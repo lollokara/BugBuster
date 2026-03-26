@@ -1,0 +1,13 @@
+Added Component: Designator=U5(SON65P200X200X80-7N)
+Add component (AddParameter): Name = "Check_prices"; Value = "https://www.snapeda.com/parts/TPS74601PDRVT/Texas+Instruments/view-part/?ref=eda"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "MF"; Value = "Texas Instruments"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "MP"; Value = "TPS74601PDRVT"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Package"; Value = "WSON-6 Texas Instruments"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "SnapEDA_Link"; Value = "https://www.snapeda.com/parts/TPS74601PDRVT/Texas+Instruments/view-part/?ref=snap"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Value"; Value = ""; VariantName = "[No Variations]"
+Added Pin To Net: NetName=3V3_LDO Pin=U5-1
+Added Pin To Net: NetName=GND Pin=U5-3
+Added Pin To Net: NetName=5V_BUCK Pin=U5-4
+Added Pin To Net: NetName=5V_BUCK Pin=U5-6
+Added Pin To Net: NetName=GND Pin=U5-7
+Added Member To Class: ClassName=Power Member=Component U5 TPS74601PDRVT
