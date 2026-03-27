@@ -1,0 +1,192 @@
+// =============================================================================
+// state.rs - Shared device state types (mirrors firmware DeviceState)
+// =============================================================================
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChannelState {
+    pub function: u8,           // ChannelFunction code (0-12)
+    pub adc_raw: u32,           // 24-bit ADC code
+    pub adc_value: f32,         // Converted value (V or mA)
+    pub adc_range: u8,          // AdcRange code
+    pub adc_rate: u8,           // AdcRate code
+    pub adc_mux: u8,            // AdcConvMux code
+    pub dac_code: u16,          // Active DAC code
+    pub dac_value: f32,         // Converted DAC value
+    pub din_state: bool,        // Digital input comparator output
+    pub din_counter: u32,       // DIN event counter
+    pub do_state: bool,         // Digital output state
+    pub channel_alert: u16,     // Per-channel alert bits
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiagState {
+    pub source: u8,             // Diagnostic source code (0-13)
+    pub raw_code: u16,          // Raw diagnostic ADC code
+    pub value: f32,             // Converted value (V or C)
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GpioState {
+    pub mode: u8,               // GpioSelect mode (0-4)
+    pub output: bool,           // GPO_DATA state
+    pub input: bool,            // GPI_DATA state
+    pub pulldown: bool,         // GP_WK_PD_EN
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UartBridgeState {
+    pub uart_num: u8,
+    pub tx_pin: u8,
+    pub rx_pin: u8,
+    pub baudrate: u32,
+    pub data_bits: u8,
+    pub parity: u8,
+    pub stop_bits: u8,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeviceState {
+    pub spi_ok: bool,
+    pub die_temperature: f32,
+    pub alert_status: u16,
+    pub alert_mask: u16,
+    pub supply_alert_status: u16,
+    pub supply_alert_mask: u16,
+    pub live_status: u16,
+    pub channels: [ChannelState; 4],
+    pub diag: [DiagState; 4],
+    pub gpio: [GpioState; 6],
+}
+
+impl DeviceState {
+    /// Parse a GET_STATUS response payload into DeviceState.
+    pub fn from_status_payload(payload: &[u8]) -> Option<Self> {
+        use crate::bbp::PayloadReader;
+        let mut r = PayloadReader::new(payload);
+
+        let mut state = DeviceState::default();
+        state.spi_ok = r.get_bool()?;
+        state.die_temperature = r.get_f32()?;
+        state.alert_status = r.get_u16()?;
+        state.alert_mask = r.get_u16()?;
+        state.supply_alert_status = r.get_u16()?;
+        state.supply_alert_mask = r.get_u16()?;
+        state.live_status = r.get_u16()?;
+
+        for ch in 0..4 {
+            let _id = r.get_u8()?; // channel_id
+            state.channels[ch].function = r.get_u8()?;
+            state.channels[ch].adc_raw = r.get_u24()?;
+            state.channels[ch].adc_value = r.get_f32()?;
+            state.channels[ch].adc_range = r.get_u8()?;
+            state.channels[ch].adc_rate = r.get_u8()?;
+            state.channels[ch].adc_mux = r.get_u8()?;
+            state.channels[ch].dac_code = r.get_u16()?;
+            state.channels[ch].dac_value = r.get_f32()?;
+            state.channels[ch].din_state = r.get_bool()?;
+            state.channels[ch].din_counter = r.get_u32()?;
+            state.channels[ch].do_state = r.get_bool()?;
+            state.channels[ch].channel_alert = r.get_u16()?;
+        }
+
+        Some(state)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Device info from handshake or GET_DEVICE_INFO
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub spi_ok: bool,
+    pub silicon_rev: u8,
+    pub silicon_id0: u16,
+    pub silicon_id1: u16,
+    pub fw_version: String,
+    pub proto_version: u8,
+}
+
+// -----------------------------------------------------------------------------
+// Connection status (emitted to frontend)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ConnectionMode {
+    Disconnected,
+    Usb,
+    Http,
+}
+
+impl Default for ConnectionMode {
+    fn default() -> Self {
+        Self::Disconnected
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionStatus {
+    pub mode: ConnectionMode,
+    pub port_or_url: String,
+    pub device_info: Option<DeviceInfo>,
+}
+
+impl Default for ConnectionStatus {
+    fn default() -> Self {
+        Self {
+            mode: ConnectionMode::Disconnected,
+            port_or_url: String::new(),
+            device_info: None,
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Discovered device entry
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredDevice {
+    pub id: String,             // Unique identifier
+    pub name: String,           // Display name
+    pub transport: String,      // "usb" or "http"
+    pub address: String,        // Port path or URL
+}
+
+// -----------------------------------------------------------------------------
+// ADC stream sample (for frontend plotting)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdcStreamBatch {
+    pub channel_mask: u8,
+    pub timestamp_us: u32,
+    pub samples: Vec<AdcSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdcSample {
+    pub raw: [u32; 4],         // 24-bit raw codes (0 for inactive channels)
+}
+
+// -----------------------------------------------------------------------------
+// Scope data bucket
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeBucket {
+    pub seq: u32,
+    pub timestamp_ms: u32,
+    pub count: u16,
+    pub channels: [ScopeChannelData; 4],
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScopeChannelData {
+    pub avg: f32,
+    pub min: f32,
+    pub max: f32,
+}

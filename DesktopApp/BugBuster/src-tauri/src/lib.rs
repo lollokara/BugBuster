@@ -1,14 +1,53 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+// =============================================================================
+// lib.rs - Tauri application entry point
+// =============================================================================
+
+mod bbp;
+mod commands;
+mod connection_manager;
+mod discovery;
+mod http_transport;
+mod state;
+mod transport;
+mod usb_transport;
+
+use connection_manager::ConnectionManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(ConnectionManager::new())
+        .invoke_handler(tauri::generate_handler![
+            // Discovery & Connection
+            commands::discover_devices,
+            commands::connect_device,
+            commands::disconnect_device,
+            commands::get_connection_status,
+            // Device State
+            commands::get_device_state,
+            // Channel Configuration
+            commands::set_channel_function,
+            commands::set_dac_code,
+            commands::set_dac_voltage,
+            commands::set_dac_current,
+            commands::set_adc_config,
+            commands::set_do_state,
+            commands::set_vout_range,
+            commands::set_current_limit,
+            commands::set_gpio_config,
+            commands::set_gpio_value,
+            // Faults
+            commands::clear_all_alerts,
+            commands::clear_channel_alert,
+            // System
+            commands::device_reset,
+            // Streaming
+            commands::start_adc_stream,
+            commands::stop_adc_stream,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
