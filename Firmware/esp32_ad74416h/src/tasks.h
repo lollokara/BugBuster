@@ -4,11 +4,11 @@
 // tasks.h - FreeRTOS task management for AD74416H controller
 // =============================================================================
 
-#include <Arduino.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <freertos/semphr.h>
-#include <freertos/queue.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "freertos/queue.h"
 
 #include "ad74416h.h"
 #include "ad74416h_regs.h"
@@ -47,6 +47,31 @@ struct GpioState {
     bool             pulldown;          // GP_WK_PD_EN
 };
 
+// Scope: ring buffer of downsampled time buckets.
+// Each bucket covers SCOPE_BUCKET_MS and stores min/max/last per channel.
+// The ADC poll task accumulates into the current bucket; when the bucket
+// interval elapses a new bucket is started. The HTTP endpoint drains
+// completed buckets since the caller's last sequence number.
+#define SCOPE_BUF_SIZE    256           // number of buckets in ring
+#define SCOPE_BUCKET_MS   10            // ms per bucket (~100 buckets/s)
+
+struct ScopeBucket {
+    uint32_t  timestamp_ms;             // start time of this bucket
+    float     vMin[4];
+    float     vMax[4];
+    float     vSum[4];                  // running sum for average
+    uint16_t  count;                    // number of ADC samples accumulated
+};
+
+struct ScopeBuffer {
+    ScopeBucket      buckets[SCOPE_BUF_SIZE];
+    volatile uint16_t head;             // next write index (completed buckets)
+    volatile uint16_t seq;              // monotonic sequence (incremented per bucket)
+    // Accumulator for the bucket currently being filled
+    ScopeBucket      cur;
+    uint32_t         curStart;          // start time of current bucket
+};
+
 struct DeviceState {
     bool             spiOk;             // SPI communication healthy
     ChannelState     channels[4];
@@ -58,6 +83,7 @@ struct DeviceState {
     uint16_t         liveStatus;
     DiagState        diag[4];           // 4 diagnostic slots
     GpioState        gpio[6];           // 6 GPIOs (A-F)
+    ScopeBuffer      scope;             // ring buffer for batched scope data
 };
 
 extern DeviceState        g_deviceState;

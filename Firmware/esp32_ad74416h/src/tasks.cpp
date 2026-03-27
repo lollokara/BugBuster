@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "tasks.h"
+#include "esp_timer.h"
 
 // -----------------------------------------------------------------------------
 // Global state definitions
@@ -24,14 +25,19 @@ static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range)
     if (s_device == nullptr) return 0.0f;
 
     switch (func) {
-        case CH_FUNC_IOUT:
-        case CH_FUNC_IOUT_HART:
         case CH_FUNC_IIN_EXT_PWR:
         case CH_FUNC_IIN_LOOP_PWR:
         case CH_FUNC_IIN_EXT_PWR_HART:
         case CH_FUNC_IIN_LOOP_PWR_HART:
-            // Current channels: convert via sense resistor (A) then scale to mA
+            // Current INPUT channels: ADC measures voltage across sense resistor
+            // Convert to mA via Rsense
             return s_device->adcCodeToCurrent(raw, range) * 1000.0f;
+
+        case CH_FUNC_IOUT:
+        case CH_FUNC_IOUT_HART:
+            // Current OUTPUT: ADC measures compliance voltage at terminal (V)
+            // The output current is set by DAC, not measured by ADC.
+            return s_device->adcCodeToVoltage(raw, range);
 
         default:
             // Voltage input, VOUT readback, high-impedance, RTD, DIN – return V
@@ -40,17 +46,34 @@ static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range)
 }
 
 // -----------------------------------------------------------------------------
-// Task 1: ADC Poll (Core 1, Priority 3, 100 ms period)
+// Task 1: ADC Poll (Core 1, Priority 3, dynamic rate)
 // -----------------------------------------------------------------------------
+
+// Map ADC rate enum to approximate poll interval in ms.
+// We can't match full SPI throughput at 9600 SPS, but we poll as fast as
+// practical for higher rates. Minimum ~2ms due to SPI + FreeRTOS overhead.
+static uint32_t adcRateToPollMs(AdcRate fastest)
+{
+    switch (fastest) {
+        case ADC_RATE_10SPS_H:   return 100;  // 10 SPS
+        case ADC_RATE_20SPS:     return 50;   // 20 SPS
+        case ADC_RATE_20SPS_H:   return 50;   // 20 SPS (HR)
+        case ADC_RATE_200SPS_H1: return 5;    // 200 SPS
+        case ADC_RATE_200SPS_H:  return 5;    // 200 SPS (HR)
+        case ADC_RATE_1_2KSPS:   return 2;    // 1.2 kSPS
+        case ADC_RATE_1_2KSPS_H: return 2;    // 1.2 kSPS (HR)
+        case ADC_RATE_4_8KSPS:   return 1;    // 4.8 kSPS
+        case ADC_RATE_9_6KSPS:   return 1;    // 9.6 kSPS
+        default:                 return 50;
+    }
+}
 
 static void taskAdcPoll(void* /*pvParameters*/)
 {
+    TickType_t pollDelay = pdMS_TO_TICKS(50);
+
     for (;;) {
         if (s_device) {
-            // Always read ADC results regardless of ADC_DATA_RDY.
-            // The fault monitor task reads diagnostic results which self-clears
-            // ADC_DATA_RDY (per datasheet), so we can't rely on it.
-            // Reading results while ADC is busy returns the last completed values.
             uint32_t raw[AD74416H_NUM_CHANNELS];
             float    eng[AD74416H_NUM_CHANNELS];
 
@@ -70,6 +93,16 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 xSemaphoreGive(g_stateMutex);
             }
 
+            // Determine fastest active channel rate → shortest poll interval
+            uint32_t minPollMs = 50;  // default 20 SPS
+            for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+                if (func[ch] != CH_FUNC_HIGH_IMP) {
+                    uint32_t ms = adcRateToPollMs(rate[ch]);
+                    if (ms < minPollMs) minPollMs = ms;
+                }
+            }
+            pollDelay = pdMS_TO_TICKS(minPollMs);
+
             // Read hardware (outside mutex) - only for non-HIGH_IMP channels
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                 if (func[ch] != CH_FUNC_HIGH_IMP) {
@@ -81,17 +114,59 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 }
             }
 
-            // Write results back under mutex
+            // Write results back under mutex + accumulate into scope bucket
+            uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                     g_deviceState.channels[ch].adcRawCode = raw[ch];
                     g_deviceState.channels[ch].adcValue   = eng[ch];
                 }
+
+                ScopeBuffer& sb = g_deviceState.scope;
+
+                // Initialise first bucket if needed
+                if (sb.curStart == 0) {
+                    sb.curStart = nowMs;
+                    sb.cur.timestamp_ms = nowMs;
+                    sb.cur.count = 0;
+                    for (uint8_t ch = 0; ch < 4; ch++) {
+                        sb.cur.vMin[ch] =  1e30f;
+                        sb.cur.vMax[ch] = -1e30f;
+                        sb.cur.vSum[ch] = 0.0f;
+                    }
+                }
+
+                // If current bucket interval has elapsed, commit it and start new
+                if (nowMs - sb.curStart >= SCOPE_BUCKET_MS && sb.cur.count > 0) {
+                    uint16_t idx = sb.head % SCOPE_BUF_SIZE;
+                    sb.buckets[idx] = sb.cur;
+                    sb.head = (sb.head + 1) % SCOPE_BUF_SIZE;
+                    sb.seq++;
+                    // Start fresh bucket
+                    sb.curStart = nowMs;
+                    sb.cur.timestamp_ms = nowMs;
+                    sb.cur.count = 0;
+                    for (uint8_t ch = 0; ch < 4; ch++) {
+                        sb.cur.vMin[ch] =  1e30f;
+                        sb.cur.vMax[ch] = -1e30f;
+                        sb.cur.vSum[ch] = 0.0f;
+                    }
+                }
+
+                // Accumulate sample into current bucket
+                for (uint8_t ch = 0; ch < 4; ch++) {
+                    float v = eng[ch];
+                    if (v < sb.cur.vMin[ch]) sb.cur.vMin[ch] = v;
+                    if (v > sb.cur.vMax[ch]) sb.cur.vMax[ch] = v;
+                    sb.cur.vSum[ch] += v;
+                }
+                sb.cur.count++;
+
                 xSemaphoreGive(g_stateMutex);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pollDelay);
     }
 }
 
@@ -265,7 +340,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     s_device->startAdcConversion(true, chMask, 0x0F);
 
                     // Clear any transient ADC_ERR caused by the sequence restart
-                    delay(50);
+                    delay_ms(50);
                     s_device->clearAllAlerts();
                 }
                 break;

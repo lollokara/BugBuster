@@ -2,35 +2,42 @@
 
 // =============================================================================
 // config.h - Pin definitions and system constants for AD74416H + ESP32-S3
+//            ESP-IDF native (no Arduino dependency)
 // =============================================================================
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "driver/gpio.h"
+#include "esp_timer.h"
+#include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 // -----------------------------------------------------------------------------
 // SPI Pin Definitions (AD74416H uses SYNC as active-low chip select)
 // -----------------------------------------------------------------------------
-#define PIN_SDO         8   // MISO - Serial Data Out (from AD74416H)
-#define PIN_SDI         9   // MOSI - Serial Data In  (to AD74416H)
-#define PIN_SYNC        10  // CS   - Active low frame sync (chip select)
-#define PIN_SCLK        11  // SCLK - SPI clock
+#define PIN_SDO         GPIO_NUM_8    // MISO - Serial Data Out (from AD74416H)
+#define PIN_SDI         GPIO_NUM_9    // MOSI - Serial Data In  (to AD74416H)
+#define PIN_SYNC        GPIO_NUM_10   // CS   - Active low frame sync (chip select)
+#define PIN_SCLK        GPIO_NUM_11   // SCLK - SPI clock
 
 // -----------------------------------------------------------------------------
 // Control / Status Pin Definitions
 // -----------------------------------------------------------------------------
-#define PIN_RESET       5   // Active low hardware reset (drive LOW to reset)
-#define PIN_ADC_RDY     6   // Open-drain, active low - ADC conversion ready
-#define PIN_ALERT       7   // Open-drain, active low - fault/alert output
+#define PIN_RESET       GPIO_NUM_5    // Active low hardware reset
+#define PIN_ADC_RDY     GPIO_NUM_6    // Open-drain, active low - ADC conversion ready
+#define PIN_ALERT       GPIO_NUM_7    // Open-drain, active low - fault/alert output
 
 // -----------------------------------------------------------------------------
 // SPI Configuration
 // -----------------------------------------------------------------------------
-#define SPI_CLOCK_HZ    1000000UL   // 1 MHz safe starting speed (max 20 MHz)
-#define SPI_MODE        SPI_MODE2   // CPOL=1, CPHA=0
+#define SPI_CLOCK_HZ    1000000UL     // 1 MHz safe starting speed (max 20 MHz)
 
 // -----------------------------------------------------------------------------
 // AD74416H Device Address
 // AD0=AD1=GND -> device address = 0
-// Address bits [1:0] occupy D[37:36] in the SPI frame
 // -----------------------------------------------------------------------------
-#define AD74416H_DEV_ADDR   0x00    // AD0=AD1=GND
+#define AD74416H_DEV_ADDR   0x00
 
 // -----------------------------------------------------------------------------
 // WiFi / Access Point Configuration
@@ -41,22 +48,57 @@
 #define WIFI_MAX_CONN   4
 
 // -----------------------------------------------------------------------------
-// Timing Constants (microseconds unless noted)
+// Timing Constants
 // -----------------------------------------------------------------------------
-#define RESET_PULSE_MS          10      // Hardware reset pulse width (ms)
-#define POWER_UP_DELAY_MS       50      // Post-reset stabilisation delay (ms)
-#define CHANNEL_SWITCH_US       300     // Channel function switch settle (us)
-#define CHANNEL_SWITCH_HART_US  4200    // IOUT_HART channel switch settle (us)
+#define RESET_PULSE_MS          10
+#define POWER_UP_DELAY_MS       50
+#define CHANNEL_SWITCH_US       300
+#define CHANNEL_SWITCH_HART_US  4200
 
 // -----------------------------------------------------------------------------
 // AD74416H Limits
 // -----------------------------------------------------------------------------
 #define AD74416H_NUM_CHANNELS   4
-#define DAC_FULL_SCALE          65535U  // 16-bit DAC full scale code
-#define ADC_FULL_SCALE          16777216UL  // 2^24 for 24-bit ADC
+#define DAC_FULL_SCALE          65535U
+#define ADC_FULL_SCALE          16777216UL
 
 // Voltage / current output spans
-#define VOUT_UNIPOLAR_SPAN_V    12.0f   // 0 V to 12 V
-#define VOUT_BIPOLAR_SPAN_V     24.0f   // -12 V to +12 V
-#define VOUT_BIPOLAR_OFFSET_V   12.0f   // Offset for bipolar code conversion
-#define IOUT_MAX_MA             25.0f   // 0 mA to 25 mA
+#define VOUT_UNIPOLAR_SPAN_V    12.0f
+#define VOUT_BIPOLAR_SPAN_V     24.0f
+#define VOUT_BIPOLAR_OFFSET_V   12.0f
+#define IOUT_MAX_MA             25.0f
+
+// =============================================================================
+// GPIO / Timing Helpers (replace Arduino pinMode/digitalWrite/delay)
+// =============================================================================
+
+static inline void pin_mode_output(gpio_num_t pin) {
+    gpio_reset_pin(pin);
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+}
+
+static inline void pin_mode_input_pullup(gpio_num_t pin) {
+    gpio_reset_pin(pin);
+    gpio_set_direction(pin, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
+}
+
+static inline void pin_write(gpio_num_t pin, int level) {
+    gpio_set_level(pin, level);
+}
+
+static inline int pin_read(gpio_num_t pin) {
+    return gpio_get_level(pin);
+}
+
+static inline void delay_ms(uint32_t ms) {
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+static inline void delay_us(uint32_t us) {
+    esp_rom_delay_us(us);
+}
+
+static inline uint32_t millis_now(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}

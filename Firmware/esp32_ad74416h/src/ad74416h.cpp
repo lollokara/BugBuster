@@ -34,7 +34,7 @@ const AdcRangeParams AD74416H::_adc_range_params[8] = {
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
-AD74416H::AD74416H(AD74416H_SPI& spi, uint8_t pin_reset)
+AD74416H::AD74416H(AD74416H_SPI& spi, gpio_num_t pin_reset)
     : _spi(spi),
       _pin_reset(pin_reset)
 {
@@ -47,13 +47,13 @@ bool AD74416H::begin()
 {
     // 1. Configure the RESET pin: drive HIGH immediately so the device is not
     //    held in reset, then perform a controlled hardware reset pulse.
-    pinMode(_pin_reset, OUTPUT);
-    digitalWrite(_pin_reset, HIGH);  // Release from any residual reset state
-    delay(1);                        // Brief settling before intentional pulse
+    pin_mode_output(_pin_reset);
+    pin_write(_pin_reset, 1);  // Release from any residual reset state
+    delay_ms(1);                        // Brief settling before intentional pulse
     hardwareReset();
 
     // 2. Wait for device power-up (50 ms minimum after reset deassertion)
-    delay(POWER_UP_DELAY_MS);
+    delay_ms(POWER_UP_DELAY_MS);
 
     // 3. Initialise the SPI bus
     _spi.begin();
@@ -65,7 +65,7 @@ bool AD74416H::begin()
     const uint16_t test_pattern = 0xA5C3;
 
     for (uint8_t attempt = 0; attempt < 3 && !comm_ok; attempt++) {
-        if (attempt > 0) delay(10);  // Brief delay before retry
+        if (attempt > 0) delay_ms(10);  // Brief delay before retry
 
         // Send a dummy NOP to wake up the SPI
         _spi.writeRegister(REG_NOP, 0x0000);
@@ -101,11 +101,11 @@ bool AD74416H::begin()
 void AD74416H::hardwareReset()
 {
     // Drive RESET low for RESET_PULSE_MS (device resets on falling edge / low level)
-    digitalWrite(_pin_reset, LOW);
-    delay(RESET_PULSE_MS);
+    pin_write(_pin_reset, 0);
+    delay_ms(RESET_PULSE_MS);
 
     // Release - device begins power-up sequence
-    digitalWrite(_pin_reset, HIGH);
+    pin_write(_pin_reset, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ void AD74416H::softwareReset()
     _spi.writeRegister(REG_CMD_KEY, CMD_KEY_RESET_2);
 
     // Allow device time to complete reset and re-initialise
-    delay(POWER_UP_DELAY_MS);
+    delay_ms(POWER_UP_DELAY_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +135,7 @@ void AD74416H::setChannelFunction(uint8_t ch, ChannelFunction func)
                                     & CH_FUNC_SETUP_CH_FUNC_MASK));
 
     // Step 2: Wait 300 us for channel to settle in high-impedance state
-    delayMicroseconds(CHANNEL_SWITCH_US);
+    delay_us(CHANNEL_SWITCH_US);
 
     // Step 3: Zero the DAC code (safe starting point for output channels)
     setDacCode(ch, 0);
@@ -148,9 +148,9 @@ void AD74416H::setChannelFunction(uint8_t ch, ChannelFunction func)
 
     // Step 5: Wait for channel to settle in new function
     if (func == CH_FUNC_IOUT_HART) {
-        delayMicroseconds(CHANNEL_SWITCH_HART_US);
+        delay_us(CHANNEL_SWITCH_HART_US);
     } else {
-        delayMicroseconds(CHANNEL_SWITCH_US);
+        delay_us(CHANNEL_SWITCH_US);
     }
 }
 
@@ -243,12 +243,12 @@ void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagM
     uint16_t stopped = current & ~ADC_CONV_CTRL_CONV_SEQ_MASK;
     _spi.writeRegister(REG_ADC_CONV_CTRL, stopped);
 
-    // Step 2: Wait for ADC_BUSY to clear (timeout ~50ms)
-    for (int i = 0; i < 500; i++) {
+    // Step 2: Wait for ADC_BUSY to clear (timeout ~500ms for slow ADC rates)
+    for (int i = 0; i < 5000; i++) {
         uint16_t live = 0;
         _spi.readRegister(REG_LIVE_STATUS, &live);
         if (!(live & LIVE_STATUS_ADC_BUSY_MASK)) break;
-        delayMicroseconds(100);
+        delay_us(100);
     }
 
     // Step 3: Build and write new configuration
@@ -289,11 +289,11 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
     _spi.writeRegister(REG_ADC_CONV_CTRL, stopped);
 
     // Wait for current conversion to finish (ADC_BUSY goes low)
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 5000; i++) {
         uint16_t live = 0;
         _spi.readRegister(REG_LIVE_STATUS, &live);
         if (!(live & LIVE_STATUS_ADC_BUSY_MASK)) break;
-        delayMicroseconds(100);
+        delay_us(100);
     }
 
     // Modify channel enable

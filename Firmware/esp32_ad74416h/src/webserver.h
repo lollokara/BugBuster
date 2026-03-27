@@ -1,19 +1,24 @@
 #pragma once
 
 // =============================================================================
-// webserver.h - HTTP API server for AD74416H controller
+// webserver.h - HTTP API server for AD74416H controller (ESP-IDF httpd)
 // =============================================================================
 
-#include <ESPAsyncWebServer.h>
+#include "esp_http_server.h"
 #include "ad74416h_regs.h"
 
 /**
  * @brief Convert a ChannelFunction enum value to a human-readable string.
  */
-String channelFunctionToString(ChannelFunction f);
+const char* channelFunctionToString(ChannelFunction f);
 
 /**
- * @brief Register all HTTP routes on the provided AsyncWebServer.
- *        Call once from setup() after SPIFFS.begin() and initTasks().
+ * @brief Create and start the HTTP server, registering all URI handlers.
+ *        Call once from setup() after SPIFFS is mounted and initTasks().
  */
-void initWebServer(AsyncWebServer& server);
+void initWebServer(void);
+
+/**
+ * @brief Stop the HTTP server and release resources.
+ */
+void stopWebServer(void);

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <Arduino.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -39,7 +38,7 @@ public:
      * @param pin_reset Hardware RESET pin (active low)
      */
     explicit AD74416H(AD74416H_SPI& spi,
-                      uint8_t pin_reset = PIN_RESET);
+                      gpio_num_t pin_reset = PIN_RESET);
 
     // -------------------------------------------------------------------------
     // Initialisation
@@ -500,7 +499,7 @@ public:
 
 private:
     AD74416H_SPI& _spi;
-    uint8_t       _pin_reset;
+    gpio_num_t    _pin_reset;
 
     // Cached ADC range parameters table (indexed by AdcRange enum)
     static const AdcRangeParams _adc_range_params[8];

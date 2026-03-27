@@ -122,7 +122,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
   background:linear-gradient(90deg,transparent,rgba(255,255,255,0.08),transparent);
 }
 .card:hover{border-color:rgba(59,130,246,0.25);box-shadow:0 4px 32px rgba(0,0,0,0.5),0 0 0 1px rgba(59,130,246,0.1)}
-.card.dimmed{opacity:0.45;pointer-events:none}
+.card.dimmed{opacity:0.45}
 .card.fault{border-color:rgba(239,68,68,0.4);box-shadow:0 0 20px rgba(239,68,68,0.1)}
 .card.warning{border-color:rgba(245,158,11,0.4);box-shadow:0 0 20px rgba(245,158,11,0.1)}
 .card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
@@ -429,6 +429,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   <button class="tab-btn" data-tab="dout"><span class="tab-icon">↑</span> Digital Out</button>
   <button class="tab-btn" data-tab="faults"><span class="tab-icon">⚠</span> Faults <span id="fault-badge" style="display:none;background:var(--rose);color:#fff;font-size:.6rem;padding:1px 5px;border-radius:8px;margin-left:2px">!</span></button>
   <button class="tab-btn" data-tab="gpio"><span class="tab-icon">🔌</span> GPIO</button>
+  <button class="tab-btn" data-tab="uart"><span class="tab-icon">🔗</span> UART</button>
   <button class="tab-btn" data-tab="scope"><span class="tab-icon">📊</span> Scope</button>
 </div>
 
@@ -594,6 +595,13 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   </div>
 </div>
 
+<!-- =============================== UART ================================ -->
+<div class="tab-panel" id="tab-uart">
+  <div class="ch-grid" id="uart-grid">
+    <!-- populated by JS -->
+  </div>
+</div>
+
 <!-- =============================== SCOPE =============================== -->
 <div class="tab-panel" id="tab-scope">
   <div class="card" style="padding:16px">
@@ -678,7 +686,8 @@ const state = {
     {slot:2, source:2, sourceName:'DVCC',    raw:0, value:0, unit:'V', dirty:0},
     {slot:3, source:3, sourceName:'AVCC',    raw:0, value:0, unit:'V', dirty:0}
   ],
-  gpio: [0,1,2,3,4,5].map(i=>({pin:i,name:String.fromCharCode(65+i),mode:0,modeName:'HIGH_IMP',output:false,input:false,pulldown:true}))
+  gpio: [0,1,2,3,4,5].map(i=>({pin:i,name:String.fromCharCode(65+i),mode:0,modeName:'HIGH_IMP',output:false,input:false,pulldown:true})),
+  uart: {bridges:[], pins:[]}
 };
 
 const DIAG_SOURCES = [
@@ -820,15 +829,15 @@ function drawScope(){
   const W = canvas.width;
   const H = canvas.height;
   const dpr = window.devicePixelRatio || 1;
-  const pad = {l:60*dpr, r:20*dpr, t:20*dpr, b:30*dpr};
+  const pad = {l:80*dpr, r:20*dpr, t:20*dpr, b:30*dpr};
   const plotW = W - pad.l - pad.r;
   const plotH = H - pad.t - pad.b;
 
   ctx.clearRect(0, 0, W, H);
 
-  const now = Date.now();
-  const tMin = now - scope.window * 1000;
-  const tMax = now;
+  // Use server timestamps for X axis - scopeNewestT is "now"
+  const stMax = scopeNewestT;
+  const stMin = stMax - scope.window * 1000;
 
   // Y range
   let yMin=0, yMax=12;
@@ -860,14 +869,16 @@ function drawScope(){
     ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t+plotH); ctx.stroke();
   }
 
-  // Y-axis labels
+  // Y-axis labels (auto precision based on range span)
   ctx.fillStyle = '#64748b';
   ctx.font = `${11*dpr}px -apple-system,sans-serif`;
   ctx.textAlign = 'right';
+  const ySpan = yMax - yMin;
+  const yPrec = ySpan < 0.001 ? 6 : ySpan < 0.01 ? 5 : ySpan < 0.1 ? 4 : ySpan < 1 ? 3 : ySpan < 10 ? 2 : 1;
   for(let i=0;i<=ySteps;i++){
     const v = yMax - (i/ySteps)*(yMax-yMin);
     const y = pad.t + (i/ySteps)*plotH;
-    ctx.fillText(v.toFixed(2), pad.l-8*dpr, y+4*dpr);
+    ctx.fillText(v.toFixed(yPrec), pad.l-8*dpr, y+4*dpr);
   }
 
   // X-axis labels (time ago)
@@ -878,19 +889,36 @@ function drawScope(){
     ctx.fillText(t>0?`-${t.toFixed(0)}s`:'now', x, H-6*dpr);
   }
 
-  // Plot data lines
-  ctx.lineWidth = 2*dpr;
+  // Plot data: filled min/max band + smooth average line
   for(let ch=0;ch<4;ch++){
     if(!scope.channels[ch] || scope.data[ch].length < 2) continue;
-    ctx.strokeStyle = scope.colors[ch];
-    ctx.beginPath();
-    let first = true;
-    for(const p of scope.data[ch]){
-      const x = pad.l + ((p.t-tMin)/(tMax-tMin))*plotW;
-      const y = pad.t + ((yMax-p.v)/(yMax-yMin))*plotH;
-      if(first){ctx.moveTo(x,y);first=false}
-      else ctx.lineTo(x,y);
+    const pts=scope.data[ch];
+    const color=scope.colors[ch];
+    const tRange=stMax-stMin;
+    if(tRange<=0) continue;
+
+    // Helper: server timestamp → canvas X
+    const tx=st=>pad.l+((st-stMin)/tRange)*plotW;
+    const vy=v=>pad.t+((yMax-v)/(yMax-yMin))*plotH;
+
+    // 1) Filled min/max band
+    if(pts[0].mn!==undefined){
+      ctx.fillStyle=color.replace(')',',0.13)').replace('rgb','rgba');
+      ctx.beginPath();
+      ctx.moveTo(tx(pts[0].st), vy(pts[0].mn));
+      for(let i=1;i<pts.length;i++) ctx.lineTo(tx(pts[i].st), vy(pts[i].mn));
+      for(let i=pts.length-1;i>=0;i--) ctx.lineTo(tx(pts[i].st), vy(pts[i].mx));
+      ctx.closePath();
+      ctx.fill();
     }
+
+    // 2) Average line
+    ctx.strokeStyle=color;
+    ctx.lineWidth=1.5*dpr;
+    ctx.lineJoin='round';
+    ctx.beginPath();
+    ctx.moveTo(tx(pts[0].st), vy(pts[0].v));
+    for(let i=1;i<pts.length;i++) ctx.lineTo(tx(pts[i].st), vy(pts[i].v));
     ctx.stroke();
   }
 
@@ -936,6 +964,7 @@ function scopeToggleRun(){
 }
 function scopeClear(){
   scope.data = [[],[],[],[]];
+  scopeSeq=0; scopeNewestT=0; scopeBusy=false;
   drawScope();
 }
 
@@ -955,6 +984,8 @@ function initUI(){
   buildLiveStatusGrid();
   buildMaskUI();
   buildGPIO();
+  buildUART();
+  fetchUARTPins();
   scopeInit();
 }
 
@@ -1098,7 +1129,7 @@ function buildVDAC(){
       <div class="divider"></div>
       <div class="form-row"><label>Voltage</label>
         <input type="range" id="vdac-slider-${i}" min="0" max="12000" step="1" value="0"
-          oninput="onVdacSlider(${i},this.value)">
+          oninput="onVdacSlider(${i},this.value)" onchange="sendVdac(${i})">
       </div>
       <div class="slider-labels"><span id="vdac-smin-${i}">0V</span><span id="vdac-smax-${i}">12V</span></div>
       <div class="form-row mt-8"><label>Precise V</label>
@@ -1124,6 +1155,10 @@ function buildIDAC(){
       </div>
       <div class="big-value" id="idac-val-${i}">0.000<span class="unit">mA</span></div>
       <div class="raw-val">DAC Code: <span id="idac-code-${i}">0</span></div>
+      <div style="display:flex;gap:16px;margin:6px 0 2px;font-size:0.85rem">
+        <span class="color-dim">V<sub>out</sub>: <span id="idac-vout-${i}" style="color:#60a5fa">--</span></span>
+        <span class="color-dim">R<sub>load</sub>: <span id="idac-rload-${i}" style="color:#fbbf24">--</span></span>
+      </div>
       <div class="bar-gauge mt-8"><div class="bar-fill" id="idac-bar-${i}" style="width:0%;
         background:linear-gradient(90deg,var(--purple),rgba(168,85,247,0.7))"></div></div>
       <div class="flex-between" style="margin-top:3px">
@@ -1133,7 +1168,7 @@ function buildIDAC(){
       <div class="divider"></div>
       <div class="form-row"><label>Current</label>
         <input type="range" id="idac-slider-${i}" min="0" max="25000" step="1" value="0"
-          oninput="onIdacSlider(${i},this.value)">
+          oninput="onIdacSlider(${i},this.value)" onchange="sendIdac(${i})">
       </div>
       <div class="slider-labels"><span>0 mA</span><span>25 mA</span></div>
       <div class="form-row mt-8"><label>Precise mA</label>
@@ -1453,6 +1488,115 @@ function updateGPIO(){
 }
 
 // ============================================================
+// UART
+// ============================================================
+const UART_BAUDS=[300,1200,2400,4800,9600,19200,38400,57600,115200,230400,460800,921600];
+const UART_PARITY=['None','Odd','Even'];
+
+async function fetchUARTPins(){
+  try{
+    const r=await fetch('/api/uart/pins',{cache:'no-store'});
+    if(r.ok){const d=await r.json();state.uart.pins=d.available||[];}
+  }catch(e){}
+  // Also fetch initial bridge config
+  try{
+    const r=await fetch('/api/uart/config',{cache:'no-store'});
+    if(r.ok){const d=await r.json();if(Array.isArray(d.bridges)){state.uart.bridges=d.bridges;buildUART();}}
+  }catch(e){}
+}
+
+function buildUART(){
+  const grid=document.getElementById('uart-grid');
+  if(!grid) return;
+  grid.innerHTML='';
+  const pins=state.uart.pins;
+  const pinOpts=pins.map(p=>`<option value="${p}">GPIO ${p}</option>`).join('');
+  state.uart.bridges.forEach((br,idx)=>{
+    const d=document.createElement('div');
+    d.className='card';d.id=`uart-card-${idx}`;
+    d.innerHTML=`
+      <div class="card-header">
+        <div class="card-title"><span class="ch-badge" style="background:rgba(59,130,246,0.15);color:var(--blue);border-color:rgba(59,130,246,0.25)">${idx}</span> UART Bridge ${idx}</div>
+        <span id="uart-status-badge-${idx}" class="fn-badge high-imp">IDLE</span>
+      </div>
+      <div class="form-row"><label>Enabled</label>
+        <div class="toggle-wrap">
+          <label class="toggle"><input type="checkbox" id="uart-en-${idx}" ${br.enabled?'checked':''}>
+            <span class="toggle-slider"></span></label>
+          <span class="toggle-label" id="uart-en-label-${idx}">${br.enabled?'Enabled':'Disabled'}</span>
+        </div>
+      </div>
+      <div class="form-row"><label>UART Port</label>
+        <select id="uart-port-${idx}">
+          <option value="0"${br.uartNum===0?' selected':''}>UART0</option>
+          <option value="1"${br.uartNum===1?' selected':''}>UART1</option>
+          <option value="2"${br.uartNum===2?' selected':''}>UART2</option>
+        </select>
+      </div>
+      <div class="form-row"><label>TX Pin</label>
+        <select id="uart-tx-${idx}">${pinOpts}</select>
+      </div>
+      <div class="form-row"><label>RX Pin</label>
+        <select id="uart-rx-${idx}">${pinOpts}</select>
+      </div>
+      <div class="divider"></div>
+      <div class="form-row"><label>Baud Rate</label>
+        <select id="uart-baud-${idx}">${UART_BAUDS.map(b=>`<option value="${b}"${b===br.baudrate?' selected':''}>${b>=1000?(b/1000)+'k':b}</option>`).join('')}</select>
+      </div>
+      <div class="form-row"><label>Data Bits</label>
+        <select id="uart-databits-${idx}">${[5,6,7,8].map(b=>`<option value="${b}"${b===br.dataBits?' selected':''}>${b}</option>`).join('')}</select>
+      </div>
+      <div class="form-row"><label>Parity</label>
+        <select id="uart-parity-${idx}">${UART_PARITY.map((p,pi)=>`<option value="${pi}"${pi===br.parity?' selected':''}>${p}</option>`).join('')}</select>
+      </div>
+      <div class="form-row"><label>Stop Bits</label>
+        <select id="uart-stopbits-${idx}">${[1,2].map(b=>`<option value="${b}"${b===br.stopBits?' selected':''}>${b}</option>`).join('')}</select>
+      </div>
+      <div class="divider"></div>
+      <button class="btn" onclick="applyUARTConfig(${idx})">Apply</button>
+      <div style="margin-top:8px;font-size:.7rem;color:var(--text3)">Bridge ${idx} maps to UART${br.uartNum} — connect via USB-CDC or TCP bridge</div>`;
+    // Set pin selectors to current values after DOM insertion
+    grid.appendChild(d);
+    const txSel=document.getElementById(`uart-tx-${idx}`);
+    const rxSel=document.getElementById(`uart-rx-${idx}`);
+    if(txSel) txSel.value=br.txPin;
+    if(rxSel) rxSel.value=br.rxPin;
+  });
+}
+
+async function applyUARTConfig(idx){
+  const cfg={
+    uartNum:parseInt(document.getElementById(`uart-port-${idx}`).value),
+    txPin:parseInt(document.getElementById(`uart-tx-${idx}`).value),
+    rxPin:parseInt(document.getElementById(`uart-rx-${idx}`).value),
+    baudrate:parseInt(document.getElementById(`uart-baud-${idx}`).value),
+    dataBits:parseInt(document.getElementById(`uart-databits-${idx}`).value),
+    parity:parseInt(document.getElementById(`uart-parity-${idx}`).value),
+    stopBits:parseInt(document.getElementById(`uart-stopbits-${idx}`).value),
+    enabled:document.getElementById(`uart-en-${idx}`).checked
+  };
+  try{
+    await apiFetch(`/api/uart/${idx}/config`,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    toast('ok',`UART Bridge ${idx} configured — ${cfg.baudrate} baud`);
+  }catch(e){toast('err',`UART ${idx}: ${e.message}`)}
+}
+
+function updateUART(){
+  state.uart.bridges.forEach((br,idx)=>{
+    const badge=document.getElementById(`uart-status-badge-${idx}`);
+    if(badge){
+      if(br.connected){badge.className='fn-badge vin';badge.textContent='CONNECTED';}
+      else{badge.className='fn-badge high-imp';badge.textContent='IDLE';}
+    }
+    const enEl=document.getElementById(`uart-en-${idx}`);
+    if(enEl&&enEl!==document.activeElement) enEl.checked=br.enabled;
+    const enLabel=document.getElementById(`uart-en-label-${idx}`);
+    if(enLabel) enLabel.textContent=br.enabled?'Enabled':'Disabled';
+  });
+}
+
+// ============================================================
 // API CALLS
 // ============================================================
 async function apiFetch(url,opts={}){
@@ -1468,6 +1612,13 @@ async function setFunction(ch,val){
     await apiFetch(`/api/channel/${ch}/function`,{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({function:parseInt(val)})});
+    // Optimistic update so tabs reflect new function immediately
+    state.channels[ch].function = FN_MAP[parseInt(val)] || 'HIGH_IMP';
+    state.channels[ch].dacCode = 0;
+    state.channels[ch].dacValue = 0;
+    state.channels[ch].adcRaw = 0;
+    state.channels[ch].adcValue = 0;
+    updateAll();
     toast('ok',`CH${CH_NAMES[ch]} function set`);
   }catch(e){toast('err',`CH${CH_NAMES[ch]}: ${e.message}`)}
 }
@@ -1502,6 +1653,7 @@ async function setAdcConfig(ch){
 // VDAC
 let vdacBipolar=[false,false,false,false];
 function onVdacSlider(ch,mV){
+  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
   const bipolar=vdacBipolar[ch];
   const minV=bipolar?-12:0,maxV=12;
   const v=(parseInt(mV)/1000).toFixed(3);
@@ -1511,6 +1663,7 @@ function onVdacSlider(ch,mV){
   document.getElementById(`vdac-val-${ch}`).innerHTML=`${v}<span class="unit">V</span>`;
 }
 function onVdacNum(ch,v){
+  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
   const bipolar=vdacBipolar[ch];
   const minV=bipolar?-12:0,maxV=12;
   const fv=Math.max(minV,Math.min(maxV,parseFloat(v)||0));
@@ -1521,6 +1674,7 @@ function onVdacNum(ch,v){
 }
 async function sendVdac(ch){
   const v=parseFloat(document.getElementById(`vdac-num-${ch}`).value)||0;
+  state.channels[ch].dacDirty = Date.now(); // protect immediately
   const bipolar=vdacBipolar[ch];
   try{
     await apiFetch(`/api/channel/${ch}/dac`,{method:'POST',
@@ -1558,12 +1712,14 @@ async function setIlimit(ch){
 
 // IDAC
 function onIdacSlider(ch,uA){
+  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
   const mA=(parseInt(uA)/1000).toFixed(3);
   document.getElementById(`idac-num-${ch}`).value=mA;
   document.getElementById(`idac-bar-${ch}`).style.width=(parseInt(uA)/25000*100)+'%';
   document.getElementById(`idac-val-${ch}`).innerHTML=`${mA}<span class="unit">mA</span>`;
 }
 function onIdacNum(ch,v){
+  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
   const fv=Math.max(0,Math.min(25,parseFloat(v)||0));
   document.getElementById(`idac-slider-${ch}`).value=Math.round(fv*1000);
   document.getElementById(`idac-val-${ch}`).innerHTML=`${fv.toFixed(3)}<span class="unit">mA</span>`;
@@ -1571,6 +1727,7 @@ function onIdacNum(ch,v){
 }
 async function sendIdac(ch){
   const mA=parseFloat(document.getElementById(`idac-num-${ch}`).value)||0;
+  state.channels[ch].dacDirty = Date.now(); // protect immediately
   try{
     await apiFetch(`/api/channel/${ch}/dac`,{method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -1786,7 +1943,7 @@ function updateAll(){
     if(adcMuxSel&&adcMuxSel!==document.activeElement)     adcMuxSel.value=ch.adcMux;
 
     // VDAC tab (only update if not being edited)
-    const dacDirty = ch.dacDirty && (Date.now() - ch.dacDirty < 2000);
+    const dacDirty = ch.dacDirty && (Date.now() - ch.dacDirty < 5000);
     if(isVout){
       if(!dacDirty){
         const vdacValEl=document.getElementById(`vdac-val-${i}`);
@@ -1812,6 +1969,22 @@ function updateAll(){
         setEl(`idac-code-${i}`,ch.dacCode);
       }
       setBar(`idac-bar-${i}`,Math.max(0,Math.min(100,(ch.dacValue/25)*100)));
+      // Show compliance voltage and calculated load resistance
+      const voutEl=document.getElementById(`idac-vout-${i}`);
+      const rloadEl=document.getElementById(`idac-rload-${i}`);
+      if(voutEl){
+        const vOut=ch.adcValue; // In IOUT mode, adcValue is compliance voltage (V)
+        voutEl.textContent=vOut.toFixed(3)+' V';
+        if(rloadEl){
+          const iA=ch.dacValue/1000; // mA → A
+          if(iA>0.0001){
+            const rOhm=vOut/iA;
+            rloadEl.textContent=rOhm>=1000?(rOhm/1000).toFixed(2)+' kΩ':rOhm.toFixed(1)+' Ω';
+          } else {
+            rloadEl.textContent='--';
+          }
+        }
+      }
     }
 
     // DIN
@@ -1906,6 +2079,9 @@ function updateAll(){
   // GPIO
   updateGPIO();
 
+  // UART
+  updateUART();
+
   // Masks - sync checkboxes from state (only if not just edited)
   document.querySelectorAll('[data-masktype=global]').forEach(el=>{
     el.checked=!!(state.alertMask&(1<<el.dataset.bit));
@@ -1979,7 +2155,7 @@ async function poll(){
     if(Array.isArray(d.channels)){
       d.channels.forEach((ch,i)=>{
         if(i<4){
-          const dirty = state.channels[i].dacDirty && (Date.now() - state.channels[i].dacDirty < 2000);
+          const dirty = state.channels[i].dacDirty && (Date.now() - state.channels[i].dacDirty < 5000);
           if(dirty){
             const {dacValue, dacCode, ...rest} = ch;
             Object.assign(state.channels[i], rest);
@@ -2024,19 +2200,14 @@ async function poll(){
           }
         }
       }catch(e){}
-    }
-
-    // Scope data collection
-    if(scope.running) {
-      const now = Date.now();
-      for(let i=0;i<4;i++){
-        if(scope.channels[i] && state.channels[i].function !== 'HIGH_IMP'){
-          scope.data[i].push({t:now, v:state.channels[i].adcValue});
-          const cutoff = now - scope.window * 1000;
-          while(scope.data[i].length > 0 && scope.data[i][0].t < cutoff) scope.data[i].shift();
+      // Poll UART on same cadence
+      try{
+        const ur=await fetch('/api/uart/config',{cache:'no-store'});
+        if(ur.ok){
+          const ud=await ur.json();
+          if(Array.isArray(ud.bridges)) state.uart.bridges=ud.bridges;
         }
-      }
-      drawScope();
+      }catch(e){}
     }
 
     updateAll();
@@ -2053,6 +2224,49 @@ async function poll(){
 function startPolling(){
   poll();
   pollInterval=setInterval(poll,500);
+  // Dedicated scope polling (faster than main poll)
+  setInterval(scopePoll, 50);
+}
+
+let scopeLastDraw=0;
+let scopeSeq=0;
+let scopeNewestT=0;    // newest server timestamp seen
+let scopeBusy=false;
+async function scopePoll(){
+  if(!scope.running || scopeBusy) return;
+  const scopeTab=document.getElementById('tab-scope');
+  if(!scopeTab || !scopeTab.classList.contains('active')) return;
+  scopeBusy=true;
+  try{
+    const r=await fetch(`/api/scope?since=${scopeSeq}`,{cache:'no-store'});
+    if(!r.ok){scopeBusy=false;return;}
+    const d=await r.json();
+    if(d.seq!==undefined){
+      const prevSeq=scopeSeq;
+      scopeSeq=d.seq;
+      if(prevSeq===0){scopeBusy=false;return;}
+    }
+    if(!Array.isArray(d.s)||d.s.length===0){scopeBusy=false;return;}
+    // Store raw server timestamps - offset computed at draw time only
+    for(const bk of d.s){
+      const st=bk[0]; // server timestamp ms
+      if(st>scopeNewestT) scopeNewestT=st;
+      for(let i=0;i<4;i++){
+        if(!scope.channels[i]) continue;
+        scope.data[i].push({st, v:bk[1+i], mn:bk[5+i*2], mx:bk[6+i*2]});
+      }
+    }
+    // Trim: remove points older than window (in server time)
+    const serverCutoff=scopeNewestT - scope.window*1000;
+    const maxPts=8000;
+    for(let i=0;i<4;i++){
+      while(scope.data[i].length>0&&scope.data[i][0].st<serverCutoff) scope.data[i].shift();
+      if(scope.data[i].length>maxPts) scope.data[i].splice(0,scope.data[i].length-maxPts);
+    }
+    const now=Date.now();
+    if(now-scopeLastDraw>33){scopeLastDraw=now;drawScope();}
+  }catch(e){}
+  scopeBusy=false;
 }
 
 // ============================================================

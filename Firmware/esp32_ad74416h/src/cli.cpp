@@ -9,7 +9,11 @@
 #include "ad74416h_regs.h"
 #include "config.h"
 #include "tasks.h"
-#include <WiFi.h>
+#include "serial_io.h"
+#include "wifi_manager.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
 // Internal state
 static AD74416H*   s_dev  = nullptr;
@@ -115,16 +119,16 @@ void cliInit(AD74416H& device)
 void cliProcess()
 {
     if (s_showPrompt) {
-        Serial.print("\r\n[BugBuster]> ");
+        serial_print("\r\n[BugBuster]> ");
         s_showPrompt = false;
     }
 
-    while (Serial.available()) {
-        char c = (char)Serial.read();
+    while (serial_available()) {
+        char c = (char)serial_read();
 
         if (c == '\r' || c == '\n') {
             if (s_pos > 0) {
-                Serial.println();
+                serial_println("");
                 s_buf[s_pos] = '\0';
                 handleCommand(s_buf);
                 s_pos = 0;
@@ -137,7 +141,7 @@ void cliProcess()
         if (c == '\b' || c == 127) {
             if (s_pos > 0) {
                 s_pos--;
-                Serial.print("\b \b");
+                serial_print("\b \b");
             }
             continue;
         }
@@ -145,7 +149,7 @@ void cliProcess()
         // Echo and buffer
         if (s_pos < sizeof(s_buf) - 1) {
             s_buf[s_pos++] = c;
-            Serial.print(c);
+            serial_printf("%c", c);
         }
     }
 }
@@ -227,7 +231,7 @@ static void handleCommand(const char* line)
     } else if (strcmp(cmd, "menu") == 0 || strcmp(cmd, "m") == 0) {
         printMainMenu();
     } else {
-        Serial.printf("Unknown command: '%s'. Type 'help' for available commands.\r\n", cmd);
+        serial_printf("Unknown command: '%s'. Type 'help' for available commands.\r\n", cmd);
     }
 }
 
@@ -237,7 +241,7 @@ static void handleCommand(const char* line)
 
 static void cmdHelp()
 {
-    Serial.println(F(
+    serial_print(
         "\r\n"
         "========================================\r\n"
         "  BugBuster AD74416H Serial CLI\r\n"
@@ -299,12 +303,12 @@ static void cmdHelp()
         "--- Faults ---\r\n"
         "  faults, f           Read all fault/alert registers\r\n"
         "  clear               Clear all faults\r\n"
-    ));
+    );
 }
 
 static void printMainMenu()
 {
-    Serial.println(F(
+    serial_print(
         "\r\n"
         "+--------------------------------------------+\r\n"
         "|        BugBuster - AD74416H Tester         |\r\n"
@@ -322,7 +326,7 @@ static void printMainMenu()
         "+--------------------------------------------+\r\n"
         "| Type a command or number, press Enter.     |\r\n"
         "+--------------------------------------------+\r\n"
-    ));
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -331,34 +335,31 @@ static void printMainMenu()
 
 static void cmdStatus()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
-    Serial.println(F("\r\n--- Device Status ---"));
+    serial_println("\r\n--- Device Status ---");
 
     // SPI check
     cmdScratch();
 
-    // Temperature
+    // Temperature (reads from diagnostic result, does not disrupt ADC)
     float temp = s_dev->readDieTemperature();
 
-    // Restart continuous ADC after temp reading (temp stops it)
-    s_dev->startAdcConversion(true);
-
-    Serial.printf("Die Temperature: %.1f C\r\n", temp);
+    serial_printf("Die Temperature: %.1f C\r\n", temp);
 
     // Live status
     uint16_t live = s_dev->readLiveStatus();
-    Serial.printf("LIVE_STATUS:     0x%04X\r\n", live);
+    serial_printf("LIVE_STATUS:     0x%04X\r\n", live);
 
     // Alert overview
     uint16_t alert = s_dev->readAlertStatus();
     uint16_t supply = s_dev->readSupplyAlertStatus();
-    Serial.printf("ALERT_STATUS:    0x%04X\r\n", alert);
-    Serial.printf("SUPPLY_ALERT:    0x%04X\r\n", supply);
+    serial_printf("ALERT_STATUS:    0x%04X\r\n", alert);
+    serial_printf("SUPPLY_ALERT:    0x%04X\r\n", supply);
 
     // Per-channel summary
-    Serial.println(F("\r\n CH | Function     | ADC Raw    | ADC Value      | DAC Code | DIN | DO  | Ch Alert"));
-    Serial.println(F("----|--------------|------------|----------------|----------|-----|-----|----------"));
+    serial_println("\r\n CH | Function     | ADC Raw    | ADC Value      | DAC Code | DIN | DO  | Ch Alert");
+    serial_println("----|--------------|------------|----------------|----------|-----|-----|----------");
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         ChannelFunction func = s_dev->getChannelFunction(ch);
@@ -384,7 +385,7 @@ static void cmdStatus()
             xSemaphoreGive(g_stateMutex);
         }
 
-        Serial.printf("  %d | %-12s | %10lu | %+12.6f V | %5u    |  %d  |  %d  | 0x%04X\r\n",
+        serial_printf("  %d | %-12s | %10lu | %+12.6f V | %5u    |  %d  |  %d  | 0x%04X\r\n",
                        ch, funcName(func), (unsigned long)adcRaw, adcVal, dacActive,
                        (int)dinBit, (int)doState, chAlert);
     }
@@ -396,11 +397,11 @@ static void cmdStatus()
 
 static void cmdReadReg(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int addr;
     if (sscanf(args, "%x", &addr) != 1) {
-        Serial.println("Usage: rreg <hex_addr>  (e.g. rreg 76)");
+        serial_println("Usage: rreg <hex_addr>  (e.g. rreg 76)");
         return;
     }
 
@@ -412,33 +413,33 @@ static void cmdReadReg(const char* args)
 
     // Workaround: write addr to READ_SELECT, then NOP to get value
     // This is what the SPI driver does internally
-    Serial.printf("Register 0x%02X: ", addr);
+    serial_printf("Register 0x%02X: ", addr);
 
     // Use the tasks mechanism - but for raw reg we need direct SPI access
     // For now, use known register addresses
     extern AD74416H_SPI spiDriver;  // declared in main.cpp
     bool ok = spiDriver.readRegister((uint8_t)addr, &val);
-    Serial.printf("0x%04X (%s)\r\n", val, ok ? "CRC OK" : "CRC FAIL");
+    serial_printf("0x%04X (%s)\r\n", val, ok ? "CRC OK" : "CRC FAIL");
 }
 
 static void cmdWriteReg(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int addr, val;
     if (sscanf(args, "%x %x", &addr, &val) != 2) {
-        Serial.println("Usage: wreg <hex_addr> <hex_val>  (e.g. wreg 76 A5C3)");
+        serial_println("Usage: wreg <hex_addr> <hex_val>  (e.g. wreg 76 A5C3)");
         return;
     }
 
     extern AD74416H_SPI spiDriver;
     spiDriver.writeRegister((uint8_t)addr, (uint16_t)val);
-    Serial.printf("Wrote 0x%04X to register 0x%02X\r\n", val, addr);
+    serial_printf("Wrote 0x%04X to register 0x%02X\r\n", val, addr);
 
     // Read back to verify
     uint16_t readback = 0;
     spiDriver.readRegister((uint8_t)addr, &readback);
-    Serial.printf("Readback: 0x%04X %s\r\n", readback,
+    serial_printf("Readback: 0x%04X %s\r\n", readback,
                   (readback == (uint16_t)val) ? "(MATCH)" : "(MISMATCH!)");
 }
 
@@ -448,19 +449,19 @@ static void cmdWriteReg(const char* args)
 
 static void cmdFunc(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int ch, code;
     if (sscanf(args, "%u %u", &ch, &code) != 2 || ch > 3 || code > 12) {
-        Serial.println("Usage: func <ch 0-3> <code 0-12>");
-        Serial.println("  0=HIGH_IMP  1=VOUT    2=IOUT   3=VIN");
-        Serial.println("  4=IIN_EXT   5=IIN_LOOP         7=RTD");
-        Serial.println("  8=DIN_LOGIC 9=DIN_LOOP");
+        serial_println("Usage: func <ch 0-3> <code 0-12>");
+        serial_println("  0=HIGH_IMP  1=VOUT    2=IOUT   3=VIN");
+        serial_println("  4=IIN_EXT   5=IIN_LOOP         7=RTD");
+        serial_println("  8=DIN_LOGIC 9=DIN_LOOP");
         return;
     }
 
     ChannelFunction f = (ChannelFunction)code;
-    Serial.printf("Setting CH%u to %s (%u)...\r\n", ch, funcName(f), code);
+    serial_printf("Setting CH%u to %s (%u)...\r\n", ch, funcName(f), code);
 
     // Use command queue so shared state stays in sync
     Command cmd;
@@ -469,11 +470,11 @@ static void cmdFunc(const char* args)
     cmd.func = f;
     sendCommand(cmd);
 
-    delay(50);  // Let command processor run
+    delay_ms(50);  // Let command processor run
 
     // Verify
     ChannelFunction actual = s_dev->getChannelFunction((uint8_t)ch);
-    Serial.printf("CH%u function now: %s (%u) %s\r\n",
+    serial_printf("CH%u function now: %s (%u) %s\r\n",
                   ch, funcName(actual), (unsigned)actual,
                   (actual == f) ? "[OK]" : "[MISMATCH!]");
 }
@@ -484,7 +485,7 @@ static void cmdFunc(const char* args)
 
 static void cmdAdc(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     int ch_filter = -1;  // -1 = all channels
     unsigned int ch_arg;
@@ -492,9 +493,9 @@ static void cmdAdc(const char* args)
         ch_filter = (int)ch_arg;
     }
 
-    Serial.println(F("\r\n--- ADC Readings ---"));
-    Serial.println(F(" CH | Range           | Mux | Raw Code   | Voltage        | Current (if applicable)"));
-    Serial.println(F("----|-----------------|-----|------------|----------------|------------------------"));
+    serial_println("\r\n--- ADC Readings ---");
+    serial_println(" CH | Range           | Mux | Raw Code   | Voltage        | Current (if applicable)");
+    serial_println("----|-----------------|-----|------------|----------------|------------------------");
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         if (ch_filter >= 0 && ch != ch_filter) continue;
@@ -514,7 +515,7 @@ static void cmdAdc(const char* args)
         float voltage = s_dev->adcCodeToVoltage(raw, range);
         float current_mA = s_dev->adcCodeToCurrent(raw, range) * 1000.0f;
 
-        Serial.printf("  %d | %-15s |  %d  | %10lu | %+12.6f V | %8.4f mA\r\n",
+        serial_printf("  %d | %-15s |  %d  | %10lu | %+12.6f V | %8.4f mA\r\n",
                        ch, adcRangeName(range), (int)mux,
                        (unsigned long)raw, voltage, current_mA);
     }
@@ -522,28 +523,28 @@ static void cmdAdc(const char* args)
 
 static void cmdAdcCont(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int seconds = 5;
     sscanf(args, "%u", &seconds);
     if (seconds > 60) seconds = 60;
 
-    Serial.printf("Continuous ADC for %u seconds (press any key to stop)...\r\n\r\n", seconds);
-    Serial.println(F("   Time   |    CH0 (V)    |    CH1 (V)    |    CH2 (V)    |    CH3 (V)   "));
-    Serial.println(F("----------|---------------|---------------|---------------|---------------"));
+    serial_printf("Continuous ADC for %u seconds (press any key to stop)...\r\n\r\n", seconds);
+    serial_println("   Time   |    CH0 (V)    |    CH1 (V)    |    CH2 (V)    |    CH3 (V)   ");
+    serial_println("----------|---------------|---------------|---------------|---------------");
 
-    uint32_t start = millis();
+    uint32_t start = millis_now();
     uint32_t end = start + (seconds * 1000UL);
     uint32_t lastPrint = 0;
 
-    while (millis() < end) {
-        if (Serial.available()) {
-            Serial.read();  // consume key
-            Serial.println("\r\n[Stopped by user]");
+    while (millis_now() < end) {
+        if (serial_available()) {
+            serial_read();  // consume key
+            serial_println("\r\n[Stopped by user]");
             return;
         }
 
-        uint32_t now = millis();
+        uint32_t now = millis_now();
         if (now - lastPrint >= 250) {  // 4 Hz update
             lastPrint = now;
 
@@ -559,14 +560,14 @@ static void cmdAdcCont(const char* args)
             }
 
             float elapsed = (now - start) / 1000.0f;
-            Serial.printf(" %7.2fs | %+11.6f V | %+11.6f V | %+11.6f V | %+11.6f V\r\n",
+            serial_printf(" %7.2fs | %+11.6f V | %+11.6f V | %+11.6f V | %+11.6f V\r\n",
                            elapsed, vals[0], vals[1], vals[2], vals[3]);
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-    Serial.println(F("\r\n[Done]"));
+    serial_println("\r\n[Done]");
 }
 
 // ---------------------------------------------------------------------------
@@ -575,9 +576,9 @@ static void cmdAdcCont(const char* args)
 
 static void cmdAdcDiag()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
-    Serial.println(F("\r\n--- ADC Diagnostics ---"));
+    serial_println("\r\n--- ADC Diagnostics ---");
 
     // Die temperature from cached state
     float temp = 0.0f;
@@ -585,12 +586,12 @@ static void cmdAdcDiag()
         temp = g_deviceState.dieTemperature;
         xSemaphoreGive(g_stateMutex);
     }
-    Serial.printf("Die Temperature: %.1f C\r\n", temp);
+    serial_printf("Die Temperature: %.1f C\r\n", temp);
 
     // Read all 4 diagnostic slots from cached state
-    Serial.println(F("\r\nDiag Results:"));
-    Serial.println(F(" Slot | Source     | Raw Code   | Value"));
-    Serial.println(F("------|------------|------------|----------------"));
+    serial_println("\r\nDiag Results:");
+    serial_println(" Slot | Source     | Raw Code   | Value");
+    serial_println("------|------------|------------|----------------");
 
     for (uint8_t d = 0; d < 4; d++) {
         DiagState ds;
@@ -602,19 +603,19 @@ static void cmdAdcDiag()
         }
 
         float val = AD74416H::diagCodeToValue(ds.rawCode, ds.source);
-        Serial.printf("   %u  | %-10s | 0x%04X     | %+10.4f %s\r\n",
+        serial_printf("   %u  | %-10s | 0x%04X     | %+10.4f %s\r\n",
                        d, diagSourceName(ds.source), ds.rawCode,
                        val, diagSourceUnit(ds.source));
     }
 
     // LIVE_STATUS
     uint16_t live = s_dev->readLiveStatus();
-    Serial.printf("\r\nLIVE_STATUS: 0x%04X\r\n", live);
-    Serial.printf("  SUPPLY_STATUS:    %s\r\n", (live & (1 << 0))  ? "ERR" : "OK");
-    Serial.printf("  ADC_BUSY:         %s\r\n", (live & (1 << 1))  ? "YES" : "no");
-    Serial.printf("  ADC_DATA_RDY:     %s\r\n", (live & (1 << 2))  ? "YES" : "no");
-    Serial.printf("  TEMP_ALERT:       %s\r\n", (live & (1 << 3))  ? "ERR" : "OK");
-    Serial.printf("  DIN_STATUS_ABCD:  %d%d%d%d\r\n",
+    serial_printf("\r\nLIVE_STATUS: 0x%04X\r\n", live);
+    serial_printf("  SUPPLY_STATUS:    %s\r\n", (live & (1 << 0))  ? "ERR" : "OK");
+    serial_printf("  ADC_BUSY:         %s\r\n", (live & (1 << 1))  ? "YES" : "no");
+    serial_printf("  ADC_DATA_RDY:     %s\r\n", (live & (1 << 2))  ? "YES" : "no");
+    serial_printf("  TEMP_ALERT:       %s\r\n", (live & (1 << 3))  ? "ERR" : "OK");
+    serial_printf("  DIN_STATUS_ABCD:  %d%d%d%d\r\n",
                   (live >> 4) & 1, (live >> 5) & 1, (live >> 6) & 1, (live >> 7) & 1);
 }
 
@@ -624,7 +625,7 @@ static void cmdAdcDiag()
 
 static void cmdDac(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int ch;
     char mode;
@@ -634,27 +635,27 @@ static void cmdDac(const char* args)
     // Try "dac <ch> v <volts>" or "dac <ch> i <mA>"
     if (sscanf(args, "%u %c %f", &ch, &mode, &fval) == 3 && ch <= 3) {
         if (mode == 'v' || mode == 'V') {
-            Serial.printf("Setting CH%u VOUT to %.4f V...\r\n", ch, fval);
+            serial_printf("Setting CH%u VOUT to %.4f V...\r\n", ch, fval);
             Command cmd;
             cmd.type = CMD_SET_DAC_VOLTAGE;
             cmd.channel = (uint8_t)ch;
             cmd.floatVal = fval;
             sendCommand(cmd);
-            delay(20);
+            delay_ms(20);
             uint16_t active = s_dev->getDacActive((uint8_t)ch);
-            Serial.printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
+            serial_printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
             return;
         }
         if (mode == 'i' || mode == 'I') {
-            Serial.printf("Setting CH%u IOUT to %.4f mA...\r\n", ch, fval);
+            serial_printf("Setting CH%u IOUT to %.4f mA...\r\n", ch, fval);
             Command cmd;
             cmd.type = CMD_SET_DAC_CURRENT;
             cmd.channel = (uint8_t)ch;
             cmd.floatVal = fval;
             sendCommand(cmd);
-            delay(20);
+            delay_ms(20);
             uint16_t active = s_dev->getDacActive((uint8_t)ch);
-            Serial.printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
+            serial_printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
             return;
         }
     }
@@ -662,26 +663,26 @@ static void cmdDac(const char* args)
     // Try "dac <ch> <code>"
     if (sscanf(args, "%u %u", &ch, &uval) == 2 && ch <= 3) {
         if (uval > 65535) uval = 65535;
-        Serial.printf("Setting CH%u DAC_CODE to %u (0x%04X)...\r\n", ch, uval, uval);
+        serial_printf("Setting CH%u DAC_CODE to %u (0x%04X)...\r\n", ch, uval, uval);
         Command cmd;
         cmd.type = CMD_SET_DAC_CODE;
         cmd.channel = (uint8_t)ch;
         cmd.dacCode = (uint16_t)uval;
         sendCommand(cmd);
-        delay(20);
+        delay_ms(20);
         uint16_t active = s_dev->getDacActive((uint8_t)ch);
-        Serial.printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
+        serial_printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
         return;
     }
 
-    Serial.println("Usage: dac <ch> <code>      Set raw DAC code (0-65535)");
-    Serial.println("       dac <ch> v <volts>   Set voltage output");
-    Serial.println("       dac <ch> i <mA>      Set current output");
+    serial_println("Usage: dac <ch> <code>      Set raw DAC code (0-65535)");
+    serial_println("       dac <ch> v <volts>   Set voltage output");
+    serial_println("       dac <ch> i <mA>      Set current output");
 }
 
 static void cmdSweep(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int ch = 0, period_ms = 2000;
     sscanf(args, "%u %u", &ch, &period_ms);
@@ -689,18 +690,18 @@ static void cmdSweep(const char* args)
     if (period_ms < 100) period_ms = 100;
     if (period_ms > 30000) period_ms = 30000;
 
-    Serial.printf("DAC sweep on CH%u, period %u ms. Press any key to stop.\r\n", ch, period_ms);
+    serial_printf("DAC sweep on CH%u, period %u ms. Press any key to stop.\r\n", ch, period_ms);
 
-    uint32_t start = millis();
+    uint32_t start = millis_now();
     while (true) {
-        if (Serial.available()) {
-            Serial.read();
+        if (serial_available()) {
+            serial_read();
             s_dev->setDacCode((uint8_t)ch, 0);
-            Serial.println("\r\n[Sweep stopped, DAC set to 0]");
+            serial_println("\r\n[Sweep stopped, DAC set to 0]");
             return;
         }
 
-        uint32_t elapsed = millis() - start;
+        uint32_t elapsed = millis_now() - start;
         float phase = (float)(elapsed % period_ms) / (float)period_ms;
         uint16_t code = (uint16_t)(phase * 65535.0f);
         s_dev->setDacCode((uint8_t)ch, code);
@@ -715,33 +716,33 @@ static void cmdSweep(const char* args)
 
 static void cmdDin()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     uint8_t comp = s_dev->readDinCompOut();
-    Serial.println(F("\r\n--- Digital Inputs ---"));
-    Serial.println(F(" CH | Comparator | Counter"));
-    Serial.println(F("----|------------|----------"));
+    serial_println("\r\n--- Digital Inputs ---");
+    serial_println(" CH | Comparator | Counter");
+    serial_println("----|------------|----------");
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         bool state = (comp >> ch) & 1;
         uint32_t counter = s_dev->readDinCounter(ch);
-        Serial.printf("  %d |    %s     | %lu\r\n",
+        serial_printf("  %d |    %s     | %lu\r\n",
                        ch, state ? " HIGH" : "  LOW", (unsigned long)counter);
     }
 }
 
 static void cmdDoSet(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int ch, val;
     if (sscanf(args, "%u %u", &ch, &val) != 2 || ch > 3) {
-        Serial.println("Usage: do <ch 0-3> <0|1>");
+        serial_println("Usage: do <ch 0-3> <0|1>");
         return;
     }
 
     bool on = (val != 0);
-    Serial.printf("Setting CH%u DO_DATA = %s\r\n", ch, on ? "ON" : "OFF");
+    serial_printf("Setting CH%u DO_DATA = %s\r\n", ch, on ? "ON" : "OFF");
 
     Command cmd;
     cmd.type = CMD_DO_SET;
@@ -807,55 +808,55 @@ static void printBits(uint16_t val, uint8_t maxBit, const char* (*nameFunc)(uint
     bool anySet = false;
     for (int8_t b = maxBit; b >= 0; b--) {
         if (val & (1 << b)) {
-            Serial.printf("    [%2d] %s\r\n", b, nameFunc(b));
+            serial_printf("    [%2d] %s\r\n", b, nameFunc(b));
             anySet = true;
         }
     }
-    if (!anySet) Serial.println("    (none)");
+    if (!anySet) serial_println("    (none)");
 }
 
 static void cmdFaults()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
-    Serial.println(F("\r\n--- Fault / Alert Status ---"));
+    serial_println("\r\n--- Fault / Alert Status ---");
 
     // Global
     uint16_t alert = s_dev->readAlertStatus();
     uint16_t alertMask = s_dev->getAlertMask();
-    Serial.printf("\r\nALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", alert, alertMask);
+    serial_printf("\r\nALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", alert, alertMask);
     printBits(alert, 15, alertBitName);
 
     // Supply
     uint16_t supply = s_dev->readSupplyAlertStatus();
     uint16_t supplyMask = s_dev->getSupplyAlertMask();
-    Serial.printf("\r\nSUPPLY_ALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", supply, supplyMask);
+    serial_printf("\r\nSUPPLY_ALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", supply, supplyMask);
     printBits(supply, 6, supplyBitName);
 
     // Per-channel
     for (uint8_t ch = 0; ch < 4; ch++) {
         uint16_t chAlert = s_dev->readChannelAlertStatus(ch);
         uint16_t chMask = s_dev->getChannelAlertMask(ch);
-        Serial.printf("\r\nCH%u_ALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", ch, chAlert, chMask);
+        serial_printf("\r\nCH%u_ALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", ch, chAlert, chMask);
         printBits(chAlert, 9, chAlertBitName);
     }
 }
 
 static void cmdClearFaults()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
-    Serial.println("Clearing all faults...");
+    serial_println("Clearing all faults...");
 
     Command cmd;
     cmd.type = CMD_CLEAR_ALERTS;
     cmd.channel = 0;
     sendCommand(cmd);
 
-    delay(50);
+    delay_ms(50);
 
     uint16_t alert = s_dev->readAlertStatus();
-    Serial.printf("ALERT_STATUS after clear: 0x%04X %s\r\n",
+    serial_printf("ALERT_STATUS after clear: 0x%04X %s\r\n",
                   alert, (alert == 0) ? "[CLEAR]" : "[FAULTS REMAIN!]");
 }
 
@@ -865,14 +866,11 @@ static void cmdClearFaults()
 
 static void cmdTemp()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     float temp = s_dev->readDieTemperature();
 
-    // Restart continuous ADC (temp stops it)
-    s_dev->startAdcConversion(true);
-
-    Serial.printf("Die Temperature: %.1f C\r\n", temp);
+    serial_printf("Die Temperature: %.1f C\r\n", temp);
 }
 
 // ---------------------------------------------------------------------------
@@ -881,14 +879,14 @@ static void cmdTemp()
 
 static void cmdReset()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
-    Serial.println("Performing hardware reset...");
+    serial_println("Performing hardware reset...");
     s_dev->hardwareReset();
-    delay(POWER_UP_DELAY_MS);
+    delay_ms(POWER_UP_DELAY_MS);
 
     bool ok = s_dev->begin();
-    Serial.printf("Reset complete. SPI verify: %s\r\n", ok ? "OK" : "FAILED");
+    serial_printf("Reset complete. SPI verify: %s\r\n", ok ? "OK" : "FAILED");
 
     // Update global SPI health flag
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -907,7 +905,7 @@ static void cmdReset()
 
     // Start ADC with diagnostics only (no channel conversions - all HIGH_IMP)
     s_dev->startAdcConversion(true, 0x00, 0x0F);
-    Serial.println("ADC continuous conversion restarted (diag only).");
+    serial_println("ADC continuous conversion restarted (diag only).");
 }
 
 // ---------------------------------------------------------------------------
@@ -916,7 +914,7 @@ static void cmdReset()
 
 static void cmdScratch()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     extern AD74416H_SPI spiDriver;
 
@@ -924,13 +922,13 @@ static void cmdScratch()
     const int nPatterns = sizeof(patterns) / sizeof(patterns[0]);
     int pass = 0;
 
-    Serial.println(F("SPI SCRATCH register test:"));
+    serial_println("SPI SCRATCH register test:");
     for (int i = 0; i < nPatterns; i++) {
         spiDriver.writeRegister(REG_SCRATCH, patterns[i]);
         uint16_t rb = 0;
         bool crc = spiDriver.readRegister(REG_SCRATCH, &rb);
         bool match = (rb == patterns[i]);
-        Serial.printf("  Write 0x%04X -> Read 0x%04X  CRC:%s  %s\r\n",
+        serial_printf("  Write 0x%04X -> Read 0x%04X  CRC:%s  %s\r\n",
                        patterns[i], rb,
                        crc ? "OK" : "FAIL",
                        match ? "PASS" : "FAIL");
@@ -938,7 +936,7 @@ static void cmdScratch()
     }
 
     spiDriver.writeRegister(REG_SCRATCH, 0x0000);
-    Serial.printf("Result: %d/%d passed  %s\r\n", pass, nPatterns,
+    serial_printf("Result: %d/%d passed  %s\r\n", pass, nPatterns,
                   (pass == nPatterns) ? "[SPI OK]" : "[SPI PROBLEM!]");
 }
 
@@ -948,17 +946,17 @@ static void cmdScratch()
 
 static void cmdDiagCfg(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int slot, source;
     if (sscanf(args, "%u %u", &slot, &source) != 2 || slot > 3 || source > 9) {
-        Serial.println("Usage: diagcfg <slot 0-3> <source 0-9>");
-        Serial.println("  0=AGND  1=Temp  2=DVCC  3=AVCC  4=LDO1V8");
-        Serial.println("  5=AVDD_HI  6=AVDD_LO  7=AVSS  8=LVIN  9=DO_VDD");
+        serial_println("Usage: diagcfg <slot 0-3> <source 0-9>");
+        serial_println("  0=AGND  1=Temp  2=DVCC  3=AVCC  4=LDO1V8");
+        serial_println("  5=AVDD_HI  6=AVDD_LO  7=AVSS  8=LVIN  9=DO_VDD");
         return;
     }
 
-    Serial.printf("Setting DIAG slot %u to %s (%u)...\r\n", slot, diagSourceName(source), source);
+    serial_printf("Setting DIAG slot %u to %s (%u)...\r\n", slot, diagSourceName(source), source);
 
     Command cmd;
     cmd.type = CMD_DIAG_CONFIG;
@@ -967,8 +965,8 @@ static void cmdDiagCfg(const char* args)
     cmd.diagCfg.source = (uint8_t)source;
     sendCommand(cmd);
 
-    delay(50);
-    Serial.println("Done.");
+    delay_ms(50);
+    serial_println("Done.");
 }
 
 // ---------------------------------------------------------------------------
@@ -977,9 +975,9 @@ static void cmdDiagCfg(const char* args)
 
 static void cmdDiagRead()
 {
-    Serial.println(F("\r\n--- Diagnostic Slots (cached) ---"));
-    Serial.println(F(" Slot | Source     | Raw Code   | Value"));
-    Serial.println(F("------|------------|------------|----------------"));
+    serial_println("\r\n--- Diagnostic Slots (cached) ---");
+    serial_println(" Slot | Source     | Raw Code   | Value");
+    serial_println("------|------------|------------|----------------");
 
     for (uint8_t d = 0; d < 4; d++) {
         DiagState ds;
@@ -991,7 +989,7 @@ static void cmdDiagRead()
         }
 
         float val = AD74416H::diagCodeToValue(ds.rawCode, ds.source);
-        Serial.printf("   %u  | %-10s | 0x%04X     | %+10.4f %s\r\n",
+        serial_printf("   %u  | %-10s | 0x%04X     | %+10.4f %s\r\n",
                        d, diagSourceName(ds.source), ds.rawCode,
                        val, diagSourceUnit(ds.source));
     }
@@ -1003,15 +1001,15 @@ static void cmdDiagRead()
 
 static void cmdIlimit(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int ch, val;
     if (sscanf(args, "%u %u", &ch, &val) != 2 || ch > 3 || val > 1) {
-        Serial.println("Usage: ilimit <ch 0-3> <0|1>");
+        serial_println("Usage: ilimit <ch 0-3> <0|1>");
         return;
     }
 
-    Serial.printf("Setting CH%u current limit = %s\r\n", ch, val ? "ENABLED" : "DISABLED");
+    serial_printf("Setting CH%u current limit = %s\r\n", ch, val ? "ENABLED" : "DISABLED");
 
     Command cmd;
     cmd.type = CMD_SET_CURRENT_LIMIT;
@@ -1019,8 +1017,8 @@ static void cmdIlimit(const char* args)
     cmd.boolVal = (val == 1);
     sendCommand(cmd);
 
-    delay(20);
-    Serial.println("Done.");
+    delay_ms(20);
+    serial_println("Done.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,15 +1027,15 @@ static void cmdIlimit(const char* args)
 
 static void cmdVrange(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int ch, val;
     if (sscanf(args, "%u %u", &ch, &val) != 2 || ch > 3 || val > 1) {
-        Serial.println("Usage: vrange <ch 0-3> <0|1>  (0=unipolar, 1=bipolar)");
+        serial_println("Usage: vrange <ch 0-3> <0|1>  (0=unipolar, 1=bipolar)");
         return;
     }
 
-    Serial.printf("Setting CH%u VOUT range = %s\r\n", ch, val ? "BIPOLAR" : "UNIPOLAR");
+    serial_printf("Setting CH%u VOUT range = %s\r\n", ch, val ? "BIPOLAR" : "UNIPOLAR");
 
     Command cmd;
     cmd.type = CMD_SET_VOUT_RANGE;
@@ -1045,8 +1043,8 @@ static void cmdVrange(const char* args)
     cmd.boolVal = (val == 1);
     sendCommand(cmd);
 
-    delay(20);
-    Serial.println("Done.");
+    delay_ms(20);
+    serial_println("Done.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1055,15 +1053,15 @@ static void cmdVrange(const char* args)
 
 static void cmdAvdd(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     unsigned int ch, val;
     if (sscanf(args, "%u %u", &ch, &val) != 2 || ch > 3 || val > 3) {
-        Serial.println("Usage: avdd <ch 0-3> <0-3>");
+        serial_println("Usage: avdd <ch 0-3> <0-3>");
         return;
     }
 
-    Serial.printf("Setting CH%u AVDD_SELECT = %u\r\n", ch, val);
+    serial_printf("Setting CH%u AVDD_SELECT = %u\r\n", ch, val);
 
     Command cmd;
     cmd.type = CMD_SET_AVDD_SELECT;
@@ -1071,8 +1069,8 @@ static void cmdAvdd(const char* args)
     cmd.avddSel = (uint8_t)val;
     sendCommand(cmd);
 
-    delay(20);
-    Serial.println("Done.");
+    delay_ms(20);
+    serial_println("Done.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,20 +1079,20 @@ static void cmdAvdd(const char* args)
 
 static void cmdSilicon()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     extern AD74416H_SPI spiDriver;
 
-    Serial.println(F("\r\n--- Silicon Info ---"));
+    serial_println("\r\n--- Silicon Info ---");
 
     uint16_t rev = 0, id0 = 0, id1 = 0;
     spiDriver.readRegister(0x7B, &rev);
     spiDriver.readRegister(0x7D, &id0);
     spiDriver.readRegister(0x7E, &id1);
 
-    Serial.printf("SILICON_REV: 0x%04X\r\n", rev);
-    Serial.printf("SILICON_ID0: 0x%04X\r\n", id0);
-    Serial.printf("SILICON_ID1: 0x%04X\r\n", id1);
+    serial_printf("SILICON_REV: 0x%04X\r\n", rev);
+    serial_printf("SILICON_ID0: 0x%04X\r\n", id0);
+    serial_printf("SILICON_ID1: 0x%04X\r\n", id1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1103,34 +1101,34 @@ static void cmdSilicon()
 
 static void cmdRegs()
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     extern AD74416H_SPI spiDriver;
 
-    Serial.println(F("\r\n--- Quick Register Dump ---"));
+    serial_println("\r\n--- Quick Register Dump ---");
 
     uint16_t val = 0;
 
     spiDriver.readRegister(0x39, &val);
-    Serial.printf("ADC_CONV_CTRL     (0x39): 0x%04X\r\n", val);
+    serial_printf("ADC_CONV_CTRL     (0x39): 0x%04X\r\n", val);
 
     spiDriver.readRegister(0x38, &val);
-    Serial.printf("PWR_OPTIM_CONFIG  (0x38): 0x%04X\r\n", val);
+    serial_printf("PWR_OPTIM_CONFIG  (0x38): 0x%04X\r\n", val);
 
     spiDriver.readRegister(0x3A, &val);
-    Serial.printf("DIAG_ASSIGN       (0x3A): 0x%04X\r\n", val);
+    serial_printf("DIAG_ASSIGN       (0x3A): 0x%04X\r\n", val);
 
     spiDriver.readRegister(0x40, &val);
-    Serial.printf("LIVE_STATUS       (0x40): 0x%04X\r\n", val);
+    serial_printf("LIVE_STATUS       (0x40): 0x%04X\r\n", val);
 
     spiDriver.readRegister(0x3F, &val);
-    Serial.printf("ALERT_STATUS      (0x3F): 0x%04X\r\n", val);
+    serial_printf("ALERT_STATUS      (0x3F): 0x%04X\r\n", val);
 
-    Serial.println(F("\r\nADC_CONFIG per channel:"));
+    serial_println("\r\nADC_CONFIG per channel:");
     for (uint8_t ch = 0; ch < 4; ch++) {
         uint8_t addr = AD74416H_REG_ADC_CONFIG(ch);
         spiDriver.readRegister(addr, &val);
-        Serial.printf("  CH%u ADC_CONFIG (0x%02X): 0x%04X\r\n", ch, addr, val);
+        serial_printf("  CH%u ADC_CONFIG (0x%02X): 0x%04X\r\n", ch, addr, val);
     }
 }
 
@@ -1164,7 +1162,7 @@ static const char* gpioModeName(uint8_t mode) {
 
 static void cmdGpio(const char* args)
 {
-    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+    if (!s_dev) { serial_println("ERROR: Device not initialised"); return; }
 
     // Skip leading whitespace
     while (*args == ' ') args++;
@@ -1173,9 +1171,9 @@ static void cmdGpio(const char* args)
     if (*args == '\0') {
         extern AD74416H_SPI spiDriver;
 
-        Serial.println(F("\r\n--- GPIO Status (A-F) ---"));
-        Serial.println(F(" Pin | Mode     | Out | In | Pulldown | Reg Raw"));
-        Serial.println(F("-----|----------|-----|----|----------|--------"));
+        serial_println("\r\n--- GPIO Status (A-F) ---");
+        serial_println(" Pin | Mode     | Out | In | Pulldown | Reg Raw");
+        serial_println("-----|----------|-----|----|----------|--------");
 
         for (uint8_t g = 0; g < 6; g++) {
             GpioState gs;
@@ -1190,7 +1188,7 @@ static void cmdGpio(const char* args)
             uint16_t raw = 0;
             spiDriver.readRegister(AD74416H_REG_GPIO_CONFIG(g), &raw);
 
-            Serial.printf("  %c  | %-8s |  %d  |  %d |    %s   | 0x%04X\r\n",
+            serial_printf("  %c  | %-8s |  %d  |  %d |    %s   | 0x%04X\r\n",
                            'A' + g,
                            gpioModeName(gs.mode),
                            (int)gs.outputVal,
@@ -1204,11 +1202,11 @@ static void cmdGpio(const char* args)
     // Parse pin argument
     int pin = parseGpioPin(args);
     if (pin < 0) {
-        Serial.println("Usage: gpio                  Show all GPIO status");
-        Serial.println("       gpio <pin> mode <0-4> Set GPIO mode");
-        Serial.println("       gpio <pin> set <0|1>  Set GPIO output");
-        Serial.println("       gpio <pin> read       Read GPIO input");
-        Serial.println("  Pin: 0-5 or A-F");
+        serial_println("Usage: gpio                  Show all GPIO status");
+        serial_println("       gpio <pin> mode <0-4> Set GPIO mode");
+        serial_println("       gpio <pin> set <0|1>  Set GPIO output");
+        serial_println("       gpio <pin> read       Read GPIO input");
+        serial_println("  Pin: 0-5 or A-F");
         return;
     }
 
@@ -1228,14 +1226,14 @@ static void cmdGpio(const char* args)
     if (strcmp(subcmd, "mode") == 0) {
         unsigned int mode;
         if (sscanf(args, "%u", &mode) != 1 || mode > 4) {
-            Serial.println("Usage: gpio <pin> mode <0-4>");
-            Serial.println("  0=HIGH_IMP 1=OUTPUT 2=INPUT 3=DIN_OUT 4=DO_EXT");
+            serial_println("Usage: gpio <pin> mode <0-4>");
+            serial_println("  0=HIGH_IMP 1=OUTPUT 2=INPUT 3=DIN_OUT 4=DO_EXT");
             return;
         }
 
         bool pulldown = (mode != 1);  // default: pulldown off for OUTPUT, on for others
 
-        Serial.printf("Setting GPIO_%c mode to %s (pulldown=%s)...\r\n",
+        serial_printf("Setting GPIO_%c mode to %s (pulldown=%s)...\r\n",
                        'A' + pin, gpioModeName((uint8_t)mode), pulldown ? "on" : "off");
 
         Command cmd;
@@ -1245,17 +1243,17 @@ static void cmdGpio(const char* args)
         cmd.gpioCfg.pulldown = pulldown;
         sendCommand(cmd);
 
-        delay(50);
-        Serial.println("Done.");
+        delay_ms(50);
+        serial_println("Done.");
 
     } else if (strcmp(subcmd, "set") == 0) {
         unsigned int val;
         if (sscanf(args, "%u", &val) != 1 || val > 1) {
-            Serial.println("Usage: gpio <pin> set <0|1>");
+            serial_println("Usage: gpio <pin> set <0|1>");
             return;
         }
 
-        Serial.printf("Setting GPIO_%c output = %s\r\n", 'A' + pin, val ? "HIGH" : "LOW");
+        serial_printf("Setting GPIO_%c output = %s\r\n", 'A' + pin, val ? "HIGH" : "LOW");
 
         Command cmd;
         cmd.type = CMD_GPIO_SET;
@@ -1263,17 +1261,17 @@ static void cmdGpio(const char* args)
         cmd.gpioSet.value = (val != 0);
         sendCommand(cmd);
 
-        delay(20);
-        Serial.println("Done.");
+        delay_ms(20);
+        serial_println("Done.");
 
     } else if (strcmp(subcmd, "read") == 0) {
         bool state = s_dev->readGpioInput((uint8_t)pin);
-        Serial.printf("GPIO_%c input: %s (%d)\r\n", 'A' + pin, state ? "HIGH" : "LOW", (int)state);
+        serial_printf("GPIO_%c input: %s (%d)\r\n", 'A' + pin, state ? "HIGH" : "LOW", (int)state);
 
     } else {
-        Serial.println("Usage: gpio <pin> mode <0-4>");
-        Serial.println("       gpio <pin> set <0|1>");
-        Serial.println("       gpio <pin> read");
+        serial_println("Usage: gpio <pin> mode <0-4>");
+        serial_println("       gpio <pin> set <0|1>");
+        serial_println("       gpio <pin> read");
     }
 }
 
@@ -1285,19 +1283,19 @@ static void cmdWifi(const char* args)
 {
     // No args: show status
     if (!args || !*args) {
-        Serial.println(F("\r\n--- WiFi Status ---"));
-        Serial.printf("  Mode:    AP+STA\r\n");
-        Serial.printf("  AP SSID: %s\r\n", WIFI_SSID);
-        Serial.printf("  AP IP:   %s\r\n", WiFi.softAPIP().toString().c_str());
-        Serial.printf("  AP MAC:  %s\r\n", WiFi.softAPmacAddress().c_str());
+        serial_println("\r\n--- WiFi Status ---");
+        serial_printf("  Mode:    AP+STA\r\n");
+        serial_printf("  AP SSID: %s\r\n", WIFI_SSID);
+        serial_printf("  AP IP:   %s\r\n", wifi_get_ap_ip());
+        serial_printf("  AP MAC:  %s\r\n", wifi_get_ap_mac());
 
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("  STA:     CONNECTED\r\n");
-            Serial.printf("  STA SSID:%s\r\n", WiFi.SSID().c_str());
-            Serial.printf("  STA IP:  %s\r\n", WiFi.localIP().toString().c_str());
-            Serial.printf("  STA RSSI:%d dBm\r\n", WiFi.RSSI());
+        if (wifi_is_connected()) {
+            serial_printf("  STA:     CONNECTED\r\n");
+            serial_printf("  STA SSID:%s\r\n", wifi_get_sta_ssid());
+            serial_printf("  STA IP:  %s\r\n", wifi_get_sta_ip());
+            serial_printf("  STA RSSI:%d dBm\r\n", wifi_get_rssi());
         } else {
-            Serial.printf("  STA:     NOT CONNECTED\r\n");
+            serial_printf("  STA:     NOT CONNECTED\r\n");
         }
         return;
     }
@@ -1307,25 +1305,17 @@ static void cmdWifi(const char* args)
     char pass[64] = {};
     int n = sscanf(args, "%63s %63s", ssid, pass);
     if (n < 2) {
-        Serial.println("Usage: wifi <ssid> <password>");
+        serial_println("Usage: wifi <ssid> <password>");
         return;
     }
 
-    Serial.printf("Connecting to '%s'...\r\n", ssid);
-    WiFi.begin(ssid, pass);
+    serial_printf("Connecting to '%s'...\r\n", ssid);
+    bool ok = wifi_connect(ssid, pass);
 
-    uint8_t attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-        delay(250);
-        Serial.print(".");
-        attempts++;
-    }
-    Serial.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("Connected! IP: %s  RSSI: %d dBm\r\n",
-                      WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    if (ok) {
+        serial_printf("Connected! IP: %s  RSSI: %d dBm\r\n",
+                      wifi_get_sta_ip(), wifi_get_rssi());
     } else {
-        Serial.println("Connection FAILED. Check SSID and password.");
+        serial_println("Connection FAILED. Check SSID and password.");
     }
 }

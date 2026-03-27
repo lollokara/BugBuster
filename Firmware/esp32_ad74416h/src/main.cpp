@@ -1,210 +1,135 @@
 // =============================================================================
-// main.cpp - Entry point for the AD74416H BugBuster ESP32-S3 firmware
-//
-// Startup sequence:
-//   1. Serial init
-//   2. Drive RESET pin HIGH immediately (device is active-low reset)
-//   3. WiFi AP + optional STA
-//   4. SPIFFS mount
-//   5. AD74416H device init (SPI + hardware reset + SCRATCH verify)
-//   6. ADC continuous conversion start
-//   7. FreeRTOS tasks
-//   8. Async web server
+// main.cpp - Entry point for the AD74416H BugBuster ESP32-S3 firmware (ESP-IDF)
 // =============================================================================
 
-#include <Arduino.h>
-#include <WiFi.h>
-#include <SPIFFS.h>
-#include <ESPAsyncWebServer.h>
+#include <stdio.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_spiffs.h"
 
 #include "config.h"
 #include "wifi_credentials.h"
+#include "usb_cdc.h"
+#include "serial_io.h"
+#include "wifi_manager.h"
 #include "ad74416h_spi.h"
 #include "ad74416h.h"
 #include "tasks.h"
 #include "webserver.h"
 #include "cli.h"
+#include "uart_bridge.h"
+
+static const char* TAG = "main";
 
 // -----------------------------------------------------------------------------
-// Static object instances
+// Global objects
 // -----------------------------------------------------------------------------
-
-// Low-level SPI driver (uses pin defaults from config.h)
-// Note: NOT static - the CLI module uses 'extern AD74416H_SPI spiDriver'
-// for raw register access during diagnostics.
-AD74416H_SPI spiDriver(PIN_SDO, PIN_SDI, PIN_SYNC, PIN_SCLK,
-                        AD74416H_DEV_ADDR);
-
-// High-level HAL (takes a reference to the SPI driver and the RESET pin)
+AD74416H_SPI spiDriver(PIN_SDO, PIN_SDI, PIN_SYNC, PIN_SCLK, AD74416H_DEV_ADDR);
 static AD74416H device(spiDriver, PIN_RESET);
 
-// Async HTTP server on port 80
-static AsyncWebServer server(80);
-
 // -----------------------------------------------------------------------------
-// setup()
+// Main loop task (CLI + heartbeat)
 // -----------------------------------------------------------------------------
-
-void setup()
+static void mainLoopTask(void* pvParam)
 {
-    // -------------------------------------------------------------------------
-    // 1. Serial
-    // -------------------------------------------------------------------------
-    Serial.begin(115200);
-    delay(200);  // Give host time to open terminal
-    Serial.println("\n[BugBuster] Booting...");
+    uint32_t lastHeartbeat = 0;
 
-    // -------------------------------------------------------------------------
-    // 2. CRITICAL: Drive RESET pin HIGH immediately.
-    //
-    //    The AD74416H RESET pin is active LOW.  If this pin is left floating or
-    //    driven low (which is the ESP32 default when a GPIO is first configured
-    //    as OUTPUT), the device stays in permanent reset and all SPI traffic is
-    //    ignored.  Configure the pin and drive it HIGH here, BEFORE any other
-    //    peripheral init, so that the device is released from reset as early as
-    //    possible.  AD74416H::begin() will later issue a controlled reset pulse
-    //    (LOW for 10 ms then HIGH) as part of its own init sequence.
-    // -------------------------------------------------------------------------
-    pinMode(PIN_RESET, OUTPUT);
-    digitalWrite(PIN_RESET, HIGH);
-    Serial.println("[BugBuster] RESET pin asserted HIGH");
+    for (;;) {
+        cliProcess();
 
-    // -------------------------------------------------------------------------
-    // 3. ALERT and ADC_RDY pins (open-drain outputs from the chip)
-    // -------------------------------------------------------------------------
-    pinMode(PIN_ALERT,   INPUT_PULLUP);
-    pinMode(PIN_ADC_RDY, INPUT_PULLUP);
+        uint32_t now = millis_now();
+        if (now - lastHeartbeat >= 30000UL) {
+            lastHeartbeat = now;
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                serial_printf("\r\n[Heartbeat] uptime=%lus | spiOk=%d | temp=%.1f C\r\n",
+                              (unsigned long)(now / 1000),
+                              (int)g_deviceState.spiOk,
+                              g_deviceState.dieTemperature);
+                xSemaphoreGive(g_stateMutex);
+            }
+        }
 
-    // -------------------------------------------------------------------------
-    // 4. WiFi - Access Point mode
-    //    Also attempt STA connection if credentials are stored in NVS/Preferences
-    // -------------------------------------------------------------------------
-    Serial.println("[BugBuster] Starting WiFi AP...");
-
-    // Start AP unconditionally
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(WIFI_SSID, WIFI_PASSWORD, WIFI_CHANNEL, 0, WIFI_MAX_CONN);
-
-    IPAddress apIP = WiFi.softAPIP();
-    Serial.print("[BugBuster] AP IP address: ");
-    Serial.println(apIP);
-
-    // Connect to home WiFi (credentials in wifi_credentials.h, gitignored)
-    Serial.printf("[BugBuster] Connecting to WiFi '%s'...\r\n", WIFI_STA_SSID);
-    WiFi.begin(WIFI_STA_SSID, WIFI_STA_PASSWORD);
-    uint8_t sta_attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && sta_attempts < 40) {
-        delay(250);
-        sta_attempts++;
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.print("[BugBuster] STA connected. IP: ");
-        Serial.println(WiFi.localIP());
-    } else {
-        Serial.println("[BugBuster] No STA connection (AP-only mode)");
-    }
-
-    // -------------------------------------------------------------------------
-    // 5. SPIFFS - mount filesystem for index.html
-    // -------------------------------------------------------------------------
-    if (!SPIFFS.begin(true)) {
-        Serial.println("[BugBuster] ERROR: SPIFFS mount failed");
-    } else {
-        Serial.println("[BugBuster] SPIFFS mounted OK");
-    }
-
-    // -------------------------------------------------------------------------
-    // 6. AD74416H device init
-    //    begin() will:
-    //      - Set up RESET pin (already HIGH from step 2; begin() drives it LOW
-    //        for 10 ms then HIGH again as the intentional reset pulse)
-    //      - Wait 50 ms for device power-up
-    //      - Init SPI bus
-    //      - Write / read SCRATCH register to verify SPI comms
-    //      - Clear all alert registers
-    //      - Enable internal voltage reference
-    // -------------------------------------------------------------------------
-    Serial.println("[BugBuster] Initialising AD74416H...");
-    bool spiOk = device.begin();
-    if (spiOk) {
-        Serial.println("[BugBuster] AD74416H SPI communication verified OK");
-    } else {
-        Serial.println("[BugBuster] WARNING: AD74416H SCRATCH verify FAILED - check SPI wiring");
-    }
-
-    // Update the shared state flag so the web UI can reflect SPI health
-    // (g_stateMutex is not yet created; write directly before initTasks())
-    g_deviceState.spiOk = spiOk;
-    if (!spiOk) {
-        // SCRATCH test failed at boot - this is often a timing issue.
-        // Manual scratch tests typically pass later, so this is not fatal.
-        Serial.println("[BugBuster] NOTE: Initial SCRATCH test failed but device may still work");
-    }
-
-    // -------------------------------------------------------------------------
-    // 7. Diagnostics setup: route die temperature to diag slot 0
-    // -------------------------------------------------------------------------
-    device.setupDiagnostics();
-
-    // -------------------------------------------------------------------------
-    // 8. ADC: start continuous conversion with diagnostics only.
-    //    No channel conversions enabled at boot (all channels are HIGH_IMP).
-    //    Channels are enabled individually when a function is assigned.
-    //    This prevents ADC_ERR from floating HIGH_IMP inputs.
-    // -------------------------------------------------------------------------
-    device.startAdcConversion(true, 0x00, 0x0F);  // no channels, all 4 diags
-    Serial.println("[BugBuster] ADC continuous conversion started (diag only)");
-
-    // -------------------------------------------------------------------------
-    // 9. FreeRTOS tasks
-    //    Creates g_stateMutex, g_cmdQueue, and starts three tasks pinned to
-    //    Core 1: adcPoll (pri 3), faultMonitor (pri 4), cmdProcessor (pri 2)
-    // -------------------------------------------------------------------------
-    initTasks(device);
-    Serial.println("[BugBuster] RTOS tasks started");
-
-    // -------------------------------------------------------------------------
-    // 10. Web server
-    // -------------------------------------------------------------------------
-    initWebServer(server);
-    server.begin();
-    Serial.println("[BugBuster] Web server listening on port 80");
-
-    // -------------------------------------------------------------------------
-    // 11. Serial CLI
-    // -------------------------------------------------------------------------
-    cliInit(device);
-    Serial.println("[BugBuster] Serial CLI ready. Type 'help' for commands.");
-
-    Serial.println("[BugBuster] Boot complete.");
 }
 
 // -----------------------------------------------------------------------------
-// loop() - Runs on Core 1 alongside the RTOS scheduler.
-//          All real work is done in the RTOS tasks; loop() just emits a
-//          periodic heartbeat so the serial monitor shows the firmware is alive.
+// app_main - ESP-IDF entry point
 // -----------------------------------------------------------------------------
-
-void loop()
+extern "C" void app_main(void)
 {
-    // Process serial CLI input (non-blocking)
-    cliProcess();
+    // 1. USB CDC (TinyUSB composite: CLI + UART bridge)
+    usb_cdc_init();
+    delay_ms(500);  // Wait for USB enumeration
+    serial_init();
+    serial_println("\n[BugBuster] Booting (ESP-IDF)...");
 
-    static uint32_t lastHeartbeat = 0;
-    uint32_t now = millis();
+    // 2. RESET pin HIGH immediately
+    pin_mode_output(PIN_RESET);
+    pin_write(PIN_RESET, 1);
+    serial_println("[BugBuster] RESET pin HIGH");
 
-    if (now - lastHeartbeat >= 30000UL) {  // 30s heartbeat (less noise for CLI)
-        lastHeartbeat = now;
+    // 3. ALERT and ADC_RDY pins
+    pin_mode_input_pullup(PIN_ALERT);
+    pin_mode_input_pullup(PIN_ADC_RDY);
 
-        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            Serial.printf("\r\n[Heartbeat] uptime=%lus | spiOk=%d | temp=%.1f C\r\n",
-                          (unsigned long)(now / 1000),
-                          (int)g_deviceState.spiOk,
-                          g_deviceState.dieTemperature);
-            xSemaphoreGive(g_stateMutex);
-        }
+    // 4. WiFi AP+STA
+    serial_println("[BugBuster] Starting WiFi...");
+    wifi_init(WIFI_SSID, WIFI_PASSWORD, WIFI_STA_SSID, WIFI_STA_PASSWORD);
+
+    if (wifi_is_connected()) {
+        serial_printf("[BugBuster] STA connected. IP: %s\r\n", wifi_get_sta_ip());
+    } else {
+        serial_println("[BugBuster] No STA connection (AP-only mode)");
+    }
+    serial_printf("[BugBuster] AP IP: %s\r\n", wifi_get_ap_ip());
+
+    // 5. SPIFFS
+    esp_vfs_spiffs_conf_t spiffs_conf = {
+        .base_path = "/spiffs",
+        .partition_label = NULL,
+        .max_files = 5,
+        .format_if_mount_failed = true,
+    };
+    if (esp_vfs_spiffs_register(&spiffs_conf) == ESP_OK) {
+        serial_println("[BugBuster] SPIFFS mounted OK");
+    } else {
+        serial_println("[BugBuster] ERROR: SPIFFS mount failed");
     }
 
-    // Yield to the FreeRTOS scheduler; avoid starving other tasks
-    vTaskDelay(pdMS_TO_TICKS(20));
+    // 6. AD74416H device init
+    serial_println("[BugBuster] Initialising AD74416H...");
+    bool spiOk = device.begin();
+    serial_printf("[BugBuster] AD74416H SPI: %s\r\n", spiOk ? "OK" : "VERIFY FAILED");
+    g_deviceState.spiOk = spiOk;
+
+    // 7. Diagnostics setup
+    device.setupDiagnostics();
+
+    // 8. ADC: start with diagnostics only (no channels - all HIGH_IMP)
+    device.startAdcConversion(true, 0x00, 0x0F);
+    serial_println("[BugBuster] ADC continuous (diag only)");
+
+    // 9. FreeRTOS tasks
+    initTasks(device);
+    serial_println("[BugBuster] RTOS tasks started");
+
+    // 10. UART bridge (CDC #1+ ↔ UART)
+    uart_bridge_init();
+    uart_bridge_start();
+    serial_println("[BugBuster] UART bridge started");
+
+    // 11. Web server
+    initWebServer();
+    serial_println("[BugBuster] Web server on port 80");
+
+    // 12. CLI
+    cliInit(device);
+    serial_println("[BugBuster] CLI ready. Type 'help'.");
+    serial_println("[BugBuster] Boot complete.");
+
+    // 12. Main loop task (CLI + heartbeat)
+    xTaskCreatePinnedToCore(mainLoopTask, "mainLoop", 8192, NULL, 1, NULL, 0);
 }
