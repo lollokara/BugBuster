@@ -1,0 +1,215 @@
+#pragma once
+
+// =============================================================================
+// bbp.h - BugBuster Binary Protocol (BBP)
+//
+// High-throughput binary protocol over USB CDC #0.
+// Shares the CDC port with the text CLI; auto-switches via handshake.
+// See BugBusterProtocol.md for the full specification.
+// =============================================================================
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+#include "ad74416h.h"
+#include "ad74416h_spi.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// -----------------------------------------------------------------------------
+// Protocol Constants
+// -----------------------------------------------------------------------------
+
+#define BBP_PROTO_VERSION       1
+
+#define BBP_FW_VERSION_MAJOR    1
+#define BBP_FW_VERSION_MINOR    0
+#define BBP_FW_VERSION_PATCH    0
+
+// Handshake magic bytes: 0xBB 'B' 'U' 'G'
+#define BBP_MAGIC_0             0xBB
+#define BBP_MAGIC_1             0x42
+#define BBP_MAGIC_2             0x55
+#define BBP_MAGIC_3             0x47
+#define BBP_MAGIC_LEN           4
+#define BBP_HANDSHAKE_RSP_LEN   8   // magic[4] + version[1] + fw[3]
+
+// Framing
+#define BBP_MAX_PAYLOAD         1024
+#define BBP_COBS_MAX            (BBP_MAX_PAYLOAD + 2 + 1) // payload + COBS overhead + delimiter
+#define BBP_FRAME_DELIMITER     0x00
+
+// Message header size: type(1) + seq(2) + cmd(1) = 4
+// CRC footer: 2 bytes
+#define BBP_HEADER_SIZE         4
+#define BBP_CRC_SIZE            2
+#define BBP_MIN_MSG_SIZE        (BBP_HEADER_SIZE + BBP_CRC_SIZE)
+
+// -----------------------------------------------------------------------------
+// Message Types
+// -----------------------------------------------------------------------------
+
+#define BBP_MSG_CMD             0x01    // Host -> Device: command request
+#define BBP_MSG_RSP             0x02    // Device -> Host: response
+#define BBP_MSG_EVT             0x03    // Device -> Host: unsolicited event
+#define BBP_MSG_ERR             0x04    // Device -> Host: error response
+
+// -----------------------------------------------------------------------------
+// Command IDs (Host -> Device)
+// -----------------------------------------------------------------------------
+
+// Status & Info
+#define BBP_CMD_GET_STATUS      0x01
+#define BBP_CMD_GET_DEVICE_INFO 0x02
+#define BBP_CMD_GET_FAULTS      0x03
+#define BBP_CMD_GET_DIAGNOSTICS 0x04
+
+// Channel Configuration
+#define BBP_CMD_SET_CH_FUNC     0x10
+#define BBP_CMD_SET_DAC_CODE    0x11
+#define BBP_CMD_SET_DAC_VOLTAGE 0x12
+#define BBP_CMD_SET_DAC_CURRENT 0x13
+#define BBP_CMD_SET_ADC_CONFIG  0x14
+#define BBP_CMD_SET_DIN_CONFIG  0x15
+#define BBP_CMD_SET_DO_CONFIG   0x16
+#define BBP_CMD_SET_DO_STATE    0x17
+#define BBP_CMD_SET_VOUT_RANGE  0x18
+#define BBP_CMD_SET_ILIMIT      0x19
+#define BBP_CMD_SET_AVDD_SEL    0x1A
+#define BBP_CMD_GET_ADC_VALUE   0x1B
+#define BBP_CMD_GET_DAC_READBACK 0x1C
+
+// Faults
+#define BBP_CMD_CLEAR_ALL_ALERTS    0x20
+#define BBP_CMD_CLEAR_CH_ALERT      0x21
+#define BBP_CMD_SET_ALERT_MASK      0x22
+#define BBP_CMD_SET_CH_ALERT_MASK   0x23
+
+// Diagnostics
+#define BBP_CMD_SET_DIAG_CONFIG 0x30
+
+// GPIO
+#define BBP_CMD_GET_GPIO_STATUS 0x40
+#define BBP_CMD_SET_GPIO_CONFIG 0x41
+#define BBP_CMD_SET_GPIO_VALUE  0x42
+
+// UART Bridge
+#define BBP_CMD_GET_UART_CONFIG 0x50
+#define BBP_CMD_SET_UART_CONFIG 0x51
+#define BBP_CMD_GET_UART_PINS   0x52
+
+// Streaming
+#define BBP_CMD_START_ADC_STREAM    0x60
+#define BBP_CMD_STOP_ADC_STREAM     0x61
+#define BBP_CMD_START_SCOPE_STREAM  0x62
+#define BBP_CMD_STOP_SCOPE_STREAM   0x63
+
+// System
+#define BBP_CMD_DEVICE_RESET    0x70
+#define BBP_CMD_REG_READ        0x71
+#define BBP_CMD_REG_WRITE       0x72
+#define BBP_CMD_PING            0xFE
+#define BBP_CMD_DISCONNECT      0xFF
+
+// -----------------------------------------------------------------------------
+// Event IDs (Device -> Host, unsolicited)
+// -----------------------------------------------------------------------------
+
+#define BBP_EVT_ADC_DATA        0x80
+#define BBP_EVT_SCOPE_DATA      0x81
+#define BBP_EVT_ALERT           0x82
+#define BBP_EVT_DIN             0x83
+
+// -----------------------------------------------------------------------------
+// Error Codes
+// -----------------------------------------------------------------------------
+
+#define BBP_ERR_INVALID_CMD     0x01
+#define BBP_ERR_INVALID_CH      0x02
+#define BBP_ERR_INVALID_PARAM   0x03
+#define BBP_ERR_SPI_FAIL        0x04
+#define BBP_ERR_QUEUE_FULL      0x05
+#define BBP_ERR_BUSY            0x06
+#define BBP_ERR_INVALID_STATE   0x07
+#define BBP_ERR_CRC_FAIL        0x08
+#define BBP_ERR_FRAME_TOO_LARGE 0x09
+#define BBP_ERR_STREAM_ACTIVE   0x0A
+
+// -----------------------------------------------------------------------------
+// ADC Stream Ring Buffer (lock-free, single-producer single-consumer)
+// -----------------------------------------------------------------------------
+
+#define BBP_ADC_STREAM_BUF_SIZE 256  // Must be power of 2
+
+struct BbpAdcSample {
+    uint32_t raw[4];        // 24-bit ADC codes per channel
+    uint32_t timestamp_us;  // Microsecond timestamp
+};
+
+struct BbpAdcStreamBuf {
+    BbpAdcSample samples[BBP_ADC_STREAM_BUF_SIZE];
+    volatile uint16_t head;  // Written by producer (ADC task)
+    volatile uint16_t tail;  // Read by consumer (BBP task)
+};
+
+// -----------------------------------------------------------------------------
+// COBS Codec
+// -----------------------------------------------------------------------------
+
+size_t bbp_cobs_encode(const uint8_t *input, size_t length, uint8_t *output);
+size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output);
+
+// -----------------------------------------------------------------------------
+// CRC-16/CCITT
+// -----------------------------------------------------------------------------
+
+uint16_t bbp_crc16(const uint8_t *data, size_t len);
+
+// -----------------------------------------------------------------------------
+// Public API
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Initialize the BBP module.
+ * @param device  Pointer to the AD74416H HAL instance
+ * @param spi     Pointer to the SPI driver (for raw register access)
+ */
+void bbpInit(AD74416H *device, AD74416H_SPI *spi);
+
+/** @brief Check if BBP binary mode is currently active. */
+bool bbpIsActive(void);
+
+/**
+ * @brief Try to detect handshake magic in incoming CLI bytes.
+ * @param byte  The incoming byte
+ * @return true if handshake detected and binary mode entered
+ */
+bool bbpDetectHandshake(uint8_t byte);
+
+/**
+ * @brief Process binary protocol messages and send stream data.
+ *        Call from the main loop when bbpIsActive() == true.
+ */
+void bbpProcess(void);
+
+/** @brief Exit binary mode and return to CLI. */
+void bbpExitBinaryMode(void);
+
+/**
+ * @brief Push an ADC sample into the stream ring buffer.
+ *        Called from the ADC poll task (Core 1). Lock-free.
+ */
+void bbpPushAdcSample(const uint32_t raw[4], uint32_t timestamp_us);
+
+/** @brief Get ADC stream channel mask (0 if inactive). */
+uint8_t bbpAdcStreamMask(void);
+
+/** @brief Check if scope streaming is active. */
+bool bbpScopeStreamActive(void);
+
+#ifdef __cplusplus
+}
+#endif
