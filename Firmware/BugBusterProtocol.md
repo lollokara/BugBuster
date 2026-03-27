@@ -1,0 +1,1193 @@
+# BugBuster Binary Protocol Specification
+
+**Version:** 1.0
+**Transport:** USB CDC (Virtual COM Port)
+**Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
+**Status:** Draft
+
+---
+
+## 1. Overview & Goals
+
+The BugBuster Binary Protocol (BBP) provides a high-throughput, low-latency interface
+between the BugBuster device and a host application over USB CDC. It replaces HTTP
+polling with a persistent binary link capable of streaming raw 24-bit ADC data at
+the full hardware rate (up to 9.6 kSPS x 4 channels).
+
+**Design goals:**
+- Full feature parity with the existing HTTP REST API
+- Continuous ADC data streaming at up to ~38.4k samples/sec aggregate
+- Sub-millisecond command latency (no HTTP overhead)
+- Cross-platform: Mac, Linux, Windows (standard CDC/ACM driver, no custom driver)
+- Coexists with the UART bridge on CDC #1 (unchanged)
+- Zero-configuration: CLI auto-detects the host app and switches modes
+
+**What stays the same:**
+- CDC #1 remains the transparent UART bridge (COM port passthrough)
+- The HTTP/WiFi interface remains available in parallel
+- The command queue architecture is reused (BBP enqueues the same `Command` structs)
+
+---
+
+## 2. Transport Layer
+
+### 2.1 USB CDC Allocation
+
+| CDC Port | Default Mode | Binary Mode | Purpose |
+|----------|-------------|-------------|---------|
+| CDC #0 | Text CLI | BBP binary link | Debug CLI / Host app data channel |
+| CDC #1 | UART bridge | UART bridge (unchanged) | Transparent serial passthrough |
+
+The ESP32-S3 TinyUSB stack supports exactly 2 CDC interfaces. CDC #0 is shared
+between the text CLI and the binary protocol, switching at runtime via handshake.
+
+### 2.2 Throughput Budget
+
+USB Full-Speed CDC theoretical max: ~1 MB/s
+Worst-case ADC stream: 4 channels x 9.6 kSPS x 3 bytes/sample = **115.2 KB/s**
+With COBS + framing overhead (~1.5%): **~117 KB/s**
+Headroom: ~8x margin for commands, responses, and burst traffic.
+
+---
+
+## 3. Mode Switching (CLI <-> Binary)
+
+CDC #0 boots in **text CLI mode** (default). The host application triggers a switch
+to binary mode via a handshake sequence. On disconnect, the device returns to CLI.
+
+### 3.1 Handshake: CLI -> Binary
+
+**Host sends** (raw bytes, not COBS-encoded):
+```
+0xBB 0x42 0x55 0x47  ("BUG" with 0xBB prefix)
+```
+
+The 0xBB prefix byte is non-printable ASCII, so it cannot be accidentally triggered
+by normal CLI typing. The device scans incoming CLI bytes for this 4-byte sequence.
+
+**Device responds** (raw bytes):
+```
+0xBB 0x42 0x55 0x47 <PROTO_VER:1> <FW_VER_MAJOR:1> <FW_VER_MINOR:1> <FW_VER_PATCH:1>
+```
+
+After sending this response, the device:
+1. Stops the CLI parser
+2. Flushes any pending CLI output
+3. Enters binary mode (all subsequent I/O on CDC #0 uses COBS framing)
+4. Sets an internal flag `g_binaryMode = true`
+
+The host must wait for the 8-byte response before sending COBS-framed messages.
+
+### 3.2 Binary -> CLI (Disconnect)
+
+Binary mode ends when any of these occur:
+1. **DISCONNECT command** (0xFF) sent by the host (graceful)
+2. **USB DTR drop** (host closes the serial port)
+3. **Handshake timeout** - if no valid COBS frame is received within 5 seconds
+   after handshake, the device reverts to CLI
+
+On exit from binary mode:
+1. All active streams are stopped
+2. `g_binaryMode = false`
+3. CLI parser resumes
+4. Device prints `\r\n[CLI Ready]\r\n` to signal text mode is active
+
+### 3.3 Detection Logic (Firmware Side)
+
+The CLI input loop already reads bytes one at a time. The detection is a simple
+4-byte shift register:
+
+```
+// In CLI byte processing loop:
+static uint8_t magic_buf[4];
+static uint8_t magic_idx = 0;
+
+if (byte == MAGIC[magic_idx]) {
+    magic_idx++;
+    if (magic_idx == 4) {
+        enter_binary_mode();
+        magic_idx = 0;
+    }
+} else {
+    // Not a match - process buffered bytes as CLI input, reset
+    magic_idx = 0;
+}
+```
+
+Normal CLI input is unaffected because 0xBB is not a valid ASCII character and
+cannot appear in typed commands.
+
+---
+
+## 4. Framing: COBS (Consistent Overhead Byte Stuffing)
+
+All messages in binary mode are framed using **COBS encoding** with a **0x00
+delimiter** byte.
+
+### 4.1 Why COBS
+
+- Guarantees no 0x00 bytes in the encoded payload -> 0x00 is an unambiguous
+  frame delimiter
+- Fixed, predictable overhead: at most 1 byte per 254 payload bytes (~0.4%)
+- Re-synchronization after corruption: skip to next 0x00 and resume
+- Simple to implement (< 50 lines of C)
+- No escape sequences (unlike SLIP)
+
+### 4.2 Frame Format
+
+```
+[COBS-encoded payload] [0x00]
+ └─ variable length ─┘  └ delimiter
+```
+
+The payload (before COBS encoding) is the raw BBP message described in Section 5.
+
+### 4.3 Maximum Frame Size
+
+- Max payload before encoding: **1024 bytes**
+- Max encoded frame: **1026 bytes** (1024 + COBS overhead + delimiter)
+
+This limit accommodates the largest possible ADC stream batch (see Section 7)
+while keeping firmware buffer requirements reasonable.
+
+### 4.4 COBS Reference Implementation
+
+**Encoding** (host and device):
+```c
+size_t cobs_encode(const uint8_t *input, size_t length, uint8_t *output) {
+    size_t read_idx  = 0;
+    size_t write_idx = 1;
+    size_t code_idx  = 0;
+    uint8_t code     = 1;
+
+    while (read_idx < length) {
+        if (input[read_idx] == 0x00) {
+            output[code_idx] = code;
+            code_idx = write_idx++;
+            code = 1;
+        } else {
+            output[write_idx++] = input[read_idx];
+            code++;
+            if (code == 0xFF) {
+                output[code_idx] = code;
+                code_idx = write_idx++;
+                code = 1;
+            }
+        }
+        read_idx++;
+    }
+    output[code_idx] = code;
+    return write_idx;
+}
+```
+
+**Decoding** (host and device):
+```c
+size_t cobs_decode(const uint8_t *input, size_t length, uint8_t *output) {
+    size_t read_idx  = 0;
+    size_t write_idx = 0;
+
+    while (read_idx < length) {
+        uint8_t code = input[read_idx++];
+        for (uint8_t i = 1; i < code && read_idx < length; i++) {
+            output[write_idx++] = input[read_idx++];
+        }
+        if (code != 0xFF && read_idx < length) {
+            output[write_idx++] = 0x00;
+        }
+    }
+    if (write_idx > 0) write_idx--;  // Remove trailing zero
+    return write_idx;
+}
+```
+
+---
+
+## 5. Message Format
+
+All messages (after COBS decoding) share a common header:
+
+```
+Byte   Field         Size    Description
+─────────────────────────────────────────────────────
+0      MSG_TYPE      1       Message type (see 5.1)
+1-2    SEQ           2       Sequence number (little-endian)
+3      CMD_ID        1       Command/event identifier
+4..N-3 PAYLOAD       0..1016 Command-specific payload
+N-2    CRC_LO        1       CRC-16 low byte
+N-1    CRC_HI        1       CRC-16 high byte
+```
+
+**Minimum message size:** 6 bytes (header + empty payload + CRC)
+**Maximum message size:** 1024 bytes
+
+### 5.1 Message Types
+
+| Value | Name | Direction | Description |
+|-------|------|-----------|-------------|
+| 0x01 | CMD | Host -> Device | Command request |
+| 0x02 | RSP | Device -> Host | Response to a command |
+| 0x03 | EVT | Device -> Host | Unsolicited event (stream data, alerts) |
+| 0x04 | ERR | Device -> Host | Error response |
+
+### 5.2 Sequence Numbers
+
+- Host assigns a 16-bit sequence number to each CMD message (monotonically
+  increasing, wrapping at 0xFFFF)
+- RSP and ERR messages echo the SEQ of the CMD they respond to
+- EVT messages use a device-side counter (independent sequence space)
+- Sequence numbers enable the host to match responses to commands and detect
+  dropped messages
+
+### 5.3 CRC-16/CCITT
+
+- Polynomial: 0x1021
+- Initial value: 0xFFFF
+- Input reflection: false
+- Output reflection: false
+- Final XOR: 0x0000
+- Computed over bytes 0 through N-3 (everything except the CRC itself)
+
+```c
+uint16_t crc16_ccitt(const uint8_t *data, size_t len) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int j = 0; j < 8; j++) {
+            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+        }
+    }
+    return crc;
+}
+```
+
+If CRC verification fails, the device silently discards the frame (the host
+detects the missing response via timeout).
+
+---
+
+## 6. Command Reference
+
+### 6.1 Data Type Encoding
+
+All multi-byte integers are **little-endian**.
+Floats are **IEEE 754 single-precision (32-bit), little-endian**.
+Booleans are **1 byte** (0x00 = false, 0x01 = true).
+
+| Type | Size | Notes |
+|------|------|-------|
+| u8 | 1 | Unsigned 8-bit |
+| u16 | 2 | Unsigned 16-bit LE |
+| u24 | 3 | Unsigned 24-bit LE (ADC raw codes) |
+| u32 | 4 | Unsigned 32-bit LE |
+| i32 | 4 | Signed 32-bit LE |
+| f32 | 4 | IEEE 754 float LE |
+| bool | 1 | 0x00 or 0x01 |
+
+### 6.2 Status & Information
+
+#### 0x01 GET_STATUS
+Full device state snapshot (equivalent to `GET /api/status`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Offset  Field               Type    Description
+0       spi_ok              bool    SPI communication OK
+1       die_temp            f32     Die temperature (C)
+5       alert_status        u16     Global alert status register
+7       alert_mask          u16     Global alert mask
+9       supply_alert_status u16     Supply alert status
+11      supply_alert_mask   u16     Supply alert mask
+13      live_status         u16     Live status register
+
+Per channel (4x, starting at offset 15, stride = 26 bytes):
++0      channel_id          u8      Channel index (0-3)
++1      function            u8      Channel function code (0-12)
++2      adc_raw             u24     ADC raw code (24-bit)
++5      adc_value           f32     Converted ADC value (V or mA)
++9      adc_range           u8      ADC range code
++10     adc_rate            u8      ADC rate code
++11     adc_mux             u8      ADC mux code
++12     dac_code            u16     Active DAC code
++14     dac_value           f32     Converted DAC value
++18     din_state           bool    Digital input state
++19     din_counter         u32     DIN event counter
++23     do_state            bool    Digital output state
++24     channel_alert       u16     Per-channel alert bits
+
+Total response: 15 + (4 x 26) = 119 bytes
+```
+
+#### 0x02 GET_DEVICE_INFO
+Silicon identification (equivalent to `GET /api/device/info`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       spi_ok          bool    SPI communication OK
+1       silicon_rev     u8      Silicon revision
+2       silicon_id0     u16     Silicon ID word 0
+4       silicon_id1     u16     Silicon ID word 1
+```
+
+#### 0x03 GET_FAULTS
+Fault/alert status (equivalent to `GET /api/faults`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Offset  Field               Type    Description
+0       alert_status        u16     Global ALERT_STATUS
+2       alert_mask          u16     Global ALERT_MASK (read-only)
+4       supply_alert_status u16     SUPPLY_ALERT_STATUS
+6       supply_alert_mask   u16     SUPPLY_ALERT_MASK (read-only)
+
+Per channel (4x, stride = 5):
++0      channel_id          u8      Channel (0-3)
++1      channel_alert       u16     CHANNEL_ALERT_STATUS
++3      channel_alert_mask  u16     CHANNEL_ALERT_MASK
+
+Total: 8 + (4 x 5) = 28 bytes
+```
+
+#### 0x04 GET_DIAGNOSTICS
+Diagnostic slot readings (equivalent to `GET /api/diagnostics`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Per slot (4x, stride = 8):
++0      slot            u8      Slot index (0-3)
++1      source          u8      Diagnostic source code (0-13)
++2      raw_code        u16     Raw diagnostic ADC code
++4      value           f32     Converted value (V or C)
+
+Total: 4 x 8 = 32 bytes
+```
+
+---
+
+### 6.3 Channel Configuration
+
+#### 0x10 SET_CHANNEL_FUNC
+Set channel function (equivalent to `POST /api/channel/X/function`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       function        u8      Function code (0-12, see Section 6.10)
+```
+
+**Response payload:**
+```
+0       channel         u8      Echoed channel
+1       function        u8      Echoed function code
+```
+
+#### 0x11 SET_DAC_CODE
+Set DAC raw code (equivalent to `POST /api/channel/X/dac` with `code`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       code            u16     DAC code (0-65535)
+```
+
+**Response payload:**
+```
+0       channel         u8
+1       code            u16
+```
+
+#### 0x12 SET_DAC_VOLTAGE
+Set DAC voltage output (equivalent to `POST /api/channel/X/dac` with `voltage`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       voltage         f32     Target voltage
+5       bipolar         bool    Range: false=0..12V, true=-12..12V
+```
+
+**Response payload:**
+```
+0       channel         u8
+1       voltage         f32
+5       bipolar         bool
+```
+
+#### 0x13 SET_DAC_CURRENT
+Set DAC current output (equivalent to `POST /api/channel/X/dac` with `current_mA`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       current_mA      f32     Target current (mA)
+```
+
+**Response payload:**
+```
+0       channel         u8
+1       current_mA      f32
+```
+
+#### 0x14 SET_ADC_CONFIG
+Configure ADC parameters (equivalent to `POST /api/channel/X/adc/config`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       mux             u8      ADC mux code (0-4)
+2       range           u8      ADC range code (0-7)
+3       rate            u8      ADC rate code (0-13)
+```
+
+**Response payload:**
+```
+0       channel         u8
+1       mux             u8
+2       range           u8
+3       rate            u8
+```
+
+#### 0x15 SET_DIN_CONFIG
+Configure digital input (equivalent to `POST /api/channel/X/din/config`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       thresh          u8      Comparator threshold (7-bit)
+2       thresh_mode     bool    Fixed (true) or programmable (false)
+3       debounce        u8      Debounce time code (5-bit)
+4       sink            u8      Current sink code (5-bit)
+5       sink_range      bool    Sink range (false=low, true=high)
+6       oc_det          bool    Open-circuit detection
+7       sc_det          bool    Short-circuit detection
+```
+
+**Response payload:** Echoes request.
+
+#### 0x16 SET_DO_CONFIG
+Configure digital output (equivalent to `POST /api/channel/X/do/config`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       mode            u8      DO mode (DO_MODE[1:0])
+2       src_sel_gpio    bool    Source: false=SPI, true=GPIO
+3       t1              u8      T1 timing parameter
+4       t2              u8      T2 timing parameter
+```
+
+**Response payload:** Echoes request.
+
+#### 0x17 SET_DO_STATE
+Set digital output on/off (equivalent to `POST /api/channel/X/do/set`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       on              bool    Output state
+```
+
+**Response payload:** Echoes request.
+
+#### 0x18 SET_VOUT_RANGE
+Set voltage output range (equivalent to `POST /api/channel/X/vout/range`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       bipolar         bool    false=0..12V, true=-12..12V
+```
+
+**Response payload:** Echoes request.
+
+#### 0x19 SET_CURRENT_LIMIT
+Set current limit (equivalent to `POST /api/channel/X/ilimit`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       limit_8mA       bool    true=8mA limit, false=25mA full
+```
+
+**Response payload:** Echoes request.
+
+#### 0x1A SET_AVDD_SELECT
+Set AVDD source (equivalent to `POST /api/channel/X/avdd`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       select          u8      AVDD source (0-3)
+```
+
+**Response payload:** Echoes request.
+
+#### 0x1B GET_ADC_VALUE
+Read single ADC value (equivalent to `GET /api/channel/X/adc`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+```
+
+**Response payload:**
+```
+0       channel         u8
+1       adc_raw         u24     24-bit raw ADC code
+4       adc_value       f32     Converted value
+8       adc_range       u8      Current range code
+9       adc_rate        u8      Current rate code
+10      adc_mux         u8      Current mux code
+```
+
+#### 0x1C GET_DAC_READBACK
+Read active DAC code (equivalent to `GET /api/channel/X/dac/readback`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+```
+
+**Response payload:**
+```
+0       channel         u8
+1       active_code     u16     DAC_ACTIVE register value
+```
+
+---
+
+### 6.4 Fault Management
+
+#### 0x20 CLEAR_ALL_ALERTS
+Clear all alert status bits (equivalent to `POST /api/faults/clear`).
+
+**Request payload:** (empty)
+**Response payload:** (empty)
+
+#### 0x21 CLEAR_CHANNEL_ALERT
+Clear a single channel's alert (equivalent to `POST /api/faults/clear/X`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+```
+
+**Response payload:** Echoes request.
+
+#### 0x22 SET_ALERT_MASK
+Set global alert masks (equivalent to `POST /api/faults/mask`).
+
+**Request payload:**
+```
+0       alert_mask      u16     ALERT_MASK register value
+2       supply_mask     u16     SUPPLY_ALERT_MASK register value
+```
+
+**Response payload:** Echoes request.
+
+#### 0x23 SET_CHANNEL_ALERT_MASK
+Set per-channel alert mask (equivalent to `POST /api/faults/mask/X`).
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       mask            u16     CHANNEL_ALERT_MASK value
+```
+
+**Response payload:** Echoes request.
+
+---
+
+### 6.5 Diagnostics Configuration
+
+#### 0x30 SET_DIAG_CONFIG
+Configure a diagnostic slot source (equivalent to `POST /api/diagnostics/config`).
+
+**Request payload:**
+```
+0       slot            u8      Slot index (0-3)
+1       source          u8      Diagnostic source code (0-13)
+```
+
+**Response payload:** Echoes request.
+
+---
+
+### 6.6 GPIO Control
+
+#### 0x40 GET_GPIO_STATUS
+Read all GPIO states (equivalent to `GET /api/gpio`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Per GPIO (6x, stride = 5):
++0      gpio_id         u8      GPIO index (0-5, maps to A-F)
++1      mode            u8      GPIO_SELECT mode (0-4)
++2      output          bool    Current output value
++3      input           bool    Current input value
++4      pulldown        bool    Pull-down enabled
+
+Total: 6 x 5 = 30 bytes
+```
+
+#### 0x41 SET_GPIO_CONFIG
+Configure GPIO mode (equivalent to `POST /api/gpio/X/config`).
+
+**Request payload:**
+```
+0       gpio            u8      GPIO index (0-5)
+1       mode            u8      GPIO mode (0-4)
+2       pulldown        bool    Enable pull-down
+```
+
+**Response payload:** Echoes request.
+
+#### 0x42 SET_GPIO_VALUE
+Set GPIO output value (equivalent to `POST /api/gpio/X/set`).
+
+**Request payload:**
+```
+0       gpio            u8      GPIO index (0-5)
+1       value           bool    Output value
+```
+
+**Response payload:** Echoes request.
+
+---
+
+### 6.7 UART Bridge Configuration
+
+#### 0x50 GET_UART_CONFIG
+Read UART bridge configuration (equivalent to `GET /api/uart/config`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       bridge_count    u8      Number of bridges
+
+Per bridge (stride = 12):
++0      bridge_id       u8      Bridge index
++1      uart_num        u8      UART peripheral (0-2)
++2      tx_pin          u8      TX GPIO pin
++3      rx_pin          u8      RX GPIO pin
++4      baudrate        u32     Baud rate
++8      data_bits       u8      Data bits (5-8)
++9      parity          u8      Parity (0=none, 1=odd, 2=even)
++10     stop_bits       u8      Stop bits (0=1, 1=1.5, 2=2)
++11     enabled         bool    Bridge active
+```
+
+#### 0x51 SET_UART_CONFIG
+Configure UART bridge (equivalent to `POST /api/uart/X/config`).
+
+**Request payload:**
+```
+0       bridge_id       u8      Bridge index
+1       uart_num        u8      UART peripheral (0-2)
+2       tx_pin          u8      TX GPIO pin
+3       rx_pin          u8      RX GPIO pin
+4       baudrate        u32     Baud rate (300-3000000)
+8       data_bits       u8      Data bits (5-8)
+9       parity          u8      Parity (0=none, 1=odd, 2=even)
+10      stop_bits       u8      Stop bits (0=1, 1=1.5, 2=2)
+11      enabled         bool    Bridge active
+```
+
+**Response payload:** Echoes request.
+
+#### 0x52 GET_UART_PINS
+Get available GPIO pins for UART (equivalent to `GET /api/uart/pins`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       count           u8      Number of available pins
+1..N    pins            u8[]    GPIO pin numbers
+```
+
+---
+
+### 6.8 Register Access (Low-Level)
+
+#### 0x71 REGISTER_READ
+Read a raw AD74416H register (equivalent to CLI `rreg`).
+
+**Request payload:**
+```
+0       address         u8      Register address (hex)
+```
+
+**Response payload:**
+```
+0       address         u8      Echoed address
+1       value           u16     16-bit register value
+```
+
+#### 0x72 REGISTER_WRITE
+Write a raw AD74416H register (equivalent to CLI `wreg`).
+
+**Request payload:**
+```
+0       address         u8      Register address
+1       value           u16     16-bit register value
+```
+
+**Response payload:** Echoes request.
+
+---
+
+### 6.9 System Commands
+
+#### 0x70 DEVICE_RESET
+Reset all channels to HIGH_IMP and clear alerts (equivalent to `POST /api/device/reset`).
+
+**Request payload:** (empty)
+**Response payload:** (empty)
+
+#### 0xFE PING
+Keepalive / latency measurement. Device echoes immediately.
+
+**Request payload:**
+```
+0..3    token           u32     Arbitrary token (echoed back)
+```
+
+**Response payload:**
+```
+0..3    token           u32     Echoed token
+4..7    uptime_ms       u32     Device uptime in milliseconds
+```
+
+#### 0xFF DISCONNECT
+Graceful exit from binary mode. Device returns to CLI.
+
+**Request payload:** (empty)
+**Response payload:** (empty -- sent before reverting to CLI mode)
+
+---
+
+### 6.10 Enum Reference Tables
+
+**ChannelFunction codes:**
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0 | HIGH_IMP | High-impedance (safe state) |
+| 1 | VOUT | Voltage output |
+| 2 | IOUT | Current output |
+| 3 | VIN | Voltage input |
+| 4 | IIN_EXT_PWR | Current input (external power) |
+| 5 | IIN_LOOP_PWR | Current input (loop powered) |
+| 7 | RES_MEAS | Resistance measurement (RTD) |
+| 8 | DIN_LOGIC | Digital input (logic level) |
+| 9 | DIN_LOOP | Digital input (loop powered) |
+| 10 | IOUT_HART | Current output with HART |
+| 11 | IIN_EXT_HART | Current input HART (ext power) |
+| 12 | IIN_LOOP_HART | Current input HART (loop) |
+
+**ADC Range codes:** See FirmwareStructure.md Section 2.
+**ADC Rate codes:** See FirmwareStructure.md Section 2.
+**ADC Mux codes:** See FirmwareStructure.md Section 2.
+**GPIO Mode codes:** 0=HIGH_IMP, 1=OUTPUT, 2=INPUT, 3=DIN_OUT, 4=DO_EXT
+**Diagnostic Source codes:** See FirmwareStructure.md Section 12.
+
+---
+
+## 7. Streaming Protocol
+
+The primary advantage of BBP over HTTP: continuous, push-based data delivery
+with no polling overhead.
+
+### 7.1 ADC Stream
+
+#### 0x60 START_ADC_STREAM
+Begin streaming raw ADC data from selected channels.
+
+**Request payload:**
+```
+0       channel_mask    u8      Bitmask of channels to stream (bit0=chA ... bit3=chD)
+1       divider         u8      Sample rate divider (1 = every sample, N = every Nth)
+```
+
+The divider allows the host to reduce throughput when full-rate data is not
+needed. A divider of 0 is treated as 1 (no division).
+
+**Response payload:**
+```
+0       channel_mask    u8      Confirmed active channels
+1       divider         u8      Confirmed divider
+2       sample_rate     u16     Effective per-channel rate in SPS (after divider)
+```
+
+Once started, the device pushes `ADC_DATA` events (0x80) continuously until
+stopped.
+
+#### 0x61 STOP_ADC_STREAM
+Stop ADC data streaming.
+
+**Request payload:** (empty)
+**Response payload:** (empty)
+
+#### 0x80 ADC_DATA (Event)
+Unsolicited ADC data batch pushed by the device.
+
+**Event payload:**
+```
+Offset  Field               Type    Description
+0       channel_mask        u8      Active channel bitmask
+1       base_timestamp_us   u32     Timestamp of first sample (us, wrapping)
+5       sample_count        u16     Number of samples in this batch
+7       samples             ...     Packed sample data
+
+Each sample (per active channel, in mask order):
+  +0    raw_code            u24     24-bit ADC code (LE)
+```
+
+**Sample size per batch entry** = 3 bytes x (number of set bits in channel_mask)
+
+Example: 4 channels active, 50 samples per batch:
+- Payload = 7 + (50 x 12) = 607 bytes
+- At 9.6 kSPS: ~192 batches/sec (50 samples each) -> ~117 KB/s
+
+**Batching strategy (firmware):**
+- Collect samples into a buffer
+- Flush when buffer reaches ~50 samples OR 5 ms elapsed (whichever comes first)
+- This balances latency (~5 ms worst case) against framing overhead
+
+### 7.2 Scope Stream
+
+#### 0x62 START_SCOPE_STREAM
+Begin streaming pre-processed scope data (10 ms buckets with min/max/avg,
+equivalent to `GET /api/scope` but push-based).
+
+**Request payload:** (empty)
+
+**Response payload:** (empty)
+
+#### 0x63 STOP_SCOPE_STREAM
+Stop scope data streaming.
+
+**Request payload:** (empty)
+**Response payload:** (empty)
+
+#### 0x81 SCOPE_DATA (Event)
+Unsolicited scope bucket pushed by the device every 10 ms.
+
+**Event payload:**
+```
+Offset  Field           Type    Description
+0       seq             u32     Monotonic bucket sequence number
+4       timestamp_ms    u32     Bucket timestamp (ms since boot)
+8       count           u16     Number of samples in bucket
+
+Per channel (4x, stride = 12):
++0      avg             f32     Average value (V or mA)
++4      min             f32     Minimum value
++8      max             f32     Maximum value
+
+Total: 10 + (4 x 12) = 58 bytes per event
+```
+
+### 7.3 Alert Events
+
+#### 0x82 ALERT_EVENT (Event)
+Pushed when an alert condition is detected (from fault monitor task).
+
+**Event payload:**
+```
+0       alert_status        u16     Updated global ALERT_STATUS
+2       supply_alert_status u16     Updated SUPPLY_ALERT_STATUS
+
+Per channel with active alert (variable count, 0-4):
++0      channel             u8
++1      channel_alert       u16
+```
+
+### 7.4 DIN Event
+
+#### 0x83 DIN_EVENT (Event)
+Pushed on digital input state change (edge detection).
+
+**Event payload:**
+```
+0       channel         u8      Channel (0-3)
+1       state           bool    New comparator output state
+2       counter         u32     Updated event counter
+```
+
+---
+
+## 8. Error Handling
+
+### 8.1 Error Response Format
+
+When a command fails, the device sends an ERR message (MSG_TYPE = 0x04) with
+the same SEQ as the failed command.
+
+**Error payload:**
+```
+0       error_code      u8      Error code (see below)
+1       cmd_id          u8      The CMD_ID that failed
+2..N    message         u8[]    Optional ASCII error description (not null-terminated)
+```
+
+### 8.2 Error Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0x01 | ERR_INVALID_CMD | Unknown CMD_ID |
+| 0x02 | ERR_INVALID_CHANNEL | Channel index out of range |
+| 0x03 | ERR_INVALID_PARAM | Parameter value out of valid range |
+| 0x04 | ERR_SPI_FAIL | SPI communication error with AD74416H |
+| 0x05 | ERR_QUEUE_FULL | Command queue is full (try again) |
+| 0x06 | ERR_BUSY | Resource busy (mutex timeout) |
+| 0x07 | ERR_INVALID_STATE | Operation not valid in current device state |
+| 0x08 | ERR_CRC_FAIL | CRC mismatch (informational, frame was discarded) |
+| 0x09 | ERR_FRAME_TOO_LARGE | Decoded frame exceeds max size |
+| 0x0A | ERR_STREAM_ACTIVE | Stream already active (stop first) |
+
+### 8.3 Host Timeout Strategy
+
+- **Command timeout:** 500 ms (commands are queued, may wait for processor)
+- **Handshake timeout:** 2000 ms
+- **Ping timeout:** 200 ms
+
+On timeout, the host should:
+1. Retry once with the same SEQ
+2. If retry fails, send PING to check connectivity
+3. If PING fails, assume disconnection and close the port
+
+---
+
+## 9. Flow Control
+
+### 9.1 Device -> Host (Backpressure)
+
+USB CDC has built-in flow control via the USB protocol itself. If the host
+does not read fast enough, `tud_cdc_write()` will block or return short.
+
+The firmware handles this by:
+- Dropping the oldest ADC stream batch if the CDC TX buffer is full
+- Incrementing a dropped-batch counter (reported in the next ADC_DATA header)
+- Never blocking the ADC poll task
+
+If the host detects gaps in the `base_timestamp_us` field, it knows samples
+were dropped due to backpressure.
+
+### 9.2 Host -> Device
+
+The device processes commands sequentially via the command queue. If the queue
+is full, the device returns ERR_QUEUE_FULL. The host should wait and retry.
+
+Commands are lightweight (no large uploads), so host->device flow control is
+not a practical concern.
+
+---
+
+## 10. Implementation Notes
+
+### 10.1 Firmware Integration Points
+
+**Files to modify:**
+- `cli.cpp` -- Add magic byte detection in the CLI input loop
+- `serial_io.h/cpp` -- Add binary mode flag and raw read/write functions
+- New file: `bbp.h/cpp` -- Protocol handler (COBS codec, message dispatch, stream management)
+- `tasks.cpp` -- Hook ADC poll to push data to BBP stream buffer when active
+
+**Task architecture:**
+- BBP runs in the main loop task (Core 0) alongside CLI, since only one is
+  active at a time
+- ADC data is pushed from the ADC poll task (Core 1) into a lock-free ring
+  buffer; the BBP task drains and sends it
+- Commands received via BBP are enqueued using the existing `sendCommand()` path
+
+### 10.2 Host Application Notes
+
+**Opening the port:**
+- On all platforms, CDC #0 appears as a standard serial/COM port:
+  - macOS: `/dev/cu.usbmodemXXXX`
+  - Linux: `/dev/ttyACM0`
+  - Windows: `COMx` (via usbser.sys, no driver install needed)
+- Open at any baud rate (CDC ignores baud rate, it's USB-native)
+- Set DTR high (signals connection to device)
+- Send the handshake magic bytes
+- Wait for 8-byte handshake response
+- Begin COBS-framed communication
+
+**Recommended host libraries:**
+- Cross-platform serial: `serialport` (Rust), `pyserial` (Python),
+  `SerialPort` (Node.js), `libserialport` (C/C++)
+- All of these handle CDC/ACM ports transparently
+
+### 10.3 Identifying BugBuster Ports
+
+The TinyUSB descriptor exposes:
+- **VID/PID:** As configured in `tusb_config.h` (Espressif defaults or custom)
+- **Manufacturer string:** Should be set to `"BugBuster"`
+- **Product string:** Should be set to `"BugBuster Universal Debugger"`
+- **Serial number:** Unique per device (ESP32 MAC-based)
+
+The host app should enumerate serial ports and match on VID/PID or
+manufacturer/product strings to auto-detect the device. CDC #0 vs #1 is
+distinguished by the interface number in the USB descriptor (interface 0 =
+CLI/BBP, interface 2 = UART bridge).
+
+---
+
+## 11. Example Flows
+
+### 11.1 Connection and Status Query
+
+```
+Host                                    Device
+  │                                       │
+  │──── 0xBB 0x42 0x55 0x47 ────────────>│  (magic bytes)
+  │                                       │
+  │<──── 0xBB 0x42 0x55 0x47 0x01 ───────│  (ACK, proto v1, fw version)
+  │         0x01 0x00 0x01                │
+  │                                       │  (device enters binary mode)
+  │                                       │
+  │──── [COBS: CMD seq=1 GET_STATUS] ───>│
+  │                                       │
+  │<──── [COBS: RSP seq=1 status...] ────│
+  │                                       │
+```
+
+### 11.2 Configure Channel and Start ADC Stream
+
+```
+Host                                    Device
+  │                                       │
+  │── CMD seq=2 SET_CHANNEL_FUNC ───────>│  ch=0, func=3 (VIN)
+  │   [0x01][0x02,0x00][0x10][0x00,0x03] │
+  │                                       │
+  │<── RSP seq=2 ────────────────────────│  OK, ch=0, func=3
+  │                                       │
+  │── CMD seq=3 SET_ADC_CONFIG ─────────>│  ch=0, mux=0, range=0, rate=13
+  │                                       │
+  │<── RSP seq=3 ────────────────────────│  OK
+  │                                       │
+  │── CMD seq=4 START_ADC_STREAM ───────>│  mask=0x01, divider=1
+  │                                       │
+  │<── RSP seq=4 ────────────────────────│  mask=0x01, div=1, rate=9600
+  │                                       │
+  │<── EVT ADC_DATA (batch 1) ──────────│  50 samples, ch0 only
+  │<── EVT ADC_DATA (batch 2) ──────────│  50 samples
+  │<── EVT ADC_DATA (batch 3) ──────────│  50 samples
+  │    ... continuous ...                 │
+  │                                       │
+  │── CMD seq=5 STOP_ADC_STREAM ────────>│
+  │                                       │
+  │<── RSP seq=5 ────────────────────────│  OK, streaming stopped
+  │                                       │
+```
+
+### 11.3 Graceful Disconnect
+
+```
+Host                                    Device
+  │                                       │
+  │── CMD seq=99 DISCONNECT ────────────>│
+  │                                       │
+  │<── RSP seq=99 ──────────────────────│  OK
+  │                                       │  (device reverts to CLI)
+  │<──── "\r\n[CLI Ready]\r\n" ─────────│  (text mode)
+  │                                       │
+```
+
+---
+
+## 12. Protocol Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2026-03-27 | Initial specification |
+
+---
+
+## Appendix A: Quick Reference -- Command ID Table
+
+| CMD_ID | Name | Direction | Payload (Req) | Web API Equivalent |
+|--------|------|-----------|---------------|-------------------|
+| 0x01 | GET_STATUS | H->D | -- | `GET /api/status` |
+| 0x02 | GET_DEVICE_INFO | H->D | -- | `GET /api/device/info` |
+| 0x03 | GET_FAULTS | H->D | -- | `GET /api/faults` |
+| 0x04 | GET_DIAGNOSTICS | H->D | -- | `GET /api/diagnostics` |
+| 0x10 | SET_CHANNEL_FUNC | H->D | ch, func | `POST /api/channel/X/function` |
+| 0x11 | SET_DAC_CODE | H->D | ch, code | `POST /api/channel/X/dac` |
+| 0x12 | SET_DAC_VOLTAGE | H->D | ch, V, bipolar | `POST /api/channel/X/dac` |
+| 0x13 | SET_DAC_CURRENT | H->D | ch, mA | `POST /api/channel/X/dac` |
+| 0x14 | SET_ADC_CONFIG | H->D | ch, mux, rng, rate | `POST /api/channel/X/adc/config` |
+| 0x15 | SET_DIN_CONFIG | H->D | ch, thresh, ... | `POST /api/channel/X/din/config` |
+| 0x16 | SET_DO_CONFIG | H->D | ch, mode, ... | `POST /api/channel/X/do/config` |
+| 0x17 | SET_DO_STATE | H->D | ch, on | `POST /api/channel/X/do/set` |
+| 0x18 | SET_VOUT_RANGE | H->D | ch, bipolar | `POST /api/channel/X/vout/range` |
+| 0x19 | SET_CURRENT_LIMIT | H->D | ch, limit | `POST /api/channel/X/ilimit` |
+| 0x1A | SET_AVDD_SELECT | H->D | ch, sel | `POST /api/channel/X/avdd` |
+| 0x1B | GET_ADC_VALUE | H->D | ch | `GET /api/channel/X/adc` |
+| 0x1C | GET_DAC_READBACK | H->D | ch | `GET /api/channel/X/dac/readback` |
+| 0x20 | CLEAR_ALL_ALERTS | H->D | -- | `POST /api/faults/clear` |
+| 0x21 | CLEAR_CHANNEL_ALERT | H->D | ch | `POST /api/faults/clear/X` |
+| 0x22 | SET_ALERT_MASK | H->D | masks | `POST /api/faults/mask` |
+| 0x23 | SET_CH_ALERT_MASK | H->D | ch, mask | `POST /api/faults/mask/X` |
+| 0x30 | SET_DIAG_CONFIG | H->D | slot, src | `POST /api/diagnostics/config` |
+| 0x40 | GET_GPIO_STATUS | H->D | -- | `GET /api/gpio` |
+| 0x41 | SET_GPIO_CONFIG | H->D | gpio, mode, pd | `POST /api/gpio/X/config` |
+| 0x42 | SET_GPIO_VALUE | H->D | gpio, val | `POST /api/gpio/X/set` |
+| 0x50 | GET_UART_CONFIG | H->D | -- | `GET /api/uart/config` |
+| 0x51 | SET_UART_CONFIG | H->D | bridge cfg | `POST /api/uart/X/config` |
+| 0x52 | GET_UART_PINS | H->D | -- | `GET /api/uart/pins` |
+| 0x60 | START_ADC_STREAM | H->D | mask, div | (new, no web equiv) |
+| 0x61 | STOP_ADC_STREAM | H->D | -- | (new) |
+| 0x62 | START_SCOPE_STREAM | H->D | -- | `GET /api/scope` (push) |
+| 0x63 | STOP_SCOPE_STREAM | H->D | -- | (new) |
+| 0x70 | DEVICE_RESET | H->D | -- | `POST /api/device/reset` |
+| 0x71 | REGISTER_READ | H->D | addr | CLI `rreg` |
+| 0x72 | REGISTER_WRITE | H->D | addr, val | CLI `wreg` |
+| 0xFE | PING | H->D | token | (new) |
+| 0xFF | DISCONNECT | H->D | -- | (new) |
+
+## Appendix B: Event ID Table
+
+| EVT_ID | Name | Direction | Trigger |
+|--------|------|-----------|---------|
+| 0x80 | ADC_DATA | D->H | ADC stream batch ready |
+| 0x81 | SCOPE_DATA | D->H | 10 ms scope bucket complete |
+| 0x82 | ALERT_EVENT | D->H | Alert condition detected |
+| 0x83 | DIN_EVENT | D->H | Digital input state change |
+
+## Appendix C: Wire Format Example
+
+**Example: SET_DAC_VOLTAGE on channel 0 to 5.0V unipolar, SEQ=42**
+
+Raw message (before COBS):
+```
+Byte  Hex   Field
+0     01    MSG_TYPE = CMD
+1     2A    SEQ low = 42
+2     00    SEQ high = 0
+3     12    CMD_ID = SET_DAC_VOLTAGE
+4     00    channel = 0
+5     00    voltage = 5.0f (IEEE 754: 0x40A00000)
+6     00
+7     A0
+8     40
+9     00    bipolar = false
+10    XX    CRC-16 low
+11    XX    CRC-16 high
+```
+
+After COBS encoding + 0x00 delimiter: ~14 bytes on the wire.
