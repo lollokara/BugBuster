@@ -20,6 +20,7 @@
 #include "webserver.h"
 #include "cli.h"
 #include "uart_bridge.h"
+#include "bbp.h"
 
 static const char* TAG = "main";
 
@@ -30,28 +31,35 @@ AD74416H_SPI spiDriver(PIN_SDO, PIN_SDI, PIN_SYNC, PIN_SCLK, AD74416H_DEV_ADDR);
 static AD74416H device(spiDriver, PIN_RESET);
 
 // -----------------------------------------------------------------------------
-// Main loop task (CLI + heartbeat)
+// Main loop task (CLI/BBP + heartbeat)
 // -----------------------------------------------------------------------------
 static void mainLoopTask(void* pvParam)
 {
     uint32_t lastHeartbeat = 0;
 
     for (;;) {
+        // cliProcess() handles both CLI and BBP modes:
+        // - In CLI mode: processes text commands, scans for BBP handshake
+        // - In BBP mode: calls bbpProcess() for binary protocol
         cliProcess();
 
-        uint32_t now = millis_now();
-        if (now - lastHeartbeat >= 30000UL) {
-            lastHeartbeat = now;
-            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                serial_printf("\r\n[Heartbeat] uptime=%lus | spiOk=%d | temp=%.1f C\r\n",
-                              (unsigned long)(now / 1000),
-                              (int)g_deviceState.spiOk,
-                              g_deviceState.dieTemperature);
-                xSemaphoreGive(g_stateMutex);
+        // Heartbeat only in CLI mode (don't pollute binary stream)
+        if (!bbpIsActive()) {
+            uint32_t now = millis_now();
+            if (now - lastHeartbeat >= 30000UL) {
+                lastHeartbeat = now;
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    serial_printf("\r\n[Heartbeat] uptime=%lus | spiOk=%d | temp=%.1f C\r\n",
+                                  (unsigned long)(now / 1000),
+                                  (int)g_deviceState.spiOk,
+                                  g_deviceState.dieTemperature);
+                    xSemaphoreGive(g_stateMutex);
+                }
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(20));
+        // Faster loop in BBP mode for lower streaming latency
+        vTaskDelay(pdMS_TO_TICKS(bbpIsActive() ? 2 : 20));
     }
 }
 
@@ -125,11 +133,13 @@ extern "C" void app_main(void)
     initWebServer();
     serial_println("[BugBuster] Web server on port 80");
 
-    // 12. CLI
+    // 12. CLI + BBP
     cliInit(device);
+    bbpInit(&device, &spiDriver);
     serial_println("[BugBuster] CLI ready. Type 'help'.");
+    serial_println("[BugBuster] BBP ready (binary protocol on CDC #0).");
     serial_println("[BugBuster] Boot complete.");
 
-    // 12. Main loop task (CLI + heartbeat)
+    // 13. Main loop task (CLI/BBP + heartbeat)
     xTaskCreatePinnedToCore(mainLoopTask, "mainLoop", 8192, NULL, 1, NULL, 0);
 }

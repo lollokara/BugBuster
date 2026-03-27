@@ -11,6 +11,7 @@
 #include "tasks.h"
 #include "serial_io.h"
 #include "wifi_manager.h"
+#include "bbp.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -118,6 +119,12 @@ void cliInit(AD74416H& device)
 
 void cliProcess()
 {
+    // If BBP binary mode is active, process binary protocol instead of CLI
+    if (bbpIsActive()) {
+        bbpProcess();
+        return;
+    }
+
     if (s_showPrompt) {
         serial_print("\r\n[BugBuster]> ");
         s_showPrompt = false;
@@ -125,6 +132,19 @@ void cliProcess()
 
     while (serial_available()) {
         char c = (char)serial_read();
+
+        // Check for BBP handshake magic (0xBB 'B' 'U' 'G')
+        // 0xBB is non-ASCII, so it can't appear in normal CLI input
+        if (bbpDetectHandshake((uint8_t)c)) {
+            // Handshake detected - binary mode activated
+            // Discard any partial CLI input
+            s_pos = 0;
+            s_showPrompt = true;
+            return;
+        }
+
+        // 0xBB is not a valid CLI character, skip it
+        if ((uint8_t)c == 0xBB) continue;
 
         if (c == '\r' || c == '\n') {
             if (s_pos > 0) {

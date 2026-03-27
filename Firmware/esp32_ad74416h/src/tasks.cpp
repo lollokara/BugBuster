@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "tasks.h"
+#include "bbp.h"
 #include "esp_timer.h"
 
 // -----------------------------------------------------------------------------
@@ -163,6 +164,12 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 sb.cur.count++;
 
                 xSemaphoreGive(g_stateMutex);
+            }
+
+            // Push into BBP ADC stream ring buffer (lock-free, outside mutex)
+            if (bbpAdcStreamMask() != 0) {
+                uint32_t ts_us = (uint32_t)esp_timer_get_time();
+                bbpPushAdcSample(raw, ts_us);
             }
         }
 
