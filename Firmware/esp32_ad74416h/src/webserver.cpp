@@ -10,6 +10,8 @@
 
 #include "tasks.h"
 #include "config.h"
+#include "ad74416h.h"
+#include "ad74416h_spi.h"
 
 // -----------------------------------------------------------------------------
 // Helper: CORS headers for development
@@ -463,6 +465,30 @@ static void handlePostCurrentLimit(AsyncWebServerRequest* request,
     sendJson(request, resp);
 }
 
+// POST /api/device/reset
+static void handlePostDeviceReset(AsyncWebServerRequest* request,
+                                   uint8_t* /*data*/, size_t /*len*/,
+                                   size_t /*index*/, size_t /*total*/)
+{
+    // Reset via command queue: clear alerts + set all HIGH_IMP
+    Command cmd{};
+    cmd.type = CMD_CLEAR_ALERTS;
+    sendCommand(cmd);
+
+    // Reset all channel functions to HIGH_IMP
+    for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+        Command funcCmd{};
+        funcCmd.type    = CMD_SET_CHANNEL_FUNC;
+        funcCmd.channel = ch;
+        funcCmd.func    = CH_FUNC_HIGH_IMP;
+        sendCommand(funcCmd);
+    }
+
+    JsonDocument resp;
+    resp["ok"] = true;
+    sendJson(request, resp);
+}
+
 // POST /api/faults/clear
 static void handlePostClearAllFaults(AsyncWebServerRequest* request,
                                       uint8_t* /*data*/, size_t /*len*/,
@@ -545,6 +571,311 @@ static void handlePostChannelFaultMask(AsyncWebServerRequest* request,
 }
 
 // -----------------------------------------------------------------------------
+// GPIO mode name helper
+// -----------------------------------------------------------------------------
+
+static const char* gpioModeName(uint8_t mode) {
+    static const char* names[] = {"HIGH_IMP","OUTPUT","INPUT","DIN_OUT","DO_EXT"};
+    return mode < 5 ? names[mode] : "?";
+}
+
+// -----------------------------------------------------------------------------
+// GPIO route handlers
+// -----------------------------------------------------------------------------
+
+// GET /api/gpio
+static void handleGetGpio(AsyncWebServerRequest* request)
+{
+    JsonDocument doc;
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        JsonArray gpios = doc["gpios"].to<JsonArray>();
+        for (uint8_t g = 0; g < AD74416H_NUM_GPIOS; g++) {
+            const GpioState& gs = g_deviceState.gpio[g];
+            JsonObject obj = gpios.add<JsonObject>();
+            obj["pin"]      = g;
+            obj["name"]     = String((char)('A' + g));
+            obj["mode"]     = gs.mode;
+            obj["modeName"] = gpioModeName(gs.mode);
+            obj["output"]   = gs.outputVal;
+            obj["input"]    = gs.inputVal;
+            obj["pulldown"] = gs.pulldown;
+        }
+        xSemaphoreGive(g_stateMutex);
+    } else {
+        JsonDocument err;
+        err["error"] = "State mutex timeout";
+        sendJson(request, err, 503);
+        return;
+    }
+
+    sendJson(request, doc);
+}
+
+// POST /api/gpio/{n}/config
+// Body: {"mode": 1, "pulldown": false}
+static void handlePostGpioConfig(AsyncWebServerRequest* request,
+                                  uint8_t* data, size_t len,
+                                  size_t /*index*/, size_t /*total*/)
+{
+    int g = request->pathArg(0).toInt();
+    if (g < 0 || g >= AD74416H_NUM_GPIOS) {
+        JsonDocument err;
+        err["error"] = "GPIO must be 0-5";
+        sendJson(request, err, 400);
+        return;
+    }
+
+    JsonDocument doc;
+    if (!parseBody(request, data, len, doc)) return;
+
+    if (!doc["mode"].is<int>()) {
+        JsonDocument err; err["error"] = "Missing 'mode' field";
+        sendJson(request, err, 400); return;
+    }
+
+    Command cmd{};
+    cmd.type            = CMD_GPIO_CONFIG;
+    cmd.gpioCfg.gpio    = (uint8_t)g;
+    cmd.gpioCfg.mode    = (uint8_t)doc["mode"].as<int>();
+    cmd.gpioCfg.pulldown = doc["pulldown"] | false;
+    sendCommand(cmd);
+
+    JsonDocument resp;
+    resp["ok"]       = true;
+    resp["gpio"]     = g;
+    resp["mode"]     = (int)cmd.gpioCfg.mode;
+    resp["pulldown"] = cmd.gpioCfg.pulldown;
+    sendJson(request, resp);
+}
+
+// POST /api/gpio/{n}/set
+// Body: {"value": true}
+static void handlePostGpioSet(AsyncWebServerRequest* request,
+                               uint8_t* data, size_t len,
+                               size_t /*index*/, size_t /*total*/)
+{
+    int g = request->pathArg(0).toInt();
+    if (g < 0 || g >= AD74416H_NUM_GPIOS) {
+        JsonDocument err;
+        err["error"] = "GPIO must be 0-5";
+        sendJson(request, err, 400);
+        return;
+    }
+
+    JsonDocument doc;
+    if (!parseBody(request, data, len, doc)) return;
+
+    Command cmd{};
+    cmd.type          = CMD_GPIO_SET;
+    cmd.gpioSet.gpio  = (uint8_t)g;
+    cmd.gpioSet.value = doc["value"] | false;
+    sendCommand(cmd);
+
+    JsonDocument resp;
+    resp["ok"]    = true;
+    resp["gpio"]  = g;
+    resp["value"] = cmd.gpioSet.value;
+    sendJson(request, resp);
+}
+
+// -----------------------------------------------------------------------------
+// Diagnostic source name / unit helpers
+// -----------------------------------------------------------------------------
+
+static const char* diagSourceName(uint8_t source)
+{
+    switch (source) {
+        case 0:  return "AGND";
+        case 1:  return "TEMP";
+        case 2:  return "DVCC";
+        case 3:  return "AVCC";
+        case 4:  return "LDO1V8";
+        case 5:  return "AVDD_HI";
+        case 6:  return "AVDD_LO";
+        case 7:  return "AVSS";
+        case 8:  return "LVIN";
+        case 9:  return "DO_VDD";
+        case 10: return "VSENSEP";
+        case 11: return "VSENSEN";
+        case 12: return "DO_CURRENT";
+        case 13: return "AVDD";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char* diagSourceUnit(uint8_t source)
+{
+    switch (source) {
+        case 1:  return "C";       // Temperature in degrees Celsius
+        default: return "V";       // All other sources are voltages
+    }
+}
+
+// -----------------------------------------------------------------------------
+// GET /api/diagnostics
+// -----------------------------------------------------------------------------
+
+static void handleGetDiagnostics(AsyncWebServerRequest* request)
+{
+    JsonDocument doc;
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        JsonArray slots = doc["slots"].to<JsonArray>();
+        for (uint8_t i = 0; i < 4; i++) {
+            const DiagState& ds = g_deviceState.diag[i];
+            JsonObject obj = slots.add<JsonObject>();
+            obj["slot"]       = i;
+            obj["source"]     = ds.source;
+            obj["sourceName"] = diagSourceName(ds.source);
+            obj["raw"]        = ds.rawCode;
+            obj["value"]      = ds.value;
+            obj["unit"]       = diagSourceUnit(ds.source);
+        }
+        xSemaphoreGive(g_stateMutex);
+    } else {
+        JsonDocument err;
+        err["error"] = "State mutex timeout";
+        sendJson(request, err, 503);
+        return;
+    }
+
+    sendJson(request, doc);
+}
+
+// -----------------------------------------------------------------------------
+// POST /api/diagnostics/config
+// Body: {"slot": 0, "source": 1}
+// -----------------------------------------------------------------------------
+
+static void handlePostDiagConfig(AsyncWebServerRequest* request,
+                                  uint8_t* data, size_t len,
+                                  size_t /*index*/, size_t /*total*/)
+{
+    JsonDocument doc;
+    if (!parseBody(request, data, len, doc)) return;
+
+    if (!doc["slot"].is<int>() || !doc["source"].is<int>()) {
+        JsonDocument err; err["error"] = "Missing 'slot' or 'source' field";
+        sendJson(request, err, 400); return;
+    }
+
+    int slot   = doc["slot"].as<int>();
+    int source = doc["source"].as<int>();
+
+    if (slot < 0 || slot > 3) {
+        JsonDocument err; err["error"] = "Slot must be 0-3";
+        sendJson(request, err, 400); return;
+    }
+    if (source < 0 || source > 13) {
+        JsonDocument err; err["error"] = "Source must be 0-13";
+        sendJson(request, err, 400); return;
+    }
+
+    Command cmd{};
+    cmd.type             = CMD_DIAG_CONFIG;
+    cmd.diagCfg.slot     = (uint8_t)slot;
+    cmd.diagCfg.source   = (uint8_t)source;
+    sendCommand(cmd);
+
+    JsonDocument resp;
+    resp["ok"]     = true;
+    resp["slot"]   = slot;
+    resp["source"] = source;
+    sendJson(request, resp);
+}
+
+// -----------------------------------------------------------------------------
+// GET /api/device/info
+// -----------------------------------------------------------------------------
+
+static void handleGetDeviceInfo(AsyncWebServerRequest* request)
+{
+    extern AD74416H_SPI spiDriver;
+
+    uint16_t rev = 0, id0 = 0, id1 = 0;
+    spiDriver.readRegister(REG_SILICON_REV, &rev);
+    spiDriver.readRegister(REG_SILICON_ID0, &id0);
+    spiDriver.readRegister(REG_SILICON_ID1, &id1);
+
+    bool spiOk = false;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        spiOk = g_deviceState.spiOk;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    char id0Str[8], id1Str[8];
+    snprintf(id0Str, sizeof(id0Str), "0x%04X", id0);
+    snprintf(id1Str, sizeof(id1Str), "0x%04X", id1);
+
+    JsonDocument doc;
+    doc["siliconRev"]  = (int)rev;
+    doc["siliconId0"]  = id0Str;
+    doc["siliconId1"]  = id1Str;
+    doc["spiOk"]       = spiOk;
+    sendJson(request, doc);
+}
+
+// -----------------------------------------------------------------------------
+// POST /api/channel/{n}/avdd
+// Body: {"select": 0}
+// -----------------------------------------------------------------------------
+
+static void handlePostAvddSelect(AsyncWebServerRequest* request,
+                                   uint8_t* data, size_t len,
+                                   size_t /*index*/, size_t /*total*/)
+{
+    int ch;
+    if (!validChannel(request, ch)) return;
+
+    JsonDocument doc;
+    if (!parseBody(request, data, len, doc)) return;
+
+    if (!doc["select"].is<int>()) {
+        JsonDocument err; err["error"] = "Missing 'select' field";
+        sendJson(request, err, 400); return;
+    }
+
+    int sel = doc["select"].as<int>();
+    if (sel < 0 || sel > 3) {
+        JsonDocument err; err["error"] = "Select must be 0-3";
+        sendJson(request, err, 400); return;
+    }
+
+    Command cmd{};
+    cmd.type    = CMD_SET_AVDD_SELECT;
+    cmd.channel = (uint8_t)ch;
+    cmd.avddSel = (uint8_t)sel;
+    sendCommand(cmd);
+
+    JsonDocument resp;
+    resp["ok"]      = true;
+    resp["channel"] = ch;
+    resp["select"]  = sel;
+    sendJson(request, resp);
+}
+
+// -----------------------------------------------------------------------------
+// GET /api/channel/{n}/dac/readback
+// -----------------------------------------------------------------------------
+
+static void handleGetDacReadback(AsyncWebServerRequest* request)
+{
+    int ch;
+    if (!validChannel(request, ch)) return;
+
+    extern AD74416H_SPI spiDriver;
+
+    uint16_t activeCode = 0;
+    spiDriver.readRegister(AD74416H_REG_DAC_ACTIVE(ch), &activeCode);
+
+    JsonDocument doc;
+    doc["channel"]    = ch;
+    doc["activeCode"] = (int)activeCode;
+    sendJson(request, doc);
+}
+
+// -----------------------------------------------------------------------------
 // OPTIONS preflight handler (CORS)
 // -----------------------------------------------------------------------------
 
@@ -569,6 +900,12 @@ void initWebServer(AsyncWebServer& server)
 
     // Fault information
     server.on("/api/faults", HTTP_GET, handleGetFaults);
+
+    // Device reset
+    server.on("/api/device/reset", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        nullptr,
+        handlePostDeviceReset);
 
     // Clear all faults
     server.on("/api/faults/clear", HTTP_POST,
@@ -645,6 +982,43 @@ void initWebServer(AsyncWebServer& server)
         [](AsyncWebServerRequest* request) {},
         nullptr,
         handlePostCurrentLimit);
+
+    // Diagnostics: GET all slots
+    server.on("/api/diagnostics", HTTP_GET, handleGetDiagnostics);
+
+    // Diagnostics: POST config
+    server.on("/api/diagnostics/config", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        nullptr,
+        handlePostDiagConfig);
+
+    // Device info
+    server.on("/api/device/info", HTTP_GET, handleGetDeviceInfo);
+
+    // Per-channel POST AVDD select: /api/channel/{n}/avdd
+    server.on("^\\/api\\/channel\\/(\\d+)\\/avdd$", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        nullptr,
+        handlePostAvddSelect);
+
+    // Per-channel GET DAC readback: /api/channel/{n}/dac/readback
+    server.on("^\\/api\\/channel\\/(\\d+)\\/dac\\/readback$", HTTP_GET,
+        handleGetDacReadback);
+
+    // GPIO: GET all states
+    server.on("/api/gpio", HTTP_GET, handleGetGpio);
+
+    // GPIO: POST config /api/gpio/{n}/config
+    server.on("^\\/api\\/gpio\\/([0-5])\\/config$", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        nullptr,
+        handlePostGpioConfig);
+
+    // GPIO: POST set /api/gpio/{n}/set
+    server.on("^\\/api\\/gpio\\/([0-5])\\/set$", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        nullptr,
+        handlePostGpioSet);
 
     // CORS preflight for all API routes
     server.on("^\\/api\\/.*$", HTTP_OPTIONS, handleOptions);

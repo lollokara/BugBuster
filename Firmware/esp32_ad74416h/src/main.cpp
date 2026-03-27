@@ -18,6 +18,7 @@
 #include <ESPAsyncWebServer.h>
 
 #include "config.h"
+#include "wifi_credentials.h"
 #include "ad74416h_spi.h"
 #include "ad74416h.h"
 #include "tasks.h"
@@ -88,13 +89,11 @@ void setup()
     Serial.print("[BugBuster] AP IP address: ");
     Serial.println(apIP);
 
-    // Optional: connect to a stored STA network (non-blocking)
-    // WiFi.begin() with no arguments uses credentials stored in flash by a
-    // previous WiFi.begin(ssid, pass) call.  If no credentials are stored the
-    // call is harmless.
-    WiFi.begin();
+    // Connect to home WiFi (credentials in wifi_credentials.h, gitignored)
+    Serial.printf("[BugBuster] Connecting to WiFi '%s'...\r\n", WIFI_STA_SSID);
+    WiFi.begin(WIFI_STA_SSID, WIFI_STA_PASSWORD);
     uint8_t sta_attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && sta_attempts < 20) {
+    while (WiFi.status() != WL_CONNECTED && sta_attempts < 40) {
         delay(250);
         sta_attempts++;
     }
@@ -136,19 +135,28 @@ void setup()
     // Update the shared state flag so the web UI can reflect SPI health
     // (g_stateMutex is not yet created; write directly before initTasks())
     g_deviceState.spiOk = spiOk;
+    if (!spiOk) {
+        // SCRATCH test failed at boot - this is often a timing issue.
+        // Manual scratch tests typically pass later, so this is not fatal.
+        Serial.println("[BugBuster] NOTE: Initial SCRATCH test failed but device may still work");
+    }
 
     // -------------------------------------------------------------------------
-    // 7. ADC: enable all four channels and start continuous conversion
+    // 7. Diagnostics setup: route die temperature to diag slot 0
     // -------------------------------------------------------------------------
-    device.enableAdcChannel(0, true);
-    device.enableAdcChannel(1, true);
-    device.enableAdcChannel(2, true);
-    device.enableAdcChannel(3, true);
-    device.startAdcConversion(true);  // continuous mode
-    Serial.println("[BugBuster] ADC continuous conversion started");
+    device.setupDiagnostics();
 
     // -------------------------------------------------------------------------
-    // 8. FreeRTOS tasks
+    // 8. ADC: start continuous conversion with diagnostics only.
+    //    No channel conversions enabled at boot (all channels are HIGH_IMP).
+    //    Channels are enabled individually when a function is assigned.
+    //    This prevents ADC_ERR from floating HIGH_IMP inputs.
+    // -------------------------------------------------------------------------
+    device.startAdcConversion(true, 0x00, 0x0F);  // no channels, all 4 diags
+    Serial.println("[BugBuster] ADC continuous conversion started (diag only)");
+
+    // -------------------------------------------------------------------------
+    // 9. FreeRTOS tasks
     //    Creates g_stateMutex, g_cmdQueue, and starts three tasks pinned to
     //    Core 1: adcPoll (pri 3), faultMonitor (pri 4), cmdProcessor (pri 2)
     // -------------------------------------------------------------------------
@@ -156,14 +164,14 @@ void setup()
     Serial.println("[BugBuster] RTOS tasks started");
 
     // -------------------------------------------------------------------------
-    // 9. Web server
+    // 10. Web server
     // -------------------------------------------------------------------------
     initWebServer(server);
     server.begin();
     Serial.println("[BugBuster] Web server listening on port 80");
 
     // -------------------------------------------------------------------------
-    // 10. Serial CLI
+    // 11. Serial CLI
     // -------------------------------------------------------------------------
     cliInit(device);
     Serial.println("[BugBuster] Serial CLI ready. Type 'help' for commands.");

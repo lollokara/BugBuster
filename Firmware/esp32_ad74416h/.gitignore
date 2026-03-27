@@ -1,0 +1,16 @@
+# PlatformIO build artifacts
+.pio/
+.vscode/
+
+# WiFi credentials (never commit)
+src/wifi_credentials.h
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+*.swp
+*.swo
+*~

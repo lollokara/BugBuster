@@ -5,30 +5,30 @@
 // =============================================================================
 
 // ---------------------------------------------------------------------------
-// ADC range transfer function parameters
-// Index = AdcRange enum value
+// ADC range transfer function parameters (corrected per datasheet Table 24)
+// Index = AdcRange enum value (CONV_RANGE code)
 //
 // Transfer function: V = v_offset + (code / 16777216.0) * v_span
 //
-// Range               v_offset       v_span
-// ADC_RNG_0_12V          0.0 V       12.0 V
-// ADC_RNG_NEG12_12V    -12.0 V       24.0 V
-// ADC_RNG_NEG2_5_2_5V   -2.5 V        5.0 V
-// ADC_RNG_NEG0_3125_0   -0.3125 V     0.3125 V
-// ADC_RNG_0_0_3125V      0.0 V        0.3125 V
-// ADC_RNG_0_0_625V       0.0 V        0.625 V
-// ADC_RNG_NEG0_3125_0_3125V  -0.3125 V  0.625 V
-// ADC_RNG_NEG104MV_104MV    -0.104 V   0.208 V
+// Code  Range                   v_offset       v_span
+//  0    0V to 12V                 0.0 V        12.0 V
+//  1    -12V to +12V            -12.0 V        24.0 V
+//  2    -312.5mV to +312.5mV    -0.3125 V       0.625 V
+//  3    -0.3125V to 0V          -0.3125 V       0.3125 V
+//  4    0V to 0.3125V             0.0 V         0.3125 V
+//  5    0V to 0.625V              0.0 V         0.625 V
+//  6    -104mV to +104mV        -0.104 V        0.208 V
+//  7    -2.5V to +2.5V          -2.5 V          5.0 V
 // ---------------------------------------------------------------------------
 const AdcRangeParams AD74416H::_adc_range_params[8] = {
-    /* ADC_RNG_0_12V             */ {  0.0f,     12.0f    },
-    /* ADC_RNG_NEG12_12V         */ { -12.0f,    24.0f    },
-    /* ADC_RNG_NEG2_5_2_5V       */ { -2.5f,      5.0f   },
-    /* ADC_RNG_NEG0_3125_0V      */ { -0.3125f,   0.3125f },
-    /* ADC_RNG_0_0_3125V         */ {  0.0f,      0.3125f },
-    /* ADC_RNG_0_0_625V          */ {  0.0f,      0.625f  },
-    /* ADC_RNG_NEG0_3125_0_3125V */ { -0.3125f,   0.625f  },
-    /* ADC_RNG_NEG104MV_104MV    */ { -0.104f,    0.208f  },
+    /* 0: ADC_RNG_0_12V             */ {  0.0f,     12.0f    },
+    /* 1: ADC_RNG_NEG12_12V         */ { -12.0f,    24.0f    },
+    /* 2: ADC_RNG_NEG0_3125_0_3125V */ { -0.3125f,   0.625f  },
+    /* 3: ADC_RNG_NEG0_3125_0V      */ { -0.3125f,   0.3125f },
+    /* 4: ADC_RNG_0_0_3125V         */ {  0.0f,      0.3125f },
+    /* 5: ADC_RNG_0_0_625V          */ {  0.0f,      0.625f  },
+    /* 6: ADC_RNG_NEG104MV_104MV    */ { -0.104f,    0.208f  },
+    /* 7: ADC_RNG_NEG2_5_2_5V       */ { -2.5f,      5.0f   },
 };
 
 // ---------------------------------------------------------------------------
@@ -59,14 +59,23 @@ bool AD74416H::begin()
     _spi.begin();
 
     // 4. SPI communication verification via SCRATCH register
-    //    Write a known pattern, read it back, verify match
+    //    Some AD74416H silicon revisions need a few dummy transactions after
+    //    reset before the SPI interface is fully responsive. Retry up to 3 times.
+    bool comm_ok = false;
     const uint16_t test_pattern = 0xA5C3;
-    _spi.writeRegister(REG_SCRATCH, test_pattern);
 
-    uint16_t readback = 0;
-    bool crc_ok = _spi.readRegister(REG_SCRATCH, &readback);
+    for (uint8_t attempt = 0; attempt < 3 && !comm_ok; attempt++) {
+        if (attempt > 0) delay(10);  // Brief delay before retry
 
-    bool comm_ok = crc_ok && (readback == test_pattern);
+        // Send a dummy NOP to wake up the SPI
+        _spi.writeRegister(REG_NOP, 0x0000);
+
+        _spi.writeRegister(REG_SCRATCH, test_pattern);
+
+        uint16_t readback = 0;
+        bool crc_ok = _spi.readRegister(REG_SCRATCH, &readback);
+        comm_ok = crc_ok && (readback == test_pattern);
+    }
 
     // Clear the scratch register after the test
     _spi.writeRegister(REG_SCRATCH, 0x0000);
@@ -75,6 +84,10 @@ bool AD74416H::begin()
     clearAllAlerts();
 
     // 6. Enable internal reference: set REF_EN (bit 13) in PWR_OPTIM_CONFIG
+    //    Even with an external reference, REF_EN must be set if the internal
+    //    buffer is needed. On the eval board, the REFIO pin is externally
+    //    driven so REF_EN can be left enabled without conflict (the reference
+    //    output driver is designed to be overridden by an external source).
     _spi.updateRegister(REG_PWR_OPTIM_CONFIG,
                         PWR_OPTIM_REF_EN_MASK,
                         PWR_OPTIM_REF_EN_MASK);
@@ -219,17 +232,38 @@ void AD74416H::configureAdc(uint8_t ch, AdcConvMux mux, AdcRange range, AdcRate 
     _spi.writeRegister(AD74416H_REG_ADC_CONFIG(ch), reg_val);
 }
 
-void AD74416H::startAdcConversion(bool continuous)
+void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagMask)
 {
-    // Enable all four channels and set the conversion sequence mode
+    // Per datasheet: channels/diagnostics cannot be modified while continuous
+    // sequence is in progress. Must stop first, wait for ADC_BUSY=0, then restart.
+
+    // Step 1: Stop current sequence (CONV_SEQ = 0b00 = idle/power-up)
+    uint16_t current = 0;
+    _spi.readRegister(REG_ADC_CONV_CTRL, &current);
+    uint16_t stopped = current & ~ADC_CONV_CTRL_CONV_SEQ_MASK;
+    _spi.writeRegister(REG_ADC_CONV_CTRL, stopped);
+
+    // Step 2: Wait for ADC_BUSY to clear (timeout ~50ms)
+    for (int i = 0; i < 500; i++) {
+        uint16_t live = 0;
+        _spi.readRegister(REG_LIVE_STATUS, &live);
+        if (!(live & LIVE_STATUS_ADC_BUSY_MASK)) break;
+        delayMicroseconds(100);
+    }
+
+    // Step 3: Build and write new configuration
     AdcConvSeq seq = continuous ? ADC_CONV_SEQ_START_CONT : ADC_CONV_SEQ_START_SINGLE;
 
     uint16_t ctrl = 0;
     ctrl |= (uint16_t)(((uint16_t)seq << ADC_CONV_CTRL_CONV_SEQ_SHIFT) & ADC_CONV_CTRL_CONV_SEQ_MASK);
-    ctrl |= ADC_CONV_CTRL_CONV_A_EN_MASK;
-    ctrl |= ADC_CONV_CTRL_CONV_B_EN_MASK;
-    ctrl |= ADC_CONV_CTRL_CONV_C_EN_MASK;
-    ctrl |= ADC_CONV_CTRL_CONV_D_EN_MASK;
+    if (chMask & 0x01) ctrl |= ADC_CONV_CTRL_CONV_A_EN_MASK;
+    if (chMask & 0x02) ctrl |= ADC_CONV_CTRL_CONV_B_EN_MASK;
+    if (chMask & 0x04) ctrl |= ADC_CONV_CTRL_CONV_C_EN_MASK;
+    if (chMask & 0x08) ctrl |= ADC_CONV_CTRL_CONV_D_EN_MASK;
+    if (diagMask & 0x01) ctrl |= ADC_CONV_CTRL_DIAG_EN0_MASK;
+    if (diagMask & 0x02) ctrl |= ADC_CONV_CTRL_DIAG_EN1_MASK;
+    if (diagMask & 0x04) ctrl |= ADC_CONV_CTRL_DIAG_EN2_MASK;
+    if (diagMask & 0x08) ctrl |= ADC_CONV_CTRL_DIAG_EN3_MASK;
 
     _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
 }
@@ -238,7 +272,6 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
 {
     ch = clampCh(ch);
 
-    // CONV_A_EN is bit 2, CONV_B_EN is bit 3, etc. - stride of 1 from A
     static const uint16_t ch_en_masks[4] = {
         ADC_CONV_CTRL_CONV_A_EN_MASK,
         ADC_CONV_CTRL_CONV_B_EN_MASK,
@@ -246,9 +279,34 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
         ADC_CONV_CTRL_CONV_D_EN_MASK,
     };
 
-    _spi.updateRegister(REG_ADC_CONV_CTRL,
-                        ch_en_masks[ch],
-                        enable ? ch_en_masks[ch] : 0);
+    // Per datasheet: channels cannot be modified while continuous sequence is
+    // in progress. Stop the sequence, modify, then restart.
+    uint16_t ctrl = 0;
+    _spi.readRegister(REG_ADC_CONV_CTRL, &ctrl);
+
+    // Stop conversion (CONV_SEQ = 0b00 = idle, preserving other bits)
+    uint16_t stopped = (ctrl & ~ADC_CONV_CTRL_CONV_SEQ_MASK);
+    _spi.writeRegister(REG_ADC_CONV_CTRL, stopped);
+
+    // Wait for current conversion to finish (ADC_BUSY goes low)
+    for (int i = 0; i < 100; i++) {
+        uint16_t live = 0;
+        _spi.readRegister(REG_LIVE_STATUS, &live);
+        if (!(live & LIVE_STATUS_ADC_BUSY_MASK)) break;
+        delayMicroseconds(100);
+    }
+
+    // Modify channel enable
+    if (enable) {
+        ctrl |= ch_en_masks[ch];
+    } else {
+        ctrl &= ~ch_en_masks[ch];
+    }
+
+    // Restart with continuous mode
+    ctrl = (ctrl & ~ADC_CONV_CTRL_CONV_SEQ_MASK)
+         | ((uint16_t)ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT);
+    _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +342,15 @@ bool AD74416H::isAdcReady()
     return (status & LIVE_STATUS_ADC_DATA_RDY_MASK) != 0;
 }
 
+void AD74416H::clearAdcDataReady()
+{
+    // Per datasheet: re-write CONV_SEQ = 0b10 (continuous) to clear
+    // ADC_DATA_RDY without interrupting the active conversion.
+    _spi.updateRegister(REG_ADC_CONV_CTRL,
+                        ADC_CONV_CTRL_CONV_SEQ_MASK,
+                        (uint16_t)(ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT));
+}
+
 // ---------------------------------------------------------------------------
 // ADC code conversion
 // ---------------------------------------------------------------------------
@@ -317,23 +384,21 @@ void AD74416H::configureDin(uint8_t ch,
 {
     ch = clampCh(ch);
 
-    // Build DIN_CONFIG0
+    // Build DIN_CONFIG0 (per datasheet Table 44)
     uint16_t cfg0 = 0;
     cfg0 |= (uint16_t)((debounce  & 0x1F) << DIN_CONFIG0_DEBOUNCE_TIME_SHIFT);
     cfg0 |= (uint16_t)((sink_code & 0x1F) << DIN_CONFIG0_DIN_SINK_SHIFT);
     if (sink_range) cfg0 |= DIN_CONFIG0_DIN_SINK_RANGE_MASK;
-    if (oc_det)     cfg0 |= DIN_CONFIG0_DIN_OC_DET_EN_MASK;
-    // Note: sc_det (bit 16) is beyond the 16-bit register - set via extended
-    // register if supported. For standard 16-bit access this bit cannot be set.
-    // OC detection enable is at bit 15 as defined in DIN_CONFIG0.
-    (void)sc_det;  // Acknowledge parameter; hardware limitation noted above
 
     _spi.writeRegister(AD74416H_REG_DIN_CONFIG0(ch), cfg0);
 
-    // Build DIN_CONFIG1
+    // Build DIN_CONFIG1 (per datasheet Table 45)
+    // OC_DET_EN and SC_DET_EN are in DIN_CONFIG1, not DIN_CONFIG0
     uint16_t cfg1 = 0;
     cfg1 |= (uint16_t)((thresh_code & 0x7F) << DIN_CONFIG1_COMP_THRESH_SHIFT);
     if (thresh_mode_fixed) cfg1 |= DIN_CONFIG1_DIN_THRESH_MODE_MASK;
+    if (oc_det)            cfg1 |= DIN_CONFIG1_DIN_OC_DET_EN_MASK;
+    if (sc_det)            cfg1 |= DIN_CONFIG1_DIN_SC_DET_EN_MASK;
 
     _spi.writeRegister(AD74416H_REG_DIN_CONFIG1(ch), cfg1);
 }
@@ -368,10 +433,10 @@ void AD74416H::configureDoExt(uint8_t ch, uint8_t do_mode, bool src_sel_gpio,
     ch = clampCh(ch);
 
     uint16_t cfg = 0;
-    cfg |= (uint16_t)((t2      & 0xFF) << DO_EXT_CONFIG_DO_T2_SHIFT);
-    cfg |= (uint16_t)((t1      & 0x0F) << DO_EXT_CONFIG_DO_T1_SHIFT);
+    cfg |= (uint16_t)((do_mode & 0x01) << DO_EXT_CONFIG_DO_MODE_SHIFT);
     if (src_sel_gpio) cfg |= DO_EXT_CONFIG_DO_SRC_SEL_MASK;
-    cfg |= (uint16_t)(((uint16_t)(do_mode & 0x03)) << DO_EXT_CONFIG_DO_MODE_SHIFT);
+    cfg |= (uint16_t)((t1 & 0x1F) << DO_EXT_CONFIG_DO_T1_SHIFT);
+    cfg |= (uint16_t)((t2 & 0x1F) << DO_EXT_CONFIG_DO_T2_SHIFT);
 
     _spi.writeRegister(AD74416H_REG_DO_EXT_CONFIG(ch), cfg);
 }
@@ -502,47 +567,123 @@ uint16_t AD74416H::getSupplyAlertMask()
 
 float AD74416H::readDieTemperature()
 {
-    // Route die temperature sensor to diagnostic slot 0
-    // DIAG_ASSIGN bits [3:0] select diagnostic 0 source
-    // Code 0x4 selects die temperature (refer to datasheet Table 51)
-    const uint16_t DIAG_DIE_TEMP_CODE = 0x0004;
-    _spi.writeRegister(REG_DIAG_ASSIGN, DIAG_DIE_TEMP_CODE);
-
-    // Enable diagnostic 0 in ADC_CONV_CTRL and start a single conversion
-    uint16_t ctrl = 0;
-    _spi.readRegister(REG_ADC_CONV_CTRL, &ctrl);
-    ctrl |= ADC_CONV_CTRL_DIAG_EN0_MASK;
-    ctrl = (uint16_t)((ctrl & ~ADC_CONV_CTRL_CONV_SEQ_MASK)
-                      | ((uint16_t)ADC_CONV_SEQ_START_SINGLE << ADC_CONV_CTRL_CONV_SEQ_SHIFT));
-    _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
-
-    // Poll ADC_DATA_RDY (LIVE_STATUS bit 4) until conversion completes
-    // Timeout after ~100 ms to avoid infinite loop
-    uint32_t timeout_us = 100000UL;
-    while (!isAdcReady() && timeout_us > 0) {
-        delayMicroseconds(100);
-        timeout_us -= 100;
-    }
-
-    // Read diagnostic result register 0
+    // Read diagnostic slot 0 (configured as die temperature by setupDiagnostics)
     uint16_t raw = readAdcDiagResult(0);
-
-    // Clear diagnostic enable and restart continuous conversion
-    // (readDieTemperature set CONV_SEQ to single; restore to continuous
-    //  so the main ADC polling task continues to get data)
-    uint16_t restore = 0;
-    _spi.readRegister(REG_ADC_CONV_CTRL, &restore);
-    restore &= ~(ADC_CONV_CTRL_CONV_SEQ_MASK | ADC_CONV_CTRL_DIAG_EN0_MASK);
-    restore |= ((uint16_t)ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT);
-    _spi.writeRegister(REG_ADC_CONV_CTRL, restore);
-
-    // Die temperature conversion (from AD74416H datasheet):
-    // Code is a 16-bit unsigned value.
-    // T (degC) = (raw / 65536.0) * 480.0 - 273.15
-    // (Approximate: full scale maps to ~480 K, subtract 273.15 for Celsius)
-    float temp_c = ((float)raw / 65536.0f) * 480.0f - 273.15f;
-    return temp_c;
+    return diagCodeToValue(raw, 1);  // source 1 = temperature
 }
+
+void AD74416H::setupDiagnostics()
+{
+    // Configure all 4 diagnostic slots with useful defaults:
+    //   Slot 0: Die temperature (code 1)
+    //   Slot 1: AVDD_HI (code 5)
+    //   Slot 2: DVCC (code 2)
+    //   Slot 3: AVCC (code 3)
+    // DIAG_ASSIGN register: [3:0]=DIAG0, [7:4]=DIAG1, [11:8]=DIAG2, [15:12]=DIAG3
+    uint16_t assign = (0x01 << 0)   // slot 0: temperature
+                    | (0x05 << 4)   // slot 1: AVDD_HI
+                    | (0x02 << 8)   // slot 2: DVCC
+                    | (0x03 << 12); // slot 3: AVCC
+    _spi.writeRegister(REG_DIAG_ASSIGN, assign);
+}
+
+void AD74416H::configureDiagSlot(uint8_t slot, uint8_t source)
+{
+    if (slot >= 4) slot = 3;
+    source &= 0x0F;
+
+    uint16_t mask = (uint16_t)(0x0F << (slot * 4));
+    uint16_t val  = (uint16_t)(source << (slot * 4));
+    _spi.updateRegister(REG_DIAG_ASSIGN, mask, val);
+}
+
+float AD74416H::diagCodeToValue(uint16_t raw, uint8_t source)
+{
+    // Diagnostic ADC range is 2.5V for voltage diagnostics.
+    // Formulas from datasheet Table 30.
+    float code = (float)raw;
+
+    switch (source) {
+        case 0:  // AGND - should read ~0V
+            return (code / 65536.0f) * 2.5f;
+
+        case 1:  // Temperature
+            return (code - 2034.0f) / 8.95f - 40.0f;
+
+        case 2:  // DVCC: V = (code/65536) * 2.5 * 2.5
+            return (code / 65536.0f) * 2.5f * 2.5f;
+
+        case 3:  // AVCC: V = (code/65536) * 2.5 * 2.5
+            return (code / 65536.0f) * 2.5f * 2.5f;
+
+        case 4:  // LDO1V8: V = (code/65536) * 2.5
+            return (code / 65536.0f) * 2.5f;
+
+        case 5:  // AVDD_HI: V = (code/65536) * 2.5 * 7.5 / 0.52
+            return (code / 65536.0f) * 2.5f * (7.5f / 0.52f);
+
+        case 6:  // AVDD_LO: same scaling as AVDD_HI
+            return (code / 65536.0f) * 2.5f * (7.5f / 0.52f);
+
+        case 7:  // AVSS: V = -((code/65536) * 2.5 * 60 / 7.5)
+            return -((code / 65536.0f) * 2.5f * (60.0f / 7.5f));
+
+        case 8:  // LVIN: V = (code/65536) * 2.5
+            return (code / 65536.0f) * 2.5f;
+
+        case 9:  // DO_VDD: V = (code/65536) * 2.5 * 7.5 / 0.52
+            return (code / 65536.0f) * 2.5f * (7.5f / 0.52f);
+
+        default: // Other sources: return raw voltage
+            return (code / 65536.0f) * 2.5f;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GPIO
+// ---------------------------------------------------------------------------
+
+void AD74416H::configureGpio(uint8_t gpio, GpioSelect mode, bool pulldown)
+{
+    if (gpio >= AD74416H_NUM_GPIOS) gpio = AD74416H_NUM_GPIOS - 1;
+
+    uint16_t cfg = 0;
+    cfg |= (uint16_t)(((uint16_t)mode & 0x07) << GPIO_CONFIG_GPIO_SELECT_SHIFT);
+    if (pulldown) cfg |= GPIO_CONFIG_GP_WK_PD_EN_MASK;
+
+    _spi.writeRegister(AD74416H_REG_GPIO_CONFIG(gpio), cfg);
+}
+
+void AD74416H::setGpioOutput(uint8_t gpio, bool high)
+{
+    if (gpio >= AD74416H_NUM_GPIOS) gpio = AD74416H_NUM_GPIOS - 1;
+
+    _spi.updateRegister(AD74416H_REG_GPIO_CONFIG(gpio),
+                        GPIO_CONFIG_GPO_DATA_MASK,
+                        high ? GPIO_CONFIG_GPO_DATA_MASK : 0);
+}
+
+bool AD74416H::readGpioInput(uint8_t gpio)
+{
+    if (gpio >= AD74416H_NUM_GPIOS) gpio = AD74416H_NUM_GPIOS - 1;
+
+    uint16_t val = 0;
+    _spi.readRegister(AD74416H_REG_GPIO_CONFIG(gpio), &val);
+    return (val & GPIO_CONFIG_GPI_DATA_MASK) != 0;
+}
+
+uint16_t AD74416H::readGpioConfig(uint8_t gpio)
+{
+    if (gpio >= AD74416H_NUM_GPIOS) gpio = AD74416H_NUM_GPIOS - 1;
+
+    uint16_t val = 0;
+    _spi.readRegister(AD74416H_REG_GPIO_CONFIG(gpio), &val);
+    return val;
+}
+
+// ---------------------------------------------------------------------------
+// Live Status
+// ---------------------------------------------------------------------------
 
 uint16_t AD74416H::readLiveStatus()
 {

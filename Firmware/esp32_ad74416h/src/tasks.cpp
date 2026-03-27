@@ -46,8 +46,11 @@ static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range)
 static void taskAdcPoll(void* /*pvParameters*/)
 {
     for (;;) {
-        if (s_device && s_device->isAdcReady()) {
-            // Collect results outside the mutex to minimise lock duration
+        if (s_device) {
+            // Always read ADC results regardless of ADC_DATA_RDY.
+            // The fault monitor task reads diagnostic results which self-clears
+            // ADC_DATA_RDY (per datasheet), so we can't rely on it.
+            // Reading results while ADC is busy returns the last completed values.
             uint32_t raw[AD74416H_NUM_CHANNELS];
             float    eng[AD74416H_NUM_CHANNELS];
 
@@ -67,10 +70,15 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 xSemaphoreGive(g_stateMutex);
             }
 
-            // Read hardware (outside mutex)
+            // Read hardware (outside mutex) - only for non-HIGH_IMP channels
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                raw[ch] = s_device->readAdcResult(ch);
-                eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch]);
+                if (func[ch] != CH_FUNC_HIGH_IMP) {
+                    raw[ch] = s_device->readAdcResult(ch);
+                    eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch]);
+                } else {
+                    raw[ch] = 0;
+                    eng[ch] = 0.0f;
+                }
             }
 
             // Write results back under mutex
@@ -128,11 +136,32 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 }
             }
 
-            // --- Read die temperature every 5th iteration (~1 second) ---
+            // --- Read GPIO input states ---
+            bool gpioIn[AD74416H_NUM_GPIOS];
+            for (uint8_t g = 0; g < AD74416H_NUM_GPIOS; g++) {
+                gpioIn[g] = s_device->readGpioInput(g);
+            }
+
+            // --- Read diagnostics every 5th iteration (~1 second) ---
             float dieTemp = 0.0f;
-            bool  readTemp = (iteration % 5 == 0);
-            if (readTemp) {
-                dieTemp = s_device->readDieTemperature();
+            uint16_t diagRaw[4] = {0};
+            float    diagVal[4] = {0.0f};
+            uint8_t  diagSrc[4] = {0};
+            bool  readDiag = (iteration % 5 == 0);
+            if (readDiag) {
+                // Snapshot diag sources under mutex
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    for (uint8_t d = 0; d < 4; d++) {
+                        diagSrc[d] = g_deviceState.diag[d].source;
+                    }
+                    xSemaphoreGive(g_stateMutex);
+                }
+                // Read all 4 diagnostic results
+                for (uint8_t d = 0; d < 4; d++) {
+                    diagRaw[d] = s_device->readAdcDiagResult(d);
+                    diagVal[d] = AD74416H::diagCodeToValue(diagRaw[d], diagSrc[d]);
+                }
+                dieTemp = diagVal[0]; // slot 0 is temperature by default
             }
 
             // --- Update global state under mutex ---
@@ -140,6 +169,8 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 g_deviceState.alertStatus       = alertStatus;
                 g_deviceState.supplyAlertStatus = supplyAlertStatus;
                 g_deviceState.liveStatus        = liveStatus;
+                // SPI is working if we got here without CRC errors
+                g_deviceState.spiOk             = true;
 
                 for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                     g_deviceState.channels[ch].channelAlertStatus = chanAlert[ch];
@@ -151,8 +182,16 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                     }
                 }
 
-                if (readTemp) {
+                for (uint8_t g = 0; g < AD74416H_NUM_GPIOS; g++) {
+                    g_deviceState.gpio[g].inputVal = gpioIn[g];
+                }
+
+                if (readDiag) {
                     g_deviceState.dieTemperature = dieTemp;
+                    for (uint8_t d = 0; d < 4; d++) {
+                        g_deviceState.diag[d].rawCode = diagRaw[d];
+                        g_deviceState.diag[d].value   = diagVal[d];
+                    }
                 }
 
                 xSemaphoreGive(g_stateMutex);
@@ -185,48 +224,49 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             case CMD_SET_CHANNEL_FUNC: {
                 s_device->setChannelFunction(cmd.channel, cmd.func);
 
-                // Apply sensible ADC defaults for the new function
-                AdcRange   defaultRange = ADC_RNG_0_12V;
-                AdcConvMux defaultMux   = ADC_MUX_LF_TO_AGND;
+                // The hardware auto-sets correct ADC_CONFIG defaults (CONV_MUX,
+                // CONV_RANGE) when CH_FUNC_SETUP is written (datasheet Table 22).
+                // Read back the hardware-set values instead of overwriting them.
+                uint16_t adcCfgReg = 0;
+                extern AD74416H_SPI spiDriver;
+                spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(cmd.channel), &adcCfgReg);
 
-                switch (cmd.func) {
-                    case CH_FUNC_VOUT:
-                        defaultRange = ADC_RNG_0_12V;
-                        defaultMux   = ADC_MUX_LF_TO_AGND;
-                        break;
-                    case CH_FUNC_IOUT:
-                    case CH_FUNC_IOUT_HART:
-                        defaultRange = ADC_RNG_0_0_3125V;
-                        defaultMux   = ADC_MUX_LF_TO_AGND;
-                        break;
-                    case CH_FUNC_VIN:
-                        defaultRange = ADC_RNG_0_12V;
-                        defaultMux   = ADC_MUX_LF_TO_AGND;
-                        break;
-                    case CH_FUNC_IIN_EXT_PWR:
-                    case CH_FUNC_IIN_LOOP_PWR:
-                    case CH_FUNC_IIN_EXT_PWR_HART:
-                    case CH_FUNC_IIN_LOOP_PWR_HART:
-                        defaultRange = ADC_RNG_0_0_3125V;
-                        defaultMux   = ADC_MUX_LF_TO_AGND;
-                        break;
-                    case CH_FUNC_RES_MEAS:
-                        defaultRange = ADC_RNG_0_0_625V;
-                        defaultMux   = ADC_MUX_HF_TO_LF;
-                        break;
-                    default:
-                        break;
-                }
+                AdcConvMux hwMux   = (AdcConvMux)((adcCfgReg & ADC_CONFIG_CONV_MUX_MASK) >> ADC_CONFIG_CONV_MUX_SHIFT);
+                AdcRange   hwRange = (AdcRange)((adcCfgReg & ADC_CONFIG_CONV_RANGE_MASK) >> ADC_CONFIG_CONV_RANGE_SHIFT);
 
-                s_device->configureAdc(cmd.channel, defaultMux,
-                                       defaultRange, ADC_RATE_20SPS);
+                // Set the conversion rate to 20 SPS (hardware defaults to 10 SPS)
+                s_device->configureAdc(cmd.channel, hwMux, hwRange, ADC_RATE_20SPS);
 
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].function = cmd.func;
-                    g_deviceState.channels[cmd.channel].adcRange = defaultRange;
-                    g_deviceState.channels[cmd.channel].adcMux   = defaultMux;
+                    g_deviceState.channels[cmd.channel].adcRange = hwRange;
+                    g_deviceState.channels[cmd.channel].adcMux   = hwMux;
                     g_deviceState.channels[cmd.channel].adcRate  = ADC_RATE_20SPS;
+                    // Reset DAC display values when switching to HIGH_IMP
+                    if (cmd.func == CH_FUNC_HIGH_IMP) {
+                        g_deviceState.channels[cmd.channel].dacCode  = 0;
+                        g_deviceState.channels[cmd.channel].dacValue = 0.0f;
+                        g_deviceState.channels[cmd.channel].adcRawCode = 0;
+                        g_deviceState.channels[cmd.channel].adcValue   = 0.0f;
+                    }
                     xSemaphoreGive(g_stateMutex);
+                }
+
+                // Rebuild ADC_CONV_CTRL: enable only non-HIGH_IMP channels.
+                {
+                    uint8_t chMask = 0;
+                    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
+                            if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
+                                chMask |= (1 << c);
+                        }
+                        xSemaphoreGive(g_stateMutex);
+                    }
+                    s_device->startAdcConversion(true, chMask, 0x0F);
+
+                    // Clear any transient ADC_ERR caused by the sequence restart
+                    delay(50);
+                    s_device->clearAllAlerts();
                 }
                 break;
             }
@@ -394,6 +434,51 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 break;
             }
 
+            // -----------------------------------------------------------------
+            case CMD_DIAG_CONFIG: {
+                s_device->configureDiagSlot(cmd.diagCfg.slot, cmd.diagCfg.source);
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    if (cmd.diagCfg.slot < 4) {
+                        g_deviceState.diag[cmd.diagCfg.slot].source = cmd.diagCfg.source;
+                    }
+                    xSemaphoreGive(g_stateMutex);
+                }
+                break;
+            }
+
+            // -----------------------------------------------------------------
+            case CMD_SET_AVDD_SELECT: {
+                s_device->setAvddSelect(cmd.channel, cmd.avddSel);
+                break;
+            }
+
+            // -----------------------------------------------------------------
+            case CMD_GPIO_CONFIG: {
+                s_device->configureGpio(cmd.gpioCfg.gpio,
+                                       (GpioSelect)cmd.gpioCfg.mode,
+                                       cmd.gpioCfg.pulldown);
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    if (cmd.gpioCfg.gpio < AD74416H_NUM_GPIOS) {
+                        g_deviceState.gpio[cmd.gpioCfg.gpio].mode = cmd.gpioCfg.mode;
+                        g_deviceState.gpio[cmd.gpioCfg.gpio].pulldown = cmd.gpioCfg.pulldown;
+                    }
+                    xSemaphoreGive(g_stateMutex);
+                }
+                break;
+            }
+
+            // -----------------------------------------------------------------
+            case CMD_GPIO_SET: {
+                s_device->setGpioOutput(cmd.gpioSet.gpio, cmd.gpioSet.value);
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    if (cmd.gpioSet.gpio < AD74416H_NUM_GPIOS) {
+                        g_deviceState.gpio[cmd.gpioSet.gpio].outputVal = cmd.gpioSet.value;
+                    }
+                    xSemaphoreGive(g_stateMutex);
+                }
+                break;
+            }
+
             default:
                 break;
         }
@@ -416,6 +501,11 @@ void initTasks(AD74416H& device)
         g_deviceState.channels[ch].adcRate  = ADC_RATE_20SPS;
         g_deviceState.channels[ch].adcMux   = ADC_MUX_LF_TO_AGND;
     }
+    // Default diagnostic slot assignments (matches setupDiagnostics)
+    g_deviceState.diag[0].source = 1;  // Temperature
+    g_deviceState.diag[1].source = 5;  // AVDD_HI
+    g_deviceState.diag[2].source = 2;  // DVCC
+    g_deviceState.diag[3].source = 3;  // AVCC
 
     // Create mutex
     g_stateMutex = xSemaphoreCreateMutex();

@@ -8,6 +8,8 @@
 #include "cli.h"
 #include "ad74416h_regs.h"
 #include "config.h"
+#include "tasks.h"
+#include <WiFi.h>
 
 // Internal state
 static AD74416H*   s_dev  = nullptr;
@@ -34,6 +36,15 @@ static void cmdReset();
 static void cmdScratch();
 static void cmdSweep(const char* args);
 static void cmdAdcCont(const char* args);
+static void cmdDiagCfg(const char* args);
+static void cmdDiagRead();
+static void cmdIlimit(const char* args);
+static void cmdVrange(const char* args);
+static void cmdAvdd(const char* args);
+static void cmdSilicon();
+static void cmdRegs();
+static void cmdGpio(const char* args);
+static void cmdWifi(const char* args);
 static void cmdHelp();
 
 // ---------------------------------------------------------------------------
@@ -69,6 +80,25 @@ static const char* adcRangeName(AdcRange r) {
         case ADC_RNG_NEG104MV_104MV:    return "-104..104mV";
         default:                        return "?";
     }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic source name / unit helpers
+// ---------------------------------------------------------------------------
+
+static const char* diagSourceName(uint8_t source) {
+    static const char* names[] = {
+        "AGND", "TEMP", "DVCC", "AVCC", "LDO1V8",
+        "AVDD_HI", "AVDD_LO", "AVSS", "LVIN", "DO_VDD",
+        "VSENSEP", "VSENSEN", "DO_CURR", "AVDD_x"
+    };
+    if (source < 14) return names[source];
+    return "?";
+}
+
+static const char* diagSourceUnit(uint8_t source) {
+    if (source == 1) return "C";
+    return "V";
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +206,24 @@ static void handleCommand(const char* line)
         cmdSweep(args);
     } else if (strcmp(cmd, "adccont") == 0) {
         cmdAdcCont(args);
+    } else if (strcmp(cmd, "diagcfg") == 0) {
+        cmdDiagCfg(args);
+    } else if (strcmp(cmd, "diagread") == 0) {
+        cmdDiagRead();
+    } else if (strcmp(cmd, "ilimit") == 0) {
+        cmdIlimit(args);
+    } else if (strcmp(cmd, "vrange") == 0) {
+        cmdVrange(args);
+    } else if (strcmp(cmd, "avdd") == 0) {
+        cmdAvdd(args);
+    } else if (strcmp(cmd, "silicon") == 0) {
+        cmdSilicon();
+    } else if (strcmp(cmd, "regs") == 0) {
+        cmdRegs();
+    } else if (strcmp(cmd, "gpio") == 0) {
+        cmdGpio(args);
+    } else if (strcmp(cmd, "wifi") == 0) {
+        cmdWifi(args);
     } else if (strcmp(cmd, "menu") == 0 || strcmp(cmd, "m") == 0) {
         printMainMenu();
     } else {
@@ -202,6 +250,10 @@ static void cmdHelp()
         "  temp, t             Read die temperature\r\n"
         "  scratch             SPI comms test (SCRATCH register)\r\n"
         "  reset               Hardware reset (pulse RESET pin)\r\n"
+        "  silicon             Read silicon revision and ID\r\n"
+        "  wifi                Show WiFi status (AP + STA IPs)\r\n"
+        "  wifi <ssid> <pass>  Connect to WiFi network\r\n"
+        "  regs                Quick register dump (key registers)\r\n"
         "\r\n"
         "--- Register Access ---\r\n"
         "  rreg <addr>         Read register (hex addr, e.g. rreg 76)\r\n"
@@ -217,6 +269,15 @@ static void cmdHelp()
         "  adc [ch]            Read ADC (all channels or specific ch 0-3)\r\n"
         "  adccont <sec>       Continuous ADC print for N seconds\r\n"
         "  diag                Read all ADC diagnostic channels\r\n"
+        "  diagcfg <slot> <src> Configure diag slot (0-3) source\r\n"
+        "                      0=AGND 1=Temp 2=DVCC 3=AVCC 4=LDO1V8\r\n"
+        "                      5=AVDD_HI 6=AVDD_LO 7=AVSS 8=LVIN 9=DO_VDD\r\n"
+        "  diagread            Read all 4 diagnostic slots (cached)\r\n"
+        "\r\n"
+        "--- Channel Config ---\r\n"
+        "  ilimit <ch> <0|1>   Set current limit (1=enabled)\r\n"
+        "  vrange <ch> <0|1>   Set VOUT range (0=unipolar 1=bipolar)\r\n"
+        "  avdd <ch> <0-3>     Set AVDD source selection\r\n"
         "\r\n"
         "--- DAC ---\r\n"
         "  dac <ch> <code>     Set DAC code (0-65535)\r\n"
@@ -227,6 +288,13 @@ static void cmdHelp()
         "--- Digital I/O ---\r\n"
         "  din                 Read all digital input states + counters\r\n"
         "  do <ch> <0|1>       Set digital output on/off\r\n"
+        "\r\n"
+        "--- GPIO ---\r\n"
+        "  gpio                Read all GPIO (A-F) status\r\n"
+        "  gpio <pin> mode <m> Set GPIO mode (pin: 0-5 or A-F)\r\n"
+        "                      0=HIGH_IMP 1=OUTPUT 2=INPUT 3=DIN_OUT 4=DO_EXT\r\n"
+        "  gpio <pin> set <v>  Set GPIO output (0|1)\r\n"
+        "  gpio <pin> read     Read GPIO input from hardware\r\n"
         "\r\n"
         "--- Faults ---\r\n"
         "  faults, f           Read all fault/alert registers\r\n"
@@ -511,20 +579,32 @@ static void cmdAdcDiag()
 
     Serial.println(F("\r\n--- ADC Diagnostics ---"));
 
-    // Die temperature
-    float temp = s_dev->readDieTemperature();
+    // Die temperature from cached state
+    float temp = 0.0f;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        temp = g_deviceState.dieTemperature;
+        xSemaphoreGive(g_stateMutex);
+    }
     Serial.printf("Die Temperature: %.1f C\r\n", temp);
 
-    // Restart continuous ADC (temp measurement stops it)
-    s_dev->startAdcConversion(true);
-
-    // Read all 4 diagnostic result registers
+    // Read all 4 diagnostic slots from cached state
     Serial.println(F("\r\nDiag Results:"));
+    Serial.println(F(" Slot | Source     | Raw Code   | Value"));
+    Serial.println(F("------|------------|------------|----------------"));
+
     for (uint8_t d = 0; d < 4; d++) {
-        uint16_t raw = s_dev->readAdcDiagResult(d);
-        // Convert to approximate voltage (diagnostic uses 16-bit, 0-12V default)
-        float v = ((float)raw / 65536.0f) * 12.0f;
-        Serial.printf("  DIAG[%u]: raw=0x%04X (%u)  ~%.4f V\r\n", d, raw, raw, v);
+        DiagState ds;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            ds = g_deviceState.diag[d];
+            xSemaphoreGive(g_stateMutex);
+        } else {
+            ds = {};
+        }
+
+        float val = AD74416H::diagCodeToValue(ds.rawCode, ds.source);
+        Serial.printf("   %u  | %-10s | 0x%04X     | %+10.4f %s\r\n",
+                       d, diagSourceName(ds.source), ds.rawCode,
+                       val, diagSourceUnit(ds.source));
     }
 
     // LIVE_STATUS
@@ -810,13 +890,24 @@ static void cmdReset()
     bool ok = s_dev->begin();
     Serial.printf("Reset complete. SPI verify: %s\r\n", ok ? "OK" : "FAILED");
 
-    // Restart ADC
-    s_dev->enableAdcChannel(0, true);
-    s_dev->enableAdcChannel(1, true);
-    s_dev->enableAdcChannel(2, true);
-    s_dev->enableAdcChannel(3, true);
-    s_dev->startAdcConversion(true);
-    Serial.println("ADC continuous conversion restarted.");
+    // Update global SPI health flag
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.spiOk = ok;
+        // Reset all channel functions to HIGH_IMP (device reset state)
+        for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+            g_deviceState.channels[ch].function = CH_FUNC_HIGH_IMP;
+            g_deviceState.channels[ch].adcRawCode = 0;
+            g_deviceState.channels[ch].adcValue = 0.0f;
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Setup diagnostics (DIAG_ASSIGN is cleared by reset)
+    s_dev->setupDiagnostics();
+
+    // Start ADC with diagnostics only (no channel conversions - all HIGH_IMP)
+    s_dev->startAdcConversion(true, 0x00, 0x0F);
+    Serial.println("ADC continuous conversion restarted (diag only).");
 }
 
 // ---------------------------------------------------------------------------
@@ -849,4 +940,392 @@ static void cmdScratch()
     spiDriver.writeRegister(REG_SCRATCH, 0x0000);
     Serial.printf("Result: %d/%d passed  %s\r\n", pass, nPatterns,
                   (pass == nPatterns) ? "[SPI OK]" : "[SPI PROBLEM!]");
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic configuration
+// ---------------------------------------------------------------------------
+
+static void cmdDiagCfg(const char* args)
+{
+    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+
+    unsigned int slot, source;
+    if (sscanf(args, "%u %u", &slot, &source) != 2 || slot > 3 || source > 9) {
+        Serial.println("Usage: diagcfg <slot 0-3> <source 0-9>");
+        Serial.println("  0=AGND  1=Temp  2=DVCC  3=AVCC  4=LDO1V8");
+        Serial.println("  5=AVDD_HI  6=AVDD_LO  7=AVSS  8=LVIN  9=DO_VDD");
+        return;
+    }
+
+    Serial.printf("Setting DIAG slot %u to %s (%u)...\r\n", slot, diagSourceName(source), source);
+
+    Command cmd;
+    cmd.type = CMD_DIAG_CONFIG;
+    cmd.channel = 0;
+    cmd.diagCfg.slot = (uint8_t)slot;
+    cmd.diagCfg.source = (uint8_t)source;
+    sendCommand(cmd);
+
+    delay(50);
+    Serial.println("Done.");
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic read (cached)
+// ---------------------------------------------------------------------------
+
+static void cmdDiagRead()
+{
+    Serial.println(F("\r\n--- Diagnostic Slots (cached) ---"));
+    Serial.println(F(" Slot | Source     | Raw Code   | Value"));
+    Serial.println(F("------|------------|------------|----------------"));
+
+    for (uint8_t d = 0; d < 4; d++) {
+        DiagState ds;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            ds = g_deviceState.diag[d];
+            xSemaphoreGive(g_stateMutex);
+        } else {
+            ds = {};
+        }
+
+        float val = AD74416H::diagCodeToValue(ds.rawCode, ds.source);
+        Serial.printf("   %u  | %-10s | 0x%04X     | %+10.4f %s\r\n",
+                       d, diagSourceName(ds.source), ds.rawCode,
+                       val, diagSourceUnit(ds.source));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Current limit
+// ---------------------------------------------------------------------------
+
+static void cmdIlimit(const char* args)
+{
+    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+
+    unsigned int ch, val;
+    if (sscanf(args, "%u %u", &ch, &val) != 2 || ch > 3 || val > 1) {
+        Serial.println("Usage: ilimit <ch 0-3> <0|1>");
+        return;
+    }
+
+    Serial.printf("Setting CH%u current limit = %s\r\n", ch, val ? "ENABLED" : "DISABLED");
+
+    Command cmd;
+    cmd.type = CMD_SET_CURRENT_LIMIT;
+    cmd.channel = (uint8_t)ch;
+    cmd.boolVal = (val == 1);
+    sendCommand(cmd);
+
+    delay(20);
+    Serial.println("Done.");
+}
+
+// ---------------------------------------------------------------------------
+// VOUT range
+// ---------------------------------------------------------------------------
+
+static void cmdVrange(const char* args)
+{
+    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+
+    unsigned int ch, val;
+    if (sscanf(args, "%u %u", &ch, &val) != 2 || ch > 3 || val > 1) {
+        Serial.println("Usage: vrange <ch 0-3> <0|1>  (0=unipolar, 1=bipolar)");
+        return;
+    }
+
+    Serial.printf("Setting CH%u VOUT range = %s\r\n", ch, val ? "BIPOLAR" : "UNIPOLAR");
+
+    Command cmd;
+    cmd.type = CMD_SET_VOUT_RANGE;
+    cmd.channel = (uint8_t)ch;
+    cmd.boolVal = (val == 1);
+    sendCommand(cmd);
+
+    delay(20);
+    Serial.println("Done.");
+}
+
+// ---------------------------------------------------------------------------
+// AVDD source selection
+// ---------------------------------------------------------------------------
+
+static void cmdAvdd(const char* args)
+{
+    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+
+    unsigned int ch, val;
+    if (sscanf(args, "%u %u", &ch, &val) != 2 || ch > 3 || val > 3) {
+        Serial.println("Usage: avdd <ch 0-3> <0-3>");
+        return;
+    }
+
+    Serial.printf("Setting CH%u AVDD_SELECT = %u\r\n", ch, val);
+
+    Command cmd;
+    cmd.type = CMD_SET_AVDD_SELECT;
+    cmd.channel = (uint8_t)ch;
+    cmd.avddSel = (uint8_t)val;
+    sendCommand(cmd);
+
+    delay(20);
+    Serial.println("Done.");
+}
+
+// ---------------------------------------------------------------------------
+// Silicon revision / ID
+// ---------------------------------------------------------------------------
+
+static void cmdSilicon()
+{
+    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+
+    extern AD74416H_SPI spiDriver;
+
+    Serial.println(F("\r\n--- Silicon Info ---"));
+
+    uint16_t rev = 0, id0 = 0, id1 = 0;
+    spiDriver.readRegister(0x7B, &rev);
+    spiDriver.readRegister(0x7D, &id0);
+    spiDriver.readRegister(0x7E, &id1);
+
+    Serial.printf("SILICON_REV: 0x%04X\r\n", rev);
+    Serial.printf("SILICON_ID0: 0x%04X\r\n", id0);
+    Serial.printf("SILICON_ID1: 0x%04X\r\n", id1);
+}
+
+// ---------------------------------------------------------------------------
+// Quick register dump
+// ---------------------------------------------------------------------------
+
+static void cmdRegs()
+{
+    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+
+    extern AD74416H_SPI spiDriver;
+
+    Serial.println(F("\r\n--- Quick Register Dump ---"));
+
+    uint16_t val = 0;
+
+    spiDriver.readRegister(0x39, &val);
+    Serial.printf("ADC_CONV_CTRL     (0x39): 0x%04X\r\n", val);
+
+    spiDriver.readRegister(0x38, &val);
+    Serial.printf("PWR_OPTIM_CONFIG  (0x38): 0x%04X\r\n", val);
+
+    spiDriver.readRegister(0x3A, &val);
+    Serial.printf("DIAG_ASSIGN       (0x3A): 0x%04X\r\n", val);
+
+    spiDriver.readRegister(0x40, &val);
+    Serial.printf("LIVE_STATUS       (0x40): 0x%04X\r\n", val);
+
+    spiDriver.readRegister(0x3F, &val);
+    Serial.printf("ALERT_STATUS      (0x3F): 0x%04X\r\n", val);
+
+    Serial.println(F("\r\nADC_CONFIG per channel:"));
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        uint8_t addr = AD74416H_REG_ADC_CONFIG(ch);
+        spiDriver.readRegister(addr, &val);
+        Serial.printf("  CH%u ADC_CONFIG (0x%02X): 0x%04X\r\n", ch, addr, val);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GPIO helper
+// ---------------------------------------------------------------------------
+
+static int parseGpioPin(const char* s) {
+    if (!s || !*s) return -1;
+    char c = *s;
+    if (c >= '0' && c <= '5') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A';
+    if (c >= 'a' && c <= 'f') return c - 'a';
+    return -1;
+}
+
+static const char* gpioModeName(uint8_t mode) {
+    switch (mode) {
+        case 0: return "HIGH_IMP";
+        case 1: return "OUTPUT";
+        case 2: return "INPUT";
+        case 3: return "DIN_OUT";
+        case 4: return "DO_EXT";
+        default: return "UNKNOWN";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GPIO commands
+// ---------------------------------------------------------------------------
+
+static void cmdGpio(const char* args)
+{
+    if (!s_dev) { Serial.println("ERROR: Device not initialised"); return; }
+
+    // Skip leading whitespace
+    while (*args == ' ') args++;
+
+    // No arguments -> show all GPIO status
+    if (*args == '\0') {
+        extern AD74416H_SPI spiDriver;
+
+        Serial.println(F("\r\n--- GPIO Status (A-F) ---"));
+        Serial.println(F(" Pin | Mode     | Out | In | Pulldown | Reg Raw"));
+        Serial.println(F("-----|----------|-----|----|----------|--------"));
+
+        for (uint8_t g = 0; g < 6; g++) {
+            GpioState gs;
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                gs = g_deviceState.gpio[g];
+                xSemaphoreGive(g_stateMutex);
+            } else {
+                gs = {};
+            }
+
+            // Read raw register for verification
+            uint16_t raw = 0;
+            spiDriver.readRegister(AD74416H_REG_GPIO_CONFIG(g), &raw);
+
+            Serial.printf("  %c  | %-8s |  %d  |  %d |    %s   | 0x%04X\r\n",
+                           'A' + g,
+                           gpioModeName(gs.mode),
+                           (int)gs.outputVal,
+                           (int)gs.inputVal,
+                           gs.pulldown ? "Y" : "N",
+                           raw);
+        }
+        return;
+    }
+
+    // Parse pin argument
+    int pin = parseGpioPin(args);
+    if (pin < 0) {
+        Serial.println("Usage: gpio                  Show all GPIO status");
+        Serial.println("       gpio <pin> mode <0-4> Set GPIO mode");
+        Serial.println("       gpio <pin> set <0|1>  Set GPIO output");
+        Serial.println("       gpio <pin> read       Read GPIO input");
+        Serial.println("  Pin: 0-5 or A-F");
+        return;
+    }
+
+    // Advance past pin character
+    args++;
+    while (*args == ' ') args++;
+
+    // Parse sub-command
+    char subcmd[8] = {};
+    int si = 0;
+    while (*args && *args != ' ' && si < 7) {
+        subcmd[si++] = *args++;
+    }
+    subcmd[si] = '\0';
+    while (*args == ' ') args++;
+
+    if (strcmp(subcmd, "mode") == 0) {
+        unsigned int mode;
+        if (sscanf(args, "%u", &mode) != 1 || mode > 4) {
+            Serial.println("Usage: gpio <pin> mode <0-4>");
+            Serial.println("  0=HIGH_IMP 1=OUTPUT 2=INPUT 3=DIN_OUT 4=DO_EXT");
+            return;
+        }
+
+        bool pulldown = (mode != 1);  // default: pulldown off for OUTPUT, on for others
+
+        Serial.printf("Setting GPIO_%c mode to %s (pulldown=%s)...\r\n",
+                       'A' + pin, gpioModeName((uint8_t)mode), pulldown ? "on" : "off");
+
+        Command cmd;
+        cmd.type = CMD_GPIO_CONFIG;
+        cmd.gpioCfg.gpio = (uint8_t)pin;
+        cmd.gpioCfg.mode = (uint8_t)mode;
+        cmd.gpioCfg.pulldown = pulldown;
+        sendCommand(cmd);
+
+        delay(50);
+        Serial.println("Done.");
+
+    } else if (strcmp(subcmd, "set") == 0) {
+        unsigned int val;
+        if (sscanf(args, "%u", &val) != 1 || val > 1) {
+            Serial.println("Usage: gpio <pin> set <0|1>");
+            return;
+        }
+
+        Serial.printf("Setting GPIO_%c output = %s\r\n", 'A' + pin, val ? "HIGH" : "LOW");
+
+        Command cmd;
+        cmd.type = CMD_GPIO_SET;
+        cmd.gpioSet.gpio = (uint8_t)pin;
+        cmd.gpioSet.value = (val != 0);
+        sendCommand(cmd);
+
+        delay(20);
+        Serial.println("Done.");
+
+    } else if (strcmp(subcmd, "read") == 0) {
+        bool state = s_dev->readGpioInput((uint8_t)pin);
+        Serial.printf("GPIO_%c input: %s (%d)\r\n", 'A' + pin, state ? "HIGH" : "LOW", (int)state);
+
+    } else {
+        Serial.println("Usage: gpio <pin> mode <0-4>");
+        Serial.println("       gpio <pin> set <0|1>");
+        Serial.println("       gpio <pin> read");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WiFi status / connect
+// ---------------------------------------------------------------------------
+
+static void cmdWifi(const char* args)
+{
+    // No args: show status
+    if (!args || !*args) {
+        Serial.println(F("\r\n--- WiFi Status ---"));
+        Serial.printf("  Mode:    AP+STA\r\n");
+        Serial.printf("  AP SSID: %s\r\n", WIFI_SSID);
+        Serial.printf("  AP IP:   %s\r\n", WiFi.softAPIP().toString().c_str());
+        Serial.printf("  AP MAC:  %s\r\n", WiFi.softAPmacAddress().c_str());
+
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("  STA:     CONNECTED\r\n");
+            Serial.printf("  STA SSID:%s\r\n", WiFi.SSID().c_str());
+            Serial.printf("  STA IP:  %s\r\n", WiFi.localIP().toString().c_str());
+            Serial.printf("  STA RSSI:%d dBm\r\n", WiFi.RSSI());
+        } else {
+            Serial.printf("  STA:     NOT CONNECTED\r\n");
+        }
+        return;
+    }
+
+    // Args: wifi <ssid> <password>
+    char ssid[64] = {};
+    char pass[64] = {};
+    int n = sscanf(args, "%63s %63s", ssid, pass);
+    if (n < 2) {
+        Serial.println("Usage: wifi <ssid> <password>");
+        return;
+    }
+
+    Serial.printf("Connecting to '%s'...\r\n", ssid);
+    WiFi.begin(ssid, pass);
+
+    uint8_t attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+        delay(250);
+        Serial.print(".");
+        attempts++;
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("Connected! IP: %s  RSSI: %d dBm\r\n",
+                      WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    } else {
+        Serial.println("Connection FAILED. Check SSID and password.");
+    }
 }

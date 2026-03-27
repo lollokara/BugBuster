@@ -4,6 +4,8 @@
 #include <SPI.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "config.h"
 #include "ad74416h_regs.h"
@@ -120,6 +122,7 @@ private:
     uint8_t _dev_addr;
 
     SPIClass* _spi;
+    SemaphoreHandle_t _mutex;   // Protects multi-frame SPI sequences
 
     /**
      * @brief Compute CRC-8 (poly 0x07, init 0x00) over the first 4 bytes of

@@ -15,7 +15,8 @@ AD74416H_SPI::AD74416H_SPI(uint8_t pin_sdo, uint8_t pin_sdi,
       _pin_sync(pin_sync),
       _pin_sclk(pin_sclk),
       _dev_addr(dev_addr & 0x03),
-      _spi(nullptr)
+      _spi(nullptr),
+      _mutex(nullptr)
 {
 }
 
@@ -24,6 +25,10 @@ AD74416H_SPI::AD74416H_SPI(uint8_t pin_sdo, uint8_t pin_sdi,
 // ---------------------------------------------------------------------------
 void AD74416H_SPI::begin()
 {
+    // Create mutex to protect multi-frame SPI sequences from concurrent access
+    _mutex = xSemaphoreCreateMutex();
+    configASSERT(_mutex);
+
     // SYNC is active low; idle state is HIGH
     pinMode(_pin_sync, OUTPUT);
     deassertSync();
@@ -97,7 +102,9 @@ void AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
     frame[SPI_FRAME_BYTE_DATA_LO] = (uint8_t)(data & 0xFF);
     frame[SPI_FRAME_BYTE_CRC]     = computeCRC8(frame);
 
+    xSemaphoreTake(_mutex, portMAX_DELAY);
     transferFrame(frame, nullptr);
+    xSemaphoreGive(_mutex);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,14 +122,23 @@ void AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
 // ---------------------------------------------------------------------------
 bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+
     // --- Stage 1: Write register address to READ_SELECT ---
-    writeRegister(REG_READ_SELECT, (uint16_t)addr);
+    {
+        uint8_t frame[SPI_FRAME_BYTES];
+        frame[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
+        frame[SPI_FRAME_BYTE_ADDR]    = REG_READ_SELECT;
+        frame[SPI_FRAME_BYTE_DATA_HI] = 0x00;
+        frame[SPI_FRAME_BYTE_DATA_LO] = addr;
+        frame[SPI_FRAME_BYTE_CRC]     = computeCRC8(frame);
+        transferFrame(frame, nullptr);
+    }
 
     // --- Stage 2: Send NOP; clock in response ---
     uint8_t tx_frame[SPI_FRAME_BYTES] = {0};
     uint8_t rx_frame[SPI_FRAME_BYTES] = {0};
 
-    // Build a NOP write frame (addr=0x00, data=0x0000) with valid CRC
     tx_frame[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
     tx_frame[SPI_FRAME_BYTE_ADDR]    = REG_NOP;
     tx_frame[SPI_FRAME_BYTE_DATA_HI] = 0x00;
@@ -131,17 +147,17 @@ bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 
     transferFrame(tx_frame, rx_frame);
 
+    xSemaphoreGive(_mutex);
+
     // --- Validate CRC of response ---
     uint8_t expected_crc = computeCRC8(rx_frame);
     if (rx_frame[SPI_FRAME_BYTE_CRC] != expected_crc) {
-        // CRC mismatch - data unreliable
         if (data != nullptr) {
-            *data = 0xFFFF;  // Sentinel value indicating error
+            *data = 0xFFFF;
         }
         return false;
     }
 
-    // Extract 16-bit data from response bytes [2] and [3]
     if (data != nullptr) {
         *data = (uint16_t)(((uint16_t)rx_frame[SPI_FRAME_BYTE_DATA_HI] << 8) |
                             (uint16_t)rx_frame[SPI_FRAME_BYTE_DATA_LO]);
@@ -154,12 +170,54 @@ bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 // ---------------------------------------------------------------------------
 bool AD74416H_SPI::updateRegister(uint8_t addr, uint16_t mask, uint16_t val)
 {
-    uint16_t current = 0;
-    bool ok = readRegister(addr, &current);
-    if (!ok) {
+    // Read-modify-write must be atomic. readRegister and writeRegister each
+    // take the mutex internally, but we need the whole sequence to be atomic.
+    // Use a recursive-safe approach: take the mutex here, call the internal
+    // (unlocked) helpers. Since we changed read/write to use the mutex and
+    // it's a FreeRTOS mutex (not recursive), we do the RMW inline.
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+
+    // Stage 1 of read: write addr to READ_SELECT
+    {
+        uint8_t frame[SPI_FRAME_BYTES];
+        frame[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
+        frame[SPI_FRAME_BYTE_ADDR]    = REG_READ_SELECT;
+        frame[SPI_FRAME_BYTE_DATA_HI] = 0x00;
+        frame[SPI_FRAME_BYTE_DATA_LO] = addr;
+        frame[SPI_FRAME_BYTE_CRC]     = computeCRC8(frame);
+        transferFrame(frame, nullptr);
+    }
+
+    // Stage 2 of read: NOP to clock in response
+    uint8_t tx_nop[SPI_FRAME_BYTES] = {0};
+    uint8_t rx_frame[SPI_FRAME_BYTES] = {0};
+    tx_nop[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
+    tx_nop[SPI_FRAME_BYTE_ADDR]    = REG_NOP;
+    tx_nop[SPI_FRAME_BYTE_CRC]     = computeCRC8(tx_nop);
+    transferFrame(tx_nop, rx_frame);
+
+    // Validate CRC
+    uint8_t expected_crc = computeCRC8(rx_frame);
+    if (rx_frame[SPI_FRAME_BYTE_CRC] != expected_crc) {
+        xSemaphoreGive(_mutex);
         return false;
     }
+
+    uint16_t current = (uint16_t)(((uint16_t)rx_frame[SPI_FRAME_BYTE_DATA_HI] << 8) |
+                                   (uint16_t)rx_frame[SPI_FRAME_BYTE_DATA_LO]);
+
+    // Modify and write back
     uint16_t updated = (current & ~mask) | (val & mask);
-    writeRegister(addr, updated);
+    {
+        uint8_t frame[SPI_FRAME_BYTES];
+        frame[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
+        frame[SPI_FRAME_BYTE_ADDR]    = addr;
+        frame[SPI_FRAME_BYTE_DATA_HI] = (uint8_t)((updated >> 8) & 0xFF);
+        frame[SPI_FRAME_BYTE_DATA_LO] = (uint8_t)(updated & 0xFF);
+        frame[SPI_FRAME_BYTE_CRC]     = computeCRC8(frame);
+        transferFrame(frame, nullptr);
+    }
+
+    xSemaphoreGive(_mutex);
     return true;
 }

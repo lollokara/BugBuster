@@ -182,4 +182,24 @@
  src/ad74416h.h src/config.h src/ad74416h_regs.h src/ad74416h_spi.h \
  C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.h \
  C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.h \
- src/tasks.h
+ src/tasks.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFi.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/IPv6Address.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiType.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiSTA.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiGeneric.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/esp_wifi/include/esp_smartconfig.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/wifi_provisioning/include/wifi_provisioning/manager.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/protocomm/include/common/protocomm.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/protocomm/include/security/protocomm_security.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/wifi_provisioning/include/wifi_provisioning/wifi_config.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiAP.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiScan.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiClient.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Client.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiServer.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Server.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiUdp.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/Udp.h \
+ C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/cbuf.h

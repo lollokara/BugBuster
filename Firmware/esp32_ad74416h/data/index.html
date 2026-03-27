@@ -312,10 +312,10 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 
 /* ===== OVERVIEW SPECIFIC ===== */
 .overview-summary{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+  display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;justify-content:center}
 .summary-tile{
   background:var(--glass);border:1px solid var(--border2);border-radius:var(--radius);
-  padding:14px;text-align:center;position:relative;overflow:hidden}
+  padding:14px;text-align:center;position:relative;overflow:hidden;min-width:160px;flex:0 1 200px}
 .summary-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;
   background:linear-gradient(90deg,transparent,rgba(255,255,255,0.06),transparent)}
 .summary-tile .s-label{font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
@@ -323,7 +323,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 .summary-tile .s-unit{font-size:.7rem;color:var(--text3);margin-left:2px}
 .summary-tile.ok{border-color:rgba(16,185,129,0.2)}
 .summary-tile.warn{border-color:rgba(245,158,11,0.2)}
-.summary-tile.fault{border-color:rgba(239,68,68,0.2)}
+.summary-tile.fault{border-color:rgba(239,68,68,0.4);box-shadow:0 0 20px rgba(239,68,68,0.1)}
 
 /* ===== FAULTS SPECIFIC ===== */
 .fault-section{margin-bottom:20px}
@@ -428,6 +428,8 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   <button class="tab-btn" data-tab="din"><span class="tab-icon">↓</span> Digital In</button>
   <button class="tab-btn" data-tab="dout"><span class="tab-icon">↑</span> Digital Out</button>
   <button class="tab-btn" data-tab="faults"><span class="tab-icon">⚠</span> Faults <span id="fault-badge" style="display:none;background:var(--rose);color:#fff;font-size:.6rem;padding:1px 5px;border-radius:8px;margin-left:2px">!</span></button>
+  <button class="tab-btn" data-tab="gpio"><span class="tab-icon">🔌</span> GPIO</button>
+  <button class="tab-btn" data-tab="scope"><span class="tab-icon">📊</span> Scope</button>
 </div>
 
 <!-- ===== CONTENT ===== -->
@@ -452,6 +454,10 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
       <div class="s-label">Supply</div>
       <div class="s-val" id="ov-supply-val" style="font-size:.9rem;margin-top:4px">--</div>
     </div>
+    <div class="summary-tile" style="cursor:pointer" onclick="deviceReset()" title="Reset AD74416H">
+      <div class="s-label">Device</div>
+      <div class="s-val" style="font-size:.9rem;margin-top:4px">🔄 Reset</div>
+    </div>
   </div>
 
   <div class="ch-grid" id="ov-ch-grid">
@@ -468,6 +474,12 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 
 <!-- =============================== ADC DIAGNOSTICS =============================== -->
 <div class="tab-panel" id="tab-adc-diag">
+  <!-- Supply Voltage Diagnostics -->
+  <div class="section-title" style="margin-bottom:14px">⚡ Supply Diagnostics</div>
+  <div class="ch-grid" id="diag-slots-grid" style="margin-bottom:20px">
+    <!-- 4 diagnostic slot cards populated by JS -->
+  </div>
+
   <div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;align-items:start">
     <!-- Thermometer -->
     <div class="card">
@@ -575,6 +587,66 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   </div>
 </div>
 
+<!-- =============================== GPIO =============================== -->
+<div class="tab-panel" id="tab-gpio">
+  <div class="ch-grid" id="gpio-grid">
+    <!-- populated by JS -->
+  </div>
+</div>
+
+<!-- =============================== SCOPE =============================== -->
+<div class="tab-panel" id="tab-scope">
+  <div class="card" style="padding:16px">
+    <!-- Control bar -->
+    <div id="scope-controls" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <!-- Channel toggles -->
+      <div style="display:flex;gap:8px">
+        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-0" checked onchange="scopeToggleCh(0)"><span style="font-size:.75rem;font-weight:600;color:var(--blue)">CH A</span></label>
+        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-1" onchange="scopeToggleCh(1)"><span style="font-size:.75rem;font-weight:600;color:var(--green)">CH B</span></label>
+        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-2" onchange="scopeToggleCh(2)"><span style="font-size:.75rem;font-weight:600;color:var(--amber)">CH C</span></label>
+        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-3" checked onchange="scopeToggleCh(3)"><span style="font-size:.75rem;font-weight:600;color:var(--purple)">CH D</span></label>
+      </div>
+      <!-- Time window -->
+      <div class="form-row compact" style="margin:0"><label>Window</label>
+        <select id="scope-window" onchange="scopeSetWindow(this.value)">
+          <option value="10">10s</option>
+          <option value="30" selected>30s</option>
+          <option value="60">60s</option>
+          <option value="120">2min</option>
+          <option value="300">5min</option>
+        </select>
+      </div>
+      <!-- Y-axis range -->
+      <div class="form-row compact" style="margin:0"><label>Y Range</label>
+        <select id="scope-yrange" onchange="scopeSetYRange(this.value)">
+          <option value="auto" selected>Auto</option>
+          <option value="0,12">0-12V</option>
+          <option value="-12,12">+/-12V</option>
+          <option value="0,0.625">0-625mV</option>
+          <option value="0,25">0-25mA</option>
+        </select>
+      </div>
+      <!-- ADC Rate -->
+      <div class="form-row compact" style="margin:0"><label>ADC Rate</label>
+        <select id="scope-adc-rate" onchange="scopeSetAdcRate(this.value)">
+          <option value="1" selected>20 SPS</option>
+          <option value="8">1.2 kSPS</option>
+          <option value="12">4.8 kSPS</option>
+          <option value="13">9.6 kSPS</option>
+          <option value="0">10 SPS (HR)</option>
+        </select>
+      </div>
+      <!-- Run/Pause -->
+      <button class="btn primary" id="scope-run-btn" onclick="scopeToggleRun()">Pause</button>
+      <button class="btn" onclick="scopeClear()">Clear</button>
+      <!-- Current values display -->
+      <div id="scope-values" style="display:flex;gap:12px;margin-left:auto;font-size:.8rem;font-variant-numeric:tabular-nums"></div>
+    </div>
+    <!-- Canvas -->
+    <canvas id="scope-canvas" style="width:100%;height:400px;border-radius:8px;background:var(--bg1);border:1px solid var(--border2)"></canvas>
+  </div>
+</div>
+
 </div><!-- /content -->
 
 <!-- Toast container -->
@@ -596,11 +668,31 @@ const state = {
   channels: [0,1,2,3].map(i=>({
     id:i, function:'HIGH_IMP', adcRaw:0, adcValue:0,
     adcRange:0, adcRate:1, adcMux:0,
-    dacCode:0, dacValue:0,
+    dacCode:0, dacValue:0, dacDirty:0,
     dinState:false, dinCounter:0, doState:false,
     channelAlert:0, channelAlertMask:0
-  }))
+  })),
+  diag: [
+    {slot:0, source:1, sourceName:'TEMP',    raw:0, value:0, unit:'C', dirty:0},
+    {slot:1, source:5, sourceName:'AVDD_HI', raw:0, value:0, unit:'V', dirty:0},
+    {slot:2, source:2, sourceName:'DVCC',    raw:0, value:0, unit:'V', dirty:0},
+    {slot:3, source:3, sourceName:'AVCC',    raw:0, value:0, unit:'V', dirty:0}
+  ],
+  gpio: [0,1,2,3,4,5].map(i=>({pin:i,name:String.fromCharCode(65+i),mode:0,modeName:'HIGH_IMP',output:false,input:false,pulldown:true}))
 };
+
+const DIAG_SOURCES = [
+  {code:0,name:'AGND',unit:'V',expect:0,range:0.1},
+  {code:1,name:'TEMP',unit:'C',expect:30,range:80},
+  {code:2,name:'DVCC',unit:'V',expect:3.3,range:0.5},
+  {code:3,name:'AVCC',unit:'V',expect:5.0,range:0.5},
+  {code:4,name:'LDO1V8',unit:'V',expect:1.8,range:0.3},
+  {code:5,name:'AVDD_HI',unit:'V',expect:24.0,range:5.0},
+  {code:6,name:'AVDD_LO',unit:'V',expect:24.0,range:5.0},
+  {code:7,name:'AVSS',unit:'V',expect:-12.0,range:5.0},
+  {code:8,name:'LVIN',unit:'V',expect:0,range:2.5},
+  {code:9,name:'DO_VDD',unit:'V',expect:24.0,range:5.0}
+];
 
 // Masks for pending changes
 const pendingMasks = {
@@ -685,8 +777,167 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
     document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
+    // Resize scope canvas when its tab becomes visible
+    if(btn.dataset.tab==='scope') setTimeout(()=>{scopeResizeCanvas();drawScope()},50);
   });
 });
+
+// ============================================================
+// SCOPE STATE
+// ============================================================
+const scope = {
+  running: true,
+  channels: [true, false, false, true],
+  colors: ['#3b82f6','#10b981','#f59e0b','#a855f7'],
+  window: 30,
+  yRange: 'auto',
+  data: [[],[],[],[]],
+  maxPoints: 600,
+};
+
+function scopeResizeCanvas(){
+  const canvas = document.getElementById('scope-canvas');
+  if(!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if(rect.width>0 && rect.height>0){
+    canvas.width = rect.width * (window.devicePixelRatio||1);
+    canvas.height = rect.height * (window.devicePixelRatio||1);
+  }
+}
+function scopeInit(){
+  scopeResizeCanvas();
+  window.addEventListener('resize', ()=>{
+    const r = canvas.getBoundingClientRect();
+    canvas.width = r.width * window.devicePixelRatio;
+    canvas.height = r.height * window.devicePixelRatio;
+  });
+}
+
+function drawScope(){
+  const canvas = document.getElementById('scope-canvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  const pad = {l:60*dpr, r:20*dpr, t:20*dpr, b:30*dpr};
+  const plotW = W - pad.l - pad.r;
+  const plotH = H - pad.t - pad.b;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const now = Date.now();
+  const tMin = now - scope.window * 1000;
+  const tMax = now;
+
+  // Y range
+  let yMin=0, yMax=12;
+  if(scope.yRange === 'auto'){
+    yMin = Infinity; yMax = -Infinity;
+    for(let i=0;i<4;i++){
+      if(!scope.channels[i]) continue;
+      scope.data[i].forEach(p => { yMin=Math.min(yMin,p.v); yMax=Math.max(yMax,p.v); });
+    }
+    if(yMin === Infinity){yMin=0;yMax=12;}
+    const margin = (yMax-yMin)*0.1 || 1;
+    yMin -= margin; yMax += margin;
+  } else {
+    const parts = scope.yRange.split(',');
+    yMin = parseFloat(parts[0]); yMax = parseFloat(parts[1]);
+  }
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  const ySteps = 5;
+  for(let i=0;i<=ySteps;i++){
+    const y = pad.t + (i/ySteps)*plotH;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+plotW, y); ctx.stroke();
+  }
+  const tSteps = Math.min(10, scope.window);
+  for(let i=0;i<=tSteps;i++){
+    const x = pad.l + (i/tSteps)*plotW;
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t+plotH); ctx.stroke();
+  }
+
+  // Y-axis labels
+  ctx.fillStyle = '#64748b';
+  ctx.font = `${11*dpr}px -apple-system,sans-serif`;
+  ctx.textAlign = 'right';
+  for(let i=0;i<=ySteps;i++){
+    const v = yMax - (i/ySteps)*(yMax-yMin);
+    const y = pad.t + (i/ySteps)*plotH;
+    ctx.fillText(v.toFixed(2), pad.l-8*dpr, y+4*dpr);
+  }
+
+  // X-axis labels (time ago)
+  ctx.textAlign = 'center';
+  for(let i=0;i<=tSteps;i++){
+    const t = scope.window - (i/tSteps)*scope.window;
+    const x = pad.l + (i/tSteps)*plotW;
+    ctx.fillText(t>0?`-${t.toFixed(0)}s`:'now', x, H-6*dpr);
+  }
+
+  // Plot data lines
+  ctx.lineWidth = 2*dpr;
+  for(let ch=0;ch<4;ch++){
+    if(!scope.channels[ch] || scope.data[ch].length < 2) continue;
+    ctx.strokeStyle = scope.colors[ch];
+    ctx.beginPath();
+    let first = true;
+    for(const p of scope.data[ch]){
+      const x = pad.l + ((p.t-tMin)/(tMax-tMin))*plotW;
+      const y = pad.t + ((yMax-p.v)/(yMax-yMin))*plotH;
+      if(first){ctx.moveTo(x,y);first=false}
+      else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+
+  // Current values overlay
+  const valDiv = document.getElementById('scope-values');
+  if(valDiv){
+    const names=['A','B','C','D'];
+    let html='';
+    for(let i=0;i<4;i++){
+      if(!scope.channels[i]) continue;
+      const d = scope.data[i];
+      const v = d.length>0 ? d[d.length-1].v : 0;
+      html+=`<span style="color:${scope.colors[i]};font-weight:600">${names[i]}: ${v.toFixed(4)}</span>`;
+    }
+    valDiv.innerHTML=html;
+  }
+}
+
+function scopeToggleCh(ch){
+  scope.channels[ch] = document.getElementById(`scope-ch-${ch}`).checked;
+}
+function scopeSetWindow(v){ scope.window = parseInt(v); }
+function scopeSetYRange(v){ scope.yRange = v; }
+async function scopeSetAdcRate(rate){
+  rate=parseInt(rate);
+  // Set ADC rate on all active channels
+  for(let i=0;i<4;i++){
+    if(state.channels[i].function!=='HIGH_IMP'){
+      try{
+        await apiFetch(`/api/channel/${i}/adc/config`,{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({mux:state.channels[i].adcMux, range:state.channels[i].adcRange, rate})});
+      }catch(e){}
+    }
+  }
+  toast('ok',`ADC rate set to ${document.getElementById('scope-adc-rate').selectedOptions[0].text}`);
+}
+function scopeToggleRun(){
+  scope.running = !scope.running;
+  const btn = document.getElementById('scope-run-btn');
+  btn.textContent = scope.running ? 'Pause' : 'Run';
+  btn.classList.toggle('primary', scope.running);
+}
+function scopeClear(){
+  scope.data = [[],[],[],[]];
+  drawScope();
+}
 
 // ============================================================
 // INIT UI (build DOM)
@@ -694,6 +945,7 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 function initUI(){
   buildOverview();
   buildADC();
+  buildDiagSlots();
   buildVDAC();
   buildIDAC();
   buildDIN();
@@ -702,6 +954,46 @@ function initUI(){
   buildDiagLEDs();
   buildLiveStatusGrid();
   buildMaskUI();
+  buildGPIO();
+  scopeInit();
+}
+
+// -------- DIAGNOSTIC SLOTS --------
+function buildDiagSlots(){
+  const grid=document.getElementById('diag-slots-grid');
+  if(!grid) return;
+  grid.innerHTML='';
+  const icons=['🌡','⚡','🔌','🔋'];
+  for(let s=0;s<4;s++){
+    const d=document.createElement('div');
+    d.className='card';d.id=`diag-slot-${s}`;
+    const opts=DIAG_SOURCES.map(ds=>`<option value="${ds.code}"${ds.code===state.diag[s].source?' selected':''}>${ds.name}</option>`).join('');
+    d.innerHTML=`
+      <div class="card-header">
+        <div class="card-title">${icons[s]} Slot ${s}</div>
+        <select id="diag-src-sel-${s}" style="width:auto;min-width:90px" onchange="changeDiagSource(${s},this.value)">${opts}</select>
+      </div>
+      <div class="big-value" id="diag-slot-val-${s}">--<span class="unit" id="diag-slot-unit-${s}"></span></div>
+      <div class="raw-val" id="diag-slot-raw-${s}">raw: --</div>
+      <div class="bar-gauge mt-8"><div class="bar-fill green" id="diag-slot-bar-${s}" style="width:0%"></div></div>
+    `;
+    grid.appendChild(d);
+  }
+}
+
+async function changeDiagSource(slot,src){
+  src=parseInt(src);
+  try{
+    const r=await fetch('/api/diagnostics/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot,source:src})});
+    if(r.ok){
+      const info=DIAG_SOURCES.find(d=>d.code===src);
+      state.diag[slot].source=src;
+      state.diag[slot].sourceName=info?info.name:'?';
+      state.diag[slot].unit=info?info.unit:'V';
+      state.diag[slot].dirty=Date.now();
+      toast('ok',`Diag slot ${slot} → ${info?info.name:'?'}`);
+    }else toast('err','Failed to configure diagnostic');
+  }catch(e){toast('err',e.message)}
 }
 
 // -------- OVERVIEW --------
@@ -1058,6 +1350,108 @@ function updateMask(){
   }
 }
 
+// -------- GPIO --------
+const GPIO_MODES = ['HIGH_IMP','OUTPUT','INPUT','DIN_OUT','DO_EXT'];
+const GPIO_NAMES = ['A','B','C','D','E','F'];
+
+function buildGPIO(){
+  const grid=document.getElementById('gpio-grid');
+  if(!grid) return;
+  grid.innerHTML='';
+  for(let g=0;g<6;g++){
+    const d=document.createElement('div');
+    d.className='card';d.id=`gpio-card-${g}`;
+    d.innerHTML=`
+      <div class="card-header">
+        <div class="card-title"><span class="ch-badge" style="background:rgba(16,185,129,0.15);color:var(--green);border-color:rgba(16,185,129,0.25)">${GPIO_NAMES[g]}</span> GPIO ${GPIO_NAMES[g]}</div>
+        <span id="gpio-mode-badge-${g}" class="fn-badge high-imp">HIGH_IMP</span>
+      </div>
+      <div class="form-row"><label>Mode</label>
+        <select id="gpio-mode-sel-${g}" onchange="setGpioConfig(${g})">
+          ${GPIO_MODES.map((m,j)=>`<option value="${j}">${m}</option>`).join('')}
+        </select>
+      </div>
+      <div class="divider"></div>
+      <div class="big-led-wrap">
+        <div class="big-led" id="gpio-in-led-${g}"></div>
+        <div class="big-led-label" id="gpio-in-label-${g}">INPUT: OFF</div>
+      </div>
+      <div class="do-toggle-wrap">
+        <button class="do-toggle-btn" id="gpio-out-btn-${g}" onclick="toggleGpio(${g})">
+          <span id="gpio-out-icon-${g}">○</span>
+          <span id="gpio-out-label-${g}">OFF</span>
+        </button>
+      </div>
+      <div class="divider"></div>
+      <div class="form-row">
+        <label>Pulldown</label>
+        <div class="toggle-wrap">
+          <label class="toggle"><input type="checkbox" id="gpio-pd-${g}" checked onchange="setGpioConfig(${g})">
+            <span class="toggle-slider"></span></label>
+          <span class="toggle-label" id="gpio-pd-label-${g}">Enabled</span>
+        </div>
+      </div>`;
+    grid.appendChild(d);
+  }
+}
+
+async function setGpioConfig(g){
+  const mode=parseInt(document.getElementById(`gpio-mode-sel-${g}`).value);
+  const pulldown=document.getElementById(`gpio-pd-${g}`).checked;
+  try{
+    await apiFetch(`/api/gpio/${g}/config`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({mode,pulldown})});
+    toast('ok',`GPIO ${GPIO_NAMES[g]} mode → ${GPIO_MODES[mode]}`);
+  }catch(e){toast('err',`GPIO ${GPIO_NAMES[g]}: ${e.message}`)}
+}
+
+async function toggleGpio(g){
+  const newState=!state.gpio[g].output;
+  try{
+    await apiFetch(`/api/gpio/${g}/set`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({value:newState})});
+    toast(newState?'ok':'info',`GPIO ${GPIO_NAMES[g]} → ${newState?'ON':'OFF'}`);
+  }catch(e){toast('err',`GPIO ${GPIO_NAMES[g]}: ${e.message}`)}
+}
+
+function updateGPIO(){
+  state.gpio.forEach((g,i)=>{
+    // Mode badge
+    const badge=document.getElementById(`gpio-mode-badge-${i}`);
+    if(badge){
+      const isOut=g.mode===1;
+      const isIn=g.mode===2;
+      const cls=isOut?'dout':isIn?'vin':g.mode===3?'din':g.mode===4?'iin':'high-imp';
+      badge.className=`fn-badge ${cls}`;
+      badge.textContent=g.modeName||GPIO_MODES[g.mode]||'?';
+    }
+    // Mode selector
+    const sel=document.getElementById(`gpio-mode-sel-${i}`);
+    if(sel&&sel!==document.activeElement) sel.value=g.mode;
+    // Input LED
+    const inLed=document.getElementById(`gpio-in-led-${i}`);
+    if(inLed){inLed.classList.toggle('on',g.input);inLed.classList.toggle('off',!g.input)}
+    const inLabel=document.getElementById(`gpio-in-label-${i}`);
+    if(inLabel) inLabel.textContent=`INPUT: ${g.input?'ON':'OFF'}`;
+    // Output toggle
+    const outBtn=document.getElementById(`gpio-out-btn-${i}`);
+    if(outBtn){
+      outBtn.classList.toggle('on',g.output);
+      const outLabel=document.getElementById(`gpio-out-label-${i}`);
+      const outIcon=document.getElementById(`gpio-out-icon-${i}`);
+      if(outLabel) outLabel.textContent=g.output?'ON':'OFF';
+      if(outIcon)  outIcon.textContent=g.output?'●':'○';
+    }
+    // Pulldown toggle
+    const pdEl=document.getElementById(`gpio-pd-${i}`);
+    if(pdEl&&pdEl!==document.activeElement) pdEl.checked=g.pulldown;
+    const pdLabel=document.getElementById(`gpio-pd-label-${i}`);
+    if(pdLabel) pdLabel.textContent=g.pulldown?'Enabled':'Disabled';
+  });
+}
+
 // ============================================================
 // API CALLS
 // ============================================================
@@ -1076,6 +1470,21 @@ async function setFunction(ch,val){
       body:JSON.stringify({function:parseInt(val)})});
     toast('ok',`CH${CH_NAMES[ch]} function set`);
   }catch(e){toast('err',`CH${CH_NAMES[ch]}: ${e.message}`)}
+}
+
+async function deviceReset(){
+  if(!confirm('Reset the AD74416H? All channels will return to High Impedance.')) return;
+  try{
+    await apiFetch('/api/device/reset',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:'{}'});
+    toast('ok','Device reset complete');
+    // Reset local state
+    for(let i=0;i<4;i++){
+      state.channels[i].function='HIGH_IMP';
+      state.channels[i].dacCode=0;state.channels[i].dacValue=0;
+      state.channels[i].adcRaw=0;state.channels[i].adcValue=0;
+    }
+  }catch(e){toast('err',e.message)}
 }
 
 async function setAdcConfig(ch){
@@ -1117,6 +1526,8 @@ async function sendVdac(ch){
     await apiFetch(`/api/channel/${ch}/dac`,{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({voltage:v,bipolar})});
+    state.channels[ch].dacValue = v;
+    state.channels[ch].dacDirty = Date.now();
     toast('ok',`CH${CH_NAMES[ch]} VDAC → ${v.toFixed(3)}V`);
   }catch(e){toast('err',e.message)}
 }
@@ -1164,6 +1575,8 @@ async function sendIdac(ch){
     await apiFetch(`/api/channel/${ch}/dac`,{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({current_mA:mA})});
+    state.channels[ch].dacValue = mA;
+    state.channels[ch].dacDirty = Date.now();
     toast('ok',`CH${CH_NAMES[ch]} IDAC → ${mA.toFixed(3)}mA`);
   }catch(e){toast('err',e.message)}
 }
@@ -1373,12 +1786,15 @@ function updateAll(){
     if(adcMuxSel&&adcMuxSel!==document.activeElement)     adcMuxSel.value=ch.adcMux;
 
     // VDAC tab (only update if not being edited)
+    const dacDirty = ch.dacDirty && (Date.now() - ch.dacDirty < 2000);
     if(isVout){
-      const vdacValEl=document.getElementById(`vdac-val-${i}`);
-      const numEl=document.getElementById(`vdac-num-${i}`);
-      if(vdacValEl) vdacValEl.innerHTML=`${ch.dacValue.toFixed(3)}<span class="unit">V</span>`;
-      if(numEl&&numEl!==document.activeElement) numEl.value=ch.dacValue.toFixed(3);
-      setEl(`vdac-code-${i}`,ch.dacCode);
+      if(!dacDirty){
+        const vdacValEl=document.getElementById(`vdac-val-${i}`);
+        const numEl=document.getElementById(`vdac-num-${i}`);
+        if(vdacValEl) vdacValEl.innerHTML=`${ch.dacValue.toFixed(3)}<span class="unit">V</span>`;
+        if(numEl&&numEl!==document.activeElement) numEl.value=ch.dacValue.toFixed(3);
+        setEl(`vdac-code-${i}`,ch.dacCode);
+      }
       const bp=vdacBipolar[i];
       const minV=bp?-12:0;
       const pv=Math.max(0,Math.min(100,((ch.dacValue-minV)/(12-minV))*100));
@@ -1387,13 +1803,15 @@ function updateAll(){
 
     // IDAC tab
     if(isIout){
-      const idacValEl=document.getElementById(`idac-val-${i}`);
-      const mA=ch.dacValue;
-      if(idacValEl) idacValEl.innerHTML=`${mA.toFixed(3)}<span class="unit">mA</span>`;
-      const numEl=document.getElementById(`idac-num-${i}`);
-      if(numEl&&numEl!==document.activeElement) numEl.value=mA.toFixed(3);
-      setEl(`idac-code-${i}`,ch.dacCode);
-      setBar(`idac-bar-${i}`,Math.max(0,Math.min(100,(mA/25)*100)));
+      if(!dacDirty){
+        const idacValEl=document.getElementById(`idac-val-${i}`);
+        const mA=ch.dacValue;
+        if(idacValEl) idacValEl.innerHTML=`${mA.toFixed(3)}<span class="unit">mA</span>`;
+        const numEl=document.getElementById(`idac-num-${i}`);
+        if(numEl&&numEl!==document.activeElement) numEl.value=mA.toFixed(3);
+        setEl(`idac-code-${i}`,ch.dacCode);
+      }
+      setBar(`idac-bar-${i}`,Math.max(0,Math.min(100,(ch.dacValue/25)*100)));
     }
 
     // DIN
@@ -1460,6 +1878,34 @@ function updateAll(){
     else{diagTs.className='fn-badge vin';diagTs.textContent='Normal'}
   }
 
+  // Diagnostic slot cards
+  state.diag.forEach((ds,s)=>{
+    // Sync source selector from state
+    const srcSel=document.getElementById(`diag-src-sel-${s}`);
+    if(srcSel&&srcSel!==document.activeElement) srcSel.value=ds.source;
+    const valEl=document.getElementById(`diag-slot-val-${s}`);
+    const unitEl=document.getElementById(`diag-slot-unit-${s}`);
+    const rawEl=document.getElementById(`diag-slot-raw-${s}`);
+    const barEl=document.getElementById(`diag-slot-bar-${s}`);
+    if(valEl){
+      const prec=ds.unit==='C'?1:3;
+      valEl.innerHTML=`${ds.value.toFixed(prec)}<span class="unit">${ds.unit}</span>`;
+    }
+    if(rawEl) rawEl.textContent=`raw: 0x${ds.raw.toString(16).toUpperCase().padStart(4,'0')} (${ds.raw})`;
+    if(barEl){
+      const info=DIAG_SOURCES.find(d=>d.code===ds.source);
+      if(info&&info.range>0){
+        const pct=Math.max(0,Math.min(100,Math.abs(ds.value-info.expect)/(info.range)*100));
+        const ok=pct<80;
+        barEl.style.width=(100-pct)+'%';
+        barEl.className='bar-fill '+(ok?'green':'amber');
+      }
+    }
+  });
+
+  // GPIO
+  updateGPIO();
+
   // Masks - sync checkboxes from state (only if not just edited)
   document.querySelectorAll('[data-masktype=global]').forEach(el=>{
     el.checked=!!(state.alertMask&(1<<el.dataset.bit));
@@ -1510,6 +1956,7 @@ function toast(type,msg){
 let pollInterval=null;
 let failCount=0;
 
+let diagPollCount=0;
 async function poll(){
   try{
     const r=await fetch('/api/status',{cache:'no-store'});
@@ -1531,9 +1978,67 @@ async function poll(){
     state.liveStatus=d.liveStatus??0;
     if(Array.isArray(d.channels)){
       d.channels.forEach((ch,i)=>{
-        if(i<4) Object.assign(state.channels[i],ch);
+        if(i<4){
+          const dirty = state.channels[i].dacDirty && (Date.now() - state.channels[i].dacDirty < 2000);
+          if(dirty){
+            const {dacValue, dacCode, ...rest} = ch;
+            Object.assign(state.channels[i], rest);
+          } else {
+            Object.assign(state.channels[i], ch);
+          }
+        }
       });
     }
+
+    // Poll diagnostics every 4th cycle (~2s)
+    diagPollCount++;
+    if(diagPollCount%4===0){
+      try{
+        const dr=await fetch('/api/diagnostics',{cache:'no-store'});
+        if(dr.ok){
+          const dd=await dr.json();
+          if(Array.isArray(dd.slots)){
+            dd.slots.forEach((s,i)=>{
+              if(i<4){
+                const diagDirty = state.diag[i].dirty && (Date.now() - state.diag[i].dirty < 2000);
+                if(diagDirty){
+                  const {source, sourceName, ...rest} = s;
+                  Object.assign(state.diag[i], rest);
+                } else {
+                  Object.assign(state.diag[i], s);
+                }
+              }
+            });
+          }
+        }
+      }catch(e){}
+      // Poll GPIO on same cadence
+      try{
+        const gr=await fetch('/api/gpio',{cache:'no-store'});
+        if(gr.ok){
+          const gd=await gr.json();
+          if(Array.isArray(gd.gpios)){
+            gd.gpios.forEach((g,i)=>{
+              if(i<6) Object.assign(state.gpio[i],g);
+            });
+          }
+        }
+      }catch(e){}
+    }
+
+    // Scope data collection
+    if(scope.running) {
+      const now = Date.now();
+      for(let i=0;i<4;i++){
+        if(scope.channels[i] && state.channels[i].function !== 'HIGH_IMP'){
+          scope.data[i].push({t:now, v:state.channels[i].adcValue});
+          const cutoff = now - scope.window * 1000;
+          while(scope.data[i].length > 0 && scope.data[i][0].t < cutoff) scope.data[i].shift();
+        }
+      }
+      drawScope();
+    }
+
     updateAll();
   }catch(e){
     failCount++;

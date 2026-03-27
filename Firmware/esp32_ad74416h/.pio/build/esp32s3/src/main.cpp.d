@@ -210,7 +210,7 @@
  .pio/libdeps/esp32s3/ESPAsyncWebServer/src/WebHandlerImpl.h \
  .pio/libdeps/esp32s3/ESPAsyncWebServer/src/WebResponseImpl.h \
  C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/StreamString.h \
- src/config.h src/ad74416h_spi.h \
+ src/config.h src/wifi_credentials.h src/ad74416h_spi.h \
  C:/users/lollo/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.h \
  C:/users/lollo/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.h \
  src/ad74416h_regs.h src/ad74416h.h src/tasks.h src/webserver.h src/cli.h

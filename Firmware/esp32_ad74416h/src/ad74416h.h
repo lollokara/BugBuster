@@ -144,16 +144,23 @@ public:
     void configureAdc(uint8_t ch, AdcConvMux mux, AdcRange range, AdcRate rate);
 
     /**
-     * @brief Start ADC conversions on all four channels.
-     *
-     * Enables CONV_A_EN..CONV_D_EN and sets CONV_SEQ.
+     * @brief Start ADC conversions with a channel enable mask.
      *
      * @param continuous  true = continuous mode; false = single conversion
+     * @param chMask      Bitmask of channels to enable (bit 0=A, 1=B, 2=C, 3=D).
+     *                    Default 0x0F = all channels.
+     * @param diagMask    Bitmask of diagnostics to enable (bit 0=DIAG0, etc.).
+     *                    Default 0x01 = DIAG0 (die temperature).
      */
-    void startAdcConversion(bool continuous = true);
+    void startAdcConversion(bool continuous = true,
+                            uint8_t chMask = 0x0F,
+                            uint8_t diagMask = 0x01);
 
     /**
-     * @brief Enable or disable ADC conversion for a single channel.
+     * @brief Enable or disable ADC conversion for a single channel
+     *        without disturbing other channels or the conversion mode.
+     *
+     * Stops continuous conversion, modifies channel enable, restarts.
      *
      * @param ch      Channel 0..3
      * @param enable  true to enable, false to disable
@@ -182,12 +189,21 @@ public:
     /**
      * @brief Check whether the ADC has fresh data ready.
      *
-     * Reads LIVE_STATUS and tests bit 4 (ADC_DATA_RDY).
+     * Reads LIVE_STATUS and tests bit 2 (ADC_DATA_RDY).
      *
      * @return true   ADC data ready
      * @return false  ADC data not yet ready
      */
     bool isAdcReady();
+
+    /**
+     * @brief Clear the ADC_DATA_RDY bit in LIVE_STATUS.
+     *
+     * Per datasheet: in continuous mode, ADC_DATA_RDY must be cleared manually
+     * by re-writing CONV_SEQ = 0b10 to ADC_CONV_CTRL. This does not interrupt
+     * the active continuous conversion.
+     */
+    void clearAdcDataReady();
 
     /**
      * @brief Convert a 24-bit ADC code to a voltage using datasheet transfer
@@ -381,21 +397,84 @@ public:
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Read the on-chip die temperature via the diagnostic ADC.
+     * @brief Read the on-chip die temperature from the diagnostic ADC result.
      *
-     * Configures DIAG_ASSIGN and ADC_CONV_CTRL to route the die temperature
-     * sensor to a diagnostic slot, triggers a single conversion, reads
-     * ADC_DIAG_RESULT[0], and converts the code to degrees Celsius.
+     * Reads ADC_DIAG_RESULT[0] (which is continuously updated when DIAG_EN0
+     * is enabled in the ADC sequence) and converts the code to Celsius.
+     * Does NOT disrupt continuous ADC conversion.
+     * Call setupDiagnostics() once during init to configure the diagnostic.
      *
      * @return float  Die temperature in degrees Celsius
      */
     float readDieTemperature();
 
     /**
+     * @brief One-time diagnostic setup: configure all 4 DIAG slots.
+     *
+     * Default: slot0=temperature, slot1=AVDD_HI, slot2=DVCC, slot3=AVCC
+     * Call once after begin(). Diagnostics run as part of the continuous
+     * ADC sequence when DIAG_ENx bits are enabled in ADC_CONV_CTRL.
+     */
+    void setupDiagnostics();
+
+    /**
+     * @brief Configure a diagnostic slot source.
+     *
+     * @param slot    Diagnostic slot 0..3
+     * @param source  Source code 0..13 (per datasheet Table 56):
+     *                0=AGND, 1=Temperature, 2=DVCC, 3=AVCC, 4=LDO1V8,
+     *                5=AVDD_HI, 6=AVDD_LO, 7=AVSS, 8=LVIN, 9=DO_VDD,
+     *                10=VSENSEP_x, 11=VSENSEN_x, 12=DO_current, 13=AVDD_x
+     */
+    void configureDiagSlot(uint8_t slot, uint8_t source);
+
+    /**
+     * @brief Convert a diagnostic ADC result to a physical value.
+     *
+     * @param raw     16-bit raw code from ADC_DIAG_RESULT
+     * @param source  The diagnostic source code (to select formula)
+     * @return float  Interpreted value (°C for temp, V for supplies)
+     */
+    static float diagCodeToValue(uint16_t raw, uint8_t source);
+
+    /**
      * @brief Read the LIVE_STATUS register.
      * @return uint16_t
      */
     uint16_t readLiveStatus();
+
+    // -------------------------------------------------------------------------
+    // GPIO (6 pins: A=0, B=1, C=2, D=3, E=4, F=5)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Configure a GPIO pin mode.
+     * @param gpio  GPIO index 0..5 (A..F)
+     * @param mode  GpioSelect mode
+     * @param pulldown  Enable weak pull-down (default true)
+     */
+    void configureGpio(uint8_t gpio, GpioSelect mode, bool pulldown = true);
+
+    /**
+     * @brief Set GPIO output value (only effective when mode=GPIO_SEL_OUTPUT).
+     * @param gpio  GPIO index 0..5
+     * @param high  true=logic high, false=logic low
+     */
+    void setGpioOutput(uint8_t gpio, bool high);
+
+    /**
+     * @brief Read GPIO input state.
+     * @param gpio  GPIO index 0..5
+     * @return true if pin is high
+     */
+    bool readGpioInput(uint8_t gpio);
+
+    /**
+     * @brief Read the full GPIO_CONFIG register for a pin.
+     * @param gpio  GPIO index 0..5
+     * @return uint16_t raw register value
+     */
+    uint16_t readGpioConfig(uint8_t gpio);
 
     // -------------------------------------------------------------------------
     // Reset

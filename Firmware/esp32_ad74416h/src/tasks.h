@@ -34,6 +34,19 @@ struct ChannelState {
     uint16_t         channelAlertMask;
 };
 
+struct DiagState {
+    uint8_t          source;            // DIAG_ASSIGN source code (0-13)
+    uint16_t         rawCode;           // raw ADC_DIAG_RESULT
+    float            value;             // interpreted value (V or °C)
+};
+
+struct GpioState {
+    uint8_t          mode;              // GpioSelect enum value
+    bool             outputVal;         // GPO_DATA state
+    bool             inputVal;          // GPI_DATA state (read-only)
+    bool             pulldown;          // GP_WK_PD_EN
+};
+
 struct DeviceState {
     bool             spiOk;             // SPI communication healthy
     ChannelState     channels[4];
@@ -43,6 +56,8 @@ struct DeviceState {
     uint16_t         supplyAlertMask;
     float            dieTemperature;
     uint16_t         liveStatus;
+    DiagState        diag[4];           // 4 diagnostic slots
+    GpioState        gpio[6];           // 6 GPIOs (A-F)
 };
 
 extern DeviceState        g_deviceState;
@@ -68,6 +83,10 @@ enum CommandType {
     CMD_SET_SUPPLY_ALERT_MASK,
     CMD_SET_VOUT_RANGE,
     CMD_SET_CURRENT_LIMIT,
+    CMD_DIAG_CONFIG,        // Configure diagnostic slot source
+    CMD_SET_AVDD_SELECT,    // Set AVDD source selection
+    CMD_GPIO_CONFIG,        // Configure GPIO mode
+    CMD_GPIO_SET,           // Set GPIO output value
 };
 
 struct Command {
@@ -99,6 +118,20 @@ struct Command {
         } doCfg;
         bool     boolVal;
         uint16_t maskVal;
+        struct {
+            uint8_t slot;
+            uint8_t source;
+        } diagCfg;
+        uint8_t  avddSel;   // AVDD_SELECT value (0-3)
+        struct {
+            uint8_t gpio;       // GPIO index 0-5 (A-F)
+            uint8_t mode;       // GpioSelect value
+            bool    pulldown;
+        } gpioCfg;
+        struct {
+            uint8_t gpio;
+            bool    value;
+        } gpioSet;
     };
 };
 

@@ -54,51 +54,50 @@
 #define CH_FUNC_SETUP_CH_FUNC_MASK      (0x0F << CH_FUNC_SETUP_CH_FUNC_SHIFT)
 
 // -----------------------------------------------------------------------------
-// ADC_CONFIG register bit fields (base 0x02)
+// ADC_CONFIG register bit fields (base 0x02, per datasheet Table 43)
+// Bit layout: [2:0] CONV_MUX, [3] RSVD, [6:4] CONV_RANGE, [7] RSVD,
+//             [11:8] CONV_RATE, [15:12] RSVD
 // -----------------------------------------------------------------------------
 #define ADC_CONFIG_CONV_MUX_SHIFT       0
 #define ADC_CONFIG_CONV_MUX_MASK        (0x07 << ADC_CONFIG_CONV_MUX_SHIFT)
 
-#define ADC_CONFIG_CONV_RANGE_SHIFT     3
+#define ADC_CONFIG_CONV_RANGE_SHIFT     4
 #define ADC_CONFIG_CONV_RANGE_MASK      (0x07 << ADC_CONFIG_CONV_RANGE_SHIFT)
 
-#define ADC_CONFIG_CONV_RATE_SHIFT      6
+#define ADC_CONFIG_CONV_RATE_SHIFT      8
 #define ADC_CONFIG_CONV_RATE_MASK       (0x0F << ADC_CONFIG_CONV_RATE_SHIFT)
 
 // -----------------------------------------------------------------------------
-// DIN_CONFIG0 register bit fields (base 0x03)
+// DIN_CONFIG0 register bit fields (base 0x03, per datasheet Table 44)
+// Bit layout: [4:0] DEBOUNCE_TIME, [5] RSVD, [6] DEBOUNCE_MODE,
+//             [11:7] DIN_SINK, [12] DIN_SINK_RANGE, [13] COMPARATOR_EN,
+//             [14] DIN_INV_COMP_OUT, [15] COUNT_EN
 // -----------------------------------------------------------------------------
 #define DIN_CONFIG0_DEBOUNCE_TIME_SHIFT     0
 #define DIN_CONFIG0_DEBOUNCE_TIME_MASK      (0x1F << DIN_CONFIG0_DEBOUNCE_TIME_SHIFT)
 
-#define DIN_CONFIG0_DEBOUNCE_MODE_SHIFT     5
+#define DIN_CONFIG0_DEBOUNCE_MODE_SHIFT     6
 #define DIN_CONFIG0_DEBOUNCE_MODE_MASK      (0x01 << DIN_CONFIG0_DEBOUNCE_MODE_SHIFT)
 
-#define DIN_CONFIG0_DIN_INV_COMP_OUT_SHIFT  6
-#define DIN_CONFIG0_DIN_INV_COMP_OUT_MASK   (0x01 << DIN_CONFIG0_DIN_INV_COMP_OUT_SHIFT)
-
-#define DIN_CONFIG0_COMPARATOR_EN_SHIFT     7
-#define DIN_CONFIG0_COMPARATOR_EN_MASK      (0x01 << DIN_CONFIG0_COMPARATOR_EN_SHIFT)
-
-#define DIN_CONFIG0_DIN_SINK_SHIFT          8
+#define DIN_CONFIG0_DIN_SINK_SHIFT          7
 #define DIN_CONFIG0_DIN_SINK_MASK           (0x1F << DIN_CONFIG0_DIN_SINK_SHIFT)
 
-#define DIN_CONFIG0_DIN_SINK_RANGE_SHIFT    13
+#define DIN_CONFIG0_DIN_SINK_RANGE_SHIFT    12
 #define DIN_CONFIG0_DIN_SINK_RANGE_MASK     (0x01 << DIN_CONFIG0_DIN_SINK_RANGE_SHIFT)
 
-#define DIN_CONFIG0_COUNT_EN_SHIFT          14
+#define DIN_CONFIG0_COMPARATOR_EN_SHIFT     13
+#define DIN_CONFIG0_COMPARATOR_EN_MASK      (0x01 << DIN_CONFIG0_COMPARATOR_EN_SHIFT)
+
+#define DIN_CONFIG0_DIN_INV_COMP_OUT_SHIFT  14
+#define DIN_CONFIG0_DIN_INV_COMP_OUT_MASK   (0x01 << DIN_CONFIG0_DIN_INV_COMP_OUT_SHIFT)
+
+#define DIN_CONFIG0_COUNT_EN_SHIFT          15
 #define DIN_CONFIG0_COUNT_EN_MASK           (0x01 << DIN_CONFIG0_COUNT_EN_SHIFT)
 
-#define DIN_CONFIG0_DIN_OC_DET_EN_SHIFT     15
-#define DIN_CONFIG0_DIN_OC_DET_EN_MASK      (0x01 << DIN_CONFIG0_DIN_OC_DET_EN_SHIFT)
-
-// Note: DIN_SC_DET_EN is bit 16 - requires 17-bit field; stored as bit 0 of
-// upper byte in 32-bit extended register. In 16-bit register context, use
-// extended config if device supports it; otherwise see datasheet for mapping.
-#define DIN_CONFIG0_DIN_SC_DET_EN_SHIFT     16  // Extended bit
-
 // -----------------------------------------------------------------------------
-// DIN_CONFIG1 register bit fields (base 0x04)
+// DIN_CONFIG1 register bit fields (base 0x04, per datasheet Table 45)
+// Bit layout: [6:0] COMP_THRESH, [7] DIN_THRESH_MODE, [8] DIN_OC_DET_EN,
+//             [9] DIN_SC_DET_EN, [10] DIN_INPUT_SELECT
 // -----------------------------------------------------------------------------
 #define DIN_CONFIG1_COMP_THRESH_SHIFT       0
 #define DIN_CONFIG1_COMP_THRESH_MASK        (0x7F << DIN_CONFIG1_COMP_THRESH_SHIFT)
@@ -106,118 +105,150 @@
 #define DIN_CONFIG1_DIN_THRESH_MODE_SHIFT   7
 #define DIN_CONFIG1_DIN_THRESH_MODE_MASK    (0x01 << DIN_CONFIG1_DIN_THRESH_MODE_SHIFT)
 
-#define DIN_CONFIG1_DIN_INPUT_SELECT_SHIFT  8
+#define DIN_CONFIG1_DIN_OC_DET_EN_SHIFT     8
+#define DIN_CONFIG1_DIN_OC_DET_EN_MASK      (0x01 << DIN_CONFIG1_DIN_OC_DET_EN_SHIFT)
+
+#define DIN_CONFIG1_DIN_SC_DET_EN_SHIFT     9
+#define DIN_CONFIG1_DIN_SC_DET_EN_MASK      (0x01 << DIN_CONFIG1_DIN_SC_DET_EN_SHIFT)
+
+#define DIN_CONFIG1_DIN_INPUT_SELECT_SHIFT  10
 #define DIN_CONFIG1_DIN_INPUT_SELECT_MASK   (0x01 << DIN_CONFIG1_DIN_INPUT_SELECT_SHIFT)
 
 // -----------------------------------------------------------------------------
-// OUTPUT_CONFIG register bit fields (base 0x05)
+// OUTPUT_CONFIG register bit fields (base 0x05, per datasheet Table 46)
+// Bit layout: [0] I_LIMIT, [2:1] SLEW_LIN_RATE, [4:3] SLEW_LIN_STEP,
+//             [6:5] SLEW_EN, [7] VOUT_RANGE, [8] HART_COMPL_SETTLED (RO),
+//             [9] VIOUT_DRV_EN_DLY, [10] WAIT_LDAC_CMD, [11] VOUT_4W_EN,
+//             [12] ALARM_DEG_PERIOD, [13] RSVD, [15:14] AVDD_SELECT
 // -----------------------------------------------------------------------------
-#define OUTPUT_CONFIG_SLEW_EN_SHIFT         0
-#define OUTPUT_CONFIG_SLEW_EN_MASK          (0x03 << OUTPUT_CONFIG_SLEW_EN_SHIFT)
-
-#define OUTPUT_CONFIG_SLEW_RANGE_SHIFT      2
-#define OUTPUT_CONFIG_SLEW_RANGE_MASK       (0x03 << OUTPUT_CONFIG_SLEW_RANGE_SHIFT)
-
-#define OUTPUT_CONFIG_I_LIMIT_SHIFT         4
+#define OUTPUT_CONFIG_I_LIMIT_SHIFT         0
 #define OUTPUT_CONFIG_I_LIMIT_MASK          (0x01 << OUTPUT_CONFIG_I_LIMIT_SHIFT)
 
-#define OUTPUT_CONFIG_VOUT_RANGE_SHIFT      5
+#define OUTPUT_CONFIG_SLEW_LIN_RATE_SHIFT   1
+#define OUTPUT_CONFIG_SLEW_LIN_RATE_MASK    (0x03 << OUTPUT_CONFIG_SLEW_LIN_RATE_SHIFT)
+
+#define OUTPUT_CONFIG_SLEW_LIN_STEP_SHIFT   3
+#define OUTPUT_CONFIG_SLEW_LIN_STEP_MASK    (0x03 << OUTPUT_CONFIG_SLEW_LIN_STEP_SHIFT)
+
+#define OUTPUT_CONFIG_SLEW_EN_SHIFT         5
+#define OUTPUT_CONFIG_SLEW_EN_MASK          (0x03 << OUTPUT_CONFIG_SLEW_EN_SHIFT)
+
+#define OUTPUT_CONFIG_VOUT_RANGE_SHIFT      7
 #define OUTPUT_CONFIG_VOUT_RANGE_MASK       (0x01 << OUTPUT_CONFIG_VOUT_RANGE_SHIFT)
 
-#define OUTPUT_CONFIG_VOUT_4W_EN_SHIFT      6
+#define OUTPUT_CONFIG_VOUT_4W_EN_SHIFT      11
 #define OUTPUT_CONFIG_VOUT_4W_EN_MASK       (0x01 << OUTPUT_CONFIG_VOUT_4W_EN_SHIFT)
 
-#define OUTPUT_CONFIG_AVDD_SELECT_SHIFT     7
+#define OUTPUT_CONFIG_ALARM_DEG_PERIOD_SHIFT 12
+#define OUTPUT_CONFIG_ALARM_DEG_PERIOD_MASK (0x01 << OUTPUT_CONFIG_ALARM_DEG_PERIOD_SHIFT)
+
+#define OUTPUT_CONFIG_AVDD_SELECT_SHIFT     14
 #define OUTPUT_CONFIG_AVDD_SELECT_MASK      (0x03 << OUTPUT_CONFIG_AVDD_SELECT_SHIFT)
 
 // -----------------------------------------------------------------------------
-// RTD_CONFIG register bit fields (base 0x06)
+// RTD_CONFIG register bit fields (base 0x06, per datasheet Table 47)
+// Bit layout: [0] RTD_CURRENT, [1] RTD_EXC_SWAP, [2] RTD_MODE_SEL,
+//             [3] RTD_ADC_REF
 // -----------------------------------------------------------------------------
-#define RTD_CONFIG_RTD_MODE_SEL_SHIFT       0
-#define RTD_CONFIG_RTD_MODE_SEL_MASK        (0x01 << RTD_CONFIG_RTD_MODE_SEL_SHIFT)
+#define RTD_CONFIG_RTD_CURRENT_SHIFT        0
+#define RTD_CONFIG_RTD_CURRENT_MASK         (0x01 << RTD_CONFIG_RTD_CURRENT_SHIFT)
 
 #define RTD_CONFIG_RTD_EXC_SWAP_SHIFT       1
 #define RTD_CONFIG_RTD_EXC_SWAP_MASK        (0x01 << RTD_CONFIG_RTD_EXC_SWAP_SHIFT)
 
-#define RTD_CONFIG_RTD_CURRENT_SHIFT        2
-#define RTD_CONFIG_RTD_CURRENT_MASK         (0x03 << RTD_CONFIG_RTD_CURRENT_SHIFT)
+#define RTD_CONFIG_RTD_MODE_SEL_SHIFT       2
+#define RTD_CONFIG_RTD_MODE_SEL_MASK        (0x01 << RTD_CONFIG_RTD_MODE_SEL_SHIFT)
 
-#define RTD_CONFIG_RTD_ADC_REF_SHIFT        4
+#define RTD_CONFIG_RTD_ADC_REF_SHIFT        3
 #define RTD_CONFIG_RTD_ADC_REF_MASK         (0x01 << RTD_CONFIG_RTD_ADC_REF_SHIFT)
 
 // -----------------------------------------------------------------------------
-// DO_EXT_CONFIG register bit fields (base 0x08)
+// DO_EXT_CONFIG register bit fields (base 0x08, per datasheet Table 49)
+// Bit layout: [0] DO_MODE, [1] DO_SRC_SEL, [6:2] DO_T1, [7] DO_DATA,
+//             [12:8] DO_T2, [15:13] RSVD
 // -----------------------------------------------------------------------------
-#define DO_EXT_CONFIG_DO_T2_SHIFT           0
-#define DO_EXT_CONFIG_DO_T2_MASK            (0xFF << DO_EXT_CONFIG_DO_T2_SHIFT)   // [7:0]
+#define DO_EXT_CONFIG_DO_MODE_SHIFT         0
+#define DO_EXT_CONFIG_DO_MODE_MASK          (0x01 << DO_EXT_CONFIG_DO_MODE_SHIFT)
 
-#define DO_EXT_CONFIG_DO_T1_SHIFT           8
-#define DO_EXT_CONFIG_DO_T1_MASK            (0x0F << DO_EXT_CONFIG_DO_T1_SHIFT)   // [11:8]
-
-#define DO_EXT_CONFIG_DO_DATA_SHIFT         12
-#define DO_EXT_CONFIG_DO_DATA_MASK          (0x01 << DO_EXT_CONFIG_DO_DATA_SHIFT)
-
-#define DO_EXT_CONFIG_DO_SRC_SEL_SHIFT      13
+#define DO_EXT_CONFIG_DO_SRC_SEL_SHIFT      1
 #define DO_EXT_CONFIG_DO_SRC_SEL_MASK       (0x01 << DO_EXT_CONFIG_DO_SRC_SEL_SHIFT)
 
-#define DO_EXT_CONFIG_DO_MODE_SHIFT         14
-#define DO_EXT_CONFIG_DO_MODE_MASK          (0x03 << DO_EXT_CONFIG_DO_MODE_SHIFT) // [15:14]
+#define DO_EXT_CONFIG_DO_T1_SHIFT           2
+#define DO_EXT_CONFIG_DO_T1_MASK            (0x1F << DO_EXT_CONFIG_DO_T1_SHIFT)   // [6:2]
+
+#define DO_EXT_CONFIG_DO_DATA_SHIFT         7
+#define DO_EXT_CONFIG_DO_DATA_MASK          (0x01 << DO_EXT_CONFIG_DO_DATA_SHIFT)
+
+#define DO_EXT_CONFIG_DO_T2_SHIFT           8
+#define DO_EXT_CONFIG_DO_T2_MASK            (0x1F << DO_EXT_CONFIG_DO_T2_SHIFT)   // [12:8]
 
 // =============================================================================
 // Global Register Addresses
 // =============================================================================
 #define REG_NOP                     0x00
 
-// GPIO Configuration (6 GPIOs, addresses 0x32..0x37)
-#define REG_GPIO_CONFIG0            0x32
-#define REG_GPIO_CONFIG1            0x33
-#define REG_GPIO_CONFIG2            0x34
-#define REG_GPIO_CONFIG3            0x35
-#define REG_GPIO_CONFIG4            0x36
-#define REG_GPIO_CONFIG5            0x37
+// GPIO Configuration (6 GPIOs A-F, addresses 0x32..0x37)
+#define REG_GPIO_CONFIG_BASE        0x32
+#define REG_GPIO_CONFIG0            0x32    // GPIO_A
+#define REG_GPIO_CONFIG1            0x33    // GPIO_B
+#define REG_GPIO_CONFIG2            0x34    // GPIO_C
+#define REG_GPIO_CONFIG3            0x35    // GPIO_D
+#define REG_GPIO_CONFIG4            0x36    // GPIO_E
+#define REG_GPIO_CONFIG5            0x37    // GPIO_F
+#define AD74416H_REG_GPIO_CONFIG(gpio) (REG_GPIO_CONFIG_BASE + (gpio))
+#define AD74416H_NUM_GPIOS          6
 
-// GPIO_CONFIGn bit fields
+// GPIO_CONFIGn bit fields (per datasheet Table 53)
+// Bit layout: [2:0] GPIO_SELECT, [3] GP_WK_PD_EN, [4] GPO_DATA,
+//             [5] GPI_DATA (RO), [7:6] DIN_DO_CH
 #define GPIO_CONFIG_GPIO_SELECT_SHIFT   0
 #define GPIO_CONFIG_GPIO_SELECT_MASK    (0x07 << GPIO_CONFIG_GPIO_SELECT_SHIFT)
 
-#define GPIO_CONFIG_GPO_DATA_SHIFT      3
-#define GPIO_CONFIG_GPO_DATA_MASK       (0x01 << GPIO_CONFIG_GPO_DATA_SHIFT)
-
-#define GPIO_CONFIG_GP_WK_PD_EN_SHIFT   4
+#define GPIO_CONFIG_GP_WK_PD_EN_SHIFT   3
 #define GPIO_CONFIG_GP_WK_PD_EN_MASK    (0x01 << GPIO_CONFIG_GP_WK_PD_EN_SHIFT)
+
+#define GPIO_CONFIG_GPO_DATA_SHIFT      4
+#define GPIO_CONFIG_GPO_DATA_MASK       (0x01 << GPIO_CONFIG_GPO_DATA_SHIFT)
 
 #define GPIO_CONFIG_GPI_DATA_SHIFT      5
 #define GPIO_CONFIG_GPI_DATA_MASK       (0x01 << GPIO_CONFIG_GPI_DATA_SHIFT)
+
+#define GPIO_CONFIG_DIN_DO_CH_SHIFT     6
+#define GPIO_CONFIG_DIN_DO_CH_MASK      (0x03 << GPIO_CONFIG_DIN_DO_CH_SHIFT)
 
 // Power Optimisation
 #define REG_PWR_OPTIM_CONFIG        0x38
 #define PWR_OPTIM_REF_EN_SHIFT      13
 #define PWR_OPTIM_REF_EN_MASK       (0x01 << PWR_OPTIM_REF_EN_SHIFT)   // Internal reference enable
 
-// ADC Conversion Control
+// ADC Conversion Control (corrected per datasheet Table 55)
+// Bit layout: [15:14] RSVD, [13] ADC_RDY_CTRL, [12:10] CONV_RATE_DIAG,
+//             [9:8] CONV_SEQ, [7] DIAG_3_EN, [6] DIAG_2_EN,
+//             [5] DIAG_1_EN, [4] DIAG_0_EN, [3] CONV_D_EN,
+//             [2] CONV_C_EN, [1] CONV_B_EN, [0] CONV_A_EN
 #define REG_ADC_CONV_CTRL           0x39
-#define ADC_CONV_CTRL_CONV_SEQ_SHIFT        0
-#define ADC_CONV_CTRL_CONV_SEQ_MASK         (0x03 << ADC_CONV_CTRL_CONV_SEQ_SHIFT)
-#define ADC_CONV_CTRL_CONV_A_EN_SHIFT       2
+#define ADC_CONV_CTRL_CONV_A_EN_SHIFT       0
 #define ADC_CONV_CTRL_CONV_A_EN_MASK        (0x01 << ADC_CONV_CTRL_CONV_A_EN_SHIFT)
-#define ADC_CONV_CTRL_CONV_B_EN_SHIFT       3
+#define ADC_CONV_CTRL_CONV_B_EN_SHIFT       1
 #define ADC_CONV_CTRL_CONV_B_EN_MASK        (0x01 << ADC_CONV_CTRL_CONV_B_EN_SHIFT)
-#define ADC_CONV_CTRL_CONV_C_EN_SHIFT       4
+#define ADC_CONV_CTRL_CONV_C_EN_SHIFT       2
 #define ADC_CONV_CTRL_CONV_C_EN_MASK        (0x01 << ADC_CONV_CTRL_CONV_C_EN_SHIFT)
-#define ADC_CONV_CTRL_CONV_D_EN_SHIFT       5
+#define ADC_CONV_CTRL_CONV_D_EN_SHIFT       3
 #define ADC_CONV_CTRL_CONV_D_EN_MASK        (0x01 << ADC_CONV_CTRL_CONV_D_EN_SHIFT)
-#define ADC_CONV_CTRL_DIAG_EN0_SHIFT        6
+#define ADC_CONV_CTRL_DIAG_EN0_SHIFT        4
 #define ADC_CONV_CTRL_DIAG_EN0_MASK         (0x01 << ADC_CONV_CTRL_DIAG_EN0_SHIFT)
-#define ADC_CONV_CTRL_DIAG_EN1_SHIFT        7
+#define ADC_CONV_CTRL_DIAG_EN1_SHIFT        5
 #define ADC_CONV_CTRL_DIAG_EN1_MASK         (0x01 << ADC_CONV_CTRL_DIAG_EN1_SHIFT)
-#define ADC_CONV_CTRL_DIAG_EN2_SHIFT        8
+#define ADC_CONV_CTRL_DIAG_EN2_SHIFT        6
 #define ADC_CONV_CTRL_DIAG_EN2_MASK         (0x01 << ADC_CONV_CTRL_DIAG_EN2_SHIFT)
-#define ADC_CONV_CTRL_DIAG_EN3_SHIFT        9
+#define ADC_CONV_CTRL_DIAG_EN3_SHIFT        7
 #define ADC_CONV_CTRL_DIAG_EN3_MASK         (0x01 << ADC_CONV_CTRL_DIAG_EN3_SHIFT)
-#define ADC_CONV_CTRL_ADC_RDY_CTRL_SHIFT    10
-#define ADC_CONV_CTRL_ADC_RDY_CTRL_MASK     (0x01 << ADC_CONV_CTRL_ADC_RDY_CTRL_SHIFT)
-#define ADC_CONV_CTRL_CONV_RATE_DIAG_SHIFT  11
+#define ADC_CONV_CTRL_CONV_SEQ_SHIFT        8
+#define ADC_CONV_CTRL_CONV_SEQ_MASK         (0x03 << ADC_CONV_CTRL_CONV_SEQ_SHIFT)
+#define ADC_CONV_CTRL_CONV_RATE_DIAG_SHIFT  10
 #define ADC_CONV_CTRL_CONV_RATE_DIAG_MASK   (0x07 << ADC_CONV_CTRL_CONV_RATE_DIAG_SHIFT)
+#define ADC_CONV_CTRL_ADC_RDY_CTRL_SHIFT    13
+#define ADC_CONV_CTRL_ADC_RDY_CTRL_MASK     (0x01 << ADC_CONV_CTRL_ADC_RDY_CTRL_SHIFT)
 
 // Diagnostic Assignment
 #define REG_DIAG_ASSIGN             0x3A
@@ -237,28 +268,37 @@
 #define AD74416H_REG_ADC_RESULT_UPR(ch)    (REG_ADC_RESULT_UPR_BASE + (ch) * 2)
 #define AD74416H_REG_ADC_RESULT(ch)        (REG_ADC_RESULT_BASE     + (ch) * 2)
 
-// ADC_RESULT_UPR bit fields
-#define ADC_RESULT_UPR_CONV_SEQ_COUNT_SHIFT 14
-#define ADC_RESULT_UPR_CONV_SEQ_COUNT_MASK  (0x03 << ADC_RESULT_UPR_CONV_SEQ_COUNT_SHIFT)
+// ADC_RESULT_UPR bit fields (per datasheet Table 61)
+// Bit layout: [7:0] CONV_RES[23:16], [9:8] CONV_SEQ_COUNT,
+//             [12:10] CONV_RES_RANGE, [15:13] CONV_RES_MUX
 #define ADC_RESULT_UPR_CONV_RES_SHIFT       0
-#define ADC_RESULT_UPR_CONV_RES_MASK        (0xFF << ADC_RESULT_UPR_CONV_RES_SHIFT)  // bits [23:16] of result
+#define ADC_RESULT_UPR_CONV_RES_MASK        (0xFF << ADC_RESULT_UPR_CONV_RES_SHIFT)
+
+#define ADC_RESULT_UPR_CONV_SEQ_COUNT_SHIFT 8
+#define ADC_RESULT_UPR_CONV_SEQ_COUNT_MASK  (0x03 << ADC_RESULT_UPR_CONV_SEQ_COUNT_SHIFT)
+
+#define ADC_RESULT_UPR_CONV_RES_RANGE_SHIFT 10
+#define ADC_RESULT_UPR_CONV_RES_RANGE_MASK  (0x07 << ADC_RESULT_UPR_CONV_RES_RANGE_SHIFT)
+
+#define ADC_RESULT_UPR_CONV_RES_MUX_SHIFT   13
+#define ADC_RESULT_UPR_CONV_RES_MUX_MASK    (0x07 << ADC_RESULT_UPR_CONV_RES_MUX_SHIFT)
 
 // ADC Diagnostic Results
 #define REG_ADC_DIAG_RESULT_BASE    0x49    // Addresses: 0x49, 0x4A, 0x4B, 0x4C
 #define AD74416H_REG_ADC_DIAG_RESULT(diag) (REG_ADC_DIAG_RESULT_BASE + (diag))
 
-// Last ADC Results (single register, not per-channel upper/lower split)
+// Last ADC Results (upper/lower pair)
+#define REG_LAST_ADC_RESULT_UPR         0x4D
 #define REG_LAST_ADC_RESULT             0x4E
 
 // Digital Input Counters (32-bit, split across two 16-bit registers)
-// Per ADI driver: DIN_COUNTER(x) = 0x50 + (x * 2)
+// Upper 16 bits (read first to latch lower): 0x4F, 0x51, 0x53, 0x55
 // Lower 16 bits: 0x50, 0x52, 0x54, 0x56
-// Upper 16 bits: 0x51, 0x53, 0x55, 0x57
+#define REG_DIN_COUNTER_UPR_BASE    0x4F
 #define REG_DIN_COUNTER_BASE        0x50
-#define REG_DIN_COUNTER_UPR_BASE    0x51
 
-#define AD74416H_REG_DIN_COUNTER(ch)     (REG_DIN_COUNTER_BASE     + (ch) * 2)
 #define AD74416H_REG_DIN_COUNTER_UPR(ch) (REG_DIN_COUNTER_UPR_BASE + (ch) * 2)
+#define AD74416H_REG_DIN_COUNTER(ch)     (REG_DIN_COUNTER_BASE     + (ch) * 2)
 
 // =============================================================================
 // Alert / Status Registers (CORRECTED per ADI no-OS driver register map)
@@ -376,12 +416,12 @@ typedef enum {
 typedef enum {
     ADC_RNG_0_12V               = 0,    //  0 V to +12 V
     ADC_RNG_NEG12_12V           = 1,    // -12 V to +12 V
-    ADC_RNG_NEG2_5_2_5V         = 2,    // -2.5 V to +2.5 V
+    ADC_RNG_NEG0_3125_0_3125V   = 2,    // -312.5 mV to +312.5 mV
     ADC_RNG_NEG0_3125_0V        = 3,    // -0.3125 V to 0 V
     ADC_RNG_0_0_3125V           = 4,    //  0 V to +0.3125 V
     ADC_RNG_0_0_625V            = 5,    //  0 V to +0.625 V
-    ADC_RNG_NEG0_3125_0_3125V   = 6,    // -0.3125 V to +0.3125 V
-    ADC_RNG_NEG104MV_104MV      = 7,    // -104 mV to +104 mV
+    ADC_RNG_NEG104MV_104MV      = 6,    // -104 mV to +104 mV
+    ADC_RNG_NEG2_5_2_5V         = 7,    // -2.5 V to +2.5 V
 } AdcRange;
 
 /**
@@ -411,7 +451,18 @@ typedef enum {
 } AdcConvMux;
 
 /**
- * @brief ADC conversion sequence control codes for ADC_CONV_CTRL[1:0] CONV_SEQ
+ * @brief GPIO_SELECT modes for GPIO_CONFIGn[2:0]
+ */
+typedef enum {
+    GPIO_SEL_HIGH_IMP       = 0,   // High impedance (input buffer off)
+    GPIO_SEL_OUTPUT         = 1,   // Logic output (GPO_DATA sets level) + input
+    GPIO_SEL_INPUT          = 2,   // Input only (output high-Z)
+    GPIO_SEL_DIN_OUT        = 3,   // DIN comparator output
+    GPIO_SEL_DO_EXT         = 4,   // DO external source
+} GpioSelect;
+
+/**
+ * @brief ADC conversion sequence control codes for ADC_CONV_CTRL[9:8] CONV_SEQ
  */
 typedef enum {
     ADC_CONV_SEQ_IDLE           = 0,   // Stop / idle
