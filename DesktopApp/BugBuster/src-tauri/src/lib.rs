@@ -10,8 +10,10 @@ mod http_transport;
 mod state;
 mod transport;
 mod usb_transport;
+mod wavegen;
 
 use connection_manager::ConnectionManager;
+use wavegen::WavegenState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,7 +21,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ConnectionManager::new())
+        .manage(WavegenState::new())
         .invoke_handler(tauri::generate_handler![
             // Discovery & Connection
             commands::discover_devices,
@@ -47,6 +51,9 @@ pub fn run() {
             // Streaming
             commands::start_adc_stream,
             commands::stop_adc_stream,
+            // Waveform Generator
+            commands::start_wavegen,
+            commands::stop_wavegen,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

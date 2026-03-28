@@ -163,13 +163,10 @@ pub fn cobs_decode(input: &[u8]) -> Option<Vec<u8>> {
             output.push(input[read_idx]);
             read_idx += 1;
         }
+        // Add implicit zero delimiter between groups, but NOT after the last group
         if code != 0xFF && read_idx < input.len() {
             output.push(0x00);
         }
-    }
-    // Remove trailing zero added by last group
-    if !output.is_empty() {
-        output.pop();
     }
     Some(output)
 }
@@ -217,7 +214,8 @@ impl Message {
         let rx_crc = u16::from_le_bytes([data[crc_offset], data[crc_offset + 1]]);
         let calc_crc = crc16(&data[..crc_offset]);
         if rx_crc != calc_crc {
-            log::warn!("CRC mismatch: rx=0x{:04X} calc=0x{:04X}", rx_crc, calc_crc);
+            log::warn!("CRC mismatch: rx=0x{:04X} calc=0x{:04X}, len={}, data={:02X?}",
+                       rx_crc, calc_crc, data.len(), &data[..std::cmp::min(data.len(), 32)]);
             return None;
         }
 
@@ -328,7 +326,11 @@ impl FrameAccumulator {
         for &byte in data {
             if byte == FRAME_DELIMITER {
                 if !self.buf.is_empty() {
+                    log::debug!("COBS frame ({} encoded bytes): {:02X?}", self.buf.len(),
+                               &self.buf[..std::cmp::min(self.buf.len(), 32)]);
                     if let Some(decoded) = cobs_decode(&self.buf) {
+                        log::debug!("Decoded ({} bytes): {:02X?}", decoded.len(),
+                                   &decoded[..std::cmp::min(decoded.len(), 32)]);
                         if let Some(msg) = Message::parse(&decoded) {
                             messages.push(msg);
                         }
@@ -480,7 +482,7 @@ mod tests {
         let encoded = cobs_encode(&data);
         assert!(!encoded.iter().any(|&b| b == 0x00));
         let decoded = cobs_decode(&encoded).unwrap();
-        assert_eq!(data, decoded);
+        assert_eq!(data, decoded, "COBS roundtrip failed for no-zero data");
     }
 
     #[test]

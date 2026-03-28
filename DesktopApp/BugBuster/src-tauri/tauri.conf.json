@@ -13,9 +13,9 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "bugbuster",
-        "width": 800,
-        "height": 600
+        "title": "BugBuster",
+        "width": 1200,
+        "height": 800
       }
     ],
     "security": {

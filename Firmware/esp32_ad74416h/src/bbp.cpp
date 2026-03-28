@@ -105,12 +105,11 @@ size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output)
         for (uint8_t i = 1; i < code && read_idx < length; i++) {
             output[write_idx++] = input[read_idx++];
         }
+        // Add implicit zero delimiter between groups, but NOT after the last group
         if (code != 0xFF && read_idx < length) {
             output[write_idx++] = 0x00;
         }
     }
-    // Remove trailing zero added by the last group
-    if (write_idx > 0) write_idx--;
     return write_idx;
 }
 
@@ -1312,6 +1311,10 @@ bool bbpDetectHandshake(uint8_t byte)
             usb_cdc_cli_write(rsp, BBP_HANDSHAKE_RSP_LEN);
             usb_cdc_cli_flush();
 
+            // Suppress ALL log output to prevent ESP_LOG from corrupting
+            // the binary stream on CDC #0
+            esp_log_level_set("*", ESP_LOG_NONE);
+
             // Enter binary mode
             s_active = true;
             s_rxLen = 0;
@@ -1320,7 +1323,6 @@ bool bbpDetectHandshake(uint8_t byte)
             s_adcStreamMask = 0;
             s_scopeStreamActive = false;
 
-            ESP_LOGI(TAG, "Binary mode activated");
             return true;
         }
     } else {
@@ -1340,6 +1342,9 @@ void bbpExitBinaryMode(void)
     s_active = false;
     s_rxLen = 0;
     s_magic_idx = 0;
+
+    // Restore log output for CLI mode
+    esp_log_level_set("*", ESP_LOG_INFO);
 
     // Signal CLI mode is back
     const char *msg = "\r\n[CLI Ready]\r\n";

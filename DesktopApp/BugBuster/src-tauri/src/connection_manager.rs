@@ -53,7 +53,13 @@ impl ConnectionManager {
     async fn connect_usb(&self, port_name: &str, app: &AppHandle) -> Result<()> {
         let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Message>();
 
-        let transport = UsbTransport::connect(port_name, _event_tx)?;
+        log::info!("Opening USB port: {}", port_name);
+        let port_name_owned = port_name.to_string();
+        let event_tx_clone = _event_tx.clone();
+        let transport = tokio::task::spawn_blocking(move || {
+            UsbTransport::connect(&port_name_owned, event_tx_clone)
+        }).await??;
+        log::info!("USB handshake completed successfully");
 
         let device_info = transport.handshake_info().map(|h| DeviceInfo {
             proto_version: h.proto_version,

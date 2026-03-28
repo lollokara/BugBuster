@@ -49,28 +49,66 @@ impl UsbTransport {
         let mut writer_port = port.try_clone()?;
         let mut reader_port = port;
 
+        // Drain any pending data (boot messages, CLI prompt, etc.)
+        {
+            let mut drain = [0u8; 1024];
+            loop {
+                match reader_port.read(&mut drain) {
+                    Ok(n) if n > 0 => {
+                        log::debug!("Drained {} bytes: {:?}", n, std::str::from_utf8(&drain[..n]).unwrap_or("(binary)"));
+                    }
+                    _ => break,
+                }
+            }
+        }
+
         // Send handshake magic
+        log::info!("Sending BBP handshake magic: {:02X?}", bbp::MAGIC);
         writer_port.write_all(&bbp::MAGIC)?;
         writer_port.flush()?;
 
-        // Wait for 8-byte handshake response
-        let mut rsp = [0u8; bbp::HANDSHAKE_RSP_LEN];
-        let mut total_read = 0;
+        // Read response bytes, scanning for the magic pattern.
+        // The CLI may echo some of our magic bytes before the real response arrives.
+        let mut ring = Vec::with_capacity(64);
         let deadline = std::time::Instant::now() + Duration::from_millis(2000);
+        let mut found_offset: Option<usize> = None;
 
-        while total_read < bbp::HANDSHAKE_RSP_LEN {
-            if std::time::Instant::now() > deadline {
-                return Err(anyhow!("Handshake timeout"));
-            }
-            match reader_port.read(&mut rsp[total_read..]) {
-                Ok(n) => total_read += n,
+        while std::time::Instant::now() < deadline {
+            let mut tmp = [0u8; 32];
+            match reader_port.read(&mut tmp) {
+                Ok(n) if n > 0 => {
+                    ring.extend_from_slice(&tmp[..n]);
+                    // Search for magic pattern in accumulated bytes
+                    if ring.len() >= bbp::HANDSHAKE_RSP_LEN {
+                        for i in 0..=(ring.len() - bbp::HANDSHAKE_RSP_LEN) {
+                            if ring[i..i+4] == bbp::MAGIC {
+                                found_offset = Some(i);
+                                break;
+                            }
+                        }
+                        if found_offset.is_some() {
+                            // We might need more bytes after the magic
+                            let off = found_offset.unwrap();
+                            if ring.len() >= off + bbp::HANDSHAKE_RSP_LEN {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Ok(_) => {}
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
                 Err(e) => return Err(e.into()),
             }
         }
 
-        let handshake_info = HandshakeInfo::parse(&rsp)
-            .ok_or_else(|| anyhow!("Invalid handshake response"))?;
+        log::info!("Handshake raw stream ({} bytes): {:02X?}", ring.len(), ring);
+
+        let off = found_offset.ok_or_else(|| {
+            anyhow!("Handshake magic not found in response: {:02X?}", ring)
+        })?;
+        let rsp = &ring[off..off + bbp::HANDSHAKE_RSP_LEN];
+        let handshake_info = HandshakeInfo::parse(rsp)
+            .ok_or_else(|| anyhow!("Invalid handshake at offset {}: {:02X?}", off, rsp))?;
 
         log::info!(
             "BBP handshake OK: proto v{}, fw v{}.{}.{}",

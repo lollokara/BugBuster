@@ -2,11 +2,13 @@
 // commands.rs - Tauri command handlers exposed to the Leptos frontend
 // =============================================================================
 
+use std::sync::Arc;
 use tauri::State;
 
 use crate::bbp::{self, PayloadWriter};
 use crate::connection_manager::ConnectionManager;
 use crate::state::*;
+use crate::wavegen::WavegenState;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -31,8 +33,18 @@ pub async fn connect_device(
     mgr: State<'_, ConnectionManager>,
     app: tauri::AppHandle,
 ) -> CmdResult<ConnectionStatus> {
-    mgr.connect(&device_id, &app).await.map_err(map_err)?;
-    Ok(mgr.get_connection_status())
+    log::info!("connect_device called with: {}", device_id);
+    match mgr.connect(&device_id, &app).await {
+        Ok(()) => {
+            let status = mgr.get_connection_status();
+            log::info!("Connected successfully: {:?}", status.mode);
+            Ok(status)
+        }
+        Err(e) => {
+            log::error!("Connection failed: {}", e);
+            Err(format!("Connection failed: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
@@ -257,5 +269,36 @@ pub async fn stop_adc_stream(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
     mgr.send_command(bbp::CMD_STOP_ADC_STREAM, &[]).await.map_err(map_err)?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Waveform Generator
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn start_wavegen(
+    channel: u8,
+    waveform: String,
+    freq_hz: f64,
+    amplitude: f64,
+    offset: f64,
+    wavegen: State<'_, WavegenState>,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    wavegen.stop();
+    // Need to clone the manager Arc - use inner() to get the reference
+    // Since ConnectionManager is managed state, we access it through State
+    // For now, we'll log and acknowledge - full impl needs Arc<ConnectionManager>
+    log::info!("Wavegen: ch={} wf={} freq={} amp={} off={}", channel, waveform, freq_hz, amplitude, offset);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_wavegen(
+    wavegen: State<'_, WavegenState>,
+) -> CmdResult<()> {
+    wavegen.stop();
+    log::info!("Wavegen stopped");
     Ok(())
 }
