@@ -64,6 +64,9 @@ pub fn run() {
             commands::idac_get_status,
             commands::idac_set_code,
             commands::idac_set_voltage,
+            commands::idac_cal_add_point,
+            commands::idac_cal_clear,
+            commands::idac_cal_save,
             // PCA9535 GPIO Expander
             commands::pca_get_status,
             commands::pca_set_control,

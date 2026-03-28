@@ -978,6 +978,48 @@ static int handleIdacCalibrate(uint16_t seq, uint8_t cmdId,
     return -1;
 }
 
+static int handleIdacCalAddPoint(uint16_t seq, uint8_t cmdId,
+                                  const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 6) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t ch = get_u8(payload, &rpos);
+    int8_t code = (int8_t)get_u8(payload, &rpos);
+    float measured_v = get_f32(payload, &rpos);
+    if (ch >= 3) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+
+    ds4424_cal_add_point(ch, code, measured_v);
+
+    const DS4424State *st = ds4424_get_state();
+    size_t pos = 0;
+    put_u8(out, &pos, ch);
+    put_u8(out, &pos, st->cal[ch].count);
+    put_bool(out, &pos, st->cal[ch].valid);
+    return (int)pos;
+}
+
+static int handleIdacCalClear(uint16_t seq, uint8_t cmdId,
+                               const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    uint8_t ch = payload[0];
+    if (ch >= 3) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+
+    ds4424_cal_clear(ch);
+
+    size_t pos = 0;
+    put_u8(out, &pos, ch);
+    return (int)pos;
+}
+
+static int handleIdacCalSave(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    bool ok = ds4424_cal_save();
+    size_t pos = 0;
+    put_bool(out, &pos, ok);
+    return (int)pos;
+}
+
 // --- PCA9535 GPIO Expander commands ---
 
 static int handlePcaGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
@@ -1511,6 +1553,15 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_IDAC_CALIBRATE:
             rspLen = handleIdacCalibrate(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_IDAC_CAL_ADD_POINT:
+            rspLen = handleIdacCalAddPoint(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_IDAC_CAL_CLEAR:
+            rspLen = handleIdacCalClear(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_IDAC_CAL_SAVE:
+            rspLen = handleIdacCalSave(seq, cmdId, rspBuf);
             break;
 
         // --- PCA9535 GPIO Expander ---

@@ -851,17 +851,36 @@ Set target output voltage. Driver computes optimal DAC code.
 
 **Response:** ch(u8) + code(u8) + target_v(f32)
 
-#### 0xA3 IDAC_CALIBRATE
-Run auto-calibration sweep using ADC feedback.
+#### 0xA3 IDAC_CALIBRATE (reserved)
+Reserved for firmware-side auto-calibration (not currently used — calibration is UI-driven).
+
+#### 0xA4 IDAC_CAL_ADD_POINT
+Add a single calibration point (measured via ADC externally).
 
 **Request payload:**
 ```
 0       ch              u8      Channel (0-2)
-1       step_size       u8      DAC code step between measurements
-2       settle_ms       u16     Settling time per step (ms)
+1       code            u8      DAC code (signed i8)
+2       measured_v      f32     ADC-measured voltage
 ```
 
-**Response:** Currently returns ERR_INVALID_STATE (needs ADC callback wiring)
+**Response:** ch(u8) + point_count(u8) + valid(bool)
+
+#### 0xA5 IDAC_CAL_CLEAR
+Clear calibration data for a channel.
+
+**Request payload:**
+```
+0       ch              u8      Channel (0-2)
+```
+
+**Response:** ch(u8)
+
+#### 0xA6 IDAC_CAL_SAVE
+Save all calibration data to NVS flash. Persists across reboots.
+
+**Request payload:** (empty)
+**Response:** success(bool)
 
 ### 6.12 PCA9535 GPIO Expander (I2C, addr 0x23)
 
@@ -1301,6 +1320,7 @@ Host                                    Device
 |---------|------|---------|
 | 1.0 | 2026-03-27 | Initial specification |
 | 1.1 | 2026-03-28 | Added I2C device commands: DS4424 IDAC (0xA0-A3), PCA9535 GPIO expander (0xB0-B2), HUSB238 USB-PD (0xC0-C2), Waveform generator (0xD0-D1) |
+| 1.2 | 2026-03-28 | Added UI-driven calibration commands: IDAC_CAL_ADD_POINT (0xA4), IDAC_CAL_CLEAR (0xA5), IDAC_CAL_SAVE (0xA6) |
 
 ---
 
@@ -1349,7 +1369,10 @@ Host                                    Device
 | 0xA0 | IDAC_GET_STATUS | H->D | -- | `GET /api/idac` |
 | 0xA1 | IDAC_SET_CODE | H->D | ch, code | `POST /api/idac/code` |
 | 0xA2 | IDAC_SET_VOLTAGE | H->D | ch, voltage | `POST /api/idac/voltage` |
-| 0xA3 | IDAC_CALIBRATE | H->D | ch, step, settle | (new) |
+| 0xA3 | IDAC_CALIBRATE | H->D | ch, step, settle | (reserved) |
+| 0xA4 | IDAC_CAL_ADD_POINT | H->D | ch, code, voltage | (new) |
+| 0xA5 | IDAC_CAL_CLEAR | H->D | ch | (new) |
+| 0xA6 | IDAC_CAL_SAVE | H->D | -- | (new) |
 | 0xB0 | PCA_GET_STATUS | H->D | -- | `GET /api/ioexp` |
 | 0xB1 | PCA_SET_CONTROL | H->D | ctrl, on | `POST /api/ioexp/control` |
 | 0xB2 | PCA_SET_PORT | H->D | port, val | (new) |

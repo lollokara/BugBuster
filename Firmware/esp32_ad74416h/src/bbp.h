@@ -116,7 +116,10 @@ extern "C" {
 #define BBP_CMD_IDAC_GET_STATUS     0xA0  // Get all IDAC channel states
 #define BBP_CMD_IDAC_SET_CODE       0xA1  // Set raw DAC code
 #define BBP_CMD_IDAC_SET_VOLTAGE    0xA2  // Set target voltage
-#define BBP_CMD_IDAC_CALIBRATE      0xA3  // Run auto-calibration
+#define BBP_CMD_IDAC_CALIBRATE      0xA3  // Run auto-calibration (unused, UI-driven)
+#define BBP_CMD_IDAC_CAL_ADD_POINT  0xA4  // Add a single calibration point
+#define BBP_CMD_IDAC_CAL_CLEAR      0xA5  // Clear calibration for a channel
+#define BBP_CMD_IDAC_CAL_SAVE       0xA6  // Save calibration to NVS
 
 // PCA9535 GPIO Expander
 #define BBP_CMD_PCA_GET_STATUS      0xB0  // Get all PCA9535 state

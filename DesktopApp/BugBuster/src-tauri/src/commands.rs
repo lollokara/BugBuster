@@ -474,6 +474,42 @@ pub async fn idac_set_voltage(
     Ok(())
 }
 
+// Calibration point management
+
+#[tauri::command]
+pub async fn idac_cal_add_point(
+    channel: u8,
+    code: i8,
+    measured_v: f32,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    pw.put_u8(code as u8);
+    pw.put_f32(measured_v);
+    mgr.send_command(bbp::CMD_IDAC_CAL_ADD_POINT, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn idac_cal_clear(
+    channel: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    mgr.send_command(bbp::CMD_IDAC_CAL_CLEAR, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn idac_cal_save(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_IDAC_CAL_SAVE, &[]).await.map_err(map_err)?;
+    Ok(())
+}
+
 // -----------------------------------------------------------------------------
 // PCA9535 GPIO Expander
 // -----------------------------------------------------------------------------

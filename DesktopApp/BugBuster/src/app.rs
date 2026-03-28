@@ -4,7 +4,7 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*};
+use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*};
 
 const TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
@@ -21,6 +21,7 @@ const TABS: &[(&str, &str)] = &[
     ("wavegen", "WaveGen"),
     ("sigpath", "Signal Path"),
     ("voltages", "Voltages"),
+    ("calibration", "Calibration"),
 ];
 
 #[component]
@@ -195,6 +196,7 @@ pub fn App() -> impl IntoView {
                         "wavegen" => view! { <WavegenTab /> }.into_any(),
                         "sigpath" => view! { <SignalPathTab state=device_state /> }.into_any(),
                         "voltages" => view! { <VoltagesTab state=device_state /> }.into_any(),
+                        "calibration" => view! { <CalibrationTab state=device_state /> }.into_any(),
                         _ => view! { <div>"Unknown tab"</div> }.into_any(),
                     }}
                 </div>

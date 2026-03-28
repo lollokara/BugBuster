@@ -91,6 +91,9 @@ pub const CMD_IDAC_GET_STATUS: u8 = 0xA0;
 pub const CMD_IDAC_SET_CODE: u8 = 0xA1;
 pub const CMD_IDAC_SET_VOLTAGE: u8 = 0xA2;
 pub const CMD_IDAC_CALIBRATE: u8 = 0xA3;
+pub const CMD_IDAC_CAL_ADD_POINT: u8 = 0xA4;
+pub const CMD_IDAC_CAL_CLEAR: u8 = 0xA5;
+pub const CMD_IDAC_CAL_SAVE: u8 = 0xA6;
 
 // PCA9535 GPIO Expander
 pub const CMD_PCA_GET_STATUS: u8 = 0xB0;

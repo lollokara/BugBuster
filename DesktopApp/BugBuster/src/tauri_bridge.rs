@@ -198,3 +198,49 @@ pub async fn fetch_idac_status() -> Option<IdacState> {
     let result = invoke("idac_get_status", JsValue::NULL).await;
     serde_wasm_bindgen::from_value(result).ok()
 }
+
+pub fn send_idac_cal_add_point(channel: u8, code: i8, measured_v: f32) {
+    #[derive(Serialize)]
+    struct Args { channel: u8, code: i8, measured_v: f32 }
+    let args = serde_wasm_bindgen::to_value(&Args { channel, code, measured_v }).unwrap();
+    invoke_void("idac_cal_add_point", args);
+}
+
+pub fn send_idac_cal_clear(channel: u8) {
+    #[derive(Serialize)]
+    struct Args { channel: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { channel }).unwrap();
+    invoke_void("idac_cal_clear", args);
+}
+
+pub fn send_idac_cal_save() {
+    invoke_void("idac_cal_save", JsValue::NULL);
+}
+
+pub fn send_pca_control(control: u8, on: bool) {
+    #[derive(Serialize)]
+    struct Args { control: u8, on: bool }
+    let args = serde_wasm_bindgen::to_value(&Args { control, on }).unwrap();
+    invoke_void("pca_set_control", args);
+}
+
+pub fn send_set_channel_function(channel: u8, function: u8) {
+    #[derive(Serialize)]
+    struct Args { channel: u8, function: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { channel, function }).unwrap();
+    invoke_void("set_channel_function", args);
+}
+
+pub fn send_set_adc_config(channel: u8, mux: u8, range: u8, rate: u8) {
+    #[derive(Serialize)]
+    struct Args { channel: u8, mux: u8, range: u8, rate: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { channel, mux, range, rate }).unwrap();
+    invoke_void("set_adc_config", args);
+}
+
+pub fn send_mux_set_switch(device: u8, switch_num: u8, state: bool) {
+    #[derive(Serialize)]
+    struct Args { device: u8, switch_num: u8, state: bool }
+    let args = serde_wasm_bindgen::to_value(&Args { device, switch_num, state }).unwrap();
+    invoke_void("mux_set_switch", args);
+}
