@@ -281,6 +281,28 @@ impl Transport for HttpTransport {
                 Ok(payload.to_vec())
             }
 
+            // Waveform Generator
+            bbp::CMD_START_WAVEGEN => {
+                if payload.len() < 15 { return Err(anyhow!("Invalid payload")); }
+                let ch = payload[0];
+                let wf = payload[1];
+                let freq = f32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
+                let amp = f32::from_le_bytes([payload[6], payload[7], payload[8], payload[9]]);
+                let off = f32::from_le_bytes([payload[10], payload[11], payload[12], payload[13]]);
+                let mode = payload[14];
+                let body = serde_json::json!({
+                    "channel": ch, "waveform": wf, "freq_hz": freq,
+                    "amplitude": amp, "offset": off, "mode": mode
+                });
+                self.post_json("/api/wavegen/start", &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_STOP_WAVEGEN => {
+                self.post_json("/api/wavegen/stop", &serde_json::json!({})).await?;
+                Ok(vec![])
+            }
+
             // Streaming not supported over HTTP
             bbp::CMD_START_ADC_STREAM | bbp::CMD_STOP_ADC_STREAM |
             bbp::CMD_START_SCOPE_STREAM | bbp::CMD_STOP_SCOPE_STREAM => {

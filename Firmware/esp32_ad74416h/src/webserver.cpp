@@ -1424,6 +1424,79 @@ static esp_err_t handle_get_debug(httpd_req_t *req)
 }
 
 // =============================================================================
+// Waveform Generator Web Handlers
+// =============================================================================
+
+// POST /api/wavegen/start
+static esp_err_t handle_post_wavegen_start(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    int ch = cJSON_GetObjectItem(body, "channel") ? cJSON_GetObjectItem(body, "channel")->valueint : 0;
+    int wf = cJSON_GetObjectItem(body, "waveform") ? cJSON_GetObjectItem(body, "waveform")->valueint : 0;
+    double freq = cJSON_GetObjectItem(body, "freq_hz") ? cJSON_GetObjectItem(body, "freq_hz")->valuedouble : 1.0;
+    double amp = cJSON_GetObjectItem(body, "amplitude") ? cJSON_GetObjectItem(body, "amplitude")->valuedouble : 5.0;
+    double off = cJSON_GetObjectItem(body, "offset") ? cJSON_GetObjectItem(body, "offset")->valuedouble : 0.0;
+    int mode = cJSON_GetObjectItem(body, "mode") ? cJSON_GetObjectItem(body, "mode")->valueint : 0;
+    cJSON_Delete(body);
+
+    if (ch > 3) return send_error(req, 400, "Invalid channel");
+    if (wf > 3) return send_error(req, 400, "Invalid waveform");
+    if (freq < 0.01 || freq > 100.0) return send_error(req, 400, "Frequency out of range");
+
+    // Set channel function
+    Command cmd = {};
+    cmd.type = CMD_SET_CHANNEL_FUNC;
+    cmd.channel = (uint8_t)ch;
+    cmd.func = (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT;
+    sendCommand(cmd);
+
+    // Set wavegen state
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active    = true;
+        g_deviceState.wavegen.channel   = (uint8_t)ch;
+        g_deviceState.wavegen.waveform  = (WaveformType)wf;
+        g_deviceState.wavegen.freq_hz   = (float)freq;
+        g_deviceState.wavegen.amplitude = (float)amp;
+        g_deviceState.wavegen.offset    = (float)off;
+        g_deviceState.wavegen.mode      = (WavegenMode)mode;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Wake wavegen task
+    extern TaskHandle_t s_wavegenTask;
+    if (s_wavegenTask) {
+        xTaskNotifyGive(s_wavegenTask);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "status", "started");
+    return send_json(req, root);
+}
+
+// POST /api/wavegen/stop
+static esp_err_t handle_post_wavegen_stop(httpd_req_t *req)
+{
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active = false;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "status", "stopped");
+    return send_json(req, root);
+}
+
+// POST /api/wavegen/* dispatcher
+static esp_err_t handle_wavegen_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/wavegen/start")) return handle_post_wavegen_start(req);
+    if (strstr(req->uri, "/api/wavegen/stop")) return handle_post_wavegen_stop(req);
+    return send_error(req, 404, "Unknown wavegen endpoint");
+}
+
+// =============================================================================
 // Server init / stop
 // =============================================================================
 
@@ -1584,6 +1657,13 @@ void initWebServer(void)
         .uri = "/api/debug", .method = HTTP_GET, .handler = handle_get_debug, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_debug_get);
+
+    // ----- Wavegen routes -----
+
+    httpd_uri_t uri_wavegen_post = {
+        .uri = "/api/wavegen/*", .method = HTTP_POST, .handler = handle_wavegen_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_wavegen_post);
 
     // ----- OPTIONS (CORS preflight) -----
 
