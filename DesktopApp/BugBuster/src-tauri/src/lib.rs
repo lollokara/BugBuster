@@ -41,6 +41,8 @@ pub fn run() {
             commands::set_current_limit,
             commands::set_gpio_config,
             commands::set_gpio_value,
+            // UART
+            commands::set_uart_config,
             // Diagnostics
             commands::set_diag_config,
             // Faults

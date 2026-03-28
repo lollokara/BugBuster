@@ -29,6 +29,7 @@ pub fn App() -> impl IntoView {
     let (scanning, set_scanning) = signal(false);
     let (device_state, set_device_state) = signal(DeviceState::default());
     let (active_tab, set_active_tab) = signal("overview".to_string());
+    let uart_config = RwSignal::new(UartConfigState::new());
 
     // Scan for devices
     let scan = move |_: ev::MouseEvent| {
@@ -187,7 +188,7 @@ pub fn App() -> impl IntoView {
                         "dout" => view! { <DoutTab state=device_state /> }.into_any(),
                         "faults" => view! { <FaultsTab state=device_state /> }.into_any(),
                         "gpio" => view! { <GpioTab state=device_state /> }.into_any(),
-                        "uart" => view! { <UartTab /> }.into_any(),
+                        "uart" => view! { <UartTab uart_config=uart_config /> }.into_any(),
                         "scope" => view! { <ScopeTab state=device_state /> }.into_any(),
                         "wavegen" => view! { <WavegenTab /> }.into_any(),
                         _ => view! { <div>"Unknown tab"</div> }.into_any(),

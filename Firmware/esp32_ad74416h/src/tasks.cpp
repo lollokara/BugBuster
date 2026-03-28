@@ -246,13 +246,24 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 dieTemp = diagVal[0]; // slot 0 is temperature by default
             }
 
+            // --- Verify SPI health via SCRATCH register ---
+            bool spiHealthy = false;
+            {
+                extern AD74416H_SPI spiDriver;
+                uint16_t testVal = 0xA5C3;
+                spiDriver.writeRegister(0x76, testVal); // SCRATCH register
+                uint16_t readBack = 0;
+                if (spiDriver.readRegister(0x76, &readBack) && readBack == testVal) {
+                    spiHealthy = true;
+                }
+            }
+
             // --- Update global state under mutex ---
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 g_deviceState.alertStatus       = alertStatus;
                 g_deviceState.supplyAlertStatus = supplyAlertStatus;
                 g_deviceState.liveStatus        = liveStatus;
-                // SPI is working if we got here without CRC errors
-                g_deviceState.spiOk             = true;
+                g_deviceState.spiOk             = spiHealthy;
 
                 for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                     g_deviceState.channels[ch].channelAlertStatus = chanAlert[ch];

@@ -213,6 +213,37 @@ pub async fn set_gpio_value(
 }
 
 // -----------------------------------------------------------------------------
+// UART Bridge
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn set_uart_config(
+    bridge_id: u8,
+    uart_num: u8,
+    tx_pin: u8,
+    rx_pin: u8,
+    baudrate: u32,
+    data_bits: u8,
+    parity: u8,
+    stop_bits: u8,
+    enabled: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(bridge_id);
+    pw.put_u8(uart_num);
+    pw.put_u8(tx_pin);
+    pw.put_u8(rx_pin);
+    pw.put_u32(baudrate);
+    pw.put_u8(data_bits);
+    pw.put_u8(parity);
+    pw.put_u8(stop_bits);
+    pw.put_bool(enabled);
+    mgr.send_command(bbp::CMD_SET_UART_CONFIG, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
 // Diagnostics
 // -----------------------------------------------------------------------------
 
