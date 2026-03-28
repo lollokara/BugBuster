@@ -4,7 +4,11 @@
 
 #include "tasks.h"
 #include "bbp.h"
+#include "ds4424.h"
+#include "husb238.h"
+#include "pca9535.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 
 // -----------------------------------------------------------------------------
 // Global state definitions
@@ -572,9 +576,66 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 break;
             }
 
+            // -----------------------------------------------------------------
+            // I2C device commands (DS4424, PCA9535)
+            // -----------------------------------------------------------------
+            case CMD_IDAC_SET_CODE: {
+                ds4424_set_code(cmd.idacCode.ch, cmd.idacCode.code);
+                break;
+            }
+
+            case CMD_IDAC_SET_VOLTAGE: {
+                ds4424_set_voltage(cmd.idacVoltage.ch, cmd.idacVoltage.voltage);
+                break;
+            }
+
+            case CMD_IDAC_CALIBRATE: {
+                // TODO: Wire up ADC read callback
+                break;
+            }
+
+            case CMD_PCA_SET_CONTROL: {
+                pca9535_set_control((PcaControl)cmd.pcaCtrl.ctrl, cmd.pcaCtrl.on);
+                break;
+            }
+
+            case CMD_PCA_SET_PORT: {
+                pca9535_set_port(cmd.pcaPort.port, cmd.pcaPort.val);
+                break;
+            }
+
             default:
                 break;
         }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Task: I2C Device Polling (500ms interval)
+// Reads status from PCA9535 and HUSB238 periodically
+// -----------------------------------------------------------------------------
+
+static void taskI2cPoll(void* /*pvParameters*/)
+{
+    static const char *TAG = "i2c_poll";
+    TickType_t pollDelay = pdMS_TO_TICKS(500);
+
+    for (;;) {
+        // Poll PCA9535 inputs (power good, e-fuse faults)
+        if (pca9535_present()) {
+            pca9535_update();
+        }
+
+        // Poll HUSB238 less frequently (every 5 iterations = 2.5s)
+        static uint8_t husb_div = 0;
+        if (++husb_div >= 5) {
+            husb_div = 0;
+            if (husb238_present()) {
+                husb238_update();
+            }
+        }
+
+        vTaskDelay(pollDelay);
     }
 }
 
@@ -637,6 +698,17 @@ void initTasks(AD74416H& device)
         2,
         nullptr,
         1
+    );
+
+    // I2C device polling task (Core 0, low priority)
+    xTaskCreatePinnedToCore(
+        taskI2cPoll,
+        "i2cPoll",
+        4096,
+        nullptr,
+        1,
+        nullptr,
+        0
     );
 }
 

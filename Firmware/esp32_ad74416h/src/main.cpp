@@ -22,6 +22,10 @@
 #include "uart_bridge.h"
 #include "bbp.h"
 #include "adgs2414d.h"
+#include "i2c_bus.h"
+#include "ds4424.h"
+#include "husb238.h"
+#include "pca9535.h"
 
 static const char* TAG = "main";
 
@@ -128,6 +132,40 @@ extern "C" void app_main(void)
     // 10. MUX switch matrix (ADGS2414D x4 daisy-chain)
     adgs_init();
     serial_println("[BugBuster] MUX matrix initialized");
+
+    // 10b. I2C bus and devices (non-blocking: won't prevent boot if absent)
+    serial_println("[BugBuster] Initializing I2C bus...");
+    if (i2c_bus_init()) {
+        serial_println("[BugBuster] I2C bus OK (SDA=42 SCL=41)");
+        g_deviceState.i2cOk = true;
+
+        // DS4424 IDAC
+        if (ds4424_init()) {
+            serial_println("[BugBuster] DS4424 IDAC: OK (0x20)");
+        } else {
+            serial_println("[BugBuster] DS4424 IDAC: NOT FOUND (0x20)");
+        }
+
+        // HUSB238 USB-PD
+        if (husb238_init()) {
+            const Husb238State *pd = husb238_get_state();
+            serial_printf("[BugBuster] HUSB238 USB-PD: OK (0x08) - %s %.0fV/%.2fA\r\n",
+                pd->attached ? "Attached" : "Detached",
+                pd->voltage_v, pd->current_a);
+        } else {
+            serial_println("[BugBuster] HUSB238 USB-PD: NOT FOUND (0x08)");
+        }
+
+        // PCA9535 GPIO Expander
+        if (pca9535_init()) {
+            serial_println("[BugBuster] PCA9535 IO Exp: OK (0x23)");
+        } else {
+            serial_println("[BugBuster] PCA9535 IO Exp: NOT FOUND (0x23)");
+        }
+    } else {
+        serial_println("[BugBuster] I2C bus FAILED");
+        g_deviceState.i2cOk = false;
+    }
 
     // 11. UART bridge (CDC #1+ ↔ UART)
     uart_bridge_init();

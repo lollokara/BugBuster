@@ -20,6 +20,10 @@
 #include "ad74416h_spi.h"
 #include "ad74416h_regs.h"
 #include "uart_bridge.h"
+#include "i2c_bus.h"
+#include "ds4424.h"
+#include "husb238.h"
+#include "pca9535.h"
 
 extern AD74416H_SPI spiDriver;
 
@@ -1142,6 +1146,284 @@ static esp_err_t handle_options(httpd_req_t *req)
 }
 
 // =============================================================================
+// I2C Device Handlers - DS4424 / HUSB238 / PCA9535
+// =============================================================================
+
+// GET /api/idac - Get all IDAC status
+static esp_err_t handle_get_idac(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    const DS4424State *st = ds4424_get_state();
+    cJSON_AddBoolToObject(root, "present", st->present);
+
+    cJSON *channels = cJSON_AddArrayToObject(root, "channels");
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "id", ch);
+        cJSON_AddNumberToObject(obj, "code", st->state[ch].dac_code);
+        cJSON_AddNumberToObject(obj, "targetV", st->state[ch].target_v);
+        cJSON_AddNumberToObject(obj, "midpointV", st->config[ch].midpoint_v);
+        cJSON_AddNumberToObject(obj, "vMin", st->config[ch].v_min);
+        cJSON_AddNumberToObject(obj, "vMax", st->config[ch].v_max);
+        cJSON_AddNumberToObject(obj, "stepMv", ds4424_step_mv(ch));
+        cJSON_AddBoolToObject(obj, "calibrated", st->cal[ch].valid);
+        const char *names[] = {"LevelShift", "V_ADJ1", "V_ADJ2"};
+        cJSON_AddStringToObject(obj, "name", names[ch]);
+        cJSON_AddItemToArray(channels, obj);
+    }
+    return send_json(req, root);
+}
+
+// POST /api/idac/code  body: {"ch":0, "code":-10}
+static esp_err_t handle_post_idac_code(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    int ch = cJSON_GetObjectItem(body, "ch") ? cJSON_GetObjectItem(body, "ch")->valueint : -1;
+    int code = cJSON_GetObjectItem(body, "code") ? cJSON_GetObjectItem(body, "code")->valueint : 0;
+    cJSON_Delete(body);
+
+    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
+    if (code < -127 || code > 127) return send_error(req, 400, "code must be -127..127");
+
+    if (!ds4424_set_code(ch, (int8_t)code)) return send_error(req, 500, "I2C write failed");
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "ch", ch);
+    cJSON_AddNumberToObject(root, "code", code);
+    cJSON_AddNumberToObject(root, "voltage", ds4424_code_to_voltage(ch, (int8_t)code));
+    return send_json(req, root);
+}
+
+// POST /api/idac/voltage  body: {"ch":0, "voltage":3.3}
+static esp_err_t handle_post_idac_voltage(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    int ch = cJSON_GetObjectItem(body, "ch") ? cJSON_GetObjectItem(body, "ch")->valueint : -1;
+    double voltage = cJSON_GetObjectItem(body, "voltage") ? cJSON_GetObjectItem(body, "voltage")->valuedouble : 0;
+    cJSON_Delete(body);
+
+    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
+
+    if (!ds4424_set_voltage(ch, (float)voltage)) return send_error(req, 500, "Failed to set voltage");
+
+    const DS4424State *st = ds4424_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "ch", ch);
+    cJSON_AddNumberToObject(root, "code", st->state[ch].dac_code);
+    cJSON_AddNumberToObject(root, "voltage", st->state[ch].target_v);
+    return send_json(req, root);
+}
+
+// POST /api/idac dispatch
+static esp_err_t handle_idac_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/idac/code")) return handle_post_idac_code(req);
+    if (strstr(req->uri, "/api/idac/voltage")) return handle_post_idac_voltage(req);
+    return send_error(req, 404, "Unknown IDAC endpoint");
+}
+
+// GET /api/usbpd - Get USB PD status
+static esp_err_t handle_get_usbpd(httpd_req_t *req)
+{
+    husb238_update();
+    const Husb238State *st = husb238_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "present", st->present);
+    cJSON_AddBoolToObject(root, "attached", st->attached);
+    cJSON_AddStringToObject(root, "cc", st->cc_direction ? "CC2" : "CC1");
+    cJSON_AddNumberToObject(root, "voltageV", st->voltage_v);
+    cJSON_AddNumberToObject(root, "currentA", st->current_a);
+    cJSON_AddNumberToObject(root, "powerW", st->power_w);
+    cJSON_AddNumberToObject(root, "pdResponse", st->pd_response);
+
+    cJSON *pdos = cJSON_AddArrayToObject(root, "sourcePdos");
+    struct { const char *name; float v; Husb238PdoInfo pdo; } list[] = {
+        {"5V",  5.0f,  st->pdo_5v},  {"9V",  9.0f,  st->pdo_9v},
+        {"12V", 12.0f, st->pdo_12v}, {"15V", 15.0f, st->pdo_15v},
+        {"18V", 18.0f, st->pdo_18v}, {"20V", 20.0f, st->pdo_20v}
+    };
+    for (int i = 0; i < 6; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddStringToObject(obj, "voltage", list[i].name);
+        cJSON_AddBoolToObject(obj, "detected", list[i].pdo.detected);
+        cJSON_AddNumberToObject(obj, "maxCurrentA", husb238_decode_current(list[i].pdo.max_current));
+        cJSON_AddNumberToObject(obj, "maxPowerW", list[i].v * husb238_decode_current(list[i].pdo.max_current));
+        cJSON_AddItemToArray(pdos, obj);
+    }
+    cJSON_AddNumberToObject(root, "selectedPdo", st->selected_pdo);
+    return send_json(req, root);
+}
+
+// POST /api/usbpd/select  body: {"voltage": 20}
+static esp_err_t handle_post_usbpd_select(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    int v = cJSON_GetObjectItem(body, "voltage") ? cJSON_GetObjectItem(body, "voltage")->valueint : 0;
+    cJSON_Delete(body);
+
+    Husb238Voltage voltage;
+    switch (v) {
+        case 5: voltage = HUSB238_V_5V; break;
+        case 9: voltage = HUSB238_V_9V; break;
+        case 12: voltage = HUSB238_V_12V; break;
+        case 15: voltage = HUSB238_V_15V; break;
+        case 18: voltage = HUSB238_V_18V; break;
+        case 20: voltage = HUSB238_V_20V; break;
+        default: return send_error(req, 400, "Invalid voltage (5/9/12/15/18/20)");
+    }
+
+    husb238_select_pdo(voltage);
+    husb238_go_command(HUSB238_GO_SELECT_PDO);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "selectedVoltage", v);
+    cJSON_AddStringToObject(root, "status", "negotiating");
+    return send_json(req, root);
+}
+
+// POST /api/usbpd dispatch
+static esp_err_t handle_usbpd_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/usbpd/select")) return handle_post_usbpd_select(req);
+    if (strstr(req->uri, "/api/usbpd/caps")) {
+        husb238_get_src_cap();
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "status", "caps_requested");
+        return send_json(req, root);
+    }
+    return send_error(req, 404, "Unknown USB PD endpoint");
+}
+
+// GET /api/ioexp - Get PCA9535 status
+static esp_err_t handle_get_ioexp(httpd_req_t *req)
+{
+    pca9535_update();
+    const PCA9535State *st = pca9535_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "present", st->present);
+
+    // Raw registers
+    cJSON_AddNumberToObject(root, "input0", st->input0);
+    cJSON_AddNumberToObject(root, "input1", st->input1);
+    cJSON_AddNumberToObject(root, "output0", st->output0);
+    cJSON_AddNumberToObject(root, "output1", st->output1);
+
+    // Power good
+    cJSON *pg = cJSON_AddObjectToObject(root, "powerGood");
+    cJSON_AddBoolToObject(pg, "logic", st->logic_pg);
+    cJSON_AddBoolToObject(pg, "vadj1", st->vadj1_pg);
+    cJSON_AddBoolToObject(pg, "vadj2", st->vadj2_pg);
+
+    // Enables
+    cJSON *en = cJSON_AddObjectToObject(root, "enables");
+    cJSON_AddBoolToObject(en, "vadj1", st->vadj1_en);
+    cJSON_AddBoolToObject(en, "vadj2", st->vadj2_en);
+    cJSON_AddBoolToObject(en, "analog15v", st->en_15v);
+    cJSON_AddBoolToObject(en, "mux", st->en_mux);
+    cJSON_AddBoolToObject(en, "usbHub", st->en_usb_hub);
+
+    // E-Fuses
+    cJSON *efuses = cJSON_AddArrayToObject(root, "efuses");
+    for (int i = 0; i < 4; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "id", i + 1);
+        cJSON_AddBoolToObject(obj, "enabled", st->efuse_en[i]);
+        cJSON_AddBoolToObject(obj, "fault", st->efuse_flt[i]);
+        cJSON_AddItemToArray(efuses, obj);
+    }
+    return send_json(req, root);
+}
+
+// POST /api/ioexp/control  body: {"control":"vadj1", "on":true}
+static esp_err_t handle_post_ioexp_control(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    const char *ctrl_name = cJSON_GetObjectItem(body, "control") ? cJSON_GetObjectItem(body, "control")->valuestring : NULL;
+    bool on = cJSON_GetObjectItem(body, "on") ? cJSON_IsTrue(cJSON_GetObjectItem(body, "on")) : false;
+
+    if (!ctrl_name) { cJSON_Delete(body); return send_error(req, 400, "Missing 'control' field"); }
+
+    PcaControl ctrl;
+    if (strcmp(ctrl_name, "vadj1") == 0)       ctrl = PCA_CTRL_VADJ1_EN;
+    else if (strcmp(ctrl_name, "vadj2") == 0)  ctrl = PCA_CTRL_VADJ2_EN;
+    else if (strcmp(ctrl_name, "15v") == 0)     ctrl = PCA_CTRL_15V_EN;
+    else if (strcmp(ctrl_name, "mux") == 0)     ctrl = PCA_CTRL_MUX_EN;
+    else if (strcmp(ctrl_name, "usb") == 0)     ctrl = PCA_CTRL_USB_HUB_EN;
+    else if (strcmp(ctrl_name, "efuse1") == 0)  ctrl = PCA_CTRL_EFUSE1_EN;
+    else if (strcmp(ctrl_name, "efuse2") == 0)  ctrl = PCA_CTRL_EFUSE2_EN;
+    else if (strcmp(ctrl_name, "efuse3") == 0)  ctrl = PCA_CTRL_EFUSE3_EN;
+    else if (strcmp(ctrl_name, "efuse4") == 0)  ctrl = PCA_CTRL_EFUSE4_EN;
+    else { cJSON_Delete(body); return send_error(req, 400, "Unknown control name"); }
+    cJSON_Delete(body);
+
+    if (!pca9535_set_control(ctrl, on)) return send_error(req, 500, "I2C write failed");
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "control", pca9535_control_name(ctrl));
+    cJSON_AddBoolToObject(root, "on", on);
+    return send_json(req, root);
+}
+
+// POST /api/ioexp dispatch
+static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/ioexp/control")) return handle_post_ioexp_control(req);
+    return send_error(req, 404, "Unknown IO Expander endpoint");
+}
+
+// GET /api/debug - Combined debug status of all I2C devices
+static esp_err_t handle_get_debug(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "i2cBusOk", i2c_bus_ready());
+
+    // DS4424
+    cJSON *idac = cJSON_AddObjectToObject(root, "ds4424");
+    cJSON_AddBoolToObject(idac, "present", ds4424_present());
+    if (ds4424_present()) {
+        const DS4424State *st = ds4424_get_state();
+        for (uint8_t ch = 0; ch < 3; ch++) {
+            char key[8]; snprintf(key, sizeof(key), "ch%d", ch);
+            cJSON *obj = cJSON_AddObjectToObject(idac, key);
+            cJSON_AddNumberToObject(obj, "code", st->state[ch].dac_code);
+            cJSON_AddNumberToObject(obj, "targetV", st->state[ch].target_v);
+        }
+    }
+
+    // HUSB238
+    cJSON *pd = cJSON_AddObjectToObject(root, "husb238");
+    cJSON_AddBoolToObject(pd, "present", husb238_present());
+    if (husb238_present()) {
+        husb238_update();
+        const Husb238State *st = husb238_get_state();
+        cJSON_AddBoolToObject(pd, "attached", st->attached);
+        cJSON_AddNumberToObject(pd, "voltageV", st->voltage_v);
+        cJSON_AddNumberToObject(pd, "currentA", st->current_a);
+    }
+
+    // PCA9535
+    cJSON *io = cJSON_AddObjectToObject(root, "pca9535");
+    cJSON_AddBoolToObject(io, "present", pca9535_present());
+    if (pca9535_present()) {
+        pca9535_update();
+        const PCA9535State *st = pca9535_get_state();
+        cJSON_AddNumberToObject(io, "input0", st->input0);
+        cJSON_AddNumberToObject(io, "input1", st->input1);
+        cJSON_AddNumberToObject(io, "output0", st->output0);
+        cJSON_AddNumberToObject(io, "output1", st->output1);
+    }
+
+    return send_json(req, root);
+}
+
+// =============================================================================
 // Server init / stop
 // =============================================================================
 
@@ -1153,7 +1435,7 @@ void initWebServer(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 35;
+    config.max_uri_handlers = 50;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     config.stack_size       = 8192;
 
@@ -1265,6 +1547,43 @@ void initWebServer(void)
         .uri = "/api/uart/*", .method = HTTP_POST, .handler = handle_uart_post_dispatch, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_uart_post);
+
+    // ----- I2C Device routes -----
+
+    httpd_uri_t uri_idac_get = {
+        .uri = "/api/idac", .method = HTTP_GET, .handler = handle_get_idac, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_idac_get);
+
+    httpd_uri_t uri_idac_post = {
+        .uri = "/api/idac/*", .method = HTTP_POST, .handler = handle_idac_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_idac_post);
+
+    httpd_uri_t uri_usbpd_get = {
+        .uri = "/api/usbpd", .method = HTTP_GET, .handler = handle_get_usbpd, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_usbpd_get);
+
+    httpd_uri_t uri_usbpd_post = {
+        .uri = "/api/usbpd/*", .method = HTTP_POST, .handler = handle_usbpd_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_usbpd_post);
+
+    httpd_uri_t uri_ioexp_get = {
+        .uri = "/api/ioexp", .method = HTTP_GET, .handler = handle_get_ioexp, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ioexp_get);
+
+    httpd_uri_t uri_ioexp_post = {
+        .uri = "/api/ioexp/*", .method = HTTP_POST, .handler = handle_ioexp_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ioexp_post);
+
+    httpd_uri_t uri_debug_get = {
+        .uri = "/api/debug", .method = HTTP_GET, .handler = handle_get_debug, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_debug_get);
 
     // ----- OPTIONS (CORS preflight) -----
 

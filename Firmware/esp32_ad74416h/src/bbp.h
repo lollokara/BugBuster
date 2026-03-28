@@ -112,6 +112,22 @@ extern "C" {
 #define BBP_CMD_MUX_GET_ALL     0x91
 #define BBP_CMD_MUX_SET_SWITCH  0x92
 
+// DS4424 IDAC
+#define BBP_CMD_IDAC_GET_STATUS     0xA0  // Get all IDAC channel states
+#define BBP_CMD_IDAC_SET_CODE       0xA1  // Set raw DAC code
+#define BBP_CMD_IDAC_SET_VOLTAGE    0xA2  // Set target voltage
+#define BBP_CMD_IDAC_CALIBRATE      0xA3  // Run auto-calibration
+
+// PCA9535 GPIO Expander
+#define BBP_CMD_PCA_GET_STATUS      0xB0  // Get all PCA9535 state
+#define BBP_CMD_PCA_SET_CONTROL     0xB1  // Set named control output
+#define BBP_CMD_PCA_SET_PORT        0xB2  // Set raw port value
+
+// HUSB238 USB PD
+#define BBP_CMD_USBPD_GET_STATUS    0xC0  // Get USB PD contract status
+#define BBP_CMD_USBPD_SELECT_PDO    0xC1  // Select PDO voltage
+#define BBP_CMD_USBPD_GO           0xC2  // Trigger re-negotiation
+
 // System
 #define BBP_CMD_DEVICE_RESET    0x70
 #define BBP_CMD_REG_READ        0x71
