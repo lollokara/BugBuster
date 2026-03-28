@@ -294,6 +294,43 @@ pub async fn device_reset(
 }
 
 // -----------------------------------------------------------------------------
+// MUX Switch Matrix
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn mux_set_all(
+    states: Vec<u8>,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    if states.len() < 4 { return Err("Need 4 device states".to_string()); }
+    mgr.send_command(bbp::CMD_MUX_SET_ALL, &states[..4]).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn mux_get_all(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<Vec<u8>> {
+    let rsp = mgr.send_command(bbp::CMD_MUX_GET_ALL, &[]).await.map_err(map_err)?;
+    Ok(rsp)
+}
+
+#[tauri::command]
+pub async fn mux_set_switch(
+    device: u8,
+    switch_num: u8,
+    state: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(device);
+    pw.put_u8(switch_num);
+    pw.put_bool(state);
+    mgr.send_command(bbp::CMD_MUX_SET_SWITCH, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
 // Streaming
 // -----------------------------------------------------------------------------
 

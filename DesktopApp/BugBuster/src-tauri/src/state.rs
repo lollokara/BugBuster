@@ -59,6 +59,7 @@ pub struct DeviceState {
     pub channels: [ChannelState; 4],
     pub diag: [DiagState; 4],
     pub gpio: [GpioState; 6],
+    pub mux_states: [u8; 4],
 }
 
 impl DeviceState {

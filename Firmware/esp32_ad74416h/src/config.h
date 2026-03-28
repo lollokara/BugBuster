@@ -29,6 +29,16 @@
 #define PIN_ALERT       GPIO_NUM_7    // Open-drain, active low - fault/alert output
 
 // -----------------------------------------------------------------------------
+// ADGS2414D Mux Switch Matrix
+// -----------------------------------------------------------------------------
+#define PIN_MUX_CS      GPIO_NUM_21   // CS for all 4 ADGS2414D (daisy-chain)
+#define PIN_LSHIFT_OE   GPIO_NUM_14   // Level shifter OE (TXS0108E U13+U15)
+
+#define ADGS_NUM_DEVICES   4
+#define ADGS_NUM_SWITCHES  8
+#define ADGS_DEAD_TIME_MS  100  // Dead time between switch-off and switch-on
+
+// -----------------------------------------------------------------------------
 // SPI Configuration
 // -----------------------------------------------------------------------------
 #define SPI_CLOCK_HZ    1000000UL     // 1 MHz safe starting speed (max 20 MHz)

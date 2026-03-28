@@ -50,6 +50,10 @@ pub fn run() {
             commands::clear_channel_alert,
             // System
             commands::device_reset,
+            // MUX Switch Matrix
+            commands::mux_set_all,
+            commands::mux_get_all,
+            commands::mux_set_switch,
             // Streaming
             commands::start_adc_stream,
             commands::stop_adc_stream,

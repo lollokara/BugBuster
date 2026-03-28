@@ -83,6 +83,7 @@ struct DeviceState {
     uint16_t         liveStatus;
     DiagState        diag[4];           // 4 diagnostic slots
     GpioState        gpio[6];           // 6 GPIOs (A-F)
+    uint8_t          muxState[4];       // ADGS2414D switch states (4 devices)
     ScopeBuffer      scope;             // ring buffer for batched scope data
 };
 

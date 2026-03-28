@@ -107,6 +107,11 @@ extern "C" {
 #define BBP_CMD_START_SCOPE_STREAM  0x62
 #define BBP_CMD_STOP_SCOPE_STREAM   0x63
 
+// MUX Switch Matrix
+#define BBP_CMD_MUX_SET_ALL     0x90
+#define BBP_CMD_MUX_GET_ALL     0x91
+#define BBP_CMD_MUX_SET_SWITCH  0x92
+
 // System
 #define BBP_CMD_DEVICE_RESET    0x70
 #define BBP_CMD_REG_READ        0x71

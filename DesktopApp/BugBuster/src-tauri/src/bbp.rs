@@ -81,6 +81,11 @@ pub const CMD_STOP_ADC_STREAM: u8 = 0x61;
 pub const CMD_START_SCOPE_STREAM: u8 = 0x62;
 pub const CMD_STOP_SCOPE_STREAM: u8 = 0x63;
 
+// MUX Switch Matrix
+pub const CMD_MUX_SET_ALL: u8 = 0x90;
+pub const CMD_MUX_GET_ALL: u8 = 0x91;
+pub const CMD_MUX_SET_SWITCH: u8 = 0x92;
+
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;
 pub const CMD_REG_READ: u8 = 0x71;

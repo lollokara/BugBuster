@@ -4,7 +4,7 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*};
+use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*};
 
 const TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
@@ -19,6 +19,7 @@ const TABS: &[(&str, &str)] = &[
     ("uart", "UART"),
     ("scope", "Scope"),
     ("wavegen", "WaveGen"),
+    ("sigpath", "Signal Path"),
 ];
 
 #[component]
@@ -191,6 +192,7 @@ pub fn App() -> impl IntoView {
                         "uart" => view! { <UartTab uart_config=uart_config /> }.into_any(),
                         "scope" => view! { <ScopeTab state=device_state /> }.into_any(),
                         "wavegen" => view! { <WavegenTab /> }.into_any(),
+                        "sigpath" => view! { <SignalPathTab state=device_state /> }.into_any(),
                         _ => view! { <div>"Unknown tab"</div> }.into_any(),
                     }}
                 </div>

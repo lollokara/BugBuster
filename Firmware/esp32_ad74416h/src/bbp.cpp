@@ -10,6 +10,7 @@
 #include "tasks.h"
 #include "config.h"
 #include "uart_bridge.h"
+#include "adgs2414d.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 
@@ -894,6 +895,42 @@ static int handleDeviceReset(uint16_t seq, uint8_t cmdId, uint8_t *out)
     return 0;
 }
 
+// --- MUX commands ---
+
+static int handleMuxSetAll(uint16_t seq, uint8_t cmdId,
+                            const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < ADGS_NUM_DEVICES) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    adgs_set_all_safe(payload);  // Includes 100ms dead time
+    // Echo back the states
+    adgs_get_all_states(out);
+    return ADGS_NUM_DEVICES;
+}
+
+static int handleMuxGetAll(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    adgs_get_all_states(out);
+    return ADGS_NUM_DEVICES;
+}
+
+static int handleMuxSetSwitch(uint16_t seq, uint8_t cmdId,
+                               const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 3) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    uint8_t device = payload[0];
+    uint8_t sw = payload[1];
+    bool closed = payload[2] != 0;
+    if (device >= ADGS_NUM_DEVICES || sw >= ADGS_NUM_SWITCHES) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+    adgs_set_switch_safe(device, sw, closed);  // Includes dead time
+    out[0] = device;
+    out[1] = sw;
+    out[2] = closed ? 1 : 0;
+    return 3;
+}
+
 static int handlePing(uint16_t seq, uint8_t cmdId,
                        const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -1147,6 +1184,18 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
         case BBP_CMD_DEVICE_RESET:
             rspLen = handleDeviceReset(seq, cmdId, rspBuf);
             break;
+
+        // --- MUX ---
+        case BBP_CMD_MUX_SET_ALL:
+            rspLen = handleMuxSetAll(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_MUX_GET_ALL:
+            rspLen = handleMuxGetAll(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_MUX_SET_SWITCH:
+            rspLen = handleMuxSetSwitch(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+
         case BBP_CMD_REG_READ:
             rspLen = handleRegRead(seq, cmdId, payload, payloadLen, rspBuf);
             break;

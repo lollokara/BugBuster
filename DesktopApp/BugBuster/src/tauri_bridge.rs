@@ -60,6 +60,8 @@ pub struct DeviceState {
     pub channels: Vec<ChannelState>,
     pub diag: Vec<DiagState>,
     pub gpio: Vec<GpioState>,
+    #[serde(default)]
+    pub mux_states: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -21,6 +21,7 @@
 #include "cli.h"
 #include "uart_bridge.h"
 #include "bbp.h"
+#include "adgs2414d.h"
 
 static const char* TAG = "main";
 
@@ -124,7 +125,11 @@ extern "C" void app_main(void)
     initTasks(device);
     serial_println("[BugBuster] RTOS tasks started");
 
-    // 10. UART bridge (CDC #1+ ↔ UART)
+    // 10. MUX switch matrix (ADGS2414D x4 daisy-chain)
+    adgs_init();
+    serial_println("[BugBuster] MUX matrix initialized");
+
+    // 11. UART bridge (CDC #1+ ↔ UART)
     uart_bridge_init();
     uart_bridge_start();
     serial_println("[BugBuster] UART bridge started");
