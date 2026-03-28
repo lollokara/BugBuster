@@ -2,13 +2,11 @@
 // commands.rs - Tauri command handlers exposed to the Leptos frontend
 // =============================================================================
 
-use std::sync::Arc;
 use tauri::State;
 
 use crate::bbp::{self, PayloadWriter};
 use crate::connection_manager::ConnectionManager;
 use crate::state::*;
-use crate::wavegen::WavegenState;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -215,6 +213,23 @@ pub async fn set_gpio_value(
 }
 
 // -----------------------------------------------------------------------------
+// Diagnostics
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn set_diag_config(
+    slot: u8,
+    source: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(slot);
+    pw.put_u8(source);
+    mgr.send_command(bbp::CMD_SET_DIAG_CONFIG, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------
 
@@ -283,22 +298,41 @@ pub async fn start_wavegen(
     freq_hz: f64,
     amplitude: f64,
     offset: f64,
-    wavegen: State<'_, WavegenState>,
+    mode: String, // "voltage" or "current"
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
-    wavegen.stop();
-    // Need to clone the manager Arc - use inner() to get the reference
-    // Since ConnectionManager is managed state, we access it through State
-    // For now, we'll log and acknowledge - full impl needs Arc<ConnectionManager>
-    log::info!("Wavegen: ch={} wf={} freq={} amp={} off={}", channel, waveform, freq_hz, amplitude, offset);
+    // Set channel to appropriate function first
+    let func: u8 = if mode == "current" { 2 } else { 1 }; // IOUT=2, VOUT=1
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    pw.put_u8(func);
+    mgr.send_command(bbp::CMD_SET_CH_FUNC, &pw.buf).await.map_err(map_err)?;
+
+    log::info!("Wavegen: ch={} mode={} wf={} freq={} amp={} off={}", channel, mode, waveform, freq_hz, amplitude, offset);
+    // TODO: implement actual waveform generation task
     Ok(())
 }
 
 #[tauri::command]
-pub fn stop_wavegen(
-    wavegen: State<'_, WavegenState>,
-) -> CmdResult<()> {
-    wavegen.stop();
+pub fn stop_wavegen() -> CmdResult<()> {
     log::info!("Wavegen stopped");
     Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// File Dialog
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn pick_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app.dialog()
+        .file()
+        .set_title("Save CSV")
+        .add_filter("CSV Files", &["csv"])
+        .set_file_name("bugbuster_scope.csv")
+        .blocking_save_file();
+
+    Ok(path.map(|p| p.to_string()))
 }

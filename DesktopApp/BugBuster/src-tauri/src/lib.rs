@@ -13,7 +13,6 @@ mod usb_transport;
 mod wavegen;
 
 use connection_manager::ConnectionManager;
-use wavegen::WavegenState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,7 +22,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ConnectionManager::new())
-        .manage(WavegenState::new())
         .invoke_handler(tauri::generate_handler![
             // Discovery & Connection
             commands::discover_devices,
@@ -43,6 +41,8 @@ pub fn run() {
             commands::set_current_limit,
             commands::set_gpio_config,
             commands::set_gpio_value,
+            // Diagnostics
+            commands::set_diag_config,
             // Faults
             commands::clear_all_alerts,
             commands::clear_channel_alert,
@@ -54,6 +54,8 @@ pub fn run() {
             // Waveform Generator
             commands::start_wavegen,
             commands::stop_wavegen,
+            // File Dialog
+            commands::pick_save_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
