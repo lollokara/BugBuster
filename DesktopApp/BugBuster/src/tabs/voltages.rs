@@ -66,11 +66,17 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 code_vals[i].set(ch.code as i32);
                             }
 
-                            let display_v = if dirty[i].get() { slider_vals[i].get() as f32 } else { ch.target_v };
                             let display_code = if code_dirty[i].get() { code_vals[i].get() as i8 } else { ch.code };
-                            let pct = if ch.v_max > ch.v_min {
-                                ((display_v - ch.v_min) / (ch.v_max - ch.v_min) * 100.0).clamp(0.0, 100.0)
-                            } else { 50.0 };
+                            // Compute preview voltage from code using calibration data
+                            let code_voltage = idac_interpolate_voltage(&ch, display_code);
+                            let raw_display_v = if code_dirty[i].get() {
+                                code_voltage
+                            } else if dirty[i].get() {
+                                slider_vals[i].get() as f32
+                            } else {
+                                ch.target_v
+                            };
+                            let display_v = raw_display_v.clamp(ch.v_min, ch.v_max);
 
                             // Compute R_FB
                             let r_fb = ch_rint / (ch.midpoint_v / v_fb - 1.0);
@@ -78,12 +84,27 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             let ifs_ua = 50.0f32;
                             let r_fs = (0.976 * 127.0) / (16.0 * ifs_ua * 1e-6) / 1000.0;
 
-                            // Usable range
-                            let delta = ifs_ua * 1e-6 * ch_rint * 1000.0;
-                            let sink_max_v = (ch.midpoint_v + delta).min(ch.v_max);
-                            let src_max_v = (ch.midpoint_v - delta).max(ch.v_min);
-                            let sink_steps = ((sink_max_v - ch.midpoint_v) / (ch.step_mv / 1000.0)).min(127.0) as i32;
-                            let src_steps = ((ch.midpoint_v - src_max_v) / (ch.step_mv / 1000.0)).min(127.0) as i32;
+                            // Voltage limits: always use hardware limits (3-15V for VADJ, 1.7-5.2V for LShift)
+                            let safe_min = ch.v_min;
+                            let safe_max = ch.v_max;
+
+                            let pct = if safe_max > safe_min {
+                                ((display_v - safe_min) / (safe_max - safe_min) * 100.0).clamp(0.0, 100.0)
+                            } else { 50.0 };
+                            // Compute DAC code limits for safe voltage range
+                            // Sink (negative code) raises voltage, Source (positive code) lowers voltage
+                            let step_v = ch.step_mv / 1000.0;
+                            // Max sink code: how many steps from midpoint to safe_max
+                            let max_sink_code = if step_v > 0.0 {
+                                (((safe_max - ch.midpoint_v) / step_v).floor() as i32).clamp(0, 127)
+                            } else { 0 };
+                            // Max source code: how many steps from midpoint down to safe_min
+                            let max_src_code = if step_v > 0.0 {
+                                (((ch.midpoint_v - safe_min) / step_v).floor() as i32).clamp(0, 127)
+                            } else { 0 };
+                            // DAC code range: -max_sink_code (raises V) to +max_src_code (lowers V)
+                            let code_min: i32 = -(max_sink_code as i32);  // most negative = highest voltage
+                            let code_max: i32 = max_src_code as i32;      // most positive = lowest voltage
 
                             let ch_idx = i as u8;
 
@@ -114,9 +135,9 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         // Step info box
                                         <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 10px; font-family: 'JetBrains Mono', monospace; margin-bottom: 12px; line-height: 1.8">
                                             <div>"Step: "<span style=format!("color: {}", color)>{format!("{:.2}mV", ch.step_mv)}</span>"/step"</div>
-                                            <div>"Usable: "<span style=format!("color: {}", color)>{format!("{:.2}V – {:.2}V", src_max_v, sink_max_v)}</span>
-                                                {format!(" (Δ={:.0}mV)", (sink_max_v - src_max_v) * 1000.0)}</div>
-                                            <div>{format!("Sink: {}/127 steps · Source: {}/127", sink_steps, src_steps)}</div>
+                                            <div>"Safe range: "<span style=format!("color: {}", color)>{format!("{:.2}V – {:.2}V", safe_min, safe_max)}</span>
+                                                {format!(" (Δ={:.0}mV)", (safe_max - safe_min) * 1000.0)}</div>
+                                            <div>{format!("Codes: {} to {} (sink {} / source {})", code_min, code_max, max_sink_code, max_src_code)}</div>
                                         </div>
 
                                         // DAC code display
@@ -130,67 +151,86 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             )}
                                         </div>
 
-                                        // Code slider
+                                        // Code slider (preview only — right = higher V)
                                         <input type="range" class="slider slider-colored"
                                             style=format!("--slider-color: {}; width: 100%", color)
-                                            min="-127" max="127" step="1"
-                                            prop:value=move || code_vals[i].get()
+                                            min=(-code_max) max=(max_sink_code) step="1"
+                                            prop:value=move || (-code_vals[i].get()).clamp(-code_max, max_sink_code as i32)
                                             on:input=move |e| {
                                                 if let Ok(v) = event_target_value(&e).parse::<i32>() {
-                                                    code_vals[i].set(v);
+                                                    let clamped = v.clamp(-code_max, max_sink_code as i32);
+                                                    code_vals[i].set(-clamped);
                                                     code_dirty[i].set(true);
-                                                    dirty[i].set(false); // voltage slider follows code
-                                                }
-                                            }
-                                            on:change=move |e| {
-                                                if let Ok(v) = event_target_value(&e).parse::<i32>() {
-                                                    send_idac_code(ch_idx, v as i8);
-                                                    code_dirty[i].set(false);
+                                                    dirty[i].set(true);
                                                 }
                                             }
                                         />
                                         <div class="slider-labels" style="font-size: 9px">
-                                            <span>"↓ SINK 127"</span>
-                                            <span>"0"</span>
-                                            <span>"SOURCE 127 ↓"</span>
+                                            <span>{format!("{:.1}V", safe_min)}</span>
+                                            <span>{format!("{:.1}V", ch.midpoint_v)}</span>
+                                            <span>{format!("{:.1}V", safe_max)}</span>
                                         </div>
 
-                                        // Big voltage display
+                                        // Big voltage preview
                                         <div style=format!("text-align: center; font-size: 32px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {}; padding: 8px 0 2px; letter-spacing: -1px", color)>
                                             {format!("{:.3}V", display_v)}
                                         </div>
-                                        <div style="text-align: center; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-bottom: 8px">
-                                            {if display_code == 0 { "Midpoint (DAC=0)".to_string() }
-                                             else if display_code < 0 { format!("Sink {} → +{:.2}mV", -display_code, -display_code as f32 * ch.step_mv) }
-                                             else { format!("Source {} → −{:.2}mV", display_code, display_code as f32 * ch.step_mv) }}
+                                        <div style="text-align: center; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-bottom: 4px">
+                                            {format!("DAC code: {} | ", display_code)}
+                                            {if display_code == 0 { "Midpoint".to_string() }
+                                             else if display_code < 0 { format!("Sink {}", -display_code) }
+                                             else { format!("Source {}", display_code) }}
                                         </div>
+
+                                        // "Preview" indicator when dirty
+                                        {if code_dirty[i].get() {
+                                            view! {
+                                                <div style="text-align: center; font-size: 10px; color: #f59e0b; font-weight: 600; margin-bottom: 4px">
+                                                    "⚠ Preview — not applied yet"
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! { <div></div> }.into_any()
+                                        }}
 
                                         // Voltage bar
                                         <div class="bar-gauge" style=format!("--bar-color: {}", color)>
                                             <div class="bar-fill-dynamic" style=format!("width: {}%", pct)></div>
                                         </div>
                                         <div class="slider-labels" style="font-size: 9px">
-                                            <span>{format!("{:.2}V", ch.v_min)}</span>
-                                            <span>{format!("{:.2}V", ch.v_max)}</span>
+                                            <span>{format!("{:.1}V", safe_min)}</span>
+                                            <span>{format!("{:.1}V", safe_max)}</span>
                                         </div>
 
-                                        // Voltage input + set
-                                        <div class="config-row" style="margin-top: 8px">
-                                            <label>"Set V"</label>
-                                            <div class="number-input-wrap">
-                                                <input type="number" class="number-input"
-                                                    min=ch.v_min max=ch.v_max step="0.01"
-                                                    prop:value=move || format!("{:.3}", slider_vals[i].get())
-                                                    on:change=move |e| {
-                                                        if let Ok(v) = event_target_value(&e).parse::<f64>() {
-                                                            send_idac_voltage(ch_idx, v as f32);
-                                                            dirty[i].set(false);
-                                                            code_dirty[i].set(false);
-                                                        }
+                                        // Voltage input + SET button
+                                        <div style="display: flex; gap: 8px; align-items: center; margin-top: 10px">
+                                            <input type="number" class="number-input" style="flex: 1"
+                                                min=safe_min max=safe_max step="0.01"
+                                                value=format!("{:.3}", display_v)
+                                                on:change=move |e| {
+                                                    if let Ok(v) = event_target_value(&e).parse::<f64>() {
+                                                        slider_vals[i].set(v);
+                                                        dirty[i].set(true);
+                                                        code_dirty[i].set(false);
                                                     }
-                                                />
-                                                <span class="number-input-unit">"V"</span>
-                                            </div>
+                                                }
+                                            />
+                                            <span style="font-size: 12px; font-weight: 600; color: var(--text-dim)">"V"</span>
+                                            <button
+                                                style=format!("padding: 6px 20px; border-radius: 6px; border: none; background: {}; color: #0f1117; font-weight: 700; font-size: 12px; cursor: pointer; font-family: 'JetBrains Mono', monospace", color)
+                                                on:click=move |_| {
+                                                    if code_dirty[i].get_untracked() {
+                                                        let code = code_vals[i].get_untracked();
+                                                        send_idac_code(ch_idx, code as i8);
+                                                    } else if dirty[i].get_untracked() {
+                                                        let v = slider_vals[i].get_untracked() as f32;
+                                                        let clamped = v.clamp(safe_min, safe_max);
+                                                        send_idac_voltage(ch_idx, clamped);
+                                                    }
+                                                    dirty[i].set(false);
+                                                    code_dirty[i].set(false);
+                                                }
+                                            >"SET"</button>
                                         </div>
 
                                         // Calibration status
@@ -209,7 +249,8 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 {format!(" R_FB={}k/(V_mid/{}-1)", ch_rint, v_fb)}</div>
                                             <div><b style="color: var(--text)">"DS4424:"</b>" R_FS=(0.976×127)/(16×I_FS)"</div>
                                             <div><b style="color: var(--text)">"Range:"</b>
-                                                {format!(" {:.1}V–{:.1}V (abs limit)", ch.v_min, ch.v_max)}</div>
+                                                {format!(" {:.1}V–{:.1}V", ch.v_min, ch.v_max)}
+                                                {if ch.calibrated { " (calibrated)" } else { " (formula)" }}</div>
                                         </div>
                                     </div>
                                 </div>

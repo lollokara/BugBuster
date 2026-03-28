@@ -110,6 +110,7 @@ pub fn WavegenTab() -> impl IntoView {
         set_running.set(new_state);
         if new_state {
             #[derive(Serialize)]
+            #[serde(rename_all = "camelCase")]
             struct Args { channel: u8, waveform: String, freq_hz: f64, amplitude: f64, offset: f64, mode: String }
             let args = serde_wasm_bindgen::to_value(&Args {
                 channel: channel.get_untracked(),

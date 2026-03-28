@@ -101,6 +101,20 @@ void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES]);
  */
 void adgs_reset_all(void);
 
+/**
+ * @brief Test ADGS2414D in address mode (no daisy-chain).
+ *        Writes SW_DATA register and reads it back.
+ *        For debugging single-device setups.
+ * @param sw_data  Switch data byte (bit0=S1 ... bit7=S8)
+ * @return Read-back value (should match sw_data if device responds)
+ */
+uint8_t adgs_test_address_mode(uint8_t sw_data);
+
+/**
+ * @brief Soft-reset and re-init the ADGS. Useful for testing.
+ */
+void adgs_soft_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

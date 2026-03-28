@@ -162,6 +162,12 @@ pub fn log(msg: &str) {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdacCalPoint {
+    pub code: i8,
+    pub voltage: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IdacChannelState {
     pub code: i8,
     pub target_v: f32,
@@ -170,7 +176,40 @@ pub struct IdacChannelState {
     pub v_max: f32,
     pub step_mv: f32,
     pub calibrated: bool,
+    #[serde(default)]
+    pub cal_points: Vec<IdacCalPoint>,
     pub name: String,
+}
+
+/// Interpolate calibration data to get voltage for a given DAC code.
+/// Falls back to formula if no calibration.
+pub fn idac_interpolate_voltage(ch: &IdacChannelState, code: i8) -> f32 {
+    if ch.calibrated && ch.cal_points.len() >= 2 {
+        let pts = &ch.cal_points;
+        // Find bracketing points (sorted by code)
+        for i in 0..pts.len() - 1 {
+            let c0 = pts[i].code;
+            let c1 = pts[i + 1].code;
+            if (code >= c0 && code <= c1) || (code <= c0 && code >= c1) {
+                if c1 != c0 {
+                    let t = (code - c0) as f32 / (c1 - c0) as f32;
+                    return pts[i].voltage + t * (pts[i + 1].voltage - pts[i].voltage);
+                }
+            }
+        }
+        // Extrapolate from edges
+        if code < pts[0].code && pts.len() >= 2 {
+            let slope = (pts[1].voltage - pts[0].voltage) / (pts[1].code - pts[0].code) as f32;
+            return pts[0].voltage + slope * (code - pts[0].code) as f32;
+        }
+        if code > pts[pts.len() - 1].code && pts.len() >= 2 {
+            let last = pts.len() - 1;
+            let slope = (pts[last].voltage - pts[last - 1].voltage) / (pts[last].code - pts[last - 1].code) as f32;
+            return pts[last].voltage + slope * (code - pts[last].code) as f32;
+        }
+    }
+    // Formula fallback
+    ch.midpoint_v - (code as f32 * ch.step_mv / 1000.0)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -201,6 +240,7 @@ pub async fn fetch_idac_status() -> Option<IdacState> {
 
 pub fn send_idac_cal_add_point(channel: u8, code: i8, measured_v: f32) {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args { channel: u8, code: i8, measured_v: f32 }
     let args = serde_wasm_bindgen::to_value(&Args { channel, code, measured_v }).unwrap();
     invoke_void("idac_cal_add_point", args);
@@ -240,6 +280,7 @@ pub fn send_set_adc_config(channel: u8, mux: u8, range: u8, rate: u8) {
 
 pub fn send_mux_set_switch(device: u8, switch_num: u8, state: bool) {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args { device: u8, switch_num: u8, state: bool }
     let args = serde_wasm_bindgen::to_value(&Args { device, switch_num, state }).unwrap();
     invoke_void("mux_set_switch", args);

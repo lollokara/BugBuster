@@ -513,7 +513,8 @@ static int handleSetDacVoltage(uint16_t seq, uint8_t cmdId,
     Command cmd = {};
     cmd.type = CMD_SET_DAC_VOLTAGE;
     cmd.channel = ch;
-    cmd.floatVal = voltage;
+    cmd.dacVoltage.voltage = voltage;
+    cmd.dacVoltage.bipolar = bipolar;
     sendCommand(cmd);
 
     size_t pos = 0;
@@ -915,6 +916,12 @@ static int handleIdacGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_f32(out, &pos, st->config[ch].v_max);
         put_f32(out, &pos, ds4424_step_mv(ch));
         put_bool(out, &pos, st->cal[ch].valid);
+        // Calibration points (code, voltage pairs)
+        put_u8(out, &pos, st->cal[ch].count);
+        for (uint8_t p = 0; p < st->cal[ch].count; p++) {
+            put_u8(out, &pos, (uint8_t)(st->cal[ch].points[p].dac_code & 0xFF));
+            put_f32(out, &pos, st->cal[ch].points[p].measured_v);
+        }
     }
     return (int)pos;
 }
@@ -1157,8 +1164,12 @@ static int handleMuxSetAll(uint16_t seq, uint8_t cmdId,
 {
     if (len < ADGS_NUM_DEVICES) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     adgs_set_all_safe(payload);  // Includes 100ms dead time
-    // Echo back the states
+    // Update cached state and echo back
     adgs_get_all_states(out);
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        adgs_get_all_states(g_deviceState.muxState);
+        xSemaphoreGive(g_stateMutex);
+    }
     return ADGS_NUM_DEVICES;
 }
 
@@ -1179,7 +1190,22 @@ static int handleMuxSetSwitch(uint16_t seq, uint8_t cmdId,
         sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
         return -1;
     }
-    adgs_set_switch_safe(device, sw, closed);  // Includes dead time
+    {
+        // Get current state, modify the switch, write directly (no dead time)
+        uint8_t states[ADGS_NUM_DEVICES];
+        adgs_get_all_states(states);
+        if (closed) {
+            states[device] |= (1 << sw);
+        } else {
+            states[device] &= ~(1 << sw);
+        }
+        adgs_set_all_raw(states);
+    }
+    // Update cached state
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        adgs_get_all_states(g_deviceState.muxState);
+        xSemaphoreGive(g_stateMutex);
+    }
     out[0] = device;
     out[1] = sw;
     out[2] = closed ? 1 : 0;
@@ -1354,23 +1380,33 @@ static int handleStartWavegen(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
-static int handleStopWavegen(uint16_t seq, uint8_t cmdId, uint8_t *out)
+static void wavegen_stop_and_reset(void)
 {
+    uint8_t ch = 0;
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        ch = g_deviceState.wavegen.channel;
         g_deviceState.wavegen.active = false;
         xSemaphoreGive(g_stateMutex);
     }
-    ESP_LOGI(TAG, "Wavegen stopped");
+    // Set channel back to HIGH_IMP
+    Command cmd = {};
+    cmd.type = CMD_SET_CHANNEL_FUNC;
+    cmd.channel = ch;
+    cmd.func = CH_FUNC_HIGH_IMP;
+    sendCommand(cmd);
+}
+
+static int handleStopWavegen(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    wavegen_stop_and_reset();
+    ESP_LOGI(TAG, "Wavegen stopped, channel set to HIGH_IMP");
     return 0;
 }
 
 // Public: stop wavegen (called on disconnect/reset)
 void bbpStopWavegen(void)
 {
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.wavegen.active = false;
-        xSemaphoreGive(g_stateMutex);
-    }
+    wavegen_stop_and_reset();
 }
 
 bool bbpWavegenActive(void)

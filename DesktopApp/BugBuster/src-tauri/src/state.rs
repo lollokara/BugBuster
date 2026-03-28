@@ -102,15 +102,22 @@ impl DeviceState {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdacCalPoint {
+    pub code: i8,
+    pub voltage: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IdacChannelState {
-    pub code: i8,               // Current DAC code (-127..+127)
-    pub target_v: f32,          // Target voltage
-    pub midpoint_v: f32,        // Midpoint voltage (DAC=0)
-    pub v_min: f32,             // Min allowed voltage
-    pub v_max: f32,             // Max allowed voltage
-    pub step_mv: f32,           // Step size in mV
-    pub calibrated: bool,       // Has calibration data
-    pub name: String,           // Channel name
+    pub code: i8,
+    pub target_v: f32,
+    pub midpoint_v: f32,
+    pub v_min: f32,
+    pub v_max: f32,
+    pub step_mv: f32,
+    pub calibrated: bool,
+    pub cal_points: Vec<IdacCalPoint>,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -438,9 +438,17 @@ pub async fn idac_get_status(
         let v_max = r.get_f32().unwrap_or(0.0);
         let step_mv = r.get_f32().unwrap_or(0.0);
         let calibrated = r.get_bool().unwrap_or(false);
+        let cal_count = r.get_u8().unwrap_or(0);
+        let mut cal_points = Vec::new();
+        for _ in 0..cal_count {
+            let pc = r.get_u8().unwrap_or(0) as i8;
+            let pv = r.get_f32().unwrap_or(0.0);
+            cal_points.push(IdacCalPoint { code: pc, voltage: pv });
+        }
         if i < 3 {
             channels.push(IdacChannelState {
                 code, target_v, midpoint_v, v_min, v_max, step_mv, calibrated,
+                cal_points,
                 name: names[i].to_string(),
             });
         }

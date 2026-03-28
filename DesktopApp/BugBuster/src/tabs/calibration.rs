@@ -126,9 +126,12 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let cal_max = if tgt.idac_ch >= 1 { v_max.min(12.0) } else { v_max };
         let cal_min = v_min;
         let idac_ch = tgt.idac_ch;
-        let dac_step: i32 = 3;
+        let dac_step: i32 = 1;
 
-        // Calculate total steps: sweep sink (0 to -127 by 3) + source (0 to 127 by 3)
+        // ADC can only read up to 12V — no point going higher
+        let cal_max = cal_max.min(12.0);
+
+        // Calculate total steps: sweep sink (0 to -127 by 1) + source (0 to 127 by 1)
         let sink_steps = 127 / dac_step;
         let src_steps = 127 / dac_step;
         let total = 1 + sink_steps + src_steps; // +1 for midpoint
@@ -151,21 +154,23 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let mut pts = 0u32;
             let mut step_count = 0u32;
 
-            // Helper: read ADC 3 times and average
+            // Helper: read ADC 10 times and average
             async fn read_adc_avg(state_sig: ReadSignal<DeviceState>) -> f32 {
                 let mut sum = 0.0f32;
-                for _ in 0..3 {
-                    sleep_ms(60).await;
+                let mut count = 0u32;
+                for _ in 0..10 {
+                    sleep_ms(80).await;
                     let ds = state_sig.get_untracked();
                     if !ds.channels.is_empty() {
                         sum += ds.channels[0].adc_value;
+                        count += 1;
                     }
                 }
-                sum / 3.0
+                if count > 0 { sum / count as f32 } else { 0.0 }
             }
 
             // Midpoint reading
-            sleep_ms(100).await;
+            sleep_ms(500).await;
             let v = read_adc_avg(state).await;
             send_idac_cal_add_point(idac_ch, 0, v);
             pts += 1;
@@ -178,9 +183,10 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
             // Sweep SINK direction (negative codes → raise voltage)
             let mut code: i32 = -dac_step;
+            let mut last_v = v;
             while code >= -127 {
                 send_idac_code(idac_ch, code as i8);
-                sleep_ms(100).await;
+                sleep_ms(500).await;
                 let v = read_adc_avg(state).await;
 
                 send_idac_cal_add_point(idac_ch, code as i8, v);
@@ -191,22 +197,38 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 set_current_voltage.set(v);
                 set_points_collected.set(pts);
 
-                if v >= cal_max {
-                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V (hit cal max)", code, v)));
+                // Log every 10 steps or at boundaries
+                if pts % 10 == 0 {
+                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V", code, v)));
+                }
+
+                // Stop if we hit 12V (ADC ceiling) or cal_max
+                if v >= cal_max || v >= 11.9 {
+                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V (hit ceiling)", code, v)));
                     break;
                 }
+                // Stop if voltage stopped rising (saturated)
+                if v < last_v - 0.01 {
+                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V (voltage dropping, saturated)", code, v)));
+                    break;
+                }
+                last_v = v;
                 code -= dac_step;
             }
 
+            // Record the max code we reached in sink direction
+            let sink_limit_code = code + dac_step; // last valid code
+
             // Return to midpoint
             send_idac_code(idac_ch, 0);
-            sleep_ms(200).await;
+            sleep_ms(1000).await;
 
             // Sweep SOURCE direction (positive codes → lower voltage)
             code = dac_step;
+            last_v = 999.0;
             while code <= 127 {
                 send_idac_code(idac_ch, code as i8);
-                sleep_ms(100).await;
+                sleep_ms(500).await;
                 let v = read_adc_avg(state).await;
 
                 send_idac_cal_add_point(idac_ch, code as i8, v);
@@ -217,10 +239,20 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 set_current_voltage.set(v);
                 set_points_collected.set(pts);
 
+                if pts % 10 == 0 {
+                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V", code, v)));
+                }
+
                 if v <= cal_min {
-                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V (hit cal min)", code, v)));
+                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V (hit floor)", code, v)));
                     break;
                 }
+                // Stop if voltage stopped dropping (saturated)
+                if last_v < 999.0 && v > last_v + 0.01 {
+                    set_cal_log.update(|l| l.push(format!("  DAC={} → {:.4}V (voltage rising, saturated)", code, v)));
+                    break;
+                }
+                last_v = v;
                 code += dac_step;
             }
 

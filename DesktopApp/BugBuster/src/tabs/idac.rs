@@ -110,6 +110,7 @@ pub fn IdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DacCurrentArgs { channel: u8, current_ma: f32 }
 
 fn send_dac_current(ch: u8, current_ma: f32) {

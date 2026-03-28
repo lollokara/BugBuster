@@ -16,6 +16,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "adgs2414d.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -264,6 +265,32 @@ static void handleCommand(const char* line)
         cmdPca(args);
     } else if (strcmp(cmd, "i2cscan") == 0) {
         cmdI2cScan();
+    } else if (strcmp(cmd, "cstest") == 0) {
+        // Toggle MUX CS pin manually to verify GPIO works
+        serial_printf("Toggling MUX CS (GPIO%d) 5 times...\r\n", PIN_MUX_CS);
+        gpio_reset_pin(PIN_MUX_CS);
+        gpio_set_direction(PIN_MUX_CS, GPIO_MODE_OUTPUT);
+        for (int i = 0; i < 5; i++) {
+            gpio_set_level(PIN_MUX_CS, 0);
+            delay_ms(500);
+            gpio_set_level(PIN_MUX_CS, 1);
+            delay_ms(500);
+            serial_printf("  Toggle %d done\r\n", i+1);
+        }
+        serial_println("Done. Note: SPI device may need re-init after this.");
+    } else if (strcmp(cmd, "muxtest") == 0) {
+        // Test ADGS2414D in address mode (single device, no daisy chain)
+        unsigned int val = 0xFF;
+        sscanf(args, "%x", &val);
+        serial_printf("Testing ADGS2414D address mode, SW_DATA=0x%02X...\r\n", val);
+        uint8_t rb = adgs_test_address_mode((uint8_t)val);
+        serial_printf("  Read back: 0x%02X %s\r\n", rb, (rb == (uint8_t)val) ? "[MATCH]" : "[MISMATCH]");
+    } else if (strcmp(cmd, "muxreset") == 0) {
+        serial_println("Resetting ADGS2414D (soft reset)...");
+        adgs_soft_reset();
+        serial_println("  Done. Re-entering daisy-chain...");
+        adgs_init();
+        serial_println("  Re-initialized.");
     } else if (strcmp(cmd, "menu") == 0 || strcmp(cmd, "m") == 0) {
         printMainMenu();
     } else {

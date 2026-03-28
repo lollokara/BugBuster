@@ -22,6 +22,7 @@
 DeviceState        g_deviceState  = {};
 SemaphoreHandle_t  g_stateMutex   = nullptr;
 QueueHandle_t      g_cmdQueue     = nullptr;
+TaskHandle_t       g_adcTaskHandle = nullptr;
 
 // Internal pointer to the HAL, set in initTasks()
 static AD74416H*   s_device       = nullptr;
@@ -112,6 +113,14 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 }
             }
             pollDelay = pdMS_TO_TICKS(minPollMs);
+
+            // Yield SPI bus if MUX driver needs it
+            extern volatile bool g_spi_bus_request;
+            extern volatile bool g_spi_bus_granted;
+            if (g_spi_bus_request) {
+                g_spi_bus_granted = true;
+                while (g_spi_bus_request) { delay_ms(1); }
+            }
 
             // Read hardware (outside mutex) - only for non-HIGH_IMP channels
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
@@ -388,22 +397,17 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_DAC_VOLTAGE: {
-                // floatVal encodes: the sign of floatVal carries bipolar intent
-                // We use the raw float for voltage; bipolar detection is done in
-                // the webserver which sends a pre-converted value. Just call HAL.
-                // (The webserver encodes: voltage directly, bipolar as negative
-                //  float is not reliable – see webserver for how bipolar is sent.)
-                // For simplicity, store the raw float and call setDacVoltage.
-                // Bipolar is detected by checking if floatVal < 0.
-                bool bipolar = (cmd.floatVal < 0.0f);
-                s_device->setDacVoltage(cmd.channel, cmd.floatVal, bipolar);
+                bool bipolar = cmd.dacVoltage.bipolar;
+                float voltage = cmd.dacVoltage.voltage;
+                // Set hardware VOUT_RANGE to match bipolar setting, then write DAC
+                s_device->setVoutRange(cmd.channel, bipolar);
+                s_device->setDacVoltage(cmd.channel, voltage, bipolar);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                    g_deviceState.channels[cmd.channel].dacValue = cmd.floatVal;
-                    // Reconstruct approximate code for display
+                    g_deviceState.channels[cmd.channel].dacValue = voltage;
                     float span = bipolar ? VOUT_BIPOLAR_SPAN_V : VOUT_UNIPOLAR_SPAN_V;
                     float off  = bipolar ? VOUT_BIPOLAR_OFFSET_V : 0.0f;
                     g_deviceState.channels[cmd.channel].dacCode =
-                        (uint16_t)(((cmd.floatVal + off) / span) * 65535.0f);
+                        (uint16_t)(((voltage + off) / span) * 65535.0f);
                     xSemaphoreGive(g_stateMutex);
                 }
                 break;
@@ -698,9 +702,19 @@ static void taskWavegen(void* /*pvParameters*/)
         uint32_t sampleIntervalUs = periodUs / samplesPerPeriod;
         if (sampleIntervalUs < 500) sampleIntervalUs = 500;  // Min ~500us per SPI write
 
-        ESP_LOGI("wavegen", "Start: ch=%d wf=%d freq=%.1fHz amp=%.2f off=%.2f mode=%d spp=%lu intv=%luus",
+        // Determine if waveform needs bipolar range (can output go negative?)
+        bool needsBipolar = false;
+        if (wg.mode == WAVEGEN_VOLTAGE) {
+            float minVal = wg.offset - wg.amplitude;
+            needsBipolar = (minVal < 0.0f);
+            // Set VOUT range ONCE before the loop
+            s_device->setVoutRange(wg.channel, needsBipolar);
+            delay_ms(10);  // Let range change settle
+        }
+
+        ESP_LOGI("wavegen", "Start: ch=%d wf=%d freq=%.1fHz amp=%.2f off=%.2f mode=%d bipolar=%d spp=%lu intv=%luus",
                  wg.channel, wg.waveform, wg.freq_hz, wg.amplitude, wg.offset,
-                 wg.mode, (unsigned long)samplesPerPeriod, (unsigned long)sampleIntervalUs);
+                 wg.mode, needsBipolar, (unsigned long)samplesPerPeriod, (unsigned long)sampleIntervalUs);
 
         // Generation loop
         uint32_t sampleIndex = 0;
@@ -725,7 +739,9 @@ static void taskWavegen(void* /*pvParameters*/)
 
             // Write to DAC
             if (wg.mode == WAVEGEN_VOLTAGE) {
-                s_device->setDacVoltage(wg.channel, value, value < 0.0f);
+                // Clamp to valid range for the configured mode
+                if (!needsBipolar && value < 0.0f) value = 0.0f;
+                s_device->setDacVoltage(wg.channel, value, needsBipolar);
             } else {
                 // Clamp current to non-negative
                 if (value < 0.0f) value = 0.0f;
@@ -821,7 +837,7 @@ void initTasks(AD74416H& device)
         4096,
         nullptr,
         3,
-        nullptr,
+        &g_adcTaskHandle,
         1
     );
 

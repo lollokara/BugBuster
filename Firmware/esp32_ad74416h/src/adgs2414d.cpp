@@ -6,6 +6,7 @@
 // =============================================================================
 
 #include "adgs2414d.h"
+#include "ad74416h_spi.h"
 #include "config.h"
 #include "esp_log.h"
 #include "driver/spi_master.h"
@@ -16,7 +17,7 @@
 static const char *TAG = "adgs2414d";
 
 // Cached switch states for all 4 devices
-static uint8_t s_mux_state[ADGS_NUM_DEVICES] = {0, 0, 0, 0};
+static uint8_t s_mux_state[ADGS_NUM_DEVICES] = {};
 
 // SPI device handle (separate from AD74416H, same bus, different CS)
 static spi_device_handle_t s_spi_dev = NULL;
@@ -28,14 +29,36 @@ static bool s_daisy_chain_active = false;
 // Low-level SPI helpers
 // -----------------------------------------------------------------------------
 
-// Send raw bytes on the SPI bus with MUX CS
+// Send raw bytes on the SPI bus with manual MUX CS
+// Cooperative SPI bus sharing with ADC poll task.
+// The ADC task checks this flag and yields when set.
+volatile bool g_spi_bus_request = false;
+volatile bool g_spi_bus_granted = false;
+
 static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
 {
+    // Request bus access — ADC task will yield after its current transaction
+    g_spi_bus_granted = false;
+    g_spi_bus_request = true;
+
+    // Wait for ADC task to grant us the bus (max 100ms)
+    for (int i = 0; i < 100 && !g_spi_bus_granted; i++) {
+        delay_ms(1);
+    }
+
+    gpio_set_level(PIN_MUX_CS, 0);
+    delay_us(1);
     spi_transaction_t t = {};
     t.length = len * 8;
     t.tx_buffer = tx;
     t.rx_buffer = rx;
-    spi_device_transmit(s_spi_dev, &t);
+    spi_device_polling_transmit(s_spi_dev, &t);
+    delay_us(1);
+    gpio_set_level(PIN_MUX_CS, 1);
+
+    // Release bus
+    g_spi_bus_request = false;
+    g_spi_bus_granted = false;
 }
 
 // Send a 16-bit address-mode command to all devices (before daisy-chain)
@@ -65,12 +88,23 @@ static void adgs_enter_daisy_chain(void)
 // So we send: [dev3, dev2, dev1, dev0]
 static void adgs_daisy_chain_write(const uint8_t states[ADGS_NUM_DEVICES])
 {
-    // Reverse order: device 3 first (reaches end of chain = U17)
-    uint8_t tx[ADGS_NUM_DEVICES] = {
-        states[3], states[2], states[1], states[0]
-    };
-    uint8_t rx[ADGS_NUM_DEVICES] = {0};
+    // Reverse order: device N-1 first (reaches end of chain)
+    uint8_t tx[ADGS_NUM_DEVICES];
+    for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
+        tx[i] = states[ADGS_NUM_DEVICES - 1 - i];
+    }
+    uint8_t rx[ADGS_NUM_DEVICES] = {};
     spi_transfer(tx, rx, ADGS_NUM_DEVICES);
+}
+
+// Write current switch states to hardware (handles both modes)
+static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
+{
+#if ADGS_NUM_DEVICES > 1
+    adgs_daisy_chain_write(states);
+#else
+    adgs_address_mode_write(ADGS_REG_SW_DATA, states[0]);
+#endif
 }
 
 // Get the group mask for a switch index
@@ -97,28 +131,33 @@ void adgs_init(void)
     gpio_set_direction(PIN_LSHIFT_OE, GPIO_MODE_OUTPUT);
     gpio_set_level(PIN_LSHIFT_OE, 1);  // OE active high
 
-    // Add SPI device on the existing SPI bus (SPI2_HOST, same as AD74416H)
-    // The AD74416H SPI driver already initialized the bus on SPI2_HOST
+    // Add our own SPI device on the bus (manual CS, no auto-CS pin)
     spi_device_interface_config_t devcfg = {};
-    devcfg.clock_speed_hz = 1000000;  // 1 MHz (ADGS supports up to 50 MHz)
-    devcfg.mode = 0;                  // SPI Mode 0 (CPOL=0, CPHA=0)
-    devcfg.spics_io_num = PIN_MUX_CS; // CS on GPIO 21
-    devcfg.queue_size = 4;
+    devcfg.clock_speed_hz = 1000000;
+    devcfg.mode = 0;
+    devcfg.spics_io_num = -1;
+    devcfg.queue_size = 1;
 
     esp_err_t ret = spi_bus_add_device(SPI2_HOST, &devcfg, &s_spi_dev);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to add SPI device: %s", esp_err_to_name(ret));
         return;
     }
+    ESP_LOGI(TAG, "SPI device added, manual CS on GPIO%d", PIN_MUX_CS);
 
     // Reset all switches to open
     memset(s_mux_state, 0, sizeof(s_mux_state));
 
-    // Enter daisy-chain mode
+#if ADGS_NUM_DEVICES > 1
+    // Enter daisy-chain mode for multi-device setup
     adgs_enter_daisy_chain();
-
-    // Write all-zeros to ensure all switches are open
     adgs_daisy_chain_write(s_mux_state);
+#else
+    // Single device: stay in address mode (no daisy-chain)
+    s_daisy_chain_active = true;  // Flag still set so API works
+    adgs_address_mode_write(ADGS_REG_SW_DATA, 0x00);
+    ESP_LOGI(TAG, "Single device mode (address mode, no daisy-chain)");
+#endif
 
     ESP_LOGI(TAG, "ADGS2414D mux matrix initialized (%d devices, CS=GPIO%d, LShift OE=GPIO%d)",
              ADGS_NUM_DEVICES, PIN_MUX_CS, PIN_LSHIFT_OE);
@@ -128,7 +167,7 @@ void adgs_set_all_raw(const uint8_t states[ADGS_NUM_DEVICES])
 {
     if (!s_daisy_chain_active) return;
     memcpy(s_mux_state, states, ADGS_NUM_DEVICES);
-    adgs_daisy_chain_write(s_mux_state);
+    adgs_write_states(s_mux_state);
 }
 
 void adgs_set_all_safe(const uint8_t states[ADGS_NUM_DEVICES])
@@ -136,15 +175,15 @@ void adgs_set_all_safe(const uint8_t states[ADGS_NUM_DEVICES])
     if (!s_daisy_chain_active) return;
 
     // Step 1: Open all switches
-    uint8_t all_open[ADGS_NUM_DEVICES] = {0, 0, 0, 0};
-    adgs_daisy_chain_write(all_open);
+    uint8_t all_open[ADGS_NUM_DEVICES] = {};
+    adgs_write_states(all_open);
 
     // Step 2: Wait dead time
     delay_ms(ADGS_DEAD_TIME_MS);
 
     // Step 3: Set new state
     memcpy(s_mux_state, states, ADGS_NUM_DEVICES);
-    adgs_daisy_chain_write(s_mux_state);
+    adgs_write_states(s_mux_state);
 }
 
 void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
@@ -160,7 +199,7 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
         uint8_t temp_state[ADGS_NUM_DEVICES];
         memcpy(temp_state, s_mux_state, ADGS_NUM_DEVICES);
         temp_state[device] &= ~group_mask;  // Open the entire group
-        adgs_daisy_chain_write(temp_state);
+        adgs_write_states(temp_state);
 
         // Wait dead time
         delay_ms(ADGS_DEAD_TIME_MS);
@@ -173,7 +212,7 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
     }
 
     s_mux_state[device] = new_state;
-    adgs_daisy_chain_write(s_mux_state);
+    adgs_write_states(s_mux_state);
 }
 
 uint8_t adgs_get_state(uint8_t device)
@@ -191,7 +230,46 @@ void adgs_reset_all(void)
 {
     memset(s_mux_state, 0, sizeof(s_mux_state));
     if (s_daisy_chain_active) {
+#if ADGS_NUM_DEVICES > 1
         adgs_daisy_chain_write(s_mux_state);
+#else
+        adgs_address_mode_write(ADGS_REG_SW_DATA, 0x00);
+#endif
     }
     ESP_LOGI(TAG, "All switches reset to open");
+}
+
+uint8_t adgs_test_address_mode(uint8_t sw_data)
+{
+    // Exit daisy-chain mode first via soft reset
+    // Soft reset: write 0xA3 then 0x05 to SOFT_RESETB register (0x0B)
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
+    delay_ms(1);
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
+    delay_ms(10);
+    s_daisy_chain_active = false;
+    ESP_LOGI(TAG, "Soft reset done, now in address mode");
+
+    // Write switch data
+    adgs_address_mode_write(ADGS_REG_SW_DATA, sw_data);
+    ESP_LOGI(TAG, "Wrote SW_DATA = 0x%02X", sw_data);
+
+    // Read back: send read command (0x80 | reg), data=0x00 (don't care)
+    uint8_t tx[2] = { ADGS_CMD_READ | ADGS_REG_SW_DATA, 0x00 };
+    uint8_t rx[2] = {0};
+    spi_transfer(tx, rx, 2);
+    ESP_LOGI(TAG, "Read SW_DATA: rx=[0x%02X, 0x%02X]", rx[0], rx[1]);
+
+    return rx[1];  // Data is in second byte
+}
+
+void adgs_soft_reset(void)
+{
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
+    delay_ms(1);
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
+    delay_ms(10);
+    s_daisy_chain_active = false;
+    memset(s_mux_state, 0, sizeof(s_mux_state));
+    ESP_LOGI(TAG, "Soft reset complete");
 }

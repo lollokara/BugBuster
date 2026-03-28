@@ -135,7 +135,44 @@ static bool write_dac(uint8_t ch, int8_t code)
     bool ok = i2c_bus_write(DS4424_I2C_ADDR, buf, 2, 50);
     if (ok) {
         s_state.state[ch].dac_code = code;
-        s_state.state[ch].target_v = ds4424_code_to_voltage(ch, code);
+        // Use calibrated voltage if available, otherwise formula
+        const DS4424CalData *cal = &s_state.cal[ch];
+        if (cal->valid && cal->count >= 2) {
+            // Interpolate from calibration points (sorted by dac_code)
+            // Find two points bracketing this code
+            float v = ds4424_code_to_voltage(ch, code); // fallback
+            for (int i = 0; i < (int)cal->count - 1; i++) {
+                int8_t c0 = cal->points[i].dac_code;
+                int8_t c1 = cal->points[i + 1].dac_code;
+                if ((code >= c0 && code <= c1) || (code >= c1 && code <= c0)) {
+                    if (c1 != c0) {
+                        float t = (float)(code - c0) / (float)(c1 - c0);
+                        v = cal->points[i].measured_v + t * (cal->points[i + 1].measured_v - cal->points[i].measured_v);
+                    }
+                    break;
+                }
+            }
+            // Extrapolate if outside range
+            if (code < cal->points[0].dac_code && cal->count >= 2) {
+                int8_t c0 = cal->points[0].dac_code;
+                int8_t c1 = cal->points[1].dac_code;
+                if (c1 != c0) {
+                    float slope = (cal->points[1].measured_v - cal->points[0].measured_v) / (float)(c1 - c0);
+                    v = cal->points[0].measured_v + slope * (float)(code - c0);
+                }
+            } else if (code > cal->points[cal->count - 1].dac_code && cal->count >= 2) {
+                int last = cal->count - 1;
+                int8_t c0 = cal->points[last - 1].dac_code;
+                int8_t c1 = cal->points[last].dac_code;
+                if (c1 != c0) {
+                    float slope = (cal->points[last].measured_v - cal->points[last - 1].measured_v) / (float)(c1 - c0);
+                    v = cal->points[last].measured_v + slope * (float)(code - c1);
+                }
+            }
+            s_state.state[ch].target_v = v;
+        } else {
+            s_state.state[ch].target_v = ds4424_code_to_voltage(ch, code);
+        }
     }
     return ok;
 }
@@ -277,26 +314,39 @@ int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
             if (between && v0 != v1) {
                 float t = (volts - v0) / (v1 - v0);
                 float code_f = (float)c0 + t * (float)(c1 - c0);
-                int code_i = (int)roundf(code_f);
+                // Round towards lower voltage (safer: truncate towards zero)
+                int code_i = (code_f >= 0) ? (int)floorf(code_f) : (int)ceilf(code_f);
                 if (code_i > 127) code_i = 127;
                 if (code_i < -127) code_i = -127;
                 return (int8_t)code_i;
             }
         }
-        // Extrapolate from the last two points if target is outside range
+        // Extrapolate if target is outside calibrated range
+        // Try first two points (for low voltage extrapolation)
         if (cal->count >= 2) {
-            int last = cal->count - 1;
-            float v0 = cal->points[last - 1].measured_v;
-            float v1 = cal->points[last].measured_v;
-            int8_t c0 = cal->points[last - 1].dac_code;
-            int8_t c1 = cal->points[last].dac_code;
-            if (v1 != v0) {
-                float t = (volts - v0) / (v1 - v0);
-                float code_f = (float)c0 + t * (float)(c1 - c0);
-                int code_i = (int)roundf(code_f);
-                if (code_i > 127) code_i = 127;
-                if (code_i < -127) code_i = -127;
-                return (int8_t)code_i;
+            float v_first = cal->points[0].measured_v;
+            float v_last = cal->points[cal->count - 1].measured_v;
+            float v_lo = (v_first < v_last) ? v_first : v_last;
+            float v_hi = (v_first > v_last) ? v_first : v_last;
+
+            if (volts <= v_lo || volts >= v_hi) {
+                // Use the two points nearest to the target for extrapolation
+                int idx = 0;
+                if (volts >= v_hi) {
+                    idx = cal->count - 2;  // Last two points
+                }
+                float ev0 = cal->points[idx].measured_v;
+                float ev1 = cal->points[idx + 1].measured_v;
+                int8_t ec0 = cal->points[idx].dac_code;
+                int8_t ec1 = cal->points[idx + 1].dac_code;
+                if (ev1 != ev0) {
+                    float t = (volts - ev0) / (ev1 - ev0);
+                    float code_f = (float)ec0 + t * (float)(ec1 - ec0);
+                    int code_i = (code_f >= 0) ? (int)floorf(code_f) : (int)ceilf(code_f);
+                    if (code_i > 127) code_i = 127;
+                    if (code_i < -127) code_i = -127;
+                    return (int8_t)code_i;
+                }
             }
         }
     }

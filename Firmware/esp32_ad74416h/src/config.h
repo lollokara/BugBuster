@@ -31,13 +31,13 @@
 // -----------------------------------------------------------------------------
 // I2C Bus Pins (shared bus: DS4424, HUSB238, PCA9535)
 // -----------------------------------------------------------------------------
-#define PIN_I2C_SDA     GPIO_NUM_42   // ESP_SDA
-#define PIN_I2C_SCL     GPIO_NUM_41   // ESP_SCL
+#define PIN_I2C_SDA     GPIO_NUM_1    // TEMP: was GPIO_NUM_42
+#define PIN_I2C_SCL     GPIO_NUM_4    // TEMP: was GPIO_NUM_41
 #define I2C_PORT_NUM    I2C_NUM_0
-#define I2C_FREQ_HZ     400000        // 400 kHz Fast Mode
+#define I2C_FREQ_HZ     100000        // 100 kHz Standard Mode (TEMP: was 400kHz)
 
 // I2C Device Addresses (7-bit)
-#define DS4424_I2C_ADDR     0x20      // A0=GND, A1=GND
+#define DS4424_I2C_ADDR     0x10      // A0=GND, A1=GND (7-bit: 0x10, 8-bit: 0x20)
 #define HUSB238_I2C_ADDR    0x08      // Fixed
 #define PCA9535_I2C_ADDR    0x23      // A2=0, A1=1, A0=1
 
@@ -47,10 +47,10 @@
 // -----------------------------------------------------------------------------
 // ADGS2414D Mux Switch Matrix
 // -----------------------------------------------------------------------------
-#define PIN_MUX_CS      GPIO_NUM_21   // CS for all 4 ADGS2414D (daisy-chain)
+#define PIN_MUX_CS      GPIO_NUM_12   // TEMP: was GPIO_NUM_21
 #define PIN_LSHIFT_OE   GPIO_NUM_14   // Level shifter OE (TXS0108E U13+U15)
 
-#define ADGS_NUM_DEVICES   4
+#define ADGS_NUM_DEVICES   1    // TEMP: was 4 (single device on breadboard)
 #define ADGS_NUM_SWITCHES  8
 #define ADGS_DEAD_TIME_MS  100  // Dead time between switch-off and switch-on
 

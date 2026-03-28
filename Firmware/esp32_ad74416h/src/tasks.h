@@ -200,6 +200,10 @@ struct Command {
         } gpioSet;
         // I2C device command data
         struct {
+            float   voltage;
+            bool    bipolar;
+        } dacVoltage;
+        struct {
             uint8_t ch;
             int8_t  code;
         } idacCode;

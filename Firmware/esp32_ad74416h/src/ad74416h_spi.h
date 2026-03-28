@@ -47,6 +47,8 @@ public:
     bool readRegister(uint8_t addr, uint16_t* data);
     bool updateRegister(uint8_t addr, uint16_t mask, uint16_t val);
 
+    spi_device_handle_t getDeviceHandle() const { return _spi_dev; }
+
 private:
     gpio_num_t _pin_sdo;
     gpio_num_t _pin_sdi;
