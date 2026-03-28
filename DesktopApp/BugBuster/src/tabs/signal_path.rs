@@ -10,12 +10,10 @@ const PRESETS: &[(&str, [u8; 4])] = &[
     ("ADC Read", [0x04; 4]), ("External", [0x08; 4]),
 ];
 
-const C_GPIO: &str = "#22c55e";
-const C_GPIO_R: &str = "#eab308";
-const C_ADC: &str = "#3b82f6";
-const C_EXT: &str = "#f97316";
-const C_TEXT: &str = "#94a3b8";
-const C_DIM: &str = "#334155";
+const C_GPIO: &str = "#22c55e";    // Green - direct GPIO
+const C_GPIO_R: &str = "#eab308";  // Yellow - GPIO via 2kΩ
+const C_ADC: &str = "#3b82f6";     // Blue - ADC
+const C_EXT: &str = "#f97316";     // Orange - external
 const C_BG: &str = "#070d1a";
 const C_CHIP: &str = "#0e1629";
 const C_CHIP_BD: &str = "#1e3050";
@@ -23,16 +21,28 @@ const C_CHIP_BD: &str = "#1e3050";
 const ACCENTS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const MUX_REF: [&str; 4] = ["U10", "U11", "U16", "U17"];
 
-// [device][switch] = (label, type: g=gpio, r=gpio+resistor, a=adc, e=ext)
-const INP: [[[&str; 2]; 8]; 4] = [
-    [["IO1","g"],["IO1","r"],["CH A","a"],["J4","e"],["IO2","g"],["IO2","r"],["IO3","g"],["IO3","r"]],
-    [["IO5","g"],["IO5","r"],["CH B","a"],["J4","e"],["IO6","g"],["IO6","r"],["IO7","g"],["IO7","r"]],
-    [["IO13","g"],["IO13","r"],["CH C","a"],["J4","e"],["IO12","g"],["IO12","r"],["IO11","g"],["IO11","r"]],
-    [["IO10","g"],["IO10","r"],["CH D","a"],["J4","e"],["IO9","g"],["IO9","r"],["IO8","g"],["IO8","r"]],
+// Switch input topology:
+// GPIO pairs: IO goes through level shifter, then SPLITS:
+//   S1 = direct (green), S2 = via 2kΩ (yellow)  — same IO
+//   S5 = direct (green), S6 = via 2kΩ (yellow)  — same IO
+//   S7 = direct (green), S8 = via 2kΩ (yellow)  — same IO
+// Non-GPIO: S3 = ADC channel, S4 = external connector
+//
+// type: p=gpio pair direct, q=gpio pair resistor, a=adc, e=ext
+// GPIO label names (one per pair, shown before LS)
+const GPIO_PAIR_LABELS: [[&str; 3]; 4] = [
+    ["IO1", "IO2", "IO3"],     // U10: pair1=S1/S2, pair2=S5/S6, pair3=S7/S8
+    ["IO5", "IO6", "IO7"],     // U11
+    ["IO13", "IO12", "IO11"],  // U16
+    ["IO10", "IO9", "IO8"],    // U17
 ];
 
+// S3 and S4 labels
+const ADC_LABELS: [&str; 4] = ["CH A", "CH B", "CH C", "CH D"];
+const EXT_LABELS: [&str; 4] = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"];
+
 fn ic(t: &str) -> &'static str {
-    match t { "g" => C_GPIO, "r" => C_GPIO_R, "a" => C_ADC, "e" => C_EXT, _ => C_TEXT }
+    match t { "d" => C_GPIO, "r" => C_GPIO_R, "a" => C_ADC, "e" => C_EXT, _ => "#94a3b8" }
 }
 
 #[component]
@@ -40,6 +50,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (mux, set_mux) = signal([0u8; 4]);
     let (psu, set_psu) = signal([false; 2]);
     let (ef, set_ef) = signal([false; 4]);
+    let (oe, set_oe) = signal(false); // Level shifter OE
     let cr = NodeRef::<leptos::html::Canvas>::new();
 
     Effect::new(move || {
@@ -81,29 +92,66 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let ms = mux.get();
             let ps = psu.get();
             let es = ef.get();
+            let oe_on = oe.get();
 
-            c.set_fill_style_str(C_BG);
-            c.fill_rect(0.0, 0.0, w, h);
+            c.set_fill_style_str(C_BG); c.fill_rect(0.0, 0.0, w, h);
 
             // Layout
             let psu_h = 42.0;
-            let leg_h = 22.0;
             let rt = psu_h + 10.0;
-            let ra = h - rt - leg_h;
+            let ra = h - rt - 4.0; // No legend at bottom — it's in toolbar
             let rh = ra / 4.0;
-            let lbl_x = w * 0.14;   // Input labels right-align here
-            let mux_l = w * 0.17;   // MUX left
-            let mux_r = w * 0.50;   // MUX right
-            let out_x = w * 0.52;   // Output labels
-            let ef_x = w * 0.63;    // E-Fuse center
-            let cn_l = w * 0.76;    // Connector left
-            let cn_r = w * 0.95;    // Connector right
+
+            let gpio_x = w * 0.06;
+            let ls_l = w * 0.085;
+            let ls_r = w * 0.115;
+            let adc_x = w * 0.155;
+            let mux_l = w * 0.18;
+            let mux_r = w * 0.50;
+            let out_x = w * 0.52;
+            let ef_x = w * 0.63;
+            let cn_l = w * 0.76;
+            let cn_r = w * 0.95;
 
             // PSU bars
             psu_bar(&c, 8.0, 4.0, w * 0.48 - 12.0, psu_h, "V_ADJ1", "→ P1, P2", ps[0]);
             psu_bar(&c, w * 0.5 + 4.0, 4.0, w * 0.48 - 12.0, psu_h, "V_ADJ2", "→ P3, P4", ps[1]);
 
-            // Channel rows
+            // ── LEVEL SHIFTERS (merged: U13 spans rows 0+1, U15 spans rows 2+3) ──
+            for pair in 0..2 {
+                let y1 = rt + pair as f64 * 2.0 * rh;
+                let y2 = y1 + 2.0 * rh;
+                let ls_name = if pair == 0 { "U13" } else { "U15" };
+
+                // Level shifter block spanning 2 rows
+                let ls_pad = 4.0;
+                rrect(&c, ls_l - 1.0, y1 + ls_pad, ls_r - ls_l + 2.0, (y2 - y1) - ls_pad * 2.0, 3.0);
+                c.set_fill_style_str(if oe_on { "#0c1a12" } else { "#0a0f1c" });
+                c.fill();
+                c.set_stroke_style_str(if oe_on { "#1a4030" } else { "#1a2a40" });
+                c.set_line_width(1.0);
+                c.stroke();
+
+                // LS label
+                c.set_fill_style_str(if oe_on { "#22c55e" } else { "#2a3f5f" });
+                c.set_font("bold 7px monospace");
+                c.set_text_align("center");
+                let _ = c.fill_text(ls_name, (ls_l + ls_r) / 2.0, y1 + ls_pad - 2.0);
+
+                // OE indicator at bottom of LS
+                let oe_y = y2 - ls_pad - 6.0;
+                c.set_fill_style_str(if oe_on { "#22c55e" } else { "#1e293b" });
+                c.begin_path(); c.arc((ls_l + ls_r) / 2.0, oe_y, 3.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
+                if oe_on {
+                    c.set_fill_style_str("rgba(34,197,94,0.15)");
+                    c.begin_path(); c.arc((ls_l + ls_r) / 2.0, oe_y, 7.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
+                }
+                c.set_fill_style_str("#334155");
+                c.set_font("5px monospace");
+                let _ = c.fill_text("OE", (ls_l + ls_r) / 2.0, oe_y + 10.0);
+            }
+
+            // ── CHANNEL ROWS ──
             for ch in 0..4usize {
                 let ry = rt + ch as f64 * rh;
                 let st = ms[ch];
@@ -112,229 +160,230 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let psu_on = ps[pi];
                 let ef_on = es[ch];
 
-                // Row divider
                 if ch > 0 {
-                    c.set_stroke_style_str("#111828");
-                    c.set_line_width(0.5);
+                    c.set_stroke_style_str("#111828"); c.set_line_width(0.5);
                     c.begin_path(); c.move_to(0.0, ry); c.line_to(w, ry); c.stroke();
                 }
 
-                // Switch Y positions (8 switches, gaps between groups)
-                let lh = (rh - 14.0) / 8.5;
-                let g1 = lh * 0.4; // gap after S4
-                let g2 = lh * 0.4; // gap after S6
+                // Switch Y positions
+                let lh = (rh - 12.0) / 8.5;
+                let g = lh * 0.4;
                 let mut sy = [0.0f64; 8];
                 for s in 0..8 {
-                    let gap = if s >= 6 { g1 + g2 } else if s >= 4 { g1 } else { 0.0 };
-                    sy[s] = ry + 7.0 + s as f64 * lh + gap;
+                    let gap = if s >= 6 { g * 2.0 } else if s >= 4 { g } else { 0.0 };
+                    sy[s] = ry + 6.0 + s as f64 * lh + gap;
                 }
 
-                // ── MUX CHIP (solid, covers everything behind) ──
-                let mt = ry + 2.0;
-                let mh = rh - 4.0;
+                // MUX chip
+                let mt = ry + 2.0; let mh = rh - 4.0;
                 c.set_fill_style_str(C_CHIP);
                 c.fill_rect(mux_l, mt, mux_r - mux_l, mh);
-                c.set_stroke_style_str(C_CHIP_BD);
-                c.set_line_width(1.0);
+                c.set_stroke_style_str(C_CHIP_BD); c.set_line_width(1.0);
                 c.stroke_rect(mux_l, mt, mux_r - mux_l, mh);
 
                 // Group separators
-                c.set_stroke_style_str("#162540");
-                c.set_line_width(0.5);
+                c.set_stroke_style_str("#162540"); c.set_line_width(0.5);
                 let sep1 = (sy[3] + sy[4]) / 2.0;
                 let sep2 = (sy[5] + sy[6]) / 2.0;
                 c.begin_path(); c.move_to(mux_l + 3.0, sep1); c.line_to(mux_r - 3.0, sep1); c.stroke();
                 c.begin_path(); c.move_to(mux_l + 3.0, sep2); c.line_to(mux_r - 3.0, sep2); c.stroke();
 
-                // MUX label at bottom
-                c.set_fill_style_str(ac);
-                c.set_font("bold 9px monospace");
-                c.set_text_align("center");
+                // MUX label
+                c.set_fill_style_str(ac); c.set_font("bold 9px monospace"); c.set_text_align("center");
                 let _ = c.fill_text(&format!("MUX {} · {}", ch + 1, MUX_REF[ch]),
                                     (mux_l + mux_r) / 2.0, mt + mh - 3.0);
 
-                // ── SWITCHES ──
+                // ── GPIO PAIRS: IO → LevelShifter → split (direct green / 2kΩ yellow) ──
+                let gpio_pairs: [(usize, usize, usize); 3] = [(0,1,0), (4,5,1), (6,7,2)];
+                for &(sd, sr, pi2) in &gpio_pairs {
+                    let yd = sy[sd];
+                    let yr = sy[sr];
+                    let ym = (yd + yr) / 2.0;
+                    let lbl = GPIO_PAIR_LABELS[ch][pi2];
+                    // IO label (white, before LS)
+                    c.set_font("bold 9px monospace"); c.set_text_align("right"); c.set_fill_style_str("#e2e8f0");
+                    let _ = c.fill_text(lbl, gpio_x, ym + 3.0);
+                    // Trace: label → LS (gray)
+                    c.set_stroke_style_str("#94a3b8"); c.set_line_width(1.0);
+                    c.begin_path(); c.move_to(gpio_x + 3.0, ym); c.line_to(ls_l, ym); c.stroke();
+                    c.set_fill_style_str("#94a3b8");
+                    c.begin_path(); c.arc(ls_l, ym, 1.5, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
+                    c.begin_path(); c.arc(ls_r, ym, 1.5, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
+                    // After LS: split
+                    let sp = ls_r + 4.0;
+                    c.set_stroke_style_str("#94a3b8"); c.set_line_width(1.0);
+                    c.begin_path(); c.move_to(ls_r, ym); c.line_to(sp, ym); c.stroke();
+                    c.set_stroke_style_str("#475569"); c.set_line_width(0.5);
+                    c.begin_path(); c.move_to(sp, yd); c.line_to(sp, yr); c.stroke();
+                    // Direct branch (green)
+                    c.set_stroke_style_str(C_GPIO); c.set_line_width(1.0);
+                    c.begin_path(); c.move_to(sp, yd); c.line_to(mux_l, yd); c.stroke();
+                    // Resistor branch (yellow + zigzag)
+                    c.set_stroke_style_str(C_GPIO_R); c.set_line_width(1.0);
+                    c.begin_path(); c.move_to(sp, yr); c.line_to(mux_l, yr); c.stroke();
+                    let rz = (sp + mux_l) / 2.0;
+                    draw_resistor(&c, rz - 8.0, yr, 16.0, C_GPIO_R);
+                }
+                // ── ADC (S3) ──
+                c.set_font("8px monospace"); c.set_text_align("right"); c.set_fill_style_str(C_ADC);
+                let _ = c.fill_text(ADC_LABELS[ch], adc_x, sy[2] + 3.0);
+                c.set_stroke_style_str(C_ADC); c.set_line_width(1.0);
+                c.begin_path(); c.move_to(adc_x + 3.0, sy[2]); c.line_to(mux_l, sy[2]); c.stroke();
+                // ── EXT (S4) ──
+                c.set_fill_style_str(C_EXT);
+                let _ = c.fill_text(EXT_LABELS[ch], adc_x, sy[3] + 3.0);
+                c.set_stroke_style_str(C_EXT); c.set_line_width(1.0);
+                c.begin_path(); c.move_to(adc_x + 3.0, sy[3]); c.line_to(mux_l, sy[3]); c.stroke();
+
+                // ── ALL 8 SWITCH BARS ──
                 for s in 0..8usize {
                     let y = sy[s];
                     let on = (st >> s) & 1 != 0;
-                    let col = ic(INP[ch][s][1]);
-                    let lbl = INP[ch][s][0];
-
-                    // Input label — ALWAYS visible in its color
-                    c.set_font("9px monospace");
-                    c.set_text_align("right");
-                    c.set_fill_style_str(col);
-                    let _ = c.fill_text(lbl, lbl_x, y + 4.0);
-
-                    // Input trace: label → MUX edge (ALWAYS drawn, colored)
-                    c.set_stroke_style_str(col);
-                    c.set_line_width(1.0);
-                    c.begin_path();
-                    c.move_to(lbl_x + 4.0, y);
-                    c.line_to(mux_l, y);
-                    c.stroke();
-
-                    // ── Inside MUX: switch bar (only lights up when ON) ──
                     let bl = mux_l + 4.0;
                     let br = mux_r - 8.0;
-
                     if on {
-                        // Active bar
                         c.set_fill_style_str(ac);
                         c.fill_rect(bl, y - 2.0, br - bl, 4.0);
-                        // Glow dot at right end
                         let glow = format!("{}44", ac);
                         c.set_fill_style_str(&glow);
-                        c.begin_path();
-                        c.arc(br, y, 6.0, 0.0, std::f64::consts::TAU).unwrap();
-                        c.fill();
+                        c.begin_path(); c.arc(br, y, 6.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
                         c.set_fill_style_str(ac);
-                        c.begin_path();
-                        c.arc(br, y, 3.0, 0.0, std::f64::consts::TAU).unwrap();
-                        c.fill();
+                        c.begin_path(); c.arc(br, y, 3.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
                     } else {
-                        // Inactive: thin dim line
                         c.set_fill_style_str("#0b1322");
                         c.fill_rect(bl, y - 1.0, br - bl, 2.0);
-                        // Dim dot
                         c.set_fill_style_str("#152030");
-                        c.begin_path();
-                        c.arc(br, y, 2.0, 0.0, std::f64::consts::TAU).unwrap();
-                        c.fill();
+                        c.begin_path(); c.arc(br, y, 2.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
                     }
-
-                    // Switch number
-                    c.set_fill_style_str(if on { "#ffffff" } else { "#1e2d40" });
-                    c.set_font("bold 7px monospace");
-                    c.set_text_align("left");
+                    let sc = match s { 0|4|6 => C_GPIO, 1|5|7 => C_GPIO_R, 2 => C_ADC, 3 => C_EXT, _ => "#fff" };
+                    c.set_fill_style_str(if on { sc } else { "#1e2d40" });
+                    c.set_font("bold 7px monospace"); c.set_text_align("left");
                     let _ = c.fill_text(&format!("S{}", s + 1), bl + 2.0, y + 3.0);
                 }
 
-                // ── OUTPUT TRACES ──
+                // Output traces
                 let grps: [(usize, usize, &str); 3] = [(0, 4, "Main"), (4, 6, "Aux1"), (6, 8, "Aux2")];
                 for &(s0, s1, lbl) in &grps {
                     let cy = (sy[s0] + sy[s1 - 1]) / 2.0;
                     let any = (s0..s1).any(|s| (st >> s) & 1 != 0);
-
-                    // Trace MUX → output area
                     c.set_stroke_style_str(if any { ac } else { "#0c1525" });
                     c.set_line_width(if any { 1.5 } else { 0.3 });
-                    c.begin_path();
-                    c.move_to(mux_r, cy);
-                    c.line_to(ef_x - 30.0, cy);
-                    c.stroke();
-
-                    // If active, continue past E-Fuse to connector
+                    c.begin_path(); c.move_to(mux_r, cy); c.line_to(ef_x - 28.0, cy); c.stroke();
                     if any {
                         let glow = format!("{}15", ac);
-                        c.set_stroke_style_str(&glow);
-                        c.set_line_width(6.0);
-                        c.begin_path(); c.move_to(mux_r, cy); c.line_to(ef_x - 30.0, cy); c.stroke();
-
-                        c.set_stroke_style_str(ac);
-                        c.set_line_width(1.0);
+                        c.set_stroke_style_str(&glow); c.set_line_width(6.0);
+                        c.begin_path(); c.move_to(mux_r, cy); c.line_to(ef_x - 28.0, cy); c.stroke();
+                        c.set_stroke_style_str(ac); c.set_line_width(1.0);
                         c.begin_path(); c.move_to(ef_x + 28.0, cy); c.line_to(cn_l, cy); c.stroke();
                     }
-
-                    // Label
-                    c.set_fill_style_str(if any { "#e2e8f0" } else { C_DIM });
-                    c.set_font("8px monospace");
-                    c.set_text_align("left");
+                    c.set_fill_style_str(if any { "#e2e8f0" } else { "#253040" });
+                    c.set_font("8px monospace"); c.set_text_align("left");
                     let _ = c.fill_text(lbl, out_x, cy + 3.0);
                 }
 
-                // ── E-FUSE ──
-                // States: off=dim, psu_on=orange, psu_on+ef_on=green, fault=red
+                // E-Fuse
                 let ef_w = 25.0;
                 let ef_top = ry + rh * 0.1;
-                let ef_h = rh * 0.75;
+                let ef_h2 = rh * 0.75;
                 let (ef_fill, ef_bd, ef_txt) = if !psu_on {
-                    (C_CHIP, C_CHIP_BD, C_DIM)          // Off
+                    (C_CHIP, C_CHIP_BD, "#334155")
                 } else if !ef_on {
-                    ("#1a1508", "#8b6020", "#f59e0b")    // PSU on, E-Fuse off = orange
+                    ("#1a1508", "#8b6020", "#f59e0b")     // Orange: PSU on, EF off
                 } else {
-                    ("#081a10", "#20603a", "#10b981")    // Both on = green (power fed)
+                    ("#081a10", "#20603a", "#10b981")      // Green: power flowing
                 };
-
-                rrect(&c, ef_x - ef_w, ef_top, ef_w * 2.0, ef_h, 4.0);
-                c.set_fill_style_str(ef_fill);
-                c.fill();
-                c.set_stroke_style_str(ef_bd);
-                c.set_line_width(1.0);
-                c.stroke();
-
-                c.set_fill_style_str(ef_txt);
-                c.set_font("bold 7px monospace");
-                c.set_text_align("center");
+                rrect(&c, ef_x - ef_w, ef_top, ef_w * 2.0, ef_h2, 4.0);
+                c.set_fill_style_str(ef_fill); c.fill();
+                c.set_stroke_style_str(ef_bd); c.set_line_width(1.0); c.stroke();
+                c.set_fill_style_str(ef_txt); c.set_font("bold 7px monospace"); c.set_text_align("center");
                 let _ = c.fill_text("E-FUSE", ef_x, ef_top + 14.0);
                 c.set_font("6px monospace");
                 let _ = c.fill_text("TPS1641", ef_x, ef_top + 24.0);
-
-                // Status dot
                 c.set_fill_style_str(ef_txt);
-                c.begin_path();
-                c.arc(ef_x, ef_top + ef_h - 12.0, 4.0, 0.0, std::f64::consts::TAU).unwrap();
-                c.fill();
+                c.begin_path(); c.arc(ef_x, ef_top + ef_h2 - 10.0, 4.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
 
                 // ── CONNECTOR ──
                 let ct = ry + 3.0;
-                let ch2 = rh - 6.0;
-                rrect(&c, cn_l, ct, cn_r - cn_l, ch2, 5.0);
-                c.set_fill_style_str("#0a1222");
-                c.fill();
+                let conn_h = rh - 6.0;
+                let conn_w = cn_r - cn_l;
+                rrect(&c, cn_l, ct, conn_w, conn_h, 5.0);
+                c.set_fill_style_str("#0a1222"); c.fill();
                 let bdc = format!("{}55", ac);
-                c.set_stroke_style_str(&bdc);
-                c.set_line_width(1.5);
-                c.stroke();
+                c.set_stroke_style_str(&bdc); c.set_line_width(1.5); c.stroke();
 
-                // Port label
+                // Port name centered at top
                 c.set_fill_style_str(ac);
-                c.set_font("bold 16px Inter, sans-serif");
+                c.set_font("bold 13px Inter, sans-serif");
                 c.set_text_align("center");
-                let cx = (cn_l + cn_r) / 2.0;
-                let _ = c.fill_text(&format!("P{}", ch + 1), cx, ct + 22.0);
+                let _ = c.fill_text(&format!("P{}", ch + 1), cn_l + conn_w / 2.0, ct + 16.0);
 
-                // Pin list
-                c.set_fill_style_str(C_TEXT);
-                c.set_font("8px monospace");
-                c.set_text_align("left");
-                let _ = c.fill_text("Main", cn_l + 8.0, ct + 38.0);
-                let _ = c.fill_text("Aux1", cn_l + 8.0, ct + 50.0);
-                let _ = c.fill_text("Aux2", cn_l + 8.0, ct + 62.0);
-                let psu_lbl = if pi == 0 { "V_ADJ1" } else { "V_ADJ2" };
-                c.set_fill_style_str(if psu_on && ef_on { "#ef4444" } else { C_DIM });
-                let _ = c.fill_text(psu_lbl, cn_l + 8.0, ct + 76.0);
-                c.set_fill_style_str("#475569");
-                let _ = c.fill_text("GND", cn_l + 8.0, ct + ch2 - 8.0);
-
-                // PWR indicator
+                // Pin labels — Y positions MATCHED to output trace centers
                 let pw = psu_on && ef_on;
+                let psu_lbl = if pi == 0 { "V_ADJ1" } else { "V_ADJ2" };
+
+                // These must match the group center Ys used for output traces above
+                let main_cy = (sy[0] + sy[3]) / 2.0;
+                let aux1_cy = (sy[4] + sy[5]) / 2.0;
+                let aux2_cy = (sy[6] + sy[7]) / 2.0;
+                let main_on = (0..4).any(|s| (st >> s) & 1 != 0);
+                let aux1_on = (4..6).any(|s| (st >> s) & 1 != 0);
+                let aux2_on = (6..8).any(|s| (st >> s) & 1 != 0);
+
+                // Pin Y positions aligned to traces
+                let pin_ys = [
+                    ct + 14.0,      // Pin 1: V_ADJ (at top of connector)
+                    main_cy,        // Pin 2: Main — aligned with Group A trace
+                    aux1_cy,        // Pin 3: Aux1 — aligned with Group B trace
+                    aux2_cy,        // Pin 4: Aux2 — aligned with Group C trace
+                    ct + conn_h - 8.0, // Pin 5: GND (at bottom)
+                ];
+
+                c.set_font("bold 10px monospace");
+                c.set_text_align("left");
+                let pin_x = cn_l + 8.0;
+                let num_x = cn_r - 14.0;
+
+                // Pin 1: V_ADJ (power) — smaller font, pushed back
+                c.set_font("8px monospace"); c.set_text_align("left");
+                c.set_fill_style_str(if pw { "#ef444499" } else { "#1e2d40" });
+                let _ = c.fill_text(psu_lbl, pin_x, pin_ys[0] + 3.0);
+                c.set_text_align("right"); c.set_fill_style_str("#253040"); c.set_font("7px monospace");
+                let _ = c.fill_text("1", num_x, pin_ys[0] + 3.0);
+                // PWR dot
                 c.set_fill_style_str(if pw { "#ef4444" } else { "#1e293b" });
-                c.begin_path();
-                c.arc(cn_r - 14.0, ct + 14.0, 5.0, 0.0, std::f64::consts::TAU).unwrap();
-                c.fill();
+                c.begin_path(); c.arc(num_x - 10.0, pin_ys[0], 4.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
                 if pw {
                     c.set_fill_style_str("rgba(239,68,68,0.12)");
-                    c.begin_path();
-                    c.arc(cn_r - 14.0, ct + 14.0, 10.0, 0.0, std::f64::consts::TAU).unwrap();
-                    c.fill();
+                    c.begin_path(); c.arc(num_x - 10.0, pin_ys[0], 8.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
                 }
-            }
 
-            // Legend
-            let ly = h - 10.0;
-            c.set_font("9px monospace");
-            c.set_text_align("left");
-            let leg: [(&str, &str); 5] = [
-                (C_GPIO, "GPIO (direct)"), (C_GPIO_R, "GPIO (2kΩ)"),
-                (C_ADC, "ADC Channel"), (C_EXT, "External"), ("#ef4444", "Power"),
-            ];
-            let mut lx = 10.0;
-            for (col, txt) in &leg {
-                c.set_fill_style_str(col);
-                c.begin_path(); c.arc(lx, ly, 3.5, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
-                let _ = c.fill_text(txt, lx + 7.0, ly + 3.0);
-                lx += 105.0;
+                // Pin 2: Main (OUT1)
+                c.set_font("bold 10px monospace"); c.set_text_align("left");
+                c.set_fill_style_str(if main_on { ac } else { "#253040" });
+                let _ = c.fill_text("Main", pin_x, pin_ys[1] + 4.0);
+                c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
+                let _ = c.fill_text("2", num_x, pin_ys[1] + 3.0);
+
+                // Pin 3: Aux1 (OUT2)
+                c.set_font("bold 10px monospace"); c.set_text_align("left");
+                c.set_fill_style_str(if aux1_on { ac } else { "#253040" });
+                let _ = c.fill_text("Aux1", pin_x, pin_ys[2] + 4.0);
+                c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
+                let _ = c.fill_text("3", num_x, pin_ys[2] + 3.0);
+
+                // Pin 4: Aux2 (OUT3)
+                c.set_font("bold 10px monospace"); c.set_text_align("left");
+                c.set_fill_style_str(if aux2_on { ac } else { "#253040" });
+                let _ = c.fill_text("Aux2", pin_x, pin_ys[3] + 4.0);
+                c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
+                let _ = c.fill_text("4", num_x, pin_ys[3] + 3.0);
+
+                // Pin 5: GND — smaller font, pushed back
+                c.set_font("8px monospace"); c.set_text_align("left");
+                c.set_fill_style_str("#1e2d40");
+                let _ = c.fill_text("GND", pin_x, pin_ys[4] + 3.0);
+                c.set_text_align("right"); c.set_fill_style_str("#253040"); c.set_font("7px monospace");
+                let _ = c.fill_text("5", num_x, pin_ys[4] + 3.0);
             }
         }
     });
@@ -344,16 +393,14 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let cv: HtmlCanvasElement = cv.clone().into();
         let r = cv.get_bounding_client_rect();
         let (x, y, w, h) = (e.client_x() as f64 - r.left(), e.client_y() as f64 - r.top(), r.width(), r.height());
-        let rt2 = 52.0;
-        let rh2 = (h - rt2 - 22.0) / 4.0;
-        let ml = w * 0.17;
-        let mr = w * 0.50;
+        let rt2 = 52.0; let rh2 = (h - rt2) / 4.0;
+        let ml = w * 0.18; let mr = w * 0.50;
         if y > rt2 && x >= ml && x <= mr {
             let ch = ((y - rt2) / rh2).floor() as usize;
             if ch < 4 {
                 let ry = rt2 + ch as f64 * rh2;
-                let lh = (rh2 - 14.0) / 8.5;
-                let sw = ((y - ry - 7.0) / lh).floor().clamp(0.0, 7.0) as usize;
+                let lh = (rh2 - 12.0) / 8.5;
+                let sw = ((y - ry - 6.0) / lh).clamp(0.0, 7.0) as usize;
                 tog(ch, sw);
             }
         }
@@ -369,6 +416,9 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     }).collect::<Vec<_>>()}
                 </div>
                 <div class="sp-psu-controls">
+                    <button class="sp-oe-btn" class:sp-oe-on=move || oe.get()
+                        on:click=move |_| set_oe.update(|v| *v = !*v)
+                    >"LShift OE"</button>
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[0]
                         on:click=move |_| set_psu.update(|v| v[0] = !v[0])>"V_ADJ1"</button>
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[1]
@@ -378,6 +428,14 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             on:click=move |_| set_ef.update(|v| v[i] = !v[i])>{format!("EF{}", i+1)}</button>
                     }).collect::<Vec<_>>()}
                 </div>
+            </div>
+            // Legend inside toolbar area
+            <div class="sp-legend">
+                <span class="sp-leg-item" style="color: #22c55e">"● GPIO (direct)"</span>
+                <span class="sp-leg-item" style="color: #eab308">"● GPIO (2kΩ)"</span>
+                <span class="sp-leg-item" style="color: #3b82f6">"● ADC Channel"</span>
+                <span class="sp-leg-item" style="color: #f97316">"● External"</span>
+                <span class="sp-leg-item" style="color: #ef4444">"● Power"</span>
             </div>
             <div class="sp-canvas-wrap">
                 <canvas node_ref=cr class="sp-canvas" on:click=on_click></canvas>
@@ -401,19 +459,39 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     }
 }
 
+// Draw a small resistor zigzag symbol
+fn draw_resistor(c: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, color: &str) {
+    c.set_stroke_style_str(color);
+    c.set_line_width(1.0);
+    c.begin_path();
+    let steps = 4;
+    let step_w = w / steps as f64;
+    let amp = 3.0;
+    c.move_to(x, y);
+    for i in 0..steps {
+        let sx = x + i as f64 * step_w;
+        c.line_to(sx + step_w * 0.25, y - amp);
+        c.line_to(sx + step_w * 0.75, y + amp);
+        c.line_to(sx + step_w, y);
+    }
+    c.stroke();
+    // "2k" label
+    c.set_fill_style_str(color);
+    c.set_font("5px monospace");
+    c.set_text_align("center");
+    let _ = c.fill_text("2k", x + w / 2.0, y - 5.0);
+}
+
 fn psu_bar(c: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, name: &str, feeds: &str, on: bool) {
     rrect(c, x, y, w, h, 5.0);
     c.set_fill_style_str(if on { "#180808" } else { "#0a1020" });
     c.fill();
     c.set_stroke_style_str(if on { "#5b1818" } else { "#182030" });
-    c.set_line_width(1.0);
-    c.stroke();
+    c.set_line_width(1.0); c.stroke();
     c.set_fill_style_str(if on { "#ef4444" } else { "#475569" });
-    c.set_font("bold 11px Inter, sans-serif");
-    c.set_text_align("left");
+    c.set_font("bold 11px Inter, sans-serif"); c.set_text_align("left");
     let _ = c.fill_text(name, x + 10.0, y + 16.0);
-    c.set_fill_style_str("#3b4a60");
-    c.set_font("8px monospace");
+    c.set_fill_style_str("#3b4a60"); c.set_font("8px monospace");
     let _ = c.fill_text(&format!("LTM8063 · DS4424 · 3–15V  {}", feeds), x + 10.0, y + 30.0);
     c.set_fill_style_str(if on { "#10b981" } else { "#1e293b" });
     c.begin_path(); c.arc(x + w - 20.0, y + h / 2.0, 4.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
