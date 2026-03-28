@@ -60,8 +60,22 @@ pub fn run() {
             // Waveform Generator
             commands::start_wavegen,
             commands::stop_wavegen,
+            // DS4424 IDAC
+            commands::idac_get_status,
+            commands::idac_set_code,
+            commands::idac_set_voltage,
+            // PCA9535 GPIO Expander
+            commands::pca_get_status,
+            commands::pca_set_control,
+            // HUSB238 USB PD
+            commands::usbpd_get_status,
+            commands::usbpd_select_pdo,
             // File Dialog
             commands::pick_save_file,
+            // CSV Recording
+            commands::start_csv_recording,
+            commands::stop_csv_recording,
+            commands::append_csv_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

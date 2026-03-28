@@ -804,6 +804,191 @@ Graceful exit from binary mode. Device returns to CLI.
 **GPIO Mode codes:** 0=HIGH_IMP, 1=OUTPUT, 2=INPUT, 3=DIN_OUT, 4=DO_EXT
 **Diagnostic Source codes:** See FirmwareStructure.md Section 12.
 
+### 6.11 DS4424 IDAC (I2C, addr 0x20)
+
+Controls output voltage of LTM8063/LTM8078 regulators via current injection into
+feedback networks. 3 active channels: IDAC0=Level Shifter V, IDAC1=V_ADJ1, IDAC2=V_ADJ2.
+
+#### 0xA0 IDAC_GET_STATUS
+Get all IDAC channel states.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       present         bool    DS4424 found on I2C
+Per channel (4x):
++0      ch              u8      Channel index
++1      dac_code        u8      Current DAC code (signed as i8: -127..+127)
++2      target_v        f32     Target output voltage
++6      actual_v        f32     Last measured voltage (from ADC calibration)
++10     midpoint_v      f32     Midpoint voltage (DAC=0)
++14     v_min           f32     Minimum allowed voltage
++18     v_max           f32     Maximum allowed voltage
++22     step_mv         f32     Step size (mV per code)
++26     calibrated      bool    Has valid calibration data
+```
+
+#### 0xA1 IDAC_SET_CODE
+Set raw DAC code for a channel.
+
+**Request payload:**
+```
+0       ch              u8      Channel (0-3)
+1       code            u8      DAC code (signed i8: -127 sink/raise to +127 source/lower)
+```
+
+**Response:** ch(u8) + code(u8) + computed_voltage(f32)
+
+#### 0xA2 IDAC_SET_VOLTAGE
+Set target output voltage. Driver computes optimal DAC code.
+
+**Request payload:**
+```
+0       ch              u8      Channel (0-2, ch3 not connected)
+1       voltage         f32     Target voltage (clamped to channel range)
+```
+
+**Response:** ch(u8) + code(u8) + target_v(f32)
+
+#### 0xA3 IDAC_CALIBRATE
+Run auto-calibration sweep using ADC feedback.
+
+**Request payload:**
+```
+0       ch              u8      Channel (0-2)
+1       step_size       u8      DAC code step between measurements
+2       settle_ms       u16     Settling time per step (ms)
+```
+
+**Response:** Currently returns ERR_INVALID_STATE (needs ADC callback wiring)
+
+### 6.12 PCA9535 GPIO Expander (I2C, addr 0x23)
+
+16-bit I/O expander controlling power supply enables, E-Fuse enables, and reading
+power-good/fault status signals.
+
+#### 0xB0 PCA_GET_STATUS
+Get all PCA9535 port states.
+
+**Response payload:**
+```
+0       present         bool    PCA9535 found on I2C
+1       input0          u8      Port 0 input register
+2       input1          u8      Port 1 input register
+3       output0         u8      Port 0 output register
+4       output1         u8      Port 1 output register
+5       logic_pg        bool    Main logic power good
+6       vadj1_pg        bool    V_ADJ1 power good
+7       vadj2_pg        bool    V_ADJ2 power good
+8-11    efuse_flt[4]    bool    E-Fuse fault flags (active = fault)
+12      vadj1_en        bool    V_ADJ1 enable state
+13      vadj2_en        bool    V_ADJ2 enable state
+14      en_15v          bool    ±15V analog supply enable
+15      en_mux          bool    MUX power enable
+16      en_usb_hub      bool    USB hub enable
+17-20   efuse_en[4]     bool    E-Fuse enable states
+```
+
+#### 0xB1 PCA_SET_CONTROL
+Set a named control output.
+
+**Request payload:**
+```
+0       control         u8      Control ID (see PcaControl enum)
+1       on              bool    true=enable, false=disable
+```
+
+**PcaControl enum:**
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0 | VADJ1_EN | V_ADJ1 regulator enable |
+| 1 | VADJ2_EN | V_ADJ2 regulator enable |
+| 2 | EN_15V_A | ±15V analog supply enable |
+| 3 | EN_MUX | MUX switch power enable |
+| 4 | EN_USB_HUB | USB hub enable |
+| 5 | EFUSE1_EN | E-Fuse 1 enable (→ P1) |
+| 6 | EFUSE2_EN | E-Fuse 2 enable (→ P2) |
+| 7 | EFUSE3_EN | E-Fuse 3 enable (→ P3) |
+| 8 | EFUSE4_EN | E-Fuse 4 enable (→ P4) |
+
+#### 0xB2 PCA_SET_PORT
+Set raw output port value (only output-configured bits are applied).
+
+**Request payload:**
+```
+0       port            u8      Port number (0 or 1)
+1       value           u8      Output value
+```
+
+### 6.13 HUSB238 USB PD (I2C, addr 0x08)
+
+USB Power Delivery sink controller. Read-only status of PD contract and source capabilities.
+
+#### 0xC0 USBPD_GET_STATUS
+Get USB PD contract status and source PDOs.
+
+**Response payload:**
+```
+0       present         bool    HUSB238 found on I2C
+1       attached        bool    USB Type-C attached
+2       cc_direction    bool    false=CC1, true=CC2
+3       pd_response     u8      PD negotiation response code
+4       voltage_code    u8      Negotiated voltage enum
+5       current_code    u8      Negotiated current enum
+6       voltage_v       f32     Negotiated voltage (V)
+10      current_a       f32     Negotiated current (A)
+14      power_w         f32     Computed power (W)
+Per PDO (6x: 5V, 9V, 12V, 15V, 18V, 20V):
++0      detected        bool    PDO available from source
++1      max_current     u8      Max current code
+18+12   selected_pdo    u8      Currently selected PDO register
+```
+
+#### 0xC1 USBPD_SELECT_PDO
+Select a voltage PDO for next negotiation.
+
+**Request payload:**
+```
+0       voltage         u8      Voltage enum (1=5V, 2=9V, 3=12V, 4=15V, 5=18V, 6=20V)
+```
+
+#### 0xC2 USBPD_GO
+Trigger PD re-negotiation or other command.
+
+**Request payload:**
+```
+0       command         u8      0x01=SELECT_PDO, 0x04=GET_SRC_CAP, 0x10=HARD_RESET
+```
+
+### 6.14 Waveform Generator
+
+#### 0xD0 START_WAVEGEN
+Start waveform generation on a channel. Automatically sets channel function.
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       waveform        u8      0=sine, 1=square, 2=triangle, 3=sawtooth
+2       freq_hz         f32     Frequency in Hz (0.01-100)
+6       amplitude       f32     Amplitude (V or mA depending on mode)
+10      offset          f32     DC offset
+14      mode            u8      0=voltage, 1=current
+```
+
+**Response:** echo of payload
+
+#### 0xD1 STOP_WAVEGEN
+Stop waveform generation. Returns channel to HIGH_IMP.
+
+**Request payload:** (empty)
+**Response:** (empty)
+
+### 6.15 MUX Switch Matrix (0x90-0x92)
+
+See existing documentation for 0x90 MUX_SET_ALL, 0x91 MUX_GET_ALL, 0x92 MUX_SET_SWITCH.
+
 ---
 
 ## 7. Streaming Protocol
@@ -1115,6 +1300,7 @@ Host                                    Device
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-03-27 | Initial specification |
+| 1.1 | 2026-03-28 | Added I2C device commands: DS4424 IDAC (0xA0-A3), PCA9535 GPIO expander (0xB0-B2), HUSB238 USB-PD (0xC0-C2), Waveform generator (0xD0-D1) |
 
 ---
 
@@ -1157,6 +1343,21 @@ Host                                    Device
 | 0x70 | DEVICE_RESET | H->D | -- | `POST /api/device/reset` |
 | 0x71 | REGISTER_READ | H->D | addr | CLI `rreg` |
 | 0x72 | REGISTER_WRITE | H->D | addr, val | CLI `wreg` |
+| 0x90 | MUX_SET_ALL | H->D | 4 states | (new) |
+| 0x91 | MUX_GET_ALL | H->D | -- | (new) |
+| 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | (new) |
+| 0xA0 | IDAC_GET_STATUS | H->D | -- | `GET /api/idac` |
+| 0xA1 | IDAC_SET_CODE | H->D | ch, code | `POST /api/idac/code` |
+| 0xA2 | IDAC_SET_VOLTAGE | H->D | ch, voltage | `POST /api/idac/voltage` |
+| 0xA3 | IDAC_CALIBRATE | H->D | ch, step, settle | (new) |
+| 0xB0 | PCA_GET_STATUS | H->D | -- | `GET /api/ioexp` |
+| 0xB1 | PCA_SET_CONTROL | H->D | ctrl, on | `POST /api/ioexp/control` |
+| 0xB2 | PCA_SET_PORT | H->D | port, val | (new) |
+| 0xC0 | USBPD_GET_STATUS | H->D | -- | `GET /api/usbpd` |
+| 0xC1 | USBPD_SELECT_PDO | H->D | voltage | `POST /api/usbpd/select` |
+| 0xC2 | USBPD_GO | H->D | command | (new) |
+| 0xD0 | START_WAVEGEN | H->D | ch,wf,f,a,o,m | (new) |
+| 0xD1 | STOP_WAVEGEN | H->D | -- | (new) |
 | 0xFE | PING | H->D | token | (new) |
 | 0xFF | DISCONNECT | H->D | -- | (new) |
 

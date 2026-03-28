@@ -123,6 +123,10 @@ extern "C" {
 #define BBP_CMD_PCA_SET_CONTROL     0xB1  // Set named control output
 #define BBP_CMD_PCA_SET_PORT        0xB2  // Set raw port value
 
+// Waveform Generator
+#define BBP_CMD_START_WAVEGEN       0xD0  // Start waveform generation
+#define BBP_CMD_STOP_WAVEGEN        0xD1  // Stop waveform generation
+
 // HUSB238 USB PD
 #define BBP_CMD_USBPD_GET_STATUS    0xC0  // Get USB PD contract status
 #define BBP_CMD_USBPD_SELECT_PDO    0xC1  // Select PDO voltage
@@ -230,6 +234,12 @@ uint8_t bbpAdcStreamMask(void);
 
 /** @brief Check if scope streaming is active. */
 bool bbpScopeStreamActive(void);
+
+/** @brief Stop wavegen task if running (called on disconnect/reset). */
+void bbpStopWavegen(void);
+
+/** @brief Check if wavegen is active. */
+bool bbpWavegenActive(void);
 
 #ifdef __cplusplus
 }

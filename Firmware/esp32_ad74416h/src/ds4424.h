@@ -152,6 +152,18 @@ void ds4424_cal_clear(uint8_t ch);
 int ds4424_cal_auto(uint8_t ch, float (*read_adc)(uint8_t ch), uint8_t step_size, uint32_t settle_ms);
 
 /**
+ * @brief Save all channel calibration data to NVS.
+ * @return true if all channels saved successfully
+ */
+bool ds4424_cal_save(void);
+
+/**
+ * @brief Load calibration data for all channels from NVS.
+ * @return true if at least one channel's calibration was loaded
+ */
+bool ds4424_cal_load(void);
+
+/**
  * @brief Get channel configuration (for display/debug).
  */
 const DS4424ChanConfig* ds4424_get_config(uint8_t ch);

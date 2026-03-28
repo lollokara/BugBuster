@@ -75,6 +75,29 @@ struct ScopeBuffer {
     uint32_t         curStart;          // start time of current bucket
 };
 
+// Waveform generator types
+enum WaveformType : uint8_t {
+    WAVE_SINE     = 0,
+    WAVE_SQUARE   = 1,
+    WAVE_TRIANGLE = 2,
+    WAVE_SAWTOOTH = 3,
+};
+
+enum WavegenMode : uint8_t {
+    WAVEGEN_VOLTAGE = 0,
+    WAVEGEN_CURRENT = 1,
+};
+
+struct WavegenState {
+    bool         active;
+    uint8_t      channel;
+    WaveformType waveform;
+    float        freq_hz;
+    float        amplitude;
+    float        offset;
+    WavegenMode  mode;
+};
+
 struct DeviceState {
     bool             spiOk;             // SPI communication healthy
     ChannelState     channels[4];
@@ -88,6 +111,7 @@ struct DeviceState {
     GpioState        gpio[6];           // 6 GPIOs (A-F)
     uint8_t          muxState[4];       // ADGS2414D switch states (4 devices)
     ScopeBuffer      scope;             // ring buffer for batched scope data
+    WavegenState     wavegen;           // waveform generator state
 
     // I2C device states (updated by i2c poll task)
     bool             i2cOk;             // I2C bus healthy

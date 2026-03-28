@@ -9,6 +9,11 @@
 #include "pca9535.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // -----------------------------------------------------------------------------
 // Global state definitions
@@ -611,6 +616,146 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 }
 
 // -----------------------------------------------------------------------------
+// Task: Waveform Generator (Core 0, Priority 3)
+// Generates waveform samples and writes them to the DAC at the correct rate.
+// The task is created once at init and sleeps via a notification when idle.
+// -----------------------------------------------------------------------------
+
+TaskHandle_t s_wavegenTask = nullptr;
+
+// Precomputed sine lookup table (256 entries, 0..1 range)
+#define WAVEGEN_SINE_LUT_SIZE 256
+static float s_sineLut[WAVEGEN_SINE_LUT_SIZE];
+
+static void wavegenInitLut(void)
+{
+    for (int i = 0; i < WAVEGEN_SINE_LUT_SIZE; i++) {
+        s_sineLut[i] = (sinf(2.0f * M_PI * (float)i / (float)WAVEGEN_SINE_LUT_SIZE) + 1.0f) * 0.5f;
+    }
+}
+
+// Generate a normalised waveform sample (0.0 .. 1.0) for a given phase (0.0 .. 1.0)
+static float wavegenSample(WaveformType type, float phase)
+{
+    switch (type) {
+        case WAVE_SINE: {
+            // Interpolate sine LUT
+            float idx = phase * (float)WAVEGEN_SINE_LUT_SIZE;
+            int i0 = (int)idx % WAVEGEN_SINE_LUT_SIZE;
+            int i1 = (i0 + 1) % WAVEGEN_SINE_LUT_SIZE;
+            float frac = idx - (float)(int)idx;
+            return s_sineLut[i0] + frac * (s_sineLut[i1] - s_sineLut[i0]);
+        }
+        case WAVE_SQUARE:
+            return (phase < 0.5f) ? 1.0f : 0.0f;
+        case WAVE_TRIANGLE:
+            return (phase < 0.5f) ? (phase * 2.0f) : (2.0f - phase * 2.0f);
+        case WAVE_SAWTOOTH:
+            return phase;
+        default:
+            return 0.5f;
+    }
+}
+
+static void taskWavegen(void* /*pvParameters*/)
+{
+    // Number of DAC updates per waveform cycle (samples per period).
+    // Higher = smoother but limited by SPI throughput.
+    // At ~500us per SPI transaction, max practical update rate is ~2000 SPS.
+    // We target 100 samples/period for smooth waveforms, clamped by max rate.
+    static const uint32_t MAX_UPDATE_RATE_HZ = 2000;
+    static const uint32_t MIN_SAMPLES_PER_PERIOD = 10;
+    static const uint32_t IDEAL_SAMPLES_PER_PERIOD = 100;
+
+    for (;;) {
+        // Sleep until notified that wavegen should start
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        // Read wavegen params from device state
+        WavegenState wg;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            wg = g_deviceState.wavegen;
+            xSemaphoreGive(g_stateMutex);
+        } else {
+            continue;
+        }
+
+        if (!wg.active || !s_device) continue;
+
+        // Compute timing
+        float freq = wg.freq_hz;
+        if (freq < 0.1f) freq = 0.1f;
+        if (freq > 100.0f) freq = 100.0f;
+
+        uint32_t samplesPerPeriod = (uint32_t)(MAX_UPDATE_RATE_HZ / freq);
+        if (samplesPerPeriod > IDEAL_SAMPLES_PER_PERIOD)
+            samplesPerPeriod = IDEAL_SAMPLES_PER_PERIOD;
+        if (samplesPerPeriod < MIN_SAMPLES_PER_PERIOD)
+            samplesPerPeriod = MIN_SAMPLES_PER_PERIOD;
+
+        // Interval between samples in microseconds
+        uint32_t periodUs = (uint32_t)(1000000.0f / freq);
+        uint32_t sampleIntervalUs = periodUs / samplesPerPeriod;
+        if (sampleIntervalUs < 500) sampleIntervalUs = 500;  // Min ~500us per SPI write
+
+        ESP_LOGI("wavegen", "Start: ch=%d wf=%d freq=%.1fHz amp=%.2f off=%.2f mode=%d spp=%lu intv=%luus",
+                 wg.channel, wg.waveform, wg.freq_hz, wg.amplitude, wg.offset,
+                 wg.mode, (unsigned long)samplesPerPeriod, (unsigned long)sampleIntervalUs);
+
+        // Generation loop
+        uint32_t sampleIndex = 0;
+        int64_t nextSampleTime = esp_timer_get_time();
+
+        while (true) {
+            // Check if still active
+            bool stillActive = false;
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                stillActive = g_deviceState.wavegen.active;
+                xSemaphoreGive(g_stateMutex);
+            }
+            if (!stillActive) break;
+
+            // Compute phase and sample value
+            float phase = (float)(sampleIndex % samplesPerPeriod) / (float)samplesPerPeriod;
+            float normalised = wavegenSample(wg.waveform, phase);
+
+            // Scale: output = offset + amplitude * (normalised - 0.5) * 2
+            // So normalised 0..1 maps to offset-amplitude .. offset+amplitude
+            float value = wg.offset + wg.amplitude * (normalised * 2.0f - 1.0f);
+
+            // Write to DAC
+            if (wg.mode == WAVEGEN_VOLTAGE) {
+                s_device->setDacVoltage(wg.channel, value, value < 0.0f);
+            } else {
+                // Clamp current to non-negative
+                if (value < 0.0f) value = 0.0f;
+                s_device->setDacCurrent(wg.channel, value);
+            }
+
+            sampleIndex++;
+
+            // Precise timing: sleep until next sample time
+            nextSampleTime += sampleIntervalUs;
+            int64_t now = esp_timer_get_time();
+            int64_t sleepUs = nextSampleTime - now;
+            if (sleepUs > 0) {
+                vTaskDelay(pdMS_TO_TICKS(sleepUs / 1000));
+                // Busy-wait the remainder for sub-ms precision
+                while (esp_timer_get_time() < nextSampleTime) {
+                    // Tight loop for precise timing
+                }
+            } else {
+                // Falling behind, reset timing
+                nextSampleTime = esp_timer_get_time();
+                taskYIELD();
+            }
+        }
+
+        ESP_LOGI("wavegen", "Stopped");
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Task: I2C Device Polling (500ms interval)
 // Reads status from PCA9535 and HUSB238 periodically
 // -----------------------------------------------------------------------------
@@ -708,6 +853,18 @@ void initTasks(AD74416H& device)
         nullptr,
         1,
         nullptr,
+        0
+    );
+
+    // Waveform generator task (Core 0, priority 3)
+    wavegenInitLut();
+    xTaskCreatePinnedToCore(
+        taskWavegen,
+        "wavegen",
+        4096,
+        nullptr,
+        3,
+        &s_wavegenTask,
         0
     );
 }

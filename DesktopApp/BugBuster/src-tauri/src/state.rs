@@ -98,6 +98,74 @@ impl DeviceState {
 }
 
 // -----------------------------------------------------------------------------
+// I2C Device States (DS4424 / HUSB238 / PCA9535)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdacChannelState {
+    pub code: i8,               // Current DAC code (-127..+127)
+    pub target_v: f32,          // Target voltage
+    pub midpoint_v: f32,        // Midpoint voltage (DAC=0)
+    pub v_min: f32,             // Min allowed voltage
+    pub v_max: f32,             // Max allowed voltage
+    pub step_mv: f32,           // Step size in mV
+    pub calibrated: bool,       // Has calibration data
+    pub name: String,           // Channel name
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdacState {
+    pub present: bool,
+    pub channels: Vec<IdacChannelState>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsbPdPdo {
+    pub voltage: String,
+    pub detected: bool,
+    pub max_current_a: f32,
+    pub max_power_w: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsbPdState {
+    pub present: bool,
+    pub attached: bool,
+    pub cc: String,
+    pub voltage_v: f32,
+    pub current_a: f32,
+    pub power_w: f32,
+    pub pd_response: u8,
+    pub source_pdos: Vec<UsbPdPdo>,
+    pub selected_pdo: u8,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EfuseState {
+    pub id: u8,
+    pub enabled: bool,
+    pub fault: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IoExpState {
+    pub present: bool,
+    pub input0: u8,
+    pub input1: u8,
+    pub output0: u8,
+    pub output1: u8,
+    pub logic_pg: bool,
+    pub vadj1_pg: bool,
+    pub vadj2_pg: bool,
+    pub vadj1_en: bool,
+    pub vadj2_en: bool,
+    pub en_15v: bool,
+    pub en_mux: bool,
+    pub en_usb_hub: bool,
+    pub efuses: Vec<EfuseState>,
+}
+
+// -----------------------------------------------------------------------------
 // Device info from handshake or GET_DEVICE_INFO
 // -----------------------------------------------------------------------------
 

@@ -1248,6 +1248,99 @@ static int handleStopScopeStream(uint16_t seq, uint8_t cmdId, uint8_t *out)
     return 0;
 }
 
+// --- Waveform Generator commands ---
+
+// Task handle is defined in tasks.cpp; we declare it extern here
+extern TaskHandle_t s_wavegenTask;
+
+static int handleStartWavegen(uint16_t seq, uint8_t cmdId,
+                               const uint8_t *payload, size_t len, uint8_t *out)
+{
+    // Payload: channel(u8) + waveform(u8) + freq_hz(f32) + amplitude(f32) + offset(f32) + mode(u8) = 15 bytes
+    if (len < 15) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    size_t rpos = 0;
+    uint8_t channel = get_u8(payload, &rpos);
+    uint8_t waveform = get_u8(payload, &rpos);
+    float freq_hz = get_f32(payload, &rpos);
+    float amplitude = get_f32(payload, &rpos);
+    float offset = get_f32(payload, &rpos);
+    uint8_t mode = get_u8(payload, &rpos);
+
+    if (channel >= 4) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+    if (waveform > 3) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (mode > 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (freq_hz < 0.1f || freq_hz > 100.0f) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    // Set channel function to VOUT or IOUT first
+    {
+        Command cmd = {};
+        cmd.type = CMD_SET_CHANNEL_FUNC;
+        cmd.channel = channel;
+        cmd.func = (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT;
+        sendCommand(cmd);
+    }
+
+    // Store wavegen state and notify the task
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active    = true;
+        g_deviceState.wavegen.channel   = channel;
+        g_deviceState.wavegen.waveform  = (WaveformType)waveform;
+        g_deviceState.wavegen.freq_hz   = freq_hz;
+        g_deviceState.wavegen.amplitude = amplitude;
+        g_deviceState.wavegen.offset    = offset;
+        g_deviceState.wavegen.mode      = (WavegenMode)mode;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Wake up the wavegen task
+    if (s_wavegenTask) {
+        xTaskNotifyGive(s_wavegenTask);
+    }
+
+    ESP_LOGI(TAG, "Wavegen start: ch=%d wf=%d freq=%.1f amp=%.2f off=%.2f mode=%d",
+             channel, waveform, freq_hz, amplitude, offset, mode);
+
+    // Echo params as response
+    size_t pos = 0;
+    put_u8(out, &pos, channel);
+    put_u8(out, &pos, waveform);
+    put_f32(out, &pos, freq_hz);
+    put_f32(out, &pos, amplitude);
+    put_f32(out, &pos, offset);
+    put_u8(out, &pos, mode);
+    return (int)pos;
+}
+
+static int handleStopWavegen(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active = false;
+        xSemaphoreGive(g_stateMutex);
+    }
+    ESP_LOGI(TAG, "Wavegen stopped");
+    return 0;
+}
+
+// Public: stop wavegen (called on disconnect/reset)
+void bbpStopWavegen(void)
+{
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active = false;
+        xSemaphoreGive(g_stateMutex);
+    }
+}
+
+bool bbpWavegenActive(void)
+{
+    bool active = false;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        active = g_deviceState.wavegen.active;
+        xSemaphoreGive(g_stateMutex);
+    }
+    return active;
+}
+
 // -----------------------------------------------------------------------------
 // Message dispatcher
 // -----------------------------------------------------------------------------
@@ -1391,6 +1484,14 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_STOP_SCOPE_STREAM:
             rspLen = handleStopScopeStream(seq, cmdId, rspBuf);
+            break;
+
+        // --- Waveform Generator ---
+        case BBP_CMD_START_WAVEGEN:
+            rspLen = handleStartWavegen(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_STOP_WAVEGEN:
+            rspLen = handleStopWavegen(seq, cmdId, rspBuf);
             break;
 
         // --- System ---
@@ -1637,6 +1738,7 @@ void bbpExitBinaryMode(void)
 {
     s_adcStreamMask = 0;
     s_scopeStreamActive = false;
+    bbpStopWavegen();  // Stop wavegen on disconnect
     s_active = false;
     s_rxLen = 0;
     s_magic_idx = 0;

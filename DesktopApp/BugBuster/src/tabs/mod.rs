@@ -11,3 +11,4 @@ pub mod uart;
 pub mod scope;
 pub mod wavegen;
 pub mod signal_path;
+pub mod voltages;

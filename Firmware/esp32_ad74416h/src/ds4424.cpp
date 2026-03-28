@@ -23,6 +23,8 @@
 #include "i2c_bus.h"
 #include "config.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 #include <string.h>
 #include <math.h>
@@ -31,6 +33,10 @@ static const char *TAG = "ds4424";
 
 // V_RFS constant from DS4424 datasheet
 #define DS4424_VRFS  0.976f
+
+// NVS namespace for calibration persistence
+#define DS4424_NVS_NAMESPACE  "ds4424_cal"
+#define DS4424_CAL_CHANNELS   3  // Only channels 0-2 have calibration
 
 static DS4424State s_state = {};
 
@@ -187,6 +193,9 @@ bool ds4424_init(void)
                  s_state.config[ch].v_min, s_state.config[ch].v_max,
                  ds4424_step_mv(ch));
     }
+
+    // Load saved calibration data from NVS
+    ds4424_cal_load();
 
     return true;
 }
@@ -436,6 +445,76 @@ int ds4424_cal_auto(uint8_t ch, float (*read_adc)(uint8_t ch), uint8_t step_size
     ESP_LOGI(TAG, "IDAC%d: Calibration complete, %d points", ch, point_count);
 
     return point_count;
+}
+
+bool ds4424_cal_save(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(DS4424_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    bool all_ok = true;
+    for (int ch = 0; ch < DS4424_CAL_CHANNELS; ch++) {
+        char key[12];
+        snprintf(key, sizeof(key), "cal_ch%d", ch);
+
+        const DS4424CalData *cal = &s_state.cal[ch];
+        err = nvs_set_blob(h, key, cal, sizeof(DS4424CalData));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "NVS write ch%d failed: %s", ch, esp_err_to_name(err));
+            all_ok = false;
+        }
+    }
+
+    err = nvs_commit(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS commit failed: %s", esp_err_to_name(err));
+        all_ok = false;
+    }
+
+    nvs_close(h);
+
+    if (all_ok) {
+        ESP_LOGI(TAG, "Calibration data saved to NVS");
+    }
+    return all_ok;
+}
+
+bool ds4424_cal_load(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(DS4424_NVS_NAMESPACE, NVS_READONLY, &h);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "NVS open for read failed: %s (no saved calibration)", esp_err_to_name(err));
+        return false;
+    }
+
+    bool any_loaded = false;
+    for (int ch = 0; ch < DS4424_CAL_CHANNELS; ch++) {
+        char key[12];
+        snprintf(key, sizeof(key), "cal_ch%d", ch);
+
+        size_t len = sizeof(DS4424CalData);
+        err = nvs_get_blob(h, key, &s_state.cal[ch], &len);
+        if (err == ESP_OK && len == sizeof(DS4424CalData)) {
+            if (s_state.cal[ch].valid && s_state.cal[ch].count >= 2) {
+                ESP_LOGI(TAG, "IDAC%d: Loaded %d calibration points from NVS",
+                         ch, s_state.cal[ch].count);
+                any_loaded = true;
+            } else {
+                // Data was read but is not valid/usable, clear it
+                memset(&s_state.cal[ch], 0, sizeof(DS4424CalData));
+            }
+        } else {
+            ESP_LOGD(TAG, "IDAC%d: No saved calibration", ch);
+        }
+    }
+
+    nvs_close(h);
+    return any_loaded;
 }
 
 const DS4424ChanConfig* ds4424_get_config(uint8_t ch)

@@ -1,9 +1,44 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
 use crate::tauri_bridge::*;
+
+// PCA9535 control IDs (must match firmware PcaControl enum)
+const PCA_VADJ1_EN: u8 = 0;
+const PCA_VADJ2_EN: u8 = 1;
+// const PCA_EN_15V_A: u8 = 2;
+// const PCA_EN_MUX: u8 = 3;
+// const PCA_EN_USB_HUB: u8 = 4;
+const PCA_EFUSE1_EN: u8 = 5;
+const PCA_EFUSE2_EN: u8 = 6;
+const PCA_EFUSE3_EN: u8 = 7;
+const PCA_EFUSE4_EN: u8 = 8;
+
+const PCA_EFUSE_IDS: [u8; 4] = [PCA_EFUSE1_EN, PCA_EFUSE2_EN, PCA_EFUSE3_EN, PCA_EFUSE4_EN];
+
+#[derive(Serialize)]
+struct PcaSetControlArgs { control: u8, on: bool }
+
+fn send_pca_control(control: u8, on: bool) {
+    let args = serde_wasm_bindgen::to_value(&PcaSetControlArgs { control, on }).unwrap();
+    invoke_void("pca_set_control", args);
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct EfuseState {
+    pub enabled: bool,
+    pub fault: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct IoExpState {
+    pub present: bool,
+    pub vadj1_en: bool,
+    pub vadj2_en: bool,
+    pub efuses: Vec<EfuseState>,
+}
 
 const PRESETS: &[(&str, [u8; 4])] = &[
     ("All Open", [0x00; 4]), ("GPIO Direct", [0x51; 4]),
@@ -50,13 +85,32 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (mux, set_mux) = signal([0u8; 4]);
     let (psu, set_psu) = signal([false; 2]);
     let (ef, set_ef) = signal([false; 4]);
-    let (oe, set_oe) = signal(false); // Level shifter OE
+    let (oe, set_oe) = signal(false); // Level shifter OE (UI-only, ESP32 GPIO14)
     let cr = NodeRef::<leptos::html::Canvas>::new();
 
+    // Sync MUX state from device-state event
     Effect::new(move || {
         let d = state.get();
         if d.mux_states.len() >= 4 {
             let mut a = [0u8; 4]; a.copy_from_slice(&d.mux_states[..4]); set_mux.set(a);
+        }
+    });
+
+    // Poll PCA9535 status to sync PSU and E-Fuse UI with hardware
+    spawn_local(async move {
+        loop {
+            slp(500).await;
+            let result = invoke("pca_get_status", wasm_bindgen::JsValue::NULL).await;
+            if let Ok(st) = serde_wasm_bindgen::from_value::<IoExpState>(result) {
+                if st.present {
+                    set_psu.set([st.vadj1_en, st.vadj2_en]);
+                    let mut ef_arr = [false; 4];
+                    for (i, e) in st.efuses.iter().enumerate().take(4) {
+                        ef_arr[i] = e.enabled;
+                    }
+                    set_ef.set(ef_arr);
+                }
+            }
         }
     });
 
@@ -420,12 +474,24 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         on:click=move |_| set_oe.update(|v| *v = !*v)
                     >"LShift OE"</button>
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[0]
-                        on:click=move |_| set_psu.update(|v| v[0] = !v[0])>"V_ADJ1"</button>
+                        on:click=move |_| {
+                            let new_val = !psu.get_untracked()[0];
+                            send_pca_control(PCA_VADJ1_EN, new_val);
+                            set_psu.update(|v| v[0] = new_val);
+                        }>"V_ADJ1"</button>
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[1]
-                        on:click=move |_| set_psu.update(|v| v[1] = !v[1])>"V_ADJ2"</button>
+                        on:click=move |_| {
+                            let new_val = !psu.get_untracked()[1];
+                            send_pca_control(PCA_VADJ2_EN, new_val);
+                            set_psu.update(|v| v[1] = new_val);
+                        }>"V_ADJ2"</button>
                     {(0..4).map(|i| view! {
                         <button class="sp-ef-btn" class:sp-ef-on=move || ef.get()[i]
-                            on:click=move |_| set_ef.update(|v| v[i] = !v[i])>{format!("EF{}", i+1)}</button>
+                            on:click=move |_| {
+                                let new_val = !ef.get_untracked()[i];
+                                send_pca_control(PCA_EFUSE_IDS[i], new_val);
+                                set_ef.update(|v| v[i] = new_val);
+                            }>{format!("EF{}", i+1)}</button>
                     }).collect::<Vec<_>>()}
                 </div>
             </div>
