@@ -217,8 +217,8 @@ impl Transport for UsbTransport {
             }
         }
 
-        // Wait for response with timeout
-        let response = tokio::time::timeout(Duration::from_millis(500), rx).await;
+        // Wait for response with timeout (2s for MUX commands that need SPI bus yield)
+        let response = tokio::time::timeout(Duration::from_millis(2000), rx).await;
 
         match response {
             Ok(Ok(msg)) => {

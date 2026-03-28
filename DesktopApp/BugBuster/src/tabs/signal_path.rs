@@ -88,10 +88,11 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (oe, set_oe) = signal(false); // Level shifter OE (UI-only, ESP32 GPIO14)
     let cr = NodeRef::<leptos::html::Canvas>::new();
 
-    // Sync MUX state from device-state event
+    // Sync MUX state from device-state event (only if non-zero, since GET_STATUS
+    // doesn't include mux states — they stay [0,0,0,0] in the poll response)
     Effect::new(move || {
         let d = state.get();
-        if d.mux_states.len() >= 4 {
+        if d.mux_states.len() >= 4 && d.mux_states.iter().any(|&s| s != 0) {
             let mut a = [0u8; 4]; a.copy_from_slice(&d.mux_states[..4]); set_mux.set(a);
         }
     });
