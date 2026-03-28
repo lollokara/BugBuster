@@ -12,6 +12,10 @@
 #include "serial_io.h"
 #include "wifi_manager.h"
 #include "bbp.h"
+#include "i2c_bus.h"
+#include "ds4424.h"
+#include "husb238.h"
+#include "pca9535.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -50,6 +54,10 @@ static void cmdSilicon();
 static void cmdRegs();
 static void cmdGpio(const char* args);
 static void cmdWifi(const char* args);
+static void cmdIdac(const char* args);
+static void cmdUsbpd(const char* args);
+static void cmdPca(const char* args);
+static void cmdI2cScan();
 static void cmdHelp();
 
 // ---------------------------------------------------------------------------
@@ -248,6 +256,14 @@ static void handleCommand(const char* line)
         cmdGpio(args);
     } else if (strcmp(cmd, "wifi") == 0) {
         cmdWifi(args);
+    } else if (strcmp(cmd, "idac") == 0) {
+        cmdIdac(args);
+    } else if (strcmp(cmd, "usbpd") == 0 || strcmp(cmd, "pd") == 0) {
+        cmdUsbpd(args);
+    } else if (strcmp(cmd, "pca") == 0 || strcmp(cmd, "ioexp") == 0) {
+        cmdPca(args);
+    } else if (strcmp(cmd, "i2cscan") == 0) {
+        cmdI2cScan();
     } else if (strcmp(cmd, "menu") == 0 || strcmp(cmd, "m") == 0) {
         printMainMenu();
     } else {
@@ -323,6 +339,17 @@ static void cmdHelp()
         "--- Faults ---\r\n"
         "  faults, f           Read all fault/alert registers\r\n"
         "  clear               Clear all faults\r\n"
+        "\r\n"
+        "--- I2C Devices ---\r\n"
+        "  i2cscan             Scan I2C bus for devices\r\n"
+        "  idac                Show DS4424 IDAC status (all channels)\r\n"
+        "  idac <ch> code <n>  Set IDAC raw code (-127..127)\r\n"
+        "  idac <ch> v <V>     Set IDAC target voltage\r\n"
+        "  usbpd               Show USB PD contract status\r\n"
+        "  usbpd caps          Request source capabilities\r\n"
+        "  usbpd select <V>    Select PDO (5/9/12/15/18/20V)\r\n"
+        "  pca                 Show IO expander status\r\n"
+        "  pca <name> <0|1>    Set control (vadj1/vadj2/15v/mux/usb/efuse1-4)\r\n"
     );
 }
 
@@ -1293,6 +1320,276 @@ static void cmdGpio(const char* args)
         serial_println("       gpio <pin> set <0|1>");
         serial_println("       gpio <pin> read");
     }
+}
+
+// ---------------------------------------------------------------------------
+// DS4424 IDAC commands
+// ---------------------------------------------------------------------------
+
+static void cmdIdac(const char* args)
+{
+    while (*args == ' ') args++;
+
+    // No args: show all channels
+    if (*args == '\0') {
+        serial_println("\r\n--- DS4424 IDAC Status ---");
+        if (!ds4424_present()) {
+            serial_println("  DS4424 NOT DETECTED");
+            return;
+        }
+        const DS4424State *st = ds4424_get_state();
+        serial_println(" Ch | Code | Target V  | Midpoint | Step mV | Range       | Cal");
+        serial_println("----|------|-----------|----------|---------|-------------|----");
+        for (uint8_t ch = 0; ch < 3; ch++) {
+            serial_printf("  %u | %+4d | %8.3fV | %6.2fV  | %6.2f  | %5.2f-%5.2fV | %s\r\n",
+                ch, st->state[ch].dac_code,
+                st->state[ch].target_v,
+                st->config[ch].midpoint_v,
+                ds4424_step_mv(ch),
+                st->config[ch].v_min, st->config[ch].v_max,
+                st->cal[ch].valid ? "YES" : "no");
+        }
+        return;
+    }
+
+    // Parse channel
+    unsigned int ch;
+    if (sscanf(args, "%u", &ch) != 1 || ch > 2) {
+        serial_println("Usage: idac                     Show all IDAC status");
+        serial_println("       idac <ch> code <-127..127> Set raw DAC code");
+        serial_println("       idac <ch> v <volts>        Set voltage");
+        serial_println("       idac <ch> cal [step] [ms]  Auto-calibrate");
+        serial_println("  ch: 0=LevelShift 1=VADJ1 2=VADJ2");
+        return;
+    }
+    args++;
+    while (*args == ' ') args++;
+
+    char subcmd[8] = {};
+    int si = 0;
+    while (*args && *args != ' ' && si < 7) subcmd[si++] = *args++;
+    subcmd[si] = '\0';
+    while (*args == ' ') args++;
+
+    if (strcmp(subcmd, "code") == 0) {
+        int code;
+        if (sscanf(args, "%d", &code) != 1 || code < -127 || code > 127) {
+            serial_println("Usage: idac <ch> code <-127..127>");
+            return;
+        }
+        serial_printf("Setting IDAC%u code=%d ...\r\n", ch, code);
+        if (ds4424_set_code(ch, (int8_t)code)) {
+            serial_printf("  Theoretical output: %.3fV\r\n", ds4424_code_to_voltage(ch, (int8_t)code));
+        } else {
+            serial_println("  FAILED (I2C error)");
+        }
+    } else if (strcmp(subcmd, "v") == 0) {
+        float v;
+        if (sscanf(args, "%f", &v) != 1) {
+            serial_println("Usage: idac <ch> v <volts>");
+            return;
+        }
+        serial_printf("Setting IDAC%u to %.3fV ...\r\n", ch, v);
+        if (ds4424_set_voltage(ch, v)) {
+            serial_printf("  Code=%d, theoretical=%.3fV\r\n",
+                ds4424_get_code(ch), ds4424_code_to_voltage(ch, ds4424_get_code(ch)));
+        } else {
+            serial_println("  FAILED");
+        }
+    } else if (strcmp(subcmd, "cal") == 0) {
+        unsigned int step = 8, settle = 200;
+        sscanf(args, "%u %u", &step, &settle);
+        serial_printf("IDAC%u auto-calibration (step=%u, settle=%ums)...\r\n", ch, step, settle);
+        serial_println("NOTE: Requires ADC channel configured for VIN on the measured rail");
+        // TODO: integrate with ADC read callback
+        serial_println("  Calibration not yet wired to ADC - use manual 'idac <ch> code' + 'adc' to calibrate");
+    } else {
+        serial_printf("Unknown IDAC sub-command: '%s'\r\n", subcmd);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HUSB238 USB PD commands
+// ---------------------------------------------------------------------------
+
+static void cmdUsbpd(const char* args)
+{
+    while (*args == ' ') args++;
+
+    if (!husb238_present()) {
+        serial_println("\r\n--- HUSB238 USB PD ---");
+        serial_println("  HUSB238 NOT DETECTED");
+        return;
+    }
+
+    husb238_update();
+    const Husb238State *st = husb238_get_state();
+
+    if (*args == '\0' || strcmp(args, "status") == 0) {
+        serial_println("\r\n--- HUSB238 USB PD Status ---");
+        serial_printf("  Attached:    %s\r\n", st->attached ? "YES" : "NO");
+        serial_printf("  CC:          CC%d\r\n", st->cc_direction ? 2 : 1);
+        serial_printf("  Contract:    %.0fV / %.2fA = %.1fW\r\n",
+            st->voltage_v, st->current_a, st->power_w);
+        serial_printf("  PD Response: 0x%02X\r\n", st->pd_response);
+        serial_println("\r\n  Source PDOs:");
+
+        struct { const char* name; Husb238PdoInfo pdo; float v; } pdos[] = {
+            {"5V",  st->pdo_5v,  5.0f},  {"9V",  st->pdo_9v,  9.0f},
+            {"12V", st->pdo_12v, 12.0f}, {"15V", st->pdo_15v, 15.0f},
+            {"18V", st->pdo_18v, 18.0f}, {"20V", st->pdo_20v, 20.0f}
+        };
+        for (int i = 0; i < 6; i++) {
+            if (pdos[i].pdo.detected) {
+                serial_printf("    %s: %.2fA (%.1fW)\r\n",
+                    pdos[i].name, husb238_decode_current(pdos[i].pdo.max_current),
+                    pdos[i].v * husb238_decode_current(pdos[i].pdo.max_current));
+            } else {
+                serial_printf("    %s: not available\r\n", pdos[i].name);
+            }
+        }
+        serial_printf("  Selected PDO: 0x%02X\r\n", st->selected_pdo);
+        return;
+    }
+
+    if (strcmp(args, "caps") == 0) {
+        serial_println("Requesting source capabilities...");
+        husb238_get_src_cap();
+        delay_ms(500);
+        husb238_update();
+        serial_println("Done. Run 'usbpd' to see updated status.");
+        return;
+    }
+
+    // Select PDO: usbpd select <5|9|12|15|18|20>
+    if (strncmp(args, "select", 6) == 0) {
+        args += 6;
+        while (*args == ' ') args++;
+        unsigned int v;
+        if (sscanf(args, "%u", &v) != 1) {
+            serial_println("Usage: usbpd select <5|9|12|15|18|20>");
+            return;
+        }
+        Husb238Voltage voltage;
+        switch (v) {
+            case 5: voltage = HUSB238_V_5V; break;
+            case 9: voltage = HUSB238_V_9V; break;
+            case 12: voltage = HUSB238_V_12V; break;
+            case 15: voltage = HUSB238_V_15V; break;
+            case 18: voltage = HUSB238_V_18V; break;
+            case 20: voltage = HUSB238_V_20V; break;
+            default: serial_println("Invalid voltage"); return;
+        }
+        serial_printf("Selecting %uV PDO...\r\n", v);
+        husb238_select_pdo(voltage);
+        serial_println("Triggering negotiation...");
+        husb238_go_command(HUSB238_GO_SELECT_PDO);
+        delay_ms(1000);
+        husb238_update();
+        serial_printf("Contract now: %.0fV / %.2fA\r\n",
+            husb238_get_state()->voltage_v, husb238_get_state()->current_a);
+        return;
+    }
+
+    serial_println("Usage: usbpd              Show PD status");
+    serial_println("       usbpd caps         Request source capabilities");
+    serial_println("       usbpd select <V>   Select PDO (5/9/12/15/18/20V)");
+}
+
+// ---------------------------------------------------------------------------
+// PCA9535 GPIO Expander commands
+// ---------------------------------------------------------------------------
+
+static void cmdPca(const char* args)
+{
+    while (*args == ' ') args++;
+
+    if (!pca9535_present()) {
+        serial_println("\r\n--- PCA9535 IO Expander ---");
+        serial_println("  PCA9535 NOT DETECTED");
+        return;
+    }
+
+    pca9535_update();
+    const PCA9535State *st = pca9535_get_state();
+
+    if (*args == '\0' || strcmp(args, "status") == 0) {
+        serial_println("\r\n--- PCA9535 IO Expander Status ---");
+        serial_printf("  Port0 In:  0x%02X  Out: 0x%02X\r\n", st->input0, st->output0);
+        serial_printf("  Port1 In:  0x%02X  Out: 0x%02X\r\n", st->input1, st->output1);
+
+        serial_println("\r\n  Power Good:");
+        serial_printf("    LOGIC_PG:  %s\r\n", st->logic_pg ? "OK" : "FAIL");
+        serial_printf("    VADJ1_PG:  %s\r\n", st->vadj1_pg ? "OK" : "FAIL");
+        serial_printf("    VADJ2_PG:  %s\r\n", st->vadj2_pg ? "OK" : "FAIL");
+
+        serial_println("\r\n  Enables:");
+        serial_printf("    VADJ1_EN:   %s\r\n", st->vadj1_en ? "ON" : "off");
+        serial_printf("    VADJ2_EN:   %s\r\n", st->vadj2_en ? "ON" : "off");
+        serial_printf("    EN_15V_A:   %s\r\n", st->en_15v ? "ON" : "off");
+        serial_printf("    EN_MUX:     %s\r\n", st->en_mux ? "ON" : "off");
+        serial_printf("    EN_USB_HUB: %s\r\n", st->en_usb_hub ? "ON" : "off");
+
+        serial_println("\r\n  E-Fuses:");
+        for (int i = 0; i < 4; i++) {
+            serial_printf("    EFUSE_%d:  EN=%s  FLT=%s\r\n",
+                i + 1, st->efuse_en[i] ? "ON" : "off",
+                st->efuse_flt[i] ? "FAULT!" : "ok");
+        }
+        return;
+    }
+
+    // Set a control: pca <name> <0|1>
+    // Try to match control name
+    struct { const char* name; PcaControl ctrl; } ctrls[] = {
+        {"vadj1", PCA_CTRL_VADJ1_EN}, {"vadj2", PCA_CTRL_VADJ2_EN},
+        {"15v",   PCA_CTRL_15V_EN},   {"mux",   PCA_CTRL_MUX_EN},
+        {"usb",   PCA_CTRL_USB_HUB_EN},
+        {"efuse1", PCA_CTRL_EFUSE1_EN}, {"efuse2", PCA_CTRL_EFUSE2_EN},
+        {"efuse3", PCA_CTRL_EFUSE3_EN}, {"efuse4", PCA_CTRL_EFUSE4_EN},
+    };
+
+    char name[16] = {};
+    unsigned int val;
+    if (sscanf(args, "%15s %u", name, &val) == 2 && val <= 1) {
+        for (int i = 0; i < 9; i++) {
+            if (strcmp(name, ctrls[i].name) == 0) {
+                serial_printf("Setting %s = %s...\r\n",
+                    pca9535_control_name(ctrls[i].ctrl), val ? "ON" : "OFF");
+                if (pca9535_set_control(ctrls[i].ctrl, val != 0)) {
+                    serial_println("  OK");
+                } else {
+                    serial_println("  FAILED");
+                }
+                return;
+            }
+        }
+    }
+
+    serial_println("Usage: pca                  Show IO expander status");
+    serial_println("       pca <name> <0|1>     Set control output");
+    serial_println("  Names: vadj1, vadj2, 15v, mux, usb, efuse1-4");
+}
+
+// ---------------------------------------------------------------------------
+// I2C Bus Scan
+// ---------------------------------------------------------------------------
+
+static void cmdI2cScan()
+{
+    serial_println("\r\n--- I2C Bus Scan ---");
+    int found = 0;
+    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+        if (i2c_bus_probe(addr)) {
+            serial_printf("  0x%02X: ACK", addr);
+            if (addr == DS4424_I2C_ADDR) serial_print(" (DS4424 IDAC)");
+            if (addr == HUSB238_I2C_ADDR) serial_print(" (HUSB238 USB-PD)");
+            if (addr == PCA9535_I2C_ADDR) serial_print(" (PCA9535 IO Exp)");
+            serial_println("");
+            found++;
+        }
+    }
+    serial_printf("  %d device(s) found\r\n", found);
 }
 
 // ---------------------------------------------------------------------------

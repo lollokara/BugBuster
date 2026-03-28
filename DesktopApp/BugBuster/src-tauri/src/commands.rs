@@ -2,11 +2,19 @@
 // commands.rs - Tauri command handlers exposed to the Leptos frontend
 // =============================================================================
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::sync::Mutex;
+
 use tauri::State;
 
 use crate::bbp::{self, PayloadWriter};
 use crate::connection_manager::ConnectionManager;
 use crate::state::*;
+
+/// Global CSV writer protected by a Mutex.
+/// `None` means no recording is in progress.
+pub static CSV_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
 
 type CmdResult<T> = Result<T, String>;
 
@@ -369,21 +377,221 @@ pub async fn start_wavegen(
     mode: String, // "voltage" or "current"
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
-    // Set channel to appropriate function first
-    let func: u8 = if mode == "current" { 2 } else { 1 }; // IOUT=2, VOUT=1
+    // Map waveform string to type enum
+    let waveform_type: u8 = match waveform.as_str() {
+        "sine" => 0,
+        "square" => 1,
+        "triangle" => 2,
+        "sawtooth" => 3,
+        _ => return Err(format!("Unknown waveform type: {}", waveform)),
+    };
+
+    // Map mode string to enum
+    let mode_val: u8 = if mode == "current" { 1 } else { 0 };
+
+    // Build START_WAVEGEN payload:
+    // channel(u8) + waveform_type(u8) + freq_hz(f32) + amplitude(f32) + offset(f32) + mode(u8)
     let mut pw = PayloadWriter::new();
     pw.put_u8(channel);
-    pw.put_u8(func);
-    mgr.send_command(bbp::CMD_SET_CH_FUNC, &pw.buf).await.map_err(map_err)?;
+    pw.put_u8(waveform_type);
+    pw.put_f32(freq_hz as f32);
+    pw.put_f32(amplitude as f32);
+    pw.put_f32(offset as f32);
+    pw.put_u8(mode_val);
 
-    log::info!("Wavegen: ch={} mode={} wf={} freq={} amp={} off={}", channel, mode, waveform, freq_hz, amplitude, offset);
-    // TODO: implement actual waveform generation task
+    mgr.send_command(bbp::CMD_START_WAVEGEN, &pw.buf).await.map_err(map_err)?;
+
+    log::info!("Wavegen started: ch={} mode={} wf={} freq={} amp={} off={}",
+               channel, mode, waveform, freq_hz, amplitude, offset);
     Ok(())
 }
 
 #[tauri::command]
-pub fn stop_wavegen() -> CmdResult<()> {
+pub async fn stop_wavegen(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_STOP_WAVEGEN, &[]).await.map_err(map_err)?;
     log::info!("Wavegen stopped");
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// DS4424 IDAC
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn idac_get_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<IdacState> {
+    let rsp = mgr.send_command(bbp::CMD_IDAC_GET_STATUS, &[]).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let present = r.get_bool().unwrap_or(false);
+    let mut channels = Vec::new();
+    let names = ["LevelShift", "V_ADJ1", "V_ADJ2", "Spare"];
+    for i in 0..4 {
+        let _ch = r.get_u8();
+        let code = r.get_u8().unwrap_or(0) as i8;
+        let target_v = r.get_f32().unwrap_or(0.0);
+        let _actual_v = r.get_f32().unwrap_or(0.0);
+        let midpoint_v = r.get_f32().unwrap_or(0.0);
+        let v_min = r.get_f32().unwrap_or(0.0);
+        let v_max = r.get_f32().unwrap_or(0.0);
+        let step_mv = r.get_f32().unwrap_or(0.0);
+        let calibrated = r.get_bool().unwrap_or(false);
+        if i < 3 {
+            channels.push(IdacChannelState {
+                code, target_v, midpoint_v, v_min, v_max, step_mv, calibrated,
+                name: names[i].to_string(),
+            });
+        }
+    }
+    Ok(IdacState { present, channels })
+}
+
+#[tauri::command]
+pub async fn idac_set_code(
+    channel: u8,
+    code: i8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    pw.put_u8(code as u8);
+    mgr.send_command(bbp::CMD_IDAC_SET_CODE, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn idac_set_voltage(
+    channel: u8,
+    voltage: f32,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    pw.put_f32(voltage);
+    mgr.send_command(bbp::CMD_IDAC_SET_VOLTAGE, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// PCA9535 GPIO Expander
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn pca_get_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<IoExpState> {
+    let rsp = mgr.send_command(bbp::CMD_PCA_GET_STATUS, &[]).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let present = r.get_bool().unwrap_or(false);
+    let input0 = r.get_u8().unwrap_or(0);
+    let input1 = r.get_u8().unwrap_or(0);
+    let output0 = r.get_u8().unwrap_or(0);
+    let output1 = r.get_u8().unwrap_or(0);
+    let logic_pg = r.get_bool().unwrap_or(false);
+    let vadj1_pg = r.get_bool().unwrap_or(false);
+    let vadj2_pg = r.get_bool().unwrap_or(false);
+    let mut efuse_flt = [false; 4];
+    for i in 0..4 { efuse_flt[i] = r.get_bool().unwrap_or(false); }
+    let vadj1_en = r.get_bool().unwrap_or(false);
+    let vadj2_en = r.get_bool().unwrap_or(false);
+    let en_15v = r.get_bool().unwrap_or(false);
+    let en_mux = r.get_bool().unwrap_or(false);
+    let en_usb_hub = r.get_bool().unwrap_or(false);
+    let mut efuse_en = [false; 4];
+    for i in 0..4 { efuse_en[i] = r.get_bool().unwrap_or(false); }
+
+    let efuses = (0..4).map(|i| EfuseState {
+        id: (i + 1) as u8,
+        enabled: efuse_en[i],
+        fault: efuse_flt[i],
+    }).collect();
+
+    Ok(IoExpState {
+        present, input0, input1, output0, output1,
+        logic_pg, vadj1_pg, vadj2_pg,
+        vadj1_en, vadj2_en, en_15v, en_mux, en_usb_hub,
+        efuses,
+    })
+}
+
+#[tauri::command]
+pub async fn pca_set_control(
+    control: u8,
+    on: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(control);
+    pw.put_bool(on);
+    mgr.send_command(bbp::CMD_PCA_SET_CONTROL, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// HUSB238 USB PD
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn usbpd_get_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<UsbPdState> {
+    let rsp = mgr.send_command(bbp::CMD_USBPD_GET_STATUS, &[]).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let present = r.get_bool().unwrap_or(false);
+    let attached = r.get_bool().unwrap_or(false);
+    let cc_dir = r.get_bool().unwrap_or(false);
+    let pd_response = r.get_u8().unwrap_or(0);
+    let _voltage_code = r.get_u8().unwrap_or(0);
+    let _current_code = r.get_u8().unwrap_or(0);
+    let voltage_v = r.get_f32().unwrap_or(0.0);
+    let current_a = r.get_f32().unwrap_or(0.0);
+    let power_w = r.get_f32().unwrap_or(0.0);
+
+    let pdo_names = ["5V", "9V", "12V", "15V", "18V", "20V"];
+    let pdo_volts = [5.0f32, 9.0, 12.0, 15.0, 18.0, 20.0];
+    let mut source_pdos = Vec::new();
+    for i in 0..6 {
+        let detected = r.get_bool().unwrap_or(false);
+        let cur_code = r.get_u8().unwrap_or(0);
+        let max_a = decode_husb_current(cur_code);
+        source_pdos.push(UsbPdPdo {
+            voltage: pdo_names[i].to_string(),
+            detected,
+            max_current_a: max_a,
+            max_power_w: pdo_volts[i] * max_a,
+        });
+    }
+    let selected_pdo = r.get_u8().unwrap_or(0);
+
+    Ok(UsbPdState {
+        present, attached,
+        cc: if cc_dir { "CC2".into() } else { "CC1".into() },
+        voltage_v, current_a, power_w, pd_response, source_pdos, selected_pdo,
+    })
+}
+
+fn decode_husb_current(code: u8) -> f32 {
+    match code {
+        0 => 0.5, 1 => 0.7, 2 => 1.0, 3 => 1.25, 4 => 1.5, 5 => 1.75,
+        6 => 2.0, 7 => 2.25, 8 => 2.5, 9 => 2.75, 10 => 3.0, 11 => 3.25,
+        12 => 3.5, 13 => 4.0, 14 => 4.5, 15 => 5.0, _ => 0.0,
+    }
+}
+
+#[tauri::command]
+pub async fn usbpd_select_pdo(
+    voltage: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(voltage);
+    mgr.send_command(bbp::CMD_USBPD_SELECT_PDO, &pw.buf).await.map_err(map_err)?;
+    // Trigger negotiation
+    let mut pw2 = PayloadWriter::new();
+    pw2.put_u8(0x01); // GO_SELECT_PDO
+    mgr.send_command(bbp::CMD_USBPD_GO, &pw2.buf).await.map_err(map_err)?;
     Ok(())
 }
 
@@ -403,4 +611,47 @@ pub async fn pick_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> 
         .blocking_save_file();
 
     Ok(path.map(|p| p.to_string()))
+}
+
+// -----------------------------------------------------------------------------
+// CSV Recording
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn start_csv_recording(path: String) -> CmdResult<()> {
+    let file = File::create(&path).map_err(|e| format!("Failed to create CSV file: {}", e))?;
+    let mut writer = BufWriter::new(file);
+    writeln!(writer, "timestamp_ms,ch_a,ch_b,ch_c,ch_d")
+        .map_err(|e| format!("Failed to write CSV header: {}", e))?;
+    writer.flush().map_err(|e| format!("Failed to flush CSV header: {}", e))?;
+
+    let mut guard = CSV_WRITER.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *guard = Some(writer);
+
+    log::info!("CSV recording started: {}", path);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_csv_recording() -> CmdResult<()> {
+    let mut guard = CSV_WRITER.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(mut writer) = guard.take() {
+        writer.flush().map_err(|e| format!("Failed to flush CSV: {}", e))?;
+    }
+    log::info!("CSV recording stopped");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn append_csv_data(timestamp_ms: f64, ch_values: Vec<f32>) -> CmdResult<()> {
+    let mut guard = CSV_WRITER.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(ref mut writer) = *guard {
+        let a = ch_values.first().copied().unwrap_or(0.0);
+        let b = ch_values.get(1).copied().unwrap_or(0.0);
+        let c = ch_values.get(2).copied().unwrap_or(0.0);
+        let d = ch_values.get(3).copied().unwrap_or(0.0);
+        writeln!(writer, "{},{},{},{},{}", timestamp_ms, a, b, c, d)
+            .map_err(|e| format!("Failed to write CSV row: {}", e))?;
+    }
+    Ok(())
 }

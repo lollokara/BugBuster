@@ -228,6 +228,59 @@ impl Transport for HttpTransport {
                 Ok(payload.to_vec())
             }
 
+            // DS4424 IDAC (HTTP passthrough via JSON API)
+            bbp::CMD_IDAC_GET_STATUS => {
+                let json = self.get_json("/api/idac").await?;
+                Ok(serde_json::to_vec(&json).unwrap_or_default())
+            }
+
+            bbp::CMD_IDAC_SET_CODE => {
+                if payload.len() < 2 { return Err(anyhow!("Invalid payload")); }
+                let body = serde_json::json!({"ch": payload[0], "code": payload[1] as i8});
+                self.post_json("/api/idac/code", &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_IDAC_SET_VOLTAGE => {
+                if payload.len() < 5 { return Err(anyhow!("Invalid payload")); }
+                let ch = payload[0];
+                let voltage = f32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                let body = serde_json::json!({"ch": ch, "voltage": voltage});
+                self.post_json("/api/idac/voltage", &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            // PCA9535 GPIO Expander
+            bbp::CMD_PCA_GET_STATUS => {
+                let json = self.get_json("/api/ioexp").await?;
+                Ok(serde_json::to_vec(&json).unwrap_or_default())
+            }
+
+            bbp::CMD_PCA_SET_CONTROL => {
+                if payload.len() < 2 { return Err(anyhow!("Invalid payload")); }
+                let ctrl_names = ["vadj1","vadj2","15v","mux","usb","efuse1","efuse2","efuse3","efuse4"];
+                let idx = payload[0] as usize;
+                let name = if idx < ctrl_names.len() { ctrl_names[idx] } else { "?" };
+                let body = serde_json::json!({"control": name, "on": payload[1] != 0});
+                self.post_json("/api/ioexp/control", &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            // HUSB238 USB PD
+            bbp::CMD_USBPD_GET_STATUS => {
+                let json = self.get_json("/api/usbpd").await?;
+                Ok(serde_json::to_vec(&json).unwrap_or_default())
+            }
+
+            bbp::CMD_USBPD_SELECT_PDO => {
+                if payload.is_empty() { return Err(anyhow!("Invalid payload")); }
+                let v_map = [0, 5, 9, 12, 15, 18, 20];
+                let v = if (payload[0] as usize) < v_map.len() { v_map[payload[0] as usize] } else { 0 };
+                let body = serde_json::json!({"voltage": v});
+                self.post_json("/api/usbpd/select", &body).await?;
+                Ok(payload.to_vec())
+            }
+
             // Streaming not supported over HTTP
             bbp::CMD_START_ADC_STREAM | bbp::CMD_STOP_ADC_STREAM |
             bbp::CMD_START_SCOPE_STREAM | bbp::CMD_STOP_SCOPE_STREAM => {

@@ -29,6 +29,22 @@
 #define PIN_ALERT       GPIO_NUM_7    // Open-drain, active low - fault/alert output
 
 // -----------------------------------------------------------------------------
+// I2C Bus Pins (shared bus: DS4424, HUSB238, PCA9535)
+// -----------------------------------------------------------------------------
+#define PIN_I2C_SDA     GPIO_NUM_42   // ESP_SDA
+#define PIN_I2C_SCL     GPIO_NUM_41   // ESP_SCL
+#define I2C_PORT_NUM    I2C_NUM_0
+#define I2C_FREQ_HZ     400000        // 400 kHz Fast Mode
+
+// I2C Device Addresses (7-bit)
+#define DS4424_I2C_ADDR     0x20      // A0=GND, A1=GND
+#define HUSB238_I2C_ADDR    0x08      // Fixed
+#define PCA9535_I2C_ADDR    0x23      // A2=0, A1=1, A0=1
+
+// PCA9535 Interrupt Pin
+#define PIN_MUX_INT     GPIO_NUM_4    // PCA9535 INT output → ESP32
+
+// -----------------------------------------------------------------------------
 // ADGS2414D Mux Switch Matrix
 // -----------------------------------------------------------------------------
 #define PIN_MUX_CS      GPIO_NUM_21   // CS for all 4 ADGS2414D (daisy-chain)

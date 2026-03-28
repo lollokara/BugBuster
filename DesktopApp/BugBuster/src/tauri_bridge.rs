@@ -156,3 +156,45 @@ pub fn invoke_void(cmd: &str, args: JsValue) {
 pub fn log(msg: &str) {
     web_sys::console::log_1(&msg.into());
 }
+
+// -----------------------------------------------------------------------------
+// I2C Device types (DS4424 IDAC)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdacChannelState {
+    pub code: i8,
+    pub target_v: f32,
+    pub midpoint_v: f32,
+    pub v_min: f32,
+    pub v_max: f32,
+    pub step_mv: f32,
+    pub calibrated: bool,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdacState {
+    pub present: bool,
+    pub channels: Vec<IdacChannelState>,
+}
+
+// IDAC invoke helpers
+pub fn send_idac_code(channel: u8, code: i8) {
+    #[derive(Serialize)]
+    struct Args { channel: u8, code: i8 }
+    let args = serde_wasm_bindgen::to_value(&Args { channel, code }).unwrap();
+    invoke_void("idac_set_code", args);
+}
+
+pub fn send_idac_voltage(channel: u8, voltage: f32) {
+    #[derive(Serialize)]
+    struct Args { channel: u8, voltage: f32 }
+    let args = serde_wasm_bindgen::to_value(&Args { channel, voltage }).unwrap();
+    invoke_void("idac_set_voltage", args);
+}
+
+pub async fn fetch_idac_status() -> Option<IdacState> {
+    let result = invoke("idac_get_status", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}

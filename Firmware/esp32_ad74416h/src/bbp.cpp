@@ -11,6 +11,9 @@
 #include "config.h"
 #include "uart_bridge.h"
 #include "adgs2414d.h"
+#include "ds4424.h"
+#include "husb238.h"
+#include "pca9535.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 
@@ -895,6 +898,216 @@ static int handleDeviceReset(uint16_t seq, uint8_t cmdId, uint8_t *out)
     return 0;
 }
 
+// --- DS4424 IDAC commands ---
+
+static int handleIdacGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    const DS4424State *st = ds4424_get_state();
+    size_t pos = 0;
+    put_bool(out, &pos, st->present);
+    for (uint8_t ch = 0; ch < DS4424_NUM_CHANNELS; ch++) {
+        put_u8(out, &pos, ch);
+        put_u8(out, &pos, (uint8_t)(st->state[ch].dac_code & 0xFF));
+        put_f32(out, &pos, st->state[ch].target_v);
+        put_f32(out, &pos, st->state[ch].actual_v);
+        put_f32(out, &pos, st->config[ch].midpoint_v);
+        put_f32(out, &pos, st->config[ch].v_min);
+        put_f32(out, &pos, st->config[ch].v_max);
+        put_f32(out, &pos, ds4424_step_mv(ch));
+        put_bool(out, &pos, st->cal[ch].valid);
+    }
+    return (int)pos;
+}
+
+static int handleIdacSetCode(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t ch = get_u8(payload, &rpos);
+    int8_t code = (int8_t)get_u8(payload, &rpos);
+    if (ch >= DS4424_NUM_CHANNELS) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+
+    if (!ds4424_set_code(ch, code)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, ch);
+    put_u8(out, &pos, (uint8_t)(code & 0xFF));
+    put_f32(out, &pos, ds4424_code_to_voltage(ch, code));
+    return (int)pos;
+}
+
+static int handleIdacSetVoltage(uint16_t seq, uint8_t cmdId,
+                                 const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 5) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t ch = get_u8(payload, &rpos);
+    float voltage = get_f32(payload, &rpos);
+    if (ch >= 3) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+
+    if (!ds4424_set_voltage(ch, voltage)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
+
+    const DS4424State *st = ds4424_get_state();
+    size_t pos = 0;
+    put_u8(out, &pos, ch);
+    put_u8(out, &pos, (uint8_t)(st->state[ch].dac_code & 0xFF));
+    put_f32(out, &pos, st->state[ch].target_v);
+    return (int)pos;
+}
+
+static int handleIdacCalibrate(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t ch = get_u8(payload, &rpos);
+    uint8_t step = get_u8(payload, &rpos);
+    uint16_t settle = get_u16(payload, &rpos);
+    if (ch >= 3) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+
+    // TODO: Wire up ADC read callback when AD74416H channel is configured for VIN
+    // For now, respond with an error indicating calibration needs ADC
+    sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+    return -1;
+}
+
+// --- PCA9535 GPIO Expander commands ---
+
+static int handlePcaGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    pca9535_update();  // Read latest inputs
+    const PCA9535State *st = pca9535_get_state();
+    size_t pos = 0;
+    put_bool(out, &pos, st->present);
+    put_u8(out, &pos, st->input0);
+    put_u8(out, &pos, st->input1);
+    put_u8(out, &pos, st->output0);
+    put_u8(out, &pos, st->output1);
+    // Decoded status
+    put_bool(out, &pos, st->logic_pg);
+    put_bool(out, &pos, st->vadj1_pg);
+    put_bool(out, &pos, st->vadj2_pg);
+    for (int i = 0; i < 4; i++) put_bool(out, &pos, st->efuse_flt[i]);
+    // Decoded enables
+    put_bool(out, &pos, st->vadj1_en);
+    put_bool(out, &pos, st->vadj2_en);
+    put_bool(out, &pos, st->en_15v);
+    put_bool(out, &pos, st->en_mux);
+    put_bool(out, &pos, st->en_usb_hub);
+    for (int i = 0; i < 4; i++) put_bool(out, &pos, st->efuse_en[i]);
+    return (int)pos;
+}
+
+static int handlePcaSetControl(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t ctrl = get_u8(payload, &rpos);
+    bool on = get_bool(payload, &rpos);
+    if (ctrl >= PCA_CTRL_COUNT) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    if (!pca9535_set_control((PcaControl)ctrl, on)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, ctrl);
+    put_bool(out, &pos, on);
+    return (int)pos;
+}
+
+static int handlePcaSetPort(uint16_t seq, uint8_t cmdId,
+                             const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t port = get_u8(payload, &rpos);
+    uint8_t val = get_u8(payload, &rpos);
+    if (port > 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    if (!pca9535_set_port(port, val)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, port);
+    put_u8(out, &pos, val);
+    return (int)pos;
+}
+
+// --- HUSB238 USB PD commands ---
+
+static int handleUsbpdGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    husb238_update();
+    const Husb238State *st = husb238_get_state();
+    size_t pos = 0;
+    put_bool(out, &pos, st->present);
+    put_bool(out, &pos, st->attached);
+    put_bool(out, &pos, st->cc_direction);
+    put_u8(out, &pos, st->pd_response);
+    put_u8(out, &pos, (uint8_t)st->voltage);
+    put_u8(out, &pos, (uint8_t)st->current);
+    put_f32(out, &pos, st->voltage_v);
+    put_f32(out, &pos, st->current_a);
+    put_f32(out, &pos, st->power_w);
+    // Source PDOs
+    struct { bool det; Husb238Current cur; } pdos[] = {
+        {st->pdo_5v.detected, st->pdo_5v.max_current},
+        {st->pdo_9v.detected, st->pdo_9v.max_current},
+        {st->pdo_12v.detected, st->pdo_12v.max_current},
+        {st->pdo_15v.detected, st->pdo_15v.max_current},
+        {st->pdo_18v.detected, st->pdo_18v.max_current},
+        {st->pdo_20v.detected, st->pdo_20v.max_current},
+    };
+    for (int i = 0; i < 6; i++) {
+        put_bool(out, &pos, pdos[i].det);
+        put_u8(out, &pos, (uint8_t)pdos[i].cur);
+    }
+    put_u8(out, &pos, st->selected_pdo);
+    return (int)pos;
+}
+
+static int handleUsbpdSelectPdo(uint16_t seq, uint8_t cmdId,
+                                 const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t voltage = get_u8(payload, &rpos);
+
+    if (!husb238_select_pdo((Husb238Voltage)voltage)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, voltage);
+    return (int)pos;
+}
+
+static int handleUsbpdGo(uint16_t seq, uint8_t cmdId,
+                          const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    uint8_t cmd = payload[0];
+    if (!husb238_go_command(cmd)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
+    out[0] = cmd;
+    return 1;
+}
+
 // --- MUX commands ---
 
 static int handleMuxSetAll(uint16_t seq, uint8_t cmdId,
@@ -1033,6 +1246,99 @@ static int handleStopScopeStream(uint16_t seq, uint8_t cmdId, uint8_t *out)
     s_scopeStreamActive = false;
     ESP_LOGI(TAG, "Scope stream stopped");
     return 0;
+}
+
+// --- Waveform Generator commands ---
+
+// Task handle is defined in tasks.cpp; we declare it extern here
+extern TaskHandle_t s_wavegenTask;
+
+static int handleStartWavegen(uint16_t seq, uint8_t cmdId,
+                               const uint8_t *payload, size_t len, uint8_t *out)
+{
+    // Payload: channel(u8) + waveform(u8) + freq_hz(f32) + amplitude(f32) + offset(f32) + mode(u8) = 15 bytes
+    if (len < 15) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    size_t rpos = 0;
+    uint8_t channel = get_u8(payload, &rpos);
+    uint8_t waveform = get_u8(payload, &rpos);
+    float freq_hz = get_f32(payload, &rpos);
+    float amplitude = get_f32(payload, &rpos);
+    float offset = get_f32(payload, &rpos);
+    uint8_t mode = get_u8(payload, &rpos);
+
+    if (channel >= 4) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+    if (waveform > 3) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (mode > 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (freq_hz < 0.1f || freq_hz > 100.0f) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    // Set channel function to VOUT or IOUT first
+    {
+        Command cmd = {};
+        cmd.type = CMD_SET_CHANNEL_FUNC;
+        cmd.channel = channel;
+        cmd.func = (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT;
+        sendCommand(cmd);
+    }
+
+    // Store wavegen state and notify the task
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active    = true;
+        g_deviceState.wavegen.channel   = channel;
+        g_deviceState.wavegen.waveform  = (WaveformType)waveform;
+        g_deviceState.wavegen.freq_hz   = freq_hz;
+        g_deviceState.wavegen.amplitude = amplitude;
+        g_deviceState.wavegen.offset    = offset;
+        g_deviceState.wavegen.mode      = (WavegenMode)mode;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Wake up the wavegen task
+    if (s_wavegenTask) {
+        xTaskNotifyGive(s_wavegenTask);
+    }
+
+    ESP_LOGI(TAG, "Wavegen start: ch=%d wf=%d freq=%.1f amp=%.2f off=%.2f mode=%d",
+             channel, waveform, freq_hz, amplitude, offset, mode);
+
+    // Echo params as response
+    size_t pos = 0;
+    put_u8(out, &pos, channel);
+    put_u8(out, &pos, waveform);
+    put_f32(out, &pos, freq_hz);
+    put_f32(out, &pos, amplitude);
+    put_f32(out, &pos, offset);
+    put_u8(out, &pos, mode);
+    return (int)pos;
+}
+
+static int handleStopWavegen(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active = false;
+        xSemaphoreGive(g_stateMutex);
+    }
+    ESP_LOGI(TAG, "Wavegen stopped");
+    return 0;
+}
+
+// Public: stop wavegen (called on disconnect/reset)
+void bbpStopWavegen(void)
+{
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.wavegen.active = false;
+        xSemaphoreGive(g_stateMutex);
+    }
+}
+
+bool bbpWavegenActive(void)
+{
+    bool active = false;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        active = g_deviceState.wavegen.active;
+        xSemaphoreGive(g_stateMutex);
+    }
+    return active;
 }
 
 // -----------------------------------------------------------------------------
@@ -1180,9 +1486,53 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             rspLen = handleStopScopeStream(seq, cmdId, rspBuf);
             break;
 
+        // --- Waveform Generator ---
+        case BBP_CMD_START_WAVEGEN:
+            rspLen = handleStartWavegen(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_STOP_WAVEGEN:
+            rspLen = handleStopWavegen(seq, cmdId, rspBuf);
+            break;
+
         // --- System ---
         case BBP_CMD_DEVICE_RESET:
             rspLen = handleDeviceReset(seq, cmdId, rspBuf);
+            break;
+
+        // --- DS4424 IDAC ---
+        case BBP_CMD_IDAC_GET_STATUS:
+            rspLen = handleIdacGetStatus(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_IDAC_SET_CODE:
+            rspLen = handleIdacSetCode(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_IDAC_SET_VOLTAGE:
+            rspLen = handleIdacSetVoltage(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_IDAC_CALIBRATE:
+            rspLen = handleIdacCalibrate(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+
+        // --- PCA9535 GPIO Expander ---
+        case BBP_CMD_PCA_GET_STATUS:
+            rspLen = handlePcaGetStatus(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_PCA_SET_CONTROL:
+            rspLen = handlePcaSetControl(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_PCA_SET_PORT:
+            rspLen = handlePcaSetPort(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+
+        // --- HUSB238 USB PD ---
+        case BBP_CMD_USBPD_GET_STATUS:
+            rspLen = handleUsbpdGetStatus(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_USBPD_SELECT_PDO:
+            rspLen = handleUsbpdSelectPdo(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_USBPD_GO:
+            rspLen = handleUsbpdGo(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- MUX ---
@@ -1388,6 +1738,7 @@ void bbpExitBinaryMode(void)
 {
     s_adcStreamMask = 0;
     s_scopeStreamActive = false;
+    bbpStopWavegen();  // Stop wavegen on disconnect
     s_active = false;
     s_rxLen = 0;
     s_magic_idx = 0;

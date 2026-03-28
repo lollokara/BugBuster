@@ -13,6 +13,9 @@
 #include "ad74416h.h"
 #include "ad74416h_regs.h"
 #include "config.h"
+#include "ds4424.h"
+#include "husb238.h"
+#include "pca9535.h"
 
 // -----------------------------------------------------------------------------
 // Shared Device State
@@ -72,6 +75,29 @@ struct ScopeBuffer {
     uint32_t         curStart;          // start time of current bucket
 };
 
+// Waveform generator types
+enum WaveformType : uint8_t {
+    WAVE_SINE     = 0,
+    WAVE_SQUARE   = 1,
+    WAVE_TRIANGLE = 2,
+    WAVE_SAWTOOTH = 3,
+};
+
+enum WavegenMode : uint8_t {
+    WAVEGEN_VOLTAGE = 0,
+    WAVEGEN_CURRENT = 1,
+};
+
+struct WavegenState {
+    bool         active;
+    uint8_t      channel;
+    WaveformType waveform;
+    float        freq_hz;
+    float        amplitude;
+    float        offset;
+    WavegenMode  mode;
+};
+
 struct DeviceState {
     bool             spiOk;             // SPI communication healthy
     ChannelState     channels[4];
@@ -85,6 +111,13 @@ struct DeviceState {
     GpioState        gpio[6];           // 6 GPIOs (A-F)
     uint8_t          muxState[4];       // ADGS2414D switch states (4 devices)
     ScopeBuffer      scope;             // ring buffer for batched scope data
+    WavegenState     wavegen;           // waveform generator state
+
+    // I2C device states (updated by i2c poll task)
+    bool             i2cOk;             // I2C bus healthy
+    DS4424State      idac;              // DS4424 IDAC state
+    Husb238State     usbpd;             // HUSB238 USB-PD state
+    PCA9535State     ioexp;             // PCA9535 GPIO expander state
 };
 
 extern DeviceState        g_deviceState;
@@ -114,6 +147,12 @@ enum CommandType {
     CMD_SET_AVDD_SELECT,    // Set AVDD source selection
     CMD_GPIO_CONFIG,        // Configure GPIO mode
     CMD_GPIO_SET,           // Set GPIO output value
+    // I2C device commands
+    CMD_IDAC_SET_CODE,      // Set DS4424 DAC code
+    CMD_IDAC_SET_VOLTAGE,   // Set DS4424 target voltage
+    CMD_IDAC_CALIBRATE,     // Run IDAC auto-calibration
+    CMD_PCA_SET_CONTROL,    // Set PCA9535 output control
+    CMD_PCA_SET_PORT,       // Set PCA9535 raw port value
 };
 
 struct Command {
@@ -159,6 +198,28 @@ struct Command {
             uint8_t gpio;
             bool    value;
         } gpioSet;
+        // I2C device command data
+        struct {
+            uint8_t ch;
+            int8_t  code;
+        } idacCode;
+        struct {
+            uint8_t ch;
+            float   voltage;
+        } idacVoltage;
+        struct {
+            uint8_t ch;
+            uint8_t step;
+            uint16_t settle_ms;
+        } idacCal;
+        struct {
+            uint8_t ctrl;   // PcaControl enum
+            bool    on;
+        } pcaCtrl;
+        struct {
+            uint8_t port;
+            uint8_t val;
+        } pcaPort;
     };
 };
 

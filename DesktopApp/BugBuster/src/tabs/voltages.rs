@@ -1,0 +1,223 @@
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use crate::tauri_bridge::*;
+
+/// DS4424 IDAC voltage calculator + control tab.
+/// Shows 3 channels with voltage math, slider control, and calibration status.
+#[component]
+pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    let (idac, set_idac) = signal(IdacState::default());
+    let slider_vals: [RwSignal<f64>; 3] = std::array::from_fn(|_| RwSignal::new(0.0));
+    let dirty: [RwSignal<bool>; 3] = std::array::from_fn(|_| RwSignal::new(false));
+    let code_vals: [RwSignal<i32>; 3] = std::array::from_fn(|_| RwSignal::new(0));
+    let code_dirty: [RwSignal<bool>; 3] = std::array::from_fn(|_| RwSignal::new(false));
+
+    // Poll IDAC status periodically
+    let set_idac_clone = set_idac.clone();
+    Effect::new(move |_| {
+        let _ = state.get(); // subscribe to state changes
+        spawn_local(async move {
+            if let Some(st) = fetch_idac_status().await {
+                set_idac_clone.set(st);
+            }
+        });
+    });
+
+    let ch_colors = ["#10b981", "#06b6d4", "#ff4d6a"];
+    let ch_titles = [
+        "Level Shifter Voltage (LTM8078 Out2)",
+        "V_ADJ1 — Domain A (LTM8063 #1 → P1, P2)",
+        "V_ADJ2 — Domain B (LTM8063 #2 → P3, P4)",
+    ];
+    let ch_vfb = [0.8f32, 0.774, 0.774];
+    let ch_rint = 249.0f32; // kΩ for all
+
+    view! {
+        <div class="tab-content">
+            {move || {
+                let st = idac.get();
+                if !st.present {
+                    return view! {
+                        <div class="card">
+                            <div class="card-header">
+                                <span class="channel-func">"DS4424 IDAC"</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="mode-warning">
+                                    <span class="mode-warning-icon">"⚠"</span>
+                                    <span>"DS4424 not detected on I2C bus (0x20). Check hardware connection."</span>
+                                </div>
+                            </div>
+                        </div>
+                    }.into_any();
+                }
+
+                view! {
+                    <div class="channel-grid-wide" style="grid-template-columns: repeat(3, 1fr)">
+                        {st.channels.into_iter().enumerate().map(|(i, ch)| {
+                            let color = ch_colors[i];
+                            let v_fb = ch_vfb[i];
+
+                            // Sync slider from device if not being dragged
+                            if !dirty[i].get() {
+                                slider_vals[i].set(ch.target_v as f64);
+                            }
+                            if !code_dirty[i].get() {
+                                code_vals[i].set(ch.code as i32);
+                            }
+
+                            let display_v = if dirty[i].get() { slider_vals[i].get() as f32 } else { ch.target_v };
+                            let display_code = if code_dirty[i].get() { code_vals[i].get() as i8 } else { ch.code };
+                            let pct = if ch.v_max > ch.v_min {
+                                ((display_v - ch.v_min) / (ch.v_max - ch.v_min) * 100.0).clamp(0.0, 100.0)
+                            } else { 50.0 };
+
+                            // Compute R_FB
+                            let r_fb = ch_rint / (ch.midpoint_v / v_fb - 1.0);
+                            // Compute R_FS (I_FS = 50µA)
+                            let ifs_ua = 50.0f32;
+                            let r_fs = (0.976 * 127.0) / (16.0 * ifs_ua * 1e-6) / 1000.0;
+
+                            // Usable range
+                            let delta = ifs_ua * 1e-6 * ch_rint * 1000.0;
+                            let sink_max_v = (ch.midpoint_v + delta).min(ch.v_max);
+                            let src_max_v = (ch.midpoint_v - delta).max(ch.v_min);
+                            let sink_steps = ((sink_max_v - ch.midpoint_v) / (ch.step_mv / 1000.0)).min(127.0) as i32;
+                            let src_steps = ((ch.midpoint_v - src_max_v) / (ch.step_mv / 1000.0)).min(127.0) as i32;
+
+                            let ch_idx = i as u8;
+
+                            view! {
+                                <div class="card" style=format!("border-top: 3px solid {}", color)>
+                                    <div class="card-header" style="flex-direction: column; align-items: flex-start; gap: 2px">
+                                        <div style=format!("font-weight: 700; color: {}", color)>
+                                            {ch_titles[i]}
+                                        </div>
+                                        <div style="display: flex; gap: 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim)">
+                                            <span>{format!("V_FB: {}V", v_fb)}</span>
+                                            <span>{format!("R_int: {}kΩ", ch_rint)}</span>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        // Midpoint + R_FB + I_FS + R_FS
+                                        <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11px; font-family: 'JetBrains Mono', monospace; margin-bottom: 12px">
+                                            <span style="color: var(--text-dim)">"Midpoint:"</span>
+                                            <span style="font-weight: 600">{format!("{:.1}V", ch.midpoint_v)}</span>
+                                            <span style="color: var(--text-dim)">"R_FB:"</span>
+                                            <span>{format!("{:.1}kΩ", r_fb)}<span style="color: var(--text-dim); font-size: 9px">" (FB→GND)"</span></span>
+                                            <span style="color: var(--text-dim)">"I_FS:"</span>
+                                            <span>{format!("{:.0}µA", ifs_ua)}</span>
+                                            <span style="color: var(--text-dim)">"R_FS:"</span>
+                                            <span>{format!("{:.0}kΩ", r_fs)}</span>
+                                        </div>
+
+                                        // Step info box
+                                        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 10px; font-family: 'JetBrains Mono', monospace; margin-bottom: 12px; line-height: 1.8">
+                                            <div>"Step: "<span style=format!("color: {}", color)>{format!("{:.2}mV", ch.step_mv)}</span>"/step"</div>
+                                            <div>"Usable: "<span style=format!("color: {}", color)>{format!("{:.2}V – {:.2}V", src_max_v, sink_max_v)}</span>
+                                                {format!(" (Δ={:.0}mV)", (sink_max_v - src_max_v) * 1000.0)}</div>
+                                            <div>{format!("Sink: {}/127 steps · Source: {}/127", sink_steps, src_steps)}</div>
+                                        </div>
+
+                                        // DAC code display
+                                        <div style="text-align: center; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); margin-bottom: 4px">
+                                            {format!("DAC: 0x{:02X} — {} · {:.2}mV/step",
+                                                if display_code >= 0 { 0x80u8 | display_code as u8 } else { (-display_code) as u8 },
+                                                if display_code == 0 { "zero".to_string() }
+                                                else if display_code < 0 { format!("sink {} (↑V)", -display_code) }
+                                                else { format!("source {} (↓V)", display_code) },
+                                                ch.step_mv
+                                            )}
+                                        </div>
+
+                                        // Code slider
+                                        <input type="range" class="slider slider-colored"
+                                            style=format!("--slider-color: {}; width: 100%", color)
+                                            min="-127" max="127" step="1"
+                                            prop:value=move || code_vals[i].get()
+                                            on:input=move |e| {
+                                                if let Ok(v) = event_target_value(&e).parse::<i32>() {
+                                                    code_vals[i].set(v);
+                                                    code_dirty[i].set(true);
+                                                    dirty[i].set(false); // voltage slider follows code
+                                                }
+                                            }
+                                            on:change=move |e| {
+                                                if let Ok(v) = event_target_value(&e).parse::<i32>() {
+                                                    send_idac_code(ch_idx, v as i8);
+                                                    code_dirty[i].set(false);
+                                                }
+                                            }
+                                        />
+                                        <div class="slider-labels" style="font-size: 9px">
+                                            <span>"↓ SINK 127"</span>
+                                            <span>"0"</span>
+                                            <span>"SOURCE 127 ↓"</span>
+                                        </div>
+
+                                        // Big voltage display
+                                        <div style=format!("text-align: center; font-size: 32px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {}; padding: 8px 0 2px; letter-spacing: -1px", color)>
+                                            {format!("{:.3}V", display_v)}
+                                        </div>
+                                        <div style="text-align: center; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-bottom: 8px">
+                                            {if display_code == 0 { "Midpoint (DAC=0)".to_string() }
+                                             else if display_code < 0 { format!("Sink {} → +{:.2}mV", -display_code, -display_code as f32 * ch.step_mv) }
+                                             else { format!("Source {} → −{:.2}mV", display_code, display_code as f32 * ch.step_mv) }}
+                                        </div>
+
+                                        // Voltage bar
+                                        <div class="bar-gauge" style=format!("--bar-color: {}", color)>
+                                            <div class="bar-fill-dynamic" style=format!("width: {}%", pct)></div>
+                                        </div>
+                                        <div class="slider-labels" style="font-size: 9px">
+                                            <span>{format!("{:.2}V", ch.v_min)}</span>
+                                            <span>{format!("{:.2}V", ch.v_max)}</span>
+                                        </div>
+
+                                        // Voltage input + set
+                                        <div class="config-row" style="margin-top: 8px">
+                                            <label>"Set V"</label>
+                                            <div class="number-input-wrap">
+                                                <input type="number" class="number-input"
+                                                    min=ch.v_min max=ch.v_max step="0.01"
+                                                    prop:value=move || format!("{:.3}", slider_vals[i].get())
+                                                    on:change=move |e| {
+                                                        if let Ok(v) = event_target_value(&e).parse::<f64>() {
+                                                            send_idac_voltage(ch_idx, v as f32);
+                                                            dirty[i].set(false);
+                                                            code_dirty[i].set(false);
+                                                        }
+                                                    }
+                                                />
+                                                <span class="number-input-unit">"V"</span>
+                                            </div>
+                                        </div>
+
+                                        // Calibration status
+                                        <div style="font-size: 10px; font-family: 'JetBrains Mono', monospace; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--text-dim)">
+                                            <span>"Calibration: "</span>
+                                            {if ch.calibrated {
+                                                view! { <span style="color: #10b981; font-weight: 600">"Active ✓"</span> }.into_any()
+                                            } else {
+                                                view! { <span style="color: var(--text-dim)">"Not calibrated (using formula)"</span> }.into_any()
+                                            }}
+                                        </div>
+
+                                        // Formula reference
+                                        <div style="font-size: 9px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); line-height: 1.8; margin-top: 6px">
+                                            <div><b style="color: var(--text)">{if i == 0 { "LTM8078:" } else { "LTM8063:" }}</b>
+                                                {format!(" R_FB={}k/(V_mid/{}-1)", ch_rint, v_fb)}</div>
+                                            <div><b style="color: var(--text)">"DS4424:"</b>" R_FS=(0.976×127)/(16×I_FS)"</div>
+                                            <div><b style="color: var(--text)">"Range:"</b>
+                                                {format!(" {:.1}V–{:.1}V (abs limit)", ch.v_min, ch.v_max)}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                }.into_any()
+            }}
+        </div>
+    }
+}

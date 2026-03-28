@@ -25,7 +25,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let scope_data: [RwSignal<Vec<ScopePoint>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
-    // Accumulate data
+    // Accumulate data and append to CSV if recording
     Effect::new(move || {
         if !running.get() { return; }
         let ds = state.get();
@@ -40,6 +40,24 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     if data.len() > MAX_POINTS { data.drain(0..data.len() - MAX_POINTS); }
                 });
             }
+        }
+
+        // Append CSV row if recording
+        if recording.get_untracked() {
+            let mut ch_values = Vec::with_capacity(4);
+            for i in 0..4 {
+                if i < ds.channels.len() {
+                    ch_values.push(ds.channels[i].adc_value);
+                } else {
+                    ch_values.push(0.0);
+                }
+            }
+            let args = serde_wasm_bindgen::to_value(
+                &serde_json::json!({ "timestampMs": now, "chValues": ch_values })
+            ).unwrap();
+            spawn_local(async move {
+                let _ = invoke("append_csv_data", args).await;
+            });
         }
     });
 
@@ -258,6 +276,10 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 <button class="scope-btn" class:scope-btn-csv=move || recording.get()
                     on:click=move |_| {
                         if recording.get_untracked() {
+                            // Stop recording: close the CSV file on backend
+                            spawn_local(async move {
+                                let _ = invoke("stop_csv_recording", wasm_bindgen::JsValue::NULL).await;
+                            });
                             set_recording.set(false);
                             set_csv_path.set(String::new());
                         } else {
@@ -269,6 +291,12 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 if let Ok(opt) = serde_wasm_bindgen::from_value::<Option<String>>(result) {
                                     if let Some(path) = opt {
                                         if !path.is_empty() {
+                                            // Open CSV file and write header on backend
+                                            let args = serde_wasm_bindgen::to_value(
+                                                &serde_json::json!({ "path": path })
+                                            ).unwrap();
+                                            let start_result = invoke("start_csv_recording", args).await;
+                                            log(&format!("start_csv_recording result: {:?}", start_result));
                                             set_csv_path.set(path);
                                             set_recording.set(true);
                                         }

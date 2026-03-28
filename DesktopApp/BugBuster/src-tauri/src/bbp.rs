@@ -86,6 +86,26 @@ pub const CMD_MUX_SET_ALL: u8 = 0x90;
 pub const CMD_MUX_GET_ALL: u8 = 0x91;
 pub const CMD_MUX_SET_SWITCH: u8 = 0x92;
 
+// DS4424 IDAC
+pub const CMD_IDAC_GET_STATUS: u8 = 0xA0;
+pub const CMD_IDAC_SET_CODE: u8 = 0xA1;
+pub const CMD_IDAC_SET_VOLTAGE: u8 = 0xA2;
+pub const CMD_IDAC_CALIBRATE: u8 = 0xA3;
+
+// PCA9535 GPIO Expander
+pub const CMD_PCA_GET_STATUS: u8 = 0xB0;
+pub const CMD_PCA_SET_CONTROL: u8 = 0xB1;
+pub const CMD_PCA_SET_PORT: u8 = 0xB2;
+
+// Waveform Generator
+pub const CMD_START_WAVEGEN: u8 = 0xD0;
+pub const CMD_STOP_WAVEGEN: u8 = 0xD1;
+
+// HUSB238 USB PD
+pub const CMD_USBPD_GET_STATUS: u8 = 0xC0;
+pub const CMD_USBPD_SELECT_PDO: u8 = 0xC1;
+pub const CMD_USBPD_GO: u8 = 0xC2;
+
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;
 pub const CMD_REG_READ: u8 = 0x71;

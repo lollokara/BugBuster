@@ -1,0 +1,250 @@
+// =============================================================================
+// pca9535.cpp - PCA9535AHF 16-bit I2C GPIO Expander Driver
+// =============================================================================
+
+#include "pca9535.h"
+#include "i2c_bus.h"
+#include "config.h"
+#include "esp_log.h"
+
+#include <string.h>
+
+static const char *TAG = "pca9535";
+
+static PCA9535State s_state = {};
+
+static bool read_reg(uint8_t reg, uint8_t *val)
+{
+    return i2c_bus_write_read(PCA9535_I2C_ADDR, &reg, 1, val, 1, 50);
+}
+
+static bool write_reg(uint8_t reg, uint8_t val)
+{
+    uint8_t buf[2] = { reg, val };
+    return i2c_bus_write(PCA9535_I2C_ADDR, buf, 2, 50);
+}
+
+// Decode input registers into state booleans
+static void decode_inputs(void)
+{
+    s_state.logic_pg = (s_state.input0 & PCA9535_LOGIC_PG) != 0;
+    s_state.vadj1_pg = (s_state.input0 & PCA9535_VADJ1_PG) != 0;
+    s_state.vadj2_pg = (s_state.input0 & PCA9535_VADJ2_PG) != 0;
+
+    // E-Fuse faults are active LOW (fault when pin is low)
+    s_state.efuse_flt[0] = (s_state.input1 & PCA9535_EFUSE_FLT_1) == 0;
+    s_state.efuse_flt[1] = (s_state.input1 & PCA9535_EFUSE_FLT_2) == 0;
+    s_state.efuse_flt[2] = (s_state.input1 & PCA9535_EFUSE_FLT_3) == 0;
+    s_state.efuse_flt[3] = (s_state.input1 & PCA9535_EFUSE_FLT_4) == 0;
+}
+
+// Decode output registers into state booleans
+static void decode_outputs(void)
+{
+    s_state.vadj1_en  = (s_state.output0 & PCA9535_VADJ1_EN) != 0;
+    s_state.vadj2_en  = (s_state.output0 & PCA9535_VADJ2_EN) != 0;
+    s_state.en_15v    = (s_state.output0 & PCA9535_EN_15V_A) != 0;
+    s_state.en_mux    = (s_state.output0 & PCA9535_EN_MUX) != 0;
+    s_state.en_usb_hub = (s_state.output0 & PCA9535_EN_USB_HUB) != 0;
+
+    s_state.efuse_en[0] = (s_state.output1 & PCA9535_EFUSE_EN_1) != 0;
+    s_state.efuse_en[1] = (s_state.output1 & PCA9535_EFUSE_EN_2) != 0;
+    s_state.efuse_en[2] = (s_state.output1 & PCA9535_EFUSE_EN_3) != 0;
+    s_state.efuse_en[3] = (s_state.output1 & PCA9535_EFUSE_EN_4) != 0;
+}
+
+bool pca9535_init(void)
+{
+    memset(&s_state, 0, sizeof(s_state));
+
+    if (!i2c_bus_ready()) {
+        ESP_LOGW(TAG, "I2C bus not ready");
+        return false;
+    }
+
+    s_state.present = i2c_bus_probe(PCA9535_I2C_ADDR);
+    if (!s_state.present) {
+        ESP_LOGW(TAG, "PCA9535 not found at 0x%02X", PCA9535_I2C_ADDR);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "PCA9535 found at 0x%02X", PCA9535_I2C_ADDR);
+
+    // Configure pin directions
+    // Port 0: config register - 1=input, 0=output
+    // Inputs: P0.0 (LOGIC_PG), P0.1 (VADJ1_PG), P0.4 (VADJ2_PG)
+    // Outputs: P0.2, P0.3, P0.5, P0.6, P0.7
+    uint8_t config0 = PCA9535_PORT0_INPUT_MASK;  // 1=input for PG pins, 0=output for EN pins
+    if (!write_reg(PCA9535_REG_CONFIG0, config0)) {
+        ESP_LOGE(TAG, "Failed to configure Port 0 direction");
+        return false;
+    }
+
+    // Port 1: EN pins as output (even bits), FLT pins as input (odd bits)
+    uint8_t config1 = PCA9535_PORT1_INPUT_MASK;  // 1=input for FLT, 0=output for EN
+    if (!write_reg(PCA9535_REG_CONFIG1, config1)) {
+        ESP_LOGE(TAG, "Failed to configure Port 1 direction");
+        return false;
+    }
+
+    // Set all outputs LOW (everything disabled) - safe start
+    s_state.output0 = 0x00;
+    s_state.output1 = 0x00;
+    if (!write_reg(PCA9535_REG_OUTPUT0, s_state.output0)) return false;
+    if (!write_reg(PCA9535_REG_OUTPUT1, s_state.output1)) return false;
+
+    // No polarity inversion
+    write_reg(PCA9535_REG_POLAR0, 0x00);
+    write_reg(PCA9535_REG_POLAR1, 0x00);
+
+    // Read initial inputs
+    pca9535_update();
+
+    ESP_LOGI(TAG, "PCA9535 configured: all outputs OFF");
+    ESP_LOGI(TAG, "  LOGIC_PG=%d VADJ1_PG=%d VADJ2_PG=%d",
+             s_state.logic_pg, s_state.vadj1_pg, s_state.vadj2_pg);
+
+    return true;
+}
+
+bool pca9535_present(void)
+{
+    return s_state.present;
+}
+
+const PCA9535State* pca9535_get_state(void)
+{
+    return &s_state;
+}
+
+bool pca9535_update(void)
+{
+    if (!s_state.present) return false;
+
+    bool ok = true;
+    ok &= read_reg(PCA9535_REG_INPUT0, &s_state.input0);
+    ok &= read_reg(PCA9535_REG_INPUT1, &s_state.input1);
+
+    if (ok) {
+        decode_inputs();
+        decode_outputs();
+    }
+    return ok;
+}
+
+bool pca9535_set_control(PcaControl ctrl, bool on)
+{
+    if (!s_state.present) return false;
+
+    switch (ctrl) {
+        case PCA_CTRL_VADJ1_EN:
+            return pca9535_set_bit(0, 2, on);
+        case PCA_CTRL_VADJ2_EN:
+            return pca9535_set_bit(0, 3, on);
+        case PCA_CTRL_15V_EN:
+            return pca9535_set_bit(0, 5, on);
+        case PCA_CTRL_MUX_EN:
+            return pca9535_set_bit(0, 6, on);
+        case PCA_CTRL_USB_HUB_EN:
+            return pca9535_set_bit(0, 7, on);
+        case PCA_CTRL_EFUSE1_EN:
+            return pca9535_set_bit(1, 0, on);
+        case PCA_CTRL_EFUSE2_EN:
+            return pca9535_set_bit(1, 2, on);
+        case PCA_CTRL_EFUSE3_EN:
+            return pca9535_set_bit(1, 4, on);
+        case PCA_CTRL_EFUSE4_EN:
+            return pca9535_set_bit(1, 6, on);
+        default:
+            return false;
+    }
+}
+
+bool pca9535_get_status(PcaStatus status)
+{
+    switch (status) {
+        case PCA_STATUS_LOGIC_PG:   return s_state.logic_pg;
+        case PCA_STATUS_VADJ1_PG:   return s_state.vadj1_pg;
+        case PCA_STATUS_VADJ2_PG:   return s_state.vadj2_pg;
+        case PCA_STATUS_EFUSE1_FLT: return s_state.efuse_flt[0];
+        case PCA_STATUS_EFUSE2_FLT: return s_state.efuse_flt[1];
+        case PCA_STATUS_EFUSE3_FLT: return s_state.efuse_flt[2];
+        case PCA_STATUS_EFUSE4_FLT: return s_state.efuse_flt[3];
+        default: return false;
+    }
+}
+
+bool pca9535_set_port(uint8_t port, uint8_t val)
+{
+    if (!s_state.present) return false;
+    if (port > 1) return false;
+
+    uint8_t reg = (port == 0) ? PCA9535_REG_OUTPUT0 : PCA9535_REG_OUTPUT1;
+    // Only write bits that are configured as outputs
+    uint8_t out_mask = (port == 0) ? PCA9535_PORT0_OUTPUT_MASK : PCA9535_PORT1_OUTPUT_MASK;
+    uint8_t *cached = (port == 0) ? &s_state.output0 : &s_state.output1;
+
+    *cached = (*cached & ~out_mask) | (val & out_mask);
+    bool ok = write_reg(reg, *cached);
+    if (ok) decode_outputs();
+    return ok;
+}
+
+bool pca9535_read_port(uint8_t port, uint8_t *val)
+{
+    if (!s_state.present) return false;
+    if (port > 1) return false;
+
+    uint8_t reg = (port == 0) ? PCA9535_REG_INPUT0 : PCA9535_REG_INPUT1;
+    return read_reg(reg, val);
+}
+
+bool pca9535_set_bit(uint8_t port, uint8_t bit, bool val)
+{
+    if (!s_state.present) return false;
+    if (port > 1 || bit > 7) return false;
+
+    uint8_t reg = (port == 0) ? PCA9535_REG_OUTPUT0 : PCA9535_REG_OUTPUT1;
+    uint8_t *cached = (port == 0) ? &s_state.output0 : &s_state.output1;
+    uint8_t mask = (1 << bit);
+
+    if (val) {
+        *cached |= mask;
+    } else {
+        *cached &= ~mask;
+    }
+
+    bool ok = write_reg(reg, *cached);
+    if (ok) decode_outputs();
+    return ok;
+}
+
+const char* pca9535_control_name(PcaControl ctrl)
+{
+    switch (ctrl) {
+        case PCA_CTRL_VADJ1_EN:   return "VADJ1_EN";
+        case PCA_CTRL_VADJ2_EN:   return "VADJ2_EN";
+        case PCA_CTRL_15V_EN:     return "EN_15V_A";
+        case PCA_CTRL_MUX_EN:     return "EN_MUX";
+        case PCA_CTRL_USB_HUB_EN: return "EN_USB_HUB";
+        case PCA_CTRL_EFUSE1_EN:  return "EFUSE_EN_1";
+        case PCA_CTRL_EFUSE2_EN:  return "EFUSE_EN_2";
+        case PCA_CTRL_EFUSE3_EN:  return "EFUSE_EN_3";
+        case PCA_CTRL_EFUSE4_EN:  return "EFUSE_EN_4";
+        default: return "UNKNOWN";
+    }
+}
+
+const char* pca9535_status_name(PcaStatus status)
+{
+    switch (status) {
+        case PCA_STATUS_LOGIC_PG:   return "LOGIC_PG";
+        case PCA_STATUS_VADJ1_PG:   return "VADJ1_PG";
+        case PCA_STATUS_VADJ2_PG:   return "VADJ2_PG";
+        case PCA_STATUS_EFUSE1_FLT: return "EFUSE_FLT_1";
+        case PCA_STATUS_EFUSE2_FLT: return "EFUSE_FLT_2";
+        case PCA_STATUS_EFUSE3_FLT: return "EFUSE_FLT_3";
+        case PCA_STATUS_EFUSE4_FLT: return "EFUSE_FLT_4";
+        default: return "UNKNOWN";
+    }
+}
