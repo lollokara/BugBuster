@@ -1,7 +1,15 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use serde::Serialize;
 use crate::tauri_bridge::*;
+
+async fn sleep_ms(ms: u32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        web_sys::window().unwrap()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32)
+            .unwrap();
+    });
+    wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
+}
 
 // Connector pin definitions (excluding GND = pin 5)
 // Pin 1 = VBUS (power), Pin 2-4 = MUX signal outputs
@@ -82,15 +90,17 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Stabilization countdown timer
     let set_step_clone = set_step;
+    let cd_read = stabilize_countdown;
     Effect::new(move |_| {
         let s = step.get();
-        let cd = stabilize_countdown.get();
+        let cd = cd_read.get();
         if s == WizardStep::Stabilizing && cd > 0 {
             let set_cd = set_stabilize_countdown;
             let set_s = set_step_clone;
+            let cur_cd = cd;
             spawn_local(async move {
-                gloo_timers::future::sleep(std::time::Duration::from_secs(1)).await;
-                let new_cd = set_cd.get_untracked().saturating_sub(1);
+                sleep_ms(1000).await;
+                let new_cd = cur_cd.saturating_sub(1);
                 set_cd.set(new_cd);
                 if new_cd == 0 {
                     set_s.set(WizardStep::Running);
@@ -136,7 +146,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
             // Set to midpoint first
             send_idac_code(idac_ch, 0);
-            gloo_timers::future::sleep(std::time::Duration::from_millis(200)).await;
+            sleep_ms(200).await;
 
             let mut pts = 0u32;
             let mut step_count = 0u32;
@@ -145,7 +155,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             async fn read_adc_avg(state_sig: ReadSignal<DeviceState>) -> f32 {
                 let mut sum = 0.0f32;
                 for _ in 0..3 {
-                    gloo_timers::future::sleep(std::time::Duration::from_millis(60)).await;
+                    sleep_ms(60).await;
                     let ds = state_sig.get_untracked();
                     if !ds.channels.is_empty() {
                         sum += ds.channels[0].adc_value;
@@ -155,7 +165,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             }
 
             // Midpoint reading
-            gloo_timers::future::sleep(std::time::Duration::from_millis(100)).await;
+            sleep_ms(100).await;
             let v = read_adc_avg(state).await;
             send_idac_cal_add_point(idac_ch, 0, v);
             pts += 1;
@@ -170,7 +180,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let mut code: i32 = -dac_step;
             while code >= -127 {
                 send_idac_code(idac_ch, code as i8);
-                gloo_timers::future::sleep(std::time::Duration::from_millis(100)).await;
+                sleep_ms(100).await;
                 let v = read_adc_avg(state).await;
 
                 send_idac_cal_add_point(idac_ch, code as i8, v);
@@ -190,13 +200,13 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
             // Return to midpoint
             send_idac_code(idac_ch, 0);
-            gloo_timers::future::sleep(std::time::Duration::from_millis(200)).await;
+            sleep_ms(200).await;
 
             // Sweep SOURCE direction (positive codes → lower voltage)
             code = dac_step;
             while code <= 127 {
                 send_idac_code(idac_ch, code as i8);
-                gloo_timers::future::sleep(std::time::Duration::from_millis(100)).await;
+                sleep_ms(100).await;
                 let v = read_adc_avg(state).await;
 
                 send_idac_cal_add_point(idac_ch, code as i8, v);
