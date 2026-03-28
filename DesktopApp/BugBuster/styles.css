@@ -540,6 +540,17 @@ button.device-item:hover { background: rgba(59,130,246,0.1); border-color: rgba(
     cursor: pointer; transition: all 0.2s; font-family: inherit;
 }
 .sp-ef-on { background: rgba(245,158,11,0.15); border-color: var(--amber); color: var(--amber); }
+.sp-oe-btn {
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--text-muted); font-size: 0.7rem;
+    cursor: pointer; transition: all 0.2s; font-family: inherit;
+}
+.sp-oe-on { background: rgba(34,197,94,0.15); border-color: #22c55e; color: #22c55e; }
+.sp-legend {
+    display: flex; gap: 16px; padding: 2px 0 6px; font-size: 0.7rem;
+    border-bottom: 1px solid var(--border);
+}
+.sp-leg-item { white-space: nowrap; }
 
 /* ---- Animations ---- */
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
