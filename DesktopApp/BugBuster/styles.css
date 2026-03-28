@@ -527,6 +527,19 @@ button.device-item:hover { background: rgba(59,130,246,0.1); border-color: rgba(
     background: rgba(16,185,129,0.2); border-color: var(--green);
     color: var(--green); font-weight: 600;
 }
+.sp-psu-controls { display: flex; gap: 4px; }
+.sp-psu-btn {
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--text-muted); font-size: 0.7rem;
+    cursor: pointer; transition: all 0.2s; font-family: inherit;
+}
+.sp-psu-on { background: rgba(239,68,68,0.15); border-color: var(--rose); color: var(--rose); }
+.sp-ef-btn {
+    padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--text-muted); font-size: 0.65rem;
+    cursor: pointer; transition: all 0.2s; font-family: inherit;
+}
+.sp-ef-on { background: rgba(245,158,11,0.15); border-color: var(--amber); color: var(--amber); }
 
 /* ---- Animations ---- */
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
