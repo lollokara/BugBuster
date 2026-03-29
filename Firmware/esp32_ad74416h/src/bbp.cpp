@@ -14,7 +14,9 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "wifi_manager.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "esp_log.h"
 
 #include <string.h>
@@ -1297,6 +1299,42 @@ static int handleSetLshiftOe(uint16_t seq, uint8_t cmdId,
     return 1;
 }
 
+static int handleSetSpiClock(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint32_t hz = get_u32(payload, &rpos);
+
+    // Pause ADC task during SPI device reconfiguration
+    extern volatile bool g_spi_bus_request;
+    extern volatile bool g_spi_bus_granted;
+    g_spi_bus_granted = false;
+    g_spi_bus_request = true;
+    for (int i = 0; i < 200 && !g_spi_bus_granted; i++) delay_ms(1);
+
+    bool ok = s_spi->setClockSpeed(hz);
+
+    g_spi_bus_request = false;
+    g_spi_bus_granted = false;
+
+    if (!ok) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    // Verify SPI still works
+    uint16_t scratch = 0;
+    s_spi->writeRegister(0x76, 0xA5C3);  // SCRATCH register
+    bool crc_ok = s_spi->readRegister(0x76, &scratch);
+    bool match = (scratch == 0xA5C3);
+    s_spi->writeRegister(0x76, 0x0000);
+
+    ESP_LOGI(TAG, "SPI clock set to %lu Hz — verify: %s", (unsigned long)hz, match ? "OK" : "FAIL");
+
+    size_t pos = 0;
+    put_u32(out, &pos, hz);
+    put_bool(out, &pos, match && crc_ok);
+    return (int)pos;
+}
+
 static int handlePing(uint16_t seq, uint8_t cmdId,
                        const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -1308,6 +1346,92 @@ static int handlePing(uint16_t seq, uint8_t cmdId,
     }
     put_u32(out, &pos, token);
     put_u32(out, &pos, millis_now());
+    return (int)pos;
+}
+
+// --- WiFi Management ---
+
+static int handleWifiGetStatus(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    size_t pos = 0;
+
+    // connected (bool)
+    bool connected = wifi_is_connected();
+    put_bool(out, &pos, connected);
+
+    // sta_ssid: len(u8) + bytes
+    const char *sta_ssid = wifi_get_sta_ssid();
+    uint8_t ssid_len = (uint8_t)strnlen(sta_ssid, 32);
+    put_u8(out, &pos, ssid_len);
+    memcpy(out + pos, sta_ssid, ssid_len);
+    pos += ssid_len;
+
+    // sta_ip: len(u8) + bytes
+    const char *sta_ip = wifi_get_sta_ip();
+    uint8_t ip_len = (uint8_t)strnlen(sta_ip, 16);
+    put_u8(out, &pos, ip_len);
+    memcpy(out + pos, sta_ip, ip_len);
+    pos += ip_len;
+
+    // rssi (i32 as u32)
+    int32_t rssi = (int32_t)wifi_get_rssi();
+    put_u32(out, &pos, (uint32_t)rssi);
+
+    // ap_ssid: get from ESP-IDF config
+    wifi_config_t ap_cfg = {};
+    esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
+    const char *ap_ssid = (const char *)ap_cfg.ap.ssid;
+    uint8_t ap_ssid_len = (uint8_t)strnlen(ap_ssid, 32);
+    put_u8(out, &pos, ap_ssid_len);
+    memcpy(out + pos, ap_ssid, ap_ssid_len);
+    pos += ap_ssid_len;
+
+    // ap_ip: len(u8) + bytes
+    const char *ap_ip = wifi_get_ap_ip();
+    uint8_t ap_ip_len = (uint8_t)strnlen(ap_ip, 16);
+    put_u8(out, &pos, ap_ip_len);
+    memcpy(out + pos, ap_ip, ap_ip_len);
+    pos += ap_ip_len;
+
+    // ap_mac: len(u8) + bytes
+    const char *ap_mac = wifi_get_ap_mac();
+    uint8_t ap_mac_len = (uint8_t)strnlen(ap_mac, 18);
+    put_u8(out, &pos, ap_mac_len);
+    memcpy(out + pos, ap_mac, ap_mac_len);
+    pos += ap_mac_len;
+
+    return (int)pos;
+}
+
+static int handleWifiConnect(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    size_t rpos = 0;
+    uint8_t ssid_len = get_u8(payload, &rpos);
+    if (ssid_len == 0 || ssid_len > 32 || rpos + ssid_len >= len) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1;
+    }
+    char ssid[33] = {};
+    memcpy(ssid, payload + rpos, ssid_len);
+    ssid[ssid_len] = '\0';
+    rpos += ssid_len;
+
+    uint8_t pass_len = get_u8(payload, &rpos);
+    if (pass_len > 64 || rpos + pass_len > len) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1;
+    }
+    char pass[65] = {};
+    memcpy(pass, payload + rpos, pass_len);
+    pass[pass_len] = '\0';
+
+    ESP_LOGI(TAG, "WiFi connect to '%s'", ssid);
+    bool ok = wifi_connect(ssid, pass);
+
+    size_t pos = 0;
+    put_bool(out, &pos, ok);
     return (int)pos;
 }
 
@@ -1724,8 +1848,17 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
         case BBP_CMD_REG_WRITE:
             rspLen = handleRegWrite(seq, cmdId, payload, payloadLen, rspBuf);
             break;
+        case BBP_CMD_SET_SPI_CLOCK:
+            rspLen = handleSetSpiClock(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
         case BBP_CMD_SET_LSHIFT_OE:
             rspLen = handleSetLshiftOe(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_WIFI_GET_STATUS:
+            rspLen = handleWifiGetStatus(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_WIFI_CONNECT:
+            rspLen = handleWifiConnect(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_PING:
             rspLen = handlePing(seq, cmdId, payload, payloadLen, rspBuf);

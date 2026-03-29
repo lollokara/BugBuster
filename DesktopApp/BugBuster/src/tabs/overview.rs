@@ -5,7 +5,7 @@ use crate::tauri_bridge::*;
 #[component]
 pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let reset = move |_: leptos::ev::MouseEvent| {
-        invoke_void("device_reset", wasm_bindgen::JsValue::NULL);
+        invoke_with_feedback("device_reset", wasm_bindgen::JsValue::NULL, "Device reset");
     };
 
     view! {
@@ -113,7 +113,8 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 #[derive(Serialize)]
                                                 struct Args { channel: u8, function: u8 }
                                                 let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx, function: func }).unwrap();
-                                                invoke_void("set_channel_function", args);
+                                                let label = format!("Set CH {} to {}", CH_NAMES[ch_idx as usize], func_name(func));
+                                                invoke_with_feedback("set_channel_function", args, &label);
                                             }
                                         >
                                             {FN_OPTIONS.iter().map(|(code, name)| {

@@ -7,14 +7,19 @@ fn send_ch_func(ch: u8, func: u8) {
     #[derive(Serialize)]
     struct Args { channel: u8, function: u8 }
     let args = serde_wasm_bindgen::to_value(&Args { channel: ch, function: func }).unwrap();
-    invoke_void("set_channel_function", args);
+    let label = format!("Set CH {} to {}", CH_NAMES[ch as usize], func_name(func));
+    invoke_with_feedback("set_channel_function", args, &label);
 }
 
 fn send_adc_cfg(ch: u8, mux: u8, range: u8, rate: u8) {
     #[derive(Serialize)]
     struct Args { channel: u8, mux: u8, range: u8, rate: u8 }
     let args = serde_wasm_bindgen::to_value(&Args { channel: ch, mux, range, rate }).unwrap();
-    invoke_void("set_adc_config", args);
+    let range_name = ADC_RANGE_OPTIONS.iter()
+        .find(|(c, _, _, _)| *c == range)
+        .map(|(_, n, _, _)| *n).unwrap_or("?");
+    let label = format!("Set CH {} ADC: {}", CH_NAMES[ch as usize], range_name);
+    invoke_with_feedback("set_adc_config", args, &label);
 }
 
 #[component]

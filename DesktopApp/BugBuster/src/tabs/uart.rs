@@ -39,7 +39,8 @@ pub fn UartTab(
             stop_bits: cfg.stop_bits,
             enabled: cfg.enabled,
         }).unwrap();
-        invoke_void("set_uart_config", args);
+        let label = format!("Apply UART config: {} baud", cfg.baud);
+        invoke_with_feedback("set_uart_config", args, &label);
     };
 
     view! {

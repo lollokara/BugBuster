@@ -99,10 +99,16 @@ struct GpioValueArgs { gpio: u8, value: bool }
 
 fn send_gpio_config(gpio: u8, mode: u8, pulldown: bool) {
     let args = serde_wasm_bindgen::to_value(&GpioConfigArgs { gpio, mode, pulldown }).unwrap();
-    invoke_void("set_gpio_config", args);
+    let mode_name = GPIO_MODE_OPTIONS.iter()
+        .find(|(c, _)| *c == mode)
+        .map(|(_, n)| *n).unwrap_or("?");
+    let label = format!("Set GPIO {} to {}{}", GPIO_NAMES[gpio as usize], mode_name,
+        if pulldown { " (pull-down)" } else { "" });
+    invoke_with_feedback("set_gpio_config", args, &label);
 }
 
 fn send_gpio_value(gpio: u8, value: bool) {
     let args = serde_wasm_bindgen::to_value(&GpioValueArgs { gpio, value }).unwrap();
-    invoke_void("set_gpio_value", args);
+    let label = format!("Set GPIO {} {}", GPIO_NAMES[gpio as usize], if value { "HIGH" } else { "LOW" });
+    invoke_with_feedback("set_gpio_value", args, &label);
 }

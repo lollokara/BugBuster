@@ -116,18 +116,67 @@ impl ConnectionManager {
         // Spawn event listener for USB stream data
         let app_handle = app.clone();
         tokio::spawn(async move {
-            while let Some(msg) = event_rx.recv().await {
-                match msg.cmd_id {
-                    bbp::EVT_ADC_DATA => {
-                        let _ = app_handle.emit("adc-stream", &msg.payload);
+            let mut last_adc_emit = std::time::Instant::now();
+            let mut adc_buffer: Vec<u8> = Vec::new();
+            let emit_interval = std::time::Duration::from_millis(33); // ~30 Hz
+
+            loop {
+                // Use a short timeout so we can flush the buffer periodically
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(10),
+                    event_rx.recv()
+                ).await {
+                    Ok(Some(msg)) => {
+                        match msg.cmd_id {
+                            bbp::EVT_ADC_DATA => {
+                                // Forward to recording backend (no frontend involvement)
+                                {
+                                    use crate::commands::RECORDING;
+                                    if let Ok(mut guard) = RECORDING.lock() {
+                                        if let Some(ref mut rec) = *guard {
+                                            // Parse count from payload and write raw sample data
+                                            if msg.payload.len() >= 7 {
+                                                let count = u16::from_le_bytes([msg.payload[5], msg.payload[6]]) as usize;
+                                                let mask = msg.payload[0];
+                                                let num_ch = (0..4).filter(|b| mask & (1 << b) != 0).count();
+                                                let data_len = count * num_ch * 3;
+                                                let data_end = 7 + data_len;
+                                                if msg.payload.len() >= data_end {
+                                                    use std::io::Write;
+                                                    let _ = rec.writer.write_all(&msg.payload[7..data_end]);
+                                                    rec.sample_count += count as u64;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Keep latest payload for throttled display
+                                adc_buffer = msg.payload;
+
+                                // Throttle display emit to ~30 Hz
+                                if last_adc_emit.elapsed() >= emit_interval {
+                                    let _ = app_handle.emit("adc-stream", &adc_buffer);
+                                    last_adc_emit = std::time::Instant::now();
+                                }
+                            }
+                            bbp::EVT_SCOPE_DATA => {
+                                let _ = app_handle.emit("scope-data", &msg.payload);
+                            }
+                            bbp::EVT_ALERT => {
+                                let _ = app_handle.emit("alert-event", &msg.payload);
+                            }
+                            _ => {}
+                        }
                     }
-                    bbp::EVT_SCOPE_DATA => {
-                        let _ = app_handle.emit("scope-data", &msg.payload);
+                    Ok(None) => break, // Channel closed
+                    Err(_) => {
+                        // Timeout — flush any pending ADC data
+                        if !adc_buffer.is_empty() && last_adc_emit.elapsed() >= emit_interval {
+                            let _ = app_handle.emit("adc-stream", &adc_buffer);
+                            last_adc_emit = std::time::Instant::now();
+                        }
                     }
-                    bbp::EVT_ALERT => {
-                        let _ = app_handle.emit("alert-event", &msg.payload);
-                    }
-                    _ => {}
                 }
             }
         });

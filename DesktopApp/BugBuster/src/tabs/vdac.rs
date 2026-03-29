@@ -136,9 +136,11 @@ struct VoutRangeArgs { channel: u8, bipolar: bool }
 
 fn send_dac_voltage(ch: u8, voltage: f32, bipolar: bool) {
     let args = serde_wasm_bindgen::to_value(&DacVoltageArgs { channel: ch, voltage, bipolar }).unwrap();
-    invoke_void("set_dac_voltage", args);
+    let label = format!("Set CH {} to {:.3}V", CH_NAMES[ch as usize], voltage);
+    invoke_with_feedback("set_dac_voltage", args, &label);
 }
 fn send_vout_range(ch: u8, bipolar: bool) {
     let args = serde_wasm_bindgen::to_value(&VoutRangeArgs { channel: ch, bipolar }).unwrap();
-    invoke_void("set_vout_range", args);
+    let label = format!("Set CH {} range to {}", CH_NAMES[ch as usize], if bipolar { "+/-12V" } else { "0-12V" });
+    invoke_with_feedback("set_vout_range", args, &label);
 }

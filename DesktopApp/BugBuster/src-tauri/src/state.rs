@@ -191,6 +191,21 @@ pub struct IoExpState {
 }
 
 // -----------------------------------------------------------------------------
+// WiFi State
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WifiState {
+    pub connected: bool,
+    pub sta_ssid: String,
+    pub sta_ip: String,
+    pub rssi: i32,
+    pub ap_ssid: String,
+    pub ap_ip: String,
+    pub ap_mac: String,
+}
+
+// -----------------------------------------------------------------------------
 // Device info from handshake or GET_DEVICE_INFO
 // -----------------------------------------------------------------------------
 

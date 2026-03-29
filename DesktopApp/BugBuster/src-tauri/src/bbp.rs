@@ -112,6 +112,10 @@ pub const CMD_USBPD_GO: u8 = 0xC2;
 // Level Shifter
 pub const CMD_SET_LSHIFT_OE: u8 = 0xE0;
 
+// WiFi Management
+pub const CMD_WIFI_GET_STATUS: u8 = 0xE1;
+pub const CMD_WIFI_CONNECT: u8 = 0xE2;
+
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;
 pub const CMD_REG_READ: u8 = 0x71;
@@ -433,6 +437,14 @@ impl<'a> PayloadReader<'a> {
 
     pub fn remaining(&self) -> usize {
         self.data.len().saturating_sub(self.pos)
+    }
+
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    pub fn skip(&mut self, n: usize) {
+        self.pos = (self.pos + n).min(self.data.len());
     }
 
     pub fn get_u8(&mut self) -> Option<u8> {

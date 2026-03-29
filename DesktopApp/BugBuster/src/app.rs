@@ -37,6 +37,44 @@ pub fn App() -> impl IntoView {
     let (active_tab, set_active_tab) = signal("overview".to_string());
     let uart_config = RwSignal::new(UartConfigState::new());
 
+    // Toast notification system
+    let (toasts, set_toasts) = signal(Vec::<(String, String, f64)>::new()); // (msg, kind, timestamp)
+
+    // Listen for toast events from invoke_with_feedback
+    spawn_local(async move {
+        let closure: Closure<dyn FnMut(JsValue)> = Closure::new(move |event: JsValue| {
+            let event: web_sys::CustomEvent = event.unchecked_into();
+            if let Some(detail) = event.detail().dyn_ref::<js_sys::Object>() {
+                let msg = js_sys::Reflect::get(detail, &"msg".into())
+                    .ok().and_then(|v| v.as_string()).unwrap_or_default();
+                let kind = js_sys::Reflect::get(detail, &"kind".into())
+                    .ok().and_then(|v| v.as_string()).unwrap_or_else(|| "info".into());
+                let now = js_sys::Date::now();
+                set_toasts.update(|t| {
+                    t.push((msg, kind, now));
+                    // Keep max 5 toasts
+                    if t.len() > 5 { t.remove(0); }
+                });
+                // Auto-remove after 3 seconds
+                let set_t = set_toasts;
+                spawn_local(async move {
+                    let promise = js_sys::Promise::new(&mut |resolve, _| {
+                        web_sys::window().unwrap()
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 3000).unwrap();
+                    });
+                    wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
+                    set_t.update(|t| {
+                        t.retain(|(_, _, ts)| js_sys::Date::now() - ts < 3000.0);
+                    });
+                });
+            }
+        });
+        if let Some(window) = web_sys::window() {
+            window.add_event_listener_with_callback("bb-toast", closure.as_ref().unchecked_ref()).ok();
+        }
+        closure.forget();
+    });
+
     // Scan for devices
     let scan = move |_: ev::MouseEvent| {
         set_scanning.set(true);
@@ -234,6 +272,18 @@ pub fn App() -> impl IntoView {
                     }}
                 </div>
             </Show>
+
+            // Toast notifications
+            <div class="toast-container">
+                {move || toasts.get().into_iter().map(|(msg, kind, _ts)| {
+                    let class = match kind.as_str() {
+                        "ok" => "toast toast-ok",
+                        "err" => "toast toast-err",
+                        _ => "toast toast-info",
+                    };
+                    view! { <div class=class>{msg}</div> }
+                }).collect::<Vec<_>>()}
+            </div>
         </div>
     }
 }

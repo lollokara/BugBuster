@@ -23,7 +23,12 @@ struct PcaSetControlArgs { control: u8, on: bool }
 
 fn send_pca_control(control: u8, on: bool) {
     let args = serde_wasm_bindgen::to_value(&PcaSetControlArgs { control, on }).unwrap();
-    invoke_void("pca_set_control", args);
+    let name = match control {
+        0 => "VADJ1", 1 => "VADJ2", 5 => "EFuse1", 6 => "EFuse2", 7 => "EFuse3", 8 => "EFuse4",
+        _ => "PCA",
+    };
+    let label = format!("{} {}", if on { "Enable" } else { "Disable" }, name);
+    invoke_with_feedback("pca_set_control", args, &label);
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -128,14 +133,16 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
 
         #[derive(Serialize)] #[serde(rename_all = "camelCase")] struct A { device: u8, switch_num: u8, state: bool }
-        let a = serde_wasm_bindgen::to_value(&A { device: d as u8, switch_num: s as u8, state: !on }).unwrap();
-        invoke_void("mux_set_switch", a);
+        let new_state = !on;
+        let a = serde_wasm_bindgen::to_value(&A { device: d as u8, switch_num: s as u8, state: new_state }).unwrap();
+        let label = format!("MUX{} S{} {}", d + 1, s + 1, if new_state { "ON" } else { "OFF" });
+        invoke_with_feedback("mux_set_switch", a, &label);
         set_mux.set(st);
     };
 
     let pre = move |s: [u8; 4]| {
         let a = serde_wasm_bindgen::to_value(&serde_json::json!({"states": s.to_vec()})).unwrap();
-        invoke_void("mux_set_all", a);
+        invoke_with_feedback("mux_set_all", a, "Apply MUX preset");
         set_mux.set(s);
     };
 
@@ -487,7 +494,8 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             #[derive(serde::Serialize)]
                             struct Args { on: bool }
                             let args = serde_wasm_bindgen::to_value(&Args { on: new_val }).unwrap();
-                            invoke_void("set_lshift_oe", args);
+                            let label = format!("{} Level Shifter OE", if new_val { "Enable" } else { "Disable" });
+                            invoke_with_feedback("set_lshift_oe", args, &label);
                         }
                     >"LShift OE"</button>
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[0]

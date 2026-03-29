@@ -1,6 +1,6 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 1.3
+**Version:** 1.4
 **Transport:** USB CDC (Virtual COM Port)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
 **Status:** Draft
@@ -1098,6 +1098,67 @@ Total: 10 + (4 x 12) = 58 bytes per bucket
   with the configured ADC sample rate.
 - Channels that are not in an ADC-reading function report `avg = min = max = 0.0`.
 
+### 6.17 WiFi Management
+
+Control and monitor the ESP32 WiFi subsystem (AP + STA dual-mode).
+
+#### 0xE1 WIFI_GET_STATUS
+Get current WiFi status including AP and STA information.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       connected       bool    STA connected to external network
++0      sta_ssid_len    u8      Length of STA SSID string
++1      sta_ssid        bytes   STA SSID (up to 32 bytes, not null-terminated)
++0      sta_ip_len      u8      Length of STA IP string
++1      sta_ip          bytes   STA IP address string (up to 16 bytes)
++0      rssi            i32     STA RSSI in dBm (as u32 on wire, interpret as signed)
++0      ap_ssid_len     u8      Length of AP SSID string
++1      ap_ssid         bytes   AP SSID (up to 32 bytes)
++0      ap_ip_len       u8      Length of AP IP string
++1      ap_ip           bytes   AP IP address string (up to 16 bytes)
++0      ap_mac_len      u8      Length of AP MAC string
++1      ap_mac          bytes   AP MAC address string (up to 18 bytes, "XX:XX:XX:XX:XX:XX")
+```
+
+All strings are length-prefixed (u8 length + raw bytes, no null terminator).
+
+**Web API equivalent:** `GET /api/wifi` returns JSON:
+```json
+{
+  "connected": true,
+  "staSSID": "MyNetwork",
+  "staIP": "192.168.1.42",
+  "rssi": -55,
+  "apSSID": "BugBuster",
+  "apIP": "192.168.4.1",
+  "apMAC": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+#### 0xE2 WIFI_CONNECT
+Connect to a WiFi network in STA mode. Blocks for up to 10 seconds waiting for connection.
+
+**Request payload:**
+```
+Offset  Field           Type    Description
+0       ssid_len        u8      Length of SSID (1-32)
+1       ssid            bytes   Network SSID
++0      pass_len        u8      Length of password (0-64)
++1      pass            bytes   Network password
+```
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       success         bool    true if connected
+```
+
+**Web API equivalent:** `POST /api/wifi/connect` with body `{"ssid":"...","password":"..."}` returns `{"success":true,"ip":"192.168.1.42"}`
+
 ---
 
 ## 7. Streaming Protocol
@@ -1412,6 +1473,7 @@ Host                                    Device
 | 1.1 | 2026-03-28 | Added I2C device commands: DS4424 IDAC (0xA0-A3), PCA9535 GPIO expander (0xB0-B2), HUSB238 USB-PD (0xC0-C2), Waveform generator (0xD0-D1) |
 | 1.2 | 2026-03-28 | Added UI-driven calibration commands: IDAC_CAL_ADD_POINT (0xA4), IDAC_CAL_CLEAR (0xA5), IDAC_CAL_SAVE (0xA6) |
 | 1.3 | 2026-03-29 | GET_STATUS now includes diagnostic slots; IDAC calibration commands (0xA4-0xA6) fully documented; added Section 6.16 Scope API (HTTP polling endpoint) |
+| 1.4 | 2026-03-28 | Added WiFi management commands: WIFI_GET_STATUS (0xE1), WIFI_CONNECT (0xE2); Section 6.17; added SET_LSHIFT_OE (0xE0) to Appendix A |
 
 ---
 
@@ -1472,6 +1534,9 @@ Host                                    Device
 | 0xC2 | USBPD_GO | H->D | command | (new) |
 | 0xD0 | START_WAVEGEN | H->D | ch,wf,f,a,o,m | (new) |
 | 0xD1 | STOP_WAVEGEN | H->D | -- | (new) |
+| 0xE0 | SET_LSHIFT_OE | H->D | on | `POST /api/lshift/oe` |
+| 0xE1 | WIFI_GET_STATUS | H->D | -- | `GET /api/wifi` |
+| 0xE2 | WIFI_CONNECT | H->D | ssid, pass | `POST /api/wifi/connect` |
 | 0xFE | PING | H->D | token | (new) |
 | 0xFF | DISCONNECT | H->D | -- | (new) |
 

@@ -153,6 +153,40 @@ pub fn invoke_void(cmd: &str, args: JsValue) {
     });
 }
 
+/// Send a command with feedback — shows toast on success/failure.
+/// `label` is a human-readable description like "Set ADC range to ±12V".
+pub fn invoke_with_feedback(cmd: &str, args: JsValue, label: &str) {
+    let cmd = cmd.to_string();
+    let label = label.to_string();
+    leptos::task::spawn_local(async move {
+        let result = invoke(&cmd, args).await;
+        // Check if result is an error (Tauri returns string errors)
+        let result_str = js_sys::JSON::stringify(&result)
+            .map(|s| s.as_string().unwrap_or_default())
+            .unwrap_or_default();
+        if result_str.contains("error") || result_str.contains("Error") || result_str.contains("timeout") {
+            show_toast(&format!("Failed: {}", label), "err");
+            log(&format!("CMD FAIL [{}]: {}", cmd, result_str));
+        } else {
+            show_toast(&format!("{}", label), "ok");
+        }
+    });
+}
+
+// Global toast system using a JS custom event
+pub fn show_toast(msg: &str, kind: &str) {
+    if let Some(window) = web_sys::window() {
+        let detail = js_sys::Object::new();
+        js_sys::Reflect::set(&detail, &"msg".into(), &msg.into()).ok();
+        js_sys::Reflect::set(&detail, &"kind".into(), &kind.into()).ok();
+        let mut init = web_sys::CustomEventInit::new();
+        init.set_detail(&detail);
+        if let Ok(event) = web_sys::CustomEvent::new_with_event_init_dict("bb-toast", &init) {
+            window.dispatch_event(&event).ok();
+        }
+    }
+}
+
 pub fn log(msg: &str) {
     web_sys::console::log_1(&msg.into());
 }
@@ -223,14 +257,16 @@ pub fn send_idac_code(channel: u8, code: i8) {
     #[derive(Serialize)]
     struct Args { channel: u8, code: i8 }
     let args = serde_wasm_bindgen::to_value(&Args { channel, code }).unwrap();
-    invoke_void("idac_set_code", args);
+    let label = format!("Set IDAC{} code={}", channel, code);
+    invoke_with_feedback("idac_set_code", args, &label);
 }
 
 pub fn send_idac_voltage(channel: u8, voltage: f32) {
     #[derive(Serialize)]
     struct Args { channel: u8, voltage: f32 }
     let args = serde_wasm_bindgen::to_value(&Args { channel, voltage }).unwrap();
-    invoke_void("idac_set_voltage", args);
+    let label = format!("Set IDAC{} to {:.3}V", channel, voltage);
+    invoke_with_feedback("idac_set_voltage", args, &label);
 }
 
 pub async fn fetch_idac_status() -> Option<IdacState> {
@@ -243,39 +279,52 @@ pub fn send_idac_cal_add_point(channel: u8, code: i8, measured_v: f32) {
     #[serde(rename_all = "camelCase")]
     struct Args { channel: u8, code: i8, measured_v: f32 }
     let args = serde_wasm_bindgen::to_value(&Args { channel, code, measured_v }).unwrap();
-    invoke_void("idac_cal_add_point", args);
+    let label = format!("IDAC{} cal: code={} -> {:.3}V", channel, code, measured_v);
+    invoke_with_feedback("idac_cal_add_point", args, &label);
 }
 
 pub fn send_idac_cal_clear(channel: u8) {
     #[derive(Serialize)]
     struct Args { channel: u8 }
     let args = serde_wasm_bindgen::to_value(&Args { channel }).unwrap();
-    invoke_void("idac_cal_clear", args);
+    let label = format!("Clear IDAC{} calibration", channel);
+    invoke_with_feedback("idac_cal_clear", args, &label);
 }
 
 pub fn send_idac_cal_save() {
-    invoke_void("idac_cal_save", JsValue::NULL);
+    invoke_with_feedback("idac_cal_save", JsValue::NULL, "Save IDAC calibration");
 }
 
 pub fn send_pca_control(control: u8, on: bool) {
     #[derive(Serialize)]
     struct Args { control: u8, on: bool }
     let args = serde_wasm_bindgen::to_value(&Args { control, on }).unwrap();
-    invoke_void("pca_set_control", args);
+    let name = match control {
+        0 => "VADJ1", 1 => "VADJ2", 2 => "+/-15V", 3 => "MUX",
+        4 => "USB Hub", 5 => "EFuse1", 6 => "EFuse2", 7 => "EFuse3", 8 => "EFuse4",
+        _ => "PCA",
+    };
+    let label = format!("{} {}", if on { "Enable" } else { "Disable" }, name);
+    invoke_with_feedback("pca_set_control", args, &label);
 }
 
 pub fn send_set_channel_function(channel: u8, function: u8) {
     #[derive(Serialize)]
     struct Args { channel: u8, function: u8 }
     let args = serde_wasm_bindgen::to_value(&Args { channel, function }).unwrap();
-    invoke_void("set_channel_function", args);
+    let label = format!("Set CH {} to {}", CH_NAMES[channel as usize], func_name(function));
+    invoke_with_feedback("set_channel_function", args, &label);
 }
 
 pub fn send_set_adc_config(channel: u8, mux: u8, range: u8, rate: u8) {
     #[derive(Serialize)]
     struct Args { channel: u8, mux: u8, range: u8, rate: u8 }
     let args = serde_wasm_bindgen::to_value(&Args { channel, mux, range, rate }).unwrap();
-    invoke_void("set_adc_config", args);
+    let range_name = ADC_RANGE_OPTIONS.iter()
+        .find(|(c, _, _, _)| *c == range)
+        .map(|(_, n, _, _)| *n).unwrap_or("?");
+    let label = format!("Set CH {} ADC: {}", CH_NAMES[channel as usize], range_name);
+    invoke_with_feedback("set_adc_config", args, &label);
 }
 
 pub fn send_mux_set_switch(device: u8, switch_num: u8, state: bool) {
@@ -283,7 +332,8 @@ pub fn send_mux_set_switch(device: u8, switch_num: u8, state: bool) {
     #[serde(rename_all = "camelCase")]
     struct Args { device: u8, switch_num: u8, state: bool }
     let args = serde_wasm_bindgen::to_value(&Args { device, switch_num, state }).unwrap();
-    invoke_void("mux_set_switch", args);
+    let label = format!("MUX{} S{} {}", device + 1, switch_num + 1, if state { "ON" } else { "OFF" });
+    invoke_with_feedback("mux_set_switch", args, &label);
 }
 
 // -----------------------------------------------------------------------------
@@ -320,7 +370,8 @@ pub fn send_usbpd_select_pdo(voltage: u8) {
     #[derive(Serialize)]
     struct Args { voltage: u8 }
     let args = serde_wasm_bindgen::to_value(&Args { voltage }).unwrap();
-    invoke_void("usbpd_select_pdo", args);
+    let label = format!("Select USB PD {}V", voltage);
+    invoke_with_feedback("usbpd_select_pdo", args, &label);
 }
 
 // -----------------------------------------------------------------------------
@@ -355,4 +406,36 @@ pub struct IoExpState {
 pub async fn fetch_pca_status() -> Option<IoExpState> {
     let result = invoke("pca_get_status", JsValue::NULL).await;
     serde_wasm_bindgen::from_value(result).ok()
+}
+
+// -----------------------------------------------------------------------------
+// WiFi State types & helpers
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WifiState {
+    pub connected: bool,
+    pub sta_ssid: String,
+    pub sta_ip: String,
+    pub rssi: i32,
+    pub ap_ssid: String,
+    pub ap_ip: String,
+    pub ap_mac: String,
+}
+
+pub async fn fetch_wifi_status() -> Option<WifiState> {
+    let result = invoke("wifi_get_status", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub fn send_wifi_connect(ssid: &str, password: &str) {
+    #[derive(Serialize)]
+    struct Args { ssid: String, password: String }
+    let ssid_str = ssid.to_string();
+    let args = serde_wasm_bindgen::to_value(&Args {
+        ssid: ssid_str.clone(),
+        password: password.to_string(),
+    }).unwrap();
+    let label = format!("Connect to WiFi '{}'", ssid_str);
+    invoke_with_feedback("wifi_connect", args, &label);
 }

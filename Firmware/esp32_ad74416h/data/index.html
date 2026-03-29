@@ -180,6 +180,43 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 </template>
 </div>
+<!-- WiFi Section -->
+<h3 class="text-xs font-semibold mt-4 mb-2" style="color:var(--text1)">WiFi</h3>
+<div class="grid gap-3" style="grid-template-columns:1fr 1fr">
+<div class="card">
+<div class="card-h"><span>Access Point</span></div>
+<div class="card-b text-xs" style="display:flex;flex-direction:column;gap:0.4rem">
+<div>SSID: <strong x-text="wifiSt.apSSID||'--'"></strong></div>
+<div>IP: <span class="mono" x-text="wifiSt.apIP||'--'"></span></div>
+<div>MAC: <span class="mono" x-text="wifiSt.apMAC||'--'"></span></div>
+</div>
+</div>
+<div class="card">
+<div class="card-h"><span>Station</span>
+<div class="led" :class="{'led-on':wifiSt.connected}" :style="wifiSt.connected?'background:var(--green);box-shadow:0 0 8px var(--green)':''"></div>
+</div>
+<div class="card-b text-xs" style="display:flex;flex-direction:column;gap:0.4rem">
+<div>Status: <strong :style="wifiSt.connected?'color:var(--green)':'color:var(--rose)'" x-text="wifiSt.connected?'Connected':'Disconnected'"></strong></div>
+<div>SSID: <strong x-text="wifiSt.staSSID||'--'"></strong></div>
+<div>IP: <span class="mono" x-text="wifiSt.staIP||'--'"></span></div>
+<div style="display:flex;align-items:center;gap:0.5rem">RSSI: <span class="mono" x-text="(wifiSt.rssi||0)+' dBm'"></span>
+<div class="bar-wrap" style="flex:1"><div class="bar-fill" :style="'width:'+Math.max(0,Math.min(100,((wifiSt.rssi||(-100))+100)/60*100))+'%;background:var(--blue)'"></div></div>
+</div>
+</div>
+</div>
+</div>
+<!-- WiFi Connect Form -->
+<div class="card mt-2">
+<div class="card-h"><span>Connect to Network</span></div>
+<div class="card-b">
+<div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+<input type="text" x-model="wifiSSID" placeholder="SSID" class="text-xs" style="flex:1;min-width:120px;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg1);color:var(--text1)">
+<input type="password" x-model="wifiPass" placeholder="Password" class="text-xs" style="flex:1;min-width:120px;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg1);color:var(--text1)">
+<button class="btn text-xs" @click="wifiConnect()" style="padding:4px 12px">Connect</button>
+</div>
+<div class="text-xs mt-1" style="color:var(--text3)" x-text="wifiMsg"></div>
+</div>
+</div>
 </div>
 <!-- VDAC -->
 <div x-show="tab==='VDAC'" x-cloak>
@@ -835,6 +872,8 @@ usbpd:{present:false,attached:false,cc:'CC1',voltageV:0,currentA:0,powerW:0,sour
 dout:[false,false,false,false],
 uart:{bridges:[{id:0,enabled:false,baud:115200,dataBits:8,parity:'none',stopBits:1,txPin:'',rxPin:''}]},
 ioexp:{present:false,powerGood:{logic:false,vadj1:false,vadj2:false},enables:{vadj1:false,vadj2:false,analog15v:false,mux:false,usbHub:false},efuses:[{id:1,enabled:false,fault:false},{id:2,enabled:false,fault:false},{id:3,enabled:false,fault:false},{id:4,enabled:false,fault:false}]},
+wifiSt:{connected:false,staSSID:'',staIP:'',rssi:0,apSSID:'',apIP:'',apMAC:''},
+wifiSSID:'',wifiPass:'',wifiMsg:'',
 _pollTimer:null,_slowTimer:null,
 fnMap:{HIGH_IMP:0,VOUT:1,IOUT:2,VIN:3,IIN_EXT_PWR:4,IIN_LOOP_PWR:5,RES_MEAS:6,DIN_LOGIC:7,DIN_LOOP:8,IOUT_HART:9,IIN_EXT_PWR_HART:10,IIN_LOOP_PWR_HART:11},
 init(){
@@ -878,6 +917,10 @@ try{
 let r=await fetch('/api/uart/config');
 if(r.ok){let d=await r.json();if(d.bridges)this.uart=d}
 }catch(e){}
+try{
+let r=await fetch('/api/wifi');
+if(r.ok)this.wifiSt=await r.json()
+}catch(e){}
 },
 fnCode(name){return this.fnMap[name]??-1},
 isCurrent(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===10||f===11},
@@ -898,6 +941,13 @@ this.st.channels.forEach(c=>t+=this.bitCount(c.channelAlert));return t},
 bitCount(n){let c=0;while(n){c+=n&1;n>>>=1}return c},
 async postJSON(url,body){
 try{let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return await r.json()}catch(e){return null}
+},
+async wifiConnect(){
+if(!this.wifiSSID){this.wifiMsg='Enter an SSID';return}
+this.wifiMsg='Connecting...';
+try{let r=await this.postJSON('/api/wifi/connect',{ssid:this.wifiSSID,password:this.wifiPass});
+if(r&&r.success){this.wifiMsg='Connected to '+this.wifiSSID+(r.ip?' ('+r.ip+')':'')}
+else{this.wifiMsg='Failed to connect to '+this.wifiSSID}}catch(e){this.wifiMsg='Error: '+e}
 },
 setFunc(i,fn){this.postJSON('/api/channel/'+i+'/function',{function:+fn})},
 setAdc(i,field,val){
