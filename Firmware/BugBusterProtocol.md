@@ -1,6 +1,6 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 1.0
+**Version:** 1.3
 **Transport:** USB CDC (Virtual COM Port)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
 **Status:** Draft
@@ -317,7 +317,12 @@ Per channel (4x, starting at offset 15, stride = 26 bytes):
 +23     do_state            bool    Digital output state
 +24     channel_alert       u16     Per-channel alert bits
 
-Total response: 15 + (4 x 26) = 119 bytes
+Per diagnostic slot (4x, starting at offset 119, stride = 7 bytes):
++0      source              u8      Diagnostic source code (0-13)
++1      raw_code            u16     Raw diagnostic ADC code
++3      value               f32     Converted value (V or C)
+
+Total response: 15 + (4 x 26) + (4 x 7) = 147 bytes
 ```
 
 #### 0x02 GET_DEVICE_INFO
@@ -852,35 +857,52 @@ Set target output voltage. Driver computes optimal DAC code.
 **Response:** ch(u8) + code(u8) + target_v(f32)
 
 #### 0xA3 IDAC_CALIBRATE (reserved)
-Reserved for firmware-side auto-calibration (not currently used — calibration is UI-driven).
+Reserved; calibration is UI-driven via 0xA4-0xA6.
 
 #### 0xA4 IDAC_CAL_ADD_POINT
 Add a single calibration point (measured via ADC externally).
 
 **Request payload:**
 ```
+Offset  Field           Type    Description
 0       ch              u8      Channel (0-2)
 1       code            u8      DAC code (signed i8)
-2       measured_v      f32     ADC-measured voltage
+2       measured_v      f32     ADC-measured voltage at this code
 ```
 
-**Response:** ch(u8) + point_count(u8) + valid(bool)
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       ch              u8      Echoed channel
+1       count           u8      Total calibration points stored for this channel
+2       valid           bool    true if enough points for a valid fit
+```
 
 #### 0xA5 IDAC_CAL_CLEAR
-Clear calibration data for a channel.
+Clear all calibration data for a channel, resetting it to uncalibrated state.
 
 **Request payload:**
 ```
+Offset  Field           Type    Description
 0       ch              u8      Channel (0-2)
 ```
 
-**Response:** ch(u8)
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       ch              u8      Echoed channel
+```
 
 #### 0xA6 IDAC_CAL_SAVE
 Save all calibration data to NVS flash. Persists across reboots.
 
 **Request payload:** (empty)
-**Response:** success(bool)
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       success         bool    true if NVS write succeeded
+```
 
 ### 6.12 PCA9535 GPIO Expander (I2C, addr 0x23)
 
@@ -1007,6 +1029,74 @@ Stop waveform generation. Returns channel to HIGH_IMP.
 ### 6.15 MUX Switch Matrix (0x90-0x92)
 
 See existing documentation for 0x90 MUX_SET_ALL, 0x91 MUX_GET_ALL, 0x92 MUX_SET_SWITCH.
+
+### 6.16 Scope API (HTTP Polling)
+
+The Scope API provides a lightweight HTTP endpoint for polling pre-processed
+10 ms scope buckets. This complements the binary SCOPE_DATA (0x81) push stream
+and is intended for browser-based or WiFi clients that cannot use the BBP link.
+
+#### `GET /api/scope?since=<seq>`
+
+Poll for scope buckets with sequence numbers greater than `since`. The server
+returns all buffered buckets newer than the given sequence number (up to the
+ring-buffer depth, typically 500 buckets / 5 seconds).
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `since` | u32 | Yes | Last sequence number the client has seen. Pass `0` on first call to get the latest available window. |
+
+**Response:** JSON array of scope bucket objects.
+
+**Scope bucket format:**
+
+```json
+{
+  "seq":          <u32>,      // Monotonic bucket sequence number
+  "timestamp_ms": <u32>,      // Bucket timestamp (ms since boot)
+  "count":        <u16>,      // Number of ADC samples aggregated in this bucket
+  "channels": [               // Array of 4 channel objects (index = channel)
+    {
+      "avg": <f32>,           // Average converted value (V or mA)
+      "min": <f32>,           // Minimum value in bucket
+      "max": <f32>            // Maximum value in bucket
+    },
+    ...                       // (4 entries, one per channel)
+  ]
+}
+```
+
+**Binary-equivalent layout** (matches SCOPE_DATA event 0x81):
+
+```
+Offset  Field           Type    Description
+0       seq             u32     Monotonic bucket sequence number
+4       timestamp_ms    u32     Bucket timestamp (ms since boot)
+8       count           u16     Number of samples in bucket
+
+Per channel (4x, stride = 12):
++0      avg             f32     Average value (V or mA)
++4      min             f32     Minimum value
++8      max             f32     Maximum value
+
+Total: 10 + (4 x 12) = 58 bytes per bucket
+```
+
+**Usage pattern:**
+
+1. Client sends `GET /api/scope?since=0` to bootstrap (receives the latest window).
+2. Client records the highest `seq` from the response.
+3. Client polls at ~100 ms intervals: `GET /api/scope?since=<last_seq>`.
+4. Server returns only new buckets (typically 10 per 100 ms poll).
+5. If the client falls behind (gap in `seq`), it should reset with `since=0`.
+
+**Notes:**
+- Each bucket covers a 10 ms wall-clock window.
+- The `count` field indicates how many raw ADC samples were aggregated; it varies
+  with the configured ADC sample rate.
+- Channels that are not in an ADC-reading function report `avg = min = max = 0.0`.
 
 ---
 
@@ -1321,6 +1411,7 @@ Host                                    Device
 | 1.0 | 2026-03-27 | Initial specification |
 | 1.1 | 2026-03-28 | Added I2C device commands: DS4424 IDAC (0xA0-A3), PCA9535 GPIO expander (0xB0-B2), HUSB238 USB-PD (0xC0-C2), Waveform generator (0xD0-D1) |
 | 1.2 | 2026-03-28 | Added UI-driven calibration commands: IDAC_CAL_ADD_POINT (0xA4), IDAC_CAL_CLEAR (0xA5), IDAC_CAL_SAVE (0xA6) |
+| 1.3 | 2026-03-29 | GET_STATUS now includes diagnostic slots; IDAC calibration commands (0xA4-0xA6) fully documented; added Section 6.16 Scope API (HTTP polling endpoint) |
 
 ---
 

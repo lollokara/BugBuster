@@ -75,7 +75,11 @@ pub fn run() {
             commands::usbpd_select_pdo,
             // File Dialog
             commands::pick_save_file,
-            // CSV Recording
+            // Recording (BBSC binary + CSV legacy)
+            commands::start_recording,
+            commands::stop_recording,
+            commands::append_recording_data,
+            commands::export_bbsc_to_csv,
             commands::start_csv_recording,
             commands::stop_csv_recording,
             commands::append_csv_data,

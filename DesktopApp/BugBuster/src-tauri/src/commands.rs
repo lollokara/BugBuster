@@ -658,44 +658,242 @@ pub async fn pick_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> 
 }
 
 // -----------------------------------------------------------------------------
-// CSV Recording
+// BBSC Binary Recording + CSV Export
+//
+// Format: [4B magic "BBSC"] [4B header_len LE] [JSON header] [raw samples...]
+// Each sample: 3 bytes per active channel (24-bit raw ADC codes, LE)
 // -----------------------------------------------------------------------------
 
+/// Recording state: file writer + metadata
+struct RecordingState {
+    writer: BufWriter<File>,
+    mask: u8,
+    num_channels: u8,
+    sample_count: u64,
+    path: String,
+}
+
+pub static RECORDING: Mutex<Option<RecordingState>> = Mutex::new(None);
+
+#[tauri::command]
+pub fn start_recording(
+    path: String,
+    channel_mask: u8,
+    adc_ranges: Vec<u8>,
+    sample_rate: u32,
+) -> CmdResult<()> {
+    let num_ch = (0..4).filter(|b| channel_mask & (1 << b) != 0).count() as u8;
+    if num_ch == 0 { return Err("No channels selected".into()); }
+
+    let file = File::create(&path).map_err(|e| format!("Failed to create file: {}", e))?;
+    let mut writer = BufWriter::with_capacity(65536, file);  // 64KB buffer for throughput
+
+    // Write magic
+    writer.write_all(b"BBSC").map_err(|e| format!("Write error: {}", e))?;
+
+    // Build JSON header
+    let header = serde_json::json!({
+        "version": 1,
+        "channels": num_ch,
+        "mask": channel_mask,
+        "sample_rate": sample_rate,
+        "adc_ranges": adc_ranges,
+        "start_time": chrono::Local::now().to_rfc3339(),
+        "channel_names": ["CH_A", "CH_B", "CH_C", "CH_D"],
+    });
+    let header_bytes = header.to_string().into_bytes();
+
+    // Write header length + header
+    writer.write_all(&(header_bytes.len() as u32).to_le_bytes())
+        .map_err(|e| format!("Write error: {}", e))?;
+    writer.write_all(&header_bytes)
+        .map_err(|e| format!("Write error: {}", e))?;
+    writer.flush().map_err(|e| format!("Flush error: {}", e))?;
+
+    let mut guard = RECORDING.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *guard = Some(RecordingState {
+        writer,
+        mask: channel_mask,
+        num_channels: num_ch,
+        sample_count: 0,
+        path: path.clone(),
+    });
+
+    log::info!("BBSC recording started: {} (mask=0x{:02X}, {}ch, {}SPS)",
+               path, channel_mask, num_ch, sample_rate);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_recording() -> CmdResult<u64> {
+    let mut guard = RECORDING.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(mut rec) = guard.take() {
+        rec.writer.flush().map_err(|e| format!("Flush error: {}", e))?;
+        let count = rec.sample_count;
+        log::info!("BBSC recording stopped: {} samples to {}", count, rec.path);
+        Ok(count)
+    } else {
+        Ok(0)
+    }
+}
+
+/// Append raw ADC samples (binary, from adc-stream event payload)
+/// This receives the raw EVT_ADC_DATA payload and writes sample data directly.
+#[tauri::command]
+pub fn append_recording_data(raw_payload: Vec<u8>) -> CmdResult<()> {
+    let mut guard = RECORDING.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let rec = match guard.as_mut() { Some(r) => r, None => return Ok(()) };
+
+    // Parse: [mask:1][timestamp:4][count:2][samples: count * num_ch * 3]
+    if raw_payload.len() < 7 { return Ok(()); }
+    let mask = raw_payload[0];
+    let count = u16::from_le_bytes([raw_payload[5], raw_payload[6]]) as usize;
+
+    // Only write the raw sample data (skip the 7-byte header)
+    let data_start = 7;
+    let num_ch = (0..4).filter(|b| mask & (1 << b) != 0).count();
+    let data_len = count * num_ch * 3;
+    let data_end = data_start + data_len;
+
+    if raw_payload.len() >= data_end {
+        rec.writer.write_all(&raw_payload[data_start..data_end])
+            .map_err(|e| format!("Write error: {}", e))?;
+        rec.sample_count += count as u64;
+    }
+    Ok(())
+}
+
+/// Export a BBSC file to CSV
+#[tauri::command]
+pub fn export_bbsc_to_csv(bbsc_path: String, csv_path: String) -> CmdResult<u64> {
+    use std::io::{BufReader, Read};
+
+    let file = File::open(&bbsc_path).map_err(|e| format!("Open error: {}", e))?;
+    let mut reader = BufReader::new(file);
+
+    // Read and verify magic
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic).map_err(|e| format!("Read error: {}", e))?;
+    if &magic != b"BBSC" { return Err("Not a BBSC file".into()); }
+
+    // Read header length and header
+    let mut hlen_buf = [0u8; 4];
+    reader.read_exact(&mut hlen_buf).map_err(|e| format!("Read error: {}", e))?;
+    let hlen = u32::from_le_bytes(hlen_buf) as usize;
+
+    let mut header_buf = vec![0u8; hlen];
+    reader.read_exact(&mut header_buf).map_err(|e| format!("Read error: {}", e))?;
+    let header: serde_json::Value = serde_json::from_slice(&header_buf)
+        .map_err(|e| format!("JSON parse error: {}", e))?;
+
+    let mask = header["mask"].as_u64().unwrap_or(0x0F) as u8;
+    let adc_ranges: Vec<u8> = header["adc_ranges"].as_array()
+        .map(|a| a.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect())
+        .unwrap_or_else(|| vec![0; 4]);
+    let sample_rate = header["sample_rate"].as_u64().unwrap_or(20) as u32;
+
+    let active_channels: Vec<usize> = (0..4).filter(|b| mask & (1 << b) != 0).collect();
+    let num_ch = active_channels.len();
+    let bytes_per_sample = num_ch * 3;
+
+    // Create CSV
+    let csv_file = File::create(&csv_path).map_err(|e| format!("Create error: {}", e))?;
+    let mut csv = BufWriter::new(csv_file);
+
+    // CSV header
+    let mut hdr = "sample,time_s".to_string();
+    let ch_names = ["ch_a", "ch_b", "ch_c", "ch_d"];
+    for &ch in &active_channels {
+        hdr.push(',');
+        hdr.push_str(ch_names[ch]);
+        hdr.push_str("_raw");
+        hdr.push(',');
+        hdr.push_str(ch_names[ch]);
+        hdr.push_str("_v");
+    }
+    writeln!(csv, "{}", hdr).map_err(|e| format!("Write error: {}", e))?;
+
+    // Read and convert samples
+    let mut sample_buf = vec![0u8; bytes_per_sample];
+    let mut sample_idx: u64 = 0;
+    let dt = if sample_rate > 0 { 1.0 / sample_rate as f64 } else { 0.001 };
+
+    loop {
+        match reader.read_exact(&mut sample_buf) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(format!("Read error: {}", e)),
+        }
+
+        let time_s = sample_idx as f64 * dt;
+        let mut line = format!("{},{:.6}", sample_idx, time_s);
+
+        let mut pos = 0;
+        for (ci, &ch) in active_channels.iter().enumerate() {
+            let raw = sample_buf[pos] as u32
+                | ((sample_buf[pos + 1] as u32) << 8)
+                | ((sample_buf[pos + 2] as u32) << 16);
+            pos += 3;
+
+            let range = if ch < adc_ranges.len() { adc_ranges[ch] } else { 0 };
+            let voltage = raw_to_voltage_f64(raw, range);
+            line.push_str(&format!(",{},{:.6}", raw, voltage));
+        }
+
+        writeln!(csv, "{}", line).map_err(|e| format!("Write error: {}", e))?;
+        sample_idx += 1;
+    }
+
+    csv.flush().map_err(|e| format!("Flush error: {}", e))?;
+    log::info!("Exported {} samples from {} to {}", sample_idx, bbsc_path, csv_path);
+    Ok(sample_idx)
+}
+
+fn raw_to_voltage_f64(raw: u32, range: u8) -> f64 {
+    let code = raw as f64;
+    let fs = 16777216.0; // 2^24
+    match range {
+        0 => code / fs * 12.0,
+        1 => (code / fs * 24.0) - 12.0,
+        2 => (code / fs * 0.625) - 0.3125,
+        3 => (code / fs * 0.3125) - 0.3125,
+        4 => code / fs * 0.3125,
+        5 => code / fs * 0.625,
+        6 => (code / fs * 0.208) - 0.104,
+        7 => (code / fs * 5.0) - 2.5,
+        _ => code / fs * 12.0,
+    }
+}
+
+// Keep legacy CSV commands for backwards compatibility
 #[tauri::command]
 pub fn start_csv_recording(path: String) -> CmdResult<()> {
     let file = File::create(&path).map_err(|e| format!("Failed to create CSV file: {}", e))?;
     let mut writer = BufWriter::new(file);
     writeln!(writer, "timestamp_ms,ch_a,ch_b,ch_c,ch_d")
         .map_err(|e| format!("Failed to write CSV header: {}", e))?;
-    writer.flush().map_err(|e| format!("Failed to flush CSV header: {}", e))?;
-
+    writer.flush().map_err(|e| format!("Flush error: {}", e))?;
     let mut guard = CSV_WRITER.lock().map_err(|e| format!("Lock error: {}", e))?;
     *guard = Some(writer);
-
-    log::info!("CSV recording started: {}", path);
     Ok(())
 }
 
 #[tauri::command]
 pub fn stop_csv_recording() -> CmdResult<()> {
     let mut guard = CSV_WRITER.lock().map_err(|e| format!("Lock error: {}", e))?;
-    if let Some(mut writer) = guard.take() {
-        writer.flush().map_err(|e| format!("Failed to flush CSV: {}", e))?;
-    }
-    log::info!("CSV recording stopped");
+    if let Some(mut w) = guard.take() { w.flush().ok(); }
     Ok(())
 }
 
 #[tauri::command]
 pub fn append_csv_data(timestamp_ms: f64, ch_values: Vec<f32>) -> CmdResult<()> {
     let mut guard = CSV_WRITER.lock().map_err(|e| format!("Lock error: {}", e))?;
-    if let Some(ref mut writer) = *guard {
+    if let Some(ref mut w) = *guard {
         let a = ch_values.first().copied().unwrap_or(0.0);
         let b = ch_values.get(1).copied().unwrap_or(0.0);
         let c = ch_values.get(2).copied().unwrap_or(0.0);
         let d = ch_values.get(3).copied().unwrap_or(0.0);
-        writeln!(writer, "{},{},{},{},{}", timestamp_ms, a, b, c, d)
-            .map_err(|e| format!("Failed to write CSV row: {}", e))?;
+        writeln!(w, "{},{},{},{},{}", timestamp_ms, a, b, c, d).ok();
     }
     Ok(())
 }

@@ -303,6 +303,136 @@ impl Transport for HttpTransport {
                 Ok(vec![])
             }
 
+            bbp::CMD_SET_DIN_CONFIG => {
+                if payload.len() < 8 {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let mut r = bbp::PayloadReader::new(payload);
+                let ch = r.get_u8().unwrap();
+                let thresh = r.get_u8().unwrap();
+                let thresh_mode = r.get_bool().unwrap();
+                let debounce = r.get_u8().unwrap();
+                let sink = r.get_u8().unwrap();
+                let sink_range = r.get_bool().unwrap();
+                let oc_det = r.get_bool().unwrap();
+                let sc_det = r.get_bool().unwrap();
+                let body = serde_json::json!({
+                    "thresh": thresh,
+                    "threshMode": thresh_mode,
+                    "debounce": debounce,
+                    "sink": sink,
+                    "sinkRange": sink_range,
+                    "ocDet": oc_det,
+                    "scDet": sc_det
+                });
+                self.post_json(&format!("/api/channel/{}/din/config", ch), &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_SET_DO_CONFIG => {
+                if payload.len() < 5 {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let mut r = bbp::PayloadReader::new(payload);
+                let ch = r.get_u8().unwrap();
+                let mode = r.get_u8().unwrap();
+                let src_sel_gpio = r.get_bool().unwrap();
+                let t1 = r.get_u8().unwrap();
+                let t2 = r.get_u8().unwrap();
+                let body = serde_json::json!({
+                    "mode": mode,
+                    "srcSelGpio": src_sel_gpio,
+                    "t1": t1,
+                    "t2": t2
+                });
+                self.post_json(&format!("/api/channel/{}/do/config", ch), &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_CLEAR_CH_ALERT => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let ch = payload[0];
+                self.post_json(&format!("/api/faults/clear/{}", ch), &serde_json::json!({})).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_SET_CH_ALERT_MASK => {
+                if payload.len() < 3 {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let mut r = bbp::PayloadReader::new(payload);
+                let ch = r.get_u8().unwrap();
+                let mask = r.get_u16().unwrap();
+                let body = serde_json::json!({"mask": mask});
+                self.post_json(&format!("/api/faults/mask/{}", ch), &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_GET_UART_CONFIG => {
+                let json = self.get_json("/api/uart/config").await?;
+                Ok(serde_json::to_vec(&json).unwrap_or_default())
+            }
+
+            bbp::CMD_SET_UART_CONFIG => {
+                if payload.len() < 12 {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let mut r = bbp::PayloadReader::new(payload);
+                let bridge_id = r.get_u8().unwrap();
+                let uart_num = r.get_u8().unwrap();
+                let tx_pin = r.get_u8().unwrap();
+                let rx_pin = r.get_u8().unwrap();
+                let baudrate = r.get_u32().unwrap();
+                let data_bits = r.get_u8().unwrap();
+                let parity = r.get_u8().unwrap();
+                let stop_bits = r.get_u8().unwrap();
+                let enabled = r.get_bool().unwrap();
+                let body = serde_json::json!({
+                    "uartNum": uart_num,
+                    "txPin": tx_pin,
+                    "rxPin": rx_pin,
+                    "baudrate": baudrate,
+                    "dataBits": data_bits,
+                    "parity": parity,
+                    "stopBits": stop_bits,
+                    "enabled": enabled
+                });
+                self.post_json(&format!("/api/uart/{}/config", bridge_id), &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_GET_UART_PINS => {
+                let json = self.get_json("/api/uart/pins").await?;
+                Ok(serde_json::to_vec(&json).unwrap_or_default())
+            }
+
+            // MUX commands - no HTTP endpoint in webserver
+            bbp::CMD_MUX_SET_ALL | bbp::CMD_MUX_GET_ALL | bbp::CMD_MUX_SET_SWITCH => {
+                Err(anyhow!("MUX switch matrix control not available over HTTP (USB only)"))
+            }
+
+            // Raw register access - requires direct SPI, not practical over HTTP
+            bbp::CMD_REG_READ | bbp::CMD_REG_WRITE => {
+                Err(anyhow!("Raw register read/write not available over HTTP (USB only)"))
+            }
+
+            // PCA9535 raw port write - no HTTP endpoint in webserver
+            bbp::CMD_PCA_SET_PORT => {
+                Err(anyhow!("PCA9535 raw port write not available over HTTP (USB only)"))
+            }
+
+            // USB PD re-negotiation - no HTTP endpoint in webserver
+            bbp::CMD_USBPD_GO => {
+                Err(anyhow!("USB PD re-negotiation not available over HTTP (USB only)"))
+            }
+
+            // IDAC calibration commands - no HTTP endpoint in webserver
+            bbp::CMD_IDAC_CAL_ADD_POINT | bbp::CMD_IDAC_CAL_CLEAR | bbp::CMD_IDAC_CAL_SAVE => {
+                Err(anyhow!("IDAC calibration not available over HTTP (USB only)"))
+            }
+
             // Streaming not supported over HTTP
             bbp::CMD_START_ADC_STREAM | bbp::CMD_STOP_ADC_STREAM |
             bbp::CMD_START_SCOPE_STREAM | bbp::CMD_STOP_SCOPE_STREAM => {

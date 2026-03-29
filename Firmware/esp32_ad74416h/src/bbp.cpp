@@ -294,6 +294,13 @@ static int handleGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_u16(out, &pos, cs.channelAlertStatus);
     }
 
+    // Diagnostic slots
+    for (uint8_t d = 0; d < 4; d++) {
+        put_u8(out, &pos, g_deviceState.diag[d].source);
+        put_u16(out, &pos, g_deviceState.diag[d].rawCode);
+        put_f32(out, &pos, g_deviceState.diag[d].value);
+    }
+
     xSemaphoreGive(g_stateMutex);
     return (int)pos;
 }
@@ -1191,10 +1198,24 @@ static int handleMuxSetSwitch(uint16_t seq, uint8_t cmdId,
         return -1;
     }
     {
-        // Get current state, modify the switch, write directly (no dead time)
+        // Group masks: S1-S4 share output A, S5-S6 share B, S7-S8 share C
+        uint8_t group_mask;
+        if (sw < 4)      group_mask = 0x0F;  // Group A
+        else if (sw < 6) group_mask = 0x30;  // Group B
+        else             group_mask = 0xC0;  // Group C
+
         uint8_t states[ADGS_NUM_DEVICES];
         adgs_get_all_states(states);
+
         if (closed) {
+            // First open all switches in the same group (break-before-make)
+            uint8_t prev = states[device];
+            states[device] &= ~group_mask;
+            if (states[device] != prev) {
+                adgs_set_all_raw(states);
+                delay_ms(ADGS_DEAD_TIME_MS);
+            }
+            // Then close only the requested switch
             states[device] |= (1 << sw);
         } else {
             states[device] &= ~(1 << sw);

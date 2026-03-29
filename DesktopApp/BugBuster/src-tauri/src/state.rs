@@ -93,6 +93,15 @@ impl DeviceState {
             state.channels[ch].channel_alert = r.get_u16()?;
         }
 
+        // Diagnostic slots (optional — older firmware won't include these)
+        for d in 0..4 {
+            if let Some(source) = r.get_u8() {
+                state.diag[d].source = source;
+                state.diag[d].raw_code = r.get_u16().unwrap_or(0);
+                state.diag[d].value = r.get_f32().unwrap_or(0.0);
+            }
+        }
+
         Some(state)
     }
 }

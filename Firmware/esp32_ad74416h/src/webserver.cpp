@@ -24,6 +24,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "adgs2414d.h"
 
 extern AD74416H_SPI spiDriver;
 
@@ -1497,6 +1498,143 @@ static esp_err_t handle_wavegen_post_dispatch(httpd_req_t *req)
 }
 
 // =============================================================================
+// MUX Switch Web Handlers
+// =============================================================================
+
+// GET /api/mux
+static esp_err_t handle_get_mux(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    uint8_t states[ADGS_NUM_DEVICES];
+    adgs_get_all_states(states);
+    cJSON *arr = cJSON_AddArrayToObject(root, "states");
+    for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
+        cJSON_AddItemToArray(arr, cJSON_CreateNumber(states[i]));
+    }
+    cJSON_AddNumberToObject(root, "numDevices", ADGS_NUM_DEVICES);
+    return send_json(req, root);
+}
+
+// POST /api/mux/switch  body: {"device":0, "switch":0, "closed":true}
+static esp_err_t handle_post_mux_switch(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    int dev = cJSON_GetObjectItem(body, "device") ? cJSON_GetObjectItem(body, "device")->valueint : -1;
+    int sw = cJSON_GetObjectItem(body, "switch") ? cJSON_GetObjectItem(body, "switch")->valueint : -1;
+    bool closed = cJSON_GetObjectItem(body, "closed") ? cJSON_IsTrue(cJSON_GetObjectItem(body, "closed")) : false;
+    cJSON_Delete(body);
+    if (dev < 0 || dev >= ADGS_NUM_DEVICES || sw < 0 || sw >= ADGS_NUM_SWITCHES)
+        return send_error(req, 400, "Invalid device/switch");
+
+    // Group-safe switching (break-before-make)
+    uint8_t group_mask = (sw < 4) ? 0x0F : (sw < 6) ? 0x30 : 0xC0;
+    uint8_t states[ADGS_NUM_DEVICES];
+    adgs_get_all_states(states);
+    if (closed) {
+        uint8_t prev = states[dev];
+        states[dev] &= ~group_mask;
+        if (states[dev] != prev) { adgs_set_all_raw(states); delay_ms(ADGS_DEAD_TIME_MS); }
+        states[dev] |= (1 << sw);
+    } else {
+        states[dev] &= ~(1 << sw);
+    }
+    adgs_set_all_raw(states);
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        adgs_get_all_states(g_deviceState.muxState);
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "device", dev);
+    cJSON_AddNumberToObject(root, "switch", sw);
+    cJSON_AddBoolToObject(root, "closed", closed);
+    return send_json(req, root);
+}
+
+// POST /api/mux/all  body: {"states":[0,0,0,0]}
+static esp_err_t handle_post_mux_all(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    cJSON *arr = cJSON_GetObjectItem(body, "states");
+    if (!arr || !cJSON_IsArray(arr)) { cJSON_Delete(body); return send_error(req, 400, "Missing states array"); }
+    uint8_t states[ADGS_NUM_DEVICES] = {};
+    for (int i = 0; i < ADGS_NUM_DEVICES && i < cJSON_GetArraySize(arr); i++) {
+        states[i] = (uint8_t)cJSON_GetArrayItem(arr, i)->valueint;
+    }
+    cJSON_Delete(body);
+    adgs_set_all_raw(states);
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        adgs_get_all_states(g_deviceState.muxState);
+        xSemaphoreGive(g_stateMutex);
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "status", "ok");
+    return send_json(req, root);
+}
+
+static esp_err_t handle_mux_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/mux/switch")) return handle_post_mux_switch(req);
+    if (strstr(req->uri, "/api/mux/all")) return handle_post_mux_all(req);
+    return send_error(req, 404, "Unknown MUX endpoint");
+}
+
+// =============================================================================
+// IDAC Calibration Web Handlers
+// =============================================================================
+
+// POST /api/idac/cal/point  body: {"ch":0, "code":-10, "measuredV":5.23}
+static esp_err_t handle_post_cal_point(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    int ch = cJSON_GetObjectItem(body, "ch") ? cJSON_GetObjectItem(body, "ch")->valueint : -1;
+    int code = cJSON_GetObjectItem(body, "code") ? cJSON_GetObjectItem(body, "code")->valueint : 0;
+    double v = cJSON_GetObjectItem(body, "measuredV") ? cJSON_GetObjectItem(body, "measuredV")->valuedouble : 0;
+    cJSON_Delete(body);
+    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
+    ds4424_cal_add_point(ch, (int8_t)code, (float)v);
+    const DS4424State *st = ds4424_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "count", st->cal[ch].count);
+    cJSON_AddBoolToObject(root, "valid", st->cal[ch].valid);
+    return send_json(req, root);
+}
+
+// POST /api/idac/cal/clear  body: {"ch":0}
+static esp_err_t handle_post_cal_clear(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    int ch = cJSON_GetObjectItem(body, "ch") ? cJSON_GetObjectItem(body, "ch")->valueint : -1;
+    cJSON_Delete(body);
+    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
+    ds4424_cal_clear(ch);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "status", "cleared");
+    return send_json(req, root);
+}
+
+// POST /api/idac/cal/save
+static esp_err_t handle_post_cal_save(httpd_req_t *req)
+{
+    bool ok = ds4424_cal_save();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", ok);
+    return send_json(req, root);
+}
+
+static esp_err_t handle_cal_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/idac/cal/point")) return handle_post_cal_point(req);
+    if (strstr(req->uri, "/api/idac/cal/clear")) return handle_post_cal_clear(req);
+    if (strstr(req->uri, "/api/idac/cal/save")) return handle_post_cal_save(req);
+    return send_error(req, 404, "Unknown calibration endpoint");
+}
+
+// =============================================================================
 // Server init / stop
 // =============================================================================
 
@@ -1508,7 +1646,7 @@ void initWebServer(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 50;
+    config.max_uri_handlers = 60;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     config.stack_size       = 8192;
 
@@ -1657,6 +1795,25 @@ void initWebServer(void)
         .uri = "/api/debug", .method = HTTP_GET, .handler = handle_get_debug, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_debug_get);
+
+    // ----- MUX routes -----
+
+    httpd_uri_t uri_mux_get = {
+        .uri = "/api/mux", .method = HTTP_GET, .handler = handle_get_mux, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_mux_get);
+
+    httpd_uri_t uri_mux_post = {
+        .uri = "/api/mux/*", .method = HTTP_POST, .handler = handle_mux_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_mux_post);
+
+    // ----- IDAC Calibration routes -----
+
+    httpd_uri_t uri_cal_post = {
+        .uri = "/api/idac/cal/*", .method = HTTP_POST, .handler = handle_cal_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_cal_post);
 
     // ----- Wavegen routes -----
 

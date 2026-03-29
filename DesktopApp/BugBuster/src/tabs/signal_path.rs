@@ -118,10 +118,19 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let tog = move |d: usize, s: usize| {
         let mut st = mux.get_untracked();
         let on = (st[d] >> s) & 1 != 0;
+
+        if !on {
+            // Closing: clear other switches in the same group first (mutual exclusion)
+            let group_mask: u8 = if s < 4 { 0x0F } else if s < 6 { 0x30 } else { 0xC0 };
+            st[d] &= !group_mask;  // Open all in group
+            st[d] |= 1 << s;       // Close requested
+        } else {
+            st[d] &= !(1 << s);    // Open requested
+        }
+
         #[derive(Serialize)] #[serde(rename_all = "camelCase")] struct A { device: u8, switch_num: u8, state: bool }
         let a = serde_wasm_bindgen::to_value(&A { device: d as u8, switch_num: s as u8, state: !on }).unwrap();
         invoke_void("mux_set_switch", a);
-        if on { st[d] &= !(1 << s); } else { st[d] |= 1 << s; }
         set_mux.set(st);
     };
 
