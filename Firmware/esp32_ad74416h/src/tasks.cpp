@@ -434,6 +434,12 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 g_spi_bus_request = true;
                 for (int i = 0; i < 200 && !g_spi_bus_granted; i++) delay_ms(1);
 
+                if (!g_spi_bus_granted) {
+                    ESP_LOGE("cmd", "ADC config: SPI bus grant timeout — aborting");
+                    g_spi_bus_request = false;
+                    break;
+                }
+
                 // Stop ADC conversion sequence (AD74416H won't accept config writes while running)
                 s_device->startAdcConversion(false, 0, 0);
                 delay_ms(5);
@@ -453,8 +459,11 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 }
 
                 // Restart ADC conversion with all active channels
+                // diagMask = 0x0F: all 4 diagnostic slots always active in conversion sequence
+                // (slot source assignments are in DIAG_ASSIGN registers, unaffected by this)
                 {
                     uint8_t chMask = 0;
+                    const uint8_t diagMask = 0x0F;
                     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                         for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
                             if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
@@ -462,7 +471,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                         }
                         xSemaphoreGive(g_stateMutex);
                     }
-                    s_device->startAdcConversion(true, chMask, 0x0F);
+                    s_device->startAdcConversion(true, chMask, diagMask);
                     delay_ms(20);
                     s_device->clearAllAlerts();
                 }

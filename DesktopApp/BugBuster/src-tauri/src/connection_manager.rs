@@ -6,6 +6,7 @@
 // =============================================================================
 
 use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, Result};
 use tauri::{AppHandle, Emitter};
@@ -24,6 +25,8 @@ pub struct ConnectionManager {
     // std::Mutex is fine for these since we never hold across await
     device_state: Arc<StdMutex<DeviceState>>,
     connection_status: Arc<StdMutex<ConnectionStatus>>,
+    // Shutdown flag for the poll loop — set on disconnect, checked each iteration
+    poll_shutdown: Arc<AtomicBool>,
 }
 
 impl ConnectionManager {
@@ -32,6 +35,7 @@ impl ConnectionManager {
             transport: Arc::new(TokioMutex::new(None)),
             device_state: Arc::new(StdMutex::new(DeviceState::default())),
             connection_status: Arc::new(StdMutex::new(ConnectionStatus::default())),
+            poll_shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -213,6 +217,9 @@ impl ConnectionManager {
 
     /// Disconnect the current transport.
     pub async fn disconnect(&self) -> Result<()> {
+        // Signal poll loop to exit immediately
+        self.poll_shutdown.store(true, Ordering::Release);
+
         let transport = {
             let mut t = self.transport.lock().await;
             t.take()
@@ -256,6 +263,9 @@ impl ConnectionManager {
 
     /// Start the status polling loop.
     fn start_polling(&self, app: AppHandle) {
+        // Reset shutdown flag for this new connection
+        self.poll_shutdown.store(false, Ordering::Release);
+        let shutdown = self.poll_shutdown.clone();
         let transport = self.transport.clone();
         let device_state = self.device_state.clone();
         let connection_status = self.connection_status.clone();
@@ -275,6 +285,12 @@ impl ConnectionManager {
 
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
+
+                // Check shutdown flag (set by disconnect())
+                if shutdown.load(Ordering::Acquire) {
+                    log::info!("Poll loop: shutdown signal received, exiting");
+                    break;
+                }
 
                 // Check connectivity and poll status while holding the lock
                 let result = {

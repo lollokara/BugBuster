@@ -46,8 +46,9 @@ static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
         delay_ms(1);
     }
     if (!g_spi_bus_granted) {
-        ESP_LOGW(TAG, "SPI bus request timeout (200ms) - ADC task may be stuck");
-        // Proceed anyway — the ADC task might not be running
+        ESP_LOGE(TAG, "SPI bus request timeout (200ms) - aborting transfer");
+        g_spi_bus_request = false;
+        return;
     }
 
     gpio_set_level(PIN_MUX_CS, 0);

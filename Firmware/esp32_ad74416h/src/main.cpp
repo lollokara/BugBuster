@@ -26,6 +26,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "esp_ota_ops.h"
 
 static const char* TAG = "main";
 
@@ -117,6 +118,11 @@ extern "C" void app_main(void)
     bool spiOk = device.begin();
     serial_printf("[BugBuster] AD74416H SPI: %s\r\n", spiOk ? "OK" : "VERIFY FAILED");
     g_deviceState.spiOk = spiOk;
+
+    // Confirm OTA image is valid — if this is a new firmware via OTA and it reached
+    // here successfully, mark it as good. If the firmware crashes before this point,
+    // the bootloader will automatically roll back to the previous partition.
+    esp_ota_mark_app_valid_cancel_rollback();
 
     // 7. Diagnostics setup
     device.setupDiagnostics();

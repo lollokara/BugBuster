@@ -1318,7 +1318,7 @@ static int handleSetSpiClock(uint16_t seq, uint8_t cmdId,
     g_spi_bus_request = false;
     g_spi_bus_granted = false;
 
-    if (!ok) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (!ok) { sendError(seq, cmdId, BBP_ERR_SPI_FAIL); return -1; }
 
     // Verify SPI still works
     uint16_t scratch = 0;
@@ -1446,12 +1446,13 @@ static int handleWifiScan(uint16_t seq, uint8_t cmdId,
     put_u8(out, &pos, (uint8_t)count);
     for (int i = 0; i < count; i++) {
         uint8_t slen = (uint8_t)strlen(results[i].ssid);
+        // Bounds check BEFORE writing: need 1 (slen) + slen (ssid) + 1 (rssi) + 1 (auth)
+        if (pos + 1 + slen + 2 > BBP_MAX_PAYLOAD - 4) break;
         put_u8(out, &pos, slen);
         memcpy(out + pos, results[i].ssid, slen);
         pos += slen;
-        out[pos++] = (uint8_t)(int8_t)results[i].rssi;  // signed as i8
+        out[pos++] = (uint8_t)(int8_t)results[i].rssi;
         put_u8(out, &pos, (uint8_t)results[i].auth);
-        if (pos > BBP_MAX_PAYLOAD - 40) break;  // safety limit
     }
     return (int)pos;
 }
@@ -1911,8 +1912,9 @@ static void processAdcStream(void)
 {
     if (s_adcStreamMask == 0) return;
 
-    // Count available samples
+    // Count available samples (acquire barrier ensures we see data written before head)
     uint16_t head = s_adcBuf.head;
+    __sync_synchronize();
     uint16_t tail = s_adcBuf.tail;
     uint16_t available = (head - tail) & (BBP_ADC_STREAM_BUF_SIZE - 1);
     if (available == 0) return;

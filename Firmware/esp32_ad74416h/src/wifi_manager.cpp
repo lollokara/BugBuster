@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/timers.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -24,10 +25,19 @@ static EventGroupHandle_t s_wifi_event_group = NULL;
 
 static bool s_sta_connected = false;
 static bool s_connecting    = false;   // true while wifi_connect() is in progress
+static TimerHandle_t s_reconnect_timer = NULL;
 static char s_sta_ip[20]    = "0.0.0.0";
 static char s_ap_ip[20]     = "192.168.4.1";
 static char s_ap_mac[20]    = "";
 static char s_sta_ssid[64]  = "";
+
+static void reconnect_timer_cb(TimerHandle_t xTimer)
+{
+    if (!s_connecting && s_sta_ssid[0]) {
+        ESP_LOGI(TAG, "Reconnect timer fired, attempting connection...");
+        esp_wifi_connect();
+    }
+}
 
 // ---- NVS helpers ----
 
@@ -74,10 +84,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             s_sta_connected = false;
             strncpy(s_sta_ip, "0.0.0.0", sizeof(s_sta_ip));
             // Don't auto-retry if wifi_connect() is driving the sequence
-            if (!s_connecting && s_sta_ssid[0]) {
+            if (!s_connecting && s_sta_ssid[0] && s_reconnect_timer) {
                 ESP_LOGI(TAG, "STA disconnected, retrying in 2s...");
-                vTaskDelay(pdMS_TO_TICKS(2000));
-                esp_wifi_connect();
+                xTimerStart(s_reconnect_timer, 0);  // non-blocking, fires after 2s
             }
         } else if (event_id == WIFI_EVENT_AP_START) {
             esp_netif_ip_info_t ip_info;
@@ -112,6 +121,7 @@ void wifi_init(const char* ap_ssid, const char* ap_pass,
     }
 
     s_wifi_event_group = xEventGroupCreate();
+    s_reconnect_timer = xTimerCreate("wifi_rc", pdMS_TO_TICKS(2000), pdFALSE, NULL, reconnect_timer_cb);
 
     // Network interface
     esp_netif_init();

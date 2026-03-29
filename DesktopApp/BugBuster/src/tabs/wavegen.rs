@@ -14,6 +14,7 @@ pub fn WavegenTab() -> impl IntoView {
     let (amplitude, set_amplitude) = signal(5.0f64);
     let (offset, set_offset) = signal(0.0f64);
     let (running, set_running) = signal(false);
+    let (sending, set_sending) = signal(false);
 
     let (edit_freq, set_edit_freq) = signal("1.0".to_string());
     let (edit_amp, set_edit_amp) = signal("5.0".to_string());
@@ -106,8 +107,9 @@ pub fn WavegenTab() -> impl IntoView {
     };
 
     let toggle = move |_: leptos::ev::MouseEvent| {
+        if sending.get_untracked() { return; } // guard double-click
+        set_sending.set(true);
         let new_state = !running.get_untracked();
-        set_running.set(new_state);
         if new_state {
             #[derive(Serialize)]
             #[serde(rename_all = "camelCase")]
@@ -123,9 +125,19 @@ pub fn WavegenTab() -> impl IntoView {
             let wf_name = waveform.get_untracked();
             let ch_name = CH_NAMES[channel.get_untracked() as usize];
             let label = format!("Start {} {}Hz on CH {}", wf_name, freq_hz.get_untracked(), ch_name);
-            invoke_with_feedback("start_wavegen", args, &label);
+            spawn_local(async move {
+                let _ = invoke("start_wavegen", args).await;
+                set_running.set(true);
+                set_sending.set(false);
+                show_toast(&label, "ok");
+            });
         } else {
-            invoke_void("stop_wavegen", wasm_bindgen::JsValue::NULL);
+            spawn_local(async move {
+                let _ = invoke("stop_wavegen", wasm_bindgen::JsValue::NULL).await;
+                set_running.set(false);
+                set_sending.set(false);
+                show_toast("Stop wavegen", "ok");
+            });
         }
     };
 
@@ -195,9 +207,12 @@ pub fn WavegenTab() -> impl IntoView {
                                 on:keydown=move |e: leptos::ev::KeyboardEvent| { if e.key() == "Enter" { commit_off(); } }
                             />
                         </div>
-                        <button class="btn wavegen-start-btn" class:wavegen-running=move || running.get() on:click=toggle>
+                        <button class="btn wavegen-start-btn"
+                            class:wavegen-running=move || running.get()
+                            prop:disabled=move || sending.get()
+                            on:click=toggle>
                             <span class="scope-btn-dot" class:running=move || running.get()></span>
-                            {move || if running.get() { "Stop Generator" } else { "Start Generator" }}
+                            {move || if sending.get() { "Sending..." } else if running.get() { "Stop Generator" } else { "Start Generator" }}
                         </button>
                         <p class="wavegen-hint">
                             {move || format!("Will set CH {} to {} mode on start",

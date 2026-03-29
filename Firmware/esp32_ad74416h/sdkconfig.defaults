@@ -17,6 +17,9 @@ CONFIG_TINYUSB_TASK_AFFINITY=0x0
 # SPIFFS support
 CONFIG_SPIFFS_MAX_PARTITIONS=3
 
+# OTA rollback: if new firmware crashes before confirming, bootloader reverts
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
 
