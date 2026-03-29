@@ -1,0 +1,221 @@
+Removed Pin From Net: NetName=NetU1_11 Pin=U16-13
+Removed Pin From Net: NetName=NetU16_10 Pin=U16-30
+Added Component: Designator=R106(RES 0603_1608)
+Add component (AddParameter): Name = "ComponentLink1Description"; Value = "Datasheet"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink1URL"; Value = "http://www.ohmite.com/assets/docs/res_hvc.pdf?r=false"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2Description"; Value = "DigiKey Link"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2URL"; Value = "http://digikey.com/product-detail/en/ohmite/HVC0603T1004FET/HVC0603T1004FETCT-ND/4809215"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Composition"; Value = "Thick Film"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Device Package"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Features"; Value = "High Voltage"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Height - Seated (Max)"; Value = "0.022" (0.55mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "LastUpdated"; Value = "09/02/2024 20:43:28"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Lifecycle Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Manufacturer"; Value = "Ohmite"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Minimum Order"; Value = "1"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Number of Terminations"; Value = "2"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Operating Temperature"; Value = "-55°C ~ 155°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Package / Case"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Packaging"; Value = "TapeAndReel"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Number"; Value = "HVC0603T1004FET"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "PartId"; Value = "7126"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Power (Watts)"; Value = "0.1W, 1/10W"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Price"; Value = "0.83"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Resistance"; Value = "1 MOhms"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Series"; Value = "HVC"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Size / Dimension"; Value = "0.059" L x 0.031" W (1.50mm x 0.80mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier 1"; Value = "DigiKey"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Device Package"; Value = "0603"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Part Number 1"; Value = "HVC0603T1004FETCT-ND"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Temperature Coefficient"; Value = "±100ppm/°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Tolerance"; Value = "±1%"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Value"; Value = "1 MOhms"; VariantName = "[No Variations]"
+Added Component: Designator=R107(RES 0603_1608)
+Add component (AddParameter): Name = "ComponentLink1Description"; Value = "Datasheet"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink1URL"; Value = "http://www.vishay.com/docs/20035/dcrcwe3.pdf"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2Description"; Value = "DigiKey Link"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2URL"; Value = "https://www.digikey.com/en/products/detail/vishay-dale/CRCW060334K8FKEA/1174842"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Composition"; Value = "Thick Film"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Device Package"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Features"; Value = "Automotive AEC-Q200"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Height - Seated (Max)"; Value = "0.020" (0.50mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "LastUpdated"; Value = "09/02/2024 20:43:05"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Lifecycle Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Manufacturer"; Value = "Vishay Dale"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Minimum Order"; Value = "1"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Number of Terminations"; Value = "2"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Operating Temperature"; Value = "-55°C ~ 155°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Package / Case"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Packaging"; Value = "TapeAndReel"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Number"; Value = "CRCW060334K8FKEA"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "PartId"; Value = "12662"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Power (Watts)"; Value = "0.1W, 1/10W"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Price"; Value = "0.01"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Ratings"; Value = "AEC-Q200"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Resistance"; Value = "34.8 kOhms"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Series"; Value = "CRCW"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Size / Dimension"; Value = "0.061" L x 0.033" W (1.55mm x 0.85mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier 1"; Value = "DigiKey"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Device Package"; Value = "0603"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Part Number 1"; Value = "541-34.8KHCT-ND"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Temperature Coefficient"; Value = "±100ppm/°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Tolerance"; Value = "±1%"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Value"; Value = "34.8 kOhms"; VariantName = "[No Variations]"
+Added Component: Designator=R108(RES 0603_1608)
+Add component (AddParameter): Name = "ComponentLink1Description"; Value = "Datasheet"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink1URL"; Value = "http://www.vishay.com/docs/20035/dcrcwe3.pdf"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2Description"; Value = "DigiKey Link"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2URL"; Value = "https://www.digikey.com/en/products/detail/vishay-dale/CRCW060334K8FKEA/1174842"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Composition"; Value = "Thick Film"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Device Package"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Features"; Value = "Automotive AEC-Q200"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Height - Seated (Max)"; Value = "0.020" (0.50mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "LastUpdated"; Value = "09/02/2024 20:43:05"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Lifecycle Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Manufacturer"; Value = "Vishay Dale"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Minimum Order"; Value = "1"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Number of Terminations"; Value = "2"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Operating Temperature"; Value = "-55°C ~ 155°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Package / Case"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Packaging"; Value = "TapeAndReel"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Number"; Value = "CRCW060334K8FKEA"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "PartId"; Value = "12662"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Power (Watts)"; Value = "0.1W, 1/10W"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Price"; Value = "0.01"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Ratings"; Value = "AEC-Q200"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Resistance"; Value = "34.8 kOhms"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Series"; Value = "CRCW"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Size / Dimension"; Value = "0.061" L x 0.033" W (1.55mm x 0.85mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier 1"; Value = "DigiKey"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Device Package"; Value = "0603"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Part Number 1"; Value = "541-34.8KHCT-ND"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Temperature Coefficient"; Value = "±100ppm/°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Tolerance"; Value = "±1%"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Value"; Value = "34.8 kOhms"; VariantName = "[No Variations]"
+Added Component: Designator=R109(RES 0603_1608)
+Add component (AddParameter): Name = "ComponentLink1Description"; Value = "Datasheet"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink1URL"; Value = "https://www.koaspeer.com/pdfs/SG73P.pdf"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2Description"; Value = "DigiKey Link"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2URL"; Value = "https://www.digikey.com/en/products/detail/koa-speer-electronics-inc/SG73P1JTTD1003F/10188341"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Composition"; Value = "Thick Film"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Device Package"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Features"; Value = "Automotive AEC-Q200, Pulse Withstanding"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Height - Seated (Max)"; Value = "0.022" (0.55mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "LastUpdated"; Value = "09/02/2024 20:40:28"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Lifecycle Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Manufacturer"; Value = "KOA Speer Electronics, Inc."; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Minimum Order"; Value = "1"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Number of Terminations"; Value = "2"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Operating Temperature"; Value = "-55°C ~ 155°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Package / Case"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Packaging"; Value = "TapeAndReel"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Number"; Value = "SG73P1JTTD1003F"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "PartId"; Value = "83707"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Power (Watts)"; Value = "0.333W, 1/3W"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Price"; Value = "0.01"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Ratings"; Value = "AEC-Q200"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Resistance"; Value = "100 kOhms"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Series"; Value = "SG73P"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Size / Dimension"; Value = "0.063" L x 0.031" W (1.60mm x 0.80mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier 1"; Value = "DigiKey"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Device Package"; Value = "0603"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Part Number 1"; Value = "2019-SG73P1JTTD1003FCT-ND"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Temperature Coefficient"; Value = "±100ppm/°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Tolerance"; Value = "±1%"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Value"; Value = "100 kOhms"; VariantName = "[No Variations]"
+Added Component: Designator=R110(RES 0603_1608)
+Add component (AddParameter): Name = "ComponentLink1Description"; Value = "Datasheet"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink1URL"; Value = "https://www.koaspeer.com/pdfs/SG73P.pdf"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2Description"; Value = "DigiKey Link"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "ComponentLink2URL"; Value = "https://www.digikey.com/en/products/detail/koa-speer-electronics-inc/SG73P1JTTD1003F/10188341"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Composition"; Value = "Thick Film"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Device Package"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Features"; Value = "Automotive AEC-Q200, Pulse Withstanding"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Height - Seated (Max)"; Value = "0.022" (0.55mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "LastUpdated"; Value = "09/02/2024 20:40:28"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Lifecycle Status"; Value = "Active"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Manufacturer"; Value = "KOA Speer Electronics, Inc."; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Minimum Order"; Value = "1"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Number of Terminations"; Value = "2"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Operating Temperature"; Value = "-55°C ~ 155°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Package / Case"; Value = "0603 (1608 Metric)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Packaging"; Value = "TapeAndReel"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Part Number"; Value = "SG73P1JTTD1003F"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "PartId"; Value = "83707"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Power (Watts)"; Value = "0.333W, 1/3W"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Price"; Value = "0.01"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Ratings"; Value = "AEC-Q200"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Resistance"; Value = "100 kOhms"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Series"; Value = "SG73P"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Size / Dimension"; Value = "0.063" L x 0.031" W (1.60mm x 0.80mm)"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier 1"; Value = "DigiKey"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Device Package"; Value = "0603"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Supplier Part Number 1"; Value = "2019-SG73P1JTTD1003FCT-ND"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Temperature Coefficient"; Value = "±100ppm/°C"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Tolerance"; Value = "±1%"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Value"; Value = "100 kOhms"; VariantName = "[No Variations]"
+Added Component: Designator=U23(CC-30-3_ADI)
+Add component (AddParameter): Name = "Copyright"; Value = "Copyright (C) 2025 Ultra Librarian. All rights reserved."; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Manufacturer_Name"; Value = "Analog Devices Inc"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Manufacturer_Part_Number"; Value = "ADGS2414DBCCZ"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "RefDes"; Value = "RefDes"; VariantName = "[No Variations]"
+Add component (AddParameter): Name = "Type"; Value = "Type"; VariantName = "[No Variations]"
+Added Pin To Net: NetName=GND Pin=R106-2
+Added Pin To Net: NetName=VADJ1_BUCK Pin=R107-2
+Added Pin To Net: NetName=VADJ2_BUCK Pin=R108-2
+Added Pin To Net: NetName=GND Pin=R109-1
+Added Pin To Net: NetName=GND Pin=R110-1
+Added Pin To Net: NetName=NetD11_1 Pin=U23-3
+Added Pin To Net: NetName=NetR73_2 Pin=U23-4
+Added Pin To Net: NetName=-15V_ANA Pin=U23-5
+Added Pin To Net: NetName=NetR80_2 Pin=U23-6
+Added Pin To Net: NetName=NetR89_2 Pin=U23-7
+Added Pin To Net: NetName=GND Pin=U23-11
+Added Pin To Net: NetName=NetU1_11 Pin=U23-13
+Added Pin To Net: NetName=NetR92_2 Pin=U23-18
+Added Pin To Net: NetName=3V3_ADJ Pin=U23-19
+Added Pin To Net: NetName=GND Pin=U23-29
+Added Pin To Net: NetName=-15V_ANA Pin=U23-31
+Added Pin To Net: NetName=NetR106_1 Pin=R106-1
+Added Pin To Net: NetName=NetR106_1 Pin=U23-1
+Added Pin To Net: NetName=NetR106_1 Pin=U23-2
+Added Pin To Net: NetName=NetR106_1 Pin=U23-8
+Added Pin To Net: NetName=NetR106_1 Pin=U23-9
+Added Pin To Net: NetName=NetR106_1 Pin=U23-16
+Added Pin To Net: NetName=NetR106_1 Pin=U23-17
+Added Pin To Net: NetName=NetR106_1 Pin=U23-23
+Added Pin To Net: NetName=NetR106_1 Pin=U23-24
+Added Net: Name=NetR106_1
+Added Pin To Net: NetName=NetR107_1 Pin=R107-1
+Added Pin To Net: NetName=NetR107_1 Pin=R109-2
+Added Pin To Net: NetName=NetR107_1 Pin=U23-21
+Added Net: Name=NetR107_1
+Added Pin To Net: NetName=NetR108_1 Pin=R108-1
+Added Pin To Net: NetName=NetR108_1 Pin=R110-2
+Added Pin To Net: NetName=NetR108_1 Pin=U23-22
+Added Net: Name=NetR108_1
+Added Pin To Net: NetName=NetU16_12 Pin=U16-12
+Added Pin To Net: NetName=NetU16_12 Pin=U23-28
+Added Net: Name=NetU16_12
+Added Pin To Net: NetName=NetU16_13 Pin=U16-13
+Added Pin To Net: NetName=NetU16_13 Pin=U23-27
+Added Net: Name=NetU16_13
+Added Pin To Net: NetName=NetU16_14 Pin=U16-14
+Added Pin To Net: NetName=NetU16_14 Pin=U23-26
+Added Net: Name=NetU16_14
+Added Pin To Net: NetName=NetU16_15 Pin=U16-15
+Added Pin To Net: NetName=NetU16_15 Pin=U23-25
+Added Net: Name=NetU16_15
+Added Pin To Net: NetName=NetU16_30 Pin=U16-30
+Added Pin To Net: NetName=NetU16_30 Pin=U23-10
+Added Pin To Net: NetName=NetU16_30 Pin=U23-30
+Added Net: Name=NetU16_30
+Added Member To Class: ClassName=IOs Member=Component R106 1 MOhms
+Added Member To Class: ClassName=IOs Member=Component R107 34.8 kOhms
+Added Member To Class: ClassName=IOs Member=Component R108 34.8 kOhms
+Added Member To Class: ClassName=IOs Member=Component R109 100 kOhms
+Added Member To Class: ClassName=IOs Member=Component R110 100 kOhms
+Added Member To Class: ClassName=IOs Member=Component U23 ADGS2414DBCCZ

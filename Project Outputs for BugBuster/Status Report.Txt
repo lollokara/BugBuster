@@ -1,0 +1,14 @@
+Output: NC Drill Files
+Type  : NC Drill
+From  : Project [BugBuster.PrjPcb]
+   Generated File[BugBusterMain-RoundHoles.TXT]
+   Generated File[BugBusterMain-SlotHoles.TXT]
+   Generated File[BugBusterMain-BoardEdgeRout.TXT]
+   Generated File[BugBusterMain.LDP]
+   Generated File[BugBusterMain.DRR]
+
+
+Files Generated   : 5
+Documents Printed : 0
+
+Finished Output Generation At 19:27:43 On 29/03/2026
