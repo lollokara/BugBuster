@@ -62,6 +62,9 @@ pub fn run() {
             commands::stop_wavegen,
             // Level Shifter
             commands::set_lshift_oe,
+            // WiFi Management
+            commands::wifi_get_status,
+            commands::wifi_connect,
             // DS4424 IDAC
             commands::idac_get_status,
             commands::idac_set_code,

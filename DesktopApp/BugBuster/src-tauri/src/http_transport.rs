@@ -433,6 +433,32 @@ impl Transport for HttpTransport {
                 Err(anyhow!("IDAC calibration not available over HTTP (USB only)"))
             }
 
+            // WiFi Management
+            bbp::CMD_WIFI_GET_STATUS => {
+                let json = self.get_json("/api/wifi").await?;
+                // Serialize JSON back as bytes for uniform handling
+                Ok(serde_json::to_vec(&json).unwrap_or_default())
+            }
+
+            bbp::CMD_WIFI_CONNECT => {
+                // Parse payload: ssid_len(u8) + ssid + pass_len(u8) + pass
+                if payload.len() < 2 { return Err(anyhow!("Invalid payload")); }
+                let mut r = bbp::PayloadReader::new(payload);
+                let ssid_len = r.get_u8().unwrap() as usize;
+                if r.remaining() < ssid_len + 1 { return Err(anyhow!("Invalid payload")); }
+                let ssid = String::from_utf8_lossy(&payload[r.pos()..r.pos() + ssid_len]).to_string();
+                r.skip(ssid_len);
+                let pass_len = r.get_u8().unwrap() as usize;
+                let pass = if pass_len > 0 && r.remaining() >= pass_len {
+                    String::from_utf8_lossy(&payload[r.pos()..r.pos() + pass_len]).to_string()
+                } else { String::new() };
+
+                let body = serde_json::json!({"ssid": ssid, "password": pass});
+                let json = self.post_json("/api/wifi/connect", &body).await?;
+                let success = json.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                Ok(vec![if success { 1 } else { 0 }])
+            }
+
             // Streaming not supported over HTTP
             bbp::CMD_START_ADC_STREAM | bbp::CMD_STOP_ADC_STREAM |
             bbp::CMD_START_SCOPE_STREAM | bbp::CMD_STOP_SCOPE_STREAM => {

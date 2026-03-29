@@ -129,11 +129,30 @@ impl ConnectionManager {
                     Ok(Some(msg)) => {
                         match msg.cmd_id {
                             bbp::EVT_ADC_DATA => {
-                                // Always keep the latest payload for display
-                                adc_buffer = msg.payload.clone();
+                                // Forward to recording backend (no frontend involvement)
+                                {
+                                    use crate::commands::RECORDING;
+                                    if let Ok(mut guard) = RECORDING.lock() {
+                                        if let Some(ref mut rec) = *guard {
+                                            // Parse count from payload and write raw sample data
+                                            if msg.payload.len() >= 7 {
+                                                let count = u16::from_le_bytes([msg.payload[5], msg.payload[6]]) as usize;
+                                                let mask = msg.payload[0];
+                                                let num_ch = (0..4).filter(|b| mask & (1 << b) != 0).count();
+                                                let data_len = count * num_ch * 3;
+                                                let data_end = 7 + data_len;
+                                                if msg.payload.len() >= data_end {
+                                                    use std::io::Write;
+                                                    let _ = rec.writer.write_all(&msg.payload[7..data_end]);
+                                                    rec.sample_count += count as u64;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
 
-                                // Emit to "adc-stream-raw" for recording (every event)
-                                let _ = app_handle.emit("adc-stream-raw", &msg.payload);
+                                // Keep latest payload for throttled display
+                                adc_buffer = msg.payload;
 
                                 // Throttle display emit to ~30 Hz
                                 if last_adc_emit.elapsed() >= emit_interval {

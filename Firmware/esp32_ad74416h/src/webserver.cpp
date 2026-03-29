@@ -25,6 +25,8 @@
 #include "husb238.h"
 #include "pca9535.h"
 #include "adgs2414d.h"
+#include "wifi_manager.h"
+#include "esp_wifi.h"
 
 extern AD74416H_SPI spiDriver;
 
@@ -1664,6 +1666,55 @@ static esp_err_t handle_post_lshift_oe(httpd_req_t *req)
 }
 
 // =============================================================================
+// WiFi Status & Connect
+// =============================================================================
+
+// GET /api/wifi
+static esp_err_t handle_get_wifi(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+
+    cJSON_AddBoolToObject(root, "connected", wifi_is_connected());
+    cJSON_AddStringToObject(root, "staSSID", wifi_get_sta_ssid());
+    cJSON_AddStringToObject(root, "staIP", wifi_get_sta_ip());
+    cJSON_AddNumberToObject(root, "rssi", wifi_get_rssi());
+
+    // Get AP SSID from ESP-IDF config
+    wifi_config_t ap_cfg = {};
+    esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
+    cJSON_AddStringToObject(root, "apSSID", (const char *)ap_cfg.ap.ssid);
+    cJSON_AddStringToObject(root, "apIP", wifi_get_ap_ip());
+    cJSON_AddStringToObject(root, "apMAC", wifi_get_ap_mac());
+
+    return send_json(req, root);
+}
+
+// POST /api/wifi/connect  body: {"ssid":"...", "password":"..."}
+static esp_err_t handle_post_wifi_connect(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *j_ssid = cJSON_GetObjectItem(body, "ssid");
+    cJSON *j_pass = cJSON_GetObjectItem(body, "password");
+    if (!j_ssid || !cJSON_IsString(j_ssid)) {
+        cJSON_Delete(body);
+        return send_error(req, 400, "Missing ssid");
+    }
+    const char *ssid = j_ssid->valuestring;
+    const char *pass = (j_pass && cJSON_IsString(j_pass)) ? j_pass->valuestring : "";
+    cJSON_Delete(body);
+
+    ESP_LOGI(TAG, "WiFi connect request to '%s'", ssid);
+    bool ok = wifi_connect(ssid, pass);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", ok);
+    cJSON_AddStringToObject(root, "ip", ok ? wifi_get_sta_ip() : "");
+    return send_json(req, root);
+}
+
+// =============================================================================
 // Server init / stop
 // =============================================================================
 
@@ -1857,6 +1908,18 @@ void initWebServer(void)
         .uri = "/api/wavegen/*", .method = HTTP_POST, .handler = handle_wavegen_post_dispatch, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_wavegen_post);
+
+    // ----- WiFi routes -----
+
+    httpd_uri_t uri_wifi_get = {
+        .uri = "/api/wifi", .method = HTTP_GET, .handler = handle_get_wifi, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_wifi_get);
+
+    httpd_uri_t uri_wifi_connect = {
+        .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = handle_post_wifi_connect, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_wifi_connect);
 
     // ----- OPTIONS (CORS preflight) -----
 

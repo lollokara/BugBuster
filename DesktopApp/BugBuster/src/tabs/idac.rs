@@ -116,5 +116,6 @@ struct DacCurrentArgs { channel: u8, current_ma: f32 }
 
 fn send_dac_current(ch: u8, current_ma: f32) {
     let args = serde_wasm_bindgen::to_value(&DacCurrentArgs { channel: ch, current_ma }).unwrap();
-    invoke_void("set_dac_current", args);
+    let label = format!("Set CH {} to {:.3}mA", CH_NAMES[ch as usize], current_ma);
+    invoke_with_feedback("set_dac_current", args, &label);
 }

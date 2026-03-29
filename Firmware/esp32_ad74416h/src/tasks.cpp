@@ -427,16 +427,49 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_ADC_CONFIG: {
+                // Request ADC task to pause cooperatively (same pattern as MUX SPI)
+                extern volatile bool g_spi_bus_request;
+                extern volatile bool g_spi_bus_granted;
+                g_spi_bus_granted = false;
+                g_spi_bus_request = true;
+                for (int i = 0; i < 200 && !g_spi_bus_granted; i++) delay_ms(1);
+
+                // Stop ADC conversion sequence (AD74416H won't accept config writes while running)
+                s_device->startAdcConversion(false, 0, 0);
+                delay_ms(5);
+
+                // Write the config (ADC is idle, poll task is yielded)
                 s_device->configureAdc(cmd.channel,
                                        cmd.adcCfg.mux,
                                        cmd.adcCfg.range,
                                        cmd.adcCfg.rate);
+
+                // Update cached state
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].adcMux   = cmd.adcCfg.mux;
                     g_deviceState.channels[cmd.channel].adcRange = cmd.adcCfg.range;
                     g_deviceState.channels[cmd.channel].adcRate  = cmd.adcCfg.rate;
                     xSemaphoreGive(g_stateMutex);
                 }
+
+                // Restart ADC conversion with all active channels
+                {
+                    uint8_t chMask = 0;
+                    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
+                            if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
+                                chMask |= (1 << c);
+                        }
+                        xSemaphoreGive(g_stateMutex);
+                    }
+                    s_device->startAdcConversion(true, chMask, 0x0F);
+                    delay_ms(20);
+                    s_device->clearAllAlerts();
+                }
+
+                // Release bus — ADC poll task resumes
+                g_spi_bus_request = false;
+                g_spi_bus_granted = false;
                 break;
             }
 

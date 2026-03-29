@@ -17,13 +17,14 @@ const CH_ALERTS: &[(usize, &str)] = &[
 #[component]
 pub fn FaultsTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let clear_all = move |_: leptos::ev::MouseEvent| {
-        invoke_void("clear_all_alerts", wasm_bindgen::JsValue::NULL);
+        invoke_with_feedback("clear_all_alerts", wasm_bindgen::JsValue::NULL, "Clear all alerts");
     };
     let clear_ch = move |ch: u8| {
         #[derive(Serialize)]
         struct Args { channel: u8 }
         let args = serde_wasm_bindgen::to_value(&Args { channel: ch }).unwrap();
-        invoke_void("clear_channel_alert", args);
+        let label = format!("Clear CH {} alerts", CH_NAMES[ch as usize]);
+        invoke_with_feedback("clear_channel_alert", args, &label);
     };
 
     let total_faults = move || {

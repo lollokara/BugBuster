@@ -139,36 +139,38 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         closure.forget();
     });
 
-    // Recording listener: "adc-stream-raw" events (full rate, every batch)
-    spawn_local(async move {
-        let closure = Closure::new(move |event: JsValue| {
-            if !recording.get_untracked() { return; }
-            #[derive(Deserialize)]
-            struct TauriEvt { payload: Vec<u8> }
-            let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvt>(event) else { return };
-            let payload_clone = evt.payload;
-            let args = serde_wasm_bindgen::to_value(
-                &serde_json::json!({ "rawPayload": payload_clone })
-            ).unwrap();
-            spawn_local(async move {
-                let _ = invoke("append_recording_data", args).await;
-            });
-        });
-        listen("adc-stream-raw", &closure).await;
-        closure.forget();
-    });
+    // Recording is handled directly in the Tauri backend (connection_manager.rs)
+    // — no frontend involvement needed for full-rate recording.
 
-    // Rate counter: update every second
+    // Rate counter + auto-restart: update every second
+    let zero_count = std::cell::Cell::new(0u32);
     spawn_local(async move {
         loop {
             sleep_ms(1000).await;
             let count = sample_counter.get_untracked();
             sample_counter.set(0);
             set_sample_rate.set(count);
+
+            // If scope is running but no samples for 3 seconds, restart stream
+            if running.get_untracked() && count == 0 {
+                let z = zero_count.get() + 1;
+                zero_count.set(z);
+                if z >= 3 {
+                    zero_count.set(0);
+                    log("Scope: 0 SPS for 3s, restarting stream...");
+                    // Toggle running to trigger the Effect restart
+                    set_running.set(false);
+                    sleep_ms(100).await;
+                    set_running.set(true);
+                }
+            } else {
+                zero_count.set(0);
+            }
         }
     });
 
-    // Start/stop ADC stream when running changes
+    // Start/stop ADC stream when running or channel selection changes.
+    // Always stop-then-start to handle ERR_STREAM_ACTIVE.
     Effect::new(move || {
         let is_running = running.get();
         let ch_en = channels_en.get();
@@ -179,21 +181,23 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 set_running.set(false);
                 return;
             }
-            // Stream at full rate (divider=1). Recording gets all samples.
-            // The event handler below throttles display updates to ~30 FPS.
             #[derive(serde::Serialize)]
             #[serde(rename_all = "camelCase")]
             struct StartArgs { channel_mask: u8, divider: u8 }
             let args = serde_wasm_bindgen::to_value(&StartArgs { channel_mask: mask, divider: 1 }).unwrap();
-            log(&format!("Scope: starting ADC stream mask=0x{:02X}", mask));
             spawn_local(async move {
+                // Stop any existing stream first (ignore errors)
+                let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+                // Small delay to let firmware clear the stream state
+                sleep_ms(50).await;
+                // Start fresh
                 let result = invoke("start_adc_stream", args).await;
-                log(&format!("ADC stream start result: {:?}", result));
+                log(&format!("Scope: stream started mask=0x{:02X}, result={:?}", mask, result));
             });
         } else {
             spawn_local(async move {
                 let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
-                log("ADC stream stopped");
+                log("Scope: stream stopped");
             });
         }
     });

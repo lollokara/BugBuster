@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use serde::Serialize;
 use crate::tauri_bridge::*;
 
@@ -109,6 +110,23 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 struct AdcConfigArgs { channel: u8, mux: u8, range: u8, rate: u8 }
 
 fn send_adc_config(ch: u8, mux: u8, range: u8, rate: u8) {
-    let args = serde_wasm_bindgen::to_value(&AdcConfigArgs { channel: ch, mux, range, rate }).unwrap();
-    invoke_void("set_adc_config", args);
+    // Stop ADC stream, apply config, restart stream to avoid conflicts
+    spawn_local(async move {
+        // Stop any running stream
+        let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+        sleep_ms(50).await;
+
+        // Apply config
+        let args = serde_wasm_bindgen::to_value(&AdcConfigArgs { channel: ch, mux, range, rate }).unwrap();
+        let _ = invoke("set_adc_config", args).await;
+    });
+}
+
+async fn sleep_ms(ms: u32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        web_sys::window().unwrap()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32)
+            .unwrap();
+    });
+    wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
 }

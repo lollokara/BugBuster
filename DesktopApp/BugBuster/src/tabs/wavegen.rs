@@ -120,7 +120,10 @@ pub fn WavegenTab() -> impl IntoView {
                 offset: offset.get_untracked(),
                 mode: mode.get_untracked(),
             }).unwrap();
-            invoke_void("start_wavegen", args);
+            let wf_name = waveform.get_untracked();
+            let ch_name = CH_NAMES[channel.get_untracked() as usize];
+            let label = format!("Start {} {}Hz on CH {}", wf_name, freq_hz.get_untracked(), ch_name);
+            invoke_with_feedback("start_wavegen", args, &label);
         } else {
             invoke_void("stop_wavegen", wasm_bindgen::JsValue::NULL);
         }

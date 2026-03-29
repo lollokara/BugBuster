@@ -34,8 +34,10 @@ pub fn DoutTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             on:click=move |_| {
                                                 #[derive(Serialize)]
                                                 struct Args { channel: u8, on: bool }
-                                                let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx, on: !ch.do_state }).unwrap();
-                                                invoke_void("set_do_state", args);
+                                                let new_state = !ch.do_state;
+                                                let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx, on: new_state }).unwrap();
+                                                let label = format!("Set CH {} DO {}", CH_NAMES[ch_idx as usize], if new_state { "ON" } else { "OFF" });
+                                                invoke_with_feedback("set_do_state", args, &label);
                                             }
                                         >
                                             <div class="do-btn-indicator"></div>

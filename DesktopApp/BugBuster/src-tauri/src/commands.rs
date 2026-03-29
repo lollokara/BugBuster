@@ -285,6 +285,78 @@ pub async fn set_lshift_oe(
 }
 
 // -----------------------------------------------------------------------------
+// WiFi Management
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn wifi_get_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<WifiState> {
+    let rsp = mgr.send_command(bbp::CMD_WIFI_GET_STATUS, &[]).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+
+    let connected = r.get_bool().unwrap_or(false);
+
+    // Read length-prefixed strings
+    let ssid_len = r.get_u8().unwrap_or(0) as usize;
+    let sta_ssid = if ssid_len > 0 && r.remaining() >= ssid_len {
+        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ssid_len]).to_string();
+        r.skip(ssid_len);
+        s
+    } else { String::new() };
+
+    let ip_len = r.get_u8().unwrap_or(0) as usize;
+    let sta_ip = if ip_len > 0 && r.remaining() >= ip_len {
+        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ip_len]).to_string();
+        r.skip(ip_len);
+        s
+    } else { String::new() };
+
+    let rssi = r.get_u32().unwrap_or(0) as i32;
+
+    let ap_ssid_len = r.get_u8().unwrap_or(0) as usize;
+    let ap_ssid = if ap_ssid_len > 0 && r.remaining() >= ap_ssid_len {
+        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ap_ssid_len]).to_string();
+        r.skip(ap_ssid_len);
+        s
+    } else { String::new() };
+
+    let ap_ip_len = r.get_u8().unwrap_or(0) as usize;
+    let ap_ip = if ap_ip_len > 0 && r.remaining() >= ap_ip_len {
+        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ap_ip_len]).to_string();
+        r.skip(ap_ip_len);
+        s
+    } else { String::new() };
+
+    let ap_mac_len = r.get_u8().unwrap_or(0) as usize;
+    let ap_mac = if ap_mac_len > 0 && r.remaining() >= ap_mac_len {
+        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ap_mac_len]).to_string();
+        r.skip(ap_mac_len);
+        s
+    } else { String::new() };
+
+    Ok(WifiState { connected, sta_ssid, sta_ip, rssi, ap_ssid, ap_ip, ap_mac })
+}
+
+#[tauri::command]
+pub async fn wifi_connect(
+    ssid: String,
+    password: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<bool> {
+    let mut pw = PayloadWriter::new();
+    let ssid_bytes = ssid.as_bytes();
+    pw.put_u8(ssid_bytes.len() as u8);
+    pw.buf.extend_from_slice(ssid_bytes);
+    let pass_bytes = password.as_bytes();
+    pw.put_u8(pass_bytes.len() as u8);
+    pw.buf.extend_from_slice(pass_bytes);
+    let rsp = mgr.send_command(bbp::CMD_WIFI_CONNECT, &pw.buf).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    Ok(r.get_bool().unwrap_or(false))
+}
+
+// -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------
 
@@ -681,12 +753,12 @@ pub async fn pick_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> 
 // -----------------------------------------------------------------------------
 
 /// Recording state: file writer + metadata
-struct RecordingState {
-    writer: BufWriter<File>,
-    mask: u8,
-    num_channels: u8,
-    sample_count: u64,
-    path: String,
+pub struct RecordingState {
+    pub writer: BufWriter<File>,
+    pub mask: u8,
+    pub num_channels: u8,
+    pub sample_count: u64,
+    pub path: String,
 }
 
 pub static RECORDING: Mutex<Option<RecordingState>> = Mutex::new(None);
