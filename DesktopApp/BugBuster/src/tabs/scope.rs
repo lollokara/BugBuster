@@ -83,6 +83,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (recording, set_recording) = signal(false);
     let (csv_path, set_csv_path) = signal(String::new());
     let (sample_rate, set_sample_rate) = signal(0u32);  // Actual samples/sec counter
+    let (cursor_x, set_cursor_x) = signal(Option::<f64>::None);  // Cursor X position (None = hidden)
 
     let scope_data: [RwSignal<Vec<ScopePoint>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
@@ -315,6 +316,94 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 });
             }
 
+            // Cursor rendering
+            if let Some(cx) = cursor_x.get_untracked() {
+                // Draw vertical cursor line
+                ctx.set_stroke_style_str("rgba(248,250,252,0.6)");
+                ctx.set_line_width(1.0);
+                ctx.begin_path();
+                ctx.move_to(cx, mt);
+                ctx.line_to(cx, mt + ph);
+                ctx.stroke();
+
+                // Compute time at cursor position
+                let cursor_frac = (cx - ml) / pw;
+                let cursor_time = t_start + cursor_frac * win_ms;
+                let secs_ago = (now - cursor_time) / 1000.0;
+
+                // Build tooltip with time and interpolated values for each enabled channel
+                let mut tooltip_lines: Vec<String> = Vec::new();
+                tooltip_lines.push(format!("t: -{:.2}s", secs_ago));
+
+                for c in 0..4 {
+                    if !ch_en[c] { continue; }
+                    scope_data[c].with_untracked(|data| {
+                        // Find the two points bracketing cursor_time and interpolate
+                        let mut interp_val: Option<f32> = None;
+                        for i in 1..data.len() {
+                            if data[i - 1].time_ms <= cursor_time && data[i].time_ms >= cursor_time {
+                                let dt_seg = data[i].time_ms - data[i - 1].time_ms;
+                                if dt_seg > 0.0 {
+                                    let t_frac = (cursor_time - data[i - 1].time_ms) / dt_seg;
+                                    interp_val = Some(
+                                        data[i - 1].value + (data[i].value - data[i - 1].value) * t_frac as f32
+                                    );
+                                } else {
+                                    interp_val = Some(data[i].value);
+                                }
+                                break;
+                            }
+                        }
+                        if let Some(v) = interp_val {
+                            tooltip_lines.push(format!("CH {}: {:.4}", CH_NAMES[c], v));
+
+                            // Draw a dot at the intersection
+                            let y = mt + ((y_max - v as f64) / y_span) * ph;
+                            let y = y.clamp(mt, mt + ph);
+                            ctx.set_fill_style_str(COLORS[c]);
+                            ctx.begin_path();
+                            let _ = ctx.arc(cx, y, 4.0, 0.0, std::f64::consts::TAU);
+                            ctx.fill();
+                        }
+                    });
+                }
+
+                // Draw tooltip background
+                let tt_x = if cx + 160.0 > w - mr { cx - 165.0 } else { cx + 10.0 };
+                let tt_y = mt + 10.0;
+                let line_h = 16.0;
+                let tt_h = tooltip_lines.len() as f64 * line_h + 8.0;
+                let tt_w = 155.0;
+
+                ctx.set_fill_style_str("rgba(15,23,42,0.92)");
+                ctx.fill_rect(tt_x, tt_y, tt_w, tt_h);
+                ctx.set_stroke_style_str("rgba(59,130,246,0.3)");
+                ctx.stroke_rect(tt_x, tt_y, tt_w, tt_h);
+
+                ctx.set_font("11px 'JetBrains Mono', monospace");
+                ctx.set_text_align("left");
+                for (li, line) in tooltip_lines.iter().enumerate() {
+                    let color = if li == 0 {
+                        "rgba(148,163,184,0.8)"
+                    } else {
+                        COLORS[{
+                            // Map tooltip line index back to channel index
+                            let mut ch_idx = 0;
+                            let mut count = 0;
+                            for c in 0..4 {
+                                if ch_en[c] {
+                                    count += 1;
+                                    if count == li { ch_idx = c; break; }
+                                }
+                            }
+                            ch_idx
+                        }]
+                    };
+                    ctx.set_fill_style_str(color);
+                    let _ = ctx.fill_text(line, tt_x + 6.0, tt_y + 14.0 + li as f64 * line_h);
+                }
+            }
+
             // Legend with current values
             ctx.set_font("12px 'JetBrains Mono', monospace");
             ctx.set_text_align("left");
@@ -514,7 +603,26 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             </div>
 
             <div class="scope-canvas-wrap">
-                <canvas node_ref=canvas_ref class="scope-canvas"></canvas>
+                <canvas node_ref=canvas_ref class="scope-canvas"
+                    on:click=move |e: web_sys::MouseEvent| {
+                        // Place or move cursor at click X position (relative to canvas)
+                        let target = e.target().unwrap();
+                        let canvas: HtmlCanvasElement = target.unchecked_into();
+                        let rect = canvas.get_bounding_client_rect();
+                        let x = e.client_x() as f64 - rect.left();
+                        set_cursor_x.set(Some(x));
+                    }
+                    on:contextmenu=move |e: web_sys::MouseEvent| {
+                        e.prevent_default();
+                        set_cursor_x.set(None);
+                    }
+                    on:keydown=move |e: web_sys::KeyboardEvent| {
+                        if e.key() == "Escape" {
+                            set_cursor_x.set(None);
+                        }
+                    }
+                    tabindex="0"
+                ></canvas>
             </div>
         </div>
     }

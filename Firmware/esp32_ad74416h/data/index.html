@@ -11,6 +11,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg0:#0a0e1a;--bg1:#111827;--bg2:#1e293b;--border:rgba(59,130,246,0.15);--blue:#3b82f6;--green:#10b981;--amber:#f59e0b;--purple:#a855f7;--rose:#ef4444;--text0:#f1f5f9;--text1:#cbd5e1;--text2:#94a3b8;--text3:#64748b}
+body.light{--bg0:#f8fafc;--bg1:#ffffff;--bg2:#f1f5f9;--border:rgba(59,130,246,0.2);--text0:#0f172a;--text1:#334155;--text2:#64748b;--text3:#94a3b8}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg0);color:var(--text1);min-height:100vh;font-size:14px}
 .mono{font-family:'JetBrains Mono',monospace}
 ::-webkit-scrollbar{width:6px;height:6px}
@@ -81,6 +82,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <span class="mono" x-text="connected?'Connected':'Disconnected'" :style="connected?'color:var(--green)':'color:var(--rose)'"></span>
 </div>
 <button class="btn btn-ghost text-xs" @click="postJSON('/api/device/reset',{})">Reset</button>
+<button class="btn btn-ghost text-xs" @click="darkMode=!darkMode;localStorage.setItem('bb_dark',darkMode?'1':'0');document.body.classList.toggle('light',!darkMode)" x-text="darkMode?'Light':'Dark'"></button>
 </div>
 <!-- Tab Bar -->
 <div class="flex overflow-x-auto border-b" style="background:var(--bg1);border-color:var(--border)">
@@ -335,6 +337,69 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </template>
 </div>
 </div>
+<!-- DIN -->
+<div x-show="tab==='DIN'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Digital input monitoring. Shows comparator state (HIGH/LOW), event counter, and channel function for channels configured as DIN_LOGIC or DIN_LOOP. Set a channel to digital input mode to activate its card.</div>
+<div class="grid-4">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card" :style="!isDin(ch)?'opacity:0.5':''">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<span class="text-xs mono" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+<div class="card-b">
+<template x-if="!isDin(ch)">
+<div class="text-xs text-center py-4" style="color:var(--text3)">Set channel to DIN_LOGIC or DIN_LOOP to monitor digital input</div>
+</template>
+<template x-if="isDin(ch)">
+<div>
+<div class="flex items-center justify-center gap-3 my-3">
+<div style="width:16px;height:16px;border-radius:50%;transition:all 0.3s"
+:style="ch.dinState?'background:var(--green);box-shadow:0 0 12px var(--green)':'background:var(--bg2);border:1px solid var(--border)'"></div>
+<span class="big-val" :style="ch.dinState?'color:var(--green)':'color:var(--text3)'" x-text="ch.dinState?'HIGH':'LOW'"></span>
+</div>
+<div class="cfg-row"><label>Events</label>
+<span class="mono text-sm" style="color:var(--text0)" x-text="ch.dinCounter"></span>
+</div>
+<div class="cfg-row"><label>Function</label>
+<span class="mono text-xs" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+</div>
+</template>
+</div>
+</div>
+</template>
+</div>
+</div>
+<!-- DOUT -->
+<div x-show="tab==='DOUT'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Digital output control. Toggle each channel's digital output ON or OFF. Only active for channels configured with digital output capability (VOUT, IOUT, DIN_LOGIC, DIN_LOOP modes).</div>
+<div class="grid-4">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card" :style="!hasDo(ch)?'opacity:0.5':''">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<span class="text-xs mono" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+<div class="card-b">
+<template x-if="!hasDo(ch)">
+<div class="text-xs text-center py-4" style="color:var(--text3)">Set channel to a mode with DO capability</div>
+</template>
+<template x-if="hasDo(ch)">
+<div class="text-center py-3">
+<div class="flex items-center justify-center gap-3 mb-3">
+<div style="width:16px;height:16px;border-radius:50%;transition:all 0.3s"
+:style="dout[i]?'background:var(--green);box-shadow:0 0 12px var(--green)':'background:var(--bg2);border:1px solid var(--border)'"></div>
+<span class="text-lg font-bold mono" :style="dout[i]?'color:var(--green)':'color:var(--text3)'" x-text="dout[i]?'ON':'OFF'"></span>
+</div>
+<button class="btn w-full" :class="dout[i]?'btn-rose':'btn-green'" @click="toggleDo(i,!dout[i])" x-text="dout[i]?'Turn OFF':'Turn ON'"></button>
+</div>
+</template>
+</div>
+</div>
+</template>
+</div>
+</div>
 <!-- Signal Path -->
 <div x-show="tab==='Signal Path'" x-cloak x-effect="if(tab==='Signal Path')setTimeout(()=>drawSig(),50)">
 <div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Interactive signal routing matrix. Click switches inside the MUX to connect GPIOs, ADC channels, or external inputs to the output connectors. Only one switch per group (S1-S4, S5-S6, S7-S8) can be active at a time.</div>
@@ -364,7 +429,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <!-- Canvas schematic -->
 <div style="position:relative;width:100%;padding-bottom:45%;background:#080c18;border-radius:8px;border:1px solid var(--border);overflow:hidden">
 <canvas x-ref="sigCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;cursor:pointer"
-@click="sigClick($event)"></canvas>
+@click="sigClick($event)" @mousemove="sigHover($event)"></canvas>
 </div>
 </div>
 <!-- Voltages (DS4424) -->
@@ -638,6 +703,44 @@ x-text="ef.fault?'⚠ Overcurrent on connector P'+(ef.id||i+1)+' — disconnect 
 
 
 </div>
+<!-- UART -->
+<div x-show="tab==='UART'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">UART bridge configuration. Set baud rate, data bits, parity, stop bits, and TX/RX pin assignments. Enable or disable each bridge independently.</div>
+<div class="grid-2">
+<template x-for="(br,bi) in uart.bridges" :key="bi">
+<div class="card">
+<div class="card-h">
+<span class="text-sm font-bold" x-text="'UART Bridge '+bi"></span>
+<div class="toggle" :class="{'on':br.enabled}" @click="br.enabled=!br.enabled;setUartConfig(bi,br)"><div class="toggle-dot"></div></div>
+</div>
+<div class="card-b" :style="!br.enabled?'opacity:0.5':''">
+<div class="cfg-row"><label>Baud</label>
+<select :value="br.baud" @change="br.baud=+$event.target.value;setUartConfig(bi,br)">
+<option value="9600">9600</option><option value="19200">19200</option><option value="38400">38400</option>
+<option value="57600">57600</option><option value="115200">115200</option><option value="230400">230400</option>
+<option value="460800">460800</option><option value="921600">921600</option>
+</select></div>
+<div class="cfg-row"><label>Data Bits</label>
+<select :value="br.dataBits" @change="br.dataBits=+$event.target.value;setUartConfig(bi,br)">
+<option value="7">7</option><option value="8">8</option>
+</select></div>
+<div class="cfg-row"><label>Parity</label>
+<select :value="br.parity" @change="br.parity=$event.target.value;setUartConfig(bi,br)">
+<option value="none">None</option><option value="even">Even</option><option value="odd">Odd</option>
+</select></div>
+<div class="cfg-row"><label>Stop Bits</label>
+<select :value="br.stopBits" @change="br.stopBits=+$event.target.value;setUartConfig(bi,br)">
+<option value="1">1</option><option value="2">2</option>
+</select></div>
+<div class="cfg-row"><label>TX Pin</label>
+<span class="mono text-xs" style="color:var(--text0)" x-text="br.txPin||'N/A'"></span></div>
+<div class="cfg-row"><label>RX Pin</label>
+<span class="mono text-xs" style="color:var(--text0)" x-text="br.rxPin||'N/A'"></span></div>
+</div>
+</div>
+</template>
+</div>
+</div>
 <!-- Faults -->
 <div x-show="tab==='Faults'" x-cloak>
 <div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">AD74416H fault and alert monitoring. Shows global and per-channel alert flags. Clear individual or all alerts. Monitor for overcurrent, open-wire, and thermal faults.</div>
@@ -703,8 +806,9 @@ x-text="t.msg"></div>
 </div>
 <script>
 function app(){return{
+darkMode:localStorage.getItem('bb_dark')!=='0',
 tab:'Overview',
-tabs:['Overview','ADC','Diagnostics','VDAC','IDAC','IIN','Signal Path','Voltages','WaveGen','Scope','USB PD','IO Expander','Faults'],
+tabs:['Overview','ADC','Diagnostics','VDAC','IDAC','IIN','DIN','DOUT','Signal Path','Voltages','WaveGen','Scope','USB PD','IO Expander','UART','Faults'],
 toasts:[],
 connected:false,
 chColors:['#3b82f6','#10b981','#f59e0b','#a855f7'],
@@ -728,10 +832,13 @@ idacSliders:[0,1,2].map(()=>({code:0,voltage:0,dirty:false,vDirty:false})),
 wg:{channel:0,waveform:0,freq:1.0,amplitude:5.0,offset:0.0,mode:0,running:false},
 scope:{running:false,chEn:[true,false,false,false],windowSec:30,yRange:'auto',data:[[],[],[],[]],seq:0,pts:0,_timer:null},
 usbpd:{present:false,attached:false,cc:'CC1',voltageV:0,currentA:0,powerW:0,sourcePdos:[]},
+dout:[false,false,false,false],
+uart:{bridges:[{id:0,enabled:false,baud:115200,dataBits:8,parity:'none',stopBits:1,txPin:'',rxPin:''}]},
 ioexp:{present:false,powerGood:{logic:false,vadj1:false,vadj2:false},enables:{vadj1:false,vadj2:false,analog15v:false,mux:false,usbHub:false},efuses:[{id:1,enabled:false,fault:false},{id:2,enabled:false,fault:false},{id:3,enabled:false,fault:false},{id:4,enabled:false,fault:false}]},
 _pollTimer:null,_slowTimer:null,
 fnMap:{HIGH_IMP:0,VOUT:1,IOUT:2,VIN:3,IIN_EXT_PWR:4,IIN_LOOP_PWR:5,RES_MEAS:6,DIN_LOGIC:7,DIN_LOOP:8,IOUT_HART:9,IIN_EXT_PWR_HART:10,IIN_LOOP_PWR_HART:11},
 init(){
+document.body.classList.toggle('light',!this.darkMode);
 this.pollStatus();
 this.pollSlow();
 this._pollTimer=setInterval(()=>this.pollStatus(),500);
@@ -767,6 +874,10 @@ if(r.ok){let d=await r.json();this.ioexp=d;
 if(d.enables){this.mux.psu=[d.enables.vadj1,d.enables.vadj2]}
 if(d.efuses){this.mux.efuses=d.efuses.map(e=>e.enabled)}}
 }catch(e){}
+try{
+let r=await fetch('/api/uart/config');
+if(r.ok){let d=await r.json();if(d.bridges)this.uart=d}
+}catch(e){}
 },
 fnCode(name){return this.fnMap[name]??-1},
 isCurrent(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===10||f===11},
@@ -796,6 +907,11 @@ body[field]=val;
 this.postJSON('/api/channel/'+i+'/adc/config',body)
 },
 setDiag(slot,source){this.postJSON('/api/diagnostics/config',{slot:slot,source:source})},
+isDin(ch){let f=this.fnCode(ch.function);return f===7||f===8},
+hasDo(ch){let f=this.fnCode(ch.function);return f===1||f===2||f===7||f===8},
+toggleDo(i,on){this.dout[i]=on;this.postJSON('/api/channel/'+i+'/do/set',{on:on})},
+async fetchUartConfig(){try{let r=await fetch('/api/uart/config');if(r.ok)this.uart=await r.json()}catch(e){}},
+setUartConfig(bridge,cfg){this.postJSON('/api/uart/'+bridge+'/config',cfg).then(()=>this.toastOk('UART bridge '+bridge+' updated'))},
 sendVdac(i,voltage,bipolar){this.postJSON('/api/channel/'+i+'/dac',{voltage:voltage,bipolar:bipolar})},
 togMux(dev,sw){
 let st=this.mux.states[dev];
@@ -832,10 +948,23 @@ for(let s=0;s<8;s++){
 let dist=Math.abs(py-sy[s]);
 if(dist<bestDist){bestDist=dist;best=s}
 }
-if(best>=0&&bestDist<rh*0.06){this.togMux(d,best);return}
+if(best>=0&&bestDist<rh*0.12){this.togMux(d,best);return}
 }
 }
 }
+},
+sigHover(ev){
+let cv=this.$refs.sigCanvas;if(!cv)return;
+let r=cv.getBoundingClientRect();
+let px=ev.clientX-r.left,py=ev.clientY-r.top,w=r.width,h=r.height;
+let nd=this.mux.states.length;
+let psu_h=Math.min(32,h/nd*0.3),rt=psu_h+4,rh=(h-rt)/nd;
+let inMux=false;
+for(let d=0;d<nd;d++){
+let ry=rt+d*rh;
+if(py>=ry&&py<ry+rh&&px>=w*0.22&&px<=w*0.52){inMux=true;break}
+}
+cv.style.cursor=inMux?'pointer':'default';
 },
 drawSig(){
 let cv=this.$refs.sigCanvas;if(!cv)return;

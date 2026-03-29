@@ -4,7 +4,7 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, iin::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*};
+use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, iin::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*};
 
 const TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
@@ -23,6 +23,8 @@ const TABS: &[(&str, &str)] = &[
     ("sigpath", "Signal Path"),
     ("voltages", "Voltages"),
     ("calibration", "Calibration"),
+    ("usbpd", "USB PD"),
+    ("ioexp", "IO Expander"),
 ];
 
 #[component]
@@ -118,6 +120,33 @@ pub fn App() -> impl IntoView {
                                         {move || format!("{:.1} °C", device_state.get().die_temperature)}
                                     </span>
                                     <span class="status-separator">"|"</span>
+                                    <button class="btn btn-ghost btn-xs" on:click=move |_| {
+                                        spawn_local(async move {
+                                            let result = invoke("pick_config_save_file", JsValue::NULL).await;
+                                            if let Ok(Some(path)) = serde_wasm_bindgen::from_value::<Option<String>>(result) {
+                                                if !path.is_empty() {
+                                                    #[derive(serde::Serialize)]
+                                                    struct Args { path: String }
+                                                    let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
+                                                    let _ = invoke("export_config", args).await;
+                                                }
+                                            }
+                                        });
+                                    }>"Export"</button>
+                                    <button class="btn btn-ghost btn-xs" on:click=move |_| {
+                                        spawn_local(async move {
+                                            let result = invoke("pick_config_open_file", JsValue::NULL).await;
+                                            if let Ok(Some(path)) = serde_wasm_bindgen::from_value::<Option<String>>(result) {
+                                                if !path.is_empty() {
+                                                    #[derive(serde::Serialize)]
+                                                    struct Args { path: String }
+                                                    let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
+                                                    let _ = invoke("import_config", args).await;
+                                                }
+                                            }
+                                        });
+                                    }>"Import"</button>
+                                    <span class="status-separator">"|"</span>
                                     <button class="btn btn-danger btn-xs" on:click=disconnect>"Disconnect"</button>
                                 </div>
                             }.into_any()
@@ -199,6 +228,8 @@ pub fn App() -> impl IntoView {
                         "sigpath" => view! { <SignalPathTab state=device_state /> }.into_any(),
                         "voltages" => view! { <VoltagesTab state=device_state /> }.into_any(),
                         "calibration" => view! { <CalibrationTab state=device_state /> }.into_any(),
+                        "usbpd" => view! { <UsbPdTab state=device_state /> }.into_any(),
+                        "ioexp" => view! { <IoExpTab state=device_state /> }.into_any(),
                         _ => view! { <div>"Unknown tab"</div> }.into_any(),
                     }}
                 </div>

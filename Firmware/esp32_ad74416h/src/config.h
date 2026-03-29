@@ -54,7 +54,11 @@
 #define PCA9535_I2C_ADDR    0x23      // A2=0, A1=1, A0=1
 
 // PCA9535 Interrupt Pin
-#define PIN_MUX_INT     GPIO_NUM_4    // PCA9535 INT output → ESP32
+#if BREADBOARD_MODE
+#define PIN_MUX_INT     GPIO_NUM_NC   // Not connected on breadboard (conflicts with I2C_SCL on GPIO4)
+#else
+#define PIN_MUX_INT     GPIO_NUM_4    // PCB: PCA9535 INT output → ESP32
+#endif
 
 // -----------------------------------------------------------------------------
 // ADGS2414D Mux Switch Matrix

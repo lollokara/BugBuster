@@ -985,20 +985,64 @@ static int handleIdacSetVoltage(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+// ADC read callback for IDAC calibration.
+// Reads the cached ADC value from channel 0 (the user must connect ADC Ch A
+// to the measurement point and set it to VIN mode before starting calibration).
+// The ADC poll task continuously updates g_deviceState.channels[0].adcValue.
+static uint8_t s_cal_adc_channel = 0;  // Which AD74416H channel reads the voltage
+
+static float cal_read_adc(uint8_t idac_ch)
+{
+    (void)idac_ch;  // We always read from the configured ADC channel
+    float val = 0.0f;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        val = g_deviceState.channels[s_cal_adc_channel].adcValue;
+        xSemaphoreGive(g_stateMutex);
+    }
+    return val;
+}
+
 static int handleIdacCalibrate(uint16_t seq, uint8_t cmdId,
                                 const uint8_t *payload, size_t len, uint8_t *out)
 {
-    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    // Payload: idac_ch(u8) + step(u8) + settle_ms(u16) + adc_channel(u8)
+    if (len < 5) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     size_t rpos = 0;
     uint8_t ch = get_u8(payload, &rpos);
     uint8_t step = get_u8(payload, &rpos);
     uint16_t settle = get_u16(payload, &rpos);
+    uint8_t adc_ch = get_u8(payload, &rpos);
     if (ch >= 3) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+    if (adc_ch >= 4) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
 
-    // TODO: Wire up ADC read callback when AD74416H channel is configured for VIN
-    // For now, respond with an error indicating calibration needs ADC
-    sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
-    return -1;
+    // Check that the ADC channel is in VIN mode
+    ChannelFunction func = CH_FUNC_HIGH_IMP;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        func = g_deviceState.channels[adc_ch].function;
+        xSemaphoreGive(g_stateMutex);
+    }
+    if (func != CH_FUNC_VIN) {
+        ESP_LOGW(TAG, "IDAC calibrate: ADC channel %d not in VIN mode (func=%d)", adc_ch, func);
+        sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+
+    s_cal_adc_channel = adc_ch;
+
+    ESP_LOGI(TAG, "Starting IDAC%d auto-calibration (step=%d, settle=%dms, ADC=ch%d)",
+             ch, step, settle, adc_ch);
+
+    int points = ds4424_cal_auto(ch, cal_read_adc, step, settle);
+
+    // Save to NVS
+    ds4424_cal_save();
+
+    ESP_LOGI(TAG, "IDAC%d calibration complete: %d points, saved to NVS", ch, points);
+
+    size_t pos = 0;
+    put_u8(out, &pos, ch);
+    put_u8(out, &pos, (uint8_t)points);
+    return (int)pos;
 }
 
 static int handleIdacCalAddPoint(uint16_t seq, uint8_t cmdId,

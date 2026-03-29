@@ -12,6 +12,8 @@ use crate::bbp::{self, PayloadWriter};
 use crate::connection_manager::ConnectionManager;
 use crate::state::*;
 
+use serde_json;
+
 /// Global CSV writer protected by a Mutex.
 /// `None` means no recording is in progress.
 pub static CSV_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
@@ -910,4 +912,229 @@ pub fn append_csv_data(timestamp_ms: f64, ch_values: Vec<f32>) -> CmdResult<()> 
         writeln!(w, "{},{},{},{},{}", timestamp_ms, a, b, c, d).ok();
     }
     Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// Config Export / Import
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn export_config(
+    path: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let state = mgr.get_device_state();
+
+    // Channel functions and ADC config
+    let channels: Vec<serde_json::Value> = (0..4).map(|i| {
+        let ch = &state.channels[i];
+        serde_json::json!({
+            "function": ch.function,
+            "adc_range": ch.adc_range,
+            "adc_rate": ch.adc_rate,
+            "adc_mux": ch.adc_mux,
+        })
+    }).collect();
+
+    // MUX switch states
+    let mux_states: Vec<u8> = state.mux_states.to_vec();
+
+    // IDAC codes (fetch live)
+    let idac_codes: Vec<i8> = {
+        let rsp = mgr.send_command(bbp::CMD_IDAC_GET_STATUS, &[]).await;
+        match rsp {
+            Ok(data) => {
+                let mut r = bbp::PayloadReader::new(&data);
+                let _present = r.get_bool();
+                let mut codes = Vec::new();
+                for _ in 0..3 {
+                    let _ch = r.get_u8();
+                    let code = r.get_u8().unwrap_or(0) as i8;
+                    // skip remaining fields per channel
+                    let _target = r.get_f32();
+                    let _actual = r.get_f32();
+                    let _mid = r.get_f32();
+                    let _vmin = r.get_f32();
+                    let _vmax = r.get_f32();
+                    let _step = r.get_f32();
+                    let _cal = r.get_bool();
+                    let cal_count = r.get_u8().unwrap_or(0);
+                    for _ in 0..cal_count {
+                        let _pc = r.get_u8();
+                        let _pv = r.get_f32();
+                    }
+                    codes.push(code);
+                }
+                codes
+            }
+            Err(_) => vec![0, 0, 0],
+        }
+    };
+
+    // PCA9535 enables (fetch live)
+    let pca_enables = {
+        let rsp = mgr.send_command(bbp::CMD_PCA_GET_STATUS, &[]).await;
+        match rsp {
+            Ok(data) => {
+                let mut r = bbp::PayloadReader::new(&data);
+                let _present = r.get_bool();
+                let _i0 = r.get_u8(); let _i1 = r.get_u8();
+                let _o0 = r.get_u8(); let _o1 = r.get_u8();
+                let _lpg = r.get_bool(); let _v1pg = r.get_bool(); let _v2pg = r.get_bool();
+                for _ in 0..4 { let _ef = r.get_bool(); }
+                let vadj1_en = r.get_bool().unwrap_or(false);
+                let vadj2_en = r.get_bool().unwrap_or(false);
+                let en_15v = r.get_bool().unwrap_or(false);
+                let en_mux = r.get_bool().unwrap_or(false);
+                let en_usb_hub = r.get_bool().unwrap_or(false);
+                let mut efuse_en = [false; 4];
+                for i in 0..4 { efuse_en[i] = r.get_bool().unwrap_or(false); }
+                serde_json::json!({
+                    "vadj1_en": vadj1_en,
+                    "vadj2_en": vadj2_en,
+                    "en_15v": en_15v,
+                    "en_mux": en_mux,
+                    "en_usb_hub": en_usb_hub,
+                    "efuse_en": efuse_en,
+                })
+            }
+            Err(_) => serde_json::json!({}),
+        }
+    };
+
+    let config = serde_json::json!({
+        "version": 1,
+        "channels": channels,
+        "mux_states": mux_states,
+        "idac_codes": idac_codes,
+        "pca_enables": pca_enables,
+    });
+
+    let json_str = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("JSON serialize error: {}", e))?;
+    std::fs::write(&path, json_str)
+        .map_err(|e| format!("File write error: {}", e))?;
+
+    log::info!("Config exported to {}", path);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn import_config(
+    path: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let json_str = std::fs::read_to_string(&path)
+        .map_err(|e| format!("File read error: {}", e))?;
+    let config: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("JSON parse error: {}", e))?;
+
+    // Restore channel functions and ADC config
+    if let Some(channels) = config["channels"].as_array() {
+        for (i, ch) in channels.iter().enumerate() {
+            if i >= 4 { break; }
+            let ch_idx = i as u8;
+
+            // Set channel function
+            if let Some(func) = ch["function"].as_u64() {
+                let mut pw = PayloadWriter::new();
+                pw.put_u8(ch_idx);
+                pw.put_u8(func as u8);
+                mgr.send_command(bbp::CMD_SET_CH_FUNC, &pw.buf).await.map_err(map_err)?;
+            }
+
+            // Set ADC config
+            let mux = ch["adc_mux"].as_u64().unwrap_or(0) as u8;
+            let range = ch["adc_range"].as_u64().unwrap_or(0) as u8;
+            let rate = ch["adc_rate"].as_u64().unwrap_or(0) as u8;
+            let mut pw = PayloadWriter::new();
+            pw.put_u8(ch_idx);
+            pw.put_u8(mux);
+            pw.put_u8(range);
+            pw.put_u8(rate);
+            mgr.send_command(bbp::CMD_SET_ADC_CONFIG, &pw.buf).await.map_err(map_err)?;
+        }
+    }
+
+    // Restore MUX states
+    if let Some(mux_arr) = config["mux_states"].as_array() {
+        let states: Vec<u8> = mux_arr.iter()
+            .map(|v| v.as_u64().unwrap_or(0) as u8)
+            .collect();
+        if states.len() >= 4 {
+            mgr.send_command(bbp::CMD_MUX_SET_ALL, &states[..4]).await.map_err(map_err)?;
+        }
+    }
+
+    // Restore IDAC codes
+    if let Some(idac_arr) = config["idac_codes"].as_array() {
+        for (i, v) in idac_arr.iter().enumerate() {
+            if i >= 3 { break; }
+            let code = v.as_i64().unwrap_or(0) as i8;
+            let mut pw = PayloadWriter::new();
+            pw.put_u8(i as u8);
+            pw.put_u8(code as u8);
+            mgr.send_command(bbp::CMD_IDAC_SET_CODE, &pw.buf).await.map_err(map_err)?;
+        }
+    }
+
+    // Restore PCA9535 enables
+    if let Some(pca) = config.get("pca_enables") {
+        let controls = [
+            ("vadj1_en", 0u8),
+            ("vadj2_en", 1u8),
+            ("en_15v", 2u8),
+            ("en_mux", 3u8),
+            ("en_usb_hub", 4u8),
+        ];
+        for (key, ctrl_id) in &controls {
+            if let Some(on) = pca[key].as_bool() {
+                let mut pw = PayloadWriter::new();
+                pw.put_u8(*ctrl_id);
+                pw.put_bool(on);
+                mgr.send_command(bbp::CMD_PCA_SET_CONTROL, &pw.buf).await.map_err(map_err)?;
+            }
+        }
+        // Restore e-fuse enables
+        if let Some(efuse_arr) = pca["efuse_en"].as_array() {
+            for (i, v) in efuse_arr.iter().enumerate() {
+                if i >= 4 { break; }
+                let on = v.as_bool().unwrap_or(false);
+                let mut pw = PayloadWriter::new();
+                pw.put_u8(5 + i as u8);  // e-fuse control IDs start at 5
+                pw.put_bool(on);
+                mgr.send_command(bbp::CMD_PCA_SET_CONTROL, &pw.buf).await.map_err(map_err)?;
+            }
+        }
+    }
+
+    log::info!("Config imported from {}", path);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pick_config_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app.dialog()
+        .file()
+        .set_title("Export Config")
+        .add_filter("JSON Files", &["json"])
+        .set_file_name("bugbuster_config.json")
+        .blocking_save_file();
+
+    Ok(path.map(|p| p.to_string()))
+}
+
+#[tauri::command]
+pub async fn pick_config_open_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let path = app.dialog()
+        .file()
+        .set_title("Import Config")
+        .add_filter("JSON Files", &["json"])
+        .blocking_pick_file();
+
+    Ok(path.map(|p| p.to_string()))
 }

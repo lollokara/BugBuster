@@ -23,7 +23,7 @@ static uint8_t s_mux_state[ADGS_NUM_DEVICES] = {};
 static spi_device_handle_t s_spi_dev = NULL;
 
 // Whether we're in daisy-chain mode
-static bool s_daisy_chain_active = false;
+static bool s_mux_initialized = false;
 
 // -----------------------------------------------------------------------------
 // Low-level SPI helpers
@@ -41,9 +41,13 @@ static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
     g_spi_bus_granted = false;
     g_spi_bus_request = true;
 
-    // Wait for ADC task to grant us the bus (max 100ms)
-    for (int i = 0; i < 100 && !g_spi_bus_granted; i++) {
+    // Wait for ADC task to grant us the bus (max 200ms)
+    for (int i = 0; i < 200 && !g_spi_bus_granted; i++) {
         delay_ms(1);
+    }
+    if (!g_spi_bus_granted) {
+        ESP_LOGW(TAG, "SPI bus request timeout (200ms) - ADC task may be stuck");
+        // Proceed anyway — the ADC task might not be running
     }
 
     gpio_set_level(PIN_MUX_CS, 0);
@@ -78,7 +82,7 @@ static void adgs_enter_daisy_chain(void)
     uint8_t tx[2] = { ADGS_DAISY_CHAIN_CMD_HI, ADGS_DAISY_CHAIN_CMD_LO };
     uint8_t rx[2] = {0};
     spi_transfer(tx, rx, 2);
-    s_daisy_chain_active = true;
+    s_mux_initialized = true;
     ESP_LOGI(TAG, "Daisy-chain mode entered");
 }
 
@@ -154,7 +158,7 @@ void adgs_init(void)
     adgs_daisy_chain_write(s_mux_state);
 #else
     // Single device: stay in address mode (no daisy-chain)
-    s_daisy_chain_active = true;  // Flag still set so API works
+    s_mux_initialized = true;  // Flag still set so API works
     adgs_address_mode_write(ADGS_REG_SW_DATA, 0x00);
     ESP_LOGI(TAG, "Single device mode (address mode, no daisy-chain)");
 #endif
@@ -165,14 +169,14 @@ void adgs_init(void)
 
 void adgs_set_all_raw(const uint8_t states[ADGS_NUM_DEVICES])
 {
-    if (!s_daisy_chain_active) return;
+    if (!s_mux_initialized) return;
     memcpy(s_mux_state, states, ADGS_NUM_DEVICES);
     adgs_write_states(s_mux_state);
 }
 
 void adgs_set_all_safe(const uint8_t states[ADGS_NUM_DEVICES])
 {
-    if (!s_daisy_chain_active) return;
+    if (!s_mux_initialized) return;
 
     // Step 1: Open all switches
     uint8_t all_open[ADGS_NUM_DEVICES] = {};
@@ -189,7 +193,7 @@ void adgs_set_all_safe(const uint8_t states[ADGS_NUM_DEVICES])
 void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 {
     if (device >= ADGS_NUM_DEVICES || sw >= ADGS_NUM_SWITCHES) return;
-    if (!s_daisy_chain_active) return;
+    if (!s_mux_initialized) return;
 
     uint8_t group_mask = get_group_mask(sw);
     uint8_t new_state;
@@ -229,7 +233,7 @@ void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES])
 void adgs_reset_all(void)
 {
     memset(s_mux_state, 0, sizeof(s_mux_state));
-    if (s_daisy_chain_active) {
+    if (s_mux_initialized) {
 #if ADGS_NUM_DEVICES > 1
         adgs_daisy_chain_write(s_mux_state);
 #else
@@ -247,7 +251,7 @@ uint8_t adgs_test_address_mode(uint8_t sw_data)
     delay_ms(1);
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
     delay_ms(10);
-    s_daisy_chain_active = false;
+    s_mux_initialized = false;
     ESP_LOGI(TAG, "Soft reset done, now in address mode");
 
     // Write switch data
@@ -269,7 +273,7 @@ void adgs_soft_reset(void)
     delay_ms(1);
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
     delay_ms(10);
-    s_daisy_chain_active = false;
+    s_mux_initialized = false;
     memset(s_mux_state, 0, sizeof(s_mux_state));
     ESP_LOGI(TAG, "Soft reset complete");
 }

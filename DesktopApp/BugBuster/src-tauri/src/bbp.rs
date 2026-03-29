@@ -607,4 +607,221 @@ mod tests {
         assert_eq!(r.get_bool(), Some(true));
         assert_eq!(r.remaining(), 0);
     }
+
+    // -------------------------------------------------------------------------
+    // PayloadWriter/Reader round-trip with all types
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_payload_roundtrip_all_types() {
+        let mut w = PayloadWriter::new();
+        w.put_u8(0xFF);
+        w.put_u16(0xBEEF);
+        // u24 is written as 3 LE bytes manually (no put_u24 on writer)
+        w.buf.extend_from_slice(&[0x56, 0x34, 0x12]); // 0x123456
+        w.put_u32(0xDEADBEEF);
+        w.put_f32(-1.5);
+        w.put_bool(false);
+        w.put_bool(true);
+
+        let mut r = PayloadReader::new(&w.buf);
+        assert_eq!(r.get_u8(), Some(0xFF));
+        assert_eq!(r.get_u16(), Some(0xBEEF));
+        assert_eq!(r.get_u24(), Some(0x123456));
+        assert_eq!(r.get_u32(), Some(0xDEADBEEF));
+        assert_eq!(r.get_f32(), Some(-1.5));
+        assert_eq!(r.get_bool(), Some(false));
+        assert_eq!(r.get_bool(), Some(true));
+        assert_eq!(r.remaining(), 0);
+    }
+
+    #[test]
+    fn test_payload_reader_exhaustion() {
+        // Reading past the end should return None, not panic
+        let data = [0x42];
+        let mut r = PayloadReader::new(&data);
+        assert_eq!(r.get_u8(), Some(0x42));
+        assert_eq!(r.get_u8(), None);
+        assert_eq!(r.get_u16(), None);
+        assert_eq!(r.get_u24(), None);
+        assert_eq!(r.get_u32(), None);
+        assert_eq!(r.get_f32(), None);
+        assert_eq!(r.get_bool(), None);
+    }
+
+    // -------------------------------------------------------------------------
+    // COBS encode/decode with embedded zeros
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_cobs_embedded_zeros() {
+        let data = vec![0x00, 0x11, 0x00, 0x00, 0x22, 0x00];
+        let encoded = cobs_encode(&data);
+        // Encoded stream must never contain 0x00
+        assert!(!encoded.iter().any(|&b| b == 0x00),
+                "COBS encoded data must not contain zero bytes");
+        let decoded = cobs_decode(&encoded).unwrap();
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn test_cobs_single_zero() {
+        let data = vec![0x00];
+        let encoded = cobs_encode(&data);
+        assert!(!encoded.iter().any(|&b| b == 0x00));
+        let decoded = cobs_decode(&encoded).unwrap();
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn test_cobs_long_non_zero_run() {
+        // Test a run longer than 254 bytes (exercises the 0xFF block boundary)
+        let data: Vec<u8> = (1..=255).cycle().take(300).collect();
+        let encoded = cobs_encode(&data);
+        assert!(!encoded.iter().any(|&b| b == 0x00));
+        let decoded = cobs_decode(&encoded).unwrap();
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn test_cobs_decode_invalid_zero_in_stream() {
+        // A zero byte inside the COBS stream is invalid
+        let invalid = vec![0x02, 0x11, 0x00, 0x03, 0x22, 0x33];
+        assert!(cobs_decode(&invalid).is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Message parse with truncated data
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_message_parse_truncated_empty() {
+        assert!(Message::parse(&[]).is_none(), "Empty data should return None");
+    }
+
+    #[test]
+    fn test_message_parse_truncated_too_short() {
+        // Less than MIN_MSG_SIZE (6 bytes: header 4 + CRC 2)
+        assert!(Message::parse(&[0x01, 0x00, 0x00]).is_none());
+        assert!(Message::parse(&[0x01, 0x00, 0x00, 0x01, 0x00]).is_none());
+    }
+
+    #[test]
+    fn test_message_parse_bad_crc() {
+        // Build a valid message then corrupt the CRC
+        let mut raw = Message::build(MSG_CMD, 1, CMD_PING, &[]);
+        let len = raw.len();
+        raw[len - 1] ^= 0xFF; // Flip bits in CRC
+        assert!(Message::parse(&raw).is_none(), "Corrupted CRC should return None");
+    }
+
+    #[test]
+    fn test_message_parse_min_valid() {
+        // A valid message with no payload (just header + CRC)
+        let raw = Message::build(MSG_CMD, 0, CMD_PING, &[]);
+        assert_eq!(raw.len(), MIN_MSG_SIZE);
+        let msg = Message::parse(&raw).unwrap();
+        assert_eq!(msg.msg_type, MSG_CMD);
+        assert_eq!(msg.seq, 0);
+        assert_eq!(msg.cmd_id, CMD_PING);
+        assert!(msg.payload.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Frame accumulator with partial frames
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_frame_accumulator_partial_then_complete() {
+        let frame = Message::build_frame(1, CMD_GET_STATUS, &[0xAA, 0xBB]);
+        let mid = frame.len() / 2;
+
+        let mut acc = FrameAccumulator::new();
+
+        // Feed first half -- no complete frames yet
+        let msgs = acc.feed(&frame[..mid]);
+        assert!(msgs.is_empty(), "Partial frame should not yield messages");
+
+        // Feed second half -- now we should get the message
+        let msgs = acc.feed(&frame[mid..]);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].cmd_id, CMD_GET_STATUS);
+        assert_eq!(msgs[0].payload, vec![0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn test_frame_accumulator_multiple_frames_byte_by_byte() {
+        let frame1 = Message::build_frame(10, CMD_PING, &[]);
+        let frame2 = Message::build_frame(20, CMD_GET_STATUS, &[0x01]);
+
+        let mut combined = frame1;
+        combined.extend_from_slice(&frame2);
+
+        let mut acc = FrameAccumulator::new();
+        let mut all_msgs = Vec::new();
+
+        // Feed one byte at a time
+        for &byte in &combined {
+            let msgs = acc.feed(&[byte]);
+            all_msgs.extend(msgs);
+        }
+
+        assert_eq!(all_msgs.len(), 2);
+        assert_eq!(all_msgs[0].cmd_id, CMD_PING);
+        assert_eq!(all_msgs[0].seq, 10);
+        assert_eq!(all_msgs[1].cmd_id, CMD_GET_STATUS);
+        assert_eq!(all_msgs[1].seq, 20);
+    }
+
+    #[test]
+    fn test_frame_accumulator_empty_between_delimiters() {
+        // Consecutive delimiters should not produce messages
+        let mut acc = FrameAccumulator::new();
+        let msgs = acc.feed(&[0x00, 0x00, 0x00]);
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn test_frame_accumulator_reset() {
+        let frame = Message::build_frame(1, CMD_PING, &[]);
+        let mid = frame.len() / 2;
+
+        let mut acc = FrameAccumulator::new();
+        acc.feed(&frame[..mid]); // partial
+        acc.reset();
+
+        // After reset, the partial data is gone; feed the rest should not yield a message
+        let msgs = acc.feed(&frame[mid..]);
+        assert!(msgs.is_empty(), "Reset should discard buffered partial data");
+    }
+
+    // -------------------------------------------------------------------------
+    // CRC-16 known test vector
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_crc16_known_vector() {
+        // CRC-16/CCITT-FALSE for "123456789" is 0x29B1
+        let data = b"123456789";
+        let crc = crc16(data);
+        assert_eq!(crc, 0x29B1,
+                   "CRC-16/CCITT-FALSE of '123456789' should be 0x29B1, got 0x{:04X}", crc);
+    }
+
+    #[test]
+    fn test_crc16_empty() {
+        // CRC of empty data with init 0xFFFF should remain 0xFFFF
+        assert_eq!(crc16(&[]), 0xFFFF);
+    }
+
+    #[test]
+    fn test_crc16_single_byte() {
+        // Deterministic: same input always gives same output
+        let a = crc16(&[0x00]);
+        let b = crc16(&[0x00]);
+        assert_eq!(a, b);
+        // Different input gives different output
+        let c = crc16(&[0x01]);
+        assert_ne!(a, c);
+    }
 }

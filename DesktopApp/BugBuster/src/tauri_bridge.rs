@@ -285,3 +285,74 @@ pub fn send_mux_set_switch(device: u8, switch_num: u8, state: bool) {
     let args = serde_wasm_bindgen::to_value(&Args { device, switch_num, state }).unwrap();
     invoke_void("mux_set_switch", args);
 }
+
+// -----------------------------------------------------------------------------
+// HUSB238 USB PD types & helpers
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsbPdPdo {
+    pub voltage: String,
+    pub detected: bool,
+    pub max_current_a: f32,
+    pub max_power_w: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsbPdState {
+    pub present: bool,
+    pub attached: bool,
+    pub cc: String,
+    pub voltage_v: f32,
+    pub current_a: f32,
+    pub power_w: f32,
+    pub pd_response: u8,
+    pub source_pdos: Vec<UsbPdPdo>,
+    pub selected_pdo: u8,
+}
+
+pub async fn fetch_usbpd_status() -> Option<UsbPdState> {
+    let result = invoke("usbpd_get_status", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub fn send_usbpd_select_pdo(voltage: u8) {
+    #[derive(Serialize)]
+    struct Args { voltage: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { voltage }).unwrap();
+    invoke_void("usbpd_select_pdo", args);
+}
+
+// -----------------------------------------------------------------------------
+// PCA9535 IO Expander types & helpers
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EfuseState {
+    pub id: u8,
+    pub enabled: bool,
+    pub fault: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IoExpState {
+    pub present: bool,
+    pub input0: u8,
+    pub input1: u8,
+    pub output0: u8,
+    pub output1: u8,
+    pub logic_pg: bool,
+    pub vadj1_pg: bool,
+    pub vadj2_pg: bool,
+    pub vadj1_en: bool,
+    pub vadj2_en: bool,
+    pub en_15v: bool,
+    pub en_mux: bool,
+    pub en_usb_hub: bool,
+    pub efuses: Vec<EfuseState>,
+}
+
+pub async fn fetch_pca_status() -> Option<IoExpState> {
+    let result = invoke("pca_get_status", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}

@@ -85,6 +85,11 @@ pub fn run() {
             commands::start_csv_recording,
             commands::stop_csv_recording,
             commands::append_csv_data,
+            // Config Export/Import
+            commands::export_config,
+            commands::import_config,
+            commands::pick_config_save_file,
+            commands::pick_config_open_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -265,6 +265,22 @@ static esp_err_t handle_get_status(httpd_req_t *req)
             cJSON_AddItemToArray(channels, obj);
         }
 
+        // Diagnostic slots (sync with BBP GET_STATUS)
+        cJSON *diagnostics = cJSON_AddArrayToObject(root, "diagnostics");
+        for (uint8_t d = 0; d < 4; d++) {
+            cJSON *dobj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(dobj, "source", g_deviceState.diag[d].source);
+            cJSON_AddNumberToObject(dobj, "rawCode", g_deviceState.diag[d].rawCode);
+            cJSON_AddNumberToObject(dobj, "value", g_deviceState.diag[d].value);
+            cJSON_AddItemToArray(diagnostics, dobj);
+        }
+
+        // MUX switch states (sync with BBP GET_STATUS)
+        cJSON *muxStates = cJSON_AddArrayToObject(root, "muxStates");
+        for (uint8_t m = 0; m < 4; m++) {
+            cJSON_AddItemToArray(muxStates, cJSON_CreateNumber(g_deviceState.muxState[m]));
+        }
+
         xSemaphoreGive(g_stateMutex);
     } else {
         cJSON_Delete(root);

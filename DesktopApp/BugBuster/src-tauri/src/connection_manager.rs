@@ -56,10 +56,41 @@ impl ConnectionManager {
         log::info!("Opening USB port: {}", port_name);
         let port_name_owned = port_name.to_string();
         let event_tx_clone = _event_tx.clone();
-        let transport = tokio::task::spawn_blocking(move || {
-            UsbTransport::connect(&port_name_owned, event_tx_clone)
-        }).await??;
+        let first_attempt = {
+            let pn = port_name_owned.clone();
+            let tx = event_tx_clone.clone();
+            tokio::task::spawn_blocking(move || {
+                UsbTransport::connect(&pn, tx)
+            }).await?
+        };
+        let transport = match first_attempt {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("USB connect failed, retrying in 2s: {}", e);
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let pn = port_name_owned.clone();
+                let tx = event_tx_clone.clone();
+                tokio::task::spawn_blocking(move || {
+                    UsbTransport::connect(&pn, tx)
+                }).await??
+            }
+        };
         log::info!("USB handshake completed successfully");
+
+        // Check firmware version compatibility
+        if let Some(h) = transport.handshake_info() {
+            if h.proto_version != bbp::PROTO_VERSION {
+                log::warn!(
+                    "Protocol version mismatch: device reports v{}, expected v{}. Allowing connection but features may not work correctly.",
+                    h.proto_version,
+                    bbp::PROTO_VERSION
+                );
+                let _ = app.emit("version-mismatch", &serde_json::json!({
+                    "device_version": h.proto_version,
+                    "expected_version": bbp::PROTO_VERSION,
+                }));
+            }
+        }
 
         let device_info = transport.handshake_info().map(|h| DeviceInfo {
             proto_version: h.proto_version,
@@ -73,13 +104,13 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self.connection_status.lock().unwrap();
+            let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
             status.mode = ConnectionMode::Usb;
             status.port_or_url = port_name.to_string();
             status.device_info = device_info;
         }
 
-        let status = self.connection_status.lock().unwrap().clone();
+        let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let _ = app.emit("connection-status", &status);
 
         // Spawn event listener for USB stream data
@@ -116,13 +147,13 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self.connection_status.lock().unwrap();
+            let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
             status.mode = ConnectionMode::Http;
             status.port_or_url = base_url.to_string();
             status.device_info = None;
         }
 
-        let status = self.connection_status.lock().unwrap().clone();
+        let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let _ = app.emit("connection-status", &status);
 
         self.start_polling(app.clone());
@@ -143,7 +174,7 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self.connection_status.lock().unwrap();
+            let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
             *status = ConnectionStatus::default();
         }
 
@@ -166,12 +197,12 @@ impl ConnectionManager {
 
     /// Get current device state.
     pub fn get_device_state(&self) -> DeviceState {
-        self.device_state.lock().unwrap().clone()
+        self.device_state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Get current connection status.
     pub fn get_connection_status(&self) -> ConnectionStatus {
-        self.connection_status.lock().unwrap().clone()
+        self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Start the status polling loop.
@@ -181,8 +212,20 @@ impl ConnectionManager {
         let connection_status = self.connection_status.clone();
 
         tokio::spawn(async move {
+            // Determine poll interval based on transport type
+            let poll_ms = {
+                let t = transport.lock().await;
+                match t.as_ref() {
+                    Some(tr) if tr.transport_name() == "HTTP" => 1000,
+                    _ => 200,
+                }
+            };
+
+            let mut consecutive_failures: u32 = 0;
+            const MAX_RETRIES: u32 = 3;
+
             loop {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
 
                 // Check connectivity and poll status while holding the lock
                 let result = {
@@ -195,24 +238,41 @@ impl ConnectionManager {
 
                 match result {
                     Ok(state) => {
-                        {
-                            let mut ds = device_state.lock().unwrap();
+                        consecutive_failures = 0;
+                        if let Ok(mut ds) = device_state.lock() {
                             *ds = state.clone();
                         }
                         let _ = app.emit("device-state", &state);
                     }
                     Err(e) => {
-                        log::warn!("Status poll failed: {}", e);
+                        consecutive_failures += 1;
+                        log::warn!(
+                            "Status poll failed (attempt {}/{}): {}",
+                            consecutive_failures,
+                            MAX_RETRIES,
+                            e
+                        );
+                        if consecutive_failures >= MAX_RETRIES {
+                            log::error!(
+                                "Status poll failed {} consecutive times, marking disconnected",
+                                MAX_RETRIES
+                            );
+                            break;
+                        }
+                        // Wait 1 second before retrying
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
                     }
                 }
             }
 
             // Mark as disconnected
-            let mut status = connection_status.lock().unwrap();
-            if status.mode != ConnectionMode::Disconnected {
-                status.mode = ConnectionMode::Disconnected;
-                status.port_or_url.clear();
-                let _ = app.emit("connection-status", &*status);
+            if let Ok(mut status) = connection_status.lock() {
+                if status.mode != ConnectionMode::Disconnected {
+                    status.mode = ConnectionMode::Disconnected;
+                    status.port_or_url.clear();
+                    let _ = app.emit("connection-status", &*status);
+                }
             }
         });
     }

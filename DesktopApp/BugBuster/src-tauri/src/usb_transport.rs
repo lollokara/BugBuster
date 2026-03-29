@@ -86,9 +86,8 @@ impl UsbTransport {
                                 break;
                             }
                         }
-                        if found_offset.is_some() {
+                        if let Some(off) = found_offset {
                             // We might need more bytes after the magic
-                            let off = found_offset.unwrap();
                             if ring.len() >= off + bbp::HANDSHAKE_RSP_LEN {
                                 break;
                             }
@@ -143,15 +142,18 @@ impl UsbTransport {
                             for msg in messages {
                                 if msg.is_response() || msg.is_error() {
                                     // Match to pending command by seq
-                                    let mut pend = reader_pending.lock().unwrap();
-                                    if let Some(idx) = pend.iter().position(|p| p.seq == msg.seq) {
-                                        let p = pend.remove(idx);
-                                        let _ = p.tx.send(msg);
+                                    if let Ok(mut pend) = reader_pending.lock() {
+                                        if let Some(idx) = pend.iter().position(|p| p.seq == msg.seq) {
+                                            let p = pend.remove(idx);
+                                            let _ = p.tx.send(msg);
+                                        }
                                     }
                                 } else if msg.is_event() {
                                     // Forward events
-                                    if let Some(tx) = reader_event_tx.lock().unwrap().as_ref() {
-                                        let _ = tx.send(msg);
+                                    if let Ok(guard) = reader_event_tx.lock() {
+                                        if let Some(tx) = guard.as_ref() {
+                                            let _ = tx.send(msg);
+                                        }
                                     }
                                 }
                             }
@@ -202,13 +204,13 @@ impl Transport for UsbTransport {
         // Register pending response
         let (tx, rx) = oneshot::channel();
         {
-            let mut pend = self.pending.lock().unwrap();
+            let mut pend = self.pending.lock().map_err(|_| anyhow!("Pending lock poisoned"))?;
             pend.push(PendingCommand { seq, tx });
         }
 
         // Write frame to serial port
         {
-            let mut writer_lock = self.writer.lock().unwrap();
+            let mut writer_lock = self.writer.lock().map_err(|_| anyhow!("Writer lock poisoned"))?;
             if let Some(ref mut port) = *writer_lock {
                 port.write_all(&frame)?;
                 port.flush()?;
@@ -232,8 +234,9 @@ impl Transport for UsbTransport {
             Ok(Err(_)) => Err(anyhow!("Response channel closed")),
             Err(_) => {
                 // Remove from pending on timeout
-                let mut pend = self.pending.lock().unwrap();
-                pend.retain(|p| p.seq != seq);
+                if let Ok(mut pend) = self.pending.lock() {
+                    pend.retain(|p| p.seq != seq);
+                }
                 Err(anyhow!("Command timeout (cmd=0x{:02X})", cmd_id))
             }
         }
@@ -257,12 +260,14 @@ impl Transport for UsbTransport {
         self.connected.store(false, Ordering::Relaxed);
 
         // Close the port
-        let mut writer_lock = self.writer.lock().unwrap();
-        *writer_lock = None;
+        if let Ok(mut writer_lock) = self.writer.lock() {
+            *writer_lock = None;
+        }
 
         // Drop event sender
-        let mut evt = self.event_tx.lock().unwrap();
-        *evt = None;
+        if let Ok(mut evt) = self.event_tx.lock() {
+            *evt = None;
+        }
 
         log::info!("USB transport disconnected from {}", self.port_name);
         Ok(())
@@ -276,7 +281,8 @@ impl Transport for UsbTransport {
 impl Drop for UsbTransport {
     fn drop(&mut self) {
         self.connected.store(false, Ordering::Relaxed);
-        let mut writer_lock = self.writer.lock().unwrap();
-        *writer_lock = None;
+        if let Ok(mut writer_lock) = self.writer.lock() {
+            *writer_lock = None;
+        }
     }
 }
