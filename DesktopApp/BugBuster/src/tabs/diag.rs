@@ -227,9 +227,115 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 }}
             </div>
 
+            // Firmware section
+            <h3 class="section-title">"Firmware"</h3>
+            <FirmwareSection />
+
             // WiFi section
             <h3 class="section-title">"WiFi"</h3>
             <WifiSection />
+        </div>
+    }
+}
+
+#[component]
+fn FirmwareSection() -> impl IntoView {
+    let fw = RwSignal::new(FirmwareInfo::default());
+    let ota_status = RwSignal::new(String::new());
+    let uploading = RwSignal::new(false);
+
+    // Fetch firmware info
+    leptos::task::spawn_local(async move {
+        if let Some(info) = fetch_firmware_info().await {
+            fw.set(info);
+        }
+    });
+
+    view! {
+        <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
+            // Firmware Info card
+            <div class="alert-panel">
+                <div class="alert-panel-header">
+                    <div class="alert-panel-title">"FIRMWARE INFO"</div>
+                    <span class="alert-panel-reg">{move || format!("PROTO v{}", fw.get().proto_version)}</span>
+                </div>
+                <div class="alert-panel-scanline"></div>
+                <div style="padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
+                    <span style="color: var(--text-muted)">"Version:"</span>
+                    <span style="color: var(--green); font-weight: 700">{move || {
+                        let v = fw.get().fw_version.clone();
+                        if v.is_empty() || v == "0.0.0" { "Fetching...".to_string() } else { format!("v{}", v) }
+                    }}</span>
+                    <span style="color: var(--text-muted)">"Built:"</span>
+                    <span style="color: var(--text-dim)">{move || {
+                        let d = fw.get().build_date.clone();
+                        if d.is_empty() { "—".to_string() } else { d }
+                    }}</span>
+                    <span style="color: var(--text-muted)">"ESP-IDF:"</span>
+                    <span style="color: var(--text-dim)">{move || {
+                        let v = fw.get().idf_version.clone();
+                        if v.is_empty() { "—".to_string() } else { v }
+                    }}</span>
+                    <span style="color: var(--text-muted)">"Partition:"</span>
+                    <span style="color: var(--text-dim)">{move || {
+                        let p = fw.get().partition.clone();
+                        let n = fw.get().next_partition.clone();
+                        if p.is_empty() { "—".to_string() } else { format!("{} (next: {})", p, n) }
+                    }}</span>
+                </div>
+            </div>
+
+            // OTA Update card
+            <div class="alert-panel">
+                <div class="alert-panel-header">
+                    <div class="alert-panel-title">"OTA UPDATE"</div>
+                </div>
+                <div class="alert-panel-scanline supply-scanline"></div>
+                <div style="padding: 12px 16px">
+                    <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 10px; line-height: 1.6; font-family: 'JetBrains Mono', monospace">
+                        "Upload a firmware.bin to flash the device over WiFi. The device reboots automatically after a successful update. NVS data is preserved."
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center">
+                        <button class="btn btn-sm btn-primary"
+                            disabled=move || uploading.get()
+                            on:click=move |_| {
+                                uploading.set(true);
+                                ota_status.set("Selecting file...".to_string());
+                                leptos::task::spawn_local(async move {
+                                    // Use Tauri file dialog
+                                    #[derive(serde::Deserialize)]
+                                    struct DialogResult { path: Option<String> }
+
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({
+                                            "title": "Select Firmware Binary",
+                                            "filters": [{"name": "Firmware", "extensions": ["bin"]}]
+                                        })
+                                    ).unwrap();
+                                    let result = invoke("plugin:dialog|open", args).await;
+                                    let path: Option<String> = serde_wasm_bindgen::from_value(result).ok().flatten();
+
+                                    if let Some(p) = path {
+                                        ota_status.set(format!("Uploading {}...", p.split('/').last().unwrap_or(&p)));
+                                        match upload_firmware(&p).await {
+                                            Ok(msg) => ota_status.set(msg),
+                                            Err(e) => ota_status.set(format!("Error: {}", e)),
+                                        }
+                                    } else {
+                                        ota_status.set(String::new());
+                                    }
+                                    uploading.set(false);
+                                });
+                            }
+                        >{move || if uploading.get() { "Uploading..." } else { "Select & Upload .bin" }}</button>
+                    </div>
+                    <div style="margin-top: 8px; font-size: 10px; font-family: 'JetBrains Mono', monospace; min-height: 16px"
+                        style:color=move || if ota_status.get().starts_with("Error") { "var(--rose)" } else { "var(--green)" }
+                    >
+                        {move || ota_status.get()}
+                    </div>
+                </div>
+            </div>
         </div>
     }
 }

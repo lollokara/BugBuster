@@ -393,6 +393,105 @@ pub async fn wifi_scan(
 // -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------
+// Firmware Version & OTA
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirmwareInfo {
+    pub fw_version: String,
+    pub proto_version: u8,
+    pub build_date: String,
+    pub idf_version: String,
+    pub partition: String,
+    pub next_partition: String,
+}
+
+#[tauri::command]
+pub async fn get_firmware_info(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<FirmwareInfo> {
+    // Try HTTP endpoint first (richer info)
+    let base_url = mgr.get_base_url().await;
+    if let Some(url) = base_url {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build().map_err(|e| e.to_string())?;
+        let resp = client.get(format!("{}/api/device/version", url))
+            .send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() {
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            return Ok(FirmwareInfo {
+                fw_version: format!("{}.{}.{}",
+                    json.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0),
+                    json.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0),
+                    json.get("fwPatch").and_then(|v| v.as_u64()).unwrap_or(0)),
+                proto_version: json.get("protoVersion").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                build_date: format!("{} {}",
+                    json.get("date").and_then(|v| v.as_str()).unwrap_or("?"),
+                    json.get("time").and_then(|v| v.as_str()).unwrap_or("")),
+                idf_version: json.get("idfVersion").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
+                partition: json.get("partition").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
+                next_partition: json.get("nextPartition").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
+            });
+        }
+    }
+    // Fallback: use handshake info from connection
+    let info = mgr.get_device_info().await;
+    let (ver, proto) = match info {
+        Some(i) => (i.fw_version, i.proto_version),
+        None => ("?".into(), 0),
+    };
+    Ok(FirmwareInfo {
+        fw_version: ver,
+        proto_version: proto,
+        build_date: String::new(),
+        idf_version: String::new(),
+        partition: String::new(),
+        next_partition: String::new(),
+    })
+}
+
+#[tauri::command]
+pub async fn ota_upload_firmware(
+    file_path: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<String> {
+    // Read the firmware binary
+    let data = std::fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let size = data.len();
+
+    if size < 1024 || size > 2 * 1024 * 1024 {
+        return Err(format!("Invalid firmware size: {} bytes (expected 100KB-2MB)", size));
+    }
+
+    log::info!("OTA: uploading {} bytes from {}", size, file_path);
+
+    // Get HTTP base URL (OTA only works over HTTP)
+    let base_url = mgr.get_base_url().await
+        .ok_or("OTA requires HTTP connection (WiFi). Connect via WiFi first.")?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build().map_err(|e| e.to_string())?;
+
+    let resp = client.post(format!("{}/api/ota/upload", base_url))
+        .header("Content-Type", "application/octet-stream")
+        .body(data)
+        .send()
+        .await
+        .map_err(|e| format!("OTA upload failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("OTA failed (HTTP {}): {}", status, body));
+    }
+
+    Ok(format!("Firmware updated ({} bytes). Device is rebooting...", size))
+}
+
+// -----------------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn clear_all_alerts(

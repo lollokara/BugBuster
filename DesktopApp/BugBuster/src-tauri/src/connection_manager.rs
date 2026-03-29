@@ -330,4 +330,16 @@ impl ConnectionManager {
     pub async fn discover(&self) -> Vec<DiscoveredDevice> {
         discovery::discover_all().await
     }
+
+    /// Get HTTP base URL if connected via HTTP transport.
+    pub async fn get_base_url(&self) -> Option<String> {
+        let t = self.transport.lock().await;
+        t.as_ref().and_then(|tr| tr.base_url())
+    }
+
+    /// Get device info from connection handshake.
+    pub async fn get_device_info(&self) -> Option<DeviceInfo> {
+        let status = self.connection_status.lock().ok()?;
+        status.device_info.clone()
+    }
 }

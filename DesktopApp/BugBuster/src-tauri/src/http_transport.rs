@@ -723,4 +723,8 @@ impl Transport for HttpTransport {
     fn transport_name(&self) -> &str {
         "HTTP"
     }
+
+    fn base_url(&self) -> Option<String> {
+        Some(self.base_url.clone())
+    }
 }

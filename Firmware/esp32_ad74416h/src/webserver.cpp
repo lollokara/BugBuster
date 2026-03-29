@@ -1735,6 +1735,132 @@ static esp_err_t handle_get_wifi_scan(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/device/version
+static esp_err_t handle_get_version(httpd_req_t *req)
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "version", app->version);
+    cJSON_AddStringToObject(root, "date", app->date);
+    cJSON_AddStringToObject(root, "time", app->time);
+    cJSON_AddStringToObject(root, "idfVersion", app->idf_ver);
+    cJSON_AddNumberToObject(root, "fwMajor", BBP_FW_VERSION_MAJOR);
+    cJSON_AddNumberToObject(root, "fwMinor", BBP_FW_VERSION_MINOR);
+    cJSON_AddNumberToObject(root, "fwPatch", BBP_FW_VERSION_PATCH);
+    cJSON_AddNumberToObject(root, "protoVersion", BBP_PROTO_VERSION);
+    if (running) {
+        cJSON_AddStringToObject(root, "partition", running->label);
+        cJSON_AddNumberToObject(root, "partitionSize", running->size);
+    }
+    if (next) {
+        cJSON_AddStringToObject(root, "nextPartition", next->label);
+        cJSON_AddNumberToObject(root, "nextPartitionSize", next->size);
+    }
+    return send_json(req, root);
+}
+
+// POST /api/ota/upload — OTA firmware update (binary body = firmware.bin)
+static esp_err_t handle_ota_upload(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "OTA upload started, content_len=%d", req->content_len);
+
+    if (req->content_len <= 0 || req->content_len > 2 * 1024 * 1024) {
+        return send_error(req, 400, "Invalid firmware size (max 2MB)");
+    }
+
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+    if (!update_partition) {
+        return send_error(req, 500, "No OTA partition available");
+    }
+
+    ESP_LOGI(TAG, "Writing to partition '%s' at 0x%lx, size %lu",
+             update_partition->label, (unsigned long)update_partition->address,
+             (unsigned long)update_partition->size);
+
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        return send_error(req, 500, esp_err_to_name(err));
+    }
+
+    // Stream firmware data in chunks
+    char *buf = (char*)malloc(4096);
+    if (!buf) {
+        esp_ota_abort(ota_handle);
+        return send_error(req, 500, "Out of memory");
+    }
+
+    int remaining = req->content_len;
+    int total_written = 0;
+    bool failed = false;
+
+    while (remaining > 0) {
+        int to_read = (remaining > 4096) ? 4096 : remaining;
+        int received = httpd_req_recv(req, buf, to_read);
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ESP_LOGE(TAG, "OTA receive error at %d/%d bytes", total_written, req->content_len);
+            failed = true;
+            break;
+        }
+
+        err = esp_ota_write(ota_handle, buf, received);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "OTA write failed at %d bytes: %s", total_written, esp_err_to_name(err));
+            failed = true;
+            break;
+        }
+
+        remaining -= received;
+        total_written += received;
+
+        // Log progress every 64KB
+        if (total_written % (64 * 1024) < 4096) {
+            ESP_LOGI(TAG, "OTA progress: %d / %d bytes (%d%%)",
+                     total_written, req->content_len,
+                     total_written * 100 / req->content_len);
+        }
+    }
+
+    free(buf);
+
+    if (failed) {
+        esp_ota_abort(ota_handle);
+        return send_error(req, 500, "OTA write failed");
+    }
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA end failed: %s", esp_err_to_name(err));
+        return send_error(req, 500, esp_err_to_name(err));
+    }
+
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Set boot partition failed: %s", esp_err_to_name(err));
+        return send_error(req, 500, esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "OTA success! %d bytes written to '%s'. Rebooting...",
+             total_written, update_partition->label);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddNumberToObject(root, "bytesWritten", total_written);
+    cJSON_AddStringToObject(root, "partition", update_partition->label);
+    esp_err_t ret = send_json(req, root);
+
+    // Reboot after a short delay to let the HTTP response flush
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+
+    return ret;
+}
+
 // =============================================================================
 // Server init / stop
 // =============================================================================
@@ -1747,9 +1873,9 @@ void initWebServer(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 60;
+    config.max_uri_handlers = 64;
     config.uri_match_fn     = httpd_uri_match_wildcard;
-    config.stack_size       = 8192;
+    config.stack_size       = 12288;  // Increased for OTA buffer
 
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {
@@ -1946,6 +2072,18 @@ void initWebServer(void)
         .uri = "/api/wifi/scan", .method = HTTP_GET, .handler = handle_get_wifi_scan, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_wifi_scan);
+
+    // ----- OTA / Version routes -----
+
+    httpd_uri_t uri_version = {
+        .uri = "/api/device/version", .method = HTTP_GET, .handler = handle_get_version, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_version);
+
+    httpd_uri_t uri_ota = {
+        .uri = "/api/ota/upload", .method = HTTP_POST, .handler = handle_ota_upload, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ota);
 
     // ----- OPTIONS (CORS preflight) -----
 

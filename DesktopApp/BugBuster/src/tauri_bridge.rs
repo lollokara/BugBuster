@@ -452,3 +452,32 @@ pub async fn fetch_wifi_scan() -> Vec<WifiNetwork> {
     let result = invoke("wifi_scan", JsValue::NULL).await;
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
+
+// -----------------------------------------------------------------------------
+// Firmware / OTA
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirmwareInfo {
+    pub fw_version: String,
+    pub proto_version: u8,
+    pub build_date: String,
+    pub idf_version: String,
+    pub partition: String,
+    pub next_partition: String,
+}
+
+pub async fn fetch_firmware_info() -> Option<FirmwareInfo> {
+    let result = invoke("get_firmware_info", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn upload_firmware(path: &str) -> Result<String, String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { file_path: String }
+    let args = serde_wasm_bindgen::to_value(&Args { file_path: path.to_string() }).unwrap();
+    let result = invoke("ota_upload_firmware", args).await;
+    serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
+}

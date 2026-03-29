@@ -14,8 +14,11 @@
     "windows": [
       {
         "title": "BugBuster",
-        "width": 1200,
-        "height": 800
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "maximized": true
       }
     ],
     "security": {

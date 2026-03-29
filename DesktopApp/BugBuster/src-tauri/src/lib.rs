@@ -66,6 +66,9 @@ pub fn run() {
             commands::wifi_get_status,
             commands::wifi_connect,
             commands::wifi_scan,
+            // Firmware / OTA
+            commands::get_firmware_info,
+            commands::ota_upload_firmware,
             // DS4424 IDAC
             commands::idac_get_status,
             commands::idac_set_code,
