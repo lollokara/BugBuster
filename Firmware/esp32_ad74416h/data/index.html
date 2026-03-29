@@ -3,2277 +3,997 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BugBuster — AD74416H Controller</title>
+<title>BugBuster Controller</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 <style>
-/* ===== RESET & BASE ===== */
 *{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg0:#0a0e1a;--bg1:#111827;--bg2:#1e293b;--bg3:#263349;
-  --glass:rgba(30,41,59,0.7);--glass2:rgba(17,24,39,0.85);
-  --border:rgba(59,130,246,0.15);--border2:rgba(255,255,255,0.07);
-  --blue:#3b82f6;--blue-glow:rgba(59,130,246,0.35);
-  --green:#10b981;--green-glow:rgba(16,185,129,0.35);
-  --amber:#f59e0b;--amber-glow:rgba(245,158,11,0.35);
-  --rose:#ef4444;--rose-glow:rgba(239,68,68,0.35);
-  --purple:#a855f7;
-  --text0:#f1f5f9;--text1:#cbd5e1;--text2:#94a3b8;--text3:#64748b;
-  --radius:12px;--radius-sm:8px;
-  --shadow:0 4px 24px rgba(0,0,0,0.4);
-  --transition:0.2s cubic-bezier(0.4,0,0.2,1);
-}
-html{scroll-behavior:smooth}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;
-  background:var(--bg0);color:var(--text1);min-height:100vh;font-size:14px;
-  background-image:radial-gradient(ellipse at 20% 0%,rgba(59,130,246,0.07) 0%,transparent 50%),
-                   radial-gradient(ellipse at 80% 100%,rgba(16,185,129,0.05) 0%,transparent 50%)}
-
-/* ===== SCROLLBAR ===== */
+:root{--bg0:#0a0e1a;--bg1:#111827;--bg2:#1e293b;--border:rgba(59,130,246,0.15);--blue:#3b82f6;--green:#10b981;--amber:#f59e0b;--purple:#a855f7;--rose:#ef4444;--text0:#f1f5f9;--text1:#cbd5e1;--text2:#94a3b8;--text3:#64748b}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg0);color:var(--text1);min-height:100vh;font-size:14px}
+.mono{font-family:'JetBrains Mono',monospace}
 ::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:var(--bg1)}
-::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:var(--blue)}
-
-/* ===== HEADER ===== */
-#header{
-  background:rgba(10,14,26,0.95);
-  backdrop-filter:blur(20px);
-  border-bottom:1px solid var(--border);
-  padding:0 20px;height:56px;
-  display:flex;align-items:center;justify-content:space-between;
-  position:sticky;top:0;z-index:200;
-  box-shadow:0 1px 0 var(--border),0 4px 20px rgba(0,0,0,0.5)
-}
-#header-left{display:flex;align-items:center;gap:12px}
-#logo{display:flex;align-items:center;gap:8px}
-#logo-icon{font-size:1.3rem}
-#logo-text{font-size:1rem;font-weight:700;color:var(--text0);letter-spacing:-0.02em}
-#logo-sub{font-size:.75rem;color:var(--blue);font-weight:500;letter-spacing:0.05em;
-  background:rgba(59,130,246,0.1);padding:2px 8px;border-radius:20px;border:1px solid rgba(59,130,246,0.2)}
-#header-right{display:flex;align-items:center;gap:16px}
-#temp-display{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--text2)}
-#temp-value{font-size:.95rem;font-weight:600;color:var(--text0);
-  transition:color var(--transition)}
-#temp-value.warm{color:var(--amber)}
-#temp-value.hot{color:var(--rose)}
-#spi-badge{font-size:.7rem;font-weight:600;padding:3px 8px;border-radius:20px;
-  transition:all var(--transition)}
-#spi-badge.ok{background:rgba(16,185,129,0.15);color:var(--green);border:1px solid rgba(16,185,129,0.3)}
-#spi-badge.err{background:rgba(239,68,68,0.15);color:var(--rose);border:1px solid rgba(239,68,68,0.3)}
-#conn-status{display:flex;align-items:center;gap:7px;font-size:.8rem;color:var(--text2)}
-#conn-dot{width:9px;height:9px;border-radius:50%;background:var(--rose);
-  box-shadow:0 0 0 0 var(--rose-glow);transition:background .3s}
-#conn-dot.ok{background:var(--green);animation:pulse-dot 2s infinite}
-@keyframes pulse-dot{
-  0%{box-shadow:0 0 0 0 var(--green-glow)}
-  70%{box-shadow:0 0 0 6px rgba(16,185,129,0)}
-  100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}
-}
-
-/* ===== TAB BAR ===== */
-#tab-bar{
-  background:rgba(10,14,26,0.8);
-  backdrop-filter:blur(10px);
-  border-bottom:1px solid var(--border2);
-  padding:0 20px;
-  display:flex;align-items:flex-end;gap:2px;
-  position:sticky;top:56px;z-index:190;
-  overflow-x:auto;
-}
-#tab-bar::-webkit-scrollbar{height:2px}
-.tab-btn{
-  padding:12px 16px 10px;
-  font-size:.78rem;font-weight:500;
-  color:var(--text3);
-  border:none;background:transparent;cursor:pointer;
-  white-space:nowrap;
-  border-bottom:2px solid transparent;
-  transition:all var(--transition);
-  display:flex;align-items:center;gap:6px;
-  position:relative;
-}
-.tab-btn:hover{color:var(--text1);background:rgba(255,255,255,0.03);border-radius:6px 6px 0 0}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg2);border-radius:3px}
+.card{background:var(--bg1);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.card-h{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card-b{padding:16px}
+.ch-badge{padding:2px 10px;border-radius:6px;font-size:12px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.big-val{font-size:28px;font-weight:800;font-family:'JetBrains Mono',monospace;letter-spacing:-1px;line-height:1.2}
+.bar-wrap{height:6px;border-radius:3px;background:var(--bg2);overflow:hidden;margin:8px 0}
+.bar-fill{height:100%;border-radius:3px;transition:width 0.3s}
+select,input[type=number],input[type=text]{background:var(--bg2);color:var(--text0);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:'JetBrains Mono',monospace;outline:none}
+select:focus,input:focus{border-color:var(--blue)}
+input[type=range]{-webkit-appearance:none;width:100%;height:6px;border-radius:3px;background:var(--bg2);outline:none;margin:8px 0}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--blue);cursor:pointer;border:2px solid var(--bg0)}
+.btn{padding:6px 16px;border-radius:6px;border:none;font-size:12px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;transition:opacity 0.2s}
+.btn:hover{opacity:0.85}
+.btn-blue{background:var(--blue);color:#fff}
+.btn-green{background:var(--green);color:#000}
+.btn-rose{background:var(--rose);color:#fff}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text2)}
+.btn-ghost:hover{border-color:var(--blue);color:var(--text0)}
+.led{width:10px;height:10px;border-radius:50%;background:var(--bg2);transition:all 0.2s}
+.led-on{box-shadow:0 0 8px currentColor}
+.tab-btn{padding:8px 16px;border:none;background:transparent;color:var(--text3);font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.15s}
+.tab-btn:hover{color:var(--text1)}
 .tab-btn.active{color:var(--blue);border-bottom-color:var(--blue)}
-.tab-btn.active::after{content:'';position:absolute;bottom:-1px;left:0;right:0;height:1px;background:var(--blue);box-shadow:0 0 8px var(--blue)}
-.tab-icon{font-size:.95rem}
-
-/* ===== MAIN CONTENT ===== */
-#content{padding:20px;max-width:1400px;margin:0 auto}
-.tab-panel{display:none}
-.tab-panel.active{display:block;animation:fadeIn .2s ease}
-@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-
-/* ===== GRID LAYOUTS ===== */
-.ch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
-.ch-grid-2{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}
-
-/* ===== GLASS CARD ===== */
-.card{
-  background:var(--glass);
-  backdrop-filter:blur(12px);
-  border:1px solid var(--border2);
-  border-radius:var(--radius);
-  padding:16px;
-  box-shadow:var(--shadow);
-  transition:border-color var(--transition),box-shadow var(--transition);
-  position:relative;overflow:hidden;
-}
-.card::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.08),transparent);
-}
-.card:hover{border-color:rgba(59,130,246,0.25);box-shadow:0 4px 32px rgba(0,0,0,0.5),0 0 0 1px rgba(59,130,246,0.1)}
-.card.dimmed{opacity:0.45}
-.card.fault{border-color:rgba(239,68,68,0.4);box-shadow:0 0 20px rgba(239,68,68,0.1)}
-.card.warning{border-color:rgba(245,158,11,0.4);box-shadow:0 0 20px rgba(245,158,11,0.1)}
-.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-.card-title{font-size:.8rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:6px}
-.ch-badge{display:inline-flex;align-items:center;justify-content:center;
-  width:22px;height:22px;border-radius:6px;font-size:.7rem;font-weight:700;
-  background:rgba(59,130,246,0.15);color:var(--blue);border:1px solid rgba(59,130,246,0.25)}
-
-/* ===== SECTION TITLE ===== */
-.section-title{font-size:.7rem;font-weight:600;color:var(--text3);text-transform:uppercase;
-  letter-spacing:.1em;margin-bottom:12px;padding-bottom:6px;
-  border-bottom:1px solid var(--border2);display:flex;align-items:center;gap:6px}
-
-/* ===== BIG VALUE DISPLAY ===== */
-.big-value{
-  font-size:2.2rem;font-weight:700;color:var(--text0);
-  font-variant-numeric:tabular-nums;letter-spacing:-0.02em;
-  transition:all .15s ease;
-  line-height:1;
-}
-.big-value .unit{font-size:.9rem;font-weight:500;color:var(--text3);margin-left:4px}
-.big-value.updated{animation:valueFlash .3s ease}
-@keyframes valueFlash{
-  0%{color:var(--blue)}50%{color:var(--text0)}100%{color:var(--text0)}
-}
-.raw-val{font-size:.7rem;color:var(--text3);margin-top:4px;font-variant-numeric:tabular-nums}
-
-/* ===== FORM CONTROLS ===== */
-select,input[type=number],input[type=text]{
-  background:rgba(255,255,255,0.05);
-  border:1px solid var(--border2);
-  color:var(--text1);
-  border-radius:var(--radius-sm);
-  padding:6px 10px;font-size:.78rem;
-  width:100%;
-  transition:border-color var(--transition),box-shadow var(--transition);
-  appearance:none;-webkit-appearance:none;
-}
-select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748b'/%3E%3C/svg%3E");
-  background-repeat:no-repeat;background-position:right 8px center;padding-right:24px}
-select:focus,input[type=number]:focus,input[type=text]:focus{
-  outline:none;border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-glow)}
-.form-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.form-row label{font-size:.72rem;color:var(--text3);white-space:nowrap;min-width:80px}
-.form-row.compact label{min-width:60px}
-
-/* ===== TOGGLE SWITCH ===== */
-.toggle-wrap{display:flex;align-items:center;gap:8px}
-.toggle{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0}
-.toggle input{opacity:0;width:0;height:0}
-.toggle-slider{
-  position:absolute;inset:0;background:rgba(255,255,255,0.1);
-  border-radius:11px;cursor:pointer;transition:background .2s;
-  border:1px solid var(--border2);
-}
-.toggle-slider::before{
-  content:'';position:absolute;height:16px;width:16px;
-  left:2px;bottom:2px;border-radius:50%;
-  background:var(--text3);transition:.2s;
-}
-.toggle input:checked+.toggle-slider{background:var(--blue);border-color:var(--blue)}
-.toggle input:checked+.toggle-slider::before{transform:translateX(18px);background:white}
-.toggle-label{font-size:.75rem;color:var(--text2)}
-
-/* ===== RANGE SLIDER ===== */
-.slider-wrap{position:relative;padding:4px 0}
-input[type=range]{
-  width:100%;height:6px;border-radius:3px;
-  background:rgba(255,255,255,0.1);
-  appearance:none;-webkit-appearance:none;
-  cursor:pointer;border:none;outline:none;
-}
-input[type=range]::-webkit-slider-thumb{
-  -webkit-appearance:none;
-  width:18px;height:18px;border-radius:50%;
-  background:var(--blue);
-  box-shadow:0 0 8px var(--blue-glow);
-  cursor:pointer;transition:transform .15s,box-shadow .15s;
-}
-input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);box-shadow:0 0 14px var(--blue-glow)}
-input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--blue);border:none;cursor:pointer}
-.slider-labels{display:flex;justify-content:space-between;font-size:.65rem;color:var(--text3);margin-top:4px}
-
-/* ===== LINEAR BAR GAUGE ===== */
-.bar-gauge{height:8px;background:rgba(255,255,255,0.07);border-radius:4px;overflow:hidden;margin-top:10px}
-.bar-fill{height:100%;border-radius:4px;transition:width .4s ease,background .3s;
-  background:linear-gradient(90deg,var(--blue),rgba(59,130,246,0.7))}
-.bar-fill.green{background:linear-gradient(90deg,var(--green),rgba(16,185,129,0.7))}
-.bar-fill.amber{background:linear-gradient(90deg,var(--amber),rgba(245,158,11,0.7))}
-.bar-fill.rose{background:linear-gradient(90deg,var(--rose),rgba(239,68,68,0.7))}
-
-/* ===== CIRCULAR GAUGE ===== */
-.circ-gauge-wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
-.circ-gauge{position:relative;width:120px;height:120px}
-.circ-gauge svg{width:100%;height:100%;transform:rotate(-90deg)}
-.circ-bg{fill:none;stroke:rgba(255,255,255,0.07);stroke-width:8}
-.circ-fill{fill:none;stroke:var(--blue);stroke-width:8;stroke-linecap:round;
-  transition:stroke-dashoffset .5s ease,stroke .3s}
-.circ-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.circ-val{font-size:1.3rem;font-weight:700;color:var(--text0);font-variant-numeric:tabular-nums}
-.circ-unit{font-size:.65rem;color:var(--text3)}
-
-/* ===== LED INDICATOR ===== */
-.led-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px}
-.led-item{display:flex;align-items:center;gap:7px;padding:5px 8px;
-  background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid var(--border2)}
-.led{width:9px;height:9px;border-radius:50%;flex-shrink:0;transition:all .2s}
-.led.off{background:#374151}
-.led.on.green{background:var(--green);box-shadow:0 0 8px var(--green-glow)}
-.led.on.amber{background:var(--amber);box-shadow:0 0 8px var(--amber-glow)}
-.led.on.rose{background:var(--rose);box-shadow:0 0 8px var(--rose-glow);animation:blink .8s infinite}
-.led.on.blue{background:var(--blue);box-shadow:0 0 8px var(--blue-glow)}
-@keyframes blink{50%{opacity:.4}}
-.led-label{font-size:.68rem;color:var(--text2);font-weight:500}
-.led-item.masked .led-label{text-decoration:line-through;color:var(--text3)}
-.led-item.masked .led{opacity:0.3}
-
-/* ===== BIG DIN LED ===== */
-.big-led-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 0}
-.big-led{width:60px;height:60px;border-radius:50%;transition:all .2s;
-  background:#1a2030;border:3px solid #2a3040}
-.big-led.on{background:var(--green);border-color:rgba(16,185,129,0.5);
-  box-shadow:0 0 30px var(--green-glow),0 0 60px rgba(16,185,129,0.2)}
-.big-led-label{font-size:.75rem;font-weight:600;color:var(--text2)}
-
-/* ===== DO TOGGLE ===== */
-.do-toggle-wrap{display:flex;justify-content:center;padding:8px 0}
-.do-toggle-btn{
-  width:100px;height:44px;border-radius:22px;border:2px solid var(--border2);
-  background:rgba(255,255,255,0.05);cursor:pointer;position:relative;
-  transition:all .2s;font-size:.8rem;font-weight:600;color:var(--text2);
-  display:flex;align-items:center;justify-content:center;gap:8px;
-}
-.do-toggle-btn.on{background:rgba(16,185,129,0.15);border-color:var(--green);color:var(--green);
-  box-shadow:0 0 20px var(--green-glow)}
-.do-toggle-btn:hover{transform:scale(1.03)}
-
-/* ===== BUTTON ===== */
-.btn{
-  padding:7px 14px;border-radius:var(--radius-sm);border:1px solid var(--border2);
-  background:rgba(255,255,255,0.06);color:var(--text1);
-  cursor:pointer;font-size:.75rem;font-weight:500;
-  transition:all var(--transition);white-space:nowrap;
-}
-.btn:hover{background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.15)}
-.btn.primary{background:rgba(59,130,246,0.15);color:var(--blue);border-color:rgba(59,130,246,0.3)}
-.btn.primary:hover{background:rgba(59,130,246,0.25);box-shadow:0 0 14px var(--blue-glow)}
-.btn.danger{background:rgba(239,68,68,0.1);color:var(--rose);border-color:rgba(239,68,68,0.25)}
-.btn.danger:hover{background:rgba(239,68,68,0.2)}
-.btn.sm{padding:4px 10px;font-size:.7rem}
-.btn:active{transform:scale(0.97)}
-
-/* ===== FUNCTION BADGE ===== */
-.fn-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;
-  border-radius:20px;font-size:.68rem;font-weight:600;letter-spacing:.03em}
-.fn-badge.vout{background:rgba(59,130,246,0.15);color:var(--blue);border:1px solid rgba(59,130,246,0.25)}
-.fn-badge.iout{background:rgba(168,85,247,0.15);color:var(--purple);border:1px solid rgba(168,85,247,0.25)}
-.fn-badge.vin{background:rgba(16,185,129,0.15);color:var(--green);border:1px solid rgba(16,185,129,0.25)}
-.fn-badge.iin{background:rgba(245,158,11,0.15);color:var(--amber);border:1px solid rgba(245,158,11,0.25)}
-.fn-badge.din{background:rgba(99,102,241,0.15);color:#818cf8;border:1px solid rgba(99,102,241,0.25)}
-.fn-badge.dout{background:rgba(236,72,153,0.15);color:#f472b6;border:1px solid rgba(236,72,153,0.25)}
-.fn-badge.high-imp{background:rgba(100,116,139,0.15);color:var(--text3);border:1px solid rgba(100,116,139,0.2)}
-.fn-badge.other{background:rgba(100,116,139,0.1);color:var(--text3);border:1px solid var(--border2)}
-
-/* ===== STATUS ROW ===== */
-.status-row{display:flex;align-items:center;justify-content:space-between;
-  padding:6px 10px;background:rgba(255,255,255,0.03);border-radius:6px;
-  border:1px solid var(--border2);margin-bottom:6px}
-.status-label{font-size:.72rem;color:var(--text3)}
-.status-val{font-size:.78rem;font-weight:600;color:var(--text1);font-variant-numeric:tabular-nums}
-
-/* ===== TOAST ===== */
-#toast-container{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
-.toast{
-  padding:10px 16px;border-radius:var(--radius-sm);
-  font-size:.78rem;font-weight:500;
-  backdrop-filter:blur(12px);
-  animation:toastIn .25s ease,toastOut .25s ease 2.75s forwards;
-  max-width:280px;
-  display:flex;align-items:center;gap:8px;
-}
-.toast.ok{background:rgba(16,185,129,0.2);border:1px solid rgba(16,185,129,0.3);color:var(--green)}
-.toast.err{background:rgba(239,68,68,0.2);border:1px solid rgba(239,68,68,0.3);color:var(--rose)}
-.toast.info{background:rgba(59,130,246,0.2);border:1px solid rgba(59,130,246,0.3);color:var(--blue)}
-@keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
-@keyframes toastOut{to{opacity:0;transform:translateX(20px)}}
-
-/* ===== OVERVIEW SPECIFIC ===== */
-.overview-summary{
-  display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;justify-content:center}
-.summary-tile{
-  background:var(--glass);border:1px solid var(--border2);border-radius:var(--radius);
-  padding:14px;text-align:center;position:relative;overflow:hidden;min-width:160px;flex:0 1 200px}
-.summary-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.06),transparent)}
-.summary-tile .s-label{font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
-.summary-tile .s-val{font-size:1.5rem;font-weight:700;color:var(--text0);font-variant-numeric:tabular-nums}
-.summary-tile .s-unit{font-size:.7rem;color:var(--text3);margin-left:2px}
-.summary-tile.ok{border-color:rgba(16,185,129,0.2)}
-.summary-tile.warn{border-color:rgba(245,158,11,0.2)}
-.summary-tile.fault{border-color:rgba(239,68,68,0.4);box-shadow:0 0 20px rgba(239,68,68,0.1)}
-
-/* ===== FAULTS SPECIFIC ===== */
-.fault-section{margin-bottom:20px}
-.fault-section .card-header{cursor:pointer;user-select:none}
-.fault-section .card-header:hover .card-title{color:var(--text1)}
-.mask-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:10px}
-.mask-item{display:flex;align-items:center;justify-content:space-between;
-  padding:6px 10px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid var(--border2)}
-.mask-label{font-size:.7rem;color:var(--text2)}
-
-/* ===== THERMOMETER ===== */
-.therm-wrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding:8px}
-.therm-bar-wrap{position:relative;width:32px;height:140px;background:rgba(255,255,255,0.07);
-  border-radius:16px;overflow:visible}
-.therm-bg{width:100%;height:100%;border-radius:16px;background:rgba(255,255,255,0.07);position:relative;overflow:hidden}
-.therm-fill{position:absolute;bottom:0;left:0;right:0;border-radius:0 0 16px 16px;
-  background:linear-gradient(180deg,var(--rose),var(--amber));
-  transition:height .5s ease}
-.therm-marks{position:absolute;right:-30px;top:0;height:100%;display:flex;flex-direction:column;justify-content:space-between}
-.therm-mark{font-size:.6rem;color:var(--text3)}
-.therm-val-large{font-size:2rem;font-weight:700;color:var(--text0);font-variant-numeric:tabular-nums}
-.therm-unit{font-size:.8rem;color:var(--text3)}
-
-/* ===== LIVE STATUS BITS ===== */
-.live-status-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
-.live-bit{display:flex;align-items:center;gap:7px;padding:6px 10px;
-  background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid var(--border2)}
-.live-bit-name{font-size:.68rem;color:var(--text2);font-weight:500}
-
-/* ===== COUNTER ===== */
-.counter-display{
-  font-size:1.6rem;font-weight:700;color:var(--text0);
-  font-variant-numeric:tabular-nums;
-  background:rgba(0,0,0,0.2);border-radius:8px;padding:8px 16px;
-  border:1px solid var(--border2);text-align:center;
-  min-width:80px;display:inline-block}
-
-/* ===== EXPAND/COLLAPSE ===== */
-.collapse-content{overflow:hidden;transition:max-height .3s ease}
-.collapse-arrow{transition:transform .2s;display:inline-block;margin-left:4px;color:var(--text3)}
-.collapsed .collapse-arrow{transform:rotate(-90deg)}
-
-/* ===== MISC ===== */
-.divider{height:1px;background:var(--border2);margin:12px 0}
-.flex-row{display:flex;align-items:center;gap:8px}
-.flex-between{display:flex;align-items:center;justify-content:space-between}
-.gap-8{gap:8px}
-.mt-8{margin-top:8px}
-.mt-12{margin-top:12px}
-.mt-16{margin-top:16px}
-.w-full{width:100%}
-.text-xs{font-size:.7rem}
-.text-right{text-align:right}
-.color-green{color:var(--green)}
-.color-amber{color:var(--amber)}
-.color-rose{color:var(--rose)}
-.color-blue{color:var(--blue)}
-.color-dim{color:var(--text3)}
-
-/* ===== RESPONSIVE ===== */
-@media(max-width:600px){
-  #content{padding:12px}
-  .ch-grid,.ch-grid-2{grid-template-columns:1fr}
-  #header-right{gap:8px}
-  #logo-sub{display:none}
-  .big-value{font-size:1.8rem}
-}
+.toggle{position:relative;width:36px;height:20px;background:var(--bg2);border-radius:10px;cursor:pointer;transition:background 0.2s}
+.toggle.on{background:var(--blue)}
+.toggle-dot{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform 0.2s}
+.toggle.on .toggle-dot{transform:translateX(16px)}
+.grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.grid-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.cfg-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;font-size:12px}
+.cfg-row label{color:var(--text2);min-width:60px}
+.mux-sw{width:36px;height:28px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text3);font-size:10px;font-weight:700;cursor:pointer;font-family:'JetBrains Mono',monospace;transition:all 0.15s}
+.mux-sw.closed{background:var(--green);color:#000;border-color:var(--green)}
+.fault-bit{display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--text3)}
+.fault-bit.set{background:rgba(239,68,68,0.15);color:var(--rose)}
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+@media(max-width:640px){.grid-4,.grid-3,.grid-2{grid-template-columns:1fr}.big-val{font-size:22px}}
 </style>
 </head>
 <body>
-
-<!-- ===== HEADER ===== -->
-<div id="header">
-  <div id="header-left">
-    <div id="logo">
-      <span id="logo-icon">⚡</span>
-      <span id="logo-text">BugBuster</span>
-      <span id="logo-sub">AD74416H</span>
-    </div>
-  </div>
-  <div id="header-right">
-    <div id="temp-display">
-      <span style="color:var(--text3)">🌡</span>
-      <span id="temp-value">--.-</span>
-      <span style="font-size:.7rem;color:var(--text3)">°C</span>
-    </div>
-    <span id="spi-badge" class="err">SPI ERR</span>
-    <div id="conn-status">
-      <div id="conn-dot"></div>
-      <span id="conn-label">Connecting…</span>
-    </div>
-  </div>
+<div x-data="app()" x-init="init()" class="min-h-screen flex flex-col">
+<!-- Status Bar -->
+<div class="flex items-center gap-4 px-4 py-2 border-b" style="background:var(--bg1);border-color:var(--border)">
+<span class="mono font-bold text-sm" style="color:var(--blue)">BugBuster</span>
+<div class="flex items-center gap-2 text-xs mono">
+<div class="status-dot" :style="st.spiOk?'background:var(--green);box-shadow:0 0 6px var(--green)':'background:var(--rose);box-shadow:0 0 6px var(--rose)'"></div>
+<span x-text="st.spiOk?'SPI OK':'SPI ERR'" :style="st.spiOk?'color:var(--green)':'color:var(--rose)'"></span>
+</div>
+<div class="flex items-center gap-1 text-xs mono" style="color:var(--amber)">
+<span x-text="st.dieTemp.toFixed(1)+'C'"></span>
+</div>
+<div class="flex items-center gap-2 text-xs mono" :style="st.alertStatus?'color:var(--rose)':'color:var(--text3)'">
+<span x-text="st.alertStatus?'ALT 0x'+st.alertStatus.toString(16).toUpperCase():'No Alerts'"></span>
+</div>
+<div class="flex-1"></div>
+<div class="flex items-center gap-2 text-xs">
+<div class="status-dot" :style="connected?'background:var(--green);box-shadow:0 0 6px var(--green)':'background:var(--rose);box-shadow:0 0 6px var(--rose)'"></div>
+<span class="mono" x-text="connected?'Connected':'Disconnected'" :style="connected?'color:var(--green)':'color:var(--rose)'"></span>
+</div>
+<button class="btn btn-ghost text-xs" @click="postJSON('/api/device/reset',{})">Reset</button>
+</div>
+<!-- Tab Bar -->
+<div class="flex overflow-x-auto border-b" style="background:var(--bg1);border-color:var(--border)">
+<template x-for="t in tabs" :key="t">
+<button class="tab-btn" :class="{'active':tab===t}" @click="tab=t" x-text="t"></button>
+</template>
+</div>
+<!-- Tab Content -->
+<div class="flex-1 p-4 overflow-y-auto">
+<!-- Overview -->
+<div x-show="tab==='Overview'" x-cloak>
+<div class="grid-4">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<span class="text-xs mono" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+<div class="card-b">
+<div class="big-val" :style="'color:'+chColors[i]">
+<span x-text="ch.function!=='HIGH_IMP'?ch.adcValue.toFixed(4):'---'"></span>
+<span class="text-sm font-normal" style="color:var(--text2)" x-text="ch.function!=='HIGH_IMP'?(isCurrent(ch)?'mA':'V'):''"></span>
+</div>
+<div class="bar-wrap"><div class="bar-fill" :style="'width:'+adcPct(ch,i)+'%;background:'+chColors[i]"></div></div>
+<div class="flex justify-between text-xs mono" style="color:var(--text3)">
+<span x-text="'DAC: '+ch.dacValue.toFixed(3)"></span>
+<span x-text="'Raw: 0x'+ch.adcRaw.toString(16).toUpperCase().padStart(6,'0')"></span>
+</div>
+<div class="cfg-row" style="margin-top:8px">
+<label>Function</label>
+<select :value="fnCode(ch.function)" @change="setFunc(i,$event.target.value)">
+<template x-for="f in fnOptions" :key="f[0]"><option :value="f[0]" x-text="f[1]"></option></template>
+</select>
+</div>
+</div>
+</div>
+</template>
+</div>
+</div>
+<!-- ADC -->
+<div x-show="tab==='ADC'" x-cloak>
+<div class="grid-4">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<span class="text-xs mono" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+<div class="card-b">
+<div class="big-val" :style="'color:'+chColors[i]">
+<span x-text="ch.adcValue.toFixed(4)"></span>
+<span class="text-sm font-normal" style="color:var(--text2)" x-text="isCurrent(ch)?'mA':'V'"></span>
+</div>
+<div class="bar-wrap"><div class="bar-fill" :style="'width:'+adcPct(ch,i)+'%;background:'+chColors[i]"></div></div>
+<div class="text-xs mono text-center" style="color:var(--text3)" x-text="'Raw: '+ch.adcRaw+' (0x'+ch.adcRaw.toString(16).toUpperCase().padStart(6,'0')+')'"></div>
+<div class="cfg-row"><label>Range</label>
+<select :value="ch.adcRange" @change="setAdc(i,'range',+$event.target.value)">
+<template x-for="r in adcRanges" :key="r[0]"><option :value="r[0]" x-text="r[1]"></option></template>
+</select></div>
+<div class="cfg-row"><label>Rate</label>
+<select :value="ch.adcRate" @change="setAdc(i,'rate',+$event.target.value)">
+<template x-for="r in adcRates" :key="r[0]"><option :value="r[0]" x-text="r[1]"></option></template>
+</select></div>
+<div class="cfg-row"><label>Mux</label>
+<select :value="ch.adcMux" @change="setAdc(i,'mux',+$event.target.value)">
+<template x-for="m in adcMuxes" :key="m[0]"><option :value="m[0]" x-text="m[1]"></option></template>
+</select></div>
+</div>
+</div>
+</template>
+</div>
+</div>
+<!-- Diagnostics -->
+<div x-show="tab==='Diagnostics'" x-cloak>
+<div class="grid-4">
+<template x-for="(d,i) in diag.slots" :key="i">
+<div class="card">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'Slot '+i"></div>
+<select :value="d.source" @change="setDiag(i,+$event.target.value)" class="text-xs">
+<template x-for="s in diagSources" :key="s[0]"><option :value="s[0]" x-text="s[1]"></option></template>
+</select>
+</div>
+<div class="card-b">
+<div class="big-val" :style="'color:'+chColors[i]">
+<span x-text="d.value.toFixed(3)"></span>
+<span class="text-sm font-normal" style="color:var(--text2)" x-text="d.unit"></span>
+</div>
+<div class="text-xs mono" style="color:var(--text3)" x-text="'Source: '+d.sourceName+' | Raw: 0x'+d.raw.toString(16).toUpperCase().padStart(4,'0')"></div>
+<div class="bar-wrap"><div class="bar-fill" :style="'width:'+diagPct(d)+'%;background:'+chColors[i]"></div></div>
+</div>
+</div>
+</template>
+</div>
+</div>
+<!-- VDAC -->
+<div x-show="tab==='VDAC'" x-cloak>
+<div class="grid-4">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card" :style="fnCode(ch.function)!=1?'opacity:0.5':''">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<span class="text-xs mono" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+<div class="card-b">
+<template x-if="fnCode(ch.function)!=1">
+<div class="text-xs text-center py-4" style="color:var(--text3)">Set channel to VOUT to control voltage</div>
+</template>
+<template x-if="fnCode(ch.function)==1">
+<div>
+<div class="big-val text-center" :style="'color:'+chColors[i]">
+<span x-text="(vdac[i].dirty?vdac[i].val:ch.dacValue).toFixed(3)"></span>
+<span class="text-sm font-normal" style="color:var(--text2)">V</span>
+</div>
+<div class="text-xs mono text-center" style="color:var(--text3)" x-text="'DAC Code: '+ch.dacCode"></div>
+<div class="bar-wrap"><div class="bar-fill" :style="'width:'+((vdac[i].dirty?vdac[i].val:ch.dacValue)/(vdac[i].bipolar?24:12)*100*(vdac[i].bipolar?1:1)).toFixed(1)+'%;background:'+chColors[i]"></div></div>
+<div class="cfg-row"><label>Range</label>
+<div class="flex items-center gap-2 text-xs mono">
+<span style="color:var(--text2)">0-12V</span>
+<div class="toggle" :class="{'on':vdac[i].bipolar}" @click="vdac[i].bipolar=!vdac[i].bipolar;postJSON('/api/channel/'+i+'/vout/range',{bipolar:vdac[i].bipolar})">
+<div class="toggle-dot"></div></div>
+<span style="color:var(--text2)">+/-12V</span>
+</div></div>
+<div class="my-2">
+<input type="range" :min="vdac[i].bipolar?-12000:0" max="12000" step="1"
+:value="Math.round((vdac[i].dirty?vdac[i].val:ch.dacValue)*1000)"
+@input="vdac[i].val=$event.target.value/1000;vdac[i].dirty=true"
+@change="sendVdac(i,vdac[i].val,vdac[i].bipolar);vdac[i].dirty=false"
+:style="'--slider-color:'+chColors[i]">
+<div class="flex justify-between text-xs mono" style="color:var(--text3)">
+<span x-text="(vdac[i].bipolar?'-12':'0')+'V'"></span><span>12V</span>
+</div>
+</div>
+<div class="cfg-row"><label>Set V</label>
+<div class="flex items-center gap-2">
+<input type="number" :min="vdac[i].bipolar?-12:0" max="12" step="0.001" class="w-24"
+:value="(vdac[i].dirty?vdac[i].val:ch.dacValue).toFixed(3)"
+@input="vdac[i].val=+$event.target.value;vdac[i].dirty=true">
+<button class="btn btn-blue text-xs" @click="sendVdac(i,vdac[i].val,vdac[i].bipolar);vdac[i].dirty=false">Set</button>
+</div></div>
+</div>
+</template>
+</div>
+</div>
+</template>
+</div>
+</div>
+<!-- IDAC -->
+<div x-show="tab==='IDAC'" x-cloak>
+<div class="grid-4">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card" :style="(fnCode(ch.function)!=2&&fnCode(ch.function)!=10)?'opacity:0.5':''">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<span class="text-xs mono" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+<div class="card-b">
+<template x-if="fnCode(ch.function)!=2&&fnCode(ch.function)!=10">
+<div class="text-xs text-center py-4" style="color:var(--text3)">Set channel to IOUT to control current</div>
+</template>
+<template x-if="fnCode(ch.function)==2||fnCode(ch.function)==10">
+<div>
+<div class="big-val text-center" :style="'color:'+chColors[i]">
+<span x-text="(idacCh[i].dirty?idacCh[i].val:ch.dacValue).toFixed(3)"></span>
+<span class="text-sm font-normal" style="color:var(--text2)">mA</span>
+</div>
+<div class="text-xs mono text-center" style="color:var(--text3)" x-text="'DAC: '+ch.dacCode+' | ADC: '+ch.adcValue.toFixed(3)+'V'"></div>
+<div class="bar-wrap"><div class="bar-fill" :style="'width:'+((idacCh[i].dirty?idacCh[i].val:ch.dacValue)/25*100).toFixed(1)+'%;background:'+chColors[i]"></div></div>
+<div class="my-2">
+<input type="range" min="0" max="25000" step="1"
+:value="Math.round((idacCh[i].dirty?idacCh[i].val:ch.dacValue)*1000)"
+@input="idacCh[i].val=$event.target.value/1000;idacCh[i].dirty=true"
+@change="postJSON('/api/channel/'+i+'/dac',{current_mA:idacCh[i].val});idacCh[i].dirty=false">
+<div class="flex justify-between text-xs mono" style="color:var(--text3)"><span>0 mA</span><span>25 mA</span></div>
+</div>
+<div class="cfg-row"><label>Set mA</label>
+<div class="flex items-center gap-2">
+<input type="number" min="0" max="25" step="0.001" class="w-24"
+:value="(idacCh[i].dirty?idacCh[i].val:ch.dacValue).toFixed(3)"
+@input="idacCh[i].val=+$event.target.value;idacCh[i].dirty=true">
+<button class="btn btn-blue text-xs" @click="postJSON('/api/channel/'+i+'/dac',{current_mA:idacCh[i].val});idacCh[i].dirty=false">Set</button>
+</div></div>
+</div>
+</template>
+</div>
+</div>
+</template>
+</div>
+</div>
+<!-- IIN -->
+<div x-show="tab==='IIN'" x-cloak>
+<div class="grid-4">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<span class="text-xs mono" style="color:var(--text2)" x-text="ch.function"></span>
+</div>
+<div class="card-b">
+<template x-if="!isIin(ch)">
+<div>
+<div class="text-xs text-center py-2" style="color:var(--text3)">Set channel to Current In mode</div>
+<div class="flex gap-2 mt-2">
+<button class="btn btn-ghost flex-1 text-xs" @click="setFunc(i,4)">IIN External</button>
+<button class="btn btn-ghost flex-1 text-xs" @click="setFunc(i,5)">IIN Loop</button>
+</div>
+</div>
+</template>
+<template x-if="isIin(ch)">
+<div>
+<div class="flex gap-2 mb-3">
+<div class="flex-1 text-center text-xs mono py-1 rounded" :style="isIinExt(ch)?'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44':'color:var(--text3);border:1px solid var(--border)'">External</div>
+<div class="flex-1 text-center text-xs mono py-1 rounded" :style="isIinLoop(ch)?'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44':'color:var(--text3);border:1px solid var(--border)'">Loop</div>
+</div>
+<div class="big-val text-center" :style="'color:'+chColors[i]">
+<span x-text="ch.adcValue.toFixed(3)"></span>
+<span class="text-sm font-normal" style="color:var(--text2)">mA</span>
+</div>
+<div class="bar-wrap"><div class="bar-fill" :style="'width:'+(Math.abs(ch.adcValue)/25*100).toFixed(1)+'%;background:'+chColors[i]"></div></div>
+<div class="flex justify-between text-xs mono" style="color:var(--text3)"><span>0 mA</span><span>25 mA</span></div>
+<div class="text-xs mono mt-2" style="color:var(--text3)" x-text="'Raw: '+ch.adcRaw+' (0x'+ch.adcRaw.toString(16).toUpperCase().padStart(6,'0')+')'"></div>
+<div class="mt-3 pt-3" style="border-top:1px solid var(--border)">
+<div class="text-xs font-semibold mb-2" style="color:var(--text3);letter-spacing:1px">ADC CONFIG</div>
+<div class="cfg-row"><label>Range</label>
+<select :value="ch.adcRange" @change="setAdc(i,'range',+$event.target.value)">
+<template x-for="r in adcRanges" :key="r[0]"><option :value="r[0]" x-text="r[1]"></option></template>
+</select></div>
+<div class="cfg-row"><label>Rate</label>
+<select :value="ch.adcRate" @change="setAdc(i,'rate',+$event.target.value)">
+<template x-for="r in adcRates" :key="r[0]"><option :value="r[0]" x-text="r[1]"></option></template>
+</select></div>
+<div class="cfg-row"><label>Input</label>
+<select :value="ch.adcMux" @change="setAdc(i,'mux',+$event.target.value)">
+<template x-for="m in adcMuxes" :key="m[0]"><option :value="m[0]" x-text="m[1]"></option></template>
+</select></div>
+</div>
+<div class="flex gap-2 mt-3 pt-3" style="border-top:1px solid var(--border)">
+<button class="btn btn-ghost flex-1 text-xs" @click="setFunc(i,4)">EXT</button>
+<button class="btn btn-ghost flex-1 text-xs" @click="setFunc(i,5)">LOOP</button>
+<button class="btn btn-ghost flex-1 text-xs" @click="setFunc(i,0)">Off</button>
+</div>
+</div>
+</template>
+</div>
+</div>
+</template>
+</div>
+</div>
+<!-- Signal Path -->
+<div x-show="tab==='Signal Path'" x-cloak x-effect="if(tab==='Signal Path')setTimeout(()=>drawSig(),50)">
+<!-- Preset buttons + PSU/EFuse controls -->
+<div class="flex flex-wrap gap-2 mb-3 items-center">
+<button class="btn text-xs" @click="mux.states=[0,0,0,0];postJSON('/api/mux/all',{states:[0,0,0,0]}).catch(()=>{});drawSig()">All Open</button>
+<button class="btn text-xs" @click="mux.states=[0x11,0x11,0x11,0x11];postJSON('/api/mux/all',{states:[0x11,0x11,0x11,0x11]}).catch(()=>{});drawSig()">GPIO Direct</button>
+<button class="btn text-xs" @click="mux.states=[0x04,0x04,0x04,0x04];postJSON('/api/mux/all',{states:[0x04,0x04,0x04,0x04]}).catch(()=>{});drawSig()">ADC Read</button>
+<button class="btn text-xs" @click="mux.states=[0x08,0x08,0x08,0x08];postJSON('/api/mux/all',{states:[0x08,0x08,0x08,0x08]}).catch(()=>{});drawSig()">External</button>
+<span style="border-left:1px solid var(--border);height:20px;margin:0 4px"></span>
+<span class="text-xs" style="color:var(--text3)">PSU:</span>
+<button class="btn text-xs" :style="mux.psu[0]?'background:#10b981;color:#000;box-shadow:0 0 12px rgba(16,185,129,0.5)':''" @click="mux.psu[0]=!mux.psu[0];postJSON('/api/ioexp/control',{control:'vadj1',on:mux.psu[0]}).catch(()=>{});drawSig()">V_ADJ1</button>
+<button class="btn text-xs" :style="mux.psu[1]?'background:#06b6d4;color:#000;box-shadow:0 0 12px rgba(6,182,212,0.5)':''" @click="mux.psu[1]=!mux.psu[1];postJSON('/api/ioexp/control',{control:'vadj2',on:mux.psu[1]}).catch(()=>{});drawSig()">V_ADJ2</button>
+<span class="text-xs" style="color:var(--text3)">EF:</span>
+<template x-for="i in [0,1,2,3]" :key="i">
+<button class="btn text-xs" :style="mux.efuses[i]?'background:'+chColors[i]+';color:#000;box-shadow:0 0 12px '+chColors[i]+'80':''" @click="mux.efuses[i]=!mux.efuses[i];postJSON('/api/ioexp/control',{control:'efuse'+(i+1),on:mux.efuses[i]}).catch(()=>{});drawSig()" x-text="'EF'+(i+1)"></button>
+</template>
+</div>
+<!-- Legend -->
+<div class="flex gap-4 mb-2 text-xs mono" style="color:var(--text3)">
+<span><span style="color:#22c55e">●</span> GPIO (direct)</span>
+<span><span style="color:#eab308">●</span> GPIO (2kΩ)</span>
+<span><span style="color:#3b82f6">●</span> ADC Channel</span>
+<span><span style="color:#f97316">●</span> External</span>
+<span><span style="color:#ef4444">●</span> Power</span>
+</div>
+<!-- Canvas schematic -->
+<div style="position:relative;width:100%;padding-bottom:45%;background:#080c18;border-radius:8px;border:1px solid var(--border);overflow:hidden">
+<canvas x-ref="sigCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;cursor:pointer"
+@click="sigClick($event)"></canvas>
+</div>
+</div>
+<!-- Voltages (DS4424) -->
+<div x-show="tab==='Voltages'" x-cloak>
+<template x-if="!idacDev.present">
+<div class="card"><div class="card-b text-center text-sm" style="color:var(--text3)">DS4424 not detected on I2C bus</div></div>
+</template>
+<template x-if="idacDev.present">
+<div class="grid-3">
+<template x-for="(ch,i) in idacDev.channels" :key="i">
+<div class="card" :style="'border-top:3px solid '+idacColors[i]">
+<div class="card-h" style="flex-direction:column;align-items:flex-start;gap:2px">
+<div class="font-bold text-sm" :style="'color:'+idacColors[i]" x-text="ch.name"></div>
+<div class="text-xs mono" style="color:var(--text3)" x-text="'Midpoint: '+ch.midpointV.toFixed(1)+'V | Step: '+ch.stepMv.toFixed(2)+'mV'"></div>
+</div>
+<div class="card-b">
+<div class="text-xs mono mb-2" style="color:var(--text3)">
+<span x-text="'Range: '+ch.vMin.toFixed(2)+'V - '+ch.vMax.toFixed(2)+'V'"></span>
+<span x-text="' | Cal: '+(ch.calibrated?'Yes':'No')"></span>
+</div>
+<div class="text-center text-xs mono mb-1" style="color:var(--text3)" x-text="'DAC code: '+idacSliders[i].code"></div>
+<input type="range" :min="-127" max="127" step="1"
+:value="idacSliders[i].code"
+@input="idacSliders[i].code=+$event.target.value;idacSliders[i].dirty=true"
+:style="'--slider-color:'+idacColors[i]">
+<div class="flex justify-between text-xs mono" style="color:var(--text3)">
+<span x-text="ch.vMin.toFixed(1)+'V'"></span>
+<span x-text="ch.midpointV.toFixed(1)+'V'"></span>
+<span x-text="ch.vMax.toFixed(1)+'V'"></span>
+</div>
+<div class="big-val text-center my-2" :style="'color:'+idacColors[i]">
+<span x-text="ch.targetV.toFixed(3)"></span>
+<span class="text-sm font-normal" style="color:var(--text2)">V</span>
+</div>
+<div class="flex gap-2 items-center mt-2">
+<input type="number" :min="ch.vMin" :max="ch.vMax" step="0.01" class="flex-1"
+:value="ch.targetV.toFixed(3)"
+@change="idacSliders[i].voltage=+$event.target.value;idacSliders[i].vDirty=true">
+<span class="text-xs font-bold" style="color:var(--text2)">V</span>
+<button class="btn text-xs" :style="'background:'+idacColors[i]+';color:#000'" @click="sendIdac(i)">SET</button>
+</div>
+<template x-if="idacSliders[i].dirty">
+<div class="text-xs text-center mt-2" style="color:var(--amber)">Preview - not applied</div>
+</template>
+</div>
+</div>
+</template>
+</div>
+</template>
+</div>
+<!-- WaveGen -->
+<div x-show="tab==='WaveGen'" x-cloak>
+<div class="grid-2">
+<div class="card">
+<div class="card-h"><span class="text-sm font-bold">Waveform Generator</span></div>
+<div class="card-b">
+<div class="cfg-row"><label>Channel</label>
+<select x-model="wg.channel">
+<template x-for="i in [0,1,2,3]" :key="i"><option :value="i" x-text="'CH '+chNames[i]"></option></template>
+</select></div>
+<div class="cfg-row"><label>Output</label>
+<div class="flex items-center gap-2 text-xs mono">
+<span style="color:var(--text2)">Voltage</span>
+<div class="toggle" :class="{'on':wg.mode===1}" @click="wg.mode=wg.mode?0:1"><div class="toggle-dot"></div></div>
+<span style="color:var(--text2)">Current</span>
+</div></div>
+<div class="cfg-row"><label>Waveform</label>
+<select x-model.number="wg.waveform">
+<option value="0">Sine</option><option value="1">Square</option>
+<option value="2">Triangle</option><option value="3">Sawtooth</option>
+</select></div>
+<div class="cfg-row"><label>Freq (Hz)</label>
+<input type="number" min="0.01" max="100" step="0.1" x-model.number="wg.freq" class="w-24"></div>
+<div class="cfg-row"><label x-text="'Amp ('+(wg.mode?'mA':'V')+')'"></label>
+<input type="number" min="0" :max="wg.mode?25:12" step="0.1" x-model.number="wg.amplitude" class="w-24"></div>
+<div class="cfg-row"><label x-text="'Offset ('+(wg.mode?'mA':'V')+')'"></label>
+<input type="number" :min="wg.mode?-25:-12" :max="wg.mode?25:12" step="0.1" x-model.number="wg.offset" class="w-24"></div>
+<button class="btn w-full mt-3" :class="wg.running?'btn-rose':'btn-green'" @click="toggleWg()" x-text="wg.running?'Stop Generator':'Start Generator'"></button>
+<div class="text-xs text-center mt-2" style="color:var(--text3)" x-text="'Will set CH '+chNames[wg.channel]+' to '+(wg.mode?'IOUT':'VOUT')+' mode'"></div>
+</div>
+</div>
+<div class="card">
+<div class="card-h"><span class="text-sm font-bold">Preview</span>
+<span class="text-xs mono" style="color:var(--text3)" x-text="['Sine','Square','Triangle','Sawtooth'][wg.waveform]+' @ '+wg.freq.toFixed(1)+' Hz'"></span>
+</div>
+<div class="card-b">
+<canvas x-ref="wgCanvas" width="400" height="200" style="width:100%;height:200px;background:var(--bg2);border-radius:8px" x-effect="drawWavePreview($refs.wgCanvas,wg)"></canvas>
+</div>
+</div>
+</div>
+</div>
+<!-- USB PD -->
+<div x-show="tab==='USB PD'" x-cloak>
+<div class="grid-2">
+<div class="card">
+<div class="card-h"><span class="text-sm font-bold">USB Power Delivery</span>
+<div class="flex items-center gap-2">
+<div class="status-dot" :style="usbpd.attached?'background:var(--green);box-shadow:0 0 6px var(--green)':'background:var(--text3)'"></div>
+<span class="text-xs mono" x-text="usbpd.attached?'Attached':'Not attached'"></span>
+</div>
+</div>
+<div class="card-b">
+<div class="grid grid-cols-2 gap-3 mb-4">
+<div class="text-center p-3 rounded" style="background:var(--bg2)">
+<div class="text-xs" style="color:var(--text3)">Voltage</div>
+<div class="big-val" style="color:var(--blue);font-size:24px" x-text="usbpd.voltageV.toFixed(1)+'V'"></div>
+</div>
+<div class="text-center p-3 rounded" style="background:var(--bg2)">
+<div class="text-xs" style="color:var(--text3)">Current</div>
+<div class="big-val" style="color:var(--green);font-size:24px" x-text="usbpd.currentA.toFixed(2)+'A'"></div>
+</div>
+<div class="text-center p-3 rounded" style="background:var(--bg2)">
+<div class="text-xs" style="color:var(--text3)">Power</div>
+<div class="big-val" style="color:var(--amber);font-size:24px" x-text="usbpd.powerW.toFixed(1)+'W'"></div>
+</div>
+<div class="text-center p-3 rounded" style="background:var(--bg2)">
+<div class="text-xs" style="color:var(--text3)">CC Dir</div>
+<div class="big-val" style="color:var(--purple);font-size:24px" x-text="usbpd.cc"></div>
+</div>
+</div>
+</div>
+</div>
+<div class="card">
+<div class="card-h"><span class="text-sm font-bold">Source PDOs</span></div>
+<div class="card-b">
+<table class="w-full text-xs mono">
+<thead><tr style="color:var(--text3)"><th class="text-left py-1">Voltage</th><th class="text-left">Detected</th><th class="text-left">Max A</th><th class="text-left">Max W</th><th></th></tr></thead>
+<tbody>
+<template x-for="p in usbpd.sourcePdos" :key="p.voltage">
+<tr style="border-top:1px solid var(--border)">
+<td class="py-2 font-bold" x-text="p.voltage"></td>
+<td><div class="led" :class="{'led-on':p.detected}" :style="p.detected?'background:var(--green);color:var(--green)':''" style="width:8px;height:8px"></div></td>
+<td x-text="p.maxCurrentA.toFixed(1)+'A'"></td>
+<td x-text="p.maxPowerW.toFixed(0)+'W'"></td>
+<td><button class="btn btn-ghost text-xs" x-show="p.detected" @click="postJSON('/api/usbpd/select',{voltage:parseInt(p.voltage)})">Select</button></td>
+</tr>
+</template>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<!-- IO Expander -->
+<div x-show="tab==='IO Expander'" x-cloak>
+<!-- PCA9535 Header -->
+<div class="p-3 mb-4 rounded-lg flex items-center justify-between" style="background:var(--bg1);border:1px solid var(--border)">
+<div>
+<span class="text-sm font-bold" style="color:var(--blue)">PCA9535AHF</span>
+<span class="text-xs mono ml-2" style="color:var(--text3)">16-bit I2C GPIO Expander (0x23)</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-xs mono" style="color:var(--text3)">Present:</span>
+<div class="led" :class="{'led-on':ioexp.present}" :style="ioexp.present?'background:var(--green)':''"></div>
+</div>
 </div>
 
-<!-- ===== TAB BAR ===== -->
-<div id="tab-bar">
-  <button class="tab-btn active" data-tab="overview"><span class="tab-icon">⊞</span> Overview</button>
-  <button class="tab-btn" data-tab="adc"><span class="tab-icon">📊</span> ADC Inputs</button>
-  <button class="tab-btn" data-tab="adc-diag"><span class="tab-icon">🩺</span> ADC Diag</button>
-  <button class="tab-btn" data-tab="vdac"><span class="tab-icon">〰</span> VDAC</button>
-  <button class="tab-btn" data-tab="idac"><span class="tab-icon">⤒</span> IDAC</button>
-  <button class="tab-btn" data-tab="din"><span class="tab-icon">↓</span> Digital In</button>
-  <button class="tab-btn" data-tab="dout"><span class="tab-icon">↑</span> Digital Out</button>
-  <button class="tab-btn" data-tab="faults"><span class="tab-icon">⚠</span> Faults <span id="fault-badge" style="display:none;background:var(--rose);color:#fff;font-size:.6rem;padding:1px 5px;border-radius:8px;margin-left:2px">!</span></button>
-  <button class="tab-btn" data-tab="gpio"><span class="tab-icon">🔌</span> GPIO</button>
-  <button class="tab-btn" data-tab="uart"><span class="tab-icon">🔗</span> UART</button>
-  <button class="tab-btn" data-tab="scope"><span class="tab-icon">📊</span> Scope</button>
+<!-- Power Good Status -->
+<div class="mb-4">
+<div class="text-xs font-bold mb-2 uppercase" style="color:var(--text3);letter-spacing:1px">Power Good Status</div>
+<div class="grid gap-3" style="grid-template-columns:repeat(3,1fr)">
+<template x-for="[name,val,desc] in [
+['LOGIC_PG',ioexp.powerGood?.logic,'Main 3.3V LDO'],
+['VADJ1_PG',ioexp.powerGood?.vadj1,'LTM8063 #1 → P1,P2'],
+['VADJ2_PG',ioexp.powerGood?.vadj2,'LTM8063 #2 → P3,P4']
+]" :key="name">
+<div class="p-3 rounded-lg text-center" :style="val?'background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3)':'background:var(--bg2);border:1px solid var(--border)'">
+<div class="flex items-center justify-center gap-2 mb-1">
+<div style="width:10px;height:10px;border-radius:50%;transition:all 0.3s" :style="val?'background:#10b981;box-shadow:0 0 8px rgba(16,185,129,0.6)':'background:#1e293b'"></div>
+<span class="text-sm font-bold mono" :style="val?'color:#10b981':'color:var(--text3)'" x-text="name"></span>
+</div>
+<div class="text-xs" style="color:var(--text3)" x-text="desc"></div>
+<div class="text-xs font-bold mt-1" :style="val?'color:#10b981':'color:#ef4444'" x-text="val?'OK':'FAIL'"></div>
+</div>
+</template>
+</div>
 </div>
 
-<!-- ===== CONTENT ===== -->
-<div id="content">
-
-<!-- =============================== OVERVIEW =============================== -->
-<div class="tab-panel active" id="tab-overview">
-  <div class="overview-summary">
-    <div class="summary-tile" id="ov-spi-tile">
-      <div class="s-label">SPI Bus</div>
-      <div class="s-val" id="ov-spi-val" style="font-size:1rem;margin-top:4px">--</div>
-    </div>
-    <div class="summary-tile" id="ov-temp-tile">
-      <div class="s-label">Die Temp</div>
-      <div class="s-val"><span id="ov-temp-val">--.-</span><span class="s-unit">°C</span></div>
-    </div>
-    <div class="summary-tile" id="ov-alert-tile">
-      <div class="s-label">Alerts</div>
-      <div class="s-val" id="ov-alert-val">--</div>
-    </div>
-    <div class="summary-tile" id="ov-supply-tile">
-      <div class="s-label">Supply</div>
-      <div class="s-val" id="ov-supply-val" style="font-size:.9rem;margin-top:4px">--</div>
-    </div>
-    <div class="summary-tile" style="cursor:pointer" onclick="deviceReset()" title="Reset AD74416H">
-      <div class="s-label">Device</div>
-      <div class="s-val" style="font-size:.9rem;margin-top:4px">🔄 Reset</div>
-    </div>
-  </div>
-
-  <div class="ch-grid" id="ov-ch-grid">
-    <!-- populated by JS -->
-  </div>
+<!-- Supply Enables -->
+<div class="mb-4">
+<div class="text-xs font-bold mb-2 uppercase" style="color:var(--text3);letter-spacing:1px">Supply Enables</div>
+<div class="grid gap-3" style="grid-template-columns:repeat(5,1fr)">
+<template x-for="[name,key,val,color,desc] in [
+['VADJ1','vadj1',ioexp.enables?.vadj1,'#10b981','3-15V Rail A'],
+['VADJ2','vadj2',ioexp.enables?.vadj2,'#06b6d4','3-15V Rail B'],
+['±15V','15v',ioexp.enables?.analog15v,'#f59e0b','AD74416H Analog'],
+['MUX','mux',ioexp.enables?.mux,'#a855f7','ADGS2414D Power'],
+['USB Hub','usb',ioexp.enables?.usbHub,'#3b82f6','USB Hub IC']
+]" :key="key">
+<div class="p-3 rounded-lg text-center cursor-pointer transition-all" @click="postJSON('/api/ioexp/control',{control:key,on:!val}).catch(()=>{})"
+:style="val?'background:'+color+'15;border:1px solid '+color+'50;box-shadow:0 0 12px '+color+'30':'background:var(--bg2);border:1px solid var(--border)'">
+<div style="width:8px;height:8px;border-radius:50%;margin:0 auto 6px;transition:all 0.3s" :style="val?'background:'+color+';box-shadow:0 0 8px '+color:'background:#1e293b'"></div>
+<div class="text-xs font-bold mono mb-1" :style="val?'color:'+color:'color:var(--text3)'" x-text="name"></div>
+<div class="text-xs" style="color:var(--text3)" x-text="desc"></div>
+<div class="text-xs font-bold mt-2" :style="val?'color:'+color:'color:var(--text3)'" x-text="val?'ON':'OFF'"></div>
+</div>
+</template>
+</div>
 </div>
 
-<!-- =============================== ADC INPUTS =============================== -->
-<div class="tab-panel" id="tab-adc">
-  <div class="ch-grid-2" id="adc-ch-grid">
-    <!-- populated by JS -->
-  </div>
+<!-- E-Fuse Status -->
+<div class="mb-4">
+<div class="text-xs font-bold mb-2 uppercase" style="color:var(--text3);letter-spacing:1px">E-Fuse Output Protection (TPS1641 × 4)</div>
+<div class="grid gap-3" style="grid-template-columns:repeat(4,1fr)">
+<template x-for="(ef,i) in ioexp.efuses" :key="ef.id">
+<div class="p-4 rounded-lg" :style="ef.fault?'background:rgba(239,68,68,0.1);border:2px solid rgba(239,68,68,0.5);box-shadow:0 0 16px rgba(239,68,68,0.3)':ef.enabled?'background:rgba(16,185,129,0.08);border:2px solid rgba(16,185,129,0.3);box-shadow:0 0 12px rgba(16,185,129,0.2)':'background:var(--bg2);border:2px solid var(--border)'">
+<!-- Header -->
+<div class="flex items-center justify-between mb-3">
+<div>
+<span class="text-lg font-bold mono" :style="'color:'+chColors[i]" x-text="'P'+(ef.id||i+1)"></span>
+<div class="text-xs mono" style="color:var(--text3)" x-text="'TPS1641 · '+((ef.id||i+1)<=2?'VADJ1':'VADJ2')"></div>
+</div>
+<div style="width:14px;height:14px;border-radius:50%;transition:all 0.3s"
+:style="ef.fault?'background:#ef4444;box-shadow:0 0 12px rgba(239,68,68,0.7);animation:pulse-dot 1s infinite':ef.enabled?'background:#10b981;box-shadow:0 0 8px rgba(16,185,129,0.5)':'background:#1e293b'"></div>
+</div>
+<!-- Enable row -->
+<div class="flex items-center justify-between p-2 rounded mb-2" :style="ef.enabled?'background:rgba(16,185,129,0.08)':'background:var(--bg1)'">
+<div>
+<div class="text-xs font-bold" :style="ef.enabled?'color:#10b981':'color:var(--text3)'">Output Enable</div>
+<div class="text-xs" style="color:var(--text3)" x-text="'Power to connector P'+(ef.id||i+1)"></div>
+</div>
+<div class="toggle" :class="{'on':ef.enabled}" @click="postJSON('/api/ioexp/control',{control:'efuse'+(ef.id||i+1),on:!ef.enabled}).catch(()=>{})"><div class="toggle-dot"></div></div>
+</div>
+<!-- Fault row -->
+<div class="flex items-center justify-between p-2 rounded" :style="ef.fault?'background:rgba(239,68,68,0.12)':'background:var(--bg1)'">
+<div>
+<div class="text-xs font-bold" :style="ef.fault?'color:#ef4444':'color:var(--text3)'">Overcurrent Fault</div>
+<div class="text-xs" style="color:var(--text3)" x-text="'Protection on connector P'+(ef.id||i+1)"></div>
+</div>
+<div class="flex items-center gap-2">
+<div style="width:8px;height:8px;border-radius:50%" :style="ef.fault?'background:#ef4444;box-shadow:0 0 6px #ef4444':'background:#1e293b'"></div>
+<span class="text-xs font-bold mono" :style="ef.fault?'color:#ef4444':'color:var(--green)'" x-text="ef.fault?'FAULT':'OK'"></span>
+</div>
+</div>
+<!-- Status text -->
+<div class="text-xs text-center mt-2 font-bold" :style="ef.fault?'color:#ef4444':ef.enabled?'color:#10b981':'color:var(--text3)'"
+x-text="ef.fault?'⚠ Overcurrent on connector P'+(ef.id||i+1)+' — disconnect load':ef.enabled?'Power flowing → Connector P'+(ef.id||i+1):'Connector P'+(ef.id||i+1)+' disconnected'"></div>
+</div>
+</template>
+</div>
 </div>
 
-<!-- =============================== ADC DIAGNOSTICS =============================== -->
-<div class="tab-panel" id="tab-adc-diag">
-  <!-- Supply Voltage Diagnostics -->
-  <div class="section-title" style="margin-bottom:14px">⚡ Supply Diagnostics</div>
-  <div class="ch-grid" id="diag-slots-grid" style="margin-bottom:20px">
-    <!-- 4 diagnostic slot cards populated by JS -->
-  </div>
 
-  <div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;align-items:start">
-    <!-- Thermometer -->
-    <div class="card">
-      <div class="card-header"><div class="card-title">🌡 Die Temperature</div></div>
-      <div class="therm-wrap">
-        <div class="therm-val-large"><span id="diag-temp-val">--.-</span><span class="therm-unit"> °C</span></div>
-        <div style="position:relative;width:32px;height:140px;margin:8px 0 30px 0">
-          <div class="therm-bg">
-            <div class="therm-fill" id="diag-therm-fill" style="height:30%"></div>
-          </div>
-          <div class="therm-marks">
-            <span class="therm-mark">125</span>
-            <span class="therm-mark">75</span>
-            <span class="therm-mark">25</span>
-            <span class="therm-mark">-25</span>
-          </div>
-        </div>
-        <div id="diag-temp-status" class="fn-badge other">Normal</div>
-      </div>
-    </div>
-    <!-- Live Status -->
-    <div class="card">
-      <div class="card-header"><div class="card-title">📡 Live Status Register</div></div>
-      <div class="live-status-wrap" id="live-status-grid">
-        <!-- populated by JS -->
-      </div>
-      <div class="divider"></div>
-      <div class="card-header" style="margin-bottom:10px"><div class="card-title">⚡ Alert Status</div></div>
-      <div class="led-grid" id="diag-alert-leds">
-        <!-- populated by JS -->
-      </div>
-      <div class="divider"></div>
-      <div class="card-header" style="margin-bottom:10px"><div class="card-title">🔋 Supply Alert Status</div></div>
-      <div class="led-grid" id="diag-supply-leds">
-        <!-- populated by JS -->
-      </div>
-    </div>
-  </div>
 </div>
-
-<!-- =============================== VDAC =============================== -->
-<div class="tab-panel" id="tab-vdac">
-  <div class="ch-grid-2" id="vdac-ch-grid">
-    <!-- populated by JS -->
-  </div>
+<!-- Faults -->
+<div x-show="tab==='Faults'" x-cloak>
+<div class="flex items-center gap-4 mb-4 p-3 rounded-lg" style="background:var(--bg1);border:1px solid var(--border)">
+<div class="status-dot" style="width:12px;height:12px" :style="totalFaults()?'background:var(--rose);box-shadow:0 0 12px var(--rose)':'background:var(--green);box-shadow:0 0 8px var(--green)'"></div>
+<span class="text-lg font-bold mono" x-text="totalFaults()+' active '+(totalFaults()===1?'fault':'faults')"></span>
+<div class="flex-1"></div>
+<button class="btn btn-rose text-xs" @click="postJSON('/api/faults/clear',{})">Clear All</button>
 </div>
-
-<!-- =============================== IDAC =============================== -->
-<div class="tab-panel" id="tab-idac">
-  <div class="ch-grid-2" id="idac-ch-grid">
-    <!-- populated by JS -->
-  </div>
+<div class="space-y-3 mb-4">
+<div class="card"><div class="card-h"><span class="text-sm font-bold">Global Alerts</span>
+<span class="text-xs mono" style="color:var(--text3)" x-text="'0x'+st.alertStatus.toString(16).toUpperCase().padStart(4,'0')"></span></div>
+<div class="card-b"><div class="flex flex-wrap gap-2">
+<template x-for="[bit,name] in alertBits" :key="bit">
+<div class="fault-bit" :class="{'set':(st.alertStatus>>bit)&1}">
+<div class="led" style="width:6px;height:6px" :style="(st.alertStatus>>bit)&1?'background:var(--rose);box-shadow:0 0 4px var(--rose)':''"></div>
+<span x-text="name"></span>
 </div>
-
-<!-- =============================== DIGITAL IN =============================== -->
-<div class="tab-panel" id="tab-din">
-  <div class="ch-grid-2" id="din-ch-grid">
-    <!-- populated by JS -->
-  </div>
+</template>
+</div></div></div>
+<div class="card"><div class="card-h"><span class="text-sm font-bold">Supply Alerts</span>
+<span class="text-xs mono" style="color:var(--text3)" x-text="'0x'+st.supplyAlertStatus.toString(16).toUpperCase().padStart(4,'0')"></span></div>
+<div class="card-b"><div class="flex flex-wrap gap-2">
+<template x-for="[bit,name] in supplyBits" :key="bit">
+<div class="fault-bit" :class="{'set':(st.supplyAlertStatus>>bit)&1}">
+<div class="led" style="width:6px;height:6px" :style="(st.supplyAlertStatus>>bit)&1?'background:var(--rose);box-shadow:0 0 4px var(--rose)':''"></div>
+<span x-text="name"></span>
 </div>
-
-<!-- =============================== DIGITAL OUT =============================== -->
-<div class="tab-panel" id="tab-dout">
-  <div class="ch-grid-2" id="dout-ch-grid">
-    <!-- populated by JS -->
-  </div>
+</template>
+</div></div></div>
 </div>
-
-<!-- =============================== FAULTS =============================== -->
-<div class="tab-panel" id="tab-faults">
-  <!-- Global Alert Status -->
-  <div class="card fault-section mb-16" style="margin-bottom:16px">
-    <div class="card-header">
-      <div class="card-title">🌐 Global Alert Status</div>
-      <button class="btn danger sm" onclick="clearAllFaults()">Clear All</button>
-    </div>
-    <div class="led-grid" id="fault-global-leds"></div>
-  </div>
-
-  <!-- Per-Channel -->
-  <div style="margin-bottom:16px">
-    <div class="section-title">📍 Per-Channel Alert Status</div>
-    <div class="ch-grid" id="fault-ch-cards"></div>
-  </div>
-
-  <!-- Supply -->
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header">
-      <div class="card-title">🔋 Supply Alert Status</div>
-    </div>
-    <div class="led-grid" id="fault-supply-leds"></div>
-  </div>
-
-  <!-- Fault Mask Management -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">🎛 Fault Mask Management</div>
-      <button class="btn primary sm" onclick="saveMasks()">Save Masks</button>
-    </div>
-    <div class="section-title" style="margin-top:8px">Global Alert Mask</div>
-    <div class="mask-grid" id="mask-global-grid"></div>
-    <div class="section-title" style="margin-top:12px">Supply Alert Mask</div>
-    <div class="mask-grid" id="mask-supply-grid"></div>
-    <div id="mask-ch-sections"></div>
-  </div>
+<div class="grid-2">
+<template x-for="(ch,i) in st.channels" :key="i">
+<div class="card" :style="ch.channelAlert?'border-color:var(--rose)':''">
+<div class="card-h">
+<div class="ch-badge" :style="'background:'+chColors[i]+'22;color:'+chColors[i]+';border:1px solid '+chColors[i]+'44'" x-text="'CH '+chNames[i]"></div>
+<div class="flex items-center gap-2">
+<span class="text-xs mono" style="color:var(--text3)" x-text="'0x'+ch.channelAlert.toString(16).toUpperCase().padStart(4,'0')"></span>
+<button class="btn btn-ghost text-xs" x-show="ch.channelAlert" @click="postJSON('/api/faults/clear/'+i,{})">Clear</button>
 </div>
-
-<!-- =============================== GPIO =============================== -->
-<div class="tab-panel" id="tab-gpio">
-  <div class="ch-grid" id="gpio-grid">
-    <!-- populated by JS -->
-  </div>
 </div>
-
-<!-- =============================== UART ================================ -->
-<div class="tab-panel" id="tab-uart">
-  <div class="ch-grid" id="uart-grid">
-    <!-- populated by JS -->
-  </div>
+<div class="card-b"><div class="flex flex-wrap gap-2">
+<template x-for="[bit,name] in chAlertBits" :key="bit">
+<div class="fault-bit" :class="{'set':(ch.channelAlert>>bit)&1}">
+<div class="led" style="width:6px;height:6px" :style="(ch.channelAlert>>bit)&1?'background:var(--rose);box-shadow:0 0 4px var(--rose)':''"></div>
+<span x-text="name"></span>
 </div>
-
-<!-- =============================== SCOPE =============================== -->
-<div class="tab-panel" id="tab-scope">
-  <div class="card" style="padding:16px">
-    <!-- Control bar -->
-    <div id="scope-controls" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-      <!-- Channel toggles -->
-      <div style="display:flex;gap:8px">
-        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-0" checked onchange="scopeToggleCh(0)"><span style="font-size:.75rem;font-weight:600;color:var(--blue)">CH A</span></label>
-        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-1" onchange="scopeToggleCh(1)"><span style="font-size:.75rem;font-weight:600;color:var(--green)">CH B</span></label>
-        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-2" onchange="scopeToggleCh(2)"><span style="font-size:.75rem;font-weight:600;color:var(--amber)">CH C</span></label>
-        <label class="toggle-wrap"><input type="checkbox" id="scope-ch-3" checked onchange="scopeToggleCh(3)"><span style="font-size:.75rem;font-weight:600;color:var(--purple)">CH D</span></label>
-      </div>
-      <!-- Time window -->
-      <div class="form-row compact" style="margin:0"><label>Window</label>
-        <select id="scope-window" onchange="scopeSetWindow(this.value)">
-          <option value="10">10s</option>
-          <option value="30" selected>30s</option>
-          <option value="60">60s</option>
-          <option value="120">2min</option>
-          <option value="300">5min</option>
-        </select>
-      </div>
-      <!-- Y-axis range -->
-      <div class="form-row compact" style="margin:0"><label>Y Range</label>
-        <select id="scope-yrange" onchange="scopeSetYRange(this.value)">
-          <option value="auto" selected>Auto</option>
-          <option value="0,12">0-12V</option>
-          <option value="-12,12">+/-12V</option>
-          <option value="0,0.625">0-625mV</option>
-          <option value="0,25">0-25mA</option>
-        </select>
-      </div>
-      <!-- ADC Rate -->
-      <div class="form-row compact" style="margin:0"><label>ADC Rate</label>
-        <select id="scope-adc-rate" onchange="scopeSetAdcRate(this.value)">
-          <option value="1" selected>20 SPS</option>
-          <option value="8">1.2 kSPS</option>
-          <option value="12">4.8 kSPS</option>
-          <option value="13">9.6 kSPS</option>
-          <option value="0">10 SPS (HR)</option>
-        </select>
-      </div>
-      <!-- Run/Pause -->
-      <button class="btn primary" id="scope-run-btn" onclick="scopeToggleRun()">Pause</button>
-      <button class="btn" onclick="scopeClear()">Clear</button>
-      <!-- Current values display -->
-      <div id="scope-values" style="display:flex;gap:12px;margin-left:auto;font-size:.8rem;font-variant-numeric:tabular-nums"></div>
-    </div>
-    <!-- Canvas -->
-    <canvas id="scope-canvas" style="width:100%;height:400px;border-radius:8px;background:var(--bg1);border:1px solid var(--border2)"></canvas>
-  </div>
+</template>
+</div></div>
 </div>
-
-</div><!-- /content -->
-
-<!-- Toast container -->
-<div id="toast-container"></div>
-
+</template>
+</div>
+</div>
+</div>
+</div>
 <script>
-// ============================================================
-// STATE
-// ============================================================
-const state = {
-  connected: false,
-  spiOk: false,
-  dieTemp: 0,
-  alertStatus: 0,
-  alertMask: 0,
-  supplyAlertStatus: 0,
-  supplyAlertMask: 0,
-  liveStatus: 0,
-  channels: [0,1,2,3].map(i=>({
-    id:i, function:'HIGH_IMP', adcRaw:0, adcValue:0,
-    adcRange:0, adcRate:1, adcMux:0,
-    dacCode:0, dacValue:0, dacDirty:0,
-    dinState:false, dinCounter:0, doState:false,
-    channelAlert:0, channelAlertMask:0
-  })),
-  diag: [
-    {slot:0, source:1, sourceName:'TEMP',    raw:0, value:0, unit:'C', dirty:0},
-    {slot:1, source:5, sourceName:'AVDD_HI', raw:0, value:0, unit:'V', dirty:0},
-    {slot:2, source:2, sourceName:'DVCC',    raw:0, value:0, unit:'V', dirty:0},
-    {slot:3, source:3, sourceName:'AVCC',    raw:0, value:0, unit:'V', dirty:0}
-  ],
-  gpio: [0,1,2,3,4,5].map(i=>({pin:i,name:String.fromCharCode(65+i),mode:0,modeName:'HIGH_IMP',output:false,input:false,pulldown:true})),
-  uart: {bridges:[], pins:[]}
-};
-
-const DIAG_SOURCES = [
-  {code:0,name:'AGND',unit:'V',expect:0,range:0.1},
-  {code:1,name:'TEMP',unit:'C',expect:30,range:80},
-  {code:2,name:'DVCC',unit:'V',expect:3.3,range:0.5},
-  {code:3,name:'AVCC',unit:'V',expect:5.0,range:0.5},
-  {code:4,name:'LDO1V8',unit:'V',expect:1.8,range:0.3},
-  {code:5,name:'AVDD_HI',unit:'V',expect:24.0,range:5.0},
-  {code:6,name:'AVDD_LO',unit:'V',expect:24.0,range:5.0},
-  {code:7,name:'AVSS',unit:'V',expect:-12.0,range:5.0},
-  {code:8,name:'LVIN',unit:'V',expect:0,range:2.5},
-  {code:9,name:'DO_VDD',unit:'V',expect:24.0,range:5.0}
-];
-
-// Masks for pending changes
-const pendingMasks = {
-  alertMask: 0,
-  supplyMask: 0,
-  chMasks: [0,0,0,0]
-};
-
-// ============================================================
-// CONSTANTS
-// ============================================================
-const FN_MAP = {
-  0:'HIGH_IMP',1:'VOUT',2:'IOUT',3:'VIN',
-  4:'IIN_EXT_PWR',5:'IIN_LOOP_PWR',7:'RES_MEAS',
-  8:'DIN_LOGIC',9:'DIN_LOOP',10:'IOUT_HART',
-  11:'IIN_EXT_PWR_HART',12:'IIN_LOOP_PWR_HART'
-};
-const FN_NAMES = {
-  'HIGH_IMP':'High Impedance','VOUT':'Voltage Out','IOUT':'Current Out',
-  'VIN':'Voltage In','IIN_EXT_PWR':'Current In (Ext)','IIN_LOOP_PWR':'Current In (Loop)',
-  'RES_MEAS':'Resistance','DIN_LOGIC':'Digital In Logic','DIN_LOOP':'Digital In Loop',
-  'IOUT_HART':'IOUT HART','IIN_EXT_PWR_HART':'IIN Ext HART','IIN_LOOP_PWR_HART':'IIN Loop HART'
-};
-const FN_OPTIONS = [0,1,2,3,4,5,7,8,9,10,11,12];
-const ADC_RANGES = ['0–12V','±12V','±2.5V','±0.3125V','0–0.3125V','0–0.625V','±0.625V','±104mV'];
-const ADC_RATES  = ['10 SPS','20 SPS','1200 SPS (50/60Hz)','4800 SPS','9600 SPS','10 SPS (50/60Hz)','20 SPS (50/60Hz)','1200 SPS'];
-const ADC_MUX    = ['Ch In+/In−','Vss/Agnd','2.5V Ref','AVDD/4','IOVDD/4','AVSS'];
-const CH_NAMES   = ['A','B','C','D'];
-
-const ADC_RANGE_MIN = [0,-12,-2.5,-0.3125,0,0,-0.625,-0.104];
-const ADC_RANGE_MAX = [12, 12, 2.5, 0.3125,0.3125,0.625,0.625,0.104];
-
-const GLOBAL_ALERT_BITS = [
-  {bit:15,name:'RESET_OCCURRED',color:'amber'},
-  {bit:14,name:'CAL_MEM_ERR',color:'rose'},
-  {bit:13,name:'SPI_CRC_ERR',color:'rose'},
-  {bit:12,name:'SPI_SCLK_CNT_ERR',color:'rose'},
-  {bit:11,name:'ADC_ERR',color:'amber'},
-  {bit:10,name:'SUPPLY_ERR',color:'rose'},
-  {bit:9, name:'TEMP_ALERT',color:'amber'},
-  {bit:7, name:'CH_ALERT_D',color:'amber'},
-  {bit:6, name:'CH_ALERT_C',color:'amber'},
-  {bit:5, name:'CH_ALERT_B',color:'amber'},
-  {bit:4, name:'CH_ALERT_A',color:'amber'},
-];
-const CH_ALERT_BITS = [
-  {bit:0,name:'VIN_UNDER',color:'amber'},
-  {bit:1,name:'VIN_OVER',color:'rose'},
-  {bit:2,name:'IOUT_OC',color:'amber'},
-  {bit:3,name:'IOUT_SC',color:'rose'},
-  {bit:4,name:'DO_SC',color:'rose'},
-  {bit:5,name:'DIN_OC',color:'amber'},
-  {bit:6,name:'DIN_SC',color:'rose'},
-  {bit:7,name:'DAC_RANGE',color:'amber'},
-  {bit:8,name:'AVDD_ERR',color:'rose'},
-  {bit:9,name:'DVCC_ERR',color:'rose'},
-];
-const SUPPLY_ALERT_BITS = [
-  {bit:0,name:'AVDD_HI',color:'amber'},
-  {bit:1,name:'AVDD_LO',color:'amber'},
-  {bit:2,name:'AVSS_ERR',color:'rose'},
-  {bit:3,name:'AVCC_ERR',color:'rose'},
-  {bit:4,name:'DVCC_ERR',color:'rose'},
-  {bit:5,name:'IOVDD_ERR',color:'rose'},
-  {bit:6,name:'REFIO_ERR',color:'rose'},
-];
-const LIVE_STATUS_BITS = [
-  {bit:15,name:'RESET_OCCURRED'},{bit:14,name:'POR_FLAG'},
-  {bit:13,name:'CONV_ACTIVE'},{bit:12,name:'ALARM_ACTIVE'},
-  {bit:11,name:'ADC_DATA_RDY'},{bit:10,name:'SUPPLY_ERR'},
-  {bit:9, name:'TEMP_ALERT'},{bit:8, name:'CH_ALERT'},
-  {bit:7, name:'DO_BUSY_D'},{bit:6, name:'DO_BUSY_C'},
-  {bit:5, name:'DO_BUSY_B'},{bit:4, name:'DO_BUSY_A'},
-];
-
-// ============================================================
-// TABS
-// ============================================================
-document.querySelectorAll('.tab-btn').forEach(btn=>{
-  btn.addEventListener('click',()=>{
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
-    // Resize scope canvas when its tab becomes visible
-    if(btn.dataset.tab==='scope') setTimeout(()=>{scopeResizeCanvas();drawScope()},50);
-  });
+function app(){return{
+tab:'Overview',
+tabs:['Overview','ADC','Diagnostics','VDAC','IDAC','IIN','Signal Path','Voltages','WaveGen','USB PD','IO Expander','Faults'],
+connected:false,
+chColors:['#3b82f6','#10b981','#f59e0b','#a855f7'],
+chNames:['A','B','C','D'],
+idacColors:['#10b981','#06b6d4','#ff4d6a'],
+fnOptions:[[0,'HIGH_IMP'],[1,'VOUT'],[2,'IOUT'],[3,'VIN'],[4,'IIN_EXT'],[5,'IIN_LOOP'],[6,'RES_MEAS'],[7,'DIN_LOGIC'],[8,'DIN_LOOP'],[9,'IOUT_HART'],[10,'IIN_EXT_HART'],[11,'IIN_LOOP_HART']],
+adcRanges:[[0,'0-12V'],[1,'+/-12V'],[2,'+/-312.5mV'],[3,'-312.5-0mV'],[4,'0-312.5mV'],[5,'0-625mV'],[6,'+/-104mV'],[7,'+/-2.5V']],
+adcRates:[[0,'10 SPS HR'],[1,'20 SPS'],[4,'200 SPS'],[8,'1.2k SPS'],[12,'4.8k SPS'],[13,'9.6k SPS']],
+adcMuxes:[[0,'Primary'],[1,'AGND'],[2,'AVDD'],[3,'ALDO1V8'],[4,'DLDO1V8'],[5,'AVSS'],[6,'LVIN']],
+diagSources:[[0,'AGND'],[1,'TEMP'],[2,'DVCC'],[3,'AVCC'],[4,'LDO1V8'],[5,'AVDD_HI'],[6,'AVDD_LO'],[7,'AVSS'],[8,'LVIN'],[9,'DO_VDD'],[10,'VSENSEP'],[11,'VSENSEN'],[12,'DO_CURRENT'],[13,'AVDD']],
+alertBits:[[0,'RESET'],[1,'CAL_MEM'],[2,'SPI_CRC'],[3,'SPI_SCLK'],[4,'ADC_ERR'],[5,'SUPPLY'],[6,'TEMP'],[7,'CH_D'],[8,'CH_C'],[9,'CH_B'],[10,'CH_A']],
+supplyBits:[[0,'AVDD_HI'],[1,'AVDD_LO'],[2,'AVSS'],[3,'AVCC'],[4,'DVCC'],[5,'IOVDD'],[6,'REFIO']],
+chAlertBits:[[0,'VIN_LO'],[1,'VIN_HI'],[2,'OC'],[3,'SC'],[4,'DO_SC'],[5,'DIN_OC'],[6,'DIN_SC'],[7,'DAC'],[8,'AVDD'],[9,'DVCC']],
+st:{spiOk:false,dieTemp:0,alertStatus:0,alertMask:0,supplyAlertStatus:0,supplyAlertMask:0,liveStatus:0,channels:[0,1,2,3].map(()=>({id:0,function:'HIGH_IMP',adcRaw:0,adcValue:0,adcRange:0,adcRate:0,adcMux:0,dacCode:0,dacValue:0,dinState:false,dinCounter:0,doState:false,channelAlert:0,channelAlertMask:0}))},
+diag:{slots:[0,1,2,3].map(()=>({slot:0,source:0,sourceName:'AGND',raw:0,value:0,unit:'V'}))},
+vdac:[0,1,2,3].map(()=>({val:0,dirty:false,bipolar:false})),
+idacCh:[0,1,2,3].map(()=>({val:0,dirty:false})),
+mux:{states:[0,0,0,0],refs:['U10','U11','U16','U17'],psu:[false,false],efuses:[false,false,false,false]},
+idacDev:{present:false,channels:[]},
+idacSliders:[0,1,2].map(()=>({code:0,voltage:0,dirty:false,vDirty:false})),
+wg:{channel:0,waveform:0,freq:1.0,amplitude:5.0,offset:0.0,mode:0,running:false},
+usbpd:{present:false,attached:false,cc:'CC1',voltageV:0,currentA:0,powerW:0,sourcePdos:[]},
+ioexp:{present:false,powerGood:{logic:false,vadj1:false,vadj2:false},enables:{vadj1:false,vadj2:false,analog15v:false,mux:false,usbHub:false},efuses:[{id:1,enabled:false,fault:false},{id:2,enabled:false,fault:false},{id:3,enabled:false,fault:false},{id:4,enabled:false,fault:false}]},
+_pollTimer:null,_slowTimer:null,
+fnMap:{HIGH_IMP:0,VOUT:1,IOUT:2,VIN:3,IIN_EXT_PWR:4,IIN_LOOP_PWR:5,RES_MEAS:6,DIN_LOGIC:7,DIN_LOOP:8,IOUT_HART:9,IIN_EXT_PWR_HART:10,IIN_LOOP_PWR_HART:11},
+init(){
+this.pollStatus();
+this.pollSlow();
+this._pollTimer=setInterval(()=>this.pollStatus(),500);
+this._slowTimer=setInterval(()=>this.pollSlow(),2000);
+},
+async pollStatus(){
+try{
+let r=await fetch('/api/status');
+if(!r.ok)throw new Error();
+let d=await r.json();
+this.connected=true;
+this.st=d;
+}catch(e){this.connected=false}
+},
+async pollSlow(){
+try{
+let[diagR,muxR]=await Promise.all([fetch('/api/diagnostics'),fetch('/api/mux')]);
+if(diagR.ok){let d=await diagR.json();this.diag=d}
+if(muxR.ok){let d=await muxR.json();this.mux.states=d.states;this.drawSig()}
+}catch(e){}
+try{
+let r=await fetch('/api/idac');
+if(r.ok){let d=await r.json();this.idacDev=d;
+if(d.channels)d.channels.forEach((ch,i)=>{if(!this.idacSliders[i].dirty)this.idacSliders[i].code=ch.code||0})}
+}catch(e){}
+try{
+let r=await fetch('/api/usbpd');
+if(r.ok)this.usbpd=await r.json()
+}catch(e){}
+try{
+let r=await fetch('/api/ioexp');
+if(r.ok){let d=await r.json();this.ioexp=d;
+if(d.enables){this.mux.psu=[d.enables.vadj1,d.enables.vadj2]}
+if(d.efuses){this.mux.efuses=d.efuses.map(e=>e.enabled)}}
+}catch(e){}
+},
+fnCode(name){return this.fnMap[name]??-1},
+isCurrent(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===10||f===11},
+isIin(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===10||f===11},
+isIinExt(ch){let f=this.fnCode(ch.function);return f===4||f===10},
+isIinLoop(ch){let f=this.fnCode(ch.function);return f===5||f===11},
+adcPct(ch,i){
+let f=this.fnCode(ch.function);
+if(f===0)return 0;
+let mx=12;
+if(ch.adcRange===1)mx=12;else if(ch.adcRange===7)mx=2.5;else if(ch.adcRange>=2&&ch.adcRange<=6)mx=0.625;
+if(this.isCurrent(ch))mx=25;
+return Math.min(Math.abs(ch.adcValue)/mx*100,100)
+},
+diagPct(d){return d.source===1?Math.max(0,Math.min((d.value+25)/150*100,100)):Math.max(0,Math.min(d.value/5*100,100))},
+totalFaults(){let t=this.bitCount(this.st.alertStatus)+this.bitCount(this.st.supplyAlertStatus);
+this.st.channels.forEach(c=>t+=this.bitCount(c.channelAlert));return t},
+bitCount(n){let c=0;while(n){c+=n&1;n>>>=1}return c},
+async postJSON(url,body){
+try{let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return await r.json()}catch(e){return null}
+},
+setFunc(i,fn){this.postJSON('/api/channel/'+i+'/function',{function:+fn})},
+setAdc(i,field,val){
+let ch=this.st.channels[i];
+let body={mux:ch.adcMux,range:ch.adcRange,rate:ch.adcRate};
+body[field]=val;
+this.postJSON('/api/channel/'+i+'/adc/config',body)
+},
+setDiag(slot,source){this.postJSON('/api/diagnostics/config',{slot:slot,source:source})},
+sendVdac(i,voltage,bipolar){this.postJSON('/api/channel/'+i+'/dac',{voltage:voltage,bipolar:bipolar})},
+togMux(dev,sw){
+let st=this.mux.states[dev];
+let on=(st>>sw)&1;
+let gm=sw<4?0x0F:sw<6?0x30:0xC0;
+if(!on){st&=~gm;st|=(1<<sw)}else{st&=~(1<<sw)}
+this.mux.states[dev]=st;
+this.postJSON('/api/mux/switch',{device:dev,switch:sw,closed:!on});
+this.drawSig()
+},
+sigClick(ev){
+let cv=this.$refs.sigCanvas;if(!cv)return;
+let r=cv.getBoundingClientRect();
+let w=r.width,h=r.height;
+let px=ev.clientX-r.left,py=ev.clientY-r.top;
+// Layout must match drawSig exactly
+let nd=this.mux.states.length;
+let psu_h=Math.min(32,h/nd*0.3);
+let rt=psu_h+4,ra=h-rt,rh=ra/nd;
+for(let d=0;d<nd;d++){
+let ry=rt+d*rh;
+if(py>=ry&&py<ry+rh){
+let mx1=w*0.22,mx2=w*0.52;
+if(px>=mx1&&px<=mx2){
+// Compute switch Y positions exactly like drawSig
+let sy=[];
+for(let s=0;s<8;s++){
+let gap=s>=6?rh*0.06:s>=4?rh*0.03:0;
+sy[s]=ry+rh*0.06+s*(rh*0.1)+gap
+}
+// Find closest switch
+let best=-1,bestDist=999;
+for(let s=0;s<8;s++){
+let dist=Math.abs(py-sy[s]);
+if(dist<bestDist){bestDist=dist;best=s}
+}
+if(best>=0&&bestDist<rh*0.06){this.togMux(d,best);return}
+}
+}
+}
+},
+drawSig(){
+let cv=this.$refs.sigCanvas;if(!cv)return;
+let dp=window.devicePixelRatio||1;
+let r=cv.getBoundingClientRect();
+let w=r.width,h=r.height;
+cv.width=w*dp;cv.height=h*dp;
+let c=cv.getContext('2d');
+c.setTransform(dp,0,0,dp,0,0);
+let ms=this.mux.states,ps=this.mux.psu,es=this.mux.efuses;
+let nd=ms.length,rh=h/nd;
+let cols=['#3b82f6','#10b981','#f59e0b','#a855f7'];
+let refs=['U10','U11','U16','U17'];
+let swColors=['#22c55e','#eab308','#3b82f6','#f97316','#22c55e','#eab308','#22c55e','#eab308'];
+let swLabels=['S1 GPIO','S2 2kΩ','S3 ADC','S4 EXT','S5 GPIO','S6 2kΩ','S7 GPIO','S8 2kΩ'];
+let gpioLabels=[['IO1','IO2','IO3'],['IO5','IO6','IO7'],['IO13','IO12','IO11'],['IO10','IO9','IO8']];
+let outLabels=['Main','Aux1','Aux2'];
+// Layout X positions (fractions of width)
+let gpio_x=0.06,ls_l=0.10,ls_r=0.14,adc_x=0.17,mux_l=0.22,mux_r=0.52;
+let out_x=0.54,ef_x=0.66,cn_l=0.78,cn_r=0.95;
+// PSU bars at top
+let psu_h=Math.min(32,rh*0.3);
+c.font='bold 10px monospace';c.textAlign='center';
+// V_ADJ1 bar
+if(ps[0]){c.shadowColor='#10b981';c.shadowBlur=12}
+c.fillStyle=ps[0]?'rgba(16,185,129,0.2)':'rgba(30,41,59,0.5)';
+c.fillRect(4,2,w*0.48-8,psu_h-4);
+c.strokeStyle=ps[0]?'#10b981':'#1e293b';c.lineWidth=ps[0]?2:1;c.strokeRect(4,2,w*0.48-8,psu_h-4);
+c.shadowBlur=0;
+c.fillStyle=ps[0]?'#10b981':'#334155';
+c.fillText('V_ADJ1 → P1, P2',w*0.24,psu_h*0.65);
+// V_ADJ2 bar
+if(ps[1]){c.shadowColor='#06b6d4';c.shadowBlur=12}
+c.fillStyle=ps[1]?'rgba(6,182,212,0.2)':'rgba(30,41,59,0.5)';
+c.fillRect(w*0.5+4,2,w*0.48-8,psu_h-4);
+c.strokeStyle=ps[1]?'#06b6d4':'#1e293b';c.lineWidth=ps[1]?2:1;c.strokeRect(w*0.5+4,2,w*0.48-8,psu_h-4);
+c.shadowBlur=0;
+c.fillStyle=ps[1]?'#06b6d4':'#334155';
+c.fillText('V_ADJ2 → P3, P4',w*0.74,psu_h*0.65);
+let rt=psu_h+4;let ra=h-rt;rh=ra/nd;
+for(let ch=0;ch<nd;ch++){
+let ry=rt+ch*rh,st=ms[ch],ac=cols[ch],pi=ch<2?0:1;
+let psuOn=ps[pi],efOn=es[ch];
+// Row separator
+if(ch>0){c.strokeStyle='#111828';c.lineWidth=0.5;c.beginPath();c.moveTo(0,ry);c.lineTo(w,ry);c.stroke()}
+// Switch Y positions
+let sy=[];
+for(let s=0;s<8;s++){
+let gap=s>=6?rh*0.06:s>=4?rh*0.03:0;
+sy[s]=ry+rh*0.06+s*(rh*0.1)+gap
+}
+// Level Shifter block
+let lsT=ry+4,lsH=rh-8;
+c.fillStyle='#0c1520';c.fillRect(w*ls_l,lsT,w*(ls_r-ls_l),lsH);
+c.strokeStyle='#1a3040';c.lineWidth=1;c.strokeRect(w*ls_l,lsT,w*(ls_r-ls_l),lsH);
+c.fillStyle='#2a5050';c.font='bold 7px monospace';c.textAlign='center';
+c.fillText(ch<2?'U13':'U15',w*(ls_l+ls_r)/2,lsT+10);
+// MUX chip
+let mt=ry+2,mh=rh-4;
+c.fillStyle='#0b1322';c.fillRect(w*mux_l,mt,w*(mux_r-mux_l),mh);
+c.strokeStyle='#162540';c.lineWidth=1;c.strokeRect(w*mux_l,mt,w*(mux_r-mux_l),mh);
+// Group separators inside MUX
+let sep1=(sy[3]+sy[4])/2,sep2=(sy[5]+sy[6])/2;
+c.strokeStyle='#162540';c.lineWidth=0.5;
+c.beginPath();c.moveTo(w*mux_l+3,sep1);c.lineTo(w*mux_r-3,sep1);c.stroke();
+c.beginPath();c.moveTo(w*mux_l+3,sep2);c.lineTo(w*mux_r-3,sep2);c.stroke();
+// MUX label
+c.fillStyle=ac;c.font='bold 9px monospace';c.textAlign='center';
+c.fillText('MUX '+(ch+1)+' · '+refs[ch],w*(mux_l+mux_r)/2,mt+mh-3);
+// GPIO labels + traces → LS → split → MUX
+let pairs=[[0,1,0],[4,5,1],[6,7,2]];
+for(let p of pairs){
+let [sd,sr,gi]=p;
+let yd=sy[sd],yr=sy[sr],ym=(yd+yr)/2;
+let lbl=gpioLabels[ch][gi];
+c.font='bold 9px monospace';c.textAlign='right';c.fillStyle='#e2e8f0';
+c.fillText(lbl,w*gpio_x,ym+3);
+// Trace: label → LS
+c.strokeStyle='#94a3b8';c.lineWidth=1;c.beginPath();c.moveTo(w*gpio_x+3,ym);c.lineTo(w*ls_l,ym);c.stroke();
+// LS → split point
+let sp=w*ls_r+4;
+c.beginPath();c.moveTo(w*ls_r,ym);c.lineTo(sp,ym);c.stroke();
+// Split vertical
+c.strokeStyle='#475569';c.lineWidth=0.5;c.beginPath();c.moveTo(sp,yd);c.lineTo(sp,yr);c.stroke();
+// Direct (green) → MUX
+c.strokeStyle='#22c55e';c.lineWidth=1;c.beginPath();c.moveTo(sp,yd);c.lineTo(w*mux_l,yd);c.stroke();
+// 2kΩ (yellow) → MUX with resistor zigzag
+c.strokeStyle='#eab308';c.lineWidth=1;c.beginPath();c.moveTo(sp,yr);c.lineTo(w*mux_l,yr);c.stroke();
+let rz=(sp+w*mux_l)/2;
+c.beginPath();c.moveTo(rz-6,yr);
+for(let z=0;z<4;z++){c.lineTo(rz-4+z*3,yr+(z%2?-3:3))}
+c.lineTo(rz+6,yr);c.stroke()
+}
+// ADC label + trace (S3)
+c.font='8px monospace';c.textAlign='right';c.fillStyle='#3b82f6';
+c.fillText('CH '+'ABCD'[ch],w*adc_x,sy[2]+3);
+c.strokeStyle='#3b82f6';c.lineWidth=1;c.beginPath();c.moveTo(w*adc_x+3,sy[2]);c.lineTo(w*mux_l,sy[2]);c.stroke();
+// EXT label + trace (S4)
+c.fillStyle='#f97316';c.fillText('EXT '+(ch+1),w*adc_x,sy[3]+3);
+c.strokeStyle='#f97316';c.lineWidth=1;c.beginPath();c.moveTo(w*adc_x+3,sy[3]);c.lineTo(w*mux_l,sy[3]);c.stroke();
+// Switch bars
+for(let s=0;s<8;s++){
+let y=sy[s],on=(st>>s)&1;
+let bl=w*mux_l+4,br=w*mux_r-8;
+if(on){
+c.shadowColor=ac;c.shadowBlur=6;
+c.fillStyle=ac;c.fillRect(bl,y-2,br-bl,4);
+c.shadowBlur=0;
+c.fillStyle=ac+'44';c.beginPath();c.arc(br,y,6,0,Math.PI*2);c.fill();
+c.fillStyle=ac;c.beginPath();c.arc(br,y,3,0,Math.PI*2);c.fill()
+}else{
+c.fillStyle='#0b1322';c.fillRect(bl,y-1,br-bl,2);
+c.fillStyle='#152030';c.beginPath();c.arc(br,y,2,0,Math.PI*2);c.fill()
+}
+c.fillStyle=on?swColors[s]:'#1e2d40';c.font='bold 7px monospace';c.textAlign='left';
+c.fillText('S'+(s+1),bl+2,y+3)
+}
+// Output traces
+let grps=[[0,4,'Main'],[4,6,'Aux1'],[6,8,'Aux2']];
+for(let g of grps){
+let [s0,s1,lbl]=g;
+let cy=(sy[s0]+sy[s1-1])/2;
+let any=false;for(let s=s0;s<s1;s++)if((st>>s)&1)any=true;
+c.strokeStyle=any?ac:'#0c1525';c.lineWidth=any?1.5:0.3;
+c.beginPath();c.moveTo(w*mux_r,cy);c.lineTo(w*ef_x-28,cy);c.stroke();
+if(any){c.strokeStyle=ac;c.lineWidth=1;c.beginPath();c.moveTo(w*ef_x+28,cy);c.lineTo(w*cn_l,cy);c.stroke()}
+c.fillStyle=any?'#e2e8f0':'#253040';c.font='8px monospace';c.textAlign='left';
+c.fillText(lbl,w*out_x,cy+3)
+}
+// E-Fuse block
+let efW=25,efT=ry+rh*0.1,efH=rh*0.75;
+let efFill=!psuOn?'#0b1322':!efOn?'#1a1508':'#081a10';
+let efBd=!psuOn?'#162540':!efOn?'#8b6020':'#20603a';
+let efTxt=!psuOn?'#334155':!efOn?'#f59e0b':'#10b981';
+if(psuOn&&efOn){c.shadowColor='#10b981';c.shadowBlur=8}
+c.fillStyle=efFill;c.fillRect(w*ef_x-efW,efT,efW*2,efH);
+c.strokeStyle=efBd;c.lineWidth=psuOn&&efOn?2:1;c.strokeRect(w*ef_x-efW,efT,efW*2,efH);
+c.shadowBlur=0;
+c.fillStyle=efTxt;c.font='bold 7px monospace';c.textAlign='center';
+c.fillText('E-FUSE',w*ef_x,efT+14);c.font='6px monospace';c.fillText('TPS1641',w*ef_x,efT+24);
+c.beginPath();c.arc(w*ef_x,efT+efH-10,4,0,Math.PI*2);c.fill();
+// Connector
+let ct=ry+3,connH=rh-6,connW=w*(cn_r-cn_l);
+if(psuOn&&efOn){c.shadowColor=ac;c.shadowBlur=10}
+c.fillStyle='#0a1222';c.fillRect(w*cn_l,ct,connW,connH);
+c.strokeStyle=psuOn&&efOn?ac:ac+'55';c.lineWidth=psuOn&&efOn?2:1.5;c.strokeRect(w*cn_l,ct,connW,connH);
+c.shadowBlur=0;
+c.fillStyle=ac;c.font='bold 13px sans-serif';c.textAlign='center';
+c.fillText('P'+(ch+1),w*cn_l+connW/2,ct+16);
+let pw=psuOn&&efOn;
+c.font='8px monospace';c.textAlign='left';
+c.fillStyle=pw?'#ef444499':'#1e2d40';c.fillText(pi==0?'V_ADJ1':'V_ADJ2',w*cn_l+8,ct+30);
+c.fillStyle='#253040';c.fillText('GND',w*cn_l+8,ct+connH-6);
+let pins=['Main','Aux1','Aux2'];
+for(let p=0;p<3;p++){
+let py=ct+38+p*((connH-50)/2);
+c.fillStyle=((st>>(p==0?0:p==1?4:6))&(p==0?0xF:0x3))?'#e2e8f0':'#253040';
+c.fillText(pins[p],w*cn_l+8,py)
+}
+}
+},
+sendIdac(i){
+if(this.idacSliders[i].dirty){
+this.postJSON('/api/idac/code',{ch:i,code:this.idacSliders[i].code});
+this.idacSliders[i].dirty=false
+}else if(this.idacSliders[i].vDirty){
+this.postJSON('/api/idac/voltage',{ch:i,voltage:this.idacSliders[i].voltage});
+this.idacSliders[i].vDirty=false
+}
+},
+toggleWg(){
+if(this.wg.running){
+this.postJSON('/api/wavegen/stop',{});
+this.wg.running=false
+}else{
+this.postJSON('/api/wavegen/start',{
+channel:+this.wg.channel,waveform:this.wg.waveform,
+freq_hz:this.wg.freq,amplitude:this.wg.amplitude,
+offset:this.wg.offset,mode:this.wg.mode
 });
-
-// ============================================================
-// SCOPE STATE
-// ============================================================
-const scope = {
-  running: true,
-  channels: [true, false, false, true],
-  colors: ['#3b82f6','#10b981','#f59e0b','#a855f7'],
-  window: 30,
-  yRange: 'auto',
-  data: [[],[],[],[]],
-  maxPoints: 600,
-};
-
-function scopeResizeCanvas(){
-  const canvas = document.getElementById('scope-canvas');
-  if(!canvas) return;
-  const rect = canvas.getBoundingClientRect();
-  if(rect.width>0 && rect.height>0){
-    canvas.width = rect.width * (window.devicePixelRatio||1);
-    canvas.height = rect.height * (window.devicePixelRatio||1);
-  }
+this.wg.running=true
 }
-function scopeInit(){
-  scopeResizeCanvas();
-  window.addEventListener('resize', ()=>{
-    const r = canvas.getBoundingClientRect();
-    canvas.width = r.width * window.devicePixelRatio;
-    canvas.height = r.height * window.devicePixelRatio;
-  });
+},
+drawWavePreview(canvas,wg){
+if(!canvas)return;
+let ctx=canvas.getContext('2d');
+let w=canvas.width,h=canvas.height;
+ctx.fillStyle='#1e293b';ctx.fillRect(0,0,w,h);
+ctx.strokeStyle='rgba(148,163,184,0.12)';ctx.lineWidth=1;
+ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();
+let color=wg.mode?'#a855f7':'#3b82f6';
+let amp=wg.amplitude,off=wg.offset;
+let yr=(Math.abs(amp)+Math.abs(off))*1.3||1;
+ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
+for(let px=0;px<w;px++){
+let t=px/w;let v;
+switch(wg.waveform){
+case 0:v=off+amp*Math.sin(t*Math.PI*2);break;
+case 1:v=off+(t<0.5?amp:-amp);break;
+case 2:{let tv=t<0.25?t*4:t<0.75?2-t*4:t*4-4;v=off+amp*tv;break}
+case 3:v=off+amp*(2*t-1);break;
+default:v=0
 }
-
-function drawScope(){
-  const canvas = document.getElementById('scope-canvas');
-  if(!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width;
-  const H = canvas.height;
-  const dpr = window.devicePixelRatio || 1;
-  const pad = {l:80*dpr, r:20*dpr, t:20*dpr, b:30*dpr};
-  const plotW = W - pad.l - pad.r;
-  const plotH = H - pad.t - pad.b;
-
-  ctx.clearRect(0, 0, W, H);
-
-  // Use server timestamps for X axis - scopeNewestT is "now"
-  const stMax = scopeNewestT;
-  const stMin = stMax - scope.window * 1000;
-
-  // Y range
-  let yMin=0, yMax=12;
-  if(scope.yRange === 'auto'){
-    yMin = Infinity; yMax = -Infinity;
-    for(let i=0;i<4;i++){
-      if(!scope.channels[i]) continue;
-      scope.data[i].forEach(p => { yMin=Math.min(yMin,p.v); yMax=Math.max(yMax,p.v); });
-    }
-    if(yMin === Infinity){yMin=0;yMax=12;}
-    const margin = (yMax-yMin)*0.1 || 1;
-    yMin -= margin; yMax += margin;
-  } else {
-    const parts = scope.yRange.split(',');
-    yMin = parseFloat(parts[0]); yMax = parseFloat(parts[1]);
-  }
-
-  // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = 1;
-  const ySteps = 5;
-  for(let i=0;i<=ySteps;i++){
-    const y = pad.t + (i/ySteps)*plotH;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+plotW, y); ctx.stroke();
-  }
-  const tSteps = Math.min(10, scope.window);
-  for(let i=0;i<=tSteps;i++){
-    const x = pad.l + (i/tSteps)*plotW;
-    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t+plotH); ctx.stroke();
-  }
-
-  // Y-axis labels (auto precision based on range span)
-  ctx.fillStyle = '#64748b';
-  ctx.font = `${11*dpr}px -apple-system,sans-serif`;
-  ctx.textAlign = 'right';
-  const ySpan = yMax - yMin;
-  const yPrec = ySpan < 0.001 ? 6 : ySpan < 0.01 ? 5 : ySpan < 0.1 ? 4 : ySpan < 1 ? 3 : ySpan < 10 ? 2 : 1;
-  for(let i=0;i<=ySteps;i++){
-    const v = yMax - (i/ySteps)*(yMax-yMin);
-    const y = pad.t + (i/ySteps)*plotH;
-    ctx.fillText(v.toFixed(yPrec), pad.l-8*dpr, y+4*dpr);
-  }
-
-  // X-axis labels (time ago)
-  ctx.textAlign = 'center';
-  for(let i=0;i<=tSteps;i++){
-    const t = scope.window - (i/tSteps)*scope.window;
-    const x = pad.l + (i/tSteps)*plotW;
-    ctx.fillText(t>0?`-${t.toFixed(0)}s`:'now', x, H-6*dpr);
-  }
-
-  // Plot data: filled min/max band + smooth average line
-  for(let ch=0;ch<4;ch++){
-    if(!scope.channels[ch] || scope.data[ch].length < 2) continue;
-    const pts=scope.data[ch];
-    const color=scope.colors[ch];
-    const tRange=stMax-stMin;
-    if(tRange<=0) continue;
-
-    // Helper: server timestamp → canvas X
-    const tx=st=>pad.l+((st-stMin)/tRange)*plotW;
-    const vy=v=>pad.t+((yMax-v)/(yMax-yMin))*plotH;
-
-    // 1) Filled min/max band
-    if(pts[0].mn!==undefined){
-      ctx.fillStyle=color.replace(')',',0.13)').replace('rgb','rgba');
-      ctx.beginPath();
-      ctx.moveTo(tx(pts[0].st), vy(pts[0].mn));
-      for(let i=1;i<pts.length;i++) ctx.lineTo(tx(pts[i].st), vy(pts[i].mn));
-      for(let i=pts.length-1;i>=0;i--) ctx.lineTo(tx(pts[i].st), vy(pts[i].mx));
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    // 2) Average line
-    ctx.strokeStyle=color;
-    ctx.lineWidth=1.5*dpr;
-    ctx.lineJoin='round';
-    ctx.beginPath();
-    ctx.moveTo(tx(pts[0].st), vy(pts[0].v));
-    for(let i=1;i<pts.length;i++) ctx.lineTo(tx(pts[i].st), vy(pts[i].v));
-    ctx.stroke();
-  }
-
-  // Current values overlay
-  const valDiv = document.getElementById('scope-values');
-  if(valDiv){
-    const names=['A','B','C','D'];
-    let html='';
-    for(let i=0;i<4;i++){
-      if(!scope.channels[i]) continue;
-      const d = scope.data[i];
-      const v = d.length>0 ? d[d.length-1].v : 0;
-      html+=`<span style="color:${scope.colors[i]};font-weight:600">${names[i]}: ${v.toFixed(4)}</span>`;
-    }
-    valDiv.innerHTML=html;
-  }
+let y=h/2-(v/yr)*(h/2-10);
+px===0?ctx.moveTo(px,y):ctx.lineTo(px,y)
 }
-
-function scopeToggleCh(ch){
-  scope.channels[ch] = document.getElementById(`scope-ch-${ch}`).checked;
+ctx.stroke()
 }
-function scopeSetWindow(v){ scope.window = parseInt(v); }
-function scopeSetYRange(v){ scope.yRange = v; }
-async function scopeSetAdcRate(rate){
-  rate=parseInt(rate);
-  // Set ADC rate on all active channels
-  for(let i=0;i<4;i++){
-    if(state.channels[i].function!=='HIGH_IMP'){
-      try{
-        await apiFetch(`/api/channel/${i}/adc/config`,{method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({mux:state.channels[i].adcMux, range:state.channels[i].adcRange, rate})});
-      }catch(e){}
-    }
-  }
-  toast('ok',`ADC rate set to ${document.getElementById('scope-adc-rate').selectedOptions[0].text}`);
-}
-function scopeToggleRun(){
-  scope.running = !scope.running;
-  const btn = document.getElementById('scope-run-btn');
-  btn.textContent = scope.running ? 'Pause' : 'Run';
-  btn.classList.toggle('primary', scope.running);
-}
-function scopeClear(){
-  scope.data = [[],[],[],[]];
-  scopeSeq=0; scopeNewestT=0; scopeBusy=false;
-  drawScope();
-}
-
-// ============================================================
-// INIT UI (build DOM)
-// ============================================================
-function initUI(){
-  buildOverview();
-  buildADC();
-  buildDiagSlots();
-  buildVDAC();
-  buildIDAC();
-  buildDIN();
-  buildDOUT();
-  buildFaults();
-  buildDiagLEDs();
-  buildLiveStatusGrid();
-  buildMaskUI();
-  buildGPIO();
-  buildUART();
-  fetchUARTPins();
-  scopeInit();
-}
-
-// -------- DIAGNOSTIC SLOTS --------
-function buildDiagSlots(){
-  const grid=document.getElementById('diag-slots-grid');
-  if(!grid) return;
-  grid.innerHTML='';
-  const icons=['🌡','⚡','🔌','🔋'];
-  for(let s=0;s<4;s++){
-    const d=document.createElement('div');
-    d.className='card';d.id=`diag-slot-${s}`;
-    const opts=DIAG_SOURCES.map(ds=>`<option value="${ds.code}"${ds.code===state.diag[s].source?' selected':''}>${ds.name}</option>`).join('');
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title">${icons[s]} Slot ${s}</div>
-        <select id="diag-src-sel-${s}" style="width:auto;min-width:90px" onchange="changeDiagSource(${s},this.value)">${opts}</select>
-      </div>
-      <div class="big-value" id="diag-slot-val-${s}">--<span class="unit" id="diag-slot-unit-${s}"></span></div>
-      <div class="raw-val" id="diag-slot-raw-${s}">raw: --</div>
-      <div class="bar-gauge mt-8"><div class="bar-fill green" id="diag-slot-bar-${s}" style="width:0%"></div></div>
-    `;
-    grid.appendChild(d);
-  }
-}
-
-async function changeDiagSource(slot,src){
-  src=parseInt(src);
-  try{
-    const r=await fetch('/api/diagnostics/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot,source:src})});
-    if(r.ok){
-      const info=DIAG_SOURCES.find(d=>d.code===src);
-      state.diag[slot].source=src;
-      state.diag[slot].sourceName=info?info.name:'?';
-      state.diag[slot].unit=info?info.unit:'V';
-      state.diag[slot].dirty=Date.now();
-      toast('ok',`Diag slot ${slot} → ${info?info.name:'?'}`);
-    }else toast('err','Failed to configure diagnostic');
-  }catch(e){toast('err',e.message)}
-}
-
-// -------- OVERVIEW --------
-function buildOverview(){
-  const grid = document.getElementById('ov-ch-grid');
-  grid.innerHTML = '';
-  for(let i=0;i<4;i++){
-    const d = document.createElement('div');
-    d.className='card';d.id=`ov-ch-${i}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge">${CH_NAMES[i]}</span> Channel ${CH_NAMES[i]}</div>
-        <span id="ov-fn-badge-${i}" class="fn-badge high-imp">High Imp</span>
-      </div>
-      <div class="big-value" id="ov-val-${i}">--<span class="unit" id="ov-unit-${i}"></span></div>
-      <div class="raw-val" id="ov-raw-${i}">ADC: --</div>
-      <div class="bar-gauge mt-8"><div class="bar-fill" id="ov-bar-${i}" style="width:0%"></div></div>
-      <div class="divider"></div>
-      <div class="form-row compact">
-        <label>Function</label>
-        <select id="ov-fn-sel-${i}" onchange="setFunction(${i},this.value)">
-          ${FN_OPTIONS.map(k=>`<option value="${k}">${FN_NAMES[FN_MAP[k]]}</option>`).join('')}
-        </select>
-      </div>`;
-    grid.appendChild(d);
-  }
-}
-
-// -------- ADC --------
-function buildADC(){
-  const grid = document.getElementById('adc-ch-grid');
-  grid.innerHTML='';
-  for(let i=0;i<4;i++){
-    const d=document.createElement('div');
-    d.className='card';d.id=`adc-ch-${i}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge">${CH_NAMES[i]}</span> ADC Channel ${CH_NAMES[i]}</div>
-        <span id="adc-fn-badge-${i}" class="fn-badge high-imp">High Imp</span>
-      </div>
-      <div class="big-value" id="adc-val-${i}">--<span class="unit" id="adc-unit-${i}">V</span></div>
-      <div class="raw-val">Raw: <span id="adc-raw-${i}">0x0000</span> &nbsp;|&nbsp; Code: <span id="adc-code-${i}">0</span></div>
-      <div class="bar-gauge mt-8" style="height:10px;border-radius:5px">
-        <div class="bar-fill" id="adc-bar-${i}" style="width:0%"></div>
-      </div>
-      <div class="flex-between" style="margin-top:3px">
-        <span class="text-xs color-dim" id="adc-range-min-${i}">0</span>
-        <span class="text-xs color-dim" id="adc-range-max-${i}">12V</span>
-      </div>
-      <div class="divider"></div>
-      <div class="form-row"><label>Range</label>
-        <select id="adc-range-${i}" onchange="setAdcConfig(${i})">
-          ${ADC_RANGES.map((r,j)=>`<option value="${j}">${r}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-row"><label>Rate</label>
-        <select id="adc-rate-${i}" onchange="setAdcConfig(${i})">
-          ${ADC_RATES.map((r,j)=>`<option value="${j}">${r}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-row"><label>MUX</label>
-        <select id="adc-mux-${i}" onchange="setAdcConfig(${i})">
-          ${ADC_MUX.map((r,j)=>`<option value="${j}">${r}</option>`).join('')}
-        </select>
-      </div>`;
-    grid.appendChild(d);
-  }
-}
-
-// -------- VDAC --------
-function buildVDAC(){
-  const grid = document.getElementById('vdac-ch-grid');
-  grid.innerHTML='';
-  for(let i=0;i<4;i++){
-    const d=document.createElement('div');
-    d.className='card';d.id=`vdac-ch-${i}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge">${CH_NAMES[i]}</span> VDAC Channel ${CH_NAMES[i]}</div>
-        <span id="vdac-fn-badge-${i}" class="fn-badge vout">VOUT</span>
-      </div>
-      <div class="big-value" id="vdac-val-${i}">0.000<span class="unit">V</span></div>
-      <div class="raw-val">DAC Code: <span id="vdac-code-${i}">0</span></div>
-      <div class="bar-gauge mt-8"><div class="bar-fill green" id="vdac-bar-${i}" style="width:0%"></div></div>
-      <div class="divider"></div>
-      <div class="form-row">
-        <label>Range</label>
-        <div class="toggle-wrap">
-          <label class="toggle"><input type="checkbox" id="vdac-bipolar-${i}" onchange="setVoutRange(${i})">
-            <span class="toggle-slider"></span></label>
-          <span class="toggle-label" id="vdac-range-label-${i}">Unipolar 0–12V</span>
-        </div>
-      </div>
-      <div class="form-row">
-        <label>I Limit</label>
-        <div class="toggle-wrap">
-          <label class="toggle"><input type="checkbox" id="vdac-ilimit-${i}" onchange="setIlimit(${i})">
-            <span class="toggle-slider"></span></label>
-          <span class="toggle-label" id="vdac-ilimit-label-${i}">16 mA</span>
-        </div>
-      </div>
-      <div class="divider"></div>
-      <div class="form-row"><label>Voltage</label>
-        <input type="range" id="vdac-slider-${i}" min="0" max="12000" step="1" value="0"
-          oninput="onVdacSlider(${i},this.value)" onchange="sendVdac(${i})">
-      </div>
-      <div class="slider-labels"><span id="vdac-smin-${i}">0V</span><span id="vdac-smax-${i}">12V</span></div>
-      <div class="form-row mt-8"><label>Precise V</label>
-        <input type="number" id="vdac-num-${i}" step="0.001" value="0" style="max-width:120px"
-          onchange="onVdacNum(${i},this.value)">
-        <button class="btn primary sm" onclick="sendVdac(${i})">Set</button>
-      </div>`;
-    grid.appendChild(d);
-  }
-}
-
-// -------- IDAC --------
-function buildIDAC(){
-  const grid = document.getElementById('idac-ch-grid');
-  grid.innerHTML='';
-  for(let i=0;i<4;i++){
-    const d=document.createElement('div');
-    d.className='card';d.id=`idac-ch-${i}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge">${CH_NAMES[i]}</span> IDAC Channel ${CH_NAMES[i]}</div>
-        <span id="idac-fn-badge-${i}" class="fn-badge iout">IOUT</span>
-      </div>
-      <div class="big-value" id="idac-val-${i}">0.000<span class="unit">mA</span></div>
-      <div class="raw-val">DAC Code: <span id="idac-code-${i}">0</span></div>
-      <div style="display:flex;gap:16px;margin:6px 0 2px;font-size:0.85rem">
-        <span class="color-dim">V<sub>out</sub>: <span id="idac-vout-${i}" style="color:#60a5fa">--</span></span>
-        <span class="color-dim">R<sub>load</sub>: <span id="idac-rload-${i}" style="color:#fbbf24">--</span></span>
-      </div>
-      <div class="bar-gauge mt-8"><div class="bar-fill" id="idac-bar-${i}" style="width:0%;
-        background:linear-gradient(90deg,var(--purple),rgba(168,85,247,0.7))"></div></div>
-      <div class="flex-between" style="margin-top:3px">
-        <span class="text-xs color-dim">0 mA</span>
-        <span class="text-xs color-dim">25 mA</span>
-      </div>
-      <div class="divider"></div>
-      <div class="form-row"><label>Current</label>
-        <input type="range" id="idac-slider-${i}" min="0" max="25000" step="1" value="0"
-          oninput="onIdacSlider(${i},this.value)" onchange="sendIdac(${i})">
-      </div>
-      <div class="slider-labels"><span>0 mA</span><span>25 mA</span></div>
-      <div class="form-row mt-8"><label>Precise mA</label>
-        <input type="number" id="idac-num-${i}" step="0.001" min="0" max="25" value="0" style="max-width:120px"
-          onchange="onIdacNum(${i},this.value)">
-        <button class="btn primary sm" onclick="sendIdac(${i})">Set</button>
-      </div>`;
-    grid.appendChild(d);
-  }
-}
-
-// -------- DIGITAL IN --------
-function buildDIN(){
-  const grid = document.getElementById('din-ch-grid');
-  grid.innerHTML='';
-  for(let i=0;i<4;i++){
-    const d=document.createElement('div');
-    d.className='card';d.id=`din-ch-${i}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge">${CH_NAMES[i]}</span> Digital In ${CH_NAMES[i]}</div>
-        <span id="din-fn-badge-${i}" class="fn-badge din">DIN</span>
-      </div>
-      <div class="big-led-wrap">
-        <div class="big-led" id="din-led-${i}"></div>
-        <div class="big-led-label" id="din-state-label-${i}">OFF</div>
-      </div>
-      <div class="flex-between mt-8">
-        <div>
-          <div class="text-xs color-dim" style="margin-bottom:4px">Event Counter</div>
-          <span class="counter-display" id="din-counter-${i}">0</span>
-        </div>
-        <button class="btn sm" onclick="resetDinCounter(${i})">Reset</button>
-      </div>
-      <div class="divider"></div>
-      <div class="form-row"><label>Thresh (mV)</label>
-        <input type="number" id="din-thresh-${i}" value="0" min="0" max="65535" style="max-width:100px">
-        <div class="toggle-wrap" style="margin-left:4px">
-          <label class="toggle"><input type="checkbox" id="din-thmode-${i}">
-            <span class="toggle-slider"></span></label>
-          <span class="toggle-label text-xs">Hysteresis</span>
-        </div>
-      </div>
-      <div class="form-row"><label>Debounce</label>
-        <select id="din-debounce-${i}">
-          ${[0,1,2,4,8,16,32,64].map((v,j)=>`<option value="${j}">${v}ms</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-row"><label>Sink</label>
-        <input type="number" id="din-sink-${i}" value="0" min="0" max="63" style="max-width:80px">
-        <div class="toggle-wrap" style="margin-left:4px">
-          <label class="toggle"><input type="checkbox" id="din-sinkrange-${i}">
-            <span class="toggle-slider"></span></label>
-          <span class="toggle-label text-xs">×4 Range</span>
-        </div>
-      </div>
-      <div class="form-row">
-        <label>OC Det</label>
-        <label class="toggle"><input type="checkbox" id="din-ocdet-${i}">
-          <span class="toggle-slider"></span></label>
-        <span style="margin-left:16px"></span>
-        <label>SC Det</label>
-        <label class="toggle"><input type="checkbox" id="din-scdet-${i}">
-          <span class="toggle-slider"></span></label>
-      </div>
-      <button class="btn primary w-full mt-8" onclick="sendDinConfig(${i})">Apply Config</button>`;
-    grid.appendChild(d);
-  }
-}
-
-// -------- DIGITAL OUT --------
-function buildDOUT(){
-  const grid = document.getElementById('dout-ch-grid');
-  grid.innerHTML='';
-  for(let i=0;i<4;i++){
-    const d=document.createElement('div');
-    d.className='card';d.id=`dout-ch-${i}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge">${CH_NAMES[i]}</span> Digital Out ${CH_NAMES[i]}</div>
-        <span id="dout-fn-badge-${i}" class="fn-badge dout">DOUT</span>
-      </div>
-      <div class="do-toggle-wrap">
-        <button class="do-toggle-btn" id="dout-btn-${i}" onclick="toggleDO(${i})">
-          <span id="dout-btn-icon-${i}">○</span>
-          <span id="dout-btn-label-${i}">OFF</span>
-        </button>
-      </div>
-      <div class="divider"></div>
-      <div class="form-row"><label>DO Mode</label>
-        <select id="dout-mode-${i}">
-          <option value="0">Hi-Z</option>
-          <option value="1">Push-Pull</option>
-          <option value="2">Open Drain</option>
-          <option value="3">Push-Pull HART</option>
-        </select>
-      </div>
-      <div class="form-row"><label>Source</label>
-        <div class="toggle-wrap">
-          <label class="toggle"><input type="checkbox" id="dout-srcgpio-${i}">
-            <span class="toggle-slider"></span></label>
-          <span class="toggle-label">GPIO (else SPI)</span>
-        </div>
-      </div>
-      <div class="form-row"><label>T1 (μs)</label>
-        <input type="number" id="dout-t1-${i}" value="0" min="0" style="max-width:100px"></div>
-      <div class="form-row"><label>T2 (μs)</label>
-        <input type="number" id="dout-t2-${i}" value="0" min="0" style="max-width:100px"></div>
-      <button class="btn primary w-full mt-8" onclick="sendDoutConfig(${i})">Apply Config</button>`;
-    grid.appendChild(d);
-  }
-}
-
-// -------- FAULTS --------
-function buildFaults(){
-  // Global LEDs
-  const gl = document.getElementById('fault-global-leds');
-  gl.innerHTML = GLOBAL_ALERT_BITS.map(b=>`
-    <div class="led-item" id="fault-g-${b.bit}">
-      <div class="led off" id="fault-g-led-${b.bit}"></div>
-      <span class="led-label">${b.name}</span>
-    </div>`).join('');
-
-  // Per-channel
-  const chg = document.getElementById('fault-ch-cards');
-  chg.innerHTML='';
-  for(let i=0;i<4;i++){
-    const d=document.createElement('div');
-    d.className='card';
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge">${CH_NAMES[i]}</span> Channel ${CH_NAMES[i]} Alerts</div>
-        <button class="btn sm" onclick="clearChFault(${i})">Clear</button>
-      </div>
-      <div class="led-grid" id="fault-ch-leds-${i}">
-        ${CH_ALERT_BITS.map(b=>`
-          <div class="led-item" id="fault-ch-${i}-${b.bit}">
-            <div class="led off" id="fault-ch-led-${i}-${b.bit}"></div>
-            <span class="led-label">${b.name}</span>
-          </div>`).join('')}
-      </div>`;
-    chg.appendChild(d);
-  }
-
-  // Supply
-  document.getElementById('fault-supply-leds').innerHTML = SUPPLY_ALERT_BITS.map(b=>`
-    <div class="led-item" id="fault-s-${b.bit}">
-      <div class="led off" id="fault-s-led-${b.bit}"></div>
-      <span class="led-label">${b.name}</span>
-    </div>`).join('');
-}
-
-// -------- DIAG LEDs --------
-function buildDiagLEDs(){
-  document.getElementById('diag-alert-leds').innerHTML = GLOBAL_ALERT_BITS.map(b=>`
-    <div class="led-item"><div class="led off" id="diag-a-${b.bit}"></div>
-    <span class="led-label">${b.name}</span></div>`).join('');
-  document.getElementById('diag-supply-leds').innerHTML = SUPPLY_ALERT_BITS.map(b=>`
-    <div class="led-item"><div class="led off" id="diag-s-${b.bit}"></div>
-    <span class="led-label">${b.name}</span></div>`).join('');
-}
-
-function buildLiveStatusGrid(){
-  document.getElementById('live-status-grid').innerHTML = LIVE_STATUS_BITS.map(b=>`
-    <div class="live-bit"><div class="led off" id="live-${b.bit}"></div>
-    <span class="live-bit-name">${b.name}</span></div>`).join('');
-}
-
-// -------- MASKS --------
-function buildMaskUI(){
-  // Global
-  document.getElementById('mask-global-grid').innerHTML = GLOBAL_ALERT_BITS.map(b=>`
-    <div class="mask-item">
-      <span class="mask-label">${b.name}</span>
-      <label class="toggle"><input type="checkbox" data-masktype="global" data-bit="${b.bit}" onchange="updateMask()">
-        <span class="toggle-slider"></span></label>
-    </div>`).join('');
-  // Supply
-  document.getElementById('mask-supply-grid').innerHTML = SUPPLY_ALERT_BITS.map(b=>`
-    <div class="mask-item">
-      <span class="mask-label">${b.name}</span>
-      <label class="toggle"><input type="checkbox" data-masktype="supply" data-bit="${b.bit}" onchange="updateMask()">
-        <span class="toggle-slider"></span></label>
-    </div>`).join('');
-  // Per channel
-  const sec = document.getElementById('mask-ch-sections');
-  sec.innerHTML='';
-  for(let i=0;i<4;i++){
-    const d=document.createElement('div');
-    d.innerHTML=`<div class="section-title" style="margin-top:12px">Channel ${CH_NAMES[i]} Alert Mask</div>
-    <div class="mask-grid">
-      ${CH_ALERT_BITS.map(b=>`
-        <div class="mask-item">
-          <span class="mask-label">${b.name}</span>
-          <label class="toggle"><input type="checkbox" data-masktype="ch" data-ch="${i}" data-bit="${b.bit}" onchange="updateMask()">
-            <span class="toggle-slider"></span></label>
-        </div>`).join('')}
-    </div>`;
-    sec.appendChild(d);
-  }
-}
-
-function updateMask(){
-  let gm=0;
-  document.querySelectorAll('[data-masktype=global]').forEach(el=>{if(el.checked)gm|=(1<<el.dataset.bit)});
-  pendingMasks.alertMask=gm;
-  let sm=0;
-  document.querySelectorAll('[data-masktype=supply]').forEach(el=>{if(el.checked)sm|=(1<<el.dataset.bit)});
-  pendingMasks.supplyMask=sm;
-  for(let i=0;i<4;i++){
-    let cm=0;
-    document.querySelectorAll(`[data-masktype=ch][data-ch="${i}"]`).forEach(el=>{if(el.checked)cm|=(1<<el.dataset.bit)});
-    pendingMasks.chMasks[i]=cm;
-  }
-}
-
-// -------- GPIO --------
-const GPIO_MODES = ['HIGH_IMP','OUTPUT','INPUT','DIN_OUT','DO_EXT'];
-const GPIO_NAMES = ['A','B','C','D','E','F'];
-
-function buildGPIO(){
-  const grid=document.getElementById('gpio-grid');
-  if(!grid) return;
-  grid.innerHTML='';
-  for(let g=0;g<6;g++){
-    const d=document.createElement('div');
-    d.className='card';d.id=`gpio-card-${g}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge" style="background:rgba(16,185,129,0.15);color:var(--green);border-color:rgba(16,185,129,0.25)">${GPIO_NAMES[g]}</span> GPIO ${GPIO_NAMES[g]}</div>
-        <span id="gpio-mode-badge-${g}" class="fn-badge high-imp">HIGH_IMP</span>
-      </div>
-      <div class="form-row"><label>Mode</label>
-        <select id="gpio-mode-sel-${g}" onchange="setGpioConfig(${g})">
-          ${GPIO_MODES.map((m,j)=>`<option value="${j}">${m}</option>`).join('')}
-        </select>
-      </div>
-      <div class="divider"></div>
-      <div class="big-led-wrap">
-        <div class="big-led" id="gpio-in-led-${g}"></div>
-        <div class="big-led-label" id="gpio-in-label-${g}">INPUT: OFF</div>
-      </div>
-      <div class="do-toggle-wrap">
-        <button class="do-toggle-btn" id="gpio-out-btn-${g}" onclick="toggleGpio(${g})">
-          <span id="gpio-out-icon-${g}">○</span>
-          <span id="gpio-out-label-${g}">OFF</span>
-        </button>
-      </div>
-      <div class="divider"></div>
-      <div class="form-row">
-        <label>Pulldown</label>
-        <div class="toggle-wrap">
-          <label class="toggle"><input type="checkbox" id="gpio-pd-${g}" checked onchange="setGpioConfig(${g})">
-            <span class="toggle-slider"></span></label>
-          <span class="toggle-label" id="gpio-pd-label-${g}">Enabled</span>
-        </div>
-      </div>`;
-    grid.appendChild(d);
-  }
-}
-
-async function setGpioConfig(g){
-  const mode=parseInt(document.getElementById(`gpio-mode-sel-${g}`).value);
-  const pulldown=document.getElementById(`gpio-pd-${g}`).checked;
-  try{
-    await apiFetch(`/api/gpio/${g}/config`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({mode,pulldown})});
-    toast('ok',`GPIO ${GPIO_NAMES[g]} mode → ${GPIO_MODES[mode]}`);
-  }catch(e){toast('err',`GPIO ${GPIO_NAMES[g]}: ${e.message}`)}
-}
-
-async function toggleGpio(g){
-  const newState=!state.gpio[g].output;
-  try{
-    await apiFetch(`/api/gpio/${g}/set`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({value:newState})});
-    toast(newState?'ok':'info',`GPIO ${GPIO_NAMES[g]} → ${newState?'ON':'OFF'}`);
-  }catch(e){toast('err',`GPIO ${GPIO_NAMES[g]}: ${e.message}`)}
-}
-
-function updateGPIO(){
-  state.gpio.forEach((g,i)=>{
-    // Mode badge
-    const badge=document.getElementById(`gpio-mode-badge-${i}`);
-    if(badge){
-      const isOut=g.mode===1;
-      const isIn=g.mode===2;
-      const cls=isOut?'dout':isIn?'vin':g.mode===3?'din':g.mode===4?'iin':'high-imp';
-      badge.className=`fn-badge ${cls}`;
-      badge.textContent=g.modeName||GPIO_MODES[g.mode]||'?';
-    }
-    // Mode selector
-    const sel=document.getElementById(`gpio-mode-sel-${i}`);
-    if(sel&&sel!==document.activeElement) sel.value=g.mode;
-    // Input LED
-    const inLed=document.getElementById(`gpio-in-led-${i}`);
-    if(inLed){inLed.classList.toggle('on',g.input);inLed.classList.toggle('off',!g.input)}
-    const inLabel=document.getElementById(`gpio-in-label-${i}`);
-    if(inLabel) inLabel.textContent=`INPUT: ${g.input?'ON':'OFF'}`;
-    // Output toggle
-    const outBtn=document.getElementById(`gpio-out-btn-${i}`);
-    if(outBtn){
-      outBtn.classList.toggle('on',g.output);
-      const outLabel=document.getElementById(`gpio-out-label-${i}`);
-      const outIcon=document.getElementById(`gpio-out-icon-${i}`);
-      if(outLabel) outLabel.textContent=g.output?'ON':'OFF';
-      if(outIcon)  outIcon.textContent=g.output?'●':'○';
-    }
-    // Pulldown toggle
-    const pdEl=document.getElementById(`gpio-pd-${i}`);
-    if(pdEl&&pdEl!==document.activeElement) pdEl.checked=g.pulldown;
-    const pdLabel=document.getElementById(`gpio-pd-label-${i}`);
-    if(pdLabel) pdLabel.textContent=g.pulldown?'Enabled':'Disabled';
-  });
-}
-
-// ============================================================
-// UART
-// ============================================================
-const UART_BAUDS=[300,1200,2400,4800,9600,19200,38400,57600,115200,230400,460800,921600];
-const UART_PARITY=['None','Odd','Even'];
-
-async function fetchUARTPins(){
-  try{
-    const r=await fetch('/api/uart/pins',{cache:'no-store'});
-    if(r.ok){const d=await r.json();state.uart.pins=d.available||[];}
-  }catch(e){}
-  // Also fetch initial bridge config
-  try{
-    const r=await fetch('/api/uart/config',{cache:'no-store'});
-    if(r.ok){const d=await r.json();if(Array.isArray(d.bridges)){state.uart.bridges=d.bridges;buildUART();}}
-  }catch(e){}
-}
-
-function buildUART(){
-  const grid=document.getElementById('uart-grid');
-  if(!grid) return;
-  grid.innerHTML='';
-  const pins=state.uart.pins;
-  const pinOpts=pins.map(p=>`<option value="${p}">GPIO ${p}</option>`).join('');
-  state.uart.bridges.forEach((br,idx)=>{
-    const d=document.createElement('div');
-    d.className='card';d.id=`uart-card-${idx}`;
-    d.innerHTML=`
-      <div class="card-header">
-        <div class="card-title"><span class="ch-badge" style="background:rgba(59,130,246,0.15);color:var(--blue);border-color:rgba(59,130,246,0.25)">${idx}</span> UART Bridge ${idx}</div>
-        <span id="uart-status-badge-${idx}" class="fn-badge high-imp">IDLE</span>
-      </div>
-      <div class="form-row"><label>Enabled</label>
-        <div class="toggle-wrap">
-          <label class="toggle"><input type="checkbox" id="uart-en-${idx}" ${br.enabled?'checked':''}>
-            <span class="toggle-slider"></span></label>
-          <span class="toggle-label" id="uart-en-label-${idx}">${br.enabled?'Enabled':'Disabled'}</span>
-        </div>
-      </div>
-      <div class="form-row"><label>UART Port</label>
-        <select id="uart-port-${idx}">
-          <option value="0"${br.uartNum===0?' selected':''}>UART0</option>
-          <option value="1"${br.uartNum===1?' selected':''}>UART1</option>
-          <option value="2"${br.uartNum===2?' selected':''}>UART2</option>
-        </select>
-      </div>
-      <div class="form-row"><label>TX Pin</label>
-        <select id="uart-tx-${idx}">${pinOpts}</select>
-      </div>
-      <div class="form-row"><label>RX Pin</label>
-        <select id="uart-rx-${idx}">${pinOpts}</select>
-      </div>
-      <div class="divider"></div>
-      <div class="form-row"><label>Baud Rate</label>
-        <select id="uart-baud-${idx}">${UART_BAUDS.map(b=>`<option value="${b}"${b===br.baudrate?' selected':''}>${b>=1000?(b/1000)+'k':b}</option>`).join('')}</select>
-      </div>
-      <div class="form-row"><label>Data Bits</label>
-        <select id="uart-databits-${idx}">${[5,6,7,8].map(b=>`<option value="${b}"${b===br.dataBits?' selected':''}>${b}</option>`).join('')}</select>
-      </div>
-      <div class="form-row"><label>Parity</label>
-        <select id="uart-parity-${idx}">${UART_PARITY.map((p,pi)=>`<option value="${pi}"${pi===br.parity?' selected':''}>${p}</option>`).join('')}</select>
-      </div>
-      <div class="form-row"><label>Stop Bits</label>
-        <select id="uart-stopbits-${idx}">${[1,2].map(b=>`<option value="${b}"${b===br.stopBits?' selected':''}>${b}</option>`).join('')}</select>
-      </div>
-      <div class="divider"></div>
-      <button class="btn" onclick="applyUARTConfig(${idx})">Apply</button>
-      <div style="margin-top:8px;font-size:.7rem;color:var(--text3)">Bridge ${idx} maps to UART${br.uartNum} — connect via USB-CDC or TCP bridge</div>`;
-    // Set pin selectors to current values after DOM insertion
-    grid.appendChild(d);
-    const txSel=document.getElementById(`uart-tx-${idx}`);
-    const rxSel=document.getElementById(`uart-rx-${idx}`);
-    if(txSel) txSel.value=br.txPin;
-    if(rxSel) rxSel.value=br.rxPin;
-  });
-}
-
-async function applyUARTConfig(idx){
-  const cfg={
-    uartNum:parseInt(document.getElementById(`uart-port-${idx}`).value),
-    txPin:parseInt(document.getElementById(`uart-tx-${idx}`).value),
-    rxPin:parseInt(document.getElementById(`uart-rx-${idx}`).value),
-    baudrate:parseInt(document.getElementById(`uart-baud-${idx}`).value),
-    dataBits:parseInt(document.getElementById(`uart-databits-${idx}`).value),
-    parity:parseInt(document.getElementById(`uart-parity-${idx}`).value),
-    stopBits:parseInt(document.getElementById(`uart-stopbits-${idx}`).value),
-    enabled:document.getElementById(`uart-en-${idx}`).checked
-  };
-  try{
-    await apiFetch(`/api/uart/${idx}/config`,{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-    toast('ok',`UART Bridge ${idx} configured — ${cfg.baudrate} baud`);
-  }catch(e){toast('err',`UART ${idx}: ${e.message}`)}
-}
-
-function updateUART(){
-  state.uart.bridges.forEach((br,idx)=>{
-    const badge=document.getElementById(`uart-status-badge-${idx}`);
-    if(badge){
-      if(br.connected){badge.className='fn-badge vin';badge.textContent='CONNECTED';}
-      else{badge.className='fn-badge high-imp';badge.textContent='IDLE';}
-    }
-    const enEl=document.getElementById(`uart-en-${idx}`);
-    if(enEl&&enEl!==document.activeElement) enEl.checked=br.enabled;
-    const enLabel=document.getElementById(`uart-en-label-${idx}`);
-    if(enLabel) enLabel.textContent=br.enabled?'Enabled':'Disabled';
-  });
-}
-
-// ============================================================
-// API CALLS
-// ============================================================
-async function apiFetch(url,opts={}){
-  try{
-    const r=await fetch(url,opts);
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r;
-  }catch(e){throw e}
-}
-
-async function setFunction(ch,val){
-  try{
-    await apiFetch(`/api/channel/${ch}/function`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({function:parseInt(val)})});
-    // Optimistic update so tabs reflect new function immediately
-    state.channels[ch].function = FN_MAP[parseInt(val)] || 'HIGH_IMP';
-    state.channels[ch].dacCode = 0;
-    state.channels[ch].dacValue = 0;
-    state.channels[ch].adcRaw = 0;
-    state.channels[ch].adcValue = 0;
-    updateAll();
-    toast('ok',`CH${CH_NAMES[ch]} function set`);
-  }catch(e){toast('err',`CH${CH_NAMES[ch]}: ${e.message}`)}
-}
-
-async function deviceReset(){
-  if(!confirm('Reset the AD74416H? All channels will return to High Impedance.')) return;
-  try{
-    await apiFetch('/api/device/reset',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:'{}'});
-    toast('ok','Device reset complete');
-    // Reset local state
-    for(let i=0;i<4;i++){
-      state.channels[i].function='HIGH_IMP';
-      state.channels[i].dacCode=0;state.channels[i].dacValue=0;
-      state.channels[i].adcRaw=0;state.channels[i].adcValue=0;
-    }
-  }catch(e){toast('err',e.message)}
-}
-
-async function setAdcConfig(ch){
-  const range=parseInt(document.getElementById(`adc-range-${ch}`).value);
-  const rate =parseInt(document.getElementById(`adc-rate-${ch}`).value);
-  const mux  =parseInt(document.getElementById(`adc-mux-${ch}`).value);
-  try{
-    await apiFetch(`/api/channel/${ch}/adc/config`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({mux,range,rate})});
-    toast('ok',`CH${CH_NAMES[ch]} ADC config updated`);
-  }catch(e){toast('err',e.message)}
-}
-
-// VDAC
-let vdacBipolar=[false,false,false,false];
-function onVdacSlider(ch,mV){
-  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
-  const bipolar=vdacBipolar[ch];
-  const minV=bipolar?-12:0,maxV=12;
-  const v=(parseInt(mV)/1000).toFixed(3);
-  document.getElementById(`vdac-num-${ch}`).value=v;
-  const pct=bipolar?((parseFloat(v)-minV)/(maxV-minV)*100):(parseFloat(v)/maxV*100);
-  document.getElementById(`vdac-bar-${ch}`).style.width=Math.max(0,Math.min(100,pct))+'%';
-  document.getElementById(`vdac-val-${ch}`).innerHTML=`${v}<span class="unit">V</span>`;
-}
-function onVdacNum(ch,v){
-  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
-  const bipolar=vdacBipolar[ch];
-  const minV=bipolar?-12:0,maxV=12;
-  const fv=Math.max(minV,Math.min(maxV,parseFloat(v)||0));
-  document.getElementById(`vdac-slider-${ch}`).value=Math.round((fv+12)*1000);
-  document.getElementById(`vdac-val-${ch}`).innerHTML=`${fv.toFixed(3)}<span class="unit">V</span>`;
-  const pct=bipolar?((fv-minV)/(maxV-minV)*100):(fv/maxV*100);
-  document.getElementById(`vdac-bar-${ch}`).style.width=Math.max(0,Math.min(100,pct))+'%';
-}
-async function sendVdac(ch){
-  const v=parseFloat(document.getElementById(`vdac-num-${ch}`).value)||0;
-  state.channels[ch].dacDirty = Date.now(); // protect immediately
-  const bipolar=vdacBipolar[ch];
-  try{
-    await apiFetch(`/api/channel/${ch}/dac`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({voltage:v,bipolar})});
-    state.channels[ch].dacValue = v;
-    state.channels[ch].dacDirty = Date.now();
-    toast('ok',`CH${CH_NAMES[ch]} VDAC → ${v.toFixed(3)}V`);
-  }catch(e){toast('err',e.message)}
-}
-async function setVoutRange(ch){
-  const bp=document.getElementById(`vdac-bipolar-${ch}`).checked;
-  vdacBipolar[ch]=bp;
-  document.getElementById(`vdac-range-label-${ch}`).textContent=bp?'Bipolar ±12V':'Unipolar 0–12V';
-  const sl=document.getElementById(`vdac-slider-${ch}`);
-  sl.min=bp?'-12000':'0';sl.max='12000';
-  document.getElementById(`vdac-smin-${ch}`).textContent=bp?'-12V':'0V';
-  try{
-    await apiFetch(`/api/channel/${ch}/vout/range`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({bipolar:bp})});
-    toast('ok',`CH${CH_NAMES[ch]} range: ${bp?'±12V':'0-12V'}`);
-  }catch(e){toast('err',e.message)}
-}
-async function setIlimit(ch){
-  const lim8=document.getElementById(`vdac-ilimit-${ch}`).checked;
-  document.getElementById(`vdac-ilimit-label-${ch}`).textContent=lim8?'8 mA':'16 mA';
-  try{
-    await apiFetch(`/api/channel/${ch}/ilimit`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({limit8mA:lim8})});
-    toast('ok',`CH${CH_NAMES[ch]} I-limit: ${lim8?'8mA':'16mA'}`);
-  }catch(e){toast('err',e.message)}
-}
-
-// IDAC
-function onIdacSlider(ch,uA){
-  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
-  const mA=(parseInt(uA)/1000).toFixed(3);
-  document.getElementById(`idac-num-${ch}`).value=mA;
-  document.getElementById(`idac-bar-${ch}`).style.width=(parseInt(uA)/25000*100)+'%';
-  document.getElementById(`idac-val-${ch}`).innerHTML=`${mA}<span class="unit">mA</span>`;
-}
-function onIdacNum(ch,v){
-  state.channels[ch].dacDirty = Date.now(); // protect from poll overwrite
-  const fv=Math.max(0,Math.min(25,parseFloat(v)||0));
-  document.getElementById(`idac-slider-${ch}`).value=Math.round(fv*1000);
-  document.getElementById(`idac-val-${ch}`).innerHTML=`${fv.toFixed(3)}<span class="unit">mA</span>`;
-  document.getElementById(`idac-bar-${ch}`).style.width=(fv/25*100)+'%';
-}
-async function sendIdac(ch){
-  const mA=parseFloat(document.getElementById(`idac-num-${ch}`).value)||0;
-  state.channels[ch].dacDirty = Date.now(); // protect immediately
-  try{
-    await apiFetch(`/api/channel/${ch}/dac`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({current_mA:mA})});
-    state.channels[ch].dacValue = mA;
-    state.channels[ch].dacDirty = Date.now();
-    toast('ok',`CH${CH_NAMES[ch]} IDAC → ${mA.toFixed(3)}mA`);
-  }catch(e){toast('err',e.message)}
-}
-
-// DIN
-function resetDinCounter(ch){
-  state.channels[ch].dinCounter=0;
-  document.getElementById(`din-counter-${ch}`).textContent='0';
-  toast('info',`CH${CH_NAMES[ch]} counter reset`);
-}
-async function sendDinConfig(ch){
-  const body={
-    thresh:parseInt(document.getElementById(`din-thresh-${ch}`).value)||0,
-    threshMode:document.getElementById(`din-thmode-${ch}`).checked,
-    debounce:parseInt(document.getElementById(`din-debounce-${ch}`).value)||0,
-    sink:parseInt(document.getElementById(`din-sink-${ch}`).value)||0,
-    sinkRange:document.getElementById(`din-sinkrange-${ch}`).checked,
-    ocDet:document.getElementById(`din-ocdet-${ch}`).checked,
-    scDet:document.getElementById(`din-scdet-${ch}`).checked,
-  };
-  try{
-    await apiFetch(`/api/channel/${ch}/din/config`,{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    toast('ok',`CH${CH_NAMES[ch]} DIN config applied`);
-  }catch(e){toast('err',e.message)}
-}
-
-// DOUT
-async function toggleDO(ch){
-  const newState=!state.channels[ch].doState;
-  try{
-    await apiFetch(`/api/channel/${ch}/do/set`,{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({on:newState})});
-    toast(newState?'ok':'info',`CH${CH_NAMES[ch]} DO → ${newState?'ON':'OFF'}`);
-  }catch(e){toast('err',e.message)}
-}
-async function sendDoutConfig(ch){
-  const body={
-    mode:parseInt(document.getElementById(`dout-mode-${ch}`).value)||0,
-    srcSelGpio:document.getElementById(`dout-srcgpio-${ch}`).checked,
-    t1:parseInt(document.getElementById(`dout-t1-${ch}`).value)||0,
-    t2:parseInt(document.getElementById(`dout-t2-${ch}`).value)||0,
-  };
-  try{
-    await apiFetch(`/api/channel/${ch}/do/config`,{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    toast('ok',`CH${CH_NAMES[ch]} DO config applied`);
-  }catch(e){toast('err',e.message)}
-}
-
-// FAULTS
-async function clearAllFaults(){
-  try{
-    await apiFetch('/api/faults/clear',{method:'POST'});
-    toast('ok','All faults cleared');
-  }catch(e){toast('err',e.message)}
-}
-async function clearChFault(ch){
-  try{
-    await apiFetch(`/api/faults/clear/${ch}`,{method:'POST'});
-    toast('ok',`CH${CH_NAMES[ch]} faults cleared`);
-  }catch(e){toast('err',e.message)}
-}
-async function saveMasks(){
-  try{
-    await apiFetch('/api/faults/mask',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({alertMask:pendingMasks.alertMask,supplyMask:pendingMasks.supplyMask})});
-    for(let i=0;i<4;i++){
-      await apiFetch(`/api/faults/mask/${i}`,{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({mask:pendingMasks.chMasks[i]})});
-    }
-    toast('ok','Masks saved');
-  }catch(e){toast('err',e.message)}
-}
-
-// ============================================================
-// UPDATE UI FROM STATE
-// ============================================================
-function getFnClass(fn){
-  if(fn==='VOUT') return 'vout';
-  if(fn==='IOUT'||fn==='IOUT_HART') return 'iout';
-  if(fn==='VIN') return 'vin';
-  if(fn==='IIN_EXT_PWR'||fn==='IIN_LOOP_PWR'||fn==='IIN_EXT_PWR_HART'||fn==='IIN_LOOP_PWR_HART') return 'iin';
-  if(fn==='DIN_LOGIC'||fn==='DIN_LOOP') return 'din';
-  if(fn==='HIGH_IMP') return 'high-imp';
-  return 'other';
-}
-function getFnShort(fn){
-  const map={HIGH_IMP:'Hi-Z',VOUT:'VOUT',IOUT:'IOUT',VIN:'VIN',
-    IIN_EXT_PWR:'IIN-Ext',IIN_LOOP_PWR:'IIN-Loop',RES_MEAS:'RMES',
-    DIN_LOGIC:'DIN-L',DIN_LOOP:'DIN-LP',IOUT_HART:'IOUT-H',
-    IIN_EXT_PWR_HART:'IIN-H',IIN_LOOP_PWR_HART:'IIN-LH'};
-  return map[fn]||fn;
-}
-
-let prevVals=[null,null,null,null];
-function updateAll(){
-  // Header
-  const tv=document.getElementById('temp-value');
-  const t=state.dieTemp;
-  tv.textContent=t.toFixed(1);
-  tv.className=t>85?'hot':t>60?'warm':'';
-  document.getElementById('spi-badge').textContent=state.spiOk?'SPI OK':'SPI ERR';
-  document.getElementById('spi-badge').className='spi-badge '+(state.spiOk?'ok':'err');
-
-  // Fault badge
-  const hasAlert=state.alertStatus!==0||state.supplyAlertStatus!==0||
-    state.channels.some(c=>c.channelAlert!==0);
-  document.getElementById('fault-badge').style.display=hasAlert?'inline':'none';
-
-  // Overview summary
-  document.getElementById('ov-temp-val').textContent=t.toFixed(1);
-  document.getElementById('ov-spi-val').textContent=state.spiOk?'✓ OK':'✗ ERR';
-  document.getElementById('ov-spi-tile').className='summary-tile '+(state.spiOk?'ok':'fault');
-  const alertCount=countBits(state.alertStatus)+countBits(state.supplyAlertStatus);
-  document.getElementById('ov-alert-val').textContent=alertCount||'None';
-  document.getElementById('ov-alert-tile').className='summary-tile '+(alertCount?'fault':'ok');
-  document.getElementById('ov-supply-val').textContent=state.supplyAlertStatus?'⚠ ERR':'✓ OK';
-  document.getElementById('ov-supply-tile').className='summary-tile '+(state.supplyAlertStatus?'fault':'ok');
-
-  // Channels
-  state.channels.forEach((ch,i)=>{
-    const fn=ch.function;
-    const fnClass=getFnClass(fn);
-    const fnShort=getFnShort(fn);
-    const isVin=fn==='VIN';
-    const isIin=fn==='IIN_EXT_PWR'||fn==='IIN_LOOP_PWR'||fn==='IIN_EXT_PWR_HART'||fn==='IIN_LOOP_PWR_HART';
-    const isVout=fn==='VOUT';
-    const isIout=fn==='IOUT'||fn==='IOUT_HART';
-    const isDin=fn==='DIN_LOGIC'||fn==='DIN_LOOP';
-    const isDout=false; // no specific dout function name — handled by DO set
-
-    // Update function selector in overview
-    const fnSel=document.getElementById(`ov-fn-sel-${i}`);
-    const fnInt=Object.entries(FN_MAP).find(([k,v])=>v===fn);
-    if(fnSel&&fnInt) fnSel.value=fnInt[0];
-
-    // Overview badges
-    ['ov','adc','vdac','idac','din-fn','dout-fn'].forEach(prefix=>{
-      const el=document.getElementById(`${prefix}-fn-badge-${i}`) || document.getElementById(`${prefix.replace('-fn','')}-fn-badge-${i}`);
-    });
-    setBadge(`ov-fn-badge-${i}`,fnShort,fnClass);
-    setBadge(`adc-fn-badge-${i}`,fnShort,fnClass);
-    setBadge(`vdac-fn-badge-${i}`,fnShort,fnClass);
-    setBadge(`idac-fn-badge-${i}`,fnShort,fnClass);
-    setBadge(`din-fn-badge-${i}`,fnShort,fnClass);
-    setBadge(`dout-fn-badge-${i}`,fnShort,fnClass);
-
-    // Dim irrelevant cards
-    const vdacCard=document.getElementById(`vdac-ch-${i}`);
-    const idacCard=document.getElementById(`idac-ch-${i}`);
-    const dinCard=document.getElementById(`din-ch-${i}`);
-    const doutCard=document.getElementById(`dout-ch-${i}`);
-    if(vdacCard) vdacCard.classList.toggle('dimmed',!isVout);
-    if(idacCard) idacCard.classList.toggle('dimmed',!isIout);
-    if(dinCard)  dinCard.classList.toggle('dimmed',!isDin);
-    if(doutCard) doutCard.classList.toggle('dimmed',false); // always allow DO
-
-    // Values
-    let dispVal, dispUnit, pct=0;
-    const r=ch.adcRange;
-    const rMin=ADC_RANGE_MIN[r]||0;
-    const rMax=ADC_RANGE_MAX[r]||12;
-    if(isIin){
-      dispVal=(ch.adcValue*1000).toFixed(3);dispUnit='mA';
-      pct=Math.max(0,Math.min(100,(ch.adcValue*1000/25)*100));
-    }else if(isDin){
-      dispVal=ch.dinState?'1':'0';dispUnit='';
-      pct=ch.dinState?100:0;
-    }else{
-      dispVal=ch.adcValue.toFixed(4);dispUnit='V';
-      pct=Math.max(0,Math.min(100,((ch.adcValue-rMin)/(rMax-rMin))*100));
-    }
-
-    const ovValEl=document.getElementById(`ov-val-${i}`);
-    if(ovValEl){
-      const newHtml=`${dispVal}<span class="unit">${dispUnit}</span>`;
-      if(ovValEl.innerHTML!==newHtml){
-        ovValEl.innerHTML=newHtml;
-        ovValEl.classList.remove('updated');
-        void ovValEl.offsetWidth;
-        ovValEl.classList.add('updated');
-      }
-    }
-    setBar(`ov-bar-${i}`,pct);
-
-    // ADC tab
-    const adcValEl=document.getElementById(`adc-val-${i}`);
-    if(adcValEl){
-      const newV=(isIin?(ch.adcValue*1000).toFixed(3):ch.adcValue.toFixed(4));
-      const newU=isIin?'mA':'V';
-      adcValEl.innerHTML=`${newV}<span class="unit">${newU}</span>`;
-    }
-    setEl(`adc-raw-${i}`, `0x${ch.adcRaw.toString(16).toUpperCase().padStart(4,'0')}`);
-    setEl(`adc-code-${i}`, ch.adcRaw);
-    setBar(`adc-bar-${i}`,pct);
-    setEl(`adc-range-min-${i}`,rMin+'V');
-    setEl(`adc-range-max-${i}`,rMax+'V');
-    const adcRangeSel=document.getElementById(`adc-range-${i}`);
-    const adcRateSel=document.getElementById(`adc-rate-${i}`);
-    const adcMuxSel=document.getElementById(`adc-mux-${i}`);
-    if(adcRangeSel&&adcRangeSel!==document.activeElement) adcRangeSel.value=ch.adcRange;
-    if(adcRateSel&&adcRateSel!==document.activeElement)   adcRateSel.value=ch.adcRate;
-    if(adcMuxSel&&adcMuxSel!==document.activeElement)     adcMuxSel.value=ch.adcMux;
-
-    // VDAC tab (only update if not being edited)
-    const dacDirty = ch.dacDirty && (Date.now() - ch.dacDirty < 5000);
-    if(isVout){
-      if(!dacDirty){
-        const vdacValEl=document.getElementById(`vdac-val-${i}`);
-        const numEl=document.getElementById(`vdac-num-${i}`);
-        if(vdacValEl) vdacValEl.innerHTML=`${ch.dacValue.toFixed(3)}<span class="unit">V</span>`;
-        if(numEl&&numEl!==document.activeElement) numEl.value=ch.dacValue.toFixed(3);
-        setEl(`vdac-code-${i}`,ch.dacCode);
-      }
-      const bp=vdacBipolar[i];
-      const minV=bp?-12:0;
-      const pv=Math.max(0,Math.min(100,((ch.dacValue-minV)/(12-minV))*100));
-      setBar(`vdac-bar-${i}`,pv);
-    }
-
-    // IDAC tab
-    if(isIout){
-      if(!dacDirty){
-        const idacValEl=document.getElementById(`idac-val-${i}`);
-        const mA=ch.dacValue;
-        if(idacValEl) idacValEl.innerHTML=`${mA.toFixed(3)}<span class="unit">mA</span>`;
-        const numEl=document.getElementById(`idac-num-${i}`);
-        if(numEl&&numEl!==document.activeElement) numEl.value=mA.toFixed(3);
-        setEl(`idac-code-${i}`,ch.dacCode);
-      }
-      setBar(`idac-bar-${i}`,Math.max(0,Math.min(100,(ch.dacValue/25)*100)));
-      // Show compliance voltage and calculated load resistance
-      const voutEl=document.getElementById(`idac-vout-${i}`);
-      const rloadEl=document.getElementById(`idac-rload-${i}`);
-      if(voutEl){
-        const vOut=ch.adcValue; // In IOUT mode, adcValue is compliance voltage (V)
-        voutEl.textContent=vOut.toFixed(3)+' V';
-        if(rloadEl){
-          const iA=ch.dacValue/1000; // mA → A
-          if(iA>0.0001){
-            const rOhm=vOut/iA;
-            rloadEl.textContent=rOhm>=1000?(rOhm/1000).toFixed(2)+' kΩ':rOhm.toFixed(1)+' Ω';
-          } else {
-            rloadEl.textContent='--';
-          }
-        }
-      }
-    }
-
-    // DIN
-    const dinLed=document.getElementById(`din-led-${i}`);
-    const dinLabel=document.getElementById(`din-state-label-${i}`);
-    if(dinLed){dinLed.classList.toggle('on',ch.dinState);dinLed.classList.toggle('off',!ch.dinState)}
-    if(dinLabel) dinLabel.textContent=ch.dinState?'ON':'OFF';
-    setEl(`din-counter-${i}`,ch.dinCounter);
-
-    // DOUT
-    const dBtn=document.getElementById(`dout-btn-${i}`);
-    const dBtnLabel=document.getElementById(`dout-btn-label-${i}`);
-    const dBtnIcon=document.getElementById(`dout-btn-icon-${i}`);
-    if(dBtn){
-      dBtn.classList.toggle('on',ch.doState);
-      if(dBtnLabel) dBtnLabel.textContent=ch.doState?'ON':'OFF';
-      if(dBtnIcon)  dBtnIcon.textContent=ch.doState?'●':'○';
-    }
-
-    // Channel alerts on fault cards
-    CH_ALERT_BITS.forEach(b=>{
-      const active=!!(ch.channelAlert&(1<<b.bit));
-      const masked=!!(ch.channelAlertMask&(1<<b.bit));
-      setLed(`fault-ch-led-${i}-${b.bit}`,active,b.color);
-      const item=document.getElementById(`fault-ch-${i}-${b.bit}`);
-      if(item) item.classList.toggle('masked',masked);
-    });
-  });
-
-  // Global alert LEDs
-  GLOBAL_ALERT_BITS.forEach(b=>{
-    const active=!!(state.alertStatus&(1<<b.bit));
-    const masked=!!(state.alertMask&(1<<b.bit));
-    setLed(`fault-g-led-${b.bit}`,active,b.color);
-    setLed(`diag-a-${b.bit}`,active,b.color);
-    const item=document.getElementById(`fault-g-${b.bit}`);
-    if(item) item.classList.toggle('masked',masked);
-  });
-
-  // Supply alert LEDs
-  SUPPLY_ALERT_BITS.forEach(b=>{
-    const active=!!(state.supplyAlertStatus&(1<<b.bit));
-    const masked=!!(state.supplyAlertMask&(1<<b.bit));
-    setLed(`fault-s-led-${b.bit}`,active,b.color);
-    setLed(`diag-s-${b.bit}`,active,b.color);
-    const item=document.getElementById(`fault-s-${b.bit}`);
-    if(item) item.classList.toggle('masked',masked);
-  });
-
-  // Live status
-  LIVE_STATUS_BITS.forEach(b=>{
-    setLed(`live-${b.bit}`,!!(state.liveStatus&(1<<b.bit)),'blue');
-  });
-
-  // Diagnostics thermometer
-  document.getElementById('diag-temp-val').textContent=state.dieTemp.toFixed(1);
-  const pctTherm=Math.max(0,Math.min(100,((state.dieTemp+25)/150)*100));
-  const thermFill=document.getElementById('diag-therm-fill');
-  if(thermFill) thermFill.style.height=pctTherm+'%';
-  const diagTs=document.getElementById('diag-temp-status');
-  if(diagTs){
-    if(state.dieTemp>100){diagTs.className='fn-badge iout';diagTs.textContent='HOT'}
-    else if(state.dieTemp>70){diagTs.className='fn-badge iin';diagTs.textContent='Warm'}
-    else{diagTs.className='fn-badge vin';diagTs.textContent='Normal'}
-  }
-
-  // Diagnostic slot cards
-  state.diag.forEach((ds,s)=>{
-    // Sync source selector from state
-    const srcSel=document.getElementById(`diag-src-sel-${s}`);
-    if(srcSel&&srcSel!==document.activeElement) srcSel.value=ds.source;
-    const valEl=document.getElementById(`diag-slot-val-${s}`);
-    const unitEl=document.getElementById(`diag-slot-unit-${s}`);
-    const rawEl=document.getElementById(`diag-slot-raw-${s}`);
-    const barEl=document.getElementById(`diag-slot-bar-${s}`);
-    if(valEl){
-      const prec=ds.unit==='C'?1:3;
-      valEl.innerHTML=`${ds.value.toFixed(prec)}<span class="unit">${ds.unit}</span>`;
-    }
-    if(rawEl) rawEl.textContent=`raw: 0x${ds.raw.toString(16).toUpperCase().padStart(4,'0')} (${ds.raw})`;
-    if(barEl){
-      const info=DIAG_SOURCES.find(d=>d.code===ds.source);
-      if(info&&info.range>0){
-        const pct=Math.max(0,Math.min(100,Math.abs(ds.value-info.expect)/(info.range)*100));
-        const ok=pct<80;
-        barEl.style.width=(100-pct)+'%';
-        barEl.className='bar-fill '+(ok?'green':'amber');
-      }
-    }
-  });
-
-  // GPIO
-  updateGPIO();
-
-  // UART
-  updateUART();
-
-  // Masks - sync checkboxes from state (only if not just edited)
-  document.querySelectorAll('[data-masktype=global]').forEach(el=>{
-    el.checked=!!(state.alertMask&(1<<el.dataset.bit));
-  });
-  document.querySelectorAll('[data-masktype=supply]').forEach(el=>{
-    el.checked=!!(state.supplyAlertMask&(1<<el.dataset.bit));
-  });
-  document.querySelectorAll('[data-masktype=ch]').forEach(el=>{
-    const i=parseInt(el.dataset.ch);
-    el.checked=!!(state.channels[i].channelAlertMask&(1<<el.dataset.bit));
-  });
-}
-
-// ============================================================
-// HELPERS
-// ============================================================
-function setEl(id,val){const e=document.getElementById(id);if(e)e.textContent=val}
-function setBar(id,pct){const e=document.getElementById(id);if(e)e.style.width=Math.max(0,Math.min(100,pct))+'%'}
-function setLed(id,active,color){
-  const e=document.getElementById(id);
-  if(!e)return;
-  e.className='led '+(active?`on ${color}`:'off');
-}
-function setBadge(id,text,cls){
-  const e=document.getElementById(id);
-  if(!e)return;
-  e.className=`fn-badge ${cls}`;
-  e.textContent=text;
-}
-function countBits(n){let c=0;while(n){c+=n&1;n>>>=1}return c}
-
-// ============================================================
-// TOAST
-// ============================================================
-function toast(type,msg){
-  const c=document.getElementById('toast-container');
-  const d=document.createElement('div');
-  const icons={ok:'✓',err:'✕',info:'ℹ'};
-  d.className=`toast ${type}`;
-  d.innerHTML=`<span>${icons[type]||'•'}</span><span>${msg}</span>`;
-  c.appendChild(d);
-  setTimeout(()=>d.remove(),3200);
-}
-
-// ============================================================
-// POLLING
-// ============================================================
-let pollInterval=null;
-let failCount=0;
-
-let diagPollCount=0;
-async function poll(){
-  try{
-    const r=await fetch('/api/status',{cache:'no-store'});
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d=await r.json();
-    failCount=0;
-    if(!state.connected){
-      state.connected=true;
-      document.getElementById('conn-dot').className='ok';
-      document.getElementById('conn-label').textContent='Connected';
-    }
-    // Merge state
-    state.spiOk=d.spiOk??state.spiOk;
-    state.dieTemp=d.dieTemp??state.dieTemp;
-    state.alertStatus=d.alertStatus??0;
-    state.alertMask=d.alertMask??0;
-    state.supplyAlertStatus=d.supplyAlertStatus??0;
-    state.supplyAlertMask=d.supplyAlertMask??0;
-    state.liveStatus=d.liveStatus??0;
-    if(Array.isArray(d.channels)){
-      d.channels.forEach((ch,i)=>{
-        if(i<4){
-          const dirty = state.channels[i].dacDirty && (Date.now() - state.channels[i].dacDirty < 5000);
-          if(dirty){
-            const {dacValue, dacCode, ...rest} = ch;
-            Object.assign(state.channels[i], rest);
-          } else {
-            Object.assign(state.channels[i], ch);
-          }
-        }
-      });
-    }
-
-    // Poll diagnostics every 4th cycle (~2s)
-    diagPollCount++;
-    if(diagPollCount%4===0){
-      try{
-        const dr=await fetch('/api/diagnostics',{cache:'no-store'});
-        if(dr.ok){
-          const dd=await dr.json();
-          if(Array.isArray(dd.slots)){
-            dd.slots.forEach((s,i)=>{
-              if(i<4){
-                const diagDirty = state.diag[i].dirty && (Date.now() - state.diag[i].dirty < 2000);
-                if(diagDirty){
-                  const {source, sourceName, ...rest} = s;
-                  Object.assign(state.diag[i], rest);
-                } else {
-                  Object.assign(state.diag[i], s);
-                }
-              }
-            });
-          }
-        }
-      }catch(e){}
-      // Poll GPIO on same cadence
-      try{
-        const gr=await fetch('/api/gpio',{cache:'no-store'});
-        if(gr.ok){
-          const gd=await gr.json();
-          if(Array.isArray(gd.gpios)){
-            gd.gpios.forEach((g,i)=>{
-              if(i<6) Object.assign(state.gpio[i],g);
-            });
-          }
-        }
-      }catch(e){}
-      // Poll UART on same cadence
-      try{
-        const ur=await fetch('/api/uart/config',{cache:'no-store'});
-        if(ur.ok){
-          const ud=await ur.json();
-          if(Array.isArray(ud.bridges)) state.uart.bridges=ud.bridges;
-        }
-      }catch(e){}
-    }
-
-    updateAll();
-  }catch(e){
-    failCount++;
-    if(failCount===1||state.connected){
-      state.connected=false;
-      document.getElementById('conn-dot').className='';
-      document.getElementById('conn-label').textContent='Disconnected';
-    }
-  }
-}
-
-function startPolling(){
-  poll();
-  pollInterval=setInterval(poll,500);
-  // Dedicated scope polling (faster than main poll)
-  setInterval(scopePoll, 50);
-}
-
-let scopeLastDraw=0;
-let scopeSeq=0;
-let scopeNewestT=0;    // newest server timestamp seen
-let scopeBusy=false;
-async function scopePoll(){
-  if(!scope.running || scopeBusy) return;
-  const scopeTab=document.getElementById('tab-scope');
-  if(!scopeTab || !scopeTab.classList.contains('active')) return;
-  scopeBusy=true;
-  try{
-    const r=await fetch(`/api/scope?since=${scopeSeq}`,{cache:'no-store'});
-    if(!r.ok){scopeBusy=false;return;}
-    const d=await r.json();
-    if(d.seq!==undefined){
-      const prevSeq=scopeSeq;
-      scopeSeq=d.seq;
-      if(prevSeq===0){scopeBusy=false;return;}
-    }
-    if(!Array.isArray(d.s)||d.s.length===0){scopeBusy=false;return;}
-    // Store raw server timestamps - offset computed at draw time only
-    for(const bk of d.s){
-      const st=bk[0]; // server timestamp ms
-      if(st>scopeNewestT) scopeNewestT=st;
-      for(let i=0;i<4;i++){
-        if(!scope.channels[i]) continue;
-        scope.data[i].push({st, v:bk[1+i], mn:bk[5+i*2], mx:bk[6+i*2]});
-      }
-    }
-    // Trim: remove points older than window (in server time)
-    const serverCutoff=scopeNewestT - scope.window*1000;
-    const maxPts=8000;
-    for(let i=0;i<4;i++){
-      while(scope.data[i].length>0&&scope.data[i][0].st<serverCutoff) scope.data[i].shift();
-      if(scope.data[i].length>maxPts) scope.data[i].splice(0,scope.data[i].length-maxPts);
-    }
-    const now=Date.now();
-    if(now-scopeLastDraw>33){scopeLastDraw=now;drawScope();}
-  }catch(e){}
-  scopeBusy=false;
-}
-
-// ============================================================
-// BOOT
-// ============================================================
-initUI();
-startPolling();
+}}
 </script>
 </body>
 </html>
