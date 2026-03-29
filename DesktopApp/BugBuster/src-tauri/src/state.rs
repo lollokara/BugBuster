@@ -102,6 +102,15 @@ impl DeviceState {
             }
         }
 
+        // MUX switch states (4 bytes)
+        for m in 0..4 {
+            if let Some(v) = r.get_u8() {
+                if m < state.mux_states.len() {
+                    state.mux_states[m] = v;
+                }
+            }
+        }
+
         Some(state)
     }
 }

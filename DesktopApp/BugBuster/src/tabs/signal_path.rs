@@ -88,11 +88,10 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (oe, set_oe) = signal(false); // Level shifter OE (UI-only, ESP32 GPIO14)
     let cr = NodeRef::<leptos::html::Canvas>::new();
 
-    // Sync MUX state from device-state event (only if non-zero, since GET_STATUS
-    // doesn't include mux states — they stay [0,0,0,0] in the poll response)
+    // Sync MUX state from device-state event
     Effect::new(move || {
         let d = state.get();
-        if d.mux_states.len() >= 4 && d.mux_states.iter().any(|&s| s != 0) {
+        if d.mux_states.len() >= 4 {
             let mut a = [0u8; 4]; a.copy_from_slice(&d.mux_states[..4]); set_mux.set(a);
         }
     });
@@ -472,6 +471,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content signal-path-tab">
+            <div class="tab-desc">"Interactive signal routing matrix. Click switches inside the MUX to connect GPIOs, ADC channels, or external inputs to the output connectors. Only one switch per group (S1-S4, S5-S6, S7-S8) can be active at a time."</div>
             <div class="sp-toolbar">
                 <span class="sp-title">"Signal Path"</span>
                 <div class="sp-presets">
@@ -481,7 +481,14 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 </div>
                 <div class="sp-psu-controls">
                     <button class="sp-oe-btn" class:sp-oe-on=move || oe.get()
-                        on:click=move |_| set_oe.update(|v| *v = !*v)
+                        on:click=move |_| {
+                            set_oe.update(|v| *v = !*v);
+                            let new_val = oe.get_untracked();
+                            #[derive(serde::Serialize)]
+                            struct Args { on: bool }
+                            let args = serde_wasm_bindgen::to_value(&Args { on: new_val }).unwrap();
+                            invoke_void("set_lshift_oe", args);
+                        }
                     >"LShift OE"</button>
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[0]
                         on:click=move |_| {

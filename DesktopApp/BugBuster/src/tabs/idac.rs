@@ -9,6 +9,7 @@ pub fn IdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"Current output control. Set each channel to IOUT mode to output a programmable current (0-25 mA). Used for driving 4-20 mA current loops."</div>
             <div class="channel-grid-wide">
                 {move || {
                     let ds = state.get();

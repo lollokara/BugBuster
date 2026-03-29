@@ -21,6 +21,7 @@ fn send_adc_cfg(ch: u8, mux: u8, range: u8, rate: u8) {
 pub fn IinTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"Current input measurement. Set channels to IIN External (device measures, external loop power) or IIN Loop (device powers the loop and measures). Reads 0-25 mA."</div>
             <div class="channel-grid-wide">
                 {move || {
                     let ds = state.get();

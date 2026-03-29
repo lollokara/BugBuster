@@ -1634,6 +1634,19 @@ static esp_err_t handle_cal_post_dispatch(httpd_req_t *req)
     return send_error(req, 404, "Unknown calibration endpoint");
 }
 
+// POST /api/lshift/oe  body: {"on":true}
+static esp_err_t handle_post_lshift_oe(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    bool on = cJSON_GetObjectItem(body, "on") ? cJSON_IsTrue(cJSON_GetObjectItem(body, "on")) : false;
+    cJSON_Delete(body);
+    pin_write(PIN_LSHIFT_OE, on ? 1 : 0);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "on", on);
+    return send_json(req, root);
+}
+
 // =============================================================================
 // Server init / stop
 // =============================================================================
@@ -1814,6 +1827,13 @@ void initWebServer(void)
         .uri = "/api/idac/cal/*", .method = HTTP_POST, .handler = handle_cal_post_dispatch, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_cal_post);
+
+    // ----- Level Shifter OE -----
+
+    httpd_uri_t uri_lshift = {
+        .uri = "/api/lshift/oe", .method = HTTP_POST, .handler = handle_post_lshift_oe, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_lshift);
 
     // ----- Wavegen routes -----
 

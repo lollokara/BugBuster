@@ -109,6 +109,9 @@ pub const CMD_USBPD_GET_STATUS: u8 = 0xC0;
 pub const CMD_USBPD_SELECT_PDO: u8 = 0xC1;
 pub const CMD_USBPD_GO: u8 = 0xC2;
 
+// Level Shifter
+pub const CMD_SET_LSHIFT_OE: u8 = 0xE0;
+
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;
 pub const CMD_REG_READ: u8 = 0x71;

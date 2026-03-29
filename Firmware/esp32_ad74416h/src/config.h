@@ -29,12 +29,24 @@
 #define PIN_ALERT       GPIO_NUM_7    // Open-drain, active low - fault/alert output
 
 // -----------------------------------------------------------------------------
+// BREADBOARD_MODE: Set to 1 for breadboard testing, 0 for final PCB
+// Changes: I2C pins, MUX CS pin, device count, I2C speed
+// -----------------------------------------------------------------------------
+#define BREADBOARD_MODE  1
+
+// -----------------------------------------------------------------------------
 // I2C Bus Pins (shared bus: DS4424, HUSB238, PCA9535)
 // -----------------------------------------------------------------------------
-#define PIN_I2C_SDA     GPIO_NUM_1    // TEMP: was GPIO_NUM_42
-#define PIN_I2C_SCL     GPIO_NUM_4    // TEMP: was GPIO_NUM_41
+#if BREADBOARD_MODE
+#define PIN_I2C_SDA     GPIO_NUM_1    // Breadboard: GPIO1
+#define PIN_I2C_SCL     GPIO_NUM_4    // Breadboard: GPIO4
+#define I2C_FREQ_HZ     100000        // 100 kHz (breadboard safe)
+#else
+#define PIN_I2C_SDA     GPIO_NUM_42   // PCB: ESP_SDA
+#define PIN_I2C_SCL     GPIO_NUM_41   // PCB: ESP_SCL
+#define I2C_FREQ_HZ     400000        // 400 kHz Fast Mode
+#endif
 #define I2C_PORT_NUM    I2C_NUM_0
-#define I2C_FREQ_HZ     100000        // 100 kHz Standard Mode (TEMP: was 400kHz)
 
 // I2C Device Addresses (7-bit)
 #define DS4424_I2C_ADDR     0x10      // A0=GND, A1=GND (7-bit: 0x10, 8-bit: 0x20)
@@ -47,10 +59,15 @@
 // -----------------------------------------------------------------------------
 // ADGS2414D Mux Switch Matrix
 // -----------------------------------------------------------------------------
-#define PIN_MUX_CS      GPIO_NUM_12   // TEMP: was GPIO_NUM_21
+#if BREADBOARD_MODE
+#define PIN_MUX_CS      GPIO_NUM_12   // Breadboard: GPIO12
+#define ADGS_NUM_DEVICES   1          // Single device on breadboard
+#else
+#define PIN_MUX_CS      GPIO_NUM_21   // PCB: SPI_CS_MUX
+#define ADGS_NUM_DEVICES   4          // 4x daisy-chain on PCB
+#endif
 #define PIN_LSHIFT_OE   GPIO_NUM_14   // Level shifter OE (TXS0108E U13+U15)
 
-#define ADGS_NUM_DEVICES   1    // TEMP: was 4 (single device on breadboard)
 #define ADGS_NUM_SWITCHES  8
 #define ADGS_DEAD_TIME_MS  100  // Dead time between switch-off and switch-on
 

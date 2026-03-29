@@ -128,6 +128,7 @@ pub fn WavegenTab() -> impl IntoView {
 
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"Waveform generator. Outputs sine, square, triangle, or sawtooth waveforms through the DAC. Select a channel, set frequency (0.01-100 Hz), amplitude, and offset. The channel is automatically set to VOUT or IOUT mode."</div>
             <div class="wavegen-layout">
                 <div class="card wavegen-controls">
                     <div class="card-header"><span>"Waveform Generator"</span></div>

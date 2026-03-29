@@ -34,6 +34,7 @@ pub fn FaultsTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content fault-tab">
+            <div class="tab-desc">"AD74416H fault and alert monitoring. Shows global and per-channel alert flags. Clear individual or all alerts. Monitor for overcurrent, open-wire, and thermal faults."</div>
             // Top bar
             <div class="fault-topbar">
                 <div class="fault-indicator-big"

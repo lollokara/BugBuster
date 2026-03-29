@@ -10,6 +10,7 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"Voltage output control. Set each channel to VOUT mode to output a programmable voltage (0-12V unipolar or +/-12V bipolar). Use the slider or type a value and click SET."</div>
             <div class="channel-grid-wide">
                 {move || {
                     let ds = state.get();

@@ -10,6 +10,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"Device status dashboard. Set each channel's function mode and monitor live ADC/DAC values. SPI health and die temperature shown in the header."</div>
             // Summary banner
             <div class="summary-banner">
                 <div class="summary-item">

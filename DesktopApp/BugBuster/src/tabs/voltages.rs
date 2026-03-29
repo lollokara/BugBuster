@@ -34,6 +34,7 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"DS4424 IDAC voltage regulator control. Adjusts the output voltage of the DCDC converters (V_ADJ1, V_ADJ2) and the level shifter voltage by injecting current into the feedback network. Calibrate first for accurate voltage setting."</div>
             {move || {
                 let st = idac.get();
                 if !st.present {

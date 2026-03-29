@@ -44,6 +44,7 @@ pub fn UartTab(
 
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"UART bridge configuration. Maps ESP32 hardware UARTs to GPIO pins for transparent serial communication between USB CDC and external devices. Set baud rate, parity, and pin assignments."</div>
             <div class="uart-layout">
                 <div class="card uart-card">
                     <div class="card-header">

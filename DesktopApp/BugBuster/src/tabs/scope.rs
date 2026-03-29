@@ -15,10 +15,22 @@ struct ScopePoint {
     value: f32,
 }
 
-/// Convert 24-bit raw ADC code to voltage (0-12V unipolar range)
-fn raw_to_voltage(raw: u32, range: u8) -> f32 {
+/// Convert 24-bit raw ADC code to a value based on channel function and ADC range.
+/// For current-input modes (function 4, 5, 11, 12) the ADC code maps to 0-25 mA.
+/// For current-output modes (function 2, 10) the ADC reads compliance voltage, so
+/// we fall through to the normal voltage conversion.
+/// All other modes use the standard voltage ADC ranges.
+fn raw_to_value(raw: u32, range: u8, function: u8) -> f32 {
     let code = raw as f32;
     let full_scale = 16777216.0f32; // 2^24
+
+    // Current-input modes: ADC code represents 0-25 mA
+    match function {
+        4 | 5 | 11 | 12 => return code / full_scale * 25.0,
+        _ => {}
+    }
+
+    // Voltage (and current-output compliance voltage) conversion
     match range {
         0 => code / full_scale * 12.0,                          // 0..12V
         1 => (code / full_scale * 24.0) - 12.0,                // -12..12V
@@ -93,10 +105,13 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let now = js_sys::Date::now();
             let ch_en = channels_en.get_untracked();
 
-            // Get ADC ranges from device state for conversion
+            // Get ADC ranges and function codes from device state for conversion
             let ds = state.get_untracked();
             let ranges: [u8; 4] = std::array::from_fn(|i| {
                 if i < ds.channels.len() { ds.channels[i].adc_range } else { 0 }
+            });
+            let functions: [u8; 4] = std::array::from_fn(|i| {
+                if i < ds.channels.len() { ds.channels[i].function } else { 0 }
             });
 
             // Determine time step between samples (spread evenly across batch)
@@ -106,7 +121,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let t = now - (samples.len() - 1 - si) as f64 * batch_dt;
                 for ch in 0..4 {
                     if ch_en[ch] && (mask & (1 << ch)) != 0 {
-                        let v = raw_to_voltage(raw[ch], ranges[ch]);
+                        let v = raw_to_value(raw[ch], ranges[ch], functions[ch]);
                         scope_data[ch].update(|data| {
                             data.push(ScopePoint { time_ms: t, value: v });
                         });
@@ -338,6 +353,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content scope-tab">
+            <div class="tab-desc">"Real-time oscilloscope. Polls ADC scope buckets (min/max/avg per 10ms window) and plots waveforms on canvas. Enable channels, set time window and Y-range."</div>
             <div class="scope-toolbar">
                 {(0..4).map(|ch| {
                     view! {

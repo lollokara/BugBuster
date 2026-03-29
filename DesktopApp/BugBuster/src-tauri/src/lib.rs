@@ -60,6 +60,8 @@ pub fn run() {
             // Waveform Generator
             commands::start_wavegen,
             commands::stop_wavegen,
+            // Level Shifter
+            commands::set_lshift_oe,
             // DS4424 IDAC
             commands::idac_get_status,
             commands::idac_set_code,

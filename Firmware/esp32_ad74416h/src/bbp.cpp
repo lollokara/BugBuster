@@ -301,6 +301,15 @@ static int handleGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_f32(out, &pos, g_deviceState.diag[d].value);
     }
 
+    // MUX switch states
+    for (uint8_t m = 0; m < ADGS_NUM_DEVICES; m++) {
+        put_u8(out, &pos, g_deviceState.muxState[m]);
+    }
+    // Pad to 4 if fewer devices
+    for (uint8_t m = ADGS_NUM_DEVICES; m < 4; m++) {
+        put_u8(out, &pos, 0);
+    }
+
     xSemaphoreGive(g_stateMutex);
     return (int)pos;
 }
@@ -1233,6 +1242,17 @@ static int handleMuxSetSwitch(uint16_t seq, uint8_t cmdId,
     return 3;
 }
 
+static int handleSetLshiftOe(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    bool on = payload[0] != 0;
+    pin_write(PIN_LSHIFT_OE, on ? 1 : 0);
+    ESP_LOGI(TAG, "Level shifter OE = %s", on ? "ON" : "OFF");
+    out[0] = on ? 1 : 0;
+    return 1;
+}
+
 static int handlePing(uint16_t seq, uint8_t cmdId,
                        const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -1659,6 +1679,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_REG_WRITE:
             rspLen = handleRegWrite(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_SET_LSHIFT_OE:
+            rspLen = handleSetLshiftOe(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_PING:
             rspLen = handlePing(seq, cmdId, payload, payloadLen, rspBuf);

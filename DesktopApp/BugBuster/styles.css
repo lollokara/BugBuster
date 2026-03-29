@@ -80,6 +80,7 @@
 /* ---- Content ---- */
 .tab-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .tab-content { animation: fadeIn 0.2s; }
+.tab-desc { font-size: 11px; color: var(--text-dim); background: var(--glass); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; line-height: 1.6; }
 .content { padding: 24px; max-width: 1400px; margin: 0 auto; }
 
 /* ---- Cards ---- */

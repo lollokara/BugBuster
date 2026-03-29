@@ -269,6 +269,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"DS4424 IDAC calibration wizard. Measures the actual midpoint voltage of each DCDC output, then calculates per-step voltage increments for accurate voltage control. Run calibration after power-on."</div>
             {move || {
                 let st = step.get();
                 match st {

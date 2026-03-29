@@ -54,6 +54,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 .fault-bit.set{background:rgba(239,68,68,0.15);color:var(--rose)}
 .status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 @media(max-width:640px){.grid-4,.grid-3,.grid-2{grid-template-columns:1fr}.big-val{font-size:22px}}
+@keyframes toast-in{from{opacity:0;transform:translateX(100%)}to{opacity:1;transform:translateX(0)}}
+@keyframes toast-out{from{opacity:1;transform:translateX(0)}to{opacity:0;transform:translateX(100%)}}
+.toast-enter{animation:toast-in 0.25s ease-out forwards}
+.toast-leave{animation:toast-out 0.25s ease-in forwards}
 </style>
 </head>
 <body>
@@ -88,6 +92,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <div class="flex-1 p-4 overflow-y-auto">
 <!-- Overview -->
 <div x-show="tab==='Overview'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Device status dashboard. Set each channel's function mode and monitor live ADC/DAC values. SPI health and die temperature shown in the header.</div>
 <div class="grid-4">
 <template x-for="(ch,i) in st.channels" :key="i">
 <div class="card">
@@ -118,6 +123,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- ADC -->
 <div x-show="tab==='ADC'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Analog-to-Digital Converter readings for all 4 channels. Configure the ADC range, sampling rate, and input multiplexer per channel. Values update in real-time.</div>
 <div class="grid-4">
 <template x-for="(ch,i) in st.channels" :key="i">
 <div class="card">
@@ -151,6 +157,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- Diagnostics -->
 <div x-show="tab==='Diagnostics'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Internal diagnostic ADC channels. Select what to measure per slot: die temperature, supply voltages (DVCC, AVCC, AVDD), or sense voltages. Useful for verifying power rail health.</div>
 <div class="grid-4">
 <template x-for="(d,i) in diag.slots" :key="i">
 <div class="card">
@@ -174,6 +181,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- VDAC -->
 <div x-show="tab==='VDAC'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Voltage output control. Set each channel to VOUT mode to output a programmable voltage (0-12V unipolar or +/-12V bipolar). Use the slider or type a value and click SET.</div>
 <div class="grid-4">
 <template x-for="(ch,i) in st.channels" :key="i">
 <div class="card" :style="fnCode(ch.function)!=1?'opacity:0.5':''">
@@ -226,6 +234,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- IDAC -->
 <div x-show="tab==='IDAC'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Current output control. Set each channel to IOUT mode to output a programmable current (0-25 mA). Used for driving 4-20 mA current loops.</div>
 <div class="grid-4">
 <template x-for="(ch,i) in st.channels" :key="i">
 <div class="card" :style="(fnCode(ch.function)!=2&&fnCode(ch.function)!=10)?'opacity:0.5':''">
@@ -268,6 +277,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- IIN -->
 <div x-show="tab==='IIN'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Current input measurement. Set channels to IIN External (device measures, external loop power) or IIN Loop (device powers the loop and measures). Reads 0-25 mA.</div>
 <div class="grid-4">
 <template x-for="(ch,i) in st.channels" :key="i">
 <div class="card">
@@ -327,6 +337,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- Signal Path -->
 <div x-show="tab==='Signal Path'" x-cloak x-effect="if(tab==='Signal Path')setTimeout(()=>drawSig(),50)">
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Interactive signal routing matrix. Click switches inside the MUX to connect GPIOs, ADC channels, or external inputs to the output connectors. Only one switch per group (S1-S4, S5-S6, S7-S8) can be active at a time.</div>
 <!-- Preset buttons + PSU/EFuse controls -->
 <div class="flex flex-wrap gap-2 mb-3 items-center">
 <button class="btn text-xs" @click="mux.states=[0,0,0,0];postJSON('/api/mux/all',{states:[0,0,0,0]}).catch(()=>{});drawSig()">All Open</button>
@@ -335,11 +346,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <button class="btn text-xs" @click="mux.states=[0x08,0x08,0x08,0x08];postJSON('/api/mux/all',{states:[0x08,0x08,0x08,0x08]}).catch(()=>{});drawSig()">External</button>
 <span style="border-left:1px solid var(--border);height:20px;margin:0 4px"></span>
 <span class="text-xs" style="color:var(--text3)">PSU:</span>
-<button class="btn text-xs" :style="mux.psu[0]?'background:#10b981;color:#000;box-shadow:0 0 12px rgba(16,185,129,0.5)':''" @click="mux.psu[0]=!mux.psu[0];postJSON('/api/ioexp/control',{control:'vadj1',on:mux.psu[0]}).catch(()=>{});drawSig()">V_ADJ1</button>
-<button class="btn text-xs" :style="mux.psu[1]?'background:#06b6d4;color:#000;box-shadow:0 0 12px rgba(6,182,212,0.5)':''" @click="mux.psu[1]=!mux.psu[1];postJSON('/api/ioexp/control',{control:'vadj2',on:mux.psu[1]}).catch(()=>{});drawSig()">V_ADJ2</button>
+<button class="btn text-xs" :style="mux.psu[0]?'background:#10b981;color:#000;box-shadow:0 0 12px rgba(16,185,129,0.5)':''" @click="mux.psu[0]=!mux.psu[0];postJSON('/api/ioexp/control',{control:'vadj1',on:mux.psu[0]}).catch(()=>{});drawSig();toastOk('V_ADJ1 '+(mux.psu[0]?'enabled':'disabled'))">V_ADJ1</button>
+<button class="btn text-xs" :style="mux.psu[1]?'background:#06b6d4;color:#000;box-shadow:0 0 12px rgba(6,182,212,0.5)':''" @click="mux.psu[1]=!mux.psu[1];postJSON('/api/ioexp/control',{control:'vadj2',on:mux.psu[1]}).catch(()=>{});drawSig();toastOk('V_ADJ2 '+(mux.psu[1]?'enabled':'disabled'))">V_ADJ2</button>
 <span class="text-xs" style="color:var(--text3)">EF:</span>
 <template x-for="i in [0,1,2,3]" :key="i">
-<button class="btn text-xs" :style="mux.efuses[i]?'background:'+chColors[i]+';color:#000;box-shadow:0 0 12px '+chColors[i]+'80':''" @click="mux.efuses[i]=!mux.efuses[i];postJSON('/api/ioexp/control',{control:'efuse'+(i+1),on:mux.efuses[i]}).catch(()=>{});drawSig()" x-text="'EF'+(i+1)"></button>
+<button class="btn text-xs" :style="mux.efuses[i]?'background:'+chColors[i]+';color:#000;box-shadow:0 0 12px '+chColors[i]+'80':''" @click="mux.efuses[i]=!mux.efuses[i];postJSON('/api/ioexp/control',{control:'efuse'+(i+1),on:mux.efuses[i]}).catch(()=>{});drawSig();toastOk('E-Fuse '+(i+1)+' '+(mux.efuses[i]?'enabled':'disabled'))" x-text="'EF'+(i+1)"></button>
 </template>
 </div>
 <!-- Legend -->
@@ -358,6 +369,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- Voltages (DS4424) -->
 <div x-show="tab==='Voltages'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">DS4424 IDAC voltage regulator control. Adjusts the output voltage of the DCDC converters (V_ADJ1, V_ADJ2) and the level shifter voltage by injecting current into the feedback network. Calibrate first for accurate voltage setting.</div>
 <template x-if="!idacDev.present">
 <div class="card"><div class="card-b text-center text-sm" style="color:var(--text3)">DS4424 not detected on I2C bus</div></div>
 </template>
@@ -406,6 +418,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- WaveGen -->
 <div x-show="tab==='WaveGen'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Waveform generator. Outputs sine, square, triangle, or sawtooth waveforms through the DAC. Select a channel, set frequency (0.01-100 Hz), amplitude, and offset. The channel is automatically set to VOUT or IOUT mode.</div>
 <div class="grid-2">
 <div class="card">
 <div class="card-h"><span class="text-sm font-bold">Waveform Generator</span></div>
@@ -445,8 +458,34 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 </div>
 </div>
+<!-- Scope -->
+<div x-show="tab==='Scope'" x-cloak x-init="$watch('tab', v => { if(v==='Scope' && !scope.running) scope.running=false })">
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">Real-time oscilloscope. Polls ADC scope buckets (min/max/avg per 10ms window) and plots waveforms on canvas. Enable channels, set time window and Y-range.</div>
+<div class="flex flex-wrap items-center gap-3 mb-3">
+<template x-for="(en,ci) in scope.chEn" :key="ci">
+<label class="flex items-center gap-1 cursor-pointer text-xs mono">
+<input type="checkbox" :checked="en" @change="scope.chEn[ci]=!scope.chEn[ci]">
+<span :style="'color:'+chColors[ci]" x-text="'CH '+chNames[ci]"></span>
+</label>
+</template>
+<span style="border-left:1px solid var(--border);height:20px;margin:0 4px"></span>
+<select x-model="scope.windowSec" class="text-xs">
+<option value="10">10s</option><option value="30" selected>30s</option><option value="60">1min</option>
+</select>
+<select x-model="scope.yRange" class="text-xs">
+<option value="auto">Y: Auto</option><option value="0-12">0-12V</option><option value="pm12">+/-12V</option>
+</select>
+<button class="btn text-xs" :class="scope.running?'btn-rose':'btn-green'" @click="toggleScope()" x-text="scope.running?'Stop':'Start'"></button>
+<button class="btn btn-ghost text-xs" @click="scope.data=[[], [], [], []];drawScope()">Clear</button>
+<span class="text-xs mono" style="color:var(--text3)" x-show="scope.running" x-text="scope.pts+' pts'"></span>
+</div>
+<div style="position:relative;width:100%;height:420px;background:#0f1729;border-radius:8px;border:1px solid var(--border);overflow:hidden">
+<canvas x-ref="scopeCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%"></canvas>
+</div>
+</div>
 <!-- USB PD -->
 <div x-show="tab==='USB PD'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">USB Power Delivery status from the HUSB238 controller. Shows the negotiated voltage/current contract and available source PDOs. The board is powered at 20V even without I2C communication.</div>
 <div class="grid-2">
 <div class="card">
 <div class="card-h"><span class="text-sm font-bold">USB Power Delivery</span>
@@ -499,6 +538,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </div>
 <!-- IO Expander -->
 <div x-show="tab==='IO Expander'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">PCA9535 16-bit GPIO expander status and control. Manages power supply enables (V_ADJ1, V_ADJ2, +/-15V, MUX), E-Fuse output protection per connector (P1-P4), and monitors power-good signals.</div>
 <!-- PCA9535 Header -->
 <div class="p-3 mb-4 rounded-lg flex items-center justify-between" style="background:var(--bg1);border:1px solid var(--border)">
 <div>
@@ -575,7 +615,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <div class="text-xs font-bold" :style="ef.enabled?'color:#10b981':'color:var(--text3)'">Output Enable</div>
 <div class="text-xs" style="color:var(--text3)" x-text="'Power to connector P'+(ef.id||i+1)"></div>
 </div>
-<div class="toggle" :class="{'on':ef.enabled}" @click="postJSON('/api/ioexp/control',{control:'efuse'+(ef.id||i+1),on:!ef.enabled}).catch(()=>{})"><div class="toggle-dot"></div></div>
+<div class="toggle" :class="{'on':ef.enabled}" @click="postJSON('/api/ioexp/control',{control:'efuse'+(ef.id||i+1),on:!ef.enabled}).catch(()=>{});toastOk('E-Fuse '+(ef.id||i+1)+' '+(ef.enabled?'disabled':'enabled'))"><div class="toggle-dot"></div></div>
 </div>
 <!-- Fault row -->
 <div class="flex items-center justify-between p-2 rounded" :style="ef.fault?'background:rgba(239,68,68,0.12)':'background:var(--bg1)'">
@@ -600,6 +640,7 @@ x-text="ef.fault?'⚠ Overcurrent on connector P'+(ef.id||i+1)+' — disconnect 
 </div>
 <!-- Faults -->
 <div x-show="tab==='Faults'" x-cloak>
+<div class="text-xs mb-3 p-2 rounded" style="color:var(--text3);background:var(--bg1);border:1px solid var(--border);line-height:1.6">AD74416H fault and alert monitoring. Shows global and per-channel alert flags. Clear individual or all alerts. Monitor for overcurrent, open-wire, and thermal faults.</div>
 <div class="flex items-center gap-4 mb-4 p-3 rounded-lg" style="background:var(--bg1);border:1px solid var(--border)">
 <div class="status-dot" style="width:12px;height:12px" :style="totalFaults()?'background:var(--rose);box-shadow:0 0 12px var(--rose)':'background:var(--green);box-shadow:0 0 8px var(--green)'"></div>
 <span class="text-lg font-bold mono" x-text="totalFaults()+' active '+(totalFaults()===1?'fault':'faults')"></span>
@@ -651,11 +692,20 @@ x-text="ef.fault?'⚠ Overcurrent on connector P'+(ef.id||i+1)+' — disconnect 
 </div>
 </div>
 </div>
+<!-- Toast Container -->
+<div style="position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:340px">
+<template x-for="t in toasts" :key="t.id">
+<div class="toast-enter" style="pointer-events:auto;padding:10px 16px;border-radius:8px;font-size:12px;font-family:'JetBrains Mono',monospace;backdrop-filter:blur(8px);box-shadow:0 4px 20px rgba(0,0,0,0.4)"
+:style="t.type==='ok'?'background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.4);color:#10b981':t.type==='err'?'background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);color:#ef4444':'background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.4);color:#3b82f6'"
+x-text="t.msg"></div>
+</template>
+</div>
 </div>
 <script>
 function app(){return{
 tab:'Overview',
-tabs:['Overview','ADC','Diagnostics','VDAC','IDAC','IIN','Signal Path','Voltages','WaveGen','USB PD','IO Expander','Faults'],
+tabs:['Overview','ADC','Diagnostics','VDAC','IDAC','IIN','Signal Path','Voltages','WaveGen','Scope','USB PD','IO Expander','Faults'],
+toasts:[],
 connected:false,
 chColors:['#3b82f6','#10b981','#f59e0b','#a855f7'],
 chNames:['A','B','C','D'],
@@ -676,6 +726,7 @@ mux:{states:[0,0,0,0],refs:['U10','U11','U16','U17'],psu:[false,false],efuses:[f
 idacDev:{present:false,channels:[]},
 idacSliders:[0,1,2].map(()=>({code:0,voltage:0,dirty:false,vDirty:false})),
 wg:{channel:0,waveform:0,freq:1.0,amplitude:5.0,offset:0.0,mode:0,running:false},
+scope:{running:false,chEn:[true,false,false,false],windowSec:30,yRange:'auto',data:[[],[],[],[]],seq:0,pts:0,_timer:null},
 usbpd:{present:false,attached:false,cc:'CC1',voltageV:0,currentA:0,powerW:0,sourcePdos:[]},
 ioexp:{present:false,powerGood:{logic:false,vadj1:false,vadj2:false},enables:{vadj1:false,vadj2:false,analog15v:false,mux:false,usbHub:false},efuses:[{id:1,enabled:false,fault:false},{id:2,enabled:false,fault:false},{id:3,enabled:false,fault:false},{id:4,enabled:false,fault:false}]},
 _pollTimer:null,_slowTimer:null,
@@ -949,23 +1000,27 @@ c.fillText(pins[p],w*cn_l+8,py)
 sendIdac(i){
 if(this.idacSliders[i].dirty){
 this.postJSON('/api/idac/code',{ch:i,code:this.idacSliders[i].code});
-this.idacSliders[i].dirty=false
+this.idacSliders[i].dirty=false;
+this.toastOk('IDAC CH'+i+' set to code '+this.idacSliders[i].code)
 }else if(this.idacSliders[i].vDirty){
 this.postJSON('/api/idac/voltage',{ch:i,voltage:this.idacSliders[i].voltage});
-this.idacSliders[i].vDirty=false
+this.idacSliders[i].vDirty=false;
+this.toastOk('IDAC CH'+i+' set to '+this.idacSliders[i].voltage.toFixed(3)+'V')
 }
 },
 toggleWg(){
 if(this.wg.running){
 this.postJSON('/api/wavegen/stop',{});
-this.wg.running=false
+this.wg.running=false;
+this.toastOk('WaveGen stopped')
 }else{
 this.postJSON('/api/wavegen/start',{
 channel:+this.wg.channel,waveform:this.wg.waveform,
 freq_hz:this.wg.freq,amplitude:this.wg.amplitude,
 offset:this.wg.offset,mode:this.wg.mode
 });
-this.wg.running=true
+this.wg.running=true;
+this.toastOk('WaveGen started on CH '+this.chNames[this.wg.channel])
 }
 },
 drawWavePreview(canvas,wg){
@@ -992,6 +1047,131 @@ let y=h/2-(v/yr)*(h/2-10);
 px===0?ctx.moveTo(px,y):ctx.lineTo(px,y)
 }
 ctx.stroke()
+},
+/* ---------- Toast ---------- */
+toast(msg,type='info'){
+let id=Date.now()+Math.random();
+this.toasts.push({msg,type,id});
+setTimeout(()=>{this.toasts=this.toasts.filter(t=>t.id!==id)},3000)
+},
+toastOk(msg){this.toast(msg,'ok')},
+toastErr(msg){this.toast(msg,'err')},
+/* ---------- Scope ---------- */
+toggleScope(){
+if(this.scope.running){
+this.scope.running=false;
+if(this.scope._timer){clearInterval(this.scope._timer);this.scope._timer=null}
+this.toastOk('Scope stopped');
+}else{
+this.scope.running=true;this.scope.seq=0;
+this.scope._timer=setInterval(()=>this.pollScope(),100);
+this.toastOk('Scope started');
+}
+},
+async pollScope(){
+if(!this.scope.running)return;
+try{
+let r=await fetch('/api/scope?since='+this.scope.seq);
+if(!r.ok)return;
+let d=await r.json();
+if(d.seq!==undefined)this.scope.seq=d.seq;
+if(d.buckets&&d.buckets.length){
+let now=Date.now();
+for(let b of d.buckets){
+for(let ch=0;ch<4;ch++){
+if(!this.scope.chEn[ch])continue;
+if(b.channels&&b.channels[ch]!==undefined){
+let v=b.channels[ch];
+this.scope.data[ch].push({time_ms:b.time_ms||now,avg:typeof v==='object'?v.avg:v,min:typeof v==='object'?v.min:v,max:typeof v==='object'?v.max:v});
+}
+}
+}
+/* trim to window*1.5 */
+let winMs=this.scope.windowSec*1000*1.5;
+let cutoff=Date.now()-winMs;
+for(let ch=0;ch<4;ch++){
+this.scope.data[ch]=this.scope.data[ch].filter(p=>p.time_ms>cutoff);
+if(this.scope.data[ch].length>10000)this.scope.data[ch]=this.scope.data[ch].slice(-10000);
+}
+this.scope.pts=this.scope.data.reduce((s,a)=>s+a.length,0);
+}
+this.drawScope();
+}catch(e){}
+},
+drawScope(){
+let cv=this.$refs.scopeCanvas;if(!cv)return;
+let dp=window.devicePixelRatio||1;
+let rect=cv.getBoundingClientRect();
+let w=rect.width,h=rect.height;
+cv.width=w*dp;cv.height=h*dp;
+let c=cv.getContext('2d');
+c.setTransform(dp,0,0,dp,0,0);
+/* background */
+c.fillStyle='#0f1729';c.fillRect(0,0,w,h);
+let ml=60,mr=12,mt=12,mb=28;
+let pw=w-ml-mr,ph=h-mt-mb;
+let winMs=+this.scope.windowSec*1000;
+let now=Date.now();
+let tStart=now-winMs;
+/* Y range */
+let yMin,yMax;
+let yr=this.scope.yRange;
+if(yr==='auto'){
+yMin=Infinity;yMax=-Infinity;
+for(let ch=0;ch<4;ch++){
+if(!this.scope.chEn[ch])continue;
+for(let p of this.scope.data[ch]){
+if(p.time_ms<tStart)continue;
+if(p.avg<yMin)yMin=p.avg;if(p.avg>yMax)yMax=p.avg;
+}}
+if(!isFinite(yMin)){yMin=0;yMax=1}
+let mg=(yMax-yMin)*0.15||0.1;yMin-=mg;yMax+=mg;
+}else if(yr==='0-12'){yMin=0;yMax=12}else if(yr==='pm12'){yMin=-12;yMax=12}else{yMin=0;yMax=12}
+let ySpan=yMax-yMin||1;
+/* grid */
+c.font="10px 'JetBrains Mono',monospace";c.textAlign='right';
+for(let j=0;j<=6;j++){
+let frac=j/6,y=mt+frac*ph,val=yMax-frac*ySpan;
+c.strokeStyle=j===3?'rgba(148,163,184,0.15)':'rgba(148,163,184,0.07)';
+c.beginPath();c.moveTo(ml,y);c.lineTo(w-mr,y);c.stroke();
+c.fillStyle='rgba(148,163,184,0.5)';c.fillText(val.toFixed(2),ml-6,y+4);
+}
+c.textAlign='center';
+for(let j=0;j<=8;j++){
+let frac=j/8,x=ml+frac*pw;
+c.strokeStyle='rgba(148,163,184,0.05)';c.beginPath();c.moveTo(x,mt);c.lineTo(x,h-mb);c.stroke();
+let sAgo=(1-frac)*this.scope.windowSec;
+c.fillStyle='rgba(148,163,184,0.4)';c.fillText('-'+sAgo.toFixed(0)+'s',x,h-mb+16);
+}
+c.strokeStyle='rgba(148,163,184,0.2)';c.strokeRect(ml,mt,pw,ph);
+/* plot channels */
+let cols=this.chColors;
+for(let ch=0;ch<4;ch++){
+if(!this.scope.chEn[ch])continue;
+let pts=this.scope.data[ch];if(pts.length<2)continue;
+c.strokeStyle=cols[ch];c.lineWidth=1.2;c.beginPath();
+let started=false;
+for(let p of pts){
+if(p.time_ms<tStart)continue;
+let x=ml+((p.time_ms-tStart)/winMs)*pw;
+let y=mt+((yMax-p.avg)/ySpan)*ph;
+y=Math.max(mt,Math.min(mt+ph,y));
+if(!started){c.moveTo(x,y);started=true}else c.lineTo(x,y);
+}
+c.stroke();
+}
+/* legend */
+c.font="12px 'JetBrains Mono',monospace";c.textAlign='left';
+let ly=mt+16;
+for(let ch=0;ch<4;ch++){
+if(!this.scope.chEn[ch])continue;
+let pts=this.scope.data[ch];if(!pts.length)continue;
+let last=pts[pts.length-1];
+c.fillStyle='rgba(15,23,42,0.85)';c.fillRect(ml+8,ly-12,160,18);
+c.fillStyle=cols[ch];c.fillRect(ml+8,ly-12,3,18);
+c.fillText(' CH '+this.chNames[ch]+' : '+last.avg.toFixed(4),ml+14,ly);
+ly+=22;
+}
 }
 }}
 </script>

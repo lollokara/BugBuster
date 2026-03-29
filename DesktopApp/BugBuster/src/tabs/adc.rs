@@ -6,6 +6,7 @@ use crate::tauri_bridge::*;
 pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"Analog-to-Digital Converter readings for all 4 channels. Configure the ADC range, sampling rate, and input multiplexer per channel. Values update in real-time."</div>
             <div class="channel-grid-wide">
                 {move || {
                     let ds = state.get();

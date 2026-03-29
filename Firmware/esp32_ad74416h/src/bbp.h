@@ -135,6 +135,9 @@ extern "C" {
 #define BBP_CMD_USBPD_SELECT_PDO    0xC1  // Select PDO voltage
 #define BBP_CMD_USBPD_GO           0xC2  // Trigger re-negotiation
 
+// Level Shifter
+#define BBP_CMD_SET_LSHIFT_OE   0xE0  // Set level shifter output enable
+
 // System
 #define BBP_CMD_DEVICE_RESET    0x70
 #define BBP_CMD_REG_READ        0x71

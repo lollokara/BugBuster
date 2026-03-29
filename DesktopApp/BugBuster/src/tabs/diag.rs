@@ -27,6 +27,7 @@ fn led_color(name: &str) -> &'static str {
 pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"Internal diagnostic ADC channels. Select what to measure per slot: die temperature, supply voltages (DVCC, AVCC, AVDD), or sense voltages. Useful for verifying power rail health."</div>
             // Top row: Temp + Status LEDs
             <div class="diag-top">
                 // Temperature

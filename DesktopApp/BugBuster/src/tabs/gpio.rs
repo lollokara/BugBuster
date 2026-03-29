@@ -8,6 +8,7 @@ const GPIO_NAMES: [&str; 6] = ["A", "B", "C", "D", "E", "F"];
 pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     view! {
         <div class="tab-content">
+            <div class="tab-desc">"PCA9535 16-bit GPIO expander status and control. Manages power supply enables (V_ADJ1, V_ADJ2, +/-15V, MUX), E-Fuse output protection per connector (P1-P4), and monitors power-good signals."</div>
             <div class="channel-grid">
                 {move || {
                     let ds = state.get();

@@ -268,6 +268,20 @@ pub async fn set_diag_config(
     Ok(())
 }
 
+// Level Shifter OE
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn set_lshift_oe(
+    on: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_bool(on);
+    mgr.send_command(bbp::CMD_SET_LSHIFT_OE, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
 // -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------
