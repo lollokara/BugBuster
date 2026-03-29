@@ -599,43 +599,44 @@ void AD74416H::configureDiagSlot(uint8_t slot, uint8_t source)
 
 float AD74416H::diagCodeToValue(uint16_t raw, uint8_t source)
 {
-    // Diagnostic ADC range is 2.5V for voltage diagnostics.
-    // Formulas from datasheet Table 30.
+    // Formulas from AD74416H datasheet Table 30 (page 63).
+    // DIAG_CODE is 16-bit from ADC_DIAG_RESULTn registers.
     float code = (float)raw;
+    float base = code / 65536.0f;  // normalized 0..1
 
     switch (source) {
-        case 0:  // AGND - should read ~0V
-            return (code / 65536.0f) * 2.5f;
+        case 0:  // AGND: V = (DIAG_CODE/65536) × 2.5
+            return base * 2.5f;
 
-        case 1:  // Temperature
+        case 1:  // TEMP: Temperature = (DIAG_CODE - 2034) / 8.95 - 40
             return (code - 2034.0f) / 8.95f - 40.0f;
 
-        case 2:  // DVCC: 5V rail, attenuation ~0.3 → V = (code/65536) * 2.5 / 0.3
-            return (code / 65536.0f) * (2.5f / 0.3f);
+        case 2:  // DVCC: V = (DIAG_CODE/65536) × (25/3)  [0V to 8.3V]
+            return base * (25.0f / 3.0f);
 
-        case 3:  // AVCC: 5V rail, attenuation ~0.3 → V = (code/65536) * 2.5 / 0.3
-            return (code / 65536.0f) * (2.5f / 0.3f);
+        case 3:  // AVCC: V = (DIAG_CODE/65536) × 17.5  [0V to 17.5V]
+            return base * 17.5f;
 
-        case 4:  // LDO1V8: V = (code/65536) * 2.5
-            return (code / 65536.0f) * 2.5f;
+        case 4:  // LDO1V8: V = (DIAG_CODE/65536) × 7.5  [0V to 7.5V]
+            return base * 7.5f;
 
-        case 5:  // AVDD_HI: V = (code/65536) * 2.5 * 7.5 / 0.52
-            return (code / 65536.0f) * 2.5f * (7.5f / 0.52f);
+        case 5:  // AVDD_HI: V = (DIAG_CODE/65536) × (25/0.52)  [0V to 48V]
+            return base * (25.0f / 0.52f);
 
-        case 6:  // AVDD_LO: same scaling as AVDD_HI
-            return (code / 65536.0f) * 2.5f * (7.5f / 0.52f);
+        case 6:  // AVDD_LO: V = (DIAG_CODE/65536) × (25/0.52)  [0V to 48V]
+            return base * (25.0f / 0.52f);
 
-        case 7:  // AVSS: V = -((code/65536) * 2.5 * 60 / 7.5)
-            return -((code / 65536.0f) * 2.5f * (60.0f / 7.5f));
+        case 7:  // AVSS: V = (DIAG_CODE/65536 × 31.017) - 20  [-20V to +11V]
+            return base * 31.017f - 20.0f;
 
-        case 8:  // LVIN: V = (code/65536) * 2.5
-            return (code / 65536.0f) * 2.5f;
+        case 8:  // LVIN: V = (DIAG_CODE/65536) × 2.5  [0V to 2.5V]
+            return base * 2.5f;
 
-        case 9:  // DO_VDD: V = (code/65536) * 2.5 * 7.5 / 0.52
-            return (code / 65536.0f) * 2.5f * (7.5f / 0.52f);
+        case 9:  // DO_VDD: V = (DIAG_CODE/65536) × (25/0.64)  [0V to 39V]
+            return base * (25.0f / 0.64f);
 
-        default: // Other sources: return raw voltage
-            return (code / 65536.0f) * 2.5f;
+        default:
+            return base * 2.5f;
     }
 }
 
