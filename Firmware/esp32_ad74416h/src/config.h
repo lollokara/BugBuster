@@ -89,10 +89,12 @@
 // -----------------------------------------------------------------------------
 // WiFi / Access Point Configuration
 // -----------------------------------------------------------------------------
-#define WIFI_SSID       "BugBuster"
-#define WIFI_PASSWORD   "bugbuster123"
-#define WIFI_CHANNEL    1
-#define WIFI_MAX_CONN   4
+#define WIFI_SSID           "BugBuster"
+#define WIFI_PASSWORD       "bugbuster123"
+#define WIFI_STA_SSID       ""          // Empty = no auto-connect; loaded from NVS if saved
+#define WIFI_STA_PASSWORD   ""
+#define WIFI_CHANNEL        1
+#define WIFI_MAX_CONN       4
 
 // -----------------------------------------------------------------------------
 // Timing Constants

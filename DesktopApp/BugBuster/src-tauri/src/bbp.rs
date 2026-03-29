@@ -115,6 +115,7 @@ pub const CMD_SET_LSHIFT_OE: u8 = 0xE0;
 // WiFi Management
 pub const CMD_WIFI_GET_STATUS: u8 = 0xE1;
 pub const CMD_WIFI_CONNECT: u8 = 0xE2;
+pub const CMD_WIFI_SCAN: u8 = 0xE4;
 
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;

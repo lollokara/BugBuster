@@ -219,8 +219,13 @@ impl Transport for UsbTransport {
             }
         }
 
-        // Wait for response with timeout (2s for MUX commands that need SPI bus yield)
-        let response = tokio::time::timeout(Duration::from_millis(2000), rx).await;
+        // Longer timeout for commands that block on firmware side (WiFi connect = up to 10s)
+        let timeout_ms = match cmd_id {
+            0xE2 => 65000, // BBP_CMD_WIFI_CONNECT: firmware retries up to 5x with backoff
+            0xE4 => 8000,  // BBP_CMD_WIFI_SCAN: blocking scan ~3-5s
+            _    => 2000,
+        };
+        let response = tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await;
 
         match response {
             Ok(Ok(msg)) => {

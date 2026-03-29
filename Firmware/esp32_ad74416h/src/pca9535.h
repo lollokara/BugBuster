@@ -197,6 +197,13 @@ const char* pca9535_control_name(PcaControl ctrl);
  */
 const char* pca9535_status_name(PcaStatus status);
 
+/**
+ * @brief Install GPIO ISR on the PCA9535 INT pin.
+ *        On interrupt, auto-reads input registers.
+ *        Call after pca9535_init() and GPIO ISR service install.
+ */
+void pca9535_install_isr(void);
+
 #ifdef __cplusplus
 }
 #endif

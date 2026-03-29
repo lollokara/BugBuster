@@ -331,19 +331,24 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     let _ = c.fill_text(&format!("S{}", s + 1), bl + 2.0, y + 3.0);
                 }
 
-                // Output traces
+                // Output traces — color matches the active switch's signal type
                 let grps: [(usize, usize, &str); 3] = [(0, 4, "Main"), (4, 6, "Aux1"), (6, 8, "Aux2")];
                 for &(s0, s1, lbl) in &grps {
                     let cy = (sy[s0] + sy[s1 - 1]) / 2.0;
-                    let any = (s0..s1).any(|s| (st >> s) & 1 != 0);
-                    c.set_stroke_style_str(if any { ac } else { "#0c1525" });
+                    // Find the active switch in this group and use its signal color
+                    let active_sw = (s0..s1).find(|&s| (st >> s) & 1 != 0);
+                    let any = active_sw.is_some();
+                    let tc = if let Some(s) = active_sw {
+                        match s { 0|4|6 => C_GPIO, 1|5|7 => C_GPIO_R, 2 => C_ADC, 3 => C_EXT, _ => ac }
+                    } else { "#0c1525" };
+                    c.set_stroke_style_str(tc);
                     c.set_line_width(if any { 1.5 } else { 0.3 });
                     c.begin_path(); c.move_to(mux_r, cy); c.line_to(ef_x - 28.0, cy); c.stroke();
                     if any {
-                        let glow = format!("{}15", ac);
+                        let glow = format!("{}15", tc);
                         c.set_stroke_style_str(&glow); c.set_line_width(6.0);
                         c.begin_path(); c.move_to(mux_r, cy); c.line_to(ef_x - 28.0, cy); c.stroke();
-                        c.set_stroke_style_str(ac); c.set_line_width(1.0);
+                        c.set_stroke_style_str(tc); c.set_line_width(1.0);
                         c.begin_path(); c.move_to(ef_x + 28.0, cy); c.line_to(cn_l, cy); c.stroke();
                     }
                     c.set_fill_style_str(if any { "#e2e8f0" } else { "#253040" });
@@ -395,9 +400,24 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let main_cy = (sy[0] + sy[3]) / 2.0;
                 let aux1_cy = (sy[4] + sy[5]) / 2.0;
                 let aux2_cy = (sy[6] + sy[7]) / 2.0;
-                let main_on = (0..4).any(|s| (st >> s) & 1 != 0);
-                let aux1_on = (4..6).any(|s| (st >> s) & 1 != 0);
-                let aux2_on = (6..8).any(|s| (st >> s) & 1 != 0);
+                let main_sw = (0..4).find(|&s| (st >> s) & 1 != 0);
+                let aux1_sw = (4..6).find(|&s| (st >> s) & 1 != 0);
+                let aux2_sw = (6..8).find(|&s| (st >> s) & 1 != 0);
+                let main_on = main_sw.is_some();
+                let aux1_on = aux1_sw.is_some();
+                let aux2_on = aux2_sw.is_some();
+                let sw_color = |sw: Option<usize>| -> &str {
+                    match sw {
+                        Some(0)|Some(4)|Some(6) => C_GPIO,
+                        Some(1)|Some(5)|Some(7) => C_GPIO_R,
+                        Some(2) => C_ADC,
+                        Some(3) => C_EXT,
+                        _ => "#253040",
+                    }
+                };
+                let main_c = sw_color(main_sw);
+                let aux1_c = sw_color(aux1_sw);
+                let aux2_c = sw_color(aux2_sw);
 
                 // Pin Y positions aligned to traces
                 let pin_ys = [
@@ -429,21 +449,21 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                 // Pin 2: Main (OUT1)
                 c.set_font("bold 10px monospace"); c.set_text_align("left");
-                c.set_fill_style_str(if main_on { ac } else { "#253040" });
+                c.set_fill_style_str(if main_on { main_c } else { "#253040" });
                 let _ = c.fill_text("Main", pin_x, pin_ys[1] + 4.0);
                 c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
                 let _ = c.fill_text("2", num_x, pin_ys[1] + 3.0);
 
                 // Pin 3: Aux1 (OUT2)
                 c.set_font("bold 10px monospace"); c.set_text_align("left");
-                c.set_fill_style_str(if aux1_on { ac } else { "#253040" });
+                c.set_fill_style_str(if aux1_on { aux1_c } else { "#253040" });
                 let _ = c.fill_text("Aux1", pin_x, pin_ys[2] + 4.0);
                 c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
                 let _ = c.fill_text("3", num_x, pin_ys[2] + 3.0);
 
                 // Pin 4: Aux2 (OUT3)
                 c.set_font("bold 10px monospace"); c.set_text_align("left");
-                c.set_fill_style_str(if aux2_on { ac } else { "#253040" });
+                c.set_fill_style_str(if aux2_on { aux2_c } else { "#253040" });
                 let _ = c.fill_text("Aux2", pin_x, pin_ys[3] + 4.0);
                 c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
                 let _ = c.fill_text("4", num_x, pin_ys[3] + 3.0);

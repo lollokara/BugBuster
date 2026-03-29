@@ -894,18 +894,8 @@ void initTasks(AD74416H& device)
         1
     );
 
-    // I2C device polling task (Core 0, low priority)
-    xTaskCreatePinnedToCore(
-        taskI2cPoll,
-        "i2cPoll",
-        4096,
-        nullptr,
-        1,
-        nullptr,
-        0
-    );
-
-    // Waveform generator task (Core 0, priority 3)
+    // Waveform generator task (Core 1, with other SPI tasks)
+    // Avoids competing with WiFi/network on Core 0 during tight DAC loops
     wavegenInitLut();
     xTaskCreatePinnedToCore(
         taskWavegen,
@@ -914,8 +904,11 @@ void initTasks(AD74416H& device)
         nullptr,
         3,
         &s_wavegenTask,
-        0
+        1
     );
+
+    // Note: I2C devices (PCA9535, HUSB238, DS4424) are polled on-demand
+    // by BBP/HTTP/CLI handlers — no background polling task needed.
 }
 
 void sendCommand(const Command& cmd)

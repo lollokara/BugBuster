@@ -44,6 +44,21 @@ const char* wifi_get_sta_ssid(void);
 /** @brief Get STA RSSI in dBm. */
 int wifi_get_rssi(void);
 
+/** Scan result entry. */
+typedef struct {
+    char ssid[33];
+    int  rssi;
+    int  auth;  // wifi_auth_mode_t
+} wifi_scan_result_t;
+
+/**
+ * @brief Scan for WiFi networks (blocking, ~3s).
+ * @param results   Output array
+ * @param max_results  Max entries to return
+ * @return Number of networks found (capped to max_results)
+ */
+int wifi_scan(wifi_scan_result_t* results, int max_results);
+
 #ifdef __cplusplus
 }
 #endif

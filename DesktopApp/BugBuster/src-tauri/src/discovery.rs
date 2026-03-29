@@ -130,36 +130,73 @@ pub fn discover_usb() -> Vec<DiscoveredDevice> {
     devices
 }
 
+/// Get local IP addresses to derive subnet scan ranges.
+fn get_local_subnets() -> Vec<String> {
+    let mut subnets = Vec::new();
+    if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
+        for (_name, ip) in ifaces {
+            if let std::net::IpAddr::V4(v4) = ip {
+                if v4.is_loopback() { continue; }
+                let octets = v4.octets();
+                let subnet = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
+                if !subnets.contains(&subnet) {
+                    subnets.push(subnet);
+                }
+            }
+        }
+    }
+    subnets
+}
+
+/// Probe a single HTTP address for BugBuster device.
+async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDevice> {
+    let url = format!("{}/api/device/info", addr);
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    if json.get("spiOk").is_none() { return None; }
+    Some(DiscoveredDevice {
+        id: format!("http:{}", addr),
+        name: format!("BugBuster (WiFi: {})", addr),
+        transport: "http".to_string(),
+        address: addr.to_string(),
+    })
+}
+
 /// Scan known network addresses for BugBuster HTTP API.
+/// Checks the AP address (192.168.4.1) plus scans local subnets.
 pub async fn discover_http() -> Vec<DiscoveredDevice> {
-    let mut devices = Vec::new();
-
-    let candidates = [
-        "http://192.168.4.1",
-    ];
-
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
+        .timeout(Duration::from_millis(800))
         .build()
         .unwrap();
 
-    for &addr in &candidates {
-        let url = format!("{}/api/device/info", addr);
-        match client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if json.get("spiOk").is_some() {
-                        devices.push(DiscoveredDevice {
-                            id: format!("http:{}", addr),
-                            name: format!("BugBuster (WiFi: {})", addr),
-                            transport: "http".to_string(),
-                            address: addr.to_string(),
-                        });
-                    }
-                }
+    // Build candidate list: AP address + full local subnet scans
+    let mut candidates = vec!["http://192.168.4.1".to_string()];
+    for subnet in get_local_subnets() {
+        for host in 1..=254u8 {
+            let addr = format!("http://{}.{}", subnet, host);
+            if !candidates.contains(&addr) {
+                candidates.push(addr);
             }
-            _ => {}
         }
+    }
+
+    log::info!("HTTP discovery: scanning {} addresses...", candidates.len());
+
+    // Probe in parallel batches of 50 for speed
+    let mut devices = Vec::new();
+    for chunk in candidates.chunks(50) {
+        let futs: Vec<_> = chunk.iter()
+            .map(|addr| probe_http(&client, addr))
+            .collect();
+        let results = futures::future::join_all(futs).await;
+        for dev in results.into_iter().flatten() {
+            log::info!("  ✓ Found BugBuster at {}", dev.address);
+            devices.push(dev);
+        }
+        // Stop early if we found one (no need to scan the rest)
+        if !devices.is_empty() { break; }
     }
 
     devices

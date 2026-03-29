@@ -159,6 +159,7 @@ extern "C" void app_main(void)
         // PCA9535 GPIO Expander
         if (pca9535_init()) {
             serial_println("[BugBuster] PCA9535 IO Exp: OK (0x23)");
+            pca9535_install_isr();
         } else {
             serial_println("[BugBuster] PCA9535 IO Exp: NOT FOUND (0x23)");
         }

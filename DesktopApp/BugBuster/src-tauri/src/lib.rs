@@ -65,6 +65,7 @@ pub fn run() {
             // WiFi Management
             commands::wifi_get_status,
             commands::wifi_connect,
+            commands::wifi_scan,
             // DS4424 IDAC
             commands::idac_get_status,
             commands::idac_set_code,

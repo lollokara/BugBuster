@@ -1435,6 +1435,27 @@ static int handleWifiConnect(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+static int handleWifiScan(uint16_t seq, uint8_t cmdId,
+                           const uint8_t *payload, size_t len, uint8_t *out)
+{
+    // Scan takes ~3s. Response: count(u8) + N * (ssid_len(u8) + ssid + rssi(i8) + auth(u8))
+    wifi_scan_result_t results[20];
+    int count = wifi_scan(results, 20);
+
+    size_t pos = 0;
+    put_u8(out, &pos, (uint8_t)count);
+    for (int i = 0; i < count; i++) {
+        uint8_t slen = (uint8_t)strlen(results[i].ssid);
+        put_u8(out, &pos, slen);
+        memcpy(out + pos, results[i].ssid, slen);
+        pos += slen;
+        out[pos++] = (uint8_t)(int8_t)results[i].rssi;  // signed as i8
+        put_u8(out, &pos, (uint8_t)results[i].auth);
+        if (pos > BBP_MAX_PAYLOAD - 40) break;  // safety limit
+    }
+    return (int)pos;
+}
+
 // --- Streaming commands ---
 
 static int handleStartAdcStream(uint16_t seq, uint8_t cmdId,
@@ -1859,6 +1880,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_WIFI_CONNECT:
             rspLen = handleWifiConnect(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_WIFI_SCAN:
+            rspLen = handleWifiScan(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_PING:
             rspLen = handlePing(seq, cmdId, payload, payloadLen, rspBuf);

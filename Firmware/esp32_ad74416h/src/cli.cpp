@@ -1666,12 +1666,32 @@ static void cmdWifi(const char* args)
         return;
     }
 
+    // Subcommand: wifi scan
+    if (strcmp(args, "scan") == 0) {
+        serial_println("Scanning...");
+        wifi_scan_result_t results[20];
+        int count = wifi_scan(results, 20);
+        if (count == 0) {
+            serial_println("  No networks found.");
+        } else {
+            serial_printf("  Found %d networks:\r\n", count);
+            serial_println("  # | RSSI  | Auth    | SSID");
+            serial_println("  --+-------+---------+------------------------");
+            const char* auth_names[] = {"OPEN","WEP","WPA","WPA2","WPA/2","WPA2-E","WPA3","WPA2/3","WAPI","OWE"};
+            for (int i = 0; i < count; i++) {
+                const char* auth = (results[i].auth < 10) ? auth_names[results[i].auth] : "???";
+                serial_printf("  %2d| %4d  | %-7s | %s\r\n", i + 1, results[i].rssi, auth, results[i].ssid);
+            }
+        }
+        return;
+    }
+
     // Args: wifi <ssid> <password>
     char ssid[64] = {};
     char pass[64] = {};
     int n = sscanf(args, "%63s %63s", ssid, pass);
     if (n < 2) {
-        serial_println("Usage: wifi <ssid> <password>");
+        serial_println("Usage: wifi [scan | <ssid> <password>]");
         return;
     }
 

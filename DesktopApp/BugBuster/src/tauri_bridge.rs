@@ -439,3 +439,16 @@ pub fn send_wifi_connect(ssid: &str, password: &str) {
     let label = format!("Connect to WiFi '{}'", ssid_str);
     invoke_with_feedback("wifi_connect", args, &label);
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WifiNetwork {
+    pub ssid: String,
+    pub rssi: i32,
+    pub auth: u8,
+}
+
+pub async fn fetch_wifi_scan() -> Vec<WifiNetwork> {
+    let result = invoke("wifi_scan", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).unwrap_or_default()
+}

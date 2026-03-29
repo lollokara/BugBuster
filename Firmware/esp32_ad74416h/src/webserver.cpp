@@ -27,6 +27,9 @@
 #include "adgs2414d.h"
 #include "wifi_manager.h"
 #include "esp_wifi.h"
+#include "esp_ota_ops.h"
+#include "esp_app_format.h"
+#include "bbp.h"
 
 extern AD74416H_SPI spiDriver;
 
@@ -1714,6 +1717,24 @@ static esp_err_t handle_post_wifi_connect(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/wifi/scan
+static esp_err_t handle_get_wifi_scan(httpd_req_t *req)
+{
+    wifi_scan_result_t results[20];
+    int count = wifi_scan(results, 20);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "networks");
+    for (int i = 0; i < count; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "ssid", results[i].ssid);
+        cJSON_AddNumberToObject(item, "rssi", results[i].rssi);
+        cJSON_AddNumberToObject(item, "auth", results[i].auth);
+        cJSON_AddItemToArray(arr, item);
+    }
+    return send_json(req, root);
+}
+
 // =============================================================================
 // Server init / stop
 // =============================================================================
@@ -1920,6 +1941,11 @@ void initWebServer(void)
         .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = handle_post_wifi_connect, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_wifi_connect);
+
+    httpd_uri_t uri_wifi_scan = {
+        .uri = "/api/wifi/scan", .method = HTTP_GET, .handler = handle_get_wifi_scan, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_wifi_scan);
 
     // ----- OPTIONS (CORS preflight) -----
 

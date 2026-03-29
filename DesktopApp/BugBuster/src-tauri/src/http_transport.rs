@@ -10,11 +10,12 @@ use reqwest::Client;
 use serde_json::Value;
 
 use crate::bbp;
-use crate::state::{ChannelState, DeviceState};
+use crate::state::{ChannelState, DeviceState, DiagState};
 use crate::transport::Transport;
 
 pub struct HttpTransport {
-    client: Client,
+    client: Client,       // Fast client for status polls and normal commands
+    slow_client: Client,  // Slow client for WiFi connect/scan (long-blocking)
     base_url: String,
     connected: AtomicBool,
 }
@@ -24,6 +25,10 @@ impl HttpTransport {
     pub async fn connect(base_url: &str) -> Result<Self> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(3))
+            .pool_max_idle_per_host(4)
+            .build()?;
+        let slow_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
             .build()?;
 
         // Verify the device is reachable
@@ -43,6 +48,7 @@ impl HttpTransport {
 
         Ok(Self {
             client,
+            slow_client,
             base_url: base_url.to_string(),
             connected: AtomicBool::new(true),
         })
@@ -51,6 +57,24 @@ impl HttpTransport {
     async fn get_json(&self, path: &str) -> Result<Value> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn get_json_slow(&self, path: &str) -> Result<Value> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self.slow_client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn post_json_slow(&self, path: &str, body: &Value) -> Result<Value> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self.slow_client.post(&url).json(body).send().await?;
         if !resp.status().is_success() {
             return Err(anyhow!("HTTP {} from {}", resp.status(), path));
         }
@@ -66,34 +90,73 @@ impl HttpTransport {
         Ok(resp.json().await?)
     }
 
+    /// Map channel function string from webserver to numeric ID used by BBP.
+    fn parse_function(v: &Value) -> u8 {
+        if let Some(n) = v.as_u64() { return n as u8; }
+        match v.as_str().unwrap_or("") {
+            "HIGH_IMP"          => 0,
+            "VOUT"              => 1,
+            "IOUT"              => 2,
+            "VIN"               => 3,
+            "IIN_EXT_PWR"       => 4,
+            "IIN_LOOP_PWR"      => 5,
+            "RES_MEAS"          => 7,
+            "DIN_LOGIC"         => 8,
+            "DIN_LOOP"          => 9,
+            "IOUT_HART"         => 10,
+            "IIN_EXT_PWR_HART"  => 11,
+            "IIN_LOOP_PWR_HART" => 12,
+            _ => 0,
+        }
+    }
+
     /// Parse /api/status JSON into DeviceState
     fn parse_status_json(json: &Value) -> Option<DeviceState> {
         let mut state = DeviceState::default();
 
-        state.spi_ok = json.get("spiOk")?.as_bool()?;
-        state.die_temperature = json.get("dieTemp")?.as_f64()? as f32;
-        state.alert_status = json.get("alertStatus")?.as_u64()? as u16;
-        state.alert_mask = json.get("alertMask")?.as_u64()? as u16;
-        state.supply_alert_status = json.get("supplyAlertStatus")?.as_u64()? as u16;
-        state.supply_alert_mask = json.get("supplyAlertMask")?.as_u64()? as u16;
-        state.live_status = json.get("liveStatus")?.as_u64()? as u16;
+        state.spi_ok = json.get("spiOk").and_then(|v| v.as_bool()).unwrap_or(false);
+        state.die_temperature = json.get("dieTemp").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        state.alert_status = json.get("alertStatus").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+        state.alert_mask = json.get("alertMask").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+        state.supply_alert_status = json.get("supplyAlertStatus").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+        state.supply_alert_mask = json.get("supplyAlertMask").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+        state.live_status = json.get("liveStatus").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
 
-        let channels = json.get("channels")?.as_array()?;
-        for (i, ch_json) in channels.iter().enumerate().take(4) {
-            state.channels[i] = ChannelState {
-                function: ch_json.get("function")?.as_u64()? as u8,
-                adc_raw: ch_json.get("adcRaw")?.as_u64()? as u32,
-                adc_value: ch_json.get("adcValue")?.as_f64()? as f32,
-                adc_range: ch_json.get("adcRange")?.as_u64()? as u8,
-                adc_rate: ch_json.get("adcRate")?.as_u64()? as u8,
-                adc_mux: ch_json.get("adcMux")?.as_u64()? as u8,
-                dac_code: ch_json.get("dacCode")?.as_u64()? as u16,
-                dac_value: ch_json.get("dacValue")?.as_f64()? as f32,
-                din_state: ch_json.get("dinState")?.as_bool().unwrap_or(false),
-                din_counter: ch_json.get("dinCounter")?.as_u64().unwrap_or(0) as u32,
-                do_state: ch_json.get("doState")?.as_bool().unwrap_or(false),
-                channel_alert: ch_json.get("channelAlert")?.as_u64()? as u16,
-            };
+        if let Some(channels) = json.get("channels").and_then(|v| v.as_array()) {
+            for (i, ch_json) in channels.iter().enumerate().take(4) {
+                state.channels[i] = ChannelState {
+                    function: Self::parse_function(ch_json.get("function").unwrap_or(&Value::Null)),
+                    adc_raw: ch_json.get("adcRaw").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                    adc_value: ch_json.get("adcValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                    adc_range: ch_json.get("adcRange").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                    adc_rate: ch_json.get("adcRate").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                    adc_mux: ch_json.get("adcMux").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                    dac_code: ch_json.get("dacCode").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                    dac_value: ch_json.get("dacValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                    din_state: ch_json.get("dinState").and_then(|v| v.as_bool()).unwrap_or(false),
+                    din_counter: ch_json.get("dinCounter").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                    do_state: ch_json.get("doState").and_then(|v| v.as_bool()).unwrap_or(false),
+                    channel_alert: ch_json.get("channelAlert").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                };
+            }
+        }
+
+        // Parse diagnostic slots if present
+        if let Some(diag) = json.get("diagnostics").and_then(|v| v.as_array()) {
+            for (i, d) in diag.iter().enumerate().take(4) {
+                state.diag[i] = DiagState {
+                    source: d.get("source").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                    raw_code: d.get("raw").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                    value: d.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                };
+            }
+        }
+
+        // Parse MUX states if present
+        if let Some(mux) = json.get("muxStates").and_then(|v| v.as_array()) {
+            for (i, v) in mux.iter().enumerate().take(4) {
+                state.mux_states[i] = v.as_u64().unwrap_or(0) as u8;
+            }
         }
 
         Some(state)
@@ -178,6 +241,20 @@ impl Transport for HttpTransport {
                 Ok(vec![])
             }
 
+            bbp::CMD_GET_GPIO_STATUS => {
+                let json = self.get_json("/api/gpio").await?;
+                let mut pw = bbp::PayloadWriter::new();
+                let gpios = json.get("gpios").and_then(|v| v.as_array());
+                for i in 0..6 {
+                    let g = gpios.and_then(|a| a.get(i));
+                    pw.put_u8(g.and_then(|v| v.get("mode")).and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                    pw.put_bool(g.and_then(|v| v.get("output")).and_then(|v| v.as_bool()).unwrap_or(false));
+                    pw.put_bool(g.and_then(|v| v.get("input")).and_then(|v| v.as_bool()).unwrap_or(false));
+                    pw.put_bool(g.and_then(|v| v.get("pulldown")).and_then(|v| v.as_bool()).unwrap_or(false));
+                }
+                Ok(pw.buf)
+            }
+
             bbp::CMD_SET_GPIO_CONFIG => {
                 if payload.len() < 3 {
                     return Err(anyhow!("Invalid payload"));
@@ -228,10 +305,32 @@ impl Transport for HttpTransport {
                 Ok(payload.to_vec())
             }
 
-            // DS4424 IDAC (HTTP passthrough via JSON API)
+            // DS4424 IDAC — re-encode JSON as BBP binary for uniform parsing
             bbp::CMD_IDAC_GET_STATUS => {
                 let json = self.get_json("/api/idac").await?;
-                Ok(serde_json::to_vec(&json).unwrap_or_default())
+                let mut pw = bbp::PayloadWriter::new();
+                let present = json.get("present").and_then(|v| v.as_bool()).unwrap_or(false);
+                pw.put_bool(present);
+                let channels = json.get("channels").and_then(|v| v.as_array());
+                let names = ["LevelShift", "V_ADJ1", "V_ADJ2", "Spare"];
+                for i in 0..4u8 {
+                    let ch = channels.and_then(|arr| arr.get(i as usize));
+                    pw.put_u8(i);
+                    pw.put_u8(ch.and_then(|c| c.get("code").and_then(|v| v.as_i64())).unwrap_or(0) as u8);
+                    pw.put_f32(ch.and_then(|c| c.get("targetV").and_then(|v| v.as_f64())).unwrap_or(0.0) as f32);
+                    pw.put_f32(ch.and_then(|c| c.get("actualV").and_then(|v| v.as_f64())).unwrap_or(
+                        ch.and_then(|c| c.get("targetV").and_then(|v| v.as_f64())).unwrap_or(0.0)
+                    ) as f32);
+                    pw.put_f32(ch.and_then(|c| c.get("midpointV").and_then(|v| v.as_f64())).unwrap_or(0.0) as f32);
+                    pw.put_f32(ch.and_then(|c| c.get("vMin").and_then(|v| v.as_f64())).unwrap_or(0.0) as f32);
+                    pw.put_f32(ch.and_then(|c| c.get("vMax").and_then(|v| v.as_f64())).unwrap_or(0.0) as f32);
+                    pw.put_f32(ch.and_then(|c| c.get("stepMv").and_then(|v| v.as_f64())).unwrap_or(0.0) as f32);
+                    let calibrated = ch.and_then(|c| c.get("calibrated").and_then(|v| v.as_bool())).unwrap_or(false);
+                    pw.put_bool(calibrated);
+                    // Calibration points (not available via HTTP API — send 0 count)
+                    pw.put_u8(0);
+                }
+                Ok(pw.buf)
             }
 
             bbp::CMD_IDAC_SET_CODE => {
@@ -250,10 +349,37 @@ impl Transport for HttpTransport {
                 Ok(payload.to_vec())
             }
 
-            // PCA9535 GPIO Expander
+            // PCA9535 GPIO Expander — re-encode as BBP binary
             bbp::CMD_PCA_GET_STATUS => {
                 let json = self.get_json("/api/ioexp").await?;
-                Ok(serde_json::to_vec(&json).unwrap_or_default())
+                let mut pw = bbp::PayloadWriter::new();
+                pw.put_bool(json.get("present").and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_u8(json.get("input0").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_u8(json.get("input1").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_u8(json.get("output0").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_u8(json.get("output1").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                let pg = json.get("powerGood");
+                pw.put_bool(pg.and_then(|v| v.get("logic")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(pg.and_then(|v| v.get("vadj1")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(pg.and_then(|v| v.get("vadj2")).and_then(|v| v.as_bool()).unwrap_or(false));
+                // E-Fuse faults
+                let efuses = json.get("efuses").and_then(|v| v.as_array());
+                for i in 0..4 {
+                    let flt = efuses.and_then(|a| a.get(i)).and_then(|e| e.get("fault")).and_then(|v| v.as_bool()).unwrap_or(false);
+                    pw.put_bool(flt);
+                }
+                let en = json.get("enables");
+                pw.put_bool(en.and_then(|v| v.get("vadj1")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(en.and_then(|v| v.get("vadj2")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(en.and_then(|v| v.get("analog15v")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(en.and_then(|v| v.get("mux")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(en.and_then(|v| v.get("usbHub")).and_then(|v| v.as_bool()).unwrap_or(false));
+                // E-Fuse enables
+                for i in 0..4 {
+                    let enabled = efuses.and_then(|a| a.get(i)).and_then(|e| e.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(false);
+                    pw.put_bool(enabled);
+                }
+                Ok(pw.buf)
             }
 
             bbp::CMD_PCA_SET_CONTROL => {
@@ -266,10 +392,28 @@ impl Transport for HttpTransport {
                 Ok(payload.to_vec())
             }
 
-            // HUSB238 USB PD
+            // HUSB238 USB PD — re-encode as BBP binary
             bbp::CMD_USBPD_GET_STATUS => {
                 let json = self.get_json("/api/usbpd").await?;
-                Ok(serde_json::to_vec(&json).unwrap_or_default())
+                let mut pw = bbp::PayloadWriter::new();
+                pw.put_bool(json.get("present").and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(json.get("attached").and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(json.get("cc").and_then(|v| v.as_str()).unwrap_or("CC1") == "CC2");
+                pw.put_u8(json.get("pdResponse").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_u8(0); // voltage code (not in JSON, unused)
+                pw.put_u8(0); // current code (not in JSON, unused)
+                pw.put_f32(json.get("voltageV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(json.get("currentA").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(json.get("powerW").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                // Source PDOs
+                let pdos = json.get("sourcePdos").and_then(|v| v.as_array());
+                for i in 0..6 {
+                    let pdo = pdos.and_then(|a| a.get(i));
+                    pw.put_bool(pdo.and_then(|p| p.get("detected")).and_then(|v| v.as_bool()).unwrap_or(false));
+                    pw.put_u8(0); // current code (not available, decode_husb_current handles it)
+                }
+                pw.put_u8(json.get("selectedPdo").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                Ok(pw.buf)
             }
 
             bbp::CMD_USBPD_SELECT_PDO => {
@@ -371,8 +515,8 @@ impl Transport for HttpTransport {
             }
 
             bbp::CMD_GET_UART_CONFIG => {
-                let json = self.get_json("/api/uart/config").await?;
-                Ok(serde_json::to_vec(&json).unwrap_or_default())
+                // UART config — not critical, return empty for now
+                Ok(vec![])
             }
 
             bbp::CMD_SET_UART_CONFIG => {
@@ -404,13 +548,37 @@ impl Transport for HttpTransport {
             }
 
             bbp::CMD_GET_UART_PINS => {
-                let json = self.get_json("/api/uart/pins").await?;
-                Ok(serde_json::to_vec(&json).unwrap_or_default())
+                // UART pins — not critical, return empty for now
+                Ok(vec![])
             }
 
-            // MUX commands - no HTTP endpoint in webserver
-            bbp::CMD_MUX_SET_ALL | bbp::CMD_MUX_GET_ALL | bbp::CMD_MUX_SET_SWITCH => {
-                Err(anyhow!("MUX switch matrix control not available over HTTP (USB only)"))
+            // MUX commands
+            bbp::CMD_MUX_GET_ALL => {
+                let json = self.get_json("/api/mux").await?;
+                let states = json.get("states").and_then(|v| v.as_array());
+                let mut pw = bbp::PayloadWriter::new();
+                for i in 0..4 {
+                    pw.put_u8(states.and_then(|a| a.get(i)).and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                }
+                Ok(pw.buf)
+            }
+
+            bbp::CMD_MUX_SET_ALL => {
+                let states: Vec<u8> = payload.to_vec();
+                let body = serde_json::json!({"states": states});
+                self.post_json("/api/mux/all", &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_MUX_SET_SWITCH => {
+                if payload.len() < 3 { return Err(anyhow!("Invalid payload")); }
+                let body = serde_json::json!({
+                    "device": payload[0],
+                    "switch": payload[1],
+                    "closed": payload[2] != 0
+                });
+                self.post_json("/api/mux/switch", &body).await?;
+                Ok(payload.to_vec())
             }
 
             // Raw register access - requires direct SPI, not practical over HTTP
@@ -436,8 +604,28 @@ impl Transport for HttpTransport {
             // WiFi Management
             bbp::CMD_WIFI_GET_STATUS => {
                 let json = self.get_json("/api/wifi").await?;
-                // Serialize JSON back as bytes for uniform handling
-                Ok(serde_json::to_vec(&json).unwrap_or_default())
+                // Re-encode as BBP binary (length-prefixed strings)
+                let mut pw = bbp::PayloadWriter::new();
+                let connected = json.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
+                pw.put_bool(connected);
+                let sta_ssid = json.get("staSSID").and_then(|v| v.as_str()).unwrap_or("");
+                pw.put_u8(sta_ssid.len() as u8);
+                pw.buf.extend_from_slice(sta_ssid.as_bytes());
+                let sta_ip = json.get("staIP").and_then(|v| v.as_str()).unwrap_or("0.0.0.0");
+                pw.put_u8(sta_ip.len() as u8);
+                pw.buf.extend_from_slice(sta_ip.as_bytes());
+                let rssi = json.get("rssi").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                pw.put_u32(rssi as u32);
+                let ap_ssid = json.get("apSSID").and_then(|v| v.as_str()).unwrap_or("");
+                pw.put_u8(ap_ssid.len() as u8);
+                pw.buf.extend_from_slice(ap_ssid.as_bytes());
+                let ap_ip = json.get("apIP").and_then(|v| v.as_str()).unwrap_or("");
+                pw.put_u8(ap_ip.len() as u8);
+                pw.buf.extend_from_slice(ap_ip.as_bytes());
+                let ap_mac = json.get("apMAC").and_then(|v| v.as_str()).unwrap_or("");
+                pw.put_u8(ap_mac.len() as u8);
+                pw.buf.extend_from_slice(ap_mac.as_bytes());
+                Ok(pw.buf)
             }
 
             bbp::CMD_WIFI_CONNECT => {
@@ -454,9 +642,28 @@ impl Transport for HttpTransport {
                 } else { String::new() };
 
                 let body = serde_json::json!({"ssid": ssid, "password": pass});
-                let json = self.post_json("/api/wifi/connect", &body).await?;
+                let json = self.post_json_slow("/api/wifi/connect", &body).await?;
                 let success = json.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                 Ok(vec![if success { 1 } else { 0 }])
+            }
+
+            bbp::CMD_WIFI_SCAN => {
+                let json = self.get_json_slow("/api/wifi/scan").await?;
+                // Re-encode as BBP binary: count(u8) + N * (ssid_len(u8) + ssid + rssi(i8) + auth(u8))
+                let mut buf = Vec::new();
+                let networks = json.get("networks").and_then(|v| v.as_array());
+                let nets = networks.cloned().unwrap_or_default();
+                buf.push(nets.len() as u8);
+                for n in &nets {
+                    let ssid = n.get("ssid").and_then(|v| v.as_str()).unwrap_or("");
+                    let rssi = n.get("rssi").and_then(|v| v.as_i64()).unwrap_or(0) as i8;
+                    let auth = n.get("auth").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    buf.push(ssid.len() as u8);
+                    buf.extend_from_slice(ssid.as_bytes());
+                    buf.push(rssi as u8);
+                    buf.push(auth);
+                }
+                Ok(buf)
             }
 
             // Streaming not supported over HTTP
@@ -472,9 +679,35 @@ impl Transport for HttpTransport {
     }
 
     async fn get_status(&self) -> Result<DeviceState> {
-        let json = self.get_json("/api/status").await?;
-        Self::parse_status_json(&json)
-            .ok_or_else(|| anyhow!("Failed to parse HTTP status response"))
+        // Fetch status and GPIO in parallel for lower latency
+        let status_url = format!("{}/api/status", self.base_url);
+        let gpio_url = format!("{}/api/gpio", self.base_url);
+        let (status_res, gpio_res) = tokio::join!(
+            self.client.get(&status_url).send(),
+            self.client.get(&gpio_url).send()
+        );
+
+        let status_json: Value = status_res?.json().await?;
+        let mut state = Self::parse_status_json(&status_json)
+            .ok_or_else(|| anyhow!("Failed to parse HTTP status response"))?;
+
+        // Merge GPIO state if available
+        if let Ok(resp) = gpio_res {
+            if let Ok(gpio_json) = resp.json::<Value>().await {
+                if let Some(gpios) = gpio_json.get("gpios").and_then(|v| v.as_array()) {
+                    for (i, g) in gpios.iter().enumerate().take(6) {
+                        state.gpio[i] = crate::state::GpioState {
+                            mode: g.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                            output: g.get("output").and_then(|v| v.as_bool()).unwrap_or(false),
+                            input: g.get("input").and_then(|v| v.as_bool()).unwrap_or(false),
+                            pulldown: g.get("pulldown").and_then(|v| v.as_bool()).unwrap_or(false),
+                        };
+                    }
+                }
+            }
+        }
+
+        Ok(state)
     }
 
     fn is_connected(&self) -> bool {

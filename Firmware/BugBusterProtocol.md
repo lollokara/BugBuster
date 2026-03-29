@@ -1159,6 +1159,40 @@ Offset  Field           Type    Description
 
 **Web API equivalent:** `POST /api/wifi/connect` with body `{"ssid":"...","password":"..."}` returns `{"success":true,"ip":"192.168.1.42"}`
 
+Credentials are automatically saved to NVS on successful connect and restored on boot.
+
+#### 0xE4 WIFI_SCAN
+Scan for available WiFi networks. Blocks for ~3-5 seconds while the radio scans all channels.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       count           u8      Number of networks found (max 20)
+```
+
+Followed by `count` entries, each:
+```
+Offset  Field           Type    Description
++0      ssid_len        u8      Length of SSID string (0-32)
++1      ssid            bytes   Network SSID
++0      rssi            i8      Signal strength in dBm (signed)
++1      auth            u8      Auth mode (0=OPEN, 3=WPA2, 4=WPA/WPA2, 6=WPA3)
+```
+
+Results are sorted by signal strength (strongest first), deduplicated by SSID.
+
+**Web API equivalent:** `GET /api/wifi/scan` returns JSON:
+```json
+{
+  "networks": [
+    {"ssid": "MyNetwork", "rssi": -45, "auth": 3},
+    {"ssid": "Neighbor", "rssi": -72, "auth": 4}
+  ]
+}
+```
+
 ---
 
 ## 7. Streaming Protocol
@@ -1474,6 +1508,7 @@ Host                                    Device
 | 1.2 | 2026-03-28 | Added UI-driven calibration commands: IDAC_CAL_ADD_POINT (0xA4), IDAC_CAL_CLEAR (0xA5), IDAC_CAL_SAVE (0xA6) |
 | 1.3 | 2026-03-29 | GET_STATUS now includes diagnostic slots; IDAC calibration commands (0xA4-0xA6) fully documented; added Section 6.16 Scope API (HTTP polling endpoint) |
 | 1.4 | 2026-03-28 | Added WiFi management commands: WIFI_GET_STATUS (0xE1), WIFI_CONNECT (0xE2); Section 6.17; added SET_LSHIFT_OE (0xE0) to Appendix A |
+| 1.5 | 2026-03-29 | Added WIFI_SCAN (0xE4) with scan button + dropdown UI; WiFi credentials now persist in NVS across reboots |
 
 ---
 
@@ -1537,6 +1572,8 @@ Host                                    Device
 | 0xE0 | SET_LSHIFT_OE | H->D | on | `POST /api/lshift/oe` |
 | 0xE1 | WIFI_GET_STATUS | H->D | -- | `GET /api/wifi` |
 | 0xE2 | WIFI_CONNECT | H->D | ssid, pass | `POST /api/wifi/connect` |
+| 0xE3 | SET_SPI_CLOCK | H->D | hz (u32) | (new) |
+| 0xE4 | WIFI_SCAN | H->D | -- | `GET /api/wifi/scan` |
 | 0xFE | PING | H->D | token | (new) |
 | 0xFF | DISCONNECT | H->D | -- | (new) |
 

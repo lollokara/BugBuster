@@ -32,4 +32,6 @@ async-trait = "0.1"
 tauri-plugin-dialog = "2"
 csv = "1"
 chrono = "0.4"
+local-ip-address = "0.6"
+futures = "0.3"
 

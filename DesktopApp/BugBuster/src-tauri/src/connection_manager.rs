@@ -265,7 +265,7 @@ impl ConnectionManager {
             let poll_ms = {
                 let t = transport.lock().await;
                 match t.as_ref() {
-                    Some(tr) if tr.transport_name() == "HTTP" => 1000,
+                    Some(tr) if tr.transport_name() == "HTTP" => 300,
                     _ => 200,
                 }
             };

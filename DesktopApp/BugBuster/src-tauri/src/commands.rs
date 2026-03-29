@@ -356,6 +356,40 @@ pub async fn wifi_connect(
     Ok(r.get_bool().unwrap_or(false))
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WifiNetwork {
+    pub ssid: String,
+    pub rssi: i32,
+    pub auth: u8,
+}
+
+#[tauri::command]
+pub async fn wifi_scan(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<Vec<WifiNetwork>> {
+    let rsp = mgr.send_command(bbp::CMD_WIFI_SCAN, &[]).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let count = r.get_u8().unwrap_or(0) as usize;
+    let mut networks = Vec::with_capacity(count);
+    for _ in 0..count {
+        let slen = r.get_u8().unwrap_or(0) as usize;
+        if r.remaining() < slen + 2 { break; }
+        let ssid = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + slen]).to_string();
+        r.skip(slen);
+        let rssi = r.get_u8().unwrap_or(0) as i8 as i32;
+        let auth = r.get_u8().unwrap_or(0);
+        if !ssid.is_empty() {
+            networks.push(WifiNetwork { ssid, rssi, auth });
+        }
+    }
+    // Deduplicate by SSID, keep strongest signal
+    networks.sort_by(|a, b| b.rssi.cmp(&a.rssi));
+    let mut seen = std::collections::HashSet::new();
+    networks.retain(|n| seen.insert(n.ssid.clone()));
+    Ok(networks)
+}
+
 // -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------

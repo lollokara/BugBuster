@@ -6,6 +6,9 @@
 #include "i2c_bus.h"
 #include "config.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <string.h>
 
@@ -247,4 +250,59 @@ const char* pca9535_status_name(PcaStatus status)
         case PCA_STATUS_EFUSE4_FLT: return "EFUSE_FLT_4";
         default: return "UNKNOWN";
     }
+}
+
+// --- Interrupt-driven input monitoring ---
+
+static TaskHandle_t s_isr_task = NULL;
+
+static void IRAM_ATTR pca_isr_handler(void* arg)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (s_isr_task) {
+        vTaskNotifyGiveFromISR(s_isr_task, &xHigherPriorityTaskWoken);
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+static void pca_isr_task(void* /*pvParameters*/)
+{
+    for (;;) {
+        // Block until ISR fires (or timeout every 2s as fallback poll)
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+        if (s_state.present) {
+            pca9535_update();
+        }
+    }
+}
+
+void pca9535_install_isr(void)
+{
+    if (PIN_MUX_INT == GPIO_NUM_NC) {
+        ESP_LOGW(TAG, "PCA9535 INT pin not configured (breadboard mode)");
+        return;
+    }
+    if (!s_state.present) {
+        ESP_LOGW(TAG, "PCA9535 not present, skipping ISR install");
+        return;
+    }
+
+    // Create the deferred handler task (Core 0, low priority — I2C reads)
+    xTaskCreatePinnedToCore(pca_isr_task, "pcaISR", 2048, NULL, 2, &s_isr_task, 0);
+
+    // Configure INT pin: active-low, falling edge
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = (1ULL << PIN_MUX_INT);
+    io_conf.mode         = GPIO_MODE_INPUT;
+    io_conf.pull_up_en   = GPIO_PULLUP_ENABLE;
+    io_conf.intr_type    = GPIO_INTR_NEGEDGE;
+    gpio_config(&io_conf);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(PIN_MUX_INT, pca_isr_handler, NULL);
+
+    // Read initial state (clears any pending interrupt)
+    pca9535_update();
+
+    ESP_LOGI(TAG, "PCA9535 ISR installed on GPIO%d", PIN_MUX_INT);
 }

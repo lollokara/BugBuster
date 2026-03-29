@@ -41,9 +41,9 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         <div class="temp-thermometer">
                             <div class="temp-thermo-fill" style=move || {
                                 let t = state.get().die_temperature;
-                                let pct = ((t + 25.0) / 150.0 * 100.0).clamp(0.0, 100.0);
-                                let color = if t > 100.0 { "var(--rose)" } else if t > 70.0 { "var(--amber)" } else { "var(--green)" };
-                                format!("height: {}%; background: linear-gradient(to top, {}, {}88)", pct, color, color)
+                                let pct = ((t / 125.0) * 100.0).clamp(2.0, 100.0);
+                                let color = if t > 100.0 { "#ef4444" } else if t > 70.0 { "#f59e0b" } else { "#10b981" };
+                                format!("height: {:.1}%; background: {}", pct, color)
                             }></div>
                         </div>
                         <div class="temp-label" style=move || {
@@ -59,51 +59,95 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     </div>
                 </div>
 
-                // Alert Status
-                <div class="card">
-                    <div class="card-header"><span>"Alert Status"</span>
-                        <span class="badge-hex">{move || format!("0x{:04X}", state.get().alert_status)}</span>
+                // Alert Status — futuristic panel
+                <div class="alert-panel">
+                    <div class="alert-panel-header">
+                        <div class="alert-panel-title">
+                            <span class="alert-panel-icon">"△"</span>
+                            " ALERT STATUS"
+                        </div>
+                        <span class="alert-panel-reg">{move || format!("REG 0x{:04X}", state.get().alert_status)}</span>
                     </div>
-                    <div class="card-body status-led-grid">
+                    <div class="alert-panel-scanline"></div>
+                    <div class="alert-grid">
                         {ALERT_BITS.iter().map(|(bit, name, color)| {
                             let bit = *bit;
                             let lc = led_color(color);
+                            let accent = match *color { "rose" => "#ef4444", "amber" => "#f59e0b", "blue" => "#3b82f6", _ => "#10b981" };
                             view! {
-                                <div class="status-led-item">
-                                    <div class="led"
-                                        class:led-on=move || (state.get().alert_status >> bit) & 1 != 0
+                                <div class="alert-cell"
+                                    style=move || if (state.get().alert_status >> bit) & 1 != 0 {
+                                        format!("border-color: {}; background: {}0a; box-shadow: inset 0 0 20px {}08, 0 0 12px {}15", accent, accent, accent, accent)
+                                    } else { String::new() }
+                                >
+                                    <div class="alert-cell-dot"
                                         style=move || if (state.get().alert_status >> bit) & 1 != 0 {
-                                            format!("background: {}; box-shadow: 0 0 8px {}", lc, lc)
+                                            format!("background: {}; box-shadow: 0 0 6px {}, 0 0 12px {}66", lc, lc, lc)
                                         } else { String::new() }
                                     ></div>
-                                    <span class="led-label">{*name}</span>
+                                    <span class="alert-cell-label"
+                                        style=move || if (state.get().alert_status >> bit) & 1 != 0 {
+                                            format!("color: {}", accent)
+                                        } else { String::new() }
+                                    >{*name}</span>
                                 </div>
                             }
                         }).collect::<Vec<_>>()}
+                    </div>
+                    <div class="alert-panel-footer">
+                        <span class="alert-panel-count" style=move || {
+                            let count = (0..16).filter(|b| (state.get().alert_status >> b) & 1 != 0).count();
+                            if count > 0 { "color: #ef4444".to_string() } else { "color: #10b981".to_string() }
+                        }>{move || {
+                            let count = (0..16).filter(|b| (state.get().alert_status >> b) & 1 != 0).count();
+                            if count == 0 { "ALL CLEAR".to_string() } else { format!("{} ACTIVE", count) }
+                        }}</span>
                     </div>
                 </div>
 
-                // Supply Alert
-                <div class="card">
-                    <div class="card-header"><span>"Supply Status"</span>
-                        <span class="badge-hex">{move || format!("0x{:04X}", state.get().supply_alert_status)}</span>
+                // Supply Status — futuristic panel
+                <div class="alert-panel supply-panel">
+                    <div class="alert-panel-header">
+                        <div class="alert-panel-title">
+                            <span class="alert-panel-icon">"⚡"</span>
+                            " SUPPLY STATUS"
+                        </div>
+                        <span class="alert-panel-reg">{move || format!("REG 0x{:04X}", state.get().supply_alert_status)}</span>
                     </div>
-                    <div class="card-body status-led-grid">
+                    <div class="alert-panel-scanline supply-scanline"></div>
+                    <div class="alert-grid">
                         {SUPPLY_BITS.iter().map(|(bit, name, color)| {
                             let bit = *bit;
                             let lc = led_color(color);
+                            let accent = match *color { "rose" => "#ef4444", "amber" => "#f59e0b", "blue" => "#3b82f6", _ => "#10b981" };
                             view! {
-                                <div class="status-led-item">
-                                    <div class="led"
-                                        class:led-on=move || (state.get().supply_alert_status >> bit) & 1 != 0
+                                <div class="alert-cell"
+                                    style=move || if (state.get().supply_alert_status >> bit) & 1 != 0 {
+                                        format!("border-color: {}; background: {}0a; box-shadow: inset 0 0 20px {}08, 0 0 12px {}15", accent, accent, accent, accent)
+                                    } else { String::new() }
+                                >
+                                    <div class="alert-cell-dot"
                                         style=move || if (state.get().supply_alert_status >> bit) & 1 != 0 {
-                                            format!("background: {}; box-shadow: 0 0 8px {}", lc, lc)
+                                            format!("background: {}; box-shadow: 0 0 6px {}, 0 0 12px {}66", lc, lc, lc)
                                         } else { String::new() }
                                     ></div>
-                                    <span class="led-label">{*name}</span>
+                                    <span class="alert-cell-label"
+                                        style=move || if (state.get().supply_alert_status >> bit) & 1 != 0 {
+                                            format!("color: {}", accent)
+                                        } else { String::new() }
+                                    >{*name}</span>
                                 </div>
                             }
                         }).collect::<Vec<_>>()}
+                    </div>
+                    <div class="alert-panel-footer">
+                        <span class="alert-panel-count" style=move || {
+                            let count = (0..16).filter(|b| (state.get().supply_alert_status >> b) & 1 != 0).count();
+                            if count > 0 { "color: #ef4444".to_string() } else { "color: #10b981".to_string() }
+                        }>{move || {
+                            let count = (0..16).filter(|b| (state.get().supply_alert_status >> b) & 1 != 0).count();
+                            if count == 0 { "ALL CLEAR".to_string() } else { format!("{} ACTIVE", count) }
+                        }}</span>
                     </div>
                 </div>
             </div>
@@ -154,12 +198,26 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     </div>
                                     <div class="bar-gauge" style=format!("--bar-color: {}", color)>
                                         <div class="bar-fill-dynamic" style={
-                                            let pct = if d.source == 1 {
-                                                ((d.value + 25.0) / 150.0 * 100.0).clamp(0.0, 100.0)
-                                            } else {
-                                                (d.value / 5.0 * 100.0).clamp(0.0, 100.0)
+                                            // Nominal ranges per diagnostic source
+                                            let (lo, hi) = match d.source {
+                                                0  => (0.0, 0.5),       // AGND
+                                                1  => (0.0, 125.0),     // Temperature (°C)
+                                                2  => (4.5, 5.5),       // DVCC (5V nom)
+                                                3  => (4.5, 5.5),       // AVCC (5V nom)
+                                                4  => (1.6, 2.0),       // LDO1V8 (1.8V nom)
+                                                5  => (0.0, 33.0),      // AVDD_HI (up to ~33V)
+                                                6  => (4.5, 5.5),       // ALDO5V (5V nom)
+                                                7  => (-24.0, 0.0),     // AVSS (negative)
+                                                8  => (2.3, 2.7),       // REFOUT (2.5V nom)
+                                                9  => (0.0, 30.0),      // DO_VDD
+                                                10 => (0.0, 5.0),       // AGND_SENSE
+                                                11 => (0.0, 5.0),       // AVDD_LO
+                                                _  => (0.0, 5.0),
                                             };
-                                            format!("width: {}%", pct)
+                                            let pct = if hi > lo {
+                                                ((d.value - lo) / (hi - lo) * 100.0).clamp(0.0, 100.0)
+                                            } else { 0.0 };
+                                            format!("width: {:.1}%", pct)
                                         }></div>
                                     </div>
                                 </div>
@@ -182,6 +240,8 @@ fn WifiSection() -> impl IntoView {
     let connect_ssid = RwSignal::new(String::new());
     let connect_pass = RwSignal::new(String::new());
     let connect_status = RwSignal::new(String::new());
+    let scan_results: RwSignal<Vec<WifiNetwork>> = RwSignal::new(Vec::new());
+    let scanning = RwSignal::new(false);
 
     // Poll WiFi status every 2 seconds
     let poll = move || {
@@ -196,6 +256,21 @@ fn WifiSection() -> impl IntoView {
         move || poll(),
         std::time::Duration::from_secs(2),
     );
+
+    let do_scan = move |_| {
+        scanning.set(true);
+        connect_status.set("Scanning...".to_string());
+        leptos::task::spawn_local(async move {
+            let results = fetch_wifi_scan().await;
+            let count = results.len();
+            if count > 0 && connect_ssid.get().is_empty() {
+                connect_ssid.set(results[0].ssid.clone());
+            }
+            scan_results.set(results);
+            scanning.set(false);
+            connect_status.set(format!("Found {} networks", count));
+        });
+    };
 
     view! {
         <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
@@ -255,22 +330,36 @@ fn WifiSection() -> impl IntoView {
             <div class="card-header"><span>"Connect to Network"</span></div>
             <div class="card-body">
                 <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap">
-                    <input type="text" class="input" placeholder="SSID"
-                        style="flex: 1; min-width: 120px"
+                    <button class="btn btn-sm btn-primary"
+                        disabled=move || scanning.get()
+                        on:click=do_scan
+                        style="white-space: nowrap"
+                    >{move || if scanning.get() { "Scanning..." } else { "Scan" }}</button>
+                    <select class="input"
+                        style="flex: 1; min-width: 160px; max-width: none"
                         prop:value=move || connect_ssid.get()
-                        on:input=move |e| connect_ssid.set(event_target_value(&e))
-                    />
+                        on:change=move |e| connect_ssid.set(event_target_value(&e))
+                    >
+                        <option value="" disabled=true selected=move || connect_ssid.get().is_empty()>"Select network..."</option>
+                        {move || {
+                            scan_results.get().into_iter().map(|n| {
+                                let label = format!("{} ({} dBm)", n.ssid, n.rssi);
+                                let ssid = n.ssid.clone();
+                                view! { <option value=ssid>{label}</option> }
+                            }).collect::<Vec<_>>()
+                        }}
+                    </select>
                     <input type="password" class="input" placeholder="Password"
                         style="flex: 1; min-width: 120px"
                         prop:value=move || connect_pass.get()
                         on:input=move |e| connect_pass.set(event_target_value(&e))
                     />
-                    <button class="btn btn-sm"
+                    <button class="btn btn-sm" style="background: rgba(16,185,129,0.7); border-color: rgba(16,185,129,0.3)"
                         on:click=move |_| {
                             let ssid = connect_ssid.get();
                             let pass = connect_pass.get();
                             if ssid.is_empty() {
-                                connect_status.set("Enter an SSID".to_string());
+                                connect_status.set("Select a network first".to_string());
                                 return;
                             }
                             connect_status.set("Connecting...".to_string());
@@ -291,7 +380,7 @@ fn WifiSection() -> impl IntoView {
                         }
                     >"Connect"</button>
                 </div>
-                <div class="text-xs" style="margin-top: 0.5rem; color: var(--text3)">
+                <div class="text-xs" style="margin-top: 0.5rem; color: var(--text-dim)">
                     {move || connect_status.get()}
                 </div>
             </div>
