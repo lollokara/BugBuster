@@ -166,10 +166,12 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 }
                                             }
                                         />
-                                        <div class="slider-labels" style="font-size: 9px">
-                                            <span>{format!("{:.1}V", safe_min)}</span>
-                                            <span>{format!("{:.1}V", ch.midpoint_v)}</span>
-                                            <span>{format!("{:.1}V", safe_max)}</span>
+                                        <div style="position: relative; height: 16px; font-size: 9px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim)">
+                                            <span style="position: absolute; left: 0">{format!("{:.1}V", safe_min)}</span>
+                                            <span style=format!("position: absolute; left: {:.1}%; transform: translateX(-50%)",
+                                                if safe_max > safe_min { (ch.midpoint_v - safe_min) / (safe_max - safe_min) * 100.0 } else { 50.0 }
+                                            )>{format!("{:.1}V", ch.midpoint_v)}</span>
+                                            <span style="position: absolute; right: 0">{format!("{:.1}V", safe_max)}</span>
                                         </div>
 
                                         // Big voltage preview

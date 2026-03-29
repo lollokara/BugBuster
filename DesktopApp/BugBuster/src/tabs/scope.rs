@@ -92,21 +92,17 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let sample_counter = RwSignal::new(0u32);
     let last_rate_check = RwSignal::new(js_sys::Date::now());
 
-    // Listen for ADC stream events
+    // Display listener: "adc-stream" events (throttled to ~30 Hz by backend)
     spawn_local(async move {
         let closure = Closure::new(move |event: JsValue| {
-            // Parse the Tauri event wrapper
             #[derive(Deserialize)]
             struct TauriEvt { payload: Vec<u8> }
             let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvt>(event) else { return };
-
             if !running.get_untracked() { return; }
 
             let Some((mask, samples)) = parse_adc_event(&evt.payload) else { return };
             let now = js_sys::Date::now();
             let ch_en = channels_en.get_untracked();
-
-            // Get ADC ranges and function codes from device state for conversion
             let ds = state.get_untracked();
             let ranges: [u8; 4] = std::array::from_fn(|i| {
                 if i < ds.channels.len() { ds.channels[i].adc_range } else { 0 }
@@ -115,25 +111,21 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 if i < ds.channels.len() { ds.channels[i].function } else { 0 }
             });
 
-            // Determine time step between samples (spread evenly across batch)
-            let batch_dt = if samples.len() > 1 { 2.0 / samples.len() as f64 } else { 0.0 };
-
-            for (si, raw) in samples.iter().enumerate() {
-                let t = now - (samples.len() - 1 - si) as f64 * batch_dt;
+            // Push last sample of batch to display
+            if let Some(raw) = samples.last() {
                 for ch in 0..4 {
-                    if ch_en[ch] && (mask & (1 << ch)) != 0 {
-                        let v = raw_to_value(raw[ch], ranges[ch], functions[ch]);
-                        scope_data[ch].update(|data| {
-                            data.push(ScopePoint { time_ms: t, value: v });
-                        });
-                    }
+                    if !ch_en[ch] || (mask & (1 << ch)) == 0 { continue; }
+                    let v = raw_to_value(raw[ch], ranges[ch], functions[ch]);
+                    scope_data[ch].update(|data| {
+                        data.push(ScopePoint { time_ms: now, value: v });
+                    });
                 }
             }
 
-            // Update sample counter
+            // Count samples for rate display
             sample_counter.update(|c| *c += samples.len() as u32);
 
-            // Trim old data (keep 1.5x window + cap at MAX_POINTS)
+            // Trim old data
             let win = window_sec.get_untracked();
             let cutoff = now - win * 1000.0 * 1.5;
             for ch in 0..4 {
@@ -142,19 +134,27 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     if data.len() > MAX_POINTS { data.drain(0..data.len() - MAX_POINTS); }
                 });
             }
-
-            // Binary recording: forward raw payload to BBSC writer
-            if recording.get_untracked() {
-                let payload_clone = evt.payload.clone();
-                let args = serde_wasm_bindgen::to_value(
-                    &serde_json::json!({ "rawPayload": payload_clone })
-                ).unwrap();
-                spawn_local(async move {
-                    let _ = invoke("append_recording_data", args).await;
-                });
-            }
         });
         listen("adc-stream", &closure).await;
+        closure.forget();
+    });
+
+    // Recording listener: "adc-stream-raw" events (full rate, every batch)
+    spawn_local(async move {
+        let closure = Closure::new(move |event: JsValue| {
+            if !recording.get_untracked() { return; }
+            #[derive(Deserialize)]
+            struct TauriEvt { payload: Vec<u8> }
+            let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvt>(event) else { return };
+            let payload_clone = evt.payload;
+            let args = serde_wasm_bindgen::to_value(
+                &serde_json::json!({ "rawPayload": payload_clone })
+            ).unwrap();
+            spawn_local(async move {
+                let _ = invoke("append_recording_data", args).await;
+            });
+        });
+        listen("adc-stream-raw", &closure).await;
         closure.forget();
     });
 
@@ -174,18 +174,26 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let ch_en = channels_en.get();
         if is_running {
             let mask: u8 = (0..4).fold(0u8, |m, i| if ch_en[i] { m | (1 << i) } else { m });
-            if mask == 0 { return; }
-            // Start ADC stream with divider=1 (full rate)
+            if mask == 0 {
+                log("Scope: no channels enabled");
+                set_running.set(false);
+                return;
+            }
+            // Stream at full rate (divider=1). Recording gets all samples.
+            // The event handler below throttles display updates to ~30 FPS.
             #[derive(serde::Serialize)]
             #[serde(rename_all = "camelCase")]
             struct StartArgs { channel_mask: u8, divider: u8 }
             let args = serde_wasm_bindgen::to_value(&StartArgs { channel_mask: mask, divider: 1 }).unwrap();
+            log(&format!("Scope: starting ADC stream mask=0x{:02X}", mask));
             spawn_local(async move {
-                let _ = invoke("start_adc_stream", args).await;
+                let result = invoke("start_adc_stream", args).await;
+                log(&format!("ADC stream start result: {:?}", result));
             });
         } else {
             spawn_local(async move {
                 let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+                log("ADC stream stopped");
             });
         }
     });

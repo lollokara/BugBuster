@@ -116,18 +116,48 @@ impl ConnectionManager {
         // Spawn event listener for USB stream data
         let app_handle = app.clone();
         tokio::spawn(async move {
-            while let Some(msg) = event_rx.recv().await {
-                match msg.cmd_id {
-                    bbp::EVT_ADC_DATA => {
-                        let _ = app_handle.emit("adc-stream", &msg.payload);
+            let mut last_adc_emit = std::time::Instant::now();
+            let mut adc_buffer: Vec<u8> = Vec::new();
+            let emit_interval = std::time::Duration::from_millis(33); // ~30 Hz
+
+            loop {
+                // Use a short timeout so we can flush the buffer periodically
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(10),
+                    event_rx.recv()
+                ).await {
+                    Ok(Some(msg)) => {
+                        match msg.cmd_id {
+                            bbp::EVT_ADC_DATA => {
+                                // Always keep the latest payload for display
+                                adc_buffer = msg.payload.clone();
+
+                                // Emit to "adc-stream-raw" for recording (every event)
+                                let _ = app_handle.emit("adc-stream-raw", &msg.payload);
+
+                                // Throttle display emit to ~30 Hz
+                                if last_adc_emit.elapsed() >= emit_interval {
+                                    let _ = app_handle.emit("adc-stream", &adc_buffer);
+                                    last_adc_emit = std::time::Instant::now();
+                                }
+                            }
+                            bbp::EVT_SCOPE_DATA => {
+                                let _ = app_handle.emit("scope-data", &msg.payload);
+                            }
+                            bbp::EVT_ALERT => {
+                                let _ = app_handle.emit("alert-event", &msg.payload);
+                            }
+                            _ => {}
+                        }
                     }
-                    bbp::EVT_SCOPE_DATA => {
-                        let _ = app_handle.emit("scope-data", &msg.payload);
+                    Ok(None) => break, // Channel closed
+                    Err(_) => {
+                        // Timeout — flush any pending ADC data
+                        if !adc_buffer.is_empty() && last_adc_emit.elapsed() >= emit_interval {
+                            let _ = app_handle.emit("adc-stream", &adc_buffer);
+                            last_adc_emit = std::time::Instant::now();
+                        }
                     }
-                    bbp::EVT_ALERT => {
-                        let _ = app_handle.emit("alert-event", &msg.payload);
-                    }
-                    _ => {}
                 }
             }
         });

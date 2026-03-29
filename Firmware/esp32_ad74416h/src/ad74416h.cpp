@@ -610,11 +610,11 @@ float AD74416H::diagCodeToValue(uint16_t raw, uint8_t source)
         case 1:  // Temperature
             return (code - 2034.0f) / 8.95f - 40.0f;
 
-        case 2:  // DVCC: V = (code/65536) * 2.5 * 2.5
-            return (code / 65536.0f) * 2.5f * 2.5f;
+        case 2:  // DVCC: 5V rail, attenuation ~0.3 → V = (code/65536) * 2.5 / 0.3
+            return (code / 65536.0f) * (2.5f / 0.3f);
 
-        case 3:  // AVCC: V = (code/65536) * 2.5 * 2.5
-            return (code / 65536.0f) * 2.5f * 2.5f;
+        case 3:  // AVCC: 5V rail, attenuation ~0.3 → V = (code/65536) * 2.5 / 0.3
+            return (code / 65536.0f) * (2.5f / 0.3f);
 
         case 4:  // LDO1V8: V = (code/65536) * 2.5
             return (code / 65536.0f) * 2.5f;
