@@ -1,3 +1,39 @@
-/Firmware/esp32_ad74416h/managed_components/espressif__tinyusb
-/Firmware/esp32_ad74416h/managed_components/espressif__esp_tinyusb
+# =============================================================================
+# BugBuster .gitignore
+# =============================================================================
+
+# macOS
 .DS_Store
+**/.DS_Store
+
+# Altium Designer version history (auto-generated backups)
+History/
+__Previews/
+
+# ESP-IDF / PlatformIO build artifacts
+Firmware/esp32_ad74416h/.pio/
+Firmware/esp32_ad74416h/managed_components/espressif__tinyusb
+Firmware/esp32_ad74416h/managed_components/espressif__esp_tinyusb
+Firmware/esp32_ad74416h/sdkconfig.esp32s3
+Firmware/esp32_ad74416h/firmware_ota.bin
+
+# Rust / Tauri build artifacts
+DesktopApp/BugBuster/target/
+DesktopApp/BugBuster/dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Test outputs
+Scripts/*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/

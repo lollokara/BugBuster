@@ -1,6 +1,6 @@
 # BugBuster Architecture
 
-Reference document for the BugBuster hardware test instrument. Last updated 2026-03-28.
+Reference document for the BugBuster hardware test instrument. Last updated 2026-03-30.
 
 ---
 
@@ -29,7 +29,7 @@ Both transports are abstracted behind a `Transport` trait in the Rust backend so
 | Component | Role | Bus | Address |
 |-----------|------|-----|---------|
 | **ESP32-S3** (DFRobot FireBeetle 2) | Main MCU, 4 MB flash | -- | -- |
-| **AD74416H** | 4-ch software-configurable I/O (24-bit ADC, 16-bit DAC) | SPI (1 MHz) | Dev addr 0x00 |
+| **AD74416H** | 4-ch software-configurable I/O (24-bit ADC, 16-bit DAC) | SPI (10 MHz default, up to 20 MHz) | Dev addr 0x00 |
 | **ADGS2414D x4** | Octal SPST analog switch matrix (32 switches total) | SPI (shared bus, separate CS) | Daisy-chain |
 | **DS4424** | 4-ch I2C current DAC (adjusts LTM8063/LTM8078 output voltages) | I2C | 0x10 |
 | **HUSB238** | USB-C PD sink controller (negotiates 5-20V from USB-C) | I2C | 0x08 |
@@ -44,7 +44,7 @@ Both transports are abstracted behind a `Transport` trait in the Rust backend so
 | SDO (MISO) | 8 | From AD74416H |
 | SDI (MOSI) | 9 | To AD74416H |
 | SYNC (CS) | 10 | AD74416H chip select (active-low) |
-| SCLK | 11 | SPI clock, 1 MHz |
+| SCLK | 11 | SPI clock, 10 MHz (configurable up to 20 MHz) |
 | MUX_CS | 12 | ADGS2414D chip select |
 | LSHIFT_OE | 14 | Level shifter output enable (TXS0108E) |
 
@@ -68,7 +68,7 @@ Both transports are abstracted behind a `Transport` trait in the Rust backend so
 ```
 ESP32-S3
   |
-  +--[SPI @ 1 MHz]--+--[CS GPIO10]--> AD74416H (4-ch I/O)
+  +--[SPI @ 10 MHz]-+--[CS GPIO10]--> AD74416H (4-ch I/O)
   |                  |
   |                  +--[CS GPIO12]--> ADGS2414D x4 (daisy-chain, via level shifter)
   |

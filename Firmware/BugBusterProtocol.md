@@ -1,9 +1,9 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 1.4
-**Transport:** USB CDC (Virtual COM Port)
+**Version:** 1.5
+**Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
-**Status:** Draft
+**Status:** Active
 
 ---
 
@@ -1193,6 +1193,86 @@ Results are sorted by signal strength (strongest first), deduplicated by SSID.
 }
 ```
 
+### 6.18 Level Shifter Control
+
+#### 0xE0 SET_LSHIFT_OE
+Enable or disable the TXS0108E level shifter output (controls signal routing between ESP32 GPIOs and the MUX matrix).
+
+**Request payload:**
+```
+Offset  Field           Type    Description
+0       on              bool    true = enable level shifter, false = disable (high-Z)
+```
+
+**Response payload:** (empty)
+
+**Web API equivalent:** `POST /api/lshift/oe` with body `{"on": true}`
+
+### 6.19 SPI Clock Control
+
+#### 0xE3 SET_SPI_CLOCK
+Change the AD74416H SPI clock speed at runtime. Useful for testing signal integrity at different bus speeds. The AD74416H supports up to 20 MHz.
+
+**Request payload:**
+```
+Offset  Field           Type    Description
+0       clock_hz        u32     SPI clock speed in Hz (100,000 - 20,000,000)
+```
+
+**Response payload:** (empty on success)
+
+Pauses ADC polling, removes and re-adds the SPI device with the new clock, then verifies by writing/reading the SCRATCH register. Returns `ERR_SPI_FAIL` if verification fails.
+
+**CLI equivalent:** `spiclock 10000000`
+
+### 6.20 Firmware Management (HTTP only)
+
+These endpoints are available only via the HTTP REST API (not BBP).
+
+#### GET /api/device/version
+Returns firmware version, build metadata, and OTA partition information.
+
+**Response:**
+```json
+{
+  "version": "Mar 30 2026",
+  "date": "Mar 30 2026",
+  "time": "01:30:00",
+  "idfVersion": "v5.4-dirty",
+  "fwMajor": 1,
+  "fwMinor": 0,
+  "fwPatch": 0,
+  "protoVersion": 1,
+  "partition": "app0",
+  "partitionSize": 1703936,
+  "nextPartition": "app1",
+  "nextPartitionSize": 1703936
+}
+```
+
+#### POST /api/ota/upload
+Upload a firmware binary for OTA update. The request body is the raw `firmware.bin` file (application/octet-stream). Maximum size: 2 MB.
+
+The device writes to the inactive OTA partition, validates the image, sets it as the boot partition, sends a success response, then reboots after 1 second.
+
+**Request:** Binary body (firmware.bin, max 2 MB)
+
+**Response (success):**
+```json
+{
+  "success": true,
+  "bytesWritten": 1056576,
+  "partition": "app1"
+}
+```
+
+**Response (failure):**
+```json
+{"error": "OTA write failed"}
+```
+
+If the new firmware fails to boot (crashes before `esp_ota_mark_app_valid_cancel_rollback()`), the bootloader automatically reverts to the previous partition.
+
 ---
 
 ## 7. Streaming Protocol
@@ -1508,7 +1588,8 @@ Host                                    Device
 | 1.2 | 2026-03-28 | Added UI-driven calibration commands: IDAC_CAL_ADD_POINT (0xA4), IDAC_CAL_CLEAR (0xA5), IDAC_CAL_SAVE (0xA6) |
 | 1.3 | 2026-03-29 | GET_STATUS now includes diagnostic slots; IDAC calibration commands (0xA4-0xA6) fully documented; added Section 6.16 Scope API (HTTP polling endpoint) |
 | 1.4 | 2026-03-28 | Added WiFi management commands: WIFI_GET_STATUS (0xE1), WIFI_CONNECT (0xE2); Section 6.17; added SET_LSHIFT_OE (0xE0) to Appendix A |
-| 1.5 | 2026-03-29 | Added WIFI_SCAN (0xE4) with scan button + dropdown UI; WiFi credentials now persist in NVS across reboots |
+| 1.5 | 2026-03-29 | Added WIFI_SCAN (0xE4); WiFi credentials persist in NVS |
+| 1.6 | 2026-03-30 | Added SET_LSHIFT_OE (0xE0), SET_SPI_CLOCK (0xE3) sections; OTA update endpoint (POST /api/ota/upload); device version endpoint (GET /api/device/version); A/B OTA partition table with rollback |
 
 ---
 
