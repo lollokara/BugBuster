@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "ad74416h_spi.h"
+#include "esp_log.h"
 #include <string.h>
 
 AD74416H_SPI::AD74416H_SPI(gpio_num_t pin_sdo, gpio_num_t pin_sdi,
@@ -47,6 +48,30 @@ void AD74416H_SPI::begin()
     dev_cfg.flags          = 0;
 
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev_cfg, &_spi_dev));
+}
+
+bool AD74416H_SPI::setClockSpeed(uint32_t hz)
+{
+    if (hz < 100000 || hz > 20000000) return false;  // 100kHz to 20MHz
+
+    // Remove old device, add new one with updated clock
+    spi_bus_remove_device(_spi_dev);
+
+    spi_device_interface_config_t dev_cfg = {};
+    dev_cfg.clock_speed_hz = hz;
+    dev_cfg.mode           = 2;  // CPOL=1, CPHA=0
+    dev_cfg.spics_io_num   = -1; // Manual CS
+    dev_cfg.queue_size     = 4;
+
+    esp_err_t err = spi_bus_add_device(SPI2_HOST, &dev_cfg, &_spi_dev);
+    if (err != ESP_OK) {
+        ESP_LOGE("spi", "Failed to re-add SPI device at %luHz: %s", (unsigned long)hz, esp_err_to_name(err));
+        return false;
+    }
+
+    _clock_hz = hz;
+    ESP_LOGI("spi", "SPI clock changed to %lu Hz (%.1f MHz)", (unsigned long)hz, hz / 1e6f);
+    return true;
 }
 
 uint8_t AD74416H_SPI::computeCRC8(const uint8_t* frame) const

@@ -142,6 +142,9 @@ extern "C" {
 #define BBP_CMD_WIFI_GET_STATUS  0xE1  // Get WiFi status
 #define BBP_CMD_WIFI_CONNECT     0xE2  // Connect to WiFi network
 
+// SPI Clock
+#define BBP_CMD_SET_SPI_CLOCK    0xE3  // Set SPI clock speed (Hz, u32)
+
 // System
 #define BBP_CMD_DEVICE_RESET    0x70
 #define BBP_CMD_REG_READ        0x71

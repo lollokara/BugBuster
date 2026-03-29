@@ -1299,6 +1299,42 @@ static int handleSetLshiftOe(uint16_t seq, uint8_t cmdId,
     return 1;
 }
 
+static int handleSetSpiClock(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint32_t hz = get_u32(payload, &rpos);
+
+    // Pause ADC task during SPI device reconfiguration
+    extern volatile bool g_spi_bus_request;
+    extern volatile bool g_spi_bus_granted;
+    g_spi_bus_granted = false;
+    g_spi_bus_request = true;
+    for (int i = 0; i < 200 && !g_spi_bus_granted; i++) delay_ms(1);
+
+    bool ok = s_spi->setClockSpeed(hz);
+
+    g_spi_bus_request = false;
+    g_spi_bus_granted = false;
+
+    if (!ok) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    // Verify SPI still works
+    uint16_t scratch = 0;
+    s_spi->writeRegister(0x76, 0xA5C3);  // SCRATCH register
+    bool crc_ok = s_spi->readRegister(0x76, &scratch);
+    bool match = (scratch == 0xA5C3);
+    s_spi->writeRegister(0x76, 0x0000);
+
+    ESP_LOGI(TAG, "SPI clock set to %lu Hz — verify: %s", (unsigned long)hz, match ? "OK" : "FAIL");
+
+    size_t pos = 0;
+    put_u32(out, &pos, hz);
+    put_bool(out, &pos, match && crc_ok);
+    return (int)pos;
+}
+
 static int handlePing(uint16_t seq, uint8_t cmdId,
                        const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -1811,6 +1847,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_REG_WRITE:
             rspLen = handleRegWrite(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_SET_SPI_CLOCK:
+            rspLen = handleSetSpiClock(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_SET_LSHIFT_OE:
             rspLen = handleSetLshiftOe(seq, cmdId, payload, payloadLen, rspBuf);

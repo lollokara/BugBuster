@@ -285,6 +285,28 @@ static void handleCommand(const char* line)
         serial_printf("Testing ADGS2414D address mode, SW_DATA=0x%02X...\r\n", val);
         uint8_t rb = adgs_test_address_mode((uint8_t)val);
         serial_printf("  Read back: 0x%02X %s\r\n", rb, (rb == (uint8_t)val) ? "[MATCH]" : "[MISMATCH]");
+    } else if (strcmp(cmd, "spiclock") == 0) {
+        extern AD74416H_SPI spiDriver;
+        if (!*args) {
+            serial_printf("Current SPI clock: %lu Hz (%.1f MHz)\r\n",
+                (unsigned long)spiDriver.getClockSpeed(), spiDriver.getClockSpeed() / 1e6f);
+        } else {
+            unsigned long hz = strtoul(args, NULL, 10);
+            if (hz == 0) { serial_println("Usage: spiclock <Hz>  e.g. spiclock 10000000"); }
+            else {
+                serial_printf("Setting SPI clock to %lu Hz...\r\n", hz);
+                if (spiDriver.setClockSpeed((uint32_t)hz)) {
+                    // Verify
+                    spiDriver.writeRegister(0x76, 0xA5C3);
+                    uint16_t rb = 0;
+                    bool ok = spiDriver.readRegister(0x76, &rb);
+                    spiDriver.writeRegister(0x76, 0x0000);
+                    serial_printf("  Verify: wrote 0xA5C3, read 0x%04X — %s\r\n", rb, (rb == 0xA5C3 && ok) ? "OK" : "FAIL");
+                } else {
+                    serial_println("  FAILED (range: 100kHz - 20MHz)");
+                }
+            }
+        }
     } else if (strcmp(cmd, "muxreset") == 0) {
         serial_println("Resetting ADGS2414D (soft reset)...");
         adgs_soft_reset();

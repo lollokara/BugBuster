@@ -49,7 +49,18 @@ public:
 
     spi_device_handle_t getDeviceHandle() const { return _spi_dev; }
 
+    /**
+     * @brief Change SPI clock speed at runtime.
+     * @param hz  New clock speed in Hz (max 20 MHz for AD74416H)
+     * @return true on success
+     */
+    bool setClockSpeed(uint32_t hz);
+
+    /** @brief Get current SPI clock speed in Hz. */
+    uint32_t getClockSpeed() const { return _clock_hz; }
+
 private:
+    uint32_t _clock_hz = SPI_CLOCK_HZ;
     gpio_num_t _pin_sdo;
     gpio_num_t _pin_sdi;
     gpio_num_t _pin_sync;
