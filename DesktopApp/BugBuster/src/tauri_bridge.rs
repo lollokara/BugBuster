@@ -180,7 +180,7 @@ pub fn show_toast(msg: &str, kind: &str) {
         js_sys::Reflect::set(&detail, &"msg".into(), &msg.into()).ok();
         js_sys::Reflect::set(&detail, &"kind".into(), &kind.into()).ok();
         let mut init = web_sys::CustomEventInit::new();
-        init.detail(&detail);
+        init.set_detail(&detail);
         if let Ok(event) = web_sys::CustomEvent::new_with_event_init_dict("bb-toast", &init) {
             window.dispatch_event(&event).ok();
         }

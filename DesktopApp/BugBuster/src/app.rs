@@ -42,7 +42,7 @@ pub fn App() -> impl IntoView {
 
     // Listen for toast events from invoke_with_feedback
     spawn_local(async move {
-        let closure = Closure::new(move |event: JsValue| {
+        let closure: Closure<dyn FnMut(JsValue)> = Closure::new(move |event: JsValue| {
             let event: web_sys::CustomEvent = event.unchecked_into();
             if let Some(detail) = event.detail().dyn_ref::<js_sys::Object>() {
                 let msg = js_sys::Reflect::get(detail, &"msg".into())
