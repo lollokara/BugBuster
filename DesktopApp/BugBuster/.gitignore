@@ -1,3 +1,9 @@
 /dist/
 /target/
 /Cargo.lock
+
+# macOS metadata
+.DS_Store
+._*
+**/.DS_Store
+**/._*

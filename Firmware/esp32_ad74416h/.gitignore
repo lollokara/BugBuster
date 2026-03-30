@@ -14,3 +14,9 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# macOS metadata
+.DS_Store
+._*
+**/.DS_Store
+**/._*
