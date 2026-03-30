@@ -5,6 +5,8 @@
 # macOS
 .DS_Store
 **/.DS_Store
+._*
+**/._*
 
 # Altium Designer version history (auto-generated backups)
 History/
