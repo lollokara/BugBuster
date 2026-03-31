@@ -1,0 +1,5 @@
+Record=TopLevelDocument|FileName=Analog.SchDoc|SheetNumber=4
+Record=NoMainPathDocument|SourceDocument=Analog.SchDoc|FileName=ESP32.SchDoc|SheetNumber=1
+Record=NoMainPathDocument|SourceDocument=Analog.SchDoc|FileName=IOs.SchDoc|SheetNumber=5
+Record=NoMainPathDocument|SourceDocument=Analog.SchDoc|FileName=Power.SchDoc|SheetNumber=3
+Record=NoMainPathDocument|SourceDocument=Analog.SchDoc|FileName=USB.SchDoc|SheetNumber=2
