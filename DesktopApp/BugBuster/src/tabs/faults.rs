@@ -2,16 +2,20 @@ use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;
 
+// ALERT_STATUS register (0x3F)
 const GLOBAL_ALERTS: &[(usize, &str)] = &[
-    (0, "RESET"), (1, "CAL_MEM"), (2, "SPI_CRC"), (3, "SPI_SCLK"), (4, "ADC_ERR"),
-    (5, "SUPPLY"), (6, "TEMP"), (7, "CH_D"), (8, "CH_C"), (9, "CH_B"), (10, "CH_A"),
+    (0, "RESET"), (2, "SUPPLY_ERR"), (3, "SPI_ERR"), (4, "TEMP_ALERT"), (5, "ADC_ERR"),
+    (8, "CH_A"), (9, "CH_B"), (10, "CH_C"), (11, "CH_D"),
+    (12, "HART_A"), (13, "HART_B"), (14, "HART_C"), (15, "HART_D"),
 ];
+// SUPPLY_ALERT_STATUS register (0x57)
 const SUPPLY_ALERTS: &[(usize, &str)] = &[
-    (0, "AVDD_HI"), (1, "AVDD_LO"), (2, "AVSS"), (3, "AVCC"), (4, "DVCC"), (5, "IOVDD"), (6, "REFIO"),
+    (0, "CAL_MEM"), (1, "AVSS"), (2, "DVCC"), (3, "AVCC"), (4, "DO_VDD"), (5, "AVDD_LO"), (6, "AVDD_HI"),
 ];
+// CHANNEL_ALERT_STATUS register (0x58 + ch)
 const CH_ALERTS: &[(usize, &str)] = &[
-    (0, "VIN_LO"), (1, "VIN_HI"), (2, "OC"), (3, "SC"), (4, "DO_SC"),
-    (5, "DIN_OC"), (6, "DIN_SC"), (7, "DAC"), (8, "AVDD"), (9, "DVCC"),
+    (0, "DIN_SC"), (1, "DIN_OC"), (2, "DO_SC"), (3, "DO_TIMEOUT"),
+    (4, "AIO_SC"), (5, "AIO_OC"), (6, "VIOUT_SHDN"),
 ];
 
 #[component]

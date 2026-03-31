@@ -122,9 +122,12 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 while (g_spi_bus_request) { delay_ms(1); }
             }
 
-            // Read hardware (outside mutex) - only for non-HIGH_IMP channels
+            // Read hardware (outside mutex) - only for channels that have ADC active
+            // DIN_LOGIC and DIN_LOOP use the comparator path, not the ADC conversion path
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                if (func[ch] != CH_FUNC_HIGH_IMP) {
+                if (func[ch] != CH_FUNC_HIGH_IMP &&
+                    func[ch] != CH_FUNC_DIN_LOGIC &&
+                    func[ch] != CH_FUNC_DIN_LOOP) {
                     raw[ch] = s_device->readAdcResult(ch);
                     eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch]);
                 } else {
@@ -363,12 +366,18 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     xSemaphoreGive(g_stateMutex);
                 }
 
-                // Rebuild ADC_CONV_CTRL: enable only non-HIGH_IMP channels.
+                // Rebuild ADC_CONV_CTRL: enable only channels with active ADC conversion.
+                // DIN_LOGIC and DIN_LOOP use the comparator path — enabling them in the
+                // ADC conversion mask causes ADC_ERR because the hardware auto-sets an
+                // invalid CONV_MUX for DIN functions.
                 {
                     uint8_t chMask = 0;
                     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                         for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
-                            if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
+                            ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
+                            if (f != CH_FUNC_HIGH_IMP &&
+                                f != CH_FUNC_DIN_LOGIC &&
+                                f != CH_FUNC_DIN_LOOP)
                                 chMask |= (1 << c);
                         }
                         xSemaphoreGive(g_stateMutex);
@@ -461,12 +470,16 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 // Restart ADC conversion with all active channels
                 // diagMask = 0x0F: all 4 diagnostic slots always active in conversion sequence
                 // (slot source assignments are in DIAG_ASSIGN registers, unaffected by this)
+                // DIN_LOGIC and DIN_LOOP are excluded — they use the comparator path, not ADC.
                 {
                     uint8_t chMask = 0;
                     const uint8_t diagMask = 0x0F;
                     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                         for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
-                            if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
+                            ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
+                            if (f != CH_FUNC_HIGH_IMP &&
+                                f != CH_FUNC_DIN_LOGIC &&
+                                f != CH_FUNC_DIN_LOOP)
                                 chMask |= (1 << c);
                         }
                         xSemaphoreGive(g_stateMutex);

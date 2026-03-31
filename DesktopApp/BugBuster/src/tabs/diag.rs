@@ -3,16 +3,18 @@ use serde::Serialize;
 use wasm_bindgen::JsValue;
 use crate::tauri_bridge::*;
 
+// ALERT_STATUS register (0x3F)
 const ALERT_BITS: &[(usize, &str, &str)] = &[
-    (0, "RESET", "amber"), (1, "CAL_MEM", "rose"), (2, "SPI_CRC", "rose"),
-    (3, "SPI_SCLK", "rose"), (4, "ADC_ERR", "amber"), (5, "SUPPLY", "rose"),
-    (6, "TEMP", "amber"), (7, "CH_D", "blue"), (8, "CH_C", "blue"),
-    (9, "CH_B", "blue"), (10, "CH_A", "blue"),
+    (0, "RESET", "amber"), (2, "SUPPLY_ERR", "rose"), (3, "SPI_ERR", "rose"),
+    (4, "TEMP_ALERT", "amber"), (5, "ADC_ERR", "rose"),
+    (8, "CH_A", "blue"), (9, "CH_B", "blue"), (10, "CH_C", "blue"), (11, "CH_D", "blue"),
+    (12, "HART_A", "amber"), (13, "HART_B", "amber"), (14, "HART_C", "amber"), (15, "HART_D", "amber"),
 ];
 
+// SUPPLY_ALERT_STATUS register (0x57)
 const SUPPLY_BITS: &[(usize, &str, &str)] = &[
-    (0, "AVDD_HI", "rose"), (1, "AVDD_LO", "rose"), (2, "AVSS", "rose"),
-    (3, "AVCC", "amber"), (4, "DVCC", "amber"), (5, "IOVDD", "amber"), (6, "REFIO", "amber"),
+    (0, "CAL_MEM", "amber"), (1, "AVSS", "rose"), (2, "DVCC", "rose"),
+    (3, "AVCC", "rose"), (4, "DO_VDD", "rose"), (5, "AVDD_LO", "rose"), (6, "AVDD_HI", "rose"),
 ];
 
 fn led_color(name: &str) -> &'static str {
