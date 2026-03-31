@@ -88,6 +88,31 @@ static uint32_t adcRateToPollMs(AdcRate fastest)
     }
 }
 
+// -----------------------------------------------------------------------------
+// Helper: return the next wider AdcRange for auto-ranging.
+// Returns the same range if already at maximum span.
+// -----------------------------------------------------------------------------
+static AdcRange nextWiderRange(AdcRange r)
+{
+    switch (r) {
+        // Unipolar small → unipolar medium
+        case ADC_RNG_0_0_3125V:         return ADC_RNG_0_0_625V;
+        // Unipolar medium → bipolar wide
+        case ADC_RNG_0_0_625V:          return ADC_RNG_NEG2_5_2_5V;
+        // Bipolar small → bipolar medium
+        case ADC_RNG_NEG104MV_104MV:    return ADC_RNG_NEG0_3125_0_3125V;
+        case ADC_RNG_NEG0_3125_0_3125V: return ADC_RNG_NEG2_5_2_5V;
+        // Negative-only → bipolar medium
+        case ADC_RNG_NEG0_3125_0V:      return ADC_RNG_NEG2_5_2_5V;
+        // Bipolar medium → full-scale unipolar, then full-scale bipolar
+        case ADC_RNG_NEG2_5_2_5V:       return ADC_RNG_0_12V;
+        case ADC_RNG_0_12V:             return ADC_RNG_NEG12_12V;
+        // Already at maximum
+        case ADC_RNG_NEG12_12V:         return ADC_RNG_NEG12_12V;
+        default:                        return r;
+    }
+}
+
 static void taskAdcPoll(void* /*pvParameters*/)
 {
     TickType_t pollDelay = pdMS_TO_TICKS(50);
@@ -144,6 +169,47 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 } else {
                     raw[ch] = 0;
                     eng[ch] = 0.0f;
+                }
+            }
+
+            // ---- Auto-ranging -----------------------------------------------
+            // If a channel's raw code is near positive or negative saturation,
+            // switch to the next wider range.  A 500 ms debounce per channel
+            // prevents queue flooding when the signal stays over-range.
+            {
+                static TickType_t s_lastRangeChange[AD74416H_NUM_CHANNELS] = {0};
+                const TickType_t  RANGE_DEBOUNCE = pdMS_TO_TICKS(500);
+                TickType_t now = xTaskGetTickCount();
+
+                for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+                    if (func[ch] == CH_FUNC_HIGH_IMP  ||
+                        func[ch] == CH_FUNC_DIN_LOGIC ||
+                        func[ch] == CH_FUNC_DIN_LOOP) continue;
+
+                    // Positive over-range: code at/near 24-bit positive maximum
+                    bool over = (raw[ch] >= 0xFF0000U);
+
+                    // Negative over-range (bipolar ranges only): code near 0
+                    bool bipolar = (range[ch] == ADC_RNG_NEG12_12V         ||
+                                    range[ch] == ADC_RNG_NEG0_3125_0_3125V ||
+                                    range[ch] == ADC_RNG_NEG0_3125_0V      ||
+                                    range[ch] == ADC_RNG_NEG104MV_104MV    ||
+                                    range[ch] == ADC_RNG_NEG2_5_2_5V);
+                    if (bipolar && raw[ch] <= 0x00FFFFU) over = true;
+
+                    if (over && (now - s_lastRangeChange[ch]) >= RANGE_DEBOUNCE) {
+                        AdcRange wider = nextWiderRange(range[ch]);
+                        if (wider != range[ch]) {
+                            s_lastRangeChange[ch] = now;
+                            Command rcmd = {};
+                            rcmd.type           = CMD_ADC_CONFIG;
+                            rcmd.channel        = ch;
+                            rcmd.adcCfg.mux     = mux[ch];
+                            rcmd.adcCfg.range   = wider;
+                            rcmd.adcCfg.rate    = rate[ch];
+                            xQueueSend(g_cmdQueue, &rcmd, 0);
+                        }
+                    }
                 }
             }
 
@@ -370,25 +436,34 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     hwRange = ADC_RNG_NEG0_3125_0_3125V;
                 }
 
-                // RES_MEAS (RTD) requires two things the hardware does not auto-configure:
+                // RES_MEAS (RTD) requires configuration the hardware does not auto-set:
                 //
                 // 1. RTD_CONFIG must be written to enable the excitation current.
                 //    Without it the VIOUT driver has nothing to source, immediately
                 //    asserts VIOUT_SHUTDOWN → CHANNEL_ALERT_STATUS bit 6 → CH_A_ALERT
                 //    (bit 8 of ALERT_STATUS).
                 //
-                //    Default: 250 µA excitation (RTD_CURRENT=1), ratiometric reference
-                //    (RTD_ADC_REF=1), 2-wire mode (RTD_MODE_SEL=0), no current swap.
-                //    This covers PT100 (max ~100 mV at 850 °C) well within range 4.
+                //    Default: 250 µA excitation (RTD_CURRENT=1), non-ratiometric
+                //    (RTD_ADC_REF=0), 2-wire mode (RTD_MODE_SEL=0), no current swap.
+                //    Non-ratiometric keeps the standard adcCodeToVoltage() formula valid
+                //    (V = code/ADC_FULL_SCALE × v_span); ratiometric alters the ADC
+                //    reference in a way that requires a different formula.
                 //
-                // 2. CONV_RANGE must be valid. The hardware auto-sets an incompatible
-                //    range that triggers ADC_ERR. Override to 0–312.5 mV (range 4),
-                //    which gives 18.6 nV/LSB resolution — suitable for PT100.
-                //    For PT1000 with 250 µA use range 5 (0–625 mV) via the ADC config UI.
+                // 2. CONV_MUX must be forced to ADC_MUX_LF_TO_AGND (0).
+                //    The hardware auto-sets MUX=3 (LF to VSENSE-) which is the 4-wire
+                //    Kelvin sense path.  In that configuration the ADC measures
+                //    V(LF) − V(VSENSE-), which includes the IC's ~1.3 kΩ internal series
+                //    resistance in the return path → inflated reading (~5× for a 330 Ω
+                //    load).  With MUX=0 the ADC measures V(LF) − V(AGND) = I_EXC × R_RTD
+                //    directly, which is correct for the 2-wire topology.
+                //
+                // 3. CONV_RANGE must be valid. The hardware auto-sets an incompatible
+                //    range that triggers ADC_ERR. Start with 0–312.5 mV (range 4);
+                //    auto-ranging will promote to 0–625 mV if needed (e.g. PT1000).
                 if (cmd.func == CH_FUNC_RES_MEAS) {
-                    const uint16_t rtdCfg = RTD_CONFIG_RTD_CURRENT_MASK   // bit 0: 250 µA
-                                          | RTD_CONFIG_RTD_ADC_REF_MASK;   // bit 3: ratiometric
+                    const uint16_t rtdCfg = RTD_CONFIG_RTD_CURRENT_MASK;  // bit 0: 250 µA, no ratiometric
                     spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfg);
+                    hwMux   = ADC_MUX_LF_TO_AGND;   // 2-wire: measure V(LF)−V(AGND) only
                     hwRange = ADC_RNG_0_0_3125V;
                 }
 
@@ -729,9 +804,11 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             case CMD_SET_RTD_CONFIG: {
                 // cmd.rtdCfg.current: 0 = 125 µA (RTD_CURRENT bit clear)
                 //                     1 = 250 µA (RTD_CURRENT bit set)
-                // Always use ratiometric ADC reference (RTD_ADC_REF = 1).
+                // Non-ratiometric (RTD_ADC_REF = 0) so that the standard
+                // adcCodeToVoltage() formula (V = code/ADC_FULL_SCALE × v_span)
+                // remains valid and R = V / I_EXC gives the correct resistance.
                 extern AD74416H_SPI spiDriver;
-                uint16_t rtdCfgVal = RTD_CONFIG_RTD_ADC_REF_MASK;
+                uint16_t rtdCfgVal = 0;  // RTD_ADC_REF = 0: non-ratiometric
                 if (cmd.rtdCfg.current != 0)
                     rtdCfgVal |= RTD_CONFIG_RTD_CURRENT_MASK;  // 250 µA
                 spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfgVal);
