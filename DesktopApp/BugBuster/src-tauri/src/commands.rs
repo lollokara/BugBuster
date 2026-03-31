@@ -169,6 +169,50 @@ pub async fn set_do_state(
 }
 
 #[tauri::command]
+pub async fn set_din_config(
+    channel: u8,
+    thresh: u8,
+    thresh_mode: bool,
+    debounce: u8,
+    sink: u8,
+    sink_range: bool,
+    oc_det: bool,
+    sc_det: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    pw.put_u8(thresh);
+    pw.put_bool(thresh_mode);
+    pw.put_u8(debounce);
+    pw.put_u8(sink);
+    pw.put_bool(sink_range);
+    pw.put_bool(oc_det);
+    pw.put_bool(sc_det);
+    mgr.send_command(bbp::CMD_SET_DIN_CONFIG, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_do_config(
+    channel: u8,
+    mode: u8,
+    src_sel_gpio: bool,
+    t1: u8,
+    t2: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    pw.put_u8(mode);
+    pw.put_bool(src_sel_gpio);
+    pw.put_u8(t1);
+    pw.put_u8(t2);
+    mgr.send_command(bbp::CMD_SET_DO_CONFIG, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_vout_range(
     channel: u8,
     bipolar: bool,
@@ -344,11 +388,17 @@ pub async fn wifi_connect(
     password: String,
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<bool> {
-    let mut pw = PayloadWriter::new();
     let ssid_bytes = ssid.as_bytes();
+    if ssid_bytes.len() > 32 {
+        return Err("SSID too long (max 32 bytes)".into());
+    }
+    let pass_bytes = password.as_bytes();
+    if pass_bytes.len() > 64 {
+        return Err("Password too long (max 64 bytes)".into());
+    }
+    let mut pw = PayloadWriter::new();
     pw.put_u8(ssid_bytes.len() as u8);
     pw.buf.extend_from_slice(ssid_bytes);
-    let pass_bytes = password.as_bytes();
     pw.put_u8(pass_bytes.len() as u8);
     pw.buf.extend_from_slice(pass_bytes);
     let rsp = mgr.send_command(bbp::CMD_WIFI_CONNECT, &pw.buf).await.map_err(map_err)?;

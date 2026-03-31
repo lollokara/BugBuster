@@ -1362,8 +1362,10 @@ static esp_err_t handle_post_ioexp_control(httpd_req_t *req)
     cJSON *body = recv_json_body(req);
     if (!body) return send_error(req, 400, "Invalid JSON");
 
-    const char *ctrl_name = cJSON_GetObjectItem(body, "control") ? cJSON_GetObjectItem(body, "control")->valuestring : NULL;
-    bool on = cJSON_GetObjectItem(body, "on") ? cJSON_IsTrue(cJSON_GetObjectItem(body, "on")) : false;
+    cJSON *ctrl_item = cJSON_GetObjectItem(body, "control");
+    const char *ctrl_name = (ctrl_item && cJSON_IsString(ctrl_item)) ? ctrl_item->valuestring : NULL;
+    cJSON *on_item = cJSON_GetObjectItem(body, "on");
+    bool on = on_item ? cJSON_IsTrue(on_item) : false;
 
     if (!ctrl_name) { cJSON_Delete(body); return send_error(req, 400, "Missing 'control' field"); }
 

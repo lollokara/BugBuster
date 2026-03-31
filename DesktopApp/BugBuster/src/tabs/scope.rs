@@ -197,8 +197,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             spawn_local(async move {
                 // Stop any existing stream first (ignore errors)
                 let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
-                // Small delay to let firmware clear the stream state
-                sleep_ms(50).await;
+                // Delay to let firmware clear the stream state (200ms for HTTP transport)
+                sleep_ms(200).await;
                 // Start fresh
                 let result = invoke("start_adc_stream", args).await;
                 log(&format!("Scope: stream started mask=0x{:02X}, result={:?}", mask, result));

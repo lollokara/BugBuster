@@ -103,10 +103,12 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Poll PCA9535 status to sync PSU and E-Fuse UI with hardware
     spawn_local(async move {
+        let mut fail_count = 0u32;
         loop {
             slp(500).await;
             let result = invoke("pca_get_status", wasm_bindgen::JsValue::NULL).await;
             if let Ok(st) = serde_wasm_bindgen::from_value::<IoExpState>(result) {
+                fail_count = 0;
                 if st.present {
                     set_psu.set([st.vadj1_en, st.vadj2_en]);
                     let mut ef_arr = [false; 4];
@@ -114,6 +116,11 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         ef_arr[i] = e.enabled;
                     }
                     set_ef.set(ef_arr);
+                }
+            } else {
+                fail_count += 1;
+                if fail_count >= 10 {
+                    break; // Stop polling after 10 consecutive failures (likely disconnected)
                 }
             }
         }
