@@ -242,5 +242,6 @@ void initTasks(AD74416H& device);
 /**
  * @brief Enqueue a command for the command-processor task.
  *        Non-blocking from the caller side (100 ms timeout).
+ * @return true if enqueued, false if queue was full.
  */
-void sendCommand(const Command& cmd);
+bool sendCommand(const Command& cmd);

@@ -50,6 +50,7 @@ void serial_printf(const char* fmt, ...)
     int len = vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     if (len > 0) {
+        if ((size_t)len > sizeof(buf)) len = (int)sizeof(buf);
         usb_cdc_cli_write((const uint8_t*)buf, (size_t)len);
     }
 }

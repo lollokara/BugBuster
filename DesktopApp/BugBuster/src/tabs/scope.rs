@@ -144,6 +144,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Rate counter + auto-restart: update every second
     let zero_count = std::cell::Cell::new(0u32);
+    let restart_count = std::cell::Cell::new(0u32);
+    const MAX_RESTARTS: u32 = 5;
     spawn_local(async move {
         loop {
             sleep_ms(1000).await;
@@ -157,14 +159,21 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 zero_count.set(z);
                 if z >= 3 {
                     zero_count.set(0);
-                    log("Scope: 0 SPS for 3s, restarting stream...");
-                    // Toggle running to trigger the Effect restart
-                    set_running.set(false);
-                    sleep_ms(100).await;
-                    set_running.set(true);
+                    let restarts = restart_count.get() + 1;
+                    restart_count.set(restarts);
+                    if restarts <= MAX_RESTARTS {
+                        log(&format!("Scope: 0 SPS for 3s, restarting stream ({}/{})...", restarts, MAX_RESTARTS));
+                        // Toggle running to trigger the Effect restart
+                        set_running.set(false);
+                        sleep_ms(100).await;
+                        set_running.set(true);
+                    } else if restarts == MAX_RESTARTS + 1 {
+                        log("Scope: max restart attempts reached, stopping auto-restart.");
+                    }
                 }
             } else {
                 zero_count.set(0);
+                restart_count.set(0);
             }
         }
     });

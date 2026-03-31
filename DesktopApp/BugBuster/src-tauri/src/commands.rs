@@ -1234,6 +1234,18 @@ pub async fn import_config(
     let config: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("JSON parse error: {}", e))?;
 
+    // Validate config version
+    let version = config["version"].as_u64().unwrap_or(0);
+    if version == 0 {
+        return Err("Invalid config file: missing version field".into());
+    }
+    if version > 1 {
+        return Err(format!("Config version {} is not supported (max: 1)", version).into());
+    }
+    if config["channels"].as_array().is_none() {
+        return Err("Invalid config file: missing channels array".into());
+    }
+
     // Restore channel functions and ADC config
     if let Some(channels) = config["channels"].as_array() {
         for (i, ch) in channels.iter().enumerate() {

@@ -378,6 +378,7 @@ impl FrameAccumulator {
                     self.buf.push(byte);
                 } else {
                     // Frame too large, discard
+                    log::warn!("BBP frame too large ({} bytes), discarding", self.buf.len());
                     self.buf.clear();
                 }
             }

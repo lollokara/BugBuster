@@ -259,6 +259,8 @@
 .btn-primary:hover:not(:disabled) { background: rgba(59,130,246,0.95); box-shadow: 0 0 20px rgba(59,130,246,0.35); }
 .btn-danger { background: rgba(239,68,68,0.8); border-color: rgba(239,68,68,0.3); }
 .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,0.95); box-shadow: 0 0 20px rgba(239,68,68,0.3); }
+.btn-ghost { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.15); }
+.btn-ghost:hover:not(:disabled) { background: rgba(255,255,255,0.18); box-shadow: 0 0 12px rgba(255,255,255,0.1); }
 .btn-sm { padding: 5px 14px; font-size: 0.75rem; }
 .btn-xs { padding: 2px 8px; font-size: 0.65rem; }
 

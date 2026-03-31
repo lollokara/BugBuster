@@ -514,7 +514,10 @@ static esp_err_t handle_post_channel_function(httpd_req_t *req)
     cmd.type    = CMD_SET_CHANNEL_FUNC;
     cmd.channel = (uint8_t)ch;
     cmd.func    = (ChannelFunction)funcItem->valueint;
-    sendCommand(cmd);
+    if (!sendCommand(cmd)) {
+        cJSON_Delete(doc);
+        return send_error(req, 503, "Command queue full");
+    }
 
     cJSON_Delete(doc);
 
@@ -547,19 +550,8 @@ static esp_err_t handle_post_dac(httpd_req_t *req)
     } else if (voltageItem && cJSON_IsNumber(voltageItem)) {
         cmd.type = CMD_SET_DAC_VOLTAGE;
         cJSON *bipolarItem = cJSON_GetObjectItem(doc, "bipolar");
-        bool bipolar = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
-        float v = (float)voltageItem->valuedouble;
-
-        if (bipolar) {
-            Command rangeCmd{};
-            rangeCmd.type     = CMD_SET_VOUT_RANGE;
-            rangeCmd.channel  = (uint8_t)ch;
-            rangeCmd.boolVal  = true;
-            sendCommand(rangeCmd);
-            cmd.floatVal = (v >= 0.0f) ? -0.0001f - v : v;
-        } else {
-            cmd.floatVal = v;
-        }
+        cmd.dacVoltage.bipolar = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
+        cmd.dacVoltage.voltage = (float)voltageItem->valuedouble;
     } else if (currentItem && cJSON_IsNumber(currentItem)) {
         cmd.type     = CMD_SET_DAC_CURRENT;
         cmd.floatVal = (float)currentItem->valuedouble;
@@ -568,7 +560,10 @@ static esp_err_t handle_post_dac(httpd_req_t *req)
         return send_error(req, 400, "Body must have 'code', 'voltage', or 'current_mA'");
     }
 
-    sendCommand(cmd);
+    if (!sendCommand(cmd)) {
+        cJSON_Delete(doc);
+        return send_error(req, 503, "Command queue full");
+    }
     cJSON_Delete(doc);
 
     cJSON *resp = cJSON_CreateObject();

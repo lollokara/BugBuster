@@ -116,6 +116,31 @@ pub fn App() -> impl IntoView {
         closure.forget();
     });
 
+    // Listen for protocol version mismatch
+    spawn_local(async move {
+        let closure = Closure::new(move |event: JsValue| {
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event) {
+                let dev_ver = evt.payload.get("device_version").and_then(|v| v.as_u64()).unwrap_or(0);
+                let exp_ver = evt.payload.get("expected_version").and_then(|v| v.as_u64()).unwrap_or(0);
+                let msg = format!("Protocol mismatch: device v{}, app v{}. Some features may not work. Consider updating firmware.", dev_ver, exp_ver);
+                // Dispatch toast event
+                if let Some(window) = web_sys::window() {
+                    let detail = js_sys::Object::new();
+                    let _ = js_sys::Reflect::set(&detail, &"msg".into(), &msg.into());
+                    let _ = js_sys::Reflect::set(&detail, &"kind".into(), &"err".into());
+                    if let Ok(evt) = web_sys::CustomEvent::new_with_event_init_dict(
+                        "bb-toast",
+                        web_sys::CustomEventInit::new().detail(&detail),
+                    ) {
+                        let _ = window.dispatch_event(&evt);
+                    }
+                }
+            }
+        });
+        listen("version-mismatch", &closure).await;
+        closure.forget();
+    });
+
     // Auto-scan
     spawn_local(async move {
         let result = invoke("discover_devices", JsValue::NULL).await;

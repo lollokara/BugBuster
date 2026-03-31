@@ -114,7 +114,7 @@ fn send_adc_config(ch: u8, mux: u8, range: u8, rate: u8) {
     spawn_local(async move {
         // Stop any running stream
         let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
-        sleep_ms(50).await;
+        sleep_ms(200).await;
 
         // Apply config
         let args = serde_wasm_bindgen::to_value(&AdcConfigArgs { channel: ch, mux, range, rate }).unwrap();

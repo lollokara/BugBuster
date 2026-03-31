@@ -231,6 +231,10 @@ static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
     put_u16(s_msgBuf, &pos, seq);
     put_u8(s_msgBuf, &pos, cmdId);
     if (payload && payloadLen > 0) {
+        if (pos + payloadLen + 2 > BBP_MAX_PAYLOAD) {
+            ESP_LOGW(TAG, "sendMsg: payload too large (%u + %u > %u)", (unsigned)pos, (unsigned)payloadLen, BBP_MAX_PAYLOAD);
+            return;
+        }
         memcpy(s_msgBuf + pos, payload, payloadLen);
         pos += payloadLen;
     }

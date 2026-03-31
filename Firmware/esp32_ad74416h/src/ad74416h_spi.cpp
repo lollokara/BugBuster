@@ -123,14 +123,17 @@ void AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
     frame[SPI_FRAME_BYTE_DATA_LO] = (uint8_t)(data & 0xFF);
     frame[SPI_FRAME_BYTE_CRC]     = computeCRC8(frame);
 
-    xSemaphoreTake(_mutex, portMAX_DELAY);
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
     transferFrame(frame, NULL);
     xSemaphoreGive(_mutex);
 }
 
 bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        if (data != NULL) *data = 0xFFFF;
+        return false;
+    }
 
     // Stage 1: Write register address to READ_SELECT
     {
@@ -169,7 +172,7 @@ bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 
 bool AD74416H_SPI::updateRegister(uint8_t addr, uint16_t mask, uint16_t val)
 {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
 
     // Read
     {

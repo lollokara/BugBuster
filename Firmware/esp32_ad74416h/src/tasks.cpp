@@ -920,9 +920,13 @@ void initTasks(AD74416H& device)
     // by BBP/HTTP/CLI handlers — no background polling task needed.
 }
 
-void sendCommand(const Command& cmd)
+bool sendCommand(const Command& cmd)
 {
     if (g_cmdQueue) {
-        xQueueSend(g_cmdQueue, &cmd, pdMS_TO_TICKS(100));
+        if (xQueueSend(g_cmdQueue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+            return true;
+        }
+        ESP_LOGW("tasks", "Command queue full (type=%d), command dropped", (int)cmd.type);
     }
+    return false;
 }
