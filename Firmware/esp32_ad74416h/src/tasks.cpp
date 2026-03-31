@@ -348,6 +348,17 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 AdcConvMux hwMux   = (AdcConvMux)((adcCfgReg & ADC_CONFIG_CONV_MUX_MASK) >> ADC_CONFIG_CONV_MUX_SHIFT);
                 AdcRange   hwRange = (AdcRange)((adcCfgReg & ADC_CONFIG_CONV_RANGE_MASK) >> ADC_CONFIG_CONV_RANGE_SHIFT);
 
+                // The hardware auto-sets CONV_RANGE=3 (negative-only, -312.5mV to 0V)
+                // for IIN modes, which is invalid for measuring the positive sense voltage
+                // across RSENSE and triggers ADC_ERR. Override to ±312.5mV (range 2),
+                // which covers the full 4-20mA range (48mV–240mV across 12Ω RSENSE).
+                if (cmd.func == CH_FUNC_IIN_EXT_PWR     ||
+                    cmd.func == CH_FUNC_IIN_LOOP_PWR     ||
+                    cmd.func == CH_FUNC_IIN_EXT_PWR_HART ||
+                    cmd.func == CH_FUNC_IIN_LOOP_PWR_HART) {
+                    hwRange = ADC_RNG_NEG0_3125_0_3125V;
+                }
+
                 // Set the conversion rate to 20 SPS (hardware defaults to 10 SPS)
                 s_device->configureAdc(cmd.channel, hwMux, hwRange, ADC_RATE_20SPS);
 

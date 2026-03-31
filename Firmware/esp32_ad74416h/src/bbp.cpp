@@ -2084,11 +2084,10 @@ void bbpExitBinaryMode(void)
     // Restore log output for CLI mode
     esp_log_level_set("*", ESP_LOG_INFO);
 
-    // Signal CLI mode is back
-    const char *msg = "\r\n[CLI Ready]\r\n";
-    usb_cdc_cli_write((const uint8_t *)msg, strlen(msg));
-    usb_cdc_cli_flush();
-
+    // NOTE: Do NOT write "[CLI Ready]" text to CDC #0 here. The desktop app
+    // uses CDC #0 exclusively for binary BBP frames; injecting ASCII text
+    // corrupts the FrameAccumulator, causes CRC mismatches, and triggers a
+    // spurious disconnection. The desktop detects binary-mode exit via timeout.
     ESP_LOGI(TAG, "Binary mode deactivated, CLI ready");
 }
 
