@@ -443,7 +443,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 //    asserts VIOUT_SHUTDOWN → CHANNEL_ALERT_STATUS bit 6 → CH_A_ALERT
                 //    (bit 8 of ALERT_STATUS).
                 //
-                //    Default: 250 µA excitation (RTD_CURRENT=1), non-ratiometric
+                //    Default: 1 mA excitation (RTD_CURRENT=1), non-ratiometric
                 //    (RTD_ADC_REF=0), 2-wire mode (RTD_MODE_SEL=0), no current swap.
                 //    Non-ratiometric keeps the standard adcCodeToVoltage() formula valid
                 //    (V = code/ADC_FULL_SCALE × v_span); ratiometric alters the ADC

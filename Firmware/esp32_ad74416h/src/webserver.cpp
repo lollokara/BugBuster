@@ -1019,7 +1019,7 @@ static esp_err_t handle_post_rtd_config(httpd_req_t *req)
     cJSON *curItem = cJSON_GetObjectItem(doc, "current");
     cJSON *uaItem  = cJSON_GetObjectItem(doc, "excitation_ua");
 
-    uint8_t current = 1; // default 250 µA
+    uint8_t current = 1; // default 1 mA (RTD_CURRENT bit set)
     if (curItem && cJSON_IsNumber(curItem)) {
         current = (curItem->valueint != 0) ? 1 : 0;
     } else if (uaItem && cJSON_IsNumber(uaItem)) {

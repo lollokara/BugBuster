@@ -17,7 +17,7 @@
 //  3    -0.3125V to 0V          -0.3125 V       0.3125 V
 //  4    0V to 0.3125V             0.0 V         0.3125 V
 //  5    0V to 0.625V              0.0 V         0.625 V
-//  6    -104mV to +104mV        -0.104 V        0.208 V
+//  6    -104.17mV to +104.17mV  -0.104167 V     0.208333 V
 //  7    -2.5V to +2.5V          -2.5 V          5.0 V
 // ---------------------------------------------------------------------------
 const AdcRangeParams AD74416H::_adc_range_params[8] = {
@@ -27,7 +27,7 @@ const AdcRangeParams AD74416H::_adc_range_params[8] = {
     /* 3: ADC_RNG_NEG0_3125_0V      */ { -0.3125f,   0.3125f },
     /* 4: ADC_RNG_0_0_3125V         */ {  0.0f,      0.3125f },
     /* 5: ADC_RNG_0_0_625V          */ {  0.0f,      0.625f  },
-    /* 6: ADC_RNG_NEG104MV_104MV    */ { -0.104f,    0.208f  },
+    /* 6: ADC_RNG_NEG104MV_104MV    */ { -0.104167f,  0.208333f },
     /* 7: ADC_RNG_NEG2_5_2_5V       */ { -2.5f,      5.0f   },
 };
 
@@ -175,6 +175,9 @@ void AD74416H::setDacCode(uint8_t ch, uint16_t code)
 {
     ch = clampCh(ch);
     _spi.writeRegister(AD74416H_REG_DAC_CODE(ch), code);
+    // CMD_KEY 0x1C7D latches the staged DAC_CODE to the actual DAC output.
+    // Without this write the output never changes from its reset value.
+    _spi.writeRegister(REG_CMD_KEY, CMD_KEY_DAC_UPDATE);
 }
 
 void AD74416H::setDacVoltage(uint8_t ch, float voltage, bool bipolar)

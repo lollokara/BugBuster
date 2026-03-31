@@ -380,6 +380,7 @@
 #define REG_CMD_KEY                 0x74
 #define CMD_KEY_RESET_1             0x15FA  // First software reset key
 #define CMD_KEY_RESET_2             0xAF51  // Second software reset key
+#define CMD_KEY_DAC_UPDATE          0x1C7D  // DAC update — latches staged DAC_CODE to output
 
 #define REG_BROADCAST_CMD_KEY       0x75
 

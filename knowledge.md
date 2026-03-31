@@ -208,15 +208,17 @@ ADC saturation codes (set when input exceeds range):
 
 ### 3.6 ADC Conversion Control
 
-Register `ADC_CONV_CTRL` at address 0x39:
+Register `ADC_CONV_CTRL` at address 0x39 (corrected per datasheet Table 55 / ad74416h_regs.h):
 
 ```
-Bits [1:0]  — CONV_SEQ:  0=idle, 1=single, 2=continuous, 3=stop
-Bits [7:4]  — CH_EN:     bit 4=ChA, 5=ChB, 6=ChC, 7=ChD
-Bits [11:8] — DIAG_EN:   bit 8=slot0, 9=slot1, 10=slot2, 11=slot3
+Bits [3:0]   — CONV_A–D_EN:     bit 0=ChA, 1=ChB, 2=ChC, 3=ChD (per-channel ADC enable)
+Bits [7:4]   — DIAG_0–3_EN:     bit 4=slot0, 5=slot1, 6=slot2, 7=slot3 (diagnostic slot enable)
+Bits [9:8]   — CONV_SEQ:        0=idle, 1=single, 2=continuous, 3=stop
+Bits [12:10] — CONV_RATE_DIAG:  diagnostic conversion rate select
+Bit  [13]    — ADC_RDY_CTRL:    0=ADC_RDY pulses per channel; 1=pulses only for last channel
 ```
 
-DIN_LOGIC and DIN_LOOP channels must be **excluded** from CH_EN — including them causes ADC_ERR.
+DIN_LOGIC and DIN_LOOP channels must be **excluded** from CONV_A–D_EN — including them causes ADC_ERR.
 
 ### 3.7 Auto-Ranging (Firmware, tasks.cpp)
 
@@ -516,13 +518,13 @@ Stride: 0x0C (12 decimal). Address = `base + channel × 0x0C`, channel = 0–3.
 | 0x36    | GPIO_CONFIG[E]       | R/W    | 0x0000 |                                                         |
 | 0x37    | GPIO_CONFIG[F]       | R/W    | 0x0000 |                                                         |
 | 0x38    | PWR_OPTIM_CONFIG     | R/W    | 0x0000 | [13] REF_EN (must be set to enable internal 2.5V ref)  |
-| 0x39    | ADC_CONV_CTRL        | R/W    | 0x0000 | [11:8] DIAG_EN, [7:4] CH_EN, [1:0] CONV_SEQ           |
+| 0x39    | ADC_CONV_CTRL        | R/W    | 0x0000 | [3:0] CH_EN, [7:4] DIAG_EN, [9:8] CONV_SEQ, [12:10] CONV_RATE_DIAG, [13] ADC_RDY_CTRL |
 | 0x3A    | DIAG_ASSIGN          | R/W    | 0x0000 | [15:12] slot3, [11:8] slot2, [7:4] slot1, [3:0] slot0 |
 | 0x3B    | WDT_CONFIG           | R/W    | 0x0000 | Watchdog timer                                          |
 | 0x3E    | DIN_COMP_OUT         | R      | 0x0000 | [3:0] comparator outputs, one per channel              |
-| 0x3F    | ALERT_STATUS         | R/W1C  | 0x8000 | See §10.1                                              |
+| 0x3F    | ALERT_STATUS         | R/W1C  | 0x0001 | See §10.1; bit0=RESET, bit2=SUPPLY_ERR, bit3=SPI_ERR, bits8–11=CH_ALERT, bits12–15=HART_ALERT |
 | 0x40    | LIVE_STATUS          | R      | 0x0001 | Real-time status (not latched)                         |
-| 0x41    | ADC_RESULT_UPR[A]    | R      | 0x0000 | [23:16] of 24-bit ADC result + CONV_RES_RNG[3:0]       |
+| 0x41    | ADC_RESULT_UPR[A]    | R      | 0x0000 | [7:0]=ADC[23:16], [9:8]=SEQ_CNT, [12:10]=RNG, [15:13]=MUX — read UPR first! |
 | 0x42    | ADC_RESULT[A]        | R      | 0x0000 | [15:0] of 24-bit ADC result — read UPR first!          |
 | 0x43    | ADC_RESULT_UPR[B]    | R      | 0x0000 |                                                         |
 | 0x44    | ADC_RESULT[B]        | R      | 0x0000 |                                                         |
@@ -566,13 +568,16 @@ Stride: 0x0C (12 decimal). Address = `base + channel × 0x0C`, channel = 0–3.
 
 ### 9.3 ADC_RESULT_UPR Field Layout
 
+Corrected per datasheet Table 61 / ad74416h_regs.h (`ADC_RESULT_UPR_CONV_RES_MASK = 0xFF << 0`):
+
 ```
-Bits [15:10] — reserved
-Bits [9:8]   — CONV_SEQ_COUNT (2-bit rolling counter, increments per completed sequence)
-Bits [7:4]   — CONV_RES_RNG   (active CONV_RANGE at time of conversion)
-Bits [3:0]   — ADC_CODE[23:16] (top 8 bits of 24-bit result)
+Bits [7:0]   — ADC_CODE[23:16]  (top 8 bits of 24-bit result; occupies the full lower byte)
+Bits [9:8]   — CONV_SEQ_COUNT   (2-bit rolling counter, increments per completed sequence)
+Bits [12:10] — CONV_RES_RANGE   (active CONV_RANGE code at time of conversion)
+Bits [15:13] — CONV_RES_MUX     (active ADC MUX setting at time of conversion)
 ```
-ADC_RESULT[n] bits [15:0] = ADC_CODE[15:0] (bottom 16 bits).
+
+ADC_RESULT[n] bits [15:0] = ADC_CODE[15:0] (bottom 16 bits). Read UPR first — reading UPR latches the lower word.
 
 ### 9.4 CMD_KEY Values
 
@@ -593,24 +598,27 @@ Broadcast CMD_KEY (0x75): 0x1A78 + 0xD203 = broadcast reset; 0x964E = broadcast 
 
 Write 1 to clear (W1C). The ALERT pin (active-low open-drain) asserts when any unmasked bit is set.
 
-| Bit | Name            | Description                                         |
-|-----|-----------------|-----------------------------------------------------|
-| 0   | VI_ERR_A        | Channel A analog I/O error (ADC_ERR or short-circuit) |
-| 1   | VI_ERR_B        |                                                     |
-| 2   | VI_ERR_C        |                                                     |
-| 3   | VI_ERR_D        |                                                     |
-| 4   | HART_ALERT_A    | Channel A HART alert (see HART_ALERT_STATUS_A)      |
-| 5   | HART_ALERT_B    |                                                     |
-| 6   | HART_ALERT_C    |                                                     |
-| 7   | HART_ALERT_D    |                                                     |
-| 8   | CH_A_ALERT      | Channel A alert (see CHANNEL_ALERT_STATUS_A)        |
-| 9   | CH_B_ALERT      |                                                     |
-| 10  | CH_C_ALERT      |                                                     |
-| 11  | CH_D_ALERT      |                                                     |
-| 12  | reserved        |                                                     |
-| 13  | SUPPLY_ERR      | Supply voltage error (see SUPPLY_ALERT_STATUS)      |
-| 14  | ADC_ERR         | ADC conversion error (invalid MUX or saturation)    |
-| 15  | RESET_OCCURRED  | Device reset since last clear                       |
+Corrected per ADI no-OS driver register map / ad74416h_regs.h:
+
+| Bit | Name            | Description                                               |
+|-----|-----------------|-----------------------------------------------------------|
+| 0   | RESET_OCCURRED  | Device reset since last clear (set on power-up)           |
+| 1   | —               | Reserved                                                  |
+| 2   | SUPPLY_ERR      | Supply voltage error (see SUPPLY_ALERT_STATUS 0x57)       |
+| 3   | SPI_ERR         | SPI framing or CRC error                                  |
+| 4   | TEMP_ALERT      | Die temperature ≥ 115 °C                                  |
+| 5   | ADC_ERR         | ADC conversion error (invalid MUX or saturation)          |
+| 6–7 | —               | Reserved                                                  |
+| 8   | CH_ALERT_A      | Channel A alert (see CHANNEL_ALERT_STATUS_A 0x58)         |
+| 9   | CH_ALERT_B      | Channel B alert (see CHANNEL_ALERT_STATUS_B 0x59)         |
+| 10  | CH_ALERT_C      | Channel C alert (see CHANNEL_ALERT_STATUS_C 0x5A)         |
+| 11  | CH_ALERT_D      | Channel D alert (see CHANNEL_ALERT_STATUS_D 0x5B)         |
+| 12  | HART_ALERT_A    | Channel A HART alert (see HART_ALERT_STATUS_A 0x80)       |
+| 13  | HART_ALERT_B    | Channel B HART alert                                      |
+| 14  | HART_ALERT_C    | Channel C HART alert                                      |
+| 15  | HART_ALERT_D    | Channel D HART alert                                      |
+
+Reset value = 0x0001 (RESET_OCCURRED bit 0 set at power-up). Note: an earlier version of this section incorrectly placed fields at the wrong bits; this corrected layout matches the ad74416h_regs.h definitions.
 
 ### 10.2 CHANNEL_ALERT_STATUS[n] (0x58–0x5B)
 
@@ -859,10 +867,15 @@ The code is correct; only the comment is wrong.
 
 ---
 
-### BUG-09: Stale Comment in tasks.cpp — RTD Current Description ⚠️ Documentation only
+### BUG-09: Stale Comment in tasks.cpp — RTD Current Description ✅ FIXED
 
-Comment near CMD_SET_CHANNEL_FUNC RES_MEAS block says "Default: 250 µA excitation (RTD_CURRENT=1)".
-Per datasheet, RTD_CURRENT=1 is **1 mA**, not 250 µA. The code correctly stores 1000. Comment only.
+**Status: Fixed in `tasks.cpp` and `webserver.cpp`.**
+
+Comment at the CMD_SET_CHANNEL_FUNC / RES_MEAS block said "Default: 250 µA excitation (RTD_CURRENT=1)".
+Per datasheet, RTD_CURRENT=1 is **1 mA**, not 250 µA. The code correctly stores 1000.
+
+**Fix applied:** Comment updated to "1 mA excitation (RTD_CURRENT=1)". Also fixed matching stale comment
+in `webserver.cpp` RTD config handler ("default 250 µA" → "default 1 mA (RTD_CURRENT bit set)").
 
 ---
 
@@ -901,6 +914,100 @@ During debugging the incorrect resistance reading, three MUX values were tried:
 - MUX=1 (HF→LF, across RSENSE): 1975mV → nonsensical for RTD measurement
 
 MUX=0 (SENSELF to AGND) is the correct measurement for 2-wire RTD. Final fix uses MUX=0.
+
+---
+
+### BUG-13: DAC Output Never Updates — CMD_KEY 0x1C7D Not Written ✅ FIXED
+
+**Status: Fixed in `ad74416h_regs.h` and `ad74416h.cpp`.**
+
+The AD74416H DAC uses a staged write model: writing to the `DAC_CODE` register (0x16–0x19) only
+loads a staging register. The output only changes when `CMD_KEY = 0x1C7D` is written to register
+0x74. Without this, all DAC outputs remain at their reset value (0V for VOUT, 0mA for IOUT) regardless
+of the value written to `DAC_CODE`.
+
+`setDacCode()` in `ad74416h.cpp` wrote only to `DAC_CODE` and never issued the CMD_KEY update.
+The constant `CMD_KEY_DAC_UPDATE = 0x1C7D` was also missing from `ad74416h_regs.h`.
+
+**Fix applied:**
+- Added `#define CMD_KEY_DAC_UPDATE 0x1C7D` to `ad74416h_regs.h`
+- Added `_spi.writeRegister(REG_CMD_KEY, CMD_KEY_DAC_UPDATE)` immediately after the `DAC_CODE` write
+  in `setDacCode()`. All callers (`setDacVoltage`, `setDacCurrent`, and the implicit channel-function
+  initialisation) now correctly latch the DAC output.
+
+---
+
+### BUG-14: Range 6 ADC Precision Truncated — ±104.17 mV Range ✅ FIXED
+
+**Status: Fixed in `ad74416h.cpp`.**
+
+`_adc_range_params[6]` had `v_offset = -0.104f` and `v_span = 0.208f`.
+The exact values are ±(25/6)/2.4 ≈ ±104.1667 mV, giving:
+
+- Correct `v_offset` = **−0.104167 V**
+- Correct `v_span`   = **0.208333 V**
+
+The truncation introduced a worst-case error of ~1.67 mV (≈16 LSB at 24-bit resolution).
+
+**Fix applied:** Updated `_adc_range_params[6]` to `{ -0.104167f, 0.208333f }`.
+
+---
+
+### BUG-15: Web UI `isDin()` Matches Wrong Function Codes ✅ FIXED
+
+**Status: Fixed in `data/index.html`.**
+
+`isDin(ch)` tested `f===7||f===8` — code 7 is `RES_MEAS`, code 8 is `DIN_LOGIC`.
+DIN channels are `DIN_LOGIC` (8) and `DIN_LOOP` (9).
+
+`hasDo(ch)` had the same off-by-one: tested `f===1||f===2||f===7||f===8`.
+
+**Fix applied:**
+- `isDin`: `f===7||f===8` → `f===8||f===9`
+- `hasDo`: `f===1||f===2||f===7||f===8` → `f===1||f===2||f===8||f===9`
+
+---
+
+### BUG-16: Web UI `isIinExt()` / `isIinLoop()` Match Wrong HART Function Codes ✅ FIXED
+
+**Status: Fixed in `data/index.html`.**
+
+`fnMap`: `IOUT_HART:10, IIN_EXT_PWR_HART:11, IIN_LOOP_PWR_HART:12`
+
+- `isIinExt()` tested `f===4||f===10` — code 10 is `IOUT_HART` (wrong). Should be `IIN_EXT_PWR_HART` = 11.
+- `isIinLoop()` tested `f===5||f===11` — code 11 is `IIN_EXT_PWR_HART` (wrong). Should be `IIN_LOOP_PWR_HART` = 12.
+
+Effect: the "External" / "Loop" pill indicators in the IIN panel highlighted the wrong mode for HART channels,
+and `IOUT_HART` would have been mis-identified as an IIN channel.
+
+**Fix applied:**
+- `isIinExt`:  `f===4||f===10` → `f===4||f===11`
+- `isIinLoop`: `f===5||f===11` → `f===5||f===12`
+
+---
+
+### BUG-17: Web UI `alertBits` Table Has Wrong Bit Positions for ALERT_STATUS ✅ FIXED
+
+**Status: Fixed in `data/index.html`.**
+
+The old `alertBits` array placed fields at completely wrong bit positions relative to the actual
+ALERT_STATUS register (0x3F) layout confirmed by `ad74416h_regs.h`:
+
+| Old (wrong)           | Correct                        |
+|-----------------------|--------------------------------|
+| bit 1 = CAL_MEM       | bit 1 = reserved               |
+| bit 2 = SPI_CRC       | bit 2 = SUPPLY_ERR             |
+| bit 3 = SPI_SCLK      | bit 3 = SPI_ERR                |
+| bit 4 = ADC_ERR       | bit 4 = TEMP_ALERT             |
+| bit 5 = SUPPLY        | bit 5 = ADC_ERR                |
+| bit 6 = TEMP          | bits 6–7 = reserved            |
+| bit 7 = CH_D          | bit 8 = CH_ALERT_A (not C!)    |
+| bit 8 = CH_C          | bit 9 = CH_ALERT_B             |
+| bit 9 = CH_B          | bit 10 = CH_ALERT_C            |
+| bit 10 = CH_A         | bit 11 = CH_ALERT_D            |
+| (missing bits 11–15)  | bits 12–15 = HART_ALERT_A–D    |
+
+**Fix applied:** `alertBits` replaced with correct layout including all HART alert bits.
 
 ---
 
