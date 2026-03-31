@@ -302,11 +302,11 @@ Offset  Field               Type    Description
 11      supply_alert_mask   u16     Supply alert mask
 13      live_status         u16     Live status register
 
-Per channel (4x, starting at offset 15, stride = 26 bytes):
+Per channel (4x, starting at offset 15, stride = 28 bytes):
 +0      channel_id          u8      Channel index (0-3)
 +1      function            u8      Channel function code (0-12)
 +2      adc_raw             u24     ADC raw code (24-bit)
-+5      adc_value           f32     Converted ADC value (V or mA)
++5      adc_value           f32     Converted ADC value (V, mA, or Ω for RES_MEAS)
 +9      adc_range           u8      ADC range code
 +10     adc_rate            u8      ADC rate code
 +11     adc_mux             u8      ADC mux code
@@ -316,13 +316,14 @@ Per channel (4x, starting at offset 15, stride = 26 bytes):
 +19     din_counter         u32     DIN event counter
 +23     do_state            bool    Digital output state
 +24     channel_alert       u16     Per-channel alert bits
++26     rtd_excitation_ua   u16     RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
 
-Per diagnostic slot (4x, starting at offset 119, stride = 7 bytes):
+Per diagnostic slot (4x, starting at offset 127, stride = 7 bytes):
 +0      source              u8      Diagnostic source code (0-13)
 +1      raw_code            u16     Raw diagnostic ADC code
 +3      value               f32     Converted value (V or C)
 
-Total response: 15 + (4 x 26) + (4 x 7) = 147 bytes
+Total response: 15 + (4 x 28) + (4 x 7) = 155 bytes
 ```
 
 #### 0x02 GET_DEVICE_INFO
@@ -567,6 +568,27 @@ Read active DAC code (equivalent to `GET /api/channel/X/dac/readback`).
 0       channel         u8
 1       active_code     u16     DAC_ACTIVE register value
 ```
+
+#### 0x1D SET_RTD_CONFIG
+Configure the RTD excitation current for a channel in RES_MEAS mode.
+Writes the RTD_CONFIG register (bit 0 = RTD_CURRENT, bit 3 = RTD_ADC_REF ratiometric reference).
+The converted `adc_value` in GET_STATUS will be in Ohms: R = V_adc / I_excitation.
+
+**Request payload:**
+```
+0       channel         u8      Channel (0-3)
+1       current         u8      Excitation current: 0 = 125 µA, 1 = 250 µA
+```
+
+**Response payload:** Echoes request.
+
+| current | RTD_CURRENT bit | I_excitation | Max R (0–312.5 mV range) |
+|---------|----------------|--------------|--------------------------|
+| 0       | 0              | 125 µA       | 2500 Ω (PT1000 capable)  |
+| 1       | 1              | 250 µA       | 1250 Ω (PT100 capable)   |
+
+> **Note:** Always set the channel function to RES_MEAS (0x07) before calling SET_RTD_CONFIG.
+> Switching away from RES_MEAS clears RTD_CONFIG automatically.
 
 ---
 
@@ -1590,6 +1612,7 @@ Host                                    Device
 | 1.4 | 2026-03-28 | Added WiFi management commands: WIFI_GET_STATUS (0xE1), WIFI_CONNECT (0xE2); Section 6.17; added SET_LSHIFT_OE (0xE0) to Appendix A |
 | 1.5 | 2026-03-29 | Added WIFI_SCAN (0xE4); WiFi credentials persist in NVS |
 | 1.6 | 2026-03-30 | Added SET_LSHIFT_OE (0xE0), SET_SPI_CLOCK (0xE3) sections; OTA update endpoint (POST /api/ota/upload); device version endpoint (GET /api/device/version); A/B OTA partition table with rollback |
+| 1.7 | 2026-03-31 | Added SET_RTD_CONFIG (0x1D) command for RTD excitation current selection (125/250 µA); GET_STATUS per-channel payload extended by 2 bytes (rtd_excitation_ua u16, stride 26→28, total 147→155 bytes); adc_value for RES_MEAS now returned in Ohms (R = V_adc / I_exc) |
 
 ---
 
@@ -1614,6 +1637,7 @@ Host                                    Device
 | 0x1A | SET_AVDD_SELECT | H->D | ch, sel | `POST /api/channel/X/avdd` |
 | 0x1B | GET_ADC_VALUE | H->D | ch | `GET /api/channel/X/adc` |
 | 0x1C | GET_DAC_READBACK | H->D | ch | `GET /api/channel/X/dac/readback` |
+| 0x1D | SET_RTD_CONFIG | H->D | ch, current | `POST /api/channel/X/rtd/config` |
 | 0x20 | CLEAR_ALL_ALERTS | H->D | -- | `POST /api/faults/clear` |
 | 0x21 | CLEAR_CHANNEL_ALERT | H->D | ch | `POST /api/faults/clear/X` |
 | 0x22 | SET_ALERT_MASK | H->D | masks | `POST /api/faults/mask` |

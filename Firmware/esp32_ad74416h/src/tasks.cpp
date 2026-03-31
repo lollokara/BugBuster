@@ -31,7 +31,7 @@ static AD74416H*   s_device       = nullptr;
 // Helper: Convert raw ADC code to engineering value based on channel function
 // -----------------------------------------------------------------------------
 
-static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range)
+static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range, uint16_t excUa)
 {
     if (s_device == nullptr) return 0.0f;
 
@@ -50,8 +50,17 @@ static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range)
             // The output current is set by DAC, not measured by ADC.
             return s_device->adcCodeToVoltage(raw, range);
 
+        case CH_FUNC_RES_MEAS: {
+            // RTD measurement: convert ADC voltage to resistance.
+            // R = V_adc / I_excitation
+            // excUa is the RTD excitation current in µA (125 or 250).
+            float v = s_device->adcCodeToVoltage(raw, range);
+            float iExc = (excUa > 0) ? (excUa * 1e-6f) : (250e-6f);
+            return v / iExc;
+        }
+
         default:
-            // Voltage input, VOUT readback, high-impedance, RTD, DIN – return V
+            // Voltage input, VOUT readback, high-impedance, DIN – return V
             return s_device->adcCodeToVoltage(raw, range);
     }
 }
@@ -93,6 +102,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
             AdcRate    rate[AD74416H_NUM_CHANNELS];
             AdcConvMux mux[AD74416H_NUM_CHANNELS];
             ChannelFunction func[AD74416H_NUM_CHANNELS];
+            uint16_t   excUa[AD74416H_NUM_CHANNELS];
 
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
@@ -100,6 +110,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                     range[ch] = g_deviceState.channels[ch].adcRange;
                     rate[ch]  = g_deviceState.channels[ch].adcRate;
                     mux[ch]   = g_deviceState.channels[ch].adcMux;
+                    excUa[ch] = g_deviceState.channels[ch].rtdExcitationUa;
                 }
                 xSemaphoreGive(g_stateMutex);
             }
@@ -129,7 +140,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                     func[ch] != CH_FUNC_DIN_LOGIC &&
                     func[ch] != CH_FUNC_DIN_LOOP) {
                     raw[ch] = s_device->readAdcResult(ch);
-                    eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch]);
+                    eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch], excUa[ch]);
                 } else {
                     raw[ch] = 0;
                     eng[ch] = 0.0f;
@@ -359,6 +370,34 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     hwRange = ADC_RNG_NEG0_3125_0_3125V;
                 }
 
+                // RES_MEAS (RTD) requires two things the hardware does not auto-configure:
+                //
+                // 1. RTD_CONFIG must be written to enable the excitation current.
+                //    Without it the VIOUT driver has nothing to source, immediately
+                //    asserts VIOUT_SHUTDOWN → CHANNEL_ALERT_STATUS bit 6 → CH_A_ALERT
+                //    (bit 8 of ALERT_STATUS).
+                //
+                //    Default: 250 µA excitation (RTD_CURRENT=1), ratiometric reference
+                //    (RTD_ADC_REF=1), 2-wire mode (RTD_MODE_SEL=0), no current swap.
+                //    This covers PT100 (max ~100 mV at 850 °C) well within range 4.
+                //
+                // 2. CONV_RANGE must be valid. The hardware auto-sets an incompatible
+                //    range that triggers ADC_ERR. Override to 0–312.5 mV (range 4),
+                //    which gives 18.6 nV/LSB resolution — suitable for PT100.
+                //    For PT1000 with 250 µA use range 5 (0–625 mV) via the ADC config UI.
+                if (cmd.func == CH_FUNC_RES_MEAS) {
+                    const uint16_t rtdCfg = RTD_CONFIG_RTD_CURRENT_MASK   // bit 0: 250 µA
+                                          | RTD_CONFIG_RTD_ADC_REF_MASK;   // bit 3: ratiometric
+                    spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfg);
+                    hwRange = ADC_RNG_0_0_3125V;
+                }
+
+                // When leaving RES_MEAS, clear RTD_CONFIG so the excitation current
+                // is not left running if the channel is later reused in another mode.
+                if (cmd.func == CH_FUNC_HIGH_IMP) {
+                    spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), 0x0000);
+                }
+
                 // Set the conversion rate to 20 SPS (hardware defaults to 10 SPS)
                 s_device->configureAdc(cmd.channel, hwMux, hwRange, ADC_RATE_20SPS);
 
@@ -367,6 +406,13 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     g_deviceState.channels[cmd.channel].adcRange = hwRange;
                     g_deviceState.channels[cmd.channel].adcMux   = hwMux;
                     g_deviceState.channels[cmd.channel].adcRate  = ADC_RATE_20SPS;
+                    // Store initial RTD excitation current when entering RES_MEAS.
+                    // Clear it when leaving (so convertAdcCode uses the fallback safely).
+                    if (cmd.func == CH_FUNC_RES_MEAS) {
+                        g_deviceState.channels[cmd.channel].rtdExcitationUa = 250;
+                    } else {
+                        g_deviceState.channels[cmd.channel].rtdExcitationUa = 0;
+                    }
                     // Reset DAC display values when switching to HIGH_IMP
                     if (cmd.func == CH_FUNC_HIGH_IMP) {
                         g_deviceState.channels[cmd.channel].dacCode  = 0;
@@ -676,6 +722,25 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             case CMD_PCA_SET_PORT: {
                 pca9535_set_port(cmd.pcaPort.port, cmd.pcaPort.val);
+                break;
+            }
+
+            // -----------------------------------------------------------------
+            case CMD_SET_RTD_CONFIG: {
+                // cmd.rtdCfg.current: 0 = 125 µA (RTD_CURRENT bit clear)
+                //                     1 = 250 µA (RTD_CURRENT bit set)
+                // Always use ratiometric ADC reference (RTD_ADC_REF = 1).
+                extern AD74416H_SPI spiDriver;
+                uint16_t rtdCfgVal = RTD_CONFIG_RTD_ADC_REF_MASK;
+                if (cmd.rtdCfg.current != 0)
+                    rtdCfgVal |= RTD_CONFIG_RTD_CURRENT_MASK;  // 250 µA
+                spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfgVal);
+
+                uint16_t excUa = (cmd.rtdCfg.current != 0) ? 250 : 125;
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    g_deviceState.channels[cmd.channel].rtdExcitationUa = excUa;
+                    xSemaphoreGive(g_stateMutex);
+                }
                 break;
             }
 

@@ -195,7 +195,7 @@ if (IIN mode) hwRange = ADC_RNG_NEG0_3125_0_3125V;  // ±312.5 mV, range 2
 | 0 | 0 V to +12 V |
 | 1 | −12 V to +12 V |
 | 2 | −312.5 mV to +312.5 mV |
-| 3 | −312.5 mV to 0 V (**negative-only — avoid for IIN**) |
+| 3 | −312.5 mV to 0 V (**negative-only — avoid for IIN and RES_MEAS**) |
 | 4 | 0 V to +312.5 mV |
 | 5 | 0 V to +625 mV |
 | 6 | −104 mV to +104 mV |
@@ -276,6 +276,39 @@ CH_FUNC_SETUP is written. The firmware was including DIN channels in the
 
 ---
 
+### [2026-03-31] RES_MEAS mode triggers ALERT_STATUS 0x0120 (tasks.cpp)
+
+**Symptom:** Setting a channel to `CH_FUNC_RES_MEAS` (7) sets
+`ALERT_STATUS = 0x0120` = `ADC_ERR` (bit 5) + `CH_A_ALERT` (bit 8).
+
+**Root cause:** Two missing configurations when switching to RTD/resistance mode:
+
+1. **`RTD_CONFIG` never written** — excitation current defaults to off.
+   Without excitation the VIOUT driver has no current to source and immediately
+   asserts `VIOUT_SHUTDOWN` (bit 6 of `CHANNEL_ALERT_STATUS`), which propagates
+   to `CH_A_ALERT` (bit 8 of `ALERT_STATUS`).
+
+2. **No `CONV_RANGE` override** — same class as the IIN issue; the hardware
+   auto-sets a range incompatible with the RTD voltage measurement → `ADC_ERR`.
+
+**Fix:** `tasks.cpp`, `CMD_SET_CHANNEL_FUNC` handler:
+- Write `RTD_CONFIG = RTD_CURRENT_MASK | RTD_ADC_REF_MASK` (250 µA excitation,
+  ratiometric reference) when `func == CH_FUNC_RES_MEAS`.
+- Override `hwRange = ADC_RNG_0_0_3125V` (0–312.5 mV) — covers PT100 with
+  250 µA excitation (max ~100 mV at 850 °C). Use range 5 (0–625 mV) for PT1000.
+- Clear `RTD_CONFIG = 0` when switching to `CH_FUNC_HIGH_IMP` to stop excitation.
+
+**RTD_CONFIG bit map (register 0x06 + ch × 0x0C):**
+
+| Bit | Name | Notes |
+|---|---|---|
+| 0 | RTD_CURRENT | 0 = 125 µA, 1 = 250 µA |
+| 1 | RTD_EXC_SWAP | Swap excitation direction |
+| 2 | RTD_MODE_SEL | 0 = 2-wire, 1 = 3/4-wire |
+| 3 | RTD_ADC_REF | 0 = AVDD ref, 1 = ratiometric |
+
+---
+
 ### [2026-03-31] IIN modes trigger ADC_ERR (tasks.cpp)
 
 **Symptom:** Setting a channel to any Current Input mode triggers `ADC_ERR`.
@@ -323,3 +356,48 @@ Six compile-breaking defects in the Analog Devices no-OS reference driver header
 | 262 | `NO_OS_GENAMSK(9. 8)` — typo + period instead of comma | `NO_OS_GENMASK(9, 8)` |
 | 272 | `NO_OS_GENAMSK(10 8)` — typo + missing comma | `NO_OS_GENMASK(10, 8)` |
 | 385 | `NO_OS_GENAMSK(3, 2)` — typo | `NO_OS_GENMASK(3, 2)` |
+
+---
+
+## 5. RTD Excitation Current — Design Notes
+
+### RTD_CONFIG register (0x06 + ch × 0x0C)
+
+The AD74416H has a 1-bit excitation current select (RTD_CURRENT, bit 0):
+
+| Bit 0 | I_excitation | Max R (0–312.5 mV) | Max R (0–625 mV) |
+|-------|-------------|---------------------|------------------|
+| 0     | 125 µA      | 2500 Ω              | 5000 Ω           |
+| 1     | 250 µA      | 1250 Ω              | 2500 Ω           |
+
+**PT100 (0°C = 100 Ω, 850°C ≈ 390 Ω):** Both 125 µA and 250 µA work. Use 250 µA for
+better resolution (2× higher output voltage). Range 4 (0–312.5 mV) is sufficient.
+
+**PT1000 (0°C = 1000 Ω, 850°C ≈ 3900 Ω):** Use 125 µA to keep output voltage ≤ 487 mV.
+Use Range 5 (0–625 mV) from the ADC config dropdown.
+
+### `adc_value` unit for RES_MEAS
+
+`convertAdcCode()` returns **Ohms** when `func == CH_FUNC_RES_MEAS`:
+```c
+R = adcCodeToVoltage(raw, range) / (excUa * 1e-6f)
+```
+`excUa` is snapshotted from `ChannelState.rtdExcitationUa` under the mutex in the ADC
+poll task. Default is 250 µA (set when switching to RES_MEAS via CMD_SET_CHANNEL_FUNC).
+
+### BBP command: `0x1D SET_RTD_CONFIG`
+
+New command added to allow the UI to change excitation current at runtime.
+
+Payload: `channel(u8) current(u8)` where `current` = 0 → 125 µA, 1 → 250 µA.
+
+Writes `RTD_CONFIG` with the selected current bit + RTD_ADC_REF (ratiometric) always set.
+Updates `ChannelState.rtdExcitationUa`, which is echoed back in GET_STATUS (+26, u16).
+
+### GET_STATUS per-channel payload change
+
+`rtdExcitationUa` (u16) appended **after** `channel_alert` (was byte +24, was stride 26).
+New stride = **28 bytes**, total response = **155 bytes** (was 147).
+
+Desktop `state.rs::from_status_payload()` uses `r.get_u16().unwrap_or(0)` so it
+degrades gracefully if talking to older firmware that doesn't include this field.

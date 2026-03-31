@@ -36,6 +36,7 @@ pub fn run() {
             commands::set_dac_voltage,
             commands::set_dac_current,
             commands::set_adc_config,
+            commands::set_rtd_config,
             commands::set_din_config,
             commands::set_do_config,
             commands::set_do_state,

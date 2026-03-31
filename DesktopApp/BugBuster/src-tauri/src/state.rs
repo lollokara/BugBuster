@@ -18,6 +18,7 @@ pub struct ChannelState {
     pub din_counter: u32,       // DIN event counter
     pub do_state: bool,         // Digital output state
     pub channel_alert: u16,     // Per-channel alert bits
+    pub rtd_excitation_ua: u16, // RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -91,6 +92,7 @@ impl DeviceState {
             state.channels[ch].din_counter = r.get_u32()?;
             state.channels[ch].do_state = r.get_bool()?;
             state.channels[ch].channel_alert = r.get_u16()?;
+            state.channels[ch].rtd_excitation_ua = r.get_u16().unwrap_or(0);
         }
 
         // Diagnostic slots (optional — older firmware won't include these)

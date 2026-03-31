@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
-use crate::tauri_bridge::*;
+use crate::tauri_bridge::{self, *};
 
 #[component]
 pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
@@ -15,11 +15,20 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let ch_idx = i as u8;
                         let has_adc = matches!(ch.function, 3 | 4 | 5 | 7); // VIN, IIN_EXT, IIN_LOOP, RES
                         let color = CH_COLORS[i];
+                        let is_res = ch.function == 7;
                         let range_info = ADC_RANGE_OPTIONS.iter().find(|r| r.0 == ch.adc_range);
                         let (rng_min, rng_max) = range_info.map(|r| (r.2, r.3)).unwrap_or((0.0, 12.0));
-                        let span = rng_max - rng_min;
-                        let pct = if span > 0.0 { ((ch.adc_value - rng_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 };
-                        let unit = if ch.function == 4 || ch.function == 5 { "mA" } else { "V" };
+                        // For RES_MEAS: bar spans 0..max_r where max_r = rng_max / I_exc
+                        let (bar_min, bar_max) = if is_res {
+                            let i_exc = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua as f32 * 1e-6 } else { 250e-6 };
+                            (0.0_f32, rng_max / i_exc)
+                        } else {
+                            (rng_min, rng_max)
+                        };
+                        let span = bar_max - bar_min;
+                        let pct = if span > 0.0 { ((ch.adc_value - bar_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+                        let unit = if ch.function == 4 || ch.function == 5 { "mA" } else if is_res { "Ω" } else { "V" };
+                        let exc_ua = ch.rtd_excitation_ua;
 
                         view! {
                             <div class="card channel-card" class:ch-disabled=!has_adc>
@@ -92,6 +101,22 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                             }).collect::<Vec<_>>()}
                                                         </select>
                                                     </div>
+                                                    {if is_res { Some(view! {
+                                                        <div class="config-row">
+                                                            <label>"Excitation"</label>
+                                                            <select class="dropdown"
+                                                                prop:value=exc_ua.to_string()
+                                                                on:change=move |e| {
+                                                                    let ua: u16 = event_target_value(&e).parse().unwrap_or(250);
+                                                                    tauri_bridge::send_set_rtd_config(ch_idx, ua);
+                                                                }
+                                                            >
+                                                                {RTD_EXCITATION_OPTIONS.iter().map(|(ua, name)| {
+                                                                    view! { <option value=ua.to_string()>{*name}</option> }
+                                                                }).collect::<Vec<_>>()}
+                                                            </select>
+                                                        </div>
+                                                    })} else { None }}
                                                 </div>
                                             </div>
                                         }.into_any()

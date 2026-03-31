@@ -81,6 +81,7 @@ extern "C" {
 #define BBP_CMD_SET_AVDD_SEL    0x1A
 #define BBP_CMD_GET_ADC_VALUE   0x1B
 #define BBP_CMD_GET_DAC_READBACK 0x1C
+#define BBP_CMD_SET_RTD_CONFIG  0x1D
 
 // Faults
 #define BBP_CMD_CLEAR_ALL_ALERTS    0x20

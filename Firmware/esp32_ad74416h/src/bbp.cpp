@@ -298,6 +298,7 @@ static int handleGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_u32(out, &pos, cs.dinCounter);
         put_bool(out, &pos, cs.doState);
         put_u16(out, &pos, cs.channelAlertStatus);
+        put_u16(out, &pos, cs.rtdExcitationUa);
     }
 
     // Diagnostic slots
@@ -475,6 +476,30 @@ static int handleGetUartPins(uint16_t seq, uint8_t cmdId, uint8_t *out)
     for (int i = 0; i < count; i++) {
         put_u8(out, &pos, (uint8_t)pins[i]);
     }
+    return (int)pos;
+}
+
+static int handleSetRtdConfig(uint16_t seq, uint8_t cmdId,
+                               const uint8_t *payload, size_t len, uint8_t *out)
+{
+    // Payload: channel(u8) + current(u8)
+    // current: 0 = 125 µA, 1 = 250 µA
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t ch      = get_u8(payload, &rpos);
+    uint8_t current = get_u8(payload, &rpos);
+    if (ch >= 4)          { sendError(seq, cmdId, BBP_ERR_INVALID_CH);    return -1; }
+    if (current > 1)      { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    Command cmd = {};
+    cmd.type          = CMD_SET_RTD_CONFIG;
+    cmd.channel       = ch;
+    cmd.rtdCfg.current = current;
+    sendCommand(cmd);
+
+    size_t pos = 0;
+    put_u8(out, &pos, ch);
+    put_u8(out, &pos, current);
     return (int)pos;
 }
 
@@ -1742,6 +1767,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_GET_DAC_READBACK:
             rspLen = handleGetDacReadback(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_SET_RTD_CONFIG:
+            rspLen = handleSetRtdConfig(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- Faults ---

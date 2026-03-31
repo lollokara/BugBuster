@@ -35,6 +35,7 @@ struct ChannelState {
     bool             doState;           // digital output on/off
     uint16_t         channelAlertStatus;
     uint16_t         channelAlertMask;
+    uint16_t         rtdExcitationUa;   // RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
 };
 
 struct DiagState {
@@ -153,6 +154,7 @@ enum CommandType {
     CMD_IDAC_CALIBRATE,     // Run IDAC auto-calibration
     CMD_PCA_SET_CONTROL,    // Set PCA9535 output control
     CMD_PCA_SET_PORT,       // Set PCA9535 raw port value
+    CMD_SET_RTD_CONFIG,     // Set RTD excitation current (0=125µA, 1=250µA)
 };
 
 struct Command {
@@ -224,6 +226,9 @@ struct Command {
             uint8_t port;
             uint8_t val;
         } pcaPort;
+        struct {
+            uint8_t current;    // 0 = 125 µA, 1 = 250 µA
+        } rtdCfg;
     };
 };
 

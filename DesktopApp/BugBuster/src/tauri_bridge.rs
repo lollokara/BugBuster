@@ -46,6 +46,8 @@ pub struct ChannelState {
     pub din_counter: u32,
     pub do_state: bool,
     pub channel_alert: u16,
+    #[serde(default)]
+    pub rtd_excitation_ua: u16, // RTD excitation current in µA (125 or 250; 0 when not RES_MEAS)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -140,6 +142,13 @@ pub const DIAG_SOURCE_OPTIONS: &[(u8, &str)] = &[
     (4, "LDO 1.8V"), (5, "AVDD HI"), (6, "AVDD LO"), (7, "AVSS"),
     (8, "LVIN"), (9, "DO VDD"), (10, "VSENSE+"), (11, "VSENSE-"),
     (12, "DO Current"), (13, "AVDD"),
+];
+
+// RTD excitation current options (RTD_CURRENT bit: 0 = 125 µA, 1 = 250 µA)
+// Stored as µA; used in RES_MEAS mode to configure RTD_CONFIG register.
+pub const RTD_EXCITATION_OPTIONS: &[(u16, &str)] = &[
+    (125, "125 µA"),
+    (250, "250 µA"),
 ];
 
 // -----------------------------------------------------------------------------
@@ -314,6 +323,16 @@ pub fn send_set_channel_function(channel: u8, function: u8) {
     let args = serde_wasm_bindgen::to_value(&Args { channel, function }).unwrap();
     let label = format!("Set CH {} to {}", CH_NAMES[channel as usize], func_name(function));
     invoke_with_feedback("set_channel_function", args, &label);
+}
+
+pub fn send_set_rtd_config(channel: u8, excitation_ua: u16) {
+    // current: 0 = 125 µA, 1 = 250 µA (maps to RTD_CURRENT bit)
+    let current: u8 = if excitation_ua >= 250 { 1 } else { 0 };
+    #[derive(Serialize)]
+    struct Args { channel: u8, current: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { channel, current }).unwrap();
+    let label = format!("Set CH {} RTD excitation: {} µA", CH_NAMES[channel as usize], excitation_ua);
+    invoke_with_feedback("set_rtd_config", args, &label);
 }
 
 pub fn send_set_adc_config(channel: u8, mux: u8, range: u8, rate: u8) {

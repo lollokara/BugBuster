@@ -55,6 +55,7 @@ pub const CMD_SET_ILIMIT: u8 = 0x19;
 pub const CMD_SET_AVDD_SEL: u8 = 0x1A;
 pub const CMD_GET_ADC_VALUE: u8 = 0x1B;
 pub const CMD_GET_DAC_READBACK: u8 = 0x1C;
+pub const CMD_SET_RTD_CONFIG: u8 = 0x1D;
 
 // Faults
 pub const CMD_CLEAR_ALL_ALERTS: u8 = 0x20;
