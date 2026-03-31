@@ -449,13 +449,15 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 //    (V = code/ADC_FULL_SCALE × v_span); ratiometric alters the ADC
                 //    reference in a way that requires a different formula.
                 //
-                // 2. CONV_MUX must be forced to ADC_MUX_LF_TO_AGND (0).
+                // 2. CONV_MUX must be forced to ADC_MUX_HF_TO_LF (1).
                 //    The hardware auto-sets MUX=3 (LF to VSENSE-) which is the 4-wire
-                //    Kelvin sense path.  In that configuration the ADC measures
-                //    V(LF) − V(VSENSE-), which includes the IC's ~1.3 kΩ internal series
-                //    resistance in the return path → inflated reading (~5× for a 330 Ω
-                //    load).  With MUX=0 the ADC measures V(LF) − V(AGND) = I_EXC × R_RTD
-                //    directly, which is correct for the 2-wire topology.
+                //    Kelvin sense path — not appropriate for a simple 2-wire RTD.
+                //    MUX=0 (LF to AGND) is also wrong: it measures V(LF)−V(AGND) which
+                //    includes the IC's internal current-return bias (~0.32 V at 250 µA),
+                //    giving wildly inflated readings.
+                //    MUX=1 (HF to LF) measures V(HF)−V(LF) = I_EXC × R_RTD directly,
+                //    which is the correct differential voltage across the 2-wire RTD.
+                //    Example: 330 Ω × 250 µA = 82.5 mV → fits well in range 4 (0–312.5 mV).
                 //
                 // 3. CONV_RANGE must be valid. The hardware auto-sets an incompatible
                 //    range that triggers ADC_ERR. Start with 0–312.5 mV (range 4);
@@ -463,7 +465,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 if (cmd.func == CH_FUNC_RES_MEAS) {
                     const uint16_t rtdCfg = RTD_CONFIG_RTD_CURRENT_MASK;  // bit 0: 250 µA, no ratiometric
                     spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfg);
-                    hwMux   = ADC_MUX_LF_TO_AGND;   // 2-wire: measure V(LF)−V(AGND) only
+                    hwMux   = ADC_MUX_HF_TO_LF;     // 2-wire: V(HF)−V(LF) = I_EXC × R_RTD
                     hwRange = ADC_RNG_0_0_3125V;
                 }
 
