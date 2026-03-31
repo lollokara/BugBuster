@@ -425,7 +425,7 @@ typedef enum {
 } AdcRange;
 
 /**
- * @brief ADC conversion rate codes for ADC_CONFIG[9:6] CONV_RATE
+ * @brief ADC conversion rate codes for ADC_CONFIG[11:8] CONV_RATE
  */
 typedef enum {
     ADC_RATE_10SPS_H            = 0,    //  10 SPS (High rejection)

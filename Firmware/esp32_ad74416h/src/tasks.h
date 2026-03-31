@@ -154,7 +154,7 @@ enum CommandType {
     CMD_IDAC_CALIBRATE,     // Run IDAC auto-calibration
     CMD_PCA_SET_CONTROL,    // Set PCA9535 output control
     CMD_PCA_SET_PORT,       // Set PCA9535 raw port value
-    CMD_SET_RTD_CONFIG,     // Set RTD excitation current (0=125µA, 1=250µA)
+    CMD_SET_RTD_CONFIG,     // Set RTD excitation current (0=500µA, 1=1mA)
 };
 
 struct Command {
@@ -227,7 +227,7 @@ struct Command {
             uint8_t val;
         } pcaPort;
         struct {
-            uint8_t current;    // 0 = 125 µA, 1 = 250 µA
+            uint8_t current;    // 0 = 500 µA, 1 = 1000 µA (1 mA)
         } rtdCfg;
     };
 };

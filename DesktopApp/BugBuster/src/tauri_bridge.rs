@@ -144,11 +144,11 @@ pub const DIAG_SOURCE_OPTIONS: &[(u8, &str)] = &[
     (12, "DO Current"), (13, "AVDD"),
 ];
 
-// RTD excitation current options (RTD_CURRENT bit: 0 = 125 µA, 1 = 250 µA)
-// Stored as µA; used in RES_MEAS mode to configure RTD_CONFIG register.
+// RTD excitation current options (RTD_CURRENT bit: 0 = 500 µA, 1 = 1000 µA / 1 mA)
+// Per AD74416H datasheet Table 6 — stored as µA; used in RES_MEAS mode.
 pub const RTD_EXCITATION_OPTIONS: &[(u16, &str)] = &[
-    (125, "125 µA"),
-    (250, "250 µA"),
+    (500,  "500 µA"),
+    (1000, "1 mA"),
 ];
 
 // -----------------------------------------------------------------------------
@@ -326,8 +326,8 @@ pub fn send_set_channel_function(channel: u8, function: u8) {
 }
 
 pub fn send_set_rtd_config(channel: u8, excitation_ua: u16) {
-    // current: 0 = 125 µA, 1 = 250 µA (maps to RTD_CURRENT bit)
-    let current: u8 = if excitation_ua >= 250 { 1 } else { 0 };
+    // current: 0 = 500 µA, 1 = 1000 µA / 1 mA (maps to RTD_CURRENT bit)
+    let current: u8 = if excitation_ua >= 1000 { 1 } else { 0 };
     #[derive(Serialize)]
     struct Args { channel: u8, current: u8 }
     let args = serde_wasm_bindgen::to_value(&Args { channel, current }).unwrap();

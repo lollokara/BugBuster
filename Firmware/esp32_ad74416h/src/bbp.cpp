@@ -483,7 +483,7 @@ static int handleSetRtdConfig(uint16_t seq, uint8_t cmdId,
                                const uint8_t *payload, size_t len, uint8_t *out)
 {
     // Payload: channel(u8) + current(u8)
-    // current: 0 = 125 µA, 1 = 250 µA
+    // current: 0 = 500 µA, 1 = 1000 µA (1 mA)
     if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     size_t rpos = 0;
     uint8_t ch      = get_u8(payload, &rpos);

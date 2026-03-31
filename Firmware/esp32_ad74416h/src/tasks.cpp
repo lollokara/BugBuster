@@ -53,9 +53,9 @@ static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range, 
         case CH_FUNC_RES_MEAS: {
             // RTD measurement: convert ADC voltage to resistance.
             // R = V_adc / I_excitation
-            // excUa is the RTD excitation current in µA (125 or 250).
+            // excUa is the RTD excitation current in µA (500 or 1000).
             float v = s_device->adcCodeToVoltage(raw, range);
-            float iExc = (excUa > 0) ? (excUa * 1e-6f) : (250e-6f);
+            float iExc = (excUa > 0) ? (excUa * 1e-6f) : (1000e-6f); // fallback: 1 mA
             return v / iExc;
         }
 
@@ -449,24 +449,26 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 //    (V = code/ADC_FULL_SCALE × v_span); ratiometric alters the ADC
                 //    reference in a way that requires a different formula.
                 //
-                // 2. CONV_MUX must be forced to ADC_MUX_HF_TO_LF (1).
-                //    The hardware auto-sets MUX=3 (LF to VSENSE-) which is the 4-wire
-                //    Kelvin sense path — not appropriate for a simple 2-wire RTD.
-                //    MUX=0 (LF to AGND) is also wrong: it measures V(LF)−V(AGND) which
-                //    includes the IC's internal current-return bias (~0.32 V at 250 µA),
-                //    giving wildly inflated readings.
-                //    MUX=1 (HF to LF) measures V(HF)−V(LF) = I_EXC × R_RTD directly,
-                //    which is the correct differential voltage across the 2-wire RTD.
-                //    Example: 330 Ω × 250 µA = 82.5 mV → fits well in range 4 (0–312.5 mV).
+                // 2. CONV_MUX must be forced to ADC_MUX_LF_TO_AGND (0).
+                //    The hardware auto-sets MUX=3 (SENSELF to VSENSEN) which is the
+                //    3-wire RTD path — not appropriate for 2-wire.
+                //    MUX=0 (SENSELF/LF to AGND) measures V(I/OP terminal) − V(AGND)
+                //    = I_EXC × R_RTD directly, which is correct for 2-wire RTD.
+                //    Verified: 330 Ω × 1 mA = 330 mV → reads ~323 Ω (residual is
+                //    lead resistance + tolerance), well within range 5 (0–625 mV).
                 //
-                // 3. CONV_RANGE must be valid. The hardware auto-sets an incompatible
-                //    range that triggers ADC_ERR. Start with 0–312.5 mV (range 4);
-                //    auto-ranging will promote to 0–625 mV if needed (e.g. PT1000).
+                // 3. CONV_RANGE: hardware auto-sets 0–625 mV (range 5), which is
+                //    appropriate. Use the hardware-set value; auto-ranging will
+                //    promote to a wider range for high-resistance RTDs (PT1000 >850°C).
+                //
+                // RTD_CURRENT bit: 0 = 500 µA, 1 = 1 mA  (per datasheet Table 6 /
+                // RTD_CONFIG register description — NOT 125/250 µA as previously noted).
+                // Default to 1 mA (RTD_CURRENT_MASK = bit 0 set).
                 if (cmd.func == CH_FUNC_RES_MEAS) {
-                    const uint16_t rtdCfg = RTD_CONFIG_RTD_CURRENT_MASK;  // bit 0: 250 µA, no ratiometric
+                    const uint16_t rtdCfg = RTD_CONFIG_RTD_CURRENT_MASK;  // bit 0: 1 mA, non-ratiometric
                     spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfg);
-                    hwMux   = ADC_MUX_HF_TO_LF;     // 2-wire: V(HF)−V(LF) = I_EXC × R_RTD
-                    hwRange = ADC_RNG_0_0_3125V;
+                    hwMux = ADC_MUX_LF_TO_AGND;   // 2-wire: V(terminal)−V(AGND) = I_EXC × R_RTD
+                    // hwRange: keep hardware auto-set value (range 5, 0–625 mV)
                 }
 
                 // When leaving RES_MEAS, clear RTD_CONFIG so the excitation current
@@ -485,8 +487,9 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     g_deviceState.channels[cmd.channel].adcRate  = ADC_RATE_20SPS;
                     // Store initial RTD excitation current when entering RES_MEAS.
                     // Clear it when leaving (so convertAdcCode uses the fallback safely).
+                    // RTD_CURRENT bit: 0 = 500 µA, 1 = 1000 µA (1 mA) per datasheet.
                     if (cmd.func == CH_FUNC_RES_MEAS) {
-                        g_deviceState.channels[cmd.channel].rtdExcitationUa = 250;
+                        g_deviceState.channels[cmd.channel].rtdExcitationUa = 1000; // 1 mA default
                     } else {
                         g_deviceState.channels[cmd.channel].rtdExcitationUa = 0;
                     }
@@ -804,18 +807,18 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_RTD_CONFIG: {
-                // cmd.rtdCfg.current: 0 = 125 µA (RTD_CURRENT bit clear)
-                //                     1 = 250 µA (RTD_CURRENT bit set)
-                // Non-ratiometric (RTD_ADC_REF = 0) so that the standard
-                // adcCodeToVoltage() formula (V = code/ADC_FULL_SCALE × v_span)
-                // remains valid and R = V / I_EXC gives the correct resistance.
+                // cmd.rtdCfg.current: 0 = 500 µA (RTD_CURRENT bit clear)
+                //                     1 = 1000 µA / 1 mA (RTD_CURRENT bit set)
+                // Per AD74416H datasheet Table 6 / RTD_CONFIG register description.
+                // Non-ratiometric (RTD_ADC_REF = 0): standard adcCodeToVoltage()
+                // formula valid; R = V / I_EXC gives the correct resistance.
                 extern AD74416H_SPI spiDriver;
                 uint16_t rtdCfgVal = 0;  // RTD_ADC_REF = 0: non-ratiometric
                 if (cmd.rtdCfg.current != 0)
-                    rtdCfgVal |= RTD_CONFIG_RTD_CURRENT_MASK;  // 250 µA
+                    rtdCfgVal |= RTD_CONFIG_RTD_CURRENT_MASK;  // 1 mA
                 spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfgVal);
 
-                uint16_t excUa = (cmd.rtdCfg.current != 0) ? 250 : 125;
+                uint16_t excUa = (cmd.rtdCfg.current != 0) ? 1000 : 500;
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].rtdExcitationUa = excUa;
                     xSemaphoreGive(g_stateMutex);

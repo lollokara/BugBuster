@@ -577,15 +577,15 @@ The converted `adc_value` in GET_STATUS will be in Ohms: R = V_adc / I_excitatio
 **Request payload:**
 ```
 0       channel         u8      Channel (0-3)
-1       current         u8      Excitation current: 0 = 125 µA, 1 = 250 µA
+1       current         u8      Excitation current: 0 = 500 µA, 1 = 1000 µA (1 mA)
 ```
 
 **Response payload:** Echoes request.
 
-| current | RTD_CURRENT bit | I_excitation | Max R (0–312.5 mV range) |
-|---------|----------------|--------------|--------------------------|
-| 0       | 0              | 125 µA       | 2500 Ω (PT1000 capable)  |
-| 1       | 1              | 250 µA       | 1250 Ω (PT100 capable)   |
+| current | RTD_CURRENT bit | I_excitation   | Max R (0–625 mV range) | Max R (0–12 V range) |
+|---------|----------------|----------------|------------------------|----------------------|
+| 0       | 0              | 500 µA         | 1250 Ω                 | 24 kΩ                |
+| 1       | 1              | 1000 µA (1 mA) | 625 Ω                  | 12 kΩ                |
 
 > **Note:** Always set the channel function to RES_MEAS (0x07) before calling SET_RTD_CONFIG.
 > Switching away from RES_MEAS clears RTD_CONFIG automatically.

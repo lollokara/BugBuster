@@ -158,7 +158,7 @@ pub async fn set_adc_config(
 #[tauri::command]
 pub async fn set_rtd_config(
     channel: u8,
-    current: u8,    // 0 = 125 µA, 1 = 250 µA
+    current: u8,    // 0 = 500 µA, 1 = 1000 µA (1 mA)
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
     let mut pw = PayloadWriter::new();

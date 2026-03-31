@@ -389,6 +389,7 @@ void AD74416H::configureDin(uint8_t ch,
     cfg0 |= (uint16_t)((debounce  & 0x1F) << DIN_CONFIG0_DEBOUNCE_TIME_SHIFT);
     cfg0 |= (uint16_t)((sink_code & 0x1F) << DIN_CONFIG0_DIN_SINK_SHIFT);
     if (sink_range) cfg0 |= DIN_CONFIG0_DIN_SINK_RANGE_MASK;
+    cfg0 |= DIN_CONFIG0_COMPARATOR_EN_MASK;  // bit 13: enable comparator block (required for DIN reads)
 
     _spi.writeRegister(AD74416H_REG_DIN_CONFIG0(ch), cfg0);
 
@@ -634,6 +635,26 @@ float AD74416H::diagCodeToValue(uint16_t raw, uint8_t source)
 
         case 9:  // DO_VDD: V = (DIAG_CODE/65536) × (25/0.64)  [0V to 39V]
             return base * (25.0f / 0.64f);
+
+        case 10: // VSENSEP_x: Voltage on VSENSE+ pin.
+            // Two sub-modes based on DIN_THRESH_MODE (not passed here).
+            // Default: DIN_THRESH_MODE=1: V = (DIAG_CODE/65536 × 50) − 20  [−20V to +30V]
+            // Note: DIN_THRESH_MODE=0 formula is V = (DIAG_CODE/65536 × 60) − AVDD_HI
+            return base * 50.0f - 20.0f;
+
+        case 11: // VSENSEN_x: Voltage on VSENSE− pin.
+            // V = (DIAG_CODE/65536 × 50) − 20  [−20V to +30V]
+            return base * 50.0f - 20.0f;
+
+        case 12: // I_DO_SRC_x: Sourcing current at DO_x through R_SET.
+            // I = (DIAG_CODE/65536 × 0.5) / R_SET
+            // R_SET = 0.15 Ω recommended → max 3.3A. Returns voltage across R_SET (0–0.5V);
+            // caller must divide by R_SET if actual current in amps is needed.
+            return base * 0.5f;
+
+        case 13: // AVDD_x: Per-channel AVDD pin voltage.
+            // V = (DIAG_CODE/65536) × (25/0.52)  [0V to 48V]
+            return base * (25.0f / 0.52f);
 
         default:
             return base * 2.5f;

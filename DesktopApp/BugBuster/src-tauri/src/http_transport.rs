@@ -307,7 +307,7 @@ impl Transport for HttpTransport {
             }
 
             bbp::CMD_SET_RTD_CONFIG => {
-                // payload: channel(u8) + current(u8)  (0=125µA, 1=250µA)
+                // payload: channel(u8) + current(u8)  (0=500µA, 1=1mA)
                 if payload.len() < 2 {
                     return Err(anyhow!("Invalid payload"));
                 }
