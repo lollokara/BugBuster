@@ -267,6 +267,7 @@ static esp_err_t handle_get_status(httpd_req_t *req)
             cJSON_AddBoolToObject(obj, "doState", cs.doState);
             cJSON_AddNumberToObject(obj, "channelAlert", cs.channelAlertStatus);
             cJSON_AddNumberToObject(obj, "channelAlertMask", cs.channelAlertMask);
+            cJSON_AddNumberToObject(obj, "rtdExcitationUa", cs.rtdExcitationUa);
             cJSON_AddItemToArray(channels, obj);
         }
 
@@ -1005,6 +1006,41 @@ static esp_err_t handle_channel_get_dispatch(httpd_req_t *req)
     return send_error(req, 404, "Unknown channel GET endpoint");
 }
 
+// POST /api/channel/?/rtd/config
+static esp_err_t handle_post_rtd_config(httpd_req_t *req)
+{
+    int ch = extract_channel(req->uri);
+    if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    // Accept either 'current' (0=125µA, 1=250µA) or 'excitation_ua' (125 or 250)
+    cJSON *curItem = cJSON_GetObjectItem(doc, "current");
+    cJSON *uaItem  = cJSON_GetObjectItem(doc, "excitation_ua");
+
+    uint8_t current = 1; // default 250 µA
+    if (curItem && cJSON_IsNumber(curItem)) {
+        current = (curItem->valueint != 0) ? 1 : 0;
+    } else if (uaItem && cJSON_IsNumber(uaItem)) {
+        current = (uaItem->valueint >= 250) ? 1 : 0;
+    }
+    cJSON_Delete(doc);
+
+    Command cmd{};
+    cmd.type          = CMD_SET_RTD_CONFIG;
+    cmd.channel       = (uint8_t)ch;
+    cmd.rtdCfg.current = current;
+    if (!sendCommand(cmd)) return send_error(req, 503, "Command queue full");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddNumberToObject(resp, "channel", ch);
+    cJSON_AddNumberToObject(resp, "current", current);
+    cJSON_AddNumberToObject(resp, "excitation_ua", current ? 250 : 125);
+    return send_json(req, resp);
+}
+
 // POST /api/channel/* dispatcher
 static esp_err_t handle_channel_post_dispatch(httpd_req_t *req)
 {
@@ -1020,6 +1056,7 @@ static esp_err_t handle_channel_post_dispatch(httpd_req_t *req)
     if (strcmp(suffix, "vout/range") == 0)    return handle_post_vout_range(req);
     if (strcmp(suffix, "ilimit") == 0)        return handle_post_current_limit(req);
     if (strcmp(suffix, "avdd") == 0)          return handle_post_avdd_select(req);
+    if (strcmp(suffix, "rtd/config") == 0)   return handle_post_rtd_config(req);
 
     return send_error(req, 404, "Unknown channel POST endpoint");
 }

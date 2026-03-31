@@ -105,7 +105,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <div class="card-b">
 <div class="big-val" :style="'color:'+chColors[i]">
 <span x-text="ch.function!=='HIGH_IMP'?ch.adcValue.toFixed(4):'---'"></span>
-<span class="text-sm font-normal" style="color:var(--text2)" x-text="ch.function!=='HIGH_IMP'?(isCurrent(ch)?'mA':'V'):''"></span>
+<span class="text-sm font-normal" style="color:var(--text2)" x-text="ch.function!=='HIGH_IMP'?(isCurrent(ch)?'mA':(isRes(ch)?'Ω':'V')):''"></span>
 </div>
 <div class="bar-wrap"><div class="bar-fill" :style="'width:'+adcPct(ch,i)+'%;background:'+chColors[i]"></div></div>
 <div class="flex justify-between text-xs mono" style="color:var(--text3)">
@@ -136,7 +136,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <div class="card-b">
 <div class="big-val" :style="'color:'+chColors[i]">
 <span x-text="ch.adcValue.toFixed(4)"></span>
-<span class="text-sm font-normal" style="color:var(--text2)" x-text="isCurrent(ch)?'mA':'V'"></span>
+<span class="text-sm font-normal" style="color:var(--text2)" x-text="isCurrent(ch)?'mA':(isRes(ch)?'Ω':'V')"></span>
 </div>
 <div class="bar-wrap"><div class="bar-fill" :style="'width:'+adcPct(ch,i)+'%;background:'+chColors[i]"></div></div>
 <div class="text-xs mono text-center" style="color:var(--text3)" x-text="'Raw: '+ch.adcRaw+' (0x'+ch.adcRaw.toString(16).toUpperCase().padStart(6,'0')+')'"></div>
@@ -151,6 +151,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 <div class="cfg-row"><label>Mux</label>
 <select :value="ch.adcMux" @change="setAdc(i,'mux',+$event.target.value)">
 <template x-for="m in adcMuxes" :key="m[0]"><option :value="m[0]" x-text="m[1]"></option></template>
+</select></div>
+<div class="cfg-row" x-show="isRes(ch)"><label>Excitation</label>
+<select :value="ch.rtdExcitationUa>=250?1:0" @change="setRtd(i,+$event.target.value)">
+<template x-for="e in rtdExcCurrents" :key="e[0]"><option :value="e[0]" x-text="e[1]"></option></template>
 </select></div>
 </div>
 </div>
@@ -851,15 +855,16 @@ connected:false,
 chColors:['#3b82f6','#10b981','#f59e0b','#a855f7'],
 chNames:['A','B','C','D'],
 idacColors:['#10b981','#06b6d4','#ff4d6a'],
-fnOptions:[[0,'HIGH_IMP'],[1,'VOUT'],[2,'IOUT'],[3,'VIN'],[4,'IIN_EXT'],[5,'IIN_LOOP'],[6,'RES_MEAS'],[7,'DIN_LOGIC'],[8,'DIN_LOOP'],[9,'IOUT_HART'],[10,'IIN_EXT_HART'],[11,'IIN_LOOP_HART']],
+fnOptions:[[0,'HIGH_IMP'],[1,'VOUT'],[2,'IOUT'],[3,'VIN'],[4,'IIN_EXT'],[5,'IIN_LOOP'],[7,'RES_MEAS'],[8,'DIN_LOGIC'],[9,'DIN_LOOP'],[10,'IOUT_HART'],[11,'IIN_EXT_HART'],[12,'IIN_LOOP_HART']],
 adcRanges:[[0,'0-12V'],[1,'+/-12V'],[2,'+/-312.5mV'],[3,'-312.5-0mV'],[4,'0-312.5mV'],[5,'0-625mV'],[6,'+/-104mV'],[7,'+/-2.5V']],
 adcRates:[[0,'10 SPS HR'],[1,'20 SPS'],[4,'200 SPS'],[8,'1.2k SPS'],[12,'4.8k SPS'],[13,'9.6k SPS']],
 adcMuxes:[[0,'Primary'],[1,'AGND'],[2,'AVDD'],[3,'ALDO1V8'],[4,'DLDO1V8'],[5,'AVSS'],[6,'LVIN']],
+rtdExcCurrents:[[0,'125 µA'],[1,'250 µA']],
 diagSources:[[0,'AGND'],[1,'TEMP'],[2,'DVCC'],[3,'AVCC'],[4,'LDO1V8'],[5,'AVDD_HI'],[6,'AVDD_LO'],[7,'AVSS'],[8,'LVIN'],[9,'DO_VDD'],[10,'VSENSEP'],[11,'VSENSEN'],[12,'DO_CURRENT'],[13,'AVDD']],
 alertBits:[[0,'RESET'],[1,'CAL_MEM'],[2,'SPI_CRC'],[3,'SPI_SCLK'],[4,'ADC_ERR'],[5,'SUPPLY'],[6,'TEMP'],[7,'CH_D'],[8,'CH_C'],[9,'CH_B'],[10,'CH_A']],
 supplyBits:[[0,'AVDD_HI'],[1,'AVDD_LO'],[2,'AVSS'],[3,'AVCC'],[4,'DVCC'],[5,'IOVDD'],[6,'REFIO']],
 chAlertBits:[[0,'VIN_LO'],[1,'VIN_HI'],[2,'OC'],[3,'SC'],[4,'DO_SC'],[5,'DIN_OC'],[6,'DIN_SC'],[7,'DAC'],[8,'AVDD'],[9,'DVCC']],
-st:{spiOk:false,dieTemp:0,alertStatus:0,alertMask:0,supplyAlertStatus:0,supplyAlertMask:0,liveStatus:0,channels:[0,1,2,3].map(()=>({id:0,function:'HIGH_IMP',adcRaw:0,adcValue:0,adcRange:0,adcRate:0,adcMux:0,dacCode:0,dacValue:0,dinState:false,dinCounter:0,doState:false,channelAlert:0,channelAlertMask:0}))},
+st:{spiOk:false,dieTemp:0,alertStatus:0,alertMask:0,supplyAlertStatus:0,supplyAlertMask:0,liveStatus:0,channels:[0,1,2,3].map(()=>({id:0,function:'HIGH_IMP',adcRaw:0,adcValue:0,adcRange:0,adcRate:0,adcMux:0,dacCode:0,dacValue:0,dinState:false,dinCounter:0,doState:false,channelAlert:0,channelAlertMask:0,rtdExcitationUa:0}))},
 diag:{slots:[0,1,2,3].map(()=>({slot:0,source:0,sourceName:'AGND',raw:0,value:0,unit:'V'}))},
 vdac:[0,1,2,3].map(()=>({val:0,dirty:false,bipolar:false})),
 idacCh:[0,1,2,3].map(()=>({val:0,dirty:false})),
@@ -875,7 +880,7 @@ ioexp:{present:false,powerGood:{logic:false,vadj1:false,vadj2:false},enables:{va
 wifiSt:{connected:false,staSSID:'',staIP:'',rssi:0,apSSID:'',apIP:'',apMAC:''},
 wifiSSID:'',wifiPass:'',wifiMsg:'',
 _pollTimer:null,_slowTimer:null,
-fnMap:{HIGH_IMP:0,VOUT:1,IOUT:2,VIN:3,IIN_EXT_PWR:4,IIN_LOOP_PWR:5,RES_MEAS:6,DIN_LOGIC:7,DIN_LOOP:8,IOUT_HART:9,IIN_EXT_PWR_HART:10,IIN_LOOP_PWR_HART:11},
+fnMap:{HIGH_IMP:0,VOUT:1,IOUT:2,VIN:3,IIN_EXT_PWR:4,IIN_LOOP_PWR:5,RES_MEAS:7,DIN_LOGIC:8,DIN_LOOP:9,IOUT_HART:10,IIN_EXT_PWR_HART:11,IIN_LOOP_PWR_HART:12},
 init(){
 document.body.classList.toggle('light',!this.darkMode);
 this.pollStatus();
@@ -923,13 +928,18 @@ if(r.ok)this.wifiSt=await r.json()
 }catch(e){}
 },
 fnCode(name){return this.fnMap[name]??-1},
-isCurrent(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===10||f===11},
-isIin(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===10||f===11},
+isCurrent(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===11||f===12},
+isRes(ch){return this.fnCode(ch.function)===7},
+isIin(ch){let f=this.fnCode(ch.function);return f===4||f===5||f===11||f===12},
 isIinExt(ch){let f=this.fnCode(ch.function);return f===4||f===10},
 isIinLoop(ch){let f=this.fnCode(ch.function);return f===5||f===11},
 adcPct(ch,i){
 let f=this.fnCode(ch.function);
 if(f===0)return 0;
+if(this.isRes(ch)){
+let rngV=[12,12,0.3125,0.3125,0.3125,0.625,0.104,2.5][ch.adcRange]||0.3125;
+let iExc=ch.rtdExcitationUa>0?ch.rtdExcitationUa/1e6:250e-6;
+return Math.min(ch.adcValue/(rngV/iExc)*100,100)}
 let mx=12;
 if(ch.adcRange===1)mx=12;else if(ch.adcRange===7)mx=2.5;else if(ch.adcRange>=2&&ch.adcRange<=6)mx=0.625;
 if(this.isCurrent(ch))mx=25;
@@ -956,6 +966,7 @@ let body={mux:ch.adcMux,range:ch.adcRange,rate:ch.adcRate};
 body[field]=val;
 this.postJSON('/api/channel/'+i+'/adc/config',body)
 },
+setRtd(i,current){this.postJSON('/api/channel/'+i+'/rtd/config',{current:+current})},
 setDiag(slot,source){this.postJSON('/api/diagnostics/config',{slot:slot,source:source})},
 isDin(ch){let f=this.fnCode(ch.function);return f===7||f===8},
 hasDo(ch){let f=this.fnCode(ch.function);return f===1||f===2||f===7||f===8},

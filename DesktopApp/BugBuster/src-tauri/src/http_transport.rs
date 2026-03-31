@@ -137,6 +137,7 @@ impl HttpTransport {
                     din_counter: ch_json.get("dinCounter").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
                     do_state: ch_json.get("doState").and_then(|v| v.as_bool()).unwrap_or(false),
                     channel_alert: ch_json.get("channelAlert").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                    rtd_excitation_ua: ch_json.get("rtdExcitationUa").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
                 };
             }
         }
@@ -302,6 +303,17 @@ impl Transport for HttpTransport {
                 let ch = payload[0];
                 let body = serde_json::json!({"limit8mA": payload[1] != 0});
                 self.post_json(&format!("/api/channel/{}/ilimit", ch), &body).await?;
+                Ok(payload.to_vec())
+            }
+
+            bbp::CMD_SET_RTD_CONFIG => {
+                // payload: channel(u8) + current(u8)  (0=125µA, 1=250µA)
+                if payload.len() < 2 {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let ch = payload[0];
+                let body = serde_json::json!({"current": payload[1]});
+                self.post_json(&format!("/api/channel/{}/rtd/config", ch), &body).await?;
                 Ok(payload.to_vec())
             }
 
