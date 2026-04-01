@@ -358,9 +358,9 @@ Generates ±15 V analog supplies for the AD74416H.
 | A1 | GND via R34 (154 kΩ) | Address bit 1 = 0 |
 | FS0 | R35 (154 kΩ) → GND | Full-scale current range select [UNSURE exact purpose] |
 | FS1–FS3 | R36 (154 kΩ) → GND | Full-scale range [UNSURE] |
-| OUT0 | IDAC_OUT0 | [UNSURE — destination; possibly unused or to LTM8063 U4 FB] |
-| OUT1 | IDAC_OUT1 | → LTM8063 U4 (VADJ1) FB node |
-| OUT2 | IDAC_OUT2 | → LTM8063 U6 (VADJ2) FB node |
+| OUT0 | IDAC_OUT0 | → TPS74601 (VLOGIC / 3V3_ADJ) FB node — adjusts logic-level voltage (1.8–5.0 V) |
+| OUT1 | IDAC_OUT1 | → LTM8063 U4 (VADJ1) FB node — adjusts Block 1 supply (3–15 V) |
+| OUT2 | IDAC_OUT2 | → LTM8063 U6 (VADJ2) FB node — adjusts Block 2 supply (3–15 V) |
 | OUT3 | IDAC_OUT3 | [UNSURE — destination; possibly unused] |
 | EP | GND | — |
 
@@ -580,16 +580,93 @@ One per output port (P1–P4).
 | ILIM | R (to GND) | Sets current limit threshold |
 | GND | GND | — |
 
-### 6.5 P1–P4 — Output Terminal Blocks
+### 6.5 Physical IO Architecture
+
+The BugBuster has **12 physical IOs** organized into **2 Blocks**, each containing **2 IO_Blocks** of **3 IOs**.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ BLOCK 1 — VADJ1 (3–15 V adjustable via IDAC ch 1)                     │
+│                                                                         │
+│   IO_Block 1 (EFUSE1)          IO_Block 2 (EFUSE2)                     │
+│   ┌─────────────────────┐      ┌─────────────────────┐                 │
+│   │ IO 1  — analog/HAT  │      │ IO 4  — analog/HAT  │                 │
+│   │ IO 2  — digital     │      │ IO 5  — digital     │                 │
+│   │ IO 3  — digital     │      │ IO 6  — digital     │                 │
+│   │ VCC   GND           │      │ VCC   GND           │                 │
+│   └─────────────────────┘      └─────────────────────┘                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│ BLOCK 2 — VADJ2 (3–15 V adjustable via IDAC ch 2)                     │
+│                                                                         │
+│   IO_Block 3 (EFUSE3)          IO_Block 4 (EFUSE4)                     │
+│   ┌─────────────────────┐      ┌─────────────────────┐                 │
+│   │ IO 7  — analog/HAT  │      │ IO 10 — analog/HAT  │                 │
+│   │ IO 8  — digital     │      │ IO 11 — digital     │                 │
+│   │ IO 9  — digital     │      │ IO 12 — digital     │                 │
+│   │ VCC   GND           │      │ VCC   GND           │                 │
+│   └─────────────────────┘      └─────────────────────┘                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### VCC Requirements
+
+Each IO_Block's VCC pin is only active when ALL of:
+1. VADJ regulator enabled (VADJ1_EN or VADJ2_EN via PCA9535)
+2. E-fuse enabled (EFUSE_EN_x via PCA9535)
+3. E-fuse fault-free (EFUSE_FLT_x clear)
+4. Supply power-good (VADJ1_PG or VADJ2_PG asserted)
+
+#### IO Capabilities (MUX-exclusive — one function per IO at a time)
+
+| IO | Position | MUX Options |
+|----|----------|-------------|
+| 1, 4, 7, 10 | 1st in each IO_Block | ESP GPIO (high drive) · ESP GPIO (low drive) · AD74416H channel · HAT passthrough |
+| 2, 3, 5, 6, 8, 9, 11, 12 | 2nd/3rd in each IO_Block | ESP GPIO (high drive) · ESP GPIO (low drive) |
+
+#### AD74416H Channel Mapping
+
+| IO | AD74416H Channel |
+|----|-----------------|
+| 1 | Channel A (0) |
+| 4 | Channel B (1) |
+| 7 | Channel C (2) |
+| 10 | Channel D (3) |
+
+#### VLOGIC — Common Logic Level
+
+All digital IOs are level-shifted to **VLOGIC** (1.8–5.0 V adjustable) via TXS0108E (U13, U15).
+- Controlled by: DS4424 IDAC OUT0 → TPS74601 (3V3_ADJ) feedback
+- Output Enable: ESP32 GPIO14 (LVL_OE) — **must be enabled** for any digital signal to pass
+
+#### Serial Bridge
+
+A configurable UART bridge can be routed to any 2 of the 12 IOs (TX + RX) via MUX.
+The bridge connects to a secondary ESP32 serial port used by external programs.
+Firmware commands: GET_UART_CONFIG (0x50), SET_UART_CONFIG (0x51), GET_UART_PINS (0x52).
+
+#### ESP GPIO Net Names
+
+| Block | Nets | IOs |
+|-------|------|-----|
+| Block 1 | `BLOCK1_IO1` – `BLOCK1_IO6` | IO 1–6 |
+| Block 2 | `BLOCK2_IO1` – `BLOCK2_IO6` | IO 7–12 |
+
+### 6.6 Terminal Block Connectors
 
 **Component:** Wurth 691382010005 (5-position, right-angle, screw terminal)
-(BOM: P1, P2, P3, P4)
+(BOM: P1, P2, P3, P4 — one per IO_Block)
 
 | Position | Signal | Notes |
 |----------|--------|-------|
-| 1 | VADJ_x (e-fuse output) | Adjustable 3–15 V power |
-| 2–4 | ADC_OUT signals | Analog I/O from AD74416H channels [UNSURE — exact signal mapping per pin] |
-| 5 | GND | — |
+| 1 | VADJ_x (e-fuse output) | Adjustable 3–15 V power (VCC) |
+| 2–4 | IO signals | Routed through ADGS2414D MUX matrix |
+| 5 | GND | Signal ground |
+
+#### Fifth MUX (U23) — Self-Test / Monitoring
+
+U23 is a dedicated self-test ADGS2414D (NOT part of the main 4-device daisy-chain).
+Routes internal power rails and e-fuse IMON pins to AD74416H CH_D for voltage/current monitoring.
+**Not yet implemented in firmware or library — reserved for future use.**
 
 ---
 
