@@ -22,6 +22,7 @@
 #include "uart_bridge.h"
 #include "bbp.h"
 #include "adgs2414d.h"
+#include "dio.h"
 #include "i2c_bus.h"
 #include "ds4424.h"
 #include "husb238.h"
@@ -138,6 +139,10 @@ extern "C" void app_main(void)
     // 10. MUX switch matrix (ADGS2414D x4 daisy-chain)
     adgs_init();
     serial_println("[BugBuster] MUX matrix initialized");
+
+    // 10a. Digital IO (ESP32 GPIO-based, 12 logical IOs)
+    dio_init();
+    serial_println("[BugBuster] Digital IO initialized");
 
     // 10b. I2C bus and devices (non-blocking: won't prevent boot if absent)
     serial_println("[BugBuster] Initializing I2C bus...");

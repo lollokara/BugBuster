@@ -260,10 +260,16 @@ class CmdId(IntEnum):
     # Diagnostics
     SET_DIAG_CONFIG  = 0x30
 
-    # GPIO
+    # GPIO (AD74416H on-chip GPIO pins A-F)
     GET_GPIO_STATUS  = 0x40
     SET_GPIO_CONFIG  = 0x41
     SET_GPIO_VALUE   = 0x42
+
+    # Digital IO (ESP32 GPIO-based, 12 logical IOs through MUX)
+    DIO_GET_ALL      = 0x43
+    DIO_CONFIG       = 0x44
+    DIO_WRITE        = 0x45
+    DIO_READ         = 0x46
 
     # UART bridge
     GET_UART_CONFIG  = 0x50

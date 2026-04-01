@@ -512,6 +512,93 @@ class BugBuster:
             self._http_post(f"/gpio/{gpio}/set", {"value": value})
 
     # ------------------------------------------------------------------
+    # ── Digital IO (ESP32 GPIO, 12 logical IOs) ────────────────────────
+    # ------------------------------------------------------------------
+
+    def dio_get_all(self) -> list[dict]:
+        """
+        Read the state of all 12 digital IOs.
+
+        Returns a list of dicts::
+
+            [
+                {"io": 1, "gpio": 2, "mode": 0, "output": False, "input": False},
+                …
+            ]
+
+        Mode values: 0=disabled, 1=input, 2=output.
+        """
+        if self._usb:
+            resp  = self._usb_cmd(CmdId.DIO_GET_ALL)
+            count = resp[0]
+            result = []
+            off = 1
+            for _ in range(count):
+                io_num = resp[off]
+                gpio   = struct.unpack_from('b', resp, off + 1)[0]
+                mode   = resp[off + 2]
+                output = bool(resp[off + 3])
+                inp    = bool(resp[off + 4])
+                off   += 5
+                result.append({
+                    "io": io_num, "gpio": gpio, "mode": mode,
+                    "output": output, "input": inp,
+                })
+            return result
+        else:
+            raw = self._http_get("/dio")
+            return raw.get("ios", [])
+
+    def dio_configure(self, io: int, mode: int) -> None:
+        """
+        Configure a digital IO's direction.
+
+        Parameters
+        ----------
+        io : int
+            IO number (1–12).
+        mode : int
+            0 = disabled (high-impedance), 1 = input, 2 = output.
+
+        Example::
+
+            bb.dio_configure(2, 2)   # IO 2 → output
+            bb.dio_configure(5, 1)   # IO 5 → input
+        """
+        if self._usb:
+            self._usb_cmd(CmdId.DIO_CONFIG, struct.pack('<BB', io, mode))
+        else:
+            self._http_post(f"/dio/{io}/config", {"mode": mode})
+
+    def dio_write(self, io: int, value: bool) -> None:
+        """
+        Set a digital IO output level.
+
+        *io* must be configured as output (mode=2) first.
+        *value* — ``True`` for HIGH, ``False`` for LOW.
+        """
+        if self._usb:
+            self._usb_cmd(CmdId.DIO_WRITE, struct.pack('<BB', io, int(value)))
+        else:
+            self._http_post(f"/dio/{io}/set", {"value": value})
+
+    def dio_read(self, io: int) -> dict:
+        """
+        Read a single digital IO.
+
+        Returns ``{"io": N, "mode": M, "value": True/False}``.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.DIO_READ, struct.pack('<B', io))
+            return {
+                "io":    resp[0],
+                "mode":  resp[1],
+                "value": bool(resp[2]),
+            }
+        else:
+            return self._http_get(f"/dio/{io}")
+
+    # ------------------------------------------------------------------
     # ── UART bridge ────────────────────────────────────────────────────
     # ------------------------------------------------------------------
 

@@ -693,6 +693,81 @@ Set GPIO output value (equivalent to `POST /api/gpio/X/set`).
 
 ---
 
+### 6.6b Digital IO (ESP32 GPIO)
+
+The BugBuster exposes 12 logical digital IOs mapped to ESP32 GPIO pins.
+On the PCB these GPIOs pass through the ADGS2414D MUX matrix and TXS0108E
+level shifters to the physical terminal blocks.  The MUX routing is managed
+by the host library (SET_MUX_ALL); the DIO commands only drive the ESP32
+GPIO pins themselves.
+
+IO numbering: 1–12 (matches the HAL port numbers).
+
+- IOs 1, 4, 7, 10 — first IO of each IO_Block (also analog-capable)
+- IOs 2, 3, 5, 6, 8, 9, 11, 12 — digital-only (positions 2 & 3)
+
+HTTP equivalents:
+- `GET /api/dio` — read all 12 IO states
+- `GET /api/dio/{n}` — read single IO
+- `POST /api/dio/{n}/config` body `{"mode": 1}` — configure direction
+- `POST /api/dio/{n}/set` body `{"value": true}` — set output level
+
+#### 0x43 DIO_GET_ALL
+Read the state of all 12 digital IOs (equivalent to `GET /api/dio`).
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       count           u8      Number of IOs (always 12)
+
+Per IO (stride = 5):
++0      io              u8      IO number (1-12)
++1      gpio            i8      ESP32 GPIO pin number
++2      mode            u8      0=disabled, 1=input, 2=output
++3      output          bool    Last written output level
++4      input           bool    Last read input level
+```
+
+#### 0x44 DIO_CONFIG
+Configure an IO's direction (equivalent to `POST /api/dio/{n}/config`).
+
+**Request payload:**
+```
+0       io              u8      IO number (1-12)
+1       mode            u8      0=disabled, 1=input, 2=output
+```
+
+**Response payload:** Echoes request.
+
+#### 0x45 DIO_WRITE
+Set a digital output level (equivalent to `POST /api/dio/{n}/set`).
+
+**Request payload:**
+```
+0       io              u8      IO number (1-12), must be mode=2 (output)
+1       value           bool    true=HIGH, false=LOW
+```
+
+**Response payload:** Echoes request.
+
+#### 0x46 DIO_READ
+Read a single IO (equivalent to `GET /api/dio/{n}`).
+
+**Request payload:**
+```
+0       io              u8      IO number (1-12)
+```
+
+**Response payload:**
+```
+0       io              u8      IO number (echoed)
+1       mode            u8      Current mode (0=disabled, 1=input, 2=output)
+2       value           bool    Current level (input reads live, output reads last written)
+```
+
+---
+
 ### 6.7 UART Bridge Configuration
 
 #### 0x50 GET_UART_CONFIG

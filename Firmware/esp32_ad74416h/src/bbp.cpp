@@ -11,6 +11,7 @@
 #include "config.h"
 #include "uart_bridge.h"
 #include "adgs2414d.h"
+#include "dio.h"
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
@@ -875,6 +876,97 @@ static int handleSetGpioValue(uint16_t seq, uint8_t cmdId,
 
     memcpy(out, payload, 2);
     return 2;
+}
+
+// -----------------------------------------------------------------------------
+// Digital IO (ESP32 GPIO) handlers
+// -----------------------------------------------------------------------------
+
+// 0x43 DIO_GET_ALL — read all 12 IO states
+static int handleDioGetAll(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    const DioState *all = dio_get_all();
+    dio_poll_inputs();  // refresh input levels before responding
+
+    size_t pos = 0;
+    put_u8(out, &pos, DIO_NUM_IOS);
+    for (int i = 0; i < DIO_NUM_IOS; i++) {
+        put_u8(out, &pos, (uint8_t)(i + 1));          // io number (1-12)
+        put_u8(out, &pos, all[i].gpio_num);            // ESP32 GPIO pin
+        put_u8(out, &pos, all[i].mode);                // 0=disabled, 1=input, 2=output
+        put_bool(out, &pos, all[i].output_level);      // last written output
+        put_bool(out, &pos, all[i].input_level);       // last read input
+    }
+    return (int)pos;
+}
+
+// 0x44 DIO_CONFIG — configure IO direction
+static int handleDioConfig(uint16_t seq, uint8_t cmdId,
+                           const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t io   = get_u8(payload, &rpos);   // IO number 1-12
+    uint8_t mode = get_u8(payload, &rpos);   // 0=disabled, 1=input, 2=output
+
+    if (!dio_configure(io, mode)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, io);
+    put_u8(out, &pos, mode);
+    return (int)pos;
+}
+
+// 0x45 DIO_WRITE — set output level
+static int handleDioWrite(uint16_t seq, uint8_t cmdId,
+                          const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t io  = get_u8(payload, &rpos);    // IO number 1-12
+    bool level  = get_bool(payload, &rpos);  // true=HIGH, false=LOW
+
+    if (!dio_write(io, level)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, io);
+    put_bool(out, &pos, level);
+    return (int)pos;
+}
+
+// 0x46 DIO_READ — read single IO
+static int handleDioRead(uint16_t seq, uint8_t cmdId,
+                         const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t io = get_u8(payload, &rpos);
+
+    DioState st;
+    if (!dio_get_state(io, &st)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    // Re-read the pin live
+    bool level = false;
+    if (st.mode == DIO_MODE_INPUT) {
+        level = dio_read(io);
+    } else if (st.mode == DIO_MODE_OUTPUT) {
+        level = st.output_level;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, io);
+    put_u8(out, &pos, st.mode);
+    put_bool(out, &pos, level);
+    return (int)pos;
 }
 
 static int handleSetUartConfig(uint16_t seq, uint8_t cmdId,
@@ -1800,6 +1892,20 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_SET_GPIO_VALUE:
             rspLen = handleSetGpioValue(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+
+        // --- Digital IO (ESP32 GPIO) ---
+        case BBP_CMD_DIO_GET_ALL:
+            rspLen = handleDioGetAll(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_DIO_CONFIG:
+            rspLen = handleDioConfig(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_DIO_WRITE:
+            rspLen = handleDioWrite(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_DIO_READ:
+            rspLen = handleDioRead(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- UART Bridge ---

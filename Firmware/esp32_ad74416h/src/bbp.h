@@ -92,10 +92,16 @@ extern "C" {
 // Diagnostics
 #define BBP_CMD_SET_DIAG_CONFIG 0x30
 
-// GPIO
+// GPIO (AD74416H on-chip GPIO pins A–F)
 #define BBP_CMD_GET_GPIO_STATUS 0x40
 #define BBP_CMD_SET_GPIO_CONFIG 0x41
 #define BBP_CMD_SET_GPIO_VALUE  0x42
+
+// Digital IO (ESP32 GPIO-based, 12 logical IOs routed through MUX)
+#define BBP_CMD_DIO_GET_ALL     0x43    // Read all 12 IO states
+#define BBP_CMD_DIO_CONFIG      0x44    // Configure IO direction (input/output/disabled)
+#define BBP_CMD_DIO_WRITE       0x45    // Set output level (high/low)
+#define BBP_CMD_DIO_READ        0x46    // Read single IO input level
 
 // UART Bridge
 #define BBP_CMD_GET_UART_CONFIG 0x50

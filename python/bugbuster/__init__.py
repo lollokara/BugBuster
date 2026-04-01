@@ -60,6 +60,7 @@ See the ``examples/`` directory:
 - ``04_waveform_and_mux.py`` — waveform generator + MUX routing
 - ``05_hal_basics.py``    — HAL tutorial with all 12 modes
 - ``06_power_management.py`` — USB PD, IDAC, e-fuse, power sequencing
+- ``07_digital_io.py``    — ESP32 GPIO digital read/write (USB + HTTP)
 """
 
 from .client    import BugBuster, connect_usb, connect_http

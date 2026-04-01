@@ -25,6 +25,7 @@
 #include "husb238.h"
 #include "pca9535.h"
 #include "adgs2414d.h"
+#include "dio.h"
 #include "wifi_manager.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
@@ -1085,6 +1086,124 @@ static esp_err_t handle_gpio_post_dispatch(httpd_req_t *req)
 }
 
 // =============================================================================
+// Digital IO (ESP32 GPIO) endpoints
+// =============================================================================
+
+// GET /api/dio — read all 12 IO states
+static esp_err_t handle_get_dio(httpd_req_t *req)
+{
+    dio_poll_inputs();
+    const DioState *all = dio_get_all();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *ios  = cJSON_AddArrayToObject(root, "ios");
+
+    for (int i = 0; i < DIO_NUM_IOS; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "io",     i + 1);
+        cJSON_AddNumberToObject(obj, "gpio",   all[i].gpio_num);
+        cJSON_AddNumberToObject(obj, "mode",   all[i].mode);
+        const char *mname = all[i].mode == DIO_MODE_INPUT  ? "input"  :
+                            all[i].mode == DIO_MODE_OUTPUT ? "output" : "disabled";
+        cJSON_AddStringToObject(obj, "modeName", mname);
+        cJSON_AddBoolToObject(obj, "output", all[i].output_level);
+        cJSON_AddBoolToObject(obj, "input",  all[i].input_level);
+        cJSON_AddItemToArray(ios, obj);
+    }
+
+    return send_json(req, root);
+}
+
+// POST /api/dio/{n}/config  body: {"mode": 1}   (0=disabled, 1=input, 2=output)
+static esp_err_t handle_post_dio_config(httpd_req_t *req)
+{
+    // Extract IO number from URI: /api/dio/3/config -> 3
+    const char *p = strstr(req->uri, "/api/dio/");
+    if (!p) return send_error(req, 400, "Invalid DIO URI");
+    int io = atoi(p + 9);
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    int mode = cJSON_GetObjectItem(body, "mode")->valueint;
+    cJSON_Delete(body);
+
+    if (!dio_configure((uint8_t)io, (uint8_t)mode)) {
+        return send_error(req, 400, "Invalid IO or mode");
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "io", io);
+    cJSON_AddNumberToObject(resp, "mode", mode);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    return send_json(req, resp);
+}
+
+// POST /api/dio/{n}/set  body: {"value": true}
+static esp_err_t handle_post_dio_set(httpd_req_t *req)
+{
+    const char *p = strstr(req->uri, "/api/dio/");
+    if (!p) return send_error(req, 400, "Invalid DIO URI");
+    int io = atoi(p + 9);
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    bool value = cJSON_IsTrue(cJSON_GetObjectItem(body, "value"));
+    cJSON_Delete(body);
+
+    if (!dio_write((uint8_t)io, value)) {
+        return send_error(req, 400, "IO not configured as output");
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "io", io);
+    cJSON_AddBoolToObject(resp, "value", value);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    return send_json(req, resp);
+}
+
+// GET /api/dio/{n} — read single IO
+static esp_err_t handle_get_dio_single(httpd_req_t *req)
+{
+    const char *p = strstr(req->uri, "/api/dio/");
+    if (!p) return send_error(req, 400, "Invalid DIO URI");
+    int io = atoi(p + 9);
+
+    DioState st;
+    if (!dio_get_state((uint8_t)io, &st)) {
+        return send_error(req, 400, "Invalid IO number");
+    }
+
+    bool level = false;
+    if (st.mode == DIO_MODE_INPUT)       level = dio_read((uint8_t)io);
+    else if (st.mode == DIO_MODE_OUTPUT) level = st.output_level;
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "io", io);
+    cJSON_AddNumberToObject(resp, "gpio", st.gpio_num);
+    cJSON_AddNumberToObject(resp, "mode", st.mode);
+    cJSON_AddBoolToObject(resp, "value", level);
+    return send_json(req, resp);
+}
+
+// POST /api/dio/* dispatcher
+static esp_err_t handle_dio_post_dispatch(httpd_req_t *req)
+{
+    const char *p = strstr(req->uri, "/api/dio/");
+    if (!p) return send_error(req, 400, "Invalid DIO URI");
+    // Find the action after /api/dio/N/
+    p += 9; // skip "/api/dio/"
+    while (*p >= '0' && *p <= '9') p++; // skip IO number
+    if (*p == '/') p++;
+
+    if (strcmp(p, "config") == 0) return handle_post_dio_config(req);
+    if (strcmp(p, "set") == 0)    return handle_post_dio_set(req);
+
+    return send_error(req, 404, "Unknown DIO POST endpoint");
+}
+
+// =============================================================================
 // UART Bridge endpoints
 // =============================================================================
 
@@ -2002,6 +2121,23 @@ void initWebServer(void)
         .uri = "/api/gpio/*", .method = HTTP_POST, .handler = handle_gpio_post_dispatch, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_gpio_post);
+
+    // ----- Digital IO (ESP32 GPIO) routes -----
+
+    httpd_uri_t uri_dio_get_all = {
+        .uri = "/api/dio", .method = HTTP_GET, .handler = handle_get_dio, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_dio_get_all);
+
+    httpd_uri_t uri_dio_get_single = {
+        .uri = "/api/dio/*", .method = HTTP_GET, .handler = handle_get_dio_single, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_dio_get_single);
+
+    httpd_uri_t uri_dio_post = {
+        .uri = "/api/dio/*", .method = HTTP_POST, .handler = handle_dio_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_dio_post);
 
     // ----- UART bridge routes -----
 
