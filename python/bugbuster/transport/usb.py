@@ -98,8 +98,15 @@ class USBTransport:
             rtscts=False,
             xonxoff=False,
         )
+        # ESP32-S3 native USB CDC requires DTR high before it will send data.
+        # Setting it explicitly after open avoids the macOS DTR-toggle issue
+        # that caused the device to exit binary mode on previous designs.
+        self._serial.dtr = True
 
         # Handshake strategy:
+        #   0. Send a DISCONNECT frame in case the device is stuck in binary
+        #      mode from a previous unclean session.  If the device is already
+        #      in CLI mode the COBS-encoded frame is harmless garbage.
         #   1. Wait for the device to settle and drain any startup / "CLI ready"
         #      output that arrives after the port-open DTR event.
         #   2. Send the 4-byte magic.
@@ -107,6 +114,33 @@ class USBTransport:
         #      We never call reset_input_buffer() because on macOS CDC devices
         #      tcflush() does not reliably flush the kernel USB receive buffer.
         import time as _time
+
+        # Step 0: Attempt to recover a device stuck in binary mode.
+        # If the previous session crashed without sending DISCONNECT, the
+        # device is still in binary mode with a partially-filled COBS decoder.
+        #
+        # Recovery:
+        #   a) Send 0x00 bytes to flush any partial COBS frame in the device's
+        #      receive buffer (0x00 = frame delimiter, resets the decoder).
+        #   b) Send a properly framed DISCONNECT (0xFF) command.
+        #   c) Wait for the device to exit binary mode and print CLI prompt.
+        #
+        # If the device is already in CLI mode, all these bytes are harmless
+        # (just garbage text that the CLI ignores).
+        try:
+            self._serial.write(b'\x00' * 4)         # flush partial COBS frame
+            disconnect_frame = build_frame(0, 0xFF)  # DISCONNECT cmd
+            self._serial.write(disconnect_frame)
+            self._serial.flush()
+            _time.sleep(0.3)  # give device time to exit binary mode + print CLI prompt
+            # Drain any "Binary mode deactivated" / CLI prompt text
+            try:
+                self._serial.read(1024)
+            except serial.SerialException:
+                pass
+            log.debug("Sent pre-handshake DISCONNECT (recovery for stuck binary mode)")
+        except Exception:
+            pass  # best-effort
 
         buf             = bytearray()
         magic_sent      = False

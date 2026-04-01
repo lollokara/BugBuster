@@ -27,7 +27,8 @@ sys.path.insert(0, "..")
 import bugbuster as bb
 from bugbuster import ChannelFunction, AdcRange, AdcRate, AdcMux
 
-USB_PORT = "/dev/ttyACM0"
+# Adjust for your OS:  macOS: /dev/cu.usbmodem*   Linux: /dev/ttyACM0   Windows: COM3
+USB_PORT = "/dev/cu.usbmodem1234561"
 
 # ── ADC range parameters needed to convert raw codes to volts ──────────────
 # V = v_offset + (raw / 2^24) * v_span

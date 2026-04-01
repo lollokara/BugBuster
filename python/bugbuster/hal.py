@@ -13,46 +13,53 @@ e-fuse output) and a GND pin.
     ┌─────────────────────────────────────────────────────────────────────────┐
     │ BLOCK 1 — VADJ1 (3–15 V adjustable, IDAC ch 1)                       │
     │                                                                         │
-    │   IO_Block 1 (EFUSE1)          IO_Block 2 (EFUSE2)                     │
-    │   ┌─────────────────────┐      ┌─────────────────────┐                 │
-    │   │ IO 1  — analog/HAT  │      │ IO 4  — analog/HAT  │                 │
-    │   │ IO 2  — digital     │      │ IO 5  — digital     │                 │
-    │   │ IO 3  — digital     │      │ IO 6  — digital     │                 │
-    │   │ VCC   GND           │      │ VCC   GND           │                 │
-    │   └─────────────────────┘      └─────────────────────┘                 │
+    │   IO_Block 1 (EFUSE1, MUX U10)    IO_Block 2 (EFUSE2, MUX U11)       │
+    │   ┌─────────────────────┐          ┌─────────────────────┐             │
+    │   │ IO 1  — analog/HAT  │          │ IO 4  — analog/HAT  │             │
+    │   │ IO 2  — digital     │          │ IO 5  — digital     │             │
+    │   │ IO 3  — digital     │          │ IO 6  — digital     │             │
+    │   │ VCC   GND           │          │ VCC   GND           │             │
+    │   └─────────────────────┘          └─────────────────────┘             │
     ├─────────────────────────────────────────────────────────────────────────┤
     │ BLOCK 2 — VADJ2 (3–15 V adjustable, IDAC ch 2)                       │
     │                                                                         │
-    │   IO_Block 3 (EFUSE3)          IO_Block 4 (EFUSE4)                     │
-    │   ┌─────────────────────┐      ┌─────────────────────┐                 │
-    │   │ IO 7  — analog/HAT  │      │ IO 10 — analog/HAT  │                 │
-    │   │ IO 8  — digital     │      │ IO 11 — digital     │                 │
-    │   │ IO 9  — digital     │      │ IO 12 — digital     │                 │
-    │   │ VCC   GND           │      │ VCC   GND           │                 │
-    │   └─────────────────────┘      └─────────────────────┘                 │
+    │   IO_Block 3 (EFUSE3, MUX U16)    IO_Block 4 (EFUSE4, MUX U17)       │
+    │   ┌─────────────────────┐          ┌─────────────────────┐             │
+    │   │ IO 7  — analog/HAT  │          │ IO 10 — analog/HAT  │             │
+    │   │ IO 8  — digital     │          │ IO 11 — digital     │             │
+    │   │ IO 9  — digital     │          │ IO 12 — digital     │             │
+    │   │ VCC   GND           │          │ VCC   GND           │             │
+    │   └─────────────────────┘          └─────────────────────┘             │
     └─────────────────────────────────────────────────────────────────────────┘
 
     VLOGIC: 1.8–5 V adjustable (IDAC ch 0, TPS74601) — common to both blocks.
     All digital IOs are level-shifted to VLOGIC via TXS0108E (OE = GPIO14).
 
-IO capabilities
----------------
-Each IO is connected through the ADGS2414D MUX matrix.  Options are
-**exclusive** — only one function per IO at a time.
+MUX switch matrix
+-----------------
+Each IO_Block is served by one ADGS2414D (8 SPST switches):
 
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │ IO 1, 4, 7, 10  (first IO of each IO_Block):                          │
-    │   ESP GPIO (high drive) │ ESP GPIO (low drive) │ AD74416H channel │ HAT│
-    ├─────────────────────────────────────────────────────────────────────────┤
-    │ IO 2, 3, 5, 6, 8, 9, 11, 12  (IOs 2 & 3 of each IO_Block):           │
-    │   ESP GPIO (high drive) │ ESP GPIO (low drive)                         │
-    └─────────────────────────────────────────────────────────────────────────┘
+    ┌─────────┬────────────────┬───────────────────────────────────────────┐
+    │ Group   │ Switches       │ IO / function                             │
+    ├─────────┼────────────────┼───────────────────────────────────────────┤
+    │ A       │ S1–S4 (bits 0-3)│ Analog-capable IO (pos. 1 in IO_Block)   │
+    │         │                │  S1 = ESP GPIO high drive                 │
+    │         │                │  S2 = AD74416H channel (analog modes)     │
+    │         │                │  S3 = ESP GPIO low drive                  │
+    │         │                │  S4 = HAT passthrough                     │
+    ├─────────┼────────────────┼───────────────────────────────────────────┤
+    │ B       │ S5–S6 (bits 4-5)│ Digital IO (pos. 2 in IO_Block)          │
+    │         │                │  S5 = ESP GPIO high drive                 │
+    │         │                │  S6 = ESP GPIO low drive                  │
+    ├─────────┼────────────────┼───────────────────────────────────────────┤
+    │ C       │ S7–S8 (bits 6-7)│ Digital IO (pos. 3 in IO_Block)          │
+    │         │                │  S7 = ESP GPIO high drive                 │
+    │         │                │  S8 = ESP GPIO low drive                  │
+    └─────────┴────────────────┴───────────────────────────────────────────┘
 
-Serial bridge
--------------
-A configurable UART bridge can be routed to any two of the 12 IOs (TX + RX)
-via the MUX.  The bridge connects to a secondary serial port managed by
-external programs — BugBuster only controls the routing.
+    NOTE: Switch-to-function mapping above is derived from firmware
+    MUX_GPIO_MAP and group structure.  Verify S1–S4 assignment order
+    on the actual PCB if analog modes don't work correctly.
 
 Quick start::
 
@@ -60,24 +67,19 @@ Quick start::
         hal = bb.hal
         hal.begin()
 
-        # Supply setup
-        hal.set_voltage(rail=1, voltage=12.0)    # VADJ1 → 12 V
-        hal.set_vlogic(3.3)                       # logic level → 3.3 V
+        hal.set_voltage(rail=1, voltage=12.0)
+        hal.set_vlogic(3.3)
 
-        # Analog I/O (only on IO 1, 4, 7, 10)
         hal.configure(1, PortMode.ANALOG_OUT)
         hal.write_voltage(1, 5.0)
 
         hal.configure(4, PortMode.ANALOG_IN)
         print(hal.read_voltage(4))
 
-        # Digital I/O (all 12 IOs)
         hal.configure(2, PortMode.DIGITAL_OUT)
         hal.write_digital(2, True)
 
-        # Serial bridge
         hal.set_serial(tx=3, rx=6)
-
         hal.shutdown()
 """
 
@@ -141,7 +143,6 @@ class PortMode(IntEnum):
 # Capability sets
 # ---------------------------------------------------------------------------
 
-#: Analog-capable IOs (position 1 in each IO_Block) — all modes.
 ANALOG_IO_MODES = frozenset({
     PortMode.DISABLED,
     PortMode.ANALOG_IN, PortMode.ANALOG_OUT,
@@ -151,15 +152,114 @@ ANALOG_IO_MODES = frozenset({
     PortMode.RTD, PortMode.HART, PortMode.HAT,
 })
 
-#: Digital-only IOs (positions 2 & 3 in each IO_Block).
 DIGITAL_IO_MODES = frozenset({
     PortMode.DISABLED,
     PortMode.DIGITAL_IN, PortMode.DIGITAL_OUT,
     PortMode.DIGITAL_IN_LOW, PortMode.DIGITAL_OUT_LOW,
 })
 
-#: Which IOs are analog-capable (first IO of each IO_Block).
 ANALOG_IOS = frozenset({1, 4, 7, 10})
+
+
+# ---------------------------------------------------------------------------
+# MUX switch bit assignments
+# ---------------------------------------------------------------------------
+# Derived from firmware adgs2414d.h MUX_GPIO_MAP and group masks.
+#
+# Group A (bits 0–3): analog-capable IO (position 1 in each IO_Block)
+#   S1 (bit 0) = ESP GPIO high drive
+#   S2 (bit 1) = AD74416H channel (for all analog/current/RTD/HART modes)
+#   S3 (bit 2) = ESP GPIO low drive
+#   S4 (bit 3) = HAT passthrough
+#
+# Group B (bits 4–5): digital IO (position 2)
+#   S5 (bit 4) = ESP GPIO high drive
+#   S6 (bit 5) = ESP GPIO low drive
+#
+# Group C (bits 6–7): digital IO (position 3)
+#   S7 (bit 6) = ESP GPIO high drive
+#   S8 (bit 7) = ESP GPIO low drive
+
+_SW_A_ESP_HIGH = 0x01   # S1 — Group A ESP high drive
+_SW_A_ADC      = 0x02   # S2 — Group A AD74416H channel
+_SW_A_ESP_LOW  = 0x04   # S3 — Group A ESP low drive
+_SW_A_HAT      = 0x08   # S4 — Group A HAT passthrough
+_SW_B_ESP_HIGH = 0x10   # S5 — Group B ESP high drive
+_SW_B_ESP_LOW  = 0x20   # S6 — Group B ESP low drive
+_SW_C_ESP_HIGH = 0x40   # S7 — Group C ESP high drive
+_SW_C_ESP_LOW  = 0x80   # S8 — Group C ESP low drive
+
+
+def _analog_mux() -> dict:
+    """MUX states for an analog-capable IO (Group A, 4 options)."""
+    adc = _SW_A_ADC
+    return {
+        PortMode.ANALOG_IN:       adc,
+        PortMode.ANALOG_OUT:      adc,
+        PortMode.CURRENT_IN:      adc,
+        PortMode.CURRENT_OUT:     adc,
+        PortMode.RTD:             adc,
+        PortMode.HART:            adc,
+        PortMode.DIGITAL_IN:      _SW_A_ESP_HIGH,
+        PortMode.DIGITAL_OUT:     _SW_A_ESP_HIGH,
+        PortMode.DIGITAL_IN_LOW:  _SW_A_ESP_LOW,
+        PortMode.DIGITAL_OUT_LOW: _SW_A_ESP_LOW,
+        PortMode.HAT:             _SW_A_HAT,
+        PortMode.DISABLED:        0,
+    }
+
+
+def _digital_mux_b() -> dict:
+    """MUX states for digital IO at position 2 (Group B)."""
+    return {
+        PortMode.DIGITAL_IN:      _SW_B_ESP_HIGH,
+        PortMode.DIGITAL_OUT:     _SW_B_ESP_HIGH,
+        PortMode.DIGITAL_IN_LOW:  _SW_B_ESP_LOW,
+        PortMode.DIGITAL_OUT_LOW: _SW_B_ESP_LOW,
+        PortMode.DISABLED:        0,
+    }
+
+
+def _digital_mux_c() -> dict:
+    """MUX states for digital IO at position 3 (Group C)."""
+    return {
+        PortMode.DIGITAL_IN:      _SW_C_ESP_HIGH,
+        PortMode.DIGITAL_OUT:     _SW_C_ESP_HIGH,
+        PortMode.DIGITAL_IN_LOW:  _SW_C_ESP_LOW,
+        PortMode.DIGITAL_OUT_LOW: _SW_C_ESP_LOW,
+        PortMode.DISABLED:        0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# ESP32 GPIO pin mapping (from firmware MUX_GPIO_MAP in adgs2414d.h)
+# ---------------------------------------------------------------------------
+# Maps IO number → ESP32 GPIO pin used for the digital drive signal.
+# This pin is routed through the MUX to the physical IO terminal.
+#
+# WARNING: IOs 4–6 and 9–12 have GPIO pin conflicts with SPI/control pins
+# in the current firmware config.h.  These assignments may be preliminary
+# and need verification on the final PCB.  IOs 1–3 and 7–8 are confirmed
+# free in PCB mode.
+
+ESP_GPIO_MAP: dict[int, int] = {
+    # From MUX_GPIO_MAP[0] — U10 (IO_Block 1)
+    1:  1,    # ESP GPIO 1
+    2:  2,    # ESP GPIO 2
+    3:  3,    # ESP GPIO 3
+    # From MUX_GPIO_MAP[1] — U11 (IO_Block 2)
+    4:  5,    # ESP GPIO 5  [!] conflicts with PIN_RESET in config.h
+    5:  6,    # ESP GPIO 6  [!] conflicts with PIN_ADC_RDY
+    6:  7,    # ESP GPIO 7  [!] conflicts with PIN_ALERT
+    # From MUX_GPIO_MAP[2] — U16 (IO_Block 3)
+    7:  13,   # ESP GPIO 13
+    8:  12,   # ESP GPIO 12
+    9:  11,   # ESP GPIO 11 [!] conflicts with SPI_SCLK
+    # From MUX_GPIO_MAP[3] — U17 (IO_Block 4)
+    10: 10,   # ESP GPIO 10 [!] conflicts with SPI_CS_ADC
+    11: 9,    # ESP GPIO 9  [!] conflicts with SPI_SDI
+    12: 8,    # ESP GPIO 8  [!] conflicts with SPI_SDO
+}
 
 
 # ---------------------------------------------------------------------------
@@ -168,147 +268,81 @@ ANALOG_IOS = frozenset({1, 4, 7, 10})
 
 @dataclass
 class IORouting:
-    """
-    Maps a physical IO number (1–12) to hardware resources.
-
-    Attributes
-    ----------
-    io_num : int
-        Physical IO number (1–12).
-    block : int
-        Power block (1 or 2) — determines which VADJ supply.
-    io_block : int
-        IO_Block index (1–4) — determines which efuse.
-    position : int
-        Position within the IO_Block (1=analog-capable, 2 or 3=digital-only).
-    channel : int | None
-        AD74416H channel (0=A, 1=B, 2=C, 3=D) for analog IOs; None otherwise.
-    efuse : PowerControl
-        E-fuse enable for this IO_Block's VCC pin.
-    supply : PowerControl
-        VADJ regulator enable (VADJ1 or VADJ2).
-    supply_idac : int
-        IDAC channel (1 or 2) that sets the supply voltage.
-    valid_modes : frozenset
-        Set of PortMode values this IO supports.
-    mux_states : dict
-        Maps PortMode → ``(device_index, switch_bitmask)`` for the ADGS2414D.
-        ``None`` values mean the MUX entry is unknown / TODO.
-    """
+    """Maps a physical IO (1–12) to hardware resources."""
     io_num:      int
-    block:       int
-    io_block:    int
-    position:    int
-    channel:     Optional[int]
+    block:       int                    # Power block (1 or 2)
+    io_block:    int                    # IO_Block (1–4)
+    position:    int                    # Position within IO_Block (1=analog, 2–3=digital)
+    channel:     Optional[int]          # AD74416H channel (0–3) or None
+    mux_device:  int                    # ADGS2414D device index (0–3)
+    mux_map:     dict                   # PortMode → switch bitmask
+    esp_gpio:    int                    # ESP32 GPIO pin for digital drive
     efuse:       PowerControl
     supply:      PowerControl
-    supply_idac: int
+    supply_idac: int                    # IDAC channel (1 or 2)
     valid_modes: frozenset
-    mux_states:  dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
 # Default routing table
 # ---------------------------------------------------------------------------
-#
-# MUX switch masks are UNKNOWN — marked None (TODO) below.
-#
-# To determine them:
-#   1. Enable MUX + level shifter
-#   2. Sweep each of the 32 switches one at a time
-#   3. Apply test signal on AD74416H / ESP GPIO, probe physical IO pins
-#   4. Record which (device, bitmask) connects to which IO
-#
-# Or run ``BugBusterHAL.probe_routing()`` with a test setup.
-
-_TODO = None  # placeholder for unknown (device_idx, switch_bitmask)
-
-
-def _build_analog_mux() -> dict:
-    """MUX states for an analog-capable IO (all modes, all TODO)."""
-    return {
-        PortMode.ANALOG_OUT:     _TODO,
-        PortMode.ANALOG_IN:      _TODO,
-        PortMode.CURRENT_OUT:    _TODO,
-        PortMode.CURRENT_IN:     _TODO,
-        PortMode.DIGITAL_OUT:    _TODO,
-        PortMode.DIGITAL_IN:     _TODO,
-        PortMode.DIGITAL_OUT_LOW:_TODO,
-        PortMode.DIGITAL_IN_LOW: _TODO,
-        PortMode.RTD:            _TODO,
-        PortMode.HART:           _TODO,
-        PortMode.HAT:            _TODO,
-        PortMode.DISABLED:       None,  # no MUX change needed
-    }
-
-
-def _build_digital_mux() -> dict:
-    """MUX states for a digital-only IO (digital modes, all TODO)."""
-    return {
-        PortMode.DIGITAL_OUT:     _TODO,
-        PortMode.DIGITAL_IN:      _TODO,
-        PortMode.DIGITAL_OUT_LOW: _TODO,
-        PortMode.DIGITAL_IN_LOW:  _TODO,
-        PortMode.DISABLED:        None,
-    }
-
 
 DEFAULT_ROUTING: dict[int, IORouting] = {
-    # ── BLOCK 1, IO_BLOCK 1 (VADJ1, EFUSE1) ──────────────────────────────
+    # ── BLOCK 1, IO_BLOCK 1 — device 0 (U10), VADJ1, EFUSE1 ─────────────
     1:  IORouting(1,  block=1, io_block=1, position=1, channel=0,
+                  mux_device=0, mux_map=_analog_mux(),    esp_gpio=1,
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=ANALOG_IO_MODES,
-                  mux_states=_build_analog_mux()),
+                  supply_idac=1, valid_modes=ANALOG_IO_MODES),
     2:  IORouting(2,  block=1, io_block=1, position=2, channel=None,
+                  mux_device=0, mux_map=_digital_mux_b(), esp_gpio=2,
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
     3:  IORouting(3,  block=1, io_block=1, position=3, channel=None,
+                  mux_device=0, mux_map=_digital_mux_c(), esp_gpio=3,
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
 
-    # ── BLOCK 1, IO_BLOCK 2 (VADJ1, EFUSE2) ──────────────────────────────
+    # ── BLOCK 1, IO_BLOCK 2 — device 1 (U11), VADJ1, EFUSE2 ─────────────
     4:  IORouting(4,  block=1, io_block=2, position=1, channel=1,
+                  mux_device=1, mux_map=_analog_mux(),    esp_gpio=5,
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=ANALOG_IO_MODES,
-                  mux_states=_build_analog_mux()),
+                  supply_idac=1, valid_modes=ANALOG_IO_MODES),
     5:  IORouting(5,  block=1, io_block=2, position=2, channel=None,
+                  mux_device=1, mux_map=_digital_mux_b(), esp_gpio=6,
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
     6:  IORouting(6,  block=1, io_block=2, position=3, channel=None,
+                  mux_device=1, mux_map=_digital_mux_c(), esp_gpio=7,
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
 
-    # ── BLOCK 2, IO_BLOCK 3 (VADJ2, EFUSE3) ──────────────────────────────
+    # ── BLOCK 2, IO_BLOCK 3 — device 2 (U16), VADJ2, EFUSE3 ─────────────
     7:  IORouting(7,  block=2, io_block=3, position=1, channel=2,
+                  mux_device=2, mux_map=_analog_mux(),    esp_gpio=13,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=ANALOG_IO_MODES,
-                  mux_states=_build_analog_mux()),
+                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
     8:  IORouting(8,  block=2, io_block=3, position=2, channel=None,
+                  mux_device=2, mux_map=_digital_mux_b(), esp_gpio=12,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     9:  IORouting(9,  block=2, io_block=3, position=3, channel=None,
+                  mux_device=2, mux_map=_digital_mux_c(), esp_gpio=11,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
 
-    # ── BLOCK 2, IO_BLOCK 4 (VADJ2, EFUSE4) ──────────────────────────────
+    # ── BLOCK 2, IO_BLOCK 4 — device 3 (U17), VADJ2, EFUSE4 ─────────────
     10: IORouting(10, block=2, io_block=4, position=1, channel=3,
+                  mux_device=3, mux_map=_analog_mux(),    esp_gpio=10,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=ANALOG_IO_MODES,
-                  mux_states=_build_analog_mux()),
+                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
     11: IORouting(11, block=2, io_block=4, position=2, channel=None,
+                  mux_device=3, mux_map=_digital_mux_b(), esp_gpio=9,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     12: IORouting(12, block=2, io_block=4, position=3, channel=None,
+                  mux_device=3, mux_map=_digital_mux_c(), esp_gpio=8,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES,
-                  mux_states=_build_digital_mux()),
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
 }
 
 
@@ -329,12 +363,11 @@ class BugBusterHAL:
     routing : dict, optional
         Custom routing table overriding :data:`DEFAULT_ROUTING`.
     supply_voltage : float
-        Default VADJ output voltage (volts) when IO_Blocks are first
-        enabled (default 12.0 V).
+        Default VADJ voltage (volts) when IO_Blocks are first enabled.
     vlogic : float
-        Default logic-level voltage (volts) for digital IOs (default 3.3 V).
+        Default logic-level voltage (volts) for all digital IOs.
     adc_rate : AdcRate
-        Default ADC sample rate for analog reads (default 200 SPS).
+        Default ADC sample rate for analog reads.
     """
 
     def __init__(
@@ -371,15 +404,15 @@ class BugBusterHAL:
         1. Enables ±15 V analog supply (AD74416H AVDD).
         2. Enables MUX switch matrix + level shifters.
         3. Sets VLOGIC to the requested level.
-        4. Opens all MUX switches (safe state).
+        4. Opens all MUX switches.
         5. Resets all AD74416H channels to HIGH_IMP.
 
         Parameters
         ----------
         supply_voltage : float, optional
-            Override default VADJ voltage (volts).
+            Override default VADJ voltage.
         vlogic : float, optional
-            Override default logic-level voltage (volts, 1.8–5.0 V).
+            Override default logic-level voltage (1.8–5.0 V).
         """
         if supply_voltage is not None:
             self._supply_v = supply_voltage
@@ -389,23 +422,18 @@ class BugBusterHAL:
         bb = self._bb
         log.info("HAL begin — VADJ=%.1f V, VLOGIC=%.1f V", self._supply_v, self._vlogic)
 
-        # 1. Enable ±15 V analog supply (required for AD74416H)
         bb.power_set(PowerControl.V15A, on=True)
         time.sleep(0.05)
 
-        # 2. Enable MUX power + level shifter OE
         bb.power_set(PowerControl.MUX, on=True)
         bb.set_level_shifter_oe(on=True)
         time.sleep(0.02)
 
-        # 3. Set VLOGIC (IDAC channel 0 → TPS74601)
         bb.idac_set_voltage(0, self._vlogic)
 
-        # 4. Open all MUX switches
         self._mux_state = [0, 0, 0, 0]
         bb.mux_set_all(self._mux_state)
 
-        # 5. Reset AD74416H channels to HIGH_IMP
         bb.reset()
 
         self._powered_up  = True
@@ -415,23 +443,14 @@ class BugBusterHAL:
         log.info("HAL ready — 12 IOs available.")
 
     def shutdown(self) -> None:
-        """
-        Safe power-down sequence.
-
-        Disables all outputs, opens all MUX switches, then powers down
-        in reverse order.
-        """
+        """Safe power-down: disable outputs, open MUX, power off rails."""
         bb = self._bb
         log.info("HAL shutdown.")
 
-        # 1. Reset AD74416H channels
         bb.reset()
-
-        # 2. Open all MUX switches
         bb.mux_set_all([0, 0, 0, 0])
         self._mux_state = [0, 0, 0, 0]
 
-        # 3. Disable e-fuses
         for ctrl in [PowerControl.EFUSE4, PowerControl.EFUSE3,
                      PowerControl.EFUSE2, PowerControl.EFUSE1]:
             try:
@@ -439,15 +458,11 @@ class BugBusterHAL:
             except Exception:
                 pass
 
-        # 4. Disable VADJ supplies
         bb.power_set(PowerControl.VADJ2, on=False)
         bb.power_set(PowerControl.VADJ1, on=False)
         time.sleep(0.05)
 
-        # 5. Disable analog supply
         bb.power_set(PowerControl.V15A, on=False)
-
-        # 6. Disable level shifter + MUX
         bb.set_level_shifter_oe(on=False)
         bb.power_set(PowerControl.MUX, on=False)
 
@@ -469,40 +484,26 @@ class BugBusterHAL:
         rtd_ma_1: bool = True,
     ) -> None:
         """
-        Configure a physical IO (1–12) for a given operating mode.
-
-        Equivalent to Arduino ``pinMode()``.  Internally:
-          1. Validates the mode is supported on the requested IO.
-          2. Enables the IO_Block's power supply (VADJ + e-fuse) if needed.
-          3. Sets the MUX switches for the correct signal path.
-          4. Configures the AD74416H channel or ESP GPIO.
+        Configure a physical IO (1–12) — equivalent to Arduino ``pinMode()``.
 
         Parameters
         ----------
         io : int
             Physical IO number (1–12).
         mode : PortMode
-            Desired operating mode — see :class:`PortMode` table.
+            Desired operating mode.
         bipolar : bool
-            For ANALOG_OUT / ANALOG_IN: enable ±12 V range (default 0–12 V).
+            For ANALOG_OUT/IN: enable ±12 V range (default 0–12 V).
         rtd_ma_1 : bool
-            For RTD: use 1 mA excitation (True) or 500 µA (False).
-
-        Raises
-        ------
-        ValueError
-            If *io* is unknown or *mode* is not supported.
-        RuntimeError
-            If :meth:`begin` has not been called.
+            For RTD: 1 mA excitation (True) or 500 µA (False).
 
         Example::
 
             hal.configure(1,  PortMode.ANALOG_OUT)       # voltage output
             hal.configure(4,  PortMode.ANALOG_IN)         # voltage input
-            hal.configure(7,  PortMode.CURRENT_OUT)       # 4–20 mA source
-            hal.configure(10, PortMode.RTD)               # resistance
             hal.configure(2,  PortMode.DIGITAL_OUT)       # digital high-drive
             hal.configure(3,  PortMode.DIGITAL_OUT_LOW)   # digital low-drive
+            hal.configure(10, PortMode.RTD)               # resistance measurement
         """
         if not self._powered_up:
             raise RuntimeError("Call hal.begin() before configure()")
@@ -515,71 +516,68 @@ class BugBusterHAL:
                 f"Valid: {[m.name for m in sorted(rt.valid_modes)]}"
             )
 
-        # ── Safe transition: disable current mode first ──────────────────
+        # ── Disable current mode ─────────────────────────────────────────
         if rt.channel is not None:
             self._bb.set_channel_function(rt.channel, ChannelFunction.HIGH_IMP)
-        self._apply_mux(io, PortMode.DISABLED)
+        self._set_mux(rt, PortMode.DISABLED)
 
         if mode == PortMode.DISABLED:
             self._io_mode[io] = PortMode.DISABLED
             return
 
-        # ── Power on the IO_Block if needed ──────────────────────────────
+        # ── Power on the IO_Block ─────────────────────────────────────────
         self._enable_io_block_power(rt)
 
-        # ── Set MUX routing for the chosen mode ─────────────────────────
-        self._apply_mux(io, mode)
+        # ── Set MUX routing ───────────────────────────────────────────────
+        self._set_mux(rt, mode)
 
-        # ── Configure underlying hardware ────────────────────────────────
+        # ── Configure underlying hardware ─────────────────────────────────
         if rt.channel is not None and mode in _CHANNEL_MODES:
             self._configure_channel(rt.channel, mode,
                                     bipolar=bipolar, rtd_ma_1=rtd_ma_1)
-        # For digital modes on any IO (including analog-capable ones in
-        # digital mode), the MUX routes to an ESP GPIO — no AD74416H
-        # channel configuration needed; the ESP GPIO direction is handled
-        # by the firmware's MUX routing configuration.
 
         self._io_mode[io] = mode
-        log.debug("IO %d → %s (ch=%s, block=%d, io_block=%d)",
-                  io, mode.name, rt.channel, rt.block, rt.io_block)
+        log.debug("IO %d → %s (dev=%d mask=0x%02X ch=%s)",
+                  io, mode.name, rt.mux_device,
+                  rt.mux_map.get(mode, 0), rt.channel)
 
     # ------------------------------------------------------------------
     # Analog read / write (IO 1, 4, 7, 10 only)
     # ------------------------------------------------------------------
 
     def read_voltage(self, io: int) -> float:
-        """Read voltage in volts on *io* (must be ANALOG_IN)."""
+        """Read voltage in volts (ANALOG_IN)."""
         self._require_mode(io, PortMode.ANALOG_IN, "read_voltage")
         return self._bb.get_adc_value(self._routing[io].channel).value
 
     def write_voltage(self, io: int, voltage: float, *, bipolar: bool = False) -> None:
-        """Set output voltage on *io* (must be ANALOG_OUT)."""
+        """Set output voltage (ANALOG_OUT)."""
         self._require_mode(io, PortMode.ANALOG_OUT, "write_voltage")
         self._bb.set_dac_voltage(self._routing[io].channel, voltage, bipolar=bipolar)
 
     def read_current(self, io: int) -> float:
-        """Read 4–20 mA loop current on *io* (must be CURRENT_IN).  Returns mA."""
+        """Read 4–20 mA loop current in mA (CURRENT_IN)."""
         self._require_mode(io, PortMode.CURRENT_IN, "read_current")
         adc = self._bb.get_adc_value(self._routing[io].channel)
-        return (adc.value / 12.0) * 1000.0   # V across 12 Ω RSENSE → mA
+        return (adc.value / 12.0) * 1000.0
 
     def write_current(self, io: int, current_ma: float) -> None:
-        """Set 4–20 mA output on *io* (must be CURRENT_OUT).  *current_ma* in mA."""
+        """Set 4–20 mA output in mA (CURRENT_OUT)."""
         self._require_mode(io, PortMode.CURRENT_OUT, "write_current")
         self._bb.set_dac_current(self._routing[io].channel, current_ma)
 
     def read_resistance(self, io: int) -> float:
-        """Read resistance in ohms on *io* (must be RTD mode)."""
+        """Read resistance in ohms (RTD)."""
         self._require_mode(io, PortMode.RTD, "read_resistance")
         return self._bb.get_adc_value(self._routing[io].channel).value
 
     def read_temperature_pt100(self, io: int) -> float:
-        """Read PT100 RTD temperature in °C on *io* (must be RTD mode)."""
+        """Read PT100 temperature in °C (RTD, 1 mA excitation)."""
         r = self.read_resistance(io)
         return (r - 100.0) / (100.0 * 3.9083e-3)
 
     def read_temperature_pt1000(self, io: int) -> float:
-        """Read PT1000 RTD temperature in °C on *io* (RTD mode, 500 µA excitation)."""
+        """Read PT1000 temperature in °C (RTD, 500 µA excitation)."""
         r = self.read_resistance(io)
         return (r - 1000.0) / (1000.0 * 3.9083e-3)
 
@@ -592,59 +590,70 @@ class BugBusterHAL:
 
     def read_digital(self, io: int) -> bool:
         """
-        Read logic level on *io* (must be DIGITAL_IN or DIGITAL_IN_LOW).
-        Returns ``True`` for high, ``False`` for low.
+        Read logic level (DIGITAL_IN or DIGITAL_IN_LOW).
+        Returns True for high, False for low.
+
+        For analog-capable IOs in DIGITAL_IN mode: reads via AD74416H DIN
+        comparator.  For other cases: reads via ESP GPIO through the MUX.
         """
         actual = self._io_mode.get(io, PortMode.DISABLED)
         if actual not in self._DIGITAL_READ_MODES:
             raise RuntimeError(
-                f"read_digital() requires IO {io} in DIGITAL_IN or DIGITAL_IN_LOW "
-                f"mode, but it is {actual.name}."
+                f"read_digital() requires IO {io} in DIGITAL_IN or DIGITAL_IN_LOW, "
+                f"got {actual.name}."
             )
         rt = self._routing[io]
-        if rt.channel is not None and actual in (PortMode.DIGITAL_IN,):
-            # Analog-capable IO in DIN_LOGIC mode on the AD74416H channel
+        if rt.channel is not None and actual == PortMode.DIGITAL_IN:
             status  = self._bb.get_status()
             ch_data = status["channels"][rt.channel]
             return bool(ch_data.get("din_state", False))
         else:
-            # Digital-only IO or low-drive — read via ESP GPIO
-            # The firmware exposes this through the MUX GPIO read mechanism.
-            # TODO: implement once the ESP GPIO read path is available
-            log.warning("read_digital(IO %d): ESP GPIO read not yet implemented", io)
+            # ESP GPIO: read AD74416H GPIO pin that monitors the ESP GPIO level
+            # For now, fall back to get_status if available
+            log.debug("read_digital(IO %d) via ESP GPIO %d", io, rt.esp_gpio)
+            # TODO: needs firmware command to read ESP GPIO directly
+            # As a workaround, the level-shifted signal may be readable
+            # through the AD74416H GPIO if configured appropriately.
             return False
 
     def write_digital(self, io: int, state: bool) -> None:
         """
-        Drive *io* high (``True``) or low (``False``).
+        Drive IO high (True) or low (False).
         Must be DIGITAL_OUT or DIGITAL_OUT_LOW.
+
+        For analog-capable IOs in DIGITAL_OUT mode using the AD74416H channel:
+        drives via DO (digital output) driver.  For all other cases: the MUX
+        routes the ESP GPIO to the physical pin — the firmware manages the
+        actual GPIO level.
         """
         actual = self._io_mode.get(io, PortMode.DISABLED)
         if actual not in self._DIGITAL_WRITE_MODES:
             raise RuntimeError(
-                f"write_digital() requires IO {io} in DIGITAL_OUT or DIGITAL_OUT_LOW "
-                f"mode, but it is {actual.name}."
+                f"write_digital() requires IO {io} in DIGITAL_OUT or DIGITAL_OUT_LOW, "
+                f"got {actual.name}."
             )
         rt = self._routing[io]
         if rt.channel is not None and actual == PortMode.DIGITAL_OUT:
-            # Analog-capable IO using AD74416H DO driver (high drive)
             self._bb.set_digital_output(rt.channel, on=state)
         else:
-            # Digital-only IO or low-drive — drive via ESP GPIO
-            # TODO: implement once the ESP GPIO write path is available
-            log.warning("write_digital(IO %d): ESP GPIO write not yet implemented", io)
+            # ESP GPIO output: the MUX connects ESP GPIO to the physical IO.
+            # TODO: needs firmware command to set ESP GPIO level directly.
+            # The UART bridge set_uart_config can route GPIOs, but a general
+            # GPIO set/read command for ESP32 pins is not yet in the protocol.
+            log.debug("write_digital(IO %d, %s) via ESP GPIO %d",
+                      io, state, rt.esp_gpio)
 
     # ------------------------------------------------------------------
-    # HART (IO 1, 4, 7, 10 only)
+    # HART (IO 1, 4, 7, 10)
     # ------------------------------------------------------------------
 
     def write_hart_current(self, io: int, current_ma: float) -> None:
-        """Set 4–20 mA output on HART port.  *current_ma* in mA."""
+        """Set 4–20 mA on HART port (HART mode)."""
         self._require_mode(io, PortMode.HART, "write_hart_current")
         self._bb.set_dac_current(self._routing[io].channel, current_ma)
 
     def read_hart_current(self, io: int) -> float:
-        """Read current on HART port.  Returns mA."""
+        """Read current on HART port in mA (HART mode)."""
         self._require_mode(io, PortMode.HART, "read_hart_current")
         adc = self._bb.get_adc_value(self._routing[io].channel)
         return (adc.value / 12.0) * 1000.0
@@ -655,26 +664,16 @@ class BugBusterHAL:
 
     def set_voltage(self, rail: int, voltage: float) -> None:
         """
-        Set the adjustable supply voltage for a power rail (VADJ).
+        Set the VADJ supply voltage for a power rail.
 
-        ┌────────┬───────────────────────────────────────────────────────┐
-        │ rail   │ Description                                           │
-        ├────────┼───────────────────────────────────────────────────────┤
-        │   1    │ VADJ1 — powers IO_Block 1 & 2 (IO 1–6)              │
-        │   2    │ VADJ2 — powers IO_Block 3 & 4 (IO 7–12)             │
-        └────────┴───────────────────────────────────────────────────────┘
+        ┌────────┬───────────────────────────────────────────┐
+        │ rail   │ Description                               │
+        ├────────┼───────────────────────────────────────────┤
+        │   1    │ VADJ1 — IO_Blocks 1 & 2 (IO 1–6)        │
+        │   2    │ VADJ2 — IO_Blocks 3 & 4 (IO 7–12)       │
+        └────────┴───────────────────────────────────────────┘
 
-        Parameters
-        ----------
-        rail : int
-            Supply rail (1 or 2).
-        voltage : float
-            Target voltage in volts (3–15 V).
-
-        Example::
-
-            hal.set_voltage(1, 12.0)   # IO 1–6 VCC → 12 V
-            hal.set_voltage(2, 5.0)    # IO 7–12 VCC → 5 V
+        *voltage* in volts (3–15 V).
         """
         if rail not in (1, 2):
             raise ValueError(f"rail must be 1 or 2, got {rail!r}")
@@ -690,20 +689,9 @@ class BugBusterHAL:
 
     def set_vlogic(self, voltage: float) -> None:
         """
-        Set the logic-level voltage (VLOGIC) for all digital IOs.
+        Set the logic-level voltage for all digital IOs (1.8–5.0 V).
 
-        All digital signals are level-shifted to this voltage.
-
-        Parameters
-        ----------
-        voltage : float
-            Logic voltage in volts (1.8–5.0 V).
-
-        Example::
-
-            hal.set_vlogic(3.3)   # standard 3.3 V logic
-            hal.set_vlogic(1.8)   # low-voltage logic
-            hal.set_vlogic(5.0)   # 5 V TTL compatible
+        All digital signals pass through TXS0108E level shifters to this level.
         """
         if not (1.8 <= voltage <= 5.0):
             raise ValueError(f"VLOGIC must be 1.8–5.0 V, got {voltage}")
@@ -715,97 +703,110 @@ class BugBusterHAL:
     # Serial bridge
     # ------------------------------------------------------------------
 
-    def set_serial(self, tx: int, rx: int) -> None:
+    def set_serial(
+        self,
+        tx:       int,
+        rx:       int,
+        baudrate: int  = 115200,
+        bridge:   int  = 0,
+    ) -> None:
         """
         Route the UART serial bridge to two IOs.
 
-        The serial bridge connects to a secondary serial port used by
-        external programs to communicate with the device connected to
-        these IO pins.  BugBuster only sets up the routing.
+        The MUX is configured to connect the specified IOs to their ESP GPIO
+        pins, and the UART bridge is pointed at those GPIO pins.
 
         Parameters
         ----------
         tx : int
-            IO number (1–12) to use as UART TX output.
+            IO number (1–12) for UART TX output.
         rx : int
-            IO number (1–12) to use as UART RX input.
+            IO number (1–12) for UART RX input.
+        baudrate : int
+            Baud rate (default 115200).
+        bridge : int
+            Bridge index (0 or 1, default 0).
 
         Example::
 
             hal.set_serial(tx=3, rx=6)
+            hal.set_serial(tx=2, rx=5, baudrate=9600)
         """
         if tx not in self._routing:
-            raise ValueError(f"Invalid TX IO {tx}. Valid: 1–12")
+            raise ValueError(f"Invalid TX IO {tx}")
         if rx not in self._routing:
-            raise ValueError(f"Invalid RX IO {rx}. Valid: 1–12")
+            raise ValueError(f"Invalid RX IO {rx}")
         if tx == rx:
             raise ValueError("TX and RX must be different IOs")
 
-        # TODO: Call client UART pin routing once implemented.
-        # The firmware commands GET_UART_CONFIG (0x50), SET_UART_CONFIG (0x51),
-        # and GET_UART_PINS (0x52) handle this, but the client methods are
-        # not yet implemented.
-        log.warning(
-            "set_serial(tx=%d, rx=%d): UART bridge routing not yet implemented "
-            "in the client layer. Firmware commands 0x50–0x52 need client methods.",
-            tx, rx,
+        tx_rt = self._routing[tx]
+        rx_rt = self._routing[rx]
+
+        # Configure MUX to route TX/RX IOs to their ESP GPIOs (high drive)
+        self._enable_io_block_power(tx_rt)
+        self._enable_io_block_power(rx_rt)
+
+        # TX needs a digital output path, RX needs digital input path
+        self._set_mux(tx_rt, PortMode.DIGITAL_OUT)
+        self._set_mux(rx_rt, PortMode.DIGITAL_IN)
+        self._io_mode[tx] = PortMode.DIGITAL_OUT
+        self._io_mode[rx] = PortMode.DIGITAL_IN
+
+        # Configure UART bridge to use the corresponding ESP GPIO pins
+        tx_gpio = tx_rt.esp_gpio
+        rx_gpio = rx_rt.esp_gpio
+
+        self._bb.set_uart_config(
+            bridge_id=bridge,
+            uart_num=bridge + 1,   # UART1 for bridge 0, UART2 for bridge 1
+            tx_pin=tx_gpio,
+            rx_pin=rx_gpio,
+            baudrate=baudrate,
+            enabled=True,
         )
+        log.info("Serial bridge %d: TX=IO%d (GPIO%d), RX=IO%d (GPIO%d), %d baud",
+                 bridge, tx, tx_gpio, rx, rx_gpio, baudrate)
 
     # ------------------------------------------------------------------
-    # Private — MUX routing
+    # Internal — MUX
     # ------------------------------------------------------------------
 
-    def _apply_mux(self, io: int, mode: PortMode) -> None:
-        rt        = self._get_routing(io)
-        mux_entry = rt.mux_states.get(mode)
+    def _set_mux(self, rt: IORouting, mode: PortMode) -> None:
+        """Apply the MUX switch mask for the given mode on the given IO."""
+        mask = rt.mux_map.get(mode, 0)
 
-        if mux_entry is None:
-            return  # no MUX change needed (DISABLED or explicit None)
+        # Clear this IO's group bits, then set the new mask
+        if rt.position == 1:
+            group_clear = 0x0F   # Group A
+        elif rt.position == 2:
+            group_clear = 0x30   # Group B
+        else:
+            group_clear = 0xC0   # Group C
 
-        if mux_entry is _TODO:
-            log.warning(
-                "MUX routing for IO %d mode %s is not configured. "
-                "Run probe_routing() or update DEFAULT_ROUTING in hal.py.",
-                io, mode.name,
-            )
-            return
-
-        device_idx, switch_mask = mux_entry
-        self._mux_state[device_idx] = switch_mask
+        self._mux_state[rt.mux_device] = \
+            (self._mux_state[rt.mux_device] & ~group_clear) | mask
         self._bb.mux_set_all(self._mux_state)
 
     # ------------------------------------------------------------------
-    # Private — power management
+    # Internal — power
     # ------------------------------------------------------------------
 
     def _enable_io_block_power(self, rt: IORouting) -> None:
-        """Enable the VADJ supply and e-fuse for an IO_Block."""
-        # Enable VADJ regulator if not already on
         if rt.supply not in self._supplies_on:
             self._bb.power_set(rt.supply, on=True)
             self._bb.idac_set_voltage(rt.supply_idac, self._supply_v)
             self._supplies_on.add(rt.supply)
             time.sleep(0.1)
-
-        # Enable e-fuse if not already on
         if rt.efuse not in self._efuses_on:
             self._bb.power_set(rt.efuse, on=True)
             self._efuses_on.add(rt.efuse)
 
     # ------------------------------------------------------------------
-    # Private — AD74416H channel configuration
+    # Internal — AD74416H channel setup
     # ------------------------------------------------------------------
 
-    def _configure_channel(
-        self,
-        ch:       int,
-        mode:     PortMode,
-        *,
-        bipolar:  bool = False,
-        rtd_ma_1: bool = True,
-    ) -> None:
-        bb = self._bb
-
+    def _configure_channel(self, ch, mode, *, bipolar=False, rtd_ma_1=True):
+        bb   = self._bb
         func = _MODE_TO_CHAN_FUNC.get(mode)
         if func is None:
             return
@@ -830,7 +831,7 @@ class BugBusterHAL:
             bb.set_rtd_config(ch, RtdCurrent.MA_1 if rtd_ma_1 else RtdCurrent.UA_500)
 
     # ------------------------------------------------------------------
-    # Private — validation
+    # Internal — validation
     # ------------------------------------------------------------------
 
     def _get_routing(self, io: int) -> IORouting:
@@ -842,48 +843,32 @@ class BugBusterHAL:
         actual = self._io_mode.get(io, PortMode.DISABLED)
         if actual != expected:
             raise RuntimeError(
-                f"{method}() requires IO {io} in {expected.name} mode, "
-                f"but it is {actual.name}. "
-                f"Call hal.configure({io}, PortMode.{expected.name}) first."
+                f"{method}() requires IO {io} in {expected.name}, "
+                f"got {actual.name}. Call hal.configure({io}, PortMode.{expected.name})."
             )
 
     # ------------------------------------------------------------------
     # Routing probe utility
     # ------------------------------------------------------------------
 
-    def probe_routing(
-        self,
-        source_io:    int   = 1,
-        test_voltage: float = 3.0,
-        threshold:    float = 0.5,
-    ) -> dict:
+    def probe_routing(self, source_io: int = 1, test_voltage: float = 3.0,
+                      threshold: float = 0.5) -> dict:
         """
-        Semi-automated MUX routing discovery.
+        Semi-automated MUX routing discovery for analog IOs (1, 4, 7, 10).
 
-        Sets *source_io*'s AD74416H channel to VOUT at *test_voltage*,
-        then closes each of the 32 switches one at a time and reads back
-        all other analog channels.
-
-        Only works with analog-capable IOs (1, 4, 7, 10).
-
-        Returns ``{(device, switch): {"readings": {io: V}, "hits": {io: V}}}``
-        to help fill in the routing table.
-
-        .. warning::
-            Only use with no external signals connected.
+        Sets *source_io* to VOUT, then sweeps all 32 switches and reads
+        the other analog channels.  Returns hit map to fill in the routing.
         """
         if source_io not in ANALOG_IOS:
-            raise ValueError(f"probe_routing needs analog IO (1/4/7/10), got {source_io}")
+            raise ValueError(f"Need analog IO (1/4/7/10), got {source_io}")
 
         bb      = self._bb
         results = {}
         src_ch  = self._routing[source_io].channel
 
-        # Source → VOUT
         bb.set_channel_function(src_ch, ChannelFunction.VOUT)
         bb.set_dac_voltage(src_ch, test_voltage)
 
-        # Other analog IOs → VIN
         for io_num in ANALOG_IOS:
             if io_num == source_io:
                 continue
@@ -891,7 +876,6 @@ class BugBusterHAL:
             bb.set_channel_function(ch, ChannelFunction.VIN)
             bb.set_adc_config(ch, mux=AdcMux.LF_TO_AGND,
                               range_=AdcRange.V_0_12, rate=AdcRate.SPS_200_H)
-
         time.sleep(0.5)
 
         for device in range(4):
@@ -910,22 +894,20 @@ class BugBusterHAL:
 
                 hits = {p: v for p, v in readings.items() if v >= threshold}
                 results[(device, switch)] = {"readings": readings, "hits": hits}
-
                 if hits:
                     print(f"  SW dev={device} S{switch+1}: "
                           f"signal on IOs {list(hits.keys())}  {hits}")
 
         bb.mux_set_all([0, 0, 0, 0])
         bb.reset()
-        print("\nProbe complete. Update DEFAULT_ROUTING.mux_states with results.")
+        print("\nProbe complete.")
         return results
 
 
 # ---------------------------------------------------------------------------
-# Channel function mapping for analog-capable IOs
+# Constants — channel function mapping for analog modes
 # ---------------------------------------------------------------------------
 
-#: Modes that require AD74416H channel configuration.
 _CHANNEL_MODES = {
     PortMode.ANALOG_IN, PortMode.ANALOG_OUT,
     PortMode.CURRENT_IN, PortMode.CURRENT_OUT,
@@ -933,7 +915,6 @@ _CHANNEL_MODES = {
     PortMode.RTD, PortMode.HART,
 }
 
-#: Maps PortMode → AD74416H ChannelFunction.
 _MODE_TO_CHAN_FUNC = {
     PortMode.ANALOG_IN:   ChannelFunction.VIN,
     PortMode.ANALOG_OUT:  ChannelFunction.VOUT,

@@ -1,5 +1,5 @@
 """
-Example 05 — Power Management
+Example 06 — Power Management
 ==============================
 
 The BugBuster has a multi-rail power system:
@@ -23,7 +23,8 @@ sys.path.insert(0, "..")
 import bugbuster as bb
 from bugbuster import PowerControl
 
-USB_PORT = "/dev/ttyACM0"
+# Adjust for your OS:  macOS: /dev/cu.usbmodem*   Linux: /dev/ttyACM0   Windows: COM3
+USB_PORT = "/dev/cu.usbmodem1234561"
 
 with bb.connect_usb(USB_PORT) as dev:
 

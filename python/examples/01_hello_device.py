@@ -22,7 +22,8 @@ import bugbuster as bb
 #   Linux/Mac:  /dev/ttyACM0  or  /dev/tty.usbmodem*
 #   Windows:    COM3  (check Device Manager)
 
-USB_PORT = "/dev/ttyACM0"
+# Adjust for your OS:  macOS: /dev/cu.usbmodem*   Linux: /dev/ttyACM0   Windows: COM3
+USB_PORT = "/dev/cu.usbmodem1234561"
 
 print("=== Connecting via USB ===")
 with bb.connect_usb(USB_PORT) as dev:

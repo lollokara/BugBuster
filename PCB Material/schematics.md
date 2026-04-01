@@ -551,7 +551,7 @@ Four devices daisy-chained for the 32-switch signal routing matrix (U10, U11, U1
 | SCLK | SPI_SCLK (via level shifter) |
 | CS | SPI_CS_MUX (via level shifter, daisy-chain) |
 | DOUT | → DIN of next device (daisy-chain) |
-| S1–S8 (A/B pairs) | Analog I/O routed to output terminal connectors / AD74416H channels [UNSURE exact switch-to-signal mapping per device] |
+| S1–S8 (A/B pairs) | Routed to IO_Block terminal connectors and AD74416H channels. Per-device switch grouping: Group A (S1–S4 bits 0–3) → analog-capable IO (pos.1), Group B (S5–S6 bits 4–5) → digital IO (pos.2), Group C (S7–S8 bits 6–7) → digital IO (pos.3). See Section 6.5 for full mapping. |
 
 `ADGS_NUM_DEVICES = 4` on PCB. The daisy-chain shift register is 32 bits wide (4 × 8 switches).
 
@@ -643,6 +643,34 @@ All digital IOs are level-shifted to **VLOGIC** (1.8–5.0 V adjustable) via TXS
 A configurable UART bridge can be routed to any 2 of the 12 IOs (TX + RX) via MUX.
 The bridge connects to a secondary ESP32 serial port used by external programs.
 Firmware commands: GET_UART_CONFIG (0x50), SET_UART_CONFIG (0x51), GET_UART_PINS (0x52).
+
+#### MUX Device-to-IO_Block Mapping
+
+Each ADGS2414D device handles one IO_Block (3 IOs).
+From firmware `MUX_GPIO_MAP` in `adgs2414d.h`:
+
+| Device | Ref  | IO_Block | IOs      | ESP GPIOs     |
+|--------|------|----------|----------|---------------|
+| 0      | U10  | 1        | 1, 2, 3  | 1, 2, 3       |
+| 1      | U11  | 2        | 4, 5, 6  | 5, 6, 7 [!]   |
+| 2      | U16  | 3        | 7, 8, 9  | 13, 12, 11 [!]|
+| 3      | U17  | 4        | 10,11,12 | 10, 9, 8 [!]  |
+
+**[!] GPIO conflict warning:** IOs 4–6 share ESP GPIOs with AD74416H control pins (RESET=5, ADC_RDY=6, ALERT=7), IOs 9–12 share with SPI (SCLK=11, CS=10, SDI=9, SDO=8). The `MUX_GPIO_MAP` in firmware may be preliminary — verify on final PCB.
+
+#### Switch Group Structure (per device)
+
+```
+Group A (bits 0-3, S1-S4): Analog-capable IO (position 1)
+  S1 = ESP GPIO high drive    S2 = AD74416H channel
+  S3 = ESP GPIO low drive     S4 = HAT passthrough
+
+Group B (bits 4-5, S5-S6): Digital IO (position 2)
+  S5 = ESP GPIO high drive    S6 = ESP GPIO low drive
+
+Group C (bits 6-7, S7-S8): Digital IO (position 3)
+  S7 = ESP GPIO high drive    S8 = ESP GPIO low drive
+```
 
 #### ESP GPIO Net Names
 

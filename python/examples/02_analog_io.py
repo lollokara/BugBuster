@@ -42,7 +42,8 @@ from bugbuster import (
 # │ IIN_LOOP_PWR_HART        │ Current input   loop-powered + HART          │
 # └──────────────────────────┴──────────────────────────────────────────────┘
 
-USB_PORT = "/dev/ttyACM0"
+# Adjust for your OS:  macOS: /dev/cu.usbmodem*   Linux: /dev/ttyACM0   Windows: COM3
+USB_PORT = "/dev/cu.usbmodem1234561"
 
 with bb.connect_usb(USB_PORT) as dev:
 
