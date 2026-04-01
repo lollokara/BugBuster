@@ -431,6 +431,36 @@ bool selftest_is_busy(void)
 
 static SelftestInternalSupplies s_internal_supplies = {};
 
+// Helper: send a diag config command through the task queue (proper synchronization)
+static void send_diag_config(uint8_t slot, uint8_t source)
+{
+    Command cmd = {};
+    cmd.type = CMD_DIAG_CONFIG;
+    cmd.diagCfg.slot = slot;
+    cmd.diagCfg.source = source;
+    xQueueSend(g_cmdQueue, &cmd, pdMS_TO_TICKS(100));
+}
+
+// Helper: wait for the periodic diagnostic poll to update a slot with fresh data.
+// The fault monitor reads diagnostics every 5th iteration (~1s).
+// We wait until the rawCode changes from 0 (invalidated) to a non-zero value,
+// or until timeout.
+static bool wait_for_diag_update(uint8_t slot, uint32_t timeout_ms)
+{
+    uint32_t start = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    while (true) {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        if (now - start > timeout_ms) return false;
+
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            bool ready = (g_deviceState.diag[slot].rawCode != 0);
+            xSemaphoreGive(g_stateMutex);
+            if (ready) return true;
+        }
+        delay_ms(100);
+    }
+}
+
 const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
 {
     AD74416H *dev = tasks_get_device();
@@ -448,37 +478,46 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
         xSemaphoreGive(g_stateMutex);
     }
 
-    // Configure slots to measure: 0=TEMP, 1=AVDD_HI, 2=DVCC, 3=AVSS
-    dev->configureDiagSlot(0, DIAG_SRC_TEMP);
-    dev->configureDiagSlot(1, DIAG_SRC_AVDD_HI);
-    dev->configureDiagSlot(2, DIAG_SRC_DVCC);
-    dev->configureDiagSlot(3, DIAG_SRC_AVSS);
+    // Phase 1: Configure slots via command queue (properly synchronized with ADC task)
+    // Slot 0=TEMP, 1=AVDD_HI, 2=DVCC, 3=AVSS
+    ESP_LOGI(TAG, "Configuring diagnostic slots...");
+    send_diag_config(0, DIAG_SRC_TEMP);
+    send_diag_config(1, DIAG_SRC_AVDD_HI);
+    send_diag_config(2, DIAG_SRC_DVCC);
+    send_diag_config(3, DIAG_SRC_AVSS);
 
-    // Wait for at least 2 conversion cycles to get fresh data
-    delay_ms(200);
+    // Wait for commands to be processed + ADC to restart + skipReads to expire
+    // + at least one fresh diagnostic read.
+    // skipReads=2, diag poll every ~1s → need ~3.5s minimum after commands are processed.
+    ESP_LOGI(TAG, "Waiting for fresh diagnostic data (5s)...");
+    delay_ms(5000);
 
-    // Read all 4 slots
-    uint16_t raw[4];
-    for (int i = 0; i < 4; i++) {
-        raw[i] = dev->readAdcDiagResult(i);
+    // Read cached values from g_deviceState (populated by the fault monitor task)
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_internal_supplies.temp_c    = g_deviceState.diag[0].value;
+        s_internal_supplies.avdd_hi_v = g_deviceState.diag[1].value;
+        s_internal_supplies.dvcc_v    = g_deviceState.diag[2].value;
+        s_internal_supplies.avss_v    = g_deviceState.diag[3].value;
+        ESP_LOGI(TAG, "Phase 1: TEMP=%.1f AVDD_HI=%.1f DVCC=%.2f AVSS=%.1f",
+                 s_internal_supplies.temp_c, s_internal_supplies.avdd_hi_v,
+                 s_internal_supplies.dvcc_v, s_internal_supplies.avss_v);
+        xSemaphoreGive(g_stateMutex);
     }
 
-    s_internal_supplies.temp_c    = AD74416H::diagCodeToValue(raw[0], DIAG_SRC_TEMP);
-    s_internal_supplies.avdd_hi_v = AD74416H::diagCodeToValue(raw[1], DIAG_SRC_AVDD_HI);
-    s_internal_supplies.dvcc_v    = AD74416H::diagCodeToValue(raw[2], DIAG_SRC_DVCC);
-    s_internal_supplies.avss_v    = AD74416H::diagCodeToValue(raw[3], DIAG_SRC_AVSS);
+    // Phase 2: Measure AVCC using slot 1
+    ESP_LOGI(TAG, "Switching slot 1 to AVCC...");
+    send_diag_config(1, DIAG_SRC_AVCC);
+    delay_ms(5000);  // same wait for fresh data
 
-    // Now measure AVCC using slot 1 (reuse it)
-    dev->configureDiagSlot(1, DIAG_SRC_AVCC);
-    delay_ms(200);
-    uint16_t avcc_raw = dev->readAdcDiagResult(1);
-    s_internal_supplies.avcc_v = AD74416H::diagCodeToValue(avcc_raw, DIAG_SRC_AVCC);
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_internal_supplies.avcc_v = g_deviceState.diag[1].value;
+        ESP_LOGI(TAG, "Phase 2: AVCC=%.2f", s_internal_supplies.avcc_v);
+        xSemaphoreGive(g_stateMutex);
+    }
 
     s_internal_supplies.valid = true;
 
     // Check supplies against expected ranges
-    // Breadboard: AVDD_HI ~21.5V, DVCC ~5V, AVCC ~5V, AVSS ~-16V
-    // PCB:        AVDD_HI ~15V,   DVCC ~3.3V, AVCC ~5V, AVSS ~-15V
 #if BREADBOARD_MODE
     s_internal_supplies.supplies_ok =
         (s_internal_supplies.avdd_hi_v > 18.0f && s_internal_supplies.avdd_hi_v < 25.0f) &&
@@ -501,16 +540,7 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
 
     // Restore original diagnostic slot configuration
     for (int i = 0; i < 4; i++) {
-        dev->configureDiagSlot(i, saved_sources[i]);
-    }
-    // Invalidate cached values so UI doesn't show stale data from our measurement
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        for (int i = 0; i < 4; i++) {
-            g_deviceState.diag[i].source = saved_sources[i];
-            g_deviceState.diag[i].rawCode = 0;
-            g_deviceState.diag[i].value = 0.0f;
-        }
-        xSemaphoreGive(g_stateMutex);
+        send_diag_config(i, saved_sources[i]);
     }
 
     return &s_internal_supplies;

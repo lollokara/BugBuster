@@ -336,10 +336,24 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                     }
                     xSemaphoreGive(g_stateMutex);
                 }
-                // Read all 4 diagnostic results
+                // Read all 4 diagnostic results (skip slots that recently changed source)
+                uint8_t diagSkip[4] = {};
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    for (uint8_t d = 0; d < 4; d++) {
+                        diagSkip[d] = g_deviceState.diag[d].skipReads;
+                    }
+                    xSemaphoreGive(g_stateMutex);
+                }
                 for (uint8_t d = 0; d < 4; d++) {
-                    diagRaw[d] = s_device->readAdcDiagResult(d);
-                    diagVal[d] = AD74416H::diagCodeToValue(diagRaw[d], diagSrc[d]);
+                    uint16_t raw = s_device->readAdcDiagResult(d);
+                    if (diagSkip[d] > 0) {
+                        // Stale data from previous source — discard this reading
+                        diagRaw[d] = 0;
+                        diagVal[d] = 0.0f;
+                    } else {
+                        diagRaw[d] = raw;
+                        diagVal[d] = AD74416H::diagCodeToValue(raw, diagSrc[d]);
+                    }
                 }
                 dieTemp = diagVal[0]; // slot 0 is temperature by default
             }
@@ -380,8 +394,13 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 if (readDiag) {
                     g_deviceState.dieTemperature = dieTemp;
                     for (uint8_t d = 0; d < 4; d++) {
-                        g_deviceState.diag[d].rawCode = diagRaw[d];
-                        g_deviceState.diag[d].value   = diagVal[d];
+                        if (g_deviceState.diag[d].skipReads > 0) {
+                            g_deviceState.diag[d].skipReads--;
+                            // Keep rawCode=0 / value=0 until skip is done
+                        } else {
+                            g_deviceState.diag[d].rawCode = diagRaw[d];
+                            g_deviceState.diag[d].value   = diagVal[d];
+                        }
                     }
                 }
 
@@ -734,15 +753,34 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_DIAG_CONFIG: {
-                s_device->configureDiagSlot(cmd.diagCfg.slot, cmd.diagCfg.source);
+                // Per AD74416H datasheet: DIAG_ASSIGN cannot be changed while
+                // continuous ADC conversion is running.  Must stop, update, restart.
+                {
+                    // Build current channel mask
+                    uint8_t chMask = 0;
+                    const uint8_t diagMask = 0x0F;
+                    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
+                            ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
+                            if (f != CH_FUNC_HIGH_IMP &&
+                                f != CH_FUNC_DIN_LOGIC &&
+                                f != CH_FUNC_DIN_LOOP)
+                                chMask |= (1 << c);
+                        }
+                        xSemaphoreGive(g_stateMutex);
+                    }
+
+                    // Update DIAG_ASSIGN and restart ADC conversion
+                    s_device->configureDiagSlot(cmd.diagCfg.slot, cmd.diagCfg.source);
+                    s_device->startAdcConversion(true, chMask, diagMask);
+                }
+
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     if (cmd.diagCfg.slot < 4) {
                         g_deviceState.diag[cmd.diagCfg.slot].source = cmd.diagCfg.source;
-                        // Invalidate stale values — the old rawCode was from the
-                        // previous source.  UI must not apply the new source's
-                        // conversion formula to the old raw code.
                         g_deviceState.diag[cmd.diagCfg.slot].rawCode = 0;
                         g_deviceState.diag[cmd.diagCfg.slot].value   = 0.0f;
+                        g_deviceState.diag[cmd.diagCfg.slot].skipReads = 2;
                     }
                     xSemaphoreGive(g_stateMutex);
                 }

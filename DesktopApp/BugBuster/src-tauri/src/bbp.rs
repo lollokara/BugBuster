@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-pub const PROTO_VERSION: u8 = 1;
+pub const PROTO_VERSION: u8 = 2;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
 pub const HANDSHAKE_RSP_LEN: usize = 8;
@@ -600,9 +600,9 @@ mod tests {
 
     #[test]
     fn test_handshake_parse() {
-        let data = [0xBB, 0x42, 0x55, 0x47, 0x01, 0x01, 0x00, 0x00];
+        let data = [0xBB, 0x42, 0x55, 0x47, 0x02, 0x01, 0x01, 0x00];
         let info = HandshakeInfo::parse(&data).unwrap();
-        assert_eq!(info.proto_version, 1);
+        assert_eq!(info.proto_version, 2);
         assert_eq!(info.fw_major, 1);
     }
 

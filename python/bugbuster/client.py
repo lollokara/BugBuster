@@ -717,6 +717,7 @@ class BugBuster:
         Measure internal AD74416H supply rails using diagnostic slots.
 
         Works in both breadboard and PCB mode (no U23 required).
+        Takes ~8 seconds (changes diagnostic sources, waits for fresh ADC data).
 
         Returns::
 
@@ -731,7 +732,13 @@ class BugBuster:
             }
         """
         if self._usb:
-            resp = self._usb_cmd(CmdId.SELFTEST_INT_SUPPLIES)
+            # This command takes ~8s — temporarily increase timeout
+            old_timeout = self._t._timeout
+            self._t._timeout = 15.0
+            try:
+                resp = self._usb_cmd(CmdId.SELFTEST_INT_SUPPLIES)
+            finally:
+                self._t._timeout = old_timeout
             off = 0
             valid  = bool(resp[off]); off += 1
             ok     = bool(resp[off]); off += 1

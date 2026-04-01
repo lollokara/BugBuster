@@ -76,6 +76,14 @@ void status_led_set_now(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
  */
 void status_led_update(void);
 
+/**
+ * @brief  Run one step of the boot breathing animation.
+ *         All 3 LEDs breathe yellow together in a smooth sine wave.
+ *         Call in a tight loop during boot with ~10ms delay between calls.
+ *         Non-blocking — each call takes <1ms.
+ */
+void status_led_breathe_step(void);
+
 #ifdef __cplusplus
 }
 #endif

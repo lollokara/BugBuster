@@ -92,12 +92,21 @@ static void mainLoopTask(void* pvParam)
 // -----------------------------------------------------------------------------
 extern "C" void app_main(void)
 {
-    // 0. Status LEDs — init early so we can show boot state
-    status_led_init();  // all LEDs start yellow (booting)
+    // 0. Status LEDs — init early so we can show boot animation
+    status_led_init();
+
+    // Helper: run breathing animation for N milliseconds during boot
+    auto breathe_for = [](uint32_t ms) {
+        uint32_t steps = ms / 10;
+        for (uint32_t i = 0; i < steps; i++) {
+            status_led_breathe_step();
+            delay_ms(10);
+        }
+    };
 
     // 1. USB CDC (TinyUSB composite: CLI + UART bridge)
     usb_cdc_init();
-    delay_ms(500);  // Wait for USB enumeration
+    breathe_for(500);  // breathing animation during USB enumeration wait
     serial_init();
     serial_println("\n[BugBuster] Booting (ESP-IDF)...");
 

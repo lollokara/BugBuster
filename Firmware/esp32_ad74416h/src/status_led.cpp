@@ -13,6 +13,7 @@
 #include "pca9535.h"
 #include "esp_log.h"
 #include "driver/rmt_tx.h"
+#include <math.h>
 
 static const char *TAG = "led";
 
@@ -189,6 +190,32 @@ void status_led_refresh(void)
 void status_led_set_now(uint8_t index, uint8_t r, uint8_t g, uint8_t b)
 {
     status_led_set(index, r, g, b);
+    status_led_refresh();
+}
+
+// Breathing animation state
+static uint16_t s_breathe_phase = 0;  // 0–628 (2*PI * 100)
+
+void status_led_breathe_step(void)
+{
+    if (!s_rmt_channel) return;
+
+    // Sine-based breathing: phase advances each call
+    // Full cycle ~2.5s at 10ms per call (250 steps)
+    s_breathe_phase = (s_breathe_phase + 1) % 250;
+
+    // sin(0..2PI) mapped to 0..1, then squared for smoother fade-off at low brightness
+    float t = (float)s_breathe_phase / 250.0f;  // 0..1
+    float angle = t * 2.0f * 3.14159265f;
+    float raw = (sinf(angle) + 1.0f) / 2.0f;   // 0..1
+    float brightness = raw * raw;                 // squared for smoother low end
+
+    // Yellow breathing: scale R and G equally, max 40
+    uint8_t level = (uint8_t)(brightness * 40.0f);
+
+    for (int i = 0; i < LED_COUNT; i++) {
+        status_led_set(i, level, level, 0);  // yellow = R+G
+    }
     status_led_refresh();
 }
 

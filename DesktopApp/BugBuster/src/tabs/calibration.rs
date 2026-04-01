@@ -57,37 +57,34 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
         spawn_local(async move {
             // Call firmware auto-calibrate command
-            // This blocks until calibration is complete (~4-5 seconds)
+            // This blocks until calibration is complete (~10 seconds)
             let args = serde_wasm_bindgen::to_value(
                 &serde_json::json!({"channel": ch})
             ).unwrap();
 
-            match invoke("selftest_auto_calibrate", args).await {
-                Ok(result) => {
-                    // Parse result
-                    if let Ok(r) = serde_wasm_bindgen::from_value::<serde_json::Value>(result) {
-                        let status = r.get("status").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
-                        let points = r.get("points").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                        let error = r.get("errorMv").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let result = invoke("selftest_auto_calibrate", args).await;
 
-                        set_cal_points.set(points);
-                        set_cal_error_mv.set(error);
+            // Parse the JsValue result
+            if let Ok(r) = serde_wasm_bindgen::from_value::<serde_json::Value>(result) {
+                let status = r.get("status").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
+                let points = r.get("points").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let error = r.get("errorMv").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
 
-                        if status == 2 { // CAL_STATUS_SUCCESS
-                            add_log(format!("Calibration complete: {} points, error = {:.1} mV", points, error));
-                            add_log("Calibration saved to NVS (persists across reboots).".to_string());
-                            add_log("Safety: level shifter OE and e-fuses restored.".to_string());
-                            set_cal_state.set(CalState::Complete);
-                        } else {
-                            add_log(format!("Calibration failed (status={})", status));
-                            set_cal_state.set(CalState::Failed);
-                        }
-                    }
-                }
-                Err(e) => {
-                    add_log(format!("Error: {:?}", e));
+                set_cal_points.set(points);
+                set_cal_error_mv.set(error);
+
+                if status == 2 { // CAL_STATUS_SUCCESS
+                    add_log(format!("Calibration complete: {} points, error = {:.1} mV", points, error));
+                    add_log("Calibration saved to NVS (persists across reboots).".to_string());
+                    add_log("Safety: level shifter OE and e-fuses restored.".to_string());
+                    set_cal_state.set(CalState::Complete);
+                } else {
+                    add_log(format!("Calibration failed (status={})", status));
                     set_cal_state.set(CalState::Failed);
                 }
+            } else {
+                add_log("Error: failed to parse calibration response".to_string());
+                set_cal_state.set(CalState::Failed);
             }
         });
     };

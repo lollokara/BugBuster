@@ -42,6 +42,7 @@ struct DiagState {
     uint8_t          source;            // DIAG_ASSIGN source code (0-13)
     uint16_t         rawCode;           // raw ADC_DIAG_RESULT
     float            value;             // interpreted value (V or °C)
+    uint8_t          skipReads;         // skip N reads after source change (stale ADC data)
 };
 
 struct GpioState {
