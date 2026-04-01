@@ -67,6 +67,12 @@ extern "C" {
 #define BBP_CMD_GET_FAULTS      0x03
 #define BBP_CMD_GET_DIAGNOSTICS 0x04
 
+// Self-Test / Calibration / E-fuse Monitoring
+#define BBP_CMD_SELFTEST_STATUS         0x05  // Get boot self-test result + cal status
+#define BBP_CMD_SELFTEST_MEASURE_SUPPLY 0x06  // Measure a supply rail via U23
+#define BBP_CMD_SELFTEST_EFUSE_CURRENTS 0x07  // Get all e-fuse currents
+#define BBP_CMD_SELFTEST_AUTO_CAL       0x08  // Start automatic IDAC calibration
+
 // Channel Configuration
 #define BBP_CMD_SET_CH_FUNC     0x10
 #define BBP_CMD_SET_DAC_CODE    0x11

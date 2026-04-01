@@ -234,6 +234,9 @@ struct Command {
 
 extern QueueHandle_t g_cmdQueue;
 
+/** @brief Get the AD74416H device pointer (for self-test / direct ADC access). */
+AD74416H* tasks_get_device(void);
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------

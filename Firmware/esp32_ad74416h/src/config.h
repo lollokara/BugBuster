@@ -64,16 +64,49 @@
 // ADGS2414D Mux Switch Matrix
 // -----------------------------------------------------------------------------
 #if BREADBOARD_MODE
-#define PIN_MUX_CS      GPIO_NUM_12   // Breadboard: GPIO12
-#define ADGS_NUM_DEVICES   1          // Single device on breadboard
+#define PIN_MUX_CS          GPIO_NUM_12   // Breadboard: GPIO12
+#define ADGS_NUM_DEVICES    1             // Single device on breadboard
+#define ADGS_MAIN_DEVICES   1             // Main MUX devices only
+#define ADGS_HAS_SELFTEST   0             // No U23 on breadboard
 #else
-#define PIN_MUX_CS      GPIO_NUM_21   // PCB: SPI_CS_MUX
-#define ADGS_NUM_DEVICES   4          // 4x daisy-chain on PCB
+#define PIN_MUX_CS          GPIO_NUM_21   // PCB: SPI_CS_MUX (shared for all 5 devices)
+#define ADGS_NUM_DEVICES    5             // 4x main MUX + 1x self-test (U23) in daisy-chain
+#define ADGS_MAIN_DEVICES   4             // U10, U11, U16, U17
+#define ADGS_HAS_SELFTEST   1             // U23 available for self-test / calibration
+#define ADGS_SELFTEST_DEV   4             // U23 = device index 4 in daisy-chain
 #endif
-#define PIN_LSHIFT_OE   GPIO_NUM_14   // Level shifter OE (TXS0108E U13+U15)
+#define PIN_LSHIFT_OE       GPIO_NUM_14   // Level shifter OE (TXS0108E U13+U15)
 
-#define ADGS_NUM_SWITCHES  8
-#define ADGS_DEAD_TIME_MS  100  // Dead time between switch-off and switch-on
+#define ADGS_NUM_SWITCHES   8
+#define ADGS_DEAD_TIME_MS   100  // Dead time between switch-off and switch-on
+
+// -----------------------------------------------------------------------------
+// U23 Self-Test MUX — Switch Assignments (device index 4)
+// -----------------------------------------------------------------------------
+// S-side connects to e-fuse IMON pins, VADJ voltage dividers, 3V3_ADJ, and Ch D
+// D-side connects to shared measurement rail (R106 = 1 MΩ to GND)
+
+#define U23_SW_EFUSE3_IMON  0x01   // S1 (bit 0): EFUSE_MON_3
+#define U23_SW_EFUSE1_IMON  0x02   // S2 (bit 1): EFUSE_MON_1
+#define U23_SW_EFUSE2_IMON  0x04   // S3 (bit 2): EFUSE_MON_2
+#define U23_SW_ADC_CH_D     0x08   // S4 (bit 3): AD74416H Channel D → shared rail
+#define U23_SW_EFUSE4_IMON  0x10   // S5 (bit 4): EFUSE_MON_4
+#define U23_SW_VADJ1        0x20   // S6 (bit 5): VADJ1_BUCK (via R107/R109 divider)
+#define U23_SW_VADJ2        0x40   // S7 (bit 6): VADJ2_BUCK (via R108/R110 divider)
+#define U23_SW_3V3_ADJ      0x80   // S8 (bit 7): 3V3_ADJ (VLOGIC, direct)
+
+// VADJ voltage divider ratio: R_bottom / (R_top + R_bottom) = 100k / (34.8k + 100k)
+#define VADJ_DIVIDER_RATIO  0.7418f
+
+// E-fuse IMON scaling: V_IMON = I_OUT × G_IMON × R_IOCP
+// G_IMON = 50 µA/A (typ), R_IOCP = 11 kΩ → 550 mV per amp
+#define IMON_GAIN_UA_PER_A  50.0f     // TPS1641x typical gain
+#define IMON_R_IOCP_OHM     11000.0f  // External IOCP resistor (same for all 4 e-fuses)
+#define IMON_MV_PER_A       (IMON_GAIN_UA_PER_A * IMON_R_IOCP_OHM / 1000.0f)  // = 550 mV/A
+
+// Safety interlock: U17 S2 (device 3, bit 1) vs U23 any switch
+#define U17_S2_MASK         0x02   // U17 switch S2 = bit 1
+#define U17_DEVICE_IDX      3      // U17 = device index 3
 
 // -----------------------------------------------------------------------------
 // SPI Configuration

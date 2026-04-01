@@ -693,6 +693,96 @@ Set GPIO output value (equivalent to `POST /api/gpio/X/set`).
 
 ---
 
+### 6.5b Self-Test, Calibration & E-fuse Monitoring
+
+Uses U23 (5th ADGS2414D in daisy-chain, device index 4) to route internal
+power rails and e-fuse IMON pins to AD74416H Channel D for measurement.
+
+**Safety interlock:** U23 and U17 S2 (IO 10 analog mode) are mutually exclusive.
+If U17 S2 is closed, all self-test measurement commands return -1.  If U23 is
+active, U17 S2 cannot be closed.
+
+HTTP equivalents:
+- `GET /api/selftest` — boot result + calibration status
+- `GET /api/selftest/supply/{rail}` — measure supply rail (0=VADJ1, 1=VADJ2, 2=3V3_ADJ)
+- `GET /api/selftest/efuse` — all 4 e-fuse currents
+- `POST /api/selftest/calibrate` body `{"channel": 1}` — start auto-calibration
+
+#### 0x05 SELFTEST_STATUS
+Get boot self-test result and calibration status.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       boot_ran        bool    true if boot test was executed
+1       boot_passed     bool    true if all supplies OK
+2       vadj1_v         f32     measured VADJ1 voltage (or -1)
+6       vadj2_v         f32     measured VADJ2 voltage (or -1)
+10      vlogic_v        f32     measured 3V3_ADJ voltage (or -1)
+14      cal_status      u8      0=idle, 1=running, 2=success, 3=failed
+15      cal_channel     u8      IDAC channel being calibrated
+16      cal_points      u8      calibration points collected
+17      cal_error_mv    f32     final error in mV (if success)
+```
+
+#### 0x06 SELFTEST_MEASURE_SUPPLY
+Measure a supply rail via U23. Requires U17 S2 to be open.
+
+**Request payload:**
+```
+0       rail            u8      0=VADJ1, 1=VADJ2, 2=3V3_ADJ
+```
+
+**Response payload:**
+```
+0       rail            u8      echoed rail
+1       voltage         f32     measured voltage in volts (corrected for divider), -1 on error
+```
+
+VADJ1/VADJ2 are measured through a voltage divider (R_top=34.8k, R_bottom=100k,
+ratio=0.7418).  The returned voltage is the actual supply voltage (corrected).
+3V3_ADJ is measured directly (no divider).
+
+#### 0x07 SELFTEST_EFUSE_CURRENTS
+Get all 4 e-fuse output currents from background monitoring.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       available       bool    false if U17 S2 is closed (cannot measure)
+1       timestamp_ms    u32     device uptime when last measured
+5       efuse1_a        f32     e-fuse 1 current in amps (-1 = unavailable)
+9       efuse2_a        f32     e-fuse 2 current in amps
+13      efuse3_a        f32     e-fuse 3 current in amps
+17      efuse4_a        f32     e-fuse 4 current in amps
+```
+
+IMON scaling: V_IMON = I_OUT × G_IMON × R_IOCP.
+G_IMON = 50 µA/A (TPS1641x typ), R_IOCP = 11 kΩ → 550 mV per amp.
+
+#### 0x08 SELFTEST_AUTO_CAL
+Start automatic IDAC calibration. Sweeps DAC codes, measures output via U23,
+builds calibration curve, saves to NVS. Takes several seconds.
+
+**Request payload:**
+```
+0       idac_channel    u8      1=VADJ1, 2=VADJ2
+```
+
+**Response payload:**
+```
+0       status          u8      0=idle, 1=running, 2=success, 3=failed
+1       channel         u8      channel calibrated
+2       points          u8      calibration points collected
+3       error_mv        f32     verification error in mV
+```
+
+Returns ERR_BUSY if calibration already running or interlock violation.
+
+---
+
 ### 6.6b Digital IO (ESP32 GPIO)
 
 The BugBuster exposes 12 logical digital IOs mapped to ESP32 GPIO pins.

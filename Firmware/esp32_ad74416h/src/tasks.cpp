@@ -1017,6 +1017,11 @@ static void taskI2cPoll(void* /*pvParameters*/)
 // Public API
 // -----------------------------------------------------------------------------
 
+AD74416H* tasks_get_device(void)
+{
+    return s_device;
+}
+
 void initTasks(AD74416H& device)
 {
     s_device = &device;

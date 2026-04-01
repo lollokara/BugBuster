@@ -168,33 +168,54 @@ void adgs_init(void)
              ADGS_NUM_DEVICES, PIN_MUX_CS, PIN_LSHIFT_OE);
 }
 
-void adgs_set_all_raw(const uint8_t states[ADGS_NUM_DEVICES])
+void adgs_set_all_raw(const uint8_t states[ADGS_MAIN_DEVICES])
 {
     if (!s_mux_initialized) return;
-    memcpy(s_mux_state, states, ADGS_NUM_DEVICES);
+    memcpy(s_mux_state, states, ADGS_MAIN_DEVICES);
+    // Preserve self-test device (index 4) — don't touch it from main MUX path
     adgs_write_states(s_mux_state);
 }
 
-void adgs_set_all_safe(const uint8_t states[ADGS_NUM_DEVICES])
+void adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
 {
     if (!s_mux_initialized) return;
 
-    // Step 1: Open all switches
-    uint8_t all_open[ADGS_NUM_DEVICES] = {};
-    adgs_write_states(all_open);
+#if ADGS_HAS_SELFTEST
+    // Interlock: if caller tries to set U17 S2 while U23 is active, block it
+    if ((states[U17_DEVICE_IDX] & U17_S2_MASK) && adgs_selftest_active()) {
+        ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S2 while U23 self-test is active!");
+        return;
+    }
+#endif
+
+    // Step 1: Open main MUX switches (preserve self-test device)
+    uint8_t temp[ADGS_NUM_DEVICES];
+    memset(temp, 0, ADGS_MAIN_DEVICES);
+#if ADGS_HAS_SELFTEST
+    temp[ADGS_SELFTEST_DEV] = s_mux_state[ADGS_SELFTEST_DEV];  // preserve U23
+#endif
+    adgs_write_states(temp);
 
     // Step 2: Wait dead time
     delay_ms(ADGS_DEAD_TIME_MS);
 
-    // Step 3: Set new state
-    memcpy(s_mux_state, states, ADGS_NUM_DEVICES);
+    // Step 3: Set new main MUX state (preserve self-test device)
+    memcpy(s_mux_state, states, ADGS_MAIN_DEVICES);
     adgs_write_states(s_mux_state);
 }
 
 void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 {
-    if (device >= ADGS_NUM_DEVICES || sw >= ADGS_NUM_SWITCHES) return;
+    if (device >= ADGS_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) return;
     if (!s_mux_initialized) return;
+
+#if ADGS_HAS_SELFTEST
+    // Interlock: block U17 S2 close if U23 is active
+    if (device == U17_DEVICE_IDX && sw == 1 && closed && adgs_selftest_active()) {
+        ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S2 while U23 self-test is active!");
+        return;
+    }
+#endif
 
     uint8_t group_mask = get_group_mask(sw);
     uint8_t new_state;
@@ -278,3 +299,57 @@ void adgs_soft_reset(void)
     memset(s_mux_state, 0, sizeof(s_mux_state));
     ESP_LOGI(TAG, "Soft reset complete");
 }
+
+// -----------------------------------------------------------------------------
+// Self-Test MUX (U23) — device index ADGS_SELFTEST_DEV
+// Only available when ADGS_HAS_SELFTEST == 1 (PCB mode)
+// -----------------------------------------------------------------------------
+
+#if ADGS_HAS_SELFTEST
+
+bool adgs_set_selftest(uint8_t sw_byte)
+{
+    if (!s_mux_initialized) return false;
+
+    // Safety interlock: U17 S2 must be open before ANY U23 switch can close
+    if (sw_byte != 0 && adgs_u17_s2_active()) {
+        ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U17 S2 (IO10 analog) is closed!");
+        return false;
+    }
+
+    uint8_t old = s_mux_state[ADGS_SELFTEST_DEV];
+    if (old == sw_byte) return true;  // no change
+
+    if (sw_byte == 0) {
+        // Opening all — just write directly
+        s_mux_state[ADGS_SELFTEST_DEV] = 0;
+        adgs_write_states(s_mux_state);
+    } else {
+        // Break-before-make: open U23 first, wait dead time, then close new switches
+        s_mux_state[ADGS_SELFTEST_DEV] = 0;
+        adgs_write_states(s_mux_state);
+        delay_ms(ADGS_DEAD_TIME_MS);
+        s_mux_state[ADGS_SELFTEST_DEV] = sw_byte;
+        adgs_write_states(s_mux_state);
+    }
+
+    ESP_LOGD(TAG, "U23 selftest: 0x%02X -> 0x%02X", old, sw_byte);
+    return true;
+}
+
+uint8_t adgs_get_selftest(void)
+{
+    return s_mux_state[ADGS_SELFTEST_DEV];
+}
+
+bool adgs_u17_s2_active(void)
+{
+    return (s_mux_state[U17_DEVICE_IDX] & U17_S2_MASK) != 0;
+}
+
+bool adgs_selftest_active(void)
+{
+    return s_mux_state[ADGS_SELFTEST_DEV] != 0;
+}
+
+#endif // ADGS_HAS_SELFTEST

@@ -599,6 +599,120 @@ class BugBuster:
             return self._http_get(f"/dio/{io}")
 
     # ------------------------------------------------------------------
+    # ── Self-Test / Calibration / E-fuse Monitoring ────────────────────
+    # ------------------------------------------------------------------
+
+    def selftest_status(self) -> dict:
+        """
+        Get the boot self-test result and calibration status.
+
+        Returns::
+
+            {
+                "boot": {"ran": True, "passed": True,
+                         "vadj1_v": 12.0, "vadj2_v": 5.0, "vlogic_v": 3.3},
+                "cal":  {"status": 0, "channel": 0, "points": 0, "error_mv": 0.0}
+            }
+
+        Cal status: 0=idle, 1=running, 2=success, 3=failed.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SELFTEST_STATUS)
+            off = 0
+            boot_ran    = bool(resp[off]); off += 1
+            boot_passed = bool(resp[off]); off += 1
+            vadj1,  = struct.unpack_from('<f', resp, off); off += 4
+            vadj2,  = struct.unpack_from('<f', resp, off); off += 4
+            vlogic, = struct.unpack_from('<f', resp, off); off += 4
+            cal_status = resp[off]; off += 1
+            cal_ch     = resp[off]; off += 1
+            cal_pts    = resp[off]; off += 1
+            cal_err,   = struct.unpack_from('<f', resp, off); off += 4
+            return {
+                "boot": {"ran": boot_ran, "passed": boot_passed,
+                         "vadj1_v": vadj1, "vadj2_v": vadj2, "vlogic_v": vlogic},
+                "cal":  {"status": cal_status, "channel": cal_ch,
+                         "points": cal_pts, "error_mv": cal_err},
+            }
+        else:
+            return self._http_get("/selftest")
+
+    def selftest_measure_supply(self, rail: int) -> float:
+        """
+        Measure a supply rail via U23 self-test MUX.
+
+        Parameters
+        ----------
+        rail : int
+            0 = VADJ1, 1 = VADJ2, 2 = 3V3_ADJ (VLOGIC).
+
+        Returns voltage in volts (corrected for divider), or -1 if unavailable.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SELFTEST_MEASURE_SUPPLY,
+                                 struct.pack('<B', rail))
+            _, voltage = struct.unpack_from('<Bf', resp, 0)
+            return voltage
+        else:
+            r = self._http_get(f"/selftest/supply/{rail}")
+            return r.get("voltage", -1.0)
+
+    def selftest_efuse_currents(self) -> dict:
+        """
+        Get all 4 e-fuse output currents measured via IMON.
+
+        Returns::
+
+            {
+                "available": True,
+                "timestamp_ms": 12345,
+                "currents": [0.5, 0.3, -1.0, 0.1]   # amps, -1 = unavailable
+            }
+
+        ``available`` is False when U17 S2 is closed (IO 10 in analog mode).
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SELFTEST_EFUSE_CURRENTS)
+            off = 0
+            avail = bool(resp[off]); off += 1
+            ts,   = struct.unpack_from('<I', resp, off); off += 4
+            currents = []
+            for _ in range(4):
+                c, = struct.unpack_from('<f', resp, off); off += 4
+                currents.append(c)
+            return {"available": avail, "timestamp_ms": ts, "currents": currents}
+        else:
+            return self._http_get("/selftest/efuse")
+
+    def selftest_auto_calibrate(self, idac_channel: int) -> dict:
+        """
+        Start automatic IDAC calibration for a supply channel.
+
+        Sweeps IDAC codes, measures actual output voltage via U23,
+        builds calibration curve, and saves to NVS.  This takes several
+        seconds — the device is unresponsive to other commands during cal.
+
+        Parameters
+        ----------
+        idac_channel : int
+            1 = VADJ1, 2 = VADJ2.
+
+        Returns cal result dict: ``{"status", "channel", "points", "error_mv"}``.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SELFTEST_AUTO_CAL,
+                                 struct.pack('<B', idac_channel))
+            return {
+                "status":   resp[0],
+                "channel":  resp[1],
+                "points":   resp[2],
+                "error_mv": struct.unpack_from('<f', resp, 3)[0],
+            }
+        else:
+            r = self._http_post("/selftest/calibrate", {"channel": idac_channel})
+            return r
+
+    # ------------------------------------------------------------------
     # ── UART bridge ────────────────────────────────────────────────────
     # ------------------------------------------------------------------
 

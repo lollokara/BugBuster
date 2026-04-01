@@ -26,6 +26,7 @@
 #include "pca9535.h"
 #include "adgs2414d.h"
 #include "dio.h"
+#include "selftest.h"
 #include "wifi_manager.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
@@ -1204,6 +1205,93 @@ static esp_err_t handle_dio_post_dispatch(httpd_req_t *req)
 }
 
 // =============================================================================
+// Self-Test / Calibration endpoints
+// =============================================================================
+
+// GET /api/selftest — boot result + cal status
+static esp_err_t handle_get_selftest(httpd_req_t *req)
+{
+    const SelftestBootResult *boot = selftest_boot_check();
+    const SelftestCalResult  *cal  = selftest_get_cal_result();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *b = cJSON_AddObjectToObject(root, "boot");
+    cJSON_AddBoolToObject(b, "ran", boot->ran);
+    cJSON_AddBoolToObject(b, "passed", boot->passed);
+    cJSON_AddNumberToObject(b, "vadj1V", boot->vadj1_v);
+    cJSON_AddNumberToObject(b, "vadj2V", boot->vadj2_v);
+    cJSON_AddNumberToObject(b, "vlogicV", boot->vlogic_v);
+
+    cJSON *c = cJSON_AddObjectToObject(root, "calibration");
+    cJSON_AddNumberToObject(c, "status", cal->status);
+    cJSON_AddNumberToObject(c, "channel", cal->channel);
+    cJSON_AddNumberToObject(c, "points", cal->points_collected);
+    cJSON_AddNumberToObject(c, "errorMv", cal->error_mv);
+
+    return send_json(req, root);
+}
+
+// GET /api/selftest/supply/{rail} — measure a supply rail (0=VADJ1, 1=VADJ2, 2=3V3_ADJ)
+static esp_err_t handle_get_selftest_supply(httpd_req_t *req)
+{
+    const char *p = strstr(req->uri, "/api/selftest/supply/");
+    if (!p) return send_error(req, 400, "Invalid URI");
+    int rail = atoi(p + 21);
+
+    float voltage = selftest_measure_supply((uint8_t)rail);
+
+    cJSON *resp = cJSON_CreateObject();
+    const char *names[] = {"VADJ1", "VADJ2", "3V3_ADJ"};
+    cJSON_AddStringToObject(resp, "rail", (rail < 3) ? names[rail] : "unknown");
+    cJSON_AddNumberToObject(resp, "voltage", voltage);
+    cJSON_AddBoolToObject(resp, "ok", voltage >= 0);
+    return send_json(req, resp);
+}
+
+// GET /api/selftest/efuse — all e-fuse currents
+static esp_err_t handle_get_selftest_efuse(httpd_req_t *req)
+{
+    selftest_monitor_step();
+    const SelftestEfuseCurrents *ec = selftest_get_efuse_currents();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "available", ec->available);
+    cJSON_AddNumberToObject(root, "timestampMs", ec->timestamp_ms);
+    cJSON *arr = cJSON_AddArrayToObject(root, "efuses");
+    for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "efuse", i + 1);
+        cJSON_AddNumberToObject(obj, "currentA", ec->current_a[i]);
+        cJSON_AddItemToArray(arr, obj);
+    }
+    return send_json(req, root);
+}
+
+// POST /api/selftest/calibrate body: {"channel": 1}
+static esp_err_t handle_post_selftest_calibrate(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    int ch = cJSON_GetObjectItem(body, "channel")->valueint;
+    cJSON_Delete(body);
+
+    bool ok = selftest_start_auto_calibrate((uint8_t)ch);
+    if (!ok) {
+        return send_error(req, 409, "Calibration blocked (busy or interlock)");
+    }
+
+    const SelftestCalResult *cal = selftest_get_cal_result();
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "status", cal->status);
+    cJSON_AddNumberToObject(resp, "channel", cal->channel);
+    cJSON_AddNumberToObject(resp, "points", cal->points_collected);
+    cJSON_AddNumberToObject(resp, "errorMv", cal->error_mv);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    return send_json(req, resp);
+}
+
+// =============================================================================
 // UART Bridge endpoints
 // =============================================================================
 
@@ -2138,6 +2226,28 @@ void initWebServer(void)
         .uri = "/api/dio/*", .method = HTTP_POST, .handler = handle_dio_post_dispatch, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_dio_post);
+
+    // ----- Self-Test / Calibration routes -----
+
+    httpd_uri_t uri_selftest_get = {
+        .uri = "/api/selftest", .method = HTTP_GET, .handler = handle_get_selftest, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_selftest_get);
+
+    httpd_uri_t uri_selftest_supply = {
+        .uri = "/api/selftest/supply/*", .method = HTTP_GET, .handler = handle_get_selftest_supply, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_selftest_supply);
+
+    httpd_uri_t uri_selftest_efuse = {
+        .uri = "/api/selftest/efuse", .method = HTTP_GET, .handler = handle_get_selftest_efuse, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_selftest_efuse);
+
+    httpd_uri_t uri_selftest_cal = {
+        .uri = "/api/selftest/calibrate", .method = HTTP_POST, .handler = handle_post_selftest_calibrate, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_selftest_cal);
 
     // ----- UART bridge routes -----
 

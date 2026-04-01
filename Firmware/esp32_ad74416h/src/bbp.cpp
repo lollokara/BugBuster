@@ -12,6 +12,7 @@
 #include "uart_bridge.h"
 #include "adgs2414d.h"
 #include "dio.h"
+#include "selftest.h"
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
@@ -969,6 +970,82 @@ static int handleDioRead(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+// -----------------------------------------------------------------------------
+// Self-Test / Calibration handlers
+// -----------------------------------------------------------------------------
+
+// 0x05 SELFTEST_STATUS — get boot result + cal status
+static int handleSelftestStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    const SelftestBootResult *boot = selftest_boot_check();  // returns cached if already ran
+    const SelftestCalResult  *cal  = selftest_get_cal_result();
+
+    size_t pos = 0;
+    // Boot result
+    put_bool(out, &pos, boot->ran);
+    put_bool(out, &pos, boot->passed);
+    put_f32(out, &pos, boot->vadj1_v);
+    put_f32(out, &pos, boot->vadj2_v);
+    put_f32(out, &pos, boot->vlogic_v);
+    // Cal result
+    put_u8(out, &pos, cal->status);
+    put_u8(out, &pos, cal->channel);
+    put_u8(out, &pos, cal->points_collected);
+    put_f32(out, &pos, cal->error_mv);
+    return (int)pos;
+}
+
+// 0x06 SELFTEST_MEASURE_SUPPLY — measure a rail
+static int handleSelftestMeasureSupply(uint16_t seq, uint8_t cmdId,
+                                       const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    uint8_t rail = payload[0];
+
+    float voltage = selftest_measure_supply(rail);
+
+    size_t pos = 0;
+    put_u8(out, &pos, rail);
+    put_f32(out, &pos, voltage);
+    return (int)pos;
+}
+
+// 0x07 SELFTEST_EFUSE_CURRENTS — get all e-fuse currents
+static int handleSelftestEfuseCurrents(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    const SelftestEfuseCurrents *ec = selftest_get_efuse_currents();
+
+    size_t pos = 0;
+    put_bool(out, &pos, ec->available);
+    put_u32(out, &pos, ec->timestamp_ms);
+    for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++) {
+        put_f32(out, &pos, ec->current_a[i]);
+    }
+    return (int)pos;
+}
+
+// 0x08 SELFTEST_AUTO_CAL — start auto-calibration
+static int handleSelftestAutoCal(uint16_t seq, uint8_t cmdId,
+                                  const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    uint8_t idac_ch = payload[0];
+
+    bool ok = selftest_start_auto_calibrate(idac_ch);
+    if (!ok) {
+        sendError(seq, cmdId, BBP_ERR_BUSY);
+        return -1;
+    }
+
+    const SelftestCalResult *cal = selftest_get_cal_result();
+    size_t pos = 0;
+    put_u8(out, &pos, cal->status);
+    put_u8(out, &pos, cal->channel);
+    put_u8(out, &pos, cal->points_collected);
+    put_f32(out, &pos, cal->error_mv);
+    return (int)pos;
+}
+
 static int handleSetUartConfig(uint16_t seq, uint8_t cmdId,
                                 const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -1818,6 +1895,20 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_GET_DIAGNOSTICS:
             rspLen = handleGetDiagnostics(seq, cmdId, rspBuf);
+            break;
+
+        // --- Self-Test / Calibration ---
+        case BBP_CMD_SELFTEST_STATUS:
+            rspLen = handleSelftestStatus(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_SELFTEST_MEASURE_SUPPLY:
+            rspLen = handleSelftestMeasureSupply(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_SELFTEST_EFUSE_CURRENTS:
+            rspLen = handleSelftestEfuseCurrents(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_SELFTEST_AUTO_CAL:
+            rspLen = handleSelftestAutoCal(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- Channel Config ---

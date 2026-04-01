@@ -690,11 +690,35 @@ Group C (bits 6-7, S7-S8): Digital IO (position 3)
 | 2–4 | IO signals | Routed through ADGS2414D MUX matrix |
 | 5 | GND | Signal ground |
 
-#### Fifth MUX (U23) — Self-Test / Monitoring
+#### Fifth MUX (U23) — Self-Test / Monitoring / Auto-Calibration
 
-U23 is a dedicated self-test ADGS2414D (NOT part of the main 4-device daisy-chain).
-Routes internal power rails and e-fuse IMON pins to AD74416H CH_D for voltage/current monitoring.
-**Not yet implemented in firmware or library — reserved for future use.**
+U23 is the 5th ADGS2414D in the same daisy-chain (device index 4, same CS pin).
+Routes internal power rails and e-fuse IMON pins to a shared measurement rail,
+which connects to AD74416H Channel D via S4.
+
+```
+Switch Mapping:
+  S1 (bit 0): EFUSE_MON_3     — e-fuse 3 IMON (current monitor)
+  S2 (bit 1): EFUSE_MON_1     — e-fuse 1 IMON
+  S3 (bit 2): EFUSE_MON_2     — e-fuse 2 IMON
+  S4 (bit 3): ADC_OUT_4       — AD74416H Ch D → shared rail (MUST be closed for any measurement)
+  S5 (bit 4): EFUSE_MON_4     — e-fuse 4 IMON
+  S6 (bit 5): VADJ1_BUCK      — via R107(34.8kΩ)/R109(100kΩ) divider, ratio=0.7418
+  S7 (bit 6): VADJ2_BUCK      — via R108(34.8kΩ)/R110(100kΩ) divider, ratio=0.7418
+  S8 (bit 7): 3V3_ADJ         — VLOGIC, direct (no divider)
+
+D-side: all switches share one rail with R106 (1 MΩ) to GND (prevents floating).
+```
+
+**IMON scaling (TPS1641x):** G_IMON = 50 µA/A, R_IOCP = 11 kΩ → V_IMON = I_OUT × 550 mV/A
+
+**SAFETY INTERLOCK:** U23 and U17 S2 (IO 10 analog mode) are **mutually exclusive**.
+Both route to AD74416H Channel D — closing both simultaneously creates a short path.
+
+**Features:**
+- Boot-time supply verification (measure VADJ1, VADJ2, 3V3_ADJ)
+- Automatic IDAC calibration (sweep codes, measure via ADC, save to NVS)
+- Background e-fuse current + voltage monitoring (non-blocking, with dead-time between switches)
 
 ---
 
