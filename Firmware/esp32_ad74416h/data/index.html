@@ -521,6 +521,35 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 </template>
 </div>
 </template>
+<!-- Auto-Calibration via U23 -->
+<template x-if="idacDev.present">
+<div class="card mt-3">
+<div class="card-h"><span class="text-sm font-bold">Auto-Calibration (U23 Self-Test MUX)</span></div>
+<div class="card-b">
+<div class="text-xs mb-2" style="color:var(--text3);line-height:1.5">
+Automatically calibrate VADJ1 or VADJ2 using the on-board self-test MUX (U23).
+No external connections needed. During calibration, the level shifter OE and all e-fuses
+are disabled for safety and restored afterwards.
+</div>
+<div class="flex gap-2 mb-2">
+<button class="btn btn-sm flex-1" :disabled="calRunning"
+@click="startAutoCal(1)" style="border-color:#06b6d4;color:#06b6d4">
+<span x-text="calRunning && calChannel===1 ? 'Calibrating...' : 'Auto-Cal VADJ1'"></span>
+</button>
+<button class="btn btn-sm flex-1" :disabled="calRunning"
+@click="startAutoCal(2)" style="border-color:#ff4d6a;color:#ff4d6a">
+<span x-text="calRunning && calChannel===2 ? 'Calibrating...' : 'Auto-Cal VADJ2'"></span>
+</button>
+</div>
+<template x-if="calResult">
+<div class="text-xs mono p-2 rounded" :style="'background:var(--bg1);border:1px solid '+(calResult.ok?'#10b981':'#ef4444')">
+<span x-show="calResult.ok" style="color:#10b981" x-text="'Calibration complete: '+calResult.points+' points, error='+calResult.errorMv.toFixed(1)+' mV. Saved to NVS.'"></span>
+<span x-show="!calResult.ok" style="color:#ef4444">Calibration failed. Check U23 connection and ensure IO 10 is not in analog mode.</span>
+</div>
+</template>
+</div>
+</div>
+</template>
 </div>
 <!-- WaveGen -->
 <div x-show="tab==='WaveGen'" x-cloak>
@@ -871,6 +900,7 @@ idacCh:[0,1,2,3].map(()=>({val:0,dirty:false})),
 mux:{states:[0,0,0,0],refs:['U10','U11','U16','U17'],psu:[false,false],efuses:[false,false,false,false]},
 idacDev:{present:false,channels:[]},
 idacSliders:[0,1,2].map(()=>({code:0,voltage:0,dirty:false,vDirty:false})),
+calRunning:false,calChannel:0,calResult:null,
 wg:{channel:0,waveform:0,freq:1.0,amplitude:5.0,offset:0.0,mode:0,running:false},
 scope:{running:false,chEn:[true,false,false,false],windowSec:30,yRange:'auto',data:[[],[],[],[]],seq:0,pts:0,_timer:null},
 usbpd:{present:false,attached:false,cc:'CC1',voltageV:0,currentA:0,powerW:0,sourcePdos:[]},
@@ -1197,6 +1227,18 @@ this.postJSON('/api/idac/voltage',{ch:i,voltage:this.idacSliders[i].voltage});
 this.idacSliders[i].vDirty=false;
 this.toastOk('IDAC CH'+i+' set to '+this.idacSliders[i].voltage.toFixed(3)+'V')
 }
+},
+async startAutoCal(ch){
+this.calRunning=true;this.calChannel=ch;this.calResult=null;
+this.toastOk('Starting auto-calibration for IDAC CH'+ch+'...');
+try{
+let r=await fetch('/api/selftest/calibrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel:ch})});
+let j=await r.json();
+this.calResult={ok:r.ok&&j.status===2,points:j.points||0,errorMv:j.errorMv||0};
+if(this.calResult.ok)this.toastOk('Calibration complete: '+j.points+' points, error='+j.errorMv.toFixed(1)+' mV');
+else this.toastErr('Calibration failed (status='+j.status+')');
+}catch(e){this.calResult={ok:false,points:0,errorMv:0};this.toastErr('Calibration error: '+e.message)}
+this.calRunning=false;
 },
 toggleWg(){
 if(this.wg.running){

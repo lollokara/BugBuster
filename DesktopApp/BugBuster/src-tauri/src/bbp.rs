@@ -63,6 +63,12 @@ pub const CMD_CLEAR_CH_ALERT: u8 = 0x21;
 pub const CMD_SET_ALERT_MASK: u8 = 0x22;
 pub const CMD_SET_CH_ALERT_MASK: u8 = 0x23;
 
+// Self-Test / Calibration
+pub const CMD_SELFTEST_STATUS: u8 = 0x05;
+pub const CMD_SELFTEST_MEASURE_SUPPLY: u8 = 0x06;
+pub const CMD_SELFTEST_EFUSE_CURRENTS: u8 = 0x07;
+pub const CMD_SELFTEST_AUTO_CAL: u8 = 0x08;
+
 // Diagnostics
 pub const CMD_SET_DIAG_CONFIG: u8 = 0x30;
 

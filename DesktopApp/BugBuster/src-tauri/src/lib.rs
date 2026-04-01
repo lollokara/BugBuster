@@ -79,6 +79,8 @@ pub fn run() {
             commands::idac_cal_add_point,
             commands::idac_cal_clear,
             commands::idac_cal_save,
+            // Self-Test / Auto-Calibration
+            commands::selftest_auto_calibrate,
             // PCA9535 GPIO Expander
             commands::pca_get_status,
             commands::pca_set_control,

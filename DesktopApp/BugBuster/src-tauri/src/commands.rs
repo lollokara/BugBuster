@@ -803,6 +803,37 @@ pub async fn idac_cal_save(
 }
 
 // -----------------------------------------------------------------------------
+// Self-Test / Auto-Calibration
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn selftest_auto_calibrate(
+    channel: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<serde_json::Value> {
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(channel);
+    // This command takes several seconds — the firmware sweeps IDAC codes
+    // and measures each via U23 before responding.
+    let resp = mgr.send_command(bbp::CMD_SELFTEST_AUTO_CAL, &pw.buf)
+        .await.map_err(map_err)?;
+    let status = resp.get(0).copied().unwrap_or(3);
+    let cal_ch = resp.get(1).copied().unwrap_or(0);
+    let points = resp.get(2).copied().unwrap_or(0);
+    let error_mv = if resp.len() >= 7 {
+        f32::from_le_bytes([resp[3], resp[4], resp[5], resp[6]])
+    } else {
+        0.0
+    };
+    Ok(serde_json::json!({
+        "status": status,
+        "channel": cal_ch,
+        "points": points,
+        "errorMv": error_mv,
+    }))
+}
+
+// -----------------------------------------------------------------------------
 // PCA9535 GPIO Expander
 // -----------------------------------------------------------------------------
 

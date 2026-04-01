@@ -320,6 +320,24 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
     s_cal_result.points_collected = 0;
     s_cal_result.error_mv = 0;
 
+    // ── Safety: disable level shifter OE and all e-fuses during calibration ──
+    // This prevents any signal from reaching the physical terminals while we
+    // manipulate the DCDC voltage across its full range.
+    ESP_LOGI(TAG, "  Safety: disabling level shifter OE and all e-fuses");
+    pin_write(PIN_LSHIFT_OE, 0);  // level shifter OFF
+
+    const PCA9535State *pca_before = pca9535_get_state();
+    bool efuse_was_on[4] = {};
+    if (pca_before && pca_before->present) {
+        for (int i = 0; i < 4; i++) {
+            efuse_was_on[i] = pca_before->efuse_en[i];
+            if (efuse_was_on[i]) {
+                pca9535_set_control((PcaControl)(PCA_CTRL_EFUSE1_EN + i), false);
+            }
+        }
+    }
+    delay_ms(50);  // let e-fuses discharge
+
     // Determine which U23 switch to use for this IDAC channel
     uint8_t rail = (idac_channel == 1) ? SELFTEST_RAIL_VADJ1 : SELFTEST_RAIL_VADJ2;
 
@@ -343,9 +361,9 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         if (measured_v < 0) {
             ESP_LOGE(TAG, "  Cal point code=%d: measurement failed", code);
             s_cal_result.status = CAL_STATUS_FAILED;
-            // Clean up: return IDAC to code 0
             ds4424_set_code(idac_channel, 0);
-            return false;
+            // Restore safety state
+            goto restore;
         }
 
         ESP_LOGI(TAG, "  Cal point: code=%+4d → %.4f V", code, measured_v);
@@ -379,7 +397,19 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
     ESP_LOGI(TAG, "Auto-calibration complete for IDAC ch%d (%d points, error=%.1f mV)",
              idac_channel, s_cal_result.points_collected, s_cal_result.error_mv);
 
-    return true;
+restore:
+    // ── Restore safety state: re-enable level shifter OE and e-fuses ──
+    ESP_LOGI(TAG, "  Restoring level shifter OE and e-fuses");
+    pin_write(PIN_LSHIFT_OE, 1);  // level shifter back ON
+    if (pca_before && pca_before->present) {
+        for (int i = 0; i < 4; i++) {
+            if (efuse_was_on[i]) {
+                pca9535_set_control((PcaControl)(PCA_CTRL_EFUSE1_EN + i), true);
+            }
+        }
+    }
+
+    return s_cal_result.status == CAL_STATUS_SUCCESS;
 }
 
 const SelftestCalResult* selftest_get_cal_result(void)
