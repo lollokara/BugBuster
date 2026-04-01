@@ -299,8 +299,8 @@ void selftest_monitor_step(void)
 
 bool selftest_start_auto_calibrate(uint8_t idac_channel)
 {
-    if (idac_channel < 1 || idac_channel > 2) {
-        ESP_LOGE(TAG, "Invalid IDAC channel %d (must be 1 or 2)", idac_channel);
+    if (idac_channel > 2) {
+        ESP_LOGE(TAG, "Invalid IDAC channel %d (must be 0, 1, or 2)", idac_channel);
         return false;
     }
 
@@ -339,7 +339,10 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
     delay_ms(50);  // let e-fuses discharge
 
     // Determine which U23 switch to use for this IDAC channel
-    uint8_t rail = (idac_channel == 1) ? SELFTEST_RAIL_VADJ1 : SELFTEST_RAIL_VADJ2;
+    uint8_t rail;
+    if (idac_channel == 0)      rail = SELFTEST_RAIL_3V3_ADJ;  // VLOGIC
+    else if (idac_channel == 1) rail = SELFTEST_RAIL_VADJ1;
+    else                        rail = SELFTEST_RAIL_VADJ2;
 
     // Clear existing calibration for this channel
     ds4424_cal_clear(idac_channel);

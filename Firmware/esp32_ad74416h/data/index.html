@@ -533,6 +533,10 @@ are disabled for safety and restored afterwards.
 </div>
 <div class="flex gap-2 mb-2">
 <button class="btn btn-sm flex-1" :disabled="calRunning"
+@click="startAutoCal(0)" style="border-color:#10b981;color:#10b981">
+<span x-text="calRunning && calChannel===0 ? 'Calibrating...' : 'Auto-Cal VLOGIC'"></span>
+</button>
+<button class="btn btn-sm flex-1" :disabled="calRunning"
 @click="startAutoCal(1)" style="border-color:#06b6d4;color:#06b6d4">
 <span x-text="calRunning && calChannel===1 ? 'Calibrating...' : 'Auto-Cal VADJ1'"></span>
 </button>
