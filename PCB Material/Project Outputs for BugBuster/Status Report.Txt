@@ -1,27 +1,14 @@
-Output: Gerber Files
-Type  : Gerber
-From  : Variant [[No Variations]] of Project [BugBuster.PrjPcb]
-   Generated File[BugBusterMain.GTO]
-   Generated File[BugBusterMain.GTP]
-   Generated File[BugBusterMain.GTS]
-   Generated File[BugBusterMain.GTL]
-   Generated File[BugBusterMain.G1]
-   Generated File[BugBusterMain.G2]
-   Generated File[BugBusterMain.G3]
-   Generated File[BugBusterMain.G4]
-   Generated File[BugBusterMain.GBL]
-   Generated File[BugBusterMain.GBS]
-   Generated File[BugBusterMain.GBP]
-   Generated File[BugBusterMain.GBO]
-   Generated File[BugBusterMain.GM4]
-   Generated File[BugBusterMain.GD1]
-   Generated File[BugBusterMain.GG1]
-   Generated File[BugBusterMain.RUL]
-   Generated File[BugBusterMain.EXTREP]
-   Generated File[BugBusterMain.REP]
+Output: NC Drill Files
+Type  : NC Drill
+From  : Project [BugBuster.PrjPcb]
+   Generated File[BugBusterMain-RoundHoles.TXT]
+   Generated File[BugBusterMain-SlotHoles.TXT]
+   Generated File[BugBusterMain-BoardEdgeRout.TXT]
+   Generated File[BugBusterMain.LDP]
+   Generated File[BugBusterMain.DRR]
 
 
-Files Generated   : 18
+Files Generated   : 5
 Documents Printed : 0
 
-Finished Output Generation At 00:51:42 On 30/03/2026
+Finished Output Generation At 13:17:10 On 01/04/2026
