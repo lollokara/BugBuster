@@ -150,6 +150,7 @@ Source of truth: `config.h`. PCB net names from schematic.
 ### 2.6 WS2812B RGB LEDs
 
 Three addressable LEDs (D1, D2, D3 = XL-2020RGBC-WS2812B) in daisy-chain.
+Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 
 | Pin | Net |
 |-----|-----|
@@ -159,6 +160,21 @@ Three addressable LEDs (D1, D2, D3 = XL-2020RGBC-WS2812B) in daisy-chain.
 | DOU (D1) → DIN (D2) | Internal chain |
 | DOU (D2) → DIN (D3) | Internal chain |
 | DOU (D3) | Not connected (×) |
+
+#### LED Assignments and Color Scheme
+
+| LED | Index | Peripheral | Color | Meaning |
+|-----|-------|-----------|-------|---------|
+| D1 | 0 | ESP32 / Connection | Blue | Client connected (BBP/HTTP active) |
+| | | | Yellow | Booting / connecting |
+| | | | Green | Operative, no client connected |
+| | | | Red | Fault (unrecoverable error) |
+| D2 | 1 | MUX + IO Expander | Green | ADGS2414D + PCA9535 healthy |
+| | | | Yellow | Not configured (PCA9535 absent) |
+| | | | Red | MUX write-verify fault |
+| D3 | 2 | AD74416H ADC | Green | SPI OK, channels configured |
+| | | | Yellow | SPI OK, all channels HIGH_IMP |
+| | | | Red | SPI failure or ALERT active |
 
 ---
 

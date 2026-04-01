@@ -20,13 +20,14 @@ static const char *TAG = "dio";
 // Breadboard mode: map to unused ESP32-S3 GPIOs that don't conflict with
 // SPI (8-11), I2C (1,4), ADC control (5-7), MUX CS (12), OE (14), USB (19,20).
 //
-// IO_Block 1: IO 1=GPIO2,  IO 2=GPIO3,   IO 3=GPIO13
+// IO_Block 1: IO 1=GPIO2,  IO 2=GPIO3,   IO 3=GPIO15
 // IO_Block 2: IO 4=GPIO21, IO 5=GPIO35,  IO 6=GPIO36
 // IO_Block 3: IO 7=GPIO37, IO 8=GPIO38,  IO 9=GPIO39
 // IO_Block 4: IO10=GPIO40, IO11=GPIO47,  IO12=GPIO48
+// NOTE: GPIO13 reserved for WS2812B LEDs in breadboard mode
 
 static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
-     2,   3,  13,     // IO_Block 1: IO 1, 2, 3
+     2,   3,  15,     // IO_Block 1: IO 1, 2, 3 (IO3 was 13, moved to 15 — 13 is LEDs)
     21,  35,  36,     // IO_Block 2: IO 4, 5, 6
     37,  38,  39,     // IO_Block 3: IO 7, 8, 9
     40,  47,  48,     // IO_Block 4: IO 10, 11, 12

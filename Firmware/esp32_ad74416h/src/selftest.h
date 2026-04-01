@@ -150,6 +150,40 @@ const SelftestCalResult* selftest_get_cal_result(void);
  */
 bool selftest_is_busy(void);
 
+// ── Internal ADC supply monitoring ──────────────────────────────────────────
+// Uses the AD74416H's built-in diagnostic slots to measure internal supplies.
+// Does NOT use U23 — works in both breadboard and PCB mode.
+
+// AD74416H diagnostic source codes
+#define DIAG_SRC_AGND       0
+#define DIAG_SRC_TEMP       1
+#define DIAG_SRC_DVCC       2   // Digital supply (breadboard: 5V, PCB: 3.3V)
+#define DIAG_SRC_AVCC       3   // Analog supply (5V)
+#define DIAG_SRC_LDO1V8     4   // Internal LDO (1.8V)
+#define DIAG_SRC_AVDD_HI    5   // Positive analog supply (breadboard: 21.5V, PCB: 15V)
+#define DIAG_SRC_AVDD_LO    6   // AVDD_LO
+#define DIAG_SRC_AVSS       7   // Negative analog supply (breadboard: -16V, PCB: -15V)
+
+// Internal supply measurement result
+typedef struct {
+    float avdd_hi_v;    // Positive analog supply
+    float dvcc_v;       // Digital supply
+    float avcc_v;       // Analog supply (AVCC)
+    float avss_v;       // Negative analog supply
+    float temp_c;       // Die temperature
+    bool  valid;        // true if measurement was successful
+    bool  supplies_ok;  // true if all supplies within expected range
+} SelftestInternalSupplies;
+
+/**
+ * @brief  Measure all internal AD74416H supplies using diagnostic slots.
+ *         Temporarily reconfigures diag slots 0–3, measures, then restores
+ *         the original slot configuration.
+ *
+ * @return Pointer to static result (valid until next call).
+ */
+const SelftestInternalSupplies* selftest_measure_internal_supplies(void);
+
 #ifdef __cplusplus
 }
 #endif

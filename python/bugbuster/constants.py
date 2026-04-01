@@ -240,6 +240,7 @@ class CmdId(IntEnum):
     SELFTEST_MEASURE_SUPPLY = 0x06
     SELFTEST_EFUSE_CURRENTS = 0x07
     SELFTEST_AUTO_CAL       = 0x08
+    SELFTEST_INT_SUPPLIES   = 0x09
 
     # Channel configuration
     SET_CHANNEL_FUNC = 0x10

@@ -1291,6 +1291,22 @@ static esp_err_t handle_post_selftest_calibrate(httpd_req_t *req)
     return send_json(req, resp);
 }
 
+// GET /api/selftest/supplies — measure internal ADC supplies
+static esp_err_t handle_get_selftest_supplies(httpd_req_t *req)
+{
+    const SelftestInternalSupplies *s = selftest_measure_internal_supplies();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "valid", s->valid);
+    cJSON_AddBoolToObject(root, "suppliesOk", s->supplies_ok);
+    cJSON_AddNumberToObject(root, "avddHiV", s->avdd_hi_v);
+    cJSON_AddNumberToObject(root, "dvccV", s->dvcc_v);
+    cJSON_AddNumberToObject(root, "avccV", s->avcc_v);
+    cJSON_AddNumberToObject(root, "avssV", s->avss_v);
+    cJSON_AddNumberToObject(root, "tempC", s->temp_c);
+    return send_json(req, root);
+}
+
 // =============================================================================
 // UART Bridge endpoints
 // =============================================================================
@@ -2248,6 +2264,11 @@ void initWebServer(void)
         .uri = "/api/selftest/calibrate", .method = HTTP_POST, .handler = handle_post_selftest_calibrate, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_selftest_cal);
+
+    httpd_uri_t uri_selftest_supplies = {
+        .uri = "/api/selftest/supplies", .method = HTTP_GET, .handler = handle_get_selftest_supplies, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_selftest_supplies);
 
     // ----- UART bridge routes -----
 

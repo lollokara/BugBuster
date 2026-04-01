@@ -16,7 +16,7 @@
 
 static const char *TAG = "adgs2414d";
 
-// Cached switch states for all 4 devices
+// Cached switch states for all devices
 static uint8_t s_mux_state[ADGS_NUM_DEVICES] = {};
 
 // SPI device handle (separate from AD74416H, same bus, different CS)
@@ -24,6 +24,15 @@ static spi_device_handle_t s_spi_dev = NULL;
 
 // Whether we're in daisy-chain mode
 static bool s_mux_initialized = false;
+
+// Fault flag: set when write-verify fails after ADGS_MAX_RETRIES
+static bool s_mux_faulted = false;
+
+// Readback capability: false if SDO is not connected (breadboard typical)
+// Detected on first non-zero write: if readback returns 0 for a non-zero write,
+// SDO is assumed disconnected and verification is skipped with a warning.
+static bool s_readback_available = true;
+static bool s_readback_checked = false;
 
 // -----------------------------------------------------------------------------
 // Low-level SPI helpers
@@ -102,14 +111,147 @@ static void adgs_daisy_chain_write(const uint8_t states[ADGS_NUM_DEVICES])
     spi_transfer(tx, rx, ADGS_NUM_DEVICES);
 }
 
-// Write current switch states to hardware (handles both modes)
-static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
+// Read a register in address mode (single device)
+static uint8_t adgs_address_mode_read(uint8_t reg)
+{
+    uint8_t tx[2] = { (uint8_t)(ADGS_CMD_READ | (reg & 0x7F)), 0x00 };
+    uint8_t rx[2] = {0};
+    spi_transfer(tx, rx, 2);
+    ESP_LOGD(TAG, "ADGS read reg 0x%02X: tx=[%02X %02X] rx=[%02X %02X] → 0x%02X",
+             reg, tx[0], tx[1], rx[0], rx[1], rx[1]);
+    return rx[1];  // data is in second byte
+}
+
+// Read back switch states in daisy-chain mode.
+// Perform a "dummy" write of the current cached state and capture SDO.
+// In daisy-chain mode, SDO outputs the previous switch data register contents.
+static void adgs_daisy_chain_readback(uint8_t out[ADGS_NUM_DEVICES])
+{
+    // Send current cached state (no change) and capture what comes back
+    uint8_t tx[ADGS_NUM_DEVICES];
+    for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
+        tx[i] = s_mux_state[ADGS_NUM_DEVICES - 1 - i];  // reversed order
+    }
+    uint8_t rx[ADGS_NUM_DEVICES] = {};
+    spi_transfer(tx, rx, ADGS_NUM_DEVICES);
+
+    // SDO comes back in reversed order too
+    for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
+        out[i] = rx[ADGS_NUM_DEVICES - 1 - i];
+    }
+}
+
+// Write states and verify by readback. Returns true on match.
+static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
 {
 #if ADGS_NUM_DEVICES > 1
     adgs_daisy_chain_write(states);
+    delay_us(10);
+
+    // Readback verify
+    uint8_t readback[ADGS_NUM_DEVICES] = {};
+    adgs_daisy_chain_readback(readback);
+
+    for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
+        if (readback[i] != states[i]) {
+            ESP_LOGW(TAG, "Readback mismatch: device %d wrote=0x%02X read=0x%02X",
+                     i, states[i], readback[i]);
+            return false;
+        }
+    }
+    return true;
 #else
     adgs_address_mode_write(ADGS_REG_SW_DATA, states[0]);
+    delay_ms(1);  // ensure register write is committed
+    uint8_t rb = adgs_address_mode_read(ADGS_REG_SW_DATA);
+    ESP_LOGI(TAG, "Write-verify: wrote=0x%02X readback=0x%02X %s",
+             states[0], rb, (rb == states[0]) ? "OK" : "MISMATCH");
+    if (rb != states[0]) {
+        return false;
+    }
+    return true;
 #endif
+}
+
+// Write switch states with verification and retry.
+// Sets fault flag if all retries fail.
+static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
+{
+    for (int attempt = 0; attempt < ADGS_MAX_RETRIES; attempt++) {
+        if (adgs_write_and_verify(states)) {
+            if (attempt > 0) {
+                ESP_LOGI(TAG, "MUX write succeeded on retry %d", attempt);
+            }
+            s_mux_faulted = false;
+            return;  // success
+        }
+        ESP_LOGW(TAG, "MUX write-verify failed (attempt %d/%d)", attempt + 1, ADGS_MAX_RETRIES);
+        delay_ms(5);
+    }
+
+    // All retries exhausted — attempt recovery via software reset
+    ESP_LOGW(TAG, "MUX write-verify failed after %d retries. Attempting software reset recovery...", ADGS_MAX_RETRIES);
+
+#if ADGS_NUM_DEVICES > 1
+    // In daisy-chain mode: exit DC mode via soft reset, re-enter, retry once more.
+    // Soft reset: write 0xA3 then 0x05 to reg 0x0B (address mode).
+    // This requires dropping out of daisy-chain mode temporarily.
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
+    delay_ms(1);
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
+    delay_ms(10);
+
+    // Re-enter daisy-chain mode
+    adgs_enter_daisy_chain();
+
+    // One final attempt after reset
+    if (adgs_write_and_verify(states)) {
+        ESP_LOGI(TAG, "MUX recovered after software reset!");
+        s_mux_faulted = false;
+        return;
+    }
+#else
+    // Address mode: soft reset and retry
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
+    delay_ms(1);
+    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
+    delay_ms(10);
+    s_mux_initialized = true;
+
+    // Check error flags after reset
+    uint8_t err_flags = adgs_address_mode_read(ADGS_REG_ERR_FLAGS);
+    if (err_flags) {
+        ESP_LOGW(TAG, "Error flags after reset: 0x%02X (CRC=%d SCLK=%d RW=%d)",
+                 err_flags,
+                 !!(err_flags & ADGS_ERR_CRC_FLAG),
+                 !!(err_flags & ADGS_ERR_SCLK_FLAG),
+                 !!(err_flags & ADGS_ERR_RW_FLAG));
+        // Clear them
+        uint8_t clr[2] = { ADGS_ERR_CLEAR_HI, ADGS_ERR_CLEAR_LO };
+        uint8_t clr_rx[2] = {};
+        spi_transfer(clr, clr_rx, 2);
+    }
+
+    // One final attempt after reset
+    if (adgs_write_and_verify(states)) {
+        ESP_LOGI(TAG, "MUX recovered after software reset!");
+        s_mux_faulted = false;
+        return;
+    }
+#endif
+
+    // Recovery failed — declare MUX FAULT
+    ESP_LOGE(TAG, "MUX FAULT: recovery failed! Opening all switches for safety.");
+    s_mux_faulted = true;
+
+    // Safety: force all switches open (best effort, no verification)
+#if ADGS_NUM_DEVICES > 1
+    uint8_t zeros[ADGS_NUM_DEVICES] = {};
+    adgs_daisy_chain_write(zeros);
+#else
+    adgs_address_mode_write(ADGS_REG_SW_DATA, 0x00);
+#endif
+    memset(s_mux_state, 0, sizeof(s_mux_state));
 }
 
 // Get the group mask for a switch index
@@ -287,6 +429,50 @@ uint8_t adgs_test_address_mode(uint8_t sw_data)
     ESP_LOGI(TAG, "Read SW_DATA: rx=[0x%02X, 0x%02X]", rx[0], rx[1]);
 
     return rx[1];  // Data is in second byte
+}
+
+bool adgs_readback_verify(uint8_t out[ADGS_NUM_DEVICES])
+{
+    if (!s_mux_initialized) return false;
+
+#if ADGS_NUM_DEVICES > 1
+    adgs_daisy_chain_readback(out);
+#else
+    out[0] = adgs_address_mode_read(ADGS_REG_SW_DATA);
+#endif
+
+    // Compare with cached state
+    for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
+        if (out[i] != s_mux_state[i]) return false;
+    }
+    return true;
+}
+
+uint8_t adgs_read_error_flags(void)
+{
+#if ADGS_NUM_DEVICES == 1
+    // Only works in address mode (single device)
+    return adgs_address_mode_read(ADGS_REG_ERR_FLAGS);
+#else
+    // In daisy-chain mode, can't read individual device registers.
+    // Would need to exit DC mode to read — not safe during operation.
+    return 0;
+#endif
+}
+
+void adgs_clear_error_flags(void)
+{
+#if ADGS_NUM_DEVICES == 1
+    uint8_t tx[2] = { ADGS_ERR_CLEAR_HI, ADGS_ERR_CLEAR_LO };
+    uint8_t rx[2] = {0};
+    spi_transfer(tx, rx, 2);
+    ESP_LOGI(TAG, "Error flags cleared");
+#endif
+}
+
+bool adgs_is_faulted(void)
+{
+    return s_mux_faulted;
 }
 
 void adgs_soft_reset(void)

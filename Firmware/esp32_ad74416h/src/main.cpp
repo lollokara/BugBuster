@@ -24,6 +24,7 @@
 #include "adgs2414d.h"
 #include "dio.h"
 #include "selftest.h"
+#include "status_led.h"
 #include "i2c_bus.h"
 #include "ds4424.h"
 #include "husb238.h"
@@ -44,6 +45,8 @@ static AD74416H device(spiDriver, PIN_RESET);
 static void mainLoopTask(void* pvParam)
 {
     uint32_t lastHeartbeat = 0;
+    uint32_t lastLedUpdate = 0;
+    uint32_t lastSelftestPoll = 0;
 
     for (;;) {
         // cliProcess() handles both CLI and BBP modes:
@@ -51,9 +54,22 @@ static void mainLoopTask(void* pvParam)
         // - In BBP mode: calls bbpProcess() for binary protocol
         cliProcess();
 
+        uint32_t now = millis_now();
+
+        // Status LED update (~2 Hz)
+        if (now - lastLedUpdate >= 500) {
+            lastLedUpdate = now;
+            status_led_update();
+        }
+
+        // Background self-test monitoring step (~0.5 Hz, one channel per call)
+        if (now - lastSelftestPoll >= 2000) {
+            lastSelftestPoll = now;
+            selftest_monitor_step();
+        }
+
         // Heartbeat only in CLI mode (don't pollute binary stream)
         if (!bbpIsActive()) {
-            uint32_t now = millis_now();
             if (now - lastHeartbeat >= 30000UL) {
                 lastHeartbeat = now;
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -76,6 +92,9 @@ static void mainLoopTask(void* pvParam)
 // -----------------------------------------------------------------------------
 extern "C" void app_main(void)
 {
+    // 0. Status LEDs — init early so we can show boot state
+    status_led_init();  // all LEDs start yellow (booting)
+
     // 1. USB CDC (TinyUSB composite: CLI + UART bridge)
     usb_cdc_init();
     delay_ms(500);  // Wait for USB enumeration
@@ -133,21 +152,24 @@ extern "C" void app_main(void)
     device.startAdcConversion(true, 0x00, 0x0F);
     serial_println("[BugBuster] ADC continuous (diag only)");
 
-    // 9. FreeRTOS tasks
-    initTasks(device);
-    serial_println("[BugBuster] RTOS tasks started");
-
-    // 10. MUX switch matrix (ADGS2414D x4 daisy-chain)
+    // 9. MUX switch matrix — MUST init BEFORE starting RTOS tasks
+    //    (the ADC poll task uses the SPI bus continuously; MUX init needs
+    //     exclusive SPI access for the first write-verify to succeed)
     adgs_init();
     serial_println("[BugBuster] MUX matrix initialized");
 
-    // 10a. Digital IO (ESP32 GPIO-based, 12 logical IOs)
+    // 9a. Digital IO (ESP32 GPIO-based, 12 logical IOs)
     dio_init();
     serial_println("[BugBuster] Digital IO initialized");
 
-    // 10c. Self-test / calibration module (uses U23 on PCB)
+    // 9b. Self-test / calibration module
     selftest_init();
     serial_println("[BugBuster] Self-test module initialized");
+
+    // 10. FreeRTOS tasks — starts ADC poll, fault monitor, command processor
+    //     (after MUX init so SPI bus sharing works correctly)
+    initTasks(device);
+    serial_println("[BugBuster] RTOS tasks started");
 
     // 10b. I2C bus and devices (non-blocking: won't prevent boot if absent)
     serial_println("[BugBuster] Initializing I2C bus...");

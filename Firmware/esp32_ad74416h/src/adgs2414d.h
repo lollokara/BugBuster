@@ -27,6 +27,27 @@ extern "C" {
 #define ADGS_CMD_WRITE          0x00
 #define ADGS_CMD_READ           0x80
 
+// Error registers (address mode only)
+#define ADGS_REG_ERR_CONFIG     0x02    // Error Configuration Register (default 0x06)
+#define ADGS_REG_ERR_FLAGS      0x03    // Error Flags Register (read-only, clear with 0x6CA9)
+
+// ERR_CONFIG bits
+#define ADGS_ERR_CRC_EN         (1 << 0)  // CRC error detection enable
+#define ADGS_ERR_SCLK_EN        (1 << 1)  // SCLK count error detection enable
+#define ADGS_ERR_RW_EN          (1 << 2)  // Invalid R/W address error enable
+
+// ERR_FLAGS bits
+#define ADGS_ERR_CRC_FLAG       (1 << 0)
+#define ADGS_ERR_SCLK_FLAG      (1 << 1)
+#define ADGS_ERR_RW_FLAG        (1 << 2)
+
+// Clear error flags command: write 0x6CA9 (special 16-bit SPI frame)
+#define ADGS_ERR_CLEAR_HI       0x6C
+#define ADGS_ERR_CLEAR_LO       0xA9
+
+// Max retries for verified write
+#define ADGS_MAX_RETRIES        3
+
 // Enter daisy-chain mode command
 #define ADGS_DAISY_CHAIN_CMD_HI 0x25
 #define ADGS_DAISY_CHAIN_CMD_LO 0x00
@@ -100,6 +121,36 @@ void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES]);
  * @brief Reset all switches to open (safe state).
  */
 void adgs_reset_all(void);
+
+/**
+ * @brief Read back current switch states from the hardware via SPI.
+ *        In address mode: reads SW_DATA register.
+ *        In daisy-chain mode: performs a read cycle that shifts out states.
+ *
+ * @param out  Array to fill with read-back states (ADGS_NUM_DEVICES bytes)
+ * @return true on success (readback matches cache), false on mismatch
+ */
+bool adgs_readback_verify(uint8_t out[ADGS_NUM_DEVICES]);
+
+/**
+ * @brief Check error flags on a single device (address mode only).
+ *        Reads ERR_FLAGS register (0x03).
+ *
+ * @return Error flags byte (bits: 0=CRC, 1=SCLK, 2=RW), 0 = no errors.
+ *         Returns 0xFF if read fails or not in address mode.
+ */
+uint8_t adgs_read_error_flags(void);
+
+/**
+ * @brief Clear the error flags register by sending the special 0x6CA9 command.
+ */
+void adgs_clear_error_flags(void);
+
+/**
+ * @brief Check if the MUX is in a fault state.
+ *        A fault means the last write-verify failed after retries.
+ */
+bool adgs_is_faulted(void);
 
 #if ADGS_HAS_SELFTEST
 /**

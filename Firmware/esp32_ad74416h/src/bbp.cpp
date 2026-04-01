@@ -1046,6 +1046,21 @@ static int handleSelftestAutoCal(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+// 0x09 SELFTEST_INT_SUPPLIES — measure internal ADC supplies
+static int handleSelftestIntSupplies(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    const SelftestInternalSupplies *s = selftest_measure_internal_supplies();
+    size_t pos = 0;
+    put_bool(out, &pos, s->valid);
+    put_bool(out, &pos, s->supplies_ok);
+    put_f32(out, &pos, s->avdd_hi_v);
+    put_f32(out, &pos, s->dvcc_v);
+    put_f32(out, &pos, s->avcc_v);
+    put_f32(out, &pos, s->avss_v);
+    put_f32(out, &pos, s->temp_c);
+    return (int)pos;
+}
+
 static int handleSetUartConfig(uint16_t seq, uint8_t cmdId,
                                 const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -1909,6 +1924,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_SELFTEST_AUTO_CAL:
             rspLen = handleSelftestAutoCal(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_SELFTEST_INT_SUPPLIES:
+            rspLen = handleSelftestIntSupplies(seq, cmdId, rspBuf);
             break;
 
         // --- Channel Config ---

@@ -422,7 +422,104 @@ bool selftest_is_busy(void)
     return s_cal_result.status == CAL_STATUS_RUNNING || adgs_selftest_active();
 }
 
-#else // !ADGS_HAS_SELFTEST — stubs for breadboard mode
+#endif // ADGS_HAS_SELFTEST
+
+// =============================================================================
+// Internal ADC supply monitoring (works in ALL modes — no U23 needed)
+// Uses the AD74416H's 4 diagnostic slots temporarily.
+// =============================================================================
+
+static SelftestInternalSupplies s_internal_supplies = {};
+
+const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
+{
+    AD74416H *dev = tasks_get_device();
+    if (!dev) {
+        s_internal_supplies.valid = false;
+        return &s_internal_supplies;
+    }
+
+    // Save current diagnostic slot configuration
+    uint8_t saved_sources[4] = {};
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (int i = 0; i < 4; i++) {
+            saved_sources[i] = g_deviceState.diag[i].source;
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Configure slots to measure: 0=TEMP, 1=AVDD_HI, 2=DVCC, 3=AVSS
+    dev->configureDiagSlot(0, DIAG_SRC_TEMP);
+    dev->configureDiagSlot(1, DIAG_SRC_AVDD_HI);
+    dev->configureDiagSlot(2, DIAG_SRC_DVCC);
+    dev->configureDiagSlot(3, DIAG_SRC_AVSS);
+
+    // Wait for at least 2 conversion cycles to get fresh data
+    delay_ms(200);
+
+    // Read all 4 slots
+    uint16_t raw[4];
+    for (int i = 0; i < 4; i++) {
+        raw[i] = dev->readAdcDiagResult(i);
+    }
+
+    s_internal_supplies.temp_c    = AD74416H::diagCodeToValue(raw[0], DIAG_SRC_TEMP);
+    s_internal_supplies.avdd_hi_v = AD74416H::diagCodeToValue(raw[1], DIAG_SRC_AVDD_HI);
+    s_internal_supplies.dvcc_v    = AD74416H::diagCodeToValue(raw[2], DIAG_SRC_DVCC);
+    s_internal_supplies.avss_v    = AD74416H::diagCodeToValue(raw[3], DIAG_SRC_AVSS);
+
+    // Now measure AVCC using slot 1 (reuse it)
+    dev->configureDiagSlot(1, DIAG_SRC_AVCC);
+    delay_ms(200);
+    uint16_t avcc_raw = dev->readAdcDiagResult(1);
+    s_internal_supplies.avcc_v = AD74416H::diagCodeToValue(avcc_raw, DIAG_SRC_AVCC);
+
+    s_internal_supplies.valid = true;
+
+    // Check supplies against expected ranges
+    // Breadboard: AVDD_HI ~21.5V, DVCC ~5V, AVCC ~5V, AVSS ~-16V
+    // PCB:        AVDD_HI ~15V,   DVCC ~3.3V, AVCC ~5V, AVSS ~-15V
+#if BREADBOARD_MODE
+    s_internal_supplies.supplies_ok =
+        (s_internal_supplies.avdd_hi_v > 18.0f && s_internal_supplies.avdd_hi_v < 25.0f) &&
+        (s_internal_supplies.dvcc_v    > 4.5f  && s_internal_supplies.dvcc_v    < 5.5f)  &&
+        (s_internal_supplies.avcc_v    > 4.5f  && s_internal_supplies.avcc_v    < 5.5f)  &&
+        (s_internal_supplies.avss_v    < -13.0f && s_internal_supplies.avss_v   > -20.0f);
+#else
+    s_internal_supplies.supplies_ok =
+        (s_internal_supplies.avdd_hi_v > 13.5f && s_internal_supplies.avdd_hi_v < 16.5f) &&
+        (s_internal_supplies.dvcc_v    > 3.0f  && s_internal_supplies.dvcc_v    < 3.6f)  &&
+        (s_internal_supplies.avcc_v    > 4.5f  && s_internal_supplies.avcc_v    < 5.5f)  &&
+        (s_internal_supplies.avss_v    < -13.5f && s_internal_supplies.avss_v   > -16.5f);
+#endif
+
+    ESP_LOGI(TAG, "Internal supplies: AVDD_HI=%.1fV DVCC=%.2fV AVCC=%.2fV AVSS=%.1fV Temp=%.1fC %s",
+             s_internal_supplies.avdd_hi_v, s_internal_supplies.dvcc_v,
+             s_internal_supplies.avcc_v, s_internal_supplies.avss_v,
+             s_internal_supplies.temp_c,
+             s_internal_supplies.supplies_ok ? "OK" : "OUT OF RANGE");
+
+    // Restore original diagnostic slot configuration
+    for (int i = 0; i < 4; i++) {
+        dev->configureDiagSlot(i, saved_sources[i]);
+    }
+    // Invalidate cached values so UI doesn't show stale data from our measurement
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (int i = 0; i < 4; i++) {
+            g_deviceState.diag[i].source = saved_sources[i];
+            g_deviceState.diag[i].rawCode = 0;
+            g_deviceState.diag[i].value = 0.0f;
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    return &s_internal_supplies;
+}
+
+// Note: selftest_measure_internal_supplies() defined below, shared by both modes
+
+#if !ADGS_HAS_SELFTEST
+// Stubs for breadboard mode (no U23)
 
 void selftest_init(void)
 {
@@ -460,4 +557,4 @@ const SelftestCalResult* selftest_get_cal_result(void) {
 
 bool selftest_is_busy(void) { return false; }
 
-#endif // ADGS_HAS_SELFTEST
+#endif // !ADGS_HAS_SELFTEST

@@ -781,6 +781,33 @@ builds calibration curve, saves to NVS. Takes several seconds.
 
 Returns ERR_BUSY if calibration already running or interlock violation.
 
+#### 0x09 SELFTEST_INT_SUPPLIES
+Measure internal AD74416H supply rails using diagnostic slots.
+Works in both breadboard and PCB mode (no U23 required).
+Equivalent to `GET /api/selftest/supplies`.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       valid           bool    true if measurement completed
+1       supplies_ok     bool    true if all supplies within expected range
+2       avdd_hi_v       f32     Positive analog supply (breadboard: ~21.5V, PCB: ~15V)
+6       dvcc_v          f32     Digital supply (breadboard: ~5V, PCB: ~3.3V)
+10      avcc_v          f32     Analog supply AVCC (~5V both modes)
+14      avss_v          f32     Negative analog supply (breadboard: ~-16V, PCB: ~-15V)
+18      temp_c          f32     Die temperature in °C
+```
+
+Expected supply ranges:
+
+| Supply | Breadboard | PCB |
+|--------|-----------|-----|
+| AVDD_HI | 18–25 V | 13.5–16.5 V |
+| DVCC | 4.5–5.5 V | 3.0–3.6 V |
+| AVCC | 4.5–5.5 V | 4.5–5.5 V |
+| AVSS | -20 to -13 V | -16.5 to -13.5 V |
+
 ---
 
 ### 6.6b Digital IO (ESP32 GPIO)

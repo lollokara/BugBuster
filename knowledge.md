@@ -1962,3 +1962,90 @@ The exposed pad on the bottom of the package **must** be connected to the AVSS p
 electrically connected and thermally required. Multiple thermal vias connect it to the board's
 bottom copper layer. See JEDEC JESD-51 for via design guidelines.
 
+---
+
+## 24. WS2812B Status LEDs
+
+Three WS2812B RGB LEDs chained on GPIO0 (LED_DIN), providing at-a-glance system health.
+
+### 24.1 LED Assignments
+
+| LED # | Index | Peripheral | Purpose |
+|-------|-------|-----------|---------|
+| 0 | `LED_ESP` | ESP32 / Connection | USB or WiFi client status |
+| 1 | `LED_MUX` | MUX + IO Expander | ADGS2414D + PCA9535 health |
+| 2 | `LED_ADC` | AD74416H ADC | SPI health + channel state |
+
+### 24.2 Color Scheme
+
+**LED 0 — ESP32 / Connection:**
+
+| Color | Meaning |
+|-------|---------|
+| Blue | Client connected (BBP binary mode active or HTTP session) |
+| Yellow | Booting / connecting (shown during startup sequence) |
+| Green | Operative but no client connected (idle, ready to accept) |
+| Red | Fault (unrecoverable system error) |
+
+**LED 1 — MUX & IO Expander:**
+
+| Color | Meaning |
+|-------|---------|
+| Green | All OK (ADGS2414D write-verify passing, PCA9535 detected and healthy) |
+| Yellow | Not configured (PCA9535 not detected, or MUX not yet initialized) |
+| Red | Fault (MUX write-verify failed after retries + soft reset recovery, or PCA9535 communication error) |
+
+**LED 2 — ADC (AD74416H):**
+
+| Color | Meaning |
+|-------|---------|
+| Green | Operative (SPI healthy, at least one channel configured beyond HIGH_IMP) |
+| Yellow | Not configured (SPI OK but all 4 channels still in HIGH_IMP after boot) |
+| Red | Fault (SPI verification failed, or AD74416H ALERT active) |
+
+### 24.3 Hardware Notes
+
+- Data line: GPIO0 (ESP32-S3), shared with BOOT strapping pin
+- R5 (10 kΩ) pull-up to 3V3_BUCK ensures GPIO0 = HIGH during normal boot
+- WS2812B uses GRB byte order; driven via ESP-IDF RMT peripheral at 10 MHz
+- Default brightness: RGB values capped at 40 to avoid excessive current draw and eye strain
+- Refresh rate: ~2 Hz (updated every 500 ms from the main loop task)
+
+---
+
+## 25. ADGS2414D Safety — Write-Verify and Fault Recovery
+
+### 25.1 Write-Verify Protocol
+
+Every switch state write to the ADGS2414D MUX matrix includes a readback verification:
+
+1. **Write** switch states via SPI (daisy-chain or address mode)
+2. **Readback** immediately: second SPI transaction reads back the switch data register
+3. **Compare** read-back with intended state, byte-by-byte across all devices
+4. If mismatch: **retry** up to 3 times (ADGS_MAX_RETRIES)
+5. If still failing: attempt **software reset** recovery (exit DC mode, reset, re-enter DC, retry)
+6. If recovery fails: **FAULT** — force all switches open, set fault flag, LED 1 → RED
+
+### 25.2 Error Registers (Address Mode)
+
+Available when ADGS_NUM_DEVICES = 1 (address mode, breadboard):
+
+| Register | Address | Bits | Description |
+|----------|---------|------|-------------|
+| ERR_CONFIG | 0x02 | [2:0] | Error enable: bit 0=CRC, bit 1=SCLK count, bit 2=R/W address. Default: 0x06 |
+| ERR_FLAGS | 0x03 | [2:0] | Error flags: bit 0=CRC_ERR, bit 1=SCLK_ERR, bit 2=RW_ERR. Read-only, clear with 0x6CA9 |
+
+In daisy-chain mode (PCB, 5 devices), individual register reads are not possible.
+Error detection relies on the write-verify readback mechanism instead.
+
+### 25.3 Recovery Sequence (Daisy-Chain Mode)
+
+When write-verify fails after retries in daisy-chain mode:
+
+1. Send software reset: write 0xA3 then 0x05 to register 0x0B (address-mode frame)
+2. Wait 10 ms for reset to complete
+3. Re-enter daisy-chain mode: send 0x2500 frame
+4. Attempt one final write-verify
+5. If successful: clear fault flag, log recovery
+6. If still failing: declare FAULT, open all switches for safety
+

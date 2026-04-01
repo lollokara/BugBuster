@@ -23,10 +23,10 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       1
+#define BBP_PROTO_VERSION       2
 
 #define BBP_FW_VERSION_MAJOR    1
-#define BBP_FW_VERSION_MINOR    0
+#define BBP_FW_VERSION_MINOR    1
 #define BBP_FW_VERSION_PATCH    0
 
 // Handshake magic bytes: 0xBB 'B' 'U' 'G'
@@ -72,6 +72,7 @@ extern "C" {
 #define BBP_CMD_SELFTEST_MEASURE_SUPPLY 0x06  // Measure a supply rail via U23
 #define BBP_CMD_SELFTEST_EFUSE_CURRENTS 0x07  // Get all e-fuse currents
 #define BBP_CMD_SELFTEST_AUTO_CAL       0x08  // Start automatic IDAC calibration
+#define BBP_CMD_SELFTEST_INT_SUPPLIES  0x09  // Measure internal ADC supplies (AVDD, DVCC, etc.)
 
 // Channel Configuration
 #define BBP_CMD_SET_CH_FUNC     0x10

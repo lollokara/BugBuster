@@ -738,6 +738,11 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     if (cmd.diagCfg.slot < 4) {
                         g_deviceState.diag[cmd.diagCfg.slot].source = cmd.diagCfg.source;
+                        // Invalidate stale values — the old rawCode was from the
+                        // previous source.  UI must not apply the new source's
+                        // conversion formula to the old raw code.
+                        g_deviceState.diag[cmd.diagCfg.slot].rawCode = 0;
+                        g_deviceState.diag[cmd.diagCfg.slot].value   = 0.0f;
                     }
                     xSemaphoreGive(g_stateMutex);
                 }

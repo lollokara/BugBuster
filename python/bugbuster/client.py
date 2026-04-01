@@ -712,6 +712,42 @@ class BugBuster:
             r = self._http_post("/selftest/calibrate", {"channel": idac_channel})
             return r
 
+    def selftest_internal_supplies(self) -> dict:
+        """
+        Measure internal AD74416H supply rails using diagnostic slots.
+
+        Works in both breadboard and PCB mode (no U23 required).
+
+        Returns::
+
+            {
+                "valid": True,
+                "supplies_ok": True,
+                "avdd_hi_v": 21.5,    # positive analog supply
+                "dvcc_v": 5.0,        # digital supply
+                "avcc_v": 5.0,        # analog supply
+                "avss_v": -16.0,      # negative analog supply
+                "temp_c": 27.5        # die temperature
+            }
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SELFTEST_INT_SUPPLIES)
+            off = 0
+            valid  = bool(resp[off]); off += 1
+            ok     = bool(resp[off]); off += 1
+            avdd,  = struct.unpack_from('<f', resp, off); off += 4
+            dvcc,  = struct.unpack_from('<f', resp, off); off += 4
+            avcc,  = struct.unpack_from('<f', resp, off); off += 4
+            avss,  = struct.unpack_from('<f', resp, off); off += 4
+            temp,  = struct.unpack_from('<f', resp, off); off += 4
+            return {
+                "valid": valid, "supplies_ok": ok,
+                "avdd_hi_v": avdd, "dvcc_v": dvcc, "avcc_v": avcc,
+                "avss_v": avss, "temp_c": temp,
+            }
+        else:
+            return self._http_get("/selftest/supplies")
+
     # ------------------------------------------------------------------
     # ── UART bridge ────────────────────────────────────────────────────
     # ------------------------------------------------------------------
