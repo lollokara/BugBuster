@@ -94,36 +94,102 @@ with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
 
 ## Hardware Overview
 
-```
-+-------------------------------------------------------------------------+
-| BLOCK 1  (VADJ1, 3-15 V)                                               |
-|                                                                         |
-|   IO_Block 1 (EFUSE1)          IO_Block 2 (EFUSE2)                     |
-|   +---------------------+      +---------------------+                 |
-|   | IO 1  - analog/HAT  |      | IO 4  - analog/HAT  |                 |
-|   | IO 2  - digital     |      | IO 5  - digital     |                 |
-|   | IO 3  - digital     |      | IO 6  - digital     |                 |
-|   | VCC   GND           |      | VCC   GND           |                 |
-|   +---------------------+      +---------------------+                 |
-+-------------------------------------------------------------------------+
-| BLOCK 2  (VADJ2, 3-15 V)                                               |
-|                                                                         |
-|   IO_Block 3 (EFUSE3)          IO_Block 4 (EFUSE4)                     |
-|   +---------------------+      +---------------------+                 |
-|   | IO 7  - analog/HAT  |      | IO 10 - analog/HAT  |                 |
-|   | IO 8  - digital     |      | IO 11 - digital     |                 |
-|   | IO 9  - digital     |      | IO 12 - digital     |                 |
-|   | VCC   GND           |      | VCC   GND           |                 |
-|   +---------------------+      +---------------------+                 |
-+-------------------------------------------------------------------------+
+```mermaid
+block-beta
+  columns 2
+
+  block:BLOCK1["BLOCK 1 — VADJ1 (3–15 V)"]:2
+    columns 2
+    block:IB1["IO_Block 1 · EFUSE1"]
+      IO1["IO 1 ⚡ analog/HAT"]
+      IO2["IO 2 · digital"]
+      IO3["IO 3 · digital"]
+    end
+    block:IB2["IO_Block 2 · EFUSE2"]
+      IO4["IO 4 ⚡ analog/HAT"]
+      IO5["IO 5 · digital"]
+      IO6["IO 6 · digital"]
+    end
+  end
+
+  block:BLOCK2["BLOCK 2 — VADJ2 (3–15 V)"]:2
+    columns 2
+    block:IB3["IO_Block 3 · EFUSE3"]
+      IO7["IO 7 ⚡ analog/HAT"]
+      IO8["IO 8 · digital"]
+      IO9["IO 9 · digital"]
+    end
+    block:IB4["IO_Block 4 · EFUSE4"]
+      IO10["IO 10 ⚡ analog/HAT"]
+      IO11["IO 11 · digital"]
+      IO12["IO 12 · digital"]
+    end
+  end
 ```
 
-- **12 IOs** in 2 Blocks x 2 IO_Blocks x 3 IOs
-- **IO 1, 4, 7, 10** — analog-capable (ADC, DAC, 4-20 mA, RTD, HART, HAT expansion)
-- **IO 2, 3, 5, 6, 8, 9, 11, 12** — digital only (high/low drive ESP GPIO)
-- **VADJ1** (3-15 V) powers IO 1-6; **VADJ2** powers IO 7-12
-- **VLOGIC** (1.8-5 V) sets logic level for all digital IOs (level shifted)
-- **MUX** — each IO's function is selected by an ADGS2414D analog switch (exclusive)
+```mermaid
+flowchart LR
+  subgraph ESP32["ESP32-S3"]
+    SPI[SPI Bus]
+    I2C[I2C Bus]
+    GPIO[12 GPIOs]
+    USB[USB CDC]
+    WIFI[WiFi]
+  end
+
+  subgraph Analog["Analog Frontend"]
+    ADC["AD74416H\n4-ch ADC/DAC\nVoltage · Current · RTD · HART"]
+  end
+
+  subgraph Routing["Signal Routing"]
+    MUX["ADGS2414D ×4\n32 SPST Switches"]
+    LS["TXS0108E ×2\nLevel Shifters"]
+  end
+
+  subgraph Power["Power Management"]
+    VADJ["LTM8063 ×2\nVADJ1 / VADJ2\n3–15 V"]
+    IDAC["DS4424 IDAC\n4-ch Current DAC"]
+    VLOGIC["TPS74601\nVLOGIC 1.8–5 V"]
+    PD["HUSB238\nUSB PD 5–20 V"]
+    PCA["PCA9535\nGPIO Expander"]
+    EFUSE["TPS16410 ×4\nE-Fuses"]
+  end
+
+  subgraph Terminals["Physical IOs"]
+    T1["IO 1–3\nIO_Block 1"]
+    T2["IO 4–6\nIO_Block 2"]
+    T3["IO 7–9\nIO_Block 3"]
+    T4["IO 10–12\nIO_Block 4"]
+  end
+
+  SPI --> ADC
+  SPI --> MUX
+  I2C --> IDAC
+  I2C --> PCA
+  I2C --> PD
+  GPIO --> LS --> MUX
+  ADC --> MUX
+  MUX --> T1 & T2 & T3 & T4
+  IDAC --> VADJ --> EFUSE --> T1 & T2 & T3 & T4
+  IDAC --> VLOGIC --> LS
+  PCA --> EFUSE
+  PCA --> VADJ
+```
+
+### IO Capabilities
+
+| IO | Type | MUX Options |
+|----|------|-------------|
+| **1, 4, 7, 10** | Analog-capable | ESP GPIO (high/low drive) · AD74416H channel · HAT passthrough |
+| **2, 3, 5, 6, 8, 9, 11, 12** | Digital-only | ESP GPIO (high drive) · ESP GPIO (low drive) |
+
+### Supply Rails
+
+| Rail | Range | Controls | Set via |
+|------|-------|----------|---------|
+| **VADJ1** | 3–15 V | VCC on IO 1–6 (IO_Blocks 1 & 2) | `hal.set_voltage(1, V)` |
+| **VADJ2** | 3–15 V | VCC on IO 7–12 (IO_Blocks 3 & 4) | `hal.set_voltage(2, V)` |
+| **VLOGIC** | 1.8–5.0 V | Logic level for all digital IOs | `hal.set_vlogic(V)` |
 
 ## Key Subsystems
 

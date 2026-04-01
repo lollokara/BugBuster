@@ -15,6 +15,7 @@
   <img src="https://img.shields.io/badge/firmware-ESP--IDF%20%2B%20PlatformIO-red" alt="Firmware"/>
   <img src="https://img.shields.io/badge/desktop-Tauri%20v2%20%2B%20Leptos%200.7-orange" alt="Desktop"/>
   <img src="https://img.shields.io/badge/hardware-Altium%20Designer-blue" alt="Hardware"/>
+  <img src="https://img.shields.io/badge/python-3.10%2B-yellow" alt="Python"/>
 </p>
 
 ---
@@ -31,6 +32,7 @@
 - [Screenshots](#screenshots)
 - [Architecture](#architecture)
 - [Hardware](#hardware)
+- [Python Library](#python-library)
 - [Repository Structure](#repository-structure)
 - [Getting Started](#getting-started)
 - [Communication](#communication)
@@ -49,7 +51,7 @@ BugBuster turns a single USB-C connection into a versatile bench instrument. One
 | **4-ch ADC** | 24-bit, up to 4.8 kSPS per channel, multiple voltage/current ranges |
 | **4-ch DAC** | 16-bit voltage (0–11 V / bipolar) and current (0–25 mA) output |
 | **Waveform generator** | Sine, square, triangle, sawtooth up to 100 Hz |
-| **Digital I/O** | Per-channel configurable as logic input, loop-powered input, or digital output |
+| **12 Digital IOs** | ESP32 GPIO-based, level-shifted to configurable VLOGIC (1.8–5 V), MUX-routed |
 | **Resistance measurement** | 2/3/4-wire RTD measurement with configurable 125 µA / 250 µA excitation |
 | **32-switch MUX matrix** | 4× ADGS2414D octal SPST switches for flexible signal routing |
 | **Adjustable power supplies** | DS4424 IDAC tunes LTM8063/LTM8078 DCDC output voltages (3–15 V) |
@@ -104,31 +106,33 @@ BugBuster turns a single USB-C connection into a versatile bench instrument. One
 
 ## Architecture
 
-```
-                    USB-C (power + data)
-                          |
-    +---------------------+----------------------+
-    |              ESP32-S3 (dual-core)           |
-    |                                             |
-    |  Core 0: WiFi, HTTP, CLI, USB CDC           |
-    |  Core 1: ADC polling, DAC, fault monitor    |
-    |                                             |
-    |  SPI bus ---- AD74416H (4-ch I/O)           |
-    |       \------ ADGS2414D x4 (MUX matrix)     |
-    |                                             |
-    |  I2C bus ---- DS4424 (IDAC, voltage adjust) |
-    |       \------ PCA9535 (GPIO expander)        |
-    |        \----- HUSB238 (USB PD controller)   |
-    +---------------------------------------------+
-         |                    |
-    USB CDC #0           WiFi AP/STA
-    (BBP binary)         (HTTP REST)
-         |                    |
-    +----+--------------------+----+
-    |      Tauri Desktop App       |
-    |  Rust backend + Leptos WASM  |
-    |  18 tabs, real-time scope    |
-    +------------------------------+
+```mermaid
+flowchart TB
+  USB["USB-C\n(power + data)"] --> ESP32
+
+  subgraph ESP32["ESP32-S3 (dual-core)"]
+    direction LR
+    C0["Core 0\nWiFi · HTTP · CLI\nUSB CDC · BBP"]
+    C1["Core 1\nADC polling · DAC\nFault monitor"]
+  end
+
+  subgraph SPI["SPI Bus"]
+    ADC["AD74416H\n4-ch Software-\nConfigurable I/O"]
+    MUX["ADGS2414D ×4\n32-Switch MUX"]
+  end
+
+  subgraph I2C["I2C Bus"]
+    IDAC["DS4424\nIDAC"]
+    PCA["PCA9535\nGPIO Expander"]
+    PD["HUSB238\nUSB PD"]
+  end
+
+  ESP32 --> SPI
+  ESP32 --> I2C
+
+  ESP32 -->|"USB CDC #0\n(BBP binary)"| APP["Tauri Desktop App\nRust + Leptos WASM\n18 tabs · real-time scope"]
+  ESP32 -->|"WiFi AP/STA\n(HTTP REST)"| APP
+  ESP32 -->|"Python Library\nUSB + HTTP"| PY["Python Client\n+ HAL"]
 ```
 
 ### FreeRTOS Task Layout
@@ -199,6 +203,101 @@ USB-C → HUSB238 (PD negotiation, default 20 V)
 
 PCA9535 controls all power enables (`VADJ1_EN`, `VADJ2_EN`, `EN_15V`, `EFUSE_EN_1-4`) and monitors power-good / fault signals.
 
+### IO Architecture
+
+The board has **12 physical IOs** organized into 2 Blocks, each with 2 IO_Blocks of 3 IOs:
+
+```mermaid
+block-beta
+  columns 2
+
+  block:BLOCK1["BLOCK 1 — VADJ1 (3–15 V)"]:2
+    columns 2
+    block:IB1["IO_Block 1 · EFUSE1 · MUX U10"]
+      IO1["IO 1 ⚡ analog / HAT · Ch A"]
+      IO2["IO 2 · digital"]
+      IO3["IO 3 · digital"]
+    end
+    block:IB2["IO_Block 2 · EFUSE2 · MUX U11"]
+      IO4["IO 4 ⚡ analog / HAT · Ch B"]
+      IO5["IO 5 · digital"]
+      IO6["IO 6 · digital"]
+    end
+  end
+
+  block:BLOCK2["BLOCK 2 — VADJ2 (3–15 V)"]:2
+    columns 2
+    block:IB3["IO_Block 3 · EFUSE3 · MUX U16"]
+      IO7["IO 7 ⚡ analog / HAT · Ch C"]
+      IO8["IO 8 · digital"]
+      IO9["IO 9 · digital"]
+    end
+    block:IB4["IO_Block 4 · EFUSE4 · MUX U17"]
+      IO10["IO 10 ⚡ analog / HAT · Ch D"]
+      IO11["IO 11 · digital"]
+      IO12["IO 12 · digital"]
+    end
+  end
+```
+
+Each IO is routed through one ADGS2414D octal switch — options are **MUX-exclusive** (one function at a time):
+
+| IO | Capabilities | MUX Options |
+|----|-------------|-------------|
+| **1, 4, 7, 10** | Analog + Digital | ESP GPIO (high/low drive) · AD74416H channel · HAT passthrough |
+| **2, 3, 5, 6, 8, 9, 11, 12** | Digital only | ESP GPIO (high drive) · ESP GPIO (low drive) |
+
+**VLOGIC** (1.8–5 V, controlled by IDAC ch 0 via TPS74601) sets the logic level for all digital IOs through TXS0108E level shifters.
+
+---
+
+## Python Library
+
+A full-featured Python control library lives in [`python/`](python/). It supports both USB and HTTP transports and provides two API levels:
+
+### Low-Level Client — direct hardware access
+
+```python
+import bugbuster as bb
+from bugbuster import ChannelFunction
+
+with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
+    dev.set_channel_function(0, ChannelFunction.VOUT)
+    dev.set_dac_voltage(0, 5.0)
+    print(dev.get_adc_value(1))
+```
+
+### HAL — Arduino-style port API
+
+```python
+from bugbuster import PortMode
+
+with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
+    hal = dev.hal
+    hal.begin(supply_voltage=12.0, vlogic=3.3)
+
+    hal.configure(1, PortMode.ANALOG_OUT)
+    hal.write_voltage(1, 5.0)
+
+    hal.configure(2, PortMode.DIGITAL_OUT)
+    hal.write_digital(2, True)
+
+    hal.set_voltage(rail=1, voltage=10.0)
+    hal.shutdown()
+```
+
+### Digital IO — direct ESP32 GPIO control
+
+```python
+with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
+    dev.dio_configure(1, 2)     # IO 1 → output
+    dev.dio_write(1, True)      # HIGH
+    dev.dio_configure(2, 1)     # IO 2 → input
+    print(dev.dio_read(2))      # read level
+```
+
+See [`python/README.md`](python/README.md) for installation, full API reference, and 7 annotated examples.
+
 ---
 
 ## Repository Structure
@@ -218,6 +317,16 @@ BugBuster/
 │       ├── src/                Leptos WASM frontend (18 tab modules)
 │       ├── src-tauri/          Rust backend (transport, commands, state)
 │       └── styles.css          Glass UI theme
+│
+├── python/
+│   ├── bugbuster/              Python control library (USB + HTTP)
+│   │   ├── client.py           High-level BugBuster client
+│   │   ├── hal.py              Hardware Abstraction Layer (12-IO port API)
+│   │   ├── constants.py        Enums and protocol constants
+│   │   ├── transport/          USB binary + HTTP REST transports
+│   │   └── protocol.py         COBS/CRC codec
+│   ├── examples/               7 annotated example scripts
+│   └── README.md               Python library documentation
 │
 ├── PCB Material/               Altium Designer schematics + PCB layout
 │   ├── ARCHITECTURE.md         Full system architecture document
@@ -276,7 +385,19 @@ cargo tauri dev
 cargo tauri build
 ```
 
-### 3. WiFi Access
+### 3. Python Library
+
+```bash
+cd python
+pip install pyserial requests
+pip install -e .
+
+# Run an example
+cd examples
+python 07_digital_io.py
+```
+
+### 4. WiFi Access
 
 After flashing, the device broadcasts a WiFi AP:
 
@@ -290,7 +411,7 @@ After flashing, the device broadcasts a WiFi AP:
 
 The desktop app auto-discovers the device over USB (preferred) or WiFi.
 
-### 4. OTA Firmware Update
+### 5. OTA Firmware Update
 
 After the initial USB flash, updates can be pushed wirelessly:
 
@@ -329,7 +450,8 @@ Raw pre-COBS layout:
 | `0x01–0x04` | Status / Info |
 | `0x10–0x1C` | Channel Config (function, DAC, ADC) |
 | `0x20–0x23` | Fault management |
-| `0x40–0x42` | GPIO |
+| `0x40–0x42` | GPIO (AD74416H pins A–F) |
+| `0x43–0x46` | Digital IO (12 ESP32 GPIOs) |
 | `0x50–0x52` | UART bridge |
 | `0x60–0x63` | ADC + scope streaming |
 | `0x90–0x92` | MUX matrix |
