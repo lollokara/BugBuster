@@ -167,6 +167,9 @@ static void handle_get_io_voltage(void)
 
 static void dispatch_command(const HatFrame *frame)
 {
+    // Log incoming commands (visible via USB stdio or probe_info)
+    printf("[BB] CMD 0x%02X len=%d\n", frame->cmd, frame->payload_len);
+
     switch (frame->cmd) {
     // Core
     case HAT_CMD_PING:

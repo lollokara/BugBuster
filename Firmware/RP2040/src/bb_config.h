@@ -13,6 +13,8 @@
 // -----------------------------------------------------------------------------
 // UART0 — BugBuster command bus (slave)
 // -----------------------------------------------------------------------------
+// UART0 for BugBuster command bus (stdio_uart disabled in bb_main_integrated.c)
+// UART1 is used by debugprobe CDC UART bridge (GPIO4/5)
 #define BB_UART             uart0
 #define BB_UART_BAUD        921600
 #define BB_UART_TX_PIN      0       // GPIO0 → ESP32 RX (GPIO44)

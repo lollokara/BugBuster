@@ -1,0 +1,75 @@
+; =============================================================================
+; bb_la_trigger.pio — Hardware trigger detection (PIO 1, SM 1)
+;
+; Watches a single input pin and fires an IRQ when the trigger condition
+; is met. The main capture SM (SM 0) waits for this IRQ before starting.
+;
+; Trigger types:
+;   - Rising edge: wait for pin LOW, then wait for pin HIGH
+;   - Falling edge: wait for pin HIGH, then wait for pin LOW
+; =============================================================================
+
+; Rising edge trigger: wait LOW → wait HIGH → fire IRQ
+.program la_trigger_rising
+    wait 0 pin 0        ; Wait for pin to be LOW
+    wait 1 pin 0        ; Wait for pin to go HIGH
+    irq set 0           ; Fire IRQ 0 (signals capture SM to start)
+
+; Falling edge trigger: wait HIGH → wait LOW → fire IRQ
+.program la_trigger_falling
+    wait 1 pin 0        ; Wait for pin to be HIGH
+    wait 0 pin 0        ; Wait for pin to go LOW
+    irq set 0           ; Fire IRQ 0
+
+; High level trigger: wait for pin HIGH → fire IRQ
+.program la_trigger_high
+    wait 1 pin 0        ; Wait for HIGH
+    irq set 0
+
+; Low level trigger: wait for pin LOW → fire IRQ
+.program la_trigger_low
+    wait 0 pin 0        ; Wait for LOW
+    irq set 0
+
+; =============================================================================
+; Modified capture program that waits for trigger IRQ before capturing
+; =============================================================================
+
+; 4-channel capture with trigger wait
+.program la_capture_4ch_triggered
+    irq wait 0          ; Block until trigger SM fires IRQ 0
+.wrap_target
+    in pins, 4           ; Then capture continuously
+.wrap
+
+; 2-channel capture with trigger wait
+.program la_capture_2ch_triggered
+    irq wait 0
+.wrap_target
+    in pins, 2
+.wrap
+
+; 1-channel capture with trigger wait
+.program la_capture_1ch_triggered
+    irq wait 0
+.wrap_target
+    in pins, 1
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void la_trigger_program_init(PIO pio, uint sm, uint offset,
+                                            uint trigger_pin)
+{
+    pio_sm_config c = la_trigger_rising_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, trigger_pin);
+    // Slow clock for trigger — doesn't need to be fast
+    sm_config_set_clkdiv(&c, 1.0f);
+
+    pio_gpio_init(pio, trigger_pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, trigger_pin, 1, false);
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

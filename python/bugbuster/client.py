@@ -1230,7 +1230,7 @@ class BugBuster:
         :param rate_hz:  Sample rate in Hz (max ~100MHz for 1ch, ~25MHz for 4ch)
         :param depth:    Total samples to capture
         """
-        payload = struct.pack('<BIII', channels, rate_hz, depth)
+        payload = struct.pack('<BII', channels, rate_hz, depth)
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_CONFIG, payload)
             return True

@@ -138,15 +138,29 @@ static uint8_t hat_recv_frame(uint8_t *payload, uint8_t *payload_len, uint32_t t
 static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                             uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms)
 {
-    // Flush RX buffer before sending
+    // Aggressively flush any stale data (e.g. unsolicited LA notifications)
     uart_flush_input(HAT_UART_NUM);
+    {
+        uint8_t drain[64];
+        size_t avail = 0;
+        uart_get_buffered_data_len(HAT_UART_NUM, &avail);
+        while (avail > 0) {
+            int n = uart_read_bytes(HAT_UART_NUM, drain, sizeof(drain), 0);
+            if (n <= 0) break;
+            uart_get_buffered_data_len(HAT_UART_NUM, &avail);
+        }
+    }
+
+    ESP_LOGD(TAG, "TX cmd=0x%02X len=%d", cmd, payload_len);
 
     if (!hat_send_frame(cmd, payload, payload_len)) {
         ESP_LOGW(TAG, "Failed to send command 0x%02X", cmd);
         return 0;
     }
 
-    return hat_recv_frame(rsp_payload, rsp_len, timeout_ms);
+    uint8_t rsp = hat_recv_frame(rsp_payload, rsp_len, timeout_ms);
+    ESP_LOGD(TAG, "RX rsp=0x%02X len=%d (for cmd=0x%02X)", rsp, rsp_len ? *rsp_len : 0, cmd);
+    return rsp;
 }
 
 // -----------------------------------------------------------------------------

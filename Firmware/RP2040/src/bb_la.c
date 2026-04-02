@@ -16,12 +16,14 @@
 
 #include <string.h>
 
-// Generated from bb_la.pio
+// Generated from PIO files
 #include "bb_la.pio.h"
+#include "bb_la_trigger.pio.h"
 
 // PIO instance for LA (PIO 0 is reserved for debugprobe SWD)
 #define LA_PIO          pio1
-#define LA_SM           0
+#define LA_SM           0       // Capture state machine
+#define LA_TRIGGER_SM   1       // Trigger state machine
 
 // DMA double-buffer
 #define LA_DMA_CH_A     2   // Avoid channels 0-1 which debugprobe might use
@@ -36,8 +38,10 @@ static struct {
     LaConfig    config;
     LaTrigger   trigger;
 
-    uint32_t    pio_offset;         // PIO program offset
+    uint32_t    pio_offset;         // Capture PIO program offset
+    uint32_t    trigger_offset;     // Trigger PIO program offset
     bool        pio_loaded;
+    bool        trigger_loaded;
 
     // DMA state
     uint32_t    buf_write_pos;      // Current write position in words
@@ -56,12 +60,13 @@ static struct {
 
 static bool load_pio_program(uint8_t channels)
 {
+    // Always remove previous program first (all 3 programs are same size)
     if (s_la.pio_loaded) {
+        pio_sm_set_enabled(LA_PIO, LA_SM, false);
         pio_remove_program(LA_PIO, &la_capture_4ch_program, s_la.pio_offset);
         s_la.pio_loaded = false;
     }
 
-    // All programs are 1 instruction, same size — use 4ch as the container
     const pio_program_t *prog;
     switch (channels) {
     case 1:  prog = &la_capture_1ch_program; break;
@@ -84,37 +89,19 @@ static bool load_pio_program(uint8_t channels)
 
 static void setup_dma(void)
 {
-    // Channel A: PIO RX FIFO → buffer, chain to B
+    // Single DMA channel: PIO RX FIFO → capture buffer (no ping-pong)
     dma_channel_config ca = dma_channel_get_default_config(LA_DMA_CH_A);
     channel_config_set_transfer_data_size(&ca, DMA_SIZE_32);
     channel_config_set_read_increment(&ca, false);
     channel_config_set_write_increment(&ca, true);
     channel_config_set_dreq(&ca, pio_get_dreq(LA_PIO, LA_SM, false));
-    channel_config_set_chain_to(&ca, LA_DMA_CH_B);
-
-    // Channel B: PIO RX FIFO → buffer (second half), chain to A
-    dma_channel_config cb = dma_channel_get_default_config(LA_DMA_CH_B);
-    channel_config_set_transfer_data_size(&cb, DMA_SIZE_32);
-    channel_config_set_read_increment(&cb, false);
-    channel_config_set_write_increment(&cb, true);
-    channel_config_set_dreq(&cb, pio_get_dreq(LA_PIO, LA_SM, false));
-    channel_config_set_chain_to(&cb, LA_DMA_CH_A);
-
-    // Split buffer into two halves for ping-pong
-    uint32_t half_words = s_la.buf_total_words / 2;
-    if (half_words == 0) half_words = 1;
+    // No chaining — single transfer for entire buffer
 
     dma_channel_configure(LA_DMA_CH_A, &ca,
-        &s_capture_buf[0],                      // write addr
-        &LA_PIO->rxf[LA_SM],                    // read addr (PIO RX FIFO)
-        half_words,                              // transfer count
-        false);                                  // don't start yet
-
-    dma_channel_configure(LA_DMA_CH_B, &cb,
-        &s_capture_buf[half_words],              // write addr (second half)
-        &LA_PIO->rxf[LA_SM],                    // read addr
-        s_la.buf_total_words - half_words,       // remaining
-        false);
+        s_capture_buf,                          // write addr
+        &LA_PIO->rxf[LA_SM],                   // read addr (PIO RX FIFO)
+        s_la.buf_total_words,                   // transfer count (all words)
+        false);                                 // don't start yet
 }
 
 // -----------------------------------------------------------------------------
@@ -236,31 +223,87 @@ bool bb_la_arm(void)
     s_la.words_captured = 0;
     s_la.triggered = false;
 
-    // Read initial pin state for edge trigger detection
-    s_la.last_pin_state = 0;
-    for (uint8_t i = 0; i < s_la.config.channels; i++) {
-        if (gpio_get(BB_LA_CH0_PIN + i)) s_la.last_pin_state |= (1 << i);
-    }
-
     if (s_la.trigger.type == LA_TRIG_NONE) {
-        // No trigger — start capture immediately
+        // No trigger — start capture immediately using untriggered PIO program
         s_la.triggered = true;
         s_la.state = LA_STATE_CAPTURING;
 
-        // Initialize PIO
         la_capture_program_init(LA_PIO, LA_SM, s_la.pio_offset,
                                 BB_LA_CH0_PIN, s_la.config.channels,
                                 (float)s_la.config.sample_rate_hz);
 
-        // Setup and start DMA
+        setup_dma();
+        dma_channel_start(LA_DMA_CH_A);
+        pio_sm_set_enabled(LA_PIO, LA_SM, true);
+    } else {
+        // Hardware trigger — use triggered capture PIO + trigger SM
+        s_la.state = LA_STATE_ARMED;
+
+        // Load trigger program on SM1
+        if (s_la.trigger_loaded) {
+            pio_sm_set_enabled(LA_PIO, LA_TRIGGER_SM, false);
+            pio_remove_program(LA_PIO, &la_trigger_rising_program, s_la.trigger_offset);
+            s_la.trigger_loaded = false;
+        }
+
+        const pio_program_t *trig_prog;
+        switch (s_la.trigger.type) {
+        case LA_TRIG_RISING:  trig_prog = &la_trigger_rising_program; break;
+        case LA_TRIG_FALLING: trig_prog = &la_trigger_falling_program; break;
+        case LA_TRIG_HIGH:    trig_prog = &la_trigger_high_program; break;
+        case LA_TRIG_LOW:     trig_prog = &la_trigger_low_program; break;
+        default:              trig_prog = &la_trigger_rising_program; break;
+        }
+
+        if (!pio_can_add_program(LA_PIO, trig_prog)) {
+            s_la.state = LA_STATE_ERROR;
+            return false;
+        }
+        s_la.trigger_offset = pio_add_program(LA_PIO, trig_prog);
+        s_la.trigger_loaded = true;
+
+        // Init trigger SM on the trigger channel pin
+        uint trigger_pin = BB_LA_CH0_PIN + s_la.trigger.channel;
+        la_trigger_program_init(LA_PIO, LA_TRIGGER_SM, s_la.trigger_offset, trigger_pin);
+
+        // Reload capture program with triggered variant
+        if (s_la.pio_loaded) {
+            pio_sm_set_enabled(LA_PIO, LA_SM, false);
+            pio_remove_program(LA_PIO, &la_capture_4ch_program, s_la.pio_offset);
+            s_la.pio_loaded = false;
+        }
+
+        const pio_program_t *cap_prog;
+        switch (s_la.config.channels) {
+        case 1:  cap_prog = &la_capture_1ch_triggered_program; break;
+        case 2:  cap_prog = &la_capture_2ch_triggered_program; break;
+        case 4:
+        default: cap_prog = &la_capture_4ch_triggered_program; break;
+        }
+
+        if (!pio_can_add_program(LA_PIO, cap_prog)) {
+            s_la.state = LA_STATE_ERROR;
+            return false;
+        }
+        s_la.pio_offset = pio_add_program(LA_PIO, cap_prog);
+        s_la.pio_loaded = true;
+
+        // Init capture PIO with triggered program
+        la_capture_program_init(LA_PIO, LA_SM, s_la.pio_offset,
+                                BB_LA_CH0_PIN, s_la.config.channels,
+                                (float)s_la.config.sample_rate_hz);
+
+        // Setup DMA (will wait for data from PIO, which waits for trigger IRQ)
         setup_dma();
         dma_channel_start(LA_DMA_CH_A);
 
-        // Enable PIO state machine
+        // Start both SMs — capture SM blocks on `irq wait 0`, trigger SM watches pin
         pio_sm_set_enabled(LA_PIO, LA_SM, true);
-    } else {
-        // Wait for trigger — PIO not started yet
-        s_la.state = LA_STATE_ARMED;
+        pio_sm_set_enabled(LA_PIO, LA_TRIGGER_SM, true);
+
+        // State is ARMED — when trigger fires, capture starts automatically via PIO IRQ
+        // The poll function detects DMA completion to transition to DONE
+        s_la.state = LA_STATE_CAPTURING;  // Actually capturing (PIO handles the wait)
     }
 
     return true;
@@ -288,11 +331,18 @@ void bb_la_stop(void)
 
     // Abort DMA
     dma_channel_abort(LA_DMA_CH_A);
-    dma_channel_abort(LA_DMA_CH_B);
 
     // Drain PIO FIFO
-    while (!pio_sm_is_rx_fifo_empty(LA_PIO, LA_SM)) {
-        pio_sm_get(LA_PIO, LA_SM);
+    if (s_la.pio_loaded) {
+        while (!pio_sm_is_rx_fifo_empty(LA_PIO, LA_SM)) {
+            pio_sm_get(LA_PIO, LA_SM);
+        }
+    }
+
+    // Remove PIO program so configure can reload it
+    if (s_la.pio_loaded) {
+        pio_remove_program(LA_PIO, &la_capture_4ch_program, s_la.pio_offset);
+        s_la.pio_loaded = false;
     }
 
     s_la.state = LA_STATE_IDLE;
@@ -308,11 +358,9 @@ void bb_la_get_status(LaStatus *status)
     status->total_samples = s_la.config.depth_samples;
 
     if (s_la.state == LA_STATE_CAPTURING || s_la.state == LA_STATE_DONE) {
-        // Calculate samples captured from DMA transfer count
-        uint32_t dma_a_remaining = dma_channel_hw_addr(LA_DMA_CH_A)->transfer_count;
-        uint32_t dma_b_remaining = dma_channel_hw_addr(LA_DMA_CH_B)->transfer_count;
-        uint32_t half = s_la.buf_total_words / 2;
-        uint32_t words_done = (half - dma_a_remaining) + (s_la.buf_total_words - half - dma_b_remaining);
+        // Calculate samples captured from DMA transfer count (single channel)
+        uint32_t remaining = dma_channel_hw_addr(LA_DMA_CH_A)->transfer_count;
+        uint32_t words_done = s_la.buf_total_words - remaining;
         uint32_t samples_per_word = 32 / s_la.config.channels;
         status->samples_captured = words_done * samples_per_word;
         if (status->samples_captured > status->total_samples) {
@@ -346,16 +394,16 @@ void bb_la_poll(void)
         break;
 
     case LA_STATE_CAPTURING:
-        // Check if DMA is complete
-        if (!dma_channel_is_busy(LA_DMA_CH_A) && !dma_channel_is_busy(LA_DMA_CH_B)) {
-            // Both DMA channels done — capture complete
+        // Check if DMA is complete (single channel)
+        if (!dma_channel_is_busy(LA_DMA_CH_A)) {
             pio_sm_set_enabled(LA_PIO, LA_SM, false);
             s_la.state = LA_STATE_DONE;
 
-            // Send unsolicited "capture done" notification to BugBuster via UART
-            // This triggers the ESP32 to forward a BBP event to the host app
-            extern void bb_la_notify_done(void);
-            bb_la_notify_done();
+            // TODO: Unsolicited notification disabled — causes stale UART data
+            // that interferes with subsequent commands. Re-enable after adding
+            // proper UART flow control or separate notification channel.
+            // extern void bb_la_notify_done(void);
+            // bb_la_notify_done();
         }
         break;
 

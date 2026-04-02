@@ -123,7 +123,8 @@ int main(void)
     usb_serial_init();
     cdc_uart_init();
     tusb_init();
-    stdio_uart_init();
+    // stdio_uart_init() disabled — UART0 reserved for BugBuster command bus
+    // Debug printf goes to USB CDC or nowhere
     DAP_Setup();
 
     probe_info("Welcome to BugBuster HAT (debugprobe + extensions)!\n");

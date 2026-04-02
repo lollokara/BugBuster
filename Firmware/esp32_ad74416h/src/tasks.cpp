@@ -1062,8 +1062,9 @@ static void taskI2cPoll(void* /*pvParameters*/)
     TickType_t pollDelay = pdMS_TO_TICKS(500);
 
     for (;;) {
-        // Poll HAT UART for unsolicited messages (LA capture done, etc.)
-        hat_poll();
+        // TODO: hat_poll() disabled — conflicts with HAT command UART.
+        // Need mutex synchronization before re-enabling.
+        // hat_poll();
 
         // Poll PCA9535 inputs (power good, e-fuse faults)
         // Change detection and fault callbacks run inside pca9535_update()

@@ -7,6 +7,7 @@ use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d, MouseEvent};
 
 const CH_COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
+const TOOLBAR_HEIGHT: f64 = 44.0; // Space reserved for toolbar overlay
 const TRACK_HEIGHT: f64 = 56.0;
 const LABEL_WIDTH: f64 = 50.0;
 const RULER_HEIGHT: f64 = 24.0;
@@ -49,6 +50,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (drag_start_x, set_drag_start_x) = signal(0.0f64);
     let (drag_start_vs, set_drag_start_vs) = signal(0u64);
     let (drag_start_ve, set_drag_start_ve) = signal(0u64);
+
+    // Hover state for signal measurement overlay
+    let (hover_ch, set_hover_ch) = signal(Option::<usize>::None);
+    let (hover_x, set_hover_x) = signal(0.0f64);
+    let (hover_y, set_hover_y) = signal(0.0f64);
 
     // Canvas ref
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
@@ -133,7 +139,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         while g < ve {
             let x = LABEL_WIDTH + ((g - vs) / span) * plot_w;
             ctx.begin_path();
-            ctx.move_to(x, 0.0);
+            ctx.move_to(x, TOOLBAR_HEIGHT);
             ctx.line_to(x, plot_h);
             ctx.stroke();
             g += grid_step;
@@ -141,7 +147,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
         // Channel separators
         for ch in 0..num_ch {
-            let y = ch as f64 * TRACK_HEIGHT;
+            let y = TOOLBAR_HEIGHT + ch as f64 * TRACK_HEIGHT;
             ctx.set_stroke_style_str("rgba(59, 130, 246, 0.15)");
             ctx.begin_path();
             ctx.move_to(LABEL_WIDTH, y + TRACK_HEIGHT);
@@ -154,8 +160,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             if ch >= data.channel_transitions.len() { continue; }
             let transitions = &data.channel_transitions[ch];
             let color = CH_COLORS[ch % CH_COLORS.len()];
-            let y_top = ch as f64 * TRACK_HEIGHT + SIGNAL_MARGIN;
-            let y_bot = (ch + 1) as f64 * TRACK_HEIGHT - SIGNAL_MARGIN;
+            let y_top = TOOLBAR_HEIGHT + ch as f64 * TRACK_HEIGHT + SIGNAL_MARGIN;
+            let y_bot = TOOLBAR_HEIGHT + (ch + 1) as f64 * TRACK_HEIGHT - SIGNAL_MARGIN;
             let y_high = y_top;
             let y_low = y_bot;
 
@@ -165,39 +171,51 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.set_text_align("right");
             ctx.fill_text(&format!("CH{}", ch), LABEL_WIDTH - 6.0, y_top + (y_bot - y_top) / 2.0 + 4.0).ok();
 
-            // Waveform path
+            // Waveform path — step function (no fill, no close)
             ctx.set_stroke_style_str(color);
             ctx.set_line_width(1.5);
             ctx.begin_path();
 
-            let mut current_val: u8 = 0;
-            let mut first = true;
-
-            for &(sample, val) in transitions {
-                let x = LABEL_WIDTH + ((sample as f64 - vs) / span) * plot_w;
-                let y = if val == 1 { y_high } else { y_low };
-
-                if first {
-                    // Initial state — draw from left edge
-                    let y_init = if val == current_val { y } else { if current_val == 1 { y_high } else { y_low } };
-                    ctx.move_to(LABEL_WIDTH, y_init);
-                    ctx.line_to(x, y_init); // flat line to first transition
-                    ctx.line_to(x, y);       // vertical transition
-                    first = false;
+            if transitions.is_empty() {
+                // No transitions — flat line at low
+                ctx.move_to(LABEL_WIDTH, y_low);
+                ctx.line_to(w, y_low);
+            } else {
+                // Determine initial value (value before first visible transition)
+                let init_val = if transitions[0].0 <= data.view_start {
+                    transitions[0].1  // First transition is at or before view start
                 } else {
-                    // Horizontal to transition point, then vertical
-                    let y_prev = if current_val == 1 { y_high } else { y_low };
-                    ctx.line_to(x, y_prev);
-                    ctx.line_to(x, y);
+                    // First transition is after view start — initial state is opposite
+                    1 - transitions[0].1
+                };
+
+                let y_init = if init_val == 1 { y_high } else { y_low };
+                ctx.move_to(LABEL_WIDTH, y_init);
+
+                let mut current_val = init_val;
+
+                for &(sample, val) in transitions {
+                    let x = LABEL_WIDTH + ((sample as f64 - vs) / span) * plot_w;
+                    // Clamp x to visible area
+                    let x = x.max(LABEL_WIDTH).min(w);
+
+                    if val != current_val {
+                        // Horizontal line to the transition point at current level
+                        let y_cur = if current_val == 1 { y_high } else { y_low };
+                        ctx.line_to(x, y_cur);
+                        // Vertical transition to new level
+                        let y_new = if val == 1 { y_high } else { y_low };
+                        ctx.line_to(x, y_new);
+                        current_val = val;
+                    }
                 }
-                current_val = val;
+
+                // Extend to right edge at current level
+                let y_final = if current_val == 1 { y_high } else { y_low };
+                ctx.line_to(w, y_final);
             }
 
-            // Extend to right edge
-            let y_final = if current_val == 1 { y_high } else { y_low };
-            ctx.line_to(w, y_final);
-
-            ctx.stroke();
+            ctx.stroke();  // Stroke only, never fill the path
 
             // Fill under signal (subtle)
             ctx.set_global_alpha(0.05);
@@ -236,7 +254,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 ctx.set_stroke_style_str("#ef4444");
                 ctx.set_line_width(1.0);
                 ctx.begin_path();
-                ctx.move_to(x, 0.0);
+                ctx.move_to(x, TOOLBAR_HEIGHT);
                 ctx.line_to(x, plot_h);
                 ctx.stroke();
 
@@ -256,10 +274,126 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 ctx.set_line_width(1.0);
                 ctx.set_line_dash(&JsValue::from(js_sys::Array::of2(&JsValue::from(4.0), &JsValue::from(4.0)))).ok();
                 ctx.begin_path();
-                ctx.move_to(x, 0.0);
+                ctx.move_to(x, TOOLBAR_HEIGHT);
                 ctx.line_to(x, plot_h);
                 ctx.stroke();
                 ctx.set_line_dash(&JsValue::from(js_sys::Array::new())).ok();
+            }
+        }
+
+        // Hover measurement overlay — show period, frequency, duty cycle, width
+        if let Some(hch) = hover_ch.get() {
+            if hch < data.channel_transitions.len() {
+                let transitions = &data.channel_transitions[hch];
+                let color = CH_COLORS[hch % CH_COLORS.len()];
+
+                // Find the sample under the mouse
+                let mx = hover_x.get();
+                if mx > LABEL_WIDTH {
+                    let frac = (mx - LABEL_WIDTH) / plot_w;
+                    let mouse_sample = vs + span * frac;
+
+                    // Find two consecutive rising edges around the mouse to measure period
+                    let mut rising_edges: Vec<u64> = Vec::new();
+                    for i in 1..transitions.len() {
+                        if transitions[i - 1].1 == 0 && transitions[i].1 == 1 {
+                            rising_edges.push(transitions[i].0);
+                        }
+                    }
+
+                    // Find the nearest period around mouse position
+                    if rising_edges.len() >= 2 {
+                        // Find the rising edge just before the mouse
+                        let mut edge_idx = 0;
+                        for (i, &e) in rising_edges.iter().enumerate() {
+                            if e as f64 <= mouse_sample { edge_idx = i; }
+                        }
+
+                        if edge_idx + 1 < rising_edges.len() {
+                            let e1 = rising_edges[edge_idx];
+                            let e2 = rising_edges[edge_idx + 1];
+                            let period_samples = e2 - e1;
+                            let sample_rate = data.sample_rate_hz as f64;
+
+                            if period_samples > 0 && sample_rate > 0.0 {
+                                let period_sec = period_samples as f64 / sample_rate;
+                                let freq = 1.0 / period_sec;
+
+                                // Find high time within this period for duty cycle
+                                let mut high_samples = 0u64;
+                                for s in e1..e2 {
+                                    // Check value at this sample
+                                    let mut val = 0u8;
+                                    for &(ts, tv) in transitions.iter() {
+                                        if ts <= s { val = tv; } else { break; }
+                                    }
+                                    if val == 1 { high_samples += 1; }
+                                }
+                                let duty = high_samples as f64 / period_samples as f64 * 100.0;
+                                let width_sec = high_samples as f64 / sample_rate;
+
+                                // Draw period arrow between the two edges
+                                let x1 = LABEL_WIDTH + ((e1 as f64 - vs) / span) * plot_w;
+                                let x2 = LABEL_WIDTH + ((e2 as f64 - vs) / span) * plot_w;
+                                let y_track_top = TOOLBAR_HEIGHT + hch as f64 * TRACK_HEIGHT + SIGNAL_MARGIN;
+                                let arrow_y = y_track_top - 2.0;
+
+                                // Arrow line
+                                ctx.set_stroke_style_str(color);
+                                ctx.set_line_width(1.0);
+                                ctx.begin_path();
+                                ctx.move_to(x1, arrow_y);
+                                ctx.line_to(x2, arrow_y);
+                                // Left arrowhead
+                                ctx.move_to(x1, arrow_y);
+                                ctx.line_to(x1 + 5.0, arrow_y - 3.0);
+                                ctx.move_to(x1, arrow_y);
+                                ctx.line_to(x1 + 5.0, arrow_y + 3.0);
+                                // Right arrowhead
+                                ctx.move_to(x2, arrow_y);
+                                ctx.line_to(x2 - 5.0, arrow_y - 3.0);
+                                ctx.move_to(x2, arrow_y);
+                                ctx.line_to(x2 - 5.0, arrow_y + 3.0);
+                                // Vertical markers at edges
+                                let y_bot = TOOLBAR_HEIGHT + (hch + 1) as f64 * TRACK_HEIGHT - SIGNAL_MARGIN;
+                                ctx.move_to(x1, y_track_top);
+                                ctx.line_to(x1, y_bot);
+                                ctx.move_to(x2, y_track_top);
+                                ctx.line_to(x2, y_bot);
+                                ctx.stroke();
+
+                                // Measurement text box
+                                let box_x = (x1 + x2) / 2.0;
+                                let box_y = arrow_y - 6.0;
+
+                                let freq_str = if freq >= 1e6 { format!("{:.2} MHz", freq / 1e6) }
+                                    else if freq >= 1e3 { format!("{:.2} kHz", freq / 1e3) }
+                                    else { format!("{:.1} Hz", freq) };
+                                let period_str = format_time(period_sec);
+                                let width_str = format_time(width_sec);
+                                let duty_str = format!("{:.1}%", duty);
+
+                                let label = format!("P: {}  F: {}  W: {}  D: {}", period_str, freq_str, width_str, duty_str);
+
+                                // Background box
+                                ctx.set_font("9px 'JetBrains Mono', monospace");
+                                let text_width = label.len() as f64 * 5.5;  // Approximate monospace width
+                                let bx = box_x - text_width / 2.0 - 4.0;
+                                let by = box_y - 12.0;
+                                ctx.set_fill_style_str("rgba(6, 10, 20, 0.9)");
+                                ctx.fill_rect(bx, by, text_width + 8.0, 14.0);
+                                ctx.set_stroke_style_str(color);
+                                ctx.set_line_width(0.5);
+                                ctx.stroke_rect(bx, by, text_width + 8.0, 14.0);
+
+                                // Text
+                                ctx.set_fill_style_str(color);
+                                ctx.set_text_align("center");
+                                ctx.fill_text(&label, box_x, box_y - 1.0).ok();
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -393,12 +527,27 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     };
 
     let on_mousemove = move |e: MouseEvent| {
-        if !dragging.get_untracked() { return; }
-
         let Some(canvas_el) = canvas_ref.get() else { return; };
         let canvas: HtmlCanvasElement = canvas_el.into();
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
+        let y = e.client_y() as f64 - rect.top();
+        let h = canvas.client_height() as f64;
+        let plot_h = h - RULER_HEIGHT - MINIMAP_HEIGHT;
+
+        // Track hover position for measurement overlay
+        set_hover_x.set(x);
+        set_hover_y.set(y);
+        if x > LABEL_WIDTH && y > TOOLBAR_HEIGHT && y < plot_h {
+            let ch_idx = ((y - TOOLBAR_HEIGHT) / TRACK_HEIGHT) as usize;
+            set_hover_ch.set(Some(ch_idx));
+        } else {
+            set_hover_ch.set(None);
+        }
+
+        // Drag handling
+        if !dragging.get_untracked() { return; }
+
         let w = canvas.client_width() as f64;
         let plot_w = w - LABEL_WIDTH;
 
@@ -407,7 +556,6 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let ve0 = drag_start_ve.get_untracked();
         let span = (ve0 - vs0) as f64;
 
-        // Convert pixel delta to sample delta
         let d_samples = (dx_px / plot_w * span) as i64;
         let new_start = (vs0 as i64 - d_samples).max(0) as u64;
         let new_end = new_start + span as u64;
@@ -504,18 +652,70 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                 // Control buttons
                 <button style="font-size: 10px; padding: 3px 12px; background: #10b98125; color: #10b981; border: 1px solid #10b98150; border-radius: 4px; cursor: pointer"
-                    on:click=move |_| {
-                        let ch: u8 = channels.get_untracked().parse().unwrap_or(4);
-                        let r: u32 = rate.get_untracked().parse().unwrap_or(1000000);
-                        let d: u32 = depth.get_untracked().parse().unwrap_or(100000);
-                        let tt: u8 = trig_type.get_untracked().parse().unwrap_or(0);
-                        let tc: u8 = trig_ch.get_untracked().parse().unwrap_or(0);
-                        spawn_local(async move {
-                            la_invoke_configure(ch, r, d).await;
-                            la_invoke_set_trigger(tt, tc).await;
-                            la_invoke_arm().await;
-                            show_toast("LA Armed", "ok");
-                        });
+                    on:click={
+                        let set_ci5 = set_capture_info;
+                        move |_| {
+                            let ch: u8 = channels.get_untracked().parse().unwrap_or(4);
+                            let r: u32 = rate.get_untracked().parse().unwrap_or(1000000);
+                            let d: u32 = depth.get_untracked().parse().unwrap_or(100000);
+                            let tt: u8 = trig_type.get_untracked().parse().unwrap_or(0);
+                            let tc: u8 = trig_ch.get_untracked().parse().unwrap_or(0);
+                            spawn_local(async move {
+                                // Stop any previous capture
+                                la_invoke_stop().await;
+                                // Small delay for RP2040 cleanup
+                                let promise = js_sys::Promise::new(&mut |resolve, _| {
+                                    web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 200).unwrap();
+                                });
+                                wasm_bindgen_futures::JsFuture::from(promise).await.ok();
+
+                                la_invoke_configure(ch, r, d).await;
+                                la_invoke_set_trigger(tt, tc).await;
+                                la_invoke_arm().await;
+                                show_toast(if tt == 0 { "Capturing..." } else { "Armed — waiting for trigger..." }, "ok");
+
+                                // Auto-poll for capture done
+                                for _ in 0..200 {  // Up to 20 seconds
+                                    let promise = js_sys::Promise::new(&mut |resolve, _| {
+                                        web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 100).unwrap();
+                                    });
+                                    wasm_bindgen_futures::JsFuture::from(promise).await.ok();
+
+                                    if let Some(info) = la_get_capture_info().await {
+                                        // la_get_capture_info only returns data if store exists
+                                        // We need to check LA status instead
+                                    }
+
+                                    // Check status via BBP
+                                    #[derive(serde::Deserialize)]
+                                    #[serde(rename_all = "camelCase")]
+                                    struct St { state: u8, channels: u8, samples_captured: u32, total_samples: u32, actual_rate_hz: u32 }
+                                    let result = invoke("la_get_status", JsValue::NULL).await;
+                                    if let Ok(st) = serde_wasm_bindgen::from_value::<St>(result) {
+                                        if st.state == 3 {
+                                            // DONE! Auto-read data
+                                            show_toast("Capture done! Reading...", "ok");
+                                            #[derive(serde::Serialize)]
+                                            #[serde(rename_all = "camelCase")]
+                                            struct ReadArgs { channels: u8, sample_rate_hz: u32, total_samples: u32 }
+                                            let args = serde_wasm_bindgen::to_value(&ReadArgs {
+                                                channels: st.channels, sample_rate_hz: st.actual_rate_hz, total_samples: st.samples_captured,
+                                            }).unwrap();
+                                            let read_result = invoke("la_read_uart_chunks", args).await;
+                                            if let Ok(info) = serde_wasm_bindgen::from_value::<LaCaptureInfo>(read_result) {
+                                                set_view_start.set(0);
+                                                set_view_end.set(info.total_samples);
+                                                set_ci5.set(Some(info));
+                                                show_toast("Capture complete!", "ok");
+                                            } else {
+                                                show_toast("Read failed", "err");
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
                 >"Arm"</button>
                 <button style="font-size: 10px; padding: 3px 12px; background: #f59e0b25; color: #f59e0b; border: 1px solid #f59e0b50; border-radius: 4px; cursor: pointer"
