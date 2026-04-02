@@ -1028,6 +1028,64 @@ class BugBuster:
                 "on": on,
             })
 
+    def power_get_fault_log(self) -> list:
+        """
+        Return a list of recent PCA9535 fault events (e-fuse trips, PG changes).
+        Each entry is a dict with ``type``, ``type_name``, ``channel``, ``timestamp_ms``.
+        """
+        _FAULT_NAMES = {0: "efuse_trip", 1: "efuse_clear", 2: "pg_lost", 3: "pg_restored"}
+        if self._usb:
+            resp = self._usb_cmd(CmdId.PCA_GET_FAULT_LOG)
+            off = 0
+            count = resp[off]; off += 1
+            events = []
+            for _ in range(count):
+                ftype = resp[off]; off += 1
+                ch = resp[off]; off += 1
+                ts = struct.unpack_from('<I', resp, off)[0]; off += 4
+                events.append({
+                    "type": ftype,
+                    "type_name": _FAULT_NAMES.get(ftype, "unknown"),
+                    "channel": ch,
+                    "timestamp_ms": ts,
+                })
+            return events
+        else:
+            data = self._http_get("/ioexp/faults")
+            return data.get("faults", [])
+
+    def power_set_fault_config(self, auto_disable: bool = True, log_events: bool = True) -> None:
+        """
+        Configure PCA9535 fault behavior.
+
+        :param auto_disable: If True, automatically disable faulted e-fuse on trip.
+        :param log_events:   If True, log fault events to console.
+        """
+        if self._usb:
+            payload = struct.pack('<BB', int(auto_disable), int(log_events))
+            self._usb_cmd(CmdId.PCA_SET_FAULT_CFG, payload)
+        else:
+            self._http_post("/ioexp/fault_config", {
+                "auto_disable": auto_disable,
+                "log_events": log_events,
+            })
+
+    def set_watchdog(self, enable: bool = False, timeout_code: int = 9) -> None:
+        """
+        Enable or disable the AD74416H hardware watchdog timer.
+        If enabled and no SPI transaction occurs within the timeout,
+        the device resets all channels to HIGH_IMP.
+
+        :param enable: True to enable, False to disable.
+        :param timeout_code: 0=1ms, 1=5ms, 2=10ms, 3=25ms, 4=50ms,
+                             5=100ms, 6=250ms, 7=500ms, 8=750ms, 9=1000ms, 10=2000ms
+        """
+        if self._usb:
+            payload = struct.pack('<BB', int(enable), min(timeout_code, 10))
+            self._usb_cmd(CmdId.SET_WATCHDOG, payload)
+        else:
+            raise NotImplementedError("Watchdog control is USB-only (requires SPI)")
+
     # ------------------------------------------------------------------
     # ── Waveform generator ───────────────────────────────────────────
     # ------------------------------------------------------------------

@@ -73,6 +73,30 @@ extern "C" {
 // Port 1: output mask (enable pins)
 #define PCA9535_PORT1_OUTPUT_MASK (PCA9535_EFUSE_EN_1 | PCA9535_EFUSE_EN_2 | PCA9535_EFUSE_EN_3 | PCA9535_EFUSE_EN_4)
 
+// Fault event types
+typedef enum {
+    PCA_FAULT_EFUSE_TRIP = 0,   // E-fuse fault asserted (overcurrent, active low from TPS1641)
+    PCA_FAULT_EFUSE_CLEAR,      // E-fuse fault cleared
+    PCA_FAULT_PG_LOST,          // Power-good signal lost
+    PCA_FAULT_PG_RESTORED,      // Power-good signal restored
+} PcaFaultType;
+
+// Fault event structure
+typedef struct {
+    PcaFaultType type;
+    uint8_t      channel;       // E-fuse index (0-3) or PG source (0=logic, 1=vadj1, 2=vadj2)
+    uint32_t     timestamp_ms;
+} PcaFaultEvent;
+
+// Callback signature: called from ISR task context (not ISR itself — safe for I2C/logging)
+typedef void (*pca9535_fault_cb_t)(const PcaFaultEvent *event);
+
+// Fault behavior configuration
+typedef struct {
+    bool auto_disable_efuse;    // If true, auto-disable faulted e-fuse (default: true)
+    bool log_events;            // If true, log all fault events to console (default: true)
+} PcaFaultConfig;
+
 // Named control IDs for high-level API
 typedef enum {
     PCA_CTRL_VADJ1_EN = 0,   // V_ADJ1 enable
@@ -199,10 +223,27 @@ const char* pca9535_status_name(PcaStatus status);
 
 /**
  * @brief Install GPIO ISR on the PCA9535 INT pin.
- *        On interrupt, auto-reads input registers.
+ *        On interrupt, auto-reads input registers and runs fault detection.
  *        Call after pca9535_init() and GPIO ISR service install.
  */
 void pca9535_install_isr(void);
+
+/**
+ * @brief Set fault behavior configuration.
+ */
+void pca9535_set_fault_config(const PcaFaultConfig *cfg);
+
+/**
+ * @brief Register a callback for fault events (e-fuse trips, PG changes).
+ *        Called from ISR task context (safe for I2C, logging, BBP sends).
+ *        Only one callback supported; subsequent calls replace previous.
+ */
+void pca9535_register_fault_callback(pca9535_fault_cb_t cb);
+
+/**
+ * @brief Check if any e-fuse fault is currently active.
+ */
+bool pca9535_any_fault_active(void);
 
 #ifdef __cplusplus
 }

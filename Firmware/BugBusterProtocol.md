@@ -966,6 +966,20 @@ Write a raw AD74416H register (equivalent to CLI `wreg`).
 
 **Response payload:** Echoes request.
 
+#### 0x73 SET_WATCHDOG
+Enable or disable the AD74416H hardware watchdog timer. When enabled,
+the device resets all channels to HIGH_IMP if no SPI transaction occurs
+within the configured timeout. Disabled by default.
+
+**Request payload:**
+```
+0       enable          u8      1=enable, 0=disable
+1       timeout_code    u8      0=1ms, 1=5ms, 2=10ms, 3=25ms, 4=50ms,
+                                5=100ms, 6=250ms, 7=500ms, 8=750ms, 9=1000ms, 10=2000ms
+```
+
+**Response payload:** Echoes request.
+
 ---
 
 ### 6.9 System Commands
@@ -1175,6 +1189,31 @@ Set raw output port value (only output-configured bits are applied).
 ```
 0       port            u8      Port number (0 or 1)
 1       value           u8      Output value
+```
+
+#### 0xB3 PCA_SET_FAULT_CFG
+Configure PCA9535 fault handling behavior.
+
+**Request payload:**
+```
+0       auto_disable    u8      1=auto-disable faulted e-fuse, 0=log only
+1       log_events      u8      1=log events to console, 0=silent
+```
+
+**Response payload:** Same as request (echo of applied config).
+
+#### 0xB4 PCA_GET_FAULT_LOG
+Get recent PCA9535 fault events (ring buffer, last 16).
+
+**Request payload:** Empty.
+
+**Response payload:**
+```
+0       count           u8      Number of events (0–16)
+Per event (count×):
++0      type            u8      0=efuse_trip, 1=efuse_clear, 2=pg_lost, 3=pg_restored
++1      channel         u8      E-fuse index (0-3) or PG source (0=logic, 1=vadj1, 2=vadj2)
++2      timestamp_ms    u32     Milliseconds since boot
 ```
 
 ### 6.13 HUSB238 USB PD (I2C, addr 0x08)
@@ -1587,16 +1626,17 @@ Total: 10 + (4 x 12) = 58 bytes per event
 ### 7.3 Alert Events
 
 #### 0x82 ALERT_EVENT (Event)
-Pushed when an alert condition is detected (from fault monitor task).
+Pushed when new alert bits are set in ALERT_STATUS or SUPPLY_ALERT_STATUS
+(compared to previous poll cycle). Sent from fault monitor task (~200ms poll).
 
 **Event payload:**
 ```
-0       alert_status        u16     Updated global ALERT_STATUS
-2       supply_alert_status u16     Updated SUPPLY_ALERT_STATUS
-
-Per channel with active alert (variable count, 0-4):
-+0      channel             u8
-+1      channel_alert       u16
+0       alert_status        u16     Current global ALERT_STATUS
+2       supply_alert_status u16     Current SUPPLY_ALERT_STATUS
+4       ch_alert_a          u8      Channel A alert status (low byte)
+5       ch_alert_b          u8      Channel B alert status (low byte)
+6       ch_alert_c          u8      Channel C alert status (low byte)
+7       ch_alert_d          u8      Channel D alert status (low byte)
 ```
 
 ### 7.4 DIN Event
@@ -1609,6 +1649,20 @@ Pushed on digital input state change (edge detection).
 0       channel         u8      Channel (0-3)
 1       state           bool    New comparator output state
 2       counter         u32     Updated event counter
+```
+
+### 7.5 PCA Fault Event
+
+#### 0x84 PCA_FAULT_EVENT (Event)
+Pushed when a PCA9535 input change is detected (e-fuse fault, power-good change).
+If auto-disable is enabled (default), the faulted e-fuse is automatically disabled
+before this event is sent.
+
+**Event payload:**
+```
+0       type            u8      0=efuse_trip, 1=efuse_clear, 2=pg_lost, 3=pg_restored
+1       channel         u8      E-fuse index (0-3) or PG source (0=logic, 1=vadj1, 2=vadj2)
+2       timestamp_ms    u32     Milliseconds since boot (little-endian)
 ```
 
 ---
@@ -1848,6 +1902,7 @@ Host                                    Device
 | 0x70 | DEVICE_RESET | H->D | -- | `POST /api/device/reset` |
 | 0x71 | REGISTER_READ | H->D | addr | CLI `rreg` |
 | 0x72 | REGISTER_WRITE | H->D | addr, val | CLI `wreg` |
+| 0x73 | SET_WATCHDOG | H->D | enable, timeout | (new, USB only) |
 | 0x90 | MUX_SET_ALL | H->D | 4 states | (new) |
 | 0x91 | MUX_GET_ALL | H->D | -- | (new) |
 | 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | (new) |
@@ -1861,6 +1916,8 @@ Host                                    Device
 | 0xB0 | PCA_GET_STATUS | H->D | -- | `GET /api/ioexp` |
 | 0xB1 | PCA_SET_CONTROL | H->D | ctrl, on | `POST /api/ioexp/control` |
 | 0xB2 | PCA_SET_PORT | H->D | port, val | (new) |
+| 0xB3 | PCA_SET_FAULT_CFG | H->D | auto_dis, log | `POST /api/ioexp/fault_config` |
+| 0xB4 | PCA_GET_FAULT_LOG | H->D | -- | `GET /api/ioexp/faults` |
 | 0xC0 | USBPD_GET_STATUS | H->D | -- | `GET /api/usbpd` |
 | 0xC1 | USBPD_SELECT_PDO | H->D | voltage | `POST /api/usbpd/select` |
 | 0xC2 | USBPD_GO | H->D | command | (new) |
@@ -1882,6 +1939,7 @@ Host                                    Device
 | 0x81 | SCOPE_DATA | D->H | 10 ms scope bucket complete |
 | 0x82 | ALERT_EVENT | D->H | Alert condition detected |
 | 0x83 | DIN_EVENT | D->H | Digital input state change |
+| 0x84 | PCA_FAULT_EVENT | D->H | E-fuse trip, PG change |
 
 ## Appendix C: Wire Format Example
 

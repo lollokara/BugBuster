@@ -90,6 +90,14 @@ bool i2c_bus_write_read(uint8_t addr, const uint8_t *wr_data, size_t wr_len,
     // Repeated start + read phase
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_READ, true);
+    if (rd_len == 0) {
+        // Nothing to read — shouldn't happen, but guard against buffer underflow
+        i2c_master_stop(cmd);
+        i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(timeout_ms));
+        i2c_cmd_link_delete(cmd);
+        xSemaphoreGive(s_mutex);
+        return false;
+    }
     if (rd_len > 1) {
         i2c_master_read(cmd, rd_data, rd_len - 1, I2C_MASTER_ACK);
     }
@@ -114,6 +122,13 @@ bool i2c_bus_read(uint8_t addr, uint8_t *data, size_t len, uint32_t timeout_ms)
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_READ, true);
+    if (len == 0) {
+        i2c_master_stop(cmd);
+        i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(timeout_ms));
+        i2c_cmd_link_delete(cmd);
+        xSemaphoreGive(s_mutex);
+        return false;
+    }
     if (len > 1) {
         i2c_master_read(cmd, data, len - 1, I2C_MASTER_ACK);
     }

@@ -77,6 +77,13 @@ void status_led_set_now(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
 void status_led_update(void);
 
 /**
+ * @brief  Enable or disable fault blink mode on LED_MUX (LED 1, central).
+ *         When active, LED_MUX blinks red (~2Hz) overriding normal color.
+ *         Activated on e-fuse trip or power-good loss; cleared when resolved.
+ */
+void status_led_set_fault_blink(bool active);
+
+/**
  * @brief  Run one step of the boot breathing animation.
  *         All 3 LEDs breathe yellow together in a smooth sine wave.
  *         Call in a tight loop during boot with ~10ms delay between calls.

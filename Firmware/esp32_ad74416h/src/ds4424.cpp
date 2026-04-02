@@ -17,6 +17,10 @@
 // Note on polarity: Sink current flows INTO the DS4424 pin, pulling the
 // FB node voltage DOWN, which makes the regulator RAISE its output.
 // Source current flows OUT, pushing FB UP, making the regulator LOWER output.
+//
+// VCC Safety: DS4424 OUT pin absolute max is VCC + 0.5V (= 3.8V with 3.3V VCC).
+// The feedback divider network ensures the FB node stays at ~0.8V (midpoint),
+// well below 3.8V across the entire DAC code range. No runtime clamp needed.
 // =============================================================================
 
 #include "ds4424.h"
@@ -113,7 +117,7 @@ static void init_channel_configs(void)
     }
 }
 
-// Write a DAC code to a DS4424 channel register
+// Write a DAC code to a DS4424 channel register with read-back verification.
 static bool write_dac(uint8_t ch, int8_t code)
 {
     if (ch >= DS4424_NUM_CHANNELS) return false;
@@ -131,9 +135,41 @@ static bool write_dac(uint8_t ch, int8_t code)
         reg_val = (uint8_t)(-code);
     }
 
-    uint8_t buf[2] = { reg_addr, reg_val };
-    bool ok = i2c_bus_write(DS4424_I2C_ADDR, buf, 2, 50);
-    if (ok) {
+    bool ok = false;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        uint8_t buf[2] = { reg_addr, reg_val };
+        if (!i2c_bus_write(DS4424_I2C_ADDR, buf, 2, 50)) {
+            ESP_LOGW(TAG, "IDAC%d write failed (attempt %d)", ch, attempt + 1);
+            delay_ms(1);
+            continue;
+        }
+
+        // Read-back verify
+        int8_t readback = 0;
+        if (!read_dac(ch, &readback)) {
+            ESP_LOGW(TAG, "IDAC%d readback failed (attempt %d)", ch, attempt + 1);
+            delay_ms(1);
+            continue;
+        }
+
+        if (readback == code) {
+            if (attempt > 0) {
+                ESP_LOGW(TAG, "IDAC%d write-verify succeeded on retry %d", ch, attempt);
+            }
+            ok = true;
+            break;
+        }
+        ESP_LOGW(TAG, "IDAC%d write-verify mismatch: wrote=%d read=%d (attempt %d)",
+                 ch, code, readback, attempt + 1);
+        delay_ms(1);
+    }
+
+    if (!ok) {
+        ESP_LOGE(TAG, "IDAC%d write-verify FAILED after 3 retries", ch);
+        return false;
+    }
+
+    {
         s_state.state[ch].dac_code = code;
         // Use calibrated voltage if available, otherwise formula
         const DS4424CalData *cal = &s_state.cal[ch];
@@ -217,10 +253,28 @@ bool ds4424_init(void)
 
     ESP_LOGI(TAG, "DS4424 found at 0x%02X", DS4424_I2C_ADDR);
 
-    // Set all channels to zero current (safe start)
+    // Set all channels to zero current (safe start) — write_dac includes read-back verify
     for (uint8_t ch = 0; ch < DS4424_NUM_CHANNELS; ch++) {
         write_dac(ch, 0);
         s_state.state[ch].present = true;
+    }
+
+    // Post-init verification: confirm all channels actually read zero
+    bool init_ok = true;
+    for (uint8_t ch = 0; ch < DS4424_NUM_CHANNELS; ch++) {
+        int8_t readback = 0;
+        if (read_dac(ch, &readback)) {
+            if (readback != 0) {
+                ESP_LOGE(TAG, "IDAC%d init verify FAIL: expected 0, read %d", ch, readback);
+                init_ok = false;
+            }
+        } else {
+            ESP_LOGE(TAG, "IDAC%d init readback failed", ch);
+            init_ok = false;
+        }
+    }
+    if (!init_ok) {
+        ESP_LOGE(TAG, "DS4424 init verification failed — outputs may not be at zero!");
     }
 
     ESP_LOGI(TAG, "All channels set to zero (midpoint voltages)");

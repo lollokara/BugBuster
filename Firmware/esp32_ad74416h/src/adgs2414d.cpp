@@ -363,19 +363,20 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
     uint8_t new_state;
 
     if (closed) {
-        // Opening: first open all switches in the same group
+        // Closing a switch: break-before-make — first open all switches in the
+        // same group to prevent momentary shorts, then close the requested one.
         uint8_t temp_state[ADGS_NUM_DEVICES];
         memcpy(temp_state, s_mux_state, ADGS_NUM_DEVICES);
         temp_state[device] &= ~group_mask;  // Open the entire group
         adgs_write_states(temp_state);
 
-        // Wait dead time
+        // Wait dead time before closing
         delay_ms(ADGS_DEAD_TIME_MS);
 
         // Close the requested switch
         new_state = (s_mux_state[device] & ~group_mask) | (1 << sw);
     } else {
-        // Simply open the switch (no dead time needed for opening)
+        // Opening a switch: no dead time needed
         new_state = s_mux_state[device] & ~(1 << sw);
     }
 
@@ -480,6 +481,8 @@ void adgs_soft_reset(void)
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
     delay_ms(1);
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
+    // ADGS2414D datasheet requires 120 µs minimum POR delay after reset.
+    // Using 10 ms here provides >80x margin for reliable initialization.
     delay_ms(10);
     s_mux_initialized = false;
     memset(s_mux_state, 0, sizeof(s_mux_state));

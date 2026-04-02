@@ -141,6 +141,36 @@ pub fn App() -> impl IntoView {
         closure.forget();
     });
 
+    // Listen for PCA9535 fault events (e-fuse trips, power-good changes)
+    spawn_local(async move {
+        let closure = Closure::new(move |event: JsValue| {
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<Vec<u8>>>(event) {
+                let payload = evt.payload;
+                if payload.len() >= 6 {
+                    let fault_type = payload[0];
+                    let channel = payload[1];
+                    let msg = match fault_type {
+                        0 => format!("E-Fuse {} tripped — output disabled!", channel + 1),
+                        1 => format!("E-Fuse {} fault cleared", channel + 1),
+                        2 => {
+                            let name = match channel { 0 => "Logic", 1 => "VADJ1", _ => "VADJ2" };
+                            format!("{} power-good LOST!", name)
+                        }
+                        3 => {
+                            let name = match channel { 0 => "Logic", 1 => "VADJ1", _ => "VADJ2" };
+                            format!("{} power-good restored", name)
+                        }
+                        _ => format!("PCA fault type={} ch={}", fault_type, channel),
+                    };
+                    let kind = if fault_type == 0 || fault_type == 2 { "err" } else { "ok" };
+                    show_toast(&msg, kind);
+                }
+            }
+        });
+        listen("pca-fault", &closure).await;
+        closure.forget();
+    });
+
     // Auto-scan
     spawn_local(async move {
         let result = invoke("discover_devices", JsValue::NULL).await;

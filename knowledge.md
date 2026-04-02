@@ -31,6 +31,12 @@ Last deep-dive: all 106 pages read and cross-referenced (2026-03-31).
 21. [3-Wire RTD — Complete Reference](#21-3-wire-rtd--complete-reference)
 22. [DAC Slew Rate Control](#22-dac-slew-rate-control)
 23. [External Components and Board Design Reference](#23-external-components-and-board-design-reference)
+24. [WS2812B Status LEDs](#24-ws2812b-status-leds)
+25. [ADGS2414D Safety — Write-Verify and Fault Recovery](#25-adgs2414d-safety--write-verify-and-fault-recovery)
+26. [ADGS2414D — Datasheet Reference](#26-adgs2414d--datasheet-reference)
+27. [PCA9535A — Datasheet Reference](#27-pca9535a--datasheet-reference)
+28. [DS4424 — Datasheet Reference](#28-ds4424--datasheet-reference)
+29. [AD74416H — Extended Reference](#29-ad74416h--extended-reference)
 
 ---
 
@@ -2048,4 +2054,503 @@ When write-verify fails after retries in daisy-chain mode:
 4. Attempt one final write-verify
 5. If successful: clear fault flag, log recovery
 6. If still failing: declare FAULT, open all switches for safety
+
+---
+
+## 26. ADGS2414D — Datasheet Reference
+
+Cross-referenced against ADGS2414D datasheet Rev. 0 (12/2023, 31 pages).
+
+### 26.1 Device Overview
+
+The ADGS2414D is a 0.56 Ω on-resistance, high-density octal SPST switch in a 4 mm × 5 mm
+30-terminal LGA package. Eight independent switches (S1–S8 to D1–D8), SPI-controlled with
+error detection. BugBuster uses 5 devices: U10, U11, U16, U17 (main MUX matrix) + U23 (self-test).
+
+**Key Specifications:**
+- R_ON: 0.56 Ω typical, 1.0 Ω max (±15V dual supply, 25°C)
+- ΔR_ON (match between channels): 0.045 Ω typ, 0.12 Ω max
+- R_FLAT(ON) (flatness across signal range): 0.004 Ω typ
+- Continuous current per channel: 768 mA (1 ch on), 439 mA (8 ch on) at 25°C, dual supply
+- Continuous current derated at temperature: 313/232 mA at 85°C, 122/112 mA at 125°C
+- THD: -122 dB at 1 kHz (R_L = 1 kΩ, 20V p-p, dual supply)
+- -3 dB bandwidth: 171 MHz typical
+- Insertion loss: -0.06 dB at 1 MHz
+- Off isolation: -76 dB at 100 kHz
+- Channel-to-channel crosstalk: -85 dB at 100 kHz
+- Break-before-make switching: guaranteed (t_D = 349 ns min, 429 ns typ)
+- On time (t_ON): 600 ns typ, 749 ns max (dual supply)
+- Off time (t_OFF): 196 ns typ, 254 ns max
+
+### 26.2 Power Supply
+
+| Parameter | Min | Max | Unit | Notes |
+|-----------|-----|-----|------|-------|
+| Dual Supply V_DD | ±4.5 | ±16.5 | V | V_DD to V_SS ≤ 33V |
+| Single Supply V_DD | +5 | +20 | V | V_SS = GND |
+| Logic Supply V_L | 2.7 | 5.5 | V | Also RESET/V_L pin |
+| I_DD (quiescent) | — | 440 | µA | All switches open |
+| I_DD (active, 50 MHz SCLK) | — | 9.0 | mA | V_L = 5.5V |
+
+### 26.3 SPI Interface
+
+- SPI Mode 0 (CPOL=0, CPHA=0) or Mode 3 (CPOL=1, CPHA=1)
+- Max SCLK frequency: 50 MHz
+- Data captured on rising edge of SCLK, propagated on falling edge
+- CS active low; frame synchronization signal
+- Minimum CS high time between commands: 20 ns (t_11)
+- SDO has integrated pullup to V_L
+
+### 26.4 Register Map
+
+| Reg Addr | Name | Default | R/W | Description |
+|----------|------|---------|-----|-------------|
+| 0x01 | SW_DATA | 0x00 | R/W | Switch enable bits: bit N = switch N+1 (1=closed, 0=open) |
+| 0x02 | ERR_CONFIG | 0x06 | R/W | Error detection enable: bit0=CRC, bit1=SCLK_ERR, bit2=RW_ERR |
+| 0x03 | ERR_FLAGS | 0x00 | R | Error flags: bit0=CRC_ERR_FLAG, bit1=SCLK_ERR_FLAG, bit2=RW_ERR_FLAG |
+| 0x05 | BURST_EN | 0x00 | R/W | bit0=BURST_MODE_EN (consecutive SPI without CS toggle) |
+| 0x0B | SOFT_RESETB | 0x00 | W | Software reset: write 0xA3 then 0x05 consecutively |
+
+### 26.5 Address Mode (Default)
+
+- 16-bit SPI frame: [R/W(1) | Addr(7) | Data(8)]
+- SDO outputs alignment byte 0x25 during first 8 bits, then register data during last 8
+- Register write occurs on 16th SCLK rising edge
+- With CRC enabled: 24-bit frame [R/W(1) | Addr(7) | Data(8) | CRC(8)]
+- CRC polynomial: x^8 + x^2 + x^1 + 1, seed = 0
+
+### 26.6 Daisy-Chain Mode
+
+- Enter: send command 0x2500 (16-bit); SDO echoes 0x25 confirming entry
+- All commands target SW_DATA register only (no register configuration changes possible)
+- Each device = 8-bit shift register; SDO of one device → SDI of next
+- First byte sent reaches the LAST device in chain
+- N devices require N × 8 SCLK cycles per frame
+- Exit: hardware reset only (RESET/V_L pin LOW, then HIGH + 120 µs wait)
+
+### 26.7 Error Detection Features
+
+**CRC Error Detection** (CRC_ERR_EN, bit 0 of ERR_CONFIG):
+- Extends frame by 8 SCLK cycles (24-bit total in address mode)
+- Polynomial: x^8 + x^2 + x^1 + 1 with seed 0
+- Calculated over: R/W bit, address bits [6:0], data bits [7:0]
+- CRC checked on 24th rising edge; write blocked if CRC mismatch
+- Disabled by default
+
+**SCLK Count Error** (SCLK_ERR_EN, bit 1 of ERR_CONFIG):
+- Counts SCLK edges per CS frame; expects exactly 16 (or 24 with CRC)
+- In burst mode: multiples of 16 (or 24) expected
+- In daisy-chain: multiples of N×8
+- Enabled by default
+
+**Invalid R/W Address Error** (RW_ERR_EN, bit 2 of ERR_CONFIG):
+- Detects reads to write-only registers, writes to read-only registers, access to nonexistent addresses
+- Detected on 9th SCLK rising edge (write is blocked)
+- Enabled by default
+
+**Clearing Error Flags**: Send special 16-bit SPI command 0x6CA9 (does not trigger RW address error)
+
+### 26.8 Power-On Reset
+
+After V_L power-up or hardware/software reset, wait minimum **120 µs** before any SPI command.
+Ensure V_L does not drop during the initialization phase.
+
+### 26.9 Absolute Maximum Ratings
+
+| Parameter | Rating |
+|-----------|--------|
+| V_DD to V_SS | 35 V |
+| V_DD to GND | -0.3 V to +25 V |
+| V_SS to GND | +0.3 V to -25 V |
+| Analog inputs (S_x, D_x) | V_SS - 0.3V to V_DD + 0.3V |
+| Digital inputs | -0.3 V to +6 V |
+| Peak current per channel | 1180 mA (pulsed, 1 ms, 10% duty cycle) |
+| Operating temperature | -40°C to +125°C |
+| θ_JA | 56.81 °C/W |
+
+---
+
+## 27. PCA9535A — Datasheet Reference
+
+Cross-referenced against PCA9535A datasheet (NXP, 24 pages).
+
+### 27.1 Device Overview
+
+The PCA9535A is a 16-bit I2C GPIO expander with interrupt output. Two 8-bit ports (Port 0, Port 1),
+each pin independently configurable as input or output. Open-drain INT output for input change notification.
+BugBuster uses U20 at I2C address 0x23 (7-bit) for power management and e-fuse control.
+
+### 27.2 Electrical Specifications
+
+| Parameter | Min | Typ | Max | Unit |
+|-----------|-----|-----|-----|------|
+| VCC | 2.3 | — | 5.5 | V |
+| I2C clock (f_SCL) | — | — | 400 | kHz |
+| Input low voltage (V_IL) | — | — | 0.3×VCC | V |
+| Input high voltage (V_IH) | 0.7×VCC | — | — | V |
+| Output low voltage (V_OL) | — | — | 0.4 | V (at 10 mA sink) |
+| INT output low (V_OL) | — | — | 0.4 | V (at 10 mA sink) |
+| Power-on reset time | — | — | — | Internal POR |
+
+### 27.3 Register Map
+
+| Reg Addr | Name | R/W | Default | Description |
+|----------|------|-----|---------|-------------|
+| 0x00 | Input Port 0 | R | — | Current state of Port 0 pins (read clears INT for this port) |
+| 0x01 | Input Port 1 | R | — | Current state of Port 1 pins |
+| 0x02 | Output Port 0 | R/W | 0xFF | Output state for Port 0 (only affects pins configured as outputs) |
+| 0x03 | Output Port 1 | R/W | 0xFF | Output state for Port 1 |
+| 0x04 | Polarity Inv. Port 0 | R/W | 0x00 | 1 = invert corresponding input bit when read |
+| 0x05 | Polarity Inv. Port 1 | R/W | 0x00 | 1 = invert corresponding input bit when read |
+| 0x06 | Configuration Port 0 | R/W | 0xFF | 1 = input, 0 = output (default: all inputs) |
+| 0x07 | Configuration Port 1 | R/W | 0xFF | 1 = input, 0 = output (default: all inputs) |
+
+### 27.4 Interrupt (INT) Pin
+
+- Open-drain output, active LOW
+- Asserted when any input pin changes from the value last read from the Input Port register
+- **Cleared by**: reading the Input Port register that caused the change, OR the input returning to its previous state
+- INT is level-triggered (stays low as long as input differs from last-read value)
+- Requires external pull-up resistor (BugBuster: 5.1 kΩ to 3.3V on I2C bus)
+- Connected to ESP32-S3 GPIO4 in PCB mode (PIN_MUX_INT)
+
+### 27.5 Power-On Reset
+
+On power-up:
+- All ports configured as **inputs** (Configuration registers = 0xFF)
+- Output registers set to **0xFF** (high)
+- Polarity inversion registers set to **0x00** (no inversion)
+- No internal pull-ups or pull-downs on I/O pins
+
+**IMPORTANT**: Input pins with no external pull-up/pull-down will float. The EFUSE_FLT_x
+fault pins from TPS1641 have external pull-ups (active-low fault signaling).
+
+### 27.6 BugBuster Pin Mapping
+
+**Port 0 — Power Management:**
+
+| Bit | Pin | Name | Direction | Description |
+|-----|-----|------|-----------|-------------|
+| 0 | P0.0 | LOGIC_PG | Input | Main logic power good |
+| 1 | P0.1 | VADJ1_PG | Input | V_ADJ1 regulator power good |
+| 2 | P0.2 | VADJ1_EN | Output | V_ADJ1 regulator enable |
+| 3 | P0.3 | VADJ2_EN | Output | V_ADJ2 regulator enable |
+| 4 | P0.4 | VADJ2_PG | Input | V_ADJ2 regulator power good |
+| 5 | P0.5 | EN_15V_A | Output | ±15V analog supply enable |
+| 6 | P0.6 | EN_MUX | Output | MUX VCC power enable |
+| 7 | P0.7 | EN_USB_HUB | Output | USB hub enable |
+
+**Port 1 — E-Fuse Control:**
+
+| Bit | Pin | Name | Direction | Description |
+|-----|-----|------|-----------|-------------|
+| 0 | P1.0 | EFUSE_EN_1 | Output | E-Fuse 1 enable (→ connector P1) |
+| 1 | P1.1 | EFUSE_FLT_1 | Input | E-Fuse 1 fault (active LOW from TPS1641) |
+| 2 | P1.2 | EFUSE_EN_2 | Output | E-Fuse 2 enable (→ connector P2) |
+| 3 | P1.3 | EFUSE_FLT_2 | Input | E-Fuse 2 fault (active LOW) |
+| 4 | P1.4 | EFUSE_EN_3 | Output | E-Fuse 3 enable (→ connector P3) |
+| 5 | P1.5 | EFUSE_FLT_3 | Input | E-Fuse 3 fault (active LOW) |
+| 6 | P1.6 | EFUSE_EN_4 | Output | E-Fuse 4 enable (→ connector P4) |
+| 7 | P1.7 | EFUSE_FLT_4 | Input | E-Fuse 4 fault (active LOW) |
+
+### 27.7 Firmware Configuration
+
+On init, firmware writes:
+- Config Port 0: 0x13 (bits 0,1,4 = input for PG; bits 2,3,5,6,7 = output for enables)
+- Config Port 1: 0xAA (odd bits = input for FLT; even bits = output for EN)
+- Output Port 0: 0x00 (all enables OFF — safe start)
+- Output Port 1: 0x00 (all e-fuses OFF — safe start)
+- Polarity Inversion: 0x00 for both ports (no inversion)
+
+---
+
+## 28. DS4424 — Datasheet Reference
+
+Cross-referenced against DS4422/DS4424 datasheet Rev. 2 (Maxim/Analog Devices, 11 pages).
+
+### 28.1 Device Overview
+
+The DS4424 is a 4-channel I2C programmable current DAC (IDAC). Each output (OUT0–OUT3) can
+sink or source current with 7-bit resolution (127 steps each direction). Used in BugBuster to adjust
+DC-DC converter output voltages by injecting current into the feedback network.
+
+**BugBuster Channel Mapping:**
+- IDAC0 (OUT0, reg 0xF8): Level shifter voltage (LTM8078 Out2, ~3.3V adjustable)
+- IDAC1 (OUT1, reg 0xF9): V_ADJ1 (LTM8063 #1, 3–15V, feeds connectors P1+P2)
+- IDAC2 (OUT2, reg 0xFA): V_ADJ2 (LTM8063 #2, 3–15V, feeds connectors P3+P4)
+- IDAC3 (OUT3, reg 0xFB): Not connected
+
+### 28.2 Electrical Specifications
+
+| Parameter | Min | Typ | Max | Unit | Notes |
+|-----------|-----|-----|-----|------|-------|
+| VCC | 2.7 | — | 5.5 | V | |
+| Full-scale output current (I_FS) | — | — | 200 | µA | Set by R_FS resistor |
+| Output current range | -I_FS | 0 | +I_FS | µA | Sink and source |
+| Zero current leakage (I_ZERO) | -1 | — | +1 | µA | At code 0 |
+| Differential linearity (DNL) | -0.5 | — | +0.5 | LSB | |
+| Integral linearity (INL) | -1 | — | +1 | LSB | |
+| Output current variation (VCC) | — | 0.32/0.42 | — | %/V | Source/sink |
+| I2C clock (f_SCL) | 0 | — | 400 | kHz | |
+| **OUT pin absolute max** | — | — | **VCC + 0.5** | **V** | **Exceeding damages device** |
+
+### 28.3 I2C Interface
+
+- Slave address (BugBuster): 0x10 (7-bit), set by A0=A1=GND → 0x20 (8-bit write), 0x21 (8-bit read)
+- Standard I2C protocol: START → slave addr + R/W → register addr → data → STOP
+- Read: requires repeated START (write register address, then read data byte)
+
+**I2C Address Table:**
+
+| A1 | A0 | 7-bit Address | 8-bit Address |
+|----|-----|--------------|---------------|
+| GND | GND | 0x10 | 0x20 |
+| GND | VCC | 0x30 | 0x60 |
+| VCC | GND | 0x50 | 0xA0 |
+| VCC | VCC | 0x70 | 0xE0 |
+
+### 28.4 Register Map
+
+| Register Address | Output | Description |
+|-----------------|--------|-------------|
+| 0xF8 | OUT0 | Current source 0 control |
+| 0xF9 | OUT1 | Current source 1 control |
+| 0xFA | OUT2 | Current source 2 (DS4424 only) |
+| 0xFB | OUT3 | Current source 3 (DS4424 only) |
+
+**Register Format:**
+
+| Bit 7 | Bits [6:0] | Meaning |
+|-------|------------|---------|
+| S (Sign) | D6–D0 (Magnitude) | S=0: sink current; S=1: source current |
+
+- Code 0x00 = zero output current (power-on default, safe)
+- Code 0x7F = maximum sink current (I_FS)
+- Code 0xFF = maximum source current (I_FS)
+- Magnitude 0 always outputs zero current regardless of sign bit
+
+### 28.5 Current and Voltage Formulas
+
+**Full-scale current (set by external R_FS resistor):**
+```
+R_FS = (V_RFS × 127) / (16 × I_FS)
+```
+Where V_RFS = 0.976V (internal reference on FS pin).
+
+**Output current from DAC code:**
+```
+I_OUT = (DAC_magnitude / 127) × I_FS
+```
+Direction determined by sign bit: S=0 → sink (into pin), S=1 → source (out of pin).
+
+**Voltage adjustment formula (BugBuster topology):**
+```
+V_OUT = V_FB × (1 + R_INT/R_FB) + I_DAC × R_INT
+```
+Where:
+- V_FB = regulator feedback reference voltage
+- R_INT = series resistor in feedback network (249 kΩ in BugBuster)
+- R_FB = parallel resistor to GND (sets midpoint voltage)
+- I_DAC = signed current (sink raises V_OUT, source lowers V_OUT)
+
+**Step size per DAC code:**
+```
+ΔV = I_FS / 127 × R_INT
+```
+For BugBuster (I_FS=50µA, R_INT=249kΩ): ΔV ≈ 98 mV/step.
+
+### 28.6 Power-On Behavior
+
+- All outputs default to **zero current** (register value 0x00) — safe
+- Device does not affect regulator output until host writes a nonzero code
+- VCC decoupling: 0.01 µF + 0.1 µF ceramic recommended
+
+### 28.7 Critical Safety Notes
+
+1. **OUT pin voltage limit**: Absolute maximum is VCC + 0.5V. In BugBuster, VCC = 3.3V so
+   OUT pins must stay below 3.8V. The feedback divider network ensures the FB node voltage
+   stays well below this (~0.8V at midpoint), so this is not a concern during normal operation.
+
+2. **Power rail ordering**: The DS4424 VCC should be brought up before or simultaneously with
+   the power rail of the DC-DC converter it controls. In BugBuster, DS4424 VCC (3.3V_BUCK)
+   is always-on before PCA9535 enables the VADJ regulators → ordering is correct by design.
+
+3. **No output clamp**: The DS4424 does not have output voltage clamps. If the feedback node
+   voltage exceeds VCC + 0.5V (e.g., during regulator startup transients), current may flow
+   through the ESD protection diodes into VCC, potentially damaging the device.
+
+---
+
+## 29. AD74416H — Extended Reference
+
+Additional details from the AD74416H datasheet (Rev. 0, 106 pages) that supplement the main sections above.
+
+### 29.1 Watchdog Timer (WDT)
+
+The AD74416H includes a programmable watchdog timer that monitors SPI activity. If no valid SPI
+transaction occurs within the timeout period, the device resets (all channels → HIGH_IMP).
+
+**WDT_CONFIG register** bits:
+- WDT_EN: Enable watchdog (0=disabled, 1=enabled)
+- WDT_TIMEOUT: 4-bit field selecting timeout period
+
+| WDT_TIMEOUT | Timeout |
+|-------------|---------|
+| 0 | 1 ms |
+| 1 | 5 ms |
+| 2 | 10 ms |
+| 3 | 25 ms |
+| 4 | 50 ms |
+| 5 | 100 ms |
+| 6 | 250 ms |
+| 7 | 500 ms |
+| 8 | 750 ms |
+| 9 | 1000 ms |
+| A | 2000 ms |
+
+The WDT is zeroed on every valid SPI transaction (read or write). If timeout expires, the device
+resets and sets RESET_OCCURRED in ALERT_STATUS.
+
+**BugBuster default**: WDT is **disabled**. As an interactive development tool, users may pause
+SPI communication during debugging. An optional BBP command allows enabling it.
+
+### 29.2 Burst Read Mode
+
+Sequential reading of multiple registers without re-issuing the read address:
+1. Enable required BURST_READ_SEL bits in BURST_READ_SEL register
+2. Set READBACK_ADDR in READ_SELECT register to first register
+3. Keep SYNC low after second frame; additional 24 clocks per register
+4. Each subsequent register outputs 16-bit data + 8-bit CRC on SDO
+
+Useful for fast ADC result reads (ADC_RESULT_UPR0 + ADC_RESULT0 for all 4 channels).
+
+### 29.3 FET Leakage Compensation
+
+The external PFET used for digital output may have off-state leakage that affects precision
+analog measurements (especially RTD and low-current sensing).
+
+- Enable via FET_LKG_COMP[n] register: set FET_SRC_LKG_COMP_EN bit
+- Connect LKG_COMP_x pin to PFET drain
+- Compensates leakage currents up to 40 µA
+- Reduces voltage error from ~30 mV (typical FET leakage through 12Ω R_SENSE) to negligible
+
+### 29.4 Software Reset
+
+**Single-device reset** via CMD_KEY register:
+1. Write 0x15FA (Software Reset Key 1) to CMD_KEY
+2. Write 0xAF51 (Software Reset Key 2) to CMD_KEY
+3. Wait 1 ms for reset cycle
+
+**Broadcast reset** (all devices on SPI bus) via BROADCAST_CMD_KEY register:
+1. Write 0x1A78 to BROADCAST_CMD_KEY
+2. Write 0xD203 to BROADCAST_CMD_KEY
+
+After reset: RESET_OCCURRED bit set in ALERT_STATUS. Clear before continuing.
+Wait for calibration memory refresh (CAL_MEM_ERR in SUPPLY_ALERT_STATUS clears when ready).
+
+### 29.5 Channel Function Switching Procedure
+
+When changing a channel from one function to another:
+1. Set CH_FUNC to HIGH_IMP (0x0000) in CH_FUNC_SETUP[n]
+2. Set DAC_CODE to intended value for new function (0x0000 for outputs, or specific limit for inputs)
+3. Wait 300 µs (or 4.2 ms for IOUT_HART with VIOUT_DRV_EN_DLY=0)
+4. Set CH_FUNC to new function code in CH_FUNC_SETUP[n]
+5. Wait channel initialization time (300 µs, or 4.2 ms for IOUT_HART)
+6. Begin operation (update DAC code, start ADC, etc.)
+
+**Important**: The DAC_CODE register is NOT reset when changing channel functions. Always
+set DAC_CODE to the intended value before or immediately after selecting the new function.
+
+### 29.6 Digital Output — Re-enable After Short-Circuit Timeout
+
+If a DO short-circuit persists beyond T2 timeout, the FET is automatically disabled.
+To re-enable after the fault is cleared:
+1. Set DO_DATA = 0 (FET off) in DO_EXT_CONFIG[n]
+2. Select a DO_MODE in DO_EXT_CONFIG[n] (re-power the output circuit)
+3. Set DO_DATA = 1 (FET on)
+
+### 29.7 ADC Conversion Rate: 19.2 kSPS
+
+The 19.2 kSPS rate is available **only for diagnostic measurements** (set via CONV_RATE_DIAG
+in ADC_CONV_CTRL). It is not available for channel ADC conversions. At 19.2 kSPS, 50/60 Hz
+rejection is disabled.
+
+### 29.8 ADC_RDY Pin Behavior
+
+The ADC_RDY pin behavior depends on the ADC_RDY_CTRL bit in ADC_CONV_CTRL:
+
+**ADC_RDY_CTRL = 0** (default, asserts at end of sequence):
+- Single conversion: deasserts when CONV_SEQ command written, asserts when sequence completes
+- Continuous: deasserts on CONV_SEQ write, asserts after 25 µs when results available
+
+**ADC_RDY_CTRL = 1** (asserts at end of each conversion):
+- Single conversion: deasserts on CONV_SEQ, asserts after each individual channel conversion
+- Continuous: deasserts on each conversion start, asserts after 25 µs (or when >1 conversion enabled)
+- Read LAST_ADC_RESULT_UPR[n] and LAST_ADC_RESULT[n] for per-conversion results
+
+### 29.9 Diagnostics — Complete Formula Table
+
+All diagnostics use DIAG_CODE from ADC_DIAG_RESULT[n] registers. Measurement range is 2.5V.
+
+| DIAG_ASSIGN | Diagnostic | Formula | Range |
+|-------------|-----------|---------|-------|
+| 0b0000 | AGND | V = (DIAG_CODE / 65,536) × 2.5 | 0–2.5V |
+| 0b0001 | Temperature (°C) | T = (DIAG_CODE - 20,034) / 8.95 - 40 | -40 to +175°C |
+| 0b0010 | DVCC | V = (DIAG_CODE / 65,536) × (25/3) | 0–8.3V |
+| 0b0011 | AVCC | V = (DIAG_CODE / 65,536) × 17.5 | 0–17.5V |
+| 0b0100 | LDO1V8 | V = (DIAG_CODE / 65,536) × 7.5 | 0–7.5V |
+| 0b0101 | AVDD_HI | V = (DIAG_CODE / 65,536) × (25/0.52) | 0–48V |
+| 0b0110 | AVDD_LO | V = (DIAG_CODE / 65,536) × (25/0.52) | 0–48V |
+| 0b0111 | AVSS | V = (DIAG_CODE / 65,536) × 31.017 - 20 | -20 to +11V |
+| 0b1000 | LVIN | V = (DIAG_CODE / 65,536) × 2.5 | 0–2.5V |
+| 0b1001 | DO_VDD | V = (DIAG_CODE / 65,536) × (25/0.64) | 0–39V |
+| 0b1010 | VSENSEP_x | V = (DIAG_CODE / 65,536) × 60 - AVDD_HI | varies |
+| 0b1011 | VSENSEN_x | V = (DIAG_CODE / 65,536) × 50 - 20 | -20 to +30V |
+| 0b1100 | I_DO_SRC (R_SET current) | I = (DIAG_CODE / 65,536) × 0.5 / R_SET | 0–3.3A |
+| 0b1101 | AVDD_x (per-channel) | V = (DIAG_CODE / 65,536) × (25/0.52) | 0–48V |
+
+### 29.10 DAC Transfer Function
+
+| DAC Code | ±12V Range | 0V to 12V Range | 0 to 25mA Range |
+|----------|-----------|-----------------|-----------------|
+| 0x0000 | -12V | 0V | 0 mA |
+| 0x0001 | -12V + 1 LSB | 12V / 65,536 | 25mA / 65,536 |
+| 0x8000 | 0V | 6V | 12.5 mA |
+| 0xFFFE | +12V - 2 LSB | 12V × (65,534/65,536) | 25mA × (65,534/65,536) |
+| 0xFFFF | +12V - 1 LSB | 12V × (65,535/65,536) | 25mA × (65,535/65,536) |
+
+1 LSB = Full Scale / 65,536. For ±12V: 1 LSB = 24V/65,536 ≈ 366 µV. For 0–12V: 1 LSB ≈ 183 µV.
+
+### 29.11 ADC Noise (Peak-to-Peak, in LSBs, Inputs Shorted)
+
+| Rate | +12V (24-bit) | ±12V (24-bit) | ±2.5V (24-bit) | 0.625V (24-bit) | ±0.3125V (24-bit) | ±104mV (24-bit) |
+|------|--------------|--------------|---------------|----------------|------------------|----------------|
+| 10 SPS_H | 23.4 | 11.7 | 13.3 | 52.2 | 48.0 | 129.0 |
+| 20 SPS | 44.8 | 22.4 | 25.6 | 104.4 | 95.6 | 257.7 |
+| 200 SPS | 85.2 | 42.6 | 48.2 | 186.0 | 175.1 | 480.3 |
+| 1.2 kSPS | 297.0 | 148.5 | 168.8 | 693.0 | 627.0 | 1696.0 |
+| 4.8 kSPS | 723.2 | 361.6 | 430.9 | 2077.6 | 1620.7 | 4407.3 |
+| 9.6 kSPS | 1417.2 | 708.6 | 877.3 | 4674.4 | 3170.0 | 8854.8 |
+
+### 29.12 Register Defaults by Channel Function
+
+When a channel function is selected via CH_FUNC_SETUP[n], multiple registers are automatically
+configured. Key defaults (see datasheet Table 22 for complete table):
+
+- **HIGH_IMP**: ADC MUX = SENSELF to AGND, range 0–12V, comparator disabled
+- **VOUT**: ADC MUX = SENSEHF to SENSELF, range ±0.3125V (current feedback), comparator disabled
+- **IOUT**: ADC MUX = SENSELF to AGND, range 0–12V, adaptive power switching = TRACK
+- **VIN**: ADC MUX = SENSELF to AGND, range 0–12V, comparator disabled
+- **IIN_EXT_PWR**: ADC MUX = SENSEHF to SENSELF, range -0.3125V to 0V, comparator enabled, AVDD = AVDD_HI/2
+- **IIN_LOOP_PWR**: ADC MUX = SENSEHF to SENSELF, range 0–0.3125V, comparator enabled + inverted
+- **RES_MEAS**: ADC MUX = SENSELF to VSENSEN, range 0–0.625V, comparator disabled
+- **DIN_LOGIC**: ADC MUX = SENSELF to AGND, range 0–12V, comparator enabled, AVDD = AVDD_HI/2
+- **DIN_LOOP**: ADC MUX = SENSELF to AGND, range 0–12V, comparator enabled + inverted
+
+Regardless of function selection, these are always set:
+- RTD_MODE_SEL = 0 (3-wire RTD mode)
+- RTD_CURRENT = 1 mA
+- RTD_ADC_REF = 2V
+- DIN_SINK = 0 (current sink off)
+- DIN_THRESH_MODE = 0 (threshold scales with AVDD_HI)
 

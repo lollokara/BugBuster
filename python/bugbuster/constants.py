@@ -291,11 +291,14 @@ class CmdId(IntEnum):
     DEVICE_RESET     = 0x70
     REGISTER_READ    = 0x71
     REGISTER_WRITE   = 0x72
+    SET_WATCHDOG     = 0x73
 
     # Unsolicited events
     ADC_DATA_EVT     = 0x80
     SCOPE_DATA_EVT   = 0x81
     ALERT_EVT        = 0x82
+    DIN_EVT          = 0x83
+    PCA_FAULT_EVT    = 0x84
     DIN_EVT          = 0x83
 
     # MUX switch matrix
@@ -313,9 +316,11 @@ class CmdId(IntEnum):
     IDAC_CAL_SAVE     = 0xA6
 
     # PCA9535 I/O expander
-    PCA_GET_STATUS   = 0xB0
-    PCA_SET_CONTROL  = 0xB1
-    PCA_SET_PORT     = 0xB2
+    PCA_GET_STATUS     = 0xB0
+    PCA_SET_CONTROL    = 0xB1
+    PCA_SET_PORT       = 0xB2
+    PCA_SET_FAULT_CFG  = 0xB3
+    PCA_GET_FAULT_LOG  = 0xB4
 
     # USB PD
     USBPD_GET_STATUS = 0xC0

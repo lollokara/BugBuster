@@ -193,6 +193,18 @@ void status_led_set_now(uint8_t index, uint8_t r, uint8_t g, uint8_t b)
     status_led_refresh();
 }
 
+// Fault blink state
+static bool s_fault_blink_active = false;
+static bool s_fault_blink_on = false;
+
+void status_led_set_fault_blink(bool active)
+{
+    s_fault_blink_active = active;
+    if (!active) {
+        s_fault_blink_on = false;
+    }
+}
+
 // Breathing animation state
 static uint16_t s_breathe_phase = 0;  // 0–628 (2*PI * 100)
 
@@ -235,7 +247,15 @@ void status_led_update(void)
     bool mux_fault = adgs_is_faulted();
     bool pca_ok = pca9535_present();
 
-    if (mux_fault) {
+    if (s_fault_blink_active) {
+        // Blink red ~2Hz (toggle every call, status_led_update runs ~every 500ms)
+        s_fault_blink_on = !s_fault_blink_on;
+        if (s_fault_blink_on) {
+            status_led_set(LED_MUX, LED_RED);
+        } else {
+            status_led_set(LED_MUX, LED_OFF);
+        }
+    } else if (mux_fault) {
         status_led_set(LED_MUX, LED_RED);
     } else if (!pca_ok) {
         status_led_set(LED_MUX, LED_YELLOW);

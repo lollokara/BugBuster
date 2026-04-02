@@ -1650,10 +1650,64 @@ static esp_err_t handle_post_ioexp_control(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/ioexp/faults - Get PCA9535 fault log
+static esp_err_t handle_get_ioexp_faults(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "faults");
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        uint8_t count = g_deviceState.pcaFaultLogCount;
+        cJSON_AddNumberToObject(root, "count", count);
+        for (uint8_t i = 0; i < count && i < DeviceState::PCA_FAULT_LOG_SIZE; i++) {
+            uint8_t idx = (g_deviceState.pcaFaultLogHead - count + i + DeviceState::PCA_FAULT_LOG_SIZE)
+                          % DeviceState::PCA_FAULT_LOG_SIZE;
+            const auto &entry = g_deviceState.pcaFaultLog[idx];
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddNumberToObject(item, "type", entry.type);
+            cJSON_AddNumberToObject(item, "channel", entry.channel);
+            cJSON_AddNumberToObject(item, "timestamp_ms", entry.timestamp_ms);
+            const char *typeStr[] = {"efuse_trip", "efuse_clear", "pg_lost", "pg_restored"};
+            if (entry.type < 4) cJSON_AddStringToObject(item, "typeName", typeStr[entry.type]);
+            cJSON_AddItemToArray(arr, item);
+        }
+        xSemaphoreGive(g_stateMutex);
+    } else {
+        cJSON_AddNumberToObject(root, "count", 0);
+    }
+
+    return send_json(req, root);
+}
+
+// POST /api/ioexp/fault_config  body: {"auto_disable":true, "log_events":true}
+static esp_err_t handle_post_ioexp_fault_config(httpd_req_t *req)
+{
+    char buf[128];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) return send_error(req, 400, "Empty body");
+    buf[ret] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    if (!json) return send_error(req, 400, "Invalid JSON");
+
+    PcaFaultConfig cfg;
+    cfg.auto_disable_efuse = cJSON_IsTrue(cJSON_GetObjectItem(json, "auto_disable"));
+    cfg.log_events = cJSON_IsTrue(cJSON_GetObjectItem(json, "log_events"));
+    cJSON_Delete(json);
+
+    pca9535_set_fault_config(&cfg);
+
+    cJSON *rsp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(rsp, "auto_disable", cfg.auto_disable_efuse);
+    cJSON_AddBoolToObject(rsp, "log_events", cfg.log_events);
+    return send_json(req, rsp);
+}
+
 // POST /api/ioexp dispatch
 static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
 {
     if (strstr(req->uri, "/api/ioexp/control")) return handle_post_ioexp_control(req);
+    if (strstr(req->uri, "/api/ioexp/fault_config")) return handle_post_ioexp_fault_config(req);
     return send_error(req, 404, "Unknown IO Expander endpoint");
 }
 
@@ -2313,6 +2367,11 @@ void initWebServer(void)
         .uri = "/api/ioexp", .method = HTTP_GET, .handler = handle_get_ioexp, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_ioexp_get);
+
+    httpd_uri_t uri_ioexp_faults_get = {
+        .uri = "/api/ioexp/faults", .method = HTTP_GET, .handler = handle_get_ioexp_faults, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ioexp_faults_get);
 
     httpd_uri_t uri_ioexp_post = {
         .uri = "/api/ioexp/*", .method = HTTP_POST, .handler = handle_ioexp_post_dispatch, .user_ctx = NULL

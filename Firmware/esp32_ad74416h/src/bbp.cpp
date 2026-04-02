@@ -262,6 +262,13 @@ static void sendEvent(uint8_t evtId, const uint8_t *payload, size_t payloadLen)
     sendMsg(BBP_MSG_EVT, s_evtSeq++, evtId, payload, payloadLen);
 }
 
+// Public wrapper for sending events from other modules
+void bbpSendEvent(uint8_t evtId, const uint8_t *payload, size_t len)
+{
+    if (!s_active) return;
+    sendEvent(evtId, payload, len);
+}
+
 // -----------------------------------------------------------------------------
 // Command handlers
 // Each returns the response payload length written into `out`, or -1 on error.
@@ -1130,6 +1137,27 @@ static int handleDeviceReset(uint16_t seq, uint8_t cmdId, uint8_t *out)
     return 0;
 }
 
+static int handleSetWatchdog(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t enable = get_u8(payload, &rpos);
+    uint8_t timeout_code = get_u8(payload, &rpos);
+
+    if (timeout_code > 0x0A) timeout_code = 0x0A;  // Max valid code
+
+    // WDT_CONFIG register: bit 4 = WDT_EN, bits [3:0] = WDT_TIMEOUT
+    uint16_t wdt_val = ((uint16_t)(enable ? 1 : 0) << 4) | (timeout_code & 0x0F);
+    // WDT_CONFIG is at register address 0x17 in AD74416H register map
+    s_spi->writeRegister(0x17, wdt_val);
+
+    size_t pos = 0;
+    put_u8(out, &pos, enable);
+    put_u8(out, &pos, timeout_code);
+    return (int)pos;
+}
+
 // --- DS4424 IDAC commands ---
 
 static int handleIdacGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
@@ -1366,6 +1394,45 @@ static int handlePcaSetPort(uint16_t seq, uint8_t cmdId,
     size_t pos = 0;
     put_u8(out, &pos, port);
     put_u8(out, &pos, val);
+    return (int)pos;
+}
+
+// --- PCA9535 Fault Config/Log commands ---
+
+static int handlePcaSetFaultConfig(uint16_t seq, uint8_t cmdId,
+                                    const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    PcaFaultConfig cfg;
+    cfg.auto_disable_efuse = get_u8(payload, &rpos) != 0;
+    cfg.log_events = get_u8(payload, &rpos) != 0;
+    pca9535_set_fault_config(&cfg);
+
+    size_t pos = 0;
+    put_u8(out, &pos, cfg.auto_disable_efuse ? 1 : 0);
+    put_u8(out, &pos, cfg.log_events ? 1 : 0);
+    return (int)pos;
+}
+
+static int handlePcaGetFaultLog(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    size_t pos = 0;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        uint8_t count = g_deviceState.pcaFaultLogCount;
+        put_u8(out, &pos, count);
+        for (uint8_t i = 0; i < count && i < DeviceState::PCA_FAULT_LOG_SIZE; i++) {
+            uint8_t idx = (g_deviceState.pcaFaultLogHead - count + i + DeviceState::PCA_FAULT_LOG_SIZE)
+                          % DeviceState::PCA_FAULT_LOG_SIZE;
+            const auto &entry = g_deviceState.pcaFaultLog[idx];
+            put_u8(out, &pos, entry.type);
+            put_u8(out, &pos, entry.channel);
+            put_u32(out, &pos, entry.timestamp_ms);
+        }
+        xSemaphoreGive(g_stateMutex);
+    } else {
+        put_u8(out, &pos, 0);
+    }
     return (int)pos;
 }
 
@@ -2088,6 +2155,12 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
         case BBP_CMD_PCA_SET_PORT:
             rspLen = handlePcaSetPort(seq, cmdId, payload, payloadLen, rspBuf);
             break;
+        case BBP_CMD_PCA_SET_FAULT_CFG:
+            rspLen = handlePcaSetFaultConfig(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_PCA_GET_FAULT_LOG:
+            rspLen = handlePcaGetFaultLog(seq, cmdId, rspBuf);
+            break;
 
         // --- HUSB238 USB PD ---
         case BBP_CMD_USBPD_GET_STATUS:
@@ -2116,6 +2189,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_REG_WRITE:
             rspLen = handleRegWrite(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_SET_WATCHDOG:
+            rspLen = handleSetWatchdog(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_SET_SPI_CLOCK:
             rspLen = handleSetSpiClock(seq, cmdId, payload, payloadLen, rspBuf);

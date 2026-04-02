@@ -120,6 +120,17 @@ struct DeviceState {
     DS4424State      idac;              // DS4424 IDAC state
     Husb238State     usbpd;             // HUSB238 USB-PD state
     PCA9535State     ioexp;             // PCA9535 GPIO expander state
+
+    // PCA9535 fault log (ring buffer, updated by fault callback)
+    struct PcaFaultLogEntry {
+        uint8_t  type;          // PcaFaultType
+        uint8_t  channel;
+        uint32_t timestamp_ms;
+    };
+    static constexpr int PCA_FAULT_LOG_SIZE = 16;
+    PcaFaultLogEntry pcaFaultLog[PCA_FAULT_LOG_SIZE];
+    uint8_t          pcaFaultLogHead;
+    uint8_t          pcaFaultLogCount;
 };
 
 extern DeviceState        g_deviceState;

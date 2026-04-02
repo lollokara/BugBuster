@@ -106,6 +106,8 @@ pub const CMD_IDAC_CAL_SAVE: u8 = 0xA6;
 pub const CMD_PCA_GET_STATUS: u8 = 0xB0;
 pub const CMD_PCA_SET_CONTROL: u8 = 0xB1;
 pub const CMD_PCA_SET_PORT: u8 = 0xB2;
+pub const CMD_PCA_SET_FAULT_CFG: u8 = 0xB3;
+pub const CMD_PCA_GET_FAULT_LOG: u8 = 0xB4;
 
 // Waveform Generator
 pub const CMD_START_WAVEGEN: u8 = 0xD0;
@@ -128,6 +130,7 @@ pub const CMD_WIFI_SCAN: u8 = 0xE4;
 pub const CMD_DEVICE_RESET: u8 = 0x70;
 pub const CMD_REG_READ: u8 = 0x71;
 pub const CMD_REG_WRITE: u8 = 0x72;
+pub const CMD_SET_WATCHDOG: u8 = 0x73;
 pub const CMD_PING: u8 = 0xFE;
 pub const CMD_DISCONNECT: u8 = 0xFF;
 
@@ -139,6 +142,7 @@ pub const EVT_ADC_DATA: u8 = 0x80;
 pub const EVT_SCOPE_DATA: u8 = 0x81;
 pub const EVT_ALERT: u8 = 0x82;
 pub const EVT_DIN: u8 = 0x83;
+pub const EVT_PCA_FAULT: u8 = 0x84;
 
 // -----------------------------------------------------------------------------
 // Error Codes

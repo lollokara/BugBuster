@@ -282,6 +282,8 @@ static void taskAdcPoll(void* /*pvParameters*/)
 static void taskFaultMonitor(void* /*pvParameters*/)
 {
     uint32_t iteration = 0;
+    uint16_t prevAlertStatus = 0;       // Track previous for BBP_EVT_ALERT
+    uint16_t prevSupplyAlertStatus = 0;
 
     for (;;) {
         if (s_device) {
@@ -406,6 +408,26 @@ static void taskFaultMonitor(void* /*pvParameters*/)
 
                 xSemaphoreGive(g_stateMutex);
             }
+
+            // --- Send BBP_EVT_ALERT on new alert bits ---
+            uint16_t newAlerts = alertStatus & ~prevAlertStatus;
+            uint16_t newSupply = supplyAlertStatus & ~prevSupplyAlertStatus;
+            // Mask out RESET_OCCURRED (bit 0) — normal after boot
+            newAlerts &= 0xFFFE;
+            if ((newAlerts || newSupply) && bbpIsActive()) {
+                uint8_t payload[8];
+                payload[0] = (uint8_t)(alertStatus & 0xFF);
+                payload[1] = (uint8_t)(alertStatus >> 8);
+                payload[2] = (uint8_t)(supplyAlertStatus & 0xFF);
+                payload[3] = (uint8_t)(supplyAlertStatus >> 8);
+                payload[4] = (uint8_t)(chanAlert[0] & 0xFF);
+                payload[5] = (uint8_t)(chanAlert[1] & 0xFF);
+                payload[6] = (uint8_t)(chanAlert[2] & 0xFF);
+                payload[7] = (uint8_t)(chanAlert[3] & 0xFF);
+                bbpSendEvent(BBP_EVT_ALERT, payload, sizeof(payload));
+            }
+            prevAlertStatus = alertStatus;
+            prevSupplyAlertStatus = supplyAlertStatus;
         }
 
         iteration++;
@@ -870,6 +892,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             }
 
             default:
+                ESP_LOGW("cmdProc", "Unknown command type: %d", cmd.type);
                 break;
         }
     }
@@ -1039,8 +1062,14 @@ static void taskI2cPoll(void* /*pvParameters*/)
 
     for (;;) {
         // Poll PCA9535 inputs (power good, e-fuse faults)
+        // Change detection and fault callbacks run inside pca9535_update()
         if (pca9535_present()) {
             pca9535_update();
+            // Copy state to DeviceState for protocol reporting
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                memcpy(&g_deviceState.ioexp, pca9535_get_state(), sizeof(PCA9535State));
+                xSemaphoreGive(g_stateMutex);
+            }
         }
 
         // Poll HUSB238 less frequently (every 5 iterations = 2.5s)

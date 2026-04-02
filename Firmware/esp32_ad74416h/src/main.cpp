@@ -40,6 +40,45 @@ AD74416H_SPI spiDriver(PIN_SDO, PIN_SDI, PIN_SYNC, PIN_SCLK, AD74416H_DEV_ADDR);
 static AD74416H device(spiDriver, PIN_RESET);
 
 // -----------------------------------------------------------------------------
+// PCA9535 fault event handler — called from ISR task context
+// -----------------------------------------------------------------------------
+static void pca_fault_handler(const PcaFaultEvent *event)
+{
+    // Update device state under mutex
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        // Copy current PCA state
+        memcpy(&g_deviceState.ioexp, pca9535_get_state(), sizeof(PCA9535State));
+
+        // Append to fault log ring buffer
+        auto &log = g_deviceState.pcaFaultLog[g_deviceState.pcaFaultLogHead];
+        log.type = (uint8_t)event->type;
+        log.channel = event->channel;
+        log.timestamp_ms = event->timestamp_ms;
+        g_deviceState.pcaFaultLogHead = (g_deviceState.pcaFaultLogHead + 1)
+                                         % DeviceState::PCA_FAULT_LOG_SIZE;
+        if (g_deviceState.pcaFaultLogCount < DeviceState::PCA_FAULT_LOG_SIZE)
+            g_deviceState.pcaFaultLogCount++;
+
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Update LED blink state
+    status_led_set_fault_blink(pca9535_any_fault_active());
+
+    // Send BBP event if binary protocol is active
+    if (bbpIsActive()) {
+        uint8_t payload[6];
+        payload[0] = (uint8_t)event->type;
+        payload[1] = event->channel;
+        payload[2] = (uint8_t)(event->timestamp_ms & 0xFF);
+        payload[3] = (uint8_t)((event->timestamp_ms >> 8) & 0xFF);
+        payload[4] = (uint8_t)((event->timestamp_ms >> 16) & 0xFF);
+        payload[5] = (uint8_t)((event->timestamp_ms >> 24) & 0xFF);
+        bbpSendEvent(BBP_EVT_PCA_FAULT, payload, sizeof(payload));
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Main loop task (CLI/BBP + heartbeat)
 // -----------------------------------------------------------------------------
 static void mainLoopTask(void* pvParam)
@@ -186,7 +225,10 @@ extern "C" void app_main(void)
         serial_println("[BugBuster] I2C bus OK (SDA=42 SCL=41)");
         g_deviceState.i2cOk = true;
 
-        // DS4424 IDAC
+        // DS4424 IDAC — initialized before PCA9535 to ensure IDAC VCC (3.3V_BUCK,
+        // always-on) is stable before VADJ regulators are enabled. DS4424 datasheet
+        // requires VCC up before/simultaneously with the controlled rail (§ Power Rail
+        // Considerations). PCA9535 starts with all enables OFF, so ordering is correct.
         if (ds4424_init()) {
             serial_println("[BugBuster] DS4424 IDAC: OK (0x20)");
         } else {
@@ -207,6 +249,7 @@ extern "C" void app_main(void)
         if (pca9535_init()) {
             serial_println("[BugBuster] PCA9535 IO Exp: OK (0x23)");
             pca9535_install_isr();
+            pca9535_register_fault_callback(pca_fault_handler);
         } else {
             serial_println("[BugBuster] PCA9535 IO Exp: NOT FOUND (0x23)");
         }

@@ -139,6 +139,8 @@ extern "C" {
 #define BBP_CMD_PCA_GET_STATUS      0xB0  // Get all PCA9535 state
 #define BBP_CMD_PCA_SET_CONTROL     0xB1  // Set named control output
 #define BBP_CMD_PCA_SET_PORT        0xB2  // Set raw port value
+#define BBP_CMD_PCA_SET_FAULT_CFG   0xB3  // Configure fault auto-disable + logging
+#define BBP_CMD_PCA_GET_FAULT_LOG   0xB4  // Get recent PCA fault events
 
 // Waveform Generator
 #define BBP_CMD_START_WAVEGEN       0xD0  // Start waveform generation
@@ -164,6 +166,7 @@ extern "C" {
 #define BBP_CMD_DEVICE_RESET    0x70
 #define BBP_CMD_REG_READ        0x71
 #define BBP_CMD_REG_WRITE       0x72
+#define BBP_CMD_SET_WATCHDOG    0x73  // Enable/disable AD74416H watchdog timer
 #define BBP_CMD_PING            0xFE
 #define BBP_CMD_DISCONNECT      0xFF
 
@@ -175,6 +178,7 @@ extern "C" {
 #define BBP_EVT_SCOPE_DATA      0x81
 #define BBP_EVT_ALERT           0x82
 #define BBP_EVT_DIN             0x83
+#define BBP_EVT_PCA_FAULT       0x84    // PCA9535 fault event (e-fuse trip, PG change)
 
 // -----------------------------------------------------------------------------
 // Error Codes
@@ -247,6 +251,15 @@ bool bbpDetectHandshake(uint8_t byte);
  *        Call from the main loop when bbpIsActive() == true.
  */
 void bbpProcess(void);
+
+/**
+ * @brief Send an unsolicited event to the host (if BBP is active).
+ *        Safe to call from any task context.
+ * @param evtId    Event ID (BBP_EVT_*)
+ * @param payload  Event payload bytes
+ * @param len      Payload length
+ */
+void bbpSendEvent(uint8_t evtId, const uint8_t *payload, size_t len);
 
 /** @brief Exit binary mode and return to CLI. */
 void bbpExitBinaryMode(void);
