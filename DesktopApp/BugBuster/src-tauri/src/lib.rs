@@ -84,6 +84,12 @@ pub fn run() {
             // PCA9535 GPIO Expander
             commands::pca_get_status,
             commands::pca_set_control,
+            // HAT Expansion Board
+            commands::hat_get_status,
+            commands::hat_set_pin,
+            commands::hat_set_all_pins,
+            commands::hat_reset,
+            commands::hat_detect,
             // HUSB238 USB PD
             commands::usbpd_get_status,
             commands::usbpd_select_pdo,

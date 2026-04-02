@@ -1070,6 +1070,97 @@ class BugBuster:
                 "log_events": log_events,
             })
 
+    # ------------------------------------------------------------------
+    # ── HAT Expansion Board ──────────────────────────────────────────
+    # ------------------------------------------------------------------
+
+    def hat_get_status(self) -> dict:
+        """
+        Get HAT expansion board status: detection, connection, pin config.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.HAT_GET_STATUS)
+            off = 0
+            detected = bool(resp[off]); off += 1
+            connected = bool(resp[off]); off += 1
+            hat_type = resp[off]; off += 1
+            detect_v = struct.unpack_from('<f', resp, off)[0]; off += 4
+            fw_major = resp[off]; off += 1
+            fw_minor = resp[off]; off += 1
+            confirmed = bool(resp[off]); off += 1
+            pins = []
+            for i in range(4):
+                pins.append(resp[off]); off += 1
+            return {
+                "detected": detected, "connected": connected,
+                "type": hat_type, "detect_voltage": detect_v,
+                "fw_version": f"{fw_major}.{fw_minor}",
+                "config_confirmed": confirmed,
+                "pin_config": pins,
+            }
+        else:
+            return self._http_get("/hat")
+
+    def hat_set_pin(self, ext_pin: int, function) -> bool:
+        """
+        Set a single EXP_EXT pin function on the HAT.
+
+        :param ext_pin:  Pin index 0-3 (EXP_EXT_1 to EXP_EXT_4)
+        :param function: HatPinFunction value
+        :return: True if HAT acknowledged
+        """
+        func_val = int(function)
+        if self._usb:
+            payload = struct.pack('<BB', ext_pin, func_val)
+            self._usb_cmd(CmdId.HAT_SET_PIN, payload)
+            return True
+        else:
+            resp = self._http_post("/hat/config", {"pin": ext_pin, "function": func_val})
+            return resp.get("ok", False)
+
+    def hat_set_all_pins(self, functions: list) -> bool:
+        """
+        Set all 4 EXP_EXT pin functions at once.
+
+        :param functions: List of 4 HatPinFunction values
+        :return: True if HAT acknowledged
+        """
+        assert len(functions) == 4
+        if self._usb:
+            payload = struct.pack('<4B', *[int(f) for f in functions])
+            self._usb_cmd(CmdId.HAT_SET_ALL_PINS, payload)
+            return True
+        else:
+            resp = self._http_post("/hat/config", {"pins": [int(f) for f in functions]})
+            return resp.get("ok", False)
+
+    def hat_reset(self) -> bool:
+        """Reset HAT to default state (all pins disconnected)."""
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_RESET)
+            return True
+        else:
+            resp = self._http_post("/hat/reset", {})
+            return resp.get("ok", False)
+
+    def hat_detect(self) -> dict:
+        """Re-run HAT detection and return result."""
+        if self._usb:
+            resp = self._usb_cmd(CmdId.HAT_DETECT)
+            off = 0
+            detected = bool(resp[off]); off += 1
+            hat_type = resp[off]; off += 1
+            detect_v = struct.unpack_from('<f', resp, off)[0]; off += 4
+            connected = bool(resp[off]); off += 1
+            return {"detected": detected, "type": hat_type,
+                    "detect_voltage": detect_v, "connected": connected}
+        else:
+            return self._http_post("/hat/detect", {})
+
+    # ------------------------------------------------------------------
+    # ── AD74416H Watchdog ────────────────────────────────────────────
+    # ------------------------------------------------------------------
+
     def set_watchdog(self, enable: bool = False, timeout_code: int = 9) -> None:
         """
         Enable or disable the AD74416H hardware watchdog timer.

@@ -1216,7 +1216,79 @@ Per event (count×):
 +2      timestamp_ms    u32     Milliseconds since boot
 ```
 
-### 6.13 HUSB238 USB PD (I2C, addr 0x08)
+### 6.13 HAT Expansion Board
+
+HAT (Hardware Attached on Top) boards connect via a dedicated header providing
+UART communication (GPIO43/44, 115200 8N1) and ADC-based detection (GPIO47).
+BugBuster is the UART master. PCB mode only.
+
+**Detection:** GPIO47 has a 10kΩ pull-up to 3.3V. HAT boards have pull-down
+resistors creating a voltage divider. ~3.3V = no HAT, ~1.65V = SWD/GPIO HAT.
+
+**EXP_EXT_1-4:** Four I/O lines independently configurable as:
+DISCONNECTED(0), SWDIO(1), SWCLK(2), TRACE1(3), TRACE2(4),
+GPIO1(5), GPIO2(6), GPIO3(7), GPIO4(8).
+
+#### 0xC5 HAT_GET_STATUS
+Get HAT detection state, connection status, and current pin configuration.
+
+**Response payload:**
+```
+0       detected        bool    HAT physically present (ADC)
+1       connected       bool    UART communication established
+2       type            u8      HAT type (0=none, 1=SWD/GPIO)
+3       detect_voltage  f32     Raw ADC voltage on detect pin
+7       fw_major        u8      HAT firmware version major
+8       fw_minor        u8      HAT firmware version minor
+9       confirmed       bool    Last config was acknowledged by HAT
+10      ext1_func       u8      EXP_EXT_1 function (HatPinFunction)
+11      ext2_func       u8      EXP_EXT_2 function
+12      ext3_func       u8      EXP_EXT_3 function
+13      ext4_func       u8      EXP_EXT_4 function
+```
+
+#### 0xC6 HAT_SET_PIN
+Set a single EXP_EXT pin function.
+
+**Request payload:**
+```
+0       pin             u8      Pin index (0-3 = EXP_EXT_1 to EXP_EXT_4)
+1       function        u8      HatPinFunction enum value
+```
+
+**Response payload:** `[pin, function, confirmed:bool]`
+
+#### 0xC7 HAT_SET_ALL_PINS
+Set all 4 EXP_EXT pin functions at once.
+
+**Request payload:**
+```
+0       ext1_func       u8      EXP_EXT_1 function
+1       ext2_func       u8      EXP_EXT_2 function
+2       ext3_func       u8      EXP_EXT_3 function
+3       ext4_func       u8      EXP_EXT_4 function
+```
+
+**Response payload:** `[ext1, ext2, ext3, ext4, confirmed:bool]`
+
+#### 0xC8 HAT_RESET
+Reset HAT to default state (all pins disconnected).
+
+**Request payload:** Empty.
+**Response payload:** Empty (success) or error.
+
+#### 0xC9 HAT_DETECT
+Re-run HAT detection (ADC read + UART connect attempt).
+
+**Response payload:**
+```
+0       detected        bool    HAT present
+1       type            u8      HAT type
+2       detect_voltage  f32     ADC voltage
+6       connected       bool    UART connected
+```
+
+### 6.14 HUSB238 USB PD (I2C, addr 0x08)
 
 USB Power Delivery sink controller. Read-only status of PD contract and source capabilities.
 
@@ -1918,6 +1990,11 @@ Host                                    Device
 | 0xB2 | PCA_SET_PORT | H->D | port, val | (new) |
 | 0xB3 | PCA_SET_FAULT_CFG | H->D | auto_dis, log | `POST /api/ioexp/fault_config` |
 | 0xB4 | PCA_GET_FAULT_LOG | H->D | -- | `GET /api/ioexp/faults` |
+| 0xC5 | HAT_GET_STATUS | H->D | -- | `GET /api/hat` |
+| 0xC6 | HAT_SET_PIN | H->D | pin, func | `POST /api/hat/config` |
+| 0xC7 | HAT_SET_ALL_PINS | H->D | 4× func | `POST /api/hat/config` |
+| 0xC8 | HAT_RESET | H->D | -- | `POST /api/hat/reset` |
+| 0xC9 | HAT_DETECT | H->D | -- | `POST /api/hat/detect` |
 | 0xC0 | USBPD_GET_STATUS | H->D | -- | `GET /api/usbpd` |
 | 0xC1 | USBPD_SELECT_PDO | H->D | voltage | `POST /api/usbpd/select` |
 | 0xC2 | USBPD_GO | H->D | command | (new) |

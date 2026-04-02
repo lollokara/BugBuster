@@ -37,6 +37,7 @@ Last deep-dive: all 106 pages read and cross-referenced (2026-03-31).
 27. [PCA9535A — Datasheet Reference](#27-pca9535a--datasheet-reference)
 28. [DS4424 — Datasheet Reference](#28-ds4424--datasheet-reference)
 29. [AD74416H — Extended Reference](#29-ad74416h--extended-reference)
+30. [HAT Expansion Board System](#30-hat-expansion-board-system)
 
 ---
 
@@ -2554,3 +2555,113 @@ Regardless of function selection, these are always set:
 - DIN_SINK = 0 (current sink off)
 - DIN_THRESH_MODE = 0 (threshold scales with AVDD_HI)
 
+---
+
+## 30. HAT Expansion Board System
+
+PCB mode only. HAT (Hardware Attached on Top) boards attach to a dedicated connector on the
+BugBuster PCB, providing configurable I/O expansion for SWD debugging, tracing, or general GPIO.
+
+### 30.1 Physical Interface
+
+| Signal | GPIO | Direction | Description |
+|--------|------|-----------|-------------|
+| HAT_DETECT | GPIO47 | ADC Input | Voltage divider for HAT identification |
+| HAT_TX | GPIO43 (TXD0) | Output | UART TX from BugBuster to HAT |
+| HAT_RX | GPIO44 (RXD0) | Input | UART RX from HAT to BugBuster |
+| HAT_IRQ | GPIO15 | Open-drain bidir | Shared interrupt line |
+| EXP_EXT_1..4 | via MUX | Configurable | 4 expansion I/O lines |
+
+### 30.2 HAT Detection (ADC)
+
+GPIO47 has a 10 kΩ pull-up to 3.3V on the BugBuster PCB. Each HAT type has a specific
+pull-down resistor creating a unique voltage divider:
+
+| Condition | Pull-down | Voltage | HAT Type |
+|-----------|-----------|---------|----------|
+| No HAT | None (open) | ~3.3V | NONE |
+| SWD/GPIO HAT | 10 kΩ | ~1.65V | SWD_GPIO |
+| Future HAT A | 4.7 kΩ | ~1.06V | (reserved) |
+| Future HAT B | 22 kΩ | ~2.27V | (reserved) |
+
+Detection uses 8-sample ADC averaging for stability. Voltage thresholds:
+- \> 2.5V → No HAT
+- 1.2V–2.1V → SWD/GPIO HAT
+- Other ranges → reserved for future HAT types
+
+### 30.3 UART Protocol
+
+- **UART0** on GPIO43 (TX) / GPIO44 (RX)
+- **115200 baud, 8N1** (8 data bits, no parity, 1 stop bit)
+- BugBuster is always the **master** (initiates all transactions)
+- HAT is the **slave** (responds to commands, can assert IRQ for attention)
+
+**Frame format:**
+
+```
+[SYNC:0xAA] [LEN:u8] [CMD:u8] [PAYLOAD:0..N] [CRC8:u8]
+```
+
+- SYNC = 0xAA (frame start marker)
+- LEN = payload length (0–32 bytes, excludes SYNC/LEN/CMD/CRC)
+- CMD = command or response ID
+- CRC-8 polynomial 0x07 over CMD + PAYLOAD bytes
+
+**Commands (master → slave):**
+
+| CMD | Name | Payload | Description |
+|-----|------|---------|-------------|
+| 0x01 | PING | (empty) | Check if HAT is alive |
+| 0x02 | GET_INFO | (empty) | Get HAT type, firmware version |
+| 0x03 | SET_PIN_CONFIG | pin(u8) + func(u8), or 4×func(u8) | Configure EXP_EXT pins |
+| 0x04 | GET_PIN_CONFIG | (empty) | Read current pin config |
+| 0x05 | RESET | (empty) | Reset all pins to disconnected |
+
+**Responses (slave → master):**
+
+| RSP | Name | Payload | Description |
+|-----|------|---------|-------------|
+| 0x80 | OK | (varies) | Success, echoes relevant data |
+| 0x81 | ERROR | error_code(u8) | Command failed |
+| 0x82 | INFO | type(u8) + fw_major(u8) + fw_minor(u8) | Response to GET_INFO |
+
+### 30.4 EXP_EXT Pin Functions
+
+Each of the 4 EXP_EXT lines can be independently assigned:
+
+| Value | Name | Description |
+|-------|------|-------------|
+| 0 | DISCONNECTED | Pin not routed (default) |
+| 1 | SWDIO | SWD data I/O (bidirectional) |
+| 2 | SWCLK | SWD clock output |
+| 3 | TRACE1 | Trace data 1 / SWO |
+| 4 | TRACE2 | Trace data 2 |
+| 5 | GPIO1 | General-purpose I/O 1 |
+| 6 | GPIO2 | General-purpose I/O 2 |
+| 7 | GPIO3 | General-purpose I/O 3 |
+| 8 | GPIO4 | General-purpose I/O 4 |
+
+### 30.5 Interrupt Line (GPIO15)
+
+Open-drain, shared between BugBuster and HAT. Either side can pull low to signal attention.
+BugBuster configures GPIO15 as input-output open-drain with internal pull-up.
+The HAT should release the line (high-Z) after the interrupt is serviced.
+
+### 30.6 Initialization Sequence
+
+1. ADC detect: read GPIO47, average 8 samples, identify HAT type
+2. If HAT detected: initialize UART0 at 115200 8N1
+3. Send PING, wait for OK response (200 ms timeout)
+4. Send GET_INFO to learn HAT type and firmware version
+5. Send GET_PIN_CONFIG to read current pin assignments
+6. Report state to host via BBP/HTTP
+
+### 30.7 BBP Commands
+
+| ID | Name | HTTP Equivalent |
+|----|------|-----------------|
+| 0xC5 | HAT_GET_STATUS | `GET /api/hat` |
+| 0xC6 | HAT_SET_PIN | `POST /api/hat/config` |
+| 0xC7 | HAT_SET_ALL_PINS | `POST /api/hat/config` |
+| 0xC8 | HAT_RESET | `POST /api/hat/reset` |
+| 0xC9 | HAT_DETECT | `POST /api/hat/detect` |

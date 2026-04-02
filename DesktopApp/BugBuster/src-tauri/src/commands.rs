@@ -889,6 +889,83 @@ pub async fn pca_set_control(
 }
 
 // -----------------------------------------------------------------------------
+// HAT Expansion Board
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HatStatus {
+    pub detected: bool,
+    pub connected: bool,
+    pub hat_type: u8,
+    pub detect_voltage: f32,
+    pub fw_major: u8,
+    pub fw_minor: u8,
+    pub config_confirmed: bool,
+    pub pin_config: [u8; 4],
+}
+
+#[tauri::command]
+pub async fn hat_get_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<HatStatus> {
+    let rsp = mgr.send_command(bbp::CMD_HAT_GET_STATUS, &[]).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let detected = r.get_bool().unwrap_or(false);
+    let connected = r.get_bool().unwrap_or(false);
+    let hat_type = r.get_u8().unwrap_or(0);
+    let detect_voltage = r.get_f32().unwrap_or(0.0);
+    let fw_major = r.get_u8().unwrap_or(0);
+    let fw_minor = r.get_u8().unwrap_or(0);
+    let config_confirmed = r.get_bool().unwrap_or(false);
+    let mut pin_config = [0u8; 4];
+    for i in 0..4 { pin_config[i] = r.get_u8().unwrap_or(0); }
+    Ok(HatStatus { detected, connected, hat_type, detect_voltage, fw_major, fw_minor, config_confirmed, pin_config })
+}
+
+#[tauri::command]
+pub async fn hat_set_pin(
+    pin: u8,
+    function: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(pin);
+    pw.put_u8(function);
+    mgr.send_command(bbp::CMD_HAT_SET_PIN, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_set_all_pins(
+    pins: [u8; 4],
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_HAT_SET_ALL_PINS, &pins).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_reset(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_HAT_RESET, &[]).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_detect(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<HatStatus> {
+    let rsp = mgr.send_command(bbp::CMD_HAT_DETECT, &[]).await.map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let detected = r.get_bool().unwrap_or(false);
+    let hat_type = r.get_u8().unwrap_or(0);
+    let detect_voltage = r.get_f32().unwrap_or(0.0);
+    let connected = r.get_bool().unwrap_or(false);
+    Ok(HatStatus { detected, connected, hat_type, detect_voltage, ..Default::default() })
+}
+
+// -----------------------------------------------------------------------------
 // HUSB238 USB PD
 // -----------------------------------------------------------------------------
 

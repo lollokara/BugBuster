@@ -16,3 +16,4 @@ pub mod calibration;
 pub mod iin;
 pub mod usbpd;
 pub mod ioexp;
+pub mod hat;

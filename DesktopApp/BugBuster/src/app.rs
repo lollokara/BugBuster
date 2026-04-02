@@ -4,7 +4,7 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, iin::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*};
+use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, iin::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*, hat::*};
 
 const TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
@@ -25,6 +25,7 @@ const TABS: &[(&str, &str)] = &[
     ("calibration", "Calibration"),
     ("usbpd", "USB PD"),
     ("ioexp", "IO Expander"),
+    ("hat", "HAT"),
 ];
 
 #[component]
@@ -324,6 +325,7 @@ pub fn App() -> impl IntoView {
                         "calibration" => view! { <CalibrationTab state=device_state /> }.into_any(),
                         "usbpd" => view! { <UsbPdTab state=device_state /> }.into_any(),
                         "ioexp" => view! { <IoExpTab state=device_state /> }.into_any(),
+                        "hat" => view! { <HatTab state=device_state /> }.into_any(),
                         _ => view! { <div>"Unknown tab"</div> }.into_any(),
                     }}
                 </div>

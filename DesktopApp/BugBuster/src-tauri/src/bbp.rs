@@ -109,6 +109,13 @@ pub const CMD_PCA_SET_PORT: u8 = 0xB2;
 pub const CMD_PCA_SET_FAULT_CFG: u8 = 0xB3;
 pub const CMD_PCA_GET_FAULT_LOG: u8 = 0xB4;
 
+// HAT Expansion Board
+pub const CMD_HAT_GET_STATUS: u8 = 0xC5;
+pub const CMD_HAT_SET_PIN: u8 = 0xC6;
+pub const CMD_HAT_SET_ALL_PINS: u8 = 0xC7;
+pub const CMD_HAT_RESET: u8 = 0xC8;
+pub const CMD_HAT_DETECT: u8 = 0xC9;
+
 // Waveform Generator
 pub const CMD_START_WAVEGEN: u8 = 0xD0;
 pub const CMD_STOP_WAVEGEN: u8 = 0xD1;

@@ -24,6 +24,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "hat.h"
 #include "adgs2414d.h"
 #include "dio.h"
 #include "selftest.h"
@@ -1711,6 +1712,107 @@ static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
     return send_error(req, 404, "Unknown IO Expander endpoint");
 }
 
+// =============================================================================
+// HAT Expansion Board API
+// =============================================================================
+
+// GET /api/hat - Get HAT status
+static esp_err_t handle_get_hat(httpd_req_t *req)
+{
+    const HatState *hs = hat_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "detected", hs->detected);
+    cJSON_AddBoolToObject(root, "connected", hs->connected);
+    cJSON_AddNumberToObject(root, "type", hs->type);
+    cJSON_AddStringToObject(root, "typeName", hat_type_name(hs->type));
+    cJSON_AddNumberToObject(root, "detectVoltage", hs->detect_voltage);
+    cJSON_AddNumberToObject(root, "fwMajor", hs->fw_version_major);
+    cJSON_AddNumberToObject(root, "fwMinor", hs->fw_version_minor);
+    cJSON_AddBoolToObject(root, "configConfirmed", hs->config_confirmed);
+
+    cJSON *pins = cJSON_AddArrayToObject(root, "pinConfig");
+    for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
+        cJSON *pin = cJSON_CreateObject();
+        cJSON_AddNumberToObject(pin, "pin", i);
+        cJSON_AddNumberToObject(pin, "function", hs->pin_config[i]);
+        cJSON_AddStringToObject(pin, "functionName", hat_func_name(hs->pin_config[i]));
+        cJSON_AddItemToArray(pins, pin);
+    }
+
+    return send_json(req, root);
+}
+
+// POST /api/hat/config  body: {"pin":0, "function":1} or {"pins":[1,2,3,4]}
+static esp_err_t handle_post_hat_config(httpd_req_t *req)
+{
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *pinItem = cJSON_GetObjectItem(doc, "pin");
+    cJSON *funcItem = cJSON_GetObjectItem(doc, "function");
+    cJSON *pinsArray = cJSON_GetObjectItem(doc, "pins");
+
+    bool ok = false;
+
+    if (pinsArray && cJSON_IsArray(pinsArray) && cJSON_GetArraySize(pinsArray) == HAT_NUM_EXT_PINS) {
+        // Set all pins at once
+        HatPinFunction config[HAT_NUM_EXT_PINS];
+        for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
+            cJSON *item = cJSON_GetArrayItem(pinsArray, i);
+            config[i] = item ? (HatPinFunction)item->valueint : HAT_FUNC_DISCONNECTED;
+        }
+        ok = hat_set_all_pins(config);
+    } else if (pinItem && funcItem && cJSON_IsNumber(pinItem) && cJSON_IsNumber(funcItem)) {
+        // Set single pin
+        ok = hat_set_pin((uint8_t)pinItem->valueint, (HatPinFunction)funcItem->valueint);
+    } else {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Need {pin, function} or {pins:[...]}");
+    }
+
+    cJSON_Delete(doc);
+
+    cJSON *rsp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(rsp, "ok", ok);
+    cJSON_AddBoolToObject(rsp, "confirmed", ok);
+    return send_json(req, rsp);
+}
+
+// POST /api/hat/reset
+static esp_err_t handle_post_hat_reset(httpd_req_t *req)
+{
+    bool ok = hat_reset();
+    cJSON *rsp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(rsp, "ok", ok);
+    return send_json(req, rsp);
+}
+
+// POST /api/hat/detect
+static esp_err_t handle_post_hat_detect(httpd_req_t *req)
+{
+    HatType type = hat_detect();
+    const HatState *hs = hat_get_state();
+    if (hs->detected && !hs->connected) {
+        hat_connect();
+    }
+    cJSON *rsp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(rsp, "detected", hs->detected);
+    cJSON_AddBoolToObject(rsp, "connected", hs->connected);
+    cJSON_AddNumberToObject(rsp, "type", type);
+    cJSON_AddStringToObject(rsp, "typeName", hat_type_name(type));
+    cJSON_AddNumberToObject(rsp, "detectVoltage", hs->detect_voltage);
+    return send_json(req, rsp);
+}
+
+// POST /api/hat dispatch
+static esp_err_t handle_hat_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/hat/config")) return handle_post_hat_config(req);
+    if (strstr(req->uri, "/api/hat/reset")) return handle_post_hat_reset(req);
+    if (strstr(req->uri, "/api/hat/detect")) return handle_post_hat_detect(req);
+    return send_error(req, 404, "Unknown HAT endpoint");
+}
+
 // GET /api/debug - Combined debug status of all I2C devices
 static esp_err_t handle_get_debug(httpd_req_t *req)
 {
@@ -2377,6 +2479,18 @@ void initWebServer(void)
         .uri = "/api/ioexp/*", .method = HTTP_POST, .handler = handle_ioexp_post_dispatch, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_ioexp_post);
+
+    // ----- HAT routes -----
+
+    httpd_uri_t uri_hat_get = {
+        .uri = "/api/hat", .method = HTTP_GET, .handler = handle_get_hat, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_get);
+
+    httpd_uri_t uri_hat_post = {
+        .uri = "/api/hat/*", .method = HTTP_POST, .handler = handle_hat_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_post);
 
     httpd_uri_t uri_debug_get = {
         .uri = "/api/debug", .method = HTTP_GET, .handler = handle_get_debug, .user_ctx = NULL

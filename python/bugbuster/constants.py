@@ -126,6 +126,25 @@ class PowerControl(IntEnum):
 
 
 # ---------------------------------------------------------------------------
+# HAT Expansion Board pin functions
+# ---------------------------------------------------------------------------
+
+class HatPinFunction(IntEnum):
+    """
+    Functions assignable to each EXP_EXT pin on the HAT connector.
+    """
+    DISCONNECTED = 0
+    SWDIO        = 1
+    SWCLK        = 2
+    TRACE1       = 3   # SWO
+    TRACE2       = 4
+    GPIO1        = 5
+    GPIO2        = 6
+    GPIO3        = 7
+    GPIO4        = 8
+
+
+# ---------------------------------------------------------------------------
 # RTD excitation current
 # ---------------------------------------------------------------------------
 
@@ -321,6 +340,13 @@ class CmdId(IntEnum):
     PCA_SET_PORT       = 0xB2
     PCA_SET_FAULT_CFG  = 0xB3
     PCA_GET_FAULT_LOG  = 0xB4
+
+    # HAT Expansion Board
+    HAT_GET_STATUS   = 0xC5
+    HAT_SET_PIN      = 0xC6
+    HAT_SET_ALL_PINS = 0xC7
+    HAT_RESET        = 0xC8
+    HAT_DETECT       = 0xC9
 
     # USB PD
     USBPD_GET_STATUS = 0xC0

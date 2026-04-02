@@ -146,6 +146,13 @@ extern "C" {
 #define BBP_CMD_START_WAVEGEN       0xD0  // Start waveform generation
 #define BBP_CMD_STOP_WAVEGEN        0xD1  // Stop waveform generation
 
+// HAT Expansion Board
+#define BBP_CMD_HAT_GET_STATUS      0xC5  // Get HAT state (detect, type, pin config)
+#define BBP_CMD_HAT_SET_PIN         0xC6  // Set single EXP_EXT pin function
+#define BBP_CMD_HAT_SET_ALL_PINS    0xC7  // Set all 4 EXP_EXT pin functions
+#define BBP_CMD_HAT_RESET           0xC8  // Reset HAT to default
+#define BBP_CMD_HAT_DETECT          0xC9  // Re-run HAT detection
+
 // HUSB238 USB PD
 #define BBP_CMD_USBPD_GET_STATUS    0xC0  // Get USB PD contract status
 #define BBP_CMD_USBPD_SELECT_PDO    0xC1  // Select PDO voltage

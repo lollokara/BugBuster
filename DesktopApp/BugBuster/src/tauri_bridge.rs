@@ -428,6 +428,41 @@ pub async fn fetch_pca_status() -> Option<IoExpState> {
 }
 
 // -----------------------------------------------------------------------------
+// HAT Expansion Board types & helpers
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HatStatus {
+    pub detected: bool,
+    pub connected: bool,
+    pub hat_type: u8,
+    pub detect_voltage: f32,
+    pub fw_major: u8,
+    pub fw_minor: u8,
+    pub config_confirmed: bool,
+    pub pin_config: [u8; 4],
+}
+
+pub async fn fetch_hat_status() -> Option<HatStatus> {
+    let result = invoke("hat_get_status", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub fn send_hat_set_pin(pin: u8, function: u8) {
+    #[derive(Serialize)]
+    struct Args { pin: u8, function: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { pin, function }).unwrap();
+    let func_names = ["Disconnected", "SWDIO", "SWCLK", "TRACE1", "TRACE2", "GPIO1", "GPIO2", "GPIO3", "GPIO4"];
+    let name = func_names.get(function as usize).unwrap_or(&"?");
+    let label = format!("EXT_{} -> {}", pin + 1, name);
+    invoke_with_feedback("hat_set_pin", args, &label);
+}
+
+pub fn send_hat_reset() {
+    invoke_with_feedback("hat_reset", JsValue::NULL, "HAT Reset");
+}
+
+// -----------------------------------------------------------------------------
 // WiFi State types & helpers
 // -----------------------------------------------------------------------------
 

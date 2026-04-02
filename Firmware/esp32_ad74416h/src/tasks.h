@@ -16,6 +16,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "hat.h"
 
 // -----------------------------------------------------------------------------
 // Shared Device State
@@ -120,6 +121,7 @@ struct DeviceState {
     DS4424State      idac;              // DS4424 IDAC state
     Husb238State     usbpd;             // HUSB238 USB-PD state
     PCA9535State     ioexp;             // PCA9535 GPIO expander state
+    HatState         hat;               // HAT expansion board state
 
     // PCA9535 fault log (ring buffer, updated by fault callback)
     struct PcaFaultLogEntry {

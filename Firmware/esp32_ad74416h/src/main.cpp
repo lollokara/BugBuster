@@ -29,6 +29,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "hat.h"
 #include "esp_ota_ops.h"
 
 static const char* TAG = "main";
@@ -256,6 +257,20 @@ extern "C" void app_main(void)
     } else {
         serial_println("[BugBuster] I2C bus FAILED");
         g_deviceState.i2cOk = false;
+    }
+
+    // HAT expansion board (PCB mode only — GPIO47 ADC detect + UART0 on GPIO43/44)
+    if (hat_init()) {
+        const HatState *hs = hat_get_state();
+        if (hs->connected) {
+            serial_printf("[BugBuster] HAT: %s (fw v%d.%d, connected)\r\n",
+                         hat_type_name(hs->type), hs->fw_version_major, hs->fw_version_minor);
+        } else if (hs->detected) {
+            serial_printf("[BugBuster] HAT: %s detected but not responding\r\n",
+                         hat_type_name(hs->type));
+        } else {
+            serial_println("[BugBuster] HAT: none detected");
+        }
     }
 
     // 11. UART bridge (CDC #1+ ↔ UART)

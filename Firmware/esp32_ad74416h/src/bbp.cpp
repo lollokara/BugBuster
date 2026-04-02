@@ -16,6 +16,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "hat.h"
 #include "wifi_manager.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -1436,6 +1437,108 @@ static int handlePcaGetFaultLog(uint16_t seq, uint8_t cmdId, uint8_t *out)
     return (int)pos;
 }
 
+// --- HAT Expansion Board commands ---
+
+static int handleHatGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    const HatState *hs = hat_get_state();
+    size_t pos = 0;
+    put_bool(out, &pos, hs->detected);
+    put_bool(out, &pos, hs->connected);
+    put_u8(out, &pos, (uint8_t)hs->type);
+    put_f32(out, &pos, hs->detect_voltage);
+    put_u8(out, &pos, hs->fw_version_major);
+    put_u8(out, &pos, hs->fw_version_minor);
+    put_bool(out, &pos, hs->config_confirmed);
+    for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
+        put_u8(out, &pos, (uint8_t)hs->pin_config[i]);
+    }
+    return (int)pos;
+}
+
+static int handleHatSetPin(uint16_t seq, uint8_t cmdId,
+                            const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t pin = get_u8(payload, &rpos);
+    uint8_t func = get_u8(payload, &rpos);
+
+    if (pin >= HAT_NUM_EXT_PINS || func >= HAT_FUNC_COUNT) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    bool ok = hat_set_pin(pin, (HatPinFunction)func);
+    if (!ok) {
+        sendError(seq, cmdId, BBP_ERR_BUSY);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, pin);
+    put_u8(out, &pos, func);
+    put_bool(out, &pos, true);  // confirmed
+    return (int)pos;
+}
+
+static int handleHatSetAllPins(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < HAT_NUM_EXT_PINS) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    HatPinFunction config[HAT_NUM_EXT_PINS];
+    size_t rpos = 0;
+    for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
+        config[i] = (HatPinFunction)get_u8(payload, &rpos);
+        if (config[i] >= HAT_FUNC_COUNT) {
+            sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+            return -1;
+        }
+    }
+
+    bool ok = hat_set_all_pins(config);
+    if (!ok) {
+        sendError(seq, cmdId, BBP_ERR_BUSY);
+        return -1;
+    }
+
+    size_t pos = 0;
+    for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
+        put_u8(out, &pos, (uint8_t)config[i]);
+    }
+    put_bool(out, &pos, true);
+    return (int)pos;
+}
+
+static int handleHatReset(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    bool ok = hat_reset();
+    if (!ok) {
+        sendError(seq, cmdId, BBP_ERR_BUSY);
+        return -1;
+    }
+    return 0;
+}
+
+static int handleHatDetect(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    HatType type = hat_detect();
+    const HatState *hs = hat_get_state();
+
+    // If newly detected, try to connect
+    if (hs->detected && !hs->connected) {
+        hat_connect();
+    }
+
+    size_t pos = 0;
+    put_bool(out, &pos, hs->detected);
+    put_u8(out, &pos, (uint8_t)hs->type);
+    put_f32(out, &pos, hs->detect_voltage);
+    put_bool(out, &pos, hs->connected);
+    return (int)pos;
+}
+
 // --- HUSB238 USB PD commands ---
 
 static int handleUsbpdGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
@@ -2160,6 +2263,23 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_PCA_GET_FAULT_LOG:
             rspLen = handlePcaGetFaultLog(seq, cmdId, rspBuf);
+            break;
+
+        // --- HAT Expansion Board ---
+        case BBP_CMD_HAT_GET_STATUS:
+            rspLen = handleHatGetStatus(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_SET_PIN:
+            rspLen = handleHatSetPin(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_HAT_SET_ALL_PINS:
+            rspLen = handleHatSetAllPins(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_HAT_RESET:
+            rspLen = handleHatReset(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_DETECT:
+            rspLen = handleHatDetect(seq, cmdId, rspBuf);
             break;
 
         // --- HUSB238 USB PD ---
