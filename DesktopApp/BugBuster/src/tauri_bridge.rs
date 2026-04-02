@@ -432,6 +432,13 @@ pub async fn fetch_pca_status() -> Option<IoExpState> {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HatConnectorStatus {
+    pub enabled: bool,
+    pub current_ma: f32,
+    pub fault: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HatStatus {
     pub detected: bool,
     pub connected: bool,
@@ -440,7 +447,14 @@ pub struct HatStatus {
     pub fw_major: u8,
     pub fw_minor: u8,
     pub config_confirmed: bool,
-    pub pin_config: [u8; 4],
+    pub pin_config: Vec<u8>,
+    // Power
+    pub connectors: Vec<HatConnectorStatus>,
+    pub io_voltage_mv: u16,
+    // SWD
+    pub dap_connected: bool,
+    pub target_detected: bool,
+    pub target_dpidr: u32,
 }
 
 pub async fn fetch_hat_status() -> Option<HatStatus> {
@@ -460,6 +474,32 @@ pub fn send_hat_set_pin(pin: u8, function: u8) {
 
 pub fn send_hat_reset() {
     invoke_with_feedback("hat_reset", JsValue::NULL, "HAT Reset");
+}
+
+pub fn send_hat_set_power(connector: u8, enable: bool) {
+    #[derive(Serialize)]
+    struct Args { connector: u8, enable: bool }
+    let args = serde_wasm_bindgen::to_value(&Args { connector, enable }).unwrap();
+    let name = if connector == 0 { "A" } else { "B" };
+    let label = format!("Connector {} {}", name, if enable { "ON" } else { "OFF" });
+    invoke_with_feedback("hat_set_power", args, &label);
+}
+
+pub fn send_hat_set_io_voltage(voltage_mv: u16) {
+    #[derive(Serialize)]
+    struct Args { voltage_mv: u16 }
+    let args = serde_wasm_bindgen::to_value(&Args { voltage_mv }).unwrap();
+    let label = format!("I/O Voltage: {:.1}V", voltage_mv as f32 / 1000.0);
+    invoke_with_feedback("hat_set_io_voltage", args, &label);
+}
+
+pub fn send_hat_setup_swd(target_voltage_mv: u16, connector: u8) {
+    #[derive(Serialize)]
+    struct Args { target_voltage_mv: u16, connector: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { target_voltage_mv, connector }).unwrap();
+    let label = format!("SWD Setup: {:.1}V on {}", target_voltage_mv as f32 / 1000.0,
+                        if connector == 0 { "A" } else { "B" });
+    invoke_with_feedback("hat_setup_swd", args, &label);
 }
 
 // -----------------------------------------------------------------------------

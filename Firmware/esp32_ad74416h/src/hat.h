@@ -31,14 +31,24 @@ extern "C" {
 // -----------------------------------------------------------------------------
 // Pin Definitions (PCB mode only)
 // -----------------------------------------------------------------------------
+#if BREADBOARD_MODE
+// Breadboard test: UART0 on GPIO43/44 (still free in breadboard mode)
+// HAT detect on GPIO47 (reused from DIO, acceptable for testing)
+// IRQ not connected in breadboard test
+#define PIN_HAT_DETECT      GPIO_NUM_NC   // No detect in breadboard (always assume connected)
+#define PIN_HAT_TX          GPIO_NUM_43   // UART TX to RP2040 GPIO2
+#define PIN_HAT_RX          GPIO_NUM_44   // UART RX from RP2040 GPIO3
+#define PIN_HAT_IRQ         GPIO_NUM_NC   // No IRQ in breadboard test
+#else
 #define PIN_HAT_DETECT      GPIO_NUM_47   // ADC input for HAT identification
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to HAT
 #define PIN_HAT_RX          GPIO_NUM_44   // UART RX from HAT
 #define PIN_HAT_IRQ         GPIO_NUM_15   // Shared open-drain interrupt
+#endif
 
 #define HAT_UART_NUM        UART_NUM_0
-#define HAT_UART_BAUD       115200
-#define HAT_UART_BUF_SIZE   256
+#define HAT_UART_BAUD       921600
+#define HAT_UART_BUF_SIZE   512
 
 // -----------------------------------------------------------------------------
 // HAT Detection — Voltage Thresholds
@@ -88,37 +98,94 @@ typedef enum {
 #define HAT_FRAME_SYNC      0xAA
 #define HAT_FRAME_MAX_LEN   32      // Max payload length
 
-// Commands (master → slave)
-#define HAT_CMD_PING            0x01  // Ping / identify
-#define HAT_CMD_GET_INFO        0x02  // Get HAT info (type, version, capabilities)
-#define HAT_CMD_SET_PIN_CONFIG  0x03  // Set EXP_EXT pin function mapping
-#define HAT_CMD_GET_PIN_CONFIG  0x04  // Get current pin config
-#define HAT_CMD_RESET           0x05  // Reset HAT to default state
+// Commands (master → slave): Core (0x01–0x0F)
+#define HAT_CMD_PING            0x01
+#define HAT_CMD_GET_INFO        0x02
+#define HAT_CMD_SET_PIN_CONFIG  0x03
+#define HAT_CMD_GET_PIN_CONFIG  0x04
+#define HAT_CMD_RESET           0x05
+
+// Commands: Power Management (0x10–0x1F)
+#define HAT_CMD_SET_POWER       0x10  // Enable/disable connector power
+#define HAT_CMD_GET_POWER_STATUS 0x11 // Read power state + current
+#define HAT_CMD_SET_IO_VOLTAGE  0x12  // Set HVPAK I/O level (mV)
+#define HAT_CMD_GET_IO_VOLTAGE  0x13  // Read current I/O voltage setting
+
+// Commands: SWD Management (0x20–0x2F)
+#define HAT_CMD_GET_DAP_STATUS  0x20  // Is debugprobe USB connected? Target detected?
+#define HAT_CMD_GET_TARGET_INFO 0x21  // DPIDR, SWD clock
+#define HAT_CMD_SET_SWD_CLOCK   0x22  // Adjust SWD clock speed
+
+// Commands: Logic Analyzer (0x30–0x3F)
+#define HAT_CMD_LA_CONFIG       0x30  // Configure capture
+#define HAT_CMD_LA_SET_TRIGGER  0x31  // Set trigger condition
+#define HAT_CMD_LA_ARM          0x32  // Arm trigger
+#define HAT_CMD_LA_FORCE        0x33  // Force immediate capture
+#define HAT_CMD_LA_GET_STATUS   0x34  // Capture state + sample count
+#define HAT_CMD_LA_READ_DATA    0x35  // Read captured data chunk
+#define HAT_CMD_LA_STOP         0x36  // Abort capture
 
 // Responses (slave → master)
-#define HAT_RSP_OK              0x80  // Success (echoes CMD in payload[0])
-#define HAT_RSP_ERROR           0x81  // Error (error code in payload)
-#define HAT_RSP_INFO            0x82  // Info response (to GET_INFO)
+#define HAT_RSP_OK              0x80
+#define HAT_RSP_ERROR           0x81
+#define HAT_RSP_INFO            0x82
+#define HAT_RSP_POWER_STATUS    0x83
+#define HAT_RSP_DAP_STATUS      0x84
+#define HAT_RSP_LA_STATUS       0x85
+#define HAT_RSP_LA_DATA         0x86
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
 #define HAT_ERR_INVALID_PIN     0x02
 #define HAT_ERR_INVALID_FUNC    0x03
 #define HAT_ERR_BUSY            0x04
+#define HAT_ERR_CRC             0x05
+#define HAT_ERR_FRAME           0x06
+#define HAT_ERR_NOT_CONNECTED   0x07
+#define HAT_ERR_POWER_FAULT     0x08
+
+// -----------------------------------------------------------------------------
+// Connector / Power Types
+// -----------------------------------------------------------------------------
+
+typedef enum {
+    HAT_CONNECTOR_A = 0,    // Target 1: powered by VADJ1
+    HAT_CONNECTOR_B = 1,    // Target 2: powered by VADJ2
+} HatConnector;
+
+typedef struct {
+    bool     enabled;           // Connector power is on
+    float    current_ma;        // Measured current (if shunt present)
+    bool     fault;             // Overcurrent fault detected
+} HatConnectorStatus;
 
 // -----------------------------------------------------------------------------
 // HAT State
 // -----------------------------------------------------------------------------
 
 typedef struct {
+    // Detection & connection
     bool         detected;                          // HAT physically present (ADC detect)
     bool         connected;                         // UART communication established
     HatType      type;                              // Detected HAT type
     float        detect_voltage;                    // Raw ADC voltage on detect pin
     uint8_t      fw_version_major;                  // HAT firmware version
     uint8_t      fw_version_minor;
+
+    // Pin configuration
     HatPinFunction pin_config[HAT_NUM_EXT_PINS];   // Current EXP_EXT assignments
     bool         config_confirmed;                  // HAT acknowledged last config
+
+    // Power management
+    HatConnectorStatus connector[2];                // Connector A and B status
+    uint16_t     io_voltage_mv;                     // HVPAK I/O voltage (mV)
+
+    // SWD management
+    bool         dap_connected;                     // USB CMSIS-DAP host connected
+    bool         target_detected;                   // SWD target responding
+    uint32_t     target_dpidr;                      // Target DPIDR value
+
+    // Timing
     uint32_t     last_ping_ms;                      // Last successful ping timestamp
 } HatState;
 
@@ -183,6 +250,93 @@ bool hat_get_pin_config(HatPinFunction config[HAT_NUM_EXT_PINS]);
  * @return true if HAT acknowledged
  */
 bool hat_reset(void);
+
+// --- Power Management ---
+
+/**
+ * @brief Enable or disable a target connector's power.
+ * @param conn  HAT_CONNECTOR_A or HAT_CONNECTOR_B
+ * @param on    true = enable, false = disable
+ * @return true if HAT acknowledged
+ */
+bool hat_set_power(HatConnector conn, bool on);
+
+/**
+ * @brief Get power status for both connectors.
+ * @return true if HAT responded
+ */
+bool hat_get_power_status(void);
+
+/**
+ * @brief Set the HVPAK I/O level translation voltage.
+ * @param mv  Target I/O voltage in millivolts (1200–5500)
+ * @return true if HAT acknowledged
+ */
+bool hat_set_io_voltage(uint16_t mv);
+
+/**
+ * @brief One-call SWD setup: set VADJ, I/O voltage, power on, route SWD pins.
+ * @param target_voltage_mv  Target voltage in mV (e.g. 3300 for 3.3V)
+ * @param connector          Which connector the target is on
+ * @return true if all steps succeeded
+ */
+bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector);
+
+// --- SWD Management ---
+
+/**
+ * @brief Query DAP/SWD status from the HAT (USB connection, target detect, clock).
+ * @return true if HAT responded
+ */
+bool hat_get_dap_status(void);
+
+/**
+ * @brief Set SWD clock speed on the HAT debugprobe.
+ * @param khz  Clock speed in kHz (100–50000)
+ * @return true if HAT acknowledged
+ */
+bool hat_set_swd_clock(uint16_t khz);
+
+// --- Logic Analyzer ---
+
+typedef struct {
+    uint8_t  state;         // LaState enum
+    uint8_t  channels;
+    uint32_t samples_captured;
+    uint32_t total_samples;
+    uint32_t actual_rate_hz;
+} HatLaStatus;
+
+/**
+ * @brief Configure LA capture parameters.
+ * @param channels   1, 2, or 4
+ * @param rate_hz    Sample rate in Hz
+ * @param depth      Total samples to capture
+ */
+bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth);
+
+/**
+ * @brief Set LA trigger condition.
+ * @param type     Trigger type (0=none, 1=rising, 2=falling, 3=both, 4=high, 5=low)
+ * @param channel  Channel to trigger on (0-3)
+ */
+bool hat_la_set_trigger(uint8_t type, uint8_t channel);
+
+bool hat_la_arm(void);
+bool hat_la_force(void);
+bool hat_la_stop(void);
+bool hat_la_get_status(HatLaStatus *status);
+
+/**
+ * @brief Read a chunk of captured data from the LA buffer.
+ * @param offset  Byte offset into buffer
+ * @param buf     Output buffer
+ * @param len     Bytes to read (max 28)
+ * @return Actual bytes read
+ */
+uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len);
+
+// --- String Helpers ---
 
 /**
  * @brief Get function name string for display.

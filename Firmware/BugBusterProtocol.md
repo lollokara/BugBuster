@@ -1995,6 +1995,17 @@ Host                                    Device
 | 0xC7 | HAT_SET_ALL_PINS | H->D | 4× func | `POST /api/hat/config` |
 | 0xC8 | HAT_RESET | H->D | -- | `POST /api/hat/reset` |
 | 0xC9 | HAT_DETECT | H->D | -- | `POST /api/hat/detect` |
+| 0xCA | HAT_SET_POWER | H->D | conn, enable | `POST /api/hat/power` |
+| 0xCB | HAT_GET_POWER | H->D | -- | `GET /api/hat/power` |
+| 0xCC | HAT_SET_IO_VOLTAGE | H->D | voltage_mv | `POST /api/hat/io_voltage` |
+| 0xCD | HAT_SETUP_SWD | H->D | voltage_mv, conn | `POST /api/hat/setup_swd` |
+| 0xCF | HAT_LA_CONFIG | H->D | ch, rate, depth | LA: configure capture |
+| 0xD5 | HAT_LA_ARM | H->D | -- | LA: arm trigger |
+| 0xD6 | HAT_LA_FORCE | H->D | -- | LA: force trigger |
+| 0xD7 | HAT_LA_STATUS | H->D | -- | LA: get capture status |
+| 0xD8 | HAT_LA_READ | H->D | offset, len | LA: read data chunk |
+| 0xD9 | HAT_LA_STOP | H->D | -- | LA: stop capture |
+| 0xDA | HAT_LA_TRIGGER | H->D | type, channel | LA: set trigger |
 | 0xC0 | USBPD_GET_STATUS | H->D | -- | `GET /api/usbpd` |
 | 0xC1 | USBPD_SELECT_PDO | H->D | voltage | `POST /api/usbpd/select` |
 | 0xC2 | USBPD_GO | H->D | command | (new) |

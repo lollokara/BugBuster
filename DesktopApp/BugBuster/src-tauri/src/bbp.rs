@@ -115,6 +115,18 @@ pub const CMD_HAT_SET_PIN: u8 = 0xC6;
 pub const CMD_HAT_SET_ALL_PINS: u8 = 0xC7;
 pub const CMD_HAT_RESET: u8 = 0xC8;
 pub const CMD_HAT_DETECT: u8 = 0xC9;
+pub const CMD_HAT_SET_POWER: u8 = 0xCA;
+pub const CMD_HAT_GET_POWER: u8 = 0xCB;
+pub const CMD_HAT_SET_IO_VOLTAGE: u8 = 0xCC;
+pub const CMD_HAT_SETUP_SWD: u8 = 0xCD;
+// HAT Logic Analyzer
+pub const CMD_HAT_LA_CONFIG: u8 = 0xCF;
+pub const CMD_HAT_LA_ARM: u8 = 0xD5;
+pub const CMD_HAT_LA_FORCE: u8 = 0xD6;
+pub const CMD_HAT_LA_STATUS: u8 = 0xD7;
+pub const CMD_HAT_LA_READ: u8 = 0xD8;
+pub const CMD_HAT_LA_STOP: u8 = 0xD9;
+pub const CMD_HAT_LA_TRIGGER: u8 = 0xDA;
 
 // Waveform Generator
 pub const CMD_START_WAVEGEN: u8 = 0xD0;

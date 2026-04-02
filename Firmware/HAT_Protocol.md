@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-04-02
-**Transport:** UART 115200 8N1 (GPIO43 TX, GPIO44 RX)
+**Transport:** UART 921600 8N1 (GPIO43 TX, GPIO44 RX)
 **Roles:** BugBuster = Master, HAT = Slave
 
 ---
@@ -28,7 +28,7 @@ The HAT (Hardware Attached on Top) protocol defines communication between the Bu
 
 | Parameter | Value |
 |-----------|-------|
-| Baud rate | 115200 |
+| Baud rate | 921600 |
 | Data bits | 8 |
 | Parity | None |
 | Stop bits | 1 |
@@ -432,7 +432,7 @@ EXP_EXT_4 = GPIO4  (0x08)
 2. Read 8 ADC samples, average → V_detect
 3. Map V_detect to HAT type
 4. If HAT type = NONE → done (no HAT)
-5. Initialize UART0: 115200 8N1 on GPIO43/GPIO44
+5. Initialize UART0: 921600 8N1 on GPIO43/GPIO44
 6. Configure GPIO15 as open-drain input with pull-up
 7. Flush UART RX buffer
 8. Send PING (0x01), wait 200ms for RSP_OK
@@ -446,7 +446,7 @@ EXP_EXT_4 = GPIO4  (0x08)
 ### 7.2 HAT Boot (Slave Side)
 
 ```
-1. Initialize UART: 115200 8N1
+1. Initialize UART: 921600 8N1
 2. Set R_ID pull-down resistor (hardware)
 3. Configure GPIO15 as open-drain output, release HIGH
 4. Set all EXP_EXT pins to DISCONNECTED (safe default)

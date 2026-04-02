@@ -12,6 +12,7 @@ use crate::bbp::{self, PayloadWriter};
 use crate::connection_manager::ConnectionManager;
 use crate::state::*;
 
+use serde::{Serialize, Deserialize};
 use serde_json;
 
 /// Global CSV writer protected by a Mutex.
@@ -893,6 +894,13 @@ pub async fn pca_set_control(
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HatConnectorStatus {
+    pub enabled: bool,
+    pub current_ma: f32,
+    pub fault: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HatStatus {
     pub detected: bool,
     pub connected: bool,
@@ -901,7 +909,14 @@ pub struct HatStatus {
     pub fw_major: u8,
     pub fw_minor: u8,
     pub config_confirmed: bool,
-    pub pin_config: [u8; 4],
+    pub pin_config: Vec<u8>,
+    // Power
+    pub connectors: Vec<HatConnectorStatus>,
+    pub io_voltage_mv: u16,
+    // SWD
+    pub dap_connected: bool,
+    pub target_detected: bool,
+    pub target_dpidr: u32,
 }
 
 #[tauri::command]
@@ -910,6 +925,7 @@ pub async fn hat_get_status(
 ) -> CmdResult<HatStatus> {
     let rsp = mgr.send_command(bbp::CMD_HAT_GET_STATUS, &[]).await.map_err(map_err)?;
     let mut r = bbp::PayloadReader::new(&rsp);
+    // Core
     let detected = r.get_bool().unwrap_or(false);
     let connected = r.get_bool().unwrap_or(false);
     let hat_type = r.get_u8().unwrap_or(0);
@@ -917,9 +933,23 @@ pub async fn hat_get_status(
     let fw_major = r.get_u8().unwrap_or(0);
     let fw_minor = r.get_u8().unwrap_or(0);
     let config_confirmed = r.get_bool().unwrap_or(false);
-    let mut pin_config = [0u8; 4];
+    let mut pin_config = vec![0u8; 4];
     for i in 0..4 { pin_config[i] = r.get_u8().unwrap_or(0); }
-    Ok(HatStatus { detected, connected, hat_type, detect_voltage, fw_major, fw_minor, config_confirmed, pin_config })
+    // Power
+    let mut connectors = vec![HatConnectorStatus::default(), HatConnectorStatus::default()];
+    for c in connectors.iter_mut() {
+        c.enabled = r.get_bool().unwrap_or(false);
+        c.current_ma = r.get_f32().unwrap_or(0.0);
+        c.fault = r.get_bool().unwrap_or(false);
+    }
+    let io_voltage_mv = r.get_u16().unwrap_or(0);
+    // SWD
+    let dap_connected = r.get_bool().unwrap_or(false);
+    let target_detected = r.get_bool().unwrap_or(false);
+    let target_dpidr = r.get_u32().unwrap_or(0);
+    Ok(HatStatus { detected, connected, hat_type, detect_voltage, fw_major, fw_minor,
+                   config_confirmed, pin_config, connectors, io_voltage_mv,
+                   dap_connected, target_detected, target_dpidr })
 }
 
 #[tauri::command]
@@ -963,6 +993,44 @@ pub async fn hat_detect(
     let detect_voltage = r.get_f32().unwrap_or(0.0);
     let connected = r.get_bool().unwrap_or(false);
     Ok(HatStatus { detected, connected, hat_type, detect_voltage, ..Default::default() })
+}
+
+// HAT Power Management
+#[tauri::command]
+pub async fn hat_set_power(
+    connector: u8,
+    enable: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(connector);
+    pw.put_bool(enable);
+    mgr.send_command(bbp::CMD_HAT_SET_POWER, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_set_io_voltage(
+    voltage_mv: u16,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u16(voltage_mv);
+    mgr.send_command(bbp::CMD_HAT_SET_IO_VOLTAGE, &pw.buf).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_setup_swd(
+    target_voltage_mv: u16,
+    connector: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u16(target_voltage_mv);
+    pw.put_u8(connector);
+    mgr.send_command(bbp::CMD_HAT_SETUP_SWD, &pw.buf).await.map_err(map_err)?;
+    Ok(())
 }
 
 // -----------------------------------------------------------------------------

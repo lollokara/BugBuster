@@ -90,6 +90,9 @@ pub fn run() {
             commands::hat_set_all_pins,
             commands::hat_reset,
             commands::hat_detect,
+            commands::hat_set_power,
+            commands::hat_set_io_voltage,
+            commands::hat_setup_swd,
             // HUSB238 USB PD
             commands::usbpd_get_status,
             commands::usbpd_select_pdo,

@@ -1157,6 +1157,192 @@ class BugBuster:
         else:
             return self._http_post("/hat/detect", {})
 
+    def hat_set_power(self, connector: int, enable: bool) -> bool:
+        """
+        Enable or disable target power on a HAT connector.
+
+        :param connector: 0 = Connector A (VADJ1), 1 = Connector B (VADJ2)
+        :param enable: True to enable power
+        """
+        if self._usb:
+            payload = struct.pack('<BB', connector, int(enable))
+            self._usb_cmd(CmdId.HAT_SET_POWER, payload)
+            return True
+        else:
+            return self._http_post("/hat/power", {"connector": connector, "enable": enable}).get("ok", False)
+
+    def hat_get_power(self) -> dict:
+        """Get power status for both HAT connectors (enabled, current, fault)."""
+        if self._usb:
+            resp = self._usb_cmd(CmdId.HAT_GET_POWER)
+            off = 0
+            connectors = []
+            for _ in range(2):
+                enabled = bool(resp[off]); off += 1
+                current = struct.unpack_from('<f', resp, off)[0]; off += 4
+                fault = bool(resp[off]); off += 1
+                connectors.append({"enabled": enabled, "current_ma": current, "fault": fault})
+            io_mv = struct.unpack_from('<H', resp, off)[0]; off += 2
+            return {"connectors": connectors, "io_voltage_mv": io_mv}
+        else:
+            return self._http_get("/hat/power")
+
+    def hat_set_io_voltage(self, voltage_mv: int) -> bool:
+        """
+        Set the HVPAK I/O level translation voltage.
+
+        :param voltage_mv: Target I/O voltage in millivolts (1200-5500)
+        """
+        if self._usb:
+            payload = struct.pack('<H', voltage_mv)
+            self._usb_cmd(CmdId.HAT_SET_IO_VOLT, payload)
+            return True
+        else:
+            return self._http_post("/hat/io_voltage", {"voltage_mv": voltage_mv}).get("ok", False)
+
+    def hat_setup_swd(self, target_voltage_mv: int = 3300, connector: int = 0) -> bool:
+        """
+        One-call SWD debug setup: sets I/O voltage, enables power, routes SWD pins.
+
+        :param target_voltage_mv: Target voltage in mV (e.g. 3300 for 3.3V)
+        :param connector: 0 = Connector A, 1 = Connector B
+        :return: True if all steps succeeded
+        """
+        if self._usb:
+            payload = struct.pack('<HB', target_voltage_mv, connector)
+            self._usb_cmd(CmdId.HAT_SETUP_SWD, payload)
+            return True
+        else:
+            return self._http_post("/hat/setup_swd", {
+                "target_voltage_mv": target_voltage_mv,
+                "connector": connector,
+            }).get("ok", False)
+
+    # ------------------------------------------------------------------
+    # ── HAT Logic Analyzer ───────────────────────────────────────────
+    # ------------------------------------------------------------------
+
+    def hat_la_configure(self, channels: int = 4, rate_hz: int = 1000000, depth: int = 100000) -> bool:
+        """
+        Configure the HAT logic analyzer.
+
+        :param channels: Number of channels (1, 2, or 4)
+        :param rate_hz:  Sample rate in Hz (max ~100MHz for 1ch, ~25MHz for 4ch)
+        :param depth:    Total samples to capture
+        """
+        payload = struct.pack('<BIII', channels, rate_hz, depth)
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_CONFIG, payload)
+            return True
+        else:
+            raise NotImplementedError("LA control is USB-only")
+
+    def hat_la_set_trigger(self, trigger_type=0, channel: int = 0) -> bool:
+        """
+        Set the trigger condition.
+
+        :param trigger_type: LaTriggerType (0=none, 1=rising, 2=falling, 3=both, 4=high, 5=low)
+        :param channel: Which channel to trigger on (0-3)
+        """
+        payload = struct.pack('<BB', int(trigger_type), channel)
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_TRIGGER, payload)
+            return True
+        else:
+            raise NotImplementedError("LA control is USB-only")
+
+    def hat_la_arm(self) -> bool:
+        """Arm the logic analyzer trigger and start waiting for capture."""
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_ARM)
+            return True
+        raise NotImplementedError("LA control is USB-only")
+
+    def hat_la_force(self) -> bool:
+        """Force trigger immediately (bypass trigger condition)."""
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_FORCE)
+            return True
+        raise NotImplementedError("LA control is USB-only")
+
+    def hat_la_stop(self) -> bool:
+        """Stop capture and return to idle."""
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_STOP)
+            return True
+        raise NotImplementedError("LA control is USB-only")
+
+    def hat_la_get_status(self) -> dict:
+        """Get logic analyzer capture status."""
+        _STATE_NAMES = {0: "idle", 1: "armed", 2: "capturing", 3: "done", 4: "error"}
+        if self._usb:
+            resp = self._usb_cmd(CmdId.HAT_LA_STATUS)
+            off = 0
+            state = resp[off]; off += 1
+            channels = resp[off]; off += 1
+            captured = struct.unpack_from('<I', resp, off)[0]; off += 4
+            total = struct.unpack_from('<I', resp, off)[0]; off += 4
+            rate = struct.unpack_from('<I', resp, off)[0]; off += 4
+            return {
+                "state": state,
+                "state_name": _STATE_NAMES.get(state, "unknown"),
+                "channels": channels,
+                "samples_captured": captured,
+                "total_samples": total,
+                "actual_rate_hz": rate,
+            }
+        raise NotImplementedError("LA control is USB-only")
+
+    def hat_la_read_all(self) -> bytes:
+        """
+        Read all captured LA data from the buffer. Blocks until complete.
+        Returns raw bytes — use hat_la_decode() to convert to channel arrays.
+        """
+        status = self.hat_la_get_status()
+        if status["state"] not in (3,):  # LA_STATE_DONE
+            raise RuntimeError(f"LA not in DONE state (state={status['state_name']})")
+
+        channels = status["channels"]
+        samples = status["samples_captured"]
+        samples_per_word = 32 // channels
+        total_bytes = ((samples + samples_per_word - 1) // samples_per_word) * 4
+
+        data = bytearray()
+        chunk_size = 28  # Max per HAT frame
+        offset = 0
+        while offset < total_bytes:
+            remaining = total_bytes - offset
+            req_len = min(remaining, chunk_size)
+            payload = struct.pack('<IH', offset, req_len)
+            resp = self._usb_cmd(CmdId.HAT_LA_READ, payload)
+            # Response: [offset:u32, actual_len:u8, data...]
+            actual = resp[4]
+            if actual == 0:
+                break
+            data.extend(resp[5:5 + actual])
+            offset += actual
+
+        return bytes(data)
+
+    @staticmethod
+    def hat_la_decode(raw: bytes, channels: int = 4) -> list:
+        """
+        Decode raw LA capture data into per-channel sample arrays.
+
+        :param raw: Raw bytes from hat_la_read_all()
+        :param channels: Number of channels (1, 2, or 4)
+        :return: List of channels, each a list of 0/1 values
+        """
+        result = [[] for _ in range(channels)]
+        bits_per_sample = channels
+
+        for byte_val in raw:
+            for bit_pos in range(0, 8, bits_per_sample):
+                for ch in range(channels):
+                    result[ch].append((byte_val >> (bit_pos + ch)) & 1)
+
+        return result
+
     # ------------------------------------------------------------------
     # ── AD74416H Watchdog ────────────────────────────────────────────
     # ------------------------------------------------------------------

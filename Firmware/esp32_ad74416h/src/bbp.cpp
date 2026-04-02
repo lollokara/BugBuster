@@ -1441,8 +1441,14 @@ static int handlePcaGetFaultLog(uint16_t seq, uint8_t cmdId, uint8_t *out)
 
 static int handleHatGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
+    // Refresh DAP status if connected
+    if (hat_get_state()->connected) {
+        hat_get_dap_status();
+    }
+
     const HatState *hs = hat_get_state();
     size_t pos = 0;
+    // Core
     put_bool(out, &pos, hs->detected);
     put_bool(out, &pos, hs->connected);
     put_u8(out, &pos, (uint8_t)hs->type);
@@ -1450,9 +1456,21 @@ static int handleHatGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
     put_u8(out, &pos, hs->fw_version_major);
     put_u8(out, &pos, hs->fw_version_minor);
     put_bool(out, &pos, hs->config_confirmed);
+    // Pin config
     for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
         put_u8(out, &pos, (uint8_t)hs->pin_config[i]);
     }
+    // Power (connector A, B)
+    for (int i = 0; i < 2; i++) {
+        put_bool(out, &pos, hs->connector[i].enabled);
+        put_f32(out, &pos, hs->connector[i].current_ma);
+        put_bool(out, &pos, hs->connector[i].fault);
+    }
+    put_u16(out, &pos, hs->io_voltage_mv);
+    // SWD
+    put_bool(out, &pos, hs->dap_connected);
+    put_bool(out, &pos, hs->target_detected);
+    put_u32(out, &pos, hs->target_dpidr);
     return (int)pos;
 }
 
@@ -1536,6 +1554,157 @@ static int handleHatDetect(uint16_t seq, uint8_t cmdId, uint8_t *out)
     put_u8(out, &pos, (uint8_t)hs->type);
     put_f32(out, &pos, hs->detect_voltage);
     put_bool(out, &pos, hs->connected);
+    return (int)pos;
+}
+
+// --- HAT Power Management commands ---
+
+static int handleHatSetPower(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t conn = get_u8(payload, &rpos);
+    uint8_t on = get_u8(payload, &rpos);
+    if (conn > 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    bool ok = hat_set_power((HatConnector)conn, on != 0);
+    if (!ok) { sendError(seq, cmdId, BBP_ERR_BUSY); return -1; }
+
+    size_t pos = 0;
+    put_u8(out, &pos, conn);
+    put_bool(out, &pos, on != 0);
+    return (int)pos;
+}
+
+static int handleHatGetPower(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    hat_get_power_status();
+    const HatState *hs = hat_get_state();
+
+    size_t pos = 0;
+    for (int i = 0; i < 2; i++) {
+        put_bool(out, &pos, hs->connector[i].enabled);
+        put_f32(out, &pos, hs->connector[i].current_ma);
+        put_bool(out, &pos, hs->connector[i].fault);
+    }
+    put_u16(out, &pos, hs->io_voltage_mv);
+    return (int)pos;
+}
+
+static int handleHatSetIoVoltage(uint16_t seq, uint8_t cmdId,
+                                  const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint16_t mv = get_u16(payload, &rpos);
+
+    bool ok = hat_set_io_voltage(mv);
+    if (!ok) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    size_t pos = 0;
+    put_u16(out, &pos, mv);
+    return (int)pos;
+}
+
+static int handleHatSetupSwd(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 3) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint16_t voltage_mv = get_u16(payload, &rpos);
+    uint8_t conn = get_u8(payload, &rpos);
+    if (conn > 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    bool ok = hat_setup_swd(voltage_mv, (HatConnector)conn);
+    if (!ok) { sendError(seq, cmdId, BBP_ERR_BUSY); return -1; }
+
+    size_t pos = 0;
+    put_bool(out, &pos, true);
+    put_u16(out, &pos, voltage_mv);
+    put_u8(out, &pos, conn);
+    return (int)pos;
+}
+
+// --- HAT Logic Analyzer commands ---
+
+static int handleHatLaConfig(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 9) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t channels = get_u8(payload, &rpos);
+    uint32_t rate_hz = get_u32(payload, &rpos);
+    uint32_t depth = get_u32(payload, &rpos);
+
+    if (!hat_la_configure(channels, rate_hz, depth)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1;
+    }
+    size_t pos = 0;
+    put_u8(out, &pos, channels);
+    put_u32(out, &pos, rate_hz);
+    put_u32(out, &pos, depth);
+    return (int)pos;
+}
+
+static int handleHatLaTrigger(uint16_t seq, uint8_t cmdId,
+                               const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (!hat_la_set_trigger(payload[0], payload[1])) {
+        sendError(seq, cmdId, BBP_ERR_BUSY); return -1;
+    }
+    return 0;
+}
+
+static int handleHatLaArm(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    if (!hat_la_arm()) { sendError(seq, cmdId, BBP_ERR_BUSY); return -1; }
+    return 0;
+}
+
+static int handleHatLaForce(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    if (!hat_la_force()) { sendError(seq, cmdId, BBP_ERR_BUSY); return -1; }
+    return 0;
+}
+
+static int handleHatLaStop(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    hat_la_stop();
+    return 0;
+}
+
+static int handleHatLaStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    HatLaStatus st = {};
+    hat_la_get_status(&st);
+    size_t pos = 0;
+    put_u8(out, &pos, st.state);
+    put_u8(out, &pos, st.channels);
+    put_u32(out, &pos, st.samples_captured);
+    put_u32(out, &pos, st.total_samples);
+    put_u32(out, &pos, st.actual_rate_hz);
+    return (int)pos;
+}
+
+static int handleHatLaRead(uint16_t seq, uint8_t cmdId,
+                            const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 6) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint32_t offset = get_u32(payload, &rpos);
+    uint16_t read_len = get_u16(payload, &rpos);
+    if (read_len > 256) read_len = 256;  // Limit per chunk
+
+    uint8_t chunk[256];
+    uint8_t actual = hat_la_read_data(offset, chunk, (uint8_t)(read_len > 28 ? 28 : read_len));
+
+    size_t pos = 0;
+    put_u32(out, &pos, offset);
+    put_u8(out, &pos, actual);
+    memcpy(&out[pos], chunk, actual);
+    pos += actual;
     return (int)pos;
 }
 
@@ -2280,6 +2449,41 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_HAT_DETECT:
             rspLen = handleHatDetect(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_SET_POWER:
+            rspLen = handleHatSetPower(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_HAT_GET_POWER:
+            rspLen = handleHatGetPower(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_SET_IO_VOLTAGE:
+            rspLen = handleHatSetIoVoltage(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_HAT_SETUP_SWD:
+            rspLen = handleHatSetupSwd(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+
+        // --- HAT Logic Analyzer ---
+        case BBP_CMD_HAT_LA_CONFIG:
+            rspLen = handleHatLaConfig(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_TRIGGER:
+            rspLen = handleHatLaTrigger(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_ARM:
+            rspLen = handleHatLaArm(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_FORCE:
+            rspLen = handleHatLaForce(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_STOP:
+            rspLen = handleHatLaStop(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_STATUS:
+            rspLen = handleHatLaStatus(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_READ:
+            rspLen = handleHatLaRead(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- HUSB238 USB PD ---

@@ -19,22 +19,9 @@
 
 static const char *TAG = "hat";
 
-#if BREADBOARD_MODE
-
-// Breadboard mode — HAT not supported
-bool hat_init(void) { return false; }
-bool hat_detected(void) { return false; }
-const HatState* hat_get_state(void) { static HatState s = {}; return &s; }
-HatType hat_detect(void) { return HAT_TYPE_NONE; }
-bool hat_connect(void) { return false; }
-bool hat_set_pin(uint8_t ext_pin, HatPinFunction func) { return false; }
-bool hat_set_all_pins(const HatPinFunction config[HAT_NUM_EXT_PINS]) { return false; }
-bool hat_get_pin_config(HatPinFunction config[HAT_NUM_EXT_PINS]) { return false; }
-bool hat_reset(void) { return false; }
-const char* hat_func_name(HatPinFunction func) { return "N/A"; }
-const char* hat_type_name(HatType type) { return "N/A"; }
-
-#else  // PCB mode
+// HAT support enabled in both breadboard and PCB modes.
+// In breadboard mode: no ADC detect (assume HAT present), no IRQ.
+// In PCB mode: full ADC detection + IRQ support.
 
 static HatState s_state = {};
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
@@ -462,6 +449,231 @@ const char* hat_type_name(HatType type)
         case HAT_TYPE_UNKNOWN:   return "Unknown";
         default:                 return "Unknown";
     }
+}
+
+// =============================================================================
+// Power Management
+// =============================================================================
+
+bool hat_set_power(HatConnector conn, bool on)
+{
+    if (!s_state.connected) return false;
+    if (conn > HAT_CONNECTOR_B) return false;
+
+    uint8_t payload[2] = { (uint8_t)conn, (uint8_t)(on ? 1 : 0) };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_SET_POWER, payload, 2, rsp, &rsp_len, 300);
+    if (cmd == HAT_RSP_OK) {
+        s_state.connector[conn].enabled = on;
+        ESP_LOGI(TAG, "Connector %c power %s", 'A' + conn, on ? "ON" : "OFF");
+        return true;
+    }
+    ESP_LOGW(TAG, "Connector %c power command failed", 'A' + conn);
+    return false;
+}
+
+bool hat_get_power_status(void)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t rsp[16] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_GET_POWER_STATUS, NULL, 0, rsp, &rsp_len, 200);
+    if (cmd == HAT_RSP_POWER_STATUS && rsp_len >= 6) {
+        // Connector A
+        s_state.connector[0].enabled = rsp[0] != 0;
+        memcpy(&s_state.connector[0].current_ma, &rsp[1], sizeof(float)); // bytes 1-4: float
+        s_state.connector[0].fault = rsp[5] != 0;
+        // Connector B (if present in response)
+        if (rsp_len >= 12) {
+            s_state.connector[1].enabled = rsp[6] != 0;
+            memcpy(&s_state.connector[1].current_ma, &rsp[7], sizeof(float));
+            s_state.connector[1].fault = rsp[11] != 0;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool hat_set_io_voltage(uint16_t mv)
+{
+    if (!s_state.connected) return false;
+    if (mv < 1200 || mv > 5500) {
+        ESP_LOGW(TAG, "I/O voltage %u mV out of range (1200-5500)", mv);
+        return false;
+    }
+
+    uint8_t payload[2] = { (uint8_t)(mv & 0xFF), (uint8_t)(mv >> 8) };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_SET_IO_VOLTAGE, payload, 2, rsp, &rsp_len, 300);
+    if (cmd == HAT_RSP_OK) {
+        s_state.io_voltage_mv = mv;
+        ESP_LOGI(TAG, "I/O voltage set to %u mV", mv);
+        return true;
+    }
+    return false;
+}
+
+bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)
+{
+    if (!s_state.connected) return false;
+
+    ESP_LOGI(TAG, "SWD quick-setup: %umV on connector %c", target_voltage_mv, 'A' + connector);
+
+    // 1. Set HVPAK I/O voltage to match target
+    if (!hat_set_io_voltage(target_voltage_mv)) {
+        ESP_LOGE(TAG, "SWD setup: failed to set I/O voltage");
+        return false;
+    }
+    delay_ms(5);  // HVPAK stabilization
+
+    // 2. Enable connector power
+    if (!hat_set_power(connector, true)) {
+        ESP_LOGE(TAG, "SWD setup: failed to enable connector power");
+        return false;
+    }
+    delay_ms(50);  // Target power-up
+
+    // 3. Route EXP_EXT pins for SWD
+    // Connector A: EXT1=SWDIO, EXT2=SWCLK (leave EXT3/4 as-is)
+    // Connector B: EXT3=SWDIO, EXT4=SWCLK (leave EXT1/2 as-is)
+    if (connector == HAT_CONNECTOR_A) {
+        hat_set_pin(0, HAT_FUNC_SWDIO);
+        hat_set_pin(1, HAT_FUNC_SWCLK);
+    } else {
+        hat_set_pin(2, HAT_FUNC_SWDIO);
+        hat_set_pin(3, HAT_FUNC_SWCLK);
+    }
+
+    ESP_LOGI(TAG, "SWD setup complete — connect debug tool to USB CMSIS-DAP");
+    return true;
+}
+
+// =============================================================================
+// SWD Management
+// =============================================================================
+
+bool hat_get_dap_status(void)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t rsp[16] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_GET_DAP_STATUS, NULL, 0, rsp, &rsp_len, 200);
+    if (cmd == HAT_RSP_DAP_STATUS && rsp_len >= 8) {
+        s_state.dap_connected = rsp[0] != 0;
+        s_state.target_detected = rsp[1] != 0;
+        memcpy(&s_state.target_dpidr, &rsp[2], 4);
+        // swd_clock_khz at bytes 6-7 (u16 LE) — stored for display but not in HatState currently
+        return true;
+    }
+    return false;
+}
+
+bool hat_set_swd_clock(uint16_t khz)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t payload[2] = { (uint8_t)(khz & 0xFF), (uint8_t)(khz >> 8) };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_SET_SWD_CLOCK, payload, 2, rsp, &rsp_len, 200);
+    return cmd == HAT_RSP_OK;
+}
+
+// =============================================================================
+// Logic Analyzer
+// =============================================================================
+
+bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t payload[9];
+    payload[0] = channels;
+    memcpy(&payload[1], &rate_hz, 4);
+    memcpy(&payload[5], &depth, 4);
+
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_CONFIG, payload, 9, rsp, &rsp_len, 300) == HAT_RSP_OK;
+}
+
+bool hat_la_set_trigger(uint8_t type, uint8_t channel)
+{
+    if (!s_state.connected) return false;
+    uint8_t payload[2] = { type, channel };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_SET_TRIGGER, payload, 2, rsp, &rsp_len, 200) == HAT_RSP_OK;
+}
+
+bool hat_la_arm(void)
+{
+    if (!s_state.connected) return false;
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_ARM, NULL, 0, rsp, &rsp_len, 200) == HAT_RSP_OK;
+}
+
+bool hat_la_force(void)
+{
+    if (!s_state.connected) return false;
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_FORCE, NULL, 0, rsp, &rsp_len, 200) == HAT_RSP_OK;
+}
+
+bool hat_la_stop(void)
+{
+    if (!s_state.connected) return false;
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_STOP, NULL, 0, rsp, &rsp_len, 200) == HAT_RSP_OK;
+}
+
+bool hat_la_get_status(HatLaStatus *status)
+{
+    if (!s_state.connected || !status) return false;
+    uint8_t rsp[16] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_LA_GET_STATUS, NULL, 0, rsp, &rsp_len, 200);
+    if (cmd == HAT_RSP_LA_STATUS && rsp_len >= 14) {
+        status->state = rsp[0];
+        status->channels = rsp[1];
+        memcpy(&status->samples_captured, &rsp[2], 4);
+        memcpy(&status->total_samples, &rsp[6], 4);
+        memcpy(&status->actual_rate_hz, &rsp[10], 4);
+        return true;
+    }
+    return false;
+}
+
+uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len)
+{
+    if (!s_state.connected) return 0;
+    if (len > 28) len = 28;
+
+    uint8_t payload[6];
+    memcpy(&payload[0], &offset, 4);
+    payload[4] = (uint8_t)(len & 0xFF);
+    payload[5] = (uint8_t)(len >> 8);
+
+    uint8_t rsp[28] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_LA_READ_DATA, payload, 6, rsp, &rsp_len, 200);
+    if (cmd == HAT_RSP_LA_DATA && rsp_len > 0) {
+        memcpy(buf, rsp, rsp_len);
+        return rsp_len;
+    }
+    return 0;
 }
 
 #endif // BREADBOARD_MODE

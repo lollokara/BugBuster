@@ -129,6 +129,16 @@ class PowerControl(IntEnum):
 # HAT Expansion Board pin functions
 # ---------------------------------------------------------------------------
 
+class LaTriggerType(IntEnum):
+    """Trigger types for the HAT logic analyzer."""
+    NONE    = 0   # No trigger — capture immediately
+    RISING  = 1   # Rising edge
+    FALLING = 2   # Falling edge
+    BOTH    = 3   # Any edge
+    HIGH    = 4   # Level high
+    LOW     = 5   # Level low
+
+
 class HatPinFunction(IntEnum):
     """
     Functions assignable to each EXP_EXT pin on the HAT connector.
@@ -341,12 +351,25 @@ class CmdId(IntEnum):
     PCA_SET_FAULT_CFG  = 0xB3
     PCA_GET_FAULT_LOG  = 0xB4
 
-    # HAT Expansion Board
+    # HAT Expansion Board — Core
     HAT_GET_STATUS   = 0xC5
     HAT_SET_PIN      = 0xC6
     HAT_SET_ALL_PINS = 0xC7
     HAT_RESET        = 0xC8
     HAT_DETECT       = 0xC9
+    # HAT — Power Management
+    HAT_SET_POWER    = 0xCA
+    HAT_GET_POWER    = 0xCB
+    HAT_SET_IO_VOLT  = 0xCC
+    HAT_SETUP_SWD    = 0xCD
+    # HAT — Logic Analyzer
+    HAT_LA_CONFIG    = 0xCF
+    HAT_LA_ARM       = 0xD5
+    HAT_LA_FORCE     = 0xD6
+    HAT_LA_STATUS    = 0xD7
+    HAT_LA_READ      = 0xD8
+    HAT_LA_STOP      = 0xD9
+    HAT_LA_TRIGGER   = 0xDA
 
     # USB PD
     USBPD_GET_STATUS = 0xC0

@@ -146,12 +146,25 @@ extern "C" {
 #define BBP_CMD_START_WAVEGEN       0xD0  // Start waveform generation
 #define BBP_CMD_STOP_WAVEGEN        0xD1  // Stop waveform generation
 
-// HAT Expansion Board
-#define BBP_CMD_HAT_GET_STATUS      0xC5  // Get HAT state (detect, type, pin config)
+// HAT Expansion Board — Core
+#define BBP_CMD_HAT_GET_STATUS      0xC5  // Get HAT state (detect, type, pin config, power)
 #define BBP_CMD_HAT_SET_PIN         0xC6  // Set single EXP_EXT pin function
 #define BBP_CMD_HAT_SET_ALL_PINS    0xC7  // Set all 4 EXP_EXT pin functions
 #define BBP_CMD_HAT_RESET           0xC8  // Reset HAT to default
 #define BBP_CMD_HAT_DETECT          0xC9  // Re-run HAT detection
+// HAT — Power Management
+#define BBP_CMD_HAT_SET_POWER       0xCA  // Enable/disable connector (A/B)
+#define BBP_CMD_HAT_GET_POWER       0xCB  // Get power status (both connectors)
+#define BBP_CMD_HAT_SET_IO_VOLTAGE  0xCC  // Set HVPAK I/O voltage (mV)
+#define BBP_CMD_HAT_SETUP_SWD       0xCD  // One-call SWD quick-setup
+// HAT — Logic Analyzer
+#define BBP_CMD_HAT_LA_CONFIG       0xCF  // Configure LA capture
+#define BBP_CMD_HAT_LA_ARM          0xD5  // Arm trigger / start capture
+#define BBP_CMD_HAT_LA_FORCE        0xD6  // Force trigger
+#define BBP_CMD_HAT_LA_STATUS       0xD7  // Get capture status
+#define BBP_CMD_HAT_LA_READ         0xD8  // Read captured data chunk
+#define BBP_CMD_HAT_LA_STOP         0xD9  // Stop capture
+#define BBP_CMD_HAT_LA_TRIGGER      0xDA  // Set trigger condition
 
 // HUSB238 USB PD
 #define BBP_CMD_USBPD_GET_STATUS    0xC0  // Get USB PD contract status

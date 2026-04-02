@@ -1,0 +1,95 @@
+; =============================================================================
+; bb_la.pio — Logic Analyzer PIO capture programs (PIO 1)
+;
+; Captures 1-4 digital channels into the RX FIFO for DMA transfer to SRAM.
+; Uses consecutive GPIO pins (BB_LA_CH0_PIN .. BB_LA_CH0_PIN+3).
+;
+; The sample rate is controlled by the PIO clock divider:
+;   sample_rate = sys_clk / (clk_div * cycles_per_sample)
+;   For 1 cycle/sample: sample_rate = 125MHz / clk_div
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; Program: la_capture_4ch
+; Captures 4 input pins per clock cycle, packs into 32-bit words (8 samples).
+; Each 32-bit word = 8 consecutive 4-bit samples (bits 0-3 = channels 0-3).
+; Autopush at 32 bits sends one word per 8 samples.
+; -----------------------------------------------------------------------------
+.program la_capture_4ch
+.wrap_target
+    in pins, 4      ; Read 4 pins, shift into ISR (autopush every 32 bits = 8 samples)
+.wrap
+
+; -----------------------------------------------------------------------------
+; Program: la_capture_2ch
+; Captures 2 input pins per clock cycle, packs 16 samples per 32-bit word.
+; -----------------------------------------------------------------------------
+.program la_capture_2ch
+.wrap_target
+    in pins, 2      ; Read 2 pins (autopush every 32 bits = 16 samples)
+.wrap
+
+; -----------------------------------------------------------------------------
+; Program: la_capture_1ch
+; Captures 1 input pin per clock cycle, packs 32 samples per 32-bit word.
+; -----------------------------------------------------------------------------
+.program la_capture_1ch
+.wrap_target
+    in pins, 1      ; Read 1 pin (autopush every 32 bits = 32 samples)
+.wrap
+
+; =============================================================================
+; C helper functions for program loading
+; =============================================================================
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void la_capture_program_init(PIO pio, uint sm, uint offset,
+                                            uint pin_base, uint pin_count,
+                                            float sample_rate_hz)
+{
+    // Choose the right program based on channel count
+    // All programs are 1 instruction, so offset is the same
+    pio_sm_config c;
+    switch (pin_count) {
+    case 1:
+        c = la_capture_1ch_program_get_default_config(offset);
+        break;
+    case 2:
+        c = la_capture_2ch_program_get_default_config(offset);
+        break;
+    case 4:
+    default:
+        c = la_capture_4ch_program_get_default_config(offset);
+        break;
+    }
+
+    // Configure input pins
+    sm_config_set_in_pins(&c, pin_base);
+
+    // Shift right, autopush at 32 bits
+    sm_config_set_in_shift(&c, false, true, 32);  // shift left, autopush
+
+    // FIFO: join both FIFOs for RX (8-deep instead of 4)
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    // Clock divider for desired sample rate
+    // PIO executes 1 instruction per cycle, so: rate = sys_clk / div
+    float sys_clk = (float)clock_get_hz(clk_sys);
+    float div = sys_clk / sample_rate_hz;
+    if (div < 1.0f) div = 1.0f;
+    sm_config_set_clkdiv(&c, div);
+
+    // Initialize pins as PIO inputs
+    for (uint i = 0; i < pin_count; i++) {
+        pio_gpio_init(pio, pin_base + i);
+    }
+    // Set pin directions to input
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, pin_count, false);
+
+    // Load config and enable
+    pio_sm_init(pio, sm, offset, &c);
+    // Don't enable yet — caller starts with pio_sm_set_enabled()
+}
+%}

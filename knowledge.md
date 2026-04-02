@@ -2592,7 +2592,7 @@ Detection uses 8-sample ADC averaging for stability. Voltage thresholds:
 ### 30.3 UART Protocol
 
 - **UART0** on GPIO43 (TX) / GPIO44 (RX)
-- **115200 baud, 8N1** (8 data bits, no parity, 1 stop bit)
+- **921600 baud, 8N1** (8 data bits, no parity, 1 stop bit)
 - BugBuster is always the **master** (initiates all transactions)
 - HAT is the **slave** (responds to commands, can assert IRQ for attention)
 
