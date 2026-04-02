@@ -8,6 +8,7 @@
 
 #include "hat.h"
 #include "config.h"
+#include "bbp.h"
 #include "esp_log.h"
 #include "esp_adc/adc_oneshot.h"
 #include "driver/gpio.h"
@@ -689,6 +690,42 @@ uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len)
         return rsp_len;
     }
     return 0;
+}
+
+// =============================================================================
+// Polling for unsolicited messages
+// =============================================================================
+
+// Simple non-blocking check for incoming UART frames
+void hat_poll(void)
+{
+    if (!s_initialized || !s_state.connected) return;
+
+    // Check if any bytes available on UART without blocking
+    size_t buffered = 0;
+    uart_get_buffered_data_len(HAT_UART_NUM, &buffered);
+    if (buffered == 0) return;
+
+    // Try to receive a frame with very short timeout
+    uint8_t rsp[16] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_recv_frame(rsp, &rsp_len, 5);  // 5ms timeout
+
+    if (cmd == 0) return;  // No valid frame
+
+    // Handle unsolicited LA status (capture done notification)
+    if (cmd == HAT_RSP_LA_STATUS && rsp_len >= 14) {
+        uint8_t la_state = rsp[0];
+        if (la_state == 3) {  // LA_STATE_DONE
+            ESP_LOGI(TAG, "LA capture done (unsolicited notification)");
+
+            // Forward as BBP event to host
+            if (bbpIsActive()) {
+                // Payload: [state, channels, samples_captured(u32), total_samples(u32), rate(u32)]
+                bbpSendEvent(BBP_EVT_LA_DONE, rsp, rsp_len);
+            }
+        }
+    }
 }
 
 // end of hat.cpp

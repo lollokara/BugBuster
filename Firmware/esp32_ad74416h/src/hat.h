@@ -339,6 +339,14 @@ bool hat_la_get_status(HatLaStatus *status);
  */
 uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len);
 
+// --- Polling ---
+
+/**
+ * @brief Poll HAT UART for unsolicited messages (capture done, etc).
+ *        Call periodically (~10ms) from a task.
+ */
+void hat_poll(void);
+
 // --- String Helpers ---
 
 /**

@@ -7,6 +7,7 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "hat.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include <math.h>
@@ -1061,6 +1062,9 @@ static void taskI2cPoll(void* /*pvParameters*/)
     TickType_t pollDelay = pdMS_TO_TICKS(500);
 
     for (;;) {
+        // Poll HAT UART for unsolicited messages (LA capture done, etc.)
+        hat_poll();
+
         // Poll PCA9535 inputs (power good, e-fuse faults)
         // Change detection and fault callbacks run inside pca9535_update()
         if (pca9535_present()) {

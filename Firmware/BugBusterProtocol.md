@@ -1737,6 +1737,24 @@ before this event is sent.
 2       timestamp_ms    u32     Milliseconds since boot (little-endian)
 ```
 
+### 7.6 LA Done Event
+
+#### 0x85 LA_DONE_EVENT (Event)
+Pushed when logic analyzer capture completes on the RP2040 HAT. The RP2040
+sends an unsolicited UART frame which the ESP32 forwards as this BBP event.
+
+**Event payload:**
+```
+0       state           u8      LA state (3 = DONE)
+1       channels        u8      Number of channels captured
+2       samples_captured u32    Samples captured (LE)
+6       total_samples   u32     Target depth (LE)
+10      actual_rate_hz  u32     Actual sample rate achieved (LE)
+```
+
+The host should respond by reading the captured data via the RP2040 USB bulk
+endpoint (interface 3, EP 0x87 IN).
+
 ---
 
 ## 8. Error Handling
@@ -2028,6 +2046,7 @@ Host                                    Device
 | 0x82 | ALERT_EVENT | D->H | Alert condition detected |
 | 0x83 | DIN_EVENT | D->H | Digital input state change |
 | 0x84 | PCA_FAULT_EVENT | D->H | E-fuse trip, PG change |
+| 0x85 | LA_DONE_EVENT | D->H | Logic analyzer capture complete |
 
 ## Appendix C: Wire Format Example
 

@@ -559,6 +559,28 @@ pub async fn la_invoke_configure(channels: u8, rate_hz: u32, depth: u32) {
 }
 
 pub async fn la_invoke_arm() { let _ = invoke("la_arm", JsValue::NULL).await; }
+
+pub async fn la_export_vcd(path: &str) {
+    #[derive(Serialize)]
+    struct Args { path: String }
+    let args = serde_wasm_bindgen::to_value(&Args { path: path.to_string() }).unwrap();
+    let _ = invoke("la_export_vcd_file", args).await;
+}
+
+pub async fn la_export_json(path: &str) {
+    #[derive(Serialize)]
+    struct Args { path: String }
+    let args = serde_wasm_bindgen::to_value(&Args { path: path.to_string() }).unwrap();
+    let _ = invoke("la_export_json", args).await;
+}
+
+pub async fn la_import_json_file(path: &str) -> Option<LaCaptureInfo> {
+    #[derive(Serialize)]
+    struct Args { path: String }
+    let args = serde_wasm_bindgen::to_value(&Args { path: path.to_string() }).unwrap();
+    let result = invoke("la_import_json", args).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
 pub async fn la_invoke_force() { let _ = invoke("la_force", JsValue::NULL).await; }
 pub async fn la_invoke_stop() { let _ = invoke("la_stop", JsValue::NULL).await; }
 

@@ -9,6 +9,7 @@ mod discovery;
 mod http_transport;
 mod la_usb;
 mod la_store;
+mod la_decoders;
 mod la_commands;
 mod state;
 mod transport;
@@ -131,6 +132,11 @@ pub fn run() {
             la_commands::la_load_raw,
             la_commands::la_export_vcd,
             la_commands::la_get_capture_info,
+            la_commands::la_decode,
+            la_commands::la_read_uart_chunks,
+            la_commands::la_export_vcd_file,
+            la_commands::la_export_json,
+            la_commands::la_import_json,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

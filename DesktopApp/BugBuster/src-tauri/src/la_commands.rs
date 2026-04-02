@@ -13,6 +13,7 @@ use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
 use crate::la_usb::{LaUsbConnection, LaCaptureData, decode_capture, hat_usb_present};
 use crate::la_store::{LaStore, LaViewData};
+use crate::la_decoders::{self, Annotation, DecoderConfig};
 use crate::connection_manager::ConnectionManager;
 use crate::bbp;
 
@@ -256,4 +257,144 @@ pub struct LaCaptureInfo {
     pub total_samples: u64,
     pub duration_sec: f64,
     pub trigger_sample: Option<u64>,
+}
+
+/// Export capture as VCD file
+#[tauri::command]
+pub fn la_export_vcd_file(
+    path: String,
+    la: State<'_, LaState>,
+) -> CmdResult<()> {
+    let store = la.store.lock().map_err(map_err)?;
+    let s = store.as_ref().ok_or("No capture data")?;
+    let vcd = s.export_vcd();
+    std::fs::write(&path, vcd).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Export capture as JSON file (full capture data + metadata for reload)
+#[tauri::command]
+pub fn la_export_json(
+    path: String,
+    la: State<'_, LaState>,
+) -> CmdResult<()> {
+    let store = la.store.lock().map_err(map_err)?;
+    let s = store.as_ref().ok_or("No capture data")?;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ExportData {
+        channels: u8,
+        sample_rate_hz: u32,
+        total_samples: u64,
+        trigger_sample: Option<u64>,
+        transitions: Vec<Vec<(u64, u8)>>,
+    }
+
+    let data = ExportData {
+        channels: s.channels,
+        sample_rate_hz: s.sample_rate_hz,
+        total_samples: s.total_samples,
+        trigger_sample: s.trigger_sample,
+        transitions: s.transitions.clone(),
+    };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Import capture from JSON file
+#[tauri::command]
+pub fn la_import_json(
+    path: String,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ImportData {
+        channels: u8,
+        sample_rate_hz: u32,
+        total_samples: u64,
+        trigger_sample: Option<u64>,
+        transitions: Vec<Vec<(u64, u8)>>,
+    }
+
+    let data: ImportData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let store = LaStore {
+        channels: data.channels,
+        sample_rate_hz: data.sample_rate_hz,
+        transitions: data.transitions,
+        total_samples: data.total_samples,
+        trigger_sample: data.trigger_sample,
+    };
+    let info = LaCaptureInfo {
+        channels: store.channels,
+        sample_rate_hz: store.sample_rate_hz,
+        total_samples: store.total_samples,
+        duration_sec: store.total_duration_sec(),
+        trigger_sample: store.trigger_sample,
+    };
+    *la.store.lock().map_err(map_err)? = Some(store);
+    Ok(info)
+}
+
+/// Read capture data from RP2040 via UART chunks (slower fallback when USB bulk not available)
+#[tauri::command]
+pub async fn la_read_uart_chunks(
+    channels: u8,
+    sample_rate_hz: u32,
+    total_samples: u32,
+    mgr: State<'_, ConnectionManager>,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    let samples_per_word = 32u32 / channels as u32;
+    let total_bytes = ((total_samples + samples_per_word - 1) / samples_per_word) * 4;
+    let chunk_size: u16 = 28;
+
+    let mut all_data: Vec<u8> = Vec::new();
+    let mut offset: u32 = 0;
+
+    while offset < total_bytes {
+        let req_len = chunk_size.min((total_bytes - offset) as u16);
+        let mut pw = bbp::PayloadWriter::new();
+        pw.put_u32(offset);
+        pw.put_u16(req_len);
+        let rsp = mgr.send_command(bbp::CMD_HAT_LA_READ, &pw.buf).await.map_err(map_err)?;
+        let mut r = bbp::PayloadReader::new(&rsp);
+        let _rsp_offset = r.get_u32().unwrap_or(0);
+        let actual_len = r.get_u8().unwrap_or(0) as usize;
+        if actual_len == 0 { break; }
+        let remaining = &rsp[5..5+actual_len.min(rsp.len()-5)];
+        all_data.extend_from_slice(remaining);
+        offset += actual_len as u32;
+    }
+
+    // Build store from raw data
+    let store = LaStore::from_raw(&all_data, channels, sample_rate_hz);
+    let info = LaCaptureInfo {
+        channels: store.channels,
+        sample_rate_hz: store.sample_rate_hz,
+        total_samples: store.total_samples,
+        duration_sec: store.total_duration_sec(),
+        trigger_sample: store.trigger_sample,
+    };
+    *la.store.lock().map_err(map_err)? = Some(store);
+    Ok(info)
+}
+
+/// Run a protocol decoder on the capture data
+#[tauri::command]
+pub fn la_decode(
+    config: DecoderConfig,
+    start_sample: u64,
+    end_sample: u64,
+    la: State<'_, LaState>,
+) -> CmdResult<Vec<Annotation>> {
+    let store = la.store.lock().map_err(map_err)?;
+    match store.as_ref() {
+        Some(s) => Ok(la_decoders::decode(&config, s, start_sample, end_sample)),
+        None => Err("No capture data".into()),
+    }
 }

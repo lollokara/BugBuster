@@ -173,6 +173,9 @@ impl ConnectionManager {
                             bbp::EVT_PCA_FAULT => {
                                 let _ = app_handle.emit("pca-fault", &msg.payload);
                             }
+                            bbp::EVT_LA_DONE => {
+                                let _ = app_handle.emit("la-done", &msg.payload);
+                            }
                             _ => {}
                         }
                     }

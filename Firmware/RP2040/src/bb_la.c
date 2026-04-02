@@ -351,6 +351,11 @@ void bb_la_poll(void)
             // Both DMA channels done — capture complete
             pio_sm_set_enabled(LA_PIO, LA_SM, false);
             s_la.state = LA_STATE_DONE;
+
+            // Send unsolicited "capture done" notification to BugBuster via UART
+            // This triggers the ESP32 to forward a BBP event to the host app
+            extern void bb_la_notify_done(void);
+            bb_la_notify_done();
         }
         break;
 

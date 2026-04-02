@@ -10,6 +10,7 @@ const CH_COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const TRACK_HEIGHT: f64 = 56.0;
 const LABEL_WIDTH: f64 = 50.0;
 const RULER_HEIGHT: f64 = 24.0;
+const MINIMAP_HEIGHT: f64 = 20.0;
 const SIGNAL_MARGIN: f64 = 8.0;
 
 fn format_time(seconds: f64) -> String {
@@ -29,6 +30,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (view_start, set_view_start) = signal(0u64);
     let (view_end, set_view_end) = signal(10000u64);
 
+    // Decoder annotations (fetched from backend)
+    let (annotations, set_annotations) = signal(Vec::<serde_json::Value>::new());
+    let (active_decoders, set_active_decoders) = signal(Vec::<String>::new()); // ["uart", "i2c", "spi"]
+
     // Config
     let (channels, set_channels) = signal("4".to_string());
     let (rate, set_rate) = signal("1000000".to_string());
@@ -47,6 +52,26 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Canvas ref
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
+
+    // Listen for "la-done" event (capture complete notification from RP2040)
+    {
+        let set_ci2 = set_capture_info;
+        spawn_local(async move {
+            let closure = Closure::new(move |_event: JsValue| {
+                show_toast("LA Capture complete!", "ok");
+                // Fetch capture info and update view
+                spawn_local(async move {
+                    if let Some(info) = la_get_capture_info().await {
+                        set_view_start.set(0);
+                        set_view_end.set(info.total_samples);
+                        set_ci2.set(Some(info));
+                    }
+                });
+            });
+            listen("la-done", &closure).await;
+            closure.forget();
+        });
+    }
 
     // Fetch view data when viewport changes
     let set_vd = set_view_data;
@@ -96,7 +121,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         if span <= 0.0 { return; }
 
         let plot_w = w - LABEL_WIDTH;
-        let plot_h = h - RULER_HEIGHT;
+        let plot_h = h - RULER_HEIGHT - MINIMAP_HEIGHT;
 
         // Grid lines
         ctx.set_stroke_style_str("rgba(59, 130, 246, 0.08)");
@@ -235,6 +260,90 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 ctx.line_to(x, plot_h);
                 ctx.stroke();
                 ctx.set_line_dash(&JsValue::from(js_sys::Array::new())).ok();
+            }
+        }
+
+        // Minimap — full capture overview with viewport indicator
+        {
+            let mm_y = h - MINIMAP_HEIGHT;
+            let mm_w = w - LABEL_WIDTH;
+
+            // Background
+            ctx.set_fill_style_str("#0c1222");
+            ctx.fill_rect(LABEL_WIDTH, mm_y, mm_w, MINIMAP_HEIGHT);
+            ctx.set_stroke_style_str("rgba(59, 130, 246, 0.2)");
+            ctx.begin_path();
+            ctx.move_to(LABEL_WIDTH, mm_y);
+            ctx.line_to(w, mm_y);
+            ctx.stroke();
+
+            let total = data.total_samples as f64;
+            if total > 0.0 {
+                // Draw simplified waveform for CH0 in minimap
+                if !data.channel_transitions.is_empty() {
+                    ctx.set_stroke_style_str("rgba(59, 130, 246, 0.4)");
+                    ctx.set_line_width(1.0);
+                    ctx.begin_path();
+                    let mm_top = mm_y + 3.0;
+                    let mm_bot = mm_y + MINIMAP_HEIGHT - 3.0;
+                    // Use ALL transitions (not just visible) for full overview
+                    // Since we only have visible range transitions, approximate
+                    ctx.move_to(LABEL_WIDTH, mm_bot);
+                    ctx.line_to(w, mm_bot);
+                    ctx.stroke();
+                }
+
+                // Viewport indicator
+                let vp_x1 = LABEL_WIDTH + (data.view_start as f64 / total) * mm_w;
+                let vp_x2 = LABEL_WIDTH + (data.view_end as f64 / total) * mm_w;
+                ctx.set_fill_style_str("rgba(59, 130, 246, 0.15)");
+                ctx.fill_rect(vp_x1, mm_y, (vp_x2 - vp_x1).max(2.0), MINIMAP_HEIGHT);
+                ctx.set_stroke_style_str("#3b82f6");
+                ctx.set_line_width(1.0);
+                ctx.stroke_rect(vp_x1, mm_y, (vp_x2 - vp_x1).max(2.0), MINIMAP_HEIGHT);
+            }
+
+            // Label
+            ctx.set_fill_style_str("#5a6d8a");
+            ctx.set_font("8px 'JetBrains Mono', monospace");
+            ctx.set_text_align("right");
+            ctx.fill_text("MAP", LABEL_WIDTH - 4.0, mm_y + 13.0).ok();
+        }
+
+        // Draw decoder annotations
+        let anns = annotations.get();
+        for ann in &anns {
+            let Some(ss) = ann.get("startSample").and_then(|v| v.as_u64()) else { continue };
+            let Some(es) = ann.get("endSample").and_then(|v| v.as_u64()) else { continue };
+            let text = ann.get("text").and_then(|v| v.as_str()).unwrap_or("?");
+            let color = ann.get("color").and_then(|v| v.as_str()).unwrap_or("#3b82f6");
+            let row = ann.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+            if es < data.view_start || ss > data.view_end { continue; }
+
+            let x1 = LABEL_WIDTH + ((ss as f64 - vs) / span) * plot_w;
+            let x2 = LABEL_WIDTH + ((es as f64 - vs) / span) * plot_w;
+            let ann_h = 18.0;
+            let ann_y = plot_h - RULER_HEIGHT - ann_h * (1 + row) as f64 - 2.0;
+
+            // Annotation box
+            ctx.set_fill_style_str(color);
+            ctx.set_global_alpha(0.15);
+            ctx.fill_rect(x1, ann_y, (x2 - x1).max(2.0), ann_h);
+            ctx.set_global_alpha(1.0);
+
+            // Border
+            ctx.set_stroke_style_str(color);
+            ctx.set_line_width(1.0);
+            ctx.stroke_rect(x1, ann_y, (x2 - x1).max(2.0), ann_h);
+
+            // Text (if box wide enough)
+            if x2 - x1 > 20.0 {
+                ctx.set_fill_style_str(color);
+                ctx.set_font("9px 'JetBrains Mono', monospace");
+                ctx.set_text_align("center");
+                let tx = (x1 + x2) / 2.0;
+                ctx.fill_text(text, tx, ann_y + 13.0).ok();
             }
         }
     });
@@ -416,6 +525,39 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     on:click=move |_| { spawn_local(async { la_invoke_stop().await; show_toast("Stopped", "ok"); }); }
                 >"Stop"</button>
 
+                // Read capture — reads data from RP2040 via UART chunks
+                <button style="font-size: 10px; padding: 3px 12px; background: #3b82f625; color: #3b82f6; border: 1px solid #3b82f650; border-radius: 4px; cursor: pointer"
+                    on:click={
+                        let set_ci4 = set_capture_info;
+                        move |_| {
+                            let ch: u8 = channels.get_untracked().parse().unwrap_or(4);
+                            let r: u32 = rate.get_untracked().parse().unwrap_or(1000000);
+                            let d: u32 = depth.get_untracked().parse().unwrap_or(100000);
+                            spawn_local(async move {
+                                show_toast("Reading capture data via UART...", "ok");
+                                #[derive(serde::Serialize)]
+                                #[serde(rename_all = "camelCase")]
+                                struct Args { channels: u8, sample_rate_hz: u32, total_samples: u32 }
+                                let args = serde_wasm_bindgen::to_value(&Args {
+                                    channels: ch, sample_rate_hz: r, total_samples: d,
+                                }).unwrap();
+                                let result = invoke("la_read_uart_chunks", args).await;
+                                match serde_wasm_bindgen::from_value::<LaCaptureInfo>(result) {
+                                    Ok(info) => {
+                                        set_view_start.set(0);
+                                        set_view_end.set(info.total_samples);
+                                        set_ci4.set(Some(info));
+                                        show_toast("Capture data loaded!", "ok");
+                                    }
+                                    Err(e) => {
+                                        show_toast(&format!("Read failed: {:?}", e), "err");
+                                    }
+                                }
+                            });
+                        }
+                    }
+                >"Read"</button>
+
                 // Test data button — loads synthetic waveforms to verify renderer
                 <button style="font-size: 10px; padding: 3px 12px; background: #8b5cf625; color: #8b5cf6; border: 1px solid #8b5cf650; border-radius: 4px; cursor: pointer"
                     on:click={
@@ -533,14 +675,16 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 on:mouseleave=on_mouseleave
             />
 
-            // Status bar
+            // Status bar with cursor readout + export buttons
             {move || {
                 let info = capture_info.get();
                 let cursor = cursor_sample.get();
                 let vs = view_start.get();
                 let ve = view_end.get();
+                let vd = view_data.get();
                 view! {
-                    <div style="display: flex; align-items: center; gap: 12px; padding: 4px 8px; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; border-top: 1px solid var(--border, #1e293b)">
+                    <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; border-top: 1px solid var(--border, #1e293b)">
+                        // Capture info
                         {if let Some(ref i) = info {
                             view! {
                                 <span>{format!("{}ch @ {} | {} samples | {}", i.channels, format_time(1.0 / i.sample_rate_hz as f64), i.total_samples, format_time(i.duration_sec))}</span>
@@ -549,12 +693,104 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             view! { <span>"No capture"</span> }.into_any()
                         }}
                         <span style="color: var(--text-muted)">"|"</span>
-                        <span>{format!("View: {} — {}", vs, ve)}</span>
+
+                        // Cursor readout with per-channel values
                         {if let Some(cs) = cursor {
-                            view! { <span style="color: #ef4444">{format!("Cursor: sample {}", cs)}</span> }.into_any()
+                            let sr = info.as_ref().map(|i| i.sample_rate_hz as f64).unwrap_or(1.0);
+                            let t = if sr > 0.0 { cs as f64 / sr } else { 0.0 };
+                            // Get channel values at cursor from view data
+                            let ch_vals: String = if let Some(ref d) = vd {
+                                (0..d.channels).map(|ch| {
+                                    // Find value at cursor sample from transitions
+                                    let trans = &d.channel_transitions[ch as usize];
+                                    let mut val = 0u8;
+                                    for &(s, v) in trans.iter() {
+                                        if s <= cs { val = v; } else { break; }
+                                    }
+                                    format!(" CH{}:{}", ch, val)
+                                }).collect()
+                            } else { String::new() };
+                            view! {
+                                <span style="color: #ef4444">{format!("Cursor: {}{}", format_time(t), ch_vals)}</span>
+                            }.into_any()
                         } else {
-                            view! { <span></span> }.into_any()
+                            view! { <span style="color: var(--text-muted)">"Click waveform to place cursor"</span> }.into_any()
                         }}
+
+                        // Spacer
+                        <div style="flex: 1"></div>
+
+                        // Export buttons
+                        <button style="font-size: 9px; padding: 1px 8px; background: #06b6d415; color: #06b6d4; border: 1px solid #06b6d440; border-radius: 3px; cursor: pointer"
+                            on:click=move |_| {
+                                spawn_local(async {
+                                    #[derive(serde::Serialize)]
+                                    struct Filter { name: String, extensions: Vec<String> }
+                                    #[derive(serde::Serialize)]
+                                    struct Args { title: String, filters: Vec<Filter> }
+                                    let args = serde_wasm_bindgen::to_value(&Args {
+                                        title: "Export VCD".into(),
+                                        filters: vec![Filter { name: "VCD files".into(), extensions: vec!["vcd".into()] }],
+                                    }).unwrap();
+                                    let result = invoke("pick_save_file", args).await;
+                                    if let Some(path) = serde_wasm_bindgen::from_value::<Option<String>>(result).ok().flatten() {
+                                        if !path.is_empty() {
+                                            la_export_vcd(&path).await;
+                                            show_toast("Exported VCD", "ok");
+                                        }
+                                    }
+                                });
+                            }
+                        >"Export VCD"</button>
+                        <button style="font-size: 9px; padding: 1px 8px; background: #06b6d415; color: #06b6d4; border: 1px solid #06b6d440; border-radius: 3px; cursor: pointer"
+                            on:click=move |_| {
+                                spawn_local(async {
+                                    #[derive(serde::Serialize)]
+                                    struct Filter { name: String, extensions: Vec<String> }
+                                    #[derive(serde::Serialize)]
+                                    struct Args { title: String, filters: Vec<Filter> }
+                                    let args = serde_wasm_bindgen::to_value(&Args {
+                                        title: "Export JSON".into(),
+                                        filters: vec![Filter { name: "JSON files".into(), extensions: vec!["json".into()] }],
+                                    }).unwrap();
+                                    let result = invoke("pick_save_file", args).await;
+                                    if let Some(path) = serde_wasm_bindgen::from_value::<Option<String>>(result).ok().flatten() {
+                                        if !path.is_empty() {
+                                            la_export_json(&path).await;
+                                            show_toast("Exported JSON", "ok");
+                                        }
+                                    }
+                                });
+                            }
+                        >"Export JSON"</button>
+                        <button style="font-size: 9px; padding: 1px 8px; background: #a855f715; color: #a855f7; border: 1px solid #a855f740; border-radius: 3px; cursor: pointer"
+                            on:click={
+                                let set_ci3 = set_capture_info;
+                                move |_| {
+                                    spawn_local(async move {
+                                        #[derive(serde::Serialize)]
+                                        struct Filter { name: String, extensions: Vec<String> }
+                                        #[derive(serde::Serialize)]
+                                        struct Args { title: String, filters: Vec<Filter> }
+                                        let args = serde_wasm_bindgen::to_value(&Args {
+                                            title: "Import JSON".into(),
+                                            filters: vec![Filter { name: "JSON files".into(), extensions: vec!["json".into()] }],
+                                        }).unwrap();
+                                        let result = invoke("pick_config_open_file", args).await;
+                                        if let Some(path) = serde_wasm_bindgen::from_value::<Option<String>>(result).ok().flatten() {
+                                            if !path.is_empty() {
+                                                if let Some(info) = la_import_json_file(&path).await {
+                                                    set_view_start.set(0);
+                                                    set_view_end.set(info.total_samples);
+                                                    set_ci3.set(Some(info));
+                                                    show_toast("Imported capture", "ok");
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        >"Import"</button>
                     </div>
                 }
             }}

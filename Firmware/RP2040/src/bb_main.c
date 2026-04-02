@@ -311,6 +311,26 @@ static void dispatch_command(const HatFrame *frame)
 }
 
 // -----------------------------------------------------------------------------
+// Unsolicited notification: capture done
+// Sends a RSP_LA_STATUS frame with state=DONE without a prior command.
+// The ESP32 recognizes this as an event and forwards to the host.
+// -----------------------------------------------------------------------------
+
+void bb_la_notify_done(void)
+{
+    LaStatus st;
+    bb_la_get_status(&st);
+    uint8_t rsp[14];
+    size_t p = 0;
+    rsp[p++] = (uint8_t)st.state;
+    rsp[p++] = st.channels;
+    memcpy(&rsp[p], &st.samples_captured, 4); p += 4;
+    memcpy(&rsp[p], &st.total_samples, 4); p += 4;
+    memcpy(&rsp[p], &st.actual_rate_hz, 4); p += 4;
+    send_response(HAT_RSP_LA_STATUS, rsp, (uint8_t)p);
+}
+
+// -----------------------------------------------------------------------------
 // BugBuster Command Task
 //
 // When integrated with debugprobe, this function runs as a FreeRTOS task:

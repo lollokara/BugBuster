@@ -199,6 +199,7 @@ extern "C" {
 #define BBP_EVT_ALERT           0x82
 #define BBP_EVT_DIN             0x83
 #define BBP_EVT_PCA_FAULT       0x84    // PCA9535 fault event (e-fuse trip, PG change)
+#define BBP_EVT_LA_DONE         0x85    // Logic analyzer capture complete
 
 // -----------------------------------------------------------------------------
 // Error Codes
