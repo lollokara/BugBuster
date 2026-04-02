@@ -612,9 +612,8 @@ float AD74416H::diagCodeToValue(uint16_t raw, uint8_t source)
         case 0:  // AGND: V = (DIAG_CODE/65536) × 2.5
             return base * 2.5f;
 
-        case 1:  // TEMP: Temperature = (DIAG_CODE - 20034) / 8.95 - 40
-            // Datasheet Table 30 page 63: 20034 (not 2034)
-            return (code - 20034.0f) / 8.95f - 40.0f;
+        case 1:  // TEMP: Temperature = (DIAG_CODE - 2034) / 8.95 - 40
+            return (code - 2034.0f) / 8.95f - 40.0f;
 
         case 2:  // DVCC: V = (DIAG_CODE/65536) × (25/3)  [0V to 8.3V]
             return base * (25.0f / 3.0f);
