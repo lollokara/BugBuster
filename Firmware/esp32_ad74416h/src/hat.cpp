@@ -189,7 +189,8 @@ bool hat_init(void)
     memset(&s_state, 0, sizeof(s_state));
 
     // Initialize ADC for detect pin (if available)
-    if (PIN_HAT_DETECT != GPIO_NUM_NC) {
+#if !HAT_NO_DETECT
+    {
         adc_oneshot_unit_init_cfg_t adc_cfg = {
             .unit_id = ADC_UNIT_1,
         };
@@ -204,9 +205,10 @@ bool hat_init(void)
             };
             adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_6, &chan_cfg);
         }
-    } else {
-        ESP_LOGI(TAG, "No detect pin — will probe via UART ping");
     }
+#else
+    ESP_LOGI(TAG, "No detect pin (breadboard) — will probe via UART ping");
+#endif
 
     // Initialize UART for HAT communication
     uart_config_t uart_cfg = {
@@ -234,7 +236,8 @@ bool hat_init(void)
     }
 
     // Configure IRQ pin as open-drain input (shared line), if available
-    if (PIN_HAT_IRQ != GPIO_NUM_NC) {
+#if !HAT_NO_DETECT
+    if ((int)PIN_HAT_IRQ >= 0) {
         gpio_config_t irq_cfg = {
             .pin_bit_mask = (1ULL << PIN_HAT_IRQ),
             .mode = GPIO_MODE_INPUT_OUTPUT_OD,
@@ -245,6 +248,7 @@ bool hat_init(void)
         gpio_config(&irq_cfg);
         gpio_set_level(PIN_HAT_IRQ, 1);
     }
+#endif
 
     s_initialized = true;
     ESP_LOGI(TAG, "HAT subsystem initialized (UART%d: GPIO%d TX, GPIO%d RX, %d baud)",
@@ -281,14 +285,13 @@ const HatState* hat_get_state(void)
 HatType hat_detect(void)
 {
     // If no detect pin (breadboard mode), assume HAT might be present — probe via UART
-    if (PIN_HAT_DETECT == GPIO_NUM_NC || !s_adc_handle) {
-        ESP_LOGI(TAG, "No detect pin — trying UART ping...");
-        s_state.detect_voltage = 0.0f;
-        s_state.type = HAT_TYPE_SWD_GPIO;  // Assume SWD/GPIO for breadboard test
-        s_state.detected = true;            // Will be confirmed/denied by hat_connect()
-        return s_state.type;
-    }
-
+#if HAT_NO_DETECT
+    ESP_LOGI(TAG, "No detect pin — trying UART ping...");
+    s_state.detect_voltage = 0.0f;
+    s_state.type = HAT_TYPE_SWD_GPIO;  // Assume SWD/GPIO for breadboard test
+    s_state.detected = true;            // Will be confirmed/denied by hat_connect()
+    return s_state.type;
+#else
     // Average multiple ADC readings for stability
     float sum = 0.0f;
     int valid = 0;
@@ -314,6 +317,7 @@ HatType hat_detect(void)
     s_state.detected = (s_state.type != HAT_TYPE_NONE && s_state.type != HAT_TYPE_UNKNOWN);
 
     return s_state.type;
+#endif  // HAT_NO_DETECT
 }
 
 bool hat_connect(void)

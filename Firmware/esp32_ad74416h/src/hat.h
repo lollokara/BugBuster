@@ -23,6 +23,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "config.h"      // For BREADBOARD_MODE
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,13 +34,15 @@ extern "C" {
 // -----------------------------------------------------------------------------
 #if BREADBOARD_MODE
 // Breadboard test: UART0 on GPIO43/44 (still free in breadboard mode)
-// HAT detect on GPIO47 (reused from DIO, acceptable for testing)
-// IRQ not connected in breadboard test
-#define PIN_HAT_DETECT      GPIO_NUM_NC   // No detect in breadboard (always assume connected)
+// No ADC detect — always try UART ping
+// No IRQ pin in breadboard test
+#define HAT_NO_DETECT       1             // Skip ADC, probe via UART
+#define PIN_HAT_DETECT      GPIO_NUM_NC
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to RP2040 GPIO2
 #define PIN_HAT_RX          GPIO_NUM_44   // UART RX from RP2040 GPIO3
-#define PIN_HAT_IRQ         GPIO_NUM_NC   // No IRQ in breadboard test
+#define PIN_HAT_IRQ         GPIO_NUM_NC
 #else
+#define HAT_NO_DETECT       0
 #define PIN_HAT_DETECT      GPIO_NUM_47   // ADC input for HAT identification
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to HAT
 #define PIN_HAT_RX          GPIO_NUM_44   // UART RX from HAT

@@ -15,6 +15,11 @@
 #include "hardware/gpio.h"
 #include "hardware/watchdog.h"
 
+#ifdef DEBUGPROBE_INTEGRATION
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
+
 #include "bb_config.h"
 #include "bb_protocol.h"
 #include "bb_power.h"
@@ -360,7 +365,11 @@ void bb_cmd_task(void *params)
         }
 
         // Small sleep to avoid busy-loop when no UART data
+#ifdef DEBUGPROBE_INTEGRATION
+        vTaskDelay(1);  // Yield to other FreeRTOS tasks (1 tick = ~1ms)
+#else
         sleep_us(100);
+#endif
     }
 }
 

@@ -328,7 +328,6 @@ class CmdId(IntEnum):
     ALERT_EVT        = 0x82
     DIN_EVT          = 0x83
     PCA_FAULT_EVT    = 0x84
-    DIN_EVT          = 0x83
 
     # MUX switch matrix
     MUX_SET_ALL      = 0x90

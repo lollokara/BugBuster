@@ -15,21 +15,17 @@
 // -----------------------------------------------------------------------------
 #define BB_UART             uart0
 #define BB_UART_BAUD        921600
-// PCB: GPIO0 TX, GPIO1 RX
-// Breadboard test: GPIO3 TX (→ ESP32 RX), GPIO2 RX (← ESP32 TX)
-#define BB_UART_TX_PIN      3
-#define BB_UART_RX_PIN      2
+#define BB_UART_TX_PIN      0       // GPIO0 → ESP32 RX (GPIO44)
+#define BB_UART_RX_PIN      1       // GPIO1 ← ESP32 TX (GPIO43)
 #define BB_UART_BUF_SIZE    512
 
 // -----------------------------------------------------------------------------
 // SWD — debugprobe pins (PIO 0)
 // These must match the debugprobe board config
 // -----------------------------------------------------------------------------
-// SWD pins — must not overlap with UART pins during breadboard testing
-// PCB final: GPIO2 SWCLK, GPIO3 SWDIO
-// Breadboard test: moved to GPIO18/GPIO19 (or unused pins)
-#define BB_SWD_SWCLK_PIN    18      // GPIO18 — SWD clock to target
-#define BB_SWD_SWDIO_PIN    19      // GPIO19 — SWD data to target
+// SWD pins — managed by debugprobe (PIO 0), defined here for reference
+#define BB_SWD_SWCLK_PIN    2       // GPIO2 — SWD clock (debugprobe default for Pico)
+#define BB_SWD_SWDIO_PIN    3       // GPIO3 — SWD data (debugprobe default for Pico)
 
 // -----------------------------------------------------------------------------
 // Power Management
@@ -83,7 +79,7 @@
 #define BB_LA_CH2_PIN       16      // GPIO16 — LA channel 2
 #define BB_LA_CH3_PIN       17      // GPIO17 — LA channel 3
 #define BB_LA_NUM_CHANNELS  4
-#define BB_LA_BUFFER_SIZE   (200 * 1024)  // 200KB SRAM capture buffer
+#define BB_LA_BUFFER_SIZE   (90 * 1024)   // 90KB SRAM capture buffer
 
 // -----------------------------------------------------------------------------
 // LEDs
