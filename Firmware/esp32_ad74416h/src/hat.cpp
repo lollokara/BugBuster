@@ -188,24 +188,24 @@ bool hat_init(void)
 {
     memset(&s_state, 0, sizeof(s_state));
 
-    // Initialize ADC for detect pin (GPIO47 = ADC1_CH6 on ESP32-S3)
-    adc_oneshot_unit_init_cfg_t adc_cfg = {
-        .unit_id = ADC_UNIT_1,
-    };
-    esp_err_t err = adc_oneshot_new_unit(&adc_cfg, &s_adc_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ADC unit init failed: %s", esp_err_to_name(err));
-        return false;
-    }
-
-    adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten = ADC_ATTEN_DB_12,   // Full 0-3.3V range
-        .bitwidth = ADC_BITWIDTH_12,
-    };
-    err = adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_6, &chan_cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ADC channel config failed: %s", esp_err_to_name(err));
-        return false;
+    // Initialize ADC for detect pin (if available)
+    if (PIN_HAT_DETECT != GPIO_NUM_NC) {
+        adc_oneshot_unit_init_cfg_t adc_cfg = {
+            .unit_id = ADC_UNIT_1,
+        };
+        esp_err_t err = adc_oneshot_new_unit(&adc_cfg, &s_adc_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "ADC unit init failed: %s", esp_err_to_name(err));
+            // Continue without detect — will try UART ping instead
+        } else {
+            adc_oneshot_chan_cfg_t chan_cfg = {
+                .atten = ADC_ATTEN_DB_12,
+                .bitwidth = ADC_BITWIDTH_12,
+            };
+            adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_6, &chan_cfg);
+        }
+    } else {
+        ESP_LOGI(TAG, "No detect pin — will probe via UART ping");
     }
 
     // Initialize UART for HAT communication
@@ -217,7 +217,7 @@ bool hat_init(void)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    err = uart_param_config(HAT_UART_NUM, &uart_cfg);
+    esp_err_t err = uart_param_config(HAT_UART_NUM, &uart_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "UART config failed: %s", esp_err_to_name(err));
         return false;
@@ -233,16 +233,18 @@ bool hat_init(void)
         return false;
     }
 
-    // Configure IRQ pin as open-drain input (shared line)
-    gpio_config_t irq_cfg = {
-        .pin_bit_mask = (1ULL << PIN_HAT_IRQ),
-        .mode = GPIO_MODE_INPUT_OUTPUT_OD,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE, // Will enable later if needed
-    };
-    gpio_config(&irq_cfg);
-    gpio_set_level(PIN_HAT_IRQ, 1); // Release (high = idle for open-drain)
+    // Configure IRQ pin as open-drain input (shared line), if available
+    if (PIN_HAT_IRQ != GPIO_NUM_NC) {
+        gpio_config_t irq_cfg = {
+            .pin_bit_mask = (1ULL << PIN_HAT_IRQ),
+            .mode = GPIO_MODE_INPUT_OUTPUT_OD,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&irq_cfg);
+        gpio_set_level(PIN_HAT_IRQ, 1);
+    }
 
     s_initialized = true;
     ESP_LOGI(TAG, "HAT subsystem initialized (UART%d: GPIO%d TX, GPIO%d RX, %d baud)",
@@ -278,6 +280,15 @@ const HatState* hat_get_state(void)
 
 HatType hat_detect(void)
 {
+    // If no detect pin (breadboard mode), assume HAT might be present — probe via UART
+    if (PIN_HAT_DETECT == GPIO_NUM_NC || !s_adc_handle) {
+        ESP_LOGI(TAG, "No detect pin — trying UART ping...");
+        s_state.detect_voltage = 0.0f;
+        s_state.type = HAT_TYPE_SWD_GPIO;  // Assume SWD/GPIO for breadboard test
+        s_state.detected = true;            // Will be confirmed/denied by hat_connect()
+        return s_state.type;
+    }
+
     // Average multiple ADC readings for stability
     float sum = 0.0f;
     int valid = 0;
@@ -676,4 +687,4 @@ uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len)
     return 0;
 }
 
-#endif // BREADBOARD_MODE
+// end of hat.cpp

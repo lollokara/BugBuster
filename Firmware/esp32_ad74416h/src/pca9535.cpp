@@ -15,6 +15,11 @@
 static const char *TAG = "pca9535";
 
 static PCA9535State s_state = {};
+
+// Forward declarations
+static void check_changes(uint8_t old_input0, uint8_t new_input0,
+                           uint8_t old_input1, uint8_t new_input1);
+
 static pca9535_fault_cb_t s_fault_cb = NULL;
 static PcaFaultConfig s_fault_cfg = { .auto_disable_efuse = true, .log_events = true };
 static uint8_t s_prev_input0 = 0xFF;  // Previous input state for change detection

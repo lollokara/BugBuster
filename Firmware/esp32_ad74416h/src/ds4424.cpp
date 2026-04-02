@@ -44,6 +44,9 @@ static const char *TAG = "ds4424";
 
 static DS4424State s_state = {};
 
+// Forward declaration
+static bool read_dac(uint8_t ch, int8_t *code);
+
 // Default channel configurations
 // I_FS = 50µA for all channels (as specified by user)
 static void init_channel_configs(void)
