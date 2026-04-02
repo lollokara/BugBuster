@@ -34,4 +34,5 @@ csv = "1"
 chrono = "0.4"
 local-ip-address = "0.6"
 futures = "0.3"
+nusb = "0.1"                    # Raw USB for RP2040 LA vendor bulk endpoint
 

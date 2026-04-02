@@ -7,12 +7,16 @@ mod commands;
 mod connection_manager;
 mod discovery;
 mod http_transport;
+mod la_usb;
+mod la_store;
+mod la_commands;
 mod state;
 mod transport;
 mod usb_transport;
 mod wavegen;
 
 use connection_manager::ConnectionManager;
+use la_commands::LaState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,6 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ConnectionManager::new())
+        .manage(LaState::new())
         .invoke_handler(tauri::generate_handler![
             // Discovery & Connection
             commands::discover_devices,
@@ -111,6 +116,21 @@ pub fn run() {
             commands::import_config,
             commands::pick_config_save_file,
             commands::pick_config_open_file,
+            // Logic Analyzer
+            la_commands::la_check_usb,
+            la_commands::la_connect_usb,
+            la_commands::la_configure,
+            la_commands::la_set_trigger,
+            la_commands::la_arm,
+            la_commands::la_force,
+            la_commands::la_stop,
+            la_commands::la_get_status,
+            la_commands::la_read_capture,
+            la_commands::la_get_cached_capture,
+            la_commands::la_get_view,
+            la_commands::la_load_raw,
+            la_commands::la_export_vcd,
+            la_commands::la_get_capture_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

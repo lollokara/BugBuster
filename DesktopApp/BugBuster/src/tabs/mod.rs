@@ -17,3 +17,4 @@ pub mod iin;
 pub mod usbpd;
 pub mod ioexp;
 pub mod hat;
+pub mod la;

@@ -503,6 +503,77 @@ pub fn send_hat_setup_swd(target_voltage_mv: u16, connector: u8) {
 }
 
 // -----------------------------------------------------------------------------
+// Logic Analyzer types & helpers
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaViewData {
+    pub channels: u8,
+    pub sample_rate_hz: u32,
+    pub total_samples: u64,
+    pub view_start: u64,
+    pub view_end: u64,
+    pub trigger_sample: Option<u64>,
+    pub channel_transitions: Vec<Vec<(u64, u8)>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaCaptureInfo {
+    pub channels: u8,
+    pub sample_rate_hz: u32,
+    pub total_samples: u64,
+    pub duration_sec: f64,
+    pub trigger_sample: Option<u64>,
+}
+
+pub async fn la_get_view(start: u64, end: u64) -> Option<LaViewData> {
+    #[derive(Serialize)]
+    struct Args {
+        #[serde(rename = "startSample")]
+        start_sample: u64,
+        #[serde(rename = "endSample")]
+        end_sample: u64,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { start_sample: start, end_sample: end }).unwrap();
+    let result = invoke("la_get_view", args).await;
+    serde_wasm_bindgen::from_value::<Option<LaViewData>>(result).ok().flatten()
+}
+
+pub async fn la_get_capture_info() -> Option<LaCaptureInfo> {
+    let result = invoke("la_get_capture_info", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value::<Option<LaCaptureInfo>>(result).ok().flatten()
+}
+
+pub async fn la_invoke_configure(channels: u8, rate_hz: u32, depth: u32) {
+    #[derive(Serialize)]
+    struct Args {
+        channels: u8,
+        #[serde(rename = "rateHz")]
+        rate_hz: u32,
+        depth: u32,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { channels, rate_hz, depth }).unwrap();
+    let _ = invoke("la_configure", args).await;
+}
+
+pub async fn la_invoke_arm() { let _ = invoke("la_arm", JsValue::NULL).await; }
+pub async fn la_invoke_force() { let _ = invoke("la_force", JsValue::NULL).await; }
+pub async fn la_invoke_stop() { let _ = invoke("la_stop", JsValue::NULL).await; }
+
+pub async fn la_invoke_set_trigger(trigger_type: u8, channel: u8) {
+    #[derive(Serialize)]
+    struct Args {
+        #[serde(rename = "triggerType")]
+        trigger_type: u8,
+        channel: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { trigger_type, channel }).unwrap();
+    let _ = invoke("la_set_trigger", args).await;
+}
+
+// -----------------------------------------------------------------------------
 // WiFi State types & helpers
 // -----------------------------------------------------------------------------
 
