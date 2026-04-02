@@ -46,6 +46,7 @@ add_executable(bugbuster_hat
     src/bb_pins.c
     src/bb_swd.c
     src/bb_la.c
+    src/bb_la_rle.c
     src/bb_la_usb.c
 )
 
@@ -74,6 +75,7 @@ pico_generate_pio_header(bugbuster_hat ${DEBUGPROBE_DIR}/src/autobaud.pio)
 
 # PIO programs — BugBuster LA (PIO 1)
 pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_la.pio)
+pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_la_trigger.pio)
 
 # Version header
 set(VERSION_DIR ${CMAKE_BINARY_DIR}/generated/probe)

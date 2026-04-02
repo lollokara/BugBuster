@@ -36,6 +36,7 @@ typedef struct {
     uint8_t  channels;          // Number of channels: 1, 2, or 4
     uint32_t sample_rate_hz;    // Desired sample rate in Hz
     uint32_t depth_samples;     // Total samples to capture (per channel)
+    bool     rle_enabled;       // Run-length encoding compression
 } LaConfig;
 
 // Trigger configuration

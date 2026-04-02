@@ -252,6 +252,7 @@ static void dispatch_command(const HatFrame *frame)
                           | ((uint32_t)frame->payload[6] << 8)
                           | ((uint32_t)frame->payload[7] << 16)
                           | ((uint32_t)frame->payload[8] << 24);
+        cfg.rle_enabled = (frame->payload_len >= 10) ? (frame->payload[9] != 0) : false;
         if (!bb_la_configure(&cfg)) {
             send_error(HAT_ERR_INVALID_FUNC);
         } else {

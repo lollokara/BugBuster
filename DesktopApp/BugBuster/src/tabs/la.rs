@@ -1,7 +1,8 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::tauri_bridge::*;
-use crate::components::controls::Dropdown;
+// Dropdown no longer used — replaced with pill/toggle buttons
+// use crate::components::controls::Dropdown;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d, MouseEvent};
@@ -286,75 +287,96 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             if hch < data.channel_transitions.len() {
                 let transitions = &data.channel_transitions[hch];
                 let color = CH_COLORS[hch % CH_COLORS.len()];
-
-                // Find the sample under the mouse
                 let mx = hover_x.get();
-                if mx > LABEL_WIDTH {
+
+                if mx > LABEL_WIDTH && transitions.len() >= 3 {
                     let frac = (mx - LABEL_WIDTH) / plot_w;
                     let mouse_sample = vs + span * frac;
+                    let sample_rate = data.sample_rate_hz as f64;
 
-                    // Find two consecutive rising edges around the mouse to measure period
-                    let mut rising_edges: Vec<u64> = Vec::new();
+                    // Collect ALL edges (both rising and falling) with their types
+                    let mut edges: Vec<(u64, bool)> = Vec::new(); // (sample, is_rising)
                     for i in 1..transitions.len() {
-                        if transitions[i - 1].1 == 0 && transitions[i].1 == 1 {
-                            rising_edges.push(transitions[i].0);
+                        let prev_val = transitions[i - 1].1;
+                        let cur_val = transitions[i].1;
+                        if prev_val != cur_val {
+                            edges.push((transitions[i].0, cur_val == 1));
                         }
                     }
 
-                    // Find the nearest period around mouse position
-                    if rising_edges.len() >= 2 {
-                        // Find the rising edge just before the mouse
-                        let mut edge_idx = 0;
-                        for (i, &e) in rising_edges.iter().enumerate() {
-                            if e as f64 <= mouse_sample { edge_idx = i; }
+                    // Find the edge nearest to the mouse cursor
+                    if edges.len() >= 2 {
+                        let mut nearest_idx = 0;
+                        let mut nearest_dist = f64::MAX;
+                        for (i, &(s, _)) in edges.iter().enumerate() {
+                            let dist = (s as f64 - mouse_sample).abs();
+                            if dist < nearest_dist { nearest_dist = dist; nearest_idx = i; }
                         }
 
-                        if edge_idx + 1 < rising_edges.len() {
-                            let e1 = rising_edges[edge_idx];
-                            let e2 = rising_edges[edge_idx + 1];
+                        // Find next edge of the SAME direction to measure a full period
+                        let (nearest_sample, nearest_is_rising) = edges[nearest_idx];
+                        let mut period_end = None;
+                        for i in (nearest_idx + 1)..edges.len() {
+                            if edges[i].1 == nearest_is_rising {
+                                period_end = Some(i);
+                                break;
+                            }
+                        }
+
+                        if let Some(pe_idx) = period_end {
+                            let e1 = nearest_sample;
+                            let e2 = edges[pe_idx].0;
                             let period_samples = e2 - e1;
-                            let sample_rate = data.sample_rate_hz as f64;
 
                             if period_samples > 0 && sample_rate > 0.0 {
                                 let period_sec = period_samples as f64 / sample_rate;
                                 let freq = 1.0 / period_sec;
 
-                                // Find high time within this period for duty cycle
-                                let mut high_samples = 0u64;
-                                for s in e1..e2 {
-                                    // Check value at this sample
-                                    let mut val = 0u8;
-                                    for &(ts, tv) in transitions.iter() {
-                                        if ts <= s { val = tv; } else { break; }
+                                // Find the opposite edge between e1 and e2 for duty cycle
+                                let mut high_time = 0u64;
+                                if nearest_is_rising {
+                                    // Rising→Rising: high time = time from e1 to first falling edge
+                                    for i in (nearest_idx + 1)..pe_idx {
+                                        if !edges[i].1 { // falling edge
+                                            high_time = edges[i].0 - e1;
+                                            break;
+                                        }
                                     }
-                                    if val == 1 { high_samples += 1; }
+                                } else {
+                                    // Falling→Falling: high time = time from first rising to e2
+                                    for i in (nearest_idx + 1)..pe_idx {
+                                        if edges[i].1 { // rising edge
+                                            high_time = e2 - edges[i].0;
+                                            break;
+                                        }
+                                    }
                                 }
-                                let duty = high_samples as f64 / period_samples as f64 * 100.0;
-                                let width_sec = high_samples as f64 / sample_rate;
 
-                                // Draw period arrow between the two edges
+                                let duty = high_time as f64 / period_samples as f64 * 100.0;
+                                let width_sec = high_time as f64 / sample_rate;
+
+                                // Draw period arrow
                                 let x1 = LABEL_WIDTH + ((e1 as f64 - vs) / span) * plot_w;
                                 let x2 = LABEL_WIDTH + ((e2 as f64 - vs) / span) * plot_w;
                                 let y_track_top = TOOLBAR_HEIGHT + hch as f64 * TRACK_HEIGHT + SIGNAL_MARGIN;
                                 let arrow_y = y_track_top - 2.0;
 
-                                // Arrow line
                                 ctx.set_stroke_style_str(color);
                                 ctx.set_line_width(1.0);
                                 ctx.begin_path();
+                                // Arrow line
                                 ctx.move_to(x1, arrow_y);
                                 ctx.line_to(x2, arrow_y);
-                                // Left arrowhead
+                                // Arrowheads
                                 ctx.move_to(x1, arrow_y);
                                 ctx.line_to(x1 + 5.0, arrow_y - 3.0);
                                 ctx.move_to(x1, arrow_y);
                                 ctx.line_to(x1 + 5.0, arrow_y + 3.0);
-                                // Right arrowhead
                                 ctx.move_to(x2, arrow_y);
                                 ctx.line_to(x2 - 5.0, arrow_y - 3.0);
                                 ctx.move_to(x2, arrow_y);
                                 ctx.line_to(x2 - 5.0, arrow_y + 3.0);
-                                // Vertical markers at edges
+                                // Vertical markers
                                 let y_bot = TOOLBAR_HEIGHT + (hch + 1) as f64 * TRACK_HEIGHT - SIGNAL_MARGIN;
                                 ctx.move_to(x1, y_track_top);
                                 ctx.line_to(x1, y_bot);
@@ -362,31 +384,26 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 ctx.line_to(x2, y_bot);
                                 ctx.stroke();
 
-                                // Measurement text box
+                                // Measurement label
                                 let box_x = (x1 + x2) / 2.0;
                                 let box_y = arrow_y - 6.0;
 
                                 let freq_str = if freq >= 1e6 { format!("{:.2} MHz", freq / 1e6) }
                                     else if freq >= 1e3 { format!("{:.2} kHz", freq / 1e3) }
                                     else { format!("{:.1} Hz", freq) };
-                                let period_str = format_time(period_sec);
-                                let width_str = format_time(width_sec);
-                                let duty_str = format!("{:.1}%", duty);
 
-                                let label = format!("P: {}  F: {}  W: {}  D: {}", period_str, freq_str, width_str, duty_str);
+                                let label = format!("P: {}  F: {}  W: {}  D: {:.1}%",
+                                    format_time(period_sec), freq_str, format_time(width_sec), duty);
 
-                                // Background box
                                 ctx.set_font("9px 'JetBrains Mono', monospace");
-                                let text_width = label.len() as f64 * 5.5;  // Approximate monospace width
+                                let text_width = label.len() as f64 * 5.5;
                                 let bx = box_x - text_width / 2.0 - 4.0;
                                 let by = box_y - 12.0;
-                                ctx.set_fill_style_str("rgba(6, 10, 20, 0.9)");
+                                ctx.set_fill_style_str("rgba(6, 10, 20, 0.92)");
                                 ctx.fill_rect(bx, by, text_width + 8.0, 14.0);
                                 ctx.set_stroke_style_str(color);
                                 ctx.set_line_width(0.5);
                                 ctx.stroke_rect(bx, by, text_width + 8.0, 14.0);
-
-                                // Text
                                 ctx.set_fill_style_str(color);
                                 ctx.set_text_align("center");
                                 ctx.fill_text(&label, box_x, box_y - 1.0).ok();
@@ -599,56 +616,147 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         set_dragging.set(false);
     };
 
-    let ch_options = vec![
-        ("1".into(), "1 Channel".into()),
-        ("2".into(), "2 Channels".into()),
-        ("4".into(), "4 Channels".into()),
-    ];
-    let rate_options = vec![
-        ("100000".into(), "100 kHz".into()),
-        ("500000".into(), "500 kHz".into()),
-        ("1000000".into(), "1 MHz".into()),
-        ("5000000".into(), "5 MHz".into()),
-        ("10000000".into(), "10 MHz".into()),
-        ("25000000".into(), "25 MHz".into()),
-    ];
-    let depth_options = vec![
-        ("10000".into(), "10K".into()),
-        ("50000".into(), "50K".into()),
-        ("100000".into(), "100K".into()),
-        ("500000".into(), "500K".into()),
-    ];
-    let trigger_options = vec![
-        ("0".into(), "None".into()),
-        ("1".into(), "Rising".into()),
-        ("2".into(), "Falling".into()),
-        ("3".into(), "Any Edge".into()),
-        ("4".into(), "High".into()),
-        ("5".into(), "Low".into()),
-    ];
-    let trig_ch_options = vec![
-        ("0".into(), "CH0".into()),
-        ("1".into(), "CH1".into()),
-        ("2".into(), "CH2".into()),
-        ("3".into(), "CH3".into()),
-    ];
-
     view! {
         <div class="tab-content" style="display: flex; flex-direction: column; height: 100%; gap: 0">
             <div class="tab-desc">
                 "Logic Analyzer — Capture and analyze digital signals from the HAT expansion board."
             </div>
 
-            // Toolbar
-            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border, #1e293b); flex-wrap: wrap">
-                <Dropdown value=Signal::derive(move || channels.get()) on_change=Callback::new(move |v: String| set_channels.set(v)) options=ch_options.clone() />
-                <Dropdown value=Signal::derive(move || rate.get()) on_change=Callback::new(move |v: String| set_rate.set(v)) options=rate_options.clone() />
-                <Dropdown value=Signal::derive(move || depth.get()) on_change=Callback::new(move |v: String| set_depth.set(v)) options=depth_options.clone() />
-                <span style="color: var(--text-dim); font-size: 10px; margin: 0 4px">"|"</span>
-                <span style="font-size: 10px; color: var(--text-dim)">"Trigger:"</span>
-                <Dropdown value=Signal::derive(move || trig_type.get()) on_change=Callback::new(move |v: String| set_trig_type.set(v)) options=trigger_options.clone() />
-                <Dropdown value=Signal::derive(move || trig_ch.get()) on_change=Callback::new(move |v: String| set_trig_ch.set(v)) options=trig_ch_options.clone() />
-                <span style="color: var(--text-dim); font-size: 10px; margin: 0 4px">"|"</span>
+            // Toolbar with labeled sections
+            <div style="display: flex; align-items: flex-end; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border, #1e293b); flex-wrap: wrap">
+
+                // Channels section
+                <div style="display: flex; flex-direction: column; gap: 2px">
+                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Channels"</span>
+                    <div style="display: flex; gap: 3px">
+                        {(0..4u8).map(|i| {
+                            let color = CH_COLORS[i as usize];
+                            view! {
+                                <button style=format!("font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: 'JetBrains Mono', monospace; \
+                                    background: {}20; color: {}; border: 1.5px solid {}60", color, color, color)
+                                >{format!("CH{}", i)}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+
+                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
+
+                // Sample Rate section
+                <div style="display: flex; flex-direction: column; gap: 2px">
+                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Sample Rate"</span>
+                    <div style="display: flex; gap: 2px">
+                        {["100k", "500k", "1M", "5M", "10M", "25M"].iter().zip(
+                            ["100000", "500000", "1000000", "5000000", "10000000", "25000000"].iter()
+                        ).map(|(label, val)| {
+                            let v = val.to_string();
+                            let l = label.to_string();
+                            view! {
+                                <button
+                                    style=move || {
+                                        let active = rate.get() == v;
+                                        format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                            if active { "background: #3b82f6; color: #fff; border: 1px solid #3b82f6" }
+                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
+                                    }
+                                    on:click={ let v2 = val.to_string(); move |_| set_rate.set(v2.clone()) }
+                                >{l.clone()}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+
+                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
+
+                // Memory Depth section
+                <div style="display: flex; flex-direction: column; gap: 2px">
+                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Depth"</span>
+                    <div style="display: flex; gap: 2px">
+                        {["10K", "50K", "100K", "500K"].iter().zip(
+                            ["10000", "50000", "100000", "500000"].iter()
+                        ).map(|(label, val)| {
+                            let v = val.to_string();
+                            let l = label.to_string();
+                            view! {
+                                <button
+                                    style=move || {
+                                        let active = depth.get() == v;
+                                        format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                            if active { "background: #10b981; color: #fff; border: 1px solid #10b981" }
+                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
+                                    }
+                                    on:click={ let v2 = val.to_string(); move |_| set_depth.set(v2.clone()) }
+                                >{l.clone()}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+
+                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
+
+                // Trigger section
+                <div style="display: flex; flex-direction: column; gap: 2px">
+                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Trigger"</span>
+                    <div style="display: flex; gap: 2px; align-items: center">
+                        {[("0", "—", "None"), ("1", "↑", "Rising"), ("2", "↓", "Falling"), ("4", "▔", "High"), ("5", "▁", "Low")].iter().map(|(val, icon, tip)| {
+                            let v = val.to_string();
+                            let ic = icon.to_string();
+                            let tt = tip.to_string();
+                            view! {
+                                <button
+                                    style=move || {
+                                        let active = trig_type.get() == v;
+                                        format!("font-size: 12px; padding: 1px 5px; border-radius: 4px; cursor: pointer; min-width: 22px; transition: all 0.15s; {}",
+                                            if active { "background: #f59e0b30; color: #f59e0b; border: 1px solid #f59e0b" }
+                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
+                                    }
+                                    title=tt.clone()
+                                    on:click={ let v2 = val.to_string(); move |_| set_trig_type.set(v2.clone()) }
+                                >{ic.clone()}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+
+                // Trigger Channel
+                <div style="display: flex; flex-direction: column; gap: 2px">
+                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Trig Ch"</span>
+                    <div style="display: flex; gap: 2px">
+                        {(0..4u8).map(|i| {
+                            let v = i.to_string();
+                            let color = CH_COLORS[i as usize];
+                            view! {
+                                <button
+                                    style=move || {
+                                        let active = trig_ch.get() == v;
+                                        format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; font-family: 'JetBrains Mono', monospace; {}",
+                                            if active { format!("background: {}30; color: {}; border: 1px solid {}", color, color, color) }
+                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)".into() })
+                                    }
+                                    on:click={ let v2 = i.to_string(); move |_| set_trig_ch.set(v2.clone()) }
+                                >{format!("{}", i)}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+
+                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
+
+                // Mode section (Memory/Stream + RLE)
+                <div style="display: flex; flex-direction: column; gap: 2px">
+                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Mode"</span>
+                    <div style="display: flex; gap: 2px">
+                        <button style="font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; background: #8b5cf6; color: #fff; border: 1px solid #8b5cf6"
+                        >"Memory"</button>
+                        <button style="font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)"
+                        >"Stream"</button>
+                        <button style="font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; background: transparent; color: #06b6d4; border: 1px solid #06b6d440"
+                            title="Run-Length Encoding compression — captures more data in same memory"
+                        >"RLE"</button>
+                    </div>
+                </div>
+
+                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
 
                 // Control buttons
                 <button style="font-size: 10px; padding: 3px 12px; background: #10b98125; color: #10b981; border: 1px solid #10b98150; border-radius: 4px; cursor: pointer"
@@ -674,32 +782,48 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 la_invoke_arm().await;
                                 show_toast(if tt == 0 { "Capturing..." } else { "Armed — waiting for trigger..." }, "ok");
 
-                                // Auto-poll for capture done
-                                for _ in 0..200 {  // Up to 20 seconds
-                                    let promise = js_sys::Promise::new(&mut |resolve, _| {
-                                        web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 100).unwrap();
+                                // Auto-poll for capture done — simple delay + status loop
+                                let mut captured = false;
+                                for poll in 0..300 {  // Up to 30 seconds
+                                    // Sleep 100ms between polls
+                                    let p = js_sys::Promise::new(&mut |resolve, _| {
+                                        web_sys::window().unwrap()
+                                            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 100).unwrap();
                                     });
-                                    wasm_bindgen_futures::JsFuture::from(promise).await.ok();
+                                    let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 
-                                    if let Some(info) = la_get_capture_info().await {
-                                        // la_get_capture_info only returns data if store exists
-                                        // We need to check LA status instead
-                                    }
-
-                                    // Check status via BBP
+                                    // Query RP2040 LA status via ESP32
                                     #[derive(serde::Deserialize)]
-                                    #[serde(rename_all = "camelCase")]
-                                    struct St { state: u8, channels: u8, samples_captured: u32, total_samples: u32, actual_rate_hz: u32 }
+                                    #[allow(dead_code)]
+                                    struct StRsp {
+                                        state: Option<u8>,
+                                        #[serde(default)]
+                                        channels: u8,
+                                        #[serde(default, rename = "samplesCaptured")]
+                                        samples_captured: u32,
+                                        #[serde(default, rename = "totalSamples")]
+                                        total_samples: u32,
+                                        #[serde(default, rename = "actualRateHz")]
+                                        actual_rate_hz: u32,
+                                    }
                                     let result = invoke("la_get_status", JsValue::NULL).await;
-                                    if let Ok(st) = serde_wasm_bindgen::from_value::<St>(result) {
-                                        if st.state == 3 {
-                                            // DONE! Auto-read data
-                                            show_toast("Capture done! Reading...", "ok");
+                                    if let Ok(st) = serde_wasm_bindgen::from_value::<StRsp>(result) {
+                                        let state = st.state.unwrap_or(255);
+                                        if state == 3 {
+                                            // DONE — auto-read data
+                                            show_toast("Triggered! Reading data...", "ok");
                                             #[derive(serde::Serialize)]
-                                            #[serde(rename_all = "camelCase")]
-                                            struct ReadArgs { channels: u8, sample_rate_hz: u32, total_samples: u32 }
-                                            let args = serde_wasm_bindgen::to_value(&ReadArgs {
-                                                channels: st.channels, sample_rate_hz: st.actual_rate_hz, total_samples: st.samples_captured,
+                                            struct RdArgs {
+                                                channels: u8,
+                                                #[serde(rename = "sampleRateHz")]
+                                                sample_rate_hz: u32,
+                                                #[serde(rename = "totalSamples")]
+                                                total_samples: u32,
+                                            }
+                                            let args = serde_wasm_bindgen::to_value(&RdArgs {
+                                                channels: st.channels.max(ch),
+                                                sample_rate_hz: if st.actual_rate_hz > 0 { st.actual_rate_hz } else { r },
+                                                total_samples: if st.samples_captured > 0 { st.samples_captured } else { d },
                                             }).unwrap();
                                             let read_result = invoke("la_read_uart_chunks", args).await;
                                             if let Ok(info) = serde_wasm_bindgen::from_value::<LaCaptureInfo>(read_result) {
@@ -707,12 +831,17 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 set_view_end.set(info.total_samples);
                                                 set_ci5.set(Some(info));
                                                 show_toast("Capture complete!", "ok");
+                                                captured = true;
                                             } else {
-                                                show_toast("Read failed", "err");
+                                                show_toast("Data read failed — try Read button", "err");
                                             }
                                             break;
                                         }
+                                        // Still armed/capturing — keep polling
                                     }
+                                }
+                                if !captured {
+                                    show_toast("Capture timeout — use Read button manually", "err");
                                 }
                             });
                         }
