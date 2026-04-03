@@ -151,17 +151,6 @@ static void taskAdcPoll(void* /*pvParameters*/)
             }
             pollDelay = pdMS_TO_TICKS(minPollMs);
 
-            // Yield SPI bus if MUX driver needs it — give/take the mutex
-            // between ADC poll cycles so other tasks (MUX, CMD) can access SPI.
-            {
-                extern SemaphoreHandle_t g_spi_bus_mutex;
-                if (g_spi_bus_mutex) {
-                    xSemaphoreGive(g_spi_bus_mutex);
-                    vTaskDelay(1);  // Brief yield window for other tasks
-                    xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
-                }
-            }
-
             // Read hardware (outside mutex) - only for channels that have ADC active
             // DIN_LOGIC and DIN_LOOP use the comparator path, not the ADC conversion path
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
@@ -621,7 +610,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 // Acquire SPI bus to safely reconfigure ADC (blocks until ADC task yields)
                 extern SemaphoreHandle_t g_spi_bus_mutex;
                 if (g_spi_bus_mutex == NULL ||
-                    xSemaphoreTake(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+                    xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
                     ESP_LOGE("cmd", "ADC config: SPI bus acquire timeout — aborting");
                     break;
                 }
@@ -667,7 +656,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 }
 
                 // Release bus — ADC poll task resumes
-                xSemaphoreGive(g_spi_bus_mutex);
+                xSemaphoreGiveRecursive(g_spi_bus_mutex);
                 break;
             }
 

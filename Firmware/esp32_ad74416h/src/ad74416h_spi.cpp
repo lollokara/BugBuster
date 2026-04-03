@@ -6,6 +6,11 @@
 #include "esp_log.h"
 #include <string.h>
 
+// Shared SPI2 bus mutex defined in adgs2414d.cpp.
+// AD74416H and ADGS2414D must serialize on the same lock because they share
+// MOSI/MISO/SCLK with different chip selects.
+extern SemaphoreHandle_t g_spi_bus_mutex;
+
 AD74416H_SPI::AD74416H_SPI(gpio_num_t pin_sdo, gpio_num_t pin_sdi,
                              gpio_num_t pin_sync, gpio_num_t pin_sclk,
                              uint8_t dev_addr)
@@ -92,6 +97,12 @@ uint8_t AD74416H_SPI::computeCRC8(const uint8_t* frame) const
 
 void AD74416H_SPI::transferFrame(const uint8_t* tx_frame, uint8_t* rx_frame)
 {
+    if (g_spi_bus_mutex != NULL &&
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        ESP_LOGE("spi", "SPI bus acquire timeout");
+        return;
+    }
+
     spi_transaction_t txn = {};
     txn.length    = SPI_FRAME_BYTES * 8;  // bits
     txn.tx_buffer = tx_frame;
@@ -112,6 +123,10 @@ void AD74416H_SPI::transferFrame(const uint8_t* tx_frame, uint8_t* rx_frame)
     assertSync();
     spi_device_polling_transmit(_spi_dev, &txn);
     deassertSync();
+
+    if (g_spi_bus_mutex != NULL) {
+        xSemaphoreGiveRecursive(g_spi_bus_mutex);
+    }
 }
 
 void AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)

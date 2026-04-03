@@ -28,6 +28,13 @@ static bool s_mux_initialized = false;
 // Fault flag: set when write-verify fails after ADGS_MAX_RETRIES
 static bool s_mux_faulted = false;
 
+// Readback capability for single-device breadboard mode.
+// If the first non-zero SW_DATA write is visible on the hardware but SDO keeps
+// returning 0x00 with no ERR_FLAGS set, verification is downgraded to write-only
+// so the driver does not falsely roll the MUX state back to all-open.
+static bool s_readback_available = true;
+static bool s_readback_checked = false;
+
 
 // -----------------------------------------------------------------------------
 // Low-level SPI helpers
@@ -47,7 +54,7 @@ static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
 {
     // Acquire SPI bus (max 200ms wait)
     if (g_spi_bus_mutex == NULL ||
-        xSemaphoreTake(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
         ESP_LOGE(TAG, "SPI bus acquire timeout (200ms) - aborting transfer");
         return;
     }
@@ -65,7 +72,7 @@ static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
     spi_device_polling_transmit(s_spi_dev, &t);
 
     // Release bus
-    xSemaphoreGive(g_spi_bus_mutex);
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
 }
 
 // Send a 16-bit address-mode command to all devices (before daisy-chain)
@@ -157,10 +164,45 @@ static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
     adgs_address_mode_write(ADGS_REG_SW_DATA, states[0]);
     delay_ms(1);  // ensure register write is committed
 
+    if (!s_readback_available) {
+        return true;
+    }
+
     uint8_t rb = adgs_address_mode_read(ADGS_REG_SW_DATA);
+    if (rb == states[0]) {
+        if (states[0] != 0x00) {
+            s_readback_checked = true;
+        }
+        ESP_LOGI(TAG, "Write-verify: wrote=0x%02X readback=0x%02X OK",
+                 states[0], rb);
+        return true;
+    }
+
+    uint8_t err_flags = adgs_address_mode_read(ADGS_REG_ERR_FLAGS);
+    if (states[0] != 0x00 && !s_readback_checked && rb == 0x00 && err_flags == 0x00) {
+        s_readback_checked = true;
+        s_readback_available = false;
+        ESP_LOGW(TAG,
+                 "SDO readback appears unavailable/unreliable in breadboard mode "
+                 "(wrote=0x%02X readback=0x%02X ERR_FLAGS=0x%02X). "
+                 "Continuing in write-only mode.",
+                 states[0], rb, err_flags);
+        return true;
+    }
+
+    if (states[0] != 0x00) {
+        s_readback_checked = true;
+    }
     ESP_LOGI(TAG, "Write-verify: wrote=0x%02X readback=0x%02X %s",
              states[0], rb, (rb == states[0]) ? "OK" : "MISMATCH");
-    return (rb == states[0]);
+    if (err_flags) {
+        ESP_LOGW(TAG, "ERR_FLAGS=0x%02X (CRC=%d SCLK=%d RW=%d)",
+                 err_flags,
+                 !!(err_flags & ADGS_ERR_CRC_FLAG),
+                 !!(err_flags & ADGS_ERR_SCLK_FLAG),
+                 !!(err_flags & ADGS_ERR_RW_FLAG));
+    }
+    return false;
 #endif
 }
 
@@ -261,7 +303,7 @@ void adgs_init(void)
 {
     // Create SPI bus mutex if not already created
     if (g_spi_bus_mutex == NULL) {
-        g_spi_bus_mutex = xSemaphoreCreateMutex();
+        g_spi_bus_mutex = xSemaphoreCreateRecursiveMutex();
         assert(g_spi_bus_mutex != NULL);
     }
 
@@ -282,17 +324,21 @@ void adgs_init(void)
     devcfg.spics_io_num = PIN_MUX_CS;  // Hardware CS — not manual GPIO
     devcfg.queue_size = 1;
 
-    esp_err_t ret = spi_bus_add_device(SPI2_HOST, &devcfg, &s_spi_dev);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add SPI device: %s", esp_err_to_name(ret));
-        return;
+    if (s_spi_dev == NULL) {
+        esp_err_t ret = spi_bus_add_device(SPI2_HOST, &devcfg, &s_spi_dev);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add SPI device: %s", esp_err_to_name(ret));
+            return;
+        }
+        ESP_LOGI(TAG, "SPI device added, hardware CS on GPIO%d", PIN_MUX_CS);
     }
-    ESP_LOGI(TAG, "SPI device added, hardware CS on GPIO%d", PIN_MUX_CS);
 
     // Reset all switches to open
     memset(s_mux_state, 0, sizeof(s_mux_state));
 
     s_mux_faulted = false;
+    s_readback_available = true;
+    s_readback_checked = false;
 
 #if ADGS_NUM_DEVICES > 1
     // Enter daisy-chain mode for multi-device setup
@@ -485,6 +531,9 @@ void adgs_soft_reset(void)
     delay_ms(10);
     s_mux_initialized = false;
     memset(s_mux_state, 0, sizeof(s_mux_state));
+    s_mux_faulted = false;
+    s_readback_available = true;
+    s_readback_checked = false;
     ESP_LOGI(TAG, "Soft reset complete");
 }
 

@@ -362,7 +362,11 @@ static void handleCommand(const char* line)
     } else if (strcmp(cmd, "muxreset") == 0) {
         serial_println("Resetting ADGS2414D (soft reset)...");
         adgs_soft_reset();
+#if ADGS_NUM_DEVICES > 1
         serial_println("  Done. Re-entering daisy-chain...");
+#else
+        serial_println("  Done. Re-initializing address mode...");
+#endif
         adgs_init();
         serial_println("  Re-initialized.");
     } else if (strcmp(cmd, "menu") == 0 || strcmp(cmd, "m") == 0) {

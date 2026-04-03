@@ -1837,14 +1837,14 @@ static int handleSetSpiClock(uint16_t seq, uint8_t cmdId,
     // Pause ADC task during SPI device reconfiguration
     extern SemaphoreHandle_t g_spi_bus_mutex;
     if (g_spi_bus_mutex == NULL ||
-        xSemaphoreTake(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
         sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
         return -1;
     }
 
     bool ok = s_spi->setClockSpeed(hz);
 
-    xSemaphoreGive(g_spi_bus_mutex);
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
 
     if (!ok) { sendError(seq, cmdId, BBP_ERR_SPI_FAIL); return -1; }
 
