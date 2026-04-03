@@ -11,6 +11,7 @@
 use tauri::State;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::la_usb::{LaUsbConnection, LaCaptureData, decode_capture, hat_usb_present};
 use crate::la_store::{LaStore, LaViewData};
 use crate::la_decoders::{self, Annotation, DecoderConfig};
@@ -24,7 +25,9 @@ fn map_err(e: impl std::fmt::Display) -> String { e.to_string() }
 pub struct LaState {
     pub usb: Arc<Mutex<LaUsbConnection>>,
     pub last_capture: Mutex<Option<LaCaptureData>>,
-    pub store: Mutex<Option<LaStore>>,
+    pub store: Arc<Mutex<Option<LaStore>>>,
+    /// Flag to signal the background USB streaming task to stop
+    pub stream_running: Arc<AtomicBool>,
 }
 
 impl LaState {
@@ -32,7 +35,8 @@ impl LaState {
         Self {
             usb: Arc::new(Mutex::new(LaUsbConnection::new())),
             last_capture: Mutex::new(None),
-            store: Mutex::new(None),
+            store: Arc::new(Mutex::new(None)),
+            stream_running: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -353,7 +357,7 @@ pub async fn la_read_uart_chunks(
 ) -> CmdResult<LaCaptureInfo> {
     let samples_per_word = 32u32 / channels as u32;
     let total_bytes = ((total_samples + samples_per_word - 1) / samples_per_word) * 4;
-    let chunk_size: u16 = 28;
+    let chunk_size: u16 = 900; // Max ~1024 payload, leave room for framing
 
     let mut all_data: Vec<u8> = Vec::new();
     let mut offset: u32 = 0;
@@ -384,6 +388,461 @@ pub async fn la_read_uart_chunks(
     };
     *la.store.lock().map_err(map_err)? = Some(store);
     Ok(info)
+}
+
+/// Read capture data and append to existing store (for stream mode)
+#[tauri::command]
+pub async fn la_read_append(
+    channels: u8,
+    sample_rate_hz: u32,
+    total_samples: u32,
+    mgr: State<'_, ConnectionManager>,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    log::info!("[la_read_append] ch={} rate={} depth={}", channels, sample_rate_hz, total_samples);
+    let samples_per_word = 32u32 / channels as u32;
+    let total_bytes = ((total_samples + samples_per_word - 1) / samples_per_word) * 4;
+    let chunk_size: u16 = 900; // Max ~1024 payload, leave room for framing
+
+    let mut all_data: Vec<u8> = Vec::new();
+    let mut offset: u32 = 0;
+
+    while offset < total_bytes {
+        let req_len = chunk_size.min((total_bytes - offset) as u16);
+        let mut pw = bbp::PayloadWriter::new();
+        pw.put_u32(offset);
+        pw.put_u16(req_len);
+        let rsp = mgr.send_command(bbp::CMD_HAT_LA_READ, &pw.buf).await.map_err(map_err)?;
+        let mut r = bbp::PayloadReader::new(&rsp);
+        let _rsp_offset = r.get_u32().unwrap_or(0);
+        let actual_len = r.get_u8().unwrap_or(0) as usize;
+        if actual_len == 0 { break; }
+        let remaining = &rsp[5..5+actual_len.min(rsp.len()-5)];
+        all_data.extend_from_slice(remaining);
+        offset += actual_len as u32;
+    }
+
+    log::info!("[la_read_append] Read {} bytes from device", all_data.len());
+
+    let mut store_guard = la.store.lock().map_err(map_err)?;
+    if let Some(ref mut store) = *store_guard {
+        store.append_raw(&all_data);
+    } else {
+        *store_guard = Some(LaStore::from_raw(&all_data, channels, sample_rate_hz));
+    }
+
+    let store = store_guard.as_ref().unwrap();
+    log::info!("[la_read_append] Store now has {} total samples", store.total_samples);
+    Ok(LaCaptureInfo {
+        channels: store.channels,
+        sample_rate_hz: store.sample_rate_hz,
+        total_samples: store.total_samples,
+        duration_sec: store.total_duration_sec(),
+        trigger_sample: store.trigger_sample,
+    })
+}
+
+/// Full stream cycle: arm → poll → USB_SEND → USB bulk read (all in one command)
+/// Starts USB read in background BEFORE sending USB_SEND to avoid deadlock.
+#[tauri::command]
+pub async fn la_stream_cycle(
+    channels: u8,
+    sample_rate_hz: u32,
+    depth: u32,
+    rle_enabled: bool,
+    trigger_type: u8,
+    trigger_channel: u8,
+    mgr: State<'_, ConnectionManager>,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    let t_start = std::time::Instant::now();
+    log::info!("[SC] START ch={} rate={} depth={}", channels, sample_rate_hz, depth);
+
+    // Check/connect USB
+    let use_usb = if hat_usb_present() {
+        let mut usb = la.usb.lock().map_err(map_err)?;
+        if !usb.is_connected() {
+            log::info!("[SC] +{:?} USB connecting...", t_start.elapsed());
+            usb.connect().is_ok()
+        } else { true }
+    } else { false };
+    log::info!("[SC] +{:?} use_usb={}", t_start.elapsed(), use_usb);
+
+    // Start USB bulk read in background BEFORE arming
+    let usb_read = if use_usb {
+        let usb_mutex = la.usb.clone();
+        let t = t_start;
+        Some(tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+            log::info!("[SC] +{:?} bulk_in submit", t.elapsed());
+            let mut usb = usb_mutex.lock().map_err(|e| e.to_string())?;
+            log::info!("[SC] +{:?} bulk_in locked, calling read_capture_blocking", t.elapsed());
+            let result = usb.read_capture_blocking();
+            log::info!("[SC] +{:?} bulk_in returned: {}", t.elapsed(),
+                match &result { Ok(d) => format!("OK {} bytes", d.len()), Err(e) => format!("ERR: {}", e) });
+            result.map_err(|e| e.to_string())
+        }))
+    } else { None };
+
+    // Stop previous
+    log::info!("[SC] +{:?} sending STOP", t_start.elapsed());
+    let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
+    log::info!("[SC] +{:?} STOP done", t_start.elapsed());
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    // Configure
+    log::info!("[SC] +{:?} sending CONFIG", t_start.elapsed());
+    let mut cfg_buf = vec![channels];
+    cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
+    cfg_buf.extend_from_slice(&depth.to_le_bytes());
+    cfg_buf.push(if rle_enabled { 1 } else { 0 });
+    let _ = mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf).await.map_err(map_err)?;
+    log::info!("[SC] +{:?} CONFIG done", t_start.elapsed());
+
+    // Trigger + Arm
+    let _ = mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel]).await.map_err(map_err)?;
+    log::info!("[SC] +{:?} sending ARM", t_start.elapsed());
+    let _ = mgr.send_command(bbp::CMD_HAT_LA_ARM, &[]).await.map_err(map_err)?;
+    log::info!("[SC] +{:?} ARM done", t_start.elapsed());
+
+    // Poll for DONE
+    for i in 0..200 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let rsp = mgr.send_command(bbp::CMD_HAT_LA_STATUS, &[]).await.map_err(map_err)?;
+        if !rsp.is_empty() && rsp[0] == 3 {
+            log::info!("[SC] +{:?} DONE at poll {}", t_start.elapsed(), i);
+            break;
+        }
+        if i < 3 {
+            log::info!("[SC] +{:?} poll {}: state={}", t_start.elapsed(), i, rsp.get(0).unwrap_or(&0));
+        }
+    }
+
+    let raw = if let Some(read_handle) = usb_read {
+        // USB read was started before arm — wait with timeout
+        log::info!("[stream_cycle] Waiting for USB data...");
+        match tokio::time::timeout(std::time::Duration::from_secs(3), read_handle).await {
+            Ok(Ok(Ok(data))) => {
+                log::info!("[la_stream_cycle] USB bulk: {} bytes", data.len());
+                data
+            }
+            _ => {
+                log::warn!("[la_stream_cycle] USB bulk failed, falling back to UART");
+                read_uart_chunks(&mgr, channels, depth).await?
+            }
+        }
+    } else {
+        read_uart_chunks(&mgr, channels, depth).await?
+    };
+
+    // Append to store
+    let mut store_guard = la.store.lock().map_err(map_err)?;
+    if let Some(ref mut store) = *store_guard {
+        store.append_raw(&raw);
+    } else {
+        *store_guard = Some(LaStore::from_raw(&raw, channels, sample_rate_hz));
+    }
+    let store = store_guard.as_ref().unwrap();
+    Ok(LaCaptureInfo {
+        channels: store.channels,
+        sample_rate_hz: store.sample_rate_hz,
+        total_samples: store.total_samples,
+        duration_sec: store.total_duration_sec(),
+        trigger_sample: store.trigger_sample,
+    })
+}
+
+/// Helper: read capture data via UART chunks
+async fn read_uart_chunks(mgr: &ConnectionManager, channels: u8, depth: u32) -> Result<Vec<u8>, String> {
+    let samples_per_word = 32u32 / channels as u32;
+    let total_bytes = ((depth + samples_per_word - 1) / samples_per_word) * 4;
+    let chunk_size: u16 = 900;
+    let mut all_data: Vec<u8> = Vec::new();
+    let mut offset: u32 = 0;
+    while offset < total_bytes {
+        let req_len = chunk_size.min((total_bytes - offset) as u16);
+        let mut pw = bbp::PayloadWriter::new();
+        pw.put_u32(offset);
+        pw.put_u16(req_len);
+        let rsp = mgr.send_command(bbp::CMD_HAT_LA_READ, &pw.buf).await.map_err(|e| e.to_string())?;
+        let mut r = bbp::PayloadReader::new(&rsp);
+        let _rsp_offset = r.get_u32().unwrap_or(0);
+        let actual_len = r.get_u8().unwrap_or(0) as usize;
+        if actual_len == 0 { break; }
+        let remaining = &rsp[5..5+actual_len.min(rsp.len()-5)];
+        all_data.extend_from_slice(remaining);
+        offset += actual_len as u32;
+    }
+    Ok(all_data)
+}
+
+/// Start gapless USB streaming from RP2040.
+/// 1. Connects to USB if needed
+/// 2. Sends configure + arm via BBP (for sample rate / channels setup)
+/// 3. Sends stream start command directly via USB OUT endpoint
+/// 4. Spawns background task that continuously reads USB IN and appends to LaStore
+/// Returns immediately — streaming happens in background.
+#[tauri::command]
+pub async fn la_stream_usb(
+    channels: u8,
+    sample_rate_hz: u32,
+    depth: u32,
+    rle_enabled: bool,
+    trigger_type: u8,
+    trigger_channel: u8,
+    mgr: State<'_, ConnectionManager>,
+    la: State<'_, LaState>,
+) -> CmdResult<()> {
+    log::info!("[la_stream_usb] Starting gapless USB stream: ch={} rate={} depth={}", channels, sample_rate_hz, depth);
+
+    // Stop any previous streaming
+    la.stream_running.store(false, Ordering::SeqCst);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Connect USB if needed
+    {
+        let mut usb = la.usb.lock().map_err(map_err)?;
+        if !usb.is_connected() {
+            usb.connect().map_err(map_err)?;
+        }
+    }
+
+    // Stop previous capture on RP2040
+    let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    // Configure via BBP (ESP32 → UART → RP2040) for sample rate / channels
+    let mut cfg_buf = vec![channels];
+    cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
+    cfg_buf.extend_from_slice(&depth.to_le_bytes());
+    cfg_buf.push(if rle_enabled { 1 } else { 0 });
+    mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf).await.map_err(map_err)?;
+
+    // Set trigger (even TRIG_NONE to clear previous)
+    mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel]).await.map_err(map_err)?;
+
+    // Initialize store (clear previous data for fresh stream)
+    {
+        let mut store_guard = la.store.lock().map_err(map_err)?;
+        *store_guard = Some(LaStore::from_raw(&[], channels, sample_rate_hz));
+    }
+
+    // Send stream start command directly via USB OUT (bypasses ESP32)
+    {
+        let usb = la.usb.lock().map_err(map_err)?;
+        usb.send_stream_start().map_err(map_err)?;
+    }
+    log::info!("[la_stream_usb] Stream start sent via USB OUT");
+
+    // Mark streaming as active
+    la.stream_running.store(true, Ordering::SeqCst);
+
+    // Spawn background task that continuously reads USB IN
+    let usb_mutex = la.usb.clone();
+    let store_mutex = la.store.clone();
+    let running = la.stream_running.clone();
+
+    tokio::task::spawn_blocking(move || {
+        log::info!("[la_stream_usb] Background reader thread started");
+        let mut total_bytes: u64 = 0;
+        let mut chunk_count: u64 = 0;
+        let t0 = std::time::Instant::now();
+
+        while running.load(Ordering::SeqCst) {
+            // Read a chunk from USB IN (blocking)
+            let chunk = {
+                let usb = match usb_mutex.lock() {
+                    Ok(u) => u,
+                    Err(e) => {
+                        log::error!("[la_stream_usb] Mutex lock failed: {}", e);
+                        break;
+                    }
+                };
+                if chunk_count == 0 {
+                    log::info!("[la_stream_usb] First bulk_in call at +{:?}", t0.elapsed());
+                }
+                match usb.read_stream_chunk() {
+                    Ok(data) => data,
+                    Err(e) => {
+                        log::warn!("[la_stream_usb] USB read error at +{:?}: {}", t0.elapsed(), e);
+                        break;
+                    }
+                }
+            };
+
+            if chunk.is_empty() {
+                log::info!("[la_stream_usb] Empty chunk at +{:?}", t0.elapsed());
+                continue;
+            }
+
+            chunk_count += 1;
+            total_bytes += chunk.len() as u64;
+
+            if chunk_count <= 5 || chunk_count % 100 == 0 {
+                let preview: Vec<u8> = chunk.iter().take(16).copied().collect();
+                log::info!("[la_stream_usb] Chunk {}: {} bytes (total: {} at +{:?}) first={:02X?}",
+                    chunk_count, chunk.len(), total_bytes, t0.elapsed(), preview);
+            }
+
+            // Append to store
+            if let Ok(mut store_guard) = store_mutex.lock() {
+                if let Some(ref mut store) = *store_guard {
+                    store.append_raw(&chunk);
+                }
+            }
+        }
+
+        log::info!("[la_stream_usb] Reader stopped: {} chunks, {} bytes in {:?}",
+            chunk_count, total_bytes, t0.elapsed());
+    });
+
+    Ok(())
+}
+
+/// Stop gapless USB streaming.
+/// Sends stop command via USB OUT and signals the background reader to stop.
+#[tauri::command]
+pub async fn la_stream_usb_stop(
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    log::info!("[la_stream_usb_stop] Stopping gapless USB stream");
+
+    // Signal background reader to stop
+    la.stream_running.store(false, Ordering::SeqCst);
+
+    // Send stop command via USB OUT
+    {
+        let usb = la.usb.lock().map_err(map_err)?;
+        if usb.is_connected() {
+            let _ = usb.send_stream_stop();
+        }
+    }
+
+    // Small delay for background task to finish
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Return current store info
+    let store_guard = la.store.lock().map_err(map_err)?;
+    let store = store_guard.as_ref().ok_or("No capture data")?;
+    Ok(LaCaptureInfo {
+        channels: store.channels,
+        sample_rate_hz: store.sample_rate_hz,
+        total_samples: store.total_samples,
+        duration_sec: store.total_duration_sec(),
+        trigger_sample: store.trigger_sample,
+    })
+}
+
+/// Check if USB streaming is currently active
+#[tauri::command]
+pub fn la_stream_usb_active(
+    la: State<'_, LaState>,
+) -> CmdResult<bool> {
+    Ok(la.stream_running.load(Ordering::SeqCst))
+}
+
+/// Trigger USB bulk send from RP2040 and read the data (fast path for stream mode)
+/// Sends HAT_CMD_LA_USB_SEND command, then reads the bulk USB data
+#[tauri::command]
+pub async fn la_read_append_fast(
+    channels: u8,
+    sample_rate_hz: u32,
+    mgr: State<'_, ConnectionManager>,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    // Check USB is available
+    if !hat_usb_present() {
+        return Err("USB not available".into());
+    }
+
+    // Send USB_SEND command to RP2040 (via ESP32/BBP)
+    log::info!("[la_read_append_fast] Sending USB_SEND command");
+    let _rsp = mgr.send_command(bbp::CMD_HAT_LA_USB_SEND, &[]).await.map_err(map_err)?;
+
+    // Connect USB if needed
+    {
+        let mut usb = la.usb.lock().map_err(map_err)?;
+        if !usb.is_connected() {
+            usb.connect().map_err(map_err)?;
+        }
+    }
+
+    // Read bulk data from RP2040 USB
+    let usb_mutex = la.usb.clone();
+    let raw = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let mut usb = usb_mutex.lock().map_err(|e| e.to_string())?;
+        usb.read_capture_blocking().map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())??;
+
+    log::info!("[la_read_append_fast] Read {} bytes via USB bulk", raw.len());
+
+    let mut store_guard = la.store.lock().map_err(map_err)?;
+    if let Some(ref mut store) = *store_guard {
+        store.append_raw(&raw);
+    } else {
+        *store_guard = Some(LaStore::from_raw(&raw, channels, sample_rate_hz));
+    }
+
+    let store = store_guard.as_ref().unwrap();
+    log::info!("[la_read_append_fast] Store now has {} total samples", store.total_samples);
+    Ok(LaCaptureInfo {
+        channels: store.channels,
+        sample_rate_hz: store.sample_rate_hz,
+        total_samples: store.total_samples,
+        duration_sec: store.total_duration_sec(),
+        trigger_sample: store.trigger_sample,
+    })
+}
+
+/// Read capture data via USB bulk and append to existing store (fast stream path)
+/// RP2040 auto-pushes data on DONE transition — this reads it with a 2s timeout.
+#[tauri::command]
+pub async fn la_read_append_usb(
+    channels: u8,
+    sample_rate_hz: u32,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    // Quick check: bail if USB not present or not connected
+    {
+        if !hat_usb_present() {
+            return Err("USB not available".into());
+        }
+        let mut usb = la.usb.lock().map_err(map_err)?;
+        if !usb.is_connected() {
+            usb.connect().map_err(map_err)?;
+        }
+    }
+
+    let usb_mutex = la.usb.clone();
+    let read_future = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let mut usb = usb_mutex.lock().map_err(|e| e.to_string())?;
+        usb.read_capture_blocking().map_err(|e| e.to_string())
+    });
+
+    // 2-second timeout so we don't hang forever
+    let raw = match tokio::time::timeout(std::time::Duration::from_secs(2), read_future).await {
+        Ok(Ok(Ok(data))) => data,
+        Ok(Ok(Err(e))) => return Err(format!("USB read error: {}", e)),
+        Ok(Err(e)) => return Err(format!("USB task error: {}", e)),
+        Err(_) => return Err("USB read timeout (2s)".into()),
+    };
+
+    log::info!("[la_read_append_usb] Read {} bytes via USB bulk", raw.len());
+
+    let mut store_guard = la.store.lock().map_err(map_err)?;
+    if let Some(ref mut store) = *store_guard {
+        store.append_raw(&raw);
+    } else {
+        *store_guard = Some(LaStore::from_raw(&raw, channels, sample_rate_hz));
+    }
+
+    let store = store_guard.as_ref().unwrap();
+    Ok(LaCaptureInfo {
+        channels: store.channels,
+        sample_rate_hz: store.sample_rate_hz,
+        total_samples: store.total_samples,
+        duration_sec: store.total_duration_sec(),
+        trigger_sample: store.trigger_sample,
+    })
 }
 
 /// Run a protocol decoder on the capture data

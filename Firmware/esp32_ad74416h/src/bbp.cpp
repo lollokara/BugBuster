@@ -1776,7 +1776,7 @@ static int handleUsbpdGo(uint16_t seq, uint8_t cmdId,
 static int handleMuxSetAll(uint16_t seq, uint8_t cmdId,
                             const uint8_t *payload, size_t len, uint8_t *out)
 {
-    if (len < ADGS_NUM_DEVICES) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (len < ADGS_MAIN_DEVICES) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     adgs_set_all_safe(payload);  // Includes 100ms dead time
     // Update cached state and echo back
     adgs_get_all_states(out);
@@ -1784,7 +1784,7 @@ static int handleMuxSetAll(uint16_t seq, uint8_t cmdId,
         adgs_get_all_states(g_deviceState.muxState);
         xSemaphoreGive(g_stateMutex);
     }
-    return ADGS_NUM_DEVICES;
+    return ADGS_MAIN_DEVICES;
 }
 
 static int handleMuxGetAll(uint16_t seq, uint8_t cmdId, uint8_t *out)
@@ -1800,35 +1800,11 @@ static int handleMuxSetSwitch(uint16_t seq, uint8_t cmdId,
     uint8_t device = payload[0];
     uint8_t sw = payload[1];
     bool closed = payload[2] != 0;
-    if (device >= ADGS_NUM_DEVICES || sw >= ADGS_NUM_SWITCHES) {
+    if (device >= ADGS_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) {
         sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
         return -1;
     }
-    {
-        // Group masks: S1-S4 share output A, S5-S6 share B, S7-S8 share C
-        uint8_t group_mask;
-        if (sw < 4)      group_mask = 0x0F;  // Group A
-        else if (sw < 6) group_mask = 0x30;  // Group B
-        else             group_mask = 0xC0;  // Group C
-
-        uint8_t states[ADGS_NUM_DEVICES];
-        adgs_get_all_states(states);
-
-        if (closed) {
-            // First open all switches in the same group (break-before-make)
-            uint8_t prev = states[device];
-            states[device] &= ~group_mask;
-            if (states[device] != prev) {
-                adgs_set_all_raw(states);
-                delay_ms(ADGS_DEAD_TIME_MS);
-            }
-            // Then close only the requested switch
-            states[device] |= (1 << sw);
-        } else {
-            states[device] &= ~(1 << sw);
-        }
-        adgs_set_all_raw(states);
-    }
+    adgs_set_switch_safe(device, sw, closed);
     // Update cached state
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);
@@ -2755,6 +2731,14 @@ void bbpProcess(void)
 
         for (uint32_t i = 0; i < n; i++) {
             uint8_t byte = rxChunk[i];
+
+            // Detect re-handshake: if a new host connects and sends the magic
+            // while we're still in binary mode (e.g., DTR didn't drop), reset
+            // and re-enter binary mode cleanly.
+            if (bbpDetectHandshake(byte)) {
+                ESP_LOGW(TAG, "Re-handshake detected in binary mode — resetting");
+                return;  // bbpDetectHandshake already set s_active, sent response
+            }
 
             if (byte == BBP_FRAME_DELIMITER) {
                 // End of frame - decode and dispatch

@@ -65,6 +65,12 @@ static struct {
 
     // DMA completion flag (set by IRQ handler)
     volatile bool dma_done;
+
+    // Streaming (double-buffer) state
+    bool        stream_mode;
+    uint32_t    half_words;             // Words per half-buffer
+    volatile uint8_t stream_buf_ready;  // 0=A ready, 1=B ready, 0xFF=none
+    uint8_t     stream_dma_buf;         // Which half DMA is currently writing (0=A, 1=B)
 } s_la = {};
 
 // -----------------------------------------------------------------------------
@@ -123,7 +129,19 @@ static void dma_irq_handler(void)
 {
     if (la_dma_ch >= 0 && dma_channel_get_irq0_status((uint)la_dma_ch)) {
         dma_channel_acknowledge_irq0((uint)la_dma_ch);
-        s_la.dma_done = true;
+
+        if (s_la.stream_mode) {
+            // Streaming: flag completed half, swap to other half, restart DMA
+            s_la.stream_buf_ready = s_la.stream_dma_buf;
+            s_la.stream_dma_buf ^= 1; // swap 0↔1
+
+            // Reconfigure DMA write address to other half and restart
+            uint32_t *next_buf = s_capture_buf + (s_la.stream_dma_buf * s_la.half_words);
+            dma_channel_set_write_addr((uint)la_dma_ch, next_buf, false);
+            dma_channel_set_trans_count((uint)la_dma_ch, s_la.half_words, true); // true = start
+        } else {
+            s_la.dma_done = true;
+        }
     }
 }
 
@@ -439,6 +457,7 @@ void bb_la_stop(void)
     unload_capture_program();
     unload_trigger_program();
 
+    s_la.stream_mode = false;
     s_la.state = LA_STATE_IDLE;
 }
 
@@ -503,13 +522,11 @@ void bb_la_poll(void)
             while (!pio_sm_is_rx_fifo_empty(LA_PIO, LA_SM)) {
                 uint32_t raw = pio_sm_get(LA_PIO, LA_SM);
                 if (!rle_encode_word(&s_la.rle, raw)) {
-                    // Buffer full — stop capture
                     pio_sm_set_enabled(LA_PIO, LA_SM, false);
                     rle_flush(&s_la.rle);
                     s_la.state = LA_STATE_DONE;
                     break;
                 }
-                // Check if we've captured enough samples
                 if (s_la.rle.total_samples >= s_la.config.depth_samples) {
                     pio_sm_set_enabled(LA_PIO, LA_SM, false);
                     rle_flush(&s_la.rle);
@@ -526,7 +543,86 @@ void bb_la_poll(void)
         }
         break;
 
+    case LA_STATE_STREAMING:
+        // Streaming is handled by DMA IRQ + USB send in main loop — nothing to poll here
+        break;
+
     default:
         break;
     }
+}
+
+// -----------------------------------------------------------------------------
+// Continuous Streaming (DMA double-buffer → USB)
+// -----------------------------------------------------------------------------
+
+bool bb_la_start_stream(void)
+{
+    if (s_la.state != LA_STATE_IDLE) return false;
+    if (!s_la.pio_loaded) return false;
+
+    s_la.stream_mode = true;
+    s_la.stream_buf_ready = 0xFF; // nothing ready yet
+    s_la.stream_dma_buf = 0;     // DMA starts writing to buffer A
+
+    // Split capture buffer into two halves
+    uint32_t max_words = sizeof(s_capture_buf) / sizeof(uint32_t);
+    s_la.half_words = max_words / 2;
+
+    // Clear buffer
+    memset(s_capture_buf, 0, sizeof(s_capture_buf));
+
+    // Init PIO capture program
+    la_capture_program_init(LA_PIO, LA_SM, s_la.pio_offset,
+                            BB_LA_CH0_PIN, s_la.config.channels,
+                            (float)s_la.config.sample_rate_hz);
+
+    // Setup DMA for first half (buffer A)
+    if (!setup_dma()) {
+        s_la.stream_mode = false;
+        s_la.state = LA_STATE_ERROR;
+        return false;
+    }
+
+    // Override DMA transfer count to half-buffer
+    dma_channel_set_trans_count((uint)la_dma_ch, s_la.half_words, false);
+
+    // Start DMA and PIO
+    dma_channel_start((uint)la_dma_ch);
+    pio_sm_set_enabled(LA_PIO, LA_SM, true);
+
+    s_la.state = LA_STATE_STREAMING;
+    return true;
+}
+
+bool bb_la_stream_get_buffer(const uint8_t **buf_out, uint32_t *len_out)
+{
+    if (s_la.state != LA_STATE_STREAMING) return false;
+    if (s_la.stream_buf_ready == 0xFF) return false;
+
+    uint32_t *half = s_capture_buf + (s_la.stream_buf_ready * s_la.half_words);
+    *buf_out = (const uint8_t *)half;
+    *len_out = s_la.half_words * sizeof(uint32_t);
+    return true;
+}
+
+void bb_la_stream_buffer_sent(void)
+{
+    s_la.stream_buf_ready = 0xFF; // mark as consumed
+}
+
+bool bb_la_get_capture_buffer(const uint8_t **buf_out, uint32_t *len_out)
+{
+    if (s_la.state != LA_STATE_DONE && s_la.state != LA_STATE_CAPTURING) return false;
+
+    uint32_t words;
+    if (s_la.rle_mode) {
+        words = s_la.rle.num_entries;
+    } else {
+        words = s_la.buf_total_words;
+    }
+
+    *buf_out = (const uint8_t *)s_capture_buf;
+    *len_out = words * sizeof(uint32_t);
+    return true;
 }

@@ -66,6 +66,25 @@ impl LaUsbConnection {
                     .map_err(|e| anyhow!("Failed to claim LA interface {}: {}", LA_INTERFACE_NUM, e))?;
 
                 info!("LA USB interface claimed (interface {})", LA_INTERFACE_NUM);
+
+                // Diagnostic: list endpoints on this interface
+                if let Ok(config) = device.active_configuration() {
+                    for iface_group in config.interface_alt_settings() {
+                        if iface_group.interface_number() == LA_INTERFACE_NUM {
+                            info!("LA iface {} alt={} class={:?} subclass={} protocol={}",
+                                iface_group.interface_number(),
+                                iface_group.alternate_setting(),
+                                iface_group.class(),
+                                iface_group.subclass(),
+                                iface_group.protocol());
+                            for ep in iface_group.endpoints() {
+                                info!("  EP 0x{:02X} dir={:?} type={:?} max_packet={}",
+                                    ep.address(), ep.direction(), ep.transfer_type(), ep.max_packet_size());
+                            }
+                        }
+                    }
+                }
+
                 self.interface = Some(iface);
                 self.connected = true;
                 return Ok(());
@@ -124,6 +143,46 @@ impl LaUsbConnection {
         data.truncate(total_len);
         info!("LA USB: received {} bytes", data.len());
         Ok(data)
+    }
+
+    /// Send a command byte to RP2040 via USB vendor OUT endpoint (EP 0x06).
+    /// Used for gapless streaming control (0x01 = start, 0x00 = stop).
+    pub fn send_command(&self, cmd: u8) -> Result<()> {
+        let iface = self.interface.as_ref()
+            .ok_or_else(|| anyhow!("LA USB not connected"))?;
+
+        let completion = block_on(iface.bulk_out(LA_EP_OUT, vec![cmd]));
+        completion.into_result()
+            .map_err(|e| anyhow!("USB bulk OUT failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Send stream start command (0x01) to RP2040 via USB OUT endpoint.
+    pub fn send_stream_start(&self) -> Result<()> {
+        info!("LA USB: sending stream start command");
+        self.send_command(0x01)
+    }
+
+    /// Send stream stop command (0x00) to RP2040 via USB OUT endpoint.
+    pub fn send_stream_stop(&self) -> Result<()> {
+        info!("LA USB: sending stream stop command");
+        self.send_command(0x00)
+    }
+
+    /// Read a chunk of raw stream data from USB bulk IN endpoint (blocking).
+    /// No header parsing — just raw packed samples from the RP2040's
+    /// double-buffer DMA streaming.
+    /// Returns the raw bytes read, or an empty vec on timeout/disconnect.
+    pub fn read_stream_chunk(&self) -> Result<Vec<u8>> {
+        let iface = self.interface.as_ref()
+            .ok_or_else(|| anyhow!("LA USB not connected"))?;
+
+        // Read up to 4096 bytes at a time for throughput
+        let completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(4096)));
+        let result = completion.into_result()
+            .map_err(|e| anyhow!("USB bulk IN read failed: {}", e))?;
+
+        Ok(result)
     }
 
     pub fn disconnect(&mut self) {

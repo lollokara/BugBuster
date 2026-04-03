@@ -1073,15 +1073,43 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             // Toolbar with labeled sections
             <div style="display: flex; align-items: flex-end; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border, #1e293b); flex-wrap: wrap; flex-shrink: 0">
 
-                // Channels section
+                // Channels section — toggle channels on/off
                 <div style="display: flex; flex-direction: column; gap: 2px">
                     <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Channels"</span>
                     <div style="display: flex; gap: 3px">
                         {(0..4u8).map(|i| {
                             let color = CH_COLORS[i as usize];
                             view! {
-                                <button style=format!("font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: 'JetBrains Mono', monospace; \
-                                    background: {}20; color: {}; border: 1.5px solid {}60", color, color, color)
+                                <button
+                                    style=move || {
+                                        let ch_count: u8 = channels.get().parse().unwrap_or(4);
+                                        let enabled = i < ch_count;
+                                        if enabled {
+                                            format!("font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: 'JetBrains Mono', monospace; \
+                                                background: {}30; color: {}; border: 1.5px solid {}", color, color, color)
+                                        } else {
+                                            "font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: 'JetBrains Mono', monospace; \
+                                                background: transparent; color: #333; border: 1.5px solid #222".into()
+                                        }
+                                    }
+                                    on:click=move |_| {
+                                        let ch_count: u8 = channels.get_untracked().parse().unwrap_or(4);
+                                        // Click on a disabled channel → enable up to that channel
+                                        // Click on the last enabled → reduce count
+                                        let new_count = if i < ch_count {
+                                            // Clicking an enabled channel: disable from this one onwards (min 1)
+                                            (i as u8).max(1)
+                                        } else {
+                                            // Clicking a disabled channel: enable up to and including it
+                                            i + 1
+                                        };
+                                        set_channels.set(new_count.to_string());
+                                    }
+                                    title=move || {
+                                        let ch_count: u8 = channels.get().parse().unwrap_or(4);
+                                        if i < ch_count { format!("CH{} enabled — click to disable", i) }
+                                        else { format!("CH{} disabled — click to enable", i) }
+                                    }
                                 >{format!("CH{}", i)}</button>
                             }
                         }).collect::<Vec<_>>()}
@@ -1265,55 +1293,76 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             let is_stream = stream_mode.get_untracked();
 
                             if is_stream {
-                                // Stream mode: continuous re-capture loop
+                                // Stream mode: try gapless USB streaming first, fall back to cycle-based
                                 set_streaming.set(true);
                                 spawn_local(async move {
-                                    while streaming.get_untracked() {
-                                        la_invoke_stop().await;
-                                        let p = js_sys::Promise::new(&mut |res, _| {
-                                            web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(&res, 50).unwrap();
-                                        });
-                                        wasm_bindgen_futures::JsFuture::from(p).await.ok();
+                                    web_sys::console::log_1(&format!("[STREAM] Starting gapless USB: ch={} rate={} depth={}", ch, r, d).into());
 
-                                        la_invoke_configure(ch, r, d, rle_en).await;
-                                        la_invoke_set_trigger(tt, tc).await;
-                                        la_invoke_arm().await;
+                                    // Try gapless USB streaming (bypasses ESP32 for data path)
+                                    let usb_ok = la_stream_usb_start(ch, r, d, rle_en, tt, tc).await;
 
-                                        let mut got_data = false;
-                                        for _ in 0..100 {
-                                            let p2 = js_sys::Promise::new(&mut |res, _| {
-                                                web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(&res, 100).unwrap();
+                                    if usb_ok {
+                                        // Gapless mode: background task reads USB IN and appends to store.
+                                        // We poll for new data periodically and update the UI.
+                                        web_sys::console::log_1(&"[STREAM] Gapless USB streaming active".into());
+                                        show_toast("USB stream started", "ok");
+                                        let mut first_capture = true;
+                                        while streaming.get_untracked() {
+                                            // Poll every 100ms for new data in the store
+                                            let p = js_sys::Promise::new(&mut |resolve, _| {
+                                                web_sys::window().unwrap()
+                                                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 100).unwrap();
                                             });
-                                            wasm_bindgen_futures::JsFuture::from(p2).await.ok();
-                                            if !streaming.get_untracked() { break; }
+                                            let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 
-                                            #[derive(serde::Deserialize)]
-                                            #[allow(dead_code)]
-                                            struct StRsp { state: Option<u8>, #[serde(default, rename="samplesCaptured")] samples_captured: u32, #[serde(default)] channels: u8, #[serde(default, rename="actualRateHz")] actual_rate_hz: u32 }
-                                            let result = invoke("la_get_status", JsValue::NULL).await;
-                                            if let Ok(st) = serde_wasm_bindgen::from_value::<StRsp>(result) {
-                                                if st.state.unwrap_or(255) == 3 {
-                                                    #[derive(serde::Serialize)]
-                                                    struct RdArgs { channels: u8, #[serde(rename="sampleRateHz")] sample_rate_hz: u32, #[serde(rename="totalSamples")] total_samples: u32 }
-                                                    let args = serde_wasm_bindgen::to_value(&RdArgs { channels: ch, sample_rate_hz: r, total_samples: d }).unwrap();
-                                                    let rd = invoke("la_read_uart_chunks", args).await;
-                                                    if let Ok(info) = serde_wasm_bindgen::from_value::<LaCaptureInfo>(rd) {
+                                            // Check if backend is still streaming
+                                            if !la_stream_usb_active().await {
+                                                web_sys::console::log_1(&"[STREAM] Backend stream stopped".into());
+                                                break;
+                                            }
+
+                                            // Get current store info for UI update
+                                            if let Some(info) = la_get_capture_info().await {
+                                                if info.total_samples > 0 {
+                                                    if first_capture {
                                                         set_view_start.set(0);
                                                         set_view_end.set(info.total_samples);
-                                                        set_ci5.set(Some(info));
-                                                        got_data = true;
+                                                        first_capture = false;
                                                     }
-                                                    break;
+                                                    set_ci5.set(Some(info));
                                                 }
                                             }
                                         }
-                                        if !streaming.get_untracked() || !got_data { break; }
-                                        // Brief pause before next capture
-                                        let p3 = js_sys::Promise::new(&mut |res, _| {
-                                            web_sys::window().unwrap().set_timeout_with_callback_and_timeout_and_arguments_0(&res, 200).unwrap();
-                                        });
-                                        wasm_bindgen_futures::JsFuture::from(p3).await.ok();
+
+                                        // Stop gapless stream
+                                        if let Some(info) = la_stream_usb_stop().await {
+                                            set_ci5.set(Some(info));
+                                        }
+                                    } else {
+                                        // Fallback: cycle-based streaming via la_stream_cycle
+                                        web_sys::console::log_1(&"[STREAM] USB gapless unavailable, falling back to cycle mode".into());
+                                        let mut first_capture = true;
+                                        let mut cycle = 0u32;
+                                        while streaming.get_untracked() {
+                                            cycle += 1;
+                                            let t0 = js_sys::Date::now();
+                                            let info = la_stream_cycle(ch, r, d, rle_en, tt, tc).await;
+                                            let dt = js_sys::Date::now() - t0;
+                                            if let Some(ref i) = info {
+                                                web_sys::console::log_1(&format!("[STREAM] Cycle {}: {} samples ({:.0}ms)", cycle, i.total_samples, dt).into());
+                                                if first_capture {
+                                                    set_view_start.set(0);
+                                                    set_view_end.set(i.total_samples);
+                                                    first_capture = false;
+                                                }
+                                                set_ci5.set(Some(i.clone()));
+                                            } else {
+                                                web_sys::console::log_1(&format!("[STREAM] Cycle {} FAILED ({:.0}ms)", cycle, dt).into());
+                                                break;
+                                            }
+                                        }
                                     }
+
                                     set_streaming.set(false);
                                     show_toast("Stream stopped", "ok");
                                 });
@@ -1405,7 +1454,13 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 <button style="font-size: 10px; padding: 3px 12px; background: #ef444425; color: #ef4444; border: 1px solid #ef444450; border-radius: 4px; cursor: pointer"
                     on:click=move |_| {
                         set_streaming.set(false);
-                        spawn_local(async { la_invoke_stop().await; show_toast("Stopped", "ok"); });
+                        spawn_local(async {
+                            // Stop USB gapless stream if active
+                            let _ = la_stream_usb_stop().await;
+                            // Also send BBP stop (for cycle-based / ESP32 path)
+                            la_invoke_stop().await;
+                            show_toast("Stopped", "ok");
+                        });
                     }
                 >"Stop"</button>
 
@@ -1441,6 +1496,20 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         }
                     }
                 >"Read"</button>
+
+                // Clear button
+                <button style="font-size: 10px; padding: 3px 12px; background: #64748b15; color: #64748b; border: 1px solid #64748b40; border-radius: 4px; cursor: pointer"
+                    on:click=move |_| {
+                        set_capture_info.set(None);
+                        set_view_data.set(None);
+                        set_annotations.set(vec![]);
+                        set_sel_anchor.set(None);
+                        set_sel_start.set(None);
+                        set_sel_end.set(None);
+                        set_cursor_sample.set(None);
+                        show_toast("Capture cleared", "ok");
+                    }
+                >"Clear"</button>
 
                 // Test data button — loads decodable protocol waveforms
                 // CH0: UART TX 9600 baud  → decoder: UART TX=CH0 Baud=9600

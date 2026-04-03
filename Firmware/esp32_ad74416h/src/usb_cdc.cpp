@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "usb_cdc.h"
+#include "bbp.h"
 
 #include "esp_log.h"
 #include "tinyusb.h"
@@ -32,10 +33,19 @@ static void cdc_line_state_callback(int itf, cdcacm_event_t *event)
     bool rts = event->line_state_changed_data.rts;
     ESP_LOGI(TAG, "CDC %d line state: DTR=%d RTS=%d", itf, dtr, rts);
 
-    // Track DTR for bridge ports
-    int bridge_id = itf - 1;
-    if (bridge_id >= 0 && bridge_id < CDC_BRIDGE_COUNT) {
-        s_bridge_dtr[bridge_id] = dtr;
+    if (itf == 0) {
+        // CLI/BBP port: when host drops DTR (closes serial port),
+        // exit binary mode so a new connection can re-handshake immediately.
+        if (!dtr && bbpIsActive()) {
+            ESP_LOGW(TAG, "CLI port DTR dropped while BBP active — resetting to CLI mode");
+            bbpExitBinaryMode();
+        }
+    } else {
+        // Track DTR for bridge ports
+        int bridge_id = itf - 1;
+        if (bridge_id >= 0 && bridge_id < CDC_BRIDGE_COUNT) {
+            s_bridge_dtr[bridge_id] = dtr;
+        }
     }
 }
 

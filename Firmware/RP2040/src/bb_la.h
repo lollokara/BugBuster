@@ -28,6 +28,7 @@ typedef enum {
     LA_STATE_ARMED,         // Waiting for trigger
     LA_STATE_CAPTURING,     // Trigger fired, capturing data
     LA_STATE_DONE,          // Capture complete, data ready for readout
+    LA_STATE_STREAMING,     // Continuous DMA→USB streaming (double-buffered)
     LA_STATE_ERROR,         // Error occurred
 } LaState;
 
@@ -104,3 +105,32 @@ uint32_t bb_la_read_data(uint32_t offset_bytes, uint8_t *buf, uint32_t len);
  * @brief Poll function — call periodically to check trigger and manage DMA.
  */
 void bb_la_poll(void);
+
+/**
+ * @brief Start continuous DMA→USB streaming (double-buffered, gapless).
+ * PIO captures into buffer A while USB sends buffer B, then swaps.
+ * Call bb_la_stop() to end streaming.
+ * @return true if streaming started successfully
+ */
+bool bb_la_start_stream(void);
+
+/**
+ * @brief Check if a streaming buffer is ready to send via USB.
+ * @param buf_out   Pointer to buffer data (set if ready)
+ * @param len_out   Length in bytes (set if ready)
+ * @return true if a buffer is ready for USB transmission
+ */
+bool bb_la_stream_get_buffer(const uint8_t **buf_out, uint32_t *len_out);
+
+/**
+ * @brief Mark the current streaming buffer as sent (allows DMA to reuse it).
+ */
+void bb_la_stream_buffer_sent(void);
+
+/**
+ * @brief Get pointer and size of the capture buffer (for USB bulk send).
+ * @param buf_out   Set to capture buffer address
+ * @param len_out   Set to capture data length in bytes
+ * @return true if capture data is available
+ */
+bool bb_la_get_capture_buffer(const uint8_t **buf_out, uint32_t *len_out);

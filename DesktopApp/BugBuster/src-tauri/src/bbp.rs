@@ -127,6 +127,8 @@ pub const CMD_HAT_LA_STATUS: u8 = 0xD7;
 pub const CMD_HAT_LA_READ: u8 = 0xD8;
 pub const CMD_HAT_LA_STOP: u8 = 0xD9;
 pub const CMD_HAT_LA_TRIGGER: u8 = 0xDA;
+pub const CMD_HAT_LA_STREAM_START: u8 = 0xDB;
+pub const CMD_HAT_LA_USB_SEND: u8 = 0xDC;
 
 // Waveform Generator
 pub const CMD_START_WAVEGEN: u8 = 0xD0;

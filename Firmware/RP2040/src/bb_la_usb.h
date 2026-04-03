@@ -34,9 +34,27 @@ bool bb_la_usb_connected(void);
 
 /**
  * @brief Stream entire LA capture buffer over USB.
+ *        Sends a 4-byte header first (total length LE), then data.
  *        Blocks until all data is sent or timeout.
  * @param buf        Capture buffer
  * @param total_bytes  Total bytes to send
  * @return Bytes sent
  */
 uint32_t bb_la_usb_stream_buffer(const uint8_t *buf, uint32_t total_bytes);
+
+/**
+ * @brief Write raw data over USB bulk IN (no header).
+ *        Used for gapless streaming — sends packed samples directly.
+ * @param buf        Data buffer
+ * @param total_bytes  Total bytes to send
+ * @return Bytes sent
+ */
+uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes);
+
+/**
+ * @brief Poll the vendor OUT endpoint for commands from the USB host.
+ *        Commands: 0x01 = start stream, 0x00 = stop.
+ *        Called from the main loop to enable gapless USB streaming
+ *        without ESP32 involvement.
+ */
+void bb_la_usb_poll_commands(void);

@@ -72,6 +72,38 @@ impl LaStore {
         }
     }
 
+    /// Append raw packed bitstream data to the existing store (for stream mode).
+    /// New samples are indexed starting from `self.total_samples`.
+    pub fn append_raw(&mut self, raw: &[u8]) {
+        let bits_per_sample = self.channels as usize;
+        if bits_per_sample == 0 { return; }
+
+        // Get the last known value per channel to detect transitions
+        let mut prev_values: Vec<u8> = (0..self.channels as usize).map(|ch| {
+            self.transitions[ch].last().map(|&(_, v)| v)
+                .unwrap_or(0xFF) // impossible value forces first transition if store was empty
+        }).collect();
+
+        let mut sample_idx = self.total_samples;
+
+        for &byte in raw {
+            let mut bit_pos = 0;
+            while bit_pos + bits_per_sample <= 8 {
+                for ch in 0..self.channels as usize {
+                    let val = (byte >> (bit_pos + ch)) & 1;
+                    if val != prev_values[ch] {
+                        self.transitions[ch].push((sample_idx, val));
+                        prev_values[ch] = val;
+                    }
+                }
+                sample_idx += 1;
+                bit_pos += bits_per_sample;
+            }
+        }
+
+        self.total_samples = sample_idx;
+    }
+
     /// Get transitions visible in a sample range for a channel.
     /// Includes one transition before `start` to establish initial value.
     pub fn get_visible(&self, ch: u8, start: u64, end: u64) -> Vec<Transition> {

@@ -14,6 +14,29 @@ extern "C" {
     pub async fn listen(event: &str, handler: &Closure<dyn FnMut(JsValue)>) -> JsValue;
 }
 
+/// Safe invoke that returns None instead of panicking on error
+pub async fn try_invoke(cmd: &str, args: JsValue) -> Option<JsValue> {
+    let promise = js_sys::Function::new_with_args(
+        "cmd, args",
+        "return window.__TAURI__.core.invoke(cmd, args).catch(function(e) { console.warn('[try_invoke] ' + cmd + ' error:', e); return null; })"
+    );
+    let result = match promise.call2(&JsValue::NULL, &JsValue::from_str(cmd), &args) {
+        Ok(r) => r,
+        Err(e) => {
+            web_sys::console::warn_1(&format!("[try_invoke] JS call failed for {}: {:?}", cmd, e).into());
+            return None;
+        }
+    };
+    let future = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(result));
+    match future.await {
+        Ok(val) => if val.is_null() { None } else { Some(val) },
+        Err(e) => {
+            web_sys::console::warn_1(&format!("[try_invoke] {} rejected: {:?}", cmd, e).into());
+            None
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Shared types (match src-tauri/src/state.rs)
 // -----------------------------------------------------------------------------
@@ -168,16 +191,22 @@ pub fn invoke_with_feedback(cmd: &str, args: JsValue, label: &str) {
     let cmd = cmd.to_string();
     let label = label.to_string();
     leptos::task::spawn_local(async move {
-        let result = invoke(&cmd, args).await;
-        // Check if result is an error (Tauri returns string errors)
-        let result_str = js_sys::JSON::stringify(&result)
-            .map(|s| s.as_string().unwrap_or_default())
-            .unwrap_or_default();
-        if result_str.contains("error") || result_str.contains("Error") || result_str.contains("timeout") {
-            show_toast(&format!("Failed: {}", label), "err");
-            log(&format!("CMD FAIL [{}]: {}", cmd, result_str));
-        } else {
-            show_toast(&format!("{}", label), "ok");
+        match try_invoke(&cmd, args).await {
+            Some(result) => {
+                let result_str = js_sys::JSON::stringify(&result)
+                    .map(|s| s.as_string().unwrap_or_default())
+                    .unwrap_or_default();
+                if result_str.contains("error") || result_str.contains("Error") || result_str.contains("timeout") {
+                    show_toast(&format!("Failed: {}", label), "err");
+                    log(&format!("CMD FAIL [{}]: {}", cmd, result_str));
+                } else {
+                    show_toast(&format!("{}", label), "ok");
+                }
+            }
+            None => {
+                show_toast(&format!("Failed: {}", label), "err");
+                log(&format!("CMD FAIL [{}]: command rejected", cmd));
+            }
         }
     });
 }
@@ -559,10 +588,10 @@ pub async fn la_invoke_configure(channels: u8, rate_hz: u32, depth: u32, rle_ena
         rle_enabled: bool,
     }
     let args = serde_wasm_bindgen::to_value(&Args { channels, rate_hz, depth, rle_enabled }).unwrap();
-    let _ = invoke("la_configure", args).await;
+    let _ = try_invoke("la_configure", args).await;
 }
 
-pub async fn la_invoke_arm() { let _ = invoke("la_arm", JsValue::NULL).await; }
+pub async fn la_invoke_arm() { let _ = try_invoke("la_arm", JsValue::NULL).await; }
 
 pub async fn la_export_vcd(path: &str) {
     #[derive(Serialize)]
@@ -585,8 +614,8 @@ pub async fn la_import_json_file(path: &str) -> Option<LaCaptureInfo> {
     let result = invoke("la_import_json", args).await;
     serde_wasm_bindgen::from_value(result).ok()
 }
-pub async fn la_invoke_force() { let _ = invoke("la_force", JsValue::NULL).await; }
-pub async fn la_invoke_stop() { let _ = invoke("la_stop", JsValue::NULL).await; }
+pub async fn la_invoke_force() { let _ = try_invoke("la_force", JsValue::NULL).await; }
+pub async fn la_invoke_stop() { let _ = try_invoke("la_stop", JsValue::NULL).await; }
 
 pub async fn la_decode_uart(tx_channel: u8, rx_channel: Option<u8>, baud_rate: u32, start_sample: u64, end_sample: u64) -> Vec<serde_json::Value> {
     #[derive(Serialize)]
@@ -661,6 +690,81 @@ pub async fn la_delete_range(start: u64, end: u64) -> Option<LaCaptureInfo> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
+pub async fn la_read_append(channels: u8, sample_rate_hz: u32, total_samples: u32) -> Option<LaCaptureInfo> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { channels: u8, sample_rate_hz: u32, total_samples: u32 }
+    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz, total_samples }).unwrap();
+    let result = invoke("la_read_append", args).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn la_read_append_fast(channels: u8, sample_rate_hz: u32) -> Option<LaCaptureInfo> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { channels: u8, sample_rate_hz: u32 }
+    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz }).unwrap();
+    let result = invoke("la_read_append_fast", args).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn la_read_append_usb(channels: u8, sample_rate_hz: u32) -> Option<LaCaptureInfo> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { channels: u8, sample_rate_hz: u32 }
+    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz }).unwrap();
+    let result = try_invoke("la_read_append_usb", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+/// Single stream cycle: stop → configure → arm → poll → read (USB bulk or UART fallback)
+pub async fn la_stream_cycle(channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8) -> Option<LaCaptureInfo> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz, depth, rle_enabled, trigger_type, trigger_channel }).unwrap();
+    let result = try_invoke("la_stream_cycle", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+/// Start gapless USB streaming — configures + starts continuous DMA→USB stream.
+/// Returns immediately; data is appended to the store in background.
+pub async fn la_stream_usb_start(channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8) -> bool {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8 }
+    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz, depth, rle_enabled, trigger_type, trigger_channel }).unwrap();
+    // try_invoke returns None for both null (Ok(())) and error — use JS that distinguishes
+    let promise = js_sys::Function::new_with_args(
+        "cmd, args",
+        "return window.__TAURI__.core.invoke(cmd, args).then(function() { return true; }).catch(function(e) { console.warn('[stream_usb] error:', e); return false; })"
+    );
+    let result = match promise.call2(&JsValue::NULL, &JsValue::from_str("la_stream_usb"), &args) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    let future = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(result));
+    match future.await {
+        Ok(val) => val.as_bool().unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Stop gapless USB streaming and return final capture info.
+pub async fn la_stream_usb_stop() -> Option<LaCaptureInfo> {
+    let result = try_invoke("la_stream_usb_stop", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+/// Check if gapless USB streaming is currently active.
+pub async fn la_stream_usb_active() -> bool {
+    let result = try_invoke("la_stream_usb_active", JsValue::NULL).await;
+    match result {
+        Some(v) => serde_wasm_bindgen::from_value(v).unwrap_or(false),
+        None => false,
+    }
+}
+
 pub async fn la_invoke_set_trigger(trigger_type: u8, channel: u8) {
     #[derive(Serialize)]
     struct Args {
@@ -669,7 +773,7 @@ pub async fn la_invoke_set_trigger(trigger_type: u8, channel: u8) {
         channel: u8,
     }
     let args = serde_wasm_bindgen::to_value(&Args { trigger_type, channel }).unwrap();
-    let _ = invoke("la_set_trigger", args).await;
+    let _ = try_invoke("la_set_trigger", args).await;
 }
 
 // -----------------------------------------------------------------------------

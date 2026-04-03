@@ -27,6 +27,7 @@
 #include "bb_pins.h"
 #include "bb_swd.h"
 #include "bb_la.h"
+#include "bb_la_usb.h"
 
 // Firmware version
 #define BB_HAT_FW_MAJOR  1
@@ -330,6 +331,9 @@ static void dispatch_command(const HatFrame *frame)
         memcpy(&rsp[p], &st.samples_captured, 4); p += 4;
         memcpy(&rsp[p], &st.total_samples, 4); p += 4;
         memcpy(&rsp[p], &st.actual_rate_hz, 4); p += 4;
+        // Diagnostic: USB vendor mount status
+        rsp[p++] = bb_la_usb_connected() ? 1 : 0;
+        rsp[p++] = tud_mounted() ? 1 : 0;  // Overall USB mounted
         send_response(HAT_RSP_LA_STATUS, rsp, (uint8_t)p);
         break;
     }
@@ -340,8 +344,8 @@ static void dispatch_command(const HatFrame *frame)
                         | ((uint32_t)frame->payload[2] << 16)
                         | ((uint32_t)frame->payload[3] << 24);
         uint16_t len = (uint16_t)frame->payload[4] | ((uint16_t)frame->payload[5] << 8);
-        if (len > 28) len = 28;  // Max payload for data chunk
-        uint8_t data[28];
+        if (len > 900) len = 900;  // Max payload for data chunk
+        uint8_t data[900];
         uint32_t actual = bb_la_read_data(offset, data, len);
         send_response(HAT_RSP_LA_DATA, data, (uint8_t)actual);
         break;
@@ -350,6 +354,22 @@ static void dispatch_command(const HatFrame *frame)
         bb_la_stop();
         send_ok(NULL, 0);
         break;
+    case HAT_CMD_LA_STREAM_START:
+        if (!bb_la_start_stream()) { send_error(HAT_ERR_BUSY); }
+        else { send_ok(NULL, 0); }
+        break;
+    case HAT_CMD_LA_USB_SEND: {
+        // Send capture buffer via USB bulk endpoint (fast readout)
+        const uint8_t *cap_buf;
+        uint32_t cap_len;
+        if (bb_la_get_capture_buffer(&cap_buf, &cap_len)) {
+            send_ok(NULL, 0);  // ACK first, then send data on USB bulk
+            bb_la_usb_stream_buffer(cap_buf, cap_len);
+        } else {
+            send_error(HAT_ERR_BUSY);
+        }
+        break;
+    }
 
     default:
         send_error(HAT_ERR_INVALID_CMD);
@@ -441,12 +461,27 @@ void bb_cmd_task(void *params)
             // LA trigger check + DMA completion
             bb_la_poll();
 
-            // Detect LA state transition to DONE and notify
+            // Poll USB vendor OUT for direct stream commands (gapless path)
+            bb_la_usb_poll_commands();
+
+            // LA streaming: send completed buffer halves via USB (raw, no header)
+            {
+                const uint8_t *stream_buf;
+                uint32_t stream_len;
+                if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
+                    bb_la_usb_write_raw(stream_buf, stream_len);
+                    bb_la_stream_buffer_sent();
+                }
+            }
+
+            // Detect LA state transition to DONE and notify ESP32
             LaStatus la_st;
             bb_la_get_status(&la_st);
             if (la_st.state == LA_STATE_DONE && s_prev_la_state != LA_STATE_DONE) {
                 bb_la_notify_done();  // Send unsolicited LA_STATUS frame
                 bb_irq_pulse();       // Also assert IRQ
+                // NOTE: no auto-push via USB — the host reads via gapless stream
+                // or explicitly via HAT_CMD_LA_USB_SEND
             }
             s_prev_la_state = la_st.state;
 

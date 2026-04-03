@@ -122,6 +122,8 @@
 #define HAT_CMD_LA_GET_STATUS   0x34
 #define HAT_CMD_LA_READ_DATA    0x35
 #define HAT_CMD_LA_STOP         0x36
+#define HAT_CMD_LA_STREAM_START 0x37
+#define HAT_CMD_LA_USB_SEND     0x38  // Send capture buffer via USB bulk
 
 // Responses
 #define HAT_RSP_OK              0x80
