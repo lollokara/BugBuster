@@ -70,12 +70,14 @@ pub async fn la_configure(
     channels: u8,
     rate_hz: u32,
     depth: u32,
+    rle_enabled: bool,
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
     let mut pw = bbp::PayloadWriter::new();
     pw.put_u8(channels);
     pw.put_u32(rate_hz);
     pw.put_u32(depth);
+    pw.put_u8(rle_enabled as u8);
     mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &pw.buf).await.map_err(map_err)?;
     Ok(())
 }
@@ -397,4 +399,23 @@ pub fn la_decode(
         Some(s) => Ok(la_decoders::decode(&config, s, start_sample, end_sample)),
         None => Err("No capture data".into()),
     }
+}
+
+/// Delete a range of samples from the capture store
+#[tauri::command]
+pub fn la_delete_range(
+    start_sample: u64,
+    end_sample: u64,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
+    let mut store = la.store.lock().map_err(map_err)?;
+    let s = store.as_mut().ok_or("No capture data")?;
+    s.delete_range(start_sample, end_sample);
+    Ok(LaCaptureInfo {
+        channels: s.channels,
+        sample_rate_hz: s.sample_rate_hz,
+        total_samples: s.total_samples,
+        duration_sec: s.total_duration_sec(),
+        trigger_sample: s.trigger_sample,
+    })
 }

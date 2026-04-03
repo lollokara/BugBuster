@@ -546,15 +546,17 @@ pub async fn la_get_capture_info() -> Option<LaCaptureInfo> {
     serde_wasm_bindgen::from_value::<Option<LaCaptureInfo>>(result).ok().flatten()
 }
 
-pub async fn la_invoke_configure(channels: u8, rate_hz: u32, depth: u32) {
+pub async fn la_invoke_configure(channels: u8, rate_hz: u32, depth: u32, rle_enabled: bool) {
     #[derive(Serialize)]
     struct Args {
         channels: u8,
         #[serde(rename = "rateHz")]
         rate_hz: u32,
         depth: u32,
+        #[serde(rename = "rleEnabled")]
+        rle_enabled: bool,
     }
-    let args = serde_wasm_bindgen::to_value(&Args { channels, rate_hz, depth }).unwrap();
+    let args = serde_wasm_bindgen::to_value(&Args { channels, rate_hz, depth, rle_enabled }).unwrap();
     let _ = invoke("la_configure", args).await;
 }
 
@@ -583,6 +585,79 @@ pub async fn la_import_json_file(path: &str) -> Option<LaCaptureInfo> {
 }
 pub async fn la_invoke_force() { let _ = invoke("la_force", JsValue::NULL).await; }
 pub async fn la_invoke_stop() { let _ = invoke("la_stop", JsValue::NULL).await; }
+
+pub async fn la_decode_uart(tx_channel: u8, rx_channel: Option<u8>, baud_rate: u32, start_sample: u64, end_sample: u64) -> Vec<serde_json::Value> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UartCfg {
+        #[serde(rename = "type")] dtype: &'static str,
+        tx_channel: u8,
+        rx_channel: Option<u8>,
+        baud_rate: u32,
+        data_bits: u8,
+        parity: &'static str,
+        stop_bits: f32,
+        idle_high: bool,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { config: UartCfg, start_sample: u64, end_sample: u64 }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        config: UartCfg { dtype: "uart", tx_channel, rx_channel, baud_rate, data_bits: 8, parity: "none", stop_bits: 1.0, idle_high: true },
+        start_sample, end_sample,
+    }).unwrap();
+    let result = invoke("la_decode", args).await;
+    serde_wasm_bindgen::from_value(result).unwrap_or_default()
+}
+
+pub async fn la_decode_i2c(sda_channel: u8, scl_channel: u8, start_sample: u64, end_sample: u64) -> Vec<serde_json::Value> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct I2cCfg { #[serde(rename = "type")] dtype: &'static str, sda_channel: u8, scl_channel: u8 }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { config: I2cCfg, start_sample: u64, end_sample: u64 }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        config: I2cCfg { dtype: "i2c", sda_channel, scl_channel },
+        start_sample, end_sample,
+    }).unwrap();
+    let result = invoke("la_decode", args).await;
+    serde_wasm_bindgen::from_value(result).unwrap_or_default()
+}
+
+pub async fn la_decode_spi(
+    mosi: u8, miso: u8, clk: u8, cs: u8, cpol: u8, cpha: u8,
+    start_sample: u64, end_sample: u64,
+) -> Vec<serde_json::Value> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SpiCfg {
+        #[serde(rename = "type")] dtype: &'static str,
+        mosi_channel: u8, miso_channel: u8, sclk_channel: u8, cs_channel: u8,
+        cpol: u8, cpha: u8, bit_order: &'static str, word_size: u8, cs_active_low: bool,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { config: SpiCfg, start_sample: u64, end_sample: u64 }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        config: SpiCfg {
+            dtype: "spi", mosi_channel: mosi, miso_channel: miso, sclk_channel: clk,
+            cs_channel: cs, cpol, cpha, bit_order: "msb", word_size: 8, cs_active_low: true,
+        },
+        start_sample, end_sample,
+    }).unwrap();
+    let result = invoke("la_decode", args).await;
+    serde_wasm_bindgen::from_value(result).unwrap_or_default()
+}
+
+pub async fn la_delete_range(start: u64, end: u64) -> Option<LaCaptureInfo> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { start_sample: u64, end_sample: u64 }
+    let args = serde_wasm_bindgen::to_value(&Args { start_sample: start, end_sample: end }).unwrap();
+    let result = invoke("la_delete_range", args).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
 
 pub async fn la_invoke_set_trigger(trigger_type: u8, channel: u8) {
     #[derive(Serialize)]

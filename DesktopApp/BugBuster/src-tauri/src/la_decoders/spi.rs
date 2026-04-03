@@ -59,9 +59,10 @@ pub fn decode(cfg: &SpiConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
         if (sample_on_rising && is_rising) || (!sample_on_rising && is_falling) {
             let s = sclk_trans[i].0;
             if s >= start && s <= end {
-                // Only include edges while CS is active
-                let cs_val = store.get_value_at(cfg.cs_channel, s);
-                if cs_val == cs_active {
+                // 0xFF = no CS line — always active
+                let cs_ok = cfg.cs_channel == 0xFF
+                    || store.get_value_at(cfg.cs_channel, s) == cs_active;
+                if cs_ok {
                     sample_edges.push(s);
                 }
             }
@@ -110,25 +111,29 @@ pub fn decode(cfg: &SpiConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
             detail: format!("SPI MOSI: {} ({})", mosi_text, mosi_val),
             ann_type: AnnotationType::Data,
             row: 0,
+            channel: cfg.mosi_channel,
         });
 
-        // MISO annotation
-        let miso_text = if ws <= 8 {
-            format!("0x{:02X}", miso_val)
-        } else if ws <= 16 {
-            format!("0x{:04X}", miso_val)
-        } else {
-            format!("0x{:X}", miso_val)
-        };
+        // MISO annotation (skip if same channel as MOSI — would be identical)
+        if cfg.miso_channel != cfg.mosi_channel {
+            let miso_text = if ws <= 8 {
+                format!("0x{:02X}", miso_val)
+            } else if ws <= 16 {
+                format!("0x{:04X}", miso_val)
+            } else {
+                format!("0x{:X}", miso_val)
+            };
 
-        annotations.push(Annotation {
-            start_sample: word_start,
-            end_sample: word_end + 5,
-            text: miso_text.clone(),
-            detail: format!("SPI MISO: {} ({})", miso_text, miso_val),
-            ann_type: AnnotationType::Info,
-            row: 1,
-        });
+            annotations.push(Annotation {
+                start_sample: word_start,
+                end_sample: word_end + 5,
+                text: miso_text.clone(),
+                detail: format!("SPI MISO: {} ({})", miso_text, miso_val),
+                ann_type: AnnotationType::Info,
+                row: 0,
+                channel: cfg.miso_channel,
+            });
+        }
 
         edge_idx += ws;
     }

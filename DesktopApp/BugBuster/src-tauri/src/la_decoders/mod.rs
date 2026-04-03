@@ -30,6 +30,7 @@ pub struct Annotation {
     pub detail: String,         // Longer detail: "Write to addr 0x4A"
     pub ann_type: AnnotationType,
     pub row: u8,                // Display row (0 = primary, 1 = secondary)
+    pub channel: u8,            // Which channel track to display this annotation on
 }
 
 impl Annotation {

@@ -65,6 +65,7 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
                 detail: "I2C STOP".into(),
                 ann_type: AnnotationType::Control,
                 row: 0,
+                channel: cfg.sda_channel,
             });
             ev_idx += 1;
             continue;
@@ -78,6 +79,7 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
             detail: "I2C START".into(),
             ann_type: AnnotationType::Control,
             row: 0,
+            channel: cfg.sda_channel,
         });
 
         // Find SCL rising edges after START until next START/STOP
@@ -118,6 +120,7 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
                     detail: format!("I2C Address 0x{:02X} {}", addr, if rw == "R" { "Read" } else { "Write" }),
                     ann_type: AnnotationType::Address,
                     row: 0,
+                    channel: cfg.sda_channel,
                 });
                 is_first_byte = false;
             } else {
@@ -129,6 +132,7 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
                     detail: format!("I2C Data 0x{:02X} ({})", byte_val, byte_val),
                     ann_type: AnnotationType::Data,
                     row: 0,
+                    channel: cfg.sda_channel,
                 });
             }
 
@@ -139,7 +143,8 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
                 text: ack_str.into(),
                 detail: format!("I2C {}", ack_str),
                 ann_type: if ack_val == 0 { AnnotationType::Info } else { AnnotationType::Error },
-                row: 1,
+                row: 0,
+                channel: cfg.scl_channel,
             });
 
             bit_idx += 9; // 8 data + 1 ack

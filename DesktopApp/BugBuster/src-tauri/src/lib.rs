@@ -133,6 +133,7 @@ pub fn run() {
             la_commands::la_export_vcd,
             la_commands::la_get_capture_info,
             la_commands::la_decode,
+            la_commands::la_delete_range,
             la_commands::la_read_uart_chunks,
             la_commands::la_export_vcd_file,
             la_commands::la_export_json,

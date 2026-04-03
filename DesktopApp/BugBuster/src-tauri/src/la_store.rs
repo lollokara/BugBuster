@@ -86,11 +86,12 @@ impl LaStore {
         // Include one transition before start for initial value
         if first_idx > 0 {
             result.push(trans[first_idx - 1]);
-        } else if !trans.is_empty() {
-            // No transition before start — signal starts at its first known value
-            // Insert a synthetic transition at sample 0
-            result.push((0, trans[0].1 ^ 1)); // opposite of first change (implies initial state)
+        } else if !trans.is_empty() && trans[0].0 > start {
+            // No transition before start, and first transition is strictly after start.
+            // Synthesize an entry at `start` with the implied initial value.
+            result.push((start, trans[0].1 ^ 1)); // opposite of first change (implies initial state)
         }
+        // If trans[0].0 == start, the main loop below will include it directly — no synthetic needed.
 
         // Collect transitions in range
         for &t in &trans[first_idx..] {
@@ -203,5 +204,43 @@ impl LaStore {
             return trans[0].1 ^ 1; // opposite of first change
         }
         trans[idx - 1].1
+    }
+
+    /// Delete all samples in [start, end] and shift subsequent samples left.
+    pub fn delete_range(&mut self, start: u64, end: u64) -> u64 {
+        if end < start { return 0; }
+        let removed = end - start + 1;
+        for ch_trans in &mut self.transitions {
+            // For each channel, preserve the value at `start` so the signal
+            // doesn't glitch: insert a transition at `start` with the value
+            // that was active just before the deleted range.
+            let val_before = {
+                let idx = ch_trans.partition_point(|&(s, _)| s < start);
+                if idx > 0 { Some(ch_trans[idx - 1].1) } else { None }
+            };
+
+            // Remove transitions in [start, end]
+            ch_trans.retain(|&(s, _)| s < start || s > end);
+
+            // Shift transitions after `end` left by `removed`
+            for t in ch_trans.iter_mut() {
+                if t.0 >= start + removed {
+                    t.0 -= removed;
+                }
+            }
+
+            // If the first transition after the splice point has a different
+            // value than what was before, insert a bridge transition
+            if let Some(vb) = val_before {
+                let splice_idx = ch_trans.partition_point(|&(s, _)| s < start);
+                let needs_bridge = splice_idx >= ch_trans.len()
+                    || ch_trans[splice_idx].1 != vb;
+                if needs_bridge && (splice_idx == 0 || ch_trans[splice_idx - 1].1 != vb) {
+                    ch_trans.insert(splice_idx, (start, vb));
+                }
+            }
+        }
+        self.total_samples = self.total_samples.saturating_sub(removed);
+        removed
     }
 }
