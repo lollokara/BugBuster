@@ -138,11 +138,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     }
 
-    // Fetch view data when viewport changes
+    // Fetch view data when viewport or capture changes (streaming updates capture_info)
     let set_vd = set_view_data;
     Effect::new(move |_| {
         let vs = view_start.get();
         let ve = view_end.get();
+        let _ci = capture_info.get(); // re-fetch when new data arrives during streaming
         spawn_local(async move {
             if let Some(data) = la_get_view(vs, ve).await {
                 set_vd.set(Some(data));
@@ -1302,23 +1303,35 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     let usb_ok = la_stream_usb_start(ch, r, d, rle_en, tt, tc).await;
 
                                     if usb_ok {
-                                        // Gapless mode: background task reads USB IN and appends to store.
-                                        // We poll for new data periodically and update the UI.
+                                        // Gapless mode active — wait a bit for background task to start
                                         web_sys::console::log_1(&"[STREAM] Gapless USB streaming active".into());
                                         show_toast("USB stream started", "ok");
+
+                                        // Give background task time to open port and start streaming
+                                        let p = js_sys::Promise::new(&mut |resolve, _| {
+                                            web_sys::window().unwrap()
+                                                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 2000).unwrap();
+                                        });
+                                        let _ = wasm_bindgen_futures::JsFuture::from(p).await;
+
                                         let mut first_capture = true;
+                                        let mut inactive_count = 0u32;
                                         while streaming.get_untracked() {
-                                            // Poll every 100ms for new data in the store
                                             let p = js_sys::Promise::new(&mut |resolve, _| {
                                                 web_sys::window().unwrap()
-                                                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 100).unwrap();
+                                                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 200).unwrap();
                                             });
                                             let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 
-                                            // Check if backend is still streaming
+                                            // Check if backend is still streaming (allow a few misses)
                                             if !la_stream_usb_active().await {
-                                                web_sys::console::log_1(&"[STREAM] Backend stream stopped".into());
-                                                break;
+                                                inactive_count += 1;
+                                                if inactive_count >= 3 {
+                                                    web_sys::console::log_1(&"[STREAM] Backend stream stopped".into());
+                                                    break;
+                                                }
+                                            } else {
+                                                inactive_count = 0;
                                             }
 
                                             // Get current store info for UI update
@@ -1500,6 +1513,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 // Clear button
                 <button style="font-size: 10px; padding: 3px 12px; background: #64748b15; color: #64748b; border: 1px solid #64748b40; border-radius: 4px; cursor: pointer"
                     on:click=move |_| {
+                        // Stop any active streaming
+                        set_streaming.set(false);
+                        spawn_local(async move {
+                            let _ = la_stream_usb_stop().await;
+                        });
                         set_capture_info.set(None);
                         set_view_data.set(None);
                         set_annotations.set(vec![]);
@@ -1507,6 +1525,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         set_sel_start.set(None);
                         set_sel_end.set(None);
                         set_cursor_sample.set(None);
+                        set_view_start.set(0);
+                        set_view_end.set(0);
+                        // Clear backend store
+                        spawn_local(async {
+                            let _ = la_delete_range(0, u64::MAX).await;
+                        });
                         show_toast("Capture cleared", "ok");
                     }
                 >"Clear"</button>

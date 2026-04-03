@@ -58,3 +58,13 @@ uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes);
  *        without ESP32 involvement.
  */
 void bb_la_usb_poll_commands(void);
+
+/**
+ * @brief Call from the USB thread (tud_task context) to send pending CDC data.
+ *        TinyUSB requires USB writes from the same task as tud_task.
+ *        bb_cmd_task queues data, usb_thread calls this to actually send it.
+ */
+void bb_la_cdc_send_pending(void);
+
+/// Flush the CDC TX ring buffer (call on stream stop to clear stale data).
+void bb_la_cdc_flush_ring(void);

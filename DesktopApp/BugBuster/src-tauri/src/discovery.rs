@@ -87,6 +87,10 @@ pub fn discover_usb() -> Vec<DiscoveredDevice> {
 
         match &port.port_type {
             serialport::SerialPortType::UsbPort(usb) => {
+                // Skip RP2040 BugBuster HAT CDC (used for LA streaming, not BBP)
+                if usb.vid == 0x2E8A && usb.pid == 0x000C {
+                    return false;
+                }
                 usb.vid == ESPRESSIF_VID
                     || usb.manufacturer.as_deref().map_or(false, |m| {
                         let ml = m.to_lowercase();

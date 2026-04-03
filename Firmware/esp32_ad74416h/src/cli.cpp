@@ -307,6 +307,58 @@ static void handleCommand(const char* line)
                 }
             }
         }
+    } else if (strcmp(cmd, "mux") == 0) {
+        if (!*args) {
+            // Show current MUX state
+            uint8_t states[ADGS_NUM_DEVICES];
+            adgs_get_all_states(states);
+            serial_printf("MUX state (%d device%s, fault=%d):\r\n",
+                          ADGS_MAIN_DEVICES, ADGS_MAIN_DEVICES > 1 ? "s" : "",
+                          adgs_is_faulted());
+            for (int d = 0; d < ADGS_MAIN_DEVICES; d++) {
+                serial_printf("  Dev %d: 0x%02X  [", d, states[d]);
+                for (int s = 0; s < 8; s++) {
+                    serial_printf("S%d=%s", s + 1, (states[d] >> s) & 1 ? "ON" : "__");
+                    if (s < 7) serial_print(" ");
+                }
+                serial_println("]");
+            }
+            // Show error flags (breadboard only)
+            uint8_t err = adgs_read_error_flags();
+            if (err) {
+                serial_printf("  ERR flags: 0x%02X (CRC=%d SCLK=%d RW=%d)\r\n",
+                              err, !!(err & 0x04), !!(err & 0x02), !!(err & 0x01));
+            }
+        } else {
+            // mux <dev> <switch> <0|1>
+            unsigned int dev = 0, sw = 0, state = 0;
+            int n = sscanf(args, "%u %u %u", &dev, &sw, &state);
+            if (n < 2) {
+                serial_printf("Usage: mux                  Show MUX state\r\n");
+                serial_printf("       mux <dev> <sw> <0|1> Set switch (dev=0-%d, sw=1-8)\r\n", ADGS_MAIN_DEVICES - 1);
+                serial_println("       mux <dev> <sw>       Toggle switch");
+            } else {
+                if (dev >= (unsigned)ADGS_MAIN_DEVICES) {
+                    serial_printf("Invalid device %u (max %d)\r\n", dev, ADGS_MAIN_DEVICES - 1);
+                } else if (sw < 1 || sw > 8) {
+                    serial_printf("Invalid switch %u (use 1-8)\r\n", sw);
+                } else {
+                    uint8_t sw_idx = (uint8_t)(sw - 1);  // UI is 1-based, driver is 0-based
+                    bool closed;
+                    if (n >= 3) {
+                        closed = state != 0;
+                    } else {
+                        // Toggle
+                        closed = !((adgs_get_state(dev) >> sw_idx) & 1);
+                    }
+                    serial_printf("MUX dev %u S%u -> %s ...\r\n", dev, sw, closed ? "CLOSE" : "OPEN");
+                    adgs_set_switch_safe((uint8_t)dev, sw_idx, closed);
+                    uint8_t after = adgs_get_state(dev);
+                    serial_printf("  Done. Dev %u state: 0x%02X (S%u=%s)\r\n",
+                                  dev, after, sw, (after >> sw_idx) & 1 ? "ON" : "OFF");
+                }
+            }
+        }
     } else if (strcmp(cmd, "muxreset") == 0) {
         serial_println("Resetting ADGS2414D (soft reset)...");
         adgs_soft_reset();
@@ -388,6 +440,12 @@ static void cmdHelp()
         "--- Faults ---\r\n"
         "  faults, f           Read all fault/alert registers\r\n"
         "  clear               Clear all faults\r\n"
+        "\r\n"
+        "--- MUX (ADGS2414D) ---\r\n"
+        "  mux                 Show all MUX switch states\r\n"
+        "  mux <dev> <sw> <0|1> Set switch (sw=1-8, 1=close 0=open)\r\n"
+        "  mux <dev> <sw>      Toggle switch\r\n"
+        "  muxreset            Soft-reset and re-init ADGS2414D\r\n"
         "\r\n"
         "--- I2C Devices ---\r\n"
         "  i2cscan             Scan I2C bus for devices\r\n"

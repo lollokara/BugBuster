@@ -81,7 +81,7 @@
 #define BB_LA_CH2_PIN       16      // GPIO16 — LA channel 2
 #define BB_LA_CH3_PIN       17      // GPIO17 — LA channel 3
 #define BB_LA_NUM_CHANNELS  4
-#define BB_LA_BUFFER_SIZE   (90 * 1024)   // 90KB SRAM capture buffer
+#define BB_LA_BUFFER_SIZE   (76 * 1024)   // 76KB SRAM capture buffer (reduced for RAM fit)
 
 // -----------------------------------------------------------------------------
 // LEDs

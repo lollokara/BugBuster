@@ -28,6 +28,11 @@
 #include "bb_swd.h"
 #include "bb_la.h"
 #include "bb_la_usb.h"
+#include "tusb.h"
+
+#ifdef DEBUGPROBE_INTEGRATION
+extern TaskHandle_t tud_taskhandle;
+#endif
 
 // Firmware version
 #define BB_HAT_FW_MAJOR  1
@@ -344,8 +349,8 @@ static void dispatch_command(const HatFrame *frame)
                         | ((uint32_t)frame->payload[2] << 16)
                         | ((uint32_t)frame->payload[3] << 24);
         uint16_t len = (uint16_t)frame->payload[4] | ((uint16_t)frame->payload[5] << 8);
-        if (len > 900) len = 900;  // Max payload for data chunk
-        uint8_t data[900];
+        if (len > 250) len = 250;  // Max payload for data chunk (limited by response framing)
+        uint8_t data[250];
         uint32_t actual = bb_la_read_data(offset, data, len);
         send_response(HAT_RSP_LA_DATA, data, (uint8_t)actual);
         break;
@@ -461,8 +466,7 @@ void bb_cmd_task(void *params)
             // LA trigger check + DMA completion
             bb_la_poll();
 
-            // Poll USB vendor OUT for direct stream commands (gapless path)
-            bb_la_usb_poll_commands();
+            // Stream commands handled in usb_thread via CDC (bb_main_integrated.c)
 
             // LA streaming: send completed buffer halves via USB (raw, no header)
             {

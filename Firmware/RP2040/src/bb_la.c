@@ -130,7 +130,7 @@ static void dma_irq_handler(void)
     if (la_dma_ch >= 0 && dma_channel_get_irq0_status((uint)la_dma_ch)) {
         dma_channel_acknowledge_irq0((uint)la_dma_ch);
 
-        if (s_la.stream_mode) {
+        if (s_la.stream_mode && s_la.state == LA_STATE_STREAMING) {
             // Streaming: flag completed half, swap to other half, restart DMA
             s_la.stream_buf_ready = s_la.stream_dma_buf;
             s_la.stream_dma_buf ^= 1; // swap 0↔1

@@ -737,7 +737,7 @@ pub async fn la_stream_usb_start(channels: u8, sample_rate_hz: u32, depth: u32, 
     // try_invoke returns None for both null (Ok(())) and error — use JS that distinguishes
     let promise = js_sys::Function::new_with_args(
         "cmd, args",
-        "return window.__TAURI__.core.invoke(cmd, args).then(function() { return true; }).catch(function(e) { console.warn('[stream_usb] error:', e); return false; })"
+        "console.log('[stream_usb] invoking', cmd); return window.__TAURI__.core.invoke(cmd, args).then(function() { console.log('[stream_usb] OK'); return true; }).catch(function(e) { console.error('[stream_usb] FAILED:', e); return false; })"
     );
     let result = match promise.call2(&JsValue::NULL, &JsValue::from_str("la_stream_usb"), &args) {
         Ok(r) => r,

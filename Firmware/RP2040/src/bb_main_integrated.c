@@ -27,6 +27,7 @@
 #include "get_serial.h"
 #include "tusb_edpt_handler.h"
 #include "DAP.h"
+#include "bb_la_usb.h"
 #include "hardware/structs/usb.h"
 
 // BugBuster command task entry point (defined in bb_main.c)
@@ -99,6 +100,47 @@ void usb_thread(void *ptr)
     wake = xTaskGetTickCount();
     do {
         tud_task();
+
+        // Send pending CDC data from bb_cmd_task's ring buffer
+        bb_la_cdc_send_pending();
+
+        // CDC command handler — start/stop gapless streaming
+        if (tud_cdc_available()) {
+            uint8_t cdc_cmd;
+            if (tud_cdc_read(&cdc_cmd, 1) == 1) {
+                switch (cdc_cmd) {
+                case 0x01:  // Start stream
+                    if (bb_la_start_stream()) {
+                        uint8_t ok[] = {'S', 'T', 'A', 'R', 'T', '\n'};
+                        tud_cdc_write(ok, 6);
+                    } else {
+                        uint8_t err[] = {'E', 'R', 'R', '\n'};
+                        tud_cdc_write(err, 4);
+                    }
+                    tud_cdc_write_flush();
+                    break;
+                case 0x00:  // Stop stream
+                    bb_la_stop();
+                    bb_la_cdc_flush_ring();  // Clear stale streaming data from ring buffer
+                    // Drain any pending CDC TX
+                    tud_cdc_write_clear();
+                    {
+                        uint8_t ok[] = {'S', 'T', 'O', 'P', '\n'};
+                        tud_cdc_write(ok, 5);
+                        tud_cdc_write_flush();
+                    }
+                    break;
+                default: {
+                    // Echo unknown commands for diagnostics
+                    uint8_t reply[] = {'R', cdc_cmd, 'O', 'K', '\n'};
+                    tud_cdc_write(reply, 5);
+                    tud_cdc_write_flush();
+                    break;
+                }
+                }
+            }
+        }
+
 #ifdef PROBE_USB_CONNECTED_LED
         if (!gpio_get(PROBE_USB_CONNECTED_LED) && tud_ready())
             gpio_put(PROBE_USB_CONNECTED_LED, 1);

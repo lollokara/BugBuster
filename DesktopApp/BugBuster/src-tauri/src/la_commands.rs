@@ -13,6 +13,30 @@ use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::la_usb::{LaUsbConnection, LaCaptureData, decode_capture, hat_usb_present};
+
+/// Find the RP2040 BugBuster HAT CDC serial port.
+/// Looks for a serial port associated with VID=0x2E8A, PID=0x000C.
+fn find_rp2040_cdc_port() -> Option<String> {
+    let ports = serialport::available_ports().ok()?;
+    for port in &ports {
+        if let serialport::SerialPortType::UsbPort(usb_info) = &port.port_type {
+            if usb_info.vid == 0x2E8A && usb_info.pid == 0x000C {
+                log::info!("[find_rp2040_cdc] Found: {} (VID={:04X} PID={:04X})",
+                    port.port_name, usb_info.vid, usb_info.pid);
+                // The CDC data interface (interface 2) is the one we want
+                // On macOS this shows up as a cu.usbmodem port
+                return Some(port.port_name.clone());
+            }
+        }
+    }
+    // Fallback: look for known port patterns
+    for port in &ports {
+        if port.port_name.contains("usbmodem1302") {
+            return Some(port.port_name.clone());
+        }
+    }
+    None
+}
 use crate::la_store::{LaStore, LaViewData};
 use crate::la_decoders::{self, Annotation, DecoderConfig};
 use crate::connection_manager::ConnectionManager;
@@ -592,107 +616,140 @@ pub async fn la_stream_usb(
     mgr: State<'_, ConnectionManager>,
     la: State<'_, LaState>,
 ) -> CmdResult<()> {
-    log::info!("[la_stream_usb] Starting gapless USB stream: ch={} rate={} depth={}", channels, sample_rate_hz, depth);
+    log::info!("[la_stream_usb] Starting gapless CDC stream: ch={} rate={} depth={}", channels, sample_rate_hz, depth);
 
     // Stop any previous streaming
     la.stream_running.store(false, Ordering::SeqCst);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Connect USB if needed
+    // Disconnect USB vendor interface if held (it blocks the CDC serial port on macOS)
     {
         let mut usb = la.usb.lock().map_err(map_err)?;
-        if !usb.is_connected() {
-            usb.connect().map_err(map_err)?;
+        if usb.is_connected() {
+            usb.disconnect();
+            log::info!("[la_stream_usb] Released USB vendor interface");
         }
     }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Stop previous capture on RP2040
     let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-    // Configure via BBP (ESP32 → UART → RP2040) for sample rate / channels
+    // Configure via BBP (ESP32 → UART → RP2040)
     let mut cfg_buf = vec![channels];
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
     cfg_buf.extend_from_slice(&depth.to_le_bytes());
     cfg_buf.push(if rle_enabled { 1 } else { 0 });
     mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf).await.map_err(map_err)?;
-
-    // Set trigger (even TRIG_NONE to clear previous)
     mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel]).await.map_err(map_err)?;
+    // Wait for RP2040 to finish processing configure (goes through ESP32 → UART)
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Initialize store (clear previous data for fresh stream)
+    // Initialize store
     {
         let mut store_guard = la.store.lock().map_err(map_err)?;
         *store_guard = Some(LaStore::from_raw(&[], channels, sample_rate_hz));
     }
 
-    // Send stream start command directly via USB OUT (bypasses ESP32)
-    {
-        let usb = la.usb.lock().map_err(map_err)?;
-        usb.send_stream_start().map_err(map_err)?;
-    }
-    log::info!("[la_stream_usb] Stream start sent via USB OUT");
+    // Find RP2040 CDC serial port for direct streaming
+    let cdc_port = find_rp2040_cdc_port()
+        .ok_or_else(|| "RP2040 CDC serial port not found".to_string())?;
+    log::info!("[la_stream_usb] Found RP2040 CDC: {}", cdc_port);
 
-    // Mark streaming as active
     la.stream_running.store(true, Ordering::SeqCst);
-
-    // Spawn background task that continuously reads USB IN
-    let usb_mutex = la.usb.clone();
     let store_mutex = la.store.clone();
     let running = la.stream_running.clone();
 
     tokio::task::spawn_blocking(move || {
-        log::info!("[la_stream_usb] Background reader thread started");
-        let mut total_bytes: u64 = 0;
-        let mut chunk_count: u64 = 0;
-        let t0 = std::time::Instant::now();
-
-        while running.load(Ordering::SeqCst) {
-            // Read a chunk from USB IN (blocking)
-            let chunk = {
-                let usb = match usb_mutex.lock() {
-                    Ok(u) => u,
-                    Err(e) => {
-                        log::error!("[la_stream_usb] Mutex lock failed: {}", e);
-                        break;
-                    }
-                };
-                if chunk_count == 0 {
-                    log::info!("[la_stream_usb] First bulk_in call at +{:?}", t0.elapsed());
-                }
-                match usb.read_stream_chunk() {
-                    Ok(data) => data,
-                    Err(e) => {
-                        log::warn!("[la_stream_usb] USB read error at +{:?}: {}", t0.elapsed(), e);
-                        break;
-                    }
-                }
-            };
-
-            if chunk.is_empty() {
-                log::info!("[la_stream_usb] Empty chunk at +{:?}", t0.elapsed());
-                continue;
+        // Open CDC serial port
+        let mut port = match serialport::new(&cdc_port, 115200)
+            .timeout(std::time::Duration::from_secs(2))
+            .open() {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("[la_stream_usb] Cannot open {}: {}", cdc_port, e);
+                running.store(false, Ordering::SeqCst);
+                return;
             }
+        };
+        log::info!("[la_stream_usb] Opened CDC port");
 
-            chunk_count += 1;
-            total_bytes += chunk.len() as u64;
-
-            if chunk_count <= 5 || chunk_count % 100 == 0 {
-                let preview: Vec<u8> = chunk.iter().take(16).copied().collect();
-                log::info!("[la_stream_usb] Chunk {}: {} bytes (total: {} at +{:?}) first={:02X?}",
-                    chunk_count, chunk.len(), total_bytes, t0.elapsed(), preview);
-            }
-
-            // Append to store
-            if let Ok(mut store_guard) = store_mutex.lock() {
-                if let Some(ref mut store) = *store_guard {
-                    store.append_raw(&chunk);
+        // Drain any stale data from previous session
+        {
+            let mut drain = [0u8; 4096];
+            loop {
+                match port.read(&mut drain) {
+                    Ok(n) if n > 0 => {
+                        log::info!("[la_stream_usb] Drained {} stale bytes", n);
+                        continue;
+                    }
+                    _ => break,
                 }
             }
         }
 
-        log::info!("[la_stream_usb] Reader stopped: {} chunks, {} bytes in {:?}",
-            chunk_count, total_bytes, t0.elapsed());
+        // Send start with retry
+        let mut started = false;
+        for attempt in 0..3 {
+            port.write_all(&[0x01]).ok();
+            port.flush().ok();
+            let mut resp = [0u8; 64];
+            match port.read(&mut resp) {
+                Ok(n) if n > 0 => {
+                    let s = String::from_utf8_lossy(&resp[..n]);
+                    log::info!("[la_stream_usb] Attempt {}: {:?}", attempt, s.trim());
+                    if s.contains("START") { started = true; break; }
+                    // Got ERR — stop and retry
+                    port.write_all(&[0x00]).ok();
+                    port.flush().ok();
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                _ => {
+                    log::warn!("[la_stream_usb] Attempt {}: no response", attempt);
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+            }
+        }
+        if !started {
+            log::error!("[la_stream_usb] Failed to start stream");
+            running.store(false, Ordering::SeqCst);
+            return;
+        }
+
+        // Read loop
+        log::info!("[la_stream_usb] Streaming active");
+        let mut total_bytes: u64 = 0;
+        let mut chunk_count: u64 = 0;
+        let t0 = std::time::Instant::now();
+        let mut buf = vec![0u8; 8192];
+
+        // Send stream start command (0x01) via CDC
+        while running.load(Ordering::SeqCst) {
+            let n = match port.read(&mut buf) {
+                Ok(0) => { std::thread::sleep(std::time::Duration::from_millis(1)); continue; }
+                Ok(n) => n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+                Err(e) => { log::warn!("[la_stream_usb] Read error: {}", e); break; }
+            };
+            chunk_count += 1;
+            total_bytes += n as u64;
+            if chunk_count <= 3 || chunk_count % 200 == 0 {
+                log::info!("[la_stream_usb] Chunk {}: {}B (total: {}, {:.0} KB/s)",
+                    chunk_count, n, total_bytes,
+                    total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0);
+            }
+            if let Ok(mut sg) = store_mutex.lock() {
+                if let Some(ref mut s) = *sg { s.append_raw(&buf[..n]); }
+            }
+        }
+
+        // Stop
+        port.write_all(&[0x00]).ok();
+        port.flush().ok();
+        log::info!("[la_stream_usb] Stopped: {} chunks, {} bytes, {:.0} KB/s",
+            chunk_count, total_bytes,
+            total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0);
     });
 
     Ok(())
