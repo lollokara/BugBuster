@@ -113,7 +113,7 @@ CMSIS-DAP protocol handling, and USB descriptors. Instead, we fork and extend.
 │  │  │   ├── Logic analyzer control        │  │
 │  │  │   └── Status/detect reporting       │  │
 │  │  ├── Logic analyzer PIO (PIO 1)        │  │
-│  │  └── IRQ handler (GPIO15)              │  │
+│  │  └── IRQ signaling (GPIO8→GPIO15)      │  │
 │  └────────────────────────────────────────┘  │
 │                                              │
 │  Shared: GPIO, power state, pin config       │
@@ -385,6 +385,11 @@ are used for SWD. This enables:
 ---
 
 ## 7. HVPAK Integration
+
+> **STATUS: STUB IMPLEMENTATION** — The RP2040 HVPAK driver (`bb_hvpak.c`) currently
+> uses placeholder I2C address (0x48) and register writes. The actual HVPAK part number,
+> I2C address, and register map must be determined from the HAT PCB schematic before
+> this feature can work. `SET_IO_VOLTAGE` commands are accepted but have no effect.
 
 The Renesas HVPAK provides programmable voltage level translation for the EXP_EXT lines.
 

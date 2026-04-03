@@ -27,13 +27,15 @@
 #define LA_SM           0       // Capture state machine
 #define LA_TRIGGER_SM   1       // Trigger state machine
 
-// DMA double-buffer
-#define LA_DMA_CH_A     2   // Avoid channels 0-1 which debugprobe might use
-#define LA_DMA_CH_B     3
+// DMA channels — claimed dynamically at init, released on stop
+static int la_dma_ch = -1;
 
 // Capture buffer — statically allocated
 // 200KB = 200*1024 bytes = 51200 uint32_t words
 static uint32_t s_capture_buf[BB_LA_BUFFER_SIZE / sizeof(uint32_t)] __attribute__((aligned(4)));
+
+// Forward declaration of DMA IRQ handler
+static void dma_irq_handler(void);
 
 static struct {
     LaState     state;
@@ -60,6 +62,9 @@ static struct {
     // RLE state
     RleState    rle;
     bool        rle_mode;
+
+    // DMA completion flag (set by IRQ handler)
+    volatile bool dma_done;
 } s_la = {};
 
 // -----------------------------------------------------------------------------
@@ -110,24 +115,72 @@ static bool load_pio_program(uint8_t channels)
 }
 
 // -----------------------------------------------------------------------------
-// DMA Setup
+// DMA Setup + Completion IRQ
 // -----------------------------------------------------------------------------
 
-static void setup_dma(void)
+// DMA completion IRQ — fires when all samples have been transferred
+static void dma_irq_handler(void)
 {
+    if (la_dma_ch >= 0 && dma_channel_get_irq0_status((uint)la_dma_ch)) {
+        dma_channel_acknowledge_irq0((uint)la_dma_ch);
+        s_la.dma_done = true;
+    }
+}
+
+// Track whether we've registered the DMA IRQ handler (can only register once)
+static bool s_dma_irq_installed = false;
+
+static bool claim_dma_channel(void)
+{
+    if (la_dma_ch >= 0) return true;  // already claimed
+    la_dma_ch = dma_claim_unused_channel(false);
+    if (la_dma_ch < 0) return false;
+    return true;
+}
+
+static void release_dma_channel(void)
+{
+    if (la_dma_ch >= 0) {
+        dma_channel_set_irq0_enabled((uint)la_dma_ch, false);
+        dma_channel_unclaim((uint)la_dma_ch);
+        la_dma_ch = -1;
+    }
+    if (s_dma_irq_installed) {
+        irq_set_enabled(DMA_IRQ_0, false);
+        irq_remove_handler(DMA_IRQ_0, dma_irq_handler);
+        s_dma_irq_installed = false;
+    }
+}
+
+static bool setup_dma(void)
+{
+    if (!claim_dma_channel()) return false;
+
+    uint ch = (uint)la_dma_ch;
+
     // Single DMA channel: PIO RX FIFO → capture buffer (no ping-pong)
-    dma_channel_config ca = dma_channel_get_default_config(LA_DMA_CH_A);
+    dma_channel_config ca = dma_channel_get_default_config(ch);
     channel_config_set_transfer_data_size(&ca, DMA_SIZE_32);
     channel_config_set_read_increment(&ca, false);
     channel_config_set_write_increment(&ca, true);
     channel_config_set_dreq(&ca, pio_get_dreq(LA_PIO, LA_SM, false));
-    // No chaining — single transfer for entire buffer
 
-    dma_channel_configure(LA_DMA_CH_A, &ca,
+    dma_channel_configure(ch, &ca,
         s_capture_buf,                          // write addr
         &LA_PIO->rxf[LA_SM],                   // read addr (PIO RX FIFO)
         s_la.buf_total_words,                   // transfer count (all words)
         false);                                 // don't start yet
+
+    // Enable DMA completion interrupt
+    s_la.dma_done = false;
+    dma_channel_set_irq0_enabled(ch, true);
+    if (!s_dma_irq_installed) {
+        irq_set_exclusive_handler(DMA_IRQ_0, dma_irq_handler);
+        s_dma_irq_installed = true;
+    }
+    irq_set_enabled(DMA_IRQ_0, true);
+
+    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -271,6 +324,9 @@ bool bb_la_arm(void)
     s_la.words_captured = 0;
     s_la.triggered = false;
 
+    // Clean up any leftover trigger program from a previous capture
+    unload_trigger_program();
+
     if (s_la.trigger.type == LA_TRIG_NONE) {
         // No trigger — start capture immediately
         s_la.triggered = true;
@@ -286,8 +342,11 @@ bool bb_la_arm(void)
             pio_sm_set_enabled(LA_PIO, LA_SM, true);
         } else {
             // Raw mode: DMA from PIO to buffer
-            setup_dma();
-            dma_channel_start(LA_DMA_CH_A);
+            if (!setup_dma()) {
+                s_la.state = LA_STATE_ERROR;
+                return false;
+            }
+            dma_channel_start((uint)la_dma_ch);
             pio_sm_set_enabled(LA_PIO, LA_SM, true);
         }
     } else {
@@ -300,8 +359,11 @@ bool bb_la_arm(void)
                                 (float)s_la.config.sample_rate_hz);
 
         // Setup DMA but don't start PIO SM0 yet — trigger will enable it
-        setup_dma();
-        dma_channel_start(LA_DMA_CH_A);
+        if (!setup_dma()) {
+            s_la.state = LA_STATE_ERROR;
+            return false;
+        }
+        dma_channel_start((uint)la_dma_ch);
         // SM0 stays disabled — will be enabled by trigger callback
 
         // Load trigger program on SM1
@@ -346,11 +408,11 @@ void bb_la_force_trigger(void)
         s_la.triggered = true;
         s_la.state = LA_STATE_CAPTURING;
 
-        la_capture_program_init(LA_PIO, LA_SM, s_la.pio_offset,
-                                BB_LA_CH0_PIN, s_la.config.channels,
-                                (float)s_la.config.sample_rate_hz);
-        setup_dma();
-        dma_channel_start(LA_DMA_CH_A);
+        // Disable trigger SM — no longer needed
+        pio_sm_set_enabled(LA_PIO, LA_TRIGGER_SM, false);
+        irq_set_enabled(PIO1_IRQ_0, false);
+
+        // Enable capture SM — DMA is already configured and running from bb_la_arm()
         pio_sm_set_enabled(LA_PIO, LA_SM, true);
     }
 }
@@ -360,8 +422,11 @@ void bb_la_stop(void)
     // Stop PIO
     pio_sm_set_enabled(LA_PIO, LA_SM, false);
 
-    // Abort DMA
-    dma_channel_abort(LA_DMA_CH_A);
+    // Abort and release DMA
+    if (la_dma_ch >= 0) {
+        dma_channel_abort((uint)la_dma_ch);
+    }
+    release_dma_channel();
 
     // Drain PIO FIFO
     if (s_la.pio_loaded) {
@@ -389,11 +454,15 @@ void bb_la_get_status(LaStatus *status)
     if (s_la.state == LA_STATE_CAPTURING || s_la.state == LA_STATE_DONE) {
         if (s_la.rle_mode) {
             status->samples_captured = (uint32_t)s_la.rle.total_samples;
-        } else {
-            uint32_t remaining = dma_channel_hw_addr(LA_DMA_CH_A)->transfer_count;
+        } else if (la_dma_ch >= 0) {
+            uint32_t remaining = dma_channel_hw_addr((uint)la_dma_ch)->transfer_count;
             uint32_t words_done = s_la.buf_total_words - remaining;
             uint32_t samples_per_word = 32 / s_la.config.channels;
             status->samples_captured = words_done * samples_per_word;
+        } else {
+            // DMA already released (capture done)
+            uint32_t samples_per_word = 32 / s_la.config.channels;
+            status->samples_captured = s_la.buf_total_words * samples_per_word;
         }
         if (status->samples_captured > status->total_samples) {
             status->samples_captured = status->total_samples;
@@ -449,8 +518,8 @@ void bb_la_poll(void)
                 }
             }
         } else {
-            // Raw mode: check if DMA is complete
-            if (!dma_channel_is_busy(LA_DMA_CH_A)) {
+            // Raw mode: check DMA completion flag (set by IRQ handler)
+            if (s_la.dma_done) {
                 pio_sm_set_enabled(LA_PIO, LA_SM, false);
                 s_la.state = LA_STATE_DONE;
             }

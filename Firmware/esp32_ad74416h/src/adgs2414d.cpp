@@ -38,25 +38,22 @@ static bool s_readback_checked = false;
 // Low-level SPI helpers
 // -----------------------------------------------------------------------------
 
-// Send raw bytes on the SPI bus with manual MUX CS
-// Cooperative SPI bus sharing with ADC poll task.
-// The ADC task checks this flag and yields when set.
-volatile bool g_spi_bus_request = false;
-volatile bool g_spi_bus_granted = false;
+// Send raw bytes on the SPI bus with manual MUX CS.
+// Cooperative SPI bus sharing with ADC poll task via FreeRTOS semaphore.
+// The ADC task gives the semaphore between transactions; requesters take it.
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+// Global SPI bus semaphore — created in adgs_init(), taken by MUX/CMD callers,
+// given back by ADC task between its polling cycles.
+SemaphoreHandle_t g_spi_bus_mutex = NULL;
 
 static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
 {
-    // Request bus access — ADC task will yield after its current transaction
-    g_spi_bus_granted = false;
-    g_spi_bus_request = true;
-
-    // Wait for ADC task to grant us the bus (max 200ms)
-    for (int i = 0; i < 200 && !g_spi_bus_granted; i++) {
-        delay_ms(1);
-    }
-    if (!g_spi_bus_granted) {
-        ESP_LOGE(TAG, "SPI bus request timeout (200ms) - aborting transfer");
-        g_spi_bus_request = false;
+    // Acquire SPI bus (max 200ms wait)
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTake(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        ESP_LOGE(TAG, "SPI bus acquire timeout (200ms) - aborting transfer");
         return;
     }
 
@@ -71,8 +68,7 @@ static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
     gpio_set_level(PIN_MUX_CS, 1);
 
     // Release bus
-    g_spi_bus_request = false;
-    g_spi_bus_granted = false;
+    xSemaphoreGive(g_spi_bus_mutex);
 }
 
 // Send a 16-bit address-mode command to all devices (before daisy-chain)
@@ -268,6 +264,12 @@ static uint8_t get_group_mask(uint8_t sw)
 
 void adgs_init(void)
 {
+    // Create SPI bus mutex if not already created
+    if (g_spi_bus_mutex == NULL) {
+        g_spi_bus_mutex = xSemaphoreCreateMutex();
+        assert(g_spi_bus_mutex != NULL);
+    }
+
     // Configure CS pin as output, default HIGH (inactive)
     gpio_reset_pin(PIN_MUX_CS);
     gpio_set_direction(PIN_MUX_CS, GPIO_MODE_OUTPUT);

@@ -7,7 +7,12 @@
 
 #include "bb_protocol.h"
 #include "bb_config.h"
+#include "pico/stdlib.h"
 #include <string.h>
+
+// Frame timeout: if no new byte arrives within this period, reset the parser.
+// Prevents hanging on truncated UART frames.
+#define HAT_FRAME_TIMEOUT_MS    500
 
 uint8_t hat_crc8(const uint8_t *data, size_t len)
 {
@@ -27,8 +32,24 @@ void hat_parser_init(HatFrameParser *p)
     p->state = WAIT_SYNC;
 }
 
+void hat_parser_check_timeout(HatFrameParser *p, uint32_t now_ms)
+{
+    // Only check timeout if we're mid-frame (not waiting for sync)
+    if (p->state != WAIT_SYNC && p->last_byte_ms != 0) {
+        if (now_ms - p->last_byte_ms > HAT_FRAME_TIMEOUT_MS) {
+            // Incomplete frame — reset parser
+            p->state = WAIT_SYNC;
+            p->pos = 0;
+            p->last_byte_ms = 0;
+        }
+    }
+}
+
 bool hat_parser_feed(HatFrameParser *p, uint8_t byte)
 {
+    // Record time of each byte for timeout detection
+    p->last_byte_ms = to_ms_since_boot(get_absolute_time());
+
     switch (p->state) {
     case WAIT_SYNC:
         if (byte == HAT_FRAME_SYNC) {

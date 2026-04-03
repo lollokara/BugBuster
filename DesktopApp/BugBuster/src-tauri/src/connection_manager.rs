@@ -176,6 +176,11 @@ impl ConnectionManager {
                             bbp::EVT_LA_DONE => {
                                 let _ = app_handle.emit("la-done", &msg.payload);
                             }
+                            bbp::EVT_DISCONNECT => {
+                                log::warn!("USB reader reported disconnection");
+                                let _ = app_handle.emit("device-disconnected", &serde_json::json!({"reason": "serial_error"}));
+                                break;
+                            }
                             _ => {}
                         }
                     }

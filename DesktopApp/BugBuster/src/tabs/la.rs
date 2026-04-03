@@ -11,8 +11,8 @@ const CH_COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const TOOLBAR_HEIGHT: f64 = 44.0; // Space reserved for toolbar overlay
 const TRACK_HEIGHT: f64 = 62.0;
 const LABEL_WIDTH: f64 = 50.0;
-const RULER_HEIGHT: f64 = 24.0;
-const MINIMAP_HEIGHT: f64 = 20.0;
+const RULER_HEIGHT: f64 = 22.0;
+const MINIMAP_HEIGHT: f64 = 28.0;
 const SIGNAL_MARGIN: f64 = 8.0;
 
 fn format_time(seconds: f64) -> String {
@@ -187,8 +187,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         if span <= 0.0 { return; }
 
         let plot_w = w - LABEL_WIDTH;
+        let plot_h = h - RULER_HEIGHT - MINIMAP_HEIGHT;
 
-        // ── Dynamic track heights: expand channels that have annotations ──────
+        // ── Dynamic track heights: fill available space, expand for annotations ──
         let anns = annotations.get();
         let ann_row_h = 20.0_f64;
         let ann_gap = 3.0_f64;
@@ -201,22 +202,29 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             if ch < num_ch { ch_ann_rows[ch] = ch_ann_rows[ch].max(row); }
         }
 
-        // Cumulative Y offsets per channel, plus total track height per channel
+        // Compute annotation overhead per channel
+        let total_ann_extra: f64 = (0..num_ch).map(|ch| {
+            if ch_ann_rows[ch] > 0 { ann_gap + ann_row_h * ch_ann_rows[ch] as f64 } else { 0.0 }
+        }).sum();
+
+        // Dynamic track height: fill available signal area, min TRACK_HEIGHT
+        let available = plot_h - TOOLBAR_HEIGHT - total_ann_extra;
+        let track_h = (available / num_ch as f64).max(TRACK_HEIGHT).min(150.0);
+
+        // Cumulative Y offsets per channel
         let mut ch_y = vec![TOOLBAR_HEIGHT; num_ch];
-        let mut ch_h = vec![TRACK_HEIGHT; num_ch]; // signal area only (not anns)
+        let mut ch_h = vec![track_h; num_ch];
         {
             let mut y = TOOLBAR_HEIGHT;
             for ch in 0..num_ch {
                 ch_y[ch] = y;
                 let ann_extra = if ch_ann_rows[ch] > 0 { ann_gap + ann_row_h * ch_ann_rows[ch] as f64 } else { 0.0 };
-                ch_h[ch] = TRACK_HEIGHT + ann_extra;
+                ch_h[ch] = track_h + ann_extra;
                 y += ch_h[ch];
             }
         }
         // Share offsets with mouse handler (untracked write — no reactive loop)
         set_ch_y_offsets.set(ch_y.clone());
-
-        let plot_h = h - RULER_HEIGHT - MINIMAP_HEIGHT;
 
         // Grid lines
         ctx.set_stroke_style_str("rgba(59, 130, 246, 0.08)");
@@ -250,7 +258,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let transitions = &data.channel_transitions[ch];
             let color = CH_COLORS[ch % CH_COLORS.len()];
             let y_top = ch_y[ch] + SIGNAL_MARGIN;
-            let y_bot = ch_y[ch] + TRACK_HEIGHT - SIGNAL_MARGIN;
+            let y_bot = ch_y[ch] + track_h - SIGNAL_MARGIN;
             let y_high = y_top;
             let y_low = y_bot;
 
@@ -406,9 +414,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.set_global_alpha(1.0);
         }
 
-        // Time ruler
+        // Time ruler with tick marks and consistent unit labels
         let ruler_y = plot_h;
-        ctx.set_fill_style_str("#0c1222");
+        ctx.set_fill_style_str("#111a2e");
         ctx.fill_rect(0.0, ruler_y, w, RULER_HEIGHT);
         ctx.set_stroke_style_str("rgba(59, 130, 246, 0.3)");
         ctx.begin_path();
@@ -416,18 +424,51 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         ctx.line_to(w, ruler_y);
         ctx.stroke();
 
-        // Time labels
-        ctx.set_fill_style_str("#8b9dc3");
-        ctx.set_font("10px 'JetBrains Mono', monospace");
-        ctx.set_text_align("center");
         let sample_rate = data.sample_rate_hz as f64;
+        let span_sec = if sample_rate > 0.0 { span / sample_rate } else { 1.0 };
+        let (unit_suffix, unit_div) = if span_sec < 2e-6 { ("ns", 1e9) }
+            else if span_sec < 2e-3 { ("µs", 1e6) }
+            else if span_sec < 2.0 { ("ms", 1e3) }
+            else { ("s", 1.0) };
+
+        // Major tick marks + labels
+        ctx.set_stroke_style_str("rgba(139, 157, 195, 0.5)");
+        ctx.set_line_width(1.0);
+        ctx.set_fill_style_str("#8b9dc3");
+        ctx.set_font("9px 'JetBrains Mono', monospace");
+        ctx.set_text_align("center");
         let mut g = first_grid;
         while g < ve {
             let x = LABEL_WIDTH + ((g - vs) / span) * plot_w;
+            // Major tick
+            ctx.begin_path();
+            ctx.move_to(x, ruler_y);
+            ctx.line_to(x, ruler_y + 4.0);
+            ctx.stroke();
+            // Label
             let t = if sample_rate > 0.0 { g / sample_rate } else { 0.0 };
-            ctx.fill_text(&format_time(t), x, ruler_y + 16.0).ok();
+            let label = format!("{:.1}{}", t * unit_div, unit_suffix);
+            ctx.fill_text(&label, x, ruler_y + 15.0).ok();
+            // Minor ticks (5 subdivisions)
+            ctx.set_stroke_style_str("rgba(139, 157, 195, 0.2)");
+            let minor_step = grid_step / 5.0;
+            for m in 1..5 {
+                let mx = LABEL_WIDTH + ((g + minor_step * m as f64 - vs) / span) * plot_w;
+                if mx > LABEL_WIDTH && mx < w {
+                    ctx.begin_path();
+                    ctx.move_to(mx, ruler_y);
+                    ctx.line_to(mx, ruler_y + 3.0);
+                    ctx.stroke();
+                }
+            }
+            ctx.set_stroke_style_str("rgba(139, 157, 195, 0.5)");
             g += grid_step;
         }
+        // Unit label in left margin
+        ctx.set_fill_style_str("#5a6d8a");
+        ctx.set_font("8px 'JetBrains Mono', monospace");
+        ctx.set_text_align("right");
+        ctx.fill_text(unit_suffix, LABEL_WIDTH - 4.0, ruler_y + 14.0).ok();
 
         // Cursor
         if let Some(cs) = cursor {
@@ -444,7 +485,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let t = if sample_rate > 0.0 { cs as f64 / sample_rate } else { 0.0 };
                 ctx.set_fill_style_str("#ef4444");
                 ctx.set_font("10px 'JetBrains Mono', monospace");
-                ctx.fill_text(&format_time(t), x, ruler_y + 16.0).ok();
+                ctx.fill_text(&format_time(t), x, ruler_y + 14.0).ok();
             }
         }
 
@@ -539,7 +580,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 // Draw period arrow
                                 let x1 = LABEL_WIDTH + ((e1 as f64 - vs) / span) * plot_w;
                                 let x2 = LABEL_WIDTH + ((e2 as f64 - vs) / span) * plot_w;
-                                let y_track_top = ch_y.get(hch).copied().unwrap_or(TOOLBAR_HEIGHT + hch as f64 * TRACK_HEIGHT) + SIGNAL_MARGIN;
+                                let y_track_top = ch_y.get(hch).copied().unwrap_or(TOOLBAR_HEIGHT + hch as f64 * track_h) + SIGNAL_MARGIN;
                                 let arrow_y = y_track_top - 2.0;
 
                                 ctx.set_stroke_style_str(color);
@@ -558,7 +599,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 ctx.move_to(x2, arrow_y);
                                 ctx.line_to(x2 - 5.0, arrow_y + 3.0);
                                 // Vertical markers
-                                let y_bot = ch_y.get(hch).copied().unwrap_or(TOOLBAR_HEIGHT + hch as f64 * TRACK_HEIGHT) + TRACK_HEIGHT - SIGNAL_MARGIN;
+                                let y_bot = ch_y.get(hch).copied().unwrap_or(TOOLBAR_HEIGHT + hch as f64 * track_h) + track_h - SIGNAL_MARGIN;
                                 ctx.move_to(x1, y_track_top);
                                 ctx.line_to(x1, y_bot);
                                 ctx.move_to(x2, y_track_top);
@@ -595,51 +636,77 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             }
         }
 
-        // Minimap — full capture overview with viewport indicator
+        // Overview bar — density heatmap + viewport indicator + time range
         {
             let mm_y = h - MINIMAP_HEIGHT;
             let mm_w = w - LABEL_WIDTH;
+            let mm_heat_top = mm_y + 10.0;    // below time labels
+            let mm_heat_h = MINIMAP_HEIGHT - 12.0;
 
             // Background
-            ctx.set_fill_style_str("#0c1222");
-            ctx.fill_rect(LABEL_WIDTH, mm_y, mm_w, MINIMAP_HEIGHT);
-            ctx.set_stroke_style_str("rgba(59, 130, 246, 0.2)");
+            ctx.set_fill_style_str("#080e1a");
+            ctx.fill_rect(0.0, mm_y, w, MINIMAP_HEIGHT);
+            ctx.set_stroke_style_str("rgba(59, 130, 246, 0.25)");
             ctx.begin_path();
-            ctx.move_to(LABEL_WIDTH, mm_y);
+            ctx.move_to(0.0, mm_y);
             ctx.line_to(w, mm_y);
             ctx.stroke();
 
             let total = data.total_samples as f64;
             if total > 0.0 {
-                // Draw simplified waveform for CH0 in minimap
-                if !data.channel_transitions.is_empty() {
-                    ctx.set_stroke_style_str("rgba(59, 130, 246, 0.4)");
-                    ctx.set_line_width(1.0);
-                    ctx.begin_path();
-                    let mm_top = mm_y + 3.0;
-                    let mm_bot = mm_y + MINIMAP_HEIGHT - 3.0;
-                    // Use ALL transitions (not just visible) for full overview
-                    // Since we only have visible range transitions, approximate
-                    ctx.move_to(LABEL_WIDTH, mm_bot);
-                    ctx.line_to(w, mm_bot);
-                    ctx.stroke();
+                // Time range labels
+                let total_sec = if sample_rate > 0.0 { total / sample_rate } else { 0.0 };
+                ctx.set_fill_style_str("#5a6d8a");
+                ctx.set_font("8px 'JetBrains Mono', monospace");
+                ctx.set_text_align("left");
+                ctx.fill_text("0s", LABEL_WIDTH + 3.0, mm_y + 9.0).ok();
+                ctx.set_text_align("right");
+                ctx.fill_text(&format_time(total_sec), w - 3.0, mm_y + 9.0).ok();
+
+                // Density heatmap
+                let density = &data.density;
+                if !density.is_empty() {
+                    let max_d = *density.iter().max().unwrap_or(&1) as f64;
+                    let buckets = density.len() as f64;
+                    for (i, &count) in density.iter().enumerate() {
+                        if count == 0 { continue; }
+                        let intensity = (count as f64 / max_d).sqrt(); // sqrt for better contrast
+                        let bx = LABEL_WIDTH + (i as f64 / buckets) * mm_w;
+                        let bw = (mm_w / buckets).max(1.0);
+                        // Blue glow: brighter = more transitions
+                        let r = (20.0 + 39.0 * intensity) as u8;
+                        let g_c = (40.0 + 90.0 * intensity) as u8;
+                        let b = (80.0 + 166.0 * intensity) as u8;
+                        ctx.set_fill_style_str(&format!("rgb({},{},{})", r, g_c, b));
+                        ctx.fill_rect(bx, mm_heat_top, bw + 0.5, mm_heat_h);
+                    }
                 }
 
-                // Viewport indicator
+                // Viewport indicator box
                 let vp_x1 = LABEL_WIDTH + (data.view_start as f64 / total) * mm_w;
-                let vp_x2 = LABEL_WIDTH + (data.view_end as f64 / total) * mm_w;
-                ctx.set_fill_style_str("rgba(59, 130, 246, 0.15)");
-                ctx.fill_rect(vp_x1, mm_y, (vp_x2 - vp_x1).max(2.0), MINIMAP_HEIGHT);
-                ctx.set_stroke_style_str("#3b82f6");
-                ctx.set_line_width(1.0);
-                ctx.stroke_rect(vp_x1, mm_y, (vp_x2 - vp_x1).max(2.0), MINIMAP_HEIGHT);
+                let vp_x2 = LABEL_WIDTH + (data.view_end.min(data.total_samples) as f64 / total) * mm_w;
+                let vp_w = (vp_x2 - vp_x1).max(3.0);
+                ctx.set_fill_style_str("rgba(168, 85, 247, 0.12)");
+                ctx.fill_rect(vp_x1, mm_heat_top, vp_w, mm_heat_h);
+                ctx.set_stroke_style_str("#a855f7");
+                ctx.set_line_width(1.5);
+                ctx.stroke_rect(vp_x1, mm_heat_top, vp_w, mm_heat_h);
+                // Edge grips
+                ctx.set_line_width(2.0);
+                ctx.set_stroke_style_str("#c084fc");
+                for xg in [vp_x1, vp_x1 + vp_w] {
+                    ctx.begin_path();
+                    ctx.move_to(xg, mm_heat_top + 2.0);
+                    ctx.line_to(xg, mm_heat_top + mm_heat_h - 2.0);
+                    ctx.stroke();
+                }
             }
 
             // Label
             ctx.set_fill_style_str("#5a6d8a");
-            ctx.set_font("8px 'JetBrains Mono', monospace");
+            ctx.set_font("7px 'JetBrains Mono', monospace");
             ctx.set_text_align("right");
-            ctx.fill_text("MAP", LABEL_WIDTH - 4.0, mm_y + 13.0).ok();
+            ctx.fill_text("NAV", LABEL_WIDTH - 4.0, mm_y + 9.0).ok();
         }
 
         // Draw selection highlight
@@ -689,8 +756,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let x2 = LABEL_WIDTH + ((es as f64 - vs) / span) * plot_w;
             let ann_h = ann_row_h - 2.0;
             // Position annotation below the signal area, in the expanded annotation strip
-            let track_y = ch_y.get(ch).copied().unwrap_or(TOOLBAR_HEIGHT + ch as f64 * TRACK_HEIGHT);
-            let ann_y = track_y + TRACK_HEIGHT + ann_gap + ann_row_h * row as f64;
+            let track_y = ch_y.get(ch).copied().unwrap_or(TOOLBAR_HEIGHT + ch as f64 * track_h);
+            let ann_y = track_y + track_h + ann_gap + ann_row_h * row as f64;
 
             // Annotation box
             ctx.set_fill_style_str(color);
@@ -757,7 +824,27 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let canvas: HtmlCanvasElement = canvas_el.into();
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
+        let y = e.client_y() as f64 - rect.top();
+        let h = canvas.client_height() as f64;
         if x < LABEL_WIDTH { return; }
+
+        // Check if click is in the overview/minimap bar
+        let mm_y = h - MINIMAP_HEIGHT;
+        if y >= mm_y {
+            // Click in minimap → jump viewport to that position
+            let total = capture_info.get_untracked().map(|i| i.total_samples).unwrap_or(1);
+            let mm_w = canvas.client_width() as f64 - LABEL_WIDTH;
+            let frac = ((x - LABEL_WIDTH) / mm_w).clamp(0.0, 1.0);
+            let click_sample = (frac * total as f64) as u64;
+            let vs = view_start.get_untracked();
+            let ve = view_end.get_untracked();
+            let half_span = (ve - vs) / 2;
+            let new_start = click_sample.saturating_sub(half_span);
+            let new_end = new_start + (ve - vs);
+            set_view_start.set(new_start.min(total.saturating_sub(ve - vs)));
+            set_view_end.set(new_end.min(total));
+            return;
+        }
 
         set_dragging.set(true);
         set_drag_start_x.set(x);
@@ -981,13 +1068,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     }
 
     view! {
-        <div class="tab-content" style="display: flex; flex-direction: column; height: 100%; gap: 0">
-            <div class="tab-desc">
-                "Logic Analyzer — Capture and analyze digital signals from the HAT expansion board."
-            </div>
+        <div class="tab-content" style="display: flex; flex-direction: column; height: calc(100vh - 100px); gap: 0; overflow: hidden; margin: -20px; padding: 0">
 
             // Toolbar with labeled sections
-            <div style="display: flex; align-items: flex-end; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border, #1e293b); flex-wrap: wrap">
+            <div style="display: flex; align-items: flex-end; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border, #1e293b); flex-wrap: wrap; flex-shrink: 0">
 
                 // Channels section
                 <div style="display: flex; flex-direction: column; gap: 2px">
@@ -1531,7 +1615,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
             // Decoder panel (toggleable)
             {move || if decoder_panel_open.get() { view! {
-                <div style="display: flex; flex-direction: column; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border, #1e293b); background: #070d1a">
+                <div style="display: flex; flex-direction: column; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border, #1e293b); background: #070d1a; flex-shrink: 0">
                     // Header row
                     <div style="display: flex; align-items: center; gap: 8px">
                         <span style="font-size: 10px; font-weight: 700; color: #a855f7; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.5px">"Protocol Decoders"</span>
@@ -1831,7 +1915,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             // Canvas waveform area
             <canvas
                 node_ref=canvas_ref
-                style=move || format!("flex: 1; width: 100%; min-height: 200px; cursor: {}; border-radius: 4px",
+                style=move || format!("flex: 1; width: 100%; min-height: 0; cursor: {}; border-radius: 4px",
                     if dragging.get() { "grabbing" } else { "crosshair" })
                 on:wheel=on_wheel
                 on:mousedown=on_mousedown
@@ -1848,7 +1932,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let ve = view_end.get();
                 let vd = view_data.get();
                 view! {
-                    <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; border-top: 1px solid var(--border, #1e293b)">
+                    <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; border-top: 1px solid var(--border, #1e293b); flex-shrink: 0">
                         // Capture info
                         {if let Some(ref i) = info {
                             view! {

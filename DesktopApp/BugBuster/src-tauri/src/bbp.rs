@@ -163,6 +163,7 @@ pub const EVT_ALERT: u8 = 0x82;
 pub const EVT_DIN: u8 = 0x83;
 pub const EVT_PCA_FAULT: u8 = 0x84;
 pub const EVT_LA_DONE: u8 = 0x85;
+pub const EVT_DISCONNECT: u8 = 0xFE;  // Synthetic: USB reader thread detected serial error
 
 // -----------------------------------------------------------------------------
 // Error Codes

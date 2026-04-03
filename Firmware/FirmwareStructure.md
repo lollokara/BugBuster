@@ -1,28 +1,53 @@
 ## PROJECT STRUCTURE
-**Total codebase: ~6,558 lines**
 ```
-/home/user/BugBuster/Firmware/esp32_ad74416h/
-├── platformio.ini                    # PlatformIO configuration
-├── CMakeLists.txt                    # ESP-IDF build configuration  
-├── partitions.csv                    # Flash partition table
-├── sdkconfig.defaults                # IDF SDK defaults
-├── sdkconfig.esp32s3                 # ESP32-S3 specific configuration
-├── data/
-│   └── index.html                    # Web UI (modern dark-themed dashboard)
-└── src/
-    ├── main.cpp                      # Entry point & init sequence
-    ├── config.h                      # Pin definitions & constants
-    ├── ad74416h.h/.cpp              # High-level AD74416H HAL (all features)
-    ├── ad74416h_regs.h              # Register map, enums, bit fields
-    ├── ad74416h_spi.h/.cpp          # Low-level SPI driver (CRC-8)
-    ├── tasks.h/.cpp                 # FreeRTOS task management
-    ├── webserver.h/.cpp             # HTTP API server (20+ endpoints)
-    ├── serial_io.h/.cpp             # USB CDC interface (TinyUSB)
-    ├── usb_cdc.h/.cpp               # USB composite device (CLI + UART bridge)
-    ├── cli.h/.cpp                   # Serial CLI menu interface
-    ├── wifi_manager.h/.cpp          # WiFi AP+STA management
-    ├── uart_bridge.h/.cpp           # UART↔USB bridge (for external devices)
-    └── idf_component.yml             # Component dependencies
+Firmware/
+├── esp32_ad74416h/                   # ESP32-S3 main controller firmware
+│   ├── platformio.ini                # PlatformIO configuration
+│   ├── CMakeLists.txt                # ESP-IDF build configuration
+│   ├── partitions.csv                # Flash partition table
+│   ├── sdkconfig.defaults            # IDF SDK defaults
+│   ├── sdkconfig.esp32s3             # ESP32-S3 specific configuration
+│   ├── README.md                     # ESP32 firmware documentation
+│   ├── data/
+│   │   └── index.html                # Web UI (modern dark-themed dashboard)
+│   └── src/
+│       ├── main.cpp                  # Entry point & init sequence
+│       ├── config.h                  # Pin definitions & constants
+│       ├── ad74416h.h/.cpp           # High-level AD74416H HAL (all features)
+│       ├── ad74416h_regs.h           # Register map, enums, bit fields
+│       ├── ad74416h_spi.h/.cpp       # Low-level SPI driver (CRC-8)
+│       ├── tasks.h/.cpp              # FreeRTOS task management & command processor
+│       ├── bbp.h/.cpp                # Binary protocol (COBS, SPSC ring buffer, streaming)
+│       ├── hat.h/.cpp                # HAT board detection & UART command forwarding
+│       ├── adgs2414d.h/.cpp          # ADGS2414D MUX driver (SPI, daisy-chain, break-before-make)
+│       ├── webserver.h/.cpp          # HTTP API server (20+ endpoints)
+│       ├── serial_io.h/.cpp          # USB CDC interface (TinyUSB)
+│       ├── usb_cdc.h/.cpp            # USB composite device (CLI + UART bridge)
+│       ├── cli.h/.cpp                # Serial CLI menu interface
+│       ├── wifi_manager.h/.cpp       # WiFi AP+STA management
+│       ├── uart_bridge.h/.cpp        # UART-to-USB bridge (for external devices)
+│       └── idf_component.yml         # Component dependencies
+├── RP2040/                           # HAT expansion board firmware (debugprobe fork)
+│   ├── CMakeLists.txt                # Pico SDK build
+│   ├── README.md                     # RP2040 firmware documentation
+│   ├── src/                          # BugBuster HAT extensions
+│   │   ├── bb_main.c                 # Command task, UART dispatcher, IRQ signaling
+│   │   ├── bb_config.h               # Pin definitions, protocol constants
+│   │   ├── bb_protocol.c/h           # HAT UART framing (CRC-8, frame timeout)
+│   │   ├── bb_power.c/h              # Connector power, current sense, fault detection
+│   │   ├── bb_hvpak.c/h              # HVPAK I2C voltage control (STUB)
+│   │   ├── bb_pins.c/h               # EXP_EXT pin routing
+│   │   ├── bb_swd.c/h                # SWD status queries (target detect STUB)
+│   │   ├── bb_la.c/h                 # Logic analyzer (PIO 1, DMA with IRQ completion)
+│   │   ├── bb_la.pio                 # Capture PIO programs (1/2/4 channel)
+│   │   ├── bb_la_trigger.pio         # Trigger PIO programs (edge/level)
+│   │   ├── bb_la_rle.c/h             # RLE compression for LA data
+│   │   └── bb_la_usb.c/h             # USB vendor bulk endpoint for LA streaming
+│   └── lib/debugprobe/               # Upstream debugprobe (unmodified)
+├── BugBusterProtocol.md              # BBP binary protocol specification
+├── FirmwareStructure.md              # This file
+├── HAT_Architecture.md               # HAT expansion board design document
+└── HAT_Protocol.md                   # HAT UART protocol specification
 ```
 ---
 ## 1. ESP32 VARIANT & HARDWARE

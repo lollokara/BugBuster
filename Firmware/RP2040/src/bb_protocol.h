@@ -22,6 +22,7 @@ typedef struct {
     uint8_t  buf[36];       // max frame: SYNC + LEN + CMD + 32 payload + CRC
     uint8_t  pos;
     uint8_t  expected_len;  // payload length from LEN field
+    uint32_t last_byte_ms;  // timestamp of last byte received (for timeout)
 } HatFrameParser;
 
 /**
@@ -44,6 +45,13 @@ HatFrame hat_parser_get_frame(const HatFrameParser *p);
  * @brief Build a response frame into buf. Returns total frame size.
  */
 size_t hat_build_frame(uint8_t *buf, uint8_t cmd, const uint8_t *payload, uint8_t payload_len);
+
+/**
+ * @brief Check if the parser has timed out (incomplete frame after 500ms).
+ *        Call periodically. Resets the parser state if timed out.
+ * @param now_ms  Current time in milliseconds (from to_ms_since_boot)
+ */
+void hat_parser_check_timeout(HatFrameParser *p, uint32_t now_ms);
 
 /**
  * @brief CRC-8 (polynomial 0x07) over data.

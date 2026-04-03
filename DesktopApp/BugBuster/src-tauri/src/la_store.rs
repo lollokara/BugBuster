@@ -35,6 +35,8 @@ pub struct LaViewData {
     /// Per-channel: list of (sample_index, value) for the visible range
     /// Includes one transition before view_start for initial state
     pub channel_transitions: Vec<Vec<(u64, u8)>>,
+    /// Density histogram: total transitions per bucket across all channels (for minimap)
+    pub density: Vec<u16>,
 }
 
 impl LaStore {
@@ -113,11 +115,27 @@ impl LaStore {
         self.sample_to_time(self.total_samples)
     }
 
+    /// Build a density histogram for the entire capture (for minimap heatmap)
+    pub fn density_histogram(&self, buckets: usize) -> Vec<u16> {
+        if buckets == 0 || self.total_samples == 0 { return vec![0; buckets.max(1)]; }
+        let mut hist = vec![0u16; buckets];
+        let bucket_size = (self.total_samples as f64) / buckets as f64;
+        for ch_trans in &self.transitions {
+            for &(sample, _) in ch_trans {
+                let b = ((sample as f64 / bucket_size) as usize).min(buckets - 1);
+                hist[b] = hist[b].saturating_add(1);
+            }
+        }
+        hist
+    }
+
     /// Extract viewport data for frontend rendering
     pub fn to_view_data(&self, start: u64, end: u64) -> LaViewData {
         let channel_transitions: Vec<Vec<(u64, u8)>> = (0..self.channels)
             .map(|ch| self.get_visible(ch, start, end))
             .collect();
+
+        let density = self.density_histogram(800);
 
         LaViewData {
             channels: self.channels,
@@ -127,6 +145,7 @@ impl LaStore {
             view_end: end,
             trigger_sample: self.trigger_sample,
             channel_transitions,
+            density,
         }
     }
 

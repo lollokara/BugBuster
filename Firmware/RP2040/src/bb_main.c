@@ -34,6 +34,49 @@
 
 static HatFrameParser s_parser;
 
+// Track previous LA state for detecting DONE transition
+static LaState s_prev_la_state = LA_STATE_IDLE;
+
+// -----------------------------------------------------------------------------
+// IRQ pin assertion (open-drain, active low, ~1ms pulse)
+// Signals the ESP32 that an asynchronous event occurred.
+// -----------------------------------------------------------------------------
+static void bb_irq_assert(void)
+{
+    // Drive low (assert) by switching to output — output register is pre-loaded with 0
+    gpio_set_dir(BB_IRQ_PIN, GPIO_OUT);
+}
+
+static void bb_irq_deassert(void)
+{
+    // Release to high-Z by switching back to input (pull-up restores high level)
+    gpio_set_dir(BB_IRQ_PIN, GPIO_IN);
+}
+
+// IRQ pulse state machine (called from poll loop, non-blocking)
+static uint32_t s_irq_assert_ms = 0;
+static bool     s_irq_active = false;
+
+static void bb_irq_pulse(void)
+{
+    if (!s_irq_active) {
+        bb_irq_assert();
+        s_irq_active = true;
+        s_irq_assert_ms = to_ms_since_boot(get_absolute_time());
+    }
+}
+
+static void bb_irq_poll(void)
+{
+    if (s_irq_active) {
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        if (now - s_irq_assert_ms >= 2) {  // 2ms pulse width
+            bb_irq_deassert();
+            s_irq_active = false;
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Send a response frame over UART
 // -----------------------------------------------------------------------------
@@ -320,7 +363,7 @@ static void dispatch_command(const HatFrame *frame)
 // The ESP32 recognizes this as an event and forwards to the host.
 // -----------------------------------------------------------------------------
 
-void bb_la_notify_done(void)
+static void bb_la_notify_done(void)
 {
     LaStatus st;
     bb_la_get_status(&st);
@@ -360,10 +403,12 @@ void bb_cmd_task(void *params)
     bb_swd_init();
     bb_la_init();
 
-    // Configure IRQ pin as open-drain input (shared line)
+    // Configure IRQ pin as open-drain output (shared line, active low).
+    // Default state: high-Z (input with pull-up). To assert: set output low.
     gpio_init(BB_IRQ_PIN);
     gpio_set_dir(BB_IRQ_PIN, GPIO_IN);
     gpio_pull_up(BB_IRQ_PIN);
+    gpio_put(BB_IRQ_PIN, 0);  // Pre-load output register low for when we switch to output
 
     // Initialize frame parser
     hat_parser_init(&s_parser);
@@ -384,8 +429,29 @@ void bb_cmd_task(void *params)
         uint32_t now = to_ms_since_boot(get_absolute_time());
         if (now - last_poll >= 1) {
             last_poll = now;
-            bb_power_update();  // Power monitoring (~1ms)
-            bb_la_poll();       // LA trigger check + DMA completion
+
+            // Power monitoring — detect new faults and assert IRQ
+            bb_power_update();
+            ConnectorStatus pa, pb;
+            bb_power_get_status(&pa, &pb);
+            if (pa.fault || pb.fault) {
+                bb_irq_pulse();  // Signal ESP32 asynchronously
+            }
+
+            // LA trigger check + DMA completion
+            bb_la_poll();
+
+            // Detect LA state transition to DONE and notify
+            LaStatus la_st;
+            bb_la_get_status(&la_st);
+            if (la_st.state == LA_STATE_DONE && s_prev_la_state != LA_STATE_DONE) {
+                bb_la_notify_done();  // Send unsolicited LA_STATUS frame
+                bb_irq_pulse();       // Also assert IRQ
+            }
+            s_prev_la_state = la_st.state;
+
+            hat_parser_check_timeout(&s_parser, now);  // Reset parser on truncated frames
+            bb_irq_poll();  // Manage IRQ pulse deassert
         }
 
         // Small sleep to avoid busy-loop when no UART data

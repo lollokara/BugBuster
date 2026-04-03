@@ -163,6 +163,19 @@ impl UsbTransport {
                         Err(e) => {
                             log::error!("Serial read error: {}", e);
                             reader_connected.store(false, Ordering::Relaxed);
+                            // Notify event listeners of disconnection so frontend
+                            // can update UI immediately instead of waiting for poll timeout
+                            if let Ok(guard) = reader_event_tx.lock() {
+                                if let Some(tx) = guard.as_ref() {
+                                    let disconnect_msg = Message {
+                                        msg_type: bbp::MSG_EVT,
+                                        seq: 0,
+                                        cmd_id: bbp::EVT_DISCONNECT,
+                                        payload: vec![],
+                                    };
+                                    let _ = tx.send(disconnect_msg);
+                                }
+                            }
                             break;
                         }
                     }

@@ -516,6 +516,8 @@ pub struct LaViewData {
     pub view_end: u64,
     pub trigger_sample: Option<u64>,
     pub channel_transitions: Vec<Vec<(u64, u8)>>,
+    #[serde(default)]
+    pub density: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

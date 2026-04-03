@@ -1859,16 +1859,16 @@ static int handleSetSpiClock(uint16_t seq, uint8_t cmdId,
     uint32_t hz = get_u32(payload, &rpos);
 
     // Pause ADC task during SPI device reconfiguration
-    extern volatile bool g_spi_bus_request;
-    extern volatile bool g_spi_bus_granted;
-    g_spi_bus_granted = false;
-    g_spi_bus_request = true;
-    for (int i = 0; i < 200 && !g_spi_bus_granted; i++) delay_ms(1);
+    extern SemaphoreHandle_t g_spi_bus_mutex;
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTake(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
 
     bool ok = s_spi->setClockSpeed(hz);
 
-    g_spi_bus_request = false;
-    g_spi_bus_granted = false;
+    xSemaphoreGive(g_spi_bus_mutex);
 
     if (!ok) { sendError(seq, cmdId, BBP_ERR_SPI_FAIL); return -1; }
 
@@ -2559,10 +2559,9 @@ static void processAdcStream(void)
 {
     if (s_adcStreamMask == 0) return;
 
-    // Count available samples (acquire barrier ensures we see data written before head)
-    uint16_t head = s_adcBuf.head;
-    __sync_synchronize();
-    uint16_t tail = s_adcBuf.tail;
+    // Acquire head to see producer's latest progress; read our own tail relaxed
+    uint16_t head = __atomic_load_n(&s_adcBuf.head, __ATOMIC_ACQUIRE);
+    uint16_t tail = __atomic_load_n(&s_adcBuf.tail, __ATOMIC_RELAXED);
     uint16_t available = (head - tail) & (BBP_ADC_STREAM_BUF_SIZE - 1);
     if (available == 0) return;
 
@@ -2572,7 +2571,8 @@ static void processAdcStream(void)
         s_adcBatch[i] = s_adcBuf.samples[tail & (BBP_ADC_STREAM_BUF_SIZE - 1)];
         tail++;
     }
-    s_adcBuf.tail = tail;
+    // Release tail so producer sees our progress
+    __atomic_store_n(&s_adcBuf.tail, tail, __ATOMIC_RELEASE);
 
     // Count active channels
     uint8_t mask = s_adcStreamMask;
@@ -2787,11 +2787,12 @@ void bbpProcess(void)
 void bbpPushAdcSample(const uint32_t raw[4], uint32_t timestamp_us)
 {
     // Lock-free SPSC: only the producer (ADC task) writes head
-    uint16_t head = s_adcBuf.head;
+    uint16_t head = __atomic_load_n(&s_adcBuf.head, __ATOMIC_RELAXED);
     uint16_t next = (head + 1) & (BBP_ADC_STREAM_BUF_SIZE - 1);
 
-    // Check if buffer is full (would overwrite tail)
-    if (next == s_adcBuf.tail) {
+    // Check if buffer is full — acquire tail to see consumer's latest progress
+    uint16_t tail = __atomic_load_n(&s_adcBuf.tail, __ATOMIC_ACQUIRE);
+    if (next == tail) {
         return;  // Drop sample (backpressure)
     }
 
@@ -2802,9 +2803,8 @@ void bbpPushAdcSample(const uint32_t raw[4], uint32_t timestamp_us)
     s.raw[3] = raw[3];
     s.timestamp_us = timestamp_us;
 
-    // Memory barrier to ensure sample data is written before head advances
-    __sync_synchronize();
-    s_adcBuf.head = next;
+    // Release barrier: ensure sample data is visible before head advances
+    __atomic_store_n(&s_adcBuf.head, next, __ATOMIC_RELEASE);
 }
 
 uint8_t bbpAdcStreamMask(void)

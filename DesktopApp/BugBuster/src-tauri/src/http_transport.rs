@@ -464,14 +464,14 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload"));
                 }
                 let mut r = bbp::PayloadReader::new(payload);
-                let ch = r.get_u8().unwrap();
-                let thresh = r.get_u8().unwrap();
-                let thresh_mode = r.get_bool().unwrap();
-                let debounce = r.get_u8().unwrap();
-                let sink = r.get_u8().unwrap();
-                let sink_range = r.get_bool().unwrap();
-                let oc_det = r.get_bool().unwrap();
-                let sc_det = r.get_bool().unwrap();
+                let ch = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let thresh = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let thresh_mode = r.get_bool().ok_or_else(|| anyhow!("Payload too short"))?;
+                let debounce = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let sink = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let sink_range = r.get_bool().ok_or_else(|| anyhow!("Payload too short"))?;
+                let oc_det = r.get_bool().ok_or_else(|| anyhow!("Payload too short"))?;
+                let sc_det = r.get_bool().ok_or_else(|| anyhow!("Payload too short"))?;
                 let body = serde_json::json!({
                     "thresh": thresh,
                     "threshMode": thresh_mode,
@@ -490,11 +490,11 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload"));
                 }
                 let mut r = bbp::PayloadReader::new(payload);
-                let ch = r.get_u8().unwrap();
-                let mode = r.get_u8().unwrap();
-                let src_sel_gpio = r.get_bool().unwrap();
-                let t1 = r.get_u8().unwrap();
-                let t2 = r.get_u8().unwrap();
+                let ch = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let mode = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let src_sel_gpio = r.get_bool().ok_or_else(|| anyhow!("Payload too short"))?;
+                let t1 = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let t2 = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
                 let body = serde_json::json!({
                     "mode": mode,
                     "srcSelGpio": src_sel_gpio,
@@ -519,8 +519,8 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload"));
                 }
                 let mut r = bbp::PayloadReader::new(payload);
-                let ch = r.get_u8().unwrap();
-                let mask = r.get_u16().unwrap();
+                let ch = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let mask = r.get_u16().ok_or_else(|| anyhow!("Payload too short"))?;
                 let body = serde_json::json!({"mask": mask});
                 self.post_json(&format!("/api/faults/mask/{}", ch), &body).await?;
                 Ok(payload.to_vec())
@@ -536,15 +536,15 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload"));
                 }
                 let mut r = bbp::PayloadReader::new(payload);
-                let bridge_id = r.get_u8().unwrap();
-                let uart_num = r.get_u8().unwrap();
-                let tx_pin = r.get_u8().unwrap();
-                let rx_pin = r.get_u8().unwrap();
-                let baudrate = r.get_u32().unwrap();
-                let data_bits = r.get_u8().unwrap();
-                let parity = r.get_u8().unwrap();
-                let stop_bits = r.get_u8().unwrap();
-                let enabled = r.get_bool().unwrap();
+                let bridge_id = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let uart_num = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let tx_pin = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let rx_pin = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let baudrate = r.get_u32().ok_or_else(|| anyhow!("Payload too short"))?;
+                let data_bits = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let parity = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let stop_bits = r.get_u8().ok_or_else(|| anyhow!("Payload too short"))?;
+                let enabled = r.get_bool().ok_or_else(|| anyhow!("Payload too short"))?;
                 let body = serde_json::json!({
                     "uartNum": uart_num,
                     "txPin": tx_pin,
