@@ -28,11 +28,6 @@ static bool s_mux_initialized = false;
 // Fault flag: set when write-verify fails after ADGS_MAX_RETRIES
 static bool s_mux_faulted = false;
 
-// Readback capability: false if SDO is not connected (breadboard typical)
-// Detected on first non-zero write: if readback returns 0 for a non-zero write,
-// SDO is assumed disconnected and verification is skipped with a warning.
-static bool s_readback_available = true;
-static bool s_readback_checked = false;
 
 // -----------------------------------------------------------------------------
 // Low-level SPI helpers
@@ -57,15 +52,17 @@ static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
         return;
     }
 
-    gpio_set_level(PIN_MUX_CS, 0);
-    delay_us(1);
+    // CS is managed by the SPI hardware (spics_io_num = PIN_MUX_CS).
+    // The hardware asserts CS only AFTER reconfiguring SCLK polarity for this device
+    // (Mode 0, CPOL=0). This prevents the spurious falling SCLK edge that occurs when
+    // CS is asserted manually while the bus is still in Mode 2 (CPOL=1) from a previous
+    // AD74416H transaction — which would give the ADGS 17 SCLK cycles instead of 16,
+    // triggering SCLK_ERR and silently blocking register writes.
     spi_transaction_t t = {};
     t.length = len * 8;
     t.tx_buffer = tx;
     t.rx_buffer = rx;
     spi_device_polling_transmit(s_spi_dev, &t);
-    delay_us(1);
-    gpio_set_level(PIN_MUX_CS, 1);
 
     // Release bus
     xSemaphoreGive(g_spi_bus_mutex);
@@ -159,13 +156,11 @@ static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
 #else
     adgs_address_mode_write(ADGS_REG_SW_DATA, states[0]);
     delay_ms(1);  // ensure register write is committed
+
     uint8_t rb = adgs_address_mode_read(ADGS_REG_SW_DATA);
     ESP_LOGI(TAG, "Write-verify: wrote=0x%02X readback=0x%02X %s",
              states[0], rb, (rb == states[0]) ? "OK" : "MISMATCH");
-    if (rb != states[0]) {
-        return false;
-    }
-    return true;
+    return (rb == states[0]);
 #endif
 }
 
@@ -270,21 +265,21 @@ void adgs_init(void)
         assert(g_spi_bus_mutex != NULL);
     }
 
-    // Configure CS pin as output, default HIGH (inactive)
-    gpio_reset_pin(PIN_MUX_CS);
-    gpio_set_direction(PIN_MUX_CS, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_MUX_CS, 1);
-
     // Enable level shifters
     gpio_reset_pin(PIN_LSHIFT_OE);
     gpio_set_direction(PIN_LSHIFT_OE, GPIO_MODE_OUTPUT);
     gpio_set_level(PIN_LSHIFT_OE, 1);  // OE active high
 
-    // Add our own SPI device on the bus (manual CS, no auto-CS pin)
+    // Add SPI device with hardware CS (spics_io_num = PIN_MUX_CS).
+    // Hardware CS ensures the bus polarity is reconfigured to Mode 0 (SCLK idle LOW)
+    // BEFORE CS is asserted — preventing a spurious falling SCLK edge that would occur
+    // if CS were asserted manually while the bus was still in Mode 2 (SCLK idle HIGH)
+    // from the AD74416H. Without this fix the ADGS counts 17 SCLK cycles per frame,
+    // triggering SCLK_ERR_FLAG and silently discarding every register write.
     spi_device_interface_config_t devcfg = {};
     devcfg.clock_speed_hz = 1000000;
     devcfg.mode = 0;
-    devcfg.spics_io_num = -1;
+    devcfg.spics_io_num = PIN_MUX_CS;  // Hardware CS — not manual GPIO
     devcfg.queue_size = 1;
 
     esp_err_t ret = spi_bus_add_device(SPI2_HOST, &devcfg, &s_spi_dev);
@@ -292,10 +287,12 @@ void adgs_init(void)
         ESP_LOGE(TAG, "Failed to add SPI device: %s", esp_err_to_name(ret));
         return;
     }
-    ESP_LOGI(TAG, "SPI device added, manual CS on GPIO%d", PIN_MUX_CS);
+    ESP_LOGI(TAG, "SPI device added, hardware CS on GPIO%d", PIN_MUX_CS);
 
     // Reset all switches to open
     memset(s_mux_state, 0, sizeof(s_mux_state));
+
+    s_mux_faulted = false;
 
 #if ADGS_NUM_DEVICES > 1
     // Enter daisy-chain mode for multi-device setup

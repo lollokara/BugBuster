@@ -52,6 +52,8 @@ pub struct LaState {
     pub store: Arc<Mutex<Option<LaStore>>>,
     /// Flag to signal the background USB streaming task to stop
     pub stream_running: Arc<AtomicBool>,
+    /// Join handle for the background streaming task, so we can wait for it to finish
+    pub stream_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl LaState {
@@ -61,6 +63,7 @@ impl LaState {
             last_capture: Mutex::new(None),
             store: Arc::new(Mutex::new(None)),
             stream_running: Arc::new(AtomicBool::new(false)),
+            stream_task: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -618,9 +621,18 @@ pub async fn la_stream_usb(
 ) -> CmdResult<()> {
     log::info!("[la_stream_usb] Starting gapless CDC stream: ch={} rate={} depth={}", channels, sample_rate_hz, depth);
 
-    // Stop any previous streaming
+    // Stop any previous streaming and wait for the background task to fully exit.
+    // The task holds the CDC serial port open; we must wait for it to release the port
+    // before we can open it again. A 50ms sleep is not enough — port.read() has a 2s
+    // timeout, so the old task can stay alive (and send a stray 0x00 stop command) for
+    // up to 2s after we set stream_running=false.
     la.stream_running.store(false, Ordering::SeqCst);
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    {
+        let old_task = la.stream_task.lock().map_err(map_err)?.take();
+        if let Some(handle) = old_task {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(5000), handle).await;
+        }
+    }
 
     // Disconnect USB vendor interface if held (it blocks the CDC serial port on macOS)
     {
@@ -660,11 +672,12 @@ pub async fn la_stream_usb(
     la.stream_running.store(true, Ordering::SeqCst);
     let store_mutex = la.store.clone();
     let running = la.stream_running.clone();
+    let task_slot = la.stream_task.clone();
 
-    tokio::task::spawn_blocking(move || {
+    let handle = tokio::task::spawn_blocking(move || {
         // Open CDC serial port
         let mut port = match serialport::new(&cdc_port, 115200)
-            .timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_millis(200))
             .open() {
             Ok(p) => p,
             Err(e) => {
@@ -752,6 +765,12 @@ pub async fn la_stream_usb(
             total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0);
     });
 
+    // Store the task handle so the next call to la_stream_usb can wait for this task to finish
+    // before opening the CDC port again (avoids the "port already open" / stray-stop-command race).
+    if let Ok(mut slot) = task_slot.lock() {
+        *slot = Some(handle);
+    }
+
     Ok(())
 }
 
@@ -774,8 +793,13 @@ pub async fn la_stream_usb_stop(
         }
     }
 
-    // Small delay for background task to finish
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for the background task to fully exit (it holds the CDC port open).
+    {
+        let old_task = la.stream_task.lock().map_err(map_err)?.take();
+        if let Some(handle) = old_task {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(5000), handle).await;
+        }
+    }
 
     // Return current store info
     let store_guard = la.store.lock().map_err(map_err)?;
