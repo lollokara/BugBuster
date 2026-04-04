@@ -21,6 +21,14 @@
 //  Byte 4 (D7..D0):   CRC-8
 //
 // CRC-8: Polynomial 0x07, init 0x00, computed over D39..D8 (4 bytes)
+//
+// Locking strategy:
+//   A single global recursive mutex (g_spi_bus_mutex, defined in adgs2414d.cpp)
+//   serializes all SPI bus access.  AD74416H_SPI methods that require atomicity
+//   across multiple frames (readRegister, updateRegister) hold the mutex for the
+//   entire multi-frame sequence.  There is no per-device mutex; the bus mutex
+//   already prevents interleaving because both AD74416H and ADGS2414D share the
+//   same physical MOSI/MISO/SCLK lines.
 // =============================================================================
 
 #define SPI_FRAME_BYTES         5
@@ -43,8 +51,25 @@ public:
                  uint8_t dev_addr    = AD74416H_DEV_ADDR);
 
     void begin();
-    void writeRegister(uint8_t addr, uint16_t data);
+
+    /**
+     * @brief Write a 16-bit value to a register.
+     * @return true on success, false if the bus mutex timed out.
+     */
+    bool writeRegister(uint8_t addr, uint16_t data);
+
+    /**
+     * @brief Read a 16-bit register (two-phase: READ_SELECT + NOP).
+     *
+     * On failure (bus timeout or CRC error) *data is set to 0xFFFF.
+     * @return true on success, false on failure.
+     */
     bool readRegister(uint8_t addr, uint16_t* data);
+
+    /**
+     * @brief Atomic read-modify-write.
+     * @return true on success, false on read failure or bus timeout.
+     */
     bool updateRegister(uint8_t addr, uint16_t mask, uint16_t val);
 
     spi_device_handle_t getDeviceHandle() const { return _spi_dev; }
@@ -68,9 +93,18 @@ private:
     uint8_t    _dev_addr;
 
     spi_device_handle_t _spi_dev;
-    SemaphoreHandle_t   _mutex;
 
     uint8_t computeCRC8(const uint8_t* frame) const;
+
+    /**
+     * @brief Transmit one 5-byte SPI frame.
+     *
+     * Caller MUST already hold g_spi_bus_mutex.  This is a raw helper;
+     * public methods handle locking.
+     *
+     * @param tx_frame  5-byte frame to send
+     * @param rx_frame  5-byte buffer for received data (may be NULL for write-only)
+     */
     void transferFrame(const uint8_t* tx_frame, uint8_t* rx_frame);
 
     inline void assertSync()   { gpio_set_level(_pin_sync, 0); }

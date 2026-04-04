@@ -123,28 +123,31 @@ void AD74416H::softwareReset()
 // ---------------------------------------------------------------------------
 // setChannelFunction() - Switch channel function with required sequencing
 // ---------------------------------------------------------------------------
-void AD74416H::setChannelFunction(uint8_t ch, ChannelFunction func)
+bool AD74416H::setChannelFunction(uint8_t ch, ChannelFunction func)
 {
     ch = clampCh(ch);
     uint8_t reg = AD74416H_REG_CH_FUNC_SETUP(ch);
 
     // Step 1: Force channel to HIGH_IMP (safe intermediate state)
-    _spi.updateRegister(reg,
+    if (!_spi.updateRegister(reg,
                         CH_FUNC_SETUP_CH_FUNC_MASK,
                         (uint16_t)((CH_FUNC_HIGH_IMP << CH_FUNC_SETUP_CH_FUNC_SHIFT)
-                                    & CH_FUNC_SETUP_CH_FUNC_MASK));
+                                    & CH_FUNC_SETUP_CH_FUNC_MASK)))
+        return false;
 
-    // Step 2: Wait 300 us for channel to settle in high-impedance state
+    // Step 2: Zero the DAC code (safe starting point for output channels)
+    // Per datasheet: "Configure DAC code to the required value" BEFORE waiting.
+    if (!setDacCode(ch, 0)) return false;
+
+    // Step 3: Wait 300 us for channel to settle
     delay_us(CHANNEL_SWITCH_US);
 
-    // Step 3: Zero the DAC code (safe starting point for output channels)
-    setDacCode(ch, 0);
-
     // Step 4: Set the desired function
-    _spi.updateRegister(reg,
+    if (!_spi.updateRegister(reg,
                         CH_FUNC_SETUP_CH_FUNC_MASK,
                         (uint16_t)(((uint16_t)func << CH_FUNC_SETUP_CH_FUNC_SHIFT)
-                                    & CH_FUNC_SETUP_CH_FUNC_MASK));
+                                    & CH_FUNC_SETUP_CH_FUNC_MASK)))
+        return false;
 
     // Step 5: Wait for channel to settle in new function
     if (func == CH_FUNC_IOUT_HART) {
@@ -152,6 +155,7 @@ void AD74416H::setChannelFunction(uint8_t ch, ChannelFunction func)
     } else {
         delay_us(CHANNEL_SWITCH_US);
     }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,44 +175,43 @@ ChannelFunction AD74416H::getChannelFunction(uint8_t ch)
 // DAC Functions
 // ---------------------------------------------------------------------------
 
-void AD74416H::setDacCode(uint8_t ch, uint16_t code)
+bool AD74416H::setDacCode(uint8_t ch, uint16_t code)
 {
     ch = clampCh(ch);
-    _spi.writeRegister(AD74416H_REG_DAC_CODE(ch), code);
+    if (!_spi.writeRegister(AD74416H_REG_DAC_CODE(ch), code)) return false;
     // CMD_KEY 0x1C7D latches the staged DAC_CODE to the actual DAC output.
     // Without this write the output never changes from its reset value.
-    _spi.writeRegister(REG_CMD_KEY, CMD_KEY_DAC_UPDATE);
+    return _spi.writeRegister(REG_CMD_KEY, CMD_KEY_DAC_UPDATE);
 }
 
-void AD74416H::setDacVoltage(uint8_t ch, float voltage, bool bipolar)
+bool AD74416H::setDacVoltage(uint8_t ch, float voltage, bool bipolar)
 {
-    uint16_t code;
+    float normalised;
     if (bipolar) {
         // Bipolar: -12 V to +12 V
-        // code = ((voltage + 12.0) / 24.0) * 65535
-        float normalised = (voltage + VOUT_BIPOLAR_OFFSET_V) / VOUT_BIPOLAR_SPAN_V;
-        if (normalised < 0.0f) normalised = 0.0f;
-        if (normalised > 1.0f) normalised = 1.0f;
-        code = (uint16_t)(normalised * (float)DAC_FULL_SCALE);
+        // Per datasheet: V = (code / 65536) * 24 - 12  →  code = ((V+12)/24) * 65536
+        normalised = (voltage + VOUT_BIPOLAR_OFFSET_V) / VOUT_BIPOLAR_SPAN_V;
     } else {
         // Unipolar: 0 V to 12 V
-        // code = (voltage / 12.0) * 65535
-        float normalised = voltage / VOUT_UNIPOLAR_SPAN_V;
-        if (normalised < 0.0f) normalised = 0.0f;
-        if (normalised > 1.0f) normalised = 1.0f;
-        code = (uint16_t)(normalised * (float)DAC_FULL_SCALE);
+        // Per datasheet: V = (code / 65536) * 12  →  code = (V/12) * 65536
+        normalised = voltage / VOUT_UNIPOLAR_SPAN_V;
     }
-    setDacCode(ch, code);
+    if (normalised < 0.0f) normalised = 0.0f;
+    if (normalised > 1.0f) normalised = 1.0f;
+    uint32_t raw = (uint32_t)(normalised * (float)DAC_FULL_SCALE);
+    if (raw > 0xFFFF) raw = 0xFFFF;
+    return setDacCode(ch, (uint16_t)raw);
 }
 
-void AD74416H::setDacCurrent(uint8_t ch, float current_mA)
+bool AD74416H::setDacCurrent(uint8_t ch, float current_mA)
 {
-    // code = (current_mA / 25.0) * 65535
+    // Per datasheet: I = (code / 65536) * 25mA  →  code = (I/25) * 65536
     float normalised = current_mA / IOUT_MAX_MA;
     if (normalised < 0.0f) normalised = 0.0f;
     if (normalised > 1.0f) normalised = 1.0f;
-    uint16_t code = (uint16_t)(normalised * (float)DAC_FULL_SCALE);
-    setDacCode(ch, code);
+    uint32_t raw = (uint32_t)(normalised * (float)DAC_FULL_SCALE);
+    if (raw > 0xFFFF) raw = 0xFFFF;
+    return setDacCode(ch, (uint16_t)raw);
 }
 
 uint16_t AD74416H::getDacActive(uint8_t ch)
@@ -315,19 +318,38 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
 // ---------------------------------------------------------------------------
 // readAdcResult() - Always read UPR first (latches lower 16 bits)
 // ---------------------------------------------------------------------------
-uint32_t AD74416H::readAdcResult(uint8_t ch)
+bool AD74416H::readAdcResult(uint8_t ch, uint32_t* result)
 {
     ch = clampCh(ch);
+
+    // Hold the bus mutex across both reads so UPR latch + LWR read are atomic.
+    extern SemaphoreHandle_t g_spi_bus_mutex;
+    static constexpr TickType_t BUS_TIMEOUT = pdMS_TO_TICKS(500);
+
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        if (result) *result = 0;
+        return false;
+    }
 
     // Reading ADC_RESULT_UPR latches ADC_RESULT for the same channel
     uint16_t upr = 0;
     uint16_t lwr = 0;
-    _spi.readRegister(AD74416H_REG_ADC_RESULT_UPR(ch), &upr);
-    _spi.readRegister(AD74416H_REG_ADC_RESULT(ch),     &lwr);
+    bool ok1 = _spi.readRegister(AD74416H_REG_ADC_RESULT_UPR(ch), &upr);
+    bool ok2 = _spi.readRegister(AD74416H_REG_ADC_RESULT(ch),     &lwr);
+
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
+
+    if (!ok1 || !ok2) {
+        if (result) *result = 0;
+        return false;
+    }
 
     // bits [23:16] are in upr[7:0], bits [15:0] are in lwr
-    uint32_t result = (uint32_t)((upr & ADC_RESULT_UPR_CONV_RES_MASK) << 16) | (uint32_t)lwr;
-    return result;
+    if (result) {
+        *result = (uint32_t)((upr & ADC_RESULT_UPR_CONV_RES_MASK) << 16) | (uint32_t)lwr;
+    }
+    return true;
 }
 
 uint16_t AD74416H::readAdcDiagResult(uint8_t diag)
@@ -414,17 +436,37 @@ uint8_t AD74416H::readDinCompOut()
     return (uint8_t)(val & DIN_COMP_OUT_MASK);
 }
 
-uint32_t AD74416H::readDinCounter(uint8_t ch)
+bool AD74416H::readDinCounter(uint8_t ch, uint32_t* count)
 {
     ch = clampCh(ch);
 
-    // Read upper word first to latch lower word
+    // Hold the bus mutex across both reads so UPR latch + LWR read are atomic.
+    extern SemaphoreHandle_t g_spi_bus_mutex;
+    static constexpr TickType_t BUS_TIMEOUT = pdMS_TO_TICKS(500);
+
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        if (count) *count = 0;
+        return false;
+    }
+
+    // Read upper word first to latch lower word (per datasheet)
     uint16_t upr = 0;
     uint16_t lwr = 0;
-    _spi.readRegister(AD74416H_REG_DIN_COUNTER_UPR(ch), &upr);
-    _spi.readRegister(AD74416H_REG_DIN_COUNTER(ch),     &lwr);
+    bool ok1 = _spi.readRegister(AD74416H_REG_DIN_COUNTER_UPR(ch), &upr);
+    bool ok2 = _spi.readRegister(AD74416H_REG_DIN_COUNTER(ch),     &lwr);
 
-    return ((uint32_t)upr << 16) | (uint32_t)lwr;
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
+
+    if (!ok1 || !ok2) {
+        if (count) *count = 0;
+        return false;
+    }
+
+    if (count) {
+        *count = ((uint32_t)upr << 16) | (uint32_t)lwr;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -485,26 +527,29 @@ void AD74416H::setAvddSelect(uint8_t ch, uint8_t sel)
 // Alert / Fault Management
 // ---------------------------------------------------------------------------
 
-uint16_t AD74416H::readAlertStatus()
+bool AD74416H::readAlertStatus(uint16_t* val)
 {
-    uint16_t val = 0;
-    _spi.readRegister(REG_ALERT_STATUS, &val);
-    return val;
+    uint16_t tmp = 0;
+    bool ok = _spi.readRegister(REG_ALERT_STATUS, &tmp);
+    if (val) *val = tmp;
+    return ok;
 }
 
-uint16_t AD74416H::readChannelAlertStatus(uint8_t ch)
+bool AD74416H::readChannelAlertStatus(uint8_t ch, uint16_t* val)
 {
     ch = clampCh(ch);
-    uint16_t val = 0;
-    _spi.readRegister(AD74416H_REG_CHANNEL_ALERT_STATUS(ch), &val);
-    return val;
+    uint16_t tmp = 0;
+    bool ok = _spi.readRegister(AD74416H_REG_CHANNEL_ALERT_STATUS(ch), &tmp);
+    if (val) *val = tmp;
+    return ok;
 }
 
-uint16_t AD74416H::readSupplyAlertStatus()
+bool AD74416H::readSupplyAlertStatus(uint16_t* val)
 {
-    uint16_t val = 0;
-    _spi.readRegister(REG_SUPPLY_ALERT_STATUS, &val);
-    return val;
+    uint16_t tmp = 0;
+    bool ok = _spi.readRegister(REG_SUPPLY_ALERT_STATUS, &tmp);
+    if (val) *val = tmp;
+    return ok;
 }
 
 void AD74416H::clearAllAlerts()
@@ -710,9 +755,10 @@ uint16_t AD74416H::readGpioConfig(uint8_t gpio)
 // Live Status
 // ---------------------------------------------------------------------------
 
-uint16_t AD74416H::readLiveStatus()
+bool AD74416H::readLiveStatus(uint16_t* val)
 {
-    uint16_t val = 0;
-    _spi.readRegister(REG_LIVE_STATUS, &val);
-    return val;
+    uint16_t tmp = 0;
+    bool ok = _spi.readRegister(REG_LIVE_STATUS, &tmp);
+    if (val) *val = tmp;
+    return ok;
 }

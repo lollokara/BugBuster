@@ -75,7 +75,7 @@ public:
      * @param ch    Channel index 0..3
      * @param func  Desired ChannelFunction
      */
-    void setChannelFunction(uint8_t ch, ChannelFunction func);
+    bool setChannelFunction(uint8_t ch, ChannelFunction func);
 
     /**
      * @brief Read back the current channel function from CH_FUNC_SETUP.
@@ -90,12 +90,13 @@ public:
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Write a raw 16-bit code to DAC_CODE.
+     * @brief Write a raw 16-bit code to DAC_CODE and latch via CMD_KEY.
      *
      * @param ch    Channel 0..3
      * @param code  16-bit DAC code
+     * @return true if both the DAC_CODE and CMD_KEY writes succeeded.
      */
-    void setDacCode(uint8_t ch, uint16_t code);
+    bool setDacCode(uint8_t ch, uint16_t code);
 
     /**
      * @brief Set the DAC output voltage.
@@ -107,8 +108,9 @@ public:
      * @param ch      Channel 0..3
      * @param voltage Target voltage in Volts
      * @param bipolar True for -12 V..+12 V range; false for 0..+12 V
+     * @return true on success
      */
-    void setDacVoltage(uint8_t ch, float voltage, bool bipolar = false);
+    bool setDacVoltage(uint8_t ch, float voltage, bool bipolar = false);
 
     /**
      * @brief Set the DAC output current (4..20 mA or 0..25 mA range).
@@ -117,8 +119,9 @@ public:
      *
      * @param ch         Channel 0..3
      * @param current_mA Target current in milliamps
+     * @return true on success
      */
-    void setDacCurrent(uint8_t ch, float current_mA);
+    bool setDacCurrent(uint8_t ch, float current_mA);
 
     /**
      * @brief Read the DAC_ACTIVE register (the value currently being output).
@@ -175,7 +178,7 @@ public:
      * @param ch  Channel 0..3
      * @return uint32_t  24-bit ADC code (bits [23:0])
      */
-    uint32_t readAdcResult(uint8_t ch);
+    bool readAdcResult(uint8_t ch, uint32_t* result);
 
     /**
      * @brief Read a diagnostic ADC result register.
@@ -270,7 +273,7 @@ public:
      * @param ch  Channel 0..3
      * @return uint32_t  Counter value
      */
-    uint32_t readDinCounter(uint8_t ch);
+    bool readDinCounter(uint8_t ch, uint32_t* count);
 
     // -------------------------------------------------------------------------
     // Digital Output
@@ -334,20 +337,20 @@ public:
      * @brief Read the global ALERT_STATUS register.
      * @return uint16_t
      */
-    uint16_t readAlertStatus();
+    bool readAlertStatus(uint16_t* val);
 
     /**
      * @brief Read per-channel alert status.
      * @param ch  Channel 0..3
-     * @return uint16_t
+     * @return true on success
      */
-    uint16_t readChannelAlertStatus(uint8_t ch);
+    bool readChannelAlertStatus(uint8_t ch, uint16_t* val);
 
     /**
      * @brief Read the supply alert status register.
-     * @return uint16_t
+     * @return true on success
      */
-    uint16_t readSupplyAlertStatus();
+    bool readSupplyAlertStatus(uint16_t* val);
 
     /**
      * @brief Clear all alert registers in the correct order.
@@ -440,7 +443,7 @@ public:
      * @brief Read the LIVE_STATUS register.
      * @return uint16_t
      */
-    uint16_t readLiveStatus();
+    bool readLiveStatus(uint16_t* val);
 
     // -------------------------------------------------------------------------
     // GPIO (6 pins: A=0, B=1, C=2, D=3, E=4, F=5)

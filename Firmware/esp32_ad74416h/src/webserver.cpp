@@ -28,6 +28,7 @@
 #include "adgs2414d.h"
 #include "dio.h"
 #include "selftest.h"
+#include "bbp.h"
 #include "wifi_manager.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
@@ -1908,10 +1909,7 @@ static esp_err_t handle_post_wavegen_start(httpd_req_t *req)
 // POST /api/wavegen/stop
 static esp_err_t handle_post_wavegen_stop(httpd_req_t *req)
 {
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.wavegen.active = false;
-        xSemaphoreGive(g_stateMutex);
-    }
+    bbpStopWavegen();  // Full stop: sets active=false AND resets channel to HIGH_IMP
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "stopped");

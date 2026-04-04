@@ -157,7 +157,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 if (func[ch] != CH_FUNC_HIGH_IMP &&
                     func[ch] != CH_FUNC_DIN_LOGIC &&
                     func[ch] != CH_FUNC_DIN_LOOP) {
-                    raw[ch] = s_device->readAdcResult(ch);
+                    s_device->readAdcResult(ch, &raw[ch]);
                     eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch], excUa[ch]);
                 } else {
                     raw[ch] = 0;
@@ -200,7 +200,9 @@ static void taskAdcPoll(void* /*pvParameters*/)
                             rcmd.adcCfg.mux     = mux[ch];
                             rcmd.adcCfg.range   = wider;
                             rcmd.adcCfg.rate    = rate[ch];
-                            xQueueSend(g_cmdQueue, &rcmd, 0);
+                            if (xQueueSend(g_cmdQueue, &rcmd, 0) != pdTRUE) {
+                                ESP_LOGW("adcPoll", "Auto-range cmd dropped (queue full) ch%u", ch);
+                            }
                         }
                     }
                 }
@@ -281,18 +283,21 @@ static void taskFaultMonitor(void* /*pvParameters*/)
     for (;;) {
         if (s_device) {
             // --- Read global and per-channel alert status ---
-            uint16_t alertStatus        = s_device->readAlertStatus();
-            uint16_t supplyAlertStatus  = s_device->readSupplyAlertStatus();
-            uint16_t chanAlert[AD74416H_NUM_CHANNELS];
+            uint16_t alertStatus = 0;
+            uint16_t supplyAlertStatus = 0;
+            s_device->readAlertStatus(&alertStatus);
+            s_device->readSupplyAlertStatus(&supplyAlertStatus);
+            uint16_t chanAlert[AD74416H_NUM_CHANNELS] = {0};
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                chanAlert[ch] = s_device->readChannelAlertStatus(ch);
+                s_device->readChannelAlertStatus(ch, &chanAlert[ch]);
             }
 
             // --- Read DIN comparator outputs ---
             uint8_t dinComp = s_device->readDinCompOut();
 
             // --- Read LIVE_STATUS ---
-            uint16_t liveStatus = s_device->readLiveStatus();
+            uint16_t liveStatus = 0;
+            s_device->readLiveStatus(&liveStatus);
 
             // --- Read DIN counters for channels in DIN mode ---
             uint32_t dinCounter[AD74416H_NUM_CHANNELS] = {0, 0, 0, 0};
@@ -307,7 +312,7 @@ static void taskFaultMonitor(void* /*pvParameters*/)
 
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                 if (func[ch] == CH_FUNC_DIN_LOGIC || func[ch] == CH_FUNC_DIN_LOOP) {
-                    dinCounter[ch] = s_device->readDinCounter(ch);
+                    s_device->readDinCounter(ch, &dinCounter[ch]);
                 }
             }
 
@@ -353,15 +358,20 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 dieTemp = diagVal[0]; // slot 0 is temperature by default
             }
 
-            // --- Verify SPI health via SCRATCH register ---
+            // --- Verify SPI health via SCRATCH register (with retry) ---
+            // A single transient CRC glitch should not flip the health flag.
             bool spiHealthy = false;
             {
                 extern AD74416H_SPI spiDriver;
+                static constexpr int SPI_HEALTH_RETRIES = 3;
                 uint16_t testVal = 0xA5C3;
-                spiDriver.writeRegister(0x76, testVal); // SCRATCH register
-                uint16_t readBack = 0;
-                if (spiDriver.readRegister(0x76, &readBack) && readBack == testVal) {
-                    spiHealthy = true;
+                for (int attempt = 0; attempt < SPI_HEALTH_RETRIES; attempt++) {
+                    if (!spiDriver.writeRegister(0x76, testVal)) continue;
+                    uint16_t readBack = 0;
+                    if (spiDriver.readRegister(0x76, &readBack) && readBack == testVal) {
+                        spiHealthy = true;
+                        break;
+                    }
                 }
             }
 
@@ -540,7 +550,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     g_deviceState.channels[cmd.channel].dacCode = cmd.dacCode;
                     // Approximate engineering value (unipolar 0..12V as default)
                     g_deviceState.channels[cmd.channel].dacValue =
-                        (cmd.dacCode / 65535.0f) * VOUT_UNIPOLAR_SPAN_V;
+                        (cmd.dacCode / 65536.0f) * VOUT_UNIPOLAR_SPAN_V;
                     xSemaphoreGive(g_stateMutex);
                 }
                 break;
@@ -558,7 +568,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     float span = bipolar ? VOUT_BIPOLAR_SPAN_V : VOUT_UNIPOLAR_SPAN_V;
                     float off  = bipolar ? VOUT_BIPOLAR_OFFSET_V : 0.0f;
                     g_deviceState.channels[cmd.channel].dacCode =
-                        (uint16_t)(((voltage + off) / span) * 65535.0f);
+                        (uint16_t)(((voltage + off) / span) * 65536.0f);
                     xSemaphoreGive(g_stateMutex);
                 }
                 break;
@@ -570,7 +580,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].dacValue = cmd.floatVal;
                     g_deviceState.channels[cmd.channel].dacCode =
-                        (uint16_t)((cmd.floatVal / IOUT_MAX_MA) * 65535.0f);
+                        (uint16_t)((cmd.floatVal / IOUT_MAX_MA) * 65536.0f);
                     xSemaphoreGive(g_stateMutex);
                 }
                 break;
@@ -974,15 +984,27 @@ static void taskWavegen(void* /*pvParameters*/)
             // So normalised 0..1 maps to offset-amplitude .. offset+amplitude
             float value = wg.offset + wg.amplitude * (normalised * 2.0f - 1.0f);
 
-            // Write to DAC
-            if (wg.mode == WAVEGEN_VOLTAGE) {
-                // Clamp to valid range for the configured mode
-                if (!needsBipolar && value < 0.0f) value = 0.0f;
-                s_device->setDacVoltage(wg.channel, value, needsBipolar);
-            } else {
-                // Clamp current to non-negative
-                if (value < 0.0f) value = 0.0f;
-                s_device->setDacCurrent(wg.channel, value);
+            // Write to DAC — if the write fails (bus timeout), yield once
+            // and retry before continuing.  Persistent failures are logged
+            // but don't crash the task; the waveform simply glitches.
+            {
+                bool ok;
+                if (wg.mode == WAVEGEN_VOLTAGE) {
+                    if (!needsBipolar && value < 0.0f) value = 0.0f;
+                    ok = s_device->setDacVoltage(wg.channel, value, needsBipolar);
+                } else {
+                    if (value < 0.0f) value = 0.0f;
+                    ok = s_device->setDacCurrent(wg.channel, value);
+                }
+                if (!ok) {
+                    taskYIELD();
+                    // Retry once
+                    if (wg.mode == WAVEGEN_VOLTAGE) {
+                        s_device->setDacVoltage(wg.channel, value, needsBipolar);
+                    } else {
+                        s_device->setDacCurrent(wg.channel, value);
+                    }
+                }
             }
 
             sampleIndex++;

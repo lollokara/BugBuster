@@ -141,7 +141,7 @@
 // AD74416H Limits
 // -----------------------------------------------------------------------------
 #define AD74416H_NUM_CHANNELS   4
-#define DAC_FULL_SCALE          65535U
+#define DAC_FULL_SCALE          65536U  // Per datasheet: code = normalised * 65536
 #define ADC_FULL_SCALE          16777216UL
 
 // Voltage / current output spans

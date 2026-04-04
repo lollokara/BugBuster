@@ -9,7 +9,16 @@
 // Shared SPI2 bus mutex defined in adgs2414d.cpp.
 // AD74416H and ADGS2414D must serialize on the same lock because they share
 // MOSI/MISO/SCLK with different chip selects.
+//
+// This single mutex replaces the previous two-mutex scheme (_mutex +
+// g_spi_bus_mutex).  Collapsing to one lock eliminates a subtle ordering
+// hazard (ABBA potential) and guarantees that the two-phase read sequence
+// (READ_SELECT + NOP) is atomic with respect to ALL other bus users, not just
+// other AD74416H callers.
 extern SemaphoreHandle_t g_spi_bus_mutex;
+
+// Bus-lock timeout.  500 ms is generous; any longer indicates a stuck task.
+static constexpr TickType_t BUS_TIMEOUT = pdMS_TO_TICKS(500);
 
 AD74416H_SPI::AD74416H_SPI(gpio_num_t pin_sdo, gpio_num_t pin_sdi,
                              gpio_num_t pin_sync, gpio_num_t pin_sclk,
@@ -19,16 +28,12 @@ AD74416H_SPI::AD74416H_SPI(gpio_num_t pin_sdo, gpio_num_t pin_sdi,
       _pin_sync(pin_sync),
       _pin_sclk(pin_sclk),
       _dev_addr(dev_addr & 0x03),
-      _spi_dev(NULL),
-      _mutex(NULL)
+      _spi_dev(NULL)
 {
 }
 
 void AD74416H_SPI::begin()
 {
-    _mutex = xSemaphoreCreateMutex();
-    configASSERT(_mutex);
-
     // SYNC pin: manual chip select (active low), idle HIGH
     pin_mode_output(_pin_sync);
     deassertSync();
@@ -95,41 +100,34 @@ uint8_t AD74416H_SPI::computeCRC8(const uint8_t* frame) const
     return crc;
 }
 
+// ---------------------------------------------------------------------------
+// transferFrame — send/receive one 5-byte SPI frame.
+// Caller MUST already hold g_spi_bus_mutex.
+// ---------------------------------------------------------------------------
 void AD74416H_SPI::transferFrame(const uint8_t* tx_frame, uint8_t* rx_frame)
 {
-    if (g_spi_bus_mutex != NULL &&
-        xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
-        ESP_LOGE("spi", "SPI bus acquire timeout");
-        return;
-    }
-
     spi_transaction_t txn = {};
     txn.length    = SPI_FRAME_BYTES * 8;  // bits
     txn.tx_buffer = tx_frame;
-    txn.rx_buffer = rx_frame;
 
-    // If no RX needed, use tx-only mode
-    if (rx_frame == NULL) {
-        txn.flags = SPI_TRANS_USE_TXDATA;
-        memcpy(txn.tx_data, tx_frame, 4);  // Only 4 bytes fit in tx_data
-        // For 5-byte frame, use buffer mode
-        txn.flags = 0;
-        txn.tx_buffer = tx_frame;
+    // dummy_rx lives at function scope so it survives until after the transfer.
+    uint8_t dummy_rx[SPI_FRAME_BYTES];
 
-        uint8_t dummy_rx[SPI_FRAME_BYTES];
+    if (rx_frame != NULL) {
+        txn.rx_buffer = rx_frame;
+    } else {
         txn.rx_buffer = dummy_rx;
     }
 
     assertSync();
     spi_device_polling_transmit(_spi_dev, &txn);
     deassertSync();
-
-    if (g_spi_bus_mutex != NULL) {
-        xSemaphoreGiveRecursive(g_spi_bus_mutex);
-    }
 }
 
-void AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
+// ---------------------------------------------------------------------------
+// writeRegister
+// ---------------------------------------------------------------------------
+bool AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
 {
     uint8_t frame[SPI_FRAME_BYTES];
     frame[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
@@ -138,19 +136,32 @@ void AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
     frame[SPI_FRAME_BYTE_DATA_LO] = (uint8_t)(data & 0xFF);
     frame[SPI_FRAME_BYTE_CRC]     = computeCRC8(frame);
 
-    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(500)) != pdTRUE) return;
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        ESP_LOGE("spi", "writeRegister(0x%02X): bus timeout", addr);
+        return false;
+    }
+
     transferFrame(frame, NULL);
-    xSemaphoreGive(_mutex);
+
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
+    return true;
 }
 
+// ---------------------------------------------------------------------------
+// readRegister — two-phase read held under a single mutex acquisition so the
+// READ_SELECT + NOP pair cannot be interleaved by any other bus user.
+// ---------------------------------------------------------------------------
 bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 {
-    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        ESP_LOGE("spi", "readRegister(0x%02X): bus timeout", addr);
         if (data != NULL) *data = 0xFFFF;
         return false;
     }
 
-    // Stage 1: Write register address to READ_SELECT
+    // Phase 1: Write register address to READ_SELECT
     {
         uint8_t frame[SPI_FRAME_BYTES];
         frame[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
@@ -161,7 +172,7 @@ bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
         transferFrame(frame, NULL);
     }
 
-    // Stage 2: NOP to clock in response
+    // Phase 2: NOP to clock in response
     uint8_t tx_frame[SPI_FRAME_BYTES] = {0};
     uint8_t rx_frame[SPI_FRAME_BYTES] = {0};
     tx_frame[SPI_FRAME_BYTE_CTRL] = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
@@ -169,7 +180,7 @@ bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
     tx_frame[SPI_FRAME_BYTE_CRC]  = computeCRC8(tx_frame);
     transferFrame(tx_frame, rx_frame);
 
-    xSemaphoreGive(_mutex);
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
 
     // Validate CRC
     uint8_t expected_crc = computeCRC8(rx_frame);
@@ -185,11 +196,18 @@ bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// updateRegister — atomic read-modify-write under one bus lock.
+// ---------------------------------------------------------------------------
 bool AD74416H_SPI::updateRegister(uint8_t addr, uint16_t mask, uint16_t val)
 {
-    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(500)) != pdTRUE) return false;
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        ESP_LOGE("spi", "updateRegister(0x%02X): bus timeout", addr);
+        return false;
+    }
 
-    // Read
+    // Phase 1: READ_SELECT
     {
         uint8_t frame[SPI_FRAME_BYTES];
         frame[SPI_FRAME_BYTE_CTRL]    = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
@@ -200,6 +218,7 @@ bool AD74416H_SPI::updateRegister(uint8_t addr, uint16_t mask, uint16_t val)
         transferFrame(frame, NULL);
     }
 
+    // Phase 2: NOP — read current value
     uint8_t tx_nop[SPI_FRAME_BYTES] = {0};
     uint8_t rx_frame[SPI_FRAME_BYTES] = {0};
     tx_nop[SPI_FRAME_BYTE_CTRL] = (uint8_t)((_dev_addr & 0x03) << SPI_CTRL_DEVADDR_SHIFT);
@@ -209,14 +228,14 @@ bool AD74416H_SPI::updateRegister(uint8_t addr, uint16_t mask, uint16_t val)
 
     uint8_t expected_crc = computeCRC8(rx_frame);
     if (rx_frame[SPI_FRAME_BYTE_CRC] != expected_crc) {
-        xSemaphoreGive(_mutex);
+        xSemaphoreGiveRecursive(g_spi_bus_mutex);
         return false;
     }
 
     uint16_t current = (uint16_t)(((uint16_t)rx_frame[SPI_FRAME_BYTE_DATA_HI] << 8) |
                                    (uint16_t)rx_frame[SPI_FRAME_BYTE_DATA_LO]);
 
-    // Modify and write
+    // Phase 3: Modify and write back
     uint16_t updated = (current & ~mask) | (val & mask);
     {
         uint8_t frame[SPI_FRAME_BYTES];
@@ -228,6 +247,6 @@ bool AD74416H_SPI::updateRegister(uint8_t addr, uint16_t mask, uint16_t val)
         transferFrame(frame, NULL);
     }
 
-    xSemaphoreGive(_mutex);
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
     return true;
 }

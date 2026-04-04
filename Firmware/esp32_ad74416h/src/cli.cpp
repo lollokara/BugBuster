@@ -506,12 +506,14 @@ static void cmdStatus()
     serial_printf("Die Temperature: %.1f C\r\n", temp);
 
     // Live status
-    uint16_t live = s_dev->readLiveStatus();
+    uint16_t live = 0;
+    s_dev->readLiveStatus(&live);
     serial_printf("LIVE_STATUS:     0x%04X\r\n", live);
 
     // Alert overview
-    uint16_t alert = s_dev->readAlertStatus();
-    uint16_t supply = s_dev->readSupplyAlertStatus();
+    uint16_t alert = 0, supply = 0;
+    s_dev->readAlertStatus(&alert);
+    s_dev->readSupplyAlertStatus(&supply);
     serial_printf("ALERT_STATUS:    0x%04X\r\n", alert);
     serial_printf("SUPPLY_ALERT:    0x%04X\r\n", supply);
 
@@ -521,7 +523,8 @@ static void cmdStatus()
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         ChannelFunction func = s_dev->getChannelFunction(ch);
-        uint32_t adcRaw = s_dev->readAdcResult(ch);
+        uint32_t adcRaw = 0;
+        s_dev->readAdcResult(ch, &adcRaw);
 
         // Get current ADC range from state
         AdcRange range = ADC_RNG_0_12V;
@@ -534,7 +537,8 @@ static void cmdStatus()
         uint16_t dacActive = s_dev->getDacActive(ch);
         uint8_t dinComp = s_dev->readDinCompOut();
         bool dinBit = (dinComp >> ch) & 1;
-        uint16_t chAlert = s_dev->readChannelAlertStatus(ch);
+        uint16_t chAlert = 0;
+        s_dev->readChannelAlertStatus(ch, &chAlert);
 
         // Get DO state from shared state
         bool doState = false;
@@ -669,7 +673,8 @@ static void cmdAdc(const char* args)
             xSemaphoreGive(g_stateMutex);
         }
 
-        uint32_t raw = s_dev->readAdcResult(ch);
+        uint32_t raw = 0;
+        s_dev->readAdcResult(ch, &raw);
         float voltage = s_dev->adcCodeToVoltage(raw, range);
         float current_mA = s_dev->adcCodeToCurrent(raw, range) * 1000.0f;
 
@@ -713,7 +718,8 @@ static void cmdAdcCont(const char* args)
                     range = g_deviceState.channels[ch].adcRange;
                     xSemaphoreGive(g_stateMutex);
                 }
-                uint32_t raw = s_dev->readAdcResult(ch);
+                uint32_t raw = 0;
+                s_dev->readAdcResult(ch, &raw);
                 vals[ch] = s_dev->adcCodeToVoltage(raw, range);
             }
 
@@ -767,7 +773,8 @@ static void cmdAdcDiag()
     }
 
     // LIVE_STATUS
-    uint16_t live = s_dev->readLiveStatus();
+    uint16_t live = 0;
+    s_dev->readLiveStatus(&live);
     serial_printf("\r\nLIVE_STATUS: 0x%04X\r\n", live);
     serial_printf("  SUPPLY_STATUS:    %s\r\n", (live & (1 << 0))  ? "ERR" : "OK");
     serial_printf("  ADC_BUSY:         %s\r\n", (live & (1 << 1))  ? "YES" : "no");
@@ -883,7 +890,8 @@ static void cmdDin()
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         bool state = (comp >> ch) & 1;
-        uint32_t counter = s_dev->readDinCounter(ch);
+        uint32_t counter = 0;
+        s_dev->readDinCounter(ch, &counter);
         serial_printf("  %d |    %s     | %lu\r\n",
                        ch, state ? " HIGH" : "  LOW", (unsigned long)counter);
     }
@@ -980,20 +988,23 @@ static void cmdFaults()
     serial_println("\r\n--- Fault / Alert Status ---");
 
     // Global
-    uint16_t alert = s_dev->readAlertStatus();
+    uint16_t alert = 0;
+    s_dev->readAlertStatus(&alert);
     uint16_t alertMask = s_dev->getAlertMask();
     serial_printf("\r\nALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", alert, alertMask);
     printBits(alert, 15, alertBitName);
 
     // Supply
-    uint16_t supply = s_dev->readSupplyAlertStatus();
+    uint16_t supply = 0;
+    s_dev->readSupplyAlertStatus(&supply);
     uint16_t supplyMask = s_dev->getSupplyAlertMask();
     serial_printf("\r\nSUPPLY_ALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", supply, supplyMask);
     printBits(supply, 6, supplyBitName);
 
     // Per-channel
     for (uint8_t ch = 0; ch < 4; ch++) {
-        uint16_t chAlert = s_dev->readChannelAlertStatus(ch);
+        uint16_t chAlert = 0;
+        s_dev->readChannelAlertStatus(ch, &chAlert);
         uint16_t chMask = s_dev->getChannelAlertMask(ch);
         serial_printf("\r\nCH%u_ALERT_STATUS: 0x%04X  (mask: 0x%04X)\r\n", ch, chAlert, chMask);
         printBits(chAlert, 9, chAlertBitName);
@@ -1013,7 +1024,8 @@ static void cmdClearFaults()
 
     delay_ms(50);
 
-    uint16_t alert = s_dev->readAlertStatus();
+    uint16_t alert = 0;
+    s_dev->readAlertStatus(&alert);
     serial_printf("ALERT_STATUS after clear: 0x%04X %s\r\n",
                   alert, (alert == 0) ? "[CLEAR]" : "[FAULTS REMAIN!]");
 }
