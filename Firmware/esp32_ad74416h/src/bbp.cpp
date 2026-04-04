@@ -2099,14 +2099,12 @@ static int handleStartWavegen(uint16_t seq, uint8_t cmdId,
     if (mode > 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     if (freq_hz < 0.1f || freq_hz > 100.0f) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
 
-    // Set channel function to VOUT or IOUT first
-    {
-        Command cmd = {};
-        cmd.type = CMD_SET_CHANNEL_FUNC;
-        cmd.channel = channel;
-        cmd.func = (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT;
-        sendCommand(cmd);
-    }
+    // Apply channel function change synchronously before waking the wavegen task.
+    // The wavegen task is priority 3 and the command processor is priority 2, so
+    // if we enqueued CMD_SET_CHANNEL_FUNC instead of calling directly, the wavegen
+    // would win the scheduler race and start writing DAC values to an unconfigured
+    // channel, corrupting the ADC state.
+    tasks_apply_channel_function(channel, (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT);
 
     // Store wavegen state and notify the task
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {

@@ -1879,12 +1879,8 @@ static esp_err_t handle_post_wavegen_start(httpd_req_t *req)
     if (wf > 3) return send_error(req, 400, "Invalid waveform");
     if (freq < 0.01 || freq > 100.0) return send_error(req, 400, "Frequency out of range");
 
-    // Set channel function
-    Command cmd = {};
-    cmd.type = CMD_SET_CHANNEL_FUNC;
-    cmd.channel = (uint8_t)ch;
-    cmd.func = (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT;
-    sendCommand(cmd);
+    // Apply channel function synchronously — see bbp.cpp handleStartWavegen for rationale.
+    tasks_apply_channel_function((uint8_t)ch, (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT);
 
     // Set wavegen state
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {

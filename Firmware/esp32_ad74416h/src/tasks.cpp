@@ -429,6 +429,88 @@ static void taskFaultMonitor(void* /*pvParameters*/)
 }
 
 // -----------------------------------------------------------------------------
+// tasks_apply_channel_function — synchronous channel-function change
+//
+// Encapsulates the full CH_FUNC_SETUP sequence so it can be called both from
+// the command processor (via CMD_SET_CHANNEL_FUNC) and directly from callers
+// that must guarantee the change is complete before proceeding (e.g. wavegen
+// start).  The wavegen task runs at priority 3, the command processor at
+// priority 2; if the channel setup were enqueued instead of called directly,
+// the wavegen would win the scheduler race and start driving DAC values before
+// the channel function has been applied — corrupting the ADC state.
+// -----------------------------------------------------------------------------
+void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
+{
+    if (!s_device) return;
+
+    s_device->setChannelFunction(channel, func);
+
+    // The hardware auto-sets correct ADC_CONFIG defaults (CONV_MUX, CONV_RANGE)
+    // when CH_FUNC_SETUP is written (datasheet Table 22).  Read back instead of
+    // overwriting.
+    uint16_t adcCfgReg = 0;
+    extern AD74416H_SPI spiDriver;
+    spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(channel), &adcCfgReg);
+
+    AdcConvMux hwMux   = (AdcConvMux)((adcCfgReg & ADC_CONFIG_CONV_MUX_MASK) >> ADC_CONFIG_CONV_MUX_SHIFT);
+    AdcRange   hwRange = (AdcRange)((adcCfgReg & ADC_CONFIG_CONV_RANGE_MASK) >> ADC_CONFIG_CONV_RANGE_SHIFT);
+
+    // IIN modes: hardware sets CONV_RANGE=3 (negative-only), which is wrong for
+    // measuring the positive sense voltage.  Override to ±312.5 mV.
+    if (func == CH_FUNC_IIN_EXT_PWR     ||
+        func == CH_FUNC_IIN_LOOP_PWR     ||
+        func == CH_FUNC_IIN_EXT_PWR_HART ||
+        func == CH_FUNC_IIN_LOOP_PWR_HART) {
+        hwRange = ADC_RNG_NEG0_3125_0_3125V;
+    }
+
+    // RES_MEAS: enable excitation current and fix CONV_MUX for 2-wire RTD.
+    if (func == CH_FUNC_RES_MEAS) {
+        spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(channel), RTD_CONFIG_RTD_CURRENT_MASK);
+        hwMux = ADC_MUX_LF_TO_AGND;
+    }
+
+    // Leaving RES_MEAS: stop excitation current.
+    if (func == CH_FUNC_HIGH_IMP) {
+        spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(channel), 0x0000);
+    }
+
+    s_device->configureAdc(channel, hwMux, hwRange, ADC_RATE_20SPS);
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.channels[channel].function = func;
+        g_deviceState.channels[channel].adcRange = hwRange;
+        g_deviceState.channels[channel].adcMux   = hwMux;
+        g_deviceState.channels[channel].adcRate  = ADC_RATE_20SPS;
+        g_deviceState.channels[channel].rtdExcitationUa =
+            (func == CH_FUNC_RES_MEAS) ? 1000u : 0u;
+        if (func == CH_FUNC_HIGH_IMP) {
+            g_deviceState.channels[channel].dacCode    = 0;
+            g_deviceState.channels[channel].dacValue   = 0.0f;
+            g_deviceState.channels[channel].adcRawCode = 0;
+            g_deviceState.channels[channel].adcValue   = 0.0f;
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Rebuild ADC_CONV_CTRL.
+    {
+        uint8_t chMask = 0;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
+                ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
+                if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP)
+                    chMask |= (1u << c);
+            }
+            xSemaphoreGive(g_stateMutex);
+        }
+        s_device->startAdcConversion(true, chMask, 0x0F);
+        delay_ms(50);
+        s_device->clearAllAlerts();
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Task 3: Command Processor (Core 1, Priority 2)
 // -----------------------------------------------------------------------------
 
@@ -447,118 +529,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_CHANNEL_FUNC: {
-                s_device->setChannelFunction(cmd.channel, cmd.func);
-
-                // The hardware auto-sets correct ADC_CONFIG defaults (CONV_MUX,
-                // CONV_RANGE) when CH_FUNC_SETUP is written (datasheet Table 22).
-                // Read back the hardware-set values instead of overwriting them.
-                uint16_t adcCfgReg = 0;
-                extern AD74416H_SPI spiDriver;
-                spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(cmd.channel), &adcCfgReg);
-
-                AdcConvMux hwMux   = (AdcConvMux)((adcCfgReg & ADC_CONFIG_CONV_MUX_MASK) >> ADC_CONFIG_CONV_MUX_SHIFT);
-                AdcRange   hwRange = (AdcRange)((adcCfgReg & ADC_CONFIG_CONV_RANGE_MASK) >> ADC_CONFIG_CONV_RANGE_SHIFT);
-
-                // The hardware auto-sets CONV_RANGE=3 (negative-only, -312.5mV to 0V)
-                // for IIN modes, which is invalid for measuring the positive sense voltage
-                // across RSENSE and triggers ADC_ERR. Override to ±312.5mV (range 2),
-                // which covers the full 4-20mA range (48mV–240mV across 12Ω RSENSE).
-                if (cmd.func == CH_FUNC_IIN_EXT_PWR     ||
-                    cmd.func == CH_FUNC_IIN_LOOP_PWR     ||
-                    cmd.func == CH_FUNC_IIN_EXT_PWR_HART ||
-                    cmd.func == CH_FUNC_IIN_LOOP_PWR_HART) {
-                    hwRange = ADC_RNG_NEG0_3125_0_3125V;
-                }
-
-                // RES_MEAS (RTD) requires configuration the hardware does not auto-set:
-                //
-                // 1. RTD_CONFIG must be written to enable the excitation current.
-                //    Without it the VIOUT driver has nothing to source, immediately
-                //    asserts VIOUT_SHUTDOWN → CHANNEL_ALERT_STATUS bit 6 → CH_A_ALERT
-                //    (bit 8 of ALERT_STATUS).
-                //
-                //    Default: 1 mA excitation (RTD_CURRENT=1), non-ratiometric
-                //    (RTD_ADC_REF=0), 2-wire mode (RTD_MODE_SEL=0), no current swap.
-                //    Non-ratiometric keeps the standard adcCodeToVoltage() formula valid
-                //    (V = code/ADC_FULL_SCALE × v_span); ratiometric alters the ADC
-                //    reference in a way that requires a different formula.
-                //
-                // 2. CONV_MUX must be forced to ADC_MUX_LF_TO_AGND (0).
-                //    The hardware auto-sets MUX=3 (SENSELF to VSENSEN) which is the
-                //    3-wire RTD path — not appropriate for 2-wire.
-                //    MUX=0 (SENSELF/LF to AGND) measures V(I/OP terminal) − V(AGND)
-                //    = I_EXC × R_RTD directly, which is correct for 2-wire RTD.
-                //    Verified: 330 Ω × 1 mA = 330 mV → reads ~323 Ω (residual is
-                //    lead resistance + tolerance), well within range 5 (0–625 mV).
-                //
-                // 3. CONV_RANGE: hardware auto-sets 0–625 mV (range 5), which is
-                //    appropriate. Use the hardware-set value; auto-ranging will
-                //    promote to a wider range for high-resistance RTDs (PT1000 >850°C).
-                //
-                // RTD_CURRENT bit: 0 = 500 µA, 1 = 1 mA  (per datasheet Table 6 /
-                // RTD_CONFIG register description — NOT 125/250 µA as previously noted).
-                // Default to 1 mA (RTD_CURRENT_MASK = bit 0 set).
-                if (cmd.func == CH_FUNC_RES_MEAS) {
-                    const uint16_t rtdCfg = RTD_CONFIG_RTD_CURRENT_MASK;  // bit 0: 1 mA, non-ratiometric
-                    spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfg);
-                    hwMux = ADC_MUX_LF_TO_AGND;   // 2-wire: V(terminal)−V(AGND) = I_EXC × R_RTD
-                    // hwRange: keep hardware auto-set value (range 5, 0–625 mV)
-                }
-
-                // When leaving RES_MEAS, clear RTD_CONFIG so the excitation current
-                // is not left running if the channel is later reused in another mode.
-                if (cmd.func == CH_FUNC_HIGH_IMP) {
-                    spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), 0x0000);
-                }
-
-                // Set the conversion rate to 20 SPS (hardware defaults to 10 SPS)
-                s_device->configureAdc(cmd.channel, hwMux, hwRange, ADC_RATE_20SPS);
-
-                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                    g_deviceState.channels[cmd.channel].function = cmd.func;
-                    g_deviceState.channels[cmd.channel].adcRange = hwRange;
-                    g_deviceState.channels[cmd.channel].adcMux   = hwMux;
-                    g_deviceState.channels[cmd.channel].adcRate  = ADC_RATE_20SPS;
-                    // Store initial RTD excitation current when entering RES_MEAS.
-                    // Clear it when leaving (so convertAdcCode uses the fallback safely).
-                    // RTD_CURRENT bit: 0 = 500 µA, 1 = 1000 µA (1 mA) per datasheet.
-                    if (cmd.func == CH_FUNC_RES_MEAS) {
-                        g_deviceState.channels[cmd.channel].rtdExcitationUa = 1000; // 1 mA default
-                    } else {
-                        g_deviceState.channels[cmd.channel].rtdExcitationUa = 0;
-                    }
-                    // Reset DAC display values when switching to HIGH_IMP
-                    if (cmd.func == CH_FUNC_HIGH_IMP) {
-                        g_deviceState.channels[cmd.channel].dacCode  = 0;
-                        g_deviceState.channels[cmd.channel].dacValue = 0.0f;
-                        g_deviceState.channels[cmd.channel].adcRawCode = 0;
-                        g_deviceState.channels[cmd.channel].adcValue   = 0.0f;
-                    }
-                    xSemaphoreGive(g_stateMutex);
-                }
-
-                // Rebuild ADC_CONV_CTRL: enable only channels with active ADC conversion.
-                // DIN_LOGIC and DIN_LOOP use the comparator path — enabling them in the
-                // ADC conversion mask causes ADC_ERR because the hardware auto-sets an
-                // invalid CONV_MUX for DIN functions.
-                {
-                    uint8_t chMask = 0;
-                    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                        for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
-                            ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
-                            if (f != CH_FUNC_HIGH_IMP &&
-                                f != CH_FUNC_DIN_LOGIC &&
-                                f != CH_FUNC_DIN_LOOP)
-                                chMask |= (1 << c);
-                        }
-                        xSemaphoreGive(g_stateMutex);
-                    }
-                    s_device->startAdcConversion(true, chMask, 0x0F);
-
-                    // Clear any transient ADC_ERR caused by the sequence restart
-                    delay_ms(50);
-                    s_device->clearAllAlerts();
-                }
+                tasks_apply_channel_function(cmd.channel, cmd.func);
                 break;
             }
 
@@ -1016,20 +987,24 @@ static void taskWavegen(void* /*pvParameters*/)
 
             sampleIndex++;
 
-            // Precise timing: sleep until next sample time
+            // Precise timing: yield cooperatively until next sample time.
+            // A busy-wait here would starve taskAdcPoll (same priority, same
+            // core) for the entire inter-sample interval.  taskYIELD() gives
+            // other ready tasks a chance to run on each scheduler tick while
+            // keeping the wavegen in the ready queue for low-latency reschedule.
             nextSampleTime += sampleIntervalUs;
-            int64_t now = esp_timer_get_time();
-            int64_t sleepUs = nextSampleTime - now;
-            if (sleepUs > 0) {
-                vTaskDelay(pdMS_TO_TICKS(sleepUs / 1000));
-                // Busy-wait the remainder for sub-ms precision
-                while (esp_timer_get_time() < nextSampleTime) {
-                    // Tight loop for precise timing
+            {
+                int64_t sleepUs = nextSampleTime - esp_timer_get_time();
+                if (sleepUs > 1000) {
+                    vTaskDelay(pdMS_TO_TICKS(sleepUs / 1000));
                 }
-            } else {
-                // Falling behind, reset timing
-                nextSampleTime = esp_timer_get_time();
-                taskYIELD();
+                while (esp_timer_get_time() < nextSampleTime) {
+                    taskYIELD();
+                }
+                if (nextSampleTime < esp_timer_get_time() - (int64_t)sampleIntervalUs) {
+                    // Fallen more than one interval behind — reset timeline.
+                    nextSampleTime = esp_timer_get_time();
+                }
             }
         }
 

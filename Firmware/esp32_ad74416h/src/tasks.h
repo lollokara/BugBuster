@@ -267,3 +267,19 @@ void initTasks(AD74416H& device);
  * @return true if enqueued, false if queue was full.
  */
 bool sendCommand(const Command& cmd);
+
+/**
+ * @brief Apply a channel function change synchronously, bypassing the command
+ *        queue.  Sets CH_FUNC_SETUP, reads back hardware ADC defaults, applies
+ *        any range overrides (IIN, RTD), reconfigures the ADC, restarts the
+ *        conversion sequence, and clears transient alerts.
+ *
+ *        Use this instead of sendCommand(CMD_SET_CHANNEL_FUNC) when the caller
+ *        must guarantee the change is complete before proceeding — in particular
+ *        before starting the waveform generator, whose task has higher priority
+ *        than the command processor and would otherwise race ahead.
+ *
+ *        Safe to call from any task context; acquires the SPI and state mutexes
+ *        internally.  Blocks for ~50 ms (ADC settling + alert clear).
+ */
+void tasks_apply_channel_function(uint8_t channel, ChannelFunction func);
