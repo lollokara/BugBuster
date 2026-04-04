@@ -6,8 +6,8 @@
 #include "bb_config.h"
 
 // Current run state (not yet flushed to buffer)
-static uint8_t  s_current_value = 0xFF;  // Invalid initial value
-static uint32_t s_current_count = 0;
+static volatile uint8_t  s_current_value = 0xFF;  // Invalid initial value
+static volatile uint32_t s_current_count = 0;
 
 void rle_init(RleState *state, uint32_t *buffer, uint32_t max_words, uint8_t channels)
 {

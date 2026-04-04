@@ -439,7 +439,16 @@ class BugBuster:
         *sink*        — current sink code for loop-powered inputs.
         *oc_detect*   — enable open-circuit fault detection.
         *sc_detect*   — enable short-circuit fault detection.
+
+        *sink_range*  — selects sink current range for loop-powered inputs (``False`` = low-range,
+                        ``True`` = high-range). Refer to AD74416H datasheet DINX_SINK_SEL bit.
         """
+        if not (0 <= threshold <= 255):
+            raise ValueError(f"threshold must be 0–255, got {threshold}")
+        if not (0 <= debounce <= 31):
+            raise ValueError(f"debounce must be 0–31, got {debounce}")
+        if not (0 <= sink <= 31):
+            raise ValueError(f"sink must be 0–31, got {sink}")
         if self._usb:
             payload = struct.pack(
                 '<BBBBBBB',
@@ -1169,7 +1178,10 @@ class BugBuster:
             self._usb_cmd(CmdId.HAT_SET_POWER, payload)
             return True
         else:
-            return self._http_post("/hat/power", {"connector": connector, "enable": enable}).get("ok", False)
+            raise NotImplementedError(
+                "hat_set_power() is not available over HTTP — firmware does not expose /api/hat/power. "
+                "Use a USB connection instead."
+            )
 
     def hat_get_power(self) -> dict:
         """Get power status for both HAT connectors (enabled, current, fault)."""
@@ -1185,7 +1197,10 @@ class BugBuster:
             io_mv = struct.unpack_from('<H', resp, off)[0]; off += 2
             return {"connectors": connectors, "io_voltage_mv": io_mv}
         else:
-            return self._http_get("/hat/power")
+            raise NotImplementedError(
+                "hat_get_power() is not available over HTTP — firmware does not expose /api/hat/power. "
+                "Use a USB connection instead."
+            )
 
     def hat_set_io_voltage(self, voltage_mv: int) -> bool:
         """
@@ -1198,7 +1213,10 @@ class BugBuster:
             self._usb_cmd(CmdId.HAT_SET_IO_VOLT, payload)
             return True
         else:
-            return self._http_post("/hat/io_voltage", {"voltage_mv": voltage_mv}).get("ok", False)
+            raise NotImplementedError(
+                "hat_set_io_voltage() is not available over HTTP — firmware does not expose /api/hat/io_voltage. "
+                "Use a USB connection instead."
+            )
 
     def hat_setup_swd(self, target_voltage_mv: int = 3300, connector: int = 0) -> bool:
         """

@@ -1,0 +1,12 @@
+pytest>=8.0
+pytest-html>=4.0
+pytest-timeout>=2.3
+pytest-xdist>=3.5
+pytest-json-report>=1.5
+rich>=13.0
+pyserial>=3.5
+requests>=2.31
+ipykernel>=6.0
+ipywidgets>=8.0
+plotly>=5.0
+pandas>=2.0

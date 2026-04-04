@@ -142,7 +142,7 @@ void usb_thread(void *ptr)
         }
 
 #ifdef PROBE_USB_CONNECTED_LED
-        if (!gpio_get(PROBE_USB_CONNECTED_LED) && tud_ready())
+        if (!gpio_get(PROBE_USB_CONNECTED_LED) && tud_connected())
             gpio_put(PROBE_USB_CONNECTED_LED, 1);
         else
             gpio_put(PROBE_USB_CONNECTED_LED, 0);

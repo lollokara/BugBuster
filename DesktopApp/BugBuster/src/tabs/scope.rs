@@ -15,63 +15,19 @@ struct ScopePoint {
     value: f32,
 }
 
-/// Convert 24-bit raw ADC code to a value based on channel function and ADC range.
-/// For current-input modes (function 4, 5, 11, 12) the ADC code maps to 0-25 mA.
-/// For current-output modes (function 2, 10) the ADC reads compliance voltage, so
-/// we fall through to the normal voltage conversion.
-/// All other modes use the standard voltage ADC ranges.
-fn raw_to_value(raw: u32, range: u8, function: u8) -> f32 {
-    let code = raw as f32;
-    let full_scale = 16777216.0f32; // 2^24
 
-    // Current-input modes: ADC code represents 0-25 mA
-    match function {
-        4 | 5 | 11 | 12 => return code / full_scale * 25.0,
-        _ => {}
+/// Parse EVT_SCOPE_DATA payload into per-channel avg values.
+/// Format: bucketSeq(u32) + timestamp_ms(u32) + count(u16) + [avg(f32), min(f32), max(f32)] × 4
+fn parse_scope_event(data: &[u8]) -> Option<[f32; 4]> {
+    if data.len() < 58 { return None; }
+    // Skip bucketSeq(4) + timestamp_ms(4) + count(2) = 10 bytes
+    let mut pos = 10;
+    let mut avg = [0f32; 4];
+    for ch in 0..4 {
+        avg[ch] = f32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]);
+        pos += 12; // skip avg(4) + min(4) + max(4)
     }
-
-    // Voltage (and current-output compliance voltage) conversion
-    match range {
-        0 => code / full_scale * 12.0,                          // 0..12V
-        1 => (code / full_scale * 24.0) - 12.0,                // -12..12V
-        2 => (code / full_scale * 0.625) - 0.3125,             // -312.5..312.5mV
-        3 => (code / full_scale * 0.3125) - 0.3125,            // -312.5..0mV
-        4 => code / full_scale * 0.3125,                        // 0..312.5mV
-        5 => code / full_scale * 0.625,                          // 0..625mV
-        6 => (code / full_scale * 0.208) - 0.104,              // -104..104mV
-        7 => (code / full_scale * 5.0) - 2.5,                  // -2.5..2.5V
-        _ => code / full_scale * 12.0,
-    }
-}
-
-/// Parse binary ADC stream event payload
-fn parse_adc_event(data: &[u8]) -> Option<(u8, Vec<[u32; 4]>)> {
-    if data.len() < 7 { return None; }
-    let mask = data[0];
-    // timestamp at [1..5] — not used for now (we use JS Date.now)
-    let count = u16::from_le_bytes([data[5], data[6]]) as usize;
-    let num_ch = (0..4).filter(|b| mask & (1 << b) != 0).count();
-    if num_ch == 0 { return None; }
-
-    let expected_data_len = 7 + count * num_ch * 3;
-    if data.len() < expected_data_len { return None; }
-
-    let mut samples = Vec::with_capacity(count);
-    let mut pos = 7;
-    for _ in 0..count {
-        let mut raw = [0u32; 4];
-        for ch in 0..4 {
-            if mask & (1 << ch) != 0 {
-                if pos + 3 > data.len() { break; }
-                raw[ch] = data[pos] as u32
-                    | ((data[pos + 1] as u32) << 8)
-                    | ((data[pos + 2] as u32) << 16);
-                pos += 3;
-            }
-        }
-        samples.push(raw);
-    }
-    Some((mask, samples))
+    Some(avg)
 }
 
 #[component]
@@ -92,7 +48,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let sample_counter = RwSignal::new(0u32);
     let last_rate_check = RwSignal::new(js_sys::Date::now());
 
-    // Display listener: "adc-stream" events (throttled to ~30 Hz by backend)
+    // Display listener: "scope-data" events (EVT_SCOPE_DATA, one per 10 ms bucket)
     spawn_local(async move {
         let closure = Closure::new(move |event: JsValue| {
             #[derive(Deserialize)]
@@ -100,30 +56,18 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvt>(event) else { return };
             if !running.get_untracked() { return; }
 
-            let Some((mask, samples)) = parse_adc_event(&evt.payload) else { return };
+            let Some(avg) = parse_scope_event(&evt.payload) else { return };
             let now = js_sys::Date::now();
             let ch_en = channels_en.get_untracked();
-            let ds = state.get_untracked();
-            let ranges: [u8; 4] = std::array::from_fn(|i| {
-                if i < ds.channels.len() { ds.channels[i].adc_range } else { 0 }
-            });
-            let functions: [u8; 4] = std::array::from_fn(|i| {
-                if i < ds.channels.len() { ds.channels[i].function } else { 0 }
-            });
 
-            // Push last sample of batch to display
-            if let Some(raw) = samples.last() {
-                for ch in 0..4 {
-                    if !ch_en[ch] || (mask & (1 << ch)) == 0 { continue; }
-                    let v = raw_to_value(raw[ch], ranges[ch], functions[ch]);
-                    scope_data[ch].update(|data| {
-                        data.push(ScopePoint { time_ms: now, value: v });
-                    });
-                }
+            for ch in 0..4 {
+                if !ch_en[ch] { continue; }
+                scope_data[ch].update(|data| {
+                    data.push(ScopePoint { time_ms: now, value: avg[ch] });
+                });
             }
 
-            // Count samples for rate display
-            sample_counter.update(|c| *c += samples.len() as u32);
+            sample_counter.update(|c| *c += 1);
 
             // Trim old data
             let win = window_sec.get_untracked();
@@ -135,7 +79,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 });
             }
         });
-        listen("adc-stream", &closure).await;
+        listen("scope-data", &closure).await;
         closure.forget();
     });
 
@@ -178,34 +122,30 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
     });
 
-    // Start/stop ADC stream when running or channel selection changes.
-    // Always stop-then-start to handle ERR_STREAM_ACTIVE.
+    // Start/stop scope stream when running or channel selection changes.
+    // Uses START_SCOPE_STREAM (0x62) which emits pre-processed min/max/avg buckets every 10 ms.
     Effect::new(move || {
         let is_running = running.get();
         let ch_en = channels_en.get();
         if is_running {
-            let mask: u8 = (0..4).fold(0u8, |m, i| if ch_en[i] { m | (1 << i) } else { m });
-            if mask == 0 {
+            let has_channels = ch_en.iter().any(|&en| en);
+            if !has_channels {
                 log("Scope: no channels enabled");
                 set_running.set(false);
                 return;
             }
-            #[derive(serde::Serialize)]
-            #[serde(rename_all = "camelCase")]
-            struct StartArgs { channel_mask: u8, divider: u8 }
-            let args = serde_wasm_bindgen::to_value(&StartArgs { channel_mask: mask, divider: 1 }).unwrap();
             spawn_local(async move {
                 // Stop any existing stream first (ignore errors)
-                let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+                let _ = invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
                 // Delay to let firmware clear the stream state (200ms for HTTP transport)
                 sleep_ms(200).await;
                 // Start fresh
-                let result = invoke("start_adc_stream", args).await;
-                log(&format!("Scope: stream started mask=0x{:02X}, result={:?}", mask, result));
+                let result = invoke("start_scope_stream", wasm_bindgen::JsValue::NULL).await;
+                log(&format!("Scope: stream started, result={:?}", result));
             });
         } else {
             spawn_local(async move {
-                let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+                let _ = invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
                 log("Scope: stream stopped");
             });
         }

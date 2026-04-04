@@ -66,6 +66,8 @@ pub fn run() {
             // Streaming
             commands::start_adc_stream,
             commands::stop_adc_stream,
+            commands::start_scope_stream,
+            commands::stop_scope_stream,
             // Waveform Generator
             commands::start_wavegen,
             commands::stop_wavegen,
@@ -86,12 +88,16 @@ pub fn run() {
             commands::idac_cal_clear,
             commands::idac_cal_save,
             // Self-Test / Auto-Calibration
+            commands::selftest_status,
+            commands::selftest_measure_supply,
+            commands::selftest_efuse_currents,
             commands::selftest_auto_calibrate,
             // PCA9535 GPIO Expander
             commands::pca_get_status,
             commands::pca_set_control,
             // HAT Expansion Board
             commands::hat_get_status,
+            commands::hat_get_power,
             commands::hat_set_pin,
             commands::hat_set_all_pins,
             commands::hat_reset,

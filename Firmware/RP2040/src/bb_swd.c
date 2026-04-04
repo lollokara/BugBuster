@@ -44,7 +44,7 @@ void bb_swd_get_status(SwdStatus *status)
 {
 #ifdef DEBUGPROBE_INTEGRATION
     // Read live state from debugprobe / TinyUSB
-    s_status.dap_connected = tud_mounted() && tud_ready();
+    s_status.dap_connected = tud_mounted() && tud_connected();
     // TODO: target_detected and dpidr require hooking into DAP_SWD.c
     // For now, cache from last bb_swd_detect_target() call
 #endif

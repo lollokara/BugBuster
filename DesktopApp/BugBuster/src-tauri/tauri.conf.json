@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.bugbuster.app",
   "build": {
-    "beforeDevCommand": "trunk serve",
+    "beforeDevCommand": "sh -c 'cd \"$(git rev-parse --show-toplevel)/DesktopApp/BugBuster\" && trunk serve'",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "trunk build",
+    "beforeBuildCommand": "sh -c 'cd \"$(git rev-parse --show-toplevel)/DesktopApp/BugBuster\" && trunk build'",
     "frontendDist": "../dist"
   },
   "app": {

@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "types": ["node", "@wdio/globals/types", "@wdio/mocha-framework"],
+    "outDir": ".wdio-dist"
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", ".wdio-dist"]
+}

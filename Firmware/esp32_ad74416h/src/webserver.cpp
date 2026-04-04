@@ -370,7 +370,6 @@ static esp_err_t handle_get_scope(httpd_req_t *req)
 
         uint16_t avail = (uint16_t)(cur_seq - since_seq);
         if (avail > SCOPE_BUF_SIZE) avail = SCOPE_BUF_SIZE;
-        if (since_seq == 0) avail = 0; // first call: sync only
 
         cJSON_AddNumberToObject(root, "seq", cur_seq);
         cJSON *samples = cJSON_AddArrayToObject(root, "s");

@@ -1,0 +1,19 @@
+{
+  "name": "bugbuster-e2e",
+  "version": "1.0.0",
+  "description": "E2E tests for the BugBuster Tauri desktop app",
+  "scripts": {
+    "test": "wdio run wdio.conf.ts",
+    "test:headless": "wdio run wdio.conf.ts",
+    "build-app": "cd ../.. && cargo build 2>&1"
+  },
+  "devDependencies": {
+    "@wdio/cli": "^8",
+    "@wdio/local-runner": "^8",
+    "@wdio/mocha-framework": "^8",
+    "@wdio/spec-reporter": "^8",
+    "ts-node": "^10",
+    "typescript": "^5",
+    "webdriverio": "^8"
+  }
+}

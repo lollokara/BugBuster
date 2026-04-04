@@ -60,8 +60,8 @@ static void bb_irq_deassert(void)
 }
 
 // IRQ pulse state machine (called from poll loop, non-blocking)
-static uint32_t s_irq_assert_ms = 0;
-static bool     s_irq_active = false;
+static volatile uint32_t s_irq_assert_ms = 0;
+static volatile bool     s_irq_active = false;
 
 static void bb_irq_pulse(void)
 {
@@ -314,6 +314,7 @@ static void dispatch_command(const HatFrame *frame)
         LaTrigger trig;
         trig.type = (LaTriggerType)frame->payload[0];
         trig.channel = frame->payload[1];
+        if (trig.channel >= BB_LA_NUM_CHANNELS) { send_error(HAT_ERR_INVALID_PIN); break; }
         bb_la_set_trigger(&trig);
         send_ok(NULL, 0);
         break;
@@ -495,7 +496,7 @@ void bb_cmd_task(void *params)
 
         // Small sleep to avoid busy-loop when no UART data
 #ifdef DEBUGPROBE_INTEGRATION
-        vTaskDelay(1);  // Yield to other FreeRTOS tasks (1 tick = ~1ms)
+        vTaskDelay(0);  // Yield to other FreeRTOS tasks without blocking (avoids UART FIFO overflow)
 #else
         sleep_us(100);
 #endif

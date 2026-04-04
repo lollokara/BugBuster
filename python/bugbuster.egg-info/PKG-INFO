@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: bugbuster
+Version: 0.1.0
+Summary: Python control library for the BugBuster AD74416H industrial I/O device
+Requires-Python: >=3.10
+Requires-Dist: pyserial>=3.5
+Requires-Dist: requests>=2.28
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

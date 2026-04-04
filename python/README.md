@@ -4,8 +4,27 @@ Python control library for the **BugBuster** industrial I/O board, built around 
 AD74416H quad-channel software-configurable I/O IC on an ESP32-S3 platform.
 
 Supports two communication transports:
-- **USB** — Binary protocol (BBP) over CDC serial. Low-latency, supports ADC streaming.
+- **USB** — Binary protocol (BBP) over CDC serial. Low-latency, supports ADC/scope streaming.
 - **HTTP** — WiFi REST API. No streaming, but works wirelessly.
+
+## Transport Feature Comparison
+
+| Feature | USB | HTTP |
+|---------|-----|------|
+| Core channel I/O (VOUT, IOUT, VIN, IIN, RTD, DIN) | ✅ | ✅ |
+| GPIO / MUX / Power management | ✅ | ✅ |
+| IDAC / self-test / diagnostics | ✅ | ✅ |
+| WiFi management | ✅ | ✅ |
+| Waveform generator | ✅ | ✅ |
+| ADC streaming (`start_adc_stream`) | ✅ | ❌ |
+| Scope streaming (`on_scope_data`) | ✅ | ❌ |
+| HAT power control (`hat_set_power`, `hat_get_power`) | ✅ | ❌ (no firmware endpoint) |
+| HAT I/O voltage (`hat_set_io_voltage`) | ✅ | ❌ (no firmware endpoint) |
+| Logic Analyzer (`hat_la_*`) | ✅ | ❌ |
+| UART bridge config (`set_uart_config`) | ✅ | ❌ |
+| Direct register access (`register_read`, `register_write`) | ✅ | ❌ |
+
+Methods that raise `NotImplementedError` over HTTP are documented in their docstrings.
 
 ## Installation
 

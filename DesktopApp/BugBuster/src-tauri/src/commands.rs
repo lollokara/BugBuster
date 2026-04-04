@@ -351,49 +351,7 @@ pub async fn wifi_get_status(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<WifiState> {
     let rsp = mgr.send_command(bbp::CMD_WIFI_GET_STATUS, &[]).await.map_err(map_err)?;
-    let mut r = bbp::PayloadReader::new(&rsp);
-
-    let connected = r.get_bool().unwrap_or(false);
-
-    // Read length-prefixed strings
-    let ssid_len = r.get_u8().unwrap_or(0) as usize;
-    let sta_ssid = if ssid_len > 0 && r.remaining() >= ssid_len {
-        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ssid_len]).to_string();
-        r.skip(ssid_len);
-        s
-    } else { String::new() };
-
-    let ip_len = r.get_u8().unwrap_or(0) as usize;
-    let sta_ip = if ip_len > 0 && r.remaining() >= ip_len {
-        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ip_len]).to_string();
-        r.skip(ip_len);
-        s
-    } else { String::new() };
-
-    let rssi = r.get_u32().unwrap_or(0) as i32;
-
-    let ap_ssid_len = r.get_u8().unwrap_or(0) as usize;
-    let ap_ssid = if ap_ssid_len > 0 && r.remaining() >= ap_ssid_len {
-        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ap_ssid_len]).to_string();
-        r.skip(ap_ssid_len);
-        s
-    } else { String::new() };
-
-    let ap_ip_len = r.get_u8().unwrap_or(0) as usize;
-    let ap_ip = if ap_ip_len > 0 && r.remaining() >= ap_ip_len {
-        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ap_ip_len]).to_string();
-        r.skip(ap_ip_len);
-        s
-    } else { String::new() };
-
-    let ap_mac_len = r.get_u8().unwrap_or(0) as usize;
-    let ap_mac = if ap_mac_len > 0 && r.remaining() >= ap_mac_len {
-        let s = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + ap_mac_len]).to_string();
-        r.skip(ap_mac_len);
-        s
-    } else { String::new() };
-
-    Ok(WifiState { connected, sta_ssid, sta_ip, rssi, ap_ssid, ap_ip, ap_mac })
+    Ok(parse_wifi_status(&rsp))
 }
 
 #[tauri::command]
@@ -433,25 +391,7 @@ pub async fn wifi_scan(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<Vec<WifiNetwork>> {
     let rsp = mgr.send_command(bbp::CMD_WIFI_SCAN, &[]).await.map_err(map_err)?;
-    let mut r = bbp::PayloadReader::new(&rsp);
-    let count = r.get_u8().unwrap_or(0) as usize;
-    let mut networks = Vec::with_capacity(count);
-    for _ in 0..count {
-        let slen = r.get_u8().unwrap_or(0) as usize;
-        if r.remaining() < slen + 2 { break; }
-        let ssid = String::from_utf8_lossy(&rsp[r.pos()..r.pos() + slen]).to_string();
-        r.skip(slen);
-        let rssi = r.get_u8().unwrap_or(0) as i8 as i32;
-        let auth = r.get_u8().unwrap_or(0);
-        if !ssid.is_empty() {
-            networks.push(WifiNetwork { ssid, rssi, auth });
-        }
-    }
-    // Deduplicate by SSID, keep strongest signal
-    networks.sort_by(|a, b| b.rssi.cmp(&a.rssi));
-    let mut seen = std::collections::HashSet::new();
-    networks.retain(|n| seen.insert(n.ssid.clone()));
-    Ok(networks)
+    Ok(parse_wifi_scan(&rsp))
 }
 
 // -----------------------------------------------------------------------------
@@ -648,6 +588,22 @@ pub async fn stop_adc_stream(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn start_scope_stream(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_START_SCOPE_STREAM, &[]).await.map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_scope_stream(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_STOP_SCOPE_STREAM, &[]).await.map_err(map_err)?;
+    Ok(())
+}
+
 // -----------------------------------------------------------------------------
 // Waveform Generator
 // -----------------------------------------------------------------------------
@@ -709,36 +665,7 @@ pub async fn idac_get_status(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<IdacState> {
     let rsp = mgr.send_command(bbp::CMD_IDAC_GET_STATUS, &[]).await.map_err(map_err)?;
-    let mut r = bbp::PayloadReader::new(&rsp);
-    let present = r.get_bool().unwrap_or(false);
-    let mut channels = Vec::new();
-    let names = ["LevelShift", "V_ADJ1", "V_ADJ2", "Spare"];
-    for i in 0..4 {
-        let _ch = r.get_u8();
-        let code = r.get_u8().unwrap_or(0) as i8;
-        let target_v = r.get_f32().unwrap_or(0.0);
-        let _actual_v = r.get_f32().unwrap_or(0.0);
-        let midpoint_v = r.get_f32().unwrap_or(0.0);
-        let v_min = r.get_f32().unwrap_or(0.0);
-        let v_max = r.get_f32().unwrap_or(0.0);
-        let step_mv = r.get_f32().unwrap_or(0.0);
-        let calibrated = r.get_bool().unwrap_or(false);
-        let cal_count = r.get_u8().unwrap_or(0);
-        let mut cal_points = Vec::new();
-        for _ in 0..cal_count {
-            let pc = r.get_u8().unwrap_or(0) as i8;
-            let pv = r.get_f32().unwrap_or(0.0);
-            cal_points.push(IdacCalPoint { code: pc, voltage: pv });
-        }
-        if i < 3 {
-            channels.push(IdacChannelState {
-                code, target_v, midpoint_v, v_min, v_max, step_mv, calibrated,
-                cal_points,
-                name: names[i].to_string(),
-            });
-        }
-    }
-    Ok(IdacState { present, channels })
+    Ok(parse_idac_status(&rsp))
 }
 
 #[tauri::command]
@@ -818,20 +745,32 @@ pub async fn selftest_auto_calibrate(
     // and measures each via U23 before responding.
     let resp = mgr.send_command(bbp::CMD_SELFTEST_AUTO_CAL, &pw.buf)
         .await.map_err(map_err)?;
-    let status = resp.get(0).copied().unwrap_or(3);
-    let cal_ch = resp.get(1).copied().unwrap_or(0);
-    let points = resp.get(2).copied().unwrap_or(0);
-    let error_mv = if resp.len() >= 7 {
-        f32::from_le_bytes([resp[3], resp[4], resp[5], resp[6]])
-    } else {
-        0.0
-    };
-    Ok(serde_json::json!({
-        "status": status,
-        "channel": cal_ch,
-        "points": points,
-        "errorMv": error_mv,
-    }))
+    Ok(parse_selftest_auto_cal(&resp))
+}
+
+#[tauri::command]
+pub async fn selftest_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<serde_json::Value> {
+    let rsp = mgr.send_command(bbp::CMD_SELFTEST_STATUS, &[]).await.map_err(map_err)?;
+    Ok(parse_selftest_status(&rsp))
+}
+
+#[tauri::command]
+pub async fn selftest_measure_supply(
+    rail: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<serde_json::Value> {
+    let rsp = mgr.send_command(bbp::CMD_SELFTEST_MEASURE_SUPPLY, &[rail]).await.map_err(map_err)?;
+    Ok(parse_selftest_measure_supply(rail, &rsp))
+}
+
+#[tauri::command]
+pub async fn selftest_efuse_currents(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<serde_json::Value> {
+    let rsp = mgr.send_command(bbp::CMD_SELFTEST_EFUSE_CURRENTS, &[]).await.map_err(map_err)?;
+    Ok(parse_selftest_efuse_currents(&rsp))
 }
 
 // -----------------------------------------------------------------------------
@@ -843,37 +782,7 @@ pub async fn pca_get_status(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<IoExpState> {
     let rsp = mgr.send_command(bbp::CMD_PCA_GET_STATUS, &[]).await.map_err(map_err)?;
-    let mut r = bbp::PayloadReader::new(&rsp);
-    let present = r.get_bool().unwrap_or(false);
-    let input0 = r.get_u8().unwrap_or(0);
-    let input1 = r.get_u8().unwrap_or(0);
-    let output0 = r.get_u8().unwrap_or(0);
-    let output1 = r.get_u8().unwrap_or(0);
-    let logic_pg = r.get_bool().unwrap_or(false);
-    let vadj1_pg = r.get_bool().unwrap_or(false);
-    let vadj2_pg = r.get_bool().unwrap_or(false);
-    let mut efuse_flt = [false; 4];
-    for i in 0..4 { efuse_flt[i] = r.get_bool().unwrap_or(false); }
-    let vadj1_en = r.get_bool().unwrap_or(false);
-    let vadj2_en = r.get_bool().unwrap_or(false);
-    let en_15v = r.get_bool().unwrap_or(false);
-    let en_mux = r.get_bool().unwrap_or(false);
-    let en_usb_hub = r.get_bool().unwrap_or(false);
-    let mut efuse_en = [false; 4];
-    for i in 0..4 { efuse_en[i] = r.get_bool().unwrap_or(false); }
-
-    let efuses = (0..4).map(|i| EfuseState {
-        id: (i + 1) as u8,
-        enabled: efuse_en[i],
-        fault: efuse_flt[i],
-    }).collect();
-
-    Ok(IoExpState {
-        present, input0, input1, output0, output1,
-        logic_pg, vadj1_pg, vadj2_pg,
-        vadj1_en, vadj2_en, en_15v, en_mux, en_usb_hub,
-        efuses,
-    })
+    Ok(parse_pca_status(&rsp))
 }
 
 #[tauri::command]
@@ -924,32 +833,7 @@ pub async fn hat_get_status(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<HatStatus> {
     let rsp = mgr.send_command(bbp::CMD_HAT_GET_STATUS, &[]).await.map_err(map_err)?;
-    let mut r = bbp::PayloadReader::new(&rsp);
-    // Core
-    let detected = r.get_bool().unwrap_or(false);
-    let connected = r.get_bool().unwrap_or(false);
-    let hat_type = r.get_u8().unwrap_or(0);
-    let detect_voltage = r.get_f32().unwrap_or(0.0);
-    let fw_major = r.get_u8().unwrap_or(0);
-    let fw_minor = r.get_u8().unwrap_or(0);
-    let config_confirmed = r.get_bool().unwrap_or(false);
-    let mut pin_config = vec![0u8; 4];
-    for i in 0..4 { pin_config[i] = r.get_u8().unwrap_or(0); }
-    // Power
-    let mut connectors = vec![HatConnectorStatus::default(), HatConnectorStatus::default()];
-    for c in connectors.iter_mut() {
-        c.enabled = r.get_bool().unwrap_or(false);
-        c.current_ma = r.get_f32().unwrap_or(0.0);
-        c.fault = r.get_bool().unwrap_or(false);
-    }
-    let io_voltage_mv = r.get_u16().unwrap_or(0);
-    // SWD
-    let dap_connected = r.get_bool().unwrap_or(false);
-    let target_detected = r.get_bool().unwrap_or(false);
-    let target_dpidr = r.get_u32().unwrap_or(0);
-    Ok(HatStatus { detected, connected, hat_type, detect_voltage, fw_major, fw_minor,
-                   config_confirmed, pin_config, connectors, io_voltage_mv,
-                   dap_connected, target_detected, target_dpidr })
+    Ok(parse_hat_status(&rsp))
 }
 
 #[tauri::command]
@@ -987,12 +871,16 @@ pub async fn hat_detect(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<HatStatus> {
     let rsp = mgr.send_command(bbp::CMD_HAT_DETECT, &[]).await.map_err(map_err)?;
-    let mut r = bbp::PayloadReader::new(&rsp);
-    let detected = r.get_bool().unwrap_or(false);
-    let hat_type = r.get_u8().unwrap_or(0);
-    let detect_voltage = r.get_f32().unwrap_or(0.0);
-    let connected = r.get_bool().unwrap_or(false);
-    Ok(HatStatus { detected, connected, hat_type, detect_voltage, ..Default::default() })
+    Ok(parse_hat_detect(&rsp))
+}
+
+// HAT Power Query
+#[tauri::command]
+pub async fn hat_get_power(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<serde_json::Value> {
+    let rsp = mgr.send_command(bbp::CMD_HAT_GET_POWER, &[]).await.map_err(map_err)?;
+    Ok(parse_hat_get_power(&rsp))
 }
 
 // HAT Power Management
@@ -1042,38 +930,7 @@ pub async fn usbpd_get_status(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<UsbPdState> {
     let rsp = mgr.send_command(bbp::CMD_USBPD_GET_STATUS, &[]).await.map_err(map_err)?;
-    let mut r = bbp::PayloadReader::new(&rsp);
-    let present = r.get_bool().unwrap_or(false);
-    let attached = r.get_bool().unwrap_or(false);
-    let cc_dir = r.get_bool().unwrap_or(false);
-    let pd_response = r.get_u8().unwrap_or(0);
-    let _voltage_code = r.get_u8().unwrap_or(0);
-    let _current_code = r.get_u8().unwrap_or(0);
-    let voltage_v = r.get_f32().unwrap_or(0.0);
-    let current_a = r.get_f32().unwrap_or(0.0);
-    let power_w = r.get_f32().unwrap_or(0.0);
-
-    let pdo_names = ["5V", "9V", "12V", "15V", "18V", "20V"];
-    let pdo_volts = [5.0f32, 9.0, 12.0, 15.0, 18.0, 20.0];
-    let mut source_pdos = Vec::new();
-    for i in 0..6 {
-        let detected = r.get_bool().unwrap_or(false);
-        let cur_code = r.get_u8().unwrap_or(0);
-        let max_a = decode_husb_current(cur_code);
-        source_pdos.push(UsbPdPdo {
-            voltage: pdo_names[i].to_string(),
-            detected,
-            max_current_a: max_a,
-            max_power_w: pdo_volts[i] * max_a,
-        });
-    }
-    let selected_pdo = r.get_u8().unwrap_or(0);
-
-    Ok(UsbPdState {
-        present, attached,
-        cc: if cc_dir { "CC2".into() } else { "CC1".into() },
-        voltage_v, current_a, power_w, pd_response, source_pdos, selected_pdo,
-    })
+    Ok(parse_usbpd_status(&rsp))
 }
 
 fn decode_husb_current(code: u8) -> f32 {
@@ -1593,4 +1450,830 @@ pub async fn pick_config_open_file(app: tauri::AppHandle) -> CmdResult<Option<St
         .blocking_pick_file();
 
     Ok(path.map(|p| p.to_string()))
+}
+
+// =============================================================================
+// Parse helpers — extracted from command handlers for unit-testability.
+// Each function takes a raw response payload (&[u8]) and returns the parsed
+// value.  Command handlers are thin wrappers that call these.
+// =============================================================================
+
+pub fn parse_selftest_status(data: &[u8]) -> serde_json::Value {
+    let mut r = bbp::PayloadReader::new(data);
+    serde_json::json!({
+        "boot": {
+            "ran":     r.get_bool().unwrap_or(false),
+            "passed":  r.get_bool().unwrap_or(false),
+            "vadj1V":  r.get_f32().unwrap_or(0.0),
+            "vadj2V":  r.get_f32().unwrap_or(0.0),
+            "vlogicV": r.get_f32().unwrap_or(0.0),
+        },
+        "cal": {
+            "status":  r.get_u8().unwrap_or(0),
+            "channel": r.get_u8().unwrap_or(0),
+            "points":  r.get_u8().unwrap_or(0),
+            "errorMv": r.get_f32().unwrap_or(0.0),
+        }
+    })
+}
+
+pub fn parse_selftest_auto_cal(data: &[u8]) -> serde_json::Value {
+    let status   = data.get(0).copied().unwrap_or(3);
+    let cal_ch   = data.get(1).copied().unwrap_or(0);
+    let points   = data.get(2).copied().unwrap_or(0);
+    let error_mv = if data.len() >= 7 {
+        f32::from_le_bytes([data[3], data[4], data[5], data[6]])
+    } else { 0.0 };
+    serde_json::json!({
+        "status":  status,
+        "channel": cal_ch,
+        "points":  points,
+        "errorMv": error_mv,
+    })
+}
+
+pub fn parse_selftest_measure_supply(rail: u8, data: &[u8]) -> serde_json::Value {
+    let mut r = bbp::PayloadReader::new(data);
+    serde_json::json!({
+        "rail":    r.get_u8().unwrap_or(rail),
+        "voltage": r.get_f32().unwrap_or(0.0),
+    })
+}
+
+pub fn parse_selftest_efuse_currents(data: &[u8]) -> serde_json::Value {
+    let mut r = bbp::PayloadReader::new(data);
+    let available    = r.get_bool().unwrap_or(false);
+    let timestamp_ms = r.get_u32().unwrap_or(0);
+    let currents: Vec<f32> = (0..4).map(|_| r.get_f32().unwrap_or(-1.0)).collect();
+    serde_json::json!({
+        "available":   available,
+        "timestampMs": timestamp_ms,
+        "currentsA":   currents,
+    })
+}
+
+pub fn parse_hat_get_power(data: &[u8]) -> serde_json::Value {
+    let mut r = bbp::PayloadReader::new(data);
+    let mut connectors = Vec::new();
+    for _ in 0..2 {
+        let enabled    = r.get_bool().unwrap_or(false);
+        let current_ma = r.get_f32().unwrap_or(0.0);
+        let fault      = r.get_bool().unwrap_or(false);
+        connectors.push(serde_json::json!({
+            "enabled":   enabled,
+            "currentMa": current_ma,
+            "fault":     fault,
+        }));
+    }
+    let io_voltage_mv = r.get_u16().unwrap_or(0);
+    serde_json::json!({ "connectors": connectors, "ioVoltageMv": io_voltage_mv })
+}
+
+pub fn parse_usbpd_status(data: &[u8]) -> UsbPdState {
+    let mut r = bbp::PayloadReader::new(data);
+    let present      = r.get_bool().unwrap_or(false);
+    let attached     = r.get_bool().unwrap_or(false);
+    let cc_dir       = r.get_bool().unwrap_or(false);
+    let pd_response  = r.get_u8().unwrap_or(0);
+    let _voltage_code = r.get_u8().unwrap_or(0);
+    let _current_code = r.get_u8().unwrap_or(0);
+    let voltage_v    = r.get_f32().unwrap_or(0.0);
+    let current_a    = r.get_f32().unwrap_or(0.0);
+    let power_w      = r.get_f32().unwrap_or(0.0);
+
+    let pdo_names = ["5V", "9V", "12V", "15V", "18V", "20V"];
+    let pdo_volts = [5.0f32, 9.0, 12.0, 15.0, 18.0, 20.0];
+    let mut source_pdos = Vec::new();
+    for i in 0..6 {
+        let detected  = r.get_bool().unwrap_or(false);
+        let cur_code  = r.get_u8().unwrap_or(0);
+        let max_a     = decode_husb_current(cur_code);
+        source_pdos.push(UsbPdPdo {
+            voltage:       pdo_names[i].to_string(),
+            detected,
+            max_current_a: max_a,
+            max_power_w:   pdo_volts[i] * max_a,
+        });
+    }
+    let selected_pdo = r.get_u8().unwrap_or(0);
+    UsbPdState {
+        present, attached,
+        cc: if cc_dir { "CC2".into() } else { "CC1".into() },
+        voltage_v, current_a, power_w, pd_response, source_pdos, selected_pdo,
+    }
+}
+
+pub fn parse_idac_status(data: &[u8]) -> IdacState {
+    let mut r = bbp::PayloadReader::new(data);
+    let present = r.get_bool().unwrap_or(false);
+    let mut channels = Vec::new();
+    let names = ["LevelShift", "V_ADJ1", "V_ADJ2", "Spare"];
+    for i in 0..4 {
+        let _ch        = r.get_u8();
+        let code       = r.get_u8().unwrap_or(0) as i8;
+        let target_v   = r.get_f32().unwrap_or(0.0);
+        let _actual_v  = r.get_f32().unwrap_or(0.0);
+        let midpoint_v = r.get_f32().unwrap_or(0.0);
+        let v_min      = r.get_f32().unwrap_or(0.0);
+        let v_max      = r.get_f32().unwrap_or(0.0);
+        let step_mv    = r.get_f32().unwrap_or(0.0);
+        let calibrated = r.get_bool().unwrap_or(false);
+        let cal_count  = r.get_u8().unwrap_or(0);
+        let mut cal_points = Vec::new();
+        for _ in 0..cal_count {
+            let pc = r.get_u8().unwrap_or(0) as i8;
+            let pv = r.get_f32().unwrap_or(0.0);
+            cal_points.push(IdacCalPoint { code: pc, voltage: pv });
+        }
+        if i < 3 {
+            channels.push(IdacChannelState {
+                code, target_v, midpoint_v, v_min, v_max, step_mv, calibrated,
+                cal_points,
+                name: names[i].to_string(),
+            });
+        }
+    }
+    IdacState { present, channels }
+}
+
+pub fn parse_pca_status(data: &[u8]) -> IoExpState {
+    let mut r      = bbp::PayloadReader::new(data);
+    let present    = r.get_bool().unwrap_or(false);
+    let input0     = r.get_u8().unwrap_or(0);
+    let input1     = r.get_u8().unwrap_or(0);
+    let output0    = r.get_u8().unwrap_or(0);
+    let output1    = r.get_u8().unwrap_or(0);
+    let logic_pg   = r.get_bool().unwrap_or(false);
+    let vadj1_pg   = r.get_bool().unwrap_or(false);
+    let vadj2_pg   = r.get_bool().unwrap_or(false);
+    let mut efuse_flt = [false; 4];
+    for i in 0..4 { efuse_flt[i] = r.get_bool().unwrap_or(false); }
+    let vadj1_en   = r.get_bool().unwrap_or(false);
+    let vadj2_en   = r.get_bool().unwrap_or(false);
+    let en_15v     = r.get_bool().unwrap_or(false);
+    let en_mux     = r.get_bool().unwrap_or(false);
+    let en_usb_hub = r.get_bool().unwrap_or(false);
+    let mut efuse_en = [false; 4];
+    for i in 0..4 { efuse_en[i] = r.get_bool().unwrap_or(false); }
+    let efuses = (0..4).map(|i| EfuseState {
+        id:      (i + 1) as u8,
+        enabled: efuse_en[i],
+        fault:   efuse_flt[i],
+    }).collect();
+    IoExpState {
+        present, input0, input1, output0, output1,
+        logic_pg, vadj1_pg, vadj2_pg,
+        vadj1_en, vadj2_en, en_15v, en_mux, en_usb_hub,
+        efuses,
+    }
+}
+
+pub fn parse_hat_status(data: &[u8]) -> HatStatus {
+    let mut r           = bbp::PayloadReader::new(data);
+    let detected        = r.get_bool().unwrap_or(false);
+    let connected       = r.get_bool().unwrap_or(false);
+    let hat_type        = r.get_u8().unwrap_or(0);
+    let detect_voltage  = r.get_f32().unwrap_or(0.0);
+    let fw_major        = r.get_u8().unwrap_or(0);
+    let fw_minor        = r.get_u8().unwrap_or(0);
+    let config_confirmed = r.get_bool().unwrap_or(false);
+    let mut pin_config  = vec![0u8; 4];
+    for i in 0..4 { pin_config[i] = r.get_u8().unwrap_or(0); }
+    let mut connectors  = vec![HatConnectorStatus::default(), HatConnectorStatus::default()];
+    for c in connectors.iter_mut() {
+        c.enabled    = r.get_bool().unwrap_or(false);
+        c.current_ma = r.get_f32().unwrap_or(0.0);
+        c.fault      = r.get_bool().unwrap_or(false);
+    }
+    let io_voltage_mv   = r.get_u16().unwrap_or(0);
+    let dap_connected   = r.get_bool().unwrap_or(false);
+    let target_detected = r.get_bool().unwrap_or(false);
+    let target_dpidr    = r.get_u32().unwrap_or(0);
+    HatStatus {
+        detected, connected, hat_type, detect_voltage, fw_major, fw_minor,
+        config_confirmed, pin_config, connectors, io_voltage_mv,
+        dap_connected, target_detected, target_dpidr,
+    }
+}
+
+pub fn parse_hat_detect(data: &[u8]) -> HatStatus {
+    let mut r          = bbp::PayloadReader::new(data);
+    let detected       = r.get_bool().unwrap_or(false);
+    let hat_type       = r.get_u8().unwrap_or(0);
+    let detect_voltage = r.get_f32().unwrap_or(0.0);
+    let connected      = r.get_bool().unwrap_or(false);
+    HatStatus { detected, connected, hat_type, detect_voltage, ..Default::default() }
+}
+
+/// Parse a WiFi status response (length-prefixed strings).
+pub fn parse_wifi_status(data: &[u8]) -> WifiState {
+    let mut r = bbp::PayloadReader::new(data);
+
+    let connected = r.get_bool().unwrap_or(false);
+
+    let ssid_len = r.get_u8().unwrap_or(0) as usize;
+    let sta_ssid = if ssid_len > 0 && r.remaining() >= ssid_len {
+        let s = String::from_utf8_lossy(&data[r.pos()..r.pos() + ssid_len]).to_string();
+        r.skip(ssid_len);
+        s
+    } else { String::new() };
+
+    let ip_len = r.get_u8().unwrap_or(0) as usize;
+    let sta_ip = if ip_len > 0 && r.remaining() >= ip_len {
+        let s = String::from_utf8_lossy(&data[r.pos()..r.pos() + ip_len]).to_string();
+        r.skip(ip_len);
+        s
+    } else { String::new() };
+
+    let rssi = r.get_u32().unwrap_or(0) as i32;
+
+    let ap_ssid_len = r.get_u8().unwrap_or(0) as usize;
+    let ap_ssid = if ap_ssid_len > 0 && r.remaining() >= ap_ssid_len {
+        let s = String::from_utf8_lossy(&data[r.pos()..r.pos() + ap_ssid_len]).to_string();
+        r.skip(ap_ssid_len);
+        s
+    } else { String::new() };
+
+    let ap_ip_len = r.get_u8().unwrap_or(0) as usize;
+    let ap_ip = if ap_ip_len > 0 && r.remaining() >= ap_ip_len {
+        let s = String::from_utf8_lossy(&data[r.pos()..r.pos() + ap_ip_len]).to_string();
+        r.skip(ap_ip_len);
+        s
+    } else { String::new() };
+
+    let ap_mac_len = r.get_u8().unwrap_or(0) as usize;
+    let ap_mac = if ap_mac_len > 0 && r.remaining() >= ap_mac_len {
+        let s = String::from_utf8_lossy(&data[r.pos()..r.pos() + ap_mac_len]).to_string();
+        r.skip(ap_mac_len);
+        s
+    } else { String::new() };
+
+    WifiState { connected, sta_ssid, sta_ip, rssi, ap_ssid, ap_ip, ap_mac }
+}
+
+/// Parse a WiFi scan response, returning deduplicated networks sorted by RSSI.
+pub fn parse_wifi_scan(data: &[u8]) -> Vec<WifiNetwork> {
+    let mut r = bbp::PayloadReader::new(data);
+    let count = r.get_u8().unwrap_or(0) as usize;
+    let mut networks = Vec::with_capacity(count);
+    for _ in 0..count {
+        let slen = r.get_u8().unwrap_or(0) as usize;
+        if r.remaining() < slen + 2 { break; }
+        let ssid = String::from_utf8_lossy(&data[r.pos()..r.pos() + slen]).to_string();
+        r.skip(slen);
+        let rssi = r.get_u8().unwrap_or(0) as i8 as i32;
+        let auth = r.get_u8().unwrap_or(0);
+        if !ssid.is_empty() {
+            networks.push(WifiNetwork { ssid, rssi, auth });
+        }
+    }
+    dedup_wifi_networks(networks)
+}
+
+fn dedup_wifi_networks(mut networks: Vec<WifiNetwork>) -> Vec<WifiNetwork> {
+    networks.sort_by(|a, b| b.rssi.cmp(&a.rssi));
+    let mut seen = std::collections::HashSet::new();
+    networks.retain(|n| seen.insert(n.ssid.clone()));
+    networks
+}
+
+// =============================================================================
+// Unit Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bbp::PayloadWriter;
+
+    // -------------------------------------------------------------------------
+    // Helper: build a raw payload from a closure operating on a PayloadWriter
+    // -------------------------------------------------------------------------
+    fn build<F: FnOnce(&mut PayloadWriter)>(f: F) -> Vec<u8> {
+        let mut w = PayloadWriter::new();
+        f(&mut w);
+        w.buf
+    }
+
+    // -------------------------------------------------------------------------
+    // decode_husb_current — all 16 defined codes + unknown code
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn husb_current_code_0_is_0_5a() {
+        assert_eq!(decode_husb_current(0), 0.5);
+    }
+
+    #[test]
+    fn husb_current_code_15_is_5a() {
+        assert_eq!(decode_husb_current(15), 5.0);
+    }
+
+    #[test]
+    fn husb_current_all_codes() {
+        let expected = [
+            0.5, 0.7, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25,
+            2.5, 2.75, 3.0, 3.25, 3.5, 4.0, 4.5, 5.0,
+        ];
+        for (code, &exp) in expected.iter().enumerate() {
+            assert_eq!(decode_husb_current(code as u8), exp,
+                       "code {} should map to {} A", code, exp);
+        }
+    }
+
+    #[test]
+    fn husb_current_unknown_code_returns_zero() {
+        assert_eq!(decode_husb_current(16), 0.0);
+        assert_eq!(decode_husb_current(255), 0.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // raw_to_voltage_f64 — all 8 ADC ranges
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn raw_voltage_range0_zero_code_is_0v() {
+        // Range 0: 0..12V unipolar.  code=0 → 0 V
+        let v = raw_to_voltage_f64(0, 0);
+        assert!((v - 0.0).abs() < 1e-6, "range 0 zero code: expected 0 V, got {}", v);
+    }
+
+    #[test]
+    fn raw_voltage_range0_full_scale_is_12v() {
+        let fs = 16_777_216u32; // 2^24
+        let v = raw_to_voltage_f64(fs, 0); // full-scale (exclusive upper bound)
+        assert!((v - 12.0).abs() < 1e-4, "range 0 full scale: expected 12 V, got {}", v);
+    }
+
+    #[test]
+    fn raw_voltage_range1_bipolar_12v() {
+        // Range 1: -12..+12V.  code=0 → -12 V, mid → 0 V, full → +12 V
+        let fs = 16_777_216u32;
+        let low = raw_to_voltage_f64(0, 1);
+        let mid = raw_to_voltage_f64(fs / 2, 1);
+        let high = raw_to_voltage_f64(fs, 1);
+        assert!((low - (-12.0)).abs() < 1e-4, "range 1 low: {}", low);
+        assert!(mid.abs() < 0.01, "range 1 mid: {}", mid);
+        assert!((high - 12.0).abs() < 1e-4, "range 1 high: {}", high);
+    }
+
+    #[test]
+    fn raw_voltage_range7_bipolar_5v() {
+        // Range 7: -2.5..+2.5V.  code=0 → -2.5 V, full → +2.5 V
+        let fs = 16_777_216u32;
+        let low = raw_to_voltage_f64(0, 7);
+        let high = raw_to_voltage_f64(fs, 7);
+        assert!((low - (-2.5)).abs() < 1e-4, "range 7 low: {}", low);
+        assert!((high - 2.5).abs() < 1e-4, "range 7 high: {}", high);
+    }
+
+    #[test]
+    fn raw_voltage_unknown_range_falls_back_to_range0() {
+        // Unknown range → same as range 0 (0..12 V)
+        let v_default = raw_to_voltage_f64(0, 99);
+        let v_range0  = raw_to_voltage_f64(0, 0);
+        assert_eq!(v_default, v_range0);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_selftest_status
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_selftest_status_normal() {
+        let data = build(|w| {
+            w.put_bool(true);   // boot.ran
+            w.put_bool(true);   // boot.passed
+            w.put_f32(12.34);   // boot.vadj1V
+            w.put_f32(11.98);   // boot.vadj2V
+            w.put_f32(3.302);   // boot.vlogicV
+            w.put_u8(0);        // cal.status = OK
+            w.put_u8(2);        // cal.channel
+            w.put_u8(7);        // cal.points
+            w.put_f32(1.5);     // cal.errorMv
+        });
+        let v = parse_selftest_status(&data);
+        assert_eq!(v["boot"]["ran"], true);
+        assert_eq!(v["boot"]["passed"], true);
+        assert!((v["boot"]["vadj1V"].as_f64().unwrap() - 12.34).abs() < 0.01);
+        assert!((v["boot"]["vadj2V"].as_f64().unwrap() - 11.98).abs() < 0.01);
+        assert!((v["boot"]["vlogicV"].as_f64().unwrap() - 3.302).abs() < 0.01);
+        assert_eq!(v["cal"]["status"], 0);
+        assert_eq!(v["cal"]["channel"], 2);
+        assert_eq!(v["cal"]["points"], 7);
+        assert!((v["cal"]["errorMv"].as_f64().unwrap() - 1.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_selftest_status_empty_payload_gives_defaults() {
+        let v = parse_selftest_status(&[]);
+        assert_eq!(v["boot"]["ran"], false);
+        assert_eq!(v["boot"]["passed"], false);
+        assert_eq!(v["boot"]["vadj1V"], 0.0);
+        assert_eq!(v["cal"]["status"], 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_selftest_auto_cal
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_selftest_auto_cal_success() {
+        let error_mv: f32 = 2.5;
+        let mut data = vec![0u8, 1u8, 5u8]; // status=OK, ch=1, points=5
+        data.extend_from_slice(&error_mv.to_le_bytes());
+        let v = parse_selftest_auto_cal(&data);
+        assert_eq!(v["status"], 0);
+        assert_eq!(v["channel"], 1);
+        assert_eq!(v["points"], 5);
+        assert!((v["errorMv"].as_f64().unwrap() - 2.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_selftest_auto_cal_empty_gives_defaults() {
+        let v = parse_selftest_auto_cal(&[]);
+        assert_eq!(v["status"], 3); // default "unknown" status
+        assert_eq!(v["errorMv"], 0.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_selftest_measure_supply
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_selftest_measure_supply_normal() {
+        let data = build(|w| {
+            w.put_u8(1);        // rail 1
+            w.put_f32(12.05);   // voltage
+        });
+        let v = parse_selftest_measure_supply(1, &data);
+        assert_eq!(v["rail"], 1);
+        assert!((v["voltage"].as_f64().unwrap() - 12.05).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_selftest_measure_supply_empty_uses_fallback_rail() {
+        // If payload is empty, rail falls back to the argument
+        let v = parse_selftest_measure_supply(2, &[]);
+        assert_eq!(v["rail"], 2);
+        assert_eq!(v["voltage"], 0.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_selftest_efuse_currents
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_selftest_efuse_currents_normal() {
+        let data = build(|w| {
+            w.put_bool(true);       // available
+            w.put_u32(12345);       // timestampMs
+            w.put_f32(0.12);        // ch0
+            w.put_f32(0.24);        // ch1
+            w.put_f32(0.36);        // ch2
+            w.put_f32(0.48);        // ch3
+        });
+        let v = parse_selftest_efuse_currents(&data);
+        assert_eq!(v["available"], true);
+        assert_eq!(v["timestampMs"], 12345);
+        let currents = v["currentsA"].as_array().unwrap();
+        assert_eq!(currents.len(), 4);
+        assert!((currents[0].as_f64().unwrap() - 0.12).abs() < 0.01);
+        assert!((currents[3].as_f64().unwrap() - 0.48).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_selftest_efuse_currents_unavailable() {
+        let data = build(|w| {
+            w.put_bool(false);  // not available
+            w.put_u32(0);
+            for _ in 0..4 { w.put_f32(-1.0); }
+        });
+        let v = parse_selftest_efuse_currents(&data);
+        assert_eq!(v["available"], false);
+        let currents = v["currentsA"].as_array().unwrap();
+        assert!((currents[0].as_f64().unwrap() - (-1.0)).abs() < 0.01);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_hat_get_power
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_hat_get_power_both_connectors() {
+        let data = build(|w| {
+            // Connector 0: enabled, 150 mA, no fault
+            w.put_bool(true);
+            w.put_f32(150.0);
+            w.put_bool(false);
+            // Connector 1: disabled, 0 mA, no fault
+            w.put_bool(false);
+            w.put_f32(0.0);
+            w.put_bool(false);
+            // IO voltage
+            w.put_u16(3300);
+        });
+        let v = parse_hat_get_power(&data);
+        assert_eq!(v["connectors"][0]["enabled"], true);
+        assert!((v["connectors"][0]["currentMa"].as_f64().unwrap() - 150.0).abs() < 1.0);
+        assert_eq!(v["connectors"][0]["fault"], false);
+        assert_eq!(v["connectors"][1]["enabled"], false);
+        assert_eq!(v["ioVoltageMv"], 3300);
+    }
+
+    #[test]
+    fn parse_hat_get_power_with_fault() {
+        let data = build(|w| {
+            w.put_bool(true);
+            w.put_f32(500.0);
+            w.put_bool(true);   // fault!
+            w.put_bool(false);
+            w.put_f32(0.0);
+            w.put_bool(false);
+            w.put_u16(5000);
+        });
+        let v = parse_hat_get_power(&data);
+        assert_eq!(v["connectors"][0]["fault"], true);
+        assert_eq!(v["ioVoltageMv"], 5000);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_usbpd_status
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_usbpd_status_attached_cc1() {
+        let data = build(|w| {
+            w.put_bool(true);   // present
+            w.put_bool(true);   // attached
+            w.put_bool(false);  // cc_dir → CC1
+            w.put_u8(1);        // pd_response
+            w.put_u8(3);        // voltage_code (ignored)
+            w.put_u8(6);        // current_code (ignored)
+            w.put_f32(12.0);    // voltage_v
+            w.put_f32(2.0);     // current_a
+            w.put_f32(24.0);    // power_w
+            // 6 PDOs: 5V(detected, code=6=2A), others not detected
+            w.put_bool(true);  w.put_u8(6);  // 5V, 2A
+            w.put_bool(true);  w.put_u8(10); // 9V, 3A
+            w.put_bool(false); w.put_u8(0);  // 12V
+            w.put_bool(false); w.put_u8(0);  // 15V
+            w.put_bool(false); w.put_u8(0);  // 18V
+            w.put_bool(false); w.put_u8(0);  // 20V
+            w.put_u8(1);        // selected_pdo
+        });
+        let s = parse_usbpd_status(&data);
+        assert!(s.present);
+        assert!(s.attached);
+        assert_eq!(s.cc, "CC1");
+        assert!((s.voltage_v - 12.0).abs() < 0.01);
+        assert!((s.current_a - 2.0).abs() < 0.01);
+        assert_eq!(s.source_pdos.len(), 6);
+        assert!(s.source_pdos[0].detected);
+        assert_eq!(s.source_pdos[0].voltage, "5V");
+        assert!((s.source_pdos[0].max_current_a - 2.0).abs() < 0.01); // code 6 → 2.0A
+        assert!(!s.source_pdos[2].detected);
+        assert_eq!(s.selected_pdo, 1);
+    }
+
+    #[test]
+    fn parse_usbpd_status_cc2_direction() {
+        let data = build(|w| {
+            w.put_bool(true);   // present
+            w.put_bool(true);   // attached
+            w.put_bool(true);   // cc_dir → CC2
+            for _ in 0..15 { w.put_u8(0); } // rest
+        });
+        let s = parse_usbpd_status(&data);
+        assert_eq!(s.cc, "CC2");
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_wifi_status
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_wifi_status_connected() {
+        let ssid = "MyNetwork";
+        let ip   = "192.168.1.101";
+        let rssi: i32 = -67;
+        let ap_ssid = "BugBuster-AP";
+        let ap_ip   = "192.168.4.1";
+        let ap_mac  = "AA:BB:CC:DD:EE:FF";
+
+        let data = build(|w| {
+            w.put_bool(true);
+            w.put_u8(ssid.len() as u8);
+            w.buf.extend_from_slice(ssid.as_bytes());
+            w.put_u8(ip.len() as u8);
+            w.buf.extend_from_slice(ip.as_bytes());
+            w.put_u32(rssi as u32);
+            w.put_u8(ap_ssid.len() as u8);
+            w.buf.extend_from_slice(ap_ssid.as_bytes());
+            w.put_u8(ap_ip.len() as u8);
+            w.buf.extend_from_slice(ap_ip.as_bytes());
+            w.put_u8(ap_mac.len() as u8);
+            w.buf.extend_from_slice(ap_mac.as_bytes());
+        });
+
+        let s = parse_wifi_status(&data);
+        assert!(s.connected);
+        assert_eq!(s.sta_ssid, ssid);
+        assert_eq!(s.sta_ip, ip);
+        assert_eq!(s.rssi, rssi);
+        assert_eq!(s.ap_ssid, ap_ssid);
+        assert_eq!(s.ap_ip, ap_ip);
+        assert_eq!(s.ap_mac, ap_mac);
+    }
+
+    #[test]
+    fn parse_wifi_status_disconnected_empty_strings() {
+        let data = build(|w| {
+            w.put_bool(false);
+            w.put_u8(0); // ssid_len = 0
+            w.put_u8(0); // ip_len = 0
+            w.put_u32(0); // rssi
+            w.put_u8(0); // ap_ssid_len = 0
+            w.put_u8(0); // ap_ip_len = 0
+            w.put_u8(0); // ap_mac_len = 0
+        });
+        let s = parse_wifi_status(&data);
+        assert!(!s.connected);
+        assert!(s.sta_ssid.is_empty());
+        assert!(s.sta_ip.is_empty());
+        assert_eq!(s.rssi, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // dedup_wifi_networks (via parse_wifi_scan with crafted payload)
+    // -------------------------------------------------------------------------
+
+    fn make_scan_payload(entries: &[(&str, i8, u8)]) -> Vec<u8> {
+        build(|w| {
+            w.put_u8(entries.len() as u8);
+            for (ssid, rssi, auth) in entries {
+                w.put_u8(ssid.len() as u8);
+                w.buf.extend_from_slice(ssid.as_bytes());
+                w.put_u8(*rssi as u8);
+                w.put_u8(*auth);
+            }
+        })
+    }
+
+    #[test]
+    fn wifi_scan_dedup_keeps_strongest_signal() {
+        // Same SSID appears twice; we should keep the one with higher RSSI (-40 > -80)
+        let data = make_scan_payload(&[
+            ("HomeNet", -80, 2),
+            ("HomeNet", -40, 2),
+        ]);
+        let nets = parse_wifi_scan(&data);
+        assert_eq!(nets.len(), 1);
+        assert_eq!(nets[0].ssid, "HomeNet");
+        assert_eq!(nets[0].rssi, -40);
+    }
+
+    #[test]
+    fn wifi_scan_dedup_preserves_unique_ssids() {
+        let data = make_scan_payload(&[
+            ("Alpha", -50, 2),
+            ("Beta",  -60, 0),
+            ("Gamma", -70, 2),
+        ]);
+        let nets = parse_wifi_scan(&data);
+        assert_eq!(nets.len(), 3);
+        // Should be sorted strongest first
+        assert_eq!(nets[0].ssid, "Alpha");
+        assert_eq!(nets[1].ssid, "Beta");
+        assert_eq!(nets[2].ssid, "Gamma");
+    }
+
+    #[test]
+    fn wifi_scan_empty_payload_returns_empty() {
+        let data = build(|w| w.put_u8(0));
+        let nets = parse_wifi_scan(&data);
+        assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn wifi_scan_skips_empty_ssid_entries() {
+        // SSID with length 0 should be filtered out
+        let data = build(|w| {
+            w.put_u8(2); // 2 entries
+            // Entry with empty SSID
+            w.put_u8(0); // slen = 0  -- but remaining < slen+2 guard fires before filter
+            // Since slen=0 and remaining >= 0+2=2, we proceed.
+            // rssi and auth bytes must be present; ssid will be empty string → filtered
+            w.put_u8(0xC0u8); // rssi = -64
+            w.put_u8(2);     // auth
+            // Valid entry
+            w.put_u8(4);
+            w.buf.extend_from_slice(b"Test");
+            w.put_u8(0xD0u8); // rssi = -48
+            w.put_u8(0);
+        });
+        let nets = parse_wifi_scan(&data);
+        // Only the non-empty SSID should survive
+        assert_eq!(nets.len(), 1);
+        assert_eq!(nets[0].ssid, "Test");
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_pca_status
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_pca_status_all_enabled() {
+        let data = build(|w| {
+            w.put_bool(true);   // present
+            w.put_u8(0xFF);     // input0
+            w.put_u8(0x0F);     // input1
+            w.put_u8(0xAA);     // output0
+            w.put_u8(0x55);     // output1
+            w.put_bool(true);   // logic_pg
+            w.put_bool(true);   // vadj1_pg
+            w.put_bool(false);  // vadj2_pg
+            // efuse faults (4 bools)
+            w.put_bool(false); w.put_bool(false); w.put_bool(true); w.put_bool(false);
+            w.put_bool(true);   // vadj1_en
+            w.put_bool(true);   // vadj2_en
+            w.put_bool(false);  // en_15v
+            w.put_bool(true);   // en_mux
+            w.put_bool(false);  // en_usb_hub
+            // efuse enables (4 bools)
+            w.put_bool(true); w.put_bool(true); w.put_bool(false); w.put_bool(true);
+        });
+        let s = parse_pca_status(&data);
+        assert!(s.present);
+        assert_eq!(s.input0, 0xFF);
+        assert_eq!(s.output0, 0xAA);
+        assert!(s.logic_pg);
+        assert!(s.vadj1_pg);
+        assert!(!s.vadj2_pg);
+        assert!(s.vadj1_en);
+        assert!(s.en_mux);
+        assert!(!s.en_usb_hub);
+        assert_eq!(s.efuses.len(), 4);
+        assert!( s.efuses[2].fault);   // efuse 3 had fault
+        assert!(!s.efuses[0].fault);
+        assert!( s.efuses[0].enabled);
+        assert!(!s.efuses[2].enabled);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_hat_status / parse_hat_detect
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_hat_status_full() {
+        let data = build(|w| {
+            w.put_bool(true);   // detected
+            w.put_bool(true);   // connected
+            w.put_u8(1);        // hat_type
+            w.put_f32(3.3);     // detect_voltage
+            w.put_u8(1);        // fw_major
+            w.put_u8(2);        // fw_minor
+            w.put_bool(true);   // config_confirmed
+            for _ in 0..4 { w.put_u8(0); } // pin_config
+            // connector 0
+            w.put_bool(true); w.put_f32(200.0); w.put_bool(false);
+            // connector 1
+            w.put_bool(false); w.put_f32(0.0); w.put_bool(false);
+            w.put_u16(3300);    // io_voltage_mv
+            w.put_bool(true);   // dap_connected
+            w.put_bool(false);  // target_detected
+            w.put_u32(0);       // target_dpidr
+        });
+        let s = parse_hat_status(&data);
+        assert!(s.detected);
+        assert!(s.connected);
+        assert_eq!(s.hat_type, 1);
+        assert!((s.detect_voltage - 3.3).abs() < 0.01);
+        assert_eq!(s.fw_major, 1);
+        assert_eq!(s.fw_minor, 2);
+        assert!(s.config_confirmed);
+        assert_eq!(s.io_voltage_mv, 3300);
+        assert!(s.dap_connected);
+        assert!(!s.target_detected);
+        assert!(s.connectors[0].enabled);
+        assert!((s.connectors[0].current_ma - 200.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn parse_hat_detect_minimal() {
+        let data = build(|w| {
+            w.put_bool(true);   // detected
+            w.put_u8(2);        // hat_type
+            w.put_f32(5.0);     // detect_voltage
+            w.put_bool(false);  // connected
+        });
+        let s = parse_hat_detect(&data);
+        assert!(s.detected);
+        assert_eq!(s.hat_type, 2);
+        assert!((s.detect_voltage - 5.0).abs() < 0.01);
+        assert!(!s.connected);
+        // Default fields should be zero/false
+        assert_eq!(s.fw_major, 0);
+        assert_eq!(s.io_voltage_mv, 0);
+    }
 }
