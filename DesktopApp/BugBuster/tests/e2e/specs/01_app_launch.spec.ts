@@ -1,40 +1,36 @@
-describe('App Launch', () => {
-  it('opens a window with the correct title', async () => {
-    const title = await browser.getTitle()
-    expect(title).toBe('BugBuster')
+import { test, expect } from '@playwright/test'
+
+test.describe('App Launch', () => {
+  test('renders the BugBuster logo in the header', async ({ page }) => {
+    await page.goto('/')
+    const logo = page.locator('span.logo-text')
+    await logo.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(logo).toHaveText('BugBuster')
   })
 
-  it('renders the BugBuster logo in the header', async () => {
-    const logo = await $('span.logo-text')
-    await logo.waitForDisplayed({ timeout: 5000 })
-    const text = await logo.getText()
-    expect(text).toBe('BugBuster')
+  test('renders the subtitle in the header', async ({ page }) => {
+    await page.goto('/')
+    const subtitle = page.locator('span.subtitle')
+    await subtitle.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(subtitle).toContainText('AD74416H')
   })
 
-  it('renders the subtitle in the header', async () => {
-    const subtitle = await $('span.subtitle')
-    await subtitle.waitForDisplayed({ timeout: 5000 })
-    const text = await subtitle.getText()
-    expect(text).toContain('AD74416H')
+  test('shows the disconnected status indicator', async ({ page }) => {
+    await page.goto('/')
+    const dot = page.locator('span.status-dot.disconnected')
+    await dot.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(dot).toBeVisible()
   })
 
-  it('shows the disconnected status indicator', async () => {
-    const dot = await $('span.status-dot.disconnected')
-    await dot.waitForDisplayed({ timeout: 5000 })
-    expect(await dot.isDisplayed()).toBe(true)
+  test('shows "Disconnected" status text', async ({ page }) => {
+    await page.goto('/')
+    const statusText = page.locator('span.status-text')
+    await statusText.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(statusText).toHaveText('Disconnected')
   })
 
-  it('shows "Disconnected" status text', async () => {
-    const statusText = await $('span.status-text')
-    await statusText.waitForDisplayed({ timeout: 5000 })
-    const text = await statusText.getText()
-    expect(text).toBe('Disconnected')
-  })
-
-  it('does not show the tab bar when disconnected', async () => {
-    const tabBar = await $('nav.tab-bar')
-    // Tab bar should not be visible / not exist when disconnected
-    const exists = await tabBar.isExisting()
-    expect(exists).toBe(false)
+  test('does not show the tab bar when disconnected', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.locator('nav.tab-bar')).toHaveCount(0)
   })
 })

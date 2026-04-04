@@ -1,15 +1,18 @@
-describe('Toast System', () => {
-  it('renders the toast container', async () => {
-    const container = await $('div.toast-container')
-    await container.waitForExisting({ timeout: 5000 })
-    expect(await container.isExisting()).toBe(true)
+import { test, expect } from '@playwright/test'
+
+test.describe('Toast System', () => {
+  test('renders the toast container', async ({ page }) => {
+    await page.goto('/')
+    const container = page.locator('div.toast-container')
+    await container.waitFor({ state: 'attached', timeout: 5000 })
+    await expect(container).toHaveCount(1)
   })
 
-  it('has no toasts visible on startup', async () => {
+  test('has no toasts visible on startup', async ({ page }) => {
+    await page.goto('/')
     // Give any startup animations time to settle
-    await browser.pause(500)
-    const container = await $('div.toast-container')
-    const toasts = await container.$$('div.toast')
-    expect(toasts.length).toBe(0)
+    await page.waitForTimeout(500)
+    const toasts = page.locator('div.toast-container div.toast')
+    await expect(toasts).toHaveCount(0)
   })
 })

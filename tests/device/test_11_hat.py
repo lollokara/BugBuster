@@ -16,6 +16,7 @@ import time
 import pytest
 import bugbuster as bb
 from bugbuster.constants import LaTriggerType, HatPinFunction
+from conftest import assert_no_faults
 
 pytestmark = [
     pytest.mark.requires_hat,
@@ -48,6 +49,7 @@ def test_hat_get_status(device):
     assert isinstance(status, dict), f"hat_get_status() must return dict, got {type(status)}"
     assert "detected" in status, "HAT status missing 'detected'"
     assert "connected" in status, "HAT status missing 'connected'"
+    assert_no_faults(device)
 
 
 def test_hat_status_has_pin_config(device):
@@ -61,6 +63,7 @@ def test_hat_status_has_pin_config(device):
         pins = status["pin_config"]
         assert isinstance(pins, list), f"pin_config must be list, got {type(pins)}"
         assert len(pins) == 4, f"Expected 4 EXP_EXT pins, got {len(pins)}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +79,7 @@ def test_hat_detect(device):
 
     assert isinstance(result, dict), f"hat_detect() must return dict, got {type(result)}"
     assert "detected" in result, "hat_detect() result missing 'detected'"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +93,7 @@ def test_hat_reset(device):
     """
     result = device.hat_reset()
     assert result is True or result is not False, "hat_reset() should return True"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +107,7 @@ def test_hat_set_pin(device):
     """
     result = device.hat_set_pin(0, HatPinFunction.DISCONNECTED)
     assert result is not False, "hat_set_pin() should not return False"
+    assert_no_faults(device)
 
 
 def test_hat_set_pin_all_functions(device):
@@ -115,6 +121,7 @@ def test_hat_set_pin_all_functions(device):
 
     # Restore to safe state
     device.hat_set_pin(0, HatPinFunction.DISCONNECTED)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +141,7 @@ def test_hat_set_all_pins(device):
     ]
     result = device.hat_set_all_pins(funcs)
     assert result is not False, "hat_set_all_pins() should not return False"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +166,7 @@ def test_hat_get_power_usb(usb_device):
         assert "enabled" in conn, f"Connector {i} missing 'enabled'"
         assert "current_ma" in conn, f"Connector {i} missing 'current_ma'"
         assert "fault" in conn, f"Connector {i} missing 'fault'"
+    assert_no_faults(usb_device)
 
 
 def test_hat_get_power_http_raises(http_device):
@@ -167,6 +176,7 @@ def test_hat_get_power_http_raises(http_device):
     """
     with pytest.raises(NotImplementedError):
         http_device.hat_get_power()
+    assert_no_faults(http_device)
 
 
 @pytest.mark.usb_only
@@ -180,6 +190,7 @@ def test_hat_set_power_usb(usb_device):
     time.sleep(0.1)
     # Restore
     usb_device.hat_set_power(0, True)
+    assert_no_faults(usb_device)
 
 
 def test_hat_set_io_voltage_http_raises(http_device):
@@ -188,6 +199,7 @@ def test_hat_set_io_voltage_http_raises(http_device):
     """
     with pytest.raises(NotImplementedError):
         http_device.hat_set_io_voltage(3300)
+    assert_no_faults(http_device)
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +215,7 @@ def test_hat_la_configure(usb_device):
     """
     result = usb_device.hat_la_configure(4, 1_000_000, 1000)
     assert result is True, f"hat_la_configure() should return True, got {result}"
+    assert_no_faults(usb_device)
 
 
 @pytest.mark.usb_only
@@ -215,6 +228,7 @@ def test_hat_la_arm_and_stop(usb_device):
     usb_device.hat_la_arm()
     time.sleep(0.05)
     usb_device.hat_la_stop()
+    assert_no_faults(usb_device)
 
 
 @pytest.mark.usb_only
@@ -237,6 +251,7 @@ def test_hat_la_force_trigger(usb_device):
     )
     # Clean up
     usb_device.hat_la_stop()
+    assert_no_faults(usb_device)
 
 
 @pytest.mark.usb_only
@@ -254,6 +269,7 @@ def test_hat_la_status(usb_device):
     assert status["state"] in (0, 1, 2, 3, 4), (
         f"LA state must be 0-4, got {status['state']}"
     )
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +284,4 @@ def test_hat_swd_detect(usb_device):
     """
     result = usb_device.hat_setup_swd(target_voltage_mv=3300, connector=0)
     assert result is True, f"hat_setup_swd() should return True, got {result}"
+    assert_no_faults(usb_device)

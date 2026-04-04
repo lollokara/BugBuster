@@ -183,7 +183,18 @@ extern "C" void app_main(void)
         serial_println("[BugBuster] ERROR: SPIFFS mount failed");
     }
 
-    // 6. AD74416H device init
+    // 6. Create shared SPI bus mutex BEFORE any SPI device init.
+    //    Both AD74416H and ADGS2414D share the same physical bus and use this
+    //    mutex for serialization.  It must exist before any SPI call.
+    {
+        extern SemaphoreHandle_t g_spi_bus_mutex;
+        if (g_spi_bus_mutex == NULL) {
+            g_spi_bus_mutex = xSemaphoreCreateRecursiveMutex();
+            assert(g_spi_bus_mutex != NULL);
+        }
+    }
+
+    // 7. AD74416H device init
     serial_println("[BugBuster] Initialising AD74416H...");
     bool spiOk = device.begin();
     serial_printf("[BugBuster] AD74416H SPI: %s\r\n", spiOk ? "OK" : "VERIFY FAILED");

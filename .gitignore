@@ -40,3 +40,4 @@ Scripts/*.csv
 # Jupyter
 .ipynb_checkpoints/
 /Firmware/RP2040/build
+/DesktopApp/BugBuster/tests/e2e/node_modules

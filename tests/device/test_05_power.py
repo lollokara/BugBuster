@@ -15,6 +15,7 @@ import time
 import pytest
 import bugbuster as bb
 from bugbuster import PowerControl
+from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(10)]
 
@@ -37,6 +38,7 @@ def test_idac_get_status(device):
     channels = status["channels"]
     assert isinstance(channels, list), f"channels must be a list, got {type(channels)}"
     assert len(channels) >= 2, f"Expected at least 2 IDAC channels, got {len(channels)}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -52,12 +54,14 @@ def test_idac_set_voltage_vadj1(device):
     # idac_set_voltage takes channel and voltage in volts
     device.idac_set_voltage(1, 5.0)
     time.sleep(0.05)
+    assert_no_faults(device)
 
 
 def test_idac_set_voltage_vadj2(device):
     """Set VADJ2 (IDAC channel 2) to 3.3 V. Should not raise."""
     device.idac_set_voltage(2, 3.3)
     time.sleep(0.05)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +75,7 @@ def test_idac_set_code(device):
     """
     device.idac_set_code(1, 0)   # zero = no adjustment
     time.sleep(0.05)
+    assert_no_faults(device)
 
 
 def test_idac_set_code_midscale(device):
@@ -79,6 +84,7 @@ def test_idac_set_code_midscale(device):
     time.sleep(0.02)
     # Restore to neutral
     device.idac_set_code(1, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +100,7 @@ def test_power_get_status(device):
 
     assert isinstance(status, dict), f"power_get_status() must return dict, got {type(status)}"
     assert "present" in status, "Power status missing 'present' key"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +114,7 @@ def test_pca_set_control_enable_mux(device):
     """
     device.power_set(PowerControl.MUX, True)
     time.sleep(0.05)
+    assert_no_faults(device)
 
 
 def test_pca_set_control_disable_mux(device):
@@ -115,12 +123,14 @@ def test_pca_set_control_disable_mux(device):
     time.sleep(0.05)
     # Re-enable to leave in a known state
     device.power_set(PowerControl.MUX, True)
+    assert_no_faults(device)
 
 
 def test_pca_set_control_vadj1(device):
     """Enable VADJ1 power rail via PCA9535. Should not raise."""
     device.power_set(PowerControl.VADJ1, True)
     time.sleep(0.05)
+    assert_no_faults(device)
 
 
 def test_pca_set_control_all_controls(device):
@@ -133,6 +143,7 @@ def test_pca_set_control_all_controls(device):
         time.sleep(0.02)
         device.power_set(ctrl, False)
         time.sleep(0.02)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +162,7 @@ def test_power_fault_log(device):
         assert isinstance(entry, dict), f"Fault log entry must be dict, got {type(entry)}"
         assert "type" in entry, f"Fault log entry missing 'type': {entry}"
         assert "channel" in entry, f"Fault log entry missing 'channel': {entry}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -165,3 +177,4 @@ def test_idac_cal_save(device):
     Verifies the command completes without raising.
     """
     device.idac_cal_save()
+    assert_no_faults(device)

@@ -1,60 +1,57 @@
-describe('Connection Screen', () => {
-  it('shows the connection panel card', async () => {
-    const panel = await $('.connection-panel')
-    await panel.waitForDisplayed({ timeout: 5000 })
-    expect(await panel.isDisplayed()).toBe(true)
+import { test, expect } from '@playwright/test'
+
+test.describe('Connection Screen', () => {
+  test('shows the connection panel card', async ({ page }) => {
+    await page.goto('/')
+    const panel = page.locator('.connection-panel')
+    await panel.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(panel).toBeVisible()
   })
 
-  it('shows the "Connect to BugBuster" heading', async () => {
-    const heading = await $('.connection-panel h2')
-    await heading.waitForDisplayed({ timeout: 5000 })
-    const text = await heading.getText()
-    expect(text).toBe('Connect to BugBuster')
+  test('shows the "Connect to BugBuster" heading', async ({ page }) => {
+    await page.goto('/')
+    const heading = page.locator('.connection-panel h2')
+    await heading.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(heading).toHaveText('Connect to BugBuster')
   })
 
-  it('shows the scanning hint text', async () => {
-    const hint = await $('.connection-panel p.hint')
-    await hint.waitForDisplayed({ timeout: 5000 })
-    const text = await hint.getText()
-    expect(text).toContain('USB')
+  test('shows the scanning hint text', async ({ page }) => {
+    await page.goto('/')
+    const hint = page.locator('.connection-panel p.hint')
+    await hint.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(hint).toContainText('USB')
   })
 
-  it('shows the Scan for Devices button', async () => {
-    const scanBtn = await $('button.btn.btn-primary')
-    await scanBtn.waitForDisplayed({ timeout: 5000 })
-    const text = await scanBtn.getText()
-    expect(text).toBe('Scan for Devices')
+  test('shows the Scan for Devices button', async ({ page }) => {
+    await page.goto('/')
+    const scanBtn = page.locator('button.btn.btn-primary')
+    await scanBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(scanBtn).toHaveText('Scan for Devices')
   })
 
-  it('Scan button is enabled initially', async () => {
-    const scanBtn = await $('button.btn.btn-primary')
-    await scanBtn.waitForEnabled({ timeout: 5000 })
-    expect(await scanBtn.isEnabled()).toBe(true)
+  test('Scan button is enabled initially', async ({ page }) => {
+    await page.goto('/')
+    const scanBtn = page.locator('button.btn.btn-primary')
+    await scanBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await expect(scanBtn).toBeEnabled()
   })
 
-  it('shows "Scanning..." while scan is in progress', async () => {
-    const scanBtn = await $('button.btn.btn-primary')
+  test('shows "Scanning..." while scan is in progress', async ({ page }) => {
+    await page.goto('/')
+    const scanBtn = page.locator('button.btn.btn-primary')
+    await scanBtn.waitFor({ state: 'visible', timeout: 5000 })
     await scanBtn.click()
 
     // While scanning, the button text should change
-    await browser.waitUntil(
-      async () => {
-        const text = await scanBtn.getText()
-        return text === 'Scanning...' || text === 'Scan for Devices'
-      },
-      { timeout: 5000, interval: 200 },
-    )
+    await expect(scanBtn).toHaveText(/Scanning\.\.\.|Scan for Devices/, { timeout: 5000 })
     // Wait for scan to complete
-    await browser.waitUntil(
-      async () => (await scanBtn.getText()) === 'Scan for Devices',
-      { timeout: 15000, interval: 500 },
-    )
-    expect(await scanBtn.getText()).toBe('Scan for Devices')
+    await expect(scanBtn).toHaveText('Scan for Devices', { timeout: 15000 })
   })
 
-  it('shows the device list container', async () => {
-    const list = await $('div.device-list')
-    await list.waitForExisting({ timeout: 5000 })
-    expect(await list.isExisting()).toBe(true)
+  test('shows the device list container', async ({ page }) => {
+    await page.goto('/')
+    const list = page.locator('div.device-list')
+    await list.waitFor({ state: 'attached', timeout: 5000 })
+    await expect(list).toHaveCount(1)
   })
 })

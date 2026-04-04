@@ -8,6 +8,7 @@ DAC readback, voltage/current range, current limit, and channel independence.
 import time
 import pytest
 import bugbuster as bb
+from conftest import assert_no_faults
 from bugbuster import (
     ChannelFunction,
     AdcRange, AdcRate, AdcMux,
@@ -49,6 +50,8 @@ def test_set_high_imp(device):
             f"Channel {i} function should be HIGH_IMP after set, got {ch_status.get('function')}"
         )
 
+    assert_no_faults(device)
+
 
 # ---------------------------------------------------------------------------
 # VOUT
@@ -71,6 +74,7 @@ def test_vout_set_and_readback(device):
     assert 0 < code <= 0xFFFF, f"DAC code out of range: {code:#06x}"
 
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 def test_vout_range_unipolar(device):
@@ -84,6 +88,7 @@ def test_vout_range_unipolar(device):
     code = device.get_dac_readback(0)
     assert code > 0, "DAC code should be > 0 for 3.3 V unipolar"
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 def test_vout_range_bipolar(device):
@@ -96,6 +101,7 @@ def test_vout_range_bipolar(device):
     code = device.get_dac_readback(0)
     assert code is not None
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 def test_set_dac_code_raw(device):
@@ -111,6 +117,7 @@ def test_set_dac_code_raw(device):
     assert code is not None
     assert 0 <= code <= 0xFFFF, f"DAC readback out of range: {code}"
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +134,7 @@ def test_iout_set_and_readback(device):
     device.set_dac_current(0, 12.0)
     time.sleep(0.05)
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 def test_current_limit_25ma(device):
@@ -139,6 +147,7 @@ def test_current_limit_25ma(device):
     device.set_current_limit(0, CurrentLimit.MA_25)
     time.sleep(0.02)
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 def test_current_limit_8ma(device):
@@ -151,6 +160,7 @@ def test_current_limit_8ma(device):
     device.set_current_limit(0, CurrentLimit.MA_8)
     time.sleep(0.02)
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +181,7 @@ def test_vin_configure(device):
         rate=AdcRate.SPS_200_H,
     )
     _safe_high_imp(device, 1)
+    assert_no_faults(device)
 
 
 def test_adc_config_all_rates(device):
@@ -185,6 +196,7 @@ def test_adc_config_all_rates(device):
         device.set_adc_config(1, rate=rate)
 
     _safe_high_imp(device, 1)
+    assert_no_faults(device)
 
 
 def test_adc_config_all_ranges(device):
@@ -199,6 +211,7 @@ def test_adc_config_all_ranges(device):
         device.set_adc_config(1, range_=rng)
 
     _safe_high_imp(device, 1)
+    assert_no_faults(device)
 
 
 def test_get_adc_value(device):
@@ -219,6 +232,7 @@ def test_get_adc_value(device):
     assert hasattr(result, "range"), "AdcResult missing 'range' field"
 
     _safe_high_imp(device, 1)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +245,7 @@ def test_iin_ext_configure(device):
     device.set_channel_function(2, ChannelFunction.IIN_EXT_PWR)
     time.sleep(0.05)
     _safe_high_imp(device, 2)
+    assert_no_faults(device)
 
 
 def test_iin_loop_configure(device):
@@ -239,6 +254,7 @@ def test_iin_loop_configure(device):
     device.set_channel_function(2, ChannelFunction.IIN_LOOP_PWR)
     time.sleep(0.05)
     _safe_high_imp(device, 2)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +270,7 @@ def test_din_logic_configure(device):
     device.set_channel_function(3, ChannelFunction.DIN_LOGIC)
     device.set_din_config(3, threshold=64, debounce=5)
     _safe_high_imp(device, 3)
+    assert_no_faults(device)
 
 
 def test_din_logic_validate_threshold_range(device):
@@ -268,6 +285,7 @@ def test_din_logic_validate_threshold_range(device):
         device.set_din_config(3, threshold=300)
 
     _safe_high_imp(device, 3)
+    assert_no_faults(device)
 
 
 def test_din_debounce_validate_range(device):
@@ -282,6 +300,7 @@ def test_din_debounce_validate_range(device):
         device.set_din_config(3, threshold=64, debounce=50)
 
     _safe_high_imp(device, 3)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +317,7 @@ def test_rtd_configure(device):
     device.set_rtd_config(0, current=RtdCurrent.UA_500)
     time.sleep(0.05)
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 def test_rtd_configure_1ma(device):
@@ -307,6 +327,7 @@ def test_rtd_configure_1ma(device):
     device.set_rtd_config(0, current=RtdCurrent.MA_1)
     time.sleep(0.05)
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +345,7 @@ def test_do_configure(device):
     time.sleep(0.02)
     device.set_digital_output(3, False)
     _safe_high_imp(device, 3)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +374,7 @@ def test_channel_switch_via_high_imp(device):
     time.sleep(0.05)
 
     _safe_high_imp(device, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -383,3 +406,4 @@ def test_all_channels_independent(device):
     assert funcs.get(3) == int(ChannelFunction.DIN_LOGIC), f"ch3 should be DIN_LOGIC, got {funcs.get(3)}"
 
     _safe_high_imp(device, 0, 1, 2, 3)
+    assert_no_faults(device)

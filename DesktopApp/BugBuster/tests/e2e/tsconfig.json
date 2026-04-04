@@ -4,7 +4,7 @@
     "module": "commonjs",
     "strict": true,
     "esModuleInterop": true,
-    "types": ["node", "@wdio/globals/types", "@wdio/mocha-framework"],
+    "types": ["node"],
     "outDir": ".wdio-dist"
   },
   "include": ["**/*.ts"],

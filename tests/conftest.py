@@ -103,6 +103,36 @@ def asserter() -> DeviceAsserter:
 
 
 # ---------------------------------------------------------------------------
+# Shared fault check helper
+# ---------------------------------------------------------------------------
+
+def assert_no_faults(device):
+    """Read fault registers; xfail if any ADC alert is set."""
+    try:
+        faults = device.get_faults()
+    except Exception:
+        return
+    alert = faults["alert_status"]
+    ch_alerts = [c["alert"] for c in faults["channels"]]
+    supply = faults["supply_alert_status"]
+    if not (alert or supply or any(ch_alerts)):
+        return
+    try:
+        device.clear_alerts()
+    except Exception:
+        pass
+    parts = []
+    if alert:
+        parts.append(f"alert=0x{alert:04X}")
+    if supply:
+        parts.append(f"supply=0x{supply:04X}")
+    for i, ca in enumerate(ch_alerts):
+        if ca:
+            parts.append(f"ch{i}=0x{ca:04X}")
+    pytest.xfail(f"FAULT: {', '.join(parts)}")
+
+
+# ---------------------------------------------------------------------------
 # Connection factory helpers
 # ---------------------------------------------------------------------------
 

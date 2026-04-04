@@ -13,6 +13,7 @@ import threading
 import pytest
 import bugbuster as bb
 from bugbuster import ChannelFunction, AdcRate
+from conftest import assert_no_faults
 
 pytestmark = [
     pytest.mark.usb_only,
@@ -58,6 +59,7 @@ def test_adc_stream_starts_and_stops(usb_device):
     assert len(events) >= 1, (
         f"Expected at least 1 ADC stream event within 5 s, got {len(events)}"
     )
+    assert_no_faults(usb_device)
 
 
 def test_adc_stream_events_have_data(usb_device):
@@ -77,6 +79,7 @@ def test_adc_stream_events_have_data(usb_device):
         for s in samples:
             assert isinstance(s, int), f"Each sample must be int (raw code), got {type(s)}"
             assert 0 <= s <= 0xFFFFFF, f"24-bit ADC sample out of range: {s:#08x}"
+    assert_no_faults(usb_device)
 
 
 def test_adc_stream_mask_matches_channels(usb_device):
@@ -91,6 +94,7 @@ def test_adc_stream_mask_matches_channels(usb_device):
             f"Event mask {mask:#04x} does not include expected channels "
             f"(expected bits {expected_mask:#04x})"
         )
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +124,7 @@ def test_adc_stream_sample_rate(usb_device):
     assert rate >= 5.0, (
         f"ADC event rate too low: {rate:.1f} events/s (expected >= 5)"
     )
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +150,7 @@ def test_scope_stream_starts_and_stops(usb_device):
     assert len(events) >= 1, (
         "Expected at least 1 scope event within 500 ms (scope pushes every ~10 ms)"
     )
+    assert_no_faults(usb_device)
 
 
 def test_scope_data_format(usb_device):
@@ -182,6 +188,7 @@ def test_scope_data_format(usb_device):
             assert ch["min"] <= ch["avg"] <= ch["max"] or ch["min"] == ch["max"] == ch["avg"], (
                 f"Channel[{i}]: min <= avg <= max violated: {ch}"
             )
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +202,7 @@ def test_streaming_not_supported_over_http(http_device):
     """
     with pytest.raises(NotImplementedError):
         http_device.start_adc_stream([0], divider=1)
+    assert_no_faults(http_device)
 
 
 # ---------------------------------------------------------------------------
@@ -221,3 +229,4 @@ def test_adc_stream_restart(usb_device):
         time.sleep(0.05)
 
         assert len(events) >= 1, f"Cycle {cycle}: no events received"
+    assert_no_faults(usb_device)

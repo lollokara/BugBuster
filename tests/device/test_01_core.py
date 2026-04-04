@@ -9,6 +9,7 @@ import time
 import pytest
 import bugbuster as bb
 from bugbuster import ChannelFunction
+from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(10)]
 
@@ -30,6 +31,7 @@ def test_ping(usb_device):
     assert elapsed_ms < 500.0, f"Ping latency {elapsed_ms:.1f} ms exceeds 500 ms limit"
     assert result.token == 0xDEADBEEF, f"Token mismatch: {result.token:#010x}"
     assert result.uptime_ms >= 0, f"uptime_ms must be non-negative, got {result.uptime_ms}"
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,7 @@ def test_firmware_version(device):
     assert major >= 0, f"fw_major must be >= 0, got {major}"
     assert minor >= 0, f"fw_minor must be >= 0, got {minor}"
     assert patch >= 0, f"fw_patch must be >= 0, got {patch}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +72,7 @@ def test_device_info(device):
     assert isinstance(info.silicon_id0, int), f"silicon_id0 must be int, got {type(info.silicon_id0)}"
     assert isinstance(info.silicon_id1, int), f"silicon_id1 must be int, got {type(info.silicon_id1)}"
     assert info.silicon_rev >= 0, f"silicon_rev must be >= 0, got {info.silicon_rev}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +97,7 @@ def test_get_status(device):
         assert "id" in ch or "function" in ch, (
             f"channels[{i}] missing id/function key: {ch.keys()}"
         )
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +126,7 @@ def test_reset_clears_state(device):
     assert ch0.get("function", -1) == int(ChannelFunction.HIGH_IMP), (
         f"Channel 0 function should be HIGH_IMP (0) after reset, got {ch0.get('function')}"
     )
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +175,7 @@ def test_firmware_version_consistent(device):
     v1 = device.get_firmware_version()
     v2 = device.get_firmware_version()
     assert v1 == v2, f"Firmware version changed between calls: {v1} vs {v2}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -188,3 +195,4 @@ def test_status_has_die_temperature(device):
     assert -50.0 <= temp <= 150.0, (
         f"die_temp_c={temp:.1f} °C is outside plausible range [-50, 150]"
     )
+    assert_no_faults(device)

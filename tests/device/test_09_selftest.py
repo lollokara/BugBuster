@@ -10,6 +10,7 @@ available over the binary protocol (HTTP provides a simplified summary).
 
 import pytest
 import bugbuster as bb
+from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(20)]
 
@@ -30,6 +31,7 @@ def test_selftest_status(device):
     assert "boot" in result or "cal" in result, (
         f"selftest_status() missing 'boot'/'cal' keys: {list(result.keys())}"
     )
+    assert_no_faults(device)
 
 
 def test_selftest_status_boot_fields(device):
@@ -45,6 +47,7 @@ def test_selftest_status_boot_fields(device):
     assert isinstance(boot, dict), f"boot must be dict, got {type(boot)}"
     assert "ran" in boot, f"boot dict missing 'ran': {boot}"
     assert isinstance(boot["ran"], (bool, int)), f"boot.ran must be bool/int"
+    assert_no_faults(device)
 
 
 def test_selftest_status_cal_fields(device):
@@ -63,6 +66,7 @@ def test_selftest_status_cal_fields(device):
     assert cal["status"] in (0, 1, 2, 3), (
         f"cal.status must be 0-3, got {cal['status']}"
     )
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +87,7 @@ def test_selftest_measure_supply_vadj1(usb_device):
     )
     # -1.0 means unavailable; any other negative value is suspicious
     assert voltage >= -1.0, f"Unexpected negative voltage: {voltage}"
+    assert_no_faults(usb_device)
 
 
 @pytest.mark.usb_only
@@ -96,6 +101,7 @@ def test_selftest_measure_supply_all_rails(usb_device):
         assert isinstance(v, (int, float)), (
             f"Rail {rail}: selftest_measure_supply() must return float, got {type(v)}"
         )
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +129,7 @@ def test_selftest_efuse_currents(usb_device):
 
     for i, c in enumerate(currents):
         assert isinstance(c, (int, float)), f"currents[{i}] must be float, got {type(c)}"
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +153,7 @@ def test_selftest_auto_calibrate(usb_device):
         f"selftest_auto_calibrate() must return dict, got {type(result)}"
     )
     assert "status" in result, "Cal result missing 'status'"
+    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------
@@ -167,3 +175,4 @@ def test_selftest_status_cal_idle_after_boot(usb_device):
             f"Expected cal.status to be idle (0), success (2), or failed (3), "
             f"got {cal.get('status')}"
         )
+    assert_no_faults(usb_device)

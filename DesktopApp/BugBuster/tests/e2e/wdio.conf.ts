@@ -34,7 +34,7 @@ export const config: WebdriverIO.Config = {
       application: getAppBinary(),
     },
     acceptInsecureCerts: true,
-  }] as WebdriverIO.Capabilities[],
+  }] as unknown as WebdriverIO.Capabilities[],
 
   logLevel: 'warn',
   bail: 0,

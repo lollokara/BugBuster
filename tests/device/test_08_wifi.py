@@ -8,6 +8,7 @@ attempting to connect to a network (which would require credentials).
 
 import pytest
 import bugbuster as bb
+from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(30)]  # WiFi scan can take up to 5 s
 
@@ -27,6 +28,7 @@ def test_wifi_get_status(device):
     assert "connected" in status or "sta_connected" in status or "sta_ssid" in status, (
         f"WiFi status missing connection keys: {list(status.keys())}"
     )
+    assert_no_faults(device)
 
 
 def test_wifi_status_has_required_fields(device):
@@ -43,6 +45,7 @@ def test_wifi_status_has_required_fields(device):
 
     assert has_sta_info, f"WiFi status missing STA connection info: {list(status.keys())}"
     # AP info is optional — device may not have AP mode enabled
+    assert_no_faults(device)
 
 
 def test_wifi_status_ip_is_string(device):
@@ -54,6 +57,7 @@ def test_wifi_status_ip_is_string(device):
     # Check STA IP
     sta_ip = status.get("sta_ip") or status.get("ip", "")
     assert isinstance(sta_ip, str), f"STA IP must be str, got {type(sta_ip)}: {sta_ip!r}"
+    assert_no_faults(device)
 
 
 def test_wifi_status_rssi_is_numeric(device):
@@ -68,6 +72,7 @@ def test_wifi_status_rssi_is_numeric(device):
         assert isinstance(rssi, (int, float)), f"rssi must be numeric, got {type(rssi)}"
         # RSSI is typically -120 to 0 dBm; positive values indicate not connected
         assert rssi <= 0 or rssi == 0, f"RSSI {rssi} is unexpectedly positive"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +89,7 @@ def test_wifi_scan(device):
 
     assert isinstance(results, list), f"wifi_scan() must return list, got {type(results)}"
     # Scan may return zero results in RF-shielded environment — that is OK
+    assert_no_faults(device)
 
 
 @pytest.mark.slow
@@ -101,6 +107,7 @@ def test_wifi_scan_entry_format(device):
         assert isinstance(net["rssi"], (int, float)), (
             f"Scan result[{i}].rssi must be numeric"
         )
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -121,3 +128,4 @@ def test_wifi_status_consistent(device):
     assert ap_ssid_1 == ap_ssid_2, (
         f"AP SSID changed between calls: {ap_ssid_1!r} vs {ap_ssid_2!r}"
     )
+    assert_no_faults(device)

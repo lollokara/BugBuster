@@ -9,6 +9,7 @@ import time
 import pytest
 import bugbuster as bb
 from bugbuster import GpioMode
+from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(10)]
 
@@ -47,6 +48,8 @@ def test_gpio_get_all(device):
         assert hasattr(pin, "input"), f"pins[{i}] missing 'input'"
         assert hasattr(pin, "pulldown"), f"pins[{i}] missing 'pulldown'"
 
+    assert_no_faults(device)
+
 
 # ---------------------------------------------------------------------------
 # GPIO output high
@@ -61,6 +64,7 @@ def test_gpio_set_output_high(device):
     device.set_gpio_value(0, True)
     time.sleep(0.02)
     _restore_gpio(device, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +80,7 @@ def test_gpio_set_output_low(device):
     device.set_gpio_value(0, False)
     time.sleep(0.02)
     _restore_gpio(device, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +104,7 @@ def test_gpio_set_input(device):
         )
 
     _restore_gpio(device, 0)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +125,8 @@ def test_gpio_set_high_imp(device):
             f"GPIO 0 mode should be HIGH_IMP after set, got {pin0.mode}"
         )
 
+    assert_no_faults(device)
+
 
 # ---------------------------------------------------------------------------
 # Cycle through all pins
@@ -137,6 +145,8 @@ def test_gpio_all_pins_output_mode(device):
         time.sleep(0.01)
         device.set_gpio_config(pin_idx, GpioMode.HIGH_IMP)
 
+    assert_no_faults(device)
+
 
 # ---------------------------------------------------------------------------
 # GPIO toggle
@@ -154,6 +164,7 @@ def test_gpio_toggle_output(device):
         device.set_gpio_value(1, False)
         time.sleep(0.01)
     _restore_gpio(device, 1)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +179,7 @@ def test_gpio_set_input_with_pulldown(device):
     device.set_gpio_config(2, GpioMode.INPUT, pulldown=True)
     time.sleep(0.02)
     _restore_gpio(device, 2)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -192,3 +204,4 @@ def test_gpio_multiple_simultaneous(device):
     assert len(pins) == 6, f"Expected 6 pins after mixed config, got {len(pins)}"
 
     _restore_gpio(device, 0, 1, 2, 3)
+    assert_no_faults(device)

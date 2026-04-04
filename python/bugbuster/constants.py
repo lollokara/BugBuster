@@ -313,8 +313,10 @@ class CmdId(IntEnum):
     GET_UART_PINS    = 0x52
 
     # ADC streaming
-    START_ADC_STREAM = 0x60
-    STOP_ADC_STREAM  = 0x61
+    START_ADC_STREAM   = 0x60
+    STOP_ADC_STREAM    = 0x61
+    START_SCOPE_STREAM = 0x62
+    STOP_SCOPE_STREAM  = 0x63
 
     # System
     DEVICE_RESET     = 0x70

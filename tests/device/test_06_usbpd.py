@@ -7,6 +7,7 @@ device presence when powered from a PD-capable source.
 
 import pytest
 import bugbuster as bb
+from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(10)]
 
@@ -30,6 +31,7 @@ def test_usbpd_get_status(device):
     assert "present" in status, "USBPD status missing 'present'"
     assert "attached" in status, "USBPD status missing 'attached'"
     assert "pdos" in status, "USBPD status missing 'pdos'"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +55,7 @@ def test_usbpd_status_voltage_sane(device):
     assert voltage_v >= MIN_VOLTAGE_V, (
         f"USBPD voltage {voltage_v:.2f} V is below minimum {MIN_VOLTAGE_V} V"
     )
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +79,7 @@ def test_usbpd_status_has_pdos(device):
     for i, pdo in enumerate(pdos):
         assert isinstance(pdo, dict), f"PDO[{i}] must be a dict, got {type(pdo)}"
         assert "detected" in pdo, f"PDO[{i}] missing 'detected' key"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +97,7 @@ def test_usbpd_present_is_bool(device):
     assert isinstance(present, (bool, int)), (
         f"'present' must be bool or int, got {type(present)}"
     )
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +114,7 @@ def test_usbpd_attached_is_bool(device):
     assert isinstance(attached, (bool, int)), (
         f"'attached' must be bool or int, got {type(attached)}"
     )
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -132,3 +138,4 @@ def test_usbpd_power_values_sane(device):
     assert v > 0, f"Voltage must be > 0 when attached, got {v}"
     assert i >= 0, f"Current must be >= 0, got {i}"
     assert p >= 0, f"Power must be >= 0, got {p}"
+    assert_no_faults(device)

@@ -13,6 +13,7 @@ Switch state representation:
 import time
 import pytest
 import bugbuster as bb
+from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(10)]
 
@@ -50,6 +51,7 @@ def test_mux_get_all_returns_4_bytes(device):
     assert len(states) == 4, f"Expected 4 device bytes, got {len(states)}"
     for i, byte in enumerate(states):
         assert 0 <= byte <= 0xFF, f"Device {i} byte {byte} out of 0–255 range"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +68,7 @@ def test_mux_set_all_open(device):
 
     states = device.mux_get()
     assert states == ALL_OPEN, f"Expected all-open {ALL_OPEN}, got {states}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +90,7 @@ def test_mux_set_all_close_first(device):
     )
 
     _restore_all_open(device)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +112,7 @@ def test_mux_single_switch_close(device):
     assert states[0] & 0x01, "Switch 0 of device 0 should be closed (bit 0 set)"
 
     _restore_all_open(device)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +131,7 @@ def test_mux_single_switch_open(device):
 
     states = device.mux_get()
     assert not (states[0] & 0x01), "Switch 0 of device 0 should be open (bit 0 clear)"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +151,7 @@ def test_mux_round_trip(device):
     assert readback == pattern, f"MUX round-trip failed: wrote {pattern}, read {readback}"
 
     _restore_all_open(device)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +174,7 @@ def test_mux_per_device_control(device):
         )
 
     _restore_all_open(device)
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +191,7 @@ def test_mux_set_all_open_restore(device):
 
     states = device.mux_get()
     assert states == ALL_OPEN, f"Could not restore all switches to open: {states}"
+    assert_no_faults(device)
 
 
 # ---------------------------------------------------------------------------
@@ -196,3 +205,4 @@ def test_mux_set_all_invalid_length_raises(device):
     """
     with pytest.raises(ValueError):
         device.mux_set_all([0x00, 0x00])  # only 2 bytes — invalid
+    assert_no_faults(device)

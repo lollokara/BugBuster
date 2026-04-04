@@ -1516,6 +1516,7 @@ class BugBuster:
             callback({"seq": seq, "timestamp_ms": ts_ms, "count": count, "channels": channels})
 
         self._t.on_event(CmdId.SCOPE_DATA_EVT, _handler)
+        self._usb_cmd(CmdId.START_SCOPE_STREAM)
 
     def on_alert(self, callback: Callable[[dict], None]) -> None:
         """
