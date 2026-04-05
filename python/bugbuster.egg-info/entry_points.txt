@@ -1,0 +1,2 @@
+[console_scripts]
+bugbuster-mcp = bugbuster_mcp.__main__:main

@@ -2665,3 +2665,102 @@ The HAT should release the line (high-Z) after the interrupt is serviced.
 | 0xC7 | HAT_SET_ALL_PINS | `POST /api/hat/config` |
 | 0xC8 | HAT_RESET | `POST /api/hat/reset` |
 | 0xC9 | HAT_DETECT | `POST /api/hat/detect` |
+
+---
+
+## 31. AI Interface — MCP Server (`python/bugbuster_mcp/`)
+
+### 31.1 Overview
+
+`bugbuster_mcp` is an MCP (Model Context Protocol) server that exposes BugBuster's hardware capabilities to AI models (Claude, etc.) as structured tools, resources, and prompt templates. It wraps the existing Python library (`python/bugbuster/`) — no firmware changes required.
+
+**Location:** `python/bugbuster_mcp/`
+**Transport:** stdio (standard for Claude Code MCP integration)
+**Protocol:** MCP, using `mcp` Python SDK (FastMCP high-level API)
+
+### 31.2 Architecture
+
+```
+bugbuster_mcp/
+  server.py         FastMCP instance, registers all tools/resources/prompts
+  session.py        Singleton BugBuster + HAL connection manager
+  config.py         Safety limits and hardware constants
+  safety.py         Validation helpers (voltage limits, IO mode checks, fault detection)
+  tools/            28 tool implementations in 9 groups
+  resources/        bugbuster:// URI resource handlers (read-only state)
+  prompts/          Guided workflow prompt templates
+  __main__.py       CLI entry point
+```
+
+### 31.3 Tool Groups (28 tools total)
+
+| Group | Tools |
+|-------|-------|
+| Discovery & status | device_status, device_info, check_faults, selftest |
+| IO configuration | configure_io, set_supply_voltage, reset_device |
+| Analog measurement | read_voltage, read_current, read_resistance |
+| Analog output | write_voltage, write_current |
+| Digital IO | read_digital, write_digital |
+| Waveform & capture | start_waveform, stop_waveform, capture_adc_snapshot, capture_logic_analyzer |
+| UART & debug | setup_serial_bridge, setup_swd, uart_config |
+| Power management | usb_pd_status, usb_pd_select, power_control, wifi_status |
+| Advanced (low-level) | mux_control, register_access, idac_control |
+
+### 31.4 MUX Routing Contract
+
+The HAL's `configure()` method (called by `configure_io`) automatically sets the ADGS2414D MUX switches. Each IO can only be in one mode at a time:
+- IOs 1, 4, 7, 10 (analog-capable): routes to AD74416H channel (S2) OR ESP GPIO (S1/S3) OR HAT (S4) — mutually exclusive
+- IOs 2,3,5,6,8,9,11,12 (digital-only): routes to ESP GPIO high-drive (S5/S7) OR low-drive (S6/S8)
+
+`configure_io` must be called before any read/write operation. The MUX state is tracked in `hal._io_mode` and `hal._mux_state`.
+
+### 31.5 Safety Layer
+
+- E-fuse auto-enabled when configuring output modes
+- Default current limit: 8 mA (not 25 mA)
+- VADJ voltages above 12 V require `confirm=True`
+- `mux_control` and `register_access` require `i_understand_the_risk=True`
+- Post-action fault check after every output-driving tool
+
+### 31.6 Resources
+
+| URI | Description |
+|-----|-------------|
+| `bugbuster://status` | Full device state |
+| `bugbuster://power` | Supply voltages, USB PD, e-fuse |
+| `bugbuster://faults` | Active faults with remediation |
+| `bugbuster://hat` | HAT detection and LA state |
+| `bugbuster://capabilities` | Static IO/voltage/mode limits |
+
+### 31.7 Installation and Usage
+
+```bash
+# Install uv via brew
+brew install uv
+
+# Create venv and install (from python/ directory)
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python -e ".[mcp]"
+
+# Run the server (test)
+.venv/bin/python -m bugbuster_mcp --transport usb --port /dev/cu.usbmodemXXXX
+```
+
+**Claude Code MCP config** (`~/.claude/settings.json`):
+```json
+{
+  "mcpServers": {
+    "bugbuster": {
+      "command": "/path/to/BugBuster/python/.venv/bin/python",
+      "args": ["-m", "bugbuster_mcp", "--transport", "usb", "--port", "/dev/cu.usbmodemXXXXXX"]
+    }
+  }
+}
+```
+
+### 31.8 Key Design Decisions
+
+- **HAL as primary API**: `configure_io` → `hal.configure()` handles all MUX routing, power sequencing, and AD74416H channel setup automatically
+- **Streaming → snapshot**: ADC/LA streaming is converted to statistical summaries (min/max/mean/stddev/freq) for AI consumption
+- **Both transports**: USB BBP for full functionality (streaming, SWD, register access); HTTP for remote/lightweight access
+- **Session lifecycle**: `session.py` manages lazy connection and HAL init; `reset_device` tool triggers full reconnect

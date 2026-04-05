@@ -1,1 +1,2 @@
 bugbuster
+bugbuster_mcp

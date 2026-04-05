@@ -10,4 +10,15 @@ setup(
         "pyserial>=3.5",
         "requests>=2.28",
     ],
+    extras_require={
+        "mcp": [
+            "mcp>=1.0",
+            "pydantic>=2.0",
+        ],
+    },
+    entry_points={
+        "console_scripts": [
+            "bugbuster-mcp=bugbuster_mcp.__main__:main",
+        ],
+    },
 )

@@ -5,6 +5,10 @@ Summary: Python control library for the BugBuster AD74416H industrial I/O device
 Requires-Python: >=3.10
 Requires-Dist: pyserial>=3.5
 Requires-Dist: requests>=2.28
+Provides-Extra: mcp
+Requires-Dist: mcp>=1.0; extra == "mcp"
+Requires-Dist: pydantic>=2.0; extra == "mcp"
+Dynamic: provides-extra
 Dynamic: requires-dist
 Dynamic: requires-python
 Dynamic: summary
