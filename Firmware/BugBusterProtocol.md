@@ -1288,6 +1288,180 @@ Re-run HAT detection (ADC read + UART connect attempt).
 6       connected       bool    UART connected
 ```
 
+### 6.13b HAT Power Management
+
+Commands for controlling HAT connector power, IO voltage (via HVPAK I2C), and SWD setup.
+
+#### 0xCA HAT_SET_POWER
+Enable or disable power to a HAT connector.
+
+**Request payload:**
+```
+0       connector       u8      0=Connector A, 1=Connector B
+1       enable          bool    true=enable power, false=disable
+```
+
+**Response payload:** `[connector, enable, confirmed:bool]`
+
+The RP2040 controls power via BB_EN_A_PIN (GPIO4) / BB_EN_B_PIN (GPIO5). Overcurrent faults are monitored on BB_FAULT_A_PIN (GPIO20) / BB_FAULT_B_PIN (GPIO21), active low.
+
+#### 0xCB HAT_GET_POWER
+Get power status for both connectors.
+
+**Response payload:**
+```
+0       a_enabled       bool    Connector A power state
+1       b_enabled       bool    Connector B power state
+2       a_fault         bool    Connector A overcurrent fault
+3       b_fault         bool    Connector B overcurrent fault
+4       a_current_ma    f32     Connector A current (mA, from ADC0)
+8       b_current_ma    f32     Connector B current (mA, from ADC1)
+```
+
+#### 0xCC HAT_SET_IO_VOLTAGE
+Set the HVPAK IO voltage level (1.2–5.5 V) via I2C DAC.
+
+**Request payload:**
+```
+0       voltage_mv      u16     Target voltage in millivolts (1200–5500)
+```
+
+**Response payload:** `[voltage_mv:u16, actual_mv:u16]`
+
+Uses I2C1 (SDA=GPIO6, SCL=GPIO7) at 400 kHz, address 0x48.
+
+#### 0xCD HAT_SETUP_SWD
+Configure SWD debug probe (set IO voltage, enable connector, configure pins for SWD).
+
+**Request payload:**
+```
+0       voltage_mv      u16     Target IO voltage (default 3300)
+2       connector       u8      0=A, 1=B
+```
+
+**Response payload:** `[configured:bool, voltage_mv:u16]`
+
+Automatically sets EXP_EXT_1=SWDIO, EXP_EXT_2=SWCLK, enables the specified connector, and sets IO voltage.
+
+### 6.13c HAT Logic Analyzer
+
+The RP2040 HAT provides a PIO-based logic analyzer with 1/2/4-channel capture at up to 125 MHz. Data is captured via DMA into a 76 KB SRAM buffer (19,456 × 32-bit words).
+
+**Sample packing (raw mode):**
+- 1-channel: 32 samples per 32-bit word
+- 2-channel: 16 samples per 32-bit word
+- 4-channel: 8 samples per 32-bit word
+
+**GPIO pins:** CH0=GPIO14, CH1=GPIO15, CH2=GPIO16, CH3=GPIO17
+
+#### 0xCF HAT_LA_CONFIG
+Configure logic analyzer capture parameters.
+
+**Request payload:**
+```
+0       channels        u8      Number of channels (1, 2, or 4)
+1       sample_rate_hz  u32     Desired sample rate in Hz (LE)
+5       depth_samples   u32     Number of samples to capture (LE, 0=max)
+9       rle_enabled     bool    Enable RLE compression
+```
+
+**Response payload:**
+```
+0       channels        u8      Configured channels
+1       actual_rate_hz  u32     Actual rate achieved (PIO clock divider quantization)
+5       max_samples     u32     Maximum samples for this config
+```
+
+The actual rate is `sys_clk / round(sys_clk / desired_rate)`. Maximum depth depends on channel count and RLE mode.
+
+#### 0xDA HAT_LA_TRIGGER
+Set trigger condition for the next capture.
+
+**Request payload:**
+```
+0       type            u8      Trigger type (see table below)
+1       channel         u8      Trigger channel (0-3)
+```
+
+| Type | Name | Description |
+|------|------|-------------|
+| 0 | NONE | No trigger — capture starts immediately on arm |
+| 1 | RISING | Rising edge on specified channel |
+| 2 | FALLING | Falling edge on specified channel |
+| 3 | BOTH | Any edge on specified channel |
+| 4 | HIGH | Level high on specified channel |
+| 5 | LOW | Level low on specified channel |
+
+Hardware triggers use a dedicated PIO state machine (SM 1 on PIO 1). The trigger SM fires IRQ 0 which enables the capture SM (SM 0).
+
+**Response payload:** `[type, channel]`
+
+#### 0xD5 HAT_LA_ARM
+Arm the logic analyzer. If a trigger is configured, capture begins when the trigger fires. If no trigger, capture starts immediately.
+
+**Request payload:** Empty.
+**Response payload:** `[state:u8]` (1=ARMED)
+
+DMA is pre-configured before arming. The capture PIO program is loaded and started on SM 0.
+
+#### 0xD6 HAT_LA_FORCE
+Force-trigger the logic analyzer (bypass trigger condition and start capture immediately).
+
+**Request payload:** Empty.
+**Response payload:** `[state:u8]` (2=CAPTURING)
+
+#### 0xD7 HAT_LA_STATUS
+Get current capture status.
+
+**Response payload:**
+```
+0       state           u8      LA state (see table)
+1       channels        u8      Configured channels
+2       samples_captured u32    Samples captured so far (LE)
+6       total_samples   u32     Target depth (LE)
+10      actual_rate_hz  u32     Actual sample rate (LE)
+```
+
+| State | Name | Description |
+|-------|------|-------------|
+| 0 | IDLE | Not configured or stopped |
+| 1 | ARMED | Waiting for trigger |
+| 2 | CAPTURING | Trigger fired, DMA active |
+| 3 | DONE | Capture complete, data ready |
+| 4 | STREAMING | Continuous double-buffered mode |
+| 5 | ERROR | Capture failed |
+
+#### 0xD8 HAT_LA_READ
+Read a chunk of captured data. Each response contains up to 28 bytes (limited by HAT UART frame size).
+
+**Request payload:**
+```
+0       offset          u32     Byte offset into capture buffer (LE)
+4       length          u16     Bytes to read (max 28)
+```
+
+**Response payload:** Raw capture data bytes (up to 28 bytes).
+
+For large captures, the desktop app uses the RP2040 USB CDC endpoint for bulk transfer instead of this chunked UART path. See Section 7.6 (LA_DONE_EVENT) for the recommended high-throughput flow.
+
+#### 0xD9 HAT_LA_STOP
+Stop an active capture or disarm a waiting trigger.
+
+**Request payload:** Empty.
+**Response payload:** `[state:u8]` (0=IDLE)
+
+#### RLE Data Format
+
+When `rle_enabled=true` in HAT_LA_CONFIG, captured data is compressed using run-length encoding before readout.
+
+**RLE word format (32-bit, little-endian):**
+```
+Bits [31:28] = 4-bit channel values (MSB-first: CH3, CH2, CH1, CH0)
+Bits [27:0]  = 28-bit run length (number of consecutive identical samples)
+```
+
+Maximum run length per entry: 268,435,455 (0x0FFFFFFF). Runs exceeding this are split across multiple entries. Typical compression ratio for digital signals: 10–100×.
+
 ### 6.14 HUSB238 USB PD (I2C, addr 0x08)
 
 USB Power Delivery sink controller. Read-only status of PD contract and source capabilities.

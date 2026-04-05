@@ -38,6 +38,8 @@ Last deep-dive: all 106 pages read and cross-referenced (2026-03-31).
 28. [DS4424 — Datasheet Reference](#28-ds4424--datasheet-reference)
 29. [AD74416H — Extended Reference](#29-ad74416h--extended-reference)
 30. [HAT Expansion Board System](#30-hat-expansion-board-system)
+31. [AI Interface — MCP Server](#31-ai-interface--mcp-server-pythonbugbuster_mcp)
+32. [Testing Infrastructure](#32-testing-infrastructure)
 
 ---
 
@@ -2650,7 +2652,7 @@ The HAT should release the line (high-Z) after the interrupt is serviced.
 ### 30.6 Initialization Sequence
 
 1. ADC detect: read GPIO47, average 8 samples, identify HAT type
-2. If HAT detected: initialize UART0 at 115200 8N1
+2. If HAT detected: initialize UART0 at 921600 8N1
 3. Send PING, wait for OK response (200 ms timeout)
 4. Send GET_INFO to learn HAT type and firmware version
 5. Send GET_PIN_CONFIG to read current pin assignments
@@ -2665,6 +2667,143 @@ The HAT should release the line (high-Z) after the interrupt is serviced.
 | 0xC7 | HAT_SET_ALL_PINS | `POST /api/hat/config` |
 | 0xC8 | HAT_RESET | `POST /api/hat/reset` |
 | 0xC9 | HAT_DETECT | `POST /api/hat/detect` |
+
+### 30.8 RP2040 Hardware Overview
+
+The HAT is built around an **RP2040** (dual Cortex-M0+, 264 KB SRAM) running a modified debugprobe firmware with BugBuster extensions.
+
+**Pin Assignments (RP2040):**
+
+| Pin | GPIO | Function |
+|-----|------|----------|
+| UART TX | GPIO0 | To ESP32 RX (GPIO44) |
+| UART RX | GPIO1 | From ESP32 TX (GPIO43) |
+| SWCLK | GPIO2 | SWD clock (PIO 0) |
+| SWDIO | GPIO3 | SWD data (PIO 0) |
+| EN_A | GPIO4 | Connector A power enable |
+| EN_B | GPIO5 | Connector B power enable |
+| HVPAK SDA | GPIO6 | I2C1 for IO voltage control |
+| HVPAK SCL | GPIO7 | I2C1 (400 kHz, addr 0x48) |
+| IRQ | GPIO8 | Open-drain interrupt to ESP32 |
+| LED_STATUS | GPIO9 | Status LED |
+| EXT1–EXT4 | GPIO10–13 | Expansion I/O lines |
+| LA_CH0 | GPIO14 | Logic analyzer channel 0 |
+| LA_CH1 | GPIO15 | Logic analyzer channel 1 |
+| LA_CH2 | GPIO16 | Logic analyzer channel 2 |
+| LA_CH3 | GPIO17 | Logic analyzer channel 3 |
+| FAULT_A | GPIO20 | Connector A overcurrent (input, active low) |
+| FAULT_B | GPIO21 | Connector B overcurrent (input, active low) |
+| ADC_A | GPIO26 (ADC0) | Connector A current sense |
+| ADC_B | GPIO27 (ADC1) | Connector B current sense |
+| LED_ACTIVITY | GPIO25 | Onboard LED |
+
+**PIO Allocation:**
+- **PIO 0:** SWD debug probe (debugprobe, unmodified)
+- **PIO 1, SM 0:** Logic analyzer capture (1/2/4-channel programs)
+- **PIO 1, SM 1:** Logic analyzer hardware trigger (edge/level)
+
+**USB Composite Device:**
+- CDC #0 (EP 0x81/0x02/0x83): UART bridge + LA data streaming
+- HID (EP 0x04/0x85): CMSIS-DAP v2 (SWD)
+- Vendor (EP 0x06/0x87): LA bulk data (legacy, replaced by CDC for gapless mode)
+
+### 30.9 Logic Analyzer — Technical Reference
+
+#### Capture Architecture
+
+The logic analyzer uses PIO 1 for parallel signal capture and DMA for zero-copy transfer to SRAM.
+
+**Buffer:** 76 KB static SRAM (BB_LA_BUFFER_SIZE = 77,824 bytes = 19,456 × uint32_t words)
+
+**Sample Packing (raw mode):**
+
+| Channels | Samples per 32-bit word | Max samples (76 KB buffer) |
+|----------|------------------------|---------------------------|
+| 1 | 32 | 622,592 |
+| 2 | 16 | 311,296 |
+| 4 | 8 | 155,648 |
+
+**Sample Rate:** Configurable from ~1 Hz to 125 MHz. Actual rate = `sys_clk / round(sys_clk / desired_rate)` due to PIO clock divider quantization. sys_clk = 125 MHz.
+
+#### Trigger Modes
+
+| Type | Value | PIO Program | Description |
+|------|-------|-------------|-------------|
+| NONE | 0 | — | Capture starts immediately on arm |
+| RISING | 1 | `wait 0 pin 0; wait 1 pin 0; irq set 0` | Rising edge |
+| FALLING | 2 | `wait 1 pin 0; wait 0 pin 0; irq set 0` | Falling edge |
+| BOTH | 3 | Software fallback | Any edge change |
+| HIGH | 4 | `wait 1 pin 0; irq set 0` | Level high |
+| LOW | 5 | `wait 0 pin 0; irq set 0` | Level low |
+
+Trigger SM 1 fires PIO1_IRQ_0 → handler enables capture SM 0 → DMA begins filling buffer.
+
+#### Capture States
+
+| State | Value | Description |
+|-------|-------|-------------|
+| IDLE | 0 | Not configured or stopped |
+| ARMED | 1 | Trigger configured, waiting |
+| CAPTURING | 2 | Trigger fired, DMA active |
+| DONE | 3 | Buffer full, data ready |
+| STREAMING | 4 | Continuous double-buffered mode |
+| ERROR | 5 | Capture failed |
+
+#### RLE Compression
+
+Run-length encoding compresses repetitive digital signals (typical 10–100× compression).
+
+**RLE word format (32-bit LE):**
+```
+Bits [31:28] = 4-bit channel values (CH3, CH2, CH1, CH0)
+Bits [27:0]  = 28-bit run length (max 268,435,455 samples per entry)
+```
+
+RLE encoding is performed by `bb_la_rle.c` after capture completes. The encoder processes raw PIO words, extracts individual samples based on channel count, and emits (value, count) pairs. Runs exceeding 28-bit max are split across multiple entries.
+
+#### DMA Configuration
+
+- **Transfer size:** DMA_SIZE_32 (32-bit)
+- **Source:** PIO 1 RX FIFO (fixed address, no increment)
+- **Destination:** Capture buffer (incrementing)
+- **DREQ:** PIO 1, SM 0 RX
+- **IRQ:** DMA_IRQ_0 fires on completion, sets `dma_done` flag
+- **Channel:** Dynamically claimed/released per capture
+
+#### Streaming Mode (Double-Buffered)
+
+For continuous capture, the buffer is split into two halves (38 KB each). DMA completes one half, flags it ready, and wraps to the other. The USB/CDC layer reads the ready half while the other fills.
+
+#### Data Readout Paths
+
+1. **HAT UART (0xD8 HAT_LA_READ):** Chunked, 28 bytes per frame — slow, used for small captures
+2. **USB CDC:** Gapless streaming via ring buffer (1024-byte CDC TX buffer) — preferred for large captures
+3. **USB Vendor Bulk (legacy):** EP 0x87, 64-byte packets with 4-byte length header
+
+When LA_DONE_EVENT (0x85) fires, the desktop app reads captured data via USB CDC for best throughput.
+
+### 30.10 SWD Debug Probe
+
+The RP2040 runs a fork of the Raspberry Pi **debugprobe** firmware, providing CMSIS-DAP v2 compliance. The SWD interface uses PIO 0 (SM 0 and SM 1) on GPIO2 (SWCLK) / GPIO3 (SWDIO).
+
+**Compatible tools:** OpenOCD, pyOCD, probe-rs, VS Code Cortex-Debug
+
+The debugprobe core is unmodified — BugBuster extensions (LA, power, HVPAK) are added alongside it. Target detection is performed via SWD DPIDR read.
+
+### 30.11 HVPAK IO Voltage Control
+
+The HVPAK (Renesas level translator) provides programmable IO voltage from 1.2 V to 5.5 V (default 3.3 V). Controlled via I2C1 at 400 kHz, address 0x48.
+
+**Usage:** Set IO voltage before SWD or LA operations to match target voltage levels. The `HAT_SETUP_SWD` command (0xCD) automatically configures HVPAK voltage, enables the selected connector, and routes SWD pins.
+
+### 30.12 Power Management
+
+Each connector (A/B) has independent:
+- **Power enable:** GPIO4 (A) / GPIO5 (B), active high
+- **Overcurrent detection:** GPIO20 (A) / GPIO21 (B), active low
+- **Current sensing:** ADC0 (A) / ADC1 (B) via sense resistor
+
+The `HAT_SET_POWER` (0xCA) and `HAT_GET_POWER` (0xCB) commands control power state and read current/fault status.
 
 ---
 
@@ -2764,3 +2903,53 @@ uv pip install --python .venv/bin/python -e ".[mcp]"
 - **Streaming → snapshot**: ADC/LA streaming is converted to statistical summaries (min/max/mean/stddev/freq) for AI consumption
 - **Both transports**: USB BBP for full functionality (streaming, SWD, register access); HTTP for remote/lightweight access
 - **Session lifecycle**: `session.py` manages lazy connection and HAL init; `reset_device` tool triggers full reconnect
+
+---
+
+## 32. Testing Infrastructure
+
+### 32.1 Hardware Test Suite (`tests/`)
+
+Pytest-based integration tests that run against real hardware connected via USB. 12 test modules covering all device subsystems.
+
+| Module | Scope |
+|--------|-------|
+| `test_01_core` | Ping, status, reset, firmware info |
+| `test_02_channels` | All 12 channel functions, ADC/DAC read/write |
+| `test_03_gpio` | AD74416H GPIO pins A–F |
+| `test_04_mux` | MUX matrix routing (32 SPST switches) |
+| `test_05_power` | DCDC supplies, IDAC voltage tuning, e-fuses |
+| `test_06_usbpd` | USB Power Delivery negotiation, PDO selection |
+| `test_07_wavegen` | Waveform generator (sine, square, triangle, sawtooth) |
+| `test_08_wifi` | WiFi AP/STA modes, scan, connect |
+| `test_09_selftest` | Built-in diagnostic self-test |
+| `test_10_streaming` | ADC streaming, scope bucket aggregation |
+| `test_11_hat` | HAT detection, power, SWD, LA (requires `--hat` flag) |
+| `test_12_faults` | Alert register, fault injection, clearing |
+
+**Configuration:** `tests/conftest.py` provides fixtures for device discovery, connection, and cleanup. `tests/run_tests.py` orchestrates test execution with device detection.
+
+**HTTP API tests** (`tests/http_api/test_http_endpoints.py`): Validates 14 REST endpoint contracts (GET/POST responses, error codes, payload shapes).
+
+### 32.2 Desktop App E2E Tests (`DesktopApp/BugBuster/tests/e2e/`)
+
+WebDriverIO + Tauri driver end-to-end tests for the desktop application. Currently covers app launch, connection screen, and toast notification system. No device required for disconnected-state tests.
+
+### 32.3 Running Tests
+
+```bash
+# Hardware tests (device must be connected)
+cd tests
+pip install -r requirements-test.txt
+python run_tests.py              # full suite
+pytest device/test_02_channels.py -v  # single module
+pytest device/test_11_hat.py --hat    # HAT-specific
+
+# Desktop E2E tests
+cd DesktopApp/BugBuster/tests/e2e
+npm install && npm test
+```
+
+### 32.4 Jupyter Test Dashboard
+
+`notebooks/test_dashboard.ipynb` provides an interactive test orchestration dashboard for running and reviewing test results with visual output.
