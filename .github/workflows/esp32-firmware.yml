@@ -1,0 +1,113 @@
+name: ESP32 Firmware
+
+"on":
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/esp32-firmware.yml"
+      - "Firmware/tools/firmware_version.py"
+      - "Firmware/esp32_ad74416h/**"
+  push:
+    branches:
+      - main
+    tags:
+      - "esp-fw-v*"
+    paths:
+      - ".github/workflows/esp32-firmware.yml"
+      - "Firmware/tools/firmware_version.py"
+      - "Firmware/esp32_ad74416h/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: esp32-firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade pip platformio
+
+      - name: Read firmware version
+        id: version
+        run: |
+          version=$(python Firmware/tools/firmware_version.py esp32)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ESP32 firmware version: $version"
+
+      - name: Validate tag matches firmware version
+        if: startsWith(github.ref, 'refs/tags/esp-fw-v')
+        shell: bash
+        run: |
+          expected_version="${GITHUB_REF_NAME#esp-fw-v}"
+          python Firmware/tools/firmware_version.py esp32 --expect "$expected_version"
+
+      - name: Build ESP32 firmware
+        run: pio run -d Firmware/esp32_ad74416h -e esp32s3
+
+      - name: Package ESP32 artifacts
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          build_dir="Firmware/esp32_ad74416h/.pio/build/esp32s3"
+          out_dir="dist/esp32-firmware"
+          mkdir -p "$out_dir"
+
+          cp "$build_dir/firmware.bin" "$out_dir/bugbuster-esp32s3-v${version}-ota.bin"
+          cp "$build_dir/firmware.elf" "$out_dir/bugbuster-esp32s3-v${version}.elf"
+          cp "$build_dir/bootloader.bin" "$out_dir/bootloader.bin"
+          cp "$build_dir/partitions.bin" "$out_dir/partitions.bin"
+          cp "$build_dir/ota_data_initial.bin" "$out_dir/ota_data_initial.bin"
+          cp "$build_dir/spiffs.bin" "$out_dir/spiffs.bin"
+          cp "$build_dir/flasher_args.json" "$out_dir/flasher_args.json"
+
+          (
+            cd "$out_dir"
+            zip -q "bugbuster-esp32s3-v${version}-flash-package.zip" \
+              bootloader.bin \
+              partitions.bin \
+              ota_data_initial.bin \
+              spiffs.bin \
+              flasher_args.json \
+              "bugbuster-esp32s3-v${version}-ota.bin"
+            sha256sum ./* > "bugbuster-esp32s3-v${version}-checksums.txt"
+          )
+
+      - name: Upload ESP32 firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware-v${{ steps.version.outputs.version }}
+          path: dist/esp32-firmware/*
+          if-no-files-found: error
+
+      - name: Publish ESP32 firmware release
+        if: startsWith(github.ref, 'refs/tags/esp-fw-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${{ steps.version.outputs.version }}"
+          title="ESP32 Firmware v${version}"
+          notes="BugBuster ESP32-S3 firmware release.\n\n- *-ota.bin is the application image for OTA updates.\n- *-flash-package.zip contains the binaries needed for a full flash."
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/esp32-firmware/* --clobber
+          else
+            gh release create "$tag" dist/esp32-firmware/* \
+              --draft \
+              --title "$title" \
+              --notes "$notes"
+          fi

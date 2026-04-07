@@ -1,0 +1,6 @@
+[submodule "Firmware/RP2040/lib/pico-sdk"]
+	path = Firmware/RP2040/lib/pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk.git
+[submodule "Firmware/RP2040/lib/debugprobe"]
+	path = Firmware/RP2040/lib/debugprobe
+	url = https://github.com/raspberrypi/debugprobe.git

@@ -1,0 +1,130 @@
+name: RP2040 Firmware
+
+"on":
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/rp2040-firmware.yml"
+      - ".gitmodules"
+      - "Firmware/tools/firmware_version.py"
+      - "Firmware/RP2040/**"
+  push:
+    branches:
+      - main
+    tags:
+      - "hat-fw-v*"
+    paths:
+      - ".github/workflows/rp2040-firmware.yml"
+      - ".gitmodules"
+      - "Firmware/tools/firmware_version.py"
+      - "Firmware/RP2040/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rp2040-firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install RP2040 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libusb-1.0-0-dev \
+            pkg-config
+
+      - name: Read firmware version
+        id: version
+        run: |
+          version=$(python Firmware/tools/firmware_version.py rp2040)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "RP2040 firmware version: $version"
+
+      - name: Validate tag matches firmware version
+        if: startsWith(github.ref, 'refs/tags/hat-fw-v')
+        shell: bash
+        run: |
+          expected_version="${GITHUB_REF_NAME#hat-fw-v}"
+          python Firmware/tools/firmware_version.py rp2040 --expect "$expected_version"
+
+      - name: Configure RP2040 build
+        run: |
+          cmake -S Firmware/RP2040 -B Firmware/RP2040/build-ci \
+            -G Ninja \
+            -DPICO_BOARD=bugbuster_hat \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build RP2040 firmware
+        run: cmake --build Firmware/RP2040/build-ci --parallel
+
+      - name: Package RP2040 artifacts
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          build_dir="Firmware/RP2040/build-ci"
+          out_dir="dist/rp2040-firmware"
+          mkdir -p "$out_dir"
+
+          cp "$build_dir/bugbuster_hat.uf2" "$out_dir/bugbuster-hat-rp2040-v${version}.uf2"
+          cp "$build_dir/bugbuster_hat.bin" "$out_dir/bugbuster-hat-rp2040-v${version}.bin"
+          cp "$build_dir/bugbuster_hat.hex" "$out_dir/bugbuster-hat-rp2040-v${version}.hex"
+          cp "$build_dir/bugbuster_hat.elf" "$out_dir/bugbuster-hat-rp2040-v${version}.elf"
+          cp "$build_dir/bugbuster_hat.dis" "$out_dir/bugbuster-hat-rp2040-v${version}.dis"
+
+          (
+            cd "$out_dir"
+            zip -q "bugbuster-hat-rp2040-v${version}-bundle.zip" \
+              "bugbuster-hat-rp2040-v${version}.uf2" \
+              "bugbuster-hat-rp2040-v${version}.bin" \
+              "bugbuster-hat-rp2040-v${version}.hex" \
+              "bugbuster-hat-rp2040-v${version}.elf" \
+              "bugbuster-hat-rp2040-v${version}.dis"
+            sha256sum ./* > "bugbuster-hat-rp2040-v${version}-checksums.txt"
+          )
+
+      - name: Upload RP2040 firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rp2040-firmware-v${{ steps.version.outputs.version }}
+          path: dist/rp2040-firmware/*
+          if-no-files-found: error
+
+      - name: Publish RP2040 firmware release
+        if: startsWith(github.ref, 'refs/tags/hat-fw-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${{ steps.version.outputs.version }}"
+          title="RP2040 HAT Firmware v${version}"
+          notes="BugBuster RP2040 HAT firmware release.\n\n- *.uf2 is the drag-and-drop flash image.\n- *-bundle.zip includes all generated firmware formats."
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/rp2040-firmware/* --clobber
+          else
+            gh release create "$tag" dist/rp2040-firmware/* \
+              --draft \
+              --title "$title" \
+              --notes "$notes"
+          fi
