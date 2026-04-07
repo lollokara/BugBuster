@@ -291,7 +291,7 @@ g_deviceState                   ConnectionManager                Leptos signals
 | `usb_cdc.h/.cpp` | TinyUSB composite device init: 2x CDC (CLI + UART bridge) |
 | `uart_bridge.h/.cpp` | UART-to-USB bridge: bidirectional passthrough between CDC #1 and hardware UART |
 | `wifi_manager.h/.cpp` | WiFi AP+STA management: init, connect, status, IP/MAC queries |
-| `wifi_credentials.h` | WiFi SSID/password constants (AP and optional STA) |
+
 | `i2c_bus.h/.cpp` | Shared I2C master bus driver with mutex protection |
 | `ds4424.h/.cpp` | DS4424 4-ch IDAC driver: code/voltage set, calibration (NVS save/load), formula-based and interpolated conversion |
 | `husb238.h/.cpp` | HUSB238 USB-PD sink controller: status read, PDO selection, re-negotiation |

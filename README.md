@@ -747,11 +747,10 @@ BugBuster/
 │   ├── ARCHITECTURE.md         Full system architecture
 │   └── BugBuster.pdf           Schematic export
 │
-├── Docs/                       Component datasheets + screenshots
+├── Docs/                       Component datasheets, screenshots & AD74416H reference
 ├── Libs/                       Altium component libraries
 ├── notebooks/                  Jupyter notebooks (flash, build, setup, testing)
-├── Scripts/                    Test scripts
-└── knowledge.md                AD74416H engineering reference (140 KB, 30+ sections)
+└── Scripts/                    Test scripts
 ```
 
 <br/>

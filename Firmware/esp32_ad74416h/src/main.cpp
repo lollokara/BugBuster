@@ -10,7 +10,6 @@
 #include "esp_spiffs.h"
 
 #include "config.h"
-#include "wifi_credentials.h"
 #include "usb_cdc.h"
 #include "serial_io.h"
 #include "wifi_manager.h"

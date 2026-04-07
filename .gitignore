@@ -27,9 +27,13 @@ DesktopApp/BugBuster/dist/
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+**/.venv/
 
-# Test outputs
+# Test outputs & reports
 Scripts/*.csv
+tests/.report.json
+tests/report.html
 
 # IDE
 .vscode/

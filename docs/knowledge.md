@@ -910,7 +910,7 @@ Per AD74416H datasheet (Table 6, page 55): **RTD_CURRENT=0 → 500µA, RTD_CURRE
 This caused resistance readings to be ~4× too high (dividing by 250µA instead of 1mA).
 
 **Files corrected:** tasks.cpp, tasks.h, bbp.cpp, webserver.cpp, http_transport.rs, commands.rs,
-tauri_bridge.rs, data/index.html, knowledge.md, BugBusterProtocol.md.
+tauri_bridge.rs, data/index.html, Docs/knowledge.md, BugBusterProtocol.md.
 
 ---
 
