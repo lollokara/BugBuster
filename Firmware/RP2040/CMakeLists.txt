@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.13)
 set(CMAKE_BUILD_TYPE RelWithDebInfo)
 
 set(PICO_SDK_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/pico-sdk)
+set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards)
 include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
 set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/debugprobe/freertos)
@@ -51,11 +52,11 @@ add_executable(bugbuster_hat
 )
 
 target_include_directories(bugbuster_hat PRIVATE
+    src/
     ${DEBUGPROBE_DIR}/CMSIS_DAP/CMSIS/DAP/Firmware/Include/
     ${DEBUGPROBE_DIR}/CMSIS_DAP/CMSIS/Core/Include/
     ${DEBUGPROBE_DIR}/include/
     ${DEBUGPROBE_DIR}/src/
-    src/
 )
 
 target_compile_definitions(bugbuster_hat PRIVATE
@@ -66,7 +67,7 @@ target_compile_definitions(bugbuster_hat PRIVATE
 )
 
 target_compile_options(bugbuster_hat PRIVATE -Wall)
-# Our src/tusb_config.h overrides debugprobe's (src/ is listed before debugprobe/src/ in includes)
+# Our local override headers must win over debugprobe defaults.
 
 # PIO programs — debugprobe SWD (PIO 0)
 pico_generate_pio_header(bugbuster_hat ${DEBUGPROBE_DIR}/src/probe.pio)
