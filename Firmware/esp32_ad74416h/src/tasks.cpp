@@ -536,6 +536,110 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
     }
 }
 
+bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown)
+{
+    if (!s_device || gpio >= AD74416H_NUM_GPIOS || mode > GPIO_SEL_DO_EXT) {
+        return false;
+    }
+
+    s_device->configureGpio(gpio, mode, pulldown);
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.gpio[gpio].mode = (uint8_t)mode;
+        g_deviceState.gpio[gpio].pulldown = pulldown;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    return true;
+}
+
+bool tasks_apply_gpio_output(uint8_t gpio, bool value)
+{
+    if (!s_device || gpio >= AD74416H_NUM_GPIOS) {
+        return false;
+    }
+
+    s_device->setGpioOutput(gpio, value);
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.gpio[gpio].outputVal = value;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    return true;
+}
+
+bool tasks_apply_dac_code(uint8_t channel, uint16_t code)
+{
+    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
+        return false;
+    }
+    if (!s_device->setDacCode(channel, code)) {
+        return false;
+    }
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.channels[channel].dacCode = code;
+        g_deviceState.channels[channel].dacValue =
+            (code / 65536.0f) * VOUT_UNIPOLAR_SPAN_V;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    return true;
+}
+
+bool tasks_apply_dac_voltage(uint8_t channel, float voltage, bool bipolar)
+{
+    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
+        return false;
+    }
+
+    s_device->setVoutRange(channel, bipolar);
+    if (!s_device->setDacVoltage(channel, voltage, bipolar)) {
+        return false;
+    }
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.channels[channel].dacValue = voltage;
+        float span = bipolar ? VOUT_BIPOLAR_SPAN_V : VOUT_UNIPOLAR_SPAN_V;
+        float off  = bipolar ? VOUT_BIPOLAR_OFFSET_V : 0.0f;
+        g_deviceState.channels[channel].dacCode =
+            (uint16_t)(((voltage + off) / span) * 65536.0f);
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    return true;
+}
+
+bool tasks_apply_dac_current(uint8_t channel, float current_mA)
+{
+    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
+        return false;
+    }
+    if (!s_device->setDacCurrent(channel, current_mA)) {
+        return false;
+    }
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.channels[channel].dacValue = current_mA;
+        g_deviceState.channels[channel].dacCode =
+            (uint16_t)((current_mA / IOUT_MAX_MA) * 65536.0f);
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    return true;
+}
+
+bool tasks_apply_vout_range(uint8_t channel, bool bipolar)
+{
+    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
+        return false;
+    }
+
+    s_device->setVoutRange(channel, bipolar);
+    return true;
+}
+
 // -----------------------------------------------------------------------------
 // Task 3: Command Processor (Core 1, Priority 2)
 // -----------------------------------------------------------------------------
@@ -801,28 +905,15 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_GPIO_CONFIG: {
-                s_device->configureGpio(cmd.gpioCfg.gpio,
+                tasks_apply_gpio_config(cmd.gpioCfg.gpio,
                                        (GpioSelect)cmd.gpioCfg.mode,
                                        cmd.gpioCfg.pulldown);
-                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                    if (cmd.gpioCfg.gpio < AD74416H_NUM_GPIOS) {
-                        g_deviceState.gpio[cmd.gpioCfg.gpio].mode = cmd.gpioCfg.mode;
-                        g_deviceState.gpio[cmd.gpioCfg.gpio].pulldown = cmd.gpioCfg.pulldown;
-                    }
-                    xSemaphoreGive(g_stateMutex);
-                }
                 break;
             }
 
             // -----------------------------------------------------------------
             case CMD_GPIO_SET: {
-                s_device->setGpioOutput(cmd.gpioSet.gpio, cmd.gpioSet.value);
-                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                    if (cmd.gpioSet.gpio < AD74416H_NUM_GPIOS) {
-                        g_deviceState.gpio[cmd.gpioSet.gpio].outputVal = cmd.gpioSet.value;
-                    }
-                    xSemaphoreGive(g_stateMutex);
-                }
+                tasks_apply_gpio_output(cmd.gpioSet.gpio, cmd.gpioSet.value);
                 break;
             }
 

@@ -19,6 +19,10 @@ static const char *TAG = "adgs2414d";
 // Cached switch states for all devices
 static uint8_t s_mux_state[ADGS_NUM_DEVICES] = {};
 
+// Public 4-byte API shadow. On PCB builds this mirrors the 4 populated main
+// devices; on breadboard builds only byte 0 is backed by hardware.
+static uint8_t s_api_main_state[ADGS_API_MAIN_DEVICES] = {};
+
 // SPI device handle (separate from AD74416H, same bus, different CS)
 static spi_device_handle_t s_spi_dev = NULL;
 
@@ -34,6 +38,13 @@ static bool s_mux_faulted = false;
 // so the driver does not falsely roll the MUX state back to all-open.
 static bool s_readback_available = true;
 static bool s_readback_checked = false;
+
+static void sync_api_main_from_physical(void)
+{
+    for (uint8_t i = 0; i < ADGS_MAIN_DEVICES && i < ADGS_API_MAIN_DEVICES; i++) {
+        s_api_main_state[i] = s_mux_state[i];
+    }
+}
 
 
 // -----------------------------------------------------------------------------
@@ -323,6 +334,7 @@ void adgs_init(void)
 
     // Reset all switches to open
     memset(s_mux_state, 0, sizeof(s_mux_state));
+    memset(s_api_main_state, 0, sizeof(s_api_main_state));
 
     s_mux_faulted = false;
     s_readback_available = true;
@@ -347,6 +359,7 @@ void adgs_set_all_raw(const uint8_t states[ADGS_MAIN_DEVICES])
 {
     if (!s_mux_initialized) return;
     memcpy(s_mux_state, states, ADGS_MAIN_DEVICES);
+    sync_api_main_from_physical();
     // Preserve self-test device (index 4) — don't touch it from main MUX path
     adgs_write_states(s_mux_state);
 }
@@ -377,6 +390,7 @@ void adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
     // Step 3: Set new main MUX state (preserve self-test device)
     memcpy(s_mux_state, states, ADGS_MAIN_DEVICES);
     adgs_write_states(s_mux_state);
+    sync_api_main_from_physical();
 }
 
 void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
@@ -415,6 +429,7 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 
     s_mux_state[device] = new_state;
     adgs_write_states(s_mux_state);
+    sync_api_main_from_physical();
 }
 
 uint8_t adgs_get_state(uint8_t device)
@@ -428,9 +443,50 @@ void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES])
     memcpy(out, s_mux_state, ADGS_NUM_DEVICES);
 }
 
+void adgs_get_api_states(uint8_t out[ADGS_API_MAIN_DEVICES])
+{
+    memcpy(out, s_api_main_state, ADGS_API_MAIN_DEVICES);
+    sync_api_main_from_physical();
+    memcpy(out, s_api_main_state, ADGS_API_MAIN_DEVICES);
+}
+
+void adgs_set_api_all_safe(const uint8_t states[ADGS_API_MAIN_DEVICES])
+{
+    memcpy(s_api_main_state, states, ADGS_API_MAIN_DEVICES);
+
+    uint8_t physical[ADGS_MAIN_DEVICES];
+    for (uint8_t i = 0; i < ADGS_MAIN_DEVICES; i++) {
+        physical[i] = states[i];
+    }
+    adgs_set_all_safe(physical);
+    sync_api_main_from_physical();
+}
+
+bool adgs_set_api_switch_safe(uint8_t device, uint8_t sw, bool closed)
+{
+    if (device >= ADGS_API_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) {
+        return false;
+    }
+
+    if (device < ADGS_MAIN_DEVICES) {
+        adgs_set_switch_safe(device, sw, closed);
+        sync_api_main_from_physical();
+        return true;
+    }
+
+    uint8_t group_mask = get_group_mask(sw);
+    if (closed) {
+        s_api_main_state[device] = (s_api_main_state[device] & ~group_mask) | (1u << sw);
+    } else {
+        s_api_main_state[device] &= ~(1u << sw);
+    }
+    return true;
+}
+
 void adgs_reset_all(void)
 {
     memset(s_mux_state, 0, sizeof(s_mux_state));
+    memset(s_api_main_state, 0, sizeof(s_api_main_state));
     if (s_mux_initialized) {
 #if ADGS_NUM_DEVICES > 1
         adgs_daisy_chain_write(s_mux_state);

@@ -26,7 +26,7 @@ extern "C" {
 #define BBP_PROTO_VERSION       2
 
 #define BBP_FW_VERSION_MAJOR    1
-#define BBP_FW_VERSION_MINOR    1
+#define BBP_FW_VERSION_MINOR    2
 #define BBP_FW_VERSION_PATCH    0
 
 // Handshake magic bytes: 0xBB 'B' 'U' 'G'

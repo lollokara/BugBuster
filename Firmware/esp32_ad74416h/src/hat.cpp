@@ -29,6 +29,7 @@ static HatState s_state = {};
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 #endif
 static bool s_initialized = false;
+static uint8_t s_last_error = 0;
 
 // -----------------------------------------------------------------------------
 // CRC-8 (polynomial 0x07, same as AD74416H SPI CRC)
@@ -153,6 +154,7 @@ static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_
         }
     }
 
+    s_last_error = 0;
     ESP_LOGD(TAG, "TX cmd=0x%02X len=%d", cmd, payload_len);
 
     if (!hat_send_frame(cmd, payload, payload_len)) {
@@ -161,6 +163,10 @@ static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_
     }
 
     uint8_t rsp = hat_recv_frame(rsp_payload, rsp_len, timeout_ms);
+    if (rsp == HAT_RSP_ERROR && rsp_payload && rsp_len && *rsp_len >= 1) {
+        s_last_error = rsp_payload[0];
+        ESP_LOGW(TAG, "HAT command 0x%02X failed with error 0x%02X", cmd, s_last_error);
+    }
     ESP_LOGD(TAG, "RX rsp=0x%02X len=%d (for cmd=0x%02X)", rsp, rsp_len ? *rsp_len : 0, cmd);
     return rsp;
 }
@@ -492,6 +498,21 @@ const char* hat_type_name(HatType type)
 // Power Management
 // =============================================================================
 
+static bool hat_get_io_voltage(void)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_GET_IO_VOLTAGE, NULL, 0, rsp, &rsp_len, 200);
+    if (cmd == HAT_RSP_OK && rsp_len >= 2) {
+        s_state.io_voltage_mv = (uint16_t)rsp[0] | ((uint16_t)rsp[1] << 8);
+        return true;
+    }
+    return false;
+}
+
 bool hat_set_power(HatConnector conn, bool on)
 {
     if (!s_state.connected) return false;
@@ -530,6 +551,7 @@ bool hat_get_power_status(void)
             memcpy(&s_state.connector[1].current_ma, &rsp[7], sizeof(float));
             s_state.connector[1].fault = rsp[11] != 0;
         }
+        hat_get_io_voltage();
         return true;
     }
     return false;
@@ -564,8 +586,20 @@ bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)
 
     // 1. Set HVPAK I/O voltage to match target
     if (!hat_set_io_voltage(target_voltage_mv)) {
-        ESP_LOGE(TAG, "SWD setup: failed to set I/O voltage");
-        return false;
+        // Breadboard HAT firmware still uses a fixed 3.3 V level path and
+        // reports SET_IO_VOLTAGE as unsupported. Treat a 3.3 V request as
+        // already satisfied so SWD routing/power tests can proceed safely.
+        if (s_last_error == HAT_ERR_INVALID_FUNC &&
+            target_voltage_mv == HAT_DEFAULT_IO_VOLTAGE_MV) {
+            s_state.io_voltage_mv = HAT_DEFAULT_IO_VOLTAGE_MV;
+            ESP_LOGW(TAG,
+                     "SWD setup: programmable I/O voltage unsupported by HAT; "
+                     "assuming fixed %u mV breadboard level",
+                     HAT_DEFAULT_IO_VOLTAGE_MV);
+        } else {
+            ESP_LOGE(TAG, "SWD setup: failed to set I/O voltage");
+            return false;
+        }
     }
     delay_ms(5);  // HVPAK stabilization
 

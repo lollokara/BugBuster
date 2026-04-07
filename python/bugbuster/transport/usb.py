@@ -104,88 +104,88 @@ class USBTransport:
         self._serial.dtr = True
 
         # Handshake strategy:
-        #   0. Send a DISCONNECT frame in case the device is stuck in binary
-        #      mode from a previous unclean session.  If the device is already
-        #      in CLI mode the COBS-encoded frame is harmless garbage.
-        #   1. Wait for the device to settle and drain any startup / "CLI ready"
-        #      output that arrives after the port-open DTR event.
-        #   2. Send the 4-byte magic.
-        #   3. Scan the incoming byte stream for the 8-byte magic response.
-        #      We never call reset_input_buffer() because on macOS CDC devices
-        #      tcflush() does not reliably flush the kernel USB receive buffer.
+        #   0. Drain startup / prompt text after the DTR transition.
+        #   1. Try a clean magic handshake first.
+        #   2. If that fails, perform a binary-mode recovery (COBS delimiters +
+        #      DISCONNECT) and retry.
+        # We never call reset_input_buffer() because on macOS CDC devices
+        # tcflush() does not reliably flush the kernel USB receive buffer.
         import time as _time
 
-        # Step 0: Attempt to recover a device stuck in binary mode.
-        # If the previous session crashed without sending DISCONNECT, the
-        # device is still in binary mode with a partially-filled COBS decoder.
-        #
-        # Recovery:
-        #   a) Send 0x00 bytes to flush any partial COBS frame in the device's
-        #      receive buffer (0x00 = frame delimiter, resets the decoder).
-        #   b) Send a properly framed DISCONNECT (0xFF) command.
-        #   c) Wait for the device to exit binary mode and print CLI prompt.
-        #
-        # If the device is already in CLI mode, all these bytes are harmless
-        # (just garbage text that the CLI ignores).
-        try:
-            self._serial.write(b'\x00' * 4)         # flush partial COBS frame
-            disconnect_frame = build_frame(0, 0xFF)  # DISCONNECT cmd
-            self._serial.write(disconnect_frame)
-            self._serial.flush()
-            _time.sleep(0.3)  # give device time to exit binary mode + print CLI prompt
-            # Drain any "Binary mode deactivated" / CLI prompt text
+        def _attempt_handshake(settle_timeout: float) -> bytes:
+            buf             = bytearray()
+            magic_sent      = False
+            last_rx         = _time.time()
+            settle_deadline = _time.time() + settle_timeout
+            deadline        = None
+            settle_quiet_s  = 0.20
+
+            while True:
+                now = _time.time()
+
+                if deadline is not None and now > deadline:
+                    raise TimeoutError(buf.hex() if buf else "nothing")
+
+                try:
+                    chunk = self._serial.read(64)
+                except serial.SerialException:
+                    _time.sleep(0.02)
+                    continue
+
+                if chunk:
+                    buf.extend(chunk)
+                    last_rx = now
+
+                idx = buf.find(HANDSHAKE_MAGIC)
+                if idx != -1 and len(buf) >= idx + 8:
+                    return bytes(buf[idx:idx + 8])
+
+                if not magic_sent:
+                    quiet_for = now - last_rx
+                    if quiet_for >= settle_quiet_s or now > settle_deadline:
+                        self._serial.write(HANDSHAKE_MAGIC)
+                        self._serial.flush()
+                        magic_sent = True
+                        deadline   = _time.time() + self._timeout
+
+        # Drain any startup noise after DTR rises.
+        startup = bytearray()
+        settle_until = _time.time() + 0.5
+        while _time.time() < settle_until:
             try:
-                self._serial.read(1024)
+                chunk = self._serial.read(128)
             except serial.SerialException:
-                pass
-            log.debug("Sent pre-handshake DISCONNECT (recovery for stuck binary mode)")
-        except Exception:
-            pass  # best-effort
-
-        buf             = bytearray()
-        magic_sent      = False
-        last_rx         = _time.time()
-        # We allow up to SETTLE_QUIET_S of silence before sending the magic,
-        # then wait up to self._timeout for the handshake response.
-        SETTLE_QUIET_S  = 0.25   # silence gap that signals CLI is ready
-        settle_deadline = _time.time() + 3.0   # hard upper bound on settle wait
-        deadline        = None                  # set after magic is sent
-
-        while True:
-            now = _time.time()
-
-            # Hard timeout after magic was sent
-            if deadline is not None and now > deadline:
-                self._serial.close()
-                raise ConnectionError(
-                    f"BBP handshake timed out — received: {buf.hex() if buf else 'nothing'}"
-                )
-
-            try:
-                chunk = self._serial.read(64)
-            except serial.SerialException:
-                _time.sleep(0.02)
-                continue
-
-            if chunk:
-                buf.extend(chunk)
-                last_rx = now
-
-            # Check for the magic response in everything received so far
-            idx = buf.find(HANDSHAKE_MAGIC)
-            if idx != -1 and len(buf) >= idx + 8:
-                resp = bytes(buf[idx:idx + 8])
                 break
+            if chunk:
+                startup.extend(chunk)
+            else:
+                _time.sleep(0.02)
 
-            if not magic_sent:
-                # Wait for silence (device finished printing CLI prompt) before sending magic
-                quiet_for = now - last_rx
-                timed_out = now > settle_deadline
-                if quiet_for >= SETTLE_QUIET_S or timed_out:
-                    self._serial.write(HANDSHAKE_MAGIC)
-                    self._serial.flush()
-                    magic_sent = True
-                    deadline   = _time.time() + self._timeout
+        last_handshake_buf = startup.hex() if startup else "nothing"
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = _attempt_handshake(settle_timeout=1.0 if attempt == 0 else 0.4)
+                break
+            except TimeoutError as exc:
+                last_handshake_buf = str(exc)
+                if attempt == 0:
+                    # Recovery for a stale binary session: terminate any partial
+                    # COBS frame, request DISCONNECT, then retry a clean magic.
+                    try:
+                        self._serial.write(b'\x00' * 4)
+                        self._serial.write(build_frame(0, 0xFF))
+                        self._serial.flush()
+                        _time.sleep(0.3)
+                        self._serial.read(256)
+                        log.debug("Sent recovery DISCONNECT after failed handshake attempt")
+                    except Exception:
+                        pass
+                else:
+                    self._serial.close()
+                    raise ConnectionError(
+                        f"BBP handshake timed out — received: {last_handshake_buf}"
+                    )
 
         self.proto_version = resp[4]
         self.fw_version    = (resp[5], resp[6], resp[7])

@@ -57,6 +57,10 @@ extern "C" {
 #define ADGS_GROUP_B_MASK       0x30  // SW5-SW6 (bits 4-5)
 #define ADGS_GROUP_C_MASK       0xC0  // SW7-SW8 (bits 6-7)
 
+// Public API always exposes the 4 main MUX bytes even on breadboard builds
+// that only populate a single physical ADGS2414D device.
+#define ADGS_API_MAIN_DEVICES   4
+
 // GPIO mapping: which ESP GPIO drives each MUX switch input
 // [device][group] → ESP GPIO number for the direct-drive switch
 // Group A = S1/S2, Group B = S5/S6, Group C = S7/S8
@@ -112,6 +116,26 @@ uint8_t adgs_get_state(uint8_t device);
  * @param out  Array to fill with 4 device states
  */
 void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES]);
+
+/**
+ * @brief Get the 4-byte public MUX API state.
+ *        In breadboard mode, bytes for non-populated devices are shadowed in
+ *        software so tests and clients can still round-trip the full API.
+ */
+void adgs_get_api_states(uint8_t out[ADGS_API_MAIN_DEVICES]);
+
+/**
+ * @brief Set the 4-byte public MUX API state with safety dead time.
+ *        Only physically populated devices are driven in hardware.
+ */
+void adgs_set_api_all_safe(const uint8_t states[ADGS_API_MAIN_DEVICES]);
+
+/**
+ * @brief Set a single switch in the 4-byte public MUX API state.
+ *        Non-populated devices are updated in software only.
+ * @return true on accepted parameters, false on invalid device/switch.
+ */
+bool adgs_set_api_switch_safe(uint8_t device, uint8_t sw, bool closed);
 
 /**
  * @brief Reset all switches to open (safe state).

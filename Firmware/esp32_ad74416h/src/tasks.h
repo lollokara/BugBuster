@@ -112,7 +112,7 @@ struct DeviceState {
     uint16_t         liveStatus;
     DiagState        diag[4];           // 4 diagnostic slots
     GpioState        gpio[6];           // 6 GPIOs (A-F)
-    uint8_t          muxState[4];       // ADGS2414D switch states (4 devices)
+    uint8_t          muxState[ADGS_NUM_DEVICES]; // ADGS2414D switch states (main devices + self-test when present)
     ScopeBuffer      scope;             // ring buffer for batched scope data
     WavegenState     wavegen;           // waveform generator state
 
@@ -283,3 +283,43 @@ bool sendCommand(const Command& cmd);
  *        internally.  Blocks for ~50 ms (ADC settling + alert clear).
  */
 void tasks_apply_channel_function(uint8_t channel, ChannelFunction func);
+
+/**
+ * @brief Apply an AD74416H GPIO mode change synchronously.
+ *
+ * Updates both the hardware register and the cached GPIO state so callers can
+ * read back the new mode immediately without waiting for the command queue.
+ *
+ * @return true on success, false on invalid parameters or device access failure.
+ */
+bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown);
+
+/**
+ * @brief Apply an AD74416H GPIO output value synchronously.
+ *
+ * Updates both the hardware register and the cached GPIO state so callers can
+ * read back the new output immediately without waiting for the command queue.
+ *
+ * @return true on success, false on invalid parameters or device access failure.
+ */
+bool tasks_apply_gpio_output(uint8_t gpio, bool value);
+
+/**
+ * @brief Apply a raw DAC code synchronously for a channel.
+ */
+bool tasks_apply_dac_code(uint8_t channel, uint16_t code);
+
+/**
+ * @brief Apply a voltage DAC setpoint synchronously for a channel.
+ */
+bool tasks_apply_dac_voltage(uint8_t channel, float voltage, bool bipolar);
+
+/**
+ * @brief Apply a current DAC setpoint synchronously for a channel.
+ */
+bool tasks_apply_dac_current(uint8_t channel, float current_mA);
+
+/**
+ * @brief Apply the VOUT bipolar/unipolar range synchronously for a channel.
+ */
+bool tasks_apply_vout_range(uint8_t channel, bool bipolar);

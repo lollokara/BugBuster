@@ -51,6 +51,134 @@ IdacChannel = namedtuple("IdacChannel", ["code", "target_v", "actual_v", "v_min"
 
 
 # ---------------------------------------------------------------------------
+# HTTP compatibility helpers
+# ---------------------------------------------------------------------------
+
+def _first_present(mapping: dict, *keys, default=None):
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+    return default
+
+
+def _parse_int_maybe_hex(value, default=0) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            return default
+    return default
+
+
+def _channel_function_from_http(entry: dict) -> int:
+    value = _first_present(entry, "function", "function_code", "functionCode")
+    if isinstance(value, str):
+        try:
+            return int(ChannelFunction[value])
+        except KeyError:
+            return 0
+    return _parse_int_maybe_hex(value, 0)
+
+
+def _normalize_http_status(raw: dict) -> dict:
+    channels = []
+    for ch in raw.get("channels", []):
+        channels.append({
+            "id": _parse_int_maybe_hex(_first_present(ch, "id"), 0),
+            "function": _channel_function_from_http(ch),
+            "function_name": _first_present(ch, "function_name", "functionName")
+                             or (_first_present(ch, "function") if isinstance(_first_present(ch, "function"), str) else None),
+            "adc_raw": _parse_int_maybe_hex(_first_present(ch, "adc_raw", "raw_code", "adcRaw"), 0),
+            "adc_value": float(_first_present(ch, "adc_value", "value", "adcValue", default=0.0) or 0.0),
+            "adc_range": _parse_int_maybe_hex(_first_present(ch, "adc_range", "range", "adcRange"), 0),
+            "adc_rate": _parse_int_maybe_hex(_first_present(ch, "adc_rate", "rate", "adcRate"), 0),
+            "adc_mux": _parse_int_maybe_hex(_first_present(ch, "adc_mux", "mux", "adcMux"), 0),
+            "dac_code": _parse_int_maybe_hex(_first_present(ch, "dac_code", "dacCode"), 0),
+            "dac_value": float(_first_present(ch, "dac_value", "dacValue", default=0.0) or 0.0),
+            "din_state": bool(_first_present(ch, "din_state", "dinState", default=False)),
+            "din_counter": _parse_int_maybe_hex(_first_present(ch, "din_counter", "dinCounter"), 0),
+            "do_state": bool(_first_present(ch, "do_state", "doState", default=False)),
+            "channel_alert": _parse_int_maybe_hex(_first_present(ch, "channel_alert", "channelAlert"), 0),
+            "channel_alert_mask": _parse_int_maybe_hex(_first_present(ch, "channel_alert_mask", "channelAlertMask"), 0),
+            "rtd_excitation_ua": _parse_int_maybe_hex(_first_present(ch, "rtd_excitation_ua", "rtdExcitationUa"), 0),
+        })
+
+    diagnostics = []
+    for diag in raw.get("diagnostics", []):
+        diagnostics.append({
+            "source": _parse_int_maybe_hex(_first_present(diag, "source"), 0),
+            "raw_code": _parse_int_maybe_hex(_first_present(diag, "raw_code", "rawCode", "raw"), 0),
+            "value": float(_first_present(diag, "value", default=0.0) or 0.0),
+        })
+
+    return {
+        "spi_ok": bool(_first_present(raw, "spi_ok", "spiOk", default=False)),
+        "die_temp_c": float(_first_present(raw, "die_temp_c", "dieTemp", default=0.0) or 0.0),
+        "alert_status": _parse_int_maybe_hex(_first_present(raw, "alert_status", "alertStatus"), 0),
+        "alert_mask": _parse_int_maybe_hex(_first_present(raw, "alert_mask", "alertMask"), 0),
+        "supply_alert_status": _parse_int_maybe_hex(_first_present(raw, "supply_alert_status", "supplyAlertStatus"), 0),
+        "supply_alert_mask": _parse_int_maybe_hex(_first_present(raw, "supply_alert_mask", "supplyAlertMask"), 0),
+        "live_status": _parse_int_maybe_hex(_first_present(raw, "live_status", "liveStatus"), 0),
+        "channels": channels,
+        "diagnostics": diagnostics,
+        "mux_states": list(_first_present(raw, "mux_states", "muxStates", default=[])),
+    }
+
+
+def _normalize_http_faults(raw: dict) -> dict:
+    channels = []
+    for ch in raw.get("channels", []):
+        channels.append({
+            "id": _parse_int_maybe_hex(_first_present(ch, "id"), 0),
+            "alert": _parse_int_maybe_hex(_first_present(ch, "alert", "channel_alert", "channelAlert"), 0),
+            "mask": _parse_int_maybe_hex(_first_present(ch, "mask", "channel_alert_mask", "channelAlertMask"), 0),
+        })
+    return {
+        "alert_status": _parse_int_maybe_hex(_first_present(raw, "alert_status", "alertStatus"), 0),
+        "alert_mask": _parse_int_maybe_hex(_first_present(raw, "alert_mask", "alertMask"), 0),
+        "supply_alert_status": _parse_int_maybe_hex(_first_present(raw, "supply_alert_status", "supplyAlertStatus"), 0),
+        "supply_alert_mask": _parse_int_maybe_hex(_first_present(raw, "supply_alert_mask", "supplyAlertMask"), 0),
+        "channels": channels,
+    }
+
+
+def _normalize_http_wifi_status(raw: dict) -> dict:
+    return {
+        "connected": bool(_first_present(raw, "connected", "sta_connected", default=False)),
+        "sta_ssid": str(_first_present(raw, "sta_ssid", "staSSID", default="") or ""),
+        "sta_ip": str(_first_present(raw, "sta_ip", "staIP", "ip", default="") or ""),
+        "rssi": _first_present(raw, "rssi"),
+        "ap_ssid": str(_first_present(raw, "ap_ssid", "apSSID", default="") or ""),
+        "ap_ip": str(_first_present(raw, "ap_ip", "apIP", default="") or ""),
+        "ap_mac": str(_first_present(raw, "ap_mac", "apMAC", default="") or ""),
+    }
+
+
+def _normalize_http_hat_status(raw: dict) -> dict:
+    pin_cfg = _first_present(raw, "pin_config", "pinConfig", default=[])
+    if pin_cfg and isinstance(pin_cfg[0], dict):
+        pin_cfg = [_parse_int_maybe_hex(_first_present(p, "function"), 0) for p in pin_cfg]
+    return {
+        "detected": bool(_first_present(raw, "detected", default=False)),
+        "connected": bool(_first_present(raw, "connected", default=False)),
+        "type": _parse_int_maybe_hex(_first_present(raw, "type"), 0),
+        "detect_voltage": float(_first_present(raw, "detect_voltage", "detectVoltage", default=0.0) or 0.0),
+        "fw_version": _first_present(raw, "fw_version")
+                      or f"{_parse_int_maybe_hex(_first_present(raw, 'fw_major', 'fwMajor'), 0)}.{_parse_int_maybe_hex(_first_present(raw, 'fw_minor', 'fwMinor'), 0)}",
+        "config_confirmed": bool(_first_present(raw, "config_confirmed", "configConfirmed", default=False)),
+        "pin_config": list(pin_cfg or []),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main client
 # ---------------------------------------------------------------------------
 
@@ -167,7 +295,12 @@ class BugBuster:
             return DeviceInfo(bool(spi_ok), rev, id0, id1)
         else:
             d = self._http_get("/device/info")
-            return DeviceInfo(True, d["silicon_rev"], d["silicon_id0"], d["silicon_id1"])
+            return DeviceInfo(
+                bool(_first_present(d, "spi_ok", "spiOk", default=True)),
+                _parse_int_maybe_hex(_first_present(d, "silicon_rev", "siliconRev"), 0),
+                _parse_int_maybe_hex(_first_present(d, "silicon_id0", "siliconId0"), 0),
+                _parse_int_maybe_hex(_first_present(d, "silicon_id1", "siliconId1"), 0),
+            )
 
     def get_status(self) -> dict:
         """
@@ -180,7 +313,7 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.GET_STATUS)
             return _parse_status(resp)
         else:
-            return self._http_get("/status")
+            return _normalize_http_status(self._http_get("/status"))
 
     def get_faults(self) -> dict:
         """Return global and per-channel fault/alert registers."""
@@ -188,7 +321,7 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.GET_FAULTS)
             return _parse_faults(resp)
         else:
-            return self._http_get("/faults")
+            return _normalize_http_faults(self._http_get("/faults"))
 
     def reset(self) -> None:
         """
@@ -275,7 +408,8 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.GET_DAC_READBACK, struct.pack('<B', channel))
             return struct.unpack_from('<H', resp, 1)[0]
         else:
-            return self._http_get(f"/channel/{channel}/dac/readback")["code"]
+            d = self._http_get(f"/channel/{channel}/dac/readback")
+            return _parse_int_maybe_hex(_first_present(d, "code", "activeCode"), 0)
 
     def set_vout_range(self, channel: int, range_: VoutRange) -> None:
         """
@@ -349,11 +483,11 @@ class BugBuster:
         else:
             d = self._http_get(f"/channel/{channel}/adc")
             return AdcResult(
-                raw=d.get("raw_code", 0),
-                value=d.get("value", 0.0),
-                range=d.get("range", 0),
-                rate=d.get("rate", 0),
-                mux=d.get("mux", 0),
+                raw=_parse_int_maybe_hex(_first_present(d, "raw_code", "rawCode", "adcRaw"), 0),
+                value=float(_first_present(d, "value", "adcValue", default=0.0) or 0.0),
+                range=_parse_int_maybe_hex(_first_present(d, "range", "adcRange"), 0),
+                rate=_parse_int_maybe_hex(_first_present(d, "rate", "adcRate"), 0),
+                mux=_parse_int_maybe_hex(_first_present(d, "mux", "adcMux"), 0),
             )
 
     def set_adc_config(
@@ -451,9 +585,9 @@ class BugBuster:
             raise ValueError(f"sink must be 0–31, got {sink}")
         if self._usb:
             payload = struct.pack(
-                '<BBBBBBB',
+                '<BBBBBBBB',
                 channel, threshold, int(thresh_mode), debounce,
-                sink, int(sink_range), (int(oc_detect) | (int(sc_detect) << 1)),
+                sink, int(sink_range), int(oc_detect), int(sc_detect),
             )
             self._usb_cmd(CmdId.SET_DIN_CONFIG, payload)
         else:
@@ -485,11 +619,16 @@ class BugBuster:
                 pins.append(GpioStatus(gid, GpioMode(mode), bool(out_), bool(in_), bool(pd)))
             return pins
         else:
-            raw  = self._http_get("/gpio")
+            raw = self._http_get("/gpio")
+            if isinstance(raw, dict):
+                raw = raw.get("gpios", raw.get("pins", []))
             return [
                 GpioStatus(
-                    id=g["id"], mode=GpioMode(g["mode"]),
-                    output=g["output"], input=g["input"], pulldown=g["pulldown"],
+                    id=_parse_int_maybe_hex(_first_present(g, "id", "pin"), 0),
+                    mode=GpioMode(_parse_int_maybe_hex(_first_present(g, "mode"), 0)),
+                    output=bool(_first_present(g, "output", default=False)),
+                    input=bool(_first_present(g, "input", default=False)),
+                    pulldown=bool(_first_present(g, "pulldown", default=False)),
                 )
                 for g in raw
             ]
@@ -891,7 +1030,7 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.MUX_GET_ALL)
             return list(resp[:4])
         else:
-            return self._http_get("/mux")["states"]
+            return list(self._http_get("/mux")["states"])
 
     def mux_set_all(self, states: list[int]) -> None:
         """
@@ -1108,7 +1247,7 @@ class BugBuster:
                 "pin_config": pins,
             }
         else:
-            return self._http_get("/hat")
+            return _normalize_http_hat_status(self._http_get("/hat"))
 
     def hat_set_pin(self, ext_pin: int, function) -> bool:
         """
@@ -1164,7 +1303,13 @@ class BugBuster:
             return {"detected": detected, "type": hat_type,
                     "detect_voltage": detect_v, "connected": connected}
         else:
-            return self._http_post("/hat/detect", {})
+            raw = self._http_post("/hat/detect", {})
+            return {
+                "detected": bool(_first_present(raw, "detected", default=False)),
+                "type": _parse_int_maybe_hex(_first_present(raw, "type"), 0),
+                "detect_voltage": float(_first_present(raw, "detect_voltage", "detectVoltage", default=0.0) or 0.0),
+                "connected": bool(_first_present(raw, "connected", default=False)),
+            }
 
     def hat_set_power(self, connector: int, enable: bool) -> bool:
         """
@@ -1733,7 +1878,7 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.WIFI_GET_STATUS)
             return _parse_wifi_status(resp)
         else:
-            return self._http_get("/wifi")
+            return _normalize_http_wifi_status(self._http_get("/wifi"))
 
     def wifi_connect(self, ssid: str, password: str) -> bool:
         """
@@ -1758,7 +1903,8 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.WIFI_SCAN)
             return _parse_wifi_scan(resp)
         else:
-            return self._http_get("/wifi/scan")
+            raw = self._http_get("/wifi/scan")
+            return raw.get("networks", raw) if isinstance(raw, dict) else raw
 
     # ------------------------------------------------------------------
     # ── Raw register access  (USB only, debug/testing) ───────────────

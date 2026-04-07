@@ -629,10 +629,12 @@ mod tests {
 
     #[test]
     fn test_handshake_parse() {
-        let data = [0xBB, 0x42, 0x55, 0x47, 0x02, 0x01, 0x01, 0x00];
+        let data = [0xBB, 0x42, 0x55, 0x47, 0x02, 0x01, 0x02, 0x00];
         let info = HandshakeInfo::parse(&data).unwrap();
         assert_eq!(info.proto_version, 2);
         assert_eq!(info.fw_major, 1);
+        assert_eq!(info.fw_minor, 2);
+        assert_eq!(info.fw_patch, 0);
     }
 
     #[test]

@@ -27,6 +27,27 @@
 
 static const char *TAG = "bbp";
 
+static bool bbp_is_valid_channel_function(uint8_t func)
+{
+    switch (func) {
+        case CH_FUNC_HIGH_IMP:
+        case CH_FUNC_VOUT:
+        case CH_FUNC_IOUT:
+        case CH_FUNC_VIN:
+        case CH_FUNC_IIN_EXT_PWR:
+        case CH_FUNC_IIN_LOOP_PWR:
+        case CH_FUNC_RES_MEAS:
+        case CH_FUNC_DIN_LOGIC:
+        case CH_FUNC_DIN_LOOP:
+        case CH_FUNC_IOUT_HART:
+        case CH_FUNC_IIN_EXT_PWR_HART:
+        case CH_FUNC_IIN_LOOP_PWR_HART:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Internal state
 // -----------------------------------------------------------------------------
@@ -318,13 +339,11 @@ static int handleGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_f32(out, &pos, g_deviceState.diag[d].value);
     }
 
-    // MUX switch states
-    for (uint8_t m = 0; m < ADGS_NUM_DEVICES; m++) {
-        put_u8(out, &pos, g_deviceState.muxState[m]);
-    }
-    // Pad to 4 if fewer devices
-    for (uint8_t m = ADGS_NUM_DEVICES; m < 4; m++) {
-        put_u8(out, &pos, 0);
+    // MUX switch states (always expose the 4-byte API view)
+    uint8_t muxStates[ADGS_API_MAIN_DEVICES] = {};
+    adgs_get_api_states(muxStates);
+    for (uint8_t m = 0; m < ADGS_API_MAIN_DEVICES; m++) {
+        put_u8(out, &pos, muxStates[m]);
     }
 
     xSemaphoreGive(g_stateMutex);
@@ -523,12 +542,12 @@ static int handleSetChFunc(uint16_t seq, uint8_t cmdId,
     uint8_t ch = get_u8(payload, &rpos);
     uint8_t func = get_u8(payload, &rpos);
     if (ch >= 4) { sendError(seq, cmdId, BBP_ERR_INVALID_CH); return -1; }
+    if (!bbp_is_valid_channel_function(func)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
 
-    Command cmd = {};
-    cmd.type = CMD_SET_CHANNEL_FUNC;
-    cmd.channel = ch;
-    cmd.func = (ChannelFunction)func;
-    sendCommand(cmd);
+    tasks_apply_channel_function(ch, (ChannelFunction)func);
 
     size_t pos = 0;
     put_u8(out, &pos, ch);
@@ -856,13 +875,10 @@ static int handleSetGpioConfig(uint16_t seq, uint8_t cmdId,
     uint8_t mode = get_u8(payload, &rpos);
     bool pulldown = get_bool(payload, &rpos);
     if (gpio >= 6) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
-
-    Command cmd = {};
-    cmd.type = CMD_GPIO_CONFIG;
-    cmd.gpioCfg.gpio = gpio;
-    cmd.gpioCfg.mode = mode;
-    cmd.gpioCfg.pulldown = pulldown;
-    sendCommand(cmd);
+    if (!tasks_apply_gpio_config(gpio, (GpioSelect)mode, pulldown)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
 
     memcpy(out, payload, 3);
     return 3;
@@ -876,12 +892,10 @@ static int handleSetGpioValue(uint16_t seq, uint8_t cmdId,
     uint8_t gpio = get_u8(payload, &rpos);
     bool value = get_bool(payload, &rpos);
     if (gpio >= 6) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
-
-    Command cmd = {};
-    cmd.type = CMD_GPIO_SET;
-    cmd.gpioSet.gpio = gpio;
-    cmd.gpioSet.value = value;
-    sendCommand(cmd);
+    if (!tasks_apply_gpio_output(gpio, value)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
 
     memcpy(out, payload, 2);
     return 2;
@@ -1807,21 +1821,26 @@ static int handleUsbpdGo(uint16_t seq, uint8_t cmdId,
 static int handleMuxSetAll(uint16_t seq, uint8_t cmdId,
                             const uint8_t *payload, size_t len, uint8_t *out)
 {
-    if (len < ADGS_MAIN_DEVICES) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
-    adgs_set_all_safe(payload);  // Includes 100ms dead time
+    if (len < ADGS_API_MAIN_DEVICES) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    uint8_t states[ADGS_API_MAIN_DEVICES] = {};
+    memcpy(states, payload, ADGS_API_MAIN_DEVICES);
+    adgs_set_api_all_safe(states);  // Includes 100ms dead time for physical devices
     // Update cached state and echo back
-    adgs_get_all_states(out);
+    adgs_get_api_states(states);
+    memcpy(out, states, ADGS_API_MAIN_DEVICES);
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);
         xSemaphoreGive(g_stateMutex);
     }
-    return ADGS_MAIN_DEVICES;
+    return ADGS_API_MAIN_DEVICES;
 }
 
 static int handleMuxGetAll(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
-    adgs_get_all_states(out);
-    return ADGS_NUM_DEVICES;
+    uint8_t states[ADGS_API_MAIN_DEVICES] = {};
+    adgs_get_api_states(states);
+    memcpy(out, states, ADGS_API_MAIN_DEVICES);
+    return ADGS_API_MAIN_DEVICES;
 }
 
 static int handleMuxSetSwitch(uint16_t seq, uint8_t cmdId,
@@ -1831,11 +1850,14 @@ static int handleMuxSetSwitch(uint16_t seq, uint8_t cmdId,
     uint8_t device = payload[0];
     uint8_t sw = payload[1];
     bool closed = payload[2] != 0;
-    if (device >= ADGS_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) {
+    if (device >= ADGS_API_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) {
         sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
         return -1;
     }
-    adgs_set_switch_safe(device, sw, closed);
+    if (!adgs_set_api_switch_safe(device, sw, closed)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
     // Update cached state
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);

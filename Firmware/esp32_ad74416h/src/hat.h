@@ -52,6 +52,7 @@ extern "C" {
 #define HAT_UART_NUM        UART_NUM_0
 #define HAT_UART_BAUD       921600
 #define HAT_UART_BUF_SIZE   512
+#define HAT_DEFAULT_IO_VOLTAGE_MV 3300
 
 // -----------------------------------------------------------------------------
 // HAT Detection — Voltage Thresholds

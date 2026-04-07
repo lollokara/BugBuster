@@ -77,7 +77,10 @@ static float read_channel_d(uint8_t adc_range)
 
     // Configure Ch D as VIN with the requested range
     dev->setChannelFunction(3, CH_FUNC_VIN);
-    dev->setAdcConfig(3, adc_range, 0x06 /* 200 SPS */, 0x00 /* LF_TO_AGND */);
+    dev->configureAdc(3,
+                      ADC_MUX_LF_TO_AGND,
+                      (AdcRange)adc_range,
+                      ADC_RATE_200SPS_H);
 
     // Wait for ADC to produce a valid reading (need at least 2 conversion cycles)
     delay_ms(50);
@@ -352,6 +355,9 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
     const int8_t codes[] = { -100, -80, -60, -40, -20, 0, 20, 40, 60, 80, 100 };
     const int num_codes = sizeof(codes) / sizeof(codes[0]);
 
+    float target_v = 8.0f;
+    float verify_v = -1.0f;
+
     for (int i = 0; i < num_codes; i++) {
         int8_t code = codes[i];
 
@@ -381,10 +387,9 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
     delay_ms(100);
 
     // Verify: set to a test voltage and compare
-    float target_v = 8.0f;
     ds4424_set_voltage(idac_channel, target_v);
     delay_ms(300);
-    float verify_v = selftest_measure_supply(rail);
+    verify_v = selftest_measure_supply(rail);
     ds4424_set_code(idac_channel, 0);
 
     if (verify_v > 0) {

@@ -41,6 +41,52 @@ static const char* TAG = "webserver";
 
 static httpd_handle_t s_server = NULL;
 
+static const char* http_status_string(int code)
+{
+    switch (code) {
+        case 200: return "200 OK";
+        case 400: return "400 Bad Request";
+        case 404: return "404 Not Found";
+        case 405: return "405 Method Not Allowed";
+        case 500: return "500 Internal Server Error";
+        case 503: return "503 Service Unavailable";
+        default:  return NULL;
+    }
+}
+
+static bool is_valid_channel_function(int func)
+{
+    switch (func) {
+        case CH_FUNC_HIGH_IMP:
+        case CH_FUNC_VOUT:
+        case CH_FUNC_IOUT:
+        case CH_FUNC_VIN:
+        case CH_FUNC_IIN_EXT_PWR:
+        case CH_FUNC_IIN_LOOP_PWR:
+        case CH_FUNC_RES_MEAS:
+        case CH_FUNC_DIN_LOGIC:
+        case CH_FUNC_DIN_LOOP:
+        case CH_FUNC_IOUT_HART:
+        case CH_FUNC_IIN_EXT_PWR_HART:
+        case CH_FUNC_IIN_LOOP_PWR_HART:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void add_number_alias(cJSON *obj, const char *camel, const char *snake, double value)
+{
+    cJSON_AddNumberToObject(obj, camel, value);
+    cJSON_AddNumberToObject(obj, snake, value);
+}
+
+static void add_bool_alias(cJSON *obj, const char *camel, const char *snake, bool value)
+{
+    cJSON_AddBoolToObject(obj, camel, value);
+    cJSON_AddBoolToObject(obj, snake, value);
+}
+
 // -----------------------------------------------------------------------------
 // Helper: CORS headers
 // -----------------------------------------------------------------------------
@@ -59,14 +105,19 @@ static void set_cors_headers(httpd_req_t *req)
 static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
 {
     char *body = cJSON_PrintUnformatted(root);
+    if (!body) {
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON encode failed");
+    }
     set_cors_headers(req);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
 
     if (code != 200) {
-        char status[16];
-        snprintf(status, sizeof(status), "%d", code);
-        httpd_resp_set_status(req, status);
+        const char *status = http_status_string(code);
+        if (status) {
+            httpd_resp_set_status(req, status);
+        }
     }
 
     httpd_resp_sendstr(req, body);
@@ -84,6 +135,16 @@ static esp_err_t send_error(httpd_req_t *req, int code, const char *msg)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "error", msg);
     return send_json(req, root, code);
+}
+
+static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
+{
+    if (error == HTTPD_404_NOT_FOUND || error == HTTPD_405_METHOD_NOT_ALLOWED) {
+        set_cors_headers(req);
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    }
+
+    return httpd_resp_send_err(req, error, NULL);
 }
 
 // -----------------------------------------------------------------------------
@@ -245,13 +306,14 @@ static esp_err_t handle_get_status(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        cJSON_AddBoolToObject(root, "spiOk", g_deviceState.spiOk);
+        add_bool_alias(root, "spiOk", "spi_ok", g_deviceState.spiOk);
         cJSON_AddNumberToObject(root, "dieTemp", g_deviceState.dieTemperature);
-        cJSON_AddNumberToObject(root, "alertStatus", g_deviceState.alertStatus);
-        cJSON_AddNumberToObject(root, "alertMask", g_deviceState.alertMask);
-        cJSON_AddNumberToObject(root, "supplyAlertStatus", g_deviceState.supplyAlertStatus);
-        cJSON_AddNumberToObject(root, "supplyAlertMask", g_deviceState.supplyAlertMask);
-        cJSON_AddNumberToObject(root, "liveStatus", g_deviceState.liveStatus);
+        cJSON_AddNumberToObject(root, "die_temp_c", g_deviceState.dieTemperature);
+        add_number_alias(root, "alertStatus", "alert_status", g_deviceState.alertStatus);
+        add_number_alias(root, "alertMask", "alert_mask", g_deviceState.alertMask);
+        add_number_alias(root, "supplyAlertStatus", "supply_alert_status", g_deviceState.supplyAlertStatus);
+        add_number_alias(root, "supplyAlertMask", "supply_alert_mask", g_deviceState.supplyAlertMask);
+        add_number_alias(root, "liveStatus", "live_status", g_deviceState.liveStatus);
 
         cJSON *channels = cJSON_AddArrayToObject(root, "channels");
         for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
@@ -259,19 +321,20 @@ static esp_err_t handle_get_status(httpd_req_t *req)
             cJSON *obj = cJSON_CreateObject();
             cJSON_AddNumberToObject(obj, "id", ch);
             cJSON_AddStringToObject(obj, "function", channelFunctionToString(cs.function));
-            cJSON_AddNumberToObject(obj, "adcRaw", cs.adcRawCode);
-            cJSON_AddNumberToObject(obj, "adcValue", cs.adcValue);
-            cJSON_AddNumberToObject(obj, "adcRange", (int)cs.adcRange);
-            cJSON_AddNumberToObject(obj, "adcRate", (int)cs.adcRate);
-            cJSON_AddNumberToObject(obj, "adcMux", (int)cs.adcMux);
-            cJSON_AddNumberToObject(obj, "dacCode", cs.dacCode);
-            cJSON_AddNumberToObject(obj, "dacValue", cs.dacValue);
-            cJSON_AddBoolToObject(obj, "dinState", cs.dinState);
-            cJSON_AddNumberToObject(obj, "dinCounter", cs.dinCounter);
-            cJSON_AddBoolToObject(obj, "doState", cs.doState);
-            cJSON_AddNumberToObject(obj, "channelAlert", cs.channelAlertStatus);
-            cJSON_AddNumberToObject(obj, "channelAlertMask", cs.channelAlertMask);
-            cJSON_AddNumberToObject(obj, "rtdExcitationUa", cs.rtdExcitationUa);
+            add_number_alias(obj, "functionCode", "function_code", (int)cs.function);
+            add_number_alias(obj, "adcRaw", "adc_raw", cs.adcRawCode);
+            add_number_alias(obj, "adcValue", "adc_value", cs.adcValue);
+            add_number_alias(obj, "adcRange", "adc_range", (int)cs.adcRange);
+            add_number_alias(obj, "adcRate", "adc_rate", (int)cs.adcRate);
+            add_number_alias(obj, "adcMux", "adc_mux", (int)cs.adcMux);
+            add_number_alias(obj, "dacCode", "dac_code", cs.dacCode);
+            add_number_alias(obj, "dacValue", "dac_value", cs.dacValue);
+            add_bool_alias(obj, "dinState", "din_state", cs.dinState);
+            add_number_alias(obj, "dinCounter", "din_counter", cs.dinCounter);
+            add_bool_alias(obj, "doState", "do_state", cs.doState);
+            add_number_alias(obj, "channelAlert", "channel_alert", cs.channelAlertStatus);
+            add_number_alias(obj, "channelAlertMask", "channel_alert_mask", cs.channelAlertMask);
+            add_number_alias(obj, "rtdExcitationUa", "rtd_excitation_ua", cs.rtdExcitationUa);
             cJSON_AddItemToArray(channels, obj);
         }
 
@@ -287,8 +350,10 @@ static esp_err_t handle_get_status(httpd_req_t *req)
 
         // MUX switch states (sync with BBP GET_STATUS)
         cJSON *muxStates = cJSON_AddArrayToObject(root, "muxStates");
-        for (uint8_t m = 0; m < 4; m++) {
-            cJSON_AddItemToArray(muxStates, cJSON_CreateNumber(g_deviceState.muxState[m]));
+        uint8_t muxApiStates[ADGS_API_MAIN_DEVICES] = {};
+        adgs_get_api_states(muxApiStates);
+        for (uint8_t m = 0; m < ADGS_API_MAIN_DEVICES; m++) {
+            cJSON_AddItemToArray(muxStates, cJSON_CreateNumber(muxApiStates[m]));
         }
 
         xSemaphoreGive(g_stateMutex);
@@ -315,6 +380,11 @@ static esp_err_t handle_get_channel_adc(httpd_req_t *req)
         cJSON_AddNumberToObject(root, "adcRange", (int)cs.adcRange);
         cJSON_AddNumberToObject(root, "adcRate", (int)cs.adcRate);
         cJSON_AddNumberToObject(root, "adcMux", (int)cs.adcMux);
+        cJSON_AddNumberToObject(root, "raw_code", cs.adcRawCode);
+        cJSON_AddNumberToObject(root, "value", cs.adcValue);
+        cJSON_AddNumberToObject(root, "range", (int)cs.adcRange);
+        cJSON_AddNumberToObject(root, "rate", (int)cs.adcRate);
+        cJSON_AddNumberToObject(root, "mux", (int)cs.adcMux);
         xSemaphoreGive(g_stateMutex);
     } else {
         cJSON_Delete(root);
@@ -329,10 +399,10 @@ static esp_err_t handle_get_faults(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        cJSON_AddNumberToObject(root, "alertStatus", g_deviceState.alertStatus);
-        cJSON_AddNumberToObject(root, "alertMask", g_deviceState.alertMask);
-        cJSON_AddNumberToObject(root, "supplyAlertStatus", g_deviceState.supplyAlertStatus);
-        cJSON_AddNumberToObject(root, "supplyAlertMask", g_deviceState.supplyAlertMask);
+        add_number_alias(root, "alertStatus", "alert_status", g_deviceState.alertStatus);
+        add_number_alias(root, "alertMask", "alert_mask", g_deviceState.alertMask);
+        add_number_alias(root, "supplyAlertStatus", "supply_alert_status", g_deviceState.supplyAlertStatus);
+        add_number_alias(root, "supplyAlertMask", "supply_alert_mask", g_deviceState.supplyAlertMask);
 
         cJSON *channels = cJSON_AddArrayToObject(root, "channels");
         for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
@@ -340,6 +410,8 @@ static esp_err_t handle_get_faults(httpd_req_t *req)
             cJSON_AddNumberToObject(obj, "id", ch);
             cJSON_AddNumberToObject(obj, "channelAlert", g_deviceState.channels[ch].channelAlertStatus);
             cJSON_AddNumberToObject(obj, "channelAlertMask", g_deviceState.channels[ch].channelAlertMask);
+            cJSON_AddNumberToObject(obj, "alert", g_deviceState.channels[ch].channelAlertStatus);
+            cJSON_AddNumberToObject(obj, "mask", g_deviceState.channels[ch].channelAlertMask);
             cJSON_AddItemToArray(channels, obj);
         }
         xSemaphoreGive(g_stateMutex);
@@ -364,16 +436,19 @@ static esp_err_t handle_get_scope(httpd_req_t *req)
     }
 
     cJSON *root = cJSON_CreateObject();
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    cJSON *samples = cJSON_AddArrayToObject(root, "samples");
+    cJSON_AddItemReferenceToObject(root, "s", samples);
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         const ScopeBuffer& sb = g_deviceState.scope;
         uint16_t cur_seq = sb.seq;
         uint16_t head    = sb.head;
 
         uint16_t avail = (uint16_t)(cur_seq - since_seq);
         if (avail > SCOPE_BUF_SIZE) avail = SCOPE_BUF_SIZE;
+        if (avail > 32) avail = 32;
 
         cJSON_AddNumberToObject(root, "seq", cur_seq);
-        cJSON *samples = cJSON_AddArrayToObject(root, "s");
 
         uint16_t start = (head + SCOPE_BUF_SIZE - avail) % SCOPE_BUF_SIZE;
         for (uint16_t n = 0; n < avail; n++) {
@@ -394,6 +469,8 @@ static esp_err_t handle_get_scope(httpd_req_t *req)
         }
 
         xSemaphoreGive(g_stateMutex);
+    } else {
+        cJSON_AddNumberToObject(root, "seq", 0);
     }
     return send_json(req, root);
 }
@@ -445,22 +522,25 @@ static esp_err_t handle_get_device_info(httpd_req_t *req)
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "siliconRev", (int)rev);
+    cJSON_AddNumberToObject(root, "silicon_rev", (int)rev);
     cJSON_AddStringToObject(root, "siliconId0", id0Str);
     cJSON_AddStringToObject(root, "siliconId1", id1Str);
-    cJSON_AddBoolToObject(root, "spiOk", spiOk);
+    cJSON_AddNumberToObject(root, "silicon_id0", (int)id0);
+    cJSON_AddNumberToObject(root, "silicon_id1", (int)id1);
+    add_bool_alias(root, "spiOk", "spi_ok", spiOk);
     return send_json(req, root);
 }
 
 // GET /api/gpio
 static esp_err_t handle_get_gpio(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = cJSON_CreateArray();
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        cJSON *gpios = cJSON_AddArrayToObject(root, "gpios");
         for (uint8_t g = 0; g < AD74416H_NUM_GPIOS; g++) {
             const GpioState& gs = g_deviceState.gpio[g];
             cJSON *obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(obj, "id", g);
             cJSON_AddNumberToObject(obj, "pin", g);
             char name[2] = { (char)('A' + g), '\0' };
             cJSON_AddStringToObject(obj, "name", name);
@@ -469,7 +549,7 @@ static esp_err_t handle_get_gpio(httpd_req_t *req)
             cJSON_AddBoolToObject(obj, "output", gs.outputVal);
             cJSON_AddBoolToObject(obj, "input", gs.inputVal);
             cJSON_AddBoolToObject(obj, "pulldown", gs.pulldown);
-            cJSON_AddItemToArray(gpios, obj);
+            cJSON_AddItemToArray(root, obj);
         }
         xSemaphoreGive(g_stateMutex);
     } else {
@@ -492,6 +572,7 @@ static esp_err_t handle_get_dac_readback(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "channel", ch);
     cJSON_AddNumberToObject(root, "activeCode", (int)activeCode);
+    cJSON_AddNumberToObject(root, "code", (int)activeCode);
     return send_json(req, root);
 }
 
@@ -514,21 +595,19 @@ static esp_err_t handle_post_channel_function(httpd_req_t *req)
         return send_error(req, 400, "Missing 'function' field");
     }
 
-    Command cmd{};
-    cmd.type    = CMD_SET_CHANNEL_FUNC;
-    cmd.channel = (uint8_t)ch;
-    cmd.func    = (ChannelFunction)funcItem->valueint;
-    if (!sendCommand(cmd)) {
+    int func = funcItem->valueint;
+    if (!is_valid_channel_function(func)) {
         cJSON_Delete(doc);
-        return send_error(req, 503, "Command queue full");
+        return send_error(req, 400, "Invalid function");
     }
 
+    tasks_apply_channel_function((uint8_t)ch, (ChannelFunction)func);
     cJSON_Delete(doc);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);
     cJSON_AddNumberToObject(resp, "channel", ch);
-    cJSON_AddNumberToObject(resp, "function", (int)cmd.func);
+    cJSON_AddNumberToObject(resp, "function", func);
     return send_json(req, resp);
 }
 
@@ -541,33 +620,32 @@ static esp_err_t handle_post_dac(httpd_req_t *req)
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
-    Command cmd{};
-    cmd.channel = (uint8_t)ch;
-
     cJSON *codeItem      = cJSON_GetObjectItem(doc, "code");
     cJSON *voltageItem   = cJSON_GetObjectItem(doc, "voltage");
     cJSON *currentItem   = cJSON_GetObjectItem(doc, "current_mA");
 
     if (codeItem && cJSON_IsNumber(codeItem)) {
-        cmd.type    = CMD_SET_DAC_CODE;
-        cmd.dacCode = (uint16_t)codeItem->valueint;
+        if (!tasks_apply_dac_code((uint8_t)ch, (uint16_t)codeItem->valueint)) {
+            cJSON_Delete(doc);
+            return send_error(req, 400, "Failed to set DAC code");
+        }
     } else if (voltageItem && cJSON_IsNumber(voltageItem)) {
-        cmd.type = CMD_SET_DAC_VOLTAGE;
         cJSON *bipolarItem = cJSON_GetObjectItem(doc, "bipolar");
-        cmd.dacVoltage.bipolar = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
-        cmd.dacVoltage.voltage = (float)voltageItem->valuedouble;
+        bool bipolar = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
+        if (!tasks_apply_dac_voltage((uint8_t)ch, (float)voltageItem->valuedouble, bipolar)) {
+            cJSON_Delete(doc);
+            return send_error(req, 400, "Failed to set DAC voltage");
+        }
     } else if (currentItem && cJSON_IsNumber(currentItem)) {
-        cmd.type     = CMD_SET_DAC_CURRENT;
-        cmd.floatVal = (float)currentItem->valuedouble;
+        if (!tasks_apply_dac_current((uint8_t)ch, (float)currentItem->valuedouble)) {
+            cJSON_Delete(doc);
+            return send_error(req, 400, "Failed to set DAC current");
+        }
     } else {
         cJSON_Delete(doc);
         return send_error(req, 400, "Body must have 'code', 'voltage', or 'current_mA'");
     }
 
-    if (!sendCommand(cmd)) {
-        cJSON_Delete(doc);
-        return send_error(req, 503, "Command queue full");
-    }
     cJSON_Delete(doc);
 
     cJSON *resp = cJSON_CreateObject();
@@ -705,17 +783,17 @@ static esp_err_t handle_post_vout_range(httpd_req_t *req)
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
     cJSON *bipolarItem = cJSON_GetObjectItem(doc, "bipolar");
-    Command cmd{};
-    cmd.type     = CMD_SET_VOUT_RANGE;
-    cmd.channel  = (uint8_t)ch;
-    cmd.boolVal  = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
-    sendCommand(cmd);
+    bool bipolar = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
+    if (!tasks_apply_vout_range((uint8_t)ch, bipolar)) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Failed to set VOUT range");
+    }
     cJSON_Delete(doc);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);
     cJSON_AddNumberToObject(resp, "channel", ch);
-    cJSON_AddBoolToObject(resp, "bipolar", cmd.boolVal);
+    cJSON_AddBoolToObject(resp, "bipolar", bipolar);
     return send_json(req, resp);
 }
 
@@ -941,19 +1019,19 @@ static esp_err_t handle_post_gpio_config(httpd_req_t *req)
 
     cJSON *pulldownItem = cJSON_GetObjectItem(doc, "pulldown");
 
-    Command cmd{};
-    cmd.type             = CMD_GPIO_CONFIG;
-    cmd.gpioCfg.gpio     = (uint8_t)g;
-    cmd.gpioCfg.mode     = (uint8_t)modeItem->valueint;
-    cmd.gpioCfg.pulldown = pulldownItem ? cJSON_IsTrue(pulldownItem) : false;
-    sendCommand(cmd);
+    int mode = modeItem->valueint;
+    bool pulldown = pulldownItem ? cJSON_IsTrue(pulldownItem) : false;
+    if (!tasks_apply_gpio_config((uint8_t)g, (GpioSelect)mode, pulldown)) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Invalid GPIO config");
+    }
     cJSON_Delete(doc);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);
     cJSON_AddNumberToObject(resp, "gpio", g);
-    cJSON_AddNumberToObject(resp, "mode", (int)cmd.gpioCfg.mode);
-    cJSON_AddBoolToObject(resp, "pulldown", cmd.gpioCfg.pulldown);
+    cJSON_AddNumberToObject(resp, "mode", mode);
+    cJSON_AddBoolToObject(resp, "pulldown", pulldown);
     return send_json(req, resp);
 }
 
@@ -967,17 +1045,17 @@ static esp_err_t handle_post_gpio_set(httpd_req_t *req)
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
     cJSON *valueItem = cJSON_GetObjectItem(doc, "value");
-    Command cmd{};
-    cmd.type          = CMD_GPIO_SET;
-    cmd.gpioSet.gpio  = (uint8_t)g;
-    cmd.gpioSet.value = valueItem ? cJSON_IsTrue(valueItem) : false;
-    sendCommand(cmd);
+    bool value = valueItem ? cJSON_IsTrue(valueItem) : false;
+    if (!tasks_apply_gpio_output((uint8_t)g, value)) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Invalid GPIO value");
+    }
     cJSON_Delete(doc);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);
     cJSON_AddNumberToObject(resp, "gpio", g);
-    cJSON_AddBoolToObject(resp, "value", cmd.gpioSet.value);
+    cJSON_AddBoolToObject(resp, "value", value);
     return send_json(req, resp);
 }
 
@@ -1731,17 +1809,21 @@ static esp_err_t handle_get_hat(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "type", hs->type);
     cJSON_AddStringToObject(root, "typeName", hat_type_name(hs->type));
     cJSON_AddNumberToObject(root, "detectVoltage", hs->detect_voltage);
+    cJSON_AddNumberToObject(root, "detect_voltage", hs->detect_voltage);
     cJSON_AddNumberToObject(root, "fwMajor", hs->fw_version_major);
     cJSON_AddNumberToObject(root, "fwMinor", hs->fw_version_minor);
     cJSON_AddBoolToObject(root, "configConfirmed", hs->config_confirmed);
+    cJSON_AddBoolToObject(root, "config_confirmed", hs->config_confirmed);
 
     cJSON *pins = cJSON_AddArrayToObject(root, "pinConfig");
+    cJSON *pin_config = cJSON_AddArrayToObject(root, "pin_config");
     for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
         cJSON *pin = cJSON_CreateObject();
         cJSON_AddNumberToObject(pin, "pin", i);
         cJSON_AddNumberToObject(pin, "function", hs->pin_config[i]);
         cJSON_AddStringToObject(pin, "functionName", hat_func_name(hs->pin_config[i]));
         cJSON_AddItemToArray(pins, pin);
+        cJSON_AddItemToArray(pin_config, cJSON_CreateNumber(hs->pin_config[i]));
     }
 
     return send_json(req, root);
@@ -1806,6 +1888,7 @@ static esp_err_t handle_post_hat_detect(httpd_req_t *req)
     cJSON_AddNumberToObject(rsp, "type", type);
     cJSON_AddStringToObject(rsp, "typeName", hat_type_name(type));
     cJSON_AddNumberToObject(rsp, "detectVoltage", hs->detect_voltage);
+    cJSON_AddNumberToObject(rsp, "detect_voltage", hs->detect_voltage);
     return send_json(req, rsp);
 }
 
@@ -1937,13 +2020,15 @@ static esp_err_t handle_wavegen_post_dispatch(httpd_req_t *req)
 static esp_err_t handle_get_mux(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
-    uint8_t states[ADGS_NUM_DEVICES];
+    uint8_t states[ADGS_API_MAIN_DEVICES] = {};
     adgs_get_all_states(states);
+    adgs_get_api_states(states);
     cJSON *arr = cJSON_AddArrayToObject(root, "states");
-    for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
+    for (int i = 0; i < ADGS_API_MAIN_DEVICES; i++) {
         cJSON_AddItemToArray(arr, cJSON_CreateNumber(states[i]));
     }
-    cJSON_AddNumberToObject(root, "numDevices", ADGS_NUM_DEVICES);
+    cJSON_AddNumberToObject(root, "numDevices", ADGS_API_MAIN_DEVICES);
+    cJSON_AddNumberToObject(root, "physicalDevices", ADGS_MAIN_DEVICES);
     return send_json(req, root);
 }
 
@@ -1956,22 +2041,12 @@ static esp_err_t handle_post_mux_switch(httpd_req_t *req)
     int sw = cJSON_GetObjectItem(body, "switch") ? cJSON_GetObjectItem(body, "switch")->valueint : -1;
     bool closed = cJSON_GetObjectItem(body, "closed") ? cJSON_IsTrue(cJSON_GetObjectItem(body, "closed")) : false;
     cJSON_Delete(body);
-    if (dev < 0 || dev >= ADGS_NUM_DEVICES || sw < 0 || sw >= ADGS_NUM_SWITCHES)
+    if (dev < 0 || dev >= ADGS_API_MAIN_DEVICES || sw < 0 || sw >= ADGS_NUM_SWITCHES)
         return send_error(req, 400, "Invalid device/switch");
 
-    // Group-safe switching (break-before-make)
-    uint8_t group_mask = (sw < 4) ? 0x0F : (sw < 6) ? 0x30 : 0xC0;
-    uint8_t states[ADGS_NUM_DEVICES];
-    adgs_get_all_states(states);
-    if (closed) {
-        uint8_t prev = states[dev];
-        states[dev] &= ~group_mask;
-        if (states[dev] != prev) { adgs_set_all_raw(states); delay_ms(ADGS_DEAD_TIME_MS); }
-        states[dev] |= (1 << sw);
-    } else {
-        states[dev] &= ~(1 << sw);
+    if (!adgs_set_api_switch_safe((uint8_t)dev, (uint8_t)sw, closed)) {
+        return send_error(req, 400, "Invalid device/switch");
     }
-    adgs_set_all_raw(states);
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);
         xSemaphoreGive(g_stateMutex);
@@ -1991,12 +2066,16 @@ static esp_err_t handle_post_mux_all(httpd_req_t *req)
     if (!body) return send_error(req, 400, "Invalid JSON");
     cJSON *arr = cJSON_GetObjectItem(body, "states");
     if (!arr || !cJSON_IsArray(arr)) { cJSON_Delete(body); return send_error(req, 400, "Missing states array"); }
-    uint8_t states[ADGS_NUM_DEVICES] = {};
-    for (int i = 0; i < ADGS_NUM_DEVICES && i < cJSON_GetArraySize(arr); i++) {
+    if (cJSON_GetArraySize(arr) < ADGS_API_MAIN_DEVICES) {
+        cJSON_Delete(body);
+        return send_error(req, 400, "states must contain 4 device bytes");
+    }
+    uint8_t states[ADGS_API_MAIN_DEVICES] = {};
+    for (int i = 0; i < ADGS_API_MAIN_DEVICES && i < cJSON_GetArraySize(arr); i++) {
         states[i] = (uint8_t)cJSON_GetArrayItem(arr, i)->valueint;
     }
     cJSON_Delete(body);
-    adgs_set_all_raw(states);
+    adgs_set_api_all_safe(states);
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);
         xSemaphoreGive(g_stateMutex);
@@ -2090,15 +2169,20 @@ static esp_err_t handle_get_wifi(httpd_req_t *req)
 
     cJSON_AddBoolToObject(root, "connected", wifi_is_connected());
     cJSON_AddStringToObject(root, "staSSID", wifi_get_sta_ssid());
+    cJSON_AddStringToObject(root, "sta_ssid", wifi_get_sta_ssid());
     cJSON_AddStringToObject(root, "staIP", wifi_get_sta_ip());
+    cJSON_AddStringToObject(root, "sta_ip", wifi_get_sta_ip());
     cJSON_AddNumberToObject(root, "rssi", wifi_get_rssi());
 
     // Get AP SSID from ESP-IDF config
     wifi_config_t ap_cfg = {};
     esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
     cJSON_AddStringToObject(root, "apSSID", (const char *)ap_cfg.ap.ssid);
+    cJSON_AddStringToObject(root, "ap_ssid", (const char *)ap_cfg.ap.ssid);
     cJSON_AddStringToObject(root, "apIP", wifi_get_ap_ip());
+    cJSON_AddStringToObject(root, "ap_ip", wifi_get_ap_ip());
     cJSON_AddStringToObject(root, "apMAC", wifi_get_ap_mac());
+    cJSON_AddStringToObject(root, "ap_mac", wifi_get_ap_mac());
 
     return send_json(req, root);
 }
@@ -2295,6 +2379,8 @@ void initWebServer(void)
     }
 
     ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);
+    httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, handle_http_error);
+    httpd_register_err_handler(s_server, HTTPD_405_METHOD_NOT_ALLOWED, handle_http_error);
 
     // ----- GET routes -----
 
