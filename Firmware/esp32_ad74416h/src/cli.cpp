@@ -282,9 +282,14 @@ static void handleCommand(const char* line)
         // Test ADGS2414D in address mode (single device, no daisy chain)
         unsigned int val = 0xFF;
         sscanf(args, "%x", &val);
+#if ADGS_NUM_DEVICES > 1
+        serial_println("ADGS2414D address-mode test is unavailable in daisy-chain builds.");
+        serial_println("Datasheet note: exiting daisy-chain mode requires a hardware reset.");
+#else
         serial_printf("Testing ADGS2414D address mode, SW_DATA=0x%02X...\r\n", val);
         uint8_t rb = adgs_test_address_mode((uint8_t)val);
         serial_printf("  Read back: 0x%02X %s\r\n", rb, (rb == (uint8_t)val) ? "[MATCH]" : "[MISMATCH]");
+#endif
     } else if (strcmp(cmd, "spiclock") == 0) {
         extern AD74416H_SPI spiDriver;
         if (!*args) {
@@ -360,15 +365,18 @@ static void handleCommand(const char* line)
             }
         }
     } else if (strcmp(cmd, "muxreset") == 0) {
+#if ADGS_NUM_DEVICES > 1
+        serial_println("ADGS2414D software reset is unavailable in daisy-chain mode.");
+        serial_println("Datasheet note: exiting daisy-chain mode requires a hardware reset.");
+        serial_println("Opening all switches instead.");
+        adgs_reset_all();
+#else
         serial_println("Resetting ADGS2414D (soft reset)...");
         adgs_soft_reset();
-#if ADGS_NUM_DEVICES > 1
-        serial_println("  Done. Re-entering daisy-chain...");
-#else
         serial_println("  Done. Re-initializing address mode...");
-#endif
         adgs_init();
         serial_println("  Re-initialized.");
+#endif
     } else if (strcmp(cmd, "menu") == 0 || strcmp(cmd, "m") == 0) {
         printMainMenu();
     } else {
@@ -402,7 +410,7 @@ static void cmdHelp()
         "\r\n"
         "--- Register Access ---\r\n"
         "  rreg <addr>         Read register (hex addr, e.g. rreg 76)\r\n"
-        "  wreg <addr> <val>   Write register (hex, e.g. wreg 76 A5C3)\r\n"
+        "  wreg <addr> <val>   Write SCRATCH register only (0x76-0x79)\r\n"
         "\r\n"
         "--- Channel Function ---\r\n"
         "  func <ch> <code>    Set channel function\r\n"
@@ -449,7 +457,7 @@ static void cmdHelp()
         "  mux                 Show all MUX switch states\r\n"
         "  mux <dev> <sw> <0|1> Set switch (sw=1-8, 1=close 0=open)\r\n"
         "  mux <dev> <sw>      Toggle switch\r\n"
-        "  muxreset            Soft-reset and re-init ADGS2414D\r\n"
+        "  muxreset            Reset ADGS state (soft reset only in address mode)\r\n"
         "\r\n"
         "--- I2C Devices ---\r\n"
         "  i2cscan             Scan I2C bus for devices\r\n"
@@ -594,13 +602,26 @@ static void cmdWriteReg(const char* args)
         return;
     }
 
+    if (addr < REG_SCRATCH || addr > (REG_SCRATCH + 3)) {
+        serial_println("Unsafe raw writes are disabled. Only SCRATCH registers 0x76-0x79 may be written.");
+        serial_println("Use the dedicated high-level commands for channel, ADC, GPIO, RTD, and watchdog control.");
+        return;
+    }
+
     extern AD74416H_SPI spiDriver;
-    spiDriver.writeRegister((uint8_t)addr, (uint16_t)val);
+    if (!spiDriver.writeRegister((uint8_t)addr, (uint16_t)val)) {
+        serial_println("SPI write failed.");
+        return;
+    }
     serial_printf("Wrote 0x%04X to register 0x%02X\r\n", val, addr);
 
     // Read back to verify
     uint16_t readback = 0;
-    spiDriver.readRegister((uint8_t)addr, &readback);
+    bool ok = spiDriver.readRegister((uint8_t)addr, &readback);
+    if (!ok) {
+        serial_println("Readback failed (CRC / SPI error).");
+        return;
+    }
     serial_printf("Readback: 0x%04X %s\r\n", readback,
                   (readback == (uint16_t)val) ? "(MATCH)" : "(MISMATCH!)");
 }
@@ -664,12 +685,10 @@ static void cmdAdc(const char* args)
 
         AdcRange range = ADC_RNG_0_12V;
         AdcConvMux mux = ADC_MUX_LF_TO_AGND;
-        ChannelFunction func = CH_FUNC_HIGH_IMP;
 
         if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             range = g_deviceState.channels[ch].adcRange;
             mux = g_deviceState.channels[ch].adcMux;
-            func = g_deviceState.channels[ch].function;
             xSemaphoreGive(g_stateMutex);
         }
 

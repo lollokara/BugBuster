@@ -133,14 +133,14 @@ static esp_err_t create_ws2812_encoder(rmt_encoder_handle_t *ret)
 
 void status_led_init(void)
 {
-    rmt_tx_channel_config_t tx_cfg = {
-        .gpio_num = LED_GPIO,
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000,  // 10 MHz
-        .mem_block_symbols = 64,
-        .trans_queue_depth = 4,
-        .flags = { .invert_out = false, .with_dma = false },
-    };
+    rmt_tx_channel_config_t tx_cfg = {};
+    tx_cfg.gpio_num = LED_GPIO;
+    tx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
+    tx_cfg.resolution_hz = 10 * 1000 * 1000;  // 10 MHz
+    tx_cfg.mem_block_symbols = 64;
+    tx_cfg.trans_queue_depth = 4;
+    tx_cfg.flags.invert_out = false;
+    tx_cfg.flags.with_dma = false;
 
     esp_err_t err = rmt_new_tx_channel(&tx_cfg, &s_rmt_channel);
     if (err != ESP_OK) {
@@ -178,10 +178,9 @@ void status_led_refresh(void)
 {
     if (!s_rmt_channel || !s_encoder) return;
 
-    rmt_transmit_config_t tx_config = {
-        .loop_count = 0,
-        .flags = { .eot_level = 0 },
-    };
+    rmt_transmit_config_t tx_config = {};
+    tx_config.loop_count = 0;
+    tx_config.flags.eot_level = 0;
 
     rmt_transmit(s_rmt_channel, s_encoder, s_pixels, sizeof(s_pixels), &tx_config);
     rmt_tx_wait_all_done(s_rmt_channel, 100);

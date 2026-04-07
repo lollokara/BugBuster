@@ -77,14 +77,16 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let is_active = ch.function != 0;
                         let is_res = ch.function == 7;
                         let unit = if ch.function == 4 || ch.function == 5 { "mA" } else if is_res { "Ω" } else { "V" };
+                        let range_abs_max = ADC_RANGE_OPTIONS.iter()
+                            .find(|(code, _, _, _)| *code == ch.adc_range)
+                            .map(|(_, _, min_v, max_v)| min_v.abs().max(max_v.abs()) as f64)
+                            .unwrap_or(12.0);
                         // For RES_MEAS use resistance range; for others use voltage/current span
                         let range_max: f64 = if is_res {
-                            // max_r = rng_max_v / I_exc; use rng from ADC range code
-                            let rng_max_v: f64 = match ch.adc_range { 0 => 12.0, 1 => 12.0, 7 => 2.5, 5 => 0.625, _ => 0.3125 };
-                            let i_exc = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua as f64 * 1e-6 } else { 250e-6 };
-                            rng_max_v / i_exc
+                            let excitation_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
+                            range_abs_max / (excitation_ua as f64 * 1e-6)
                         } else {
-                            match ch.adc_range { 0 => 12.0, 1 => 12.0, 7 => 2.5, _ => 0.625 }
+                            range_abs_max
                         };
                         let pct = if range_max > 0.0 { (ch.adc_value.abs() as f64 / range_max * 100.0).min(100.0) } else { 0.0 };
                         let color = CH_COLORS[i];

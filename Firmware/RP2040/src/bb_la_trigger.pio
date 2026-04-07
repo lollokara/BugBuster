@@ -21,6 +21,17 @@
     wait 0 pin 0        ; Wait for pin to go LOW
     irq set 0           ; Fire IRQ 0
 
+; Both-edge trigger: branch based on current level, then wait for the opposite
+; level so the first transition on either edge fires the IRQ.
+.program la_trigger_both
+    jmp pin wait_fall
+wait_rise:
+    wait 1 pin 0
+    irq set 0
+wait_fall:
+    wait 0 pin 0
+    irq set 0
+
 ; High level trigger: wait for pin HIGH → fire IRQ
 .program la_trigger_high
     wait 1 pin 0        ; Wait for HIGH
@@ -64,6 +75,7 @@ static inline void la_trigger_program_init(PIO pio, uint sm, uint offset,
 {
     pio_sm_config c = la_trigger_rising_program_get_default_config(offset);
     sm_config_set_in_pins(&c, trigger_pin);
+    sm_config_set_jmp_pin(&c, trigger_pin);
     // Slow clock for trigger — doesn't need to be fast
     sm_config_set_clkdiv(&c, 1.0f);
 

@@ -25,7 +25,9 @@ static const char *TAG = "hat";
 // In PCB mode: full ADC detection + IRQ support.
 
 static HatState s_state = {};
+#if !HAT_NO_DETECT
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
+#endif
 static bool s_initialized = false;
 
 // -----------------------------------------------------------------------------
@@ -167,6 +169,7 @@ static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_
 // ADC Detection
 // -----------------------------------------------------------------------------
 
+#if !HAT_NO_DETECT
 static float hat_read_detect_voltage(void)
 {
     if (!s_adc_handle) return -1.0f;
@@ -194,6 +197,7 @@ static HatType voltage_to_hat_type(float v)
     // if (v > 2.1f && v < 2.5f) return HAT_TYPE_PROTOCOL;  // 22k pull-down (~2.27V)
     return HAT_TYPE_UNKNOWN;
 }
+#endif
 
 // -----------------------------------------------------------------------------
 // Public API
@@ -226,14 +230,13 @@ bool hat_init(void)
 #endif
 
     // Initialize UART for HAT communication
-    uart_config_t uart_cfg = {
-        .baud_rate = HAT_UART_BAUD,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
+    uart_config_t uart_cfg = {};
+    uart_cfg.baud_rate = HAT_UART_BAUD;
+    uart_cfg.data_bits = UART_DATA_8_BITS;
+    uart_cfg.parity = UART_PARITY_DISABLE;
+    uart_cfg.stop_bits = UART_STOP_BITS_1;
+    uart_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uart_cfg.source_clk = UART_SCLK_DEFAULT;
     esp_err_t err = uart_param_config(HAT_UART_NUM, &uart_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "UART config failed: %s", esp_err_to_name(err));

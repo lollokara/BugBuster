@@ -31,6 +31,8 @@ typedef struct {
     uint32_t  max_entries;      // Max entries that fit
     uint64_t  total_samples;    // Total uncompressed sample count
     uint8_t   channels;         // Number of channels
+    uint8_t   current_value;    // Current run value (invalid = 0xFF)
+    uint32_t  current_count;    // Current run length
 } RleState;
 
 /**

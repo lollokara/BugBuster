@@ -70,7 +70,7 @@ pub struct ChannelState {
     pub do_state: bool,
     pub channel_alert: u16,
     #[serde(default)]
-    pub rtd_excitation_ua: u16, // RTD excitation current in µA (125 or 250; 0 when not RES_MEAS)
+    pub rtd_excitation_ua: u16, // RTD excitation current in µA (500 or 1000; 0 when not RES_MEAS)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,7 +139,7 @@ pub const ADC_RANGE_OPTIONS: &[(u8, &str, f32, f32)] = &[
     (3, "-312.5 to 0mV", -0.3125, 0.0),
     (4, "0 to 312.5mV", 0.0, 0.3125),
     (5, "0 to 625mV", 0.0, 0.625),
-    (6, "-104 to 104mV", -0.104, 0.104),
+    (6, "-104.16 to 104.16mV", -0.104167, 0.104167),
     (7, "-2.5 to 2.5V", -2.5, 2.5),
 ];
 
@@ -174,17 +174,6 @@ pub const RTD_EXCITATION_OPTIONS: &[(u16, &str)] = &[
     (1000, "1 mA"),
 ];
 
-// -----------------------------------------------------------------------------
-// Invoke helpers
-// -----------------------------------------------------------------------------
-
-pub fn invoke_void(cmd: &str, args: JsValue) {
-    let cmd = cmd.to_string();
-    leptos::task::spawn_local(async move {
-        let _result = invoke(&cmd, args).await;
-    });
-}
-
 /// Send a command with feedback — shows toast on success/failure.
 /// `label` is a human-readable description like "Set ADC range to ±12V".
 pub fn invoke_with_feedback(cmd: &str, args: JsValue, label: &str) {
@@ -217,7 +206,7 @@ pub fn show_toast(msg: &str, kind: &str) {
         let detail = js_sys::Object::new();
         js_sys::Reflect::set(&detail, &"msg".into(), &msg.into()).ok();
         js_sys::Reflect::set(&detail, &"kind".into(), &kind.into()).ok();
-        let mut init = web_sys::CustomEventInit::new();
+        let init = web_sys::CustomEventInit::new();
         init.set_detail(&detail);
         if let Ok(event) = web_sys::CustomEvent::new_with_event_init_dict("bb-toast", &init) {
             window.dispatch_event(&event).ok();
@@ -312,27 +301,6 @@ pub async fn fetch_idac_status() -> Option<IdacState> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
-pub fn send_idac_cal_add_point(channel: u8, code: i8, measured_v: f32) {
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Args { channel: u8, code: i8, measured_v: f32 }
-    let args = serde_wasm_bindgen::to_value(&Args { channel, code, measured_v }).unwrap();
-    let label = format!("IDAC{} cal: code={} -> {:.3}V", channel, code, measured_v);
-    invoke_with_feedback("idac_cal_add_point", args, &label);
-}
-
-pub fn send_idac_cal_clear(channel: u8) {
-    #[derive(Serialize)]
-    struct Args { channel: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { channel }).unwrap();
-    let label = format!("Clear IDAC{} calibration", channel);
-    invoke_with_feedback("idac_cal_clear", args, &label);
-}
-
-pub fn send_idac_cal_save() {
-    invoke_with_feedback("idac_cal_save", JsValue::NULL, "Save IDAC calibration");
-}
-
 pub fn send_pca_control(control: u8, on: bool) {
     #[derive(Serialize)]
     struct Args { control: u8, on: bool }
@@ -346,14 +314,6 @@ pub fn send_pca_control(control: u8, on: bool) {
     invoke_with_feedback("pca_set_control", args, &label);
 }
 
-pub fn send_set_channel_function(channel: u8, function: u8) {
-    #[derive(Serialize)]
-    struct Args { channel: u8, function: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { channel, function }).unwrap();
-    let label = format!("Set CH {} to {}", CH_NAMES[channel as usize], func_name(function));
-    invoke_with_feedback("set_channel_function", args, &label);
-}
-
 pub fn send_set_rtd_config(channel: u8, excitation_ua: u16) {
     // current: 0 = 500 µA, 1 = 1000 µA / 1 mA (maps to RTD_CURRENT bit)
     let current: u8 = if excitation_ua >= 1000 { 1 } else { 0 };
@@ -362,26 +322,6 @@ pub fn send_set_rtd_config(channel: u8, excitation_ua: u16) {
     let args = serde_wasm_bindgen::to_value(&Args { channel, current }).unwrap();
     let label = format!("Set CH {} RTD excitation: {} µA", CH_NAMES[channel as usize], excitation_ua);
     invoke_with_feedback("set_rtd_config", args, &label);
-}
-
-pub fn send_set_adc_config(channel: u8, mux: u8, range: u8, rate: u8) {
-    #[derive(Serialize)]
-    struct Args { channel: u8, mux: u8, range: u8, rate: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { channel, mux, range, rate }).unwrap();
-    let range_name = ADC_RANGE_OPTIONS.iter()
-        .find(|(c, _, _, _)| *c == range)
-        .map(|(_, n, _, _)| *n).unwrap_or("?");
-    let label = format!("Set CH {} ADC: {}", CH_NAMES[channel as usize], range_name);
-    invoke_with_feedback("set_adc_config", args, &label);
-}
-
-pub fn send_mux_set_switch(device: u8, switch_num: u8, state: bool) {
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Args { device: u8, switch_num: u8, state: bool }
-    let args = serde_wasm_bindgen::to_value(&Args { device, switch_num, state }).unwrap();
-    let label = format!("MUX{} S{} {}", device + 1, switch_num + 1, if state { "ON" } else { "OFF" });
-    invoke_with_feedback("mux_set_switch", args, &label);
 }
 
 // -----------------------------------------------------------------------------
@@ -690,33 +630,6 @@ pub async fn la_delete_range(start: u64, end: u64) -> Option<LaCaptureInfo> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
-pub async fn la_read_append(channels: u8, sample_rate_hz: u32, total_samples: u32) -> Option<LaCaptureInfo> {
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Args { channels: u8, sample_rate_hz: u32, total_samples: u32 }
-    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz, total_samples }).unwrap();
-    let result = invoke("la_read_append", args).await;
-    serde_wasm_bindgen::from_value(result).ok()
-}
-
-pub async fn la_read_append_fast(channels: u8, sample_rate_hz: u32) -> Option<LaCaptureInfo> {
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Args { channels: u8, sample_rate_hz: u32 }
-    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz }).unwrap();
-    let result = invoke("la_read_append_fast", args).await;
-    serde_wasm_bindgen::from_value(result).ok()
-}
-
-pub async fn la_read_append_usb(channels: u8, sample_rate_hz: u32) -> Option<LaCaptureInfo> {
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Args { channels: u8, sample_rate_hz: u32 }
-    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz }).unwrap();
-    let result = try_invoke("la_read_append_usb", args).await?;
-    serde_wasm_bindgen::from_value(result).ok()
-}
-
 /// Single stream cycle: stop → configure → arm → poll → read (USB bulk or UART fallback)
 pub async fn la_stream_cycle(channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8) -> Option<LaCaptureInfo> {
     #[derive(Serialize)]
@@ -794,18 +707,6 @@ pub struct WifiState {
 pub async fn fetch_wifi_status() -> Option<WifiState> {
     let result = invoke("wifi_get_status", JsValue::NULL).await;
     serde_wasm_bindgen::from_value(result).ok()
-}
-
-pub fn send_wifi_connect(ssid: &str, password: &str) {
-    #[derive(Serialize)]
-    struct Args { ssid: String, password: String }
-    let ssid_str = ssid.to_string();
-    let args = serde_wasm_bindgen::to_value(&Args {
-        ssid: ssid_str.clone(),
-        password: password.to_string(),
-    }).unwrap();
-    let label = format!("Connect to WiFi '{}'", ssid_str);
-    invoke_with_feedback("wifi_connect", args, &label);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

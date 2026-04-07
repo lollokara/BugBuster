@@ -157,32 +157,10 @@ impl LaUsbConnection {
         Ok(())
     }
 
-    /// Send stream start command (0x01) to RP2040 via USB OUT endpoint.
-    pub fn send_stream_start(&self) -> Result<()> {
-        info!("LA USB: sending stream start command");
-        self.send_command(0x01)
-    }
-
     /// Send stream stop command (0x00) to RP2040 via USB OUT endpoint.
     pub fn send_stream_stop(&self) -> Result<()> {
         info!("LA USB: sending stream stop command");
         self.send_command(0x00)
-    }
-
-    /// Read a chunk of raw stream data from USB bulk IN endpoint (blocking).
-    /// No header parsing — just raw packed samples from the RP2040's
-    /// double-buffer DMA streaming.
-    /// Returns the raw bytes read, or an empty vec on timeout/disconnect.
-    pub fn read_stream_chunk(&self) -> Result<Vec<u8>> {
-        let iface = self.interface.as_ref()
-            .ok_or_else(|| anyhow!("LA USB not connected"))?;
-
-        // Read up to 4096 bytes at a time for throughput
-        let completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(4096)));
-        let result = completion.into_result()
-            .map_err(|e| anyhow!("USB bulk IN read failed: {}", e))?;
-
-        Ok(result)
     }
 
     pub fn disconnect(&mut self) {

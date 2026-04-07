@@ -1,5 +1,4 @@
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use serde::Serialize;
 use crate::tauri_bridge::*;
 

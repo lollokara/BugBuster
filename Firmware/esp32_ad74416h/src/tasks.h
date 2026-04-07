@@ -36,7 +36,7 @@ struct ChannelState {
     bool             doState;           // digital output on/off
     uint16_t         channelAlertStatus;
     uint16_t         channelAlertMask;
-    uint16_t         rtdExcitationUa;   // RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
+    uint16_t         rtdExcitationUa;   // RTD excitation current in µA (500 or 1000; 0 when not in RES_MEAS)
 };
 
 struct DiagState {

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // =============================================================================
 // bbp.rs - BugBuster Binary Protocol codec (Rust)
 //

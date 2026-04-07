@@ -34,7 +34,6 @@ fn send_pca_control(control: u8, on: bool) {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct EfuseState {
     pub enabled: bool,
-    pub fault: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -80,10 +79,6 @@ const GPIO_PAIR_LABELS: [[&str; 3]; 4] = [
 // S3 and S4 labels
 const ADC_LABELS: [&str; 4] = ["CH A", "CH B", "CH C", "CH D"];
 const EXT_LABELS: [&str; 4] = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"];
-
-fn ic(t: &str) -> &'static str {
-    match t { "d" => C_GPIO, "r" => C_GPIO_R, "a" => C_ADC, "e" => C_EXT, _ => "#94a3b8" }
-}
 
 #[component]
 pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {

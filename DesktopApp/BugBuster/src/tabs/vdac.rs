@@ -73,7 +73,7 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 <div class="slider-section">
                                                     <input type="range" class="slider slider-colored"
                                                         style=format!("--slider-color: {}", color)
-                                                        min=(min_v * 1000.0) max=(max_v * 1000.0) step="1"
+                                                        min=min_v * 1000.0 max=max_v * 1000.0 step="1"
                                                         prop:value=move || (slider_vals[i].get() * 1000.0) as i64
                                                         on:input=move |e| {
                                                             if let Ok(v) = event_target_value(&e).parse::<f64>() {

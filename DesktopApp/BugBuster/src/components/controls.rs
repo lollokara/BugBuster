@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use leptos::ev;
 use leptos::prelude::*;
 
@@ -77,7 +79,6 @@ pub fn Dropdown(
             }
         >
             {opts.into_iter().map(|(val, label)| {
-                let v = val.clone();
                 view! { <option value=val>{label}</option> }
             }).collect::<Vec<_>>()}
         </select>

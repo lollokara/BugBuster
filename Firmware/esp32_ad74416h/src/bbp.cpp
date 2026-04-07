@@ -1109,6 +1109,14 @@ static int handleRegRead(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+static bool isSafeRawRegisterWrite(uint8_t addr)
+{
+    // Raw writes bypass the HAL's datasheet-driven sequencing and W1C handling.
+    // Keep the generic path limited to SCRATCHn so SPI comms can still be
+    // tested without exposing unsafe register mutation over BBP.
+    return addr >= REG_SCRATCH && addr <= (REG_SCRATCH + 3);
+}
+
 static int handleRegWrite(uint16_t seq, uint8_t cmdId,
                            const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -1116,7 +1124,22 @@ static int handleRegWrite(uint16_t seq, uint8_t cmdId,
     size_t rpos = 0;
     uint8_t addr = get_u8(payload, &rpos);
     uint16_t value = get_u16(payload, &rpos);
-    s_spi->writeRegister(addr, value);
+
+    if (!isSafeRawRegisterWrite(addr)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    if (!s_spi->writeRegister(addr, value)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
+
+    uint16_t readback = 0;
+    if (!s_spi->readRegister(addr, &readback) || readback != value) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
 
     memcpy(out, payload, 3);
     return 3;
@@ -1146,12 +1169,20 @@ static int handleSetWatchdog(uint16_t seq, uint8_t cmdId,
     uint8_t enable = get_u8(payload, &rpos);
     uint8_t timeout_code = get_u8(payload, &rpos);
 
-    if (timeout_code > 0x0A) timeout_code = 0x0A;  // Max valid code
+    // Datasheet: values outside 0x0..0xA select the 1 s timeout (0x9).
+    if (timeout_code > 0x0A) timeout_code = 0x09;
+
+    // Firmware safety policy: the alert monitor guarantees AD74416H SPI
+    // traffic roughly every 200 ms even with all channels idle, so clamp the
+    // watchdog to >=500 ms when enabled to avoid nuisance self-resets.
+    if (enable && timeout_code < 0x07) timeout_code = 0x07;
 
     // WDT_CONFIG register: bit 4 = WDT_EN, bits [3:0] = WDT_TIMEOUT
     uint16_t wdt_val = ((uint16_t)(enable ? 1 : 0) << 4) | (timeout_code & 0x0F);
-    // WDT_CONFIG is at register address 0x17 in AD74416H register map
-    s_spi->writeRegister(0x17, wdt_val);
+    if (!s_spi->writeRegister(REG_WDT_CONFIG, wdt_val)) {
+        sendError(seq, cmdId, BBP_ERR_SPI_FAIL);
+        return -1;
+    }
 
     size_t pos = 0;
     put_u8(out, &pos, enable);
@@ -1541,7 +1572,7 @@ static int handleHatReset(uint16_t seq, uint8_t cmdId, uint8_t *out)
 
 static int handleHatDetect(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
-    HatType type = hat_detect();
+    hat_detect();
     const HatState *hs = hat_get_state();
 
     // If newly detected, try to connect

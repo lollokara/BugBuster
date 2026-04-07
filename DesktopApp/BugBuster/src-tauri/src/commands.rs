@@ -984,8 +984,6 @@ pub async fn pick_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> 
 /// Recording state: file writer + metadata
 pub struct RecordingState {
     pub writer: BufWriter<File>,
-    pub mask: u8,
-    pub num_channels: u8,
     pub sample_count: u64,
     pub path: String,
 }
@@ -1030,8 +1028,6 @@ pub fn start_recording(
     let mut guard = RECORDING.lock().map_err(|e| format!("Lock error: {}", e))?;
     *guard = Some(RecordingState {
         writer,
-        mask: channel_mask,
-        num_channels: num_ch,
         sample_count: 0,
         path: path.clone(),
     });
@@ -1146,7 +1142,7 @@ pub fn export_bbsc_to_csv(bbsc_path: String, csv_path: String) -> CmdResult<u64>
         let mut line = format!("{},{:.6}", sample_idx, time_s);
 
         let mut pos = 0;
-        for (ci, &ch) in active_channels.iter().enumerate() {
+        for &ch in &active_channels {
             let raw = sample_buf[pos] as u32
                 | ((sample_buf[pos + 1] as u32) << 8)
                 | ((sample_buf[pos + 2] as u32) << 16);
@@ -1176,7 +1172,7 @@ fn raw_to_voltage_f64(raw: u32, range: u8) -> f64 {
         3 => (code / fs * 0.3125) - 0.3125,
         4 => code / fs * 0.3125,
         5 => code / fs * 0.625,
-        6 => (code / fs * 0.208) - 0.104,
+        6 => (code / fs * 0.208333) - 0.104167,
         7 => (code / fs * 5.0) - 2.5,
         _ => code / fs * 12.0,
     }
@@ -1825,6 +1821,16 @@ mod tests {
         let high = raw_to_voltage_f64(fs, 7);
         assert!((low - (-2.5)).abs() < 1e-4, "range 7 low: {}", low);
         assert!((high - 2.5).abs() < 1e-4, "range 7 high: {}", high);
+    }
+
+    #[test]
+    fn raw_voltage_range6_matches_datasheet_endpoints() {
+        // Range 6: ±104.16 mV. Use the exact datasheet transfer values.
+        let fs = 16_777_216u32;
+        let low = raw_to_voltage_f64(0, 6);
+        let high = raw_to_voltage_f64(fs, 6);
+        assert!((low - (-0.104167)).abs() < 1e-6, "range 6 low: {}", low);
+        assert!((high - 0.104166).abs() < 5e-6, "range 6 high: {}", high);
     }
 
     #[test]

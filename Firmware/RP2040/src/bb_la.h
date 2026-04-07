@@ -68,8 +68,9 @@ bool bb_la_configure(const LaConfig *config);
 
 /**
  * @brief Set the trigger condition.
+ * @return true if the trigger is valid for the current configuration
  */
-void bb_la_set_trigger(const LaTrigger *trigger);
+bool bb_la_set_trigger(const LaTrigger *trigger);
 
 /**
  * @brief Arm the capture. Starts PIO, waits for trigger (or captures immediately if TRIG_NONE).
@@ -123,9 +124,9 @@ bool bb_la_start_stream(void);
 bool bb_la_stream_get_buffer(const uint8_t **buf_out, uint32_t *len_out);
 
 /**
- * @brief Mark the current streaming buffer as sent (allows DMA to reuse it).
+ * @brief Mark a streaming buffer as sent (allows DMA to reuse it).
  */
-void bb_la_stream_buffer_sent(void);
+void bb_la_stream_buffer_sent(const uint8_t *buf);
 
 /**
  * @brief Get pointer and size of the capture buffer (for USB bulk send).

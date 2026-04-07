@@ -315,8 +315,11 @@ static void dispatch_command(const HatFrame *frame)
         trig.type = (LaTriggerType)frame->payload[0];
         trig.channel = frame->payload[1];
         if (trig.channel >= BB_LA_NUM_CHANNELS) { send_error(HAT_ERR_INVALID_PIN); break; }
-        bb_la_set_trigger(&trig);
-        send_ok(NULL, 0);
+        if (!bb_la_set_trigger(&trig)) {
+            send_error(HAT_ERR_INVALID_FUNC);
+        } else {
+            send_ok(NULL, 0);
+        }
         break;
     }
     case HAT_CMD_LA_ARM:
@@ -330,7 +333,7 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_LA_GET_STATUS: {
         LaStatus st;
         bb_la_get_status(&st);
-        uint8_t rsp[14];
+        uint8_t rsp[16];
         size_t p = 0;
         rsp[p++] = (uint8_t)st.state;
         rsp[p++] = st.channels;
@@ -467,15 +470,20 @@ void bb_cmd_task(void *params)
             // LA trigger check + DMA completion
             bb_la_poll();
 
-            // Stream commands handled in usb_thread via CDC (bb_main_integrated.c)
+            // Stream control is handled in usb_thread; this task only feeds data.
 
             // LA streaming: send completed buffer halves via USB (raw, no header)
             {
                 const uint8_t *stream_buf;
                 uint32_t stream_len;
                 if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
-                    bb_la_usb_write_raw(stream_buf, stream_len);
-                    bb_la_stream_buffer_sent();
+                    uint32_t sent = bb_la_usb_write_raw(stream_buf, stream_len);
+                    if (sent == stream_len) {
+                        bb_la_stream_buffer_sent(stream_buf);
+                    } else {
+                        bb_la_stop();
+                        bb_la_cdc_flush_ring();
+                    }
                 }
             }
 

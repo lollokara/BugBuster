@@ -1,20 +1,15 @@
 // =============================================================================
-// bb_la_usb.c — Logic Analyzer USB bulk data streaming
+// bb_la_usb.c — Logic Analyzer USB transport helpers
 //
-// Uses TinyUSB vendor class instance 1 (instance 0 = CMSIS-DAP).
-// Data flows: LA capture buffer → tud_vendor_n_write() → USB bulk IN → Host
-//
-// Gapless streaming: the host sends commands on the vendor OUT endpoint
-// (EP 0x06) to start/stop continuous DMA→USB streaming. No ESP32 involvement
-// for the data path — commands go directly from USB host to RP2040.
+// Gapless streaming runs over the debugprobe CDC port. The original vendor-bulk
+// live-stream path proved unreliable, so vendor bulk is now only used for
+// explicit capture readout after a completed acquisition.
 // =============================================================================
 
 #include "bb_la_usb.h"
 #include "bb_la.h"
 #include "tusb.h"
-#include "device/usbd.h"  // for usbd_edpt_xfer (low-level endpoint access)
 #include "pico/stdlib.h"
-#include <stdio.h>
 
 #ifdef DEBUGPROBE_INTEGRATION
 #include "FreeRTOS.h"
@@ -27,7 +22,7 @@ extern TaskHandle_t tud_taskhandle;  // defined in bb_main_integrated.c
 #define LA_USB_CMD_START_STREAM 0x01
 
 // Shared CDC TX ring buffer: bb_cmd_task writes here, usb_thread sends via tud_cdc_write
-#define CDC_TX_BUF_SIZE  1024
+#define CDC_TX_BUF_SIZE  4096
 static uint8_t s_cdc_tx_buf[CDC_TX_BUF_SIZE];
 static volatile uint32_t s_cdc_tx_head = 0;  // written by bb_cmd_task
 static volatile uint32_t s_cdc_tx_tail = 0;  // read by usb_thread
@@ -122,6 +117,8 @@ uint32_t bb_la_usb_stream_buffer(const uint8_t *buf, uint32_t total_bytes)
 
 uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes)
 {
+    if (!tud_cdc_connected()) return 0;
+
     // Queue data for CDC TX — usb_thread will actually send it
     uint32_t sent = 0;
     uint32_t stall = 0;
@@ -156,6 +153,8 @@ void bb_la_cdc_flush_ring(void) {
 
 // Called from usb_thread (tud_task context) — actually sends queued CDC data
 void bb_la_cdc_send_pending(void) {
+    if (!tud_cdc_connected()) return;
+
     uint32_t head = s_cdc_tx_head;
     uint32_t tail = s_cdc_tx_tail;
     if (head == tail) return;  // nothing to send
@@ -172,81 +171,63 @@ void bb_la_cdc_send_pending(void) {
     s_cdc_tx_tail = (tail + written) % CDC_TX_BUF_SIZE;
 }
 
+static void cdc_write_reply(const char *msg)
+{
+    if (!tud_cdc_connected()) return;
+    tud_cdc_write_str(msg);
+    tud_cdc_write_flush();
+}
+
+static void handle_stream_command(uint8_t cmd, bool reply_on_cdc)
+{
+    switch (cmd) {
+    case LA_USB_CMD_START_STREAM:
+        if (!tud_cdc_connected() || !bb_la_start_stream()) {
+            if (reply_on_cdc) {
+                cdc_write_reply("ERR\n");
+            }
+            return;
+        }
+        if (reply_on_cdc) {
+            cdc_write_reply("START\n");
+        }
+        break;
+
+    case LA_USB_CMD_STOP:
+        bb_la_stop();
+        bb_la_cdc_flush_ring();
+        if (tud_cdc_connected()) {
+            tud_cdc_write_clear();
+        }
+        if (reply_on_cdc) {
+            cdc_write_reply("STOP\n");
+        }
+        break;
+
+    default:
+        if (reply_on_cdc) {
+            cdc_write_reply("ERR\n");
+        }
+        break;
+    }
+}
+
 void bb_la_usb_poll_commands(void)
 {
-    // Read commands from CDC serial (vendor endpoints don't work for instance 1)
-    if (!tud_cdc_available()) return;
-
     uint8_t cmd_buf[64];
-    uint32_t n = tud_cdc_read(cmd_buf, sizeof(cmd_buf));
-    int read_inst = -1;  // CDC path
-    if (n == 0) return;
-
-    // Process each command byte
-    for (uint32_t i = 0; i < n; i++) {
-        switch (cmd_buf[i]) {
-        case LA_USB_CMD_START_STREAM:
-            printf("[LA_USB] CMD: start stream\n");
-            printf("[LA_USB] vendor0_mounted=%d vendor1_mounted=%d tud_mounted=%d\n",
-                tud_vendor_n_mounted(0) ? 1 : 0,
-                tud_vendor_n_mounted(1) ? 1 : 0,
-                tud_mounted() ? 1 : 0);
-            {
-                // Test: write directly to EP 0x87 using low-level API (bypass mounted check)
-                static uint8_t test_data[64];
-                for (int j = 0; j < 64; j++) test_data[j] = (uint8_t)(j + 0xA0);
-                // Also try via tud_vendor_n_write to both instances
-                uint32_t w0 = tud_vendor_n_write(0, test_data, 8);
-                tud_vendor_n_flush(0);
-                uint32_t w1 = tud_vendor_n_write(1, test_data + 8, 8);
-                tud_vendor_n_flush(1);
-                printf("[LA_USB] write0=%lu write1=%lu\n", (unsigned long)w0, (unsigned long)w1);
-#ifdef DEBUGPROBE_INTEGRATION
-                xTaskNotify(tud_taskhandle, 0, eNoAction);
-#endif
+    if (tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
+        while (tud_vendor_n_available(BB_LA_VENDOR_ITF) > 0) {
+            uint32_t n = tud_vendor_n_read(BB_LA_VENDOR_ITF, cmd_buf, sizeof(cmd_buf));
+            for (uint32_t i = 0; i < n; i++) {
+                handle_stream_command(cmd_buf[i], false);
             }
-            if (!bb_la_start_stream()) {
-                printf("[LA_USB] start_stream failed\n");
-            } else {
-                printf("[LA_USB] start_stream OK\n");
-            }
-            break;
-
-        case LA_USB_CMD_STOP:
-            printf("[LA_USB] CMD: stop\n");
-            bb_la_stop();
-            break;
-
-        case 0x42: {
-            // Diagnostic: try ALL write methods, report which instance received data
-            static uint8_t diag[16];
-            diag[0] = 0x42;
-            diag[1] = tud_mounted() ? 1 : 0;
-            diag[2] = tud_vendor_n_mounted(0) ? 1 : 0;
-            diag[3] = tud_vendor_n_mounted(1) ? 1 : 0;
-            diag[4] = (uint8_t)read_inst;  // Which instance had the data
-            // Try writing via instance that's mounted
-            uint32_t w0 = tud_vendor_n_write(0, diag, 8);
-            tud_vendor_n_flush(0);
-            uint32_t w1 = tud_vendor_n_write(1, diag, 8);
-            tud_vendor_n_flush(1);
-            diag[5] = (uint8_t)w0;
-            diag[6] = (uint8_t)w1;
-            // Direct endpoint xfer to EP 0x87
-            diag[7] = 0xDE;
-            bool ex = usbd_edpt_xfer(0, 0x87, diag, 8);
-            printf("[LA_USB] DIAG: tud=%d v0=%d v1=%d inst=%d w0=%lu w1=%lu edpt=%d\n",
-                diag[1], diag[2], diag[3], read_inst,
-                (unsigned long)w0, (unsigned long)w1, ex ? 1 : 0);
-#ifdef DEBUGPROBE_INTEGRATION
-            xTaskNotify(tud_taskhandle, 0, eNoAction);
-#endif
-            break;
         }
+    }
 
-        default:
-            printf("[LA_USB] CMD: unknown 0x%02X\n", cmd_buf[i]);
-            break;
+    while (tud_cdc_available()) {
+        uint32_t n = tud_cdc_read(cmd_buf, sizeof(cmd_buf));
+        for (uint32_t i = 0; i < n; i++) {
+            handle_stream_command(cmd_buf[i], true);
         }
     }
 }

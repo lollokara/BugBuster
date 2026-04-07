@@ -32,7 +32,9 @@
 // BREADBOARD_MODE: Set to 1 for breadboard testing, 0 for final PCB
 // Changes: I2C pins, MUX CS pin, device count, I2C speed
 // -----------------------------------------------------------------------------
+#ifndef BREADBOARD_MODE
 #define BREADBOARD_MODE  1
+#endif
 
 // -----------------------------------------------------------------------------
 // I2C Bus Pins (shared bus: DS4424, HUSB238, PCA9535)

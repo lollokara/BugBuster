@@ -1,6 +1,5 @@
 use leptos::prelude::*;
 use serde::Serialize;
-use wasm_bindgen::JsValue;
 use crate::tauri_bridge::*;
 
 // ALERT_STATUS register (0x3F)

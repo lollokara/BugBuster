@@ -18,7 +18,7 @@ pub struct ChannelState {
     pub din_counter: u32,       // DIN event counter
     pub do_state: bool,         // Digital output state
     pub channel_alert: u16,     // Per-channel alert bits
-    pub rtd_excitation_ua: u16, // RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
+    pub rtd_excitation_ua: u16, // RTD excitation current in µA (500 or 1000; 0 when not in RES_MEAS)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -34,18 +34,6 @@ pub struct GpioState {
     pub output: bool,           // GPO_DATA state
     pub input: bool,            // GPI_DATA state
     pub pulldown: bool,         // GP_WK_PD_EN
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct UartBridgeState {
-    pub uart_num: u8,
-    pub tx_pin: u8,
-    pub rx_pin: u8,
-    pub baudrate: u32,
-    pub data_bits: u8,
-    pub parity: u8,
-    pub stop_bits: u8,
-    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -265,39 +253,4 @@ pub struct DiscoveredDevice {
     pub name: String,           // Display name
     pub transport: String,      // "usb" or "http"
     pub address: String,        // Port path or URL
-}
-
-// -----------------------------------------------------------------------------
-// ADC stream sample (for frontend plotting)
-// -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdcStreamBatch {
-    pub channel_mask: u8,
-    pub timestamp_us: u32,
-    pub samples: Vec<AdcSample>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdcSample {
-    pub raw: [u32; 4],         // 24-bit raw codes (0 for inactive channels)
-}
-
-// -----------------------------------------------------------------------------
-// Scope data bucket
-// -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScopeBucket {
-    pub seq: u32,
-    pub timestamp_ms: u32,
-    pub count: u16,
-    pub channels: [ScopeChannelData; 4],
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ScopeChannelData {
-    pub avg: f32,
-    pub min: f32,
-    pub max: f32,
 }

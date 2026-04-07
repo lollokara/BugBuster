@@ -1373,10 +1373,14 @@ class BugBuster:
 
         :param enable: True to enable, False to disable.
         :param timeout_code: 0=1ms, 1=5ms, 2=10ms, 3=25ms, 4=50ms,
-                             5=100ms, 6=250ms, 7=500ms, 8=750ms, 9=1000ms, 10=2000ms
+                             5=100ms, 6=250ms, 7=500ms, 8=750ms, 9=1000ms, 10=2000ms.
+                             Firmware safety policy clamps enabled watchdogs to >=500ms.
         """
         if self._usb:
-            payload = struct.pack('<BB', int(enable), min(timeout_code, 10))
+            timeout_code = min(timeout_code, 10)
+            if enable and timeout_code < 7:
+                timeout_code = 7
+            payload = struct.pack('<BB', int(enable), timeout_code)
             self._usb_cmd(CmdId.SET_WATCHDOG, payload)
         else:
             raise NotImplementedError("Watchdog control is USB-only (requires SPI)")

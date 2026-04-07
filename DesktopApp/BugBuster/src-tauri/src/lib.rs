@@ -14,7 +14,6 @@ mod la_commands;
 mod state;
 mod transport;
 mod usb_transport;
-mod wavegen;
 
 use connection_manager::ConnectionManager;
 use la_commands::LaState;

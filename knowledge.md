@@ -129,12 +129,13 @@ reads these back then applies corrections where needed.
 ### 2.3 RTD_CONFIG Defaults After CH_FUNC_SETUP Write
 
 The datasheet states these are set automatically when any CH_FUNC_SETUP is written (page 55):
-- `RTD_MODE_SEL = 0` (2-wire mode by default)
+- `RTD_MODE_SEL = 0` (3-wire mode by default)
 - `RTD_CURRENT = 1` (1 mA excitation)
 - `RTD_ADC_REF = 0` (non-ratiometric, 2.5V reference)
 
-The firmware writes RTD_CONFIG = 0x0001 explicitly after setChannelFunction() for RES_MEAS to
-ensure the excitation current source is active before the first conversion.
+For BugBuster's 2-wire-only RTD path, the firmware writes `RTD_CONFIG = 0x0005`
+(`RTD_MODE_SEL = 1`, `RTD_CURRENT = 1`) after `setChannelFunction()` for `RES_MEAS`
+so the mode matches the datasheet's 2-wire configuration.
 
 ### 2.4 Channel Initialisation Timing
 
@@ -311,7 +312,7 @@ Address: `0x06 + ch × 0x0C`
 |-----|----------------|-----------------------------------------------------------------------|
 | 0   | RTD_CURRENT    | **0 = 500 µA, 1 = 1000 µA (1 mA)** ⚠️ NOT 125/250 µA               |
 | 1   | RTD_EXC_SWAP   | 0 = normal, 1 = swap excitation current direction                     |
-| 2   | RTD_MODE_SEL   | 0 = 2-wire mode, 1 = 3-wire mode                                      |
+| 2   | RTD_MODE_SEL   | 0 = 3-wire mode, 1 = 2-wire mode                                      |
 | 3   | RTD_ADC_REF    | 0 = non-ratiometric (2.5V reference), 1 = ratiometric (1V reference)  |
 
 Sources: AD74416H datasheet Table 6 (excitation current 500 µA typ), page 55 (RTD_CURRENT=1 selects 1mA).
@@ -334,7 +335,7 @@ Connect the RTD between the I/OP_x (HF) and I/ON_x (LF) screw terminals.
 
 Firmware writes on entering RES_MEAS:
 ```
-RTD_CONFIG = 0x0001  (RTD_CURRENT=1 → 1mA; RTD_MODE_SEL=0 → 2-wire; RTD_ADC_REF=0 → non-ratiometric)
+RTD_CONFIG = 0x0005  (RTD_CURRENT=1 → 1mA; RTD_MODE_SEL=1 → 2-wire; RTD_ADC_REF=0 → non-ratiometric)
 CONV_MUX   = 0       (SENSELF to AGND — measures V(I/ON terminal) − V(AGND) = I_EXC × R_RTD)
 CONV_RANGE = 5       (0–625 mV — hardware auto-set, kept as-is; auto-ranging promotes as needed)
 ```
@@ -350,7 +351,7 @@ Fallback excitation in firmware: 1000 µA (1 mA) — if `rtdExcitationUa == 0`.
 
 ### 5.5 Ratiometric Formula (NOT used by firmware, provided for reference)
 
-Used only when RTD_ADC_REF=1 and RTD_MODE_SEL=1 (3-wire):
+Used only when `RTD_ADC_REF = 1` and `RTD_MODE_SEL = 0` (3-wire):
 ```
 R_RTD = (ADC_CODE / (16,777,216 × ADC_GAIN)) × R_REF
 R_REF ≈ 2012 Ω (internal reference resistor 2000 Ω + RSENSE 12 Ω)
@@ -784,7 +785,7 @@ for all four IIN function codes after reading back the hardware default.
 Without writing RTD_CONFIG, the VIOUT current source has no load on entering RES_MEAS and immediately
 asserts VIOUT_SHUTDOWN (CHANNEL_ALERT_STATUS bit 6) → CH_x_ALERT in ALERT_STATUS.
 
-**Fix:** `CMD_SET_CHANNEL_FUNC` writes `RTD_CONFIG = 0x0001` (1mA, 2-wire, non-ratiometric)
+**Fix:** `CMD_SET_CHANNEL_FUNC` writes `RTD_CONFIG = 0x0005` (1mA, 2-wire, non-ratiometric)
 immediately after `setChannelFunction()`. Clears to 0x0000 on transition to HIGH_IMP.
 
 ---
@@ -1859,15 +1860,15 @@ R_RTD = ((ADC_CODE − 8,388,608) / (8,388,608 × ADC_GAIN)) × R_REF
 
 | Aspect                | 2-Wire                              | 3-Wire                                    |
 |-----------------------|-------------------------------------|-------------------------------------------|
-| RTD_MODE_SEL          | 0                                   | 1                                         |
+| RTD_MODE_SEL          | 1                                   | 0                                         |
 | CONV_MUX              | 0 (SENSELF→AGND)                    | 3 (SENSELF→VSENSEN) — hardware default    |
 | Lead resistance error | Present — adds to reading           | Cancelled (if RL1=RL2=RL3)               |
 | Reference             | Non-ratiometric (2.5V)              | Ratiometric (1V across R_REF)             |
 | Best for              | Short leads, <4kΩ resistance        | Long leads, precision measurements        |
 | Firmware support      | ✅ Fully implemented                 | ⚠️ Not yet implemented in firmware        |
 
-> ⚠️ **Firmware Note:** The current firmware only supports 2-wire RTD (RTD_MODE_SEL=0, MUX=0).
-> 3-wire mode (RTD_MODE_SEL=1, MUX=3) is supported by hardware but not exposed via CMD_SET_RTD_CONFIG.
+> ⚠️ **Firmware Note:** The current firmware only supports 2-wire RTD (`RTD_MODE_SEL=1`, `MUX=0`).
+> 3-wire mode (`RTD_MODE_SEL=0`, `MUX=3`) is supported by hardware but not exposed via `CMD_SET_RTD_CONFIG`.
 
 ---
 
@@ -2032,8 +2033,9 @@ Every switch state write to the ADGS2414D MUX matrix includes a readback verific
 2. **Readback** immediately: second SPI transaction reads back the switch data register
 3. **Compare** read-back with intended state, byte-by-byte across all devices
 4. If mismatch: **retry** up to 3 times (ADGS_MAX_RETRIES)
-5. If still failing: attempt **software reset** recovery (exit DC mode, reset, re-enter DC, retry)
-6. If recovery fails: **FAULT** — force all switches open, set fault flag, LED 1 → RED
+5. If still failing in **address mode**: attempt the datasheet software reset sequence (0xA3, 0x05 to reg 0x0B), then retry once
+6. If still failing in **daisy-chain mode**: declare **FAULT** immediately, because the datasheet says configuration commands are unavailable in daisy-chain mode and exiting it requires a hardware reset
+7. In FAULT: force all switches open, set fault flag, LED 1 → RED
 
 ### 25.2 Error Registers (Address Mode)
 
@@ -2051,12 +2053,10 @@ Error detection relies on the write-verify readback mechanism instead.
 
 When write-verify fails after retries in daisy-chain mode:
 
-1. Send software reset: write 0xA3 then 0x05 to register 0x0B (address-mode frame)
-2. Wait 10 ms for reset to complete
-3. Re-enter daisy-chain mode: send 0x2500 frame
-4. Attempt one final write-verify
-5. If successful: clear fault flag, log recovery
-6. If still failing: declare FAULT, open all switches for safety
+1. Do **not** attempt software reset through SPI
+2. Datasheet rule: in daisy-chain mode all commands target `SW_DATA`, so configuration writes such as `SOFT_RESETB` are not possible
+3. Datasheet rule: exiting daisy-chain mode requires a **hardware reset**
+4. Therefore the firmware can only declare **FAULT**, open all switches for safety, and wait for a hardware reset / power cycle
 
 ---
 

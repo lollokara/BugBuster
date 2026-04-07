@@ -155,7 +155,7 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         // Code slider (preview only — right = higher V)
                                         <input type="range" class="slider slider-colored"
                                             style=format!("--slider-color: {}; width: 100%", color)
-                                            min=(-code_max) max=(max_sink_code) step="1"
+                                            min=-code_max max=max_sink_code step="1"
                                             prop:value=move || (-code_vals[i].get()).clamp(-code_max, max_sink_code as i32)
                                             on:input=move |e| {
                                                 if let Ok(v) = event_target_value(&e).parse::<i32>() {

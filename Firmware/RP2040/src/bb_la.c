@@ -36,6 +36,7 @@ static uint32_t s_capture_buf[BB_LA_BUFFER_SIZE / sizeof(uint32_t)] __attribute_
 
 // Forward declaration of DMA IRQ handler
 static void dma_irq_handler(void);
+static void release_dma_channel(void);
 
 static struct {
     LaState     state;
@@ -57,7 +58,6 @@ static struct {
 
     // Trigger state
     bool        triggered;
-    uint8_t     last_pin_state;     // For edge detection
 
     // RLE state
     RleState    rle;
@@ -71,7 +71,10 @@ static struct {
     uint32_t    half_words;             // Words per half-buffer
     volatile uint8_t stream_buf_ready;  // 0=A ready, 1=B ready, 0xFF=none
     uint8_t     stream_dma_buf;         // Which half DMA is currently writing (0=A, 1=B)
+    volatile bool stream_overrun;       // USB side could not release a half before reuse
 } s_la = {};
+
+#define STREAM_BUF_NONE 0xFFu
 
 // -----------------------------------------------------------------------------
 // PIO Program Loading
@@ -99,16 +102,16 @@ static void unload_trigger_program(void)
     }
 }
 
-static bool load_pio_program(uint8_t channels)
+static bool load_pio_program(uint8_t channels, bool waits_for_trigger)
 {
     unload_capture_program();
 
     const pio_program_t *prog;
     switch (channels) {
-    case 1:  prog = &la_capture_1ch_program; break;
-    case 2:  prog = &la_capture_2ch_program; break;
+    case 1:  prog = waits_for_trigger ? &la_capture_1ch_triggered_program : &la_capture_1ch_program; break;
+    case 2:  prog = waits_for_trigger ? &la_capture_2ch_triggered_program : &la_capture_2ch_program; break;
     case 4:
-    default: prog = &la_capture_4ch_program; break;
+    default: prog = waits_for_trigger ? &la_capture_4ch_triggered_program : &la_capture_4ch_program; break;
     }
 
     if (!pio_can_add_program(LA_PIO, prog)) {
@@ -118,6 +121,86 @@ static bool load_pio_program(uint8_t channels)
     s_la.pio_loaded = true;
     s_la.loaded_prog = prog;
     return true;
+}
+
+static void init_capture_sm(bool waits_for_trigger)
+{
+    pio_sm_config c;
+    switch (s_la.config.channels) {
+    case 1:
+        c = waits_for_trigger
+            ? la_capture_1ch_triggered_program_get_default_config(s_la.pio_offset)
+            : la_capture_1ch_program_get_default_config(s_la.pio_offset);
+        break;
+    case 2:
+        c = waits_for_trigger
+            ? la_capture_2ch_triggered_program_get_default_config(s_la.pio_offset)
+            : la_capture_2ch_program_get_default_config(s_la.pio_offset);
+        break;
+    case 4:
+    default:
+        c = waits_for_trigger
+            ? la_capture_4ch_triggered_program_get_default_config(s_la.pio_offset)
+            : la_capture_4ch_program_get_default_config(s_la.pio_offset);
+        break;
+    }
+
+    sm_config_set_in_pins(&c, BB_LA_CH0_PIN);
+    sm_config_set_in_shift(&c, false, true, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    float sys_clk = (float)clock_get_hz(clk_sys);
+    float div = sys_clk / (float)s_la.config.sample_rate_hz;
+    if (div < 1.0f) div = 1.0f;
+    sm_config_set_clkdiv(&c, div);
+
+    for (uint i = 0; i < s_la.config.channels; i++) {
+        pio_gpio_init(LA_PIO, BB_LA_CH0_PIN + i);
+    }
+    pio_sm_set_consecutive_pindirs(LA_PIO, LA_SM, BB_LA_CH0_PIN, s_la.config.channels, false);
+    pio_sm_init(LA_PIO, LA_SM, s_la.pio_offset, &c);
+}
+
+static void disable_trigger_irq(void)
+{
+    pio_set_irq0_source_enabled(LA_PIO, pis_interrupt0, false);
+    irq_set_enabled(PIO1_IRQ_0, false);
+    pio_interrupt_clear(LA_PIO, 0);
+}
+
+static void drain_capture_fifo(void)
+{
+    if (!s_la.pio_loaded) return;
+    while (!pio_sm_is_rx_fifo_empty(LA_PIO, LA_SM)) {
+        pio_sm_get(LA_PIO, LA_SM);
+    }
+}
+
+static void halt_capture_runtime(void)
+{
+    pio_sm_set_enabled(LA_PIO, LA_SM, false);
+    pio_sm_set_enabled(LA_PIO, LA_TRIGGER_SM, false);
+    disable_trigger_irq();
+
+    if (la_dma_ch >= 0) {
+        dma_channel_abort((uint)la_dma_ch);
+    }
+    release_dma_channel();
+    drain_capture_fifo();
+
+    s_la.dma_done = false;
+    s_la.triggered = false;
+    s_la.stream_mode = false;
+    s_la.stream_buf_ready = STREAM_BUF_NONE;
+    s_la.stream_dma_buf = 0;
+    s_la.stream_overrun = false;
+}
+
+static void enter_error_state(void)
+{
+    halt_capture_runtime();
+    unload_trigger_program();
+    s_la.state = LA_STATE_ERROR;
 }
 
 // -----------------------------------------------------------------------------
@@ -131,7 +214,15 @@ static void dma_irq_handler(void)
         dma_channel_acknowledge_irq0((uint)la_dma_ch);
 
         if (s_la.stream_mode && s_la.state == LA_STATE_STREAMING) {
-            // Streaming: flag completed half, swap to other half, restart DMA
+            // Streaming requires one free half. If the USB side has not released
+            // the previous half yet, stopping is safer than silently overwriting it.
+            if (s_la.stream_buf_ready != STREAM_BUF_NONE) {
+                s_la.stream_overrun = true;
+                pio_sm_set_enabled(LA_PIO, LA_SM, false);
+                return;
+            }
+
+            // Flag completed half, swap to other half, restart DMA
             s_la.stream_buf_ready = s_la.stream_dma_buf;
             s_la.stream_dma_buf ^= 1; // swap 0↔1
 
@@ -202,51 +293,6 @@ static bool setup_dma(void)
 }
 
 // -----------------------------------------------------------------------------
-// Trigger Detection
-// -----------------------------------------------------------------------------
-
-static bool check_trigger(void)
-{
-    if (s_la.trigger.type == LA_TRIG_NONE) return true;
-
-    uint8_t ch = s_la.trigger.channel;
-    if (ch >= s_la.config.channels) return false;
-
-    uint gpio = BB_LA_CH0_PIN + ch;
-    bool pin = gpio_get(gpio);
-
-    bool fire = false;
-    switch (s_la.trigger.type) {
-    case LA_TRIG_RISING:
-        fire = pin && !(s_la.last_pin_state & (1 << ch));
-        break;
-    case LA_TRIG_FALLING:
-        fire = !pin && (s_la.last_pin_state & (1 << ch));
-        break;
-    case LA_TRIG_BOTH:
-        fire = (pin != 0) != ((s_la.last_pin_state & (1 << ch)) != 0);
-        break;
-    case LA_TRIG_HIGH:
-        fire = pin;
-        break;
-    case LA_TRIG_LOW:
-        fire = !pin;
-        break;
-    default:
-        break;
-    }
-
-    // Update last state for all channels
-    uint8_t state = 0;
-    for (uint8_t i = 0; i < s_la.config.channels; i++) {
-        if (gpio_get(BB_LA_CH0_PIN + i)) state |= (1 << i);
-    }
-    s_la.last_pin_state = state;
-
-    return fire;
-}
-
-// -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
 
@@ -265,7 +311,12 @@ void bb_la_init(void)
 
 bool bb_la_configure(const LaConfig *config)
 {
-    if (s_la.state == LA_STATE_CAPTURING || s_la.state == LA_STATE_ARMED) {
+    if (!config) {
+        return false;
+    }
+    if (s_la.state == LA_STATE_CAPTURING ||
+        s_la.state == LA_STATE_ARMED ||
+        s_la.state == LA_STATE_STREAMING) {
         return false;  // Must stop first
     }
     if (config->channels != 1 && config->channels != 2 && config->channels != 4) {
@@ -274,6 +325,9 @@ bool bb_la_configure(const LaConfig *config)
     if (config->sample_rate_hz == 0 || config->depth_samples == 0) {
         return false;
     }
+
+    halt_capture_runtime();
+    unload_trigger_program();
 
     s_la.config = *config;
 
@@ -287,6 +341,10 @@ bool bb_la_configure(const LaConfig *config)
     if (s_la.buf_total_words > max_words) {
         s_la.buf_total_words = max_words;
     }
+    uint32_t max_samples = s_la.buf_total_words * samples_per_word;
+    if (s_la.config.depth_samples > max_samples) {
+        s_la.config.depth_samples = max_samples;
+    }
 
     // Calculate actual sample rate
     float sys_clk = (float)clock_get_hz(clk_sys);
@@ -295,7 +353,7 @@ bool bb_la_configure(const LaConfig *config)
     s_la.actual_rate_hz = (uint32_t)(sys_clk / div);
 
     // Load PIO program
-    if (!load_pio_program(config->channels)) {
+    if (!load_pio_program(config->channels, false)) {
         s_la.state = LA_STATE_ERROR;
         return false;
     }
@@ -306,9 +364,18 @@ bool bb_la_configure(const LaConfig *config)
     return true;
 }
 
-void bb_la_set_trigger(const LaTrigger *trigger)
+bool bb_la_set_trigger(const LaTrigger *trigger)
 {
+    if (!trigger) return false;
+    if (trigger->type > LA_TRIG_LOW) return false;
+    if (trigger->type != LA_TRIG_NONE) {
+        if (s_la.config.channels == 0) return false;
+        if (trigger->channel >= s_la.config.channels || trigger->channel >= BB_LA_NUM_CHANNELS) {
+            return false;
+        }
+    }
     s_la.trigger = *trigger;
+    return true;
 }
 
 // PIO IRQ handler — called when trigger SM fires IRQ 0
@@ -317,13 +384,11 @@ static void trigger_irq_handler(void)
     // Clear the IRQ
     pio_interrupt_clear(LA_PIO, 0);
 
-    // Enable capture state machine — starts sampling immediately
-    pio_sm_set_enabled(LA_PIO, LA_SM, true);
-
     // Disable trigger SM — job done
     pio_sm_set_enabled(LA_PIO, LA_TRIGGER_SM, false);
 
     // Disable this IRQ
+    pio_set_irq0_source_enabled(LA_PIO, pis_interrupt0, false);
     irq_set_enabled(PIO1_IRQ_0, false);
 
     // Update state
@@ -334,7 +399,14 @@ static void trigger_irq_handler(void)
 bool bb_la_arm(void)
 {
     if (s_la.state != LA_STATE_IDLE) return false;
-    if (!s_la.pio_loaded) return false;
+    if (s_la.trigger.type != LA_TRIG_NONE && s_la.trigger.channel >= s_la.config.channels) {
+        return false;
+    }
+
+    if (!load_pio_program(s_la.config.channels, s_la.trigger.type != LA_TRIG_NONE)) {
+        s_la.state = LA_STATE_ERROR;
+        return false;
+    }
 
     // Clear buffer
     memset(s_capture_buf, 0, s_la.buf_total_words * sizeof(uint32_t));
@@ -344,15 +416,14 @@ bool bb_la_arm(void)
 
     // Clean up any leftover trigger program from a previous capture
     unload_trigger_program();
+    disable_trigger_irq();
 
     if (s_la.trigger.type == LA_TRIG_NONE) {
         // No trigger — start capture immediately
         s_la.triggered = true;
         s_la.state = LA_STATE_CAPTURING;
 
-        la_capture_program_init(LA_PIO, LA_SM, s_la.pio_offset,
-                                BB_LA_CH0_PIN, s_la.config.channels,
-                                (float)s_la.config.sample_rate_hz);
+        init_capture_sm(false);
 
         if (s_la.rle_mode) {
             // RLE mode: no DMA, read FIFO in poll loop
@@ -361,28 +432,31 @@ bool bb_la_arm(void)
         } else {
             // Raw mode: DMA from PIO to buffer
             if (!setup_dma()) {
-                s_la.state = LA_STATE_ERROR;
+                enter_error_state();
                 return false;
             }
             dma_channel_start((uint)la_dma_ch);
             pio_sm_set_enabled(LA_PIO, LA_SM, true);
         }
     } else {
-        // Hardware trigger — use trigger SM to detect edge, then enable capture SM
+        // Hardware trigger — trigger SM fires IRQ 0, capture SM waits on it in PIO.
         s_la.state = LA_STATE_ARMED;
 
-        // Use the standard (untriggered) capture program
-        la_capture_program_init(LA_PIO, LA_SM, s_la.pio_offset,
-                                BB_LA_CH0_PIN, s_la.config.channels,
-                                (float)s_la.config.sample_rate_hz);
+        init_capture_sm(true);
 
-        // Setup DMA but don't start PIO SM0 yet — trigger will enable it
-        if (!setup_dma()) {
-            s_la.state = LA_STATE_ERROR;
-            return false;
+        if (s_la.rle_mode) {
+            rle_init(&s_la.rle, s_capture_buf, s_la.buf_total_words, s_la.config.channels);
+        } else {
+            // Setup DMA before enabling SM0 so the first post-trigger samples are captured.
+            if (!setup_dma()) {
+                enter_error_state();
+                return false;
+            }
+            dma_channel_start((uint)la_dma_ch);
         }
-        dma_channel_start((uint)la_dma_ch);
-        // SM0 stays disabled — will be enabled by trigger callback
+        // SM0 starts now, but its first instruction is IRQ WAIT so sampling begins in hardware.
+        pio_interrupt_clear(LA_PIO, 0);
+        pio_sm_set_enabled(LA_PIO, LA_SM, true);
 
         // Load trigger program on SM1
         unload_trigger_program();
@@ -391,13 +465,14 @@ bool bb_la_arm(void)
         switch (s_la.trigger.type) {
         case LA_TRIG_RISING:  trig_prog = &la_trigger_rising_program; break;
         case LA_TRIG_FALLING: trig_prog = &la_trigger_falling_program; break;
+        case LA_TRIG_BOTH:    trig_prog = &la_trigger_both_program; break;
         case LA_TRIG_HIGH:    trig_prog = &la_trigger_high_program; break;
         case LA_TRIG_LOW:     trig_prog = &la_trigger_low_program; break;
         default:              trig_prog = &la_trigger_rising_program; break;
         }
 
         if (!pio_can_add_program(LA_PIO, trig_prog)) {
-            s_la.state = LA_STATE_ERROR;
+            enter_error_state();
             return false;
         }
         s_la.trigger_offset = pio_add_program(LA_PIO, trig_prog);
@@ -408,7 +483,8 @@ bool bb_la_arm(void)
         uint trigger_pin = BB_LA_CH0_PIN + s_la.trigger.channel;
         la_trigger_program_init(LA_PIO, LA_TRIGGER_SM, s_la.trigger_offset, trigger_pin);
 
-        // Set up PIO IRQ handler — when trigger SM fires IRQ 0, enable capture SM
+        // Set up PIO IRQ handler — trigger already starts capture in hardware;
+        // the CPU side just records the state transition and disables SM1.
         pio_set_irq0_source_enabled(LA_PIO, pis_interrupt0, true);
         irq_set_exclusive_handler(PIO1_IRQ_0, trigger_irq_handler);
         irq_set_enabled(PIO1_IRQ_0, true);
@@ -423,41 +499,18 @@ bool bb_la_arm(void)
 void bb_la_force_trigger(void)
 {
     if (s_la.state == LA_STATE_ARMED) {
-        s_la.triggered = true;
-        s_la.state = LA_STATE_CAPTURING;
-
-        // Disable trigger SM — no longer needed
-        pio_sm_set_enabled(LA_PIO, LA_TRIGGER_SM, false);
-        irq_set_enabled(PIO1_IRQ_0, false);
-
-        // Enable capture SM — DMA is already configured and running from bb_la_arm()
-        pio_sm_set_enabled(LA_PIO, LA_SM, true);
+        LA_PIO->irq_force = 1u << 0;
     }
 }
 
 void bb_la_stop(void)
 {
-    // Stop PIO
-    pio_sm_set_enabled(LA_PIO, LA_SM, false);
-
-    // Abort and release DMA
-    if (la_dma_ch >= 0) {
-        dma_channel_abort((uint)la_dma_ch);
-    }
-    release_dma_channel();
-
-    // Drain PIO FIFO
-    if (s_la.pio_loaded) {
-        while (!pio_sm_is_rx_fifo_empty(LA_PIO, LA_SM)) {
-            pio_sm_get(LA_PIO, LA_SM);
-        }
-    }
+    halt_capture_runtime();
 
     // Remove PIO programs so configure can reload them
     unload_capture_program();
     unload_trigger_program();
 
-    s_la.stream_mode = false;
     s_la.state = LA_STATE_IDLE;
 }
 
@@ -544,7 +597,9 @@ void bb_la_poll(void)
         break;
 
     case LA_STATE_STREAMING:
-        // Streaming is handled by DMA IRQ + USB send in main loop — nothing to poll here
+        if (s_la.stream_overrun) {
+            enter_error_state();
+        }
         break;
 
     default:
@@ -560,10 +615,12 @@ bool bb_la_start_stream(void)
 {
     if (s_la.state != LA_STATE_IDLE) return false;
     if (!s_la.pio_loaded) return false;
+    if (s_la.rle_mode) return false;
 
     s_la.stream_mode = true;
-    s_la.stream_buf_ready = 0xFF; // nothing ready yet
+    s_la.stream_buf_ready = STREAM_BUF_NONE; // nothing ready yet
     s_la.stream_dma_buf = 0;     // DMA starts writing to buffer A
+    s_la.stream_overrun = false;
 
     // Split capture buffer into two halves
     uint32_t max_words = sizeof(s_capture_buf) / sizeof(uint32_t);
@@ -579,8 +636,7 @@ bool bb_la_start_stream(void)
 
     // Setup DMA for first half (buffer A)
     if (!setup_dma()) {
-        s_la.stream_mode = false;
-        s_la.state = LA_STATE_ERROR;
+        enter_error_state();
         return false;
     }
 
@@ -598,7 +654,8 @@ bool bb_la_start_stream(void)
 bool bb_la_stream_get_buffer(const uint8_t **buf_out, uint32_t *len_out)
 {
     if (s_la.state != LA_STATE_STREAMING) return false;
-    if (s_la.stream_buf_ready == 0xFF) return false;
+    if (!buf_out || !len_out) return false;
+    if (s_la.stream_buf_ready == STREAM_BUF_NONE) return false;
 
     uint32_t *half = s_capture_buf + (s_la.stream_buf_ready * s_la.half_words);
     *buf_out = (const uint8_t *)half;
@@ -606,9 +663,25 @@ bool bb_la_stream_get_buffer(const uint8_t **buf_out, uint32_t *len_out)
     return true;
 }
 
-void bb_la_stream_buffer_sent(void)
+void bb_la_stream_buffer_sent(const uint8_t *buf)
 {
-    s_la.stream_buf_ready = 0xFF; // mark as consumed
+    if (s_la.state != LA_STATE_STREAMING || !buf) return;
+
+    const uint8_t *buf_a = (const uint8_t *)s_capture_buf;
+    const uint8_t *buf_b = buf_a + (s_la.half_words * sizeof(uint32_t));
+    uint8_t sent_half;
+
+    if (buf == buf_a) {
+        sent_half = 0;
+    } else if (buf == buf_b) {
+        sent_half = 1;
+    } else {
+        return;
+    }
+
+    if (s_la.stream_buf_ready == sent_half) {
+        s_la.stream_buf_ready = STREAM_BUF_NONE;
+    }
 }
 
 bool bb_la_get_capture_buffer(const uint8_t **buf_out, uint32_t *len_out)

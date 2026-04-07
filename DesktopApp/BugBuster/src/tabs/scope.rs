@@ -46,7 +46,6 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Track sample count for rate display
     let sample_counter = RwSignal::new(0u32);
-    let last_rate_check = RwSignal::new(js_sys::Date::now());
 
     // Display listener: "scope-data" events (EVT_SCOPE_DATA, one per 10 ms bucket)
     spawn_local(async move {

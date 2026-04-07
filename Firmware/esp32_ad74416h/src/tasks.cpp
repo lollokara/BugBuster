@@ -235,7 +235,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                     uint16_t idx = sb.head % SCOPE_BUF_SIZE;
                     sb.buckets[idx] = sb.cur;
                     sb.head = (sb.head + 1) % SCOPE_BUF_SIZE;
-                    sb.seq++;
+                    sb.seq = static_cast<uint16_t>(sb.seq + 1);
                     // Start fresh bucket
                     sb.curStart = nowMs;
                     sb.cur.timestamp_ms = nowMs;
@@ -453,14 +453,20 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
 {
     if (!s_device) return;
 
-    s_device->setChannelFunction(channel, func);
+    if (!s_device->setChannelFunction(channel, func)) {
+        ESP_LOGE("tasks", "Failed to set channel %u function %u", channel, (unsigned)func);
+        return;
+    }
 
     // The hardware auto-sets correct ADC_CONFIG defaults (CONV_MUX, CONV_RANGE)
     // when CH_FUNC_SETUP is written (datasheet Table 22).  Read back instead of
     // overwriting.
     uint16_t adcCfgReg = 0;
     extern AD74416H_SPI spiDriver;
-    spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(channel), &adcCfgReg);
+    if (!spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(channel), &adcCfgReg)) {
+        ESP_LOGE("tasks", "Failed to read back ADC_CONFIG for channel %u", channel);
+        return;
+    }
 
     AdcConvMux hwMux   = (AdcConvMux)((adcCfgReg & ADC_CONFIG_CONV_MUX_MASK) >> ADC_CONFIG_CONV_MUX_SHIFT);
     AdcRange   hwRange = (AdcRange)((adcCfgReg & ADC_CONFIG_CONV_RANGE_MASK) >> ADC_CONFIG_CONV_RANGE_SHIFT);
@@ -474,15 +480,25 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
         hwRange = ADC_RNG_NEG0_3125_0_3125V;
     }
 
-    // RES_MEAS: enable excitation current and fix CONV_MUX for 2-wire RTD.
+    // RES_MEAS: force 2-wire RTD mode, enable excitation current, and use
+    // LF->AGND as required by the AD74416H datasheet's 2-wire example.
     if (func == CH_FUNC_RES_MEAS) {
-        spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(channel), RTD_CONFIG_RTD_CURRENT_MASK);
+        if (!spiDriver.writeRegister(
+            AD74416H_REG_RTD_CONFIG(channel),
+            RTD_CONFIG_RTD_MODE_SEL_MASK | RTD_CONFIG_RTD_CURRENT_MASK
+        )) {
+            ESP_LOGE("tasks", "Failed to write RTD_CONFIG for channel %u", channel);
+            return;
+        }
         hwMux = ADC_MUX_LF_TO_AGND;
     }
 
     // Leaving RES_MEAS: stop excitation current.
     if (func == CH_FUNC_HIGH_IMP) {
-        spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(channel), 0x0000);
+        if (!spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(channel), 0x0000)) {
+            ESP_LOGE("tasks", "Failed to clear RTD_CONFIG for channel %u", channel);
+            return;
+        }
     }
 
     s_device->configureAdc(channel, hwMux, hwRange, ADC_RATE_20SPS);
@@ -842,11 +858,13 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             case CMD_SET_RTD_CONFIG: {
                 // cmd.rtdCfg.current: 0 = 500 µA (RTD_CURRENT bit clear)
                 //                     1 = 1000 µA / 1 mA (RTD_CURRENT bit set)
-                // Per AD74416H datasheet Table 6 / RTD_CONFIG register description.
+                // 2-wire only: RTD_MODE_SEL must be set. Per ad74416h.pdf:
+                // Table 47 => RTD_MODE_SEL 0 = 3-wire, 1 = 2-wire.
+                // Pt1000 2-wire example => "Set the RTD_MODE_SEL bit to high".
                 // Non-ratiometric (RTD_ADC_REF = 0): standard adcCodeToVoltage()
                 // formula valid; R = V / I_EXC gives the correct resistance.
                 extern AD74416H_SPI spiDriver;
-                uint16_t rtdCfgVal = 0;  // RTD_ADC_REF = 0: non-ratiometric
+                uint16_t rtdCfgVal = RTD_CONFIG_RTD_MODE_SEL_MASK;  // 2-wire, RTD_ADC_REF = 0
                 if (cmd.rtdCfg.current != 0)
                     rtdCfgVal |= RTD_CONFIG_RTD_CURRENT_MASK;  // 1 mA
                 spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfgVal);
@@ -1035,43 +1053,6 @@ static void taskWavegen(void* /*pvParameters*/)
 }
 
 // -----------------------------------------------------------------------------
-// Task: I2C Device Polling (500ms interval)
-// Reads status from PCA9535 and HUSB238 periodically
-// -----------------------------------------------------------------------------
-
-static void taskI2cPoll(void* /*pvParameters*/)
-{
-    static const char *TAG = "i2c_poll";
-    TickType_t pollDelay = pdMS_TO_TICKS(500);
-
-    for (;;) {
-        // TODO: hat_poll() disabled — conflicts with HAT command UART.
-        // Need mutex synchronization before re-enabling.
-        // hat_poll();
-
-        // Poll PCA9535 inputs (power good, e-fuse faults)
-        // Change detection and fault callbacks run inside pca9535_update()
-        if (pca9535_present()) {
-            pca9535_update();
-            // Copy state to DeviceState for protocol reporting
-            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                memcpy(&g_deviceState.ioexp, pca9535_get_state(), sizeof(PCA9535State));
-                xSemaphoreGive(g_stateMutex);
-            }
-        }
-
-        // Poll HUSB238 less frequently (every 5 iterations = 2.5s)
-        static uint8_t husb_div = 0;
-        if (++husb_div >= 5) {
-            husb_div = 0;
-            if (husb238_present()) {
-                husb238_update();
-            }
-        }
-
-        vTaskDelay(pollDelay);
-    }
-}
 
 // -----------------------------------------------------------------------------
 // Public API

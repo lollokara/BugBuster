@@ -444,25 +444,6 @@ static void send_diag_config(uint8_t slot, uint8_t source)
     xQueueSend(g_cmdQueue, &cmd, pdMS_TO_TICKS(100));
 }
 
-// Helper: wait for the periodic diagnostic poll to update a slot with fresh data.
-// The fault monitor reads diagnostics every 5th iteration (~1s).
-// We wait until the rawCode changes from 0 (invalidated) to a non-zero value,
-// or until timeout.
-static bool wait_for_diag_update(uint8_t slot, uint32_t timeout_ms)
-{
-    uint32_t start = (uint32_t)(esp_timer_get_time() / 1000ULL);
-    while (true) {
-        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
-        if (now - start > timeout_ms) return false;
-
-        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            bool ready = (g_deviceState.diag[slot].rawCode != 0);
-            xSemaphoreGive(g_stateMutex);
-            if (ready) return true;
-        }
-        delay_ms(100);
-    }
-}
 
 const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
 {

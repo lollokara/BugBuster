@@ -33,18 +33,6 @@ pub struct Annotation {
     pub channel: u8,            // Which channel track to display this annotation on
 }
 
-impl Annotation {
-    pub fn color(&self) -> &str {
-        match self.ann_type {
-            AnnotationType::Data    => "#3b82f6",
-            AnnotationType::Address => "#10b981",
-            AnnotationType::Control => "#f59e0b",
-            AnnotationType::Error   => "#ef4444",
-            AnnotationType::Info    => "#06b6d4",
-        }
-    }
-}
-
 /// Decoder configuration — serializable for UI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

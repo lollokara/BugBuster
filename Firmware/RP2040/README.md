@@ -24,7 +24,7 @@ src/
 ├── bb_la.pio              — PIO capture programs (1ch, 2ch, 4ch)
 ├── bb_la_trigger.pio      — PIO trigger programs (rising, falling, high, low)
 ├── bb_la_rle.c/h          — Run-length encoding compression for LA data
-├── bb_la_usb.c/h          — USB vendor bulk endpoint for LA data streaming
+├── bb_la_usb.c/h          — LA USB transport helpers (CDC streaming + vendor bulk readout)
 └── bb_usb_descriptors.c   — USB descriptors (CMSIS-DAP + CDC + LA vendor interface)
 ```
 
@@ -41,7 +41,8 @@ src/
 - **ESP32 ↔ RP2040**: UART0 @ 921600 baud, HAT protocol framing (0xAA sync, CRC-8)
 - **USB CMSIS-DAP**: HID interface (EP 0x04/0x85) — inherited from debugprobe
 - **USB CDC**: UART bridge (EP 0x81/0x02/0x83)
-- **USB LA Data**: Vendor bulk interface (EP 0x06/0x87)
+- **USB LA Streaming**: CDC serial port (start/stop control + raw sample stream)
+- **USB LA Bulk Readout**: Vendor bulk interface (EP 0x06/0x87) for completed captures
 
 ## Build
 
@@ -90,7 +91,7 @@ make -j$(nproc)
 
 - **Channels**: 1, 2, or 4 (GPIO14-17)
 - **Sample rate**: Up to system clock (125 MHz) via PIO clock divider
-- **Buffer**: 90 KB SRAM (~23K 32-bit words)
+- **Buffer**: 200 KB SRAM (~51K 32-bit words)
 - **Modes**: Raw (DMA with completion IRQ) or RLE-compressed (PIO FIFO polling)
-- **Trigger**: Rising/falling edge, level high/low on any channel (via PIO state machine)
+- **Trigger**: Rising/falling/both-edge, level high/low on any channel (PIO-to-PIO hardware trigger)
 - **DMA**: Dynamically claimed channel with interrupt-driven completion detection

@@ -74,13 +74,12 @@ void usb_cdc_init(void)
 
     // Install TinyUSB driver with default descriptors
     // esp_tinyusb generates descriptors based on CONFIG_TINYUSB_CDC_COUNT
-    const tinyusb_config_t tusb_cfg = {
-        .device_descriptor = NULL,        // Use default from menuconfig
-        .string_descriptor = NULL,        // Use default
-        .string_descriptor_count = 0,
-        .external_phy = false,
-        .configuration_descriptor = NULL, // Use default (auto-generated for CDC_COUNT)
-    };
+    tinyusb_config_t tusb_cfg = {};
+    tusb_cfg.device_descriptor = NULL;         // Use default from menuconfig
+    tusb_cfg.string_descriptor = NULL;         // Use default
+    tusb_cfg.string_descriptor_count = 0;
+    tusb_cfg.external_phy = false;
+    tusb_cfg.configuration_descriptor = NULL;  // Use default (auto-generated for CDC_COUNT)
 
     esp_err_t ret = tinyusb_driver_install(&tusb_cfg);
     if (ret != ESP_OK) {
@@ -93,7 +92,6 @@ void usb_cdc_init(void)
         tinyusb_config_cdcacm_t acm_cfg = {};
         acm_cfg.usb_dev = TINYUSB_USBDEV_0;
         acm_cfg.cdc_port = (tinyusb_cdcacm_itf_t)itf;
-        acm_cfg.rx_unread_buf_sz = 256;
         acm_cfg.callback_rx = cdc_rx_callback;
         acm_cfg.callback_rx_wanted_char = NULL;
         acm_cfg.callback_line_state_changed = cdc_line_state_callback;

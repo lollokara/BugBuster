@@ -324,7 +324,6 @@ impl Transport for HttpTransport {
                 let present = json.get("present").and_then(|v| v.as_bool()).unwrap_or(false);
                 pw.put_bool(present);
                 let channels = json.get("channels").and_then(|v| v.as_array());
-                let names = ["LevelShift", "V_ADJ1", "V_ADJ2", "Spare"];
                 for i in 0..4u8 {
                     let ch = channels.and_then(|arr| arr.get(i as usize));
                     pw.put_u8(i);

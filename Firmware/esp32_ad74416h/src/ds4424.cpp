@@ -309,8 +309,7 @@ bool ds4424_set_code(uint8_t ch, int8_t code)
     if (ch >= DS4424_NUM_CHANNELS) return false;
     if (!s_state.present) return false;
 
-    // Clamp
-    if (code > 127) code = 127;
+    // Clamp the only out-of-range int8_t case that can still occur.
     if (code < -127) code = -127;
 
     return write_dac(ch, code);
@@ -495,9 +494,11 @@ int ds4424_cal_auto(uint8_t ch, float (*read_adc)(uint8_t ch), uint8_t step_size
 {
     if (ch >= 3 || !read_adc || !s_state.present) return 0;
     if (step_size < 1) step_size = 8;
+    if (step_size > 127) step_size = 127;
 
     const DS4424ChanConfig *c = &s_state.config[ch];
     ds4424_cal_clear(ch);
+    const int step = (int)step_size;
 
     ESP_LOGI(TAG, "IDAC%d: Starting auto-calibration (step=%d, settle=%lums)",
              ch, step_size, (unsigned long)settle_ms);
@@ -514,16 +515,17 @@ int ds4424_cal_auto(uint8_t ch, float (*read_adc)(uint8_t ch), uint8_t step_size
     // Sweep sink direction (negative codes → raise voltage)
     // This goes UP in voltage. Stop if we hit v_max or 12V ADC limit
     float cal_max = (c->v_max <= 12.0f) ? c->v_max : 12.0f;
-    for (int8_t code = -(int8_t)step_size; code >= -127; code -= (int8_t)step_size) {
-        write_dac(ch, code);
+    for (int code = -step; code >= -127; code -= step) {
+        int8_t code_i8 = (int8_t)code;
+        write_dac(ch, code_i8);
         vTaskDelay(pdMS_TO_TICKS(settle_ms));
         float v = read_adc(ch);
-        ds4424_cal_add_point(ch, code, v);
+        ds4424_cal_add_point(ch, code_i8, v);
         point_count++;
-        ESP_LOGI(TAG, "  DAC=%d → %.4fV", code, v);
+        ESP_LOGI(TAG, "  DAC=%d → %.4fV", code_i8, v);
 
         if (v >= cal_max) {
-            ESP_LOGI(TAG, "  Reached cal max %.2fV at code=%d", cal_max, code);
+            ESP_LOGI(TAG, "  Reached cal max %.2fV at code=%d", cal_max, code_i8);
             break;
         }
     }
@@ -533,16 +535,17 @@ int ds4424_cal_auto(uint8_t ch, float (*read_adc)(uint8_t ch), uint8_t step_size
     vTaskDelay(pdMS_TO_TICKS(settle_ms));
 
     // Sweep source direction (positive codes → lower voltage)
-    for (int8_t code = (int8_t)step_size; code <= 127; code += (int8_t)step_size) {
-        write_dac(ch, code);
+    for (int code = step; code <= 127; code += step) {
+        int8_t code_i8 = (int8_t)code;
+        write_dac(ch, code_i8);
         vTaskDelay(pdMS_TO_TICKS(settle_ms));
         float v = read_adc(ch);
-        ds4424_cal_add_point(ch, code, v);
+        ds4424_cal_add_point(ch, code_i8, v);
         point_count++;
-        ESP_LOGI(TAG, "  DAC=%d → %.4fV", code, v);
+        ESP_LOGI(TAG, "  DAC=%d → %.4fV", code_i8, v);
 
         if (v <= c->v_min) {
-            ESP_LOGI(TAG, "  Reached v_min %.2fV at code=%d", c->v_min, code);
+            ESP_LOGI(TAG, "  Reached v_min %.2fV at code=%d", c->v_min, code_i8);
             break;
         }
     }

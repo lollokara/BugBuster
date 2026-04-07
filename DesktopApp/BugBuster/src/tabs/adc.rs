@@ -20,7 +20,8 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let (rng_min, rng_max) = range_info.map(|r| (r.2, r.3)).unwrap_or((0.0, 12.0));
                         // For RES_MEAS: bar spans 0..max_r where max_r = rng_max / I_exc
                         let (bar_min, bar_max) = if is_res {
-                            let i_exc = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua as f32 * 1e-6 } else { 250e-6 };
+                            let excitation_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
+                            let i_exc = excitation_ua as f32 * 1e-6;
                             (0.0_f32, rng_max / i_exc)
                         } else {
                             (rng_min, rng_max)
@@ -28,7 +29,7 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let span = bar_max - bar_min;
                         let pct = if span > 0.0 { ((ch.adc_value - bar_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 };
                         let unit = if ch.function == 4 || ch.function == 5 { "mA" } else if is_res { "Ω" } else { "V" };
-                        let exc_ua = ch.rtd_excitation_ua;
+                        let exc_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
 
                         view! {
                             <div class="card channel-card" class:ch-disabled=!has_adc>
@@ -107,7 +108,7 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                             <select class="dropdown"
                                                                 prop:value=exc_ua.to_string()
                                                                 on:change=move |e| {
-                                                                    let ua: u16 = event_target_value(&e).parse().unwrap_or(250);
+                                                                    let ua: u16 = event_target_value(&e).parse().unwrap_or(1000);
                                                                     tauri_bridge::send_set_rtd_config(ch_idx, ua);
                                                                 }
                                                             >

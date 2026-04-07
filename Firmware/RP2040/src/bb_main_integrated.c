@@ -41,7 +41,6 @@ extern void bb_cmd_task(void *params);
 #define BB_CMD_TASK_PRIO   (tskIDLE_PRIORITY + 1)  // Same as DAP — not time-critical
 
 static uint8_t TxDataBuffer[CFG_TUD_HID_EP_BUFSIZE];
-static uint8_t RxDataBuffer[CFG_TUD_HID_EP_BUFSIZE];
 
 TaskHandle_t dap_taskhandle, tud_taskhandle, mon_taskhandle;
 static TaskHandle_t bb_taskhandle;
@@ -101,45 +100,11 @@ void usb_thread(void *ptr)
     do {
         tud_task();
 
-        // Send pending CDC data from bb_cmd_task's ring buffer
-        bb_la_cdc_send_pending();
+        // LA stream control is handled here so TinyUSB I/O stays in one task.
+        bb_la_usb_poll_commands();
 
-        // CDC command handler — start/stop gapless streaming
-        if (tud_cdc_available()) {
-            uint8_t cdc_cmd;
-            if (tud_cdc_read(&cdc_cmd, 1) == 1) {
-                switch (cdc_cmd) {
-                case 0x01:  // Start stream
-                    if (bb_la_start_stream()) {
-                        uint8_t ok[] = {'S', 'T', 'A', 'R', 'T', '\n'};
-                        tud_cdc_write(ok, 6);
-                    } else {
-                        uint8_t err[] = {'E', 'R', 'R', '\n'};
-                        tud_cdc_write(err, 4);
-                    }
-                    tud_cdc_write_flush();
-                    break;
-                case 0x00:  // Stop stream
-                    bb_la_stop();
-                    bb_la_cdc_flush_ring();  // Clear stale streaming data from ring buffer
-                    // Drain any pending CDC TX
-                    tud_cdc_write_clear();
-                    {
-                        uint8_t ok[] = {'S', 'T', 'O', 'P', '\n'};
-                        tud_cdc_write(ok, 5);
-                        tud_cdc_write_flush();
-                    }
-                    break;
-                default: {
-                    // Echo unknown commands for diagnostics
-                    uint8_t reply[] = {'R', cdc_cmd, 'O', 'K', '\n'};
-                    tud_cdc_write(reply, 5);
-                    tud_cdc_write_flush();
-                    break;
-                }
-                }
-            }
-        }
+        // Send pending CDC data from bb_cmd_task's ring buffer.
+        bb_la_cdc_send_pending();
 
 #ifdef PROBE_USB_CONNECTED_LED
         if (!gpio_get(PROBE_USB_CONNECTED_LED) && tud_connected())

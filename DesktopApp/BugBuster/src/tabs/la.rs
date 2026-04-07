@@ -54,6 +54,7 @@ fn reformat_ann(text: &str, fmt: &str, ann_type: &str) -> String {
 
 #[component]
 pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    let _ = state;
     // Capture state
     let (capture_info, set_capture_info) = signal(Option::<LaCaptureInfo>::None);
     let (view_data, set_view_data) = signal(Option::<LaViewData>::None);
@@ -113,7 +114,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Hover state for signal measurement overlay
     let (hover_ch, set_hover_ch) = signal(Option::<usize>::None);
     let (hover_x, set_hover_x) = signal(0.0f64);
-    let (hover_y, set_hover_y) = signal(0.0f64);
+    let (_hover_y, set_hover_y) = signal(0.0f64);
 
     // Canvas ref
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
@@ -1398,7 +1399,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                                 // Auto-poll for capture done — simple delay + status loop
                                 let mut captured = false;
-                                for poll in 0..300 {  // Up to 30 seconds
+                                for _ in 0..300 {  // Up to 30 seconds
                                     // Sleep 100ms between polls
                                     let p = js_sys::Promise::new(&mut |resolve, _| {
                                         web_sys::window().unwrap()
@@ -2021,8 +2022,6 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             {move || {
                 let info = capture_info.get();
                 let cursor = cursor_sample.get();
-                let vs = view_start.get();
-                let ve = view_end.get();
                 let vd = view_data.get();
                 view! {
                     <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; border-top: 1px solid var(--border, #1e293b); flex-shrink: 0">

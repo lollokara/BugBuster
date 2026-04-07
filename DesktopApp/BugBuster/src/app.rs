@@ -130,9 +130,11 @@ pub fn App() -> impl IntoView {
                     let detail = js_sys::Object::new();
                     let _ = js_sys::Reflect::set(&detail, &"msg".into(), &msg.into());
                     let _ = js_sys::Reflect::set(&detail, &"kind".into(), &"err".into());
+                    let init = web_sys::CustomEventInit::new();
+                    init.set_detail(&detail);
                     if let Ok(evt) = web_sys::CustomEvent::new_with_event_init_dict(
                         "bb-toast",
-                        web_sys::CustomEventInit::new().detail(&detail),
+                        &init,
                     ) {
                         let _ = window.dispatch_event(&evt);
                     }

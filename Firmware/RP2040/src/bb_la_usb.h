@@ -1,10 +1,11 @@
 #pragma once
 
 // =============================================================================
-// bb_la_usb.h — Logic Analyzer USB bulk data streaming
+// bb_la_usb.h — Logic Analyzer USB transport helpers
 //
-// Streams captured LA data over USB vendor bulk endpoint (interface 3).
-// The host reads data at ~1.2 MB/s (USB Full-Speed bulk).
+// Gapless streaming uses CDC because the original vendor-bulk stream path was
+// unreliable in practice. The vendor interface is still used for bulk capture
+// readout after a completed capture.
 // =============================================================================
 
 #include <stdint.h>
@@ -43,7 +44,7 @@ bool bb_la_usb_connected(void);
 uint32_t bb_la_usb_stream_buffer(const uint8_t *buf, uint32_t total_bytes);
 
 /**
- * @brief Write raw data over USB bulk IN (no header).
+ * @brief Write raw data to the CDC streaming path (no header).
  *        Used for gapless streaming — sends packed samples directly.
  * @param buf        Data buffer
  * @param total_bytes  Total bytes to send
@@ -52,10 +53,9 @@ uint32_t bb_la_usb_stream_buffer(const uint8_t *buf, uint32_t total_bytes);
 uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes);
 
 /**
- * @brief Poll the vendor OUT endpoint for commands from the USB host.
+ * @brief Poll CDC/vendor control endpoints for stream commands.
  *        Commands: 0x01 = start stream, 0x00 = stop.
- *        Called from the main loop to enable gapless USB streaming
- *        without ESP32 involvement.
+ *        Called from the USB thread so TinyUSB reads/writes stay serialized.
  */
 void bb_la_usb_poll_commands(void);
 

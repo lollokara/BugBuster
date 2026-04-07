@@ -27,10 +27,6 @@ extern "C" {
 #define ADGS_CMD_WRITE          0x00
 #define ADGS_CMD_READ           0x80
 
-// Error registers (address mode only)
-#define ADGS_REG_ERR_CONFIG     0x02    // Error Configuration Register (default 0x06)
-#define ADGS_REG_ERR_FLAGS      0x03    // Error Flags Register (read-only, clear with 0x6CA9)
-
 // ERR_CONFIG bits
 #define ADGS_ERR_CRC_EN         (1 << 0)  // CRC error detection enable
 #define ADGS_ERR_SCLK_EN        (1 << 1)  // SCLK count error detection enable
@@ -190,7 +186,9 @@ bool adgs_selftest_active(void);
 uint8_t adgs_test_address_mode(uint8_t sw_data);
 
 /**
- * @brief Soft-reset and re-init the ADGS. Useful for testing.
+ * @brief Soft-reset the ADGS.
+ *        This only works in single-device address mode. In daisy-chain mode,
+ *        the datasheet requires a hardware reset to exit/restore configuration.
  */
 void adgs_soft_reset(void);
 

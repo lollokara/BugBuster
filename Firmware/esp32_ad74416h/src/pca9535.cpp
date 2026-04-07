@@ -22,8 +22,6 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
 
 static pca9535_fault_cb_t s_fault_cb = NULL;
 static PcaFaultConfig s_fault_cfg = { .auto_disable_efuse = true, .log_events = true };
-static uint8_t s_prev_input0 = 0xFF;  // Previous input state for change detection
-static uint8_t s_prev_input1 = 0xFF;
 static bool s_change_detect_armed = false;  // Skip first update (no valid previous state)
 
 static bool read_reg(uint8_t reg, uint8_t *val)
@@ -426,7 +424,9 @@ void pca9535_install_isr(void)
 
     // Configure INT pin: active-low, falling edge
     gpio_config_t io_conf = {};
+#if PIN_MUX_INT != GPIO_NUM_NC
     io_conf.pin_bit_mask = (1ULL << PIN_MUX_INT);
+#endif
     io_conf.mode         = GPIO_MODE_INPUT;
     io_conf.pull_up_en   = GPIO_PULLUP_ENABLE;
     io_conf.intr_type    = GPIO_INTR_NEGEDGE;

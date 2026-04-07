@@ -83,6 +83,7 @@ static void adgs_address_mode_write(uint8_t reg, uint8_t data)
     spi_transfer(tx, rx, 2);
 }
 
+#if ADGS_NUM_DEVICES > 1
 // Enter daisy-chain mode: send 0x2500 to each device in address mode
 // Per datasheet: when a device receives 0x2500, its SDO echoes 0x2500
 // (alignment bits are 0x25), so all daisy-connected devices enter DC mode
@@ -96,13 +97,10 @@ static void adgs_enter_daisy_chain(void)
     ESP_LOGI(TAG, "Daisy-chain mode entered");
 }
 
-// Send 4 bytes in daisy-chain mode (one byte per device)
-// Byte order: first byte sent goes to last device in chain (U17),
-// last byte sent goes to first device (U10).
-// So we send: [dev3, dev2, dev1, dev0]
+// Send switch bytes in daisy-chain mode.
+// The first byte sent reaches the last device in the chain.
 static void adgs_daisy_chain_write(const uint8_t states[ADGS_NUM_DEVICES])
 {
-    // Reverse order: device N-1 first (reaches end of chain)
     uint8_t tx[ADGS_NUM_DEVICES];
     for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
         tx[i] = states[ADGS_NUM_DEVICES - 1 - i];
@@ -110,6 +108,7 @@ static void adgs_daisy_chain_write(const uint8_t states[ADGS_NUM_DEVICES])
     uint8_t rx[ADGS_NUM_DEVICES] = {};
     spi_transfer(tx, rx, ADGS_NUM_DEVICES);
 }
+#endif
 
 // Read a register in address mode (single device)
 static uint8_t adgs_address_mode_read(uint8_t reg)
@@ -122,24 +121,24 @@ static uint8_t adgs_address_mode_read(uint8_t reg)
     return rx[1];  // data is in second byte
 }
 
+#if ADGS_NUM_DEVICES > 1
 // Read back switch states in daisy-chain mode.
 // Perform a "dummy" write of the current cached state and capture SDO.
 // In daisy-chain mode, SDO outputs the previous switch data register contents.
 static void adgs_daisy_chain_readback(uint8_t out[ADGS_NUM_DEVICES])
 {
-    // Send current cached state (no change) and capture what comes back
     uint8_t tx[ADGS_NUM_DEVICES];
     for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
-        tx[i] = s_mux_state[ADGS_NUM_DEVICES - 1 - i];  // reversed order
+        tx[i] = s_mux_state[ADGS_NUM_DEVICES - 1 - i];
     }
     uint8_t rx[ADGS_NUM_DEVICES] = {};
     spi_transfer(tx, rx, ADGS_NUM_DEVICES);
 
-    // SDO comes back in reversed order too
     for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
         out[i] = rx[ADGS_NUM_DEVICES - 1 - i];
     }
 }
+#endif
 
 // Write states and verify by readback. Returns true on match.
 static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
@@ -222,27 +221,16 @@ static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
         delay_ms(5);
     }
 
-    // All retries exhausted — attempt recovery via software reset
-    ESP_LOGW(TAG, "MUX write-verify failed after %d retries. Attempting software reset recovery...", ADGS_MAX_RETRIES);
+    // All retries exhausted. In address mode we can try a datasheet-defined
+    // software reset, but in daisy-chain mode all commands target SW_DATA and
+    // the datasheet requires a hardware reset to exit the chain.
+    ESP_LOGW(TAG, "MUX write-verify failed after %d retries.", ADGS_MAX_RETRIES);
 
 #if ADGS_NUM_DEVICES > 1
-    // In daisy-chain mode: exit DC mode via soft reset, re-enter, retry once more.
-    // Soft reset: write 0xA3 then 0x05 to reg 0x0B (address mode).
-    // This requires dropping out of daisy-chain mode temporarily.
-    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
-    delay_ms(1);
-    adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
-    delay_ms(10);
-
-    // Re-enter daisy-chain mode
-    adgs_enter_daisy_chain();
-
-    // One final attempt after reset
-    if (adgs_write_and_verify(states)) {
-        ESP_LOGI(TAG, "MUX recovered after software reset!");
-        s_mux_faulted = false;
-        return;
-    }
+    ESP_LOGE(TAG,
+             "ADGS2414D is in daisy-chain mode. The datasheet says all commands "
+             "target SW_DATA in this mode and a hardware reset is required to exit it, "
+             "so software-reset recovery is unavailable.");
 #else
     // Address mode: soft reset and retry
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
@@ -455,6 +443,13 @@ void adgs_reset_all(void)
 
 uint8_t adgs_test_address_mode(uint8_t sw_data)
 {
+#if ADGS_NUM_DEVICES > 1
+    ESP_LOGE(TAG,
+             "Address-mode test unavailable in daisy-chain builds. "
+             "The datasheet requires a hardware reset to exit daisy-chain mode.");
+    (void)sw_data;
+    return 0xFF;
+#else
     // Exit daisy-chain mode first via soft reset
     // Soft reset: write 0xA3 then 0x05 to SOFT_RESETB register (0x0B)
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
@@ -475,6 +470,7 @@ uint8_t adgs_test_address_mode(uint8_t sw_data)
     ESP_LOGI(TAG, "Read SW_DATA: rx=[0x%02X, 0x%02X]", rx[0], rx[1]);
 
     return rx[1];  // Data is in second byte
+#endif
 }
 
 bool adgs_readback_verify(uint8_t out[ADGS_NUM_DEVICES])
@@ -523,6 +519,12 @@ bool adgs_is_faulted(void)
 
 void adgs_soft_reset(void)
 {
+#if ADGS_NUM_DEVICES > 1
+    ESP_LOGE(TAG,
+             "Software reset unavailable in daisy-chain mode. "
+             "The datasheet requires a hardware reset to exit daisy-chain mode.");
+    return;
+#else
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL1);
     delay_ms(1);
     adgs_address_mode_write(ADGS_REG_SOFT_RESET, ADGS_SOFT_RESET_VAL2);
@@ -535,6 +537,7 @@ void adgs_soft_reset(void)
     s_readback_available = true;
     s_readback_checked = false;
     ESP_LOGI(TAG, "Soft reset complete");
+#endif
 }
 
 // -----------------------------------------------------------------------------
