@@ -55,7 +55,9 @@ jobs:
           python Firmware/tools/firmware_version.py esp32 --expect "$expected_version"
 
       - name: Build ESP32 firmware
-        run: pio run -d Firmware/esp32_ad74416h -e esp32s3
+        run: |
+          pio run -d Firmware/esp32_ad74416h -e esp32s3
+          pio run -d Firmware/esp32_ad74416h -e esp32s3 -t buildfs
 
       - name: Package ESP32 artifacts
         shell: bash

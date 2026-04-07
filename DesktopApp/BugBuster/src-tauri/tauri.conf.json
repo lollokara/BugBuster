@@ -2,11 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "bugbuster",
   "version": "0.1.0",
-  "identifier": "com.bugbuster.app",
+  "identifier": "com.bugbuster",
   "build": {
-    "beforeDevCommand": "sh -c 'cd \"$(git rev-parse --show-toplevel)/DesktopApp/BugBuster\" && trunk serve'",
+    "beforeDevCommand": "trunk serve",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "sh -c 'cd \"$(git rev-parse --show-toplevel)/DesktopApp/BugBuster\" && trunk build'",
+    "beforeBuildCommand": "trunk build",
     "frontendDist": "../dist"
   },
   "app": {
