@@ -22,6 +22,38 @@ cargo tauri dev
 cargo tauri build
 ```
 
+## GitHub Releases
+
+Cross-platform desktop releases are handled by `../../.github/workflows/desktop-release.yml`.
+
+Release flow:
+
+```bash
+# 1. Sync the desktop version in all release files
+python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.2.0
+
+# 2. Commit the version bump
+git add DesktopApp/BugBuster/Cargo.toml \
+        DesktopApp/BugBuster/src-tauri/Cargo.toml \
+        DesktopApp/BugBuster/src-tauri/tauri.conf.json
+git commit -m "desktop: release 0.2.0"
+
+# 3. Push a release tag
+git tag desktop-v0.2.0
+git push origin main --tags
+```
+
+What the workflow does:
+- Builds the Tauri desktop bundle on `windows-latest`, `ubuntu-22.04`, and `macos-latest`
+- Uploads the generated installers and bundles to a GitHub Release draft
+- Verifies the three desktop version files stay synchronized
+- Rejects a pushed tag if it does not match the app version
+
+Current limitations:
+- macOS builds are not notarized yet
+- Windows builds are not code-signed yet
+- The workflow publishes one macOS runner build; if you need separate Intel and Apple Silicon artifacts, extend the matrix with explicit macOS targets
+
 ## Project Structure
 
 ```
