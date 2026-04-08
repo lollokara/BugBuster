@@ -193,3 +193,33 @@ def test_get_faults_raw_structure(device):
     for ch in channels:
         assert "id" in ch, f"Channel missing 'id': {ch}"
         assert "alert" in ch, f"Channel missing 'alert': {ch}"
+
+
+# ---------------------------------------------------------------------------
+# Per-channel alert mask
+# ---------------------------------------------------------------------------
+
+def test_set_channel_alert_mask(device):
+    """
+    set_channel_alert_mask(channel, mask) sets the per-channel alert mask.
+    Verify the mask can be set to all-enabled and all-disabled, and that
+    get_faults() reflects the change.
+    """
+    # Set channel 0 alert mask to all-enabled
+    device.set_channel_alert_mask(0, 0xFFFF)
+    faults = device.get_faults()
+    ch0 = faults["channels"][0]
+    assert ch0["mask"] == 0xFFFF, (
+        f"Expected channel 0 mask 0xFFFF after set, got 0x{ch0['mask']:04X}"
+    )
+
+    # Disable all alerts on channel 0
+    device.set_channel_alert_mask(0, 0x0000)
+    faults = device.get_faults()
+    ch0 = faults["channels"][0]
+    assert ch0["mask"] == 0x0000, (
+        f"Expected channel 0 mask 0x0000 after set, got 0x{ch0['mask']:04X}"
+    )
+
+    # Restore default (all alerts enabled)
+    device.set_channel_alert_mask(0, 0xFFFF)

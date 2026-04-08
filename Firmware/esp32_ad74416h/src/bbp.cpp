@@ -329,6 +329,7 @@ static int handleGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_u32(out, &pos, cs.dinCounter);
         put_bool(out, &pos, cs.doState);
         put_u16(out, &pos, cs.channelAlertStatus);
+        put_u16(out, &pos, cs.channelAlertMask);
         put_u16(out, &pos, cs.rtdExcitationUa);
     }
 

@@ -94,7 +94,7 @@ pub fn WavegenTab() -> impl IntoView {
     });
 
     let commit_freq = move || {
-        if let Ok(v) = edit_freq.get_untracked().parse::<f64>() { set_freq_hz.set(v.clamp(0.01, 1000.0)); }
+        if let Ok(v) = edit_freq.get_untracked().parse::<f64>() { set_freq_hz.set(v.clamp(0.01, 100.0)); }
         set_edit_freq.set(format!("{:.1}", freq_hz.get_untracked()));
     };
     let commit_amp = move || {

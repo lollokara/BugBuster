@@ -285,3 +285,72 @@ def test_hat_swd_detect(usb_device):
     result = usb_device.hat_setup_swd(target_voltage_mv=3300, connector=0)
     assert result is True, f"hat_setup_swd() should return True, got {result}"
     assert_no_faults(usb_device)
+
+
+# ---------------------------------------------------------------------------
+# Logic Analyzer — trigger types
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usb_only
+def test_la_trigger_types(usb_device):
+    """
+    Test that all LA trigger types can be configured, armed, and stopped
+    without error.
+    """
+    usb_device.hat_la_configure(channels=4, rate_hz=1_000_000, depth=1000)
+
+    for trig_type in [LaTriggerType.RISING, LaTriggerType.FALLING,
+                      LaTriggerType.HIGH, LaTriggerType.LOW]:
+        usb_device.hat_la_set_trigger(trig_type, channel=0)
+        usb_device.hat_la_arm()
+        status = usb_device.hat_la_get_status()
+        assert status["state"] in (1, 2), (
+            f"Expected LA state armed(1) or capturing(2) after arm with "
+            f"trigger {trig_type!r}, got {status['state_name']}"
+        )
+        usb_device.hat_la_stop()
+
+    assert_no_faults(usb_device)
+
+
+# ---------------------------------------------------------------------------
+# Logic Analyzer — capture and data readback
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usb_only
+def test_la_read_data(usb_device):
+    """
+    Test LA capture with force trigger and data readback.
+    Configures a short capture, forces trigger, reads data, and decodes it.
+    """
+    from bugbuster import BugBuster
+
+    usb_device.hat_la_configure(channels=4, rate_hz=1_000_000, depth=100)
+    usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
+    usb_device.hat_la_arm()
+    usb_device.hat_la_force()
+    time.sleep(0.2)  # wait for capture to complete
+
+    status = usb_device.hat_la_get_status()
+    if status["state"] != 3:  # not DONE
+        usb_device.hat_la_stop()
+        pytest.skip(f"LA capture did not complete in time (state={status['state_name']})")
+
+    data = usb_device.hat_la_read_all()
+    assert data is not None, "hat_la_read_all() returned None"
+    assert len(data) > 0, "hat_la_read_all() returned empty data"
+
+    # Decode and verify structure
+    samples = BugBuster.hat_la_decode(data, channels=4)
+    assert len(samples) == 4, f"Expected 4 channel arrays, got {len(samples)}"
+    assert len(samples[0]) > 0, "Channel 0 sample array is empty"
+
+    # Each sample value should be 0 or 1
+    for ch_idx, ch_data in enumerate(samples):
+        for val in ch_data[:10]:
+            assert val in (0, 1), (
+                f"Channel {ch_idx} sample value must be 0 or 1, got {val}"
+            )
+
+    usb_device.hat_la_stop()
+    assert_no_faults(usb_device)

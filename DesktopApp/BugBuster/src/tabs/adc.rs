@@ -13,7 +13,7 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     let ds = state.get();
                     ds.channels.into_iter().enumerate().map(|(i, ch)| {
                         let ch_idx = i as u8;
-                        let has_adc = matches!(ch.function, 3 | 4 | 5 | 7); // VIN, IIN_EXT, IIN_LOOP, RES
+                        let has_adc = matches!(ch.function, 3 | 4 | 5 | 7 | 11 | 12); // VIN, IIN_EXT, IIN_LOOP, RES, HART variants
                         let color = CH_COLORS[i];
                         let is_res = ch.function == 7;
                         let range_info = ADC_RANGE_OPTIONS.iter().find(|r| r.0 == ch.adc_range);
@@ -28,7 +28,7 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         };
                         let span = bar_max - bar_min;
                         let pct = if span > 0.0 { ((ch.adc_value - bar_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 };
-                        let unit = if ch.function == 4 || ch.function == 5 { "mA" } else if is_res { "Ω" } else { "V" };
+                        let unit = if matches!(ch.function, 4 | 5 | 11 | 12) { "mA" } else if is_res { "Ω" } else { "V" };
                         let exc_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
 
                         view! {

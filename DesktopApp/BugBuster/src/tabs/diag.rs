@@ -209,7 +209,7 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 5  => (0.0, 33.0),      // AVDD_HI (up to ~33V)
                                                 6  => (4.5, 5.5),       // ALDO5V (5V nom)
                                                 7  => (-24.0, 0.0),     // AVSS (negative)
-                                                8  => (2.3, 2.7),       // REFOUT (2.5V nom)
+                                                8  => (0.0, 30.0),      // LVIN (input supply)
                                                 9  => (0.0, 30.0),      // DO_VDD
                                                 10 => (0.0, 5.0),       // AGND_SENSE
                                                 11 => (0.0, 5.0),       // AVDD_LO

@@ -35,7 +35,7 @@ extern "C" {
 #endif
 
 // Class instances
-#define CFG_TUD_HID              1
+#define CFG_TUD_HID              0   // HID not used — DAP v2 uses vendor bulk only
 #define CFG_TUD_CDC              1
 #define CFG_TUD_MSC              0
 #define CFG_TUD_MIDI             0

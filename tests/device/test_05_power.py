@@ -178,3 +178,43 @@ def test_idac_cal_save(device):
     """
     device.idac_cal_save()
     assert_no_faults(device)
+
+
+# ---------------------------------------------------------------------------
+# Watchdog (USB only)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usb_only
+def test_set_watchdog(usb_device):
+    """
+    set_watchdog() enables/disables the AD74416H hardware watchdog.
+    Verify both enable (safe timeout) and disable work without error.
+    """
+    # Enable with a safe timeout code (9 = 1000ms)
+    usb_device.set_watchdog(True, 9)
+    time.sleep(0.05)
+
+    # Disable watchdog
+    usb_device.set_watchdog(False, 0)
+    assert_no_faults(usb_device)
+
+
+# ---------------------------------------------------------------------------
+# Fault config (PCA9535)
+# ---------------------------------------------------------------------------
+
+def test_power_set_fault_config(device):
+    """
+    power_set_fault_config() configures PCA9535 fault behavior
+    (auto-disable on trip, event logging).  Should not raise.
+    """
+    device.power_set_fault_config(auto_disable=True, log_events=True)
+    time.sleep(0.02)
+
+    # Also verify toggling the settings works
+    device.power_set_fault_config(auto_disable=False, log_events=False)
+    time.sleep(0.02)
+
+    # Restore defaults
+    device.power_set_fault_config(auto_disable=True, log_events=True)
+    assert_no_faults(device)

@@ -179,8 +179,12 @@ bool AD74416H::setDacCode(uint8_t ch, uint16_t code)
 {
     ch = clampCh(ch);
     if (!_spi.writeRegister(AD74416H_REG_DAC_CODE(ch), code)) return false;
-    // CMD_KEY 0x1C7D latches the staged DAC_CODE to the actual DAC output.
-    // Without this write the output never changes from its reset value.
+    // CMD_KEY 0x1C7D latches the staged DAC_CODE when WAIT_LDAC_CMD=1.
+    // With the reset default WAIT_LDAC_CMD=0, DAC_CODE writes take effect
+    // immediately and this CMD_KEY write is a harmless no-op.
+    // TODO: If WAIT_LDAC_CMD is ever enabled for coordinated multi-channel
+    //       updates, move this to a dedicated latchAllDacs() method to avoid
+    //       triggering all channels on every single-channel write.
     return _spi.writeRegister(REG_CMD_KEY, CMD_KEY_DAC_UPDATE);
 }
 
@@ -369,11 +373,18 @@ bool AD74416H::isAdcReady()
 
 void AD74416H::clearAdcDataReady()
 {
-    // Per datasheet: re-write CONV_SEQ = 0b10 (continuous) to clear
-    // ADC_DATA_RDY without interrupting the active conversion.
-    _spi.updateRegister(REG_ADC_CONV_CTRL,
-                        ADC_CONV_CTRL_CONV_SEQ_MASK,
-                        (uint16_t)(ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT));
+    // Re-write the current CONV_SEQ value to clear ADC_DATA_RDY.
+    // Only restart if continuous mode is already active; avoids
+    // accidentally starting conversions when the ADC is idle.
+    uint16_t ctrl = 0;
+    _spi.readRegister(REG_ADC_CONV_CTRL, &ctrl);
+    uint16_t conv_seq = (ctrl & ADC_CONV_CTRL_CONV_SEQ_MASK) >> ADC_CONV_CTRL_CONV_SEQ_SHIFT;
+    if (conv_seq == ADC_CONV_SEQ_START_CONT) {
+        _spi.updateRegister(REG_ADC_CONV_CTRL,
+                            ADC_CONV_CTRL_CONV_SEQ_MASK,
+                            (uint16_t)(ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT));
+    }
+    // If ADC is idle or single-shot, reading ADC_RESULT also clears the flag.
 }
 
 // ---------------------------------------------------------------------------

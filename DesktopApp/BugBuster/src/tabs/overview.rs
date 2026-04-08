@@ -76,7 +76,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let fn_label = func_name(ch.function);
                         let is_active = ch.function != 0;
                         let is_res = ch.function == 7;
-                        let unit = if ch.function == 4 || ch.function == 5 { "mA" } else if is_res { "Ω" } else { "V" };
+                        let unit = if matches!(ch.function, 4 | 5 | 11 | 12) { "mA" } else if is_res { "Ω" } else { "V" };
                         let range_abs_max = ADC_RANGE_OPTIONS.iter()
                             .find(|(code, _, _, _)| *code == ch.adc_range)
                             .map(|(_, _, min_v, max_v)| min_v.abs().max(max_v.abs()) as f64)

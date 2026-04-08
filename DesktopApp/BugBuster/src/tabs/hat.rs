@@ -63,7 +63,7 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     Effect::new(move |_| {
         let st = hat.get();
         for (i, setter) in pin_setters.iter().enumerate() {
-            setter.set(st.pin_config[i].to_string());
+            setter.set(st.pin_config.get(i).copied().unwrap_or(0).to_string());
         }
     });
 
@@ -285,7 +285,7 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 options=opts_clone
                                             />
                                             <div style="font-size: 9px; color: var(--text-dim); margin-top: 4px">
-                                                {func_name(st.pin_config[idx])}
+                                                {func_name(st.pin_config.get(idx).copied().unwrap_or(0))}
                                             </div>
                                         </div>
                                     }

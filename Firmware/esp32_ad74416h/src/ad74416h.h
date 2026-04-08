@@ -285,8 +285,8 @@ public:
      * @param ch          Channel 0..3
      * @param do_mode     DO_MODE[1:0]: output mode (0=high-side, 1=low-side, etc.)
      * @param src_sel_gpio  true = GPIO controls DO_DATA, false = SPI register
-     * @param t1          DO_T1[3:0]: timing parameter 1
-     * @param t2          DO_T2[7:0]: timing parameter 2
+     * @param t1          DO_T1[4:0]: timing parameter 1 (0-31)
+     * @param t2          DO_T2[4:0]: timing parameter 2 (0-31)
      */
     void configureDoExt(uint8_t ch, uint8_t do_mode, bool src_sel_gpio,
                         uint8_t t1, uint8_t t2);

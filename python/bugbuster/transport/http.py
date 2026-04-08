@@ -89,7 +89,8 @@ class HTTPTransport:
         r.raise_for_status()
         try:
             return r.json()
-        except Exception:
+        except ValueError:
+            log.warning("Non-JSON response from %s: %s", url, r.text[:200])
             return {}
 
     # ------------------------------------------------------------------

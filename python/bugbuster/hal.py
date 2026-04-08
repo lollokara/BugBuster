@@ -611,9 +611,11 @@ class BugBusterHAL:
             # ESP GPIO: read AD74416H GPIO pin that monitors the ESP GPIO level
             # For now, fall back to get_status if available
             log.debug("read_digital(IO %d) via ESP GPIO %d", io, rt.esp_gpio)
-            # TODO: needs firmware command to read ESP GPIO directly
-            # As a workaround, the level-shifted signal may be readable
-            # through the AD74416H GPIO if configured appropriately.
+            # Ensure GPIO is configured as input before reading
+            self._bb.dio_configure(rt.esp_gpio, 1)  # DIO_MODE_INPUT
+            resp = self._bb.dio_read(rt.esp_gpio)
+            if resp and isinstance(resp, dict):
+                return bool(resp.get("value", False))
             return False
 
     def write_digital(self, io: int, state: bool) -> None:
@@ -636,12 +638,11 @@ class BugBusterHAL:
         if rt.channel is not None and actual == PortMode.DIGITAL_OUT:
             self._bb.set_digital_output(rt.channel, on=state)
         else:
-            # ESP GPIO output: the MUX connects ESP GPIO to the physical IO.
-            # TODO: needs firmware command to set ESP GPIO level directly.
-            # The UART bridge set_uart_config can route GPIOs, but a general
-            # GPIO set/read command for ESP32 pins is not yet in the protocol.
             log.debug("write_digital(IO %d, %s) via ESP GPIO %d",
                       io, state, rt.esp_gpio)
+            # Ensure GPIO is configured as output before writing
+            self._bb.dio_configure(rt.esp_gpio, 2)  # DIO_MODE_OUTPUT
+            self._bb.dio_write(rt.esp_gpio, state)
 
     # ------------------------------------------------------------------
     # HART (IO 1, 4, 7, 10)

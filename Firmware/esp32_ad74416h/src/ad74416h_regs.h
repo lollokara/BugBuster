@@ -412,7 +412,7 @@ typedef enum {
 } ChannelFunction;
 
 /**
- * @brief ADC conversion range codes for ADC_CONFIG[5:3] CONV_RANGE
+ * @brief ADC conversion range codes for ADC_CONFIG[6:4] CONV_RANGE
  */
 typedef enum {
     ADC_RNG_0_12V               = 0,    //  0 V to +12 V

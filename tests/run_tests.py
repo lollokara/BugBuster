@@ -57,6 +57,8 @@ CATEGORIES = [
     ("streaming",   "device/test_10_streaming.py",  "ADC/scope streaming (USB only)"),
     ("hat",         "device/test_11_hat.py",         "HAT expansion board"),
     ("faults",      "device/test_12_faults.py",      "Fault management"),
+    ("dio",         "device/test_13_dio.py",          "ESP32 GPIO digital I/O"),
+    ("uart",        "device/test_14_uart.py",         "UART bridge configuration"),
     ("http",        "http_api/test_http_endpoints.py", "HTTP REST endpoints"),
 ]
 
@@ -153,7 +155,7 @@ def build_pytest_cmd(args) -> list[str]:
     # Color
     if args.no_color:
         cmd.append("--no-header")
-        cmd.append("-p", "no:terminal")
+        cmd.extend(["-p", "no:terminal"])
 
     # Stop on first failure
     if args.exitfirst:

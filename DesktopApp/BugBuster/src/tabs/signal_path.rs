@@ -31,18 +31,7 @@ fn send_pca_control(control: u8, on: bool) {
     invoke_with_feedback("pca_set_control", args, &label);
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-struct EfuseState {
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct IoExpState {
-    pub present: bool,
-    pub vadj1_en: bool,
-    pub vadj2_en: bool,
-    pub efuses: Vec<EfuseState>,
-}
+// EfuseState and IoExpState come from tauri_bridge::* (canonical types with all fields)
 
 const PRESETS: &[(&str, [u8; 4])] = &[
     ("All Open", [0x00; 4]), ("GPIO Direct", [0x51; 4]),

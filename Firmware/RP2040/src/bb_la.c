@@ -2,7 +2,7 @@
 // bb_la.c — Logic Analyzer engine (PIO 1 + DMA)
 //
 // Uses PIO 1 SM0 for capture, DMA channel pair for double-buffered transfer.
-// Capture buffer is a contiguous SRAM region (~200KB).
+// Capture buffer is a contiguous SRAM region (~76KB).
 // =============================================================================
 
 #include "bb_la.h"
@@ -31,7 +31,7 @@
 static int la_dma_ch = -1;
 
 // Capture buffer — statically allocated
-// 200KB = 200*1024 bytes = 51200 uint32_t words
+// 76KB = 76*1024 bytes = 19456 uint32_t words
 static uint32_t s_capture_buf[BB_LA_BUFFER_SIZE / sizeof(uint32_t)] __attribute__((aligned(4)));
 
 // Forward declaration of DMA IRQ handler
@@ -39,7 +39,7 @@ static void dma_irq_handler(void);
 static void release_dma_channel(void);
 
 static struct {
-    LaState     state;
+    volatile LaState state;
     LaConfig    config;
     LaTrigger   trigger;
 
@@ -57,7 +57,7 @@ static struct {
     uint32_t    actual_rate_hz;
 
     // Trigger state
-    bool        triggered;
+    volatile bool triggered;
 
     // RLE state
     RleState    rle;
@@ -70,7 +70,7 @@ static struct {
     bool        stream_mode;
     uint32_t    half_words;             // Words per half-buffer
     volatile uint8_t stream_buf_ready;  // 0=A ready, 1=B ready, 0xFF=none
-    uint8_t     stream_dma_buf;         // Which half DMA is currently writing (0=A, 1=B)
+    volatile uint8_t stream_dma_buf;    // Which half DMA is currently writing (0=A, 1=B)
     volatile bool stream_overrun;       // USB side could not release a half before reuse
 } s_la = {};
 
@@ -485,8 +485,12 @@ bool bb_la_arm(void)
 
         // Set up PIO IRQ handler — trigger already starts capture in hardware;
         // the CPU side just records the state transition and disables SM1.
+        static bool s_pio_irq_installed = false;
         pio_set_irq0_source_enabled(LA_PIO, pis_interrupt0, true);
-        irq_set_exclusive_handler(PIO1_IRQ_0, trigger_irq_handler);
+        if (!s_pio_irq_installed) {
+            irq_set_exclusive_handler(PIO1_IRQ_0, trigger_irq_handler);
+            s_pio_irq_installed = true;
+        }
         irq_set_enabled(PIO1_IRQ_0, true);
 
         // Start trigger SM — it watches the pin and fires IRQ when condition met

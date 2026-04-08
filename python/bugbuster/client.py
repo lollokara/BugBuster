@@ -539,6 +539,32 @@ class BugBuster:
             self._http_post(f"/channel/{channel}/rtd/config", {"current": int(current)})
 
     # ------------------------------------------------------------------
+    # ── Diagnostics ─────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+
+    def set_diag_config(self, slot: int, source: int) -> None:
+        """
+        Configure a diagnostic slot's measurement source.
+
+        The AD74416H has 4 diagnostic slots (0–3) that can each be assigned
+        a measurement source for internal diagnostics (supply voltages,
+        temperature, etc.).
+
+        Parameters
+        ----------
+        slot : int
+            Diagnostic slot index (0–3).
+        source : int
+            Diagnostic source code (0–13).  Refer to the AD74416H datasheet
+            DIAG_ASSIGN register for the full list of source codes.
+        """
+        if self._usb:
+            payload = struct.pack('<BB', slot, source)
+            self._usb_cmd(CmdId.SET_DIAG_CONFIG, payload)
+        else:
+            self._http_post("/diagnostics/config", {"slot": slot, "source": source})
+
+    # ------------------------------------------------------------------
     # ── Channel — Digital I/O ────────────────────────────────────────
     # ------------------------------------------------------------------
 
@@ -999,7 +1025,7 @@ class BugBuster:
         """
         self._require_usb("set_uart_config")
         payload = struct.pack(
-            '<BBBBIBBBb',
+            '<BBBBIBBBB',
             bridge_id, uart_num, tx_pin, rx_pin,
             baudrate, data_bits, parity, stop_bits, int(enabled),
         )
@@ -1105,7 +1131,7 @@ class BugBuster:
         The power supply must be enabled first via :meth:`power_set`.
         """
         if self._usb:
-            payload = struct.pack('<bf', channel, float(voltage))
+            payload = struct.pack('<Bf', channel, float(voltage))
             self._usb_cmd(CmdId.IDAC_SET_VOLTAGE, payload)
         else:
             self._http_post("/idac/voltage", {"ch": channel, "voltage": float(voltage)})
@@ -1717,6 +1743,20 @@ class BugBuster:
             else:
                 self._http_post(f"/faults/clear/{channel}")
 
+    def set_channel_alert_mask(self, channel: int, mask: int) -> None:
+        """
+        Set the per-channel alert mask for a single channel.
+
+        *channel* — channel index (0–3).
+        *mask*    — 16-bit alert mask (bit = 1 enables the corresponding alert).
+                    0xFFFF enables all alerts, 0x0000 disables all.
+        """
+        if self._usb:
+            payload = struct.pack('<BH', channel, mask & 0xFFFF)
+            self._usb_cmd(CmdId.SET_CH_ALERT_MASK, payload)
+        else:
+            self._http_post(f"/faults/channel/{channel}/mask", {"mask": mask & 0xFFFF})
+
     def set_alert_mask(self, alert_mask: int, supply_mask: int) -> None:
         """Set the global alert and supply alert masks."""
         if self._usb:
@@ -1949,7 +1989,7 @@ def _parse_status(resp: bytes) -> dict:
 
     channels = []
     for i in range(4):
-        off = 15 + i * 28
+        off = 15 + i * 30  # 30 bytes per channel (added channelAlertMask)
         ch_id, func   = struct.unpack_from('<BB', resp, off)
         raw            = int.from_bytes(resp[off+2:off+5], 'little')
         adc_val,       = struct.unpack_from('<f', resp, off + 5)
@@ -1960,7 +2000,8 @@ def _parse_status(resp: bytes) -> dict:
         din_counter,   = struct.unpack_from('<I', resp, off + 19)
         do_state       = bool(resp[off + 23])
         ch_alert,      = struct.unpack_from('<H', resp, off + 24)
-        rtd_ua,        = struct.unpack_from('<H', resp, off + 26)
+        ch_alert_mask, = struct.unpack_from('<H', resp, off + 26)
+        rtd_ua,        = struct.unpack_from('<H', resp, off + 28)
         channels.append({
             "id": ch_id, "function": func,
             "adc_raw": raw, "adc_value": adc_val,
@@ -1968,12 +2009,13 @@ def _parse_status(resp: bytes) -> dict:
             "dac_code": dac_code, "dac_value": dac_val,
             "din_state": din_state, "din_counter": din_counter,
             "do_state": do_state, "channel_alert": ch_alert,
+            "channel_alert_mask": ch_alert_mask,
             "rtd_excitation_ua": rtd_ua,
         })
 
     diagnostics = []
     for i in range(4):
-        off     = 127 + i * 7
+        off     = 135 + i * 7  # 15 + 4*30 = 135
         src, rc = struct.unpack_from('<BH', resp, off)
         val,    = struct.unpack_from('<f', resp, off + 3)
         diagnostics.append({"source": src, "raw_code": rc, "value": val})
@@ -1982,6 +2024,8 @@ def _parse_status(resp: bytes) -> dict:
         "spi_ok": spi_ok, "die_temp_c": die_temp,
         "alert_status": alert_status, "alert_mask": alert_mask,
         "supply_alert_status": supply_alert_status,
+        "supply_alert_mask": supply_alert_mask,
+        "live_status": live_status,
         "channels": channels, "diagnostics": diagnostics,
     }
 

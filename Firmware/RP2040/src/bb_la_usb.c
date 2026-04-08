@@ -11,6 +11,8 @@
 #include "tusb.h"
 #include "pico/stdlib.h"
 
+#include "hardware/sync.h"   // __dmb()
+
 #ifdef DEBUGPROBE_INTEGRATION
 #include "FreeRTOS.h"
 #include "task.h"
@@ -36,6 +38,7 @@ static uint32_t cdc_queue_write(const uint8_t *data, uint32_t len) {
     for (uint32_t i = 0; i < len; i++) {
         s_cdc_tx_buf[(head + i) % CDC_TX_BUF_SIZE] = data[i];
     }
+    __dmb();  // Ensure data is visible before updating head
     s_cdc_tx_head = (head + len) % CDC_TX_BUF_SIZE;
     return len;
 }
@@ -145,10 +148,13 @@ uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes)
     return sent;
 }
 
-// Flush/reset the CDC TX ring buffer (call on stream stop)
+// Flush/reset the CDC TX ring buffer (call on stream stop).
+// Must only be called when usb_thread is not actively sending (e.g. after stream stop).
 void bb_la_cdc_flush_ring(void) {
-    s_cdc_tx_head = 0;
+    __dmb();
     s_cdc_tx_tail = 0;
+    s_cdc_tx_head = 0;
+    __dmb();
 }
 
 // Called from usb_thread (tud_task context) — actually sends queued CDC data
@@ -168,6 +174,7 @@ void bb_la_cdc_send_pending(void) {
     uint32_t chunk = (avail < cdc_avail) ? avail : cdc_avail;
     uint32_t written = tud_cdc_write(&s_cdc_tx_buf[tail], chunk);
     tud_cdc_write_flush();
+    __dmb();  // Ensure read is complete before updating tail
     s_cdc_tx_tail = (tail + written) % CDC_TX_BUF_SIZE;
 }
 

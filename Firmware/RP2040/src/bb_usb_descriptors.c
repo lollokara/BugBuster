@@ -83,8 +83,17 @@ uint8_t desc_configuration[] = {
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void)index;
-    // Hack in CAP_BREAK support for CDC (same as debugprobe)
-    desc_configuration[CONFIG_TOTAL_LEN - TUD_VENDOR_DESC_LEN - TUD_CDC_DESC_LEN + 8 + 9 + 5 + 5 + 4 - 1] = 0x6;
+    // Hack in CAP_BREAK support for CDC (same as debugprobe).
+    // The CDC bmCapabilities byte is at a fixed offset from the start of
+    // the CDC descriptor: config header (9) + ACM functional desc offset.
+    // CDC starts after TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN.
+    // Within TUD_CDC_DESCRIPTOR: interface (9) + header (5) + call_mgmt (5)
+    // + ACM functional: byte 3 is bmCapabilities → offset = 9+5+5+2 = 21
+    {
+        const int cdc_start = TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN;
+        const int bmCap_offset = cdc_start + 9 + 5 + 5 + 2;  // ACM bmCapabilities
+        desc_configuration[bmCap_offset] = 0x06;  // SET_LINE_CODING + SEND_BREAK
+    }
     return desc_configuration;
 }
 

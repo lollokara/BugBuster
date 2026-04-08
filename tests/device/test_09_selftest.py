@@ -176,3 +176,32 @@ def test_selftest_status_cal_idle_after_boot(usb_device):
             f"got {cal.get('status')}"
         )
     assert_no_faults(usb_device)
+
+
+# ---------------------------------------------------------------------------
+# Internal supplies measurement
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usb_only
+@pytest.mark.timeout(30)
+def test_internal_supplies(usb_device):
+    """
+    selftest_internal_supplies() measures internal AD74416H supply rails
+    using diagnostic slots.  Returns a dict with supply voltages and
+    die temperature.  Takes ~8 seconds.
+    """
+    result = usb_device.selftest_internal_supplies()
+
+    assert isinstance(result, dict), (
+        f"selftest_internal_supplies() must return dict, got {type(result)}"
+    )
+    # Should contain at least the valid flag and supply measurements
+    assert "valid" in result, "Result missing 'valid' key"
+    assert len(result) > 0, "Result dict should not be empty"
+
+    # When valid, supply voltages should be present
+    if result.get("valid"):
+        assert "avdd_hi_v" in result, "Missing 'avdd_hi_v' when valid"
+        assert "dvcc_v" in result, "Missing 'dvcc_v' when valid"
+        assert "avcc_v" in result, "Missing 'avcc_v' when valid"
+    assert_no_faults(usb_device)

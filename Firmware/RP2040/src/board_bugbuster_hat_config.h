@@ -20,10 +20,8 @@
 // This UART bridges to the target's serial port via connector
 #define PROBE_UART_TX       16
 #define PROBE_UART_RX       17
-#define PROBE_UART_INTERFACE uart0
-// NOTE: We use uart0 for BugBuster commands on GPIO0/1.
-// The target UART bridge should use uart1 on GPIO16/17 instead.
-// This requires modifying debugprobe's cdc_uart.c to use uart1.
+#define PROBE_UART_INTERFACE uart1
+// uart1 avoids conflict with uart0 (used by BugBuster command bus on GPIO0/1).
 
 // LED pins
 #define PROBE_PIN_LED       25      // Onboard LED (activity)
