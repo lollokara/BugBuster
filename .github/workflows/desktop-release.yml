@@ -2,9 +2,18 @@ name: Desktop Release
 
 "on":
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-release.yml"
+      - "DesktopApp/BugBuster/**"
   push:
+    branches:
+      - main
     tags:
       - "desktop-v*"
+    paths:
+      - ".github/workflows/desktop-release.yml"
+      - "DesktopApp/BugBuster/**"
 
 permissions:
   contents: write
@@ -86,15 +95,19 @@ jobs:
           expected_version="${GITHUB_REF_NAME#desktop-v}"
           python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect "$expected_version"
 
-      - name: Build and upload desktop bundles
+      - name: Build and (on tag) publish desktop bundles
         uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: DesktopApp/BugBuster/src-tauri
           tauriScript: cargo tauri
-          tagName: desktop-v__VERSION__
-          releaseName: BugBuster Desktop v__VERSION__
+          # Only set tagName/releaseName when running on a desktop-v* tag —
+          # otherwise tauri-action just builds the bundles without creating
+          # a draft release. CI runs on PR / push-to-main therefore validate
+          # the build without polluting Releases.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && 'desktop-v__VERSION__' || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && 'BugBuster Desktop v__VERSION__' || '' }}
           releaseBody: |
             Cross-platform desktop bundles for BugBuster.
 
@@ -104,3 +117,13 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Upload desktop bundle artifacts
+        if: always() && !startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: bugbuster-desktop-${{ matrix.name }}
+          path: |
+            DesktopApp/BugBuster/src-tauri/target/release/bundle/**/*
+          if-no-files-found: warn
+          retention-days: 14
