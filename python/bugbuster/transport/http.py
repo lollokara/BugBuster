@@ -78,14 +78,14 @@ class HTTPTransport:
         r.raise_for_status()
         return r.json()
 
-    def post(self, path: str, body: Optional[dict] = None) -> Any:
+    def post(self, path: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
         """
         HTTP POST ``/api{path}`` with a JSON body.
         Returns parsed JSON (or ``{}`` for empty responses).
         """
         url = f"{self._base}{path}"
         log.debug("POST %s body=%s", url, body)
-        r = self._session.post(url, json=body or {}, timeout=self._timeout)
+        r = self._session.post(url, json=body or {}, headers=headers, timeout=self._timeout)
         r.raise_for_status()
         try:
             return r.json()

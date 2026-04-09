@@ -33,6 +33,7 @@ typedef struct {
     uint8_t   channels;         // Number of channels
     uint8_t   current_value;    // Current run value (invalid = 0xFF)
     uint32_t  current_count;    // Current run length
+    uint16_t  crc16;            // CRC-16/CCITT of all packed words
 } RleState;
 
 /**

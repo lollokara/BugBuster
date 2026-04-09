@@ -22,7 +22,8 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     /// Connect to the device via HTTP. Verifies connectivity with /api/device/info.
-    pub async fn connect(base_url: &str) -> Result<Self> {
+    /// Returns (Self, mac_address) on success.
+    pub async fn connect(base_url: &str) -> Result<(Self, String)> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(3))
             .pool_max_idle_per_host(4)
@@ -38,20 +39,48 @@ impl HttpTransport {
             return Err(anyhow!("Device returned HTTP {}", resp.status()));
         }
 
-        // Parse response to confirm it's a BugBuster
+        // Parse response to confirm it's a BugBuster and extract MAC
         let info: Value = resp.json().await?;
         if info.get("spiOk").is_none() {
             return Err(anyhow!("Not a BugBuster device"));
         }
 
-        log::info!("HTTP transport connected to {}", base_url);
+        let mac = info.get("macAddress")
+            .and_then(|v| v.as_str())
+            .unwrap_or("00:00:00:00:00:00")
+            .to_string();
 
-        Ok(Self {
+        log::info!("HTTP transport connected to {} (MAC: {})", base_url, mac);
+
+        let transport = Self {
             client,
             slow_client,
             base_url: base_url.to_string(),
             connected: AtomicBool::new(true),
-        })
+        };
+
+        Ok((transport, mac))
+    }
+
+    /// Set the admin token for future POST requests.
+    pub fn set_admin_token(&mut self, token: &str) -> Result<()> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "X-BugBuster-Admin-Token",
+            reqwest::header::HeaderValue::from_str(token)?,
+        );
+
+        self.client = Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .default_headers(headers.clone())
+            .build()?;
+
+        self.slow_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .default_headers(headers)
+            .build()?;
+
+        Ok(())
     }
 
     async fn get_json(&self, path: &str) -> Result<Value> {

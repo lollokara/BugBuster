@@ -29,6 +29,7 @@
 #include "husb238.h"
 #include "pca9535.h"
 #include "hat.h"
+#include "auth.h"
 #include "esp_ota_ops.h"
 
 // -----------------------------------------------------------------------------
@@ -133,6 +134,7 @@ extern "C" void app_main(void)
 {
     // 0. Status LEDs — init early so we can show boot animation
     status_led_init();
+    auth_init();
 
     // Helper: run breathing animation for N milliseconds during boot
     auto breathe_for = [](uint32_t ms) {

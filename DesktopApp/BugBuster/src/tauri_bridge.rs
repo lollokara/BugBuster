@@ -474,7 +474,6 @@ pub fn send_hat_setup_swd(target_voltage_mv: u16, connector: u8) {
 // -----------------------------------------------------------------------------
 // Logic Analyzer types & helpers
 // -----------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaViewData {
@@ -485,8 +484,8 @@ pub struct LaViewData {
     pub view_end: u64,
     pub trigger_sample: Option<u64>,
     pub channel_transitions: Vec<Vec<(u64, u8)>>,
-    #[serde(default)]
     pub density: Vec<u16>,
+    pub decimated: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -499,15 +498,21 @@ pub struct LaCaptureInfo {
     pub trigger_sample: Option<u64>,
 }
 
-pub async fn la_get_view(start: u64, end: u64) -> Option<LaViewData> {
+pub async fn la_get_view(start: u64, end: u64, max_points: Option<usize>) -> Option<LaViewData> {
     #[derive(Serialize)]
     struct Args {
         #[serde(rename = "startSample")]
         start_sample: u64,
         #[serde(rename = "endSample")]
         end_sample: u64,
+        #[serde(rename = "maxPoints")]
+        max_points: Option<usize>,
     }
-    let args = serde_wasm_bindgen::to_value(&Args { start_sample: start, end_sample: end }).unwrap();
+    let args = serde_wasm_bindgen::to_value(&Args {
+        start_sample: start,
+        end_sample: end,
+        max_points,
+    }).unwrap();
     let result = invoke("la_get_view", args).await;
     serde_wasm_bindgen::from_value::<Option<LaViewData>>(result).ok().flatten()
 }

@@ -12,6 +12,8 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:1420',
     trace: 'on-first-retry',
+    // Mocking Tauri APIs for hardware-independent E2E tests.
+    // Use the fixture from ./fixtures.ts in your tests to automatically inject the mock.
   },
 
   projects: [

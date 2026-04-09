@@ -237,6 +237,22 @@ class BugBuster:
         self._hal       = None
         # Cached HAT presence: None = unknown (probe on demand), bool = known
         self._hat_present_cache = None
+        self._admin_token = None
+
+    def get_admin_token(self) -> str:
+        """
+        Retrieve the hardware-derived admin token.  USB only.
+        Used to authorize destructive operations over HTTP.
+        """
+        if self._admin_token:
+            return self._admin_token
+        
+        self._require_usb("get_admin_token")
+        resp = self._usb_cmd(CmdId.GET_ADMIN_TOKEN)
+        length = resp[0]
+        token = resp[1:1+length].decode('ascii')
+        self._admin_token = token
+        return token
 
     @property
     def hal(self):
@@ -261,6 +277,11 @@ class BugBuster:
         if not self._connected:
             self._t.connect()
             self._connected = True
+            if self._usb:
+                try:
+                    self.get_admin_token()
+                except Exception:
+                    log.warning("Connected via USB but failed to retrieve admin token")
         return self
 
     def disconnect(self):
@@ -288,7 +309,10 @@ class BugBuster:
         return self._t.get(path, params=params or None)
 
     def _http_post(self, path: str, body: dict = None) -> dict:
-        return self._t.post(path, body)
+        headers = {}
+        if self._admin_token:
+            headers["X-BugBuster-Admin-Token"] = self._admin_token
+        return self._t.post(path, body, headers=headers)
 
     def _require_usb(self, method: str):
         if not self._usb:

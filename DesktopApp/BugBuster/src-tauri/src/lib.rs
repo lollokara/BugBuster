@@ -9,6 +9,8 @@ mod discovery;
 mod http_transport;
 mod la_usb;
 mod la_store;
+#[cfg(test)]
+mod la_store_tests;
 mod la_decoders;
 mod la_commands;
 mod state;

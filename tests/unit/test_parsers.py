@@ -11,6 +11,59 @@ from typing import Optional, List
 import pytest
 
 from bugbuster.client import _parse_status, _parse_faults, BugBuster
+from bugbuster.protocol import cobs_encode, cobs_decode, crc16_ccitt, build_frame, parse_frame
+
+
+# ---------------------------------------------------------------------------
+# 0. COBS and Frame Protocol Tests
+# ---------------------------------------------------------------------------
+
+class TestCobsProtocol:
+
+    @pytest.mark.parametrize("data,expected", [
+        (b'\x01\x02\x03', b'\x04\x01\x02\x03'),
+        (b'\x00', b'\x01\x01'),
+        (b'\x00\x00', b'\x01\x01\x01'),
+        (b'\x01\x00\x02', b'\x02\x01\x02\x02'),
+        (bytes(range(1, 255)), b'\xff' + bytes(range(1, 255)) + b'\x01'),
+        (bytes(range(1, 256)), b'\xff' + bytes(range(1, 255)) + b'\x02\xff'),
+    ])
+    def test_cobs_encode(self, data, expected):
+        assert cobs_encode(data) == expected
+
+    @pytest.mark.parametrize("data", [
+        b'\x01\x02\x03',
+        b'\x00',
+        b'\x00\x00',
+        b'\x01\x00\x02',
+        bytes(range(256)),
+        b'Hello World',
+        b'\xff' * 500,
+    ])
+    def test_cobs_roundtrip(self, data):
+        encoded = cobs_encode(data)
+        assert 0 not in encoded
+        decoded = cobs_decode(encoded)
+        assert decoded == data
+
+    def test_crc16_ccitt(self):
+        # Test against standard CCITT-FALSE (0xFFFF init)
+        assert crc16_ccitt(b"123456789") == 0x29B1
+
+    def test_frame_roundtrip(self):
+        payload = b"Hello BugBuster"
+        frame = build_frame(seq=0x1234, cmd_id=0x42, payload=payload)
+        assert frame.endswith(b'\x00')
+        
+        # Remove delimiter before parsing
+        msg_type, seq, cmd_id, parsed_payload = parse_frame(frame[:-1])
+        assert seq == 0x1234
+        assert cmd_id == 0x42
+        assert parsed_payload == payload
+
+    def test_get_admin_token_id(self):
+        from bugbuster.constants import CmdId
+        assert CmdId.GET_ADMIN_TOKEN == 0x74
 
 
 # ---------------------------------------------------------------------------

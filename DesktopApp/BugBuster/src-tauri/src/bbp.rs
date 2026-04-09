@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 pub const PROTO_VERSION: u8 = 2;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
-pub const HANDSHAKE_RSP_LEN: usize = 8;
+pub const HANDSHAKE_RSP_LEN: usize = 14;
 
 pub const MAX_PAYLOAD: usize = 1024;
 pub const FRAME_DELIMITER: u8 = 0x00;
@@ -154,6 +154,7 @@ pub const CMD_DEVICE_RESET: u8 = 0x70;
 pub const CMD_REG_READ: u8 = 0x71;
 pub const CMD_REG_WRITE: u8 = 0x72;
 pub const CMD_SET_WATCHDOG: u8 = 0x73;
+pub const CMD_GET_ADMIN_TOKEN: u8 = 0x74;
 pub const CMD_PING: u8 = 0xFE;
 pub const CMD_DISCONNECT: u8 = 0xFF;
 
@@ -354,10 +355,11 @@ pub struct HandshakeInfo {
     pub fw_major: u8,
     pub fw_minor: u8,
     pub fw_patch: u8,
+    pub mac_address: String,
 }
 
 impl HandshakeInfo {
-    /// Parse an 8-byte handshake response.
+    /// Parse a 14-byte handshake response.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < HANDSHAKE_RSP_LEN {
             return None;
@@ -366,11 +368,19 @@ impl HandshakeInfo {
         if data[0..4] != MAGIC {
             return None;
         }
+        
+        // MAC address is at bytes 8..14
+        let mac = format!(
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            data[8], data[9], data[10], data[11], data[12], data[13]
+        );
+
         Some(Self {
             proto_version: data[4],
             fw_major: data[5],
             fw_minor: data[6],
             fw_patch: data[7],
+            mac_address: mac,
         })
     }
 }
@@ -629,12 +639,13 @@ mod tests {
 
     #[test]
     fn test_handshake_parse() {
-        let data = [0xBB, 0x42, 0x55, 0x47, 0x02, 0x01, 0x02, 0x00];
+        let data = [0xBB, 0x42, 0x55, 0x47, 0x02, 0x01, 0x02, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
         let info = HandshakeInfo::parse(&data).unwrap();
         assert_eq!(info.proto_version, 2);
         assert_eq!(info.fw_major, 1);
         assert_eq!(info.fw_minor, 2);
         assert_eq!(info.fw_patch, 0);
+        assert_eq!(info.mac_address, "AA:BB:CC:DD:EE:FF");
     }
 
     #[test]

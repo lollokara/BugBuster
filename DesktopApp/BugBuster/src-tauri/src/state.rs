@@ -207,6 +207,7 @@ pub struct DeviceInfo {
     pub silicon_id1: u16,
     pub fw_version: String,
     pub proto_version: u8,
+    pub mac_address: Option<String>,
 }
 
 // -----------------------------------------------------------------------------
@@ -231,6 +232,7 @@ pub struct ConnectionStatus {
     pub mode: ConnectionMode,
     pub port_or_url: String,
     pub device_info: Option<DeviceInfo>,
+    pub admin_token: Option<String>,
 }
 
 impl Default for ConnectionStatus {
@@ -239,6 +241,7 @@ impl Default for ConnectionStatus {
             mode: ConnectionMode::Disconnected,
             port_or_url: String::new(),
             device_info: None,
+            admin_token: None,
         }
     }
 }

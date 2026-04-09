@@ -49,3 +49,7 @@ tests/report.html
 .mex/context/stack.md
 CLAUDE.md
 /.mex
+/DesktopApp/BugBuster/.omc
+.omx/
+/.omg
+AGENTS.md

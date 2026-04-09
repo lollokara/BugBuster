@@ -28,24 +28,37 @@ extern TaskHandle_t tud_taskhandle;  // defined in bb_main_integrated.c
 static uint8_t s_cdc_tx_buf[CDC_TX_BUF_SIZE];
 static volatile uint32_t s_cdc_tx_head = 0;  // written by bb_cmd_task
 static volatile uint32_t s_cdc_tx_tail = 0;  // read by usb_thread
+static uint8_t s_cdc_seq = 0;
 
 // Queue data for CDC TX (called from bb_cmd_task)
-static uint32_t cdc_queue_write(const uint8_t *data, uint32_t len) {
+// We wrap each chunk into a framed packet: [SEQ:1][LEN:1][DATA:N]
+// MAX_CHUNK is 62 to fit in a 64-byte USB packet.
+static uint32_t cdc_queue_write_framed(const uint8_t *data, uint32_t len) {
     uint32_t head = s_cdc_tx_head;
     uint32_t tail = s_cdc_tx_tail;
+    
+    // Each packet is 2 bytes header + data
+    uint32_t packet_len = 2 + len;
+    
     uint32_t free = (tail > head) ? (tail - head - 1) : (CDC_TX_BUF_SIZE - head + tail - 1);
-    if (len > free) len = free;
+    if (packet_len > free) return 0; // Not enough space for the whole frame
+
+    s_cdc_tx_buf[head] = s_cdc_seq++;
+    s_cdc_tx_buf[(head + 1) % CDC_TX_BUF_SIZE] = (uint8_t)len;
+    
     for (uint32_t i = 0; i < len; i++) {
-        s_cdc_tx_buf[(head + i) % CDC_TX_BUF_SIZE] = data[i];
+        s_cdc_tx_buf[(head + 2 + i) % CDC_TX_BUF_SIZE] = data[i];
     }
-    __dmb();  // Ensure data is visible before updating head
-    s_cdc_tx_head = (head + len) % CDC_TX_BUF_SIZE;
+    
+    __dmb();
+    s_cdc_tx_head = (head + packet_len) % CDC_TX_BUF_SIZE;
     return len;
 }
 
 void bb_la_usb_init(void)
 {
     // Nothing to init — TinyUSB handles endpoint setup from descriptor
+    s_cdc_seq = 0;
 }
 
 bool bb_la_usb_connected(void)
@@ -122,12 +135,14 @@ uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes)
 {
     if (!tud_cdc_connected()) return 0;
 
-    // Queue data for CDC TX — usb_thread will actually send it
+    // Queue data for CDC TX in framed chunks
     uint32_t sent = 0;
     uint32_t stall = 0;
     while (sent < total_bytes) {
-        uint32_t n = cdc_queue_write(buf + sent, total_bytes - sent);
-        sent += n;
+        uint32_t chunk = total_bytes - sent;
+        if (chunk > 62) chunk = 62; // 64 - 2 bytes header
+
+        uint32_t n = cdc_queue_write_framed(buf + sent, chunk);
         if (n == 0) {
             // Queue full — wait for usb_thread to drain
 #ifdef DEBUGPROBE_INTEGRATION
@@ -140,6 +155,7 @@ uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes)
             if (stall > 5000) break;
             continue;
         }
+        sent += n;
         stall = 0;
 #ifdef DEBUGPROBE_INTEGRATION
         xTaskNotify(tud_taskhandle, 0, eNoAction);

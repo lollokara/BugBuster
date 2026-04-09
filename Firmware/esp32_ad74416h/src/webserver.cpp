@@ -29,6 +29,7 @@
 #include "dio.h"
 #include "selftest.h"
 #include "bbp.h"
+#include "auth.h"
 #include "wifi_manager.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
@@ -95,7 +96,24 @@ static void set_cors_headers(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, " ADMIN_TOKEN_HEADER);
+}
+
+// -----------------------------------------------------------------------------
+// Helper: Check Admin Authentication
+// -----------------------------------------------------------------------------
+
+static esp_err_t check_admin_auth(httpd_req_t *req)
+{
+    char token[36] = {0};
+    esp_err_t err = httpd_req_get_hdr_value_str(req, ADMIN_TOKEN_HEADER, token, sizeof(token));
+    
+    if (err == ESP_OK && auth_verify_token(token)) {
+        return ESP_OK;
+    }
+    
+    ESP_LOGW(TAG, "Unauthorized access attempt to %s", req->uri);
+    return ESP_FAIL;
 }
 
 // -----------------------------------------------------------------------------
@@ -528,6 +546,14 @@ static esp_err_t handle_get_device_info(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "silicon_id0", (int)id0);
     cJSON_AddNumberToObject(root, "silicon_id1", (int)id1);
     add_bool_alias(root, "spiOk", "spi_ok", spiOk);
+
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char macStr[20];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    cJSON_AddStringToObject(root, "macAddress", macStr);
+
     return send_json(req, root);
 }
 
@@ -2190,6 +2216,10 @@ static esp_err_t handle_get_wifi(httpd_req_t *req)
 // POST /api/wifi/connect  body: {"ssid":"...", "password":"..."}
 static esp_err_t handle_post_wifi_connect(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+
     cJSON *body = recv_json_body(req);
     if (!body) return send_error(req, 400, "Invalid JSON");
 
@@ -2260,6 +2290,10 @@ static esp_err_t handle_get_version(httpd_req_t *req)
 // POST /api/ota/upload — OTA firmware update (binary body = firmware.bin)
 static esp_err_t handle_ota_upload(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+
     ESP_LOGI(TAG, "OTA upload started, content_len=%d", req->content_len);
 
     if (req->content_len <= 0 || req->content_len > 2 * 1024 * 1024) {

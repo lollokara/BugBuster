@@ -11,7 +11,7 @@
 use tauri::State;
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use crate::la_usb::{LaUsbConnection, LaCaptureData, decode_capture, hat_usb_present};
 
 /// Find the RP2040 BugBuster HAT CDC serial port.
@@ -54,6 +54,8 @@ pub struct LaState {
     pub stream_running: Arc<AtomicBool>,
     /// Join handle for the background streaming task, so we can wait for it to finish
     pub stream_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Next expected sequence number for framed stream chunks
+    pub stream_seq: Arc<AtomicU8>,
 }
 
 impl LaState {
@@ -64,6 +66,7 @@ impl LaState {
             store: Arc::new(Mutex::new(None)),
             stream_running: Arc::new(AtomicBool::new(false)),
             stream_task: Arc::new(Mutex::new(None)),
+            stream_seq: Arc::new(AtomicU8::new(0)),
         }
     }
 }
@@ -233,11 +236,12 @@ pub fn la_get_cached_capture(la: State<'_, LaState>) -> CmdResult<Option<LaCaptu
 pub fn la_get_view(
     start_sample: u64,
     end_sample: u64,
+    max_points: Option<usize>,
     la: State<'_, LaState>,
 ) -> CmdResult<Option<LaViewData>> {
     let store = la.store.lock().map_err(map_err)?;
     match store.as_ref() {
-        Some(s) => Ok(Some(s.to_view_data(start_sample, end_sample))),
+        Some(s) => Ok(Some(s.to_view_data(start_sample, end_sample, max_points))),
         None => Ok(None),
     }
 }
@@ -673,6 +677,7 @@ pub async fn la_stream_usb(
     let store_mutex = la.store.clone();
     let running = la.stream_running.clone();
     let task_slot = la.stream_task.clone();
+    let stream_seq = la.stream_seq.clone();
 
     let handle = tokio::task::spawn_blocking(move || {
         // Open CDC serial port
@@ -736,6 +741,10 @@ pub async fn la_stream_usb(
         let mut chunk_count: u64 = 0;
         let t0 = std::time::Instant::now();
         let mut buf = vec![0u8; 8192];
+        let mut ring_buf = Vec::with_capacity(16384);
+        
+        // Reset sequence for new stream
+        stream_seq.store(0, Ordering::SeqCst);
 
         // Send stream start command (0x01) via CDC
         while running.load(Ordering::SeqCst) {
@@ -745,15 +754,53 @@ pub async fn la_stream_usb(
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
                 Err(e) => { log::warn!("[la_stream_usb] Read error: {}", e); break; }
             };
-            chunk_count += 1;
-            total_bytes += n as u64;
-            if chunk_count <= 3 || chunk_count % 200 == 0 {
-                log::info!("[la_stream_usb] Chunk {}: {}B (total: {}, {:.0} KB/s)",
-                    chunk_count, n, total_bytes,
-                    total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0);
+            
+            ring_buf.extend_from_slice(&buf[..n]);
+
+            let mut consumed = 0;
+            // Process framed chunks: [SEQ:1][LEN:1][DATA:N]
+            while ring_buf.len() - consumed >= 2 {
+                let seq = ring_buf[consumed];
+                let len = ring_buf[consumed + 1] as usize;
+                let frame_len = 2 + len;
+                
+                if len > 62 {
+                    log::error!("[la_stream_usb] Invalid framed chunk length: {}", len);
+                    consumed += 1; // Resync
+                    continue;
+                }
+
+                if ring_buf.len() - consumed < frame_len {
+                    break; // Wait for more data
+                }
+
+                // Validate sequence
+                let expected = stream_seq.load(Ordering::SeqCst);
+                if seq != expected {
+                    let dropped = if seq > expected { seq - expected } else { (255 - expected) + seq + 1 };
+                    log::warn!("[la_stream_usb] Sequence mismatch! Got {}, expected {}. (~{} chunks dropped)", seq, expected, dropped);
+                }
+                stream_seq.store(seq.wrapping_add(1), Ordering::SeqCst);
+
+                chunk_count += 1;
+                total_bytes += len as u64;
+                
+                if let Ok(mut sg) = store_mutex.lock() {
+                    if let Some(ref mut s) = *sg {
+                        s.append_raw(&ring_buf[consumed + 2 .. consumed + frame_len]);
+                    }
+                }
+                
+                consumed += frame_len;
             }
-            if let Ok(mut sg) = store_mutex.lock() {
-                if let Some(ref mut s) = *sg { s.append_raw(&buf[..n]); }
+            if consumed > 0 {
+                ring_buf.drain(0..consumed);
+            }
+
+            if chunk_count > 0 && chunk_count % 1000 == 0 {
+                log::info!("[la_stream_usb] {} chunks processed, total data: {}B ({:.0} KB/s)",
+                    chunk_count, total_bytes,
+                    total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0);
             }
         }
 

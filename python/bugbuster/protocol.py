@@ -48,11 +48,17 @@ def cobs_encode(data: bytes) -> bytes:
             if code == 0xFF:
                 result[code_pos] = code
                 code_pos = dst
-                dst += 1
+                if src + 1 < len(data): # Only advance if more data remains
+                    dst += 1
                 code = 1
         src += 1
 
     result[code_pos] = code
+    # If the last block was exactly 254 bytes (code=0xFF), 
+    # we must ensure the final 0x01 code is written.
+    if code == 1 and code_pos == dst:
+        dst += 1
+
     return bytes(result[:dst])
 
 
@@ -67,17 +73,13 @@ def cobs_decode(data: bytes) -> bytes:
     while read_idx < len(data):
         code = data[read_idx]
         read_idx += 1
-        for _ in range(1, code):
+        for i in range(1, code):
             if read_idx >= len(data):
                 break
             result.append(data[read_idx])
             read_idx += 1
         if code != 0xFF and read_idx < len(data):
             result.append(0x00)
-
-    # Remove the one trailing 0x00 that COBS always appends for a clean payload
-    if result and result[-1] == 0x00:
-        result.pop()
 
     return bytes(result)
 

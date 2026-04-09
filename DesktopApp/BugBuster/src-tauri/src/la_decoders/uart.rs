@@ -49,7 +49,7 @@ fn decode_channel(cfg: &UartConfig, store: &LaStore, start: u64, end: u64, ch: u
     let idle_val: u8 = if cfg.idle_high { 1 } else { 0 };
     let active_val: u8 = 1 - idle_val;
 
-    let transitions = store.get_visible(ch, start, end);
+    let transitions = store.get_visible(ch, start, end, None);
     let mut i = 0;
 
     while i < transitions.len() {

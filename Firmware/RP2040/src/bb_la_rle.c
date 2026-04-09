@@ -5,6 +5,25 @@
 #include "bb_la_rle.h"
 #include "bb_config.h"
 
+static uint16_t crc16_update(uint16_t crc, uint8_t byte)
+{
+    crc ^= (uint16_t)byte << 8;
+    for (int i = 0; i < 8; i++) {
+        if (crc & 0x8000) crc = (crc << 1) ^ 0x1021;
+        else crc <<= 1;
+    }
+    return crc;
+}
+
+static uint16_t crc16_word(uint16_t crc, uint32_t word)
+{
+    crc = crc16_update(crc, (uint8_t)(word & 0xFF));
+    crc = crc16_update(crc, (uint8_t)((word >> 8) & 0xFF));
+    crc = crc16_update(crc, (uint8_t)((word >> 16) & 0xFF));
+    crc = crc16_update(crc, (uint8_t)((word >> 24) & 0xFF));
+    return crc;
+}
+
 void rle_init(RleState *state, uint32_t *buffer, uint32_t max_words, uint8_t channels)
 {
     state->buffer = buffer;
@@ -12,27 +31,31 @@ void rle_init(RleState *state, uint32_t *buffer, uint32_t max_words, uint8_t cha
     state->max_entries = max_words;
     state->total_samples = 0;
     state->channels = channels;
-    state->current_value = 0xFF;
+    state->current_value = 0xFF; // Invalid value to start
     state->current_count = 0;
+    state->crc16 = 0xFFFF;       // CCITT-FALSE init
 }
 
-// Flush the current run to the buffer
 static bool flush_run(RleState *state)
 {
     if (state->current_count == 0) return true;
     if (state->num_entries >= state->max_entries) return false;
 
-    // Split into multiple entries if count exceeds 28-bit max
+    // Handle count > 28 bits (split into multiple entries)
     uint32_t remaining = state->current_count;
     while (remaining > 0 && state->num_entries < state->max_entries) {
         uint32_t chunk = remaining;
         if (chunk > 0x0FFFFFFFU) chunk = 0x0FFFFFFFU;
-        state->buffer[state->num_entries++] = RLE_PACK(state->current_value, chunk);
+        uint32_t word = RLE_PACK(state->current_value, chunk);
+        state->buffer[state->num_entries++] = word;
+        state->crc16 = crc16_word(state->crc16, word);
         remaining -= chunk;
     }
 
     state->current_count = 0;
     return remaining == 0;
+}
+
 }
 
 bool rle_encode_word(RleState *state, uint32_t raw)

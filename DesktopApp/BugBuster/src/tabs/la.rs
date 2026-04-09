@@ -141,12 +141,14 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Fetch view data when viewport or capture changes (streaming updates capture_info)
     let set_vd = set_view_data;
+    let canvas_ref_fetch = canvas_ref;
     Effect::new(move |_| {
         let vs = view_start.get();
         let ve = view_end.get();
         let _ci = capture_info.get(); // re-fetch when new data arrives during streaming
+        let max_p = canvas_ref_fetch.get().map(|el| el.width() as usize);
         spawn_local(async move {
-            if let Some(data) = la_get_view(vs, ve).await {
+            if let Some(data) = la_get_view(vs, ve, max_p).await {
                 set_vd.set(Some(data));
             }
         });
@@ -285,18 +287,18 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     1 - transitions[0].1
                 };
 
-                // Density mode: use per-pixel fill when any transitions are < 3px apart
-                let dense = if transitions.len() < 3 { false } else {
+                // Density mode: use high-performance per-pixel fill for decimated/high-freq signals
+                let dense = data.decimated || (if transitions.len() < 3 { false } else {
                     let mut min_gap = f64::MAX;
-                    for i in 1..transitions.len() {
+                    for i in 1..transitions.len().min(100) { // check sample of transitions
                         let px1 = (transitions[i-1].0 as f64 - vs) / span * plot_w;
                         let px2 = (transitions[i].0 as f64 - vs) / span * plot_w;
                         let gap = (px2 - px1).abs();
                         if gap < min_gap { min_gap = gap; }
-                        if min_gap < 3.0 { break; } // early exit
+                        if min_gap < 2.0 { break; }
                     }
-                    min_gap < 3.0
-                };
+                    min_gap < 2.0
+                });
                 if dense {
                     let pixels = plot_w as usize;
                     // bit0=has_low, bit1=has_high

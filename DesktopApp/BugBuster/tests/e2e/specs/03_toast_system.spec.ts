@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from '../fixtures'
 
 test.describe('Toast System', () => {
   test('renders the toast container', async ({ page }) => {

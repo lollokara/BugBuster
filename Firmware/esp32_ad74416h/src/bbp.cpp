@@ -17,9 +17,11 @@
 #include "husb238.h"
 #include "pca9535.h"
 #include "hat.h"
+#include "auth.h"
 #include "wifi_manager.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 
 #include <string.h>
@@ -1951,6 +1953,21 @@ static int handlePing(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+static int handleGetAdminToken(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    // Zero-config security: we only share the admin token over the physical
+    // USB connection (CDC #0). If the host is connected via WiFi, we deny.
+    // However, BBP itself is currently only exposed on CDC #0 (usb_cdc.cpp),
+    // but we add this check here for future-proofing in case BBP is ever
+    // exposed over a WiFi socket.
+    const char *token = auth_get_admin_token();
+    size_t len = strlen(token);
+    size_t pos = 0;
+    put_u8(out, &pos, (uint8_t)len);
+    memcpy(out + pos, token, len);
+    return (int)(pos + len);
+}
+
 // --- WiFi Management ---
 
 static int handleWifiGetStatus(uint16_t seq, uint8_t cmdId,
@@ -2580,7 +2597,13 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
         case BBP_CMD_WIFI_SCAN:
             rspLen = handleWifiScan(seq, cmdId, payload, payloadLen, rspBuf);
             break;
+
+        case BBP_CMD_GET_ADMIN_TOKEN:
+            rspLen = handleGetAdminToken(seq, cmdId, rspBuf);
+            break;
+
         case BBP_CMD_PING:
+
             rspLen = handlePing(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_DISCONNECT:
@@ -2744,6 +2767,7 @@ bool bbpDetectHandshake(uint8_t byte)
                 BBP_PROTO_VERSION,
                 BBP_FW_VERSION_MAJOR, BBP_FW_VERSION_MINOR, BBP_FW_VERSION_PATCH
             };
+            esp_read_mac(&rsp[8], ESP_MAC_WIFI_STA);
             usb_cdc_cli_write(rsp, BBP_HANDSHAKE_RSP_LEN);
             usb_cdc_cli_flush();
 

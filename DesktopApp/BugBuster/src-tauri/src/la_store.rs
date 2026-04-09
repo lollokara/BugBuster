@@ -37,6 +37,8 @@ pub struct LaViewData {
     pub channel_transitions: Vec<Vec<(u64, u8)>>,
     /// Density histogram: total transitions per bucket across all channels (for minimap)
     pub density: Vec<u16>,
+    /// True if the data was decimated (LOD) for this viewport
+    pub decimated: bool,
 }
 
 impl LaStore {
@@ -92,8 +94,11 @@ impl LaStore {
                 for ch in 0..self.channels as usize {
                     let val = (byte >> (bit_pos + ch)) & 1;
                     if val != prev_values[ch] {
-                        self.transitions[ch].push((sample_idx, val));
-                        prev_values[ch] = val;
+                        // Limit total transitions per channel to avoid memory explosion (1M per channel)
+                        if self.transitions[ch].len() < 1_000_000 {
+                            self.transitions[ch].push((sample_idx, val));
+                            prev_values[ch] = val;
+                        }
                     }
                 }
                 sample_idx += 1;
@@ -106,7 +111,8 @@ impl LaStore {
 
     /// Get transitions visible in a sample range for a channel.
     /// Includes one transition before `start` to establish initial value.
-    pub fn get_visible(&self, ch: u8, start: u64, end: u64) -> Vec<Transition> {
+    /// If `max_points` is provided, decimates data using a min/max envelope.
+    pub fn get_visible(&self, ch: u8, start: u64, end: u64, max_points: Option<usize>) -> Vec<Transition> {
         if ch as usize >= self.transitions.len() {
             return vec![];
         }
@@ -117,22 +123,72 @@ impl LaStore {
 
         let mut result = Vec::new();
 
-        // Include one transition before start for initial value
+        // 1. Include one transition before start for initial value
         if first_idx > 0 {
             result.push(trans[first_idx - 1]);
         } else if !trans.is_empty() && trans[0].0 > start {
-            // No transition before start, and first transition is strictly after start.
-            // Synthesize an entry at `start` with the implied initial value.
-            result.push((start, trans[0].1 ^ 1)); // opposite of first change (implies initial state)
+            result.push((start, trans[0].1 ^ 1));
         }
-        // If trans[0].0 == start, the main loop below will include it directly — no synthetic needed.
 
-        // Collect transitions in range
+        // 2. Collect transitions in range
+        let mut raw_points = Vec::new();
         for &t in &trans[first_idx..] {
             if t.0 > end { break; }
-            result.push(t);
+            raw_points.push(t);
         }
 
+        if raw_points.is_empty() {
+            return result;
+        }
+
+        // 3. Decimate if needed
+        if let Some(limit) = max_points {
+            if raw_points.len() > limit {
+                let bucket_size = (end - start) / limit as u64;
+                if bucket_size > 1 {
+                    let mut current_bucket = start + bucket_size;
+                    let mut i = 0;
+                    
+                    while i < raw_points.len() {
+                        let bucket_start_idx = i;
+                        let mut has_0 = false;
+                        let mut has_1 = false;
+                        
+                        while i < raw_points.len() && raw_points[i].0 < current_bucket {
+                            if raw_points[i].1 == 0 { has_0 = true; }
+                            else { has_1 = true; }
+                            i += 1;
+                        }
+                        
+                        if i > bucket_start_idx {
+                            // If bucket contains both 0 and 1, it's an "activity" block.
+                            // We must ensure it's visible AND ends on the correct logic level.
+                            if has_0 && has_1 {
+                                let first_val = raw_points[bucket_start_idx].1;
+                                let last_val = raw_points[i - 1].1;
+                                
+                                result.push((raw_points[bucket_start_idx].0, first_val));
+                                if last_val == first_val {
+                                    // Ending same as starting: need a middle toggle to show activity
+                                    result.push((raw_points[bucket_start_idx].0 + 1, first_val ^ 1));
+                                    result.push((raw_points[i - 1].0, last_val));
+                                } else {
+                                    // Ending different: already shows activity, just ensure last transition is there
+                                    result.push((raw_points[i - 1].0, last_val));
+                                }
+                            } else {
+                                // Uniform bucket, just take the first transition
+                                result.push(raw_points[bucket_start_idx]);
+                            }
+                        }
+                        current_bucket += bucket_size;
+                    }
+                    return result;
+                }
+            }
+        }
+
+        result.extend(raw_points);
         result
     }
 
@@ -162,9 +218,19 @@ impl LaStore {
     }
 
     /// Extract viewport data for frontend rendering
-    pub fn to_view_data(&self, start: u64, end: u64) -> LaViewData {
+    pub fn to_view_data(&self, start: u64, end: u64, max_points: Option<usize>) -> LaViewData {
+        let mut decimated = false;
         let channel_transitions: Vec<Vec<(u64, u8)>> = (0..self.channels)
-            .map(|ch| self.get_visible(ch, start, end))
+            .map(|ch| {
+                let v = self.get_visible(ch, start, end, max_points);
+                // Check if any channel was decimated (count of raw points would have been > limit)
+                if let Some(limit) = max_points {
+                    let raw_count = self.transitions[ch as usize].partition_point(|&(s, _)| s <= end) 
+                                  - self.transitions[ch as usize].partition_point(|&(s, _)| s < start);
+                    if raw_count > limit { decimated = true; }
+                }
+                v
+            })
             .collect();
 
         let density = self.density_histogram(800);
@@ -178,6 +244,7 @@ impl LaStore {
             trigger_sample: self.trigger_sample,
             channel_transitions,
             density,
+            decimated,
         }
     }
 
@@ -261,35 +328,34 @@ impl LaStore {
     pub fn delete_range(&mut self, start: u64, end: u64) -> u64 {
         if end < start { return 0; }
         let removed = end - start + 1;
-        for ch_trans in &mut self.transitions {
-            // For each channel, preserve the value at `start` so the signal
-            // doesn't glitch: insert a transition at `start` with the value
-            // that was active just before the deleted range.
-            let val_before = {
-                let idx = ch_trans.partition_point(|&(s, _)| s < start);
-                if idx > 0 { Some(ch_trans[idx - 1].1) } else { None }
-            };
+        for ch in 0..self.channels {
+            let ch_idx = ch as usize;
+            if ch_idx >= self.transitions.len() { continue; }
 
-            // Remove transitions in [start, end]
+            // 1. Capture signal states before and after the cut
+            let val_before = self.get_value_at(ch, start.saturating_sub(1));
+            let val_after = self.get_value_at(ch, end + 1);
+
+            let ch_trans = &mut self.transitions[ch_idx];
+
+            // 2. Remove transitions within the range
             ch_trans.retain(|&(s, _)| s < start || s > end);
 
-            // Shift transitions after `end` left by `removed`
+            // 3. Shift remaining transitions
             for t in ch_trans.iter_mut() {
-                if t.0 >= start + removed {
+                if t.0 > end {
                     t.0 -= removed;
                 }
             }
 
-            // If the first transition after the splice point has a different
-            // value than what was before, insert a bridge transition
-            if let Some(vb) = val_before {
+            // 4. Insert bridge transition at start if signal level changed
+            if val_after != val_before {
                 let splice_idx = ch_trans.partition_point(|&(s, _)| s < start);
-                let needs_bridge = splice_idx >= ch_trans.len()
-                    || ch_trans[splice_idx].1 != vb;
-                if needs_bridge && (splice_idx == 0 || ch_trans[splice_idx - 1].1 != vb) {
-                    ch_trans.insert(splice_idx, (start, vb));
-                }
+                ch_trans.insert(splice_idx, (start, val_after));
             }
+
+            // 5. Restore RLE invariant
+            ch_trans.dedup_by(|a, b| a.1 == b.1);
         }
         self.total_samples = self.total_samples.saturating_sub(removed);
         removed

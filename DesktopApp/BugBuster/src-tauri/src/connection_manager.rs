@@ -7,9 +7,11 @@
 
 use std::sync::{Arc, Mutex as StdMutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::fs::OpenOptions;
 
 use anyhow::{anyhow, Result};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 
 use crate::bbp::{self, Message};
@@ -27,6 +29,8 @@ pub struct ConnectionManager {
     connection_status: Arc<StdMutex<ConnectionStatus>>,
     // Shutdown flag for the poll loop — set on disconnect, checked each iteration
     poll_shutdown: Arc<AtomicBool>,
+    // Persistent admin tokens keyed by device MAC
+    tokens: Arc<StdMutex<HashMap<String, String>>>,
 }
 
 impl ConnectionManager {
@@ -36,6 +40,7 @@ impl ConnectionManager {
             device_state: Arc::new(StdMutex::new(DeviceState::default())),
             connection_status: Arc::new(StdMutex::new(ConnectionStatus::default())),
             poll_shutdown: Arc::new(AtomicBool::new(false)),
+            tokens: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
@@ -99,8 +104,25 @@ impl ConnectionManager {
         let device_info = transport.handshake_info().map(|h| DeviceInfo {
             proto_version: h.proto_version,
             fw_version: format!("{}.{}.{}", h.fw_major, h.fw_minor, h.fw_patch),
+            mac_address: Some(h.mac_address.clone()),
             ..Default::default()
         });
+
+        // 1. Fetch Admin Token via USB
+        let mut admin_token = None;
+        if let Ok(rsp) = transport.send_command(bbp::CMD_GET_ADMIN_TOKEN, &[]).await {
+            if rsp.len() > 1 {
+                let len = rsp[0] as usize;
+                if rsp.len() >= 1 + len {
+                    let token = String::from_utf8_lossy(&rsp[1..1+len]).to_string();
+                    if let Some(h) = transport.handshake_info() {
+                        log::info!("Retrieved admin token via USB for device {}", h.mac_address);
+                        self.save_token(h.mac_address.clone(), token.clone(), app);
+                    }
+                    admin_token = Some(token);
+                }
+            }
+        }
 
         {
             let mut t = self.transport.lock().await;
@@ -112,6 +134,7 @@ impl ConnectionManager {
             status.mode = ConnectionMode::Usb;
             status.port_or_url = port_name.to_string();
             status.device_info = device_info;
+            status.admin_token = admin_token;
         }
 
         let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -203,7 +226,29 @@ impl ConnectionManager {
     }
 
     async fn connect_http(&self, base_url: &str, app: &AppHandle) -> Result<()> {
-        let transport = HttpTransport::connect(base_url).await?;
+        // Ensure tokens are loaded
+        if self.tokens.lock().map(|t| t.is_empty()).unwrap_or(false) {
+            self.load_tokens(app);
+        }
+
+        let (mut transport, mac) = HttpTransport::connect(base_url).await?;
+
+        // 2. Check for Pairing (Admin Token)
+        let admin_token = self.get_token(&mac);
+        if admin_token.is_none() {
+            log::warn!("HTTP connection to {} (MAC: {}) requires pairing via USB", base_url, mac);
+            let _ = app.emit("pairing-required", &serde_json::json!({
+                "mac": mac,
+                "url": base_url,
+            }));
+            return Err(anyhow!("Pairing required: connect via USB once to authorize this computer"));
+        }
+
+        let token = admin_token.unwrap();
+        transport.set_admin_token(&token)?;
+
+        let mut device_info = DeviceInfo::default();
+        device_info.mac_address = Some(mac);
 
         {
             let mut t = self.transport.lock().await;
@@ -214,7 +259,8 @@ impl ConnectionManager {
             let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
             status.mode = ConnectionMode::Http;
             status.port_or_url = base_url.to_string();
-            status.device_info = None;
+            status.device_info = Some(device_info);
+            status.admin_token = Some(token);
         }
 
         let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -368,5 +414,63 @@ impl ConnectionManager {
     pub async fn get_device_info(&self) -> Option<DeviceInfo> {
         let status = self.connection_status.lock().ok()?;
         status.device_info.clone()
+    }
+
+    /// Load tokens from persistent storage.
+    pub fn load_tokens(&self, app: &AppHandle) {
+        if let Ok(app_dir) = app.path().app_data_dir() {
+            let path = app_dir.join("tokens.json");
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
+                    if let Ok(mut tokens) = self.tokens.lock() {
+                        *tokens = map;
+                        log::info!("Loaded {} admin tokens from storage", tokens.len());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Save a token to persistent storage.
+    pub fn save_token(&self, mac: String, token: String, app: &AppHandle) {
+        let mut map_clone = HashMap::new();
+        if let Ok(mut tokens) = self.tokens.lock() {
+            tokens.insert(mac, token);
+            map_clone = tokens.clone();
+        }
+
+        if let Ok(app_dir) = app.path().app_data_dir() {
+            let _ = std::fs::create_dir_all(&app_dir);
+            let path = app_dir.join("tokens.json");
+
+            let mut opts = OpenOptions::new();
+            opts.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+
+            let file_result = opts.open(&path);
+
+            if let Ok(file) = file_result {
+                if let Ok(content) = serde_json::to_string(&map_clone) {
+                    use std::io::Write;
+                    let mut writer = std::io::BufWriter::new(file);
+                    if let Err(e) = writer.write_all(content.as_bytes()) {
+                        log::error!("Failed to write admin tokens: {}", e);
+                    } else {
+                        log::info!("Admin tokens persisted securely to storage");
+                    }
+                }
+            } else if let Err(e) = file_result {
+                log::error!("Failed to open admin tokens file for writing: {}", e);
+            }
+        }
+    }
+
+    /// Get a stored token for a device MAC.
+    pub fn get_token(&self, mac: &str) -> Option<String> {
+        self.tokens.lock().ok()?.get(mac).cloned()
     }
 }

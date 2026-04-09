@@ -312,17 +312,15 @@ class USBTransport:
             buf.extend(chunk)
 
             # Each complete frame ends with 0x00
-            while True:
-                try:
-                    delim = buf.index(0x00)
-                except ValueError:
-                    break
-
-                frame_bytes = bytes(buf[:delim])
-                del buf[:delim + 1]
-
-                if frame_bytes:
-                    self._dispatch_frame(frame_bytes)
+            if b'\x00' in buf:
+                # Split buffer into complete frames and the remaining partial frame
+                parts = buf.split(b'\x00')
+                # The last part is the new buffer (stale data after the last 0x00)
+                buf = bytearray(parts.pop())
+                
+                for frame_bytes in parts:
+                    if frame_bytes:
+                        self._dispatch_frame(bytes(frame_bytes))
 
     def _dispatch_frame(self, raw: bytes) -> None:
         try:

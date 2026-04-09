@@ -145,6 +145,28 @@ pub fn App() -> impl IntoView {
         closure.forget();
     });
 
+    // Listen for pairing-required (HTTP connect attempt without cached token)
+    spawn_local(async move {
+        let closure = Closure::new(move |event: JsValue| {
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event) {
+                let mac = evt.payload.get("mac").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let msg = format!("Secure pairing required for device {}. Please connect via USB once to authorize this computer.", mac);
+                if let Some(window) = web_sys::window() {
+                    let detail = js_sys::Object::new();
+                    let _ = js_sys::Reflect::set(&detail, &"msg".into(), &msg.into());
+                    let _ = js_sys::Reflect::set(&detail, &"kind".into(), &"err".into());
+                    let init = web_sys::CustomEventInit::new();
+                    init.set_detail(&detail);
+                    if let Ok(evt) = web_sys::CustomEvent::new_with_event_init_dict("bb-toast", &init) {
+                        let _ = window.dispatch_event(&evt);
+                    }
+                }
+            }
+        });
+        listen("pairing-required", &closure).await;
+        closure.forget();
+    });
+
     // Listen for PCA9535 fault events (e-fuse trips, power-good changes)
     spawn_local(async move {
         let closure = Closure::new(move |event: JsValue| {

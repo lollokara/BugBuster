@@ -335,6 +335,7 @@ class CmdId(IntEnum):
     REGISTER_READ    = 0x71
     REGISTER_WRITE   = 0x72
     SET_WATCHDOG     = 0x73
+    GET_ADMIN_TOKEN  = 0x74
 
     # Unsolicited events
     ADC_DATA_EVT     = 0x80

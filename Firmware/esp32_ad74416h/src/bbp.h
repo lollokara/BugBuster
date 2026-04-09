@@ -35,7 +35,7 @@ extern "C" {
 #define BBP_MAGIC_2             0x55
 #define BBP_MAGIC_3             0x47
 #define BBP_MAGIC_LEN           4
-#define BBP_HANDSHAKE_RSP_LEN   8   // magic[4] + version[1] + fw[3]
+#define BBP_HANDSHAKE_RSP_LEN   14  // magic[4] + version[1] + fw[3] + mac[6]
 
 // Framing
 #define BBP_MAX_PAYLOAD         1024
@@ -187,6 +187,7 @@ extern "C" {
 #define BBP_CMD_REG_READ        0x71
 #define BBP_CMD_REG_WRITE       0x72
 #define BBP_CMD_SET_WATCHDOG    0x73  // Enable/disable AD74416H watchdog timer
+#define BBP_CMD_GET_ADMIN_TOKEN 0x74  // Retrieve derived admin token (USB only)
 #define BBP_CMD_PING            0xFE
 #define BBP_CMD_DISCONNECT      0xFF
 

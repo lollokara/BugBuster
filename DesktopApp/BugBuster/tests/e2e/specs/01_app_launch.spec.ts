@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from '../fixtures'
 
 test.describe('App Launch', () => {
   test('renders the BugBuster logo in the header', async ({ page }) => {

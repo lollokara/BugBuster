@@ -6,6 +6,9 @@ pub mod uart;
 pub mod i2c;
 pub mod spi;
 
+#[cfg(test)]
+mod tests;
+
 use serde::{Serialize, Deserialize};
 use crate::la_store::LaStore;
 

@@ -42,7 +42,7 @@ pub fn decode(cfg: &SpiConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
     let cs_active = if cfg.cs_active_low { 0u8 } else { 1u8 };
 
     // Find clock edges
-    let sclk_trans = store.get_visible(cfg.sclk_channel, start, end);
+    let sclk_trans = store.get_visible(cfg.sclk_channel, start, end, None);
 
     // Determine which clock edge samples data
     // CPHA=0: data sampled on first (leading) edge

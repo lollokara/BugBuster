@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from '../fixtures'
 
 test.describe('Connection Screen', () => {
   test('shows the connection panel card', async ({ page }) => {
