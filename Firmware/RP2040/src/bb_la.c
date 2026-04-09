@@ -296,6 +296,17 @@ static bool setup_dma(void)
 // Public API
 // -----------------------------------------------------------------------------
 
+// Pulse BB_LA_DONE_PIN low for >=1us to signal the ESP32 that the LA capture
+// has just finished. Push-pull output, idle high, active-low pulse.
+// Called whenever the capture state machine transitions to LA_STATE_DONE
+// (but NOT during streaming, which is gapless and has no single "done" event).
+static void la_signal_done_pulse(void)
+{
+    gpio_put(BB_LA_DONE_PIN, 0);
+    sleep_us(2);
+    gpio_put(BB_LA_DONE_PIN, 1);
+}
+
 void bb_la_init(void)
 {
     memset(&s_la, 0, sizeof(s_la));
@@ -307,6 +318,11 @@ void bb_la_init(void)
         gpio_set_dir(BB_LA_CH0_PIN + i, GPIO_IN);
         gpio_pull_down(BB_LA_CH0_PIN + i);
     }
+
+    // Initialize LA-done IRQ output to ESP32 (idle high, active-low pulse).
+    gpio_init(BB_LA_DONE_PIN);
+    gpio_set_dir(BB_LA_DONE_PIN, GPIO_OUT);
+    gpio_put(BB_LA_DONE_PIN, 1);
 }
 
 bool bb_la_configure(const LaConfig *config)
@@ -582,12 +598,14 @@ void bb_la_poll(void)
                     pio_sm_set_enabled(LA_PIO, LA_SM, false);
                     rle_flush(&s_la.rle);
                     s_la.state = LA_STATE_DONE;
+                    la_signal_done_pulse();
                     break;
                 }
                 if (s_la.rle.total_samples >= s_la.config.depth_samples) {
                     pio_sm_set_enabled(LA_PIO, LA_SM, false);
                     rle_flush(&s_la.rle);
                     s_la.state = LA_STATE_DONE;
+                    la_signal_done_pulse();
                     break;
                 }
             }
@@ -596,6 +614,7 @@ void bb_la_poll(void)
             if (s_la.dma_done) {
                 pio_sm_set_enabled(LA_PIO, LA_SM, false);
                 s_la.state = LA_STATE_DONE;
+                la_signal_done_pulse();
             }
         }
         break;

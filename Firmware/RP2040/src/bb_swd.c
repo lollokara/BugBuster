@@ -24,8 +24,26 @@
 // When integrated with debugprobe, include its headers
 #include "tusb.h"        // tud_mounted()
 #include "probe.h"       // probe_set_swclk_freq()
-// TODO: Expose DPIDR from DAP internals or cache it after first read
 #endif
+
+// bb_swd.c intentionally does NOT implement direct SWD DPIDR reads or
+// target detection. Those require reaching into the debugprobe
+// submodule (DAP_SWD.c / probe.c low-level API) which is vendor code and
+// would need a non-trivial integration layer. The BugBuster approach is
+// to let the host-side CMSIS-DAP driver (OpenOCD, pyOCD, probe-rs) do the
+// detection and DPIDR read, and only surface the last-known-good values
+// from this module.
+//
+// As a result:
+//   - bb_swd_get_status() reports dap_connected based on tud_mounted()
+//     only (does the host see the CMSIS-DAP interface?).
+//   - target_detected and dpidr are always 0 unless the caller explicitly
+//     set them via a future hook. They are NOT fabricated.
+//   - bb_swd_detect_target() is an honest no-op that returns false and
+//     leaves the cached values alone.
+//
+// See .omc/specs/deep-interview-swd-exp-ext-cleanup-2026-04-09.md for the
+// design decision and the path to a real implementation.
 
 static SwdStatus s_status = {
     .dap_connected = false,
@@ -43,11 +61,12 @@ void bb_swd_init(void)
 void bb_swd_get_status(SwdStatus *status)
 {
 #ifdef DEBUGPROBE_INTEGRATION
-    // Read live state from debugprobe / TinyUSB
+    // Host-side CMSIS-DAP interface enumeration is the only thing we can
+    // observe cheaply — it tells us whether OpenOCD / pyOCD is attached.
     s_status.dap_connected = tud_mounted() && tud_connected();
-    // TODO: target_detected and dpidr require hooking into DAP_SWD.c
-    // For now, cache from last bb_swd_detect_target() call
 #endif
+    // target_detected and dpidr stay at whatever the last successful host
+    // transaction left them — we do NOT invent values here.
 
     if (status) {
         *status = s_status;
@@ -68,27 +87,11 @@ bool bb_swd_set_clock(uint32_t khz)
 
 bool bb_swd_detect_target(void)
 {
-#ifdef DEBUGPROBE_INTEGRATION
-    // Use debugprobe's SWD engine to attempt target detection
-    // This requires:
-    //   1. SWD line reset (50+ clock cycles with SWDIO high)
-    //   2. JTAG-to-SWD switch sequence
-    //   3. Read DPIDR register
+    // Honest no-op: we do not run a direct SWD transaction from here.
+    // The host-side driver handles DPIDR read; BugBuster just relays
+    // USB CMSIS-DAP packets through the debugprobe PIO.
     //
-    // The debugprobe probe.c exposes probe_write_bits() and probe_read_bits()
-    // which can be used for raw SWD transactions.
-    //
-    // TODO: Implement direct SWD DPIDR read using probe low-level API
-    // For now, rely on the host (OpenOCD/pyOCD) to detect and cache the result
-    //
-    // Placeholder: check if last DAP transaction succeeded
-    // probe_swd_read(DP, DPIDR_ADDR, &dpidr);
-#else
-    // Standalone test mode: simulate target detection
-    // In real hardware, this would be a SWD transaction
-    s_status.target_detected = false;
-    s_status.dpidr = 0;
-#endif
-
+    // Returning the cached value lets higher layers display the last
+    // known state without this function ever pretending to have probed.
     return s_status.target_detected;
 }

@@ -40,25 +40,24 @@ bool bb_hvpak_set_voltage(uint16_t mv)
     if (!s_initialized) return false;
     if (mv < BB_HVPAK_MIN_MV || mv > BB_HVPAK_MAX_MV) return false;
 
-    // TODO: Convert voltage to HVPAK DAC code / register value
-    // The exact conversion depends on the HVPAK variant:
-    //   - Some use a DAC code proportional to voltage
-    //   - Some use a resistor divider with programmable taps
-    //   - Refer to the specific HVPAK datasheet for register map
+    // HVPAK driver is a stub — the real register map and DAC conversion
+    // are TODO (see bb_hvpak.h). Until the real driver lands we DO NOT
+    // attempt the I2C transaction because:
+    //   (a) the HVPAK chip is not populated on the breadboard, so every
+    //       write NAKs; and
+    //   (b) without external pull-ups the RP2040's i2c_write_blocking
+    //       can stall the I2C engine waiting for SDA to release, which
+    //       then blocks the HAT UART command handler task and looks like
+    //       a "BUSY" to the ESP32 side. That false-BUSY cascade was the
+    //       root cause of hat_setup_swd failing end-to-end on a
+    //       breadboard where everything else was wired correctly.
     //
-    // Placeholder: write voltage as 16-bit LE to a control register
-    uint8_t data[3];
-    data[0] = 0x00;                     // Register address (placeholder)
-    data[1] = (uint8_t)(mv & 0xFF);     // Voltage LSB
-    data[2] = (uint8_t)(mv >> 8);       // Voltage MSB
-
-    int ret = i2c_write_blocking(BB_HVPAK_I2C, BB_HVPAK_I2C_ADDR, data, 3, false);
-    if (ret < 0) return false;
-
+    // Returning false (with the ESP32's HAT_ERR_INVALID_FUNC wire
+    // response) is what the ESP32's hat_setup_swd() 3.3 V fallback
+    // expects — it will accept the request as "already satisfied" at
+    // the default voltage and continue the SWD setup sequence.
     s_voltage_mv = mv;
-    sleep_ms(2);  // Allow HVPAK voltage to settle
-
-    return true;
+    return false;
 }
 
 uint16_t bb_hvpak_get_voltage(void)

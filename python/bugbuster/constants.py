@@ -142,16 +142,28 @@ class LaTriggerType(IntEnum):
 class HatPinFunction(IntEnum):
     """
     Functions assignable to each EXP_EXT pin on the HAT connector.
+
+    Numeric slots 1..4 are reserved for wire-protocol compatibility.
+    They used to be SWDIO, SWCLK, TRACE1, TRACE2 but were removed when
+    the new HAT PCB (2026-04-09) gave SWD its own dedicated 3-pin
+    connector (SWDIO/SWCLK/TRACE) driven directly by the RP2040
+    debugprobe pins. Enabling SWD is now a single ``hat_setup_swd()``
+    call — it does NOT touch EXP_EXT.
+
+    ``BugBuster.hat_set_pin()`` raises :class:`HatPinFunctionError` if
+    called with any reserved numeric code.
     """
     DISCONNECTED = 0
-    SWDIO        = 1
-    SWCLK        = 2
-    TRACE1       = 3   # SWO
-    TRACE2       = 4
+    # 1, 2, 3, 4 are reserved (formerly SWDIO/SWCLK/TRACE1/TRACE2).
     GPIO1        = 5
     GPIO2        = 6
     GPIO3        = 7
     GPIO4        = 8
+
+
+# Reserved HatPinFunction numeric codes — module-level constants kept so
+# client.py can reject them without re-introducing them into the enum.
+HAT_FUNC_RESERVED_CODES: frozenset[int] = frozenset({1, 2, 3, 4})
 
 
 # ---------------------------------------------------------------------------

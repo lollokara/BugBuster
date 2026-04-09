@@ -25,9 +25,18 @@
 // SWD — debugprobe pins (PIO 0)
 // These must match the debugprobe board config
 // -----------------------------------------------------------------------------
-// SWD pins — managed by debugprobe (PIO 0), defined here for reference
+// SWD pins — managed by debugprobe (PIO 0), defined here for reference.
+// The 3-pin dedicated SWD connector (new PCB, 2026-04-09) exposes:
+//   SWDIO  — bidirectional data
+//   SWCLK  — clock from probe to target
+//   TRACE  — SWO single-wire trace input
+// Physical pins are finalized on the HAT board; the override is in
+// board_bugbuster_hat_config.h (SWCLK/SWDIO) and here (TRACE).
 #define BB_SWD_SWCLK_PIN    2       // GPIO2 — SWD clock (debugprobe default for Pico)
 #define BB_SWD_SWDIO_PIN    3       // GPIO3 — SWD data (debugprobe default for Pico)
+#define BB_SWD_TRACE_PIN    29      // GPIO29 — SWO trace input (new dedicated SWD connector)
+                                    // TODO(user): confirm GPIO29 matches the final HAT PCB;
+                                    // GPIO23/24/29 were free per the 2026-04-09 pin audit.
 
 // -----------------------------------------------------------------------------
 // Power Management
@@ -62,6 +71,15 @@
 // IRQ — Shared interrupt line with BugBuster
 // -----------------------------------------------------------------------------
 #define BB_IRQ_PIN          8       // GPIO8 — Open-drain, active low
+
+// -----------------------------------------------------------------------------
+// LA-done IRQ — dedicated capture-complete signal to ESP32
+// -----------------------------------------------------------------------------
+// Pulsed low for ~2 µs by bb_la.c whenever the LA transitions to LA_STATE_DONE,
+// so the ESP32 can stop polling hat_la_get_status() over the UART bridge.
+// Wired to ESP32-S3 GPIO18 (PIN_HAT_LA_DONE_IRQ in Firmware/esp32_ad74416h/src/hat.h).
+// Push-pull output on this side (only the RP2040 drives this line); idle high.
+#define BB_LA_DONE_PIN      28      // GPIO28 — active-low LA-done pulse to ESP32
 
 // -----------------------------------------------------------------------------
 // EXP_EXT — Expansion I/O lines (routed through HVPAK level translation)
@@ -150,10 +168,13 @@
 
 // Pin function codes
 #define HAT_FUNC_DISCONNECTED   0x00
-#define HAT_FUNC_SWDIO          0x01
-#define HAT_FUNC_SWCLK          0x02
-#define HAT_FUNC_TRACE1         0x03
-#define HAT_FUNC_TRACE2         0x04
+// Slots 0x01..0x04 are RESERVED for wire-protocol compatibility.
+// Formerly SWDIO, SWCLK, TRACE1, TRACE2 — removed when SWD moved to its
+// dedicated 3-pin connector (2026-04-09). bb_pins_set() rejects these.
+#define HAT_FUNC_RESERVED_1     0x01   // formerly SWDIO
+#define HAT_FUNC_RESERVED_2     0x02   // formerly SWCLK
+#define HAT_FUNC_RESERVED_3     0x03   // formerly TRACE1
+#define HAT_FUNC_RESERVED_4     0x04   // formerly TRACE2
 #define HAT_FUNC_GPIO1          0x05
 #define HAT_FUNC_GPIO2          0x06
 #define HAT_FUNC_GPIO3          0x07

@@ -36,7 +36,7 @@ extern TaskHandle_t tud_taskhandle;
 
 // Firmware version
 #define BB_HAT_FW_MAJOR  1
-#define BB_HAT_FW_MINOR  0
+#define BB_HAT_FW_MINOR  1
 
 static HatFrameParser s_parser;
 
@@ -131,12 +131,18 @@ static void handle_set_pin_config(const uint8_t *payload, uint8_t len)
         uint8_t func = payload[1];
         if (pin >= BB_NUM_EXT_PINS) { send_error(HAT_ERR_INVALID_PIN); return; }
         if (func > HAT_FUNC_GPIO4) { send_error(HAT_ERR_INVALID_FUNC); return; }
-        bb_pins_set(pin, func);
+        // bb_pins_set() returns false if `func` is a reserved (deprecated)
+        // slot like SWDIO/SWCLK/TRACE1/TRACE2 — those moved to the dedicated
+        // 3-pin SWD connector and are no longer assignable here.
+        if (!bb_pins_set(pin, func)) { send_error(HAT_ERR_INVALID_FUNC); return; }
         send_ok(NULL, 0);
     } else if (len == 4) {
         // All pins mode
         for (int i = 0; i < 4; i++) {
-            if (payload[i] > HAT_FUNC_GPIO4) { send_error(HAT_ERR_INVALID_FUNC); return; }
+            uint8_t f = payload[i];
+            if (f > HAT_FUNC_GPIO4) { send_error(HAT_ERR_INVALID_FUNC); return; }
+            // Reject reserved slots 1-4 up-front so partial writes don't happen.
+            if (f >= 1 && f <= 4) { send_error(HAT_ERR_INVALID_FUNC); return; }
         }
         bb_pins_set_all(payload);
         send_ok(NULL, 0);

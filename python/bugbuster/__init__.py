@@ -63,7 +63,13 @@ See the ``examples/`` directory:
 - ``07_digital_io.py``    — ESP32 GPIO digital read/write (USB + HTTP)
 """
 
-from .client    import BugBuster, connect_usb, connect_http
+from .client    import (
+    BugBuster,
+    HatNotPresentError,
+    HatPinFunctionError,
+    connect_usb,
+    connect_http,
+)
 from .constants import (
     ChannelFunction,
     AdcRange, AdcRate, AdcMux,
@@ -88,6 +94,10 @@ __all__ = [
 
     # Main client
     "BugBuster",
+
+    # Errors
+    "HatNotPresentError",
+    "HatPinFunctionError",
 
     # HAL
     "BugBusterHAL",

@@ -94,6 +94,31 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
         const int bmCap_offset = cdc_start + 9 + 5 + 5 + 2;  // ACM bmCapabilities
         desc_configuration[bmCap_offset] = 0x06;  // SET_LINE_CODING + SEND_BREAK
     }
+
+    // Disambiguate BB_LA from CMSIS-DAP so the debugprobe's custom DAP
+    // class driver (lib/debugprobe/src/tusb_edpt_handler.c) does not bind
+    // to BB_LA. That driver's TU_VERIFY accepts any vendor interface with
+    // bInterfaceSubClass == 0 && bInterfaceProtocol == 0. Both
+    // TUD_VENDOR_DESCRIPTOR-generated interfaces default to 0/0, so before
+    // this patch the DAP driver was called twice and its globals
+    // (itf_num, _out_ep_addr, _in_ep_addr) were overwritten to the last
+    // matched interface (BB_LA at ITF 3). That left OpenOCD's CMSIS-DAP
+    // CMD_INFO silently dropped because the DAP driver was listening on
+    // the wrong endpoints.
+    //
+    // Patching BB_LA's subclass/protocol to 0xFF makes the DAP driver
+    // reject it; TinyUSB then falls back to its built-in vendor class
+    // driver for BB_LA, which is what bb_la_usb.c already expects.
+    //
+    // Interface descriptor layout (9 bytes):
+    //   [0]=bLength [1]=bDescriptorType [2]=bInterfaceNumber
+    //   [3]=bAlternateSetting [4]=bNumEndpoints [5]=bInterfaceClass
+    //   [6]=bInterfaceSubClass [7]=bInterfaceProtocol [8]=iInterface
+    {
+        const int bb_la_start = TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_CDC_DESC_LEN;
+        desc_configuration[bb_la_start + 6] = 0xFF;  // bInterfaceSubClass
+        desc_configuration[bb_la_start + 7] = 0xFF;  // bInterfaceProtocol
+    }
     return desc_configuration;
 }
 

@@ -11,8 +11,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// TinyUSB vendor instance index for LA (0 = CMSIS-DAP, 1 = LA)
-#define BB_LA_VENDOR_ITF    1
+// TinyUSB vendor instance index for LA in the built-in vendor class
+// driver's namespace. BB_LA is the ONLY interface managed by the
+// built-in driver — CMSIS-DAP is claimed by the custom DAP class driver
+// in lib/debugprobe/src/tusb_edpt_handler.c, so it does NOT count as a
+// built-in vendor instance. BB_LA is therefore instance 0.
+//
+// Prior to 2026-04-09 this was 1, but the subclass-patch in
+// bb_usb_descriptors.c now correctly lets the custom DAP driver claim
+// CMSIS-DAP only, leaving BB_LA as the built-in driver's sole tenant.
+#define BB_LA_VENDOR_ITF    0
 
 /**
  * @brief Initialize LA USB streaming.

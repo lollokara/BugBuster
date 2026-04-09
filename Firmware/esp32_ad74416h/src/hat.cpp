@@ -31,6 +31,19 @@ static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static bool s_initialized = false;
 static uint8_t s_last_error = 0;
 
+// Dedicated LA-done IRQ (RP2040 GPIO28 → ESP32 PIN_HAT_LA_DONE_IRQ).
+// Set from the GPIO ISR on falling edge, consumed by hat_la_done_consume().
+static volatile bool s_la_done_pending = false;
+// Tracks whether we've registered the global GPIO ISR service so we don't
+// call gpio_install_isr_service() more than once.
+static bool s_gpio_isr_service_installed = false;
+
+static void IRAM_ATTR hat_la_done_isr(void *arg)
+{
+    (void)arg;
+    s_la_done_pending = true;
+}
+
 // -----------------------------------------------------------------------------
 // CRC-8 (polynomial 0x07, same as AD74416H SPI CRC)
 // -----------------------------------------------------------------------------
@@ -278,6 +291,46 @@ bool hat_init(void)
     }
 #endif
 
+    // Configure the dedicated LA-done IRQ input from the RP2040 (active low,
+    // falling-edge interrupt). Uses the internal pull-up since the RP2040
+    // side drives push-pull only during the brief done pulse.
+    if ((int)PIN_HAT_LA_DONE_IRQ >= 0) {
+        gpio_config_t la_done_cfg = {
+            .pin_bit_mask = (1ULL << PIN_HAT_LA_DONE_IRQ),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_NEGEDGE,
+        };
+        err = gpio_config(&la_done_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "LA-done IRQ pin config failed: %s (non-fatal)", esp_err_to_name(err));
+        } else {
+            if (!s_gpio_isr_service_installed) {
+                esp_err_t isr_err = gpio_install_isr_service(0);
+                // ESP_ERR_INVALID_STATE means it was already installed by
+                // another subsystem — that's fine, we can still add a handler.
+                if (isr_err == ESP_OK || isr_err == ESP_ERR_INVALID_STATE) {
+                    s_gpio_isr_service_installed = true;
+                } else {
+                    ESP_LOGW(TAG, "gpio_install_isr_service failed: %s",
+                             esp_err_to_name(isr_err));
+                }
+            }
+            if (s_gpio_isr_service_installed) {
+                esp_err_t add_err = gpio_isr_handler_add(
+                    PIN_HAT_LA_DONE_IRQ, hat_la_done_isr, NULL);
+                if (add_err != ESP_OK) {
+                    ESP_LOGW(TAG, "LA-done ISR handler add failed: %s",
+                             esp_err_to_name(add_err));
+                } else {
+                    ESP_LOGI(TAG, "LA-done IRQ armed on GPIO%d (falling edge)",
+                             (int)PIN_HAT_LA_DONE_IRQ);
+                }
+            }
+        }
+    }
+
     s_initialized = true;
     ESP_LOGI(TAG, "HAT subsystem initialized (UART%d: GPIO%d TX, GPIO%d RX, %d baud)",
              HAT_UART_NUM, PIN_HAT_TX, PIN_HAT_RX, HAT_UART_BAUD);
@@ -379,11 +432,27 @@ bool hat_connect(void)
     return true;
 }
 
+// Enum slots 1..4 are reserved (formerly SWDIO/SWCLK/TRACE1/TRACE2).
+// SWD now lives on the dedicated 3-pin connector — these function codes
+// are no longer assignable to EXP_EXT pins.
+static inline bool hat_func_is_reserved(HatPinFunction func)
+{
+    return (uint8_t)func >= 1 && (uint8_t)func <= 4;
+}
+
 bool hat_set_pin(uint8_t ext_pin, HatPinFunction func)
 {
     if (!s_state.connected) return false;
     if (ext_pin >= HAT_NUM_EXT_PINS) return false;
     if (func >= HAT_FUNC_COUNT) return false;
+    if (hat_func_is_reserved(func)) {
+        ESP_LOGW(TAG,
+                 "EXP_EXT_%d: function code %u (SWDIO/SWCLK/TRACE) is reserved — "
+                 "SWD now uses the dedicated connector, use hat_setup_swd() instead",
+                 ext_pin + 1, (unsigned)func);
+        s_last_error = HAT_ERR_INVALID_FUNC;
+        return false;
+    }
 
     uint8_t payload[2] = { ext_pin, (uint8_t)func };
     uint8_t rsp[4] = {};
@@ -409,6 +478,13 @@ bool hat_set_all_pins(const HatPinFunction config[HAT_NUM_EXT_PINS])
     uint8_t payload[HAT_NUM_EXT_PINS];
     for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
         if (config[i] >= HAT_FUNC_COUNT) return false;
+        if (hat_func_is_reserved(config[i])) {
+            ESP_LOGW(TAG,
+                     "EXP_EXT_%d: function code %u reserved (SWD moved to dedicated connector)",
+                     i + 1, (unsigned)config[i]);
+            s_last_error = HAT_ERR_INVALID_FUNC;
+            return false;
+        }
         payload[i] = (uint8_t)config[i];
     }
 
@@ -472,10 +548,10 @@ const char* hat_func_name(HatPinFunction func)
 {
     switch (func) {
         case HAT_FUNC_DISCONNECTED: return "Disconnected";
-        case HAT_FUNC_SWDIO:        return "SWDIO";
-        case HAT_FUNC_SWCLK:        return "SWCLK";
-        case HAT_FUNC_TRACE1:       return "TRACE1";
-        case HAT_FUNC_TRACE2:       return "TRACE2";
+        case HAT_FUNC_RESERVED_1:
+        case HAT_FUNC_RESERVED_2:
+        case HAT_FUNC_RESERVED_3:
+        case HAT_FUNC_RESERVED_4:   return "Reserved (deprecated)";
         case HAT_FUNC_GPIO1:        return "GPIO1";
         case HAT_FUNC_GPIO2:        return "GPIO2";
         case HAT_FUNC_GPIO3:        return "GPIO3";
@@ -610,18 +686,16 @@ bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)
     }
     delay_ms(50);  // Target power-up
 
-    // 3. Route EXP_EXT pins for SWD
-    // Connector A: EXT1=SWDIO, EXT2=SWCLK (leave EXT3/4 as-is)
-    // Connector B: EXT3=SWDIO, EXT4=SWCLK (leave EXT1/2 as-is)
-    if (connector == HAT_CONNECTOR_A) {
-        hat_set_pin(0, HAT_FUNC_SWDIO);
-        hat_set_pin(1, HAT_FUNC_SWCLK);
-    } else {
-        hat_set_pin(2, HAT_FUNC_SWDIO);
-        hat_set_pin(3, HAT_FUNC_SWCLK);
-    }
+    // 3. SWD routing is no longer done via EXP_EXT pin assignment.
+    //    The new HAT PCB (2026-04-09) exposes a dedicated 3-pin SWD
+    //    connector (SWDIO/SWCLK/TRACE) wired directly to the RP2040
+    //    debugprobe pins. The debugprobe PIO is always running on those
+    //    pins, so this function just sets voltage + power + leaves
+    //    EXP_EXT alone.
+    //    See .omc/specs/deep-interview-swd-exp-ext-cleanup-2026-04-09.md.
 
-    ESP_LOGI(TAG, "SWD setup complete — connect debug tool to USB CMSIS-DAP");
+    ESP_LOGI(TAG, "SWD setup complete — dedicated SWD connector active, "
+                  "connect debug tool to USB CMSIS-DAP");
     return true;
 }
 
@@ -781,6 +855,24 @@ void hat_poll(void)
             }
         }
     }
+}
+
+// -----------------------------------------------------------------------------
+// LA-done IRQ (dedicated GPIO from RP2040 BB_LA_DONE_PIN)
+// -----------------------------------------------------------------------------
+bool hat_la_done_pending(void)
+{
+    return s_la_done_pending;
+}
+
+bool hat_la_done_consume(void)
+{
+    // Atomic-enough for this use: the ISR only sets the flag, the task side
+    // only clears it, and we tolerate a single missed edge in the unlikely
+    // race window. If that ever matters, promote to atomic_exchange.
+    if (!s_la_done_pending) return false;
+    s_la_done_pending = false;
+    return true;
 }
 
 // end of hat.cpp

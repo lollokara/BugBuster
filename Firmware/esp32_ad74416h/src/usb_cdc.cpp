@@ -34,12 +34,12 @@ static void cdc_line_state_callback(int itf, cdcacm_event_t *event)
     ESP_LOGI(TAG, "CDC %d line state: DTR=%d RTS=%d", itf, dtr, rts);
 
     if (itf == 0) {
-        // CLI/BBP port: when host drops DTR (closes serial port),
-        // exit binary mode so a new connection can re-handshake immediately.
-        if (!dtr && bbpIsActive()) {
-            ESP_LOGW(TAG, "CLI port DTR dropped while BBP active — resetting to CLI mode");
-            bbpExitBinaryMode();
-        }
+        // CLI/BBP port: DO NOT exit binary mode on DTR changes.
+        // macOS USB CDC drivers can glitch DTR during normal operation, and
+        // exiting binary mode mid-session causes stream corruption when a
+        // new handshake races with queued log/prompt text. A fresh handshake
+        // will reset state cleanly if the host really did disconnect.
+        (void)dtr;
     } else {
         // Track DTR for bridge ports
         int bridge_id = itf - 1;

@@ -39,7 +39,10 @@ extern "C" {
 #define CFG_TUD_CDC              1
 #define CFG_TUD_MSC              0
 #define CFG_TUD_MIDI             0
-#define CFG_TUD_VENDOR           2   // 1 for CMSIS-DAP + 1 for BugBuster LA data
+#define CFG_TUD_VENDOR           1   // BugBuster LA only — CMSIS-DAP is handled
+                                     // by the custom DAP class driver in
+                                     // lib/debugprobe/src/tusb_edpt_handler.c
+                                     // and does NOT use the built-in vendor driver.
 
 // Buffer sizes
 #define CFG_TUD_CDC_RX_BUFSIZE   64

@@ -276,15 +276,8 @@ def test_hat_la_status(usb_device):
 # SWD debug setup (USB only)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.usb_only
-def test_hat_swd_detect(usb_device):
-    """
-    hat_setup_swd(3300, 0) configures SWD routing for 3.3 V target.
-    Should return True even if no SWD target is connected.
-    """
-    result = usb_device.hat_setup_swd(target_voltage_mv=3300, connector=0)
-    assert result is True, f"hat_setup_swd() should return True, got {result}"
-    assert_no_faults(usb_device)
+# NOTE: SWD-specific tests live in tests/device/test_15_swd.py since the
+# 2026-04-09 cleanup. test_hat_swd_detect was moved there.
 
 
 # ---------------------------------------------------------------------------
@@ -304,9 +297,13 @@ def test_la_trigger_types(usb_device):
         usb_device.hat_la_set_trigger(trig_type, channel=0)
         usb_device.hat_la_arm()
         status = usb_device.hat_la_get_status()
-        assert status["state"] in (1, 2), (
-            f"Expected LA state armed(1) or capturing(2) after arm with "
-            f"trigger {trig_type!r}, got {status['state_name']}"
+        # Accept armed(1), capturing(2), or done(3) — HIGH/LOW triggers fire
+        # immediately if the condition is already met, and RISING/FALLING can
+        # fire on noise with floating inputs. The important thing is that the
+        # state is valid (not error=4).
+        assert status["state"] in (1, 2, 3), (
+            f"Expected LA state armed(1), capturing(2), or done(3) after arm "
+            f"with trigger {trig_type!r}, got {status['state_name']}"
         )
         usb_device.hat_la_stop()
 

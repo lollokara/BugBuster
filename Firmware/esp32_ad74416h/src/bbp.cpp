@@ -56,6 +56,11 @@ static AD74416H     *s_dev = nullptr;
 static AD74416H_SPI *s_spi = nullptr;
 
 static bool     s_active = false;       // Binary mode active
+// Sticky: set on first successful handshake, never cleared until reboot.
+// Once a host has spoken BBP on CDC #0, we treat that interface as binary-only
+// and suppress any ASCII CLI output forever. This prevents log/prompt text
+// from corrupting the stream after a transient binary-mode exit.
+static bool     s_cdcClaimed = false;
 static uint16_t s_evtSeq = 0;          // Event sequence counter
 
 // Handshake detection state
@@ -81,9 +86,14 @@ static BbpAdcStreamBuf s_adcBuf = {};
 static uint8_t  s_rxBuf[RX_BUF_SIZE];
 static uint16_t s_rxLen = 0;
 
-// TX work buffers
+// TX work buffers — protected by s_txMutex since sendMsg can be called from
+// multiple tasks (BBP command task + event publishers: alert task, HAT task,
+// main ISR deferred task). Without this mutex the shared buffers were being
+// clobbered mid-frame, producing corrupt CRCs on the wire (notably on large
+// responses like WIFI_GET_STATUS).
 static uint8_t  s_msgBuf[BBP_MAX_PAYLOAD];  // Raw message assembly
 static uint8_t  s_cobsBuf[BBP_COBS_MAX];    // COBS-encoded output
+static SemaphoreHandle_t s_txMutex = nullptr;
 
 // ADC batch buffer for streaming
 #define ADC_BATCH_MAX  50
@@ -91,7 +101,7 @@ static BbpAdcSample s_adcBatch[ADC_BATCH_MAX];
 
 // Timeout: if no valid frame within 5s after handshake, revert
 static uint32_t s_lastFrameMs = 0;
-#define BBP_IDLE_TIMEOUT_MS  5000
+#define BBP_IDLE_TIMEOUT_MS  60000   // 60s — pytest + LA captures can pause longer than 5s
 
 // -----------------------------------------------------------------------------
 // COBS Codec
@@ -246,10 +256,17 @@ static void sendFrame(const uint8_t *msg, size_t msgLen)
     usb_cdc_cli_write(s_cobsBuf, cobsLen + 1);
 }
 
-// Build and send a response/event/error message
+// Build and send a response/event/error message.
+// Serialized through s_txMutex because this function uses shared static
+// buffers (s_msgBuf, s_cobsBuf) and is called from multiple FreeRTOS tasks.
 static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
                     const uint8_t *payload, size_t payloadLen)
 {
+    if (s_txMutex && xSemaphoreTake(s_txMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "sendMsg: tx mutex timeout (msgType=0x%02X cmd=0x%02X)", msgType, cmdId);
+        return;
+    }
+
     size_t pos = 0;
     put_u8(s_msgBuf, &pos, msgType);
     put_u16(s_msgBuf, &pos, seq);
@@ -257,6 +274,7 @@ static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
     if (payload && payloadLen > 0) {
         if (pos + payloadLen + 2 > BBP_MAX_PAYLOAD) {
             ESP_LOGW(TAG, "sendMsg: payload too large (%u + %u > %u)", (unsigned)pos, (unsigned)payloadLen, BBP_MAX_PAYLOAD);
+            if (s_txMutex) xSemaphoreGive(s_txMutex);
             return;
         }
         memcpy(s_msgBuf + pos, payload, payloadLen);
@@ -265,6 +283,8 @@ static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
     uint16_t crc = bbp_crc16(s_msgBuf, pos);
     put_u16(s_msgBuf, &pos, crc);
     sendFrame(s_msgBuf, pos);
+
+    if (s_txMutex) xSemaphoreGive(s_txMutex);
 }
 
 static void sendResponse(uint16_t seq, uint8_t cmdId,
@@ -2693,6 +2713,9 @@ void bbpInit(AD74416H *device, AD74416H_SPI *spi)
     s_scopeStreamActive = false;
     s_evtSeq = 0;
     memset(&s_adcBuf, 0, sizeof(s_adcBuf));
+    if (!s_txMutex) {
+        s_txMutex = xSemaphoreCreateMutex();
+    }
     ESP_LOGI(TAG, "BBP initialized (proto v%d, fw v%d.%d.%d)",
              BBP_PROTO_VERSION, BBP_FW_VERSION_MAJOR,
              BBP_FW_VERSION_MINOR, BBP_FW_VERSION_PATCH);
@@ -2701,6 +2724,11 @@ void bbpInit(AD74416H *device, AD74416H_SPI *spi)
 bool bbpIsActive(void)
 {
     return s_active;
+}
+
+bool bbpCdcClaimed(void)
+{
+    return s_cdcClaimed;
 }
 
 bool bbpDetectHandshake(uint8_t byte)
@@ -2725,6 +2753,7 @@ bool bbpDetectHandshake(uint8_t byte)
 
             // Enter binary mode
             s_active = true;
+            s_cdcClaimed = true;   // Sticky — CDC #0 is now binary-only for the rest of boot
             s_rxLen = 0;
             s_evtSeq = 0;
             s_lastFrameMs = millis_now();
@@ -2752,14 +2781,15 @@ void bbpExitBinaryMode(void)
     s_rxLen = 0;
     s_magic_idx = 0;
 
-    // Restore log output for CLI mode
-    esp_log_level_set("*", ESP_LOG_INFO);
-
-    // NOTE: Do NOT write "[CLI Ready]" text to CDC #0 here. The desktop app
-    // uses CDC #0 exclusively for binary BBP frames; injecting ASCII text
-    // corrupts the FrameAccumulator, causes CRC mismatches, and triggers a
-    // spurious disconnection. The desktop detects binary-mode exit via timeout.
-    ESP_LOGI(TAG, "Binary mode deactivated, CLI ready");
+    // CRITICAL: Do NOT call ESP_LOGI here and do NOT restore log level yet.
+    // Any text written to CDC #0 (via ESP_LOG → stdout → CDC) while a host
+    // may still be reading binary frames will corrupt the stream and cause
+    // CRC mismatches. Logs stay suppressed until the host explicitly sends
+    // a new CLI character (handled elsewhere).
+    //
+    // The previous version of this function wrote "Binary mode deactivated,
+    // CLI ready" via ESP_LOGI, which produced exactly the corruption it
+    // warned against.
 }
 
 void bbpProcess(void)

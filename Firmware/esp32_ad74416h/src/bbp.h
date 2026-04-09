@@ -27,7 +27,7 @@ extern "C" {
 
 #define BBP_FW_VERSION_MAJOR    1
 #define BBP_FW_VERSION_MINOR    2
-#define BBP_FW_VERSION_PATCH    0
+#define BBP_FW_VERSION_PATCH    1
 
 // Handshake magic bytes: 0xBB 'B' 'U' 'G'
 #define BBP_MAGIC_0             0xBB
@@ -284,6 +284,12 @@ void bbpSendEvent(uint8_t evtId, const uint8_t *payload, size_t len);
 
 /** @brief Exit binary mode and return to CLI. */
 void bbpExitBinaryMode(void);
+
+// Returns true if BBP has ever successfully handshaken on CDC #0 this boot.
+// Sticky — once claimed, remains true until reboot. Used by CLI and other
+// ASCII-producing code paths to avoid writing text to CDC #0 which would
+// corrupt a reconnecting binary session.
+bool bbpCdcClaimed(void);
 
 /**
  * @brief Push an ADC sample into the stream ring buffer.

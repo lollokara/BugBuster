@@ -43,6 +43,16 @@ def pytest_addoption(parser):
         default=False,
         help="Enable HAT expansion board tests (requires physical HAT)",
     )
+    parser.addoption(
+        "--swd-target",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable SWD tests that require a real target wired to the "
+            "dedicated 3-pin SWD connector (e.g. a second RP2040 or STM32). "
+            "Without this flag, tests that need a live target are skipped."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

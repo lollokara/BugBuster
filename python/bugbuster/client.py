@@ -179,6 +179,37 @@ def _normalize_http_hat_status(raw: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+class HatNotPresentError(RuntimeError):
+    """
+    Raised when an operation requires the BugBuster HAT expansion board
+    but no HAT has been detected on the device.
+
+    The Logic Analyzer and SWD debug functions live on the RP2040 on the
+    HAT, so they cannot work on a bare BugBuster board.  Connect the HAT
+    and call :meth:`BugBuster.hat_detect` to refresh the cached presence
+    state, then retry.
+    """
+
+
+class HatPinFunctionError(ValueError):
+    """
+    Raised when :meth:`BugBuster.hat_set_pin` is called with a function
+    code that is no longer assignable to an EXP_EXT pin.
+
+    Numeric slots ``1``, ``2``, ``3``, ``4`` are reserved for wire-
+    protocol compatibility — they used to be ``SWDIO``, ``SWCLK``,
+    ``TRACE1``, ``TRACE2``.  SWD now lives on the dedicated 3-pin HAT
+    connector (``SWDIO``/``SWCLK``/``TRACE``) driven directly by the
+    RP2040 debugprobe pins.  To enable SWD, call
+    :meth:`BugBuster.hat_setup_swd` instead — it configures target
+    voltage and power without touching any EXP_EXT pin.
+    """
+
+
+# ---------------------------------------------------------------------------
 # Main client
 # ---------------------------------------------------------------------------
 
@@ -204,6 +235,8 @@ class BugBuster:
         self._usb       = isinstance(transport, USBTransport)
         self._connected = False
         self._hal       = None
+        # Cached HAT presence: None = unknown (probe on demand), bool = known
+        self._hat_present_cache = None
 
     @property
     def hal(self):
@@ -1248,6 +1281,35 @@ class BugBuster:
     # ── HAT Expansion Board ──────────────────────────────────────────
     # ------------------------------------------------------------------
 
+    def _require_hat_present(self) -> None:
+        """
+        Guard for HAT-only operations (Logic Analyzer, SWD debug).
+
+        Lazily probes the HAT once and caches the result.  Raises
+        :class:`HatNotPresentError` with an actionable message if no HAT
+        has been detected on this device.  Call :meth:`hat_detect` to
+        invalidate the cache after physically attaching a HAT.
+        """
+        if self._hat_present_cache is None:
+            try:
+                status = self.hat_get_status()
+            except Exception as exc:  # noqa: BLE001
+                raise HatNotPresentError(
+                    "Could not query HAT status to verify HAT presence: "
+                    f"{exc!s}. The Logic Analyzer and SWD functions are "
+                    "HAT-only and require a working HAT expansion board."
+                ) from exc
+            self._hat_present_cache = bool(status.get("detected", False))
+
+        if not self._hat_present_cache:
+            raise HatNotPresentError(
+                "This operation requires the BugBuster HAT expansion board, "
+                "but no HAT was detected on the device. The Logic Analyzer "
+                "and SWD debug functions live on the RP2040 on the HAT and "
+                "cannot run on a bare BugBuster board. Connect the HAT and "
+                "call hat_detect() to refresh, then retry."
+            )
+
     def hat_get_status(self) -> dict:
         """
         Get HAT expansion board status: detection, connection, pin config.
@@ -1282,8 +1344,21 @@ class BugBuster:
         :param ext_pin:  Pin index 0-3 (EXP_EXT_1 to EXP_EXT_4)
         :param function: HatPinFunction value
         :return: True if HAT acknowledged
+        :raises HatPinFunctionError: If ``function`` is one of the reserved
+            numeric slots 1..4 (formerly SWDIO/SWCLK/TRACE1/TRACE2). Use
+            :meth:`hat_setup_swd` instead — SWD now lives on a dedicated
+            3-pin connector and is no longer assigned per-pin.
         """
         func_val = int(function)
+        from .constants import HAT_FUNC_RESERVED_CODES
+        if func_val in HAT_FUNC_RESERVED_CODES:
+            raise HatPinFunctionError(
+                f"HatPinFunction code {func_val} is reserved (formerly "
+                "SWDIO/SWCLK/TRACE1/TRACE2). SWD now uses the dedicated "
+                "3-pin HAT connector — call hat_setup_swd(target_voltage_mv, "
+                "connector) to enable SWD instead of assigning a function "
+                "to an EXP_EXT pin."
+            )
         if self._usb:
             payload = struct.pack('<BB', ext_pin, func_val)
             self._usb_cmd(CmdId.HAT_SET_PIN, payload)
@@ -1318,7 +1393,15 @@ class BugBuster:
             return resp.get("ok", False)
 
     def hat_detect(self) -> dict:
-        """Re-run HAT detection and return result."""
+        """Re-run HAT detection and return result.
+
+        Also invalidates the cached HAT-presence flag used by the
+        Logic Analyzer / SWD guard, so that newly attached HATs are
+        picked up on the next guarded call.
+        """
+        # Invalidate the cached presence — the very point of calling
+        # hat_detect() is usually to re-probe after wiring changes.
+        self._hat_present_cache = None
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_DETECT)
             off = 0
@@ -1326,16 +1409,20 @@ class BugBuster:
             hat_type = resp[off]; off += 1
             detect_v = struct.unpack_from('<f', resp, off)[0]; off += 4
             connected = bool(resp[off]); off += 1
-            return {"detected": detected, "type": hat_type,
-                    "detect_voltage": detect_v, "connected": connected}
+            result = {"detected": detected, "type": hat_type,
+                      "detect_voltage": detect_v, "connected": connected}
         else:
             raw = self._http_post("/hat/detect", {})
-            return {
+            result = {
                 "detected": bool(_first_present(raw, "detected", default=False)),
                 "type": _parse_int_maybe_hex(_first_present(raw, "type"), 0),
                 "detect_voltage": float(_first_present(raw, "detect_voltage", "detectVoltage", default=0.0) or 0.0),
                 "connected": bool(_first_present(raw, "connected", default=False)),
             }
+        # Refresh cache from this fresh probe so subsequent guarded calls
+        # don't issue another status query.
+        self._hat_present_cache = bool(result["detected"])
+        return result
 
     def hat_set_power(self, connector: int, enable: bool) -> bool:
         """
@@ -1396,7 +1483,9 @@ class BugBuster:
         :param target_voltage_mv: Target voltage in mV (e.g. 3300 for 3.3V)
         :param connector: 0 = Connector A, 1 = Connector B
         :return: True if all steps succeeded
+        :raises HatNotPresentError: If no HAT is detected on this device.
         """
+        self._require_hat_present()
         if self._usb:
             payload = struct.pack('<HB', target_voltage_mv, connector)
             self._usb_cmd(CmdId.HAT_SETUP_SWD, payload)
@@ -1418,7 +1507,9 @@ class BugBuster:
         :param channels: Number of channels (1, 2, or 4)
         :param rate_hz:  Sample rate in Hz (max ~100MHz for 1ch, ~25MHz for 4ch)
         :param depth:    Total samples to capture
+        :raises HatNotPresentError: If no HAT is detected on this device.
         """
+        self._require_hat_present()
         payload = struct.pack('<BII', channels, rate_hz, depth)
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_CONFIG, payload)
@@ -1432,7 +1523,9 @@ class BugBuster:
 
         :param trigger_type: LaTriggerType (0=none, 1=rising, 2=falling, 3=both, 4=high, 5=low)
         :param channel: Which channel to trigger on (0-3)
+        :raises HatNotPresentError: If no HAT is detected on this device.
         """
+        self._require_hat_present()
         payload = struct.pack('<BB', int(trigger_type), channel)
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_TRIGGER, payload)
@@ -1441,28 +1534,44 @@ class BugBuster:
             raise NotImplementedError("LA control is USB-only")
 
     def hat_la_arm(self) -> bool:
-        """Arm the logic analyzer trigger and start waiting for capture."""
+        """Arm the logic analyzer trigger and start waiting for capture.
+
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_ARM)
             return True
         raise NotImplementedError("LA control is USB-only")
 
     def hat_la_force(self) -> bool:
-        """Force trigger immediately (bypass trigger condition)."""
+        """Force trigger immediately (bypass trigger condition).
+
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_FORCE)
             return True
         raise NotImplementedError("LA control is USB-only")
 
     def hat_la_stop(self) -> bool:
-        """Stop capture and return to idle."""
+        """Stop capture and return to idle.
+
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_STOP)
             return True
         raise NotImplementedError("LA control is USB-only")
 
     def hat_la_get_status(self) -> dict:
-        """Get logic analyzer capture status."""
+        """Get logic analyzer capture status.
+
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
         _STATE_NAMES = {0: "idle", 1: "armed", 2: "capturing", 3: "done", 4: "error"}
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_LA_STATUS)
@@ -1486,7 +1595,10 @@ class BugBuster:
         """
         Read all captured LA data from the buffer. Blocks until complete.
         Returns raw bytes — use hat_la_decode() to convert to channel arrays.
+
+        :raises HatNotPresentError: If no HAT is detected on this device.
         """
+        self._require_hat_present()
         status = self.hat_la_get_status()
         if status["state"] not in (3,):  # LA_STATE_DONE
             raise RuntimeError(f"LA not in DONE state (state={status['state_name']})")

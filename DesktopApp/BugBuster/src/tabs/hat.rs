@@ -3,12 +3,15 @@ use leptos::task::spawn_local;
 use crate::tauri_bridge::*;
 use crate::components::controls::Dropdown;
 
+// Pin function options for the EXP_EXT dropdown.
+//
+// Numeric slots 1..4 are RESERVED (formerly SWDIO/SWCLK/TRACE1/TRACE2)
+// and no longer appear in this list — the new HAT PCB (2026-04-09) exposes
+// SWD on a dedicated 3-pin connector driven directly by the RP2040
+// debugprobe pins. Enabling SWD is done via the "Enable SWD" buttons in
+// the Power section of this tab, which call hat_setup_swd().
 const PIN_FUNCTION_OPTIONS: &[(&str, &str)] = &[
     ("0", "Disconnected"),
-    ("1", "SWDIO"),
-    ("2", "SWCLK"),
-    ("3", "TRACE1 (SWO)"),
-    ("4", "TRACE2"),
     ("5", "GPIO1"),
     ("6", "GPIO2"),
     ("7", "GPIO3"),
@@ -29,8 +32,14 @@ fn hat_type_name(t: u8) -> &'static str {
 
 fn func_name(f: u8) -> &'static str {
     match f {
-        0 => "Disconnected", 1 => "SWDIO", 2 => "SWCLK", 3 => "TRACE1",
-        4 => "TRACE2", 5 => "GPIO1", 6 => "GPIO2", 7 => "GPIO3", 8 => "GPIO4",
+        0 => "Disconnected",
+        // 1..4 formerly SWDIO/SWCLK/TRACE1/TRACE2 — SWD moved to a
+        // dedicated 3-pin connector on the new HAT PCB (2026-04-09).
+        1..=4 => "Reserved",
+        5 => "GPIO1",
+        6 => "GPIO2",
+        7 => "GPIO3",
+        8 => "GPIO4",
         _ => "?",
     }
 }
@@ -292,16 +301,19 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 }).collect::<Vec<_>>()}
                             </div>
                             // Presets
+                            //
+                            // The old "SWD Debug" / "SWD + SWO" presets assigned
+                            // EXP_EXT pins to SWDIO/SWCLK/TRACE — that never
+                            // actually routed SWD signals (debugprobe PIO is on
+                            // its own pins). On the new HAT PCB (2026-04-09) SWD
+                            // has a dedicated 3-pin connector and is enabled via
+                            // the "Enable SWD" buttons in the Power section of
+                            // this tab. Only the GPIO and Disconnect presets
+                            // remain here.
                             <div style="display: flex; gap: 6px; flex-wrap: wrap">
-                                <button class="btn" style="font-size: 10px; padding: 4px 12px"
-                                    on:click=move |_| { for (i, f) in [1u8,2,3,4].iter().enumerate() { send_hat_set_pin(i as u8, *f); } }
-                                >"SWD Debug"</button>
                                 <button class="btn" style="font-size: 10px; padding: 4px 12px"
                                     on:click=move |_| { for (i, f) in [5u8,6,7,8].iter().enumerate() { send_hat_set_pin(i as u8, *f); } }
                                 >"GPIO Mode"</button>
-                                <button class="btn" style="font-size: 10px; padding: 4px 12px"
-                                    on:click=move |_| { for (i, f) in [1u8,2,3,8].iter().enumerate() { send_hat_set_pin(i as u8, *f); } }
-                                >"SWD + SWO"</button>
                                 <button class="btn" style="font-size: 10px; padding: 4px 12px; background: #ef444420; color: #ef4444; border: 1px solid #ef444450"
                                     on:click=move |_| { for i in 0..4u8 { send_hat_set_pin(i, 0); } }
                                 >"Disconnect All"</button>

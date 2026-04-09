@@ -35,18 +35,26 @@ extern "C" {
 #if BREADBOARD_MODE
 // Breadboard test: UART0 on GPIO43/44 (still free in breadboard mode)
 // No ADC detect — always try UART ping
-// No IRQ pin in breadboard test
+// No shared IRQ pin in breadboard test, but we still wire the dedicated
+// LA-done input so RP2040 can signal capture completion without polling.
 #define HAT_NO_DETECT       1             // Skip ADC, probe via UART
 #define PIN_HAT_DETECT      GPIO_NUM_NC
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to RP2040 GPIO2
 #define PIN_HAT_RX          GPIO_NUM_44   // UART RX from RP2040 GPIO3
 #define PIN_HAT_IRQ         GPIO_NUM_NC
+// Dedicated LA-done interrupt input from RP2040 GPIO28 (BB_LA_DONE_PIN).
+// Active-low pulse (~2 µs) every time the LA transitions to LA_STATE_DONE.
+// Push-pull on the RP2040 side; internal pull-up enabled on the ESP32 side.
+#define PIN_HAT_LA_DONE_IRQ GPIO_NUM_18
 #else
 #define HAT_NO_DETECT       0
 #define PIN_HAT_DETECT      GPIO_NUM_47   // ADC input for HAT identification
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to HAT
 #define PIN_HAT_RX          GPIO_NUM_44   // UART RX from HAT
 #define PIN_HAT_IRQ         GPIO_NUM_15   // Shared open-drain interrupt
+// Dedicated LA-done interrupt input from RP2040 GPIO28 (BB_LA_DONE_PIN).
+// Active-low pulse (~2 µs) every time the LA transitions to LA_STATE_DONE.
+#define PIN_HAT_LA_DONE_IRQ GPIO_NUM_18
 #endif
 
 #define HAT_UART_NUM        UART_NUM_0
@@ -76,15 +84,22 @@ typedef enum {
 
 typedef enum {
     HAT_FUNC_DISCONNECTED = 0,  // Pin not assigned
-    HAT_FUNC_SWDIO,             // SWD data I/O
-    HAT_FUNC_SWCLK,             // SWD clock
-    HAT_FUNC_TRACE1,            // Trace data 1 (SWO)
-    HAT_FUNC_TRACE2,            // Trace data 2
-    HAT_FUNC_GPIO1,             // General-purpose I/O 1
-    HAT_FUNC_GPIO2,             // General-purpose I/O 2
-    HAT_FUNC_GPIO3,             // General-purpose I/O 3
-    HAT_FUNC_GPIO4,             // General-purpose I/O 4
-    HAT_FUNC_COUNT,
+    // Slots 1..4 are RESERVED for wire-protocol compatibility.
+    // They used to be SWDIO, SWCLK, TRACE1, TRACE2 but SWD now has a
+    // dedicated 3-pin connector (new HAT PCB, 2026-04-09) driven directly
+    // by the RP2040 debugprobe pins. These function codes are no longer
+    // assignable to EXP_EXT pins — hat_set_pin() rejects them with
+    // HAT_ERR_INVALID_FUNC. See
+    // .omc/specs/deep-interview-swd-exp-ext-cleanup-2026-04-09.md.
+    HAT_FUNC_RESERVED_1 = 1,    // formerly SWDIO
+    HAT_FUNC_RESERVED_2 = 2,    // formerly SWCLK
+    HAT_FUNC_RESERVED_3 = 3,    // formerly TRACE1
+    HAT_FUNC_RESERVED_4 = 4,    // formerly TRACE2
+    HAT_FUNC_GPIO1      = 5,    // General-purpose I/O 1
+    HAT_FUNC_GPIO2      = 6,    // General-purpose I/O 2
+    HAT_FUNC_GPIO3      = 7,    // General-purpose I/O 3
+    HAT_FUNC_GPIO4      = 8,    // General-purpose I/O 4
+    HAT_FUNC_COUNT      = 9,
 } HatPinFunction;
 
 #define HAT_NUM_EXT_PINS    4   // EXP_EXT_1 through EXP_EXT_4
@@ -347,6 +362,23 @@ uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len);
  *        Call periodically (~10ms) from a task.
  */
 void hat_poll(void);
+
+// --- LA-done IRQ (dedicated GPIO from RP2040 BB_LA_DONE_PIN) ---
+
+/**
+ * @brief Check whether the RP2040 has pulsed the LA-done line since the
+ *        last consume. Set from the GPIO ISR in hat.cpp.
+ * @return true if a capture-complete edge has been observed and not yet
+ *         consumed.
+ */
+bool hat_la_done_pending(void);
+
+/**
+ * @brief Atomically read and clear the LA-done pending flag.
+ * @return true if a pending edge was present (and has now been cleared);
+ *         false otherwise.
+ */
+bool hat_la_done_consume(void);
 
 // --- String Helpers ---
 

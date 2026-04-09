@@ -46,3 +46,6 @@ tests/report.html
 /Firmware/RP2040/build
 /DesktopApp/BugBuster/tests/e2e/node_modules
 /.omc
+.mex/context/stack.md
+CLAUDE.md
+/.mex

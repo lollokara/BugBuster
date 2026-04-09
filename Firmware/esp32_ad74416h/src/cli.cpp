@@ -134,7 +134,9 @@ void cliProcess()
         return;
     }
 
-    if (s_showPrompt) {
+    // Once CDC #0 has been claimed by BBP (handshake received), never write
+    // CLI prompt text — it would corrupt a reconnecting binary session.
+    if (s_showPrompt && !bbpCdcClaimed()) {
         serial_print("\r\n[BugBuster]> ");
         s_showPrompt = false;
     }
