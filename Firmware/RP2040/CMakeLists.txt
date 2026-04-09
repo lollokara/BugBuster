@@ -81,7 +81,7 @@ pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_la_trigg
 # Version header
 set(VERSION_DIR ${CMAKE_BINARY_DIR}/generated/probe)
 file(MAKE_DIRECTORY ${VERSION_DIR})
-file(WRITE ${VERSION_DIR}/version.h "#ifndef _PROBE_VERSION_H\n#define _PROBE_VERSION_H\n#define PROBE_VERSION \"bb-hat-1.0\"\n#endif\n")
+file(WRITE ${VERSION_DIR}/version.h "#ifndef _PROBE_VERSION_H\n#define _PROBE_VERSION_H\n#define PROBE_VERSION \"bb-hat-1.1\"\n#endif\n")
 target_include_directories(bugbuster_hat PRIVATE ${CMAKE_BINARY_DIR}/generated)
 
 target_link_libraries(bugbuster_hat PRIVATE
