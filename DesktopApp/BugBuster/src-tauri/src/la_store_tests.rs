@@ -79,7 +79,6 @@ mod tests {
         store2.delete_range(50, 60); // Trigger dedup
         assert_eq!(store2.transitions[0].len(), 2); // Should be (0,0), (89,1)
     }
-}
 
     #[test]
     fn test_delete_range_empty_regression() {
@@ -95,3 +94,4 @@ mod tests {
         // Let's assert what happens.
         assert_eq!(store.get_value_at(0, 0), 1, "Value at 0 should be 1");
     }
+}

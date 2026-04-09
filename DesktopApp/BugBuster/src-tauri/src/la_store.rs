@@ -348,8 +348,19 @@ impl LaStore {
                 }
             }
 
-            // 4. Insert bridge transition at start if signal level changed
-            if val_after != val_before {
+            // 4. Insert bridge transition at start if the resulting natural value
+            // at `start` doesn't match val_after. This handles both the case where
+            // the signal changed across the cut AND the case where transitions at
+            // sample 0 were removed (leaving transitions empty, implying 0).
+            let natural_val_at_start = {
+                let idx = ch_trans.partition_point(|&(s, _)| s <= start);
+                if idx == 0 {
+                    if ch_trans.is_empty() { 0 } else { ch_trans[0].1 ^ 1 }
+                } else {
+                    ch_trans[idx - 1].1
+                }
+            };
+            if val_after != natural_val_at_start {
                 let splice_idx = ch_trans.partition_point(|&(s, _)| s < start);
                 ch_trans.insert(splice_idx, (start, val_after));
             }

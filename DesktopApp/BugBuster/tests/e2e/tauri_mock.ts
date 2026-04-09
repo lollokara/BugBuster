@@ -1,5 +1,12 @@
 
 export const tauriMock = () => {
+  // Store event handlers so tests can fire events via window.__tauriMockFire(event, payload)
+  const eventHandlers: Record<string, Array<(e: any) => void>> = {};
+
+  (window as any).__tauriMockFire = (event: string, payload: any) => {
+    (eventHandlers[event] ?? []).forEach(h => h({ payload }));
+  };
+
   (window as any).__TAURI__ = {
     core: {
       invoke: async (cmd: string, args: any) => {
@@ -87,7 +94,23 @@ export const tauriMock = () => {
           case 'la_stop':
           case 'la_force':
           case 'la_configure':
+          case 'la_set_trigger':
+          case 'la_delete_range':
+          case 'la_stream_usb_start':
+          case 'la_stream_usb_stop':
             return null;
+
+          case 'la_stream_usb_active':
+            return false;
+
+          case 'la_read_uart_chunks':
+            return {
+              channels: 4,
+              sampleRateHz: 1000000,
+              totalSamples: 100000,
+              durationSec: 0.1,
+              triggerSample: 0,
+            };
 
           default:
             console.warn(`[Tauri Mock] Unhandled command: ${cmd}`);
@@ -98,6 +121,8 @@ export const tauriMock = () => {
     event: {
       listen: async (event: string, handler: (e: any) => void) => {
         console.log(`[Tauri Mock] listen: ${event}`);
+        if (!eventHandlers[event]) eventHandlers[event] = [];
+        eventHandlers[event].push(handler);
         return () => { console.log(`[Tauri Mock] unlisten: ${event}`); };
       }
     }
