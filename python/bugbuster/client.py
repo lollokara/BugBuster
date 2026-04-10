@@ -318,6 +318,60 @@ class BugBuster:
         if not self._usb:
             raise NotImplementedError(f"{method} is only available over USB")
 
+    @staticmethod
+    def _parse_hvpak_bridge(resp: bytes) -> dict:
+        return {
+            "output_mode": [resp[0], resp[2]],
+            "ocp_retry": [resp[1], resp[3]],
+            "predriver_enabled": bool(resp[4]),
+            "full_bridge_enabled": bool(resp[5]),
+            "control_selection_ph_en": bool(resp[6]),
+            "ocp_deglitch_enabled": bool(resp[7]),
+            "uvlo_enabled": bool(resp[8]),
+        }
+
+    @staticmethod
+    def _parse_hvpak_analog(resp: bytes) -> dict:
+        return {
+            "vref_mode": resp[0],
+            "vref_powered": bool(resp[1]),
+            "vref_power_from_matrix": bool(resp[2]),
+            "vref_sink_12ua": bool(resp[3]),
+            "vref_input_selection": resp[4],
+            "current_sense_vref": resp[5],
+            "current_sense_dynamic_from_pwm": bool(resp[6]),
+            "current_sense_gain": resp[7],
+            "current_sense_invert": bool(resp[8]),
+            "current_sense_enabled": bool(resp[9]),
+            "acmp0_gain": resp[10],
+            "acmp0_vref": resp[11],
+            "has_acmp1": bool(resp[12]),
+            "acmp1_gain": resp[13],
+            "acmp1_vref": resp[14],
+        }
+
+    @staticmethod
+    def _parse_hvpak_pwm(resp: bytes) -> dict:
+        return {
+            "index": resp[0],
+            "initial_value": resp[1],
+            "current_value": resp[2],
+            "resolution_7bit": bool(resp[3]),
+            "out_plus_inverted": bool(resp[4]),
+            "out_minus_inverted": bool(resp[5]),
+            "async_powerdown": bool(resp[6]),
+            "autostop_mode": bool(resp[7]),
+            "boundary_osc_disable": bool(resp[8]),
+            "phase_correct": bool(resp[9]),
+            "deadband": resp[10],
+            "stop_mode": bool(resp[11]),
+            "i2c_trigger": bool(resp[12]),
+            "duty_source": resp[13],
+            "period_clock_source": resp[14],
+            "duty_clock_source": resp[15],
+            "last_error": resp[16],
+        }
+
     # ------------------------------------------------------------------
     # ── Device ──────────────────────────────────────────────────────────
     # ------------------------------------------------------------------
@@ -1351,13 +1405,35 @@ class BugBuster:
             pins = []
             for i in range(4):
                 pins.append(resp[off]); off += 1
-            return {
+            result = {
                 "detected": detected, "connected": connected,
                 "type": hat_type, "detect_voltage": detect_v,
                 "fw_version": f"{fw_major}.{fw_minor}",
                 "config_confirmed": confirmed,
                 "pin_config": pins,
             }
+            if len(resp) >= off + 12:
+                connectors = []
+                for _ in range(2):
+                    enabled = bool(resp[off]); off += 1
+                    current = struct.unpack_from('<f', resp, off)[0]; off += 4
+                    fault = bool(resp[off]); off += 1
+                    connectors.append({
+                        "enabled": enabled,
+                        "current_ma": current,
+                        "fault": fault,
+                    })
+                result["connectors"] = connectors
+                result["io_voltage_mv"] = struct.unpack_from('<H', resp, off)[0]; off += 2
+            if len(resp) >= off + 3:
+                result["hvpak_part"] = resp[off]; off += 1
+                result["hvpak_ready"] = bool(resp[off]); off += 1
+                result["hvpak_last_error"] = resp[off]; off += 1
+            if len(resp) >= off + 6:
+                result["dap_connected"] = bool(resp[off]); off += 1
+                result["target_detected"] = bool(resp[off]); off += 1
+                result["target_dpidr"] = struct.unpack_from('<I', resp, off)[0]; off += 4
+            return result
         else:
             return _normalize_http_hat_status(self._http_get("/hat"))
 
@@ -1477,7 +1553,12 @@ class BugBuster:
                 fault = bool(resp[off]); off += 1
                 connectors.append({"enabled": enabled, "current_ma": current, "fault": fault})
             io_mv = struct.unpack_from('<H', resp, off)[0]; off += 2
-            return {"connectors": connectors, "io_voltage_mv": io_mv}
+            result = {"connectors": connectors, "io_voltage_mv": io_mv}
+            if len(resp) >= off + 3:
+                result["hvpak_part"] = resp[off]; off += 1
+                result["hvpak_ready"] = bool(resp[off]); off += 1
+                result["hvpak_last_error"] = resp[off]; off += 1
+            return result
         else:
             raise NotImplementedError(
                 "hat_get_power() is not available over HTTP — firmware does not expose /api/hat/power. "
@@ -1519,6 +1600,160 @@ class BugBuster:
                 "target_voltage_mv": target_voltage_mv,
                 "connector": connector,
             }).get("ok", False)
+
+    def hat_get_hvpak_info(self) -> dict:
+        self._require_usb("hat_get_hvpak_info")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_GET_HVPAK_INFO)
+        return {
+            "part": resp[0],
+            "ready": bool(resp[1]),
+            "last_error": resp[2],
+            "requested_mv": struct.unpack_from('<H', resp, 3)[0],
+            "applied_mv": struct.unpack_from('<H', resp, 5)[0],
+        }
+
+    def hat_get_hvpak_caps(self) -> dict:
+        self._require_usb("hat_get_hvpak_caps")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_GET_HVPAK_CAPS)
+        return {
+            "flags": struct.unpack_from('<I', resp, 0)[0],
+            "lut2_count": resp[4],
+            "lut3_count": resp[5],
+            "lut4_count": resp[6],
+            "pwm_count": resp[7],
+            "comparator_count": resp[8],
+            "bridge_count": resp[9],
+        }
+
+    def hat_get_hvpak_lut(self, kind: int, index: int) -> dict:
+        self._require_usb("hat_get_hvpak_lut")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_GET_HVPAK_LUT, struct.pack('<BB', kind, index))
+        return {
+            "kind": resp[0],
+            "index": resp[1],
+            "width_bits": resp[2],
+            "truth_table": struct.unpack_from('<H', resp, 3)[0],
+        }
+
+    def hat_set_hvpak_lut(self, kind: int, index: int, truth_table: int) -> dict:
+        self._require_usb("hat_set_hvpak_lut")
+        self._require_hat_present()
+        payload = struct.pack('<BBH', kind, index, truth_table)
+        resp = self._usb_cmd(CmdId.HAT_SET_HVPAK_LUT, payload)
+        return {
+            "kind": resp[0],
+            "index": resp[1],
+            "width_bits": resp[2],
+            "truth_table": struct.unpack_from('<H', resp, 3)[0],
+        }
+
+    def hat_get_hvpak_bridge(self) -> dict:
+        self._require_usb("hat_get_hvpak_bridge")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_GET_HVPAK_BRIDGE)
+        return self._parse_hvpak_bridge(resp)
+
+    def hat_set_hvpak_bridge(
+        self,
+        *,
+        output_mode_0: int,
+        ocp_retry_0: int,
+        output_mode_1: int,
+        ocp_retry_1: int,
+        predriver_enabled: bool,
+        full_bridge_enabled: bool,
+        control_selection_ph_en: bool,
+        ocp_deglitch_enabled: bool,
+        uvlo_enabled: bool,
+    ) -> dict:
+        self._require_usb("hat_set_hvpak_bridge")
+        self._require_hat_present()
+        payload = struct.pack(
+            '<BBBBBBBBB',
+            output_mode_0, ocp_retry_0,
+            output_mode_1, ocp_retry_1,
+            int(predriver_enabled), int(full_bridge_enabled),
+            int(control_selection_ph_en), int(ocp_deglitch_enabled),
+            int(uvlo_enabled),
+        )
+        resp = self._usb_cmd(CmdId.HAT_SET_HVPAK_BRIDGE, payload)
+        return self._parse_hvpak_bridge(resp)
+
+    def hat_get_hvpak_analog(self) -> dict:
+        self._require_usb("hat_get_hvpak_analog")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_GET_HVPAK_ANALOG)
+        return self._parse_hvpak_analog(resp)
+
+    def hat_set_hvpak_analog(self, **kwargs) -> dict:
+        self._require_usb("hat_set_hvpak_analog")
+        self._require_hat_present()
+        payload = struct.pack(
+            '<BBBBBBBBBBBBBBB',
+            kwargs.get("vref_mode", 0),
+            int(kwargs.get("vref_powered", False)),
+            int(kwargs.get("vref_power_from_matrix", False)),
+            int(kwargs.get("vref_sink_12ua", False)),
+            kwargs.get("vref_input_selection", 0),
+            kwargs.get("current_sense_vref", 0),
+            int(kwargs.get("current_sense_dynamic_from_pwm", False)),
+            kwargs.get("current_sense_gain", 0),
+            int(kwargs.get("current_sense_invert", False)),
+            int(kwargs.get("current_sense_enabled", False)),
+            kwargs.get("acmp0_gain", 0),
+            kwargs.get("acmp0_vref", 0),
+            int(kwargs.get("has_acmp1", False)),
+            kwargs.get("acmp1_gain", 0),
+            kwargs.get("acmp1_vref", 0),
+        )
+        resp = self._usb_cmd(CmdId.HAT_SET_HVPAK_ANALOG, payload)
+        return self._parse_hvpak_analog(resp)
+
+    def hat_get_hvpak_pwm(self, index: int = 0) -> dict:
+        self._require_usb("hat_get_hvpak_pwm")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_GET_HVPAK_PWM, struct.pack('<B', index))
+        return self._parse_hvpak_pwm(resp)
+
+    def hat_set_hvpak_pwm(self, index: int = 0, **kwargs) -> dict:
+        self._require_usb("hat_set_hvpak_pwm")
+        self._require_hat_present()
+        payload = struct.pack(
+            '<BBBBBBBBBBBBBBBB',
+            index,
+            kwargs.get("initial_value", 0),
+            0,
+            int(kwargs.get("resolution_7bit", False)),
+            int(kwargs.get("out_plus_inverted", False)),
+            int(kwargs.get("out_minus_inverted", False)),
+            int(kwargs.get("async_powerdown", False)),
+            int(kwargs.get("autostop_mode", False)),
+            int(kwargs.get("boundary_osc_disable", False)),
+            int(kwargs.get("phase_correct", False)),
+            kwargs.get("deadband", 0),
+            int(kwargs.get("stop_mode", False)),
+            int(kwargs.get("i2c_trigger", False)),
+            kwargs.get("duty_source", 0),
+            kwargs.get("period_clock_source", 0),
+            kwargs.get("duty_clock_source", 0),
+        )
+        resp = self._usb_cmd(CmdId.HAT_SET_HVPAK_PWM, payload)
+        return self._parse_hvpak_pwm(resp)
+
+    def hat_hvpak_reg_read(self, addr: int) -> dict:
+        self._require_usb("hat_hvpak_reg_read")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_HVPAK_REG_READ, struct.pack('<B', addr))
+        return {"addr": resp[0], "value": resp[1]}
+
+    def hat_hvpak_reg_write_masked(self, addr: int, mask: int, value: int) -> dict:
+        self._require_usb("hat_hvpak_reg_write_masked")
+        self._require_hat_present()
+        resp = self._usb_cmd(CmdId.HAT_HVPAK_REG_WRITE_MASKED, struct.pack('<BBB', addr, mask, value))
+        return {"addr": resp[0], "mask": resp[1], "value": resp[2], "actual": resp[3]}
 
     # ------------------------------------------------------------------
     # ── HAT Logic Analyzer ───────────────────────────────────────────

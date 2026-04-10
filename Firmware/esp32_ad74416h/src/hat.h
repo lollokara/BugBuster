@@ -129,6 +129,18 @@ typedef enum {
 #define HAT_CMD_GET_POWER_STATUS 0x11 // Read power state + current
 #define HAT_CMD_SET_IO_VOLTAGE  0x12  // Set HVPAK I/O level (mV)
 #define HAT_CMD_GET_IO_VOLTAGE  0x13  // Read current I/O voltage setting
+#define HAT_CMD_GET_HVPAK_INFO  0x14  // Get HVPAK identity/status summary
+#define HAT_CMD_GET_HVPAK_CAPS  0x15  // Get HVPAK capability profile
+#define HAT_CMD_GET_HVPAK_LUT   0x16  // Get LUT truth table
+#define HAT_CMD_SET_HVPAK_LUT   0x17  // Set LUT truth table
+#define HAT_CMD_GET_HVPAK_BRIDGE 0x18 // Get bridge config
+#define HAT_CMD_SET_HVPAK_BRIDGE 0x19 // Set bridge config
+#define HAT_CMD_GET_HVPAK_ANALOG 0x1A // Get analog config
+#define HAT_CMD_SET_HVPAK_ANALOG 0x1B // Set analog config
+#define HAT_CMD_GET_HVPAK_PWM   0x1C  // Get PWM config
+#define HAT_CMD_SET_HVPAK_PWM   0x1D  // Set PWM config
+#define HAT_CMD_HVPAK_REG_READ  0x1E  // Raw register read
+#define HAT_CMD_HVPAK_REG_WRITE_MASKED 0x1F // Raw masked register write
 
 // Commands: SWD Management (0x20–0x2F)
 #define HAT_CMD_GET_DAP_STATUS  0x20  // Is debugprobe USB connected? Target detected?
@@ -172,6 +184,12 @@ typedef enum {
     HAT_CONNECTOR_B = 1,    // Target 2: powered by VADJ2
 } HatConnector;
 
+typedef enum {
+    HAT_HVPAK_PART_UNKNOWN = 0,
+    HAT_HVPAK_PART_SLG47104 = 1,
+    HAT_HVPAK_PART_SLG47115_E = 2,
+} HatHvpakPart;
+
 typedef struct {
     bool     enabled;           // Connector power is on
     float    current_ma;        // Measured current (if shunt present)
@@ -198,6 +216,9 @@ typedef struct {
     // Power management
     HatConnectorStatus connector[2];                // Connector A and B status
     uint16_t     io_voltage_mv;                     // HVPAK I/O voltage (mV)
+    uint8_t      hvpak_part;                        // See HatHvpakPart
+    bool         hvpak_ready;                       // true when identity is resolved
+    uint8_t      hvpak_last_error;                  // Last RP2040-side HVPAK error
 
     // SWD management
     bool         dap_connected;                     // USB CMSIS-DAP host connected
@@ -292,6 +313,14 @@ bool hat_get_power_status(void);
  * @return true if HAT acknowledged
  */
 bool hat_set_io_voltage(uint16_t mv);
+
+/**
+ * @brief Send an advanced HVPAK command to the RP2040 HAT and return the raw
+ *        response payload. Used by BBP passthrough handlers for the typed
+ *        HVPAK backend surface.
+ */
+bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                       uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms);
 
 /**
  * @brief One-call SWD setup: set VADJ, I/O voltage, power on, route SWD pins.

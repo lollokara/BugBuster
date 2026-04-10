@@ -17,7 +17,7 @@ src/
 ├── bb_config.h            — Pin definitions, protocol constants, command IDs
 ├── bb_protocol.c/h        — HAT UART framing (CRC-8, sync byte 0xAA, frame timeout)
 ├── bb_power.c/h           — Connector power enable/disable, ADC current sense, fault detection
-├── bb_hvpak.c/h           — HVPAK I2C level translator voltage control (STUB — see Known Limitations)
+├── bb_hvpak.c/h           — HVPAK I2C backend (identity, preset voltage, LUT/bridge/analog/PWM, guarded raw register access)
 ├── bb_pins.c/h            — EXP_EXT pin routing (SWDIO/SWCLK/GPIO/TRACE)
 ├── bb_swd.c/h             — SWD status queries (target detect is STUB)
 ├── bb_la.c/h              — Logic analyzer engine: PIO 1 capture, DMA with IRQ completion
@@ -81,11 +81,18 @@ make -j$(nproc)
 
 ## Known Limitations
 
-1. **HVPAK driver is a stub** — I2C address (0x48) and register map are placeholders. `SET_IO_VOLTAGE` commands will silently fail. Requires actual HVPAK datasheet to implement.
-2. **SWD target detection always returns false** — `bb_swd_detect_target()` is not yet hooked into debugprobe's low-level SWD API.
-3. **Power fault pin polarity assumed active-low** — Needs confirmation from HAT schematic.
-4. **ADC current sense has no calibration** — Readings may be 5-10% off without offset/gain compensation.
-5. **GPIO8 IRQ signaling** — Now implemented (power fault + LA done events trigger a 2ms low pulse).
+1. **HVPAK depends on the programmed GreenPAK image contract** — the RP2040 now expects:
+   - I2C address `0x48`
+   - register `0x48` = read-only OTP identity byte (`0x04` = `SLG47104`, `0x15` = `SLG47115-E`)
+   - register `0x4C` = writable command mailbox
+   - preset voltages only: `1200`, `1800`, `2500`, `3300`, `5000` mV
+   If the image does not implement that contract, `SET_IO_VOLTAGE` fails closed and
+   reports HVPAK metadata/error codes up to the host.
+2. **Advanced HVPAK backend is capability-gated** — LUT, bridge, analog, PWM, and raw-register requests are validated against the detected part (`SLG47104` vs `SLG47115-E`).
+3. **SWD target detection always returns false** — `bb_swd_detect_target()` is not yet hooked into debugprobe's low-level SWD API.
+4. **Power fault pin polarity assumed active-low** — Needs confirmation from HAT schematic.
+5. **ADC current sense has no calibration** — Readings may be 5-10% off without offset/gain compensation.
+6. **GPIO8 IRQ signaling** — Now implemented (power fault + LA done events trigger a 2ms low pulse).
 
 ## Logic Analyzer
 

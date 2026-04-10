@@ -203,17 +203,309 @@ static void handle_set_io_voltage(const uint8_t *payload, uint8_t len)
     uint16_t mv = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
 
     if (!bb_hvpak_set_voltage(mv)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        switch (bb_hvpak_get_last_error()) {
+            case BB_HVPAK_ERR_NO_DEVICE:
+                send_error(HAT_ERR_HVPAK_NO_DEVICE);
+                break;
+            case BB_HVPAK_ERR_I2C_TIMEOUT:
+                send_error(HAT_ERR_HVPAK_TIMEOUT);
+                break;
+            case BB_HVPAK_ERR_UNKNOWN_IDENTITY:
+                send_error(HAT_ERR_HVPAK_UNKNOWN_IDENTITY);
+                break;
+            case BB_HVPAK_ERR_UNSUPPORTED_VOLTAGE:
+                send_error(HAT_ERR_HVPAK_UNSUPPORTED_VOLT);
+                break;
+            case BB_HVPAK_ERR_WRITE_FAILED:
+                send_error(HAT_ERR_HVPAK_WRITE_FAILED);
+                break;
+            default:
+                send_error(HAT_ERR_INVALID_FUNC);
+                break;
+        }
         return;
     }
-    send_ok(NULL, 0);
+
+    uint16_t requested_mv = bb_hvpak_get_requested_voltage();
+    uint16_t applied_mv = bb_hvpak_get_voltage();
+    uint8_t rsp[7] = {
+        (uint8_t)(requested_mv & 0xFF),
+        (uint8_t)(requested_mv >> 8),
+        (uint8_t)(applied_mv & 0xFF),
+        (uint8_t)(applied_mv >> 8),
+        (uint8_t)bb_hvpak_get_part(),
+        (uint8_t)(bb_hvpak_is_ready() ? 1 : 0),
+        bb_hvpak_get_last_error(),
+    };
+    send_ok(rsp, sizeof(rsp));
 }
 
 static void handle_get_io_voltage(void)
 {
-    uint16_t mv = bb_hvpak_get_voltage();
-    uint8_t rsp[2] = { (uint8_t)(mv & 0xFF), (uint8_t)(mv >> 8) };
-    send_ok(rsp, 2);
+    uint16_t requested_mv = bb_hvpak_get_requested_voltage();
+    uint16_t applied_mv = bb_hvpak_get_voltage();
+    uint8_t rsp[7] = {
+        (uint8_t)(requested_mv & 0xFF),
+        (uint8_t)(requested_mv >> 8),
+        (uint8_t)(applied_mv & 0xFF),
+        (uint8_t)(applied_mv >> 8),
+        (uint8_t)bb_hvpak_get_part(),
+        (uint8_t)(bb_hvpak_is_ready() ? 1 : 0),
+        bb_hvpak_get_last_error(),
+    };
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_get_hvpak_info(void)
+{
+    uint16_t requested_mv = bb_hvpak_get_requested_voltage();
+    uint16_t applied_mv = bb_hvpak_get_voltage();
+    uint8_t rsp[7] = {
+        (uint8_t)bb_hvpak_get_part(),
+        (uint8_t)(bb_hvpak_is_ready() ? 1 : 0),
+        bb_hvpak_get_last_error(),
+        (uint8_t)(requested_mv & 0xFF),
+        (uint8_t)(requested_mv >> 8),
+        (uint8_t)(applied_mv & 0xFF),
+        (uint8_t)(applied_mv >> 8),
+    };
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_get_hvpak_caps(void)
+{
+    BbHvpakCapabilities caps;
+    uint8_t rsp[11];
+    size_t pos = 0;
+
+    if (!bb_hvpak_get_capabilities(&caps)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+
+    memcpy(&rsp[pos], &caps.flags, sizeof(caps.flags)); pos += sizeof(caps.flags);
+    rsp[pos++] = caps.lut2_count;
+    rsp[pos++] = caps.lut3_count;
+    rsp[pos++] = caps.lut4_count;
+    rsp[pos++] = caps.pwm_count;
+    rsp[pos++] = caps.comparator_count;
+    rsp[pos++] = caps.bridge_count;
+    send_ok(rsp, (uint8_t)pos);
+}
+
+static void handle_get_hvpak_lut(const uint8_t *payload, uint8_t len)
+{
+    BbHvpakLutConfig cfg;
+    uint8_t rsp[5];
+
+    if (len < 2) { send_error(HAT_ERR_FRAME); return; }
+    if (!bb_hvpak_get_lut(payload[0], payload[1], &cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+
+    rsp[0] = cfg.kind;
+    rsp[1] = cfg.index;
+    rsp[2] = cfg.width_bits;
+    rsp[3] = (uint8_t)(cfg.truth_table & 0xFF);
+    rsp[4] = (uint8_t)(cfg.truth_table >> 8);
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_set_hvpak_lut(const uint8_t *payload, uint8_t len)
+{
+    BbHvpakLutConfig cfg;
+    if (len < 4) { send_error(HAT_ERR_FRAME); return; }
+    cfg.kind = payload[0];
+    cfg.index = payload[1];
+    cfg.truth_table = (uint16_t)payload[2] | ((uint16_t)payload[3] << 8);
+    if (!bb_hvpak_set_lut(&cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    handle_get_hvpak_lut(payload, 2);
+}
+
+static void handle_get_hvpak_bridge(void)
+{
+    BbHvpakBridgeConfig cfg;
+    uint8_t rsp[9];
+    if (!bb_hvpak_get_bridge(&cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    rsp[0] = cfg.output_mode[0];
+    rsp[1] = cfg.ocp_retry[0];
+    rsp[2] = cfg.output_mode[1];
+    rsp[3] = cfg.ocp_retry[1];
+    rsp[4] = cfg.predriver_enabled ? 1 : 0;
+    rsp[5] = cfg.full_bridge_enabled ? 1 : 0;
+    rsp[6] = cfg.control_selection_ph_en ? 1 : 0;
+    rsp[7] = cfg.ocp_deglitch_enabled ? 1 : 0;
+    rsp[8] = cfg.uvlo_enabled ? 1 : 0;
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_set_hvpak_bridge(const uint8_t *payload, uint8_t len)
+{
+    BbHvpakBridgeConfig cfg;
+    if (len < 9) { send_error(HAT_ERR_FRAME); return; }
+    cfg.output_mode[0] = payload[0];
+    cfg.ocp_retry[0] = payload[1];
+    cfg.output_mode[1] = payload[2];
+    cfg.ocp_retry[1] = payload[3];
+    cfg.predriver_enabled = payload[4] != 0;
+    cfg.full_bridge_enabled = payload[5] != 0;
+    cfg.control_selection_ph_en = payload[6] != 0;
+    cfg.ocp_deglitch_enabled = payload[7] != 0;
+    cfg.uvlo_enabled = payload[8] != 0;
+    if (!bb_hvpak_set_bridge(&cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    handle_get_hvpak_bridge();
+}
+
+static void handle_get_hvpak_analog(void)
+{
+    BbHvpakAnalogConfig cfg;
+    uint8_t rsp[15];
+    if (!bb_hvpak_get_analog(&cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    rsp[0] = cfg.vref_mode;
+    rsp[1] = cfg.vref_powered ? 1 : 0;
+    rsp[2] = cfg.vref_power_from_matrix ? 1 : 0;
+    rsp[3] = cfg.vref_sink_12ua ? 1 : 0;
+    rsp[4] = cfg.vref_input_selection;
+    rsp[5] = cfg.current_sense_vref;
+    rsp[6] = cfg.current_sense_dynamic_from_pwm ? 1 : 0;
+    rsp[7] = cfg.current_sense_gain;
+    rsp[8] = cfg.current_sense_invert ? 1 : 0;
+    rsp[9] = cfg.current_sense_enabled ? 1 : 0;
+    rsp[10] = cfg.acmp0_gain;
+    rsp[11] = cfg.acmp0_vref;
+    rsp[12] = cfg.has_acmp1 ? 1 : 0;
+    rsp[13] = cfg.acmp1_gain;
+    rsp[14] = cfg.acmp1_vref;
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_set_hvpak_analog(const uint8_t *payload, uint8_t len)
+{
+    BbHvpakAnalogConfig cfg;
+    if (len < 15) { send_error(HAT_ERR_FRAME); return; }
+    cfg.vref_mode = payload[0];
+    cfg.vref_powered = payload[1] != 0;
+    cfg.vref_power_from_matrix = payload[2] != 0;
+    cfg.vref_sink_12ua = payload[3] != 0;
+    cfg.vref_input_selection = payload[4];
+    cfg.current_sense_vref = payload[5];
+    cfg.current_sense_dynamic_from_pwm = payload[6] != 0;
+    cfg.current_sense_gain = payload[7];
+    cfg.current_sense_invert = payload[8] != 0;
+    cfg.current_sense_enabled = payload[9] != 0;
+    cfg.acmp0_gain = payload[10];
+    cfg.acmp0_vref = payload[11];
+    cfg.has_acmp1 = payload[12] != 0;
+    cfg.acmp1_gain = payload[13];
+    cfg.acmp1_vref = payload[14];
+    if (!bb_hvpak_set_analog(&cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    handle_get_hvpak_analog();
+}
+
+static void handle_get_hvpak_pwm(const uint8_t *payload, uint8_t len)
+{
+    BbHvpakPwmConfig cfg;
+    uint8_t rsp[17];
+    if (len < 1) { send_error(HAT_ERR_FRAME); return; }
+    if (!bb_hvpak_get_pwm(payload[0], &cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    rsp[0] = cfg.index;
+    rsp[1] = cfg.initial_value;
+    rsp[2] = cfg.current_value;
+    rsp[3] = cfg.resolution_7bit ? 1 : 0;
+    rsp[4] = cfg.out_plus_inverted ? 1 : 0;
+    rsp[5] = cfg.out_minus_inverted ? 1 : 0;
+    rsp[6] = cfg.async_powerdown ? 1 : 0;
+    rsp[7] = cfg.autostop_mode ? 1 : 0;
+    rsp[8] = cfg.boundary_osc_disable ? 1 : 0;
+    rsp[9] = cfg.phase_correct ? 1 : 0;
+    rsp[10] = cfg.deadband;
+    rsp[11] = cfg.stop_mode ? 1 : 0;
+    rsp[12] = cfg.i2c_trigger ? 1 : 0;
+    rsp[13] = cfg.duty_source;
+    rsp[14] = cfg.period_clock_source;
+    rsp[15] = cfg.duty_clock_source;
+    rsp[16] = bb_hvpak_get_last_error();
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_set_hvpak_pwm(const uint8_t *payload, uint8_t len)
+{
+    BbHvpakPwmConfig cfg;
+    if (len < 16) { send_error(HAT_ERR_FRAME); return; }
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.index = payload[0];
+    cfg.initial_value = payload[1];
+    cfg.resolution_7bit = payload[3] != 0;
+    cfg.out_plus_inverted = payload[4] != 0;
+    cfg.out_minus_inverted = payload[5] != 0;
+    cfg.async_powerdown = payload[6] != 0;
+    cfg.autostop_mode = payload[7] != 0;
+    cfg.boundary_osc_disable = payload[8] != 0;
+    cfg.phase_correct = payload[9] != 0;
+    cfg.deadband = payload[10];
+    cfg.stop_mode = payload[11] != 0;
+    cfg.i2c_trigger = payload[12] != 0;
+    cfg.duty_source = payload[13];
+    cfg.period_clock_source = payload[14];
+    cfg.duty_clock_source = payload[15];
+    if (!bb_hvpak_set_pwm(&cfg)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    handle_get_hvpak_pwm(payload, 1);
+}
+
+static void handle_hvpak_reg_read(const uint8_t *payload, uint8_t len)
+{
+    uint8_t value = 0;
+    uint8_t rsp[2];
+    if (len < 1) { send_error(HAT_ERR_FRAME); return; }
+    if (!bb_hvpak_reg_read(payload[0], &value)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    rsp[0] = payload[0];
+    rsp[1] = value;
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_hvpak_reg_write_masked(const uint8_t *payload, uint8_t len)
+{
+    uint8_t rsp[4];
+    uint8_t actual = 0;
+    if (len < 3) { send_error(HAT_ERR_FRAME); return; }
+    if (!bb_hvpak_reg_write_masked(payload[0], payload[1], payload[2])) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    if (!bb_hvpak_reg_read(payload[0], &actual)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+    rsp[0] = payload[0];
+    rsp[1] = payload[1];
+    rsp[2] = payload[2];
+    rsp[3] = actual;
+    send_ok(rsp, sizeof(rsp));
 }
 
 // -----------------------------------------------------------------------------
@@ -255,6 +547,42 @@ static void dispatch_command(const HatFrame *frame)
         break;
     case HAT_CMD_GET_IO_VOLTAGE:
         handle_get_io_voltage();
+        break;
+    case HAT_CMD_GET_HVPAK_INFO:
+        handle_get_hvpak_info();
+        break;
+    case HAT_CMD_GET_HVPAK_CAPS:
+        handle_get_hvpak_caps();
+        break;
+    case HAT_CMD_GET_HVPAK_LUT:
+        handle_get_hvpak_lut(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_SET_HVPAK_LUT:
+        handle_set_hvpak_lut(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_GET_HVPAK_BRIDGE:
+        handle_get_hvpak_bridge();
+        break;
+    case HAT_CMD_SET_HVPAK_BRIDGE:
+        handle_set_hvpak_bridge(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_GET_HVPAK_ANALOG:
+        handle_get_hvpak_analog();
+        break;
+    case HAT_CMD_SET_HVPAK_ANALOG:
+        handle_set_hvpak_analog(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_GET_HVPAK_PWM:
+        handle_get_hvpak_pwm(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_SET_HVPAK_PWM:
+        handle_set_hvpak_pwm(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_HVPAK_REG_READ:
+        handle_hvpak_reg_read(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_HVPAK_REG_WRITE_MASKED:
+        handle_hvpak_reg_write_masked(frame->payload, frame->payload_len);
         break;
 
     // SWD management

@@ -525,6 +525,42 @@ BugBuster may pulse GPIO15 LOW briefly (1 ms) to wake a sleeping HAT before send
 - The LEN field allows payloads up to 32 bytes; if larger payloads are needed,
   define a multi-frame transfer protocol using a new command
 
+### 10.4 HVPAK Mailbox Contract
+
+The unreleased HVPAK voltage-control path now assumes a programmed GreenPAK
+mailbox image behind the RP2040 I2C bus:
+
+- I2C address `0x48`
+- register `0x48`: read-only OTP identity byte
+- register `0x4C`: writable command byte
+- identity values:
+  - `0x04` = `SLG47104`
+  - `0x15` = `SLG47115-E`
+- preset voltages:
+  - `1200`
+  - `1800`
+  - `2500`
+  - `3300`
+  - `5000` mV
+
+`SET_IO_VOLTAGE` and `GET_IO_VOLTAGE` responses may now include HVPAK metadata
+(`hvpak_part`, `hvpak_ready`, `hvpak_last_error`) so the host can tell whether
+the programmed image matches the expected mailbox contract.
+
+### 10.5 Advanced HVPAK Backend Commands
+
+The HAT UART protocol now also carries typed HVPAK backend commands for:
+- part info / capabilities
+- LUT truth-table access
+- bridge configuration
+- analog/comparator/Vref configuration
+- PWM configuration
+- guarded raw register read/write
+
+These commands live in the `0x14..0x1F` range on the UART-side HAT protocol and
+are mirrored into BBP on the ESP32 side. The RP2040 remains the capability
+authority and validates every request against the detected part profile.
+
 ---
 
 ## Appendix A: Complete Frame Examples

@@ -239,9 +239,16 @@ pub fn la_get_view(
     max_points: Option<usize>,
     la: State<'_, LaState>,
 ) -> CmdResult<Option<LaViewData>> {
-    let store = la.store.lock().map_err(map_err)?;
-    match store.as_ref() {
-        Some(s) => Ok(Some(s.to_view_data(start_sample, end_sample, max_points))),
+    let mut store = la.store.lock().map_err(map_err)?;
+    match store.as_mut() {
+        Some(s) => {
+            #[cfg(debug_assertions)]
+            let t0 = std::time::Instant::now();
+            let result = s.to_view_data(start_sample, end_sample, max_points);
+            #[cfg(debug_assertions)]
+            log::info!("[la_get_view] to_view_data took {}µs", t0.elapsed().as_micros());
+            Ok(Some(result))
+        },
         None => Ok(None),
     }
 }
@@ -359,13 +366,13 @@ pub fn la_import_json(
     }
 
     let data: ImportData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    let store = LaStore {
-        channels: data.channels,
-        sample_rate_hz: data.sample_rate_hz,
-        transitions: data.transitions,
-        total_samples: data.total_samples,
-        trigger_sample: data.trigger_sample,
-    };
+    let store = LaStore::from_transitions(
+        data.channels,
+        data.sample_rate_hz,
+        data.transitions,
+        data.total_samples,
+        data.trigger_sample,
+    );
     let info = LaCaptureInfo {
         channels: store.channels,
         sample_rate_hz: store.sample_rate_hz,

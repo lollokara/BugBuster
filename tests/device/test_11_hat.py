@@ -66,6 +66,22 @@ def test_hat_status_has_pin_config(device):
     assert_no_faults(device)
 
 
+def test_hat_status_optional_hvpak_metadata(device):
+    """
+    Newer firmware may surface HVPAK metadata in hat_get_status().
+    If present, the fields must be well-typed and internally consistent.
+    """
+    status = device.hat_get_status()
+
+    if "hvpak_part" in status:
+        assert isinstance(status["hvpak_part"], int)
+    if "hvpak_ready" in status:
+        assert isinstance(status["hvpak_ready"], bool)
+    if "hvpak_last_error" in status:
+        assert isinstance(status["hvpak_last_error"], int)
+    assert_no_faults(device)
+
+
 # ---------------------------------------------------------------------------
 # HAT detect
 # ---------------------------------------------------------------------------
@@ -166,6 +182,12 @@ def test_hat_get_power_usb(usb_device):
         assert "enabled" in conn, f"Connector {i} missing 'enabled'"
         assert "current_ma" in conn, f"Connector {i} missing 'current_ma'"
         assert "fault" in conn, f"Connector {i} missing 'fault'"
+    if "hvpak_part" in result:
+        assert isinstance(result["hvpak_part"], int)
+    if "hvpak_ready" in result:
+        assert isinstance(result["hvpak_ready"], bool)
+    if "hvpak_last_error" in result:
+        assert isinstance(result["hvpak_last_error"], int)
     assert_no_faults(usb_device)
 
 
@@ -177,6 +199,42 @@ def test_hat_get_power_http_raises(http_device):
     with pytest.raises(NotImplementedError):
         http_device.hat_get_power()
     assert_no_faults(http_device)
+
+
+@pytest.mark.usb_only
+def test_hat_get_hvpak_info_usb(usb_device):
+    """
+    Advanced HVPAK backend should at least surface part/ready/error/voltage info.
+    """
+    result = usb_device.hat_get_hvpak_info()
+    assert isinstance(result, dict)
+    assert "part" in result
+    assert "ready" in result
+    assert "last_error" in result
+    assert "requested_mv" in result
+    assert "applied_mv" in result
+    assert_no_faults(usb_device)
+
+
+@pytest.mark.usb_only
+def test_hat_get_hvpak_caps_usb_if_ready(usb_device):
+    """
+    If the programmed HVPAK image is detected and ready, the capability
+    profile should be readable over USB.
+    """
+    info = usb_device.hat_get_hvpak_info()
+    if not info.get("ready", False):
+        pytest.skip(
+            f"HVPAK backend not ready on this hardware "
+            f"(part={info.get('part')}, err={info.get('last_error')})"
+        )
+
+    caps = usb_device.hat_get_hvpak_caps()
+    assert isinstance(caps, dict)
+    assert "flags" in caps
+    assert "pwm_count" in caps
+    assert "bridge_count" in caps
+    assert_no_faults(usb_device)
 
 
 @pytest.mark.usb_only

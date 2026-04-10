@@ -7,6 +7,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d, MouseEvent};
 
+use std::cell::{Cell, RefCell};
+
 const CH_COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const TOOLBAR_HEIGHT: f64 = 44.0; // Space reserved for toolbar overlay
 const TRACK_HEIGHT: f64 = 62.0;
@@ -14,6 +16,10 @@ const LABEL_WIDTH: f64 = 50.0;
 const RULER_HEIGHT: f64 = 22.0;
 const MINIMAP_HEIGHT: f64 = 28.0;
 const SIGNAL_MARGIN: f64 = 8.0;
+
+thread_local! {
+    static LAST_CANVAS_SIZE: Cell<(u32, u32, u32)> = Cell::new((0, 0, 0));
+}
 
 fn format_time(seconds: f64) -> String {
     if seconds.abs() < 1e-6 { return format!("{:.1}ns", seconds * 1e9); }
@@ -167,9 +173,15 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let dpr = web_sys::window().unwrap().device_pixel_ratio();
         let w = canvas.client_width() as f64;
         let h = canvas.client_height() as f64;
-        canvas.set_width((w * dpr) as u32);
-        canvas.set_height((h * dpr) as u32);
-        ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
+        let size_key = (w as u32, h as u32, (dpr * 100.0) as u32);
+        LAST_CANVAS_SIZE.with(|cell| {
+            if cell.get() != size_key {
+                canvas.set_width((w * dpr) as u32);
+                canvas.set_height((h * dpr) as u32);
+                ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
+                cell.set(size_key);
+            }
+        });
 
         // Background
         ctx.set_fill_style_str("#060a14");
@@ -230,31 +242,31 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         // Share offsets with mouse handler (untracked write — no reactive loop)
         set_ch_y_offsets.set(ch_y.clone());
 
-        // Grid lines
+        // Grid lines (batched into single path)
         ctx.set_stroke_style_str("rgba(59, 130, 246, 0.08)");
         ctx.set_line_width(1.0);
         let time_per_px = span / plot_w;
         let grid_step = 10.0f64.powf((time_per_px * 100.0).log10().ceil()); // ~100px spacing
         let first_grid = (vs / grid_step).ceil() * grid_step;
         let mut g = first_grid;
+        ctx.begin_path();
         while g < ve {
             let x = LABEL_WIDTH + ((g - vs) / span) * plot_w;
-            ctx.begin_path();
             ctx.move_to(x, TOOLBAR_HEIGHT);
             ctx.line_to(x, plot_h);
-            ctx.stroke();
             g += grid_step;
         }
+        ctx.stroke();
 
-        // Channel separators (after signal + annotation area)
+        // Channel separators (batched into single path)
+        ctx.set_stroke_style_str("rgba(59, 130, 246, 0.15)");
+        ctx.begin_path();
         for ch in 0..num_ch {
             let sep_y = ch_y[ch] + ch_h[ch];
-            ctx.set_stroke_style_str("rgba(59, 130, 246, 0.15)");
-            ctx.begin_path();
             ctx.move_to(LABEL_WIDTH, sep_y);
             ctx.line_to(w, sep_y);
-            ctx.stroke();
         }
+        ctx.stroke();
 
         // Draw waveforms
         for ch in 0..num_ch {
@@ -355,19 +367,54 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         }
                     }
 
-                    // Render per pixel
+                    // Render with 3-pass run-length batching
                     ctx.set_fill_style_str(color);
-                    for px in 0..=pixels.min(plot_w as usize) {
-                        let x = LABEL_WIDTH + px as f64;
-                        match px_flags[px] {
-                            0b11 => { // Both high and low — dense transition bar
-                                ctx.set_global_alpha(0.7);
-                                ctx.fill_rect(x, y_high, 1.0, y_low - y_high);
-                                ctx.set_global_alpha(1.0);
+                    let max_px = pixels.min(plot_w as usize);
+
+                    // Pass 1: dense transition bars (0b11) — reduced alpha
+                    ctx.set_global_alpha(0.7);
+                    {
+                        let mut run_start: Option<usize> = None;
+                        for px in 0..=max_px {
+                            if px_flags[px] == 0b11 {
+                                run_start.get_or_insert(px);
+                            } else if let Some(s) = run_start.take() {
+                                ctx.fill_rect(LABEL_WIDTH + s as f64, y_high, (px - s) as f64, y_low - y_high);
                             }
-                            0b10 => { ctx.fill_rect(x, y_high, 1.0, 2.0); }
-                            0b01 => { ctx.fill_rect(x, y_low - 1.0, 1.0, 2.0); }
-                            _ => {}
+                        }
+                        if let Some(s) = run_start {
+                            ctx.fill_rect(LABEL_WIDTH + s as f64, y_high, (max_px + 1 - s) as f64, y_low - y_high);
+                        }
+                    }
+
+                    // Pass 2: high-only lines (0b10)
+                    ctx.set_global_alpha(1.0);
+                    {
+                        let mut run_start: Option<usize> = None;
+                        for px in 0..=max_px {
+                            if px_flags[px] == 0b10 {
+                                run_start.get_or_insert(px);
+                            } else if let Some(s) = run_start.take() {
+                                ctx.fill_rect(LABEL_WIDTH + s as f64, y_high, (px - s) as f64, 2.0);
+                            }
+                        }
+                        if let Some(s) = run_start {
+                            ctx.fill_rect(LABEL_WIDTH + s as f64, y_high, (max_px + 1 - s) as f64, 2.0);
+                        }
+                    }
+
+                    // Pass 3: low-only lines (0b01)
+                    {
+                        let mut run_start: Option<usize> = None;
+                        for px in 0..=max_px {
+                            if px_flags[px] == 0b01 {
+                                run_start.get_or_insert(px);
+                            } else if let Some(s) = run_start.take() {
+                                ctx.fill_rect(LABEL_WIDTH + s as f64, y_low - 1.0, (px - s) as f64, 2.0);
+                            }
+                        }
+                        if let Some(s) = run_start {
+                            ctx.fill_rect(LABEL_WIDTH + s as f64, y_low - 1.0, (max_px + 1 - s) as f64, 2.0);
                         }
                     }
                 } else {
@@ -788,6 +835,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // Mouse handlers for zoom/pan/cursor
+    // rAF scroll throttle: coalesce rapid wheel events into one signal update per frame
+    thread_local! {
+        static PENDING_VIEWPORT: RefCell<Option<(u64, u64)>> = RefCell::new(None);
+        static RAF_SCHEDULED: Cell<bool> = Cell::new(false);
+    }
+
     let on_wheel = move |e: web_sys::WheelEvent| {
         e.prevent_default();
         let vs = view_start.get_untracked();
@@ -819,8 +872,22 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         // Clamp to capture bounds with margin
         if new_end > limit { new_end = limit; new_start = limit.saturating_sub(new_span as u64); }
 
-        set_view_start.set(new_start);
-        set_view_end.set(new_end);
+        // Write the computed viewport to the pending slot
+        PENDING_VIEWPORT.with(|p| *p.borrow_mut() = Some((new_start, new_end)));
+
+        // Schedule a rAF callback if one isn't already pending
+        if !RAF_SCHEDULED.with(|s| s.get()) {
+            RAF_SCHEDULED.with(|s| s.set(true));
+            let cb = Closure::once(move || {
+                RAF_SCHEDULED.with(|s| s.set(false));
+                if let Some((s, e)) = PENDING_VIEWPORT.with(|p| p.borrow_mut().take()) {
+                    set_view_start.set(s);
+                    set_view_end.set(e);
+                }
+            });
+            let _ = web_sys::window().unwrap().request_animation_frame(cb.as_ref().unchecked_ref());
+            cb.forget();
+        }
     };
 
     let on_mousedown = move |e: MouseEvent| {

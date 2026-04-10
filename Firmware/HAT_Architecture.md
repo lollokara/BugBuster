@@ -386,10 +386,15 @@ are used for SWD. This enables:
 
 ## 7. HVPAK Integration
 
-> **STATUS: STUB IMPLEMENTATION** — The RP2040 HVPAK driver (`bb_hvpak.c`) currently
-> uses placeholder I2C address (0x48) and register writes. The actual HVPAK part number,
-> I2C address, and register map must be determined from the HAT PCB schematic before
-> this feature can work. `SET_IO_VOLTAGE` commands are accepted but have no effect.
+> **STATUS: MAILBOX CONTRACT IMPLEMENTED** — The RP2040 HVPAK driver now expects a
+> documented GreenPAK mailbox image at I2C address `0x48`:
+> - register `0x48`: read-only OTP identity byte (`0x04` = `SLG47104`, `0x15` = `SLG47115-E`)
+> - register `0x4C`: writable command byte
+> - preset voltages: `1200`, `1800`, `2500`, `3300`, `5000` mV
+>
+> The programmed GreenPAK image must match that contract. The exact per-part command
+> bytes are owned by `bb_hvpak.c` descriptors and are surfaced to the host as
+> `hvpak_part` / `hvpak_ready` / `hvpak_last_error`.
 
 The Renesas HVPAK provides programmable voltage level translation for the EXP_EXT lines.
 

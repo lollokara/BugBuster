@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.bugbuster",
   "build": {
-    "beforeDevCommand": "trunk serve",
+    "beforeDevCommand": {"script": "trunk serve", "cwd": ".."},
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "trunk build",
+    "beforeBuildCommand": {"script": "trunk build", "cwd": ".."},
     "frontendDist": "../dist"
   },
   "app": {

@@ -376,6 +376,7 @@ class CmdId(IntEnum):
     HAT_GET_POWER    = 0xCB
     HAT_SET_IO_VOLT  = 0xCC
     HAT_SETUP_SWD    = 0xCD
+    HAT_GET_HVPAK_INFO = 0xCE
     # HAT — Logic Analyzer
     HAT_LA_CONFIG    = 0xCF
     HAT_LA_ARM       = 0xD5
@@ -384,6 +385,11 @@ class CmdId(IntEnum):
     HAT_LA_READ      = 0xD8
     HAT_LA_STOP      = 0xD9
     HAT_LA_TRIGGER   = 0xDA
+    HAT_GET_HVPAK_CAPS   = 0xDB
+    HAT_GET_HVPAK_LUT    = 0xDC
+    HAT_SET_HVPAK_LUT    = 0xDD
+    HAT_GET_HVPAK_BRIDGE = 0xDE
+    HAT_SET_HVPAK_BRIDGE = 0xDF
 
     # USB PD
     USBPD_GET_STATUS = 0xC0
@@ -393,6 +399,14 @@ class CmdId(IntEnum):
     # Waveform generator
     START_WAVEGEN    = 0xD0
     STOP_WAVEGEN     = 0xD1
+
+    # HVPAK advanced backend
+    HAT_GET_HVPAK_ANALOG = 0xE5
+    HAT_SET_HVPAK_ANALOG = 0xE6
+    HAT_GET_HVPAK_PWM    = 0xE7
+    HAT_SET_HVPAK_PWM    = 0xE8
+    HAT_HVPAK_REG_READ   = 0xE9
+    HAT_HVPAK_REG_WRITE_MASKED = 0xEA
 
     # Misc hardware
     SET_LSHIFT_OE    = 0xE0

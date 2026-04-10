@@ -23,7 +23,7 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       2
+#define BBP_PROTO_VERSION       4
 
 #define BBP_FW_VERSION_MAJOR    1
 #define BBP_FW_VERSION_MINOR    2
@@ -157,6 +157,7 @@ extern "C" {
 #define BBP_CMD_HAT_GET_POWER       0xCB  // Get power status (both connectors)
 #define BBP_CMD_HAT_SET_IO_VOLTAGE  0xCC  // Set HVPAK I/O voltage (mV)
 #define BBP_CMD_HAT_SETUP_SWD       0xCD  // One-call SWD quick-setup
+#define BBP_CMD_HAT_GET_HVPAK_INFO  0xCE  // Get HVPAK identity/status summary
 // HAT — Logic Analyzer
 #define BBP_CMD_HAT_LA_CONFIG       0xCF  // Configure LA capture
 #define BBP_CMD_HAT_LA_ARM          0xD5  // Arm trigger / start capture
@@ -165,6 +166,11 @@ extern "C" {
 #define BBP_CMD_HAT_LA_READ         0xD8  // Read captured data chunk
 #define BBP_CMD_HAT_LA_STOP         0xD9  // Stop capture
 #define BBP_CMD_HAT_LA_TRIGGER      0xDA  // Set trigger condition
+#define BBP_CMD_HAT_GET_HVPAK_CAPS   0xDB // Get HVPAK capability profile
+#define BBP_CMD_HAT_GET_HVPAK_LUT    0xDC // Get LUT truth table
+#define BBP_CMD_HAT_SET_HVPAK_LUT    0xDD // Set LUT truth table
+#define BBP_CMD_HAT_GET_HVPAK_BRIDGE 0xDE // Get bridge config
+#define BBP_CMD_HAT_SET_HVPAK_BRIDGE 0xDF // Set bridge config
 
 // HUSB238 USB PD
 #define BBP_CMD_USBPD_GET_STATUS    0xC0  // Get USB PD contract status
@@ -178,6 +184,12 @@ extern "C" {
 #define BBP_CMD_WIFI_GET_STATUS  0xE1  // Get WiFi status
 #define BBP_CMD_WIFI_CONNECT     0xE2  // Connect to WiFi network
 #define BBP_CMD_WIFI_SCAN        0xE4  // Scan for WiFi networks
+#define BBP_CMD_HAT_GET_HVPAK_ANALOG 0xE5 // Get analog config
+#define BBP_CMD_HAT_SET_HVPAK_ANALOG 0xE6 // Set analog config
+#define BBP_CMD_HAT_GET_HVPAK_PWM    0xE7 // Get PWM config
+#define BBP_CMD_HAT_SET_HVPAK_PWM    0xE8 // Set PWM config
+#define BBP_CMD_HAT_HVPAK_REG_READ   0xE9 // Raw register read
+#define BBP_CMD_HAT_HVPAK_REG_WRITE_MASKED 0xEA // Raw masked register write
 
 // SPI Clock
 #define BBP_CMD_SET_SPI_CLOCK    0xE3  // Set SPI clock speed (Hz, u32)

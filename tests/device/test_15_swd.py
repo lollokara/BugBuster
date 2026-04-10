@@ -50,6 +50,15 @@ def _safe_hat_setup_swd(usb_device, *, target_voltage_mv: int = 3300, connector:
     reason pointing at the wiring.
     """
     from bugbuster.transport.usb import DeviceError
+    status = usb_device.hat_get_status()
+    if not status.get("hvpak_ready", False):
+        hvpak_part = status.get("hvpak_part", 0)
+        hvpak_err = status.get("hvpak_last_error", 0)
+        pytest.skip(
+            "HVPAK image not ready for programmable voltage control "
+            f"(part={hvpak_part}, err={hvpak_err}). Program a supported "
+            "SLG47104/SLG47115-E mailbox image and retry."
+        )
     try:
         return usb_device.hat_setup_swd(
             target_voltage_mv=target_voltage_mv, connector=connector
@@ -214,43 +223,17 @@ def test_hat_swd_target_detected(usb_device, request):
 @pytest.mark.usb_only
 def test_hat_setup_swd_multiple_voltages(usb_device):
     """
-    hat_setup_swd should handle the full range of valid target voltages
-    without crashing the firmware.
-
-    The HVPAK driver is currently a 5-TODO stub (``bb_hvpak.c``), so any
-    voltage other than the default 3.3 V takes the "voltage unsupported"
-    branch inside ``hat_setup_swd()`` on the ESP32, which returns false,
-    which the BBP layer surfaces as ``BBP_ERR_BUSY`` (→ Python
-    ``DeviceError BUSY``). That is the DOCUMENTED graceful-unsupported
-    path until the HVPAK driver is implemented.
-
-    This test therefore accepts either:
-      * ``True`` (success — only 3.3 V today)
-      * ``False`` or a raised ``DeviceError BUSY`` (graceful unsupported)
-
-    It fails only on a crash, a transport error, or a HAT fault bit —
-    i.e. on evidence that the firmware behaved badly.
+    With a programmed HVPAK image present, hat_setup_swd should succeed on
+    every documented preset voltage and should not rely on the old stub
+    "BUSY means unsupported" path.
     """
-    from bugbuster.transport.usb import DeviceError
-
     for voltage_mv in (1800, 2500, 3300, 5000):
-        try:
-            result = usb_device.hat_setup_swd(
-                target_voltage_mv=voltage_mv, connector=0
-            )
-        except DeviceError as exc:
-            # BUSY is the documented unsupported path for non-3.3V while
-            # the HVPAK driver is a stub. Any OTHER transport/device error
-            # is a real failure.
-            assert "BUSY" in str(exc), (
-                f"hat_setup_swd({voltage_mv}, 0) raised unexpected "
-                f"DeviceError: {exc!r}"
-            )
-            result = False
-
-        assert result in (True, False), (
-            f"hat_setup_swd({voltage_mv}, 0) returned {result!r} "
-            f"(expected bool or DeviceError BUSY)"
+        result = _safe_hat_setup_swd(
+            usb_device, target_voltage_mv=voltage_mv, connector=0
+        )
+        assert result is True, (
+            f"hat_setup_swd({voltage_mv}, 0) should return True when "
+            "HVPAK metadata reports ready"
         )
         time.sleep(0.05)
     assert_no_faults(usb_device)

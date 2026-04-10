@@ -141,7 +141,8 @@ test.describe('LA – 10 M sample rendering performance', () => {
     const renderMs = await loadCapture(page)
     console.log(`[perf] initial render: ${renderMs} ms`)
 
-    expect(renderMs, `Initial canvas render took ${renderMs} ms — limit is 2000 ms`).toBeLessThan(2000)
+    // Tightened 2026-04-10. Best observed: 65ms.
+    expect(renderMs, `Initial canvas render took ${renderMs} ms — limit is 1000 ms`).toBeLessThan(1000)
   })
 
   test('canvas re-renders after each zoom scroll event', async ({ page }) => {
@@ -166,7 +167,8 @@ test.describe('LA – 10 M sample rendering performance', () => {
 
     // Each scroll triggers an async la_get_view → canvas redraw cycle;
     // with 100 ms between events most should complete.
-    expect(frames, `Expected ≥8 renders for 10 scroll events, got ${frames}`).toBeGreaterThanOrEqual(8)
+    // Tightened 2026-04-10. Best observed: 33 frames.
+    expect(frames, `Expected ≥10 renders for 10 scroll events, got ${frames}`).toBeGreaterThanOrEqual(10)
   })
 
   test('sustained scrolling over 2 s maintains ≥ 10 fps (browser timestamps)', async ({ page }) => {
@@ -229,6 +231,7 @@ test.describe('LA – 10 M sample rendering performance', () => {
     // Time from burst start (browser clock) to last canvas render
     const lastRenderDelay = timestamps[timestamps.length - 1] - burstStartTs
     console.log(`[perf] burst: last render at +${lastRenderDelay.toFixed(0)} ms from burst start`)
-    expect(lastRenderDelay, `Last render took ${lastRenderDelay.toFixed(0)} ms — limit is 1500 ms`).toBeLessThan(1500)
+    // Tightened 2026-04-10. Best observed: 340ms.
+    expect(lastRenderDelay, `Last render took ${lastRenderDelay.toFixed(0)} ms — limit is 1200 ms`).toBeLessThan(1200)
   })
 })

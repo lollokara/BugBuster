@@ -20,6 +20,7 @@ pub struct LaStore {
     pub transitions: Vec<Vec<Transition>>,
     pub total_samples: u64,
     pub trigger_sample: Option<u64>,
+    cached_density: Option<Vec<u16>>,
 }
 
 /// Serializable view data for a viewport — sent to frontend for rendering
@@ -42,6 +43,17 @@ pub struct LaViewData {
 }
 
 impl LaStore {
+    /// Create from pre-computed transitions (e.g. imported from JSON)
+    pub fn from_transitions(
+        channels: u8,
+        sample_rate_hz: u32,
+        transitions: Vec<Vec<Transition>>,
+        total_samples: u64,
+        trigger_sample: Option<u64>,
+    ) -> Self {
+        LaStore { channels, sample_rate_hz, transitions, total_samples, trigger_sample, cached_density: None }
+    }
+
     /// Create from raw packed bitstream (from RP2040 capture)
     pub fn from_raw(raw: &[u8], channels: u8, sample_rate_hz: u32) -> Self {
         let bits_per_sample = channels as usize;
@@ -71,12 +83,14 @@ impl LaStore {
             transitions,
             total_samples: sample_idx,
             trigger_sample: None,
+            cached_density: None,
         }
     }
 
     /// Append raw packed bitstream data to the existing store (for stream mode).
     /// New samples are indexed starting from `self.total_samples`.
     pub fn append_raw(&mut self, raw: &[u8]) {
+        self.cached_density = None;
         let bits_per_sample = self.channels as usize;
         if bits_per_sample == 0 { return; }
 
@@ -112,9 +126,9 @@ impl LaStore {
     /// Get transitions visible in a sample range for a channel.
     /// Includes one transition before `start` to establish initial value.
     /// If `max_points` is provided, decimates data using a min/max envelope.
-    pub fn get_visible(&self, ch: u8, start: u64, end: u64, max_points: Option<usize>) -> Vec<Transition> {
+    pub fn get_visible(&self, ch: u8, start: u64, end: u64, max_points: Option<usize>) -> (Vec<Transition>, bool) {
         if ch as usize >= self.transitions.len() {
-            return vec![];
+            return (vec![], false);
         }
         let trans = &self.transitions[ch as usize];
 
@@ -130,66 +144,58 @@ impl LaStore {
             result.push((start, trans[0].1 ^ 1));
         }
 
-        // 2. Collect transitions in range
-        let mut raw_points = Vec::new();
-        for &t in &trans[first_idx..] {
-            if t.0 > end { break; }
-            raw_points.push(t);
-        }
+        // 2. Compute slice of transitions in range (no allocation)
+        let last_idx = trans.partition_point(|&(s, _)| s <= end);
+        let raw = &trans[first_idx..last_idx];
 
-        if raw_points.is_empty() {
-            return result;
+        if raw.is_empty() {
+            return (result, false);
         }
 
         // 3. Decimate if needed
         if let Some(limit) = max_points {
-            if raw_points.len() > limit {
+            if raw.len() > limit {
                 let bucket_size = (end - start) / limit as u64;
                 if bucket_size > 1 {
                     let mut current_bucket = start + bucket_size;
                     let mut i = 0;
-                    
-                    while i < raw_points.len() {
+
+                    while i < raw.len() {
                         let bucket_start_idx = i;
                         let mut has_0 = false;
                         let mut has_1 = false;
-                        
-                        while i < raw_points.len() && raw_points[i].0 < current_bucket {
-                            if raw_points[i].1 == 0 { has_0 = true; }
+
+                        while i < raw.len() && raw[i].0 < current_bucket {
+                            if raw[i].1 == 0 { has_0 = true; }
                             else { has_1 = true; }
                             i += 1;
                         }
-                        
+
                         if i > bucket_start_idx {
-                            // If bucket contains both 0 and 1, it's an "activity" block.
-                            // We must ensure it's visible AND ends on the correct logic level.
                             if has_0 && has_1 {
-                                let first_val = raw_points[bucket_start_idx].1;
-                                let last_val = raw_points[i - 1].1;
-                                
-                                result.push((raw_points[bucket_start_idx].0, first_val));
+                                let first_val = raw[bucket_start_idx].1;
+                                let last_val = raw[i - 1].1;
+
+                                result.push((raw[bucket_start_idx].0, first_val));
                                 if last_val == first_val {
-                                    // Ending same as starting: need a middle toggle to show activity
-                                    result.push((raw_points[bucket_start_idx].0 + 1, first_val ^ 1));
-                                    result.push((raw_points[i - 1].0, last_val));
+                                    result.push((raw[bucket_start_idx].0 + 1, first_val ^ 1));
+                                    result.push((raw[i - 1].0, last_val));
                                 } else {
-                                    // Ending different: already shows activity, just ensure last transition is there
-                                    result.push((raw_points[i - 1].0, last_val));
+                                    result.push((raw[i - 1].0, last_val));
                                 }
                             } else {
-                                // Uniform bucket, just take the first transition
-                                result.push(raw_points[bucket_start_idx]);
+                                result.push(raw[bucket_start_idx]);
                             }
                         }
                         current_bucket += bucket_size;
                     }
-                    return result;
+                    return (result, true);
                 }
             }
         }
 
-        result.extend(raw_points);
-        result
+        result.extend_from_slice(raw);
+        (result, false)
     }
 
     /// Convert sample index to time in seconds
@@ -204,8 +210,17 @@ impl LaStore {
     }
 
     /// Build a density histogram for the entire capture (for minimap heatmap)
-    pub fn density_histogram(&self, buckets: usize) -> Vec<u16> {
+    pub fn density_histogram(&mut self, buckets: usize) -> Vec<u16> {
+        #[cfg(debug_assertions)]
+        let t0 = std::time::Instant::now();
         if buckets == 0 || self.total_samples == 0 { return vec![0; buckets.max(1)]; }
+        if let Some(ref cached) = self.cached_density {
+            if cached.len() == buckets {
+                #[cfg(debug_assertions)]
+                log::info!("[density_histogram] cache hit, {}µs", t0.elapsed().as_micros());
+                return cached.clone();
+            }
+        }
         let mut hist = vec![0u16; buckets];
         let bucket_size = (self.total_samples as f64) / buckets as f64;
         for ch_trans in &self.transitions {
@@ -214,24 +229,21 @@ impl LaStore {
                 hist[b] = hist[b].saturating_add(1);
             }
         }
+        self.cached_density = Some(hist.clone());
+        #[cfg(debug_assertions)]
+        log::info!("[density_histogram] computed, took {}µs", t0.elapsed().as_micros());
         hist
     }
 
     /// Extract viewport data for frontend rendering
-    pub fn to_view_data(&self, start: u64, end: u64, max_points: Option<usize>) -> LaViewData {
+    pub fn to_view_data(&mut self, start: u64, end: u64, max_points: Option<usize>) -> LaViewData {
         let mut decimated = false;
-        let channel_transitions: Vec<Vec<(u64, u8)>> = (0..self.channels)
-            .map(|ch| {
-                let v = self.get_visible(ch, start, end, max_points);
-                // Check if any channel was decimated (count of raw points would have been > limit)
-                if let Some(limit) = max_points {
-                    let raw_count = self.transitions[ch as usize].partition_point(|&(s, _)| s <= end) 
-                                  - self.transitions[ch as usize].partition_point(|&(s, _)| s < start);
-                    if raw_count > limit { decimated = true; }
-                }
-                v
-            })
-            .collect();
+        let mut channel_transitions: Vec<Vec<(u64, u8)>> = Vec::with_capacity(self.channels as usize);
+        for ch in 0..self.channels {
+            let (v, was_decimated) = self.get_visible(ch, start, end, max_points);
+            if was_decimated { decimated = true; }
+            channel_transitions.push(v);
+        }
 
         let density = self.density_histogram(800);
 
@@ -326,6 +338,7 @@ impl LaStore {
 
     /// Delete all samples in [start, end] and shift subsequent samples left.
     pub fn delete_range(&mut self, start: u64, end: u64) -> u64 {
+        self.cached_density = None;
         if end < start { return 0; }
         let removed = end - start + 1;
         for ch in 0..self.channels {
@@ -333,7 +346,7 @@ impl LaStore {
             if ch_idx >= self.transitions.len() { continue; }
 
             // 1. Capture signal states before and after the cut
-            let val_before = self.get_value_at(ch, start.saturating_sub(1));
+            let _val_before = self.get_value_at(ch, start.saturating_sub(1));
             let val_after = self.get_value_at(ch, end + 1);
 
             let ch_trans = &mut self.transitions[ch_idx];

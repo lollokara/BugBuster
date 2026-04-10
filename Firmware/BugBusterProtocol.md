@@ -1310,25 +1310,38 @@ Get power status for both connectors.
 
 **Response payload:**
 ```
-0       a_enabled       bool    Connector A power state
-1       b_enabled       bool    Connector B power state
-2       a_fault         bool    Connector A overcurrent fault
-3       b_fault         bool    Connector B overcurrent fault
-4       a_current_ma    f32     Connector A current (mA, from ADC0)
-8       b_current_ma    f32     Connector B current (mA, from ADC1)
+0       a_enabled        bool    Connector A power state
+1       a_current_ma     f32     Connector A current (mA, from ADC0)
+5       a_fault          bool    Connector A overcurrent fault
+6       b_enabled        bool    Connector B power state
+7       b_current_ma     f32     Connector B current (mA, from ADC1)
+11      b_fault          bool    Connector B overcurrent fault
+12      io_voltage_mv    u16     Last applied HVPAK preset voltage
+14      hvpak_part       u8      0=unknown, 1=SLG47104, 2=SLG47115-E
+15      hvpak_ready      bool    true when identity is resolved and mailbox is usable
+16      hvpak_last_error u8      RP2040-side HVPAK error code
 ```
 
 #### 0xCC HAT_SET_IO_VOLTAGE
-Set the HVPAK IO voltage level (1.2–5.5 V) via I2C DAC.
+Set the HVPAK IO voltage level through the RP2040 ↔ GreenPAK mailbox contract.
 
 **Request payload:**
 ```
-0       voltage_mv      u16     Target voltage in millivolts (1200–5500)
+0       voltage_mv      u16     Target preset voltage in millivolts
 ```
 
-**Response payload:** `[voltage_mv:u16, actual_mv:u16]`
+**Supported preset voltages:** `1200`, `1800`, `2500`, `3300`, `5000`
 
-Uses I2C1 (SDA=GPIO6, SCL=GPIO7) at 400 kHz, address 0x48.
+**Response payload:** `[requested_mv:u16, actual_mv:u16, hvpak_part:u8, hvpak_ready:bool, hvpak_last_error:u8]`
+
+**GreenPAK mailbox contract:**
+- I2C address: `0x48`
+- register `0x48`: read-only identity byte programmed in OTP
+- register `0x4C`: writable command byte (virtual input mailbox)
+- identity values: `0x04` = `SLG47104`, `0x15` = `SLG47115-E`
+
+The programmed GreenPAK image must match this mailbox contract for the RP2040
+driver to report `hvpak_ready=true`.
 
 #### 0xCD HAT_SETUP_SWD
 Configure SWD debug probe (set IO voltage, enable connector, configure pins for SWD).
@@ -1339,9 +1352,54 @@ Configure SWD debug probe (set IO voltage, enable connector, configure pins for 
 2       connector       u8      0=A, 1=B
 ```
 
-**Response payload:** `[configured:bool, voltage_mv:u16]`
+**Response payload:** `[configured:bool, voltage_mv:u16, connector:u8]`
 
 Automatically sets EXP_EXT_1=SWDIO, EXP_EXT_2=SWCLK, enables the specified connector, and sets IO voltage.
+
+#### 0xCE HAT_GET_HVPAK_INFO
+Get detected HVPAK part, readiness, error, and voltage summary.
+
+**Response payload:** `[part:u8, ready:bool, last_error:u8, requested_mv:u16, applied_mv:u16]`
+
+#### 0xDB HAT_GET_HVPAK_CAPS
+Get the detected part capability profile.
+
+**Response payload:** `[flags:u32, lut2_count:u8, lut3_count:u8, lut4_count:u8, pwm_count:u8, comparator_count:u8, bridge_count:u8]`
+
+#### 0xDC / 0xDD HAT_GET_HVPAK_LUT / HAT_SET_HVPAK_LUT
+Read or write a runtime LUT truth table.
+
+**Request payload:** `[kind:u8, index:u8]` for GET, `[kind:u8, index:u8, truth_table:u16]` for SET
+
+**Response payload:** `[kind:u8, index:u8, width_bits:u8, truth_table:u16]`
+
+#### 0xDE / 0xDF HAT_GET_HVPAK_BRIDGE / HAT_SET_HVPAK_BRIDGE
+Read or write the HV bridge configuration.
+
+**Bridge payload:** `[output_mode0:u8, ocp_retry0:u8, output_mode1:u8, ocp_retry1:u8, predriver:bool, full_bridge:bool, control_sel_ph_en:bool, ocp_deglitch:bool, uvlo_enable:bool]`
+
+#### 0xE5 / 0xE6 HAT_GET_HVPAK_ANALOG / HAT_SET_HVPAK_ANALOG
+Read or write the HVPAK analog runtime configuration.
+
+**Analog payload:** `[vref_mode:u8, vref_powered:bool, vref_power_from_matrix:bool, vref_sink_12ua:bool, vref_input_sel:u8, current_sense_vref:u8, current_sense_dynamic_from_pwm:bool, current_sense_gain:u8, current_sense_invert:bool, current_sense_enable:bool, acmp0_gain:u8, acmp0_vref:u8, has_acmp1:bool, acmp1_gain:u8, acmp1_vref:u8]`
+
+#### 0xE7 / 0xE8 HAT_GET_HVPAK_PWM / HAT_SET_HVPAK_PWM
+Read or write one PWM block.
+
+**GET request payload:** `[index:u8]`
+
+**PWM response payload:** `[index:u8, initial_value:u8, current_value:u8, resolution_7bit:bool, out_plus_inverted:bool, out_minus_inverted:bool, async_powerdown:bool, autostop_mode:bool, boundary_osc_disable:bool, phase_correct:bool, deadband:u8, stop_mode:bool, i2c_trigger:bool, duty_source:u8, period_clock_source:u8, duty_clock_source:u8, last_error:u8]`
+
+**SET request payload:** same shape as response, but `current_value` is ignored on write.
+
+#### 0xE9 / 0xEA HAT_HVPAK_REG_READ / HAT_HVPAK_REG_WRITE_MASKED
+Guarded raw register access for advanced/debug use.
+
+**REG_READ request:** `[addr:u8]`
+**REG_READ response:** `[addr:u8, value:u8]`
+
+**REG_WRITE_MASKED request:** `[addr:u8, mask:u8, value:u8]`
+**REG_WRITE_MASKED response:** `[addr:u8, mask:u8, value:u8, actual:u8]`
 
 ### 6.13c HAT Logic Analyzer
 

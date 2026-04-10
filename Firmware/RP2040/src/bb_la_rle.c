@@ -56,8 +56,6 @@ static bool flush_run(RleState *state)
     return remaining == 0;
 }
 
-}
-
 bool rle_encode_word(RleState *state, uint32_t raw)
 {
     uint8_t bits_per_sample = state->channels;

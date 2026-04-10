@@ -22,8 +22,8 @@ impl Default for I2cConfig {
 pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Annotation> {
     let mut annotations = Vec::new();
 
-    let sda_trans = store.get_visible(cfg.sda_channel, start, end, None);
-    let scl_trans = store.get_visible(cfg.scl_channel, start, end, None);
+    let (sda_trans, _) = store.get_visible(cfg.sda_channel, start, end, None);
+    let (scl_trans, _) = store.get_visible(cfg.scl_channel, start, end, None);
 
     // Build a list of SCL rising edges (where data is sampled)
     let mut scl_rising: Vec<u64> = Vec::new();

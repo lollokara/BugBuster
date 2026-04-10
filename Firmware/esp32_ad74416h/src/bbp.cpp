@@ -1535,6 +1535,9 @@ static int handleHatGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_bool(out, &pos, hs->connector[i].fault);
     }
     put_u16(out, &pos, hs->io_voltage_mv);
+    put_u8(out, &pos, hs->hvpak_part);
+    put_bool(out, &pos, hs->hvpak_ready);
+    put_u8(out, &pos, hs->hvpak_last_error);
     // SWD
     put_bool(out, &pos, hs->dap_connected);
     put_bool(out, &pos, hs->target_detected);
@@ -1657,6 +1660,9 @@ static int handleHatGetPower(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_bool(out, &pos, hs->connector[i].fault);
     }
     put_u16(out, &pos, hs->io_voltage_mv);
+    put_u8(out, &pos, hs->hvpak_part);
+    put_bool(out, &pos, hs->hvpak_ready);
+    put_u8(out, &pos, hs->hvpak_last_error);
     return (int)pos;
 }
 
@@ -1672,7 +1678,28 @@ static int handleHatSetIoVoltage(uint16_t seq, uint8_t cmdId,
 
     size_t pos = 0;
     put_u16(out, &pos, mv);
+    put_u16(out, &pos, hat_get_state()->io_voltage_mv);
+    put_u8(out, &pos, hat_get_state()->hvpak_part);
+    put_bool(out, &pos, hat_get_state()->hvpak_ready);
+    put_u8(out, &pos, hat_get_state()->hvpak_last_error);
     return (int)pos;
+}
+
+static int handleHatHvpakPassthrough(uint16_t seq, uint8_t cmdId,
+                                     uint8_t hatCmd,
+                                     const uint8_t *payload, size_t len,
+                                     uint8_t *out, uint32_t timeout_ms)
+{
+    uint8_t rsp[32] = {};
+    uint8_t rsp_len = 0;
+
+    if (!hat_hvpak_request(hatCmd, payload, (uint8_t)len, rsp, &rsp_len, timeout_ms)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    memcpy(out, rsp, rsp_len);
+    return (int)rsp_len;
 }
 
 static int handleHatSetupSwd(uint16_t seq, uint8_t cmdId,
@@ -2526,6 +2553,42 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_HAT_SETUP_SWD:
             rspLen = handleHatSetupSwd(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_HAT_GET_HVPAK_INFO:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_GET_HVPAK_INFO, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_GET_HVPAK_CAPS:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_GET_HVPAK_CAPS, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_GET_HVPAK_LUT:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_GET_HVPAK_LUT, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_SET_HVPAK_LUT:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_SET_HVPAK_LUT, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_GET_HVPAK_BRIDGE:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_GET_HVPAK_BRIDGE, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_SET_HVPAK_BRIDGE:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_SET_HVPAK_BRIDGE, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_GET_HVPAK_ANALOG:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_GET_HVPAK_ANALOG, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_SET_HVPAK_ANALOG:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_SET_HVPAK_ANALOG, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_GET_HVPAK_PWM:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_GET_HVPAK_PWM, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_SET_HVPAK_PWM:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_SET_HVPAK_PWM, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_HVPAK_REG_READ:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_HVPAK_REG_READ, payload, payloadLen, rspBuf, 200);
+            break;
+        case BBP_CMD_HAT_HVPAK_REG_WRITE_MASKED:
+            rspLen = handleHatHvpakPassthrough(seq, cmdId, HAT_CMD_HVPAK_REG_WRITE_MASKED, payload, payloadLen, rspBuf, 200);
             break;
 
         // --- HAT Logic Analyzer ---
