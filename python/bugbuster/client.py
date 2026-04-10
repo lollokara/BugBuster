@@ -1837,6 +1837,12 @@ class BugBuster:
         """
         self._require_hat_present()
         _STATE_NAMES = {0: "idle", 1: "armed", 2: "capturing", 3: "done", 4: "error"}
+        _STREAM_STOP_NAMES = {
+            0: "none",
+            1: "host_stop",
+            2: "usb_short_write",
+            3: "dma_overrun",
+        }
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_LA_STATUS)
             off = 0
@@ -1845,7 +1851,7 @@ class BugBuster:
             captured = struct.unpack_from('<I', resp, off)[0]; off += 4
             total = struct.unpack_from('<I', resp, off)[0]; off += 4
             rate = struct.unpack_from('<I', resp, off)[0]; off += 4
-            return {
+            result = {
                 "state": state,
                 "state_name": _STATE_NAMES.get(state, "unknown"),
                 "channels": channels,
@@ -1853,6 +1859,20 @@ class BugBuster:
                 "total_samples": total,
                 "actual_rate_hz": rate,
             }
+            if len(resp) >= off + 2:
+                result["usb_connected"] = bool(resp[off]); off += 1
+                result["usb_mounted"] = bool(resp[off]); off += 1
+            if len(resp) >= off + 1:
+                stop_reason = resp[off]; off += 1
+                result["stream_stop_reason"] = stop_reason
+                result["stream_stop_reason_name"] = _STREAM_STOP_NAMES.get(stop_reason, "unknown")
+            if len(resp) >= off + 4:
+                result["stream_overrun_count"] = struct.unpack_from('<I', resp, off)[0]
+                off += 4
+            if len(resp) >= off + 4:
+                result["stream_short_write_count"] = struct.unpack_from('<I', resp, off)[0]
+                off += 4
+            return result
         raise NotImplementedError("LA control is USB-only")
 
     def hat_la_read_all(self) -> bytes:

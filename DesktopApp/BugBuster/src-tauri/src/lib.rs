@@ -7,12 +7,12 @@ mod commands;
 mod connection_manager;
 mod discovery;
 mod http_transport;
-mod la_usb;
+mod la_commands;
+mod la_decoders;
 mod la_store;
 #[cfg(test)]
 mod la_store_tests;
-mod la_decoders;
-mod la_commands;
+mod la_usb;
 mod state;
 mod transport;
 mod usb_transport;
@@ -148,6 +148,7 @@ pub fn run() {
             la_commands::la_stream_usb,
             la_commands::la_stream_usb_stop,
             la_commands::la_stream_usb_active,
+            la_commands::la_stream_usb_status,
             la_commands::la_read_uart_chunks,
             la_commands::la_export_vcd_file,
             la_commands::la_export_json,

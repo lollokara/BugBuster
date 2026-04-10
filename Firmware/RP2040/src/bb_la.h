@@ -32,6 +32,13 @@ typedef enum {
     LA_STATE_ERROR,         // Error occurred
 } LaState;
 
+typedef enum {
+    LA_STREAM_STOP_NONE = 0,
+    LA_STREAM_STOP_HOST = 1,
+    LA_STREAM_STOP_USB_SHORT_WRITE = 2,
+    LA_STREAM_STOP_DMA_OVERRUN = 3,
+} LaStreamStopReason;
+
 // Capture configuration
 typedef struct {
     uint8_t  channels;          // Number of channels: 1, 2, or 4
@@ -53,6 +60,11 @@ typedef struct {
     uint32_t total_samples;     // Target depth
     uint32_t actual_rate_hz;    // Actual sample rate achieved
     uint8_t  channels;          // Active channel count
+    uint8_t  usb_connected;     // LA USB data interface mounted
+    uint8_t  usb_mounted;       // Overall USB stack mounted
+    uint8_t  stream_stop_reason;
+    uint32_t stream_overrun_count;
+    uint32_t stream_short_write_count;
 } LaStatus;
 
 /**
@@ -149,3 +161,9 @@ uint8_t bb_la_stream_my_half(const uint8_t *buf);
  * @param my_half   Value from bb_la_stream_my_half() for the buffer being transmitted
  */
 bool bb_la_stream_dma_lapped(uint8_t my_half);
+
+/**
+ * @brief Record that a live CDC stream stopped because the USB writer
+ *        failed to accept the whole DMA half.
+ */
+void bb_la_stream_note_short_write(void);

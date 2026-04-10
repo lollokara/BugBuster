@@ -72,6 +72,9 @@ static struct {
     volatile uint8_t stream_buf_ready;  // 0=A ready, 1=B ready, 0xFF=none
     volatile uint8_t stream_dma_buf;    // Which half DMA is currently writing (0=A, 1=B)
     volatile bool stream_overrun;       // USB side could not release a half before reuse
+    volatile uint8_t  stream_stop_reason;
+    volatile uint32_t stream_overrun_count;
+    volatile uint32_t stream_short_write_count;
 } s_la = {};
 
 #define STREAM_BUF_NONE 0xFFu
@@ -196,6 +199,20 @@ static void halt_capture_runtime(void)
     s_la.stream_overrun = false;
 }
 
+static void reset_stream_diagnostics(void)
+{
+    s_la.stream_stop_reason = LA_STREAM_STOP_NONE;
+    s_la.stream_overrun_count = 0;
+    s_la.stream_short_write_count = 0;
+}
+
+static void note_stream_stop_reason(LaStreamStopReason reason)
+{
+    if (s_la.stream_stop_reason == LA_STREAM_STOP_NONE) {
+        s_la.stream_stop_reason = (uint8_t)reason;
+    }
+}
+
 static void enter_error_state(void)
 {
     halt_capture_runtime();
@@ -218,6 +235,8 @@ static void dma_irq_handler(void)
             // the previous half yet, stopping is safer than silently overwriting it.
             if (s_la.stream_buf_ready != STREAM_BUF_NONE) {
                 s_la.stream_overrun = true;
+                s_la.stream_overrun_count++;
+                note_stream_stop_reason(LA_STREAM_STOP_DMA_OVERRUN);
                 pio_sm_set_enabled(LA_PIO, LA_SM, false);
                 return;
             }
@@ -311,6 +330,7 @@ void bb_la_init(void)
 {
     memset(&s_la, 0, sizeof(s_la));
     s_la.state = LA_STATE_IDLE;
+    reset_stream_diagnostics();
 
     // Initialize LA input pins
     for (uint i = 0; i < BB_LA_NUM_CHANNELS; i++) {
@@ -346,6 +366,7 @@ bool bb_la_configure(const LaConfig *config)
     unload_trigger_program();
 
     s_la.config = *config;
+    reset_stream_diagnostics();
 
     // Calculate buffer usage
     // samples_per_word = 32 / channels (e.g., 4ch = 8 samples/word, 1ch = 32 samples/word)
@@ -525,6 +546,9 @@ void bb_la_force_trigger(void)
 
 void bb_la_stop(void)
 {
+    if (s_la.state == LA_STATE_STREAMING) {
+        note_stream_stop_reason(LA_STREAM_STOP_HOST);
+    }
     halt_capture_runtime();
 
     // Remove PIO programs so configure can reload them
@@ -542,6 +566,11 @@ void bb_la_get_status(LaStatus *status)
     status->channels = s_la.config.channels;
     status->actual_rate_hz = s_la.actual_rate_hz;
     status->total_samples = s_la.config.depth_samples;
+    status->usb_connected = 0;
+    status->usb_mounted = 0;
+    status->stream_stop_reason = s_la.stream_stop_reason;
+    status->stream_overrun_count = s_la.stream_overrun_count;
+    status->stream_short_write_count = s_la.stream_short_write_count;
 
     if (s_la.state == LA_STATE_CAPTURING || s_la.state == LA_STATE_DONE) {
         if (s_la.rle_mode) {
@@ -644,6 +673,7 @@ bool bb_la_start_stream(void)
     s_la.stream_buf_ready = STREAM_BUF_NONE; // nothing ready yet
     s_la.stream_dma_buf = 0;     // DMA starts writing to buffer A
     s_la.stream_overrun = false;
+    reset_stream_diagnostics();
 
     // Split capture buffer into two halves
     uint32_t max_words = sizeof(s_capture_buf) / sizeof(uint32_t);
@@ -733,4 +763,10 @@ bool bb_la_stream_dma_lapped(uint8_t my_half)
 {
     if (s_la.state != LA_STATE_STREAMING) return false;
     return s_la.stream_dma_buf == my_half;
+}
+
+void bb_la_stream_note_short_write(void)
+{
+    s_la.stream_short_write_count++;
+    note_stream_stop_reason(LA_STREAM_STOP_USB_SHORT_WRITE);
 }

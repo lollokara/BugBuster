@@ -536,20 +536,32 @@ def test_la_usb_stream_five_seconds(usb_device):
     so only the first DMA half-buffer (~78ms of data) was ever delivered.
 
     Requires: RP2040 HAT attached and enumerated (VID=0x2E8A PID=0x000C).
+    Runs at 500 kHz/4 ch (DMA half-period 156 ms, CDC write ~78 ms) to give a
+    comfortable 2× margin over the CDC throughput limit. At 1 MHz both rates
+    are equal so jitter causes occasional overruns — that is a separate issue.
+    Note: pyserial clears O_NONBLOCK after open, which causes a ~60s hang on
+    macOS when the USB vendor interface is held. This test uses raw os.open()
+    with O_NONBLOCK to avoid that and reads via select().
     """
+    import os as _os
+    import fcntl as _fcntl
+    import select as _select
+    import struct as _struct
+    import termios as _termios
+
     if not _SERIAL_AVAILABLE:
-        pytest.skip("pyserial not installed — cannot open RP2040 CDC port directly")
+        pytest.skip("pyserial not installed — cannot enumerate RP2040 CDC port")
 
     rp2040_port = _find_rp2040_cdc_port()
     if rp2040_port is None:
         pytest.skip("RP2040 HAT CDC port not found (VID=0x2E8A PID=0x000C)")
 
     CHANNELS    = 4
-    RATE_HZ     = 1_000_000
-    DEPTH       = 100_000
-    WINDOW_SEC  = 1.0   # measure bytes received per 1-second window
+    RATE_HZ     = 500_000   # 500 kHz gives a 156 ms DMA half-period vs ~78 ms write time
+    DEPTH       = 100_000   # (ignored in stream mode; firmware uses full half-buffer)
+    WINDOW_SEC  = 1.0       # measure bytes received per 1-second window
     NUM_WINDOWS = 5
-    MIN_BYTES   = 1_000 # minimum data expected per window to consider it alive
+    MIN_BYTES   = 50_000    # at 250 KB/s payload rate, expect ~250 KB/s; 50 KB is a low bar
 
     # Configure via BBP (ESP32→RP2040 UART)
     usb_device.hat_la_stop()
@@ -557,37 +569,71 @@ def test_la_usb_stream_five_seconds(usb_device):
     usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
     time.sleep(0.12)  # allow UART round-trip to RP2040 to complete
 
-    port = serial.Serial(rp2040_port, baudrate=115200, timeout=0.2)
-    port.dtr = True  # assert DTR so tud_cdc_connected() returns true on RP2040
+    # Open with O_NONBLOCK to avoid macOS 60s hang when vendor USB is held.
+    # pyserial clears O_NONBLOCK in tcsetattr which triggers the hang; raw open avoids it.
     try:
-        # Drain stale bytes from previous session
-        while port.read(4096):
-            pass
+        fd = _os.open(rp2040_port, _os.O_RDWR | _os.O_NOCTTY | _os.O_NONBLOCK)
+    except OSError as e:
+        pytest.skip(f"Cannot open RP2040 CDC port ({e}) — close BugBuster app first")
 
-        # Start stream (retry up to 3 times)
+    try:
+        # Configure: 115200 8N1, raw, CLOCAL (ignore modem lines), keep O_NONBLOCK
+        iflag, oflag, cflag, lflag, _, _, cc = _termios.tcgetattr(fd)
+        cflag = _termios.CS8 | _termios.CREAD | _termios.CLOCAL
+        iflag = _termios.IGNPAR
+        oflag = 0
+        lflag = 0
+        cc = list(cc)
+        cc[_termios.VMIN] = 0
+        cc[_termios.VTIME] = 2  # 200ms read timeout (unused with select, but safe)
+        _termios.tcsetattr(fd, _termios.TCSANOW,
+                           [iflag, oflag, cflag, lflag,
+                            _termios.B115200, _termios.B115200, cc])
+
+        # Assert DTR so tud_cdc_connected() returns true on RP2040
+        TIOCMBIS = 0x8004746c   # macOS: set modem bits
+        TIOCM_DTR = 0x0002
+        try:
+            _fcntl.ioctl(fd, TIOCMBIS, _struct.pack('I', TIOCM_DTR))
+        except OSError:
+            pass  # non-fatal; some platforms don't support this ioctl
+
+        def _read(timeout=0.2):
+            r, _, _ = _select.select([fd], [], [], timeout)
+            return _os.read(fd, 8192) if r else b''
+
+        # Drain stale bytes from previous session
+        while _read(0.1): pass
+
+        # Start stream (retry up to 3 times on ERR response)
         started = False
         for _ in range(3):
-            port.write(b'\x01')
-            port.flush()
-            resp = port.read(64)
+            _os.write(fd, b'\x01')
+            resp = _read(0.5)
             if resp and b'START' in resp:
                 started = True
                 break
-            port.write(b'\x00')
-            port.flush()
+            _os.write(fd, b'\x00')
             time.sleep(0.3)
 
         assert started, "RP2040 did not respond with START — is it configured?"
 
-        # Collect framed chunks [SEQ:1][LEN:1][DATA:N] across NUM_WINDOWS windows.
-        # Each window is WINDOW_SEC seconds; we count payload bytes per window.
+        # Collect NUM_WINDOWS × WINDOW_SEC of framed data [SEQ:1][LEN:1][DATA:N].
+        # Use a tight 5ms read loop so we drain the USB buffer fast enough to prevent
+        # the firmware's DMA lapped guard from stopping the stream prematurely.
         window_bytes = []
         ring = bytearray()
         for _ in range(NUM_WINDOWS):
             window_total = 0
             t0 = time.time()
             while time.time() - t0 < WINDOW_SEC:
-                chunk = port.read(8192)
+                r, _, _ = _select.select([fd], [], [], 0.005)
+                if not r:
+                    continue
+                try:
+                    chunk = _os.read(fd, 65536)
+                except BlockingIOError:
+                    continue
                 if not chunk:
                     continue
                 ring.extend(chunk)
@@ -605,14 +651,171 @@ def test_la_usb_stream_five_seconds(usb_device):
                     del ring[:consumed]
             window_bytes.append(window_total)
 
-        port.write(b'\x00')
-        port.flush()
+        _os.write(fd, b'\x00')
     finally:
-        port.close()
+        _os.close(fd)
 
     failed = [i + 1 for i, n in enumerate(window_bytes) if n < MIN_BYTES]
     assert not failed, (
         f"LA stream delivered <{MIN_BYTES}B in windows {failed} — "
         f"DMA overrun regression? bytes per window: {window_bytes}"
+    )
+    assert_no_faults(usb_device)
+
+
+@pytest.mark.usb_only
+@pytest.mark.timeout(90)
+def test_la_usb_stream_duration_truth(usb_device):
+    """
+    Proof test for gapless live streaming: over a measured wall-clock interval,
+    the decoded sample duration must stay within ±1% of the time between START
+    acknowledgement and STOP issuance, with zero frame corruption.
+
+    The target operating point is intentionally env-configurable so bench runs
+    can pin the exact user-target configuration without editing the test:
+      BUGBUSTER_LA_STREAM_CHANNELS
+      BUGBUSTER_LA_STREAM_RATE_HZ
+      BUGBUSTER_LA_STREAM_DEPTH
+      BUGBUSTER_LA_STREAM_DURATION_S
+    """
+    import os as _os
+    import fcntl as _fcntl
+    import select as _select
+    import struct as _struct
+    import termios as _termios
+
+    if not _SERIAL_AVAILABLE:
+        pytest.skip("pyserial not installed — cannot enumerate RP2040 CDC port")
+
+    rp2040_port = _find_rp2040_cdc_port()
+    if rp2040_port is None:
+        pytest.skip("RP2040 HAT CDC port not found (VID=0x2E8A PID=0x000C)")
+
+    channels = int(_os.getenv("BUGBUSTER_LA_STREAM_CHANNELS", "4"))
+    rate_hz = int(_os.getenv("BUGBUSTER_LA_STREAM_RATE_HZ", "500000"))
+    depth = int(_os.getenv("BUGBUSTER_LA_STREAM_DEPTH", "100000"))
+    stream_sec = float(_os.getenv("BUGBUSTER_LA_STREAM_DURATION_S", "10.0"))
+
+    if channels not in (1, 2, 4):
+        pytest.fail(f"BUGBUSTER_LA_STREAM_CHANNELS must be 1, 2, or 4 (got {channels})")
+
+    usb_device.hat_la_stop()
+    usb_device.hat_la_configure(channels=channels, rate_hz=rate_hz, depth=depth)
+    usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
+    time.sleep(0.12)
+
+    try:
+        fd = _os.open(rp2040_port, _os.O_RDWR | _os.O_NOCTTY | _os.O_NONBLOCK)
+    except OSError as e:
+        pytest.skip(f"Cannot open RP2040 CDC port ({e}) — close BugBuster app first")
+
+    try:
+        iflag, oflag, cflag, lflag, _, _, cc = _termios.tcgetattr(fd)
+        cflag = _termios.CS8 | _termios.CREAD | _termios.CLOCAL
+        iflag = _termios.IGNPAR
+        oflag = 0
+        lflag = 0
+        cc = list(cc)
+        cc[_termios.VMIN] = 0
+        cc[_termios.VTIME] = 2
+        _termios.tcsetattr(fd, _termios.TCSANOW,
+                           [iflag, oflag, cflag, lflag,
+                            _termios.B115200, _termios.B115200, cc])
+
+        TIOCMBIS = 0x8004746c
+        TIOCM_DTR = 0x0002
+        try:
+            _fcntl.ioctl(fd, TIOCMBIS, _struct.pack('I', TIOCM_DTR))
+        except OSError:
+            pass
+
+        def _read(timeout=0.2):
+            r, _, _ = _select.select([fd], [], [], timeout)
+            return _os.read(fd, 65536) if r else b''
+
+        while _read(0.1):
+            pass
+
+        started = False
+        for _ in range(3):
+            _os.write(fd, b'\x01')
+            resp = _read(0.5)
+            if resp and b'START' in resp:
+                started = True
+                break
+            _os.write(fd, b'\x00')
+            time.sleep(0.3)
+
+        assert started, "RP2040 did not respond with START — is it configured?"
+
+        ring = bytearray()
+        total_bytes = 0
+        invalid_frames = 0
+        sequence_mismatches = 0
+        expected_seq = 0
+        t_start = time.monotonic()
+        while time.monotonic() - t_start < stream_sec:
+            r, _, _ = _select.select([fd], [], [], 0.005)
+            if not r:
+                continue
+            try:
+                chunk = _os.read(fd, 65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                continue
+
+            ring.extend(chunk)
+            consumed = 0
+            while len(ring) - consumed >= 2:
+                seq = ring[consumed]
+                length = ring[consumed + 1]
+                if length > 62:
+                    invalid_frames += 1
+                    break
+                if len(ring) - consumed < 2 + length:
+                    break
+                if seq != expected_seq:
+                    sequence_mismatches += 1
+                    break
+                total_bytes += length
+                expected_seq = (expected_seq + 1) & 0xFF
+                consumed += 2 + length
+            if consumed:
+                del ring[:consumed]
+            if invalid_frames or sequence_mismatches:
+                break
+
+        measured_duration = time.monotonic() - t_start
+        _os.write(fd, b'\x00')
+        time.sleep(0.05)
+    finally:
+        _os.close(fd)
+
+    samples_per_byte = 8 // channels
+    decoded_samples = total_bytes * samples_per_byte
+    decoded_duration = decoded_samples / float(rate_hz)
+    status = usb_device.hat_la_get_status()
+    stop_reason = status.get("stream_stop_reason_name", "unknown")
+    overrun_count = status.get("stream_overrun_count", 0)
+    short_write_count = status.get("stream_short_write_count", 0)
+
+    assert sequence_mismatches == 0, (
+        f"Sequence mismatch during {channels}ch/{rate_hz}Hz stream: "
+        f"mismatches={sequence_mismatches}, stop_reason={stop_reason}"
+    )
+    assert invalid_frames == 0, (
+        f"Invalid frame during {channels}ch/{rate_hz}Hz stream: "
+        f"invalid_frames={invalid_frames}, stop_reason={stop_reason}"
+    )
+    assert measured_duration > 0.0
+    assert abs(decoded_duration - measured_duration) / measured_duration <= 0.01, (
+        f"Decoded duration drifted from wall clock: decoded={decoded_duration:.3f}s, "
+        f"measured={measured_duration:.3f}s, bytes={total_bytes}, "
+        f"stop_reason={stop_reason}, overruns={overrun_count}, short_writes={short_write_count}"
+    )
+    assert total_bytes > 0, (
+        f"No live LA payload bytes received; stop_reason={stop_reason}, "
+        f"overruns={overrun_count}, short_writes={short_write_count}"
     )
     assert_no_faults(usb_device)

@@ -498,6 +498,17 @@ pub struct LaCaptureInfo {
     pub trigger_sample: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaStreamRuntimeStatus {
+    pub active: bool,
+    pub total_bytes: u64,
+    pub chunk_count: u64,
+    pub sequence_mismatches: u32,
+    pub invalid_frames: u32,
+    pub last_error: Option<String>,
+}
+
 pub async fn la_get_view(start: u64, end: u64, max_points: Option<usize>) -> Option<LaViewData> {
     #[derive(Serialize)]
     struct Args {
@@ -681,6 +692,11 @@ pub async fn la_stream_usb_active() -> bool {
         Some(v) => serde_wasm_bindgen::from_value(v).unwrap_or(false),
         None => false,
     }
+}
+
+pub async fn la_stream_usb_status() -> Option<LaStreamRuntimeStatus> {
+    let result = try_invoke("la_stream_usb_status", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
 }
 
 pub async fn la_invoke_set_trigger(trigger_type: u8, channel: u8) {

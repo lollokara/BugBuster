@@ -1393,8 +1393,16 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             });
                                             let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 
-                                            // Check if backend is still streaming (allow a few misses)
-                                            if !la_stream_usb_active().await {
+                                            let stream_status = la_stream_usb_status().await.unwrap_or_default();
+                                            if let Some(err) = stream_status.last_error.clone() {
+                                                web_sys::console::error_1(&format!("[STREAM] {}", err).into());
+                                                show_toast(&format!("USB stream failed: {}", err), "err");
+                                                break;
+                                            }
+
+                                            // Check if backend is still streaming (allow a few misses while the
+                                            // background task tears down cleanly after an explicit stop).
+                                            if !stream_status.active && !la_stream_usb_active().await {
                                                 inactive_count += 1;
                                                 if inactive_count >= 3 {
                                                     web_sys::console::log_1(&"[STREAM] Backend stream stopped".into());

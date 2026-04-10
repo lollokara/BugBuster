@@ -8,11 +8,11 @@
 //   - Manage LA state
 // =============================================================================
 
-use tauri::State;
-use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Mutex};
+use crate::la_usb::{decode_capture, hat_usb_present, LaCaptureData, LaUsbConnection};
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use crate::la_usb::{LaUsbConnection, LaCaptureData, decode_capture, hat_usb_present};
+use std::sync::{Arc, Mutex};
+use tauri::State;
 
 /// Find the RP2040 BugBuster HAT CDC serial port.
 /// Looks for a serial port associated with VID=0x2E8A, PID=0x000C.
@@ -21,8 +21,12 @@ fn find_rp2040_cdc_port() -> Option<String> {
     for port in &ports {
         if let serialport::SerialPortType::UsbPort(usb_info) = &port.port_type {
             if usb_info.vid == 0x2E8A && usb_info.pid == 0x000C {
-                log::info!("[find_rp2040_cdc] Found: {} (VID={:04X} PID={:04X})",
-                    port.port_name, usb_info.vid, usb_info.pid);
+                log::info!(
+                    "[find_rp2040_cdc] Found: {} (VID={:04X} PID={:04X})",
+                    port.port_name,
+                    usb_info.vid,
+                    usb_info.pid
+                );
                 // The CDC data interface (interface 2) is the one we want
                 // On macOS this shows up as a cu.usbmodem port
                 return Some(port.port_name.clone());
@@ -37,13 +41,94 @@ fn find_rp2040_cdc_port() -> Option<String> {
     }
     None
 }
-use crate::la_store::{LaStore, LaViewData};
-use crate::la_decoders::{self, Annotation, DecoderConfig};
-use crate::connection_manager::ConnectionManager;
 use crate::bbp;
+use crate::connection_manager::ConnectionManager;
+use crate::la_decoders::{self, Annotation, DecoderConfig};
+use crate::la_store::{LaStore, LaViewData};
 
 type CmdResult<T> = Result<T, String>;
-fn map_err(e: impl std::fmt::Display) -> String { e.to_string() }
+fn map_err(e: impl std::fmt::Display) -> String {
+    e.to_string()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaStreamRuntimeStatus {
+    pub active: bool,
+    pub total_bytes: u64,
+    pub chunk_count: u64,
+    pub sequence_mismatches: u32,
+    pub invalid_frames: u32,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StreamParseBatch {
+    consumed: usize,
+    next_expected_seq: u8,
+    chunk_count: u64,
+    payload_bytes: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StreamParseError {
+    InvalidLength(usize),
+    SequenceMismatch { got: u8, expected: u8, dropped: u8 },
+}
+
+fn consume_stream_frames<F>(
+    ring_buf: &[u8],
+    expected_seq: u8,
+    mut on_frame: F,
+) -> Result<StreamParseBatch, StreamParseError>
+where
+    F: FnMut(&[u8]),
+{
+    let mut consumed = 0usize;
+    let mut next_expected_seq = expected_seq;
+    let mut chunk_count = 0u64;
+    let mut payload_bytes = 0u64;
+
+    while ring_buf.len().saturating_sub(consumed) >= 2 {
+        let seq = ring_buf[consumed];
+        let len = ring_buf[consumed + 1] as usize;
+        if len > 62 {
+            return Err(StreamParseError::InvalidLength(len));
+        }
+
+        let frame_len = 2 + len;
+        if ring_buf.len() - consumed < frame_len {
+            break;
+        }
+
+        if seq != next_expected_seq {
+            let dropped = if seq > next_expected_seq {
+                seq - next_expected_seq
+            } else {
+                (255 - next_expected_seq) + seq + 1
+            };
+            return Err(StreamParseError::SequenceMismatch {
+                got: seq,
+                expected: next_expected_seq,
+                dropped,
+            });
+        }
+
+        let payload = &ring_buf[consumed + 2..consumed + frame_len];
+        on_frame(payload);
+        consumed += frame_len;
+        next_expected_seq = next_expected_seq.wrapping_add(1);
+        chunk_count += 1;
+        payload_bytes += len as u64;
+    }
+
+    Ok(StreamParseBatch {
+        consumed,
+        next_expected_seq,
+        chunk_count,
+        payload_bytes,
+    })
+}
 
 /// Shared LA USB connection state
 pub struct LaState {
@@ -56,6 +141,8 @@ pub struct LaState {
     pub stream_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     /// Next expected sequence number for framed stream chunks
     pub stream_seq: Arc<AtomicU8>,
+    /// Runtime health and counters for the current/last CDC live stream
+    pub stream_status: Arc<Mutex<LaStreamRuntimeStatus>>,
 }
 
 impl LaState {
@@ -67,6 +154,7 @@ impl LaState {
             stream_running: Arc::new(AtomicBool::new(false)),
             stream_task: Arc::new(Mutex::new(None)),
             stream_seq: Arc::new(AtomicU8::new(0)),
+            stream_status: Arc::new(Mutex::new(LaStreamRuntimeStatus::default())),
         }
     }
 }
@@ -75,13 +163,16 @@ impl LaState {
 pub struct LaStatusResponse {
     pub usb_present: bool,
     pub usb_connected: bool,
-    pub state: u8,          // 0=idle, 1=armed, 2=capturing, 3=done, 4=error
+    pub state: u8, // 0=idle, 1=armed, 2=capturing, 3=done, 4=error
     pub state_name: String,
     pub channels: u8,
     pub samples_captured: u32,
     pub total_samples: u32,
     pub actual_rate_hz: u32,
     pub has_capture: bool,
+    pub stream_stop_reason: Option<String>,
+    pub stream_overrun_count: Option<u32>,
+    pub stream_short_write_count: Option<u32>,
 }
 
 /// Check if RP2040 LA is available on USB
@@ -112,7 +203,9 @@ pub async fn la_configure(
     pw.put_u32(rate_hz);
     pw.put_u32(depth);
     pw.put_u8(rle_enabled as u8);
-    mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &pw.buf).await.map_err(map_err)?;
+    mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &pw.buf)
+        .await
+        .map_err(map_err)?;
     Ok(())
 }
 
@@ -126,28 +219,36 @@ pub async fn la_set_trigger(
     let mut pw = bbp::PayloadWriter::new();
     pw.put_u8(trigger_type);
     pw.put_u8(channel);
-    mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &pw.buf).await.map_err(map_err)?;
+    mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &pw.buf)
+        .await
+        .map_err(map_err)?;
     Ok(())
 }
 
 /// Arm the trigger
 #[tauri::command]
 pub async fn la_arm(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    mgr.send_command(bbp::CMD_HAT_LA_ARM, &[]).await.map_err(map_err)?;
+    mgr.send_command(bbp::CMD_HAT_LA_ARM, &[])
+        .await
+        .map_err(map_err)?;
     Ok(())
 }
 
 /// Force trigger
 #[tauri::command]
 pub async fn la_force(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    mgr.send_command(bbp::CMD_HAT_LA_FORCE, &[]).await.map_err(map_err)?;
+    mgr.send_command(bbp::CMD_HAT_LA_FORCE, &[])
+        .await
+        .map_err(map_err)?;
     Ok(())
 }
 
 /// Stop capture
 #[tauri::command]
 pub async fn la_stop(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await.map_err(map_err)?;
+    mgr.send_command(bbp::CMD_HAT_LA_STOP, &[])
+        .await
+        .map_err(map_err)?;
     Ok(())
 }
 
@@ -158,14 +259,29 @@ pub async fn la_get_status(
     la: State<'_, LaState>,
 ) -> CmdResult<LaStatusResponse> {
     let state_names = ["idle", "armed", "capturing", "done", "error"];
+    let stream_stop_reason_name = |reason: u8| match reason {
+        0 => "none",
+        1 => "host_stop",
+        2 => "usb_short_write",
+        3 => "dma_overrun",
+        _ => "unknown",
+    };
 
-    let rsp = mgr.send_command(bbp::CMD_HAT_LA_STATUS, &[]).await.map_err(map_err)?;
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_LA_STATUS, &[])
+        .await
+        .map_err(map_err)?;
     let mut r = bbp::PayloadReader::new(&rsp);
     let state = r.get_u8().unwrap_or(0);
     let channels = r.get_u8().unwrap_or(0);
     let samples_captured = r.get_u32().unwrap_or(0);
     let total_samples = r.get_u32().unwrap_or(0);
     let actual_rate_hz = r.get_u32().unwrap_or(0);
+    let _usb_connected = r.get_u8();
+    let _usb_mounted = r.get_u8();
+    let stream_stop_reason = r.get_u8().map(stream_stop_reason_name).map(str::to_string);
+    let stream_overrun_count = r.get_u32();
+    let stream_short_write_count = r.get_u32();
 
     let usb = la.usb.lock().map_err(map_err)?;
     let has_capture = la.last_capture.lock().map_err(map_err)?.is_some();
@@ -174,12 +290,18 @@ pub async fn la_get_status(
         usb_present: hat_usb_present(),
         usb_connected: usb.is_connected(),
         state,
-        state_name: state_names.get(state as usize).unwrap_or(&"unknown").to_string(),
+        state_name: state_names
+            .get(state as usize)
+            .unwrap_or(&"unknown")
+            .to_string(),
         channels,
         samples_captured,
         total_samples,
         actual_rate_hz,
         has_capture,
+        stream_stop_reason,
+        stream_overrun_count,
+        stream_short_write_count,
     })
 }
 
@@ -204,7 +326,9 @@ pub async fn la_read_capture(
     let raw = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let mut usb = usb_mutex.lock().map_err(|e| e.to_string())?;
         usb.read_capture_blocking().map_err(|e| e.to_string())
-    }).await.map_err(|e| e.to_string())??;
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     let channel_data = decode_capture(&raw, channels);
 
@@ -246,9 +370,12 @@ pub fn la_get_view(
             let t0 = std::time::Instant::now();
             let result = s.to_view_data(start_sample, end_sample, max_points);
             #[cfg(debug_assertions)]
-            log::info!("[la_get_view] to_view_data took {}µs", t0.elapsed().as_micros());
+            log::info!(
+                "[la_get_view] to_view_data took {}µs",
+                t0.elapsed().as_micros()
+            );
             Ok(Some(result))
-        },
+        }
         None => Ok(None),
     }
 }
@@ -305,10 +432,7 @@ pub struct LaCaptureInfo {
 
 /// Export capture as VCD file
 #[tauri::command]
-pub fn la_export_vcd_file(
-    path: String,
-    la: State<'_, LaState>,
-) -> CmdResult<()> {
+pub fn la_export_vcd_file(path: String, la: State<'_, LaState>) -> CmdResult<()> {
     let store = la.store.lock().map_err(map_err)?;
     let s = store.as_ref().ok_or("No capture data")?;
     let vcd = s.export_vcd();
@@ -318,10 +442,7 @@ pub fn la_export_vcd_file(
 
 /// Export capture as JSON file (full capture data + metadata for reload)
 #[tauri::command]
-pub fn la_export_json(
-    path: String,
-    la: State<'_, LaState>,
-) -> CmdResult<()> {
+pub fn la_export_json(path: String, la: State<'_, LaState>) -> CmdResult<()> {
     let store = la.store.lock().map_err(map_err)?;
     let s = store.as_ref().ok_or("No capture data")?;
 
@@ -349,10 +470,7 @@ pub fn la_export_json(
 
 /// Import capture from JSON file
 #[tauri::command]
-pub fn la_import_json(
-    path: String,
-    la: State<'_, LaState>,
-) -> CmdResult<LaCaptureInfo> {
+pub fn la_import_json(path: String, la: State<'_, LaState>) -> CmdResult<LaCaptureInfo> {
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
 
     #[derive(Deserialize)]
@@ -405,12 +523,17 @@ pub async fn la_read_uart_chunks(
         let mut pw = bbp::PayloadWriter::new();
         pw.put_u32(offset);
         pw.put_u16(req_len);
-        let rsp = mgr.send_command(bbp::CMD_HAT_LA_READ, &pw.buf).await.map_err(map_err)?;
+        let rsp = mgr
+            .send_command(bbp::CMD_HAT_LA_READ, &pw.buf)
+            .await
+            .map_err(map_err)?;
         let mut r = bbp::PayloadReader::new(&rsp);
         let _rsp_offset = r.get_u32().unwrap_or(0);
         let actual_len = r.get_u8().unwrap_or(0) as usize;
-        if actual_len == 0 { break; }
-        let remaining = &rsp[5..5+actual_len.min(rsp.len()-5)];
+        if actual_len == 0 {
+            break;
+        }
+        let remaining = &rsp[5..5 + actual_len.min(rsp.len() - 5)];
         all_data.extend_from_slice(remaining);
         offset += actual_len as u32;
     }
@@ -437,7 +560,12 @@ pub async fn la_read_append(
     mgr: State<'_, ConnectionManager>,
     la: State<'_, LaState>,
 ) -> CmdResult<LaCaptureInfo> {
-    log::info!("[la_read_append] ch={} rate={} depth={}", channels, sample_rate_hz, total_samples);
+    log::info!(
+        "[la_read_append] ch={} rate={} depth={}",
+        channels,
+        sample_rate_hz,
+        total_samples
+    );
     let samples_per_word = 32u32 / channels as u32;
     let total_bytes = ((total_samples + samples_per_word - 1) / samples_per_word) * 4;
     let chunk_size: u16 = 900; // Max ~1024 payload, leave room for framing
@@ -450,12 +578,17 @@ pub async fn la_read_append(
         let mut pw = bbp::PayloadWriter::new();
         pw.put_u32(offset);
         pw.put_u16(req_len);
-        let rsp = mgr.send_command(bbp::CMD_HAT_LA_READ, &pw.buf).await.map_err(map_err)?;
+        let rsp = mgr
+            .send_command(bbp::CMD_HAT_LA_READ, &pw.buf)
+            .await
+            .map_err(map_err)?;
         let mut r = bbp::PayloadReader::new(&rsp);
         let _rsp_offset = r.get_u32().unwrap_or(0);
         let actual_len = r.get_u8().unwrap_or(0) as usize;
-        if actual_len == 0 { break; }
-        let remaining = &rsp[5..5+actual_len.min(rsp.len()-5)];
+        if actual_len == 0 {
+            break;
+        }
+        let remaining = &rsp[5..5 + actual_len.min(rsp.len() - 5)];
         all_data.extend_from_slice(remaining);
         offset += actual_len as u32;
     }
@@ -470,7 +603,10 @@ pub async fn la_read_append(
     }
 
     let store = store_guard.as_ref().unwrap();
-    log::info!("[la_read_append] Store now has {} total samples", store.total_samples);
+    log::info!(
+        "[la_read_append] Store now has {} total samples",
+        store.total_samples
+    );
     Ok(LaCaptureInfo {
         channels: store.channels,
         sample_rate_hz: store.sample_rate_hz,
@@ -494,7 +630,12 @@ pub async fn la_stream_cycle(
     la: State<'_, LaState>,
 ) -> CmdResult<LaCaptureInfo> {
     let t_start = std::time::Instant::now();
-    log::info!("[SC] START ch={} rate={} depth={}", channels, sample_rate_hz, depth);
+    log::info!(
+        "[SC] START ch={} rate={} depth={}",
+        channels,
+        sample_rate_hz,
+        depth
+    );
 
     // Check/connect USB
     let use_usb = if hat_usb_present() {
@@ -502,24 +643,41 @@ pub async fn la_stream_cycle(
         if !usb.is_connected() {
             log::info!("[SC] +{:?} USB connecting...", t_start.elapsed());
             usb.connect().is_ok()
-        } else { true }
-    } else { false };
+        } else {
+            true
+        }
+    } else {
+        false
+    };
     log::info!("[SC] +{:?} use_usb={}", t_start.elapsed(), use_usb);
 
     // Start USB bulk read in background BEFORE arming
     let usb_read = if use_usb {
         let usb_mutex = la.usb.clone();
         let t = t_start;
-        Some(tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-            log::info!("[SC] +{:?} bulk_in submit", t.elapsed());
-            let mut usb = usb_mutex.lock().map_err(|e| e.to_string())?;
-            log::info!("[SC] +{:?} bulk_in locked, calling read_capture_blocking", t.elapsed());
-            let result = usb.read_capture_blocking();
-            log::info!("[SC] +{:?} bulk_in returned: {}", t.elapsed(),
-                match &result { Ok(d) => format!("OK {} bytes", d.len()), Err(e) => format!("ERR: {}", e) });
-            result.map_err(|e| e.to_string())
-        }))
-    } else { None };
+        Some(tokio::task::spawn_blocking(
+            move || -> Result<Vec<u8>, String> {
+                log::info!("[SC] +{:?} bulk_in submit", t.elapsed());
+                let mut usb = usb_mutex.lock().map_err(|e| e.to_string())?;
+                log::info!(
+                    "[SC] +{:?} bulk_in locked, calling read_capture_blocking",
+                    t.elapsed()
+                );
+                let result = usb.read_capture_blocking();
+                log::info!(
+                    "[SC] +{:?} bulk_in returned: {}",
+                    t.elapsed(),
+                    match &result {
+                        Ok(d) => format!("OK {} bytes", d.len()),
+                        Err(e) => format!("ERR: {}", e),
+                    }
+                );
+                result.map_err(|e| e.to_string())
+            },
+        ))
+    } else {
+        None
+    };
 
     // Stop previous
     log::info!("[SC] +{:?} sending STOP", t_start.elapsed());
@@ -533,25 +691,42 @@ pub async fn la_stream_cycle(
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
     cfg_buf.extend_from_slice(&depth.to_le_bytes());
     cfg_buf.push(if rle_enabled { 1 } else { 0 });
-    let _ = mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf).await.map_err(map_err)?;
+    let _ = mgr
+        .send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf)
+        .await
+        .map_err(map_err)?;
     log::info!("[SC] +{:?} CONFIG done", t_start.elapsed());
 
     // Trigger + Arm
-    let _ = mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel]).await.map_err(map_err)?;
+    let _ = mgr
+        .send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel])
+        .await
+        .map_err(map_err)?;
     log::info!("[SC] +{:?} sending ARM", t_start.elapsed());
-    let _ = mgr.send_command(bbp::CMD_HAT_LA_ARM, &[]).await.map_err(map_err)?;
+    let _ = mgr
+        .send_command(bbp::CMD_HAT_LA_ARM, &[])
+        .await
+        .map_err(map_err)?;
     log::info!("[SC] +{:?} ARM done", t_start.elapsed());
 
     // Poll for DONE
     for i in 0..200 {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let rsp = mgr.send_command(bbp::CMD_HAT_LA_STATUS, &[]).await.map_err(map_err)?;
+        let rsp = mgr
+            .send_command(bbp::CMD_HAT_LA_STATUS, &[])
+            .await
+            .map_err(map_err)?;
         if !rsp.is_empty() && rsp[0] == 3 {
             log::info!("[SC] +{:?} DONE at poll {}", t_start.elapsed(), i);
             break;
         }
         if i < 3 {
-            log::info!("[SC] +{:?} poll {}: state={}", t_start.elapsed(), i, rsp.get(0).unwrap_or(&0));
+            log::info!(
+                "[SC] +{:?} poll {}: state={}",
+                t_start.elapsed(),
+                i,
+                rsp.get(0).unwrap_or(&0)
+            );
         }
     }
 
@@ -590,7 +765,11 @@ pub async fn la_stream_cycle(
 }
 
 /// Helper: read capture data via UART chunks
-async fn read_uart_chunks(mgr: &ConnectionManager, channels: u8, depth: u32) -> Result<Vec<u8>, String> {
+async fn read_uart_chunks(
+    mgr: &ConnectionManager,
+    channels: u8,
+    depth: u32,
+) -> Result<Vec<u8>, String> {
     let samples_per_word = 32u32 / channels as u32;
     let total_bytes = ((depth + samples_per_word - 1) / samples_per_word) * 4;
     let chunk_size: u16 = 900;
@@ -601,12 +780,17 @@ async fn read_uart_chunks(mgr: &ConnectionManager, channels: u8, depth: u32) -> 
         let mut pw = bbp::PayloadWriter::new();
         pw.put_u32(offset);
         pw.put_u16(req_len);
-        let rsp = mgr.send_command(bbp::CMD_HAT_LA_READ, &pw.buf).await.map_err(|e| e.to_string())?;
+        let rsp = mgr
+            .send_command(bbp::CMD_HAT_LA_READ, &pw.buf)
+            .await
+            .map_err(|e| e.to_string())?;
         let mut r = bbp::PayloadReader::new(&rsp);
         let _rsp_offset = r.get_u32().unwrap_or(0);
         let actual_len = r.get_u8().unwrap_or(0) as usize;
-        if actual_len == 0 { break; }
-        let remaining = &rsp[5..5+actual_len.min(rsp.len()-5)];
+        if actual_len == 0 {
+            break;
+        }
+        let remaining = &rsp[5..5 + actual_len.min(rsp.len() - 5)];
         all_data.extend_from_slice(remaining);
         offset += actual_len as u32;
     }
@@ -630,7 +814,12 @@ pub async fn la_stream_usb(
     mgr: State<'_, ConnectionManager>,
     la: State<'_, LaState>,
 ) -> CmdResult<()> {
-    log::info!("[la_stream_usb] Starting gapless CDC stream: ch={} rate={} depth={}", channels, sample_rate_hz, depth);
+    log::info!(
+        "[la_stream_usb] Starting gapless CDC stream: ch={} rate={} depth={}",
+        channels,
+        sample_rate_hz,
+        depth
+    );
 
     // Stop any previous streaming and wait for the background task to fully exit.
     // The task holds the CDC serial port open; we must wait for it to release the port
@@ -664,8 +853,12 @@ pub async fn la_stream_usb(
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
     cfg_buf.extend_from_slice(&depth.to_le_bytes());
     cfg_buf.push(if rle_enabled { 1 } else { 0 });
-    mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf).await.map_err(map_err)?;
-    mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel]).await.map_err(map_err)?;
+    mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf)
+        .await
+        .map_err(map_err)?;
+    mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel])
+        .await
+        .map_err(map_err)?;
     // Wait for RP2040 to finish processing configure (goes through ESP32 → UART)
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -674,10 +867,14 @@ pub async fn la_stream_usb(
         let mut store_guard = la.store.lock().map_err(map_err)?;
         *store_guard = Some(LaStore::from_raw(&[], channels, sample_rate_hz));
     }
+    {
+        let mut status = la.stream_status.lock().map_err(map_err)?;
+        *status = LaStreamRuntimeStatus::default();
+    }
 
     // Find RP2040 CDC serial port for direct streaming
-    let cdc_port = find_rp2040_cdc_port()
-        .ok_or_else(|| "RP2040 CDC serial port not found".to_string())?;
+    let cdc_port =
+        find_rp2040_cdc_port().ok_or_else(|| "RP2040 CDC serial port not found".to_string())?;
     log::info!("[la_stream_usb] Found RP2040 CDC: {}", cdc_port);
 
     la.stream_running.store(true, Ordering::SeqCst);
@@ -685,16 +882,22 @@ pub async fn la_stream_usb(
     let running = la.stream_running.clone();
     let task_slot = la.stream_task.clone();
     let stream_seq = la.stream_seq.clone();
+    let stream_status = la.stream_status.clone();
 
     let handle = tokio::task::spawn_blocking(move || {
         // Open CDC serial port
         let mut port = match serialport::new(&cdc_port, 115200)
             .timeout(std::time::Duration::from_millis(200))
-            .open() {
+            .open()
+        {
             Ok(p) => p,
             Err(e) => {
                 log::error!("[la_stream_usb] Cannot open {}: {}", cdc_port, e);
                 running.store(false, Ordering::SeqCst);
+                if let Ok(mut status) = stream_status.lock() {
+                    status.active = false;
+                    status.last_error = Some(format!("cannot open {}: {}", cdc_port, e));
+                }
                 return;
             }
         };
@@ -730,7 +933,10 @@ pub async fn la_stream_usb(
                 Ok(n) if n > 0 => {
                     let s = String::from_utf8_lossy(&resp[..n]);
                     log::info!("[la_stream_usb] Attempt {}: {:?}", attempt, s.trim());
-                    if s.contains("START") { started = true; break; }
+                    if s.contains("START") {
+                        started = true;
+                        break;
+                    }
                     // Got ERR — stop and retry
                     port.write_all(&[0x00]).ok();
                     port.flush().ok();
@@ -745,6 +951,10 @@ pub async fn la_stream_usb(
         if !started {
             log::error!("[la_stream_usb] Failed to start stream");
             running.store(false, Ordering::SeqCst);
+            if let Ok(mut status) = stream_status.lock() {
+                status.active = false;
+                status.last_error = Some("RP2040 did not acknowledge START".to_string());
+            }
             return;
         }
 
@@ -753,76 +963,128 @@ pub async fn la_stream_usb(
         let mut total_bytes: u64 = 0;
         let mut chunk_count: u64 = 0;
         let t0 = std::time::Instant::now();
+        let mut last_progress = std::time::Instant::now();
         let mut buf = vec![0u8; 8192];
         let mut ring_buf = Vec::with_capacity(16384);
-        
+        let mut expected_seq = 0u8;
+
         // Reset sequence for new stream
         stream_seq.store(0, Ordering::SeqCst);
+        if let Ok(mut status) = stream_status.lock() {
+            status.active = true;
+        }
 
         // Send stream start command (0x01) via CDC
         while running.load(Ordering::SeqCst) {
             let n = match port.read(&mut buf) {
-                Ok(0) => { std::thread::sleep(std::time::Duration::from_millis(1)); continue; }
-                Ok(n) => n,
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
-                Err(e) => { log::warn!("[la_stream_usb] Read error: {}", e); break; }
-            };
-            
-            ring_buf.extend_from_slice(&buf[..n]);
-
-            let mut consumed = 0;
-            // Process framed chunks: [SEQ:1][LEN:1][DATA:N]
-            while ring_buf.len() - consumed >= 2 {
-                let seq = ring_buf[consumed];
-                let len = ring_buf[consumed + 1] as usize;
-                let frame_len = 2 + len;
-                
-                if len > 62 {
-                    log::error!("[la_stream_usb] Invalid framed chunk length: {}", len);
-                    consumed += 1; // Resync
+                Ok(0) => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
-
-                if ring_buf.len() - consumed < frame_len {
-                    break; // Wait for more data
+                Ok(n) => n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    if last_progress.elapsed() > std::time::Duration::from_secs(1) {
+                        running.store(false, Ordering::SeqCst);
+                        if let Ok(mut status) = stream_status.lock() {
+                            status.active = false;
+                            status.last_error =
+                                Some("stream stalled: no CDC data for >1s".to_string());
+                        }
+                        log::error!("[la_stream_usb] stream stalled: no CDC data for >1s");
+                        break;
+                    }
+                    continue;
                 }
-
-                // Validate sequence
-                let expected = stream_seq.load(Ordering::SeqCst);
-                if seq != expected {
-                    let dropped = if seq > expected { seq - expected } else { (255 - expected) + seq + 1 };
-                    log::warn!("[la_stream_usb] Sequence mismatch! Got {}, expected {}. (~{} chunks dropped)", seq, expected, dropped);
+                Err(e) => {
+                    log::warn!("[la_stream_usb] Read error: {}", e);
+                    running.store(false, Ordering::SeqCst);
+                    if let Ok(mut status) = stream_status.lock() {
+                        status.active = false;
+                        status.last_error = Some(format!("CDC read error: {}", e));
+                    }
+                    break;
                 }
-                stream_seq.store(seq.wrapping_add(1), Ordering::SeqCst);
+            };
 
-                chunk_count += 1;
-                total_bytes += len as u64;
-                
+            ring_buf.extend_from_slice(&buf[..n]);
+            last_progress = std::time::Instant::now();
+
+            match consume_stream_frames(&ring_buf, expected_seq, |payload| {
                 if let Ok(mut sg) = store_mutex.lock() {
                     if let Some(ref mut s) = *sg {
-                        s.append_raw(&ring_buf[consumed + 2 .. consumed + frame_len]);
+                        s.append_raw(payload);
                     }
                 }
-                
-                consumed += frame_len;
-            }
-            if consumed > 0 {
-                ring_buf.drain(0..consumed);
+            }) {
+                Ok(batch) => {
+                    if batch.consumed > 0 {
+                        ring_buf.drain(0..batch.consumed);
+                        last_progress = std::time::Instant::now();
+                    }
+                    expected_seq = batch.next_expected_seq;
+                    stream_seq.store(expected_seq, Ordering::SeqCst);
+                    chunk_count += batch.chunk_count;
+                    total_bytes += batch.payload_bytes;
+                    if let Ok(mut status) = stream_status.lock() {
+                        status.total_bytes = total_bytes;
+                        status.chunk_count = chunk_count;
+                    }
+                }
+                Err(StreamParseError::InvalidLength(len)) => {
+                    log::error!("[la_stream_usb] Invalid framed chunk length: {}", len);
+                    running.store(false, Ordering::SeqCst);
+                    if let Ok(mut status) = stream_status.lock() {
+                        status.active = false;
+                        status.invalid_frames += 1;
+                        status.last_error = Some(format!("invalid framed chunk length {}", len));
+                    }
+                    break;
+                }
+                Err(StreamParseError::SequenceMismatch {
+                    got,
+                    expected,
+                    dropped,
+                }) => {
+                    log::error!(
+                        "[la_stream_usb] Sequence mismatch! Got {}, expected {}. (~{} chunks dropped)",
+                        got, expected, dropped
+                    );
+                    running.store(false, Ordering::SeqCst);
+                    if let Ok(mut status) = stream_status.lock() {
+                        status.active = false;
+                        status.sequence_mismatches += 1;
+                        status.last_error = Some(format!(
+                            "sequence mismatch: got {}, expected {} (~{} chunks dropped)",
+                            got, expected, dropped
+                        ));
+                    }
+                    break;
+                }
             }
 
             if chunk_count > 0 && chunk_count % 1000 == 0 {
-                log::info!("[la_stream_usb] {} chunks processed, total data: {}B ({:.0} KB/s)",
-                    chunk_count, total_bytes,
-                    total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0);
+                log::info!(
+                    "[la_stream_usb] {} chunks processed, total data: {}B ({:.0} KB/s)",
+                    chunk_count,
+                    total_bytes,
+                    total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0
+                );
             }
         }
 
         // Stop
+        running.store(false, Ordering::SeqCst);
         port.write_all(&[0x00]).ok();
         port.flush().ok();
-        log::info!("[la_stream_usb] Stopped: {} chunks, {} bytes, {:.0} KB/s",
-            chunk_count, total_bytes,
-            total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0);
+        if let Ok(mut status) = stream_status.lock() {
+            status.active = false;
+        }
+        log::info!(
+            "[la_stream_usb] Stopped: {} chunks, {} bytes, {:.0} KB/s",
+            chunk_count,
+            total_bytes,
+            total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0
+        );
     });
 
     // Store the task handle so the next call to la_stream_usb can wait for this task to finish
@@ -837,9 +1099,7 @@ pub async fn la_stream_usb(
 /// Stop gapless USB streaming.
 /// Sends stop command via USB OUT and signals the background reader to stop.
 #[tauri::command]
-pub async fn la_stream_usb_stop(
-    la: State<'_, LaState>,
-) -> CmdResult<LaCaptureInfo> {
+pub async fn la_stream_usb_stop(la: State<'_, LaState>) -> CmdResult<LaCaptureInfo> {
     log::info!("[la_stream_usb_stop] Stopping gapless USB stream");
 
     // Signal background reader to stop
@@ -875,10 +1135,15 @@ pub async fn la_stream_usb_stop(
 
 /// Check if USB streaming is currently active
 #[tauri::command]
-pub fn la_stream_usb_active(
-    la: State<'_, LaState>,
-) -> CmdResult<bool> {
+pub fn la_stream_usb_active(la: State<'_, LaState>) -> CmdResult<bool> {
     Ok(la.stream_running.load(Ordering::SeqCst))
+}
+
+/// Return runtime health for the current/last gapless USB stream.
+#[tauri::command]
+pub fn la_stream_usb_status(la: State<'_, LaState>) -> CmdResult<LaStreamRuntimeStatus> {
+    let status = la.stream_status.lock().map_err(map_err)?;
+    Ok(status.clone())
 }
 
 /// Trigger USB bulk send from RP2040 and read the data (fast path for stream mode)
@@ -897,7 +1162,10 @@ pub async fn la_read_append_fast(
 
     // Send USB_SEND command to RP2040 (via ESP32/BBP)
     log::info!("[la_read_append_fast] Sending USB_SEND command");
-    let _rsp = mgr.send_command(bbp::CMD_HAT_LA_USB_SEND, &[]).await.map_err(map_err)?;
+    let _rsp = mgr
+        .send_command(bbp::CMD_HAT_LA_USB_SEND, &[])
+        .await
+        .map_err(map_err)?;
 
     // Connect USB if needed
     {
@@ -912,9 +1180,14 @@ pub async fn la_read_append_fast(
     let raw = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let mut usb = usb_mutex.lock().map_err(|e| e.to_string())?;
         usb.read_capture_blocking().map_err(|e| e.to_string())
-    }).await.map_err(|e| e.to_string())??;
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
-    log::info!("[la_read_append_fast] Read {} bytes via USB bulk", raw.len());
+    log::info!(
+        "[la_read_append_fast] Read {} bytes via USB bulk",
+        raw.len()
+    );
 
     let mut store_guard = la.store.lock().map_err(map_err)?;
     if let Some(ref mut store) = *store_guard {
@@ -924,7 +1197,10 @@ pub async fn la_read_append_fast(
     }
 
     let store = store_guard.as_ref().unwrap();
-    log::info!("[la_read_append_fast] Store now has {} total samples", store.total_samples);
+    log::info!(
+        "[la_read_append_fast] Store now has {} total samples",
+        store.total_samples
+    );
     Ok(LaCaptureInfo {
         channels: store.channels,
         sample_rate_hz: store.sample_rate_hz,
@@ -1018,4 +1294,55 @@ pub fn la_delete_range(
         duration_sec: s.total_duration_sec(),
         trigger_sample: s.trigger_sample,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{consume_stream_frames, StreamParseError};
+
+    #[test]
+    fn stream_parser_reassembles_partial_frames_across_reads() {
+        let mut ring = Vec::new();
+        let mut frames = Vec::new();
+        let mut expected_seq = 0u8;
+
+        ring.extend_from_slice(&[0x00, 0x03, 0xAA]);
+        let batch =
+            consume_stream_frames(&ring, expected_seq, |payload| frames.push(payload.to_vec()))
+                .unwrap();
+        assert_eq!(batch.consumed, 0);
+        assert!(frames.is_empty());
+
+        ring.extend_from_slice(&[0xBB, 0xCC, 0x01, 0x02, 0x10, 0x11]);
+        let batch =
+            consume_stream_frames(&ring, expected_seq, |payload| frames.push(payload.to_vec()))
+                .unwrap();
+        ring.drain(0..batch.consumed);
+        expected_seq = batch.next_expected_seq;
+
+        assert_eq!(frames, vec![vec![0xAA, 0xBB, 0xCC], vec![0x10, 0x11]]);
+        assert!(ring.is_empty());
+        assert_eq!(expected_seq, 2);
+    }
+
+    #[test]
+    fn stream_parser_rejects_invalid_length() {
+        let ring = vec![0x00, 0x3F];
+        let err = consume_stream_frames(&ring, 0, |_| {}).unwrap_err();
+        assert_eq!(err, StreamParseError::InvalidLength(63));
+    }
+
+    #[test]
+    fn stream_parser_rejects_sequence_gap() {
+        let ring = vec![0x02, 0x01, 0xAB];
+        let err = consume_stream_frames(&ring, 0, |_| {}).unwrap_err();
+        assert_eq!(
+            err,
+            StreamParseError::SequenceMismatch {
+                got: 2,
+                expected: 0,
+                dropped: 2,
+            }
+        );
+    }
 }

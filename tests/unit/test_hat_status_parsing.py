@@ -174,3 +174,29 @@ def test_hat_hvpak_reg_helpers_parse_payload():
 def test_device_error_uses_new_hvpak_error_names():
     assert "HVPAK_UNSUPPORTED_CAP" in str(DeviceError(0x0E, 7))
     assert "HVPAK_UNSAFE_REGISTER" in str(DeviceError(0x10, 8))
+
+
+def test_hat_la_status_parses_optional_stream_diagnostics():
+    payload = bytearray()
+    payload += bytes([4, 4])                 # state=error, channels=4
+    payload += struct.pack("<I", 0)          # samples_captured
+    payload += struct.pack("<I", 100000)     # total_samples
+    payload += struct.pack("<I", 500000)     # actual_rate_hz
+    payload += bytes([1, 1])                 # usb_connected, usb_mounted
+    payload += bytes([3])                    # stream_stop_reason=dma_overrun
+    payload += struct.pack("<I", 2)          # overrun_count
+    payload += struct.pack("<I", 1)          # short_write_count
+
+    client = BugBuster(_make_usb_transport({
+        CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
+        CmdId.HAT_LA_STATUS: bytes(payload),
+    }))
+    result = client.hat_la_get_status()
+
+    assert result["state_name"] == "error"
+    assert result["usb_connected"] is True
+    assert result["usb_mounted"] is True
+    assert result["stream_stop_reason"] == 3
+    assert result["stream_stop_reason_name"] == "dma_overrun"
+    assert result["stream_overrun_count"] == 2
+    assert result["stream_short_write_count"] == 1

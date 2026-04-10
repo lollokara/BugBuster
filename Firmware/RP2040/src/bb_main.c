@@ -708,7 +708,7 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_LA_GET_STATUS: {
         LaStatus st;
         bb_la_get_status(&st);
-        uint8_t rsp[16];
+        uint8_t rsp[26];
         size_t p = 0;
         rsp[p++] = (uint8_t)st.state;
         rsp[p++] = st.channels;
@@ -718,6 +718,9 @@ static void dispatch_command(const HatFrame *frame)
         // Diagnostic: USB vendor mount status
         rsp[p++] = bb_la_usb_connected() ? 1 : 0;
         rsp[p++] = tud_mounted() ? 1 : 0;  // Overall USB mounted
+        rsp[p++] = st.stream_stop_reason;
+        memcpy(&rsp[p], &st.stream_overrun_count, 4); p += 4;
+        memcpy(&rsp[p], &st.stream_short_write_count, 4); p += 4;
         send_response(HAT_RSP_LA_STATUS, rsp, (uint8_t)p);
         break;
     }
@@ -856,15 +859,19 @@ void bb_cmd_task(void *params)
                     // IRQ can mark the OTHER half ready while we are transmitting this
                     // one.  DMA is currently writing the OTHER half, so clearing our
                     // half's flag is safe for exactly one DMA cycle.
-                    uint8_t my_half = bb_la_stream_my_half(stream_buf);
                     bb_la_stream_buffer_sent(stream_buf);
                     __dmb(); // ensure flag clear is visible to IRQ before we proceed
 
                     uint32_t sent = bb_la_usb_write_raw(stream_buf, stream_len);
 
-                    // Stop if USB write failed or DMA lapped back into our half
-                    // (write took longer than two DMA half-periods — data corrupt).
-                    if (sent != stream_len || bb_la_stream_dma_lapped(my_half)) {
+                    // Stop only if the USB write failed (host too slow or disconnected).
+                    // The DMA lapped check is intentionally omitted: at 1 MHz/4 ch the
+                    // DMA half-period equals the USB write time (~78 ms), so
+                    // stream_dma_buf always returns to my_half by write completion even
+                    // when everything is working correctly.  sent != stream_len is the
+                    // definitive failure signal (ring stall or USB disconnect).
+                    if (sent != stream_len) {
+                        bb_la_stream_note_short_write();
                         bb_la_stop();
                         bb_la_cdc_flush_ring();
                     }

@@ -62,16 +62,16 @@ mod tests {
         // Transition (300, 1) shifts to (199, 1).
         // Signal at 150 becomes 0 (val_after).
         store.delete_range(150, 250);
-        
+
         // Transitions: (0,0), (100,1), (150,0), (199,1)
         assert_eq!(store.transitions[0].len(), 4);
-        
-        // Now delete [120, 180] 
+
+        // Now delete [120, 180]
         // val_before (119) = 1
         // val_after (181) = 0
         // This should result in (0,0), (100,1), (120,0) ...
         store.delete_range(120, 180);
-        
+
         // Check RLE dedup (if it happens)
         let mut store2 = LaStore::default();
         store2.channels = 1;
@@ -93,5 +93,28 @@ mod tests {
         // If transitions array becomes empty, it implies 0.
         // Let's assert what happens.
         assert_eq!(store.get_value_at(0, 0), 1, "Value at 0 should be 1");
+    }
+
+    #[test]
+    fn test_append_raw_counts_samples_for_one_channel() {
+        let mut store = LaStore::from_raw(&[], 1, 1_000_000);
+        store.append_raw(&[0b1010_0101]);
+        assert_eq!(store.total_samples, 8);
+    }
+
+    #[test]
+    fn test_append_raw_counts_samples_across_boundaries_for_two_channels() {
+        let mut store = LaStore::from_raw(&[], 2, 1_000_000);
+        store.append_raw(&[0b11_10_01_00]);
+        store.append_raw(&[0b00_01_10_11]);
+        assert_eq!(store.total_samples, 8);
+    }
+
+    #[test]
+    fn test_append_raw_counts_samples_across_boundaries_for_four_channels() {
+        let mut store = LaStore::from_raw(&[], 4, 1_000_000);
+        store.append_raw(&[0b0001_1110]);
+        store.append_raw(&[0b0101_1010, 0b1111_0000]);
+        assert_eq!(store.total_samples, 6);
     }
 }
