@@ -79,6 +79,10 @@
 #define HAT_ERR_HVPAK_UNKNOWN_IDENTITY 0x0B
 #define HAT_ERR_HVPAK_UNSUPPORTED_VOLT 0x0C
 #define HAT_ERR_HVPAK_WRITE_FAILED     0x0D
+#define HAT_ERR_HVPAK_INVALID_INDEX    0x0E
+#define HAT_ERR_HVPAK_UNSUPPORTED_CAP  0x0F
+#define HAT_ERR_HVPAK_INVALID_ARG      0x10
+#define HAT_ERR_HVPAK_UNSAFE_REG       0x11
 
 // -----------------------------------------------------------------------------
 // IRQ — Shared interrupt line with BugBuster

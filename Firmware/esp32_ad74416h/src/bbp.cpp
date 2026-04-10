@@ -1694,7 +1694,35 @@ static int handleHatHvpakPassthrough(uint16_t seq, uint8_t cmdId,
     uint8_t rsp_len = 0;
 
     if (!hat_hvpak_request(hatCmd, payload, (uint8_t)len, rsp, &rsp_len, timeout_ms)) {
-        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        uint8_t hat_err = hat_get_last_error();
+        uint8_t bbp_err = BBP_ERR_INVALID_PARAM;
+        switch (hat_err) {
+            case HAT_ERR_HVPAK_NO_DEVICE:
+                bbp_err = BBP_ERR_HVPAK_NO_DEVICE;
+                break;
+            case HAT_ERR_HVPAK_TIMEOUT:
+                bbp_err = BBP_ERR_HVPAK_TIMEOUT;
+                break;
+            case HAT_ERR_HVPAK_UNKNOWN_IDENTITY:
+                bbp_err = BBP_ERR_HVPAK_UNKNOWN_IDENTITY;
+                break;
+            case HAT_ERR_HVPAK_UNSUPPORTED_CAP:
+                bbp_err = BBP_ERR_HVPAK_UNSUPPORTED_CAP;
+                break;
+            case HAT_ERR_HVPAK_INVALID_INDEX:
+                bbp_err = BBP_ERR_HVPAK_INVALID_INDEX;
+                break;
+            case HAT_ERR_HVPAK_UNSAFE_REG:
+                bbp_err = BBP_ERR_HVPAK_UNSAFE_REGISTER;
+                break;
+            case HAT_ERR_HVPAK_INVALID_ARG:
+                bbp_err = BBP_ERR_INVALID_PARAM;
+                break;
+            default:
+                bbp_err = BBP_ERR_INVALID_PARAM;
+                break;
+        }
+        sendError(seq, cmdId, bbp_err);
         return -1;
     }
 

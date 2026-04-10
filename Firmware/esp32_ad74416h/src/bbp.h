@@ -228,6 +228,12 @@ extern "C" {
 #define BBP_ERR_CRC_FAIL        0x08
 #define BBP_ERR_FRAME_TOO_LARGE 0x09
 #define BBP_ERR_STREAM_ACTIVE   0x0A
+#define BBP_ERR_HVPAK_NO_DEVICE        0x0B
+#define BBP_ERR_HVPAK_TIMEOUT          0x0C
+#define BBP_ERR_HVPAK_UNKNOWN_IDENTITY 0x0D
+#define BBP_ERR_HVPAK_UNSUPPORTED_CAP  0x0E
+#define BBP_ERR_HVPAK_INVALID_INDEX    0x0F
+#define BBP_ERR_HVPAK_UNSAFE_REGISTER  0x10
 
 // -----------------------------------------------------------------------------
 // ADC Stream Ring Buffer (lock-free, single-producer single-consumer)

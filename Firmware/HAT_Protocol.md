@@ -561,6 +561,22 @@ These commands live in the `0x14..0x1F` range on the UART-side HAT protocol and
 are mirrored into BBP on the ESP32 side. The RP2040 remains the capability
 authority and validates every request against the detected part profile.
 
+Additional HAT-side HVPAK errors now distinguish:
+- no device
+- timeout
+- unknown identity
+- unsupported capability
+- invalid index
+- invalid argument
+- unsafe register access
+
+The HVPAK info surface may also flag a device as `factory_virgin` when:
+- the custom mailbox identity is absent, and
+- service registers `F5`, `FD`, and `FE` are readable and still equal `0x00`
+
+This is intended as a provisioning check for blank/unprovisioned PAKs, not as
+an absolute OTP-forensics claim.
+
 ---
 
 ## Appendix A: Complete Frame Examples

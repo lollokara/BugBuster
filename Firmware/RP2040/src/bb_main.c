@@ -256,18 +256,59 @@ static void handle_get_io_voltage(void)
     send_ok(rsp, sizeof(rsp));
 }
 
+static void send_hvpak_error_from_state(void)
+{
+    switch (bb_hvpak_get_last_error()) {
+        case BB_HVPAK_ERR_NO_DEVICE:
+            send_error(HAT_ERR_HVPAK_NO_DEVICE);
+            break;
+        case BB_HVPAK_ERR_I2C_TIMEOUT:
+            send_error(HAT_ERR_HVPAK_TIMEOUT);
+            break;
+        case BB_HVPAK_ERR_UNKNOWN_IDENTITY:
+            send_error(HAT_ERR_HVPAK_UNKNOWN_IDENTITY);
+            break;
+        case BB_HVPAK_ERR_UNSUPPORTED_VOLTAGE:
+            send_error(HAT_ERR_HVPAK_UNSUPPORTED_VOLT);
+            break;
+        case BB_HVPAK_ERR_WRITE_FAILED:
+            send_error(HAT_ERR_HVPAK_WRITE_FAILED);
+            break;
+        case BB_HVPAK_ERR_INVALID_INDEX:
+            send_error(HAT_ERR_HVPAK_INVALID_INDEX);
+            break;
+        case BB_HVPAK_ERR_UNSUPPORTED_CAPABILITY:
+            send_error(HAT_ERR_HVPAK_UNSUPPORTED_CAP);
+            break;
+        case BB_HVPAK_ERR_INVALID_ARGUMENT:
+            send_error(HAT_ERR_HVPAK_INVALID_ARG);
+            break;
+        case BB_HVPAK_ERR_UNSAFE_REGISTER:
+            send_error(HAT_ERR_HVPAK_UNSAFE_REG);
+            break;
+        default:
+            send_error(HAT_ERR_INVALID_FUNC);
+            break;
+    }
+}
+
 static void handle_get_hvpak_info(void)
 {
     uint16_t requested_mv = bb_hvpak_get_requested_voltage();
     uint16_t applied_mv = bb_hvpak_get_voltage();
-    uint8_t rsp[7] = {
+    uint8_t rsp[12] = {
         (uint8_t)bb_hvpak_get_part(),
         (uint8_t)(bb_hvpak_is_ready() ? 1 : 0),
         bb_hvpak_get_last_error(),
+        (uint8_t)(bb_hvpak_is_factory_virgin() ? 1 : 0),
+        (uint8_t)(bb_hvpak_has_service_window() ? 1 : 0),
         (uint8_t)(requested_mv & 0xFF),
         (uint8_t)(requested_mv >> 8),
         (uint8_t)(applied_mv & 0xFF),
         (uint8_t)(applied_mv >> 8),
+        bb_hvpak_get_service_f5(),
+        bb_hvpak_get_service_fd(),
+        bb_hvpak_get_service_fe(),
     };
     send_ok(rsp, sizeof(rsp));
 }
@@ -279,7 +320,7 @@ static void handle_get_hvpak_caps(void)
     size_t pos = 0;
 
     if (!bb_hvpak_get_capabilities(&caps)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
 
@@ -300,7 +341,7 @@ static void handle_get_hvpak_lut(const uint8_t *payload, uint8_t len)
 
     if (len < 2) { send_error(HAT_ERR_FRAME); return; }
     if (!bb_hvpak_get_lut(payload[0], payload[1], &cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
 
@@ -320,7 +361,7 @@ static void handle_set_hvpak_lut(const uint8_t *payload, uint8_t len)
     cfg.index = payload[1];
     cfg.truth_table = (uint16_t)payload[2] | ((uint16_t)payload[3] << 8);
     if (!bb_hvpak_set_lut(&cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     handle_get_hvpak_lut(payload, 2);
@@ -331,7 +372,7 @@ static void handle_get_hvpak_bridge(void)
     BbHvpakBridgeConfig cfg;
     uint8_t rsp[9];
     if (!bb_hvpak_get_bridge(&cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     rsp[0] = cfg.output_mode[0];
@@ -360,7 +401,7 @@ static void handle_set_hvpak_bridge(const uint8_t *payload, uint8_t len)
     cfg.ocp_deglitch_enabled = payload[7] != 0;
     cfg.uvlo_enabled = payload[8] != 0;
     if (!bb_hvpak_set_bridge(&cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     handle_get_hvpak_bridge();
@@ -371,7 +412,7 @@ static void handle_get_hvpak_analog(void)
     BbHvpakAnalogConfig cfg;
     uint8_t rsp[15];
     if (!bb_hvpak_get_analog(&cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     rsp[0] = cfg.vref_mode;
@@ -412,7 +453,7 @@ static void handle_set_hvpak_analog(const uint8_t *payload, uint8_t len)
     cfg.acmp1_gain = payload[13];
     cfg.acmp1_vref = payload[14];
     if (!bb_hvpak_set_analog(&cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     handle_get_hvpak_analog();
@@ -424,7 +465,7 @@ static void handle_get_hvpak_pwm(const uint8_t *payload, uint8_t len)
     uint8_t rsp[17];
     if (len < 1) { send_error(HAT_ERR_FRAME); return; }
     if (!bb_hvpak_get_pwm(payload[0], &cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     rsp[0] = cfg.index;
@@ -468,7 +509,7 @@ static void handle_set_hvpak_pwm(const uint8_t *payload, uint8_t len)
     cfg.period_clock_source = payload[14];
     cfg.duty_clock_source = payload[15];
     if (!bb_hvpak_set_pwm(&cfg)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     handle_get_hvpak_pwm(payload, 1);
@@ -480,7 +521,7 @@ static void handle_hvpak_reg_read(const uint8_t *payload, uint8_t len)
     uint8_t rsp[2];
     if (len < 1) { send_error(HAT_ERR_FRAME); return; }
     if (!bb_hvpak_reg_read(payload[0], &value)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     rsp[0] = payload[0];
@@ -494,11 +535,11 @@ static void handle_hvpak_reg_write_masked(const uint8_t *payload, uint8_t len)
     uint8_t actual = 0;
     if (len < 3) { send_error(HAT_ERR_FRAME); return; }
     if (!bb_hvpak_reg_write_masked(payload[0], payload[1], payload[2])) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     if (!bb_hvpak_reg_read(payload[0], &actual)) {
-        send_error(HAT_ERR_INVALID_FUNC);
+        send_hvpak_error_from_state();
         return;
     }
     rsp[0] = payload[0];
@@ -811,10 +852,19 @@ void bb_cmd_task(void *params)
                 const uint8_t *stream_buf;
                 uint32_t stream_len;
                 if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
+                    // Clear the ready flag BEFORE the blocking USB write so the DMA
+                    // IRQ can mark the OTHER half ready while we are transmitting this
+                    // one.  DMA is currently writing the OTHER half, so clearing our
+                    // half's flag is safe for exactly one DMA cycle.
+                    uint8_t my_half = bb_la_stream_my_half(stream_buf);
+                    bb_la_stream_buffer_sent(stream_buf);
+                    __dmb(); // ensure flag clear is visible to IRQ before we proceed
+
                     uint32_t sent = bb_la_usb_write_raw(stream_buf, stream_len);
-                    if (sent == stream_len) {
-                        bb_la_stream_buffer_sent(stream_buf);
-                    } else {
+
+                    // Stop if USB write failed or DMA lapped back into our half
+                    // (write took longer than two DMA half-periods — data corrupt).
+                    if (sent != stream_len || bb_la_stream_dma_lapped(my_half)) {
                         bb_la_stop();
                         bb_la_cdc_flush_ring();
                     }

@@ -687,6 +687,11 @@ bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms) == HAT_RSP_OK;
 }
 
+uint8_t hat_get_last_error(void)
+{
+    return s_last_error;
+}
+
 bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)
 {
     if (!s_state.connected) return false;

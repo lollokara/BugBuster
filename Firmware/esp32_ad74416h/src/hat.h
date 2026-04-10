@@ -174,6 +174,15 @@ typedef enum {
 #define HAT_ERR_FRAME           0x06
 #define HAT_ERR_NOT_CONNECTED   0x07
 #define HAT_ERR_POWER_FAULT     0x08
+#define HAT_ERR_HVPAK_NO_DEVICE        0x09
+#define HAT_ERR_HVPAK_TIMEOUT          0x0A
+#define HAT_ERR_HVPAK_UNKNOWN_IDENTITY 0x0B
+#define HAT_ERR_HVPAK_UNSUPPORTED_VOLT 0x0C
+#define HAT_ERR_HVPAK_WRITE_FAILED     0x0D
+#define HAT_ERR_HVPAK_INVALID_INDEX    0x0E
+#define HAT_ERR_HVPAK_UNSUPPORTED_CAP  0x0F
+#define HAT_ERR_HVPAK_INVALID_ARG      0x10
+#define HAT_ERR_HVPAK_UNSAFE_REG       0x11
 
 // -----------------------------------------------------------------------------
 // Connector / Power Types
@@ -321,6 +330,7 @@ bool hat_set_io_voltage(uint16_t mv);
  */
 bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                        uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms);
+uint8_t hat_get_last_error(void);
 
 /**
  * @brief One-call SWD setup: set VADJ, I/O voltage, power on, route SWD pins.

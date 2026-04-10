@@ -698,6 +698,12 @@ pub async fn la_stream_usb(
                 return;
             }
         };
+        // Assert DTR so tud_cdc_connected() returns true on the RP2040.
+        // Without DTR, the firmware's cdc_write_reply() is a no-op and
+        // the handshake ("START\n") is never sent.
+        if let Err(e) = port.write_data_terminal_ready(true) {
+            log::warn!("[la_stream_usb] Could not set DTR: {}", e);
+        }
         log::info!("[la_stream_usb] Opened CDC port");
 
         // Drain any stale data from previous session

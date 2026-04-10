@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from bugbuster import BugBuster
 from bugbuster.constants import CmdId
+from bugbuster.transport.usb import DeviceError
 from bugbuster.transport.usb import USBTransport
 
 
@@ -73,7 +74,7 @@ def test_hat_get_power_parses_optional_hvpak_fields():
 
 
 def test_hat_get_hvpak_info_parses_payload():
-    payload = bytes([2, 1, 3]) + struct.pack('<H', 3300) + struct.pack('<H', 2500)
+    payload = bytes([2, 1, 3, 1, 1]) + struct.pack('<H', 3300) + struct.pack('<H', 2500) + bytes([0x00, 0x00, 0x00])
     client = BugBuster(_make_usb_transport({
         CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
         CmdId.HAT_GET_HVPAK_INFO: payload,
@@ -83,8 +84,13 @@ def test_hat_get_hvpak_info_parses_payload():
         "part": 2,
         "ready": True,
         "last_error": 3,
+        "factory_virgin": True,
+        "service_window_ok": True,
         "requested_mv": 3300,
         "applied_mv": 2500,
+        "service_f5": 0,
+        "service_fd": 0,
+        "service_fe": 0,
     }
 
 
@@ -163,3 +169,8 @@ def test_hat_hvpak_reg_helpers_parse_payload():
     write_result = client.hat_hvpak_reg_write_masked(0x6D, 0x03, 0x01)
     assert read_result == {"addr": 0x6D, "value": 0x05}
     assert write_result == {"addr": 0x6D, "mask": 0x03, "value": 0x01, "actual": 0x05}
+
+
+def test_device_error_uses_new_hvpak_error_names():
+    assert "HVPAK_UNSUPPORTED_CAP" in str(DeviceError(0x0E, 7))
+    assert "HVPAK_UNSAFE_REGISTER" in str(DeviceError(0x10, 8))

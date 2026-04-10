@@ -1359,7 +1359,15 @@ Automatically sets EXP_EXT_1=SWDIO, EXP_EXT_2=SWCLK, enables the specified conne
 #### 0xCE HAT_GET_HVPAK_INFO
 Get detected HVPAK part, readiness, error, and voltage summary.
 
-**Response payload:** `[part:u8, ready:bool, last_error:u8, requested_mv:u16, applied_mv:u16]`
+**Response payload:** `[part:u8, ready:bool, last_error:u8, factory_virgin:bool, service_window_ok:bool, requested_mv:u16, applied_mv:u16, service_f5:u8, service_fd:u8, service_fe:u8]`
+
+`factory_virgin` is a conservative heuristic:
+- mailbox identity did not match a provisioned image
+- GreenPAK service bytes were still readable
+- service bytes `F5`, `FD`, and `FE` were all at their default `0x00` state
+
+This should be read as “factory-virgin / unprovisioned candidate”, not as a
+strong proof of pristine OTP contents.
 
 #### 0xDB HAT_GET_HVPAK_CAPS
 Get the detected part capability profile.
@@ -1400,6 +1408,16 @@ Guarded raw register access for advanced/debug use.
 
 **REG_WRITE_MASKED request:** `[addr:u8, mask:u8, value:u8]`
 **REG_WRITE_MASKED response:** `[addr:u8, mask:u8, value:u8, actual:u8]`
+
+**Advanced HVPAK error mapping:**
+- `0x0B` `HVPAK_NO_DEVICE`
+- `0x0C` `HVPAK_TIMEOUT`
+- `0x0D` `HVPAK_UNKNOWN_IDENTITY`
+- `0x0E` `HVPAK_UNSUPPORTED_CAP`
+- `0x0F` `HVPAK_INVALID_INDEX`
+- `0x10` `HVPAK_UNSAFE_REGISTER`
+
+`INVALID_PARAM` remains the top-level error for malformed payloads / invalid arguments.
 
 ### 6.13c HAT Logic Analyzer
 

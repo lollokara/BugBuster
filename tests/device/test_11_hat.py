@@ -16,7 +16,15 @@ import time
 import pytest
 import bugbuster as bb
 from bugbuster.constants import LaTriggerType, HatPinFunction
+from bugbuster.transport.usb import DeviceError
 from conftest import assert_no_faults
+
+try:
+    import serial
+    import serial.tools.list_ports
+    _SERIAL_AVAILABLE = True
+except ImportError:
+    _SERIAL_AVAILABLE = False
 
 pytestmark = [
     pytest.mark.requires_hat,
@@ -33,6 +41,16 @@ def require_hat(request):
     """Auto-use fixture that skips all HAT tests unless --hat is passed."""
     if not request.config.getoption("--hat", default=False):
         pytest.skip("HAT tests require --hat flag")
+
+
+def _require_hvpak_ready(usb_device):
+    info = usb_device.hat_get_hvpak_info()
+    if not info.get("ready", False):
+        pytest.skip(
+            f"HVPAK backend not ready on this hardware "
+            f"(part={info.get('part')}, err={info.get('last_error')})"
+        )
+    return info, usb_device.hat_get_hvpak_caps()
 
 
 # ---------------------------------------------------------------------------
@@ -222,19 +240,98 @@ def test_hat_get_hvpak_caps_usb_if_ready(usb_device):
     If the programmed HVPAK image is detected and ready, the capability
     profile should be readable over USB.
     """
-    info = usb_device.hat_get_hvpak_info()
-    if not info.get("ready", False):
-        pytest.skip(
-            f"HVPAK backend not ready on this hardware "
-            f"(part={info.get('part')}, err={info.get('last_error')})"
-        )
-
-    caps = usb_device.hat_get_hvpak_caps()
+    _, caps = _require_hvpak_ready(usb_device)
     assert isinstance(caps, dict)
     assert "flags" in caps
     assert "pwm_count" in caps
     assert "bridge_count" in caps
     assert_no_faults(usb_device)
+
+
+@pytest.mark.usb_only
+def test_hat_hvpak_lut_roundtrip_usb_if_supported(usb_device):
+    _, caps = _require_hvpak_ready(usb_device)
+    candidates = [
+        ("lut2_count", 0),
+        ("lut3_count", 1),
+        ("lut4_count", 2),
+    ]
+    for count_key, kind in candidates:
+        if caps.get(count_key, 0) > 0:
+            before = usb_device.hat_get_hvpak_lut(kind, 0)
+            after = usb_device.hat_set_hvpak_lut(kind, 0, before["truth_table"])
+            assert after["truth_table"] == before["truth_table"]
+            assert_no_faults(usb_device)
+            return
+    pytest.skip("No LUT capability exposed by this programmed HVPAK image")
+
+
+@pytest.mark.usb_only
+def test_hat_hvpak_bridge_roundtrip_usb_if_supported(usb_device):
+    _, caps = _require_hvpak_ready(usb_device)
+    if caps.get("bridge_count", 0) == 0:
+        pytest.skip("No bridge capability exposed by this programmed HVPAK image")
+    before = usb_device.hat_get_hvpak_bridge()
+    after = usb_device.hat_set_hvpak_bridge(
+        output_mode_0=before["output_mode"][0],
+        ocp_retry_0=before["ocp_retry"][0],
+        output_mode_1=before["output_mode"][1],
+        ocp_retry_1=before["ocp_retry"][1],
+        predriver_enabled=before["predriver_enabled"],
+        full_bridge_enabled=before["full_bridge_enabled"],
+        control_selection_ph_en=before["control_selection_ph_en"],
+        ocp_deglitch_enabled=before["ocp_deglitch_enabled"],
+        uvlo_enabled=before["uvlo_enabled"],
+    )
+    assert after == before
+    assert_no_faults(usb_device)
+
+
+@pytest.mark.usb_only
+def test_hat_hvpak_analog_roundtrip_usb_if_supported(usb_device):
+    _, caps = _require_hvpak_ready(usb_device)
+    if caps.get("comparator_count", 0) == 0:
+        pytest.skip("No analog capability exposed by this programmed HVPAK image")
+    before = usb_device.hat_get_hvpak_analog()
+    after = usb_device.hat_set_hvpak_analog(**before)
+    assert after == before
+    assert_no_faults(usb_device)
+
+
+@pytest.mark.usb_only
+def test_hat_hvpak_pwm_roundtrip_usb_if_supported(usb_device):
+    _, caps = _require_hvpak_ready(usb_device)
+    if caps.get("pwm_count", 0) == 0:
+        pytest.skip("No PWM capability exposed by this programmed HVPAK image")
+    before = usb_device.hat_get_hvpak_pwm(0)
+    after = usb_device.hat_set_hvpak_pwm(
+        0,
+        initial_value=before["initial_value"],
+        resolution_7bit=before["resolution_7bit"],
+        out_plus_inverted=before["out_plus_inverted"],
+        out_minus_inverted=before["out_minus_inverted"],
+        async_powerdown=before["async_powerdown"],
+        autostop_mode=before["autostop_mode"],
+        boundary_osc_disable=before["boundary_osc_disable"],
+        phase_correct=before["phase_correct"],
+        deadband=before["deadband"],
+        stop_mode=before["stop_mode"],
+        i2c_trigger=before["i2c_trigger"],
+        duty_source=before["duty_source"],
+        period_clock_source=before["period_clock_source"],
+        duty_clock_source=before["duty_clock_source"],
+    )
+    assert after["index"] == before["index"]
+    assert after["initial_value"] == before["initial_value"]
+    assert_no_faults(usb_device)
+
+
+@pytest.mark.usb_only
+def test_hat_hvpak_reg_write_masked_rejects_unsafe_register(usb_device):
+    _require_hvpak_ready(usb_device)
+    with pytest.raises(DeviceError) as exc_info:
+        usb_device.hat_hvpak_reg_write_masked(0x48, 0x01, 0x01)
+    assert "HVPAK_UNSAFE_REGISTER" in str(exc_info.value)
 
 
 @pytest.mark.usb_only
@@ -408,4 +505,114 @@ def test_la_read_data(usb_device):
             )
 
     usb_device.hat_la_stop()
+    assert_no_faults(usb_device)
+
+
+# ---------------------------------------------------------------------------
+# Logic Analyzer — USB CDC gapless stream (regression for DMA overrun fix)
+# ---------------------------------------------------------------------------
+
+def _find_rp2040_cdc_port():
+    """Return the RP2040 HAT CDC serial port path, or None if not found."""
+    if not _SERIAL_AVAILABLE:
+        return None
+    for port in serial.tools.list_ports.comports():
+        if port.vid == 0x2E8A and port.pid == 0x000C:
+            return port.device
+    return None
+
+
+@pytest.mark.usb_only
+@pytest.mark.timeout(30)
+def test_la_usb_stream_five_seconds(usb_device):
+    """
+    Regression test for the DMA overrun bug: a single continuous LA stream
+    must deliver data every second for 5 consecutive seconds without stopping.
+
+    Root cause fixed: bb_la_stream_buffer_sent() is now called before
+    bb_la_usb_write_raw() so the DMA IRQ can safely flag the other half while
+    the USB write is in progress. Without the fix, the second DMA completion
+    always detected stream_buf_ready != NONE and stopped PIO permanently,
+    so only the first DMA half-buffer (~78ms of data) was ever delivered.
+
+    Requires: RP2040 HAT attached and enumerated (VID=0x2E8A PID=0x000C).
+    """
+    if not _SERIAL_AVAILABLE:
+        pytest.skip("pyserial not installed — cannot open RP2040 CDC port directly")
+
+    rp2040_port = _find_rp2040_cdc_port()
+    if rp2040_port is None:
+        pytest.skip("RP2040 HAT CDC port not found (VID=0x2E8A PID=0x000C)")
+
+    CHANNELS    = 4
+    RATE_HZ     = 1_000_000
+    DEPTH       = 100_000
+    WINDOW_SEC  = 1.0   # measure bytes received per 1-second window
+    NUM_WINDOWS = 5
+    MIN_BYTES   = 1_000 # minimum data expected per window to consider it alive
+
+    # Configure via BBP (ESP32→RP2040 UART)
+    usb_device.hat_la_stop()
+    usb_device.hat_la_configure(channels=CHANNELS, rate_hz=RATE_HZ, depth=DEPTH)
+    usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
+    time.sleep(0.12)  # allow UART round-trip to RP2040 to complete
+
+    port = serial.Serial(rp2040_port, baudrate=115200, timeout=0.2)
+    port.dtr = True  # assert DTR so tud_cdc_connected() returns true on RP2040
+    try:
+        # Drain stale bytes from previous session
+        while port.read(4096):
+            pass
+
+        # Start stream (retry up to 3 times)
+        started = False
+        for _ in range(3):
+            port.write(b'\x01')
+            port.flush()
+            resp = port.read(64)
+            if resp and b'START' in resp:
+                started = True
+                break
+            port.write(b'\x00')
+            port.flush()
+            time.sleep(0.3)
+
+        assert started, "RP2040 did not respond with START — is it configured?"
+
+        # Collect framed chunks [SEQ:1][LEN:1][DATA:N] across NUM_WINDOWS windows.
+        # Each window is WINDOW_SEC seconds; we count payload bytes per window.
+        window_bytes = []
+        ring = bytearray()
+        for _ in range(NUM_WINDOWS):
+            window_total = 0
+            t0 = time.time()
+            while time.time() - t0 < WINDOW_SEC:
+                chunk = port.read(8192)
+                if not chunk:
+                    continue
+                ring.extend(chunk)
+                consumed = 0
+                while len(ring) - consumed >= 2:
+                    length = ring[consumed + 1]
+                    if length > 62:
+                        consumed += 1  # resync on bad frame
+                        continue
+                    if len(ring) - consumed < 2 + length:
+                        break
+                    window_total += length
+                    consumed += 2 + length
+                if consumed:
+                    del ring[:consumed]
+            window_bytes.append(window_total)
+
+        port.write(b'\x00')
+        port.flush()
+    finally:
+        port.close()
+
+    failed = [i + 1 for i, n in enumerate(window_bytes) if n < MIN_BYTES]
+    assert not failed, (
+        f"LA stream delivered <{MIN_BYTES}B in windows {failed} — "
+        f"DMA overrun regression? bytes per window: {window_bytes}"
+    )
     assert_no_faults(usb_device)

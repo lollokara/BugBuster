@@ -89,6 +89,11 @@ typedef struct {
 typedef struct {
     bool initialized;
     bool detected;
+    bool factory_virgin;
+    bool service_window_ok;
+    uint8_t service_f5;
+    uint8_t service_fd;
+    uint8_t service_fe;
     uint16_t requested_mv;
     uint16_t applied_mv;
     BbHvpakPart part;
@@ -99,6 +104,8 @@ typedef struct {
 static const uint16_t k_supported_mv[BB_HVPAK_PRESET_COUNT] = {
     1200, 1800, 2500, 3300, 5000,
 };
+
+static int hvpak_read_raw(uint8_t reg, uint8_t *value);
 
 static const HvpakLutEntry k_slg47104_lut2[] = {
     { .addr = 156, .bytes = 1, .width_bits = 4, .bit_offset = 0 },
@@ -313,6 +320,26 @@ static const HvpakDescriptor *hvpak_find_descriptor(uint8_t identity)
         }
     }
     return NULL;
+}
+
+static bool hvpak_probe_service_window(uint8_t *f5, uint8_t *fd, uint8_t *fe)
+{
+    uint8_t v_f5 = 0;
+    uint8_t v_fd = 0;
+    uint8_t v_fe = 0;
+    int rc;
+
+    rc = hvpak_read_raw(0xF5, &v_f5);
+    if (rc != 1) return false;
+    rc = hvpak_read_raw(0xFD, &v_fd);
+    if (rc != 1) return false;
+    rc = hvpak_read_raw(0xFE, &v_fe);
+    if (rc != 1) return false;
+
+    if (f5) *f5 = v_f5;
+    if (fd) *fd = v_fd;
+    if (fe) *fe = v_fe;
+    return true;
 }
 
 static bool hvpak_require_ready(void)
@@ -542,6 +569,11 @@ void bb_hvpak_init(void)
 
     s_state.initialized = true;
     s_state.detected = false;
+    s_state.factory_virgin = false;
+    s_state.service_window_ok = false;
+    s_state.service_f5 = 0;
+    s_state.service_fd = 0;
+    s_state.service_fe = 0;
     s_state.part = BB_HVPAK_PART_UNKNOWN;
     s_state.desc = NULL;
     s_state.requested_mv = BB_HVPAK_DEFAULT_MV;
@@ -564,6 +596,7 @@ bool bb_hvpak_detect(void)
     rc = hvpak_read_raw(BB_HVPAK_IDENTITY_REG, &identity);
     if (rc == PICO_ERROR_TIMEOUT) {
         s_state.detected = false;
+        s_state.factory_virgin = false;
         s_state.part = BB_HVPAK_PART_UNKNOWN;
         s_state.desc = NULL;
         hvpak_set_error(BB_HVPAK_ERR_I2C_TIMEOUT);
@@ -571,6 +604,7 @@ bool bb_hvpak_detect(void)
     }
     if (rc != 1) {
         s_state.detected = false;
+        s_state.factory_virgin = false;
         s_state.part = BB_HVPAK_PART_UNKNOWN;
         s_state.desc = NULL;
         hvpak_set_error(BB_HVPAK_ERR_NO_DEVICE);
@@ -579,6 +613,13 @@ bool bb_hvpak_detect(void)
 
     s_state.desc = hvpak_find_descriptor(identity);
     if (!s_state.desc) {
+        s_state.service_window_ok = hvpak_probe_service_window(
+            &s_state.service_f5, &s_state.service_fd, &s_state.service_fe
+        );
+        s_state.factory_virgin = s_state.service_window_ok &&
+                                 s_state.service_f5 == 0x00 &&
+                                 s_state.service_fd == 0x00 &&
+                                 s_state.service_fe == 0x00;
         s_state.detected = false;
         s_state.part = BB_HVPAK_PART_UNKNOWN;
         hvpak_set_error(BB_HVPAK_ERR_UNKNOWN_IDENTITY);
@@ -586,6 +627,11 @@ bool bb_hvpak_detect(void)
     }
 
     s_state.detected = true;
+    s_state.factory_virgin = false;
+    s_state.service_window_ok = false;
+    s_state.service_f5 = 0;
+    s_state.service_fd = 0;
+    s_state.service_fe = 0;
     s_state.part = s_state.desc->part;
     hvpak_set_error(BB_HVPAK_ERR_NONE);
     return true;
@@ -630,6 +676,11 @@ bool bb_hvpak_set_voltage(uint16_t mv)
 uint16_t bb_hvpak_get_voltage(void) { return s_state.applied_mv; }
 uint16_t bb_hvpak_get_requested_voltage(void) { return s_state.requested_mv; }
 bool bb_hvpak_is_ready(void) { return s_state.initialized && s_state.detected && s_state.desc != NULL; }
+bool bb_hvpak_is_factory_virgin(void) { return s_state.factory_virgin; }
+bool bb_hvpak_has_service_window(void) { return s_state.service_window_ok; }
+uint8_t bb_hvpak_get_service_f5(void) { return s_state.service_f5; }
+uint8_t bb_hvpak_get_service_fd(void) { return s_state.service_fd; }
+uint8_t bb_hvpak_get_service_fe(void) { return s_state.service_fe; }
 BbHvpakPart bb_hvpak_get_part(void) { return s_state.part; }
 uint8_t bb_hvpak_get_last_error(void) { return (uint8_t)s_state.last_error; }
 

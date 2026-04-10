@@ -722,3 +722,15 @@ bool bb_la_get_capture_buffer(const uint8_t **buf_out, uint32_t *len_out)
     *len_out = words * sizeof(uint32_t);
     return true;
 }
+
+uint8_t bb_la_stream_my_half(const uint8_t *buf)
+{
+    const uint8_t *buf_a = (const uint8_t *)s_capture_buf;
+    return (buf == buf_a) ? 0u : 1u;
+}
+
+bool bb_la_stream_dma_lapped(uint8_t my_half)
+{
+    if (s_la.state != LA_STATE_STREAMING) return false;
+    return s_la.stream_dma_buf == my_half;
+}

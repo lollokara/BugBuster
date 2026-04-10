@@ -205,6 +205,7 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc)
 {
     switch (cmd) {
     case LA_USB_CMD_START_STREAM:
+        s_cdc_seq = 0;
         if (!tud_cdc_connected() || !bb_la_start_stream()) {
             if (reply_on_cdc) {
                 cdc_write_reply("ERR\n");

@@ -1609,8 +1609,13 @@ class BugBuster:
             "part": resp[0],
             "ready": bool(resp[1]),
             "last_error": resp[2],
-            "requested_mv": struct.unpack_from('<H', resp, 3)[0],
-            "applied_mv": struct.unpack_from('<H', resp, 5)[0],
+            "factory_virgin": bool(resp[3]),
+            "service_window_ok": bool(resp[4]),
+            "requested_mv": struct.unpack_from('<H', resp, 5)[0],
+            "applied_mv": struct.unpack_from('<H', resp, 7)[0],
+            "service_f5": resp[9],
+            "service_fd": resp[10],
+            "service_fe": resp[11],
         }
 
     def hat_get_hvpak_caps(self) -> dict:
