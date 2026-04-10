@@ -12,6 +12,9 @@ mod la_decoders;
 mod la_store;
 #[cfg(test)]
 mod la_store_tests;
+#[cfg(test)]
+mod la_integration_tests;
+mod la_transport;
 mod la_usb;
 mod state;
 mod transport;

@@ -178,7 +178,7 @@ def test_device_error_uses_new_hvpak_error_names():
 
 def test_hat_la_status_parses_optional_stream_diagnostics():
     payload = bytearray()
-    payload += bytes([4, 4])                 # state=error, channels=4
+    payload += bytes([5, 4])                 # state=error, channels=4
     payload += struct.pack("<I", 0)          # samples_captured
     payload += struct.pack("<I", 100000)     # total_samples
     payload += struct.pack("<I", 500000)     # actual_rate_hz

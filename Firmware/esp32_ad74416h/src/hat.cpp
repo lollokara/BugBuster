@@ -814,7 +814,7 @@ bool hat_la_stop(void)
 bool hat_la_get_status(HatLaStatus *status)
 {
     if (!s_state.connected || !status) return false;
-    uint8_t rsp[16] = {};
+    uint8_t rsp[26] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_LA_GET_STATUS, NULL, 0, rsp, &rsp_len, 200);
     if (cmd == HAT_RSP_LA_STATUS && rsp_len >= 14) {
@@ -823,6 +823,19 @@ bool hat_la_get_status(HatLaStatus *status)
         memcpy(&status->samples_captured, &rsp[2], 4);
         memcpy(&status->total_samples, &rsp[6], 4);
         memcpy(&status->actual_rate_hz, &rsp[10], 4);
+        if (rsp_len >= 16) {
+            status->usb_connected = rsp[14];
+            status->usb_mounted = rsp[15];
+        }
+        if (rsp_len >= 17) {
+            status->stream_stop_reason = rsp[16];
+        }
+        if (rsp_len >= 21) {
+            memcpy(&status->stream_overrun_count, &rsp[17], 4);
+        }
+        if (rsp_len >= 25) {
+            memcpy(&status->stream_short_write_count, &rsp[21], 4);
+        }
         return true;
     }
     return false;
@@ -863,7 +876,7 @@ void hat_poll(void)
     if (buffered == 0) return;
 
     // Try to receive a frame with very short timeout
-    uint8_t rsp[16] = {};
+    uint8_t rsp[26] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_recv_frame(rsp, &rsp_len, 5);  // 5ms timeout
 

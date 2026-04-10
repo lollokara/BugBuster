@@ -3,9 +3,9 @@
 // =============================================================================
 // bb_la_usb.h — Logic Analyzer USB transport helpers
 //
-// Gapless streaming uses CDC because the original vendor-bulk stream path was
-// unreliable in practice. The vendor interface is still used for bulk capture
-// readout after a completed capture.
+// Vendor bulk is the primary LA data path. One-shot capture readout keeps its
+// existing length-prefixed bulk format; live streaming uses packetized bulk
+// frames over the same interface.
 // =============================================================================
 
 #include <stdint.h>
@@ -22,10 +22,23 @@
 // CMSIS-DAP only, leaving BB_LA as the built-in driver's sole tenant.
 #define BB_LA_VENDOR_ITF    0
 
+#define LA_USB_STREAM_PKT_START 0x01
+#define LA_USB_STREAM_PKT_DATA  0x02
+#define LA_USB_STREAM_PKT_STOP  0x03
+#define LA_USB_STREAM_PKT_ERROR 0x04
+
+#define LA_USB_STREAM_INFO_NONE           0x00
+#define LA_USB_STREAM_INFO_START_REJECTED 0x80
+
 /**
  * @brief Initialize LA USB streaming.
  */
 void bb_la_usb_init(void);
+
+/**
+ * @brief Reset the live-stream packet sequence counter.
+ */
+void bb_la_usb_live_reset_sequence(void);
 
 /**
  * @brief Send a chunk of LA data over USB bulk IN endpoint.
@@ -52,13 +65,24 @@ bool bb_la_usb_connected(void);
 uint32_t bb_la_usb_stream_buffer(const uint8_t *buf, uint32_t total_bytes);
 
 /**
- * @brief Write raw data to the CDC streaming path (no header).
- *        Used for gapless streaming — sends packed samples directly.
+ * @brief Stream packetized live LA data over the vendor bulk endpoint.
+ *        Each packet uses the format:
+ *        [type:u8][seq:u8][payload_len:u8][info:u8][payload bytes...]
+ *        where DATA payload_len is <= 60 bytes.
  * @param buf        Data buffer
  * @param total_bytes  Total bytes to send
- * @return Bytes sent
+ * @return Payload bytes actually sent
  */
-uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes);
+uint32_t bb_la_usb_write_live(const uint8_t *buf, uint32_t total_bytes);
+
+/**
+ * @brief Send a live-stream control marker on the vendor bulk endpoint.
+ *        Used for START / STOP / ERROR notifications.
+ * @param packet_type  One of LA_USB_STREAM_PKT_*
+ * @param info         Stop/error info byte
+ * @return true if the marker was written in full
+ */
+bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info);
 
 /**
  * @brief Poll CDC/vendor control endpoints for stream commands.
@@ -68,9 +92,8 @@ uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes);
 void bb_la_usb_poll_commands(void);
 
 /**
- * @brief Call from the USB thread (tud_task context) to send pending CDC data.
- *        TinyUSB requires USB writes from the same task as tud_task.
- *        bb_cmd_task queues data, usb_thread calls this to actually send it.
+ * @brief Call from the USB thread (tud_task context) to send pending legacy CDC data.
+ *        TinyUSB requires CDC writes from the same task as tud_task.
  */
 void bb_la_cdc_send_pending(void);
 

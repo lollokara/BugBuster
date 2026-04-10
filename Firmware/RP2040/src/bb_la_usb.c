@@ -1,9 +1,9 @@
 // =============================================================================
 // bb_la_usb.c — Logic Analyzer USB transport helpers
 //
-// Gapless streaming runs over the debugprobe CDC port. The original vendor-bulk
-// live-stream path proved unreliable, so vendor bulk is now only used for
-// explicit capture readout after a completed acquisition.
+// Vendor bulk is the primary LA data path. One-shot capture readout uses a
+// length-prefixed bulk dump; live streaming uses packetized vendor-bulk frames.
+// The legacy CDC live path is kept only for compatibility/debugging.
 // =============================================================================
 
 #include "bb_la_usb.h"
@@ -11,6 +11,7 @@
 #include "tusb.h"
 #include "pico/stdlib.h"
 
+#include <string.h>
 #include "hardware/sync.h"   // __dmb()
 
 #ifdef DEBUGPROBE_INTEGRATION
@@ -29,6 +30,7 @@ static uint8_t s_cdc_tx_buf[CDC_TX_BUF_SIZE];
 static volatile uint32_t s_cdc_tx_head = 0;  // written by bb_cmd_task
 static volatile uint32_t s_cdc_tx_tail = 0;  // read by usb_thread
 static uint8_t s_cdc_seq = 0;
+static uint8_t s_live_seq = 0;
 
 // Queue data for CDC TX (called from bb_cmd_task)
 // We wrap each chunk into a framed packet: [SEQ:1][LEN:1][DATA:N]
@@ -59,6 +61,12 @@ void bb_la_usb_init(void)
 {
     // Nothing to init — TinyUSB handles endpoint setup from descriptor
     s_cdc_seq = 0;
+    s_live_seq = 0;
+}
+
+void bb_la_usb_live_reset_sequence(void)
+{
+    s_live_seq = 0;
 }
 
 bool bb_la_usb_connected(void)
@@ -129,6 +137,41 @@ uint32_t bb_la_usb_stream_buffer(const uint8_t *buf, uint32_t total_bytes)
     }
 
     return sent;
+}
+
+uint32_t bb_la_usb_write_live(const uint8_t *buf, uint32_t total_bytes)
+{
+    if (!tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) return 0;
+
+    uint32_t sent = 0;
+    while (sent < total_bytes) {
+        uint8_t packet[64];
+        uint8_t chunk = (uint8_t)((total_bytes - sent > 60) ? 60 : (total_bytes - sent));
+        packet[0] = LA_USB_STREAM_PKT_DATA;
+        packet[1] = s_live_seq++;
+        packet[2] = chunk;
+        packet[3] = LA_USB_STREAM_INFO_NONE;
+        memcpy(&packet[4], buf + sent, chunk);
+
+        uint32_t written = bb_la_usb_write(packet, (uint32_t)(4 + chunk));
+        if (written != (uint32_t)(4 + chunk)) {
+            break;
+        }
+        sent += chunk;
+    }
+    return sent;
+}
+
+bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info)
+{
+    if (!tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) return false;
+
+    uint8_t packet[4];
+    packet[0] = packet_type;
+    packet[1] = s_live_seq;
+    packet[2] = 0;
+    packet[3] = info;
+    return bb_la_usb_write(packet, sizeof(packet)) == sizeof(packet);
 }
 
 uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes)
@@ -206,14 +249,22 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc)
     switch (cmd) {
     case LA_USB_CMD_START_STREAM:
         s_cdc_seq = 0;
-        if (!tud_cdc_connected() || !bb_la_start_stream()) {
+        bb_la_usb_live_reset_sequence();
+        if (!bb_la_start_stream()) {
             if (reply_on_cdc) {
                 cdc_write_reply("ERR\n");
+            } else {
+                bb_la_usb_send_stream_marker(
+                    LA_USB_STREAM_PKT_ERROR,
+                    LA_USB_STREAM_INFO_START_REJECTED
+                );
             }
             return;
         }
         if (reply_on_cdc) {
             cdc_write_reply("START\n");
+        } else {
+            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_START, LA_USB_STREAM_INFO_NONE);
         }
         break;
 
@@ -225,6 +276,8 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc)
         }
         if (reply_on_cdc) {
             cdc_write_reply("STOP\n");
+        } else {
+            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
         }
         break;
 

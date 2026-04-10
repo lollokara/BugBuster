@@ -738,12 +738,23 @@ static void dispatch_command(const HatFrame *frame)
         break;
     }
     case HAT_CMD_LA_STOP:
+    {
+        LaStatus st;
+        bb_la_get_status(&st);
+        if (st.state == LA_STATE_STREAMING) {
+            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
+        }
         bb_la_stop();
         send_ok(NULL, 0);
         break;
+    }
     case HAT_CMD_LA_STREAM_START:
+        bb_la_usb_live_reset_sequence();
         if (!bb_la_start_stream()) { send_error(HAT_ERR_BUSY); }
-        else { send_ok(NULL, 0); }
+        else {
+            send_ok(NULL, 0);
+            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_START, LA_USB_STREAM_INFO_NONE);
+        }
         break;
     case HAT_CMD_LA_USB_SEND: {
         // Send capture buffer via USB bulk endpoint (fast readout)
@@ -850,7 +861,7 @@ void bb_cmd_task(void *params)
 
             // Stream control is handled in usb_thread; this task only feeds data.
 
-            // LA streaming: send completed buffer halves via USB (raw, no header)
+            // LA streaming: send completed buffer halves via vendor bulk packets.
             {
                 const uint8_t *stream_buf;
                 uint32_t stream_len;
@@ -862,18 +873,16 @@ void bb_cmd_task(void *params)
                     bb_la_stream_buffer_sent(stream_buf);
                     __dmb(); // ensure flag clear is visible to IRQ before we proceed
 
-                    uint32_t sent = bb_la_usb_write_raw(stream_buf, stream_len);
+                    uint32_t sent = bb_la_usb_write_live(stream_buf, stream_len);
 
                     // Stop only if the USB write failed (host too slow or disconnected).
-                    // The DMA lapped check is intentionally omitted: at 1 MHz/4 ch the
-                    // DMA half-period equals the USB write time (~78 ms), so
-                    // stream_dma_buf always returns to my_half by write completion even
-                    // when everything is working correctly.  sent != stream_len is the
-                    // definitive failure signal (ring stall or USB disconnect).
                     if (sent != stream_len) {
                         bb_la_stream_note_short_write();
+                        bb_la_usb_send_stream_marker(
+                            LA_USB_STREAM_PKT_ERROR,
+                            LA_STREAM_STOP_USB_SHORT_WRITE
+                        );
                         bb_la_stop();
-                        bb_la_cdc_flush_ring();
                     }
                 }
             }
@@ -886,6 +895,12 @@ void bb_cmd_task(void *params)
                 bb_irq_pulse();       // Also assert IRQ
                 // NOTE: no auto-push via USB — the host reads via gapless stream
                 // or explicitly via HAT_CMD_LA_USB_SEND
+            }
+            if (la_st.state == LA_STATE_ERROR && s_prev_la_state != LA_STATE_ERROR) {
+                bb_la_usb_send_stream_marker(
+                    LA_USB_STREAM_PKT_ERROR,
+                    la_st.stream_stop_reason
+                );
             }
             s_prev_la_state = la_st.state;
 

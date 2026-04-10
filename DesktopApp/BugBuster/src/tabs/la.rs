@@ -1,11 +1,11 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::tauri_bridge::*;
 // Dropdown no longer used — replaced with pill/toggle buttons
 // use crate::components::controls::Dropdown;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d, MouseEvent};
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, MouseEvent};
 
 use std::cell::{Cell, RefCell};
 
@@ -22,39 +22,69 @@ thread_local! {
 }
 
 fn format_time(seconds: f64) -> String {
-    if seconds.abs() < 1e-6 { return format!("{:.1}ns", seconds * 1e9); }
-    if seconds.abs() < 1e-3 { return format!("{:.1}µs", seconds * 1e6); }
-    if seconds.abs() < 1.0  { return format!("{:.2}ms", seconds * 1e3); }
+    if seconds.abs() < 1e-6 {
+        return format!("{:.1}ns", seconds * 1e9);
+    }
+    if seconds.abs() < 1e-3 {
+        return format!("{:.1}µs", seconds * 1e6);
+    }
+    if seconds.abs() < 1.0 {
+        return format!("{:.2}ms", seconds * 1e3);
+    }
     format!("{:.3}s", seconds)
 }
 
 /// Reformat an annotation text string according to the chosen display format.
 /// Only "data" and "address" ann_types are reformatted; control/info stay as-is.
 fn reformat_ann(text: &str, fmt: &str, ann_type: &str) -> String {
-    if fmt == "hex" { return text.to_string(); }
-    if ann_type != "data" && ann_type != "address" { return text.to_string(); }
-    // Parse numeric value from "0xNN" or "'c'" encoding
-    let (val, suffix): (Option<u64>, String) = if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        let mut parts = rest.splitn(2, ' ');
-        let hex_part = parts.next().unwrap_or("");
-        let suf = parts.next().map(|s| format!(" {}", s)).unwrap_or_default();
-        (u64::from_str_radix(hex_part, 16).ok(), suf)
-    } else if text.starts_with('\'') && text.ends_with('\'') && text.len() == 3 {
-        (Some(text.chars().nth(1).unwrap() as u64), String::new())
-    } else {
+    if fmt == "hex" {
         return text.to_string();
-    };
+    }
+    if ann_type != "data" && ann_type != "address" {
+        return text.to_string();
+    }
+    // Parse numeric value from "0xNN" or "'c'" encoding
+    let (val, suffix): (Option<u64>, String) =
+        if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            let mut parts = rest.splitn(2, ' ');
+            let hex_part = parts.next().unwrap_or("");
+            let suf = parts.next().map(|s| format!(" {}", s)).unwrap_or_default();
+            (u64::from_str_radix(hex_part, 16).ok(), suf)
+        } else if text.starts_with('\'') && text.ends_with('\'') && text.len() == 3 {
+            (Some(text.chars().nth(1).unwrap() as u64), String::new())
+        } else {
+            return text.to_string();
+        };
     match val {
         None => text.to_string(),
         Some(v) => match fmt {
-            "dec"   => format!("{}{}", v, suffix),
+            "dec" => format!("{}{}", v, suffix),
             "ascii" => {
                 let b = v as u8;
-                if b >= 0x20 && b <= 0x7E { format!("'{}'", b as char) } else { format!("\\x{:02X}", v) }
-            },
-            "bin"   => format!("{:08b}{}", v, suffix),
-            _       => text.to_string(),
+                if b >= 0x20 && b <= 0x7E {
+                    format!("'{}'", b as char)
+                } else {
+                    format!("\\x{:02X}", v)
+                }
+            }
+            "bin" => format!("{:08b}{}", v, suffix),
+            _ => text.to_string(),
         },
+    }
+}
+
+fn stream_status_badge(status: &LaStreamRuntimeStatus) -> &'static str {
+    if status.last_error.is_some() {
+        "ERROR"
+    } else if matches!(status.stop_reason.as_deref(), Some(reason) if reason != "none" && reason != "host_stop")
+    {
+        "DEGRADED"
+    } else if status.active {
+        "LIVE"
+    } else if status.total_bytes > 0 || status.chunk_count > 0 {
+        "STOPPED"
+    } else {
+        "IDLE"
     }
 }
 
@@ -83,22 +113,24 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (rle_enabled, set_rle_enabled) = signal(false);
     let (stream_mode, set_stream_mode) = signal(false);
     let (streaming, set_streaming) = signal(false);
+    let (stream_runtime, set_stream_runtime) = signal(LaStreamRuntimeStatus::default());
 
     // Decoder panel state
     let (decoder_panel_open, set_decoder_panel_open) = signal(false);
     let (add_dec_type, set_add_dec_type) = signal("uart".to_string());
-    let (add_dec_ch_a, set_add_dec_ch_a) = signal(0u8);  // UART TX / I2C SDA / SPI MOSI
-    let (add_dec_ch_b, set_add_dec_ch_b) = signal(1u8);  // UART RX (0xFF=off) / I2C SCL / SPI MISO
+    let (add_dec_ch_a, set_add_dec_ch_a) = signal(0u8); // UART TX / I2C SDA / SPI MOSI
+    let (add_dec_ch_b, set_add_dec_ch_b) = signal(1u8); // UART RX (0xFF=off) / I2C SCL / SPI MISO
     let (add_dec_uart_rx_off, set_add_dec_uart_rx_off) = signal(true); // UART RX disabled by default
-    let (add_dec_ch_c, set_add_dec_ch_c) = signal(2u8);  // SPI CLK
-    let (add_dec_ch_d, set_add_dec_ch_d) = signal(3u8);  // SPI CS
+    let (add_dec_ch_c, set_add_dec_ch_c) = signal(2u8); // SPI CLK
+    let (add_dec_ch_d, set_add_dec_ch_d) = signal(3u8); // SPI CS
     let (add_dec_baud, set_add_dec_baud) = signal("115200".to_string());
     let (add_dec_spi_mode, set_add_dec_spi_mode) = signal(0u8); // CPOL<<1 | CPHA
     let (add_dec_spi_cs_off, set_add_dec_spi_cs_off) = signal(false);
     let (ann_fmt, set_ann_fmt) = signal("hex".to_string());
     let (next_dec_id, set_next_dec_id) = signal(0u32);
     // Active decoders: (id, type, label, ch_a, ch_b, ch_c, ch_d, extra_param)
-    let (decoders, set_decoders) = signal(Vec::<(u32, String, String, u8, u8, u8, u8, String)>::new());
+    let (decoders, set_decoders) =
+        signal(Vec::<(u32, String, String, u8, u8, u8, u8, String)>::new());
 
     // Cursor
     let (cursor_sample, set_cursor_sample) = signal(Option::<u64>::None);
@@ -165,9 +197,13 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let data = view_data.get();
         let cursor = cursor_sample.get();
         let fmt = ann_fmt.get(); // track format at top level so changes always redraw
-        let Some(canvas_el) = canvas_ref.get() else { return; };
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas_el.into();
-        let Some(ctx) = canvas.get_context("2d").ok().flatten() else { return; };
+        let Some(ctx) = canvas.get_context("2d").ok().flatten() else {
+            return;
+        };
         let ctx: CanvasRenderingContext2d = ctx.unchecked_into();
 
         let dpr = web_sys::window().unwrap().device_pixel_ratio();
@@ -192,7 +228,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.set_fill_style_str("#5a6d8a");
             ctx.set_font("14px 'JetBrains Mono', monospace");
             ctx.set_text_align("center");
-            ctx.fill_text("No capture data — configure and capture to see waveforms", w / 2.0, h / 2.0).ok();
+            ctx.fill_text(
+                "No capture data — configure and capture to see waveforms",
+                w / 2.0,
+                h / 2.0,
+            )
+            .ok();
             return;
         };
 
@@ -200,7 +241,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let vs = data.view_start as f64;
         let ve = data.view_end as f64;
         let span = ve - vs;
-        if span <= 0.0 { return; }
+        if span <= 0.0 {
+            return;
+        }
 
         let plot_w = w - LABEL_WIDTH;
         let plot_h = h - RULER_HEIGHT - MINIMAP_HEIGHT;
@@ -215,13 +258,21 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         for ann in &anns {
             let ch = ann.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let row = ann.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as usize + 1;
-            if ch < num_ch { ch_ann_rows[ch] = ch_ann_rows[ch].max(row); }
+            if ch < num_ch {
+                ch_ann_rows[ch] = ch_ann_rows[ch].max(row);
+            }
         }
 
         // Compute annotation overhead per channel
-        let total_ann_extra: f64 = (0..num_ch).map(|ch| {
-            if ch_ann_rows[ch] > 0 { ann_gap + ann_row_h * ch_ann_rows[ch] as f64 } else { 0.0 }
-        }).sum();
+        let total_ann_extra: f64 = (0..num_ch)
+            .map(|ch| {
+                if ch_ann_rows[ch] > 0 {
+                    ann_gap + ann_row_h * ch_ann_rows[ch] as f64
+                } else {
+                    0.0
+                }
+            })
+            .sum();
 
         // Dynamic track height: fill available signal area, min TRACK_HEIGHT
         let available = plot_h - TOOLBAR_HEIGHT - total_ann_extra;
@@ -234,7 +285,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let mut y = TOOLBAR_HEIGHT;
             for ch in 0..num_ch {
                 ch_y[ch] = y;
-                let ann_extra = if ch_ann_rows[ch] > 0 { ann_gap + ann_row_h * ch_ann_rows[ch] as f64 } else { 0.0 };
+                let ann_extra = if ch_ann_rows[ch] > 0 {
+                    ann_gap + ann_row_h * ch_ann_rows[ch] as f64
+                } else {
+                    0.0
+                };
                 ch_h[ch] = track_h + ann_extra;
                 y += ch_h[ch];
             }
@@ -270,7 +325,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
         // Draw waveforms
         for ch in 0..num_ch {
-            if ch >= data.channel_transitions.len() { continue; }
+            if ch >= data.channel_transitions.len() {
+                continue;
+            }
             let transitions = &data.channel_transitions[ch];
             let color = CH_COLORS[ch % CH_COLORS.len()];
             let y_top = ch_y[ch] + SIGNAL_MARGIN;
@@ -282,7 +339,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.set_fill_style_str(color);
             ctx.set_font("11px 'JetBrains Mono', monospace");
             ctx.set_text_align("right");
-            ctx.fill_text(&format!("CH{}", ch), LABEL_WIDTH - 6.0, y_top + (y_bot - y_top) / 2.0 + 4.0).ok();
+            ctx.fill_text(
+                &format!("CH{}", ch),
+                LABEL_WIDTH - 6.0,
+                y_top + (y_bot - y_top) / 2.0 + 4.0,
+            )
+            .ok();
 
             // Waveform rendering — step function or density mode for zoomed-out signals
             if transitions.is_empty() {
@@ -300,17 +362,25 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 };
 
                 // Density mode: use high-performance per-pixel fill for decimated/high-freq signals
-                let dense = data.decimated || (if transitions.len() < 3 { false } else {
-                    let mut min_gap = f64::MAX;
-                    for i in 1..transitions.len().min(100) { // check sample of transitions
-                        let px1 = (transitions[i-1].0 as f64 - vs) / span * plot_w;
-                        let px2 = (transitions[i].0 as f64 - vs) / span * plot_w;
-                        let gap = (px2 - px1).abs();
-                        if gap < min_gap { min_gap = gap; }
-                        if min_gap < 2.0 { break; }
-                    }
-                    min_gap < 2.0
-                });
+                let dense = data.decimated
+                    || (if transitions.len() < 3 {
+                        false
+                    } else {
+                        let mut min_gap = f64::MAX;
+                        for i in 1..transitions.len().min(100) {
+                            // check sample of transitions
+                            let px1 = (transitions[i - 1].0 as f64 - vs) / span * plot_w;
+                            let px2 = (transitions[i].0 as f64 - vs) / span * plot_w;
+                            let gap = (px2 - px1).abs();
+                            if gap < min_gap {
+                                min_gap = gap;
+                            }
+                            if min_gap < 2.0 {
+                                break;
+                            }
+                        }
+                        min_gap < 2.0
+                    });
                 if dense {
                     let pixels = plot_w as usize;
                     // bit0=has_low, bit1=has_high
@@ -338,13 +408,17 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         }
                         cur = val;
                         prev_px = px;
-                        if px > pixels as i64 { break; }
+                        if px > pixels as i64 {
+                            break;
+                        }
                     }
                     // Fill remaining pixels with final state
                     let fill_s = (prev_px + 1).max(0) as usize;
                     if fill_s <= pixels {
                         let bit: u8 = if cur == 1 { 0b10 } else { 0b01 };
-                        for f in fill_s..=pixels { px_flags[f] |= bit; }
+                        for f in fill_s..=pixels {
+                            px_flags[f] |= bit;
+                        }
                     }
 
                     // Gap fill pass:
@@ -379,11 +453,21 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             if px_flags[px] == 0b11 {
                                 run_start.get_or_insert(px);
                             } else if let Some(s) = run_start.take() {
-                                ctx.fill_rect(LABEL_WIDTH + s as f64, y_high, (px - s) as f64, y_low - y_high);
+                                ctx.fill_rect(
+                                    LABEL_WIDTH + s as f64,
+                                    y_high,
+                                    (px - s) as f64,
+                                    y_low - y_high,
+                                );
                             }
                         }
                         if let Some(s) = run_start {
-                            ctx.fill_rect(LABEL_WIDTH + s as f64, y_high, (max_px + 1 - s) as f64, y_low - y_high);
+                            ctx.fill_rect(
+                                LABEL_WIDTH + s as f64,
+                                y_high,
+                                (max_px + 1 - s) as f64,
+                                y_low - y_high,
+                            );
                         }
                     }
 
@@ -399,7 +483,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             }
                         }
                         if let Some(s) = run_start {
-                            ctx.fill_rect(LABEL_WIDTH + s as f64, y_high, (max_px + 1 - s) as f64, 2.0);
+                            ctx.fill_rect(
+                                LABEL_WIDTH + s as f64,
+                                y_high,
+                                (max_px + 1 - s) as f64,
+                                2.0,
+                            );
                         }
                     }
 
@@ -410,11 +499,21 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             if px_flags[px] == 0b01 {
                                 run_start.get_or_insert(px);
                             } else if let Some(s) = run_start.take() {
-                                ctx.fill_rect(LABEL_WIDTH + s as f64, y_low - 1.0, (px - s) as f64, 2.0);
+                                ctx.fill_rect(
+                                    LABEL_WIDTH + s as f64,
+                                    y_low - 1.0,
+                                    (px - s) as f64,
+                                    2.0,
+                                );
                             }
                         }
                         if let Some(s) = run_start {
-                            ctx.fill_rect(LABEL_WIDTH + s as f64, y_low - 1.0, (max_px + 1 - s) as f64, 2.0);
+                            ctx.fill_rect(
+                                LABEL_WIDTH + s as f64,
+                                y_low - 1.0,
+                                (max_px + 1 - s) as f64,
+                                2.0,
+                            );
                         }
                     }
                 } else {
@@ -432,7 +531,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                     for &(sample, val) in transitions {
                         let x = (LABEL_WIDTH + ((sample as f64 - vs) / span) * plot_w)
-                            .max(LABEL_WIDTH).min(w);
+                            .max(LABEL_WIDTH)
+                            .min(w);
                         if val != current_val {
                             if x >= last_drawn_x + 0.5 {
                                 // Extend horizontal at drawn level
@@ -476,11 +576,20 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         ctx.stroke();
 
         let sample_rate = data.sample_rate_hz as f64;
-        let span_sec = if sample_rate > 0.0 { span / sample_rate } else { 1.0 };
-        let (unit_suffix, unit_div) = if span_sec < 2e-6 { ("ns", 1e9) }
-            else if span_sec < 2e-3 { ("µs", 1e6) }
-            else if span_sec < 2.0 { ("ms", 1e3) }
-            else { ("s", 1.0) };
+        let span_sec = if sample_rate > 0.0 {
+            span / sample_rate
+        } else {
+            1.0
+        };
+        let (unit_suffix, unit_div) = if span_sec < 2e-6 {
+            ("ns", 1e9)
+        } else if span_sec < 2e-3 {
+            ("µs", 1e6)
+        } else if span_sec < 2.0 {
+            ("ms", 1e3)
+        } else {
+            ("s", 1.0)
+        };
 
         // Major tick marks + labels
         ctx.set_stroke_style_str("rgba(139, 157, 195, 0.5)");
@@ -497,7 +606,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.line_to(x, ruler_y + 4.0);
             ctx.stroke();
             // Label
-            let t = if sample_rate > 0.0 { g / sample_rate } else { 0.0 };
+            let t = if sample_rate > 0.0 {
+                g / sample_rate
+            } else {
+                0.0
+            };
             let label = format!("{:.1}{}", t * unit_div, unit_suffix);
             ctx.fill_text(&label, x, ruler_y + 15.0).ok();
             // Minor ticks (5 subdivisions)
@@ -519,7 +632,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         ctx.set_fill_style_str("#5a6d8a");
         ctx.set_font("8px 'JetBrains Mono', monospace");
         ctx.set_text_align("right");
-        ctx.fill_text(unit_suffix, LABEL_WIDTH - 4.0, ruler_y + 14.0).ok();
+        ctx.fill_text(unit_suffix, LABEL_WIDTH - 4.0, ruler_y + 14.0)
+            .ok();
 
         // Cursor
         if let Some(cs) = cursor {
@@ -533,7 +647,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 ctx.stroke();
 
                 // Cursor time label
-                let t = if sample_rate > 0.0 { cs as f64 / sample_rate } else { 0.0 };
+                let t = if sample_rate > 0.0 {
+                    cs as f64 / sample_rate
+                } else {
+                    0.0
+                };
                 ctx.set_fill_style_str("#ef4444");
                 ctx.set_font("10px 'JetBrains Mono', monospace");
                 ctx.fill_text(&format_time(t), x, ruler_y + 14.0).ok();
@@ -546,7 +664,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let x = LABEL_WIDTH + ((ts as f64 - vs) / span) * plot_w;
                 ctx.set_stroke_style_str("#f59e0b");
                 ctx.set_line_width(1.0);
-                ctx.set_line_dash(&JsValue::from(js_sys::Array::of2(&JsValue::from(4.0), &JsValue::from(4.0)))).ok();
+                ctx.set_line_dash(&JsValue::from(js_sys::Array::of2(
+                    &JsValue::from(4.0),
+                    &JsValue::from(4.0),
+                )))
+                .ok();
                 ctx.begin_path();
                 ctx.move_to(x, TOOLBAR_HEIGHT);
                 ctx.line_to(x, plot_h);
@@ -583,7 +705,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let mut nearest_dist = f64::MAX;
                         for (i, &(s, _)) in edges.iter().enumerate() {
                             let dist = (s as f64 - mouse_sample).abs();
-                            if dist < nearest_dist { nearest_dist = dist; nearest_idx = i; }
+                            if dist < nearest_dist {
+                                nearest_dist = dist;
+                                nearest_idx = i;
+                            }
                         }
 
                         // Find next edge of the SAME direction to measure a full period
@@ -610,7 +735,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 if nearest_is_rising {
                                     // Rising→Rising: high time = time from e1 to first falling edge
                                     for i in (nearest_idx + 1)..pe_idx {
-                                        if !edges[i].1 { // falling edge
+                                        if !edges[i].1 {
+                                            // falling edge
                                             high_time = edges[i].0 - e1;
                                             break;
                                         }
@@ -618,7 +744,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 } else {
                                     // Falling→Falling: high time = time from first rising to e2
                                     for i in (nearest_idx + 1)..pe_idx {
-                                        if edges[i].1 { // rising edge
+                                        if edges[i].1 {
+                                            // rising edge
                                             high_time = e2 - edges[i].0;
                                             break;
                                         }
@@ -631,7 +758,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 // Draw period arrow
                                 let x1 = LABEL_WIDTH + ((e1 as f64 - vs) / span) * plot_w;
                                 let x2 = LABEL_WIDTH + ((e2 as f64 - vs) / span) * plot_w;
-                                let y_track_top = ch_y.get(hch).copied().unwrap_or(TOOLBAR_HEIGHT + hch as f64 * track_h) + SIGNAL_MARGIN;
+                                let y_track_top = ch_y
+                                    .get(hch)
+                                    .copied()
+                                    .unwrap_or(TOOLBAR_HEIGHT + hch as f64 * track_h)
+                                    + SIGNAL_MARGIN;
                                 let arrow_y = y_track_top - 2.0;
 
                                 ctx.set_stroke_style_str(color);
@@ -650,7 +781,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 ctx.move_to(x2, arrow_y);
                                 ctx.line_to(x2 - 5.0, arrow_y + 3.0);
                                 // Vertical markers
-                                let y_bot = ch_y.get(hch).copied().unwrap_or(TOOLBAR_HEIGHT + hch as f64 * track_h) + track_h - SIGNAL_MARGIN;
+                                let y_bot = ch_y
+                                    .get(hch)
+                                    .copied()
+                                    .unwrap_or(TOOLBAR_HEIGHT + hch as f64 * track_h)
+                                    + track_h
+                                    - SIGNAL_MARGIN;
                                 ctx.move_to(x1, y_track_top);
                                 ctx.line_to(x1, y_bot);
                                 ctx.move_to(x2, y_track_top);
@@ -661,12 +797,21 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 let box_x = (x1 + x2) / 2.0;
                                 let box_y = arrow_y - 6.0;
 
-                                let freq_str = if freq >= 1e6 { format!("{:.2} MHz", freq / 1e6) }
-                                    else if freq >= 1e3 { format!("{:.2} kHz", freq / 1e3) }
-                                    else { format!("{:.1} Hz", freq) };
+                                let freq_str = if freq >= 1e6 {
+                                    format!("{:.2} MHz", freq / 1e6)
+                                } else if freq >= 1e3 {
+                                    format!("{:.2} kHz", freq / 1e3)
+                                } else {
+                                    format!("{:.1} Hz", freq)
+                                };
 
-                                let label = format!("P: {}  F: {}  W: {}  D: {:.1}%",
-                                    format_time(period_sec), freq_str, format_time(width_sec), duty);
+                                let label = format!(
+                                    "P: {}  F: {}  W: {}  D: {:.1}%",
+                                    format_time(period_sec),
+                                    freq_str,
+                                    format_time(width_sec),
+                                    duty
+                                );
 
                                 ctx.set_font("9px 'JetBrains Mono', monospace");
                                 let text_width = label.len() as f64 * 5.5;
@@ -691,7 +836,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         {
             let mm_y = h - MINIMAP_HEIGHT;
             let mm_w = w - LABEL_WIDTH;
-            let mm_heat_top = mm_y + 10.0;    // below time labels
+            let mm_heat_top = mm_y + 10.0; // below time labels
             let mm_heat_h = MINIMAP_HEIGHT - 12.0;
 
             // Background
@@ -706,13 +851,18 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let total = data.total_samples as f64;
             if total > 0.0 {
                 // Time range labels
-                let total_sec = if sample_rate > 0.0 { total / sample_rate } else { 0.0 };
+                let total_sec = if sample_rate > 0.0 {
+                    total / sample_rate
+                } else {
+                    0.0
+                };
                 ctx.set_fill_style_str("#5a6d8a");
                 ctx.set_font("8px 'JetBrains Mono', monospace");
                 ctx.set_text_align("left");
                 ctx.fill_text("0s", LABEL_WIDTH + 3.0, mm_y + 9.0).ok();
                 ctx.set_text_align("right");
-                ctx.fill_text(&format_time(total_sec), w - 3.0, mm_y + 9.0).ok();
+                ctx.fill_text(&format_time(total_sec), w - 3.0, mm_y + 9.0)
+                    .ok();
 
                 // Density heatmap
                 let density = &data.density;
@@ -720,7 +870,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     let max_d = *density.iter().max().unwrap_or(&1) as f64;
                     let buckets = density.len() as f64;
                     for (i, &count) in density.iter().enumerate() {
-                        if count == 0 { continue; }
+                        if count == 0 {
+                            continue;
+                        }
                         let intensity = (count as f64 / max_d).sqrt(); // sqrt for better contrast
                         let bx = LABEL_WIDTH + (i as f64 / buckets) * mm_w;
                         let bw = (mm_w / buckets).max(1.0);
@@ -735,7 +887,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                 // Viewport indicator box
                 let vp_x1 = LABEL_WIDTH + (data.view_start as f64 / total) * mm_w;
-                let vp_x2 = LABEL_WIDTH + (data.view_end.min(data.total_samples) as f64 / total) * mm_w;
+                let vp_x2 =
+                    LABEL_WIDTH + (data.view_end.min(data.total_samples) as f64 / total) * mm_w;
                 let vp_w = (vp_x2 - vp_x1).max(3.0);
                 ctx.set_fill_style_str("rgba(168, 85, 247, 0.12)");
                 ctx.fill_rect(vp_x1, mm_heat_top, vp_w, mm_heat_h);
@@ -765,11 +918,17 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let se_sel = sel_end.get();
         if let (Some(s_sel), Some(e_sel)) = (ss_sel, se_sel) {
             if e_sel > data.view_start && s_sel < data.view_end {
-                let x1_sel = LABEL_WIDTH + ((s_sel.max(data.view_start) as f64 - vs) / span) * plot_w;
+                let x1_sel =
+                    LABEL_WIDTH + ((s_sel.max(data.view_start) as f64 - vs) / span) * plot_w;
                 let x2_sel = LABEL_WIDTH + ((e_sel.min(data.view_end) as f64 - vs) / span) * plot_w;
                 ctx.set_fill_style_str("#a855f7");
                 ctx.set_global_alpha(0.12);
-                ctx.fill_rect(x1_sel, TOOLBAR_HEIGHT, x2_sel - x1_sel, plot_h - TOOLBAR_HEIGHT);
+                ctx.fill_rect(
+                    x1_sel,
+                    TOOLBAR_HEIGHT,
+                    x2_sel - x1_sel,
+                    plot_h - TOOLBAR_HEIGHT,
+                );
                 ctx.set_global_alpha(1.0);
                 // Selection edges
                 ctx.set_stroke_style_str("#a855f780");
@@ -785,29 +944,41 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
         // Draw decoder annotations (anns already computed above for ch_y)
         for ann in &anns {
-            let Some(ss) = ann.get("startSample").and_then(|v| v.as_u64()) else { continue };
-            let Some(es) = ann.get("endSample").and_then(|v| v.as_u64()) else { continue };
+            let Some(ss) = ann.get("startSample").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            let Some(es) = ann.get("endSample").and_then(|v| v.as_u64()) else {
+                continue;
+            };
             let raw_text = ann.get("text").and_then(|v| v.as_str()).unwrap_or("?");
-            let ann_type = ann.get("annType").and_then(|v| v.as_str()).unwrap_or("data");
+            let ann_type = ann
+                .get("annType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("data");
             let text_owned = reformat_ann(raw_text, &fmt, ann_type);
             let text = text_owned.as_str();
             let color = match ann_type {
                 "address" => "#10b981",
                 "control" => "#f59e0b",
-                "error"   => "#ef4444",
-                "info"    => "#06b6d4",
-                _         => "#3b82f6", // data (default)
+                "error" => "#ef4444",
+                "info" => "#06b6d4",
+                _ => "#3b82f6", // data (default)
             };
             let row = ann.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let ch = ann.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
-            if es < data.view_start || ss > data.view_end { continue; }
+            if es < data.view_start || ss > data.view_end {
+                continue;
+            }
 
             let x1 = LABEL_WIDTH + ((ss as f64 - vs) / span) * plot_w;
             let x2 = LABEL_WIDTH + ((es as f64 - vs) / span) * plot_w;
             let ann_h = ann_row_h - 2.0;
             // Position annotation below the signal area, in the expanded annotation strip
-            let track_y = ch_y.get(ch).copied().unwrap_or(TOOLBAR_HEIGHT + ch as f64 * track_h);
+            let track_y = ch_y
+                .get(ch)
+                .copied()
+                .unwrap_or(TOOLBAR_HEIGHT + ch as f64 * track_h);
             let ann_y = track_y + track_h + ann_gap + ann_row_h * row as f64;
 
             // Annotation box
@@ -851,7 +1022,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let factor = if e.delta_y() < 0.0 { 0.95 } else { 1.0 / 0.95 };
 
         // Zoom centered on mouse position
-        let Some(canvas_el) = canvas_ref.get() else { return; };
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas_el.into();
         let rect = canvas.get_bounding_client_rect();
         let mouse_x = e.client_x() as f64 - rect.left();
@@ -861,7 +1034,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         // Fraction of viewport where mouse is (0.0 = left edge, 1.0 = right edge)
         let frac = ((mouse_x - LABEL_WIDTH) / plot_w).clamp(0.0, 1.0);
 
-        let total = capture_info.get_untracked().map(|i| i.total_samples).unwrap_or(u64::MAX);
+        let total = capture_info
+            .get_untracked()
+            .map(|i| i.total_samples)
+            .unwrap_or(u64::MAX);
         let margin = (total as f64 * 0.05).max(100.0) as u64; // 5% margin
         let limit = total.saturating_add(margin);
         let new_span = (span * factor).max(10.0).min(limit as f64);
@@ -870,7 +1046,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let mut new_start = (mouse_sample - new_span * frac).max(0.0) as u64;
         let mut new_end = new_start + new_span as u64;
         // Clamp to capture bounds with margin
-        if new_end > limit { new_end = limit; new_start = limit.saturating_sub(new_span as u64); }
+        if new_end > limit {
+            new_end = limit;
+            new_start = limit.saturating_sub(new_span as u64);
+        }
 
         // Write the computed viewport to the pending slot
         PENDING_VIEWPORT.with(|p| *p.borrow_mut() = Some((new_start, new_end)));
@@ -885,25 +1064,34 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     set_view_end.set(e);
                 }
             });
-            let _ = web_sys::window().unwrap().request_animation_frame(cb.as_ref().unchecked_ref());
+            let _ = web_sys::window()
+                .unwrap()
+                .request_animation_frame(cb.as_ref().unchecked_ref());
             cb.forget();
         }
     };
 
     let on_mousedown = move |e: MouseEvent| {
-        let Some(canvas_el) = canvas_ref.get() else { return; };
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas_el.into();
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
         let h = canvas.client_height() as f64;
-        if x < LABEL_WIDTH { return; }
+        if x < LABEL_WIDTH {
+            return;
+        }
 
         // Check if click is in the overview/minimap bar
         let mm_y = h - MINIMAP_HEIGHT;
         if y >= mm_y {
             // Click in minimap → jump viewport to that position
-            let total = capture_info.get_untracked().map(|i| i.total_samples).unwrap_or(1);
+            let total = capture_info
+                .get_untracked()
+                .map(|i| i.total_samples)
+                .unwrap_or(1);
             let mm_w = canvas.client_width() as f64 - LABEL_WIDTH;
             let frac = ((x - LABEL_WIDTH) / mm_w).clamp(0.0, 1.0);
             let click_sample = (frac * total as f64) as u64;
@@ -924,7 +1112,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     };
 
     let on_mousemove = move |e: MouseEvent| {
-        let Some(canvas_el) = canvas_ref.get() else { return; };
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas_el.into();
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
@@ -942,7 +1132,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 ((y - TOOLBAR_HEIGHT) / TRACK_HEIGHT) as usize
             } else {
                 // Last channel whose start ≤ y (within signal area only)
-                offsets.iter().enumerate().rev()
+                offsets
+                    .iter()
+                    .enumerate()
+                    .rev()
                     .find(|(_, &cy)| y >= cy && y < cy + TRACK_HEIGHT)
                     .map(|(i, _)| i)
                     .unwrap_or_else(|| offsets.len().saturating_sub(1))
@@ -953,7 +1146,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
 
         // Drag handling
-        if !dragging.get_untracked() { return; }
+        if !dragging.get_untracked() {
+            return;
+        }
 
         let w = canvas.client_width() as f64;
         let plot_w = w - LABEL_WIDTH;
@@ -963,14 +1158,20 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let ve0 = drag_start_ve.get_untracked();
         let span = (ve0 - vs0) as f64;
 
-        let total = capture_info.get_untracked().map(|i| i.total_samples).unwrap_or(u64::MAX);
+        let total = capture_info
+            .get_untracked()
+            .map(|i| i.total_samples)
+            .unwrap_or(u64::MAX);
         let margin = (total as f64 * 0.05).max(100.0) as u64;
         let limit = total.saturating_add(margin);
         let d_samples = (dx_px / plot_w * span) as i64;
         let mut new_start = (vs0 as i64 - d_samples).max(0) as u64;
         let mut new_end = new_start + span as u64;
         // Clamp to capture bounds with margin
-        if new_end > limit { new_end = limit; new_start = limit.saturating_sub(span as u64); }
+        if new_end > limit {
+            new_end = limit;
+            new_start = limit.saturating_sub(span as u64);
+        }
 
         set_view_start.set(new_start);
         set_view_end.set(new_end);
@@ -983,23 +1184,31 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         // If it was a click (no drag), place cursor
         if was_dragging {
             let dx = {
-                let Some(canvas_el) = canvas_ref.get() else { return; };
+                let Some(canvas_el) = canvas_ref.get() else {
+                    return;
+                };
                 let canvas: HtmlCanvasElement = canvas_el.into();
                 let rect = canvas.get_bounding_client_rect();
                 let x = e.client_x() as f64 - rect.left();
                 (x - drag_start_x.get_untracked()).abs()
             };
-            if dx > 3.0 { return; } // Was a real drag, not a click
+            if dx > 3.0 {
+                return;
+            } // Was a real drag, not a click
         }
 
         // Place cursor / selection
-        let Some(canvas_el) = canvas_ref.get() else { return; };
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas_el.into();
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let w = canvas.client_width() as f64;
         let plot_w = w - LABEL_WIDTH;
-        if x < LABEL_WIDTH { return; }
+        if x < LABEL_WIDTH {
+            return;
+        }
         let frac = (x - LABEL_WIDTH) / plot_w;
         let vs = view_start.get_untracked();
         let ve = view_end.get_untracked();
@@ -1019,20 +1228,32 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let fmt = ann_fmt.get_untracked();
                 if !anns.is_empty() {
                     // Build channel→name map from decoders
-                    let mut ch_names: std::collections::HashMap<u8, String> = std::collections::HashMap::new();
+                    let mut ch_names: std::collections::HashMap<u8, String> =
+                        std::collections::HashMap::new();
                     for (_, dtype, _, ch_a, ch_b, _, _, extra) in &decs {
                         match dtype.as_str() {
                             "uart" => {
                                 ch_names.insert(*ch_a, "TX".into());
                                 // Only register RX if it's enabled (extra = "baud,rxch")
-                                let has_rx = extra.splitn(2, ',').nth(1).and_then(|s| s.parse::<u8>().ok()).is_some();
-                                if has_rx { ch_names.insert(*ch_b, "RX".into()); }
+                                let has_rx = extra
+                                    .splitn(2, ',')
+                                    .nth(1)
+                                    .and_then(|s| s.parse::<u8>().ok())
+                                    .is_some();
+                                if has_rx {
+                                    ch_names.insert(*ch_b, "RX".into());
+                                }
                             }
-                            "spi"  => {
+                            "spi" => {
                                 ch_names.insert(*ch_a, "MOSI".into());
-                                if *ch_b != *ch_a { ch_names.insert(*ch_b, "MISO".into()); }
+                                if *ch_b != *ch_a {
+                                    ch_names.insert(*ch_b, "MISO".into());
+                                }
                             }
-                            "i2c"  => { ch_names.insert(*ch_a, "SDA".into()); ch_names.insert(*ch_b, "SCL".into()); }
+                            "i2c" => {
+                                ch_names.insert(*ch_a, "SDA".into());
+                                ch_names.insert(*ch_b, "SCL".into());
+                            }
                             _ => {}
                         }
                     }
@@ -1040,11 +1261,22 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     // Collect annotations that overlap the selection, grouped by channel
                     let mut parts: Vec<(u8, String)> = Vec::new();
                     for ann in &anns {
-                        let Some(ss_a) = ann.get("startSample").and_then(|v| v.as_u64()) else { continue };
-                        let Some(es_a) = ann.get("endSample").and_then(|v| v.as_u64()) else { continue };
-                        if es_a < s || ss_a > e_val { continue; }
-                        let ann_type = ann.get("annType").and_then(|v| v.as_str()).unwrap_or("data");
-                        if ann_type == "control" || ann_type == "info" { continue; }
+                        let Some(ss_a) = ann.get("startSample").and_then(|v| v.as_u64()) else {
+                            continue;
+                        };
+                        let Some(es_a) = ann.get("endSample").and_then(|v| v.as_u64()) else {
+                            continue;
+                        };
+                        if es_a < s || ss_a > e_val {
+                            continue;
+                        }
+                        let ann_type = ann
+                            .get("annType")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("data");
+                        if ann_type == "control" || ann_type == "info" {
+                            continue;
+                        }
                         let raw_text = ann.get("text").and_then(|v| v.as_str()).unwrap_or("?");
                         let ch = ann.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                         let text = reformat_ann(raw_text, &fmt, ann_type);
@@ -1068,14 +1300,28 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             }
                             lines.join("\n")
                         } else {
-                            parts.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" ")
+                            parts
+                                .iter()
+                                .map(|(_, t)| t.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")
                         };
                         // Copy to clipboard
                         if let Some(win) = web_sys::window() {
                             let nav = win.navigator();
                             let clip = nav.clipboard();
                             let _ = clip.write_text(&clip_text);
-                            show_toast(&format!("Copied: {}", if clip_text.len() > 40 { &clip_text[..40] } else { &clip_text }), "ok");
+                            show_toast(
+                                &format!(
+                                    "Copied: {}",
+                                    if clip_text.len() > 40 {
+                                        &clip_text[..40]
+                                    } else {
+                                        &clip_text
+                                    }
+                                ),
+                                "ok",
+                            );
                         }
                     }
                 }
@@ -1096,45 +1342,53 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     {
         use wasm_bindgen::closure::Closure;
         use wasm_bindgen::JsCast;
-        let closure = Closure::<dyn Fn(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-            // Ignore if user is typing in an input
-            if let Some(tag) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).map(|el| el.tag_name()) {
-                if tag == "INPUT" || tag == "TEXTAREA" { return; }
-            }
-            if e.key() == "Backspace" || e.key() == "Delete" {
-                let ss = sel_start.get_untracked();
-                let se = sel_end.get_untracked();
-                if let (Some(s), Some(e_val)) = (ss, se) {
-                    e.prevent_default();
-                    spawn_local(async move {
-                        if let Some(info) = la_delete_range(s, e_val).await {
-                            let total = info.total_samples;
-                            set_capture_info.set(Some(info));
-                            // Clear selection and stale annotations
-                            set_sel_anchor.set(None);
-                            set_sel_start.set(None);
-                            set_sel_end.set(None);
-                            set_annotations.set(vec![]);
-                            // Adjust viewport
-                            let vs = view_start.get_untracked();
-                            let ve = view_end.get_untracked();
-                            let new_end = ve.min(total);
-                            set_view_start.set(vs.min(new_end.saturating_sub(1)));
-                            set_view_end.set(new_end);
-                            show_toast(&format!("Deleted {} samples", e_val - s + 1), "ok");
-                        }
-                    });
+        let closure =
+            Closure::<dyn Fn(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+                // Ignore if user is typing in an input
+                if let Some(tag) = e
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    .map(|el| el.tag_name())
+                {
+                    if tag == "INPUT" || tag == "TEXTAREA" {
+                        return;
+                    }
                 }
-            }
-            // Escape clears selection
-            if e.key() == "Escape" {
-                set_sel_anchor.set(None);
-                set_sel_start.set(None);
-                set_sel_end.set(None);
-            }
-        });
+                if e.key() == "Backspace" || e.key() == "Delete" {
+                    let ss = sel_start.get_untracked();
+                    let se = sel_end.get_untracked();
+                    if let (Some(s), Some(e_val)) = (ss, se) {
+                        e.prevent_default();
+                        spawn_local(async move {
+                            if let Some(info) = la_delete_range(s, e_val).await {
+                                let total = info.total_samples;
+                                set_capture_info.set(Some(info));
+                                // Clear selection and stale annotations
+                                set_sel_anchor.set(None);
+                                set_sel_start.set(None);
+                                set_sel_end.set(None);
+                                set_annotations.set(vec![]);
+                                // Adjust viewport
+                                let vs = view_start.get_untracked();
+                                let ve = view_end.get_untracked();
+                                let new_end = ve.min(total);
+                                set_view_start.set(vs.min(new_end.saturating_sub(1)));
+                                set_view_end.set(new_end);
+                                show_toast(&format!("Deleted {} samples", e_val - s + 1), "ok");
+                            }
+                        });
+                    }
+                }
+                // Escape clears selection
+                if e.key() == "Escape" {
+                    set_sel_anchor.set(None);
+                    set_sel_start.set(None);
+                    set_sel_end.set(None);
+                }
+            });
         let doc = web_sys::window().unwrap().document().unwrap();
-        doc.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref()).unwrap();
+        doc.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())
+            .unwrap();
         closure.forget();
     }
 
@@ -1366,6 +1620,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             if is_stream {
                                 // Stream mode: try gapless USB streaming first, fall back to cycle-based
                                 set_streaming.set(true);
+                                set_stream_runtime.set(LaStreamRuntimeStatus::default());
                                 spawn_local(async move {
                                     web_sys::console::log_1(&format!("[STREAM] Starting gapless USB: ch={} rate={} depth={}", ch, r, d).into());
 
@@ -1394,6 +1649,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             let _ = wasm_bindgen_futures::JsFuture::from(p).await;
 
                                             let stream_status = la_stream_usb_status().await.unwrap_or_default();
+                                            set_stream_runtime.set(stream_status.clone());
                                             if let Some(err) = stream_status.last_error.clone() {
                                                 web_sys::console::error_1(&format!("[STREAM] {}", err).into());
                                                 show_toast(&format!("USB stream failed: {}", err), "err");
@@ -1428,6 +1684,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         // Stop gapless stream
                                         if let Some(info) = la_stream_usb_stop().await {
                                             set_ci5.set(Some(info));
+                                        }
+                                        if let Some(status) = la_stream_usb_status().await {
+                                            set_stream_runtime.set(status);
                                         }
                                     } else {
                                         // Fallback: cycle-based streaming via la_stream_cycle
@@ -1554,6 +1813,28 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         });
                     }
                 >"Stop"</button>
+
+                <div
+                    style=move || {
+                        let status = stream_runtime.get();
+                        let badge = stream_status_badge(&status);
+                        let color = match badge {
+                            "LIVE" => "#10b981",
+                            "DEGRADED" => "#f59e0b",
+                            "ERROR" => "#ef4444",
+                            "STOPPED" => "#60a5fa",
+                            _ => "#64748b",
+                        };
+                        format!(
+                            "display: flex; align-items: center; gap: 8px; min-width: 320px; max-width: 520px; padding: 3px 10px; border-radius: 4px; border: 1px solid {}; background: {}20; color: {}; font-size: 10px; font-family: 'JetBrains Mono', monospace",
+                            color, color, color
+                        )
+                    }
+                    title="Live vendor-bulk runtime status"
+                >
+                    <span style="font-weight: 700">{move || stream_status_badge(&stream_runtime.get()).to_string()}</span>
+                    <span>{move || summarize_la_stream_status(&stream_runtime.get())}</span>
+                </div>
 
                 // Read capture — reads data from RP2040 via UART chunks
                 <button style="font-size: 10px; padding: 3px 12px; background: #3b82f625; color: #3b82f6; border: 1px solid #3b82f650; border-radius: 4px; cursor: pointer"
@@ -2213,5 +2494,41 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 }
             }}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stream_status_badge;
+    use crate::tauri_bridge::{summarize_la_stream_status, LaStreamRuntimeStatus};
+
+    #[test]
+    fn stream_badge_prefers_error() {
+        let status = LaStreamRuntimeStatus {
+            last_error: Some("bad packet".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(stream_status_badge(&status), "ERROR");
+    }
+
+    #[test]
+    fn stream_badge_marks_degraded_stop() {
+        let status = LaStreamRuntimeStatus {
+            stop_reason: Some("dma_overrun".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(stream_status_badge(&status), "DEGRADED");
+        assert!(summarize_la_stream_status(&status).contains("dma_overrun"));
+    }
+
+    #[test]
+    fn stream_badge_marks_live_state() {
+        let status = LaStreamRuntimeStatus {
+            active: true,
+            total_bytes: 1024,
+            chunk_count: 8,
+            ..Default::default()
+        };
+        assert_eq!(stream_status_badge(&status), "LIVE");
     }
 }

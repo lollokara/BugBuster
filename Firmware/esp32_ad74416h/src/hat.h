@@ -363,6 +363,11 @@ typedef struct {
     uint32_t samples_captured;
     uint32_t total_samples;
     uint32_t actual_rate_hz;
+    uint8_t  usb_connected;
+    uint8_t  usb_mounted;
+    uint8_t  stream_stop_reason;
+    uint32_t stream_overrun_count;
+    uint32_t stream_short_write_count;
 } HatLaStatus;
 
 /**

@@ -23,13 +23,21 @@ pub async fn try_invoke(cmd: &str, args: JsValue) -> Option<JsValue> {
     let result = match promise.call2(&JsValue::NULL, &JsValue::from_str(cmd), &args) {
         Ok(r) => r,
         Err(e) => {
-            web_sys::console::warn_1(&format!("[try_invoke] JS call failed for {}: {:?}", cmd, e).into());
+            web_sys::console::warn_1(
+                &format!("[try_invoke] JS call failed for {}: {:?}", cmd, e).into(),
+            );
             return None;
         }
     };
     let future = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(result));
     match future.await {
-        Ok(val) => if val.is_null() { None } else { Some(val) },
+        Ok(val) => {
+            if val.is_null() {
+                None
+            } else {
+                Some(val)
+            }
+        }
         Err(e) => {
             web_sys::console::warn_1(&format!("[try_invoke] {} rejected: {:?}", cmd, e).into());
             None
@@ -118,18 +126,35 @@ pub const CH_COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 
 pub fn func_name(code: u8) -> &'static str {
     match code {
-        0 => "HIGH_IMP", 1 => "VOUT", 2 => "IOUT", 3 => "VIN",
-        4 => "IIN_EXT", 5 => "IIN_LOOP", 7 => "RES_MEAS",
-        8 => "DIN_LOGIC", 9 => "DIN_LOOP", 10 => "IOUT_HART",
-        11 => "IIN_EXT_HART", 12 => "IIN_LOOP_HART", _ => "UNKNOWN",
+        0 => "HIGH_IMP",
+        1 => "VOUT",
+        2 => "IOUT",
+        3 => "VIN",
+        4 => "IIN_EXT",
+        5 => "IIN_LOOP",
+        7 => "RES_MEAS",
+        8 => "DIN_LOGIC",
+        9 => "DIN_LOOP",
+        10 => "IOUT_HART",
+        11 => "IIN_EXT_HART",
+        12 => "IIN_LOOP_HART",
+        _ => "UNKNOWN",
     }
 }
 
 pub const FN_OPTIONS: &[(u8, &str)] = &[
-    (0, "High Impedance"), (1, "Voltage Out"), (2, "Current Out"),
-    (3, "Voltage In"), (4, "Current In (Ext)"), (5, "Current In (Loop)"),
-    (7, "Resistance"), (8, "Digital In (Logic)"), (9, "Digital In (Loop)"),
-    (10, "Current Out HART"), (11, "Current In HART (Ext)"), (12, "Current In HART (Loop)"),
+    (0, "High Impedance"),
+    (1, "Voltage Out"),
+    (2, "Current Out"),
+    (3, "Voltage In"),
+    (4, "Current In (Ext)"),
+    (5, "Current In (Loop)"),
+    (7, "Resistance"),
+    (8, "Digital In (Logic)"),
+    (9, "Digital In (Loop)"),
+    (10, "Current Out HART"),
+    (11, "Current In HART (Ext)"),
+    (12, "Current In HART (Loop)"),
 ];
 
 pub const ADC_RANGE_OPTIONS: &[(u8, &str, f32, f32)] = &[
@@ -144,35 +169,53 @@ pub const ADC_RANGE_OPTIONS: &[(u8, &str, f32, f32)] = &[
 ];
 
 pub const ADC_RATE_OPTIONS: &[(u8, &str)] = &[
-    (0, "10 SPS HR"), (1, "20 SPS"), (3, "20 SPS HR"),
-    (4, "200 SPS HR1"), (6, "200 SPS HR"), (8, "1.2 kSPS"),
-    (9, "1.2 kSPS HR"), (12, "4.8 kSPS"), (13, "9.6 kSPS"),
+    (0, "10 SPS HR"),
+    (1, "20 SPS"),
+    (3, "20 SPS HR"),
+    (4, "200 SPS HR1"),
+    (6, "200 SPS HR"),
+    (8, "1.2 kSPS"),
+    (9, "1.2 kSPS HR"),
+    (12, "4.8 kSPS"),
+    (13, "9.6 kSPS"),
 ];
 
 pub const ADC_MUX_OPTIONS: &[(u8, &str)] = &[
-    (0, "LF to AGND"), (1, "HF to LF (diff)"),
-    (2, "VSENSE- to AGND"), (3, "LF to VSENSE-"),
+    (0, "LF to AGND"),
+    (1, "HF to LF (diff)"),
+    (2, "VSENSE- to AGND"),
+    (3, "LF to VSENSE-"),
     (4, "AGND to AGND (self-test)"),
 ];
 
 pub const GPIO_MODE_OPTIONS: &[(u8, &str)] = &[
-    (0, "High Impedance"), (1, "Output"), (2, "Input"),
-    (3, "DIN Out"), (4, "DO Ext"),
+    (0, "High Impedance"),
+    (1, "Output"),
+    (2, "Input"),
+    (3, "DIN Out"),
+    (4, "DO Ext"),
 ];
 
 pub const DIAG_SOURCE_OPTIONS: &[(u8, &str)] = &[
-    (0, "AGND"), (1, "Temperature"), (2, "DVCC"), (3, "AVCC"),
-    (4, "LDO 1.8V"), (5, "AVDD HI"), (6, "AVDD LO"), (7, "AVSS"),
-    (8, "LVIN"), (9, "DO VDD"), (10, "VSENSE+"), (11, "VSENSE-"),
-    (12, "DO Current"), (13, "AVDD"),
+    (0, "AGND"),
+    (1, "Temperature"),
+    (2, "DVCC"),
+    (3, "AVCC"),
+    (4, "LDO 1.8V"),
+    (5, "AVDD HI"),
+    (6, "AVDD LO"),
+    (7, "AVSS"),
+    (8, "LVIN"),
+    (9, "DO VDD"),
+    (10, "VSENSE+"),
+    (11, "VSENSE-"),
+    (12, "DO Current"),
+    (13, "AVDD"),
 ];
 
 // RTD excitation current options (RTD_CURRENT bit: 0 = 500 µA, 1 = 1000 µA / 1 mA)
 // Per AD74416H datasheet Table 6 — stored as µA; used in RES_MEAS mode.
-pub const RTD_EXCITATION_OPTIONS: &[(u16, &str)] = &[
-    (500,  "500 µA"),
-    (1000, "1 mA"),
-];
+pub const RTD_EXCITATION_OPTIONS: &[(u16, &str)] = &[(500, "500 µA"), (1000, "1 mA")];
 
 /// Send a command with feedback — shows toast on success/failure.
 /// `label` is a human-readable description like "Set ADC range to ±12V".
@@ -185,7 +228,10 @@ pub fn invoke_with_feedback(cmd: &str, args: JsValue, label: &str) {
                 let result_str = js_sys::JSON::stringify(&result)
                     .map(|s| s.as_string().unwrap_or_default())
                     .unwrap_or_default();
-                if result_str.contains("error") || result_str.contains("Error") || result_str.contains("timeout") {
+                if result_str.contains("error")
+                    || result_str.contains("Error")
+                    || result_str.contains("timeout")
+                {
                     show_toast(&format!("Failed: {}", label), "err");
                     log(&format!("CMD FAIL [{}]: {}", cmd, result_str));
                 } else {
@@ -265,7 +311,8 @@ pub fn idac_interpolate_voltage(ch: &IdacChannelState, code: i8) -> f32 {
         }
         if code > pts[pts.len() - 1].code && pts.len() >= 2 {
             let last = pts.len() - 1;
-            let slope = (pts[last].voltage - pts[last - 1].voltage) / (pts[last].code - pts[last - 1].code) as f32;
+            let slope = (pts[last].voltage - pts[last - 1].voltage)
+                / (pts[last].code - pts[last - 1].code) as f32;
             return pts[last].voltage + slope * (code - pts[last].code) as f32;
         }
     }
@@ -282,7 +329,10 @@ pub struct IdacState {
 // IDAC invoke helpers
 pub fn send_idac_code(channel: u8, code: i8) {
     #[derive(Serialize)]
-    struct Args { channel: u8, code: i8 }
+    struct Args {
+        channel: u8,
+        code: i8,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { channel, code }).unwrap();
     let label = format!("Set IDAC{} code={}", channel, code);
     invoke_with_feedback("idac_set_code", args, &label);
@@ -290,7 +340,10 @@ pub fn send_idac_code(channel: u8, code: i8) {
 
 pub fn send_idac_voltage(channel: u8, voltage: f32) {
     #[derive(Serialize)]
-    struct Args { channel: u8, voltage: f32 }
+    struct Args {
+        channel: u8,
+        voltage: f32,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { channel, voltage }).unwrap();
     let label = format!("Set IDAC{} to {:.3}V", channel, voltage);
     invoke_with_feedback("idac_set_voltage", args, &label);
@@ -303,11 +356,21 @@ pub async fn fetch_idac_status() -> Option<IdacState> {
 
 pub fn send_pca_control(control: u8, on: bool) {
     #[derive(Serialize)]
-    struct Args { control: u8, on: bool }
+    struct Args {
+        control: u8,
+        on: bool,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { control, on }).unwrap();
     let name = match control {
-        0 => "VADJ1", 1 => "VADJ2", 2 => "+/-15V", 3 => "MUX",
-        4 => "USB Hub", 5 => "EFuse1", 6 => "EFuse2", 7 => "EFuse3", 8 => "EFuse4",
+        0 => "VADJ1",
+        1 => "VADJ2",
+        2 => "+/-15V",
+        3 => "MUX",
+        4 => "USB Hub",
+        5 => "EFuse1",
+        6 => "EFuse2",
+        7 => "EFuse3",
+        8 => "EFuse4",
         _ => "PCA",
     };
     let label = format!("{} {}", if on { "Enable" } else { "Disable" }, name);
@@ -318,9 +381,15 @@ pub fn send_set_rtd_config(channel: u8, excitation_ua: u16) {
     // current: 0 = 500 µA, 1 = 1000 µA / 1 mA (maps to RTD_CURRENT bit)
     let current: u8 = if excitation_ua >= 1000 { 1 } else { 0 };
     #[derive(Serialize)]
-    struct Args { channel: u8, current: u8 }
+    struct Args {
+        channel: u8,
+        current: u8,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { channel, current }).unwrap();
-    let label = format!("Set CH {} RTD excitation: {} µA", CH_NAMES[channel as usize], excitation_ua);
+    let label = format!(
+        "Set CH {} RTD excitation: {} µA",
+        CH_NAMES[channel as usize], excitation_ua
+    );
     invoke_with_feedback("set_rtd_config", args, &label);
 }
 
@@ -356,7 +425,9 @@ pub async fn fetch_usbpd_status() -> Option<UsbPdState> {
 
 pub fn send_usbpd_select_pdo(voltage: u8) {
     #[derive(Serialize)]
-    struct Args { voltage: u8 }
+    struct Args {
+        voltage: u8,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { voltage }).unwrap();
     let label = format!("Select USB PD {}V", voltage);
     invoke_with_feedback("usbpd_select_pdo", args, &label);
@@ -433,9 +504,22 @@ pub async fn fetch_hat_status() -> Option<HatStatus> {
 
 pub fn send_hat_set_pin(pin: u8, function: u8) {
     #[derive(Serialize)]
-    struct Args { pin: u8, function: u8 }
+    struct Args {
+        pin: u8,
+        function: u8,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { pin, function }).unwrap();
-    let func_names = ["Disconnected", "SWDIO", "SWCLK", "TRACE1", "TRACE2", "GPIO1", "GPIO2", "GPIO3", "GPIO4"];
+    let func_names = [
+        "Disconnected",
+        "SWDIO",
+        "SWCLK",
+        "TRACE1",
+        "TRACE2",
+        "GPIO1",
+        "GPIO2",
+        "GPIO3",
+        "GPIO4",
+    ];
     let name = func_names.get(function as usize).unwrap_or(&"?");
     let label = format!("EXT_{} -> {}", pin + 1, name);
     invoke_with_feedback("hat_set_pin", args, &label);
@@ -447,7 +531,10 @@ pub fn send_hat_reset() {
 
 pub fn send_hat_set_power(connector: u8, enable: bool) {
     #[derive(Serialize)]
-    struct Args { connector: u8, enable: bool }
+    struct Args {
+        connector: u8,
+        enable: bool,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { connector, enable }).unwrap();
     let name = if connector == 0 { "A" } else { "B" };
     let label = format!("Connector {} {}", name, if enable { "ON" } else { "OFF" });
@@ -456,7 +543,9 @@ pub fn send_hat_set_power(connector: u8, enable: bool) {
 
 pub fn send_hat_set_io_voltage(voltage_mv: u16) {
     #[derive(Serialize)]
-    struct Args { voltage_mv: u16 }
+    struct Args {
+        voltage_mv: u16,
+    }
     let args = serde_wasm_bindgen::to_value(&Args { voltage_mv }).unwrap();
     let label = format!("I/O Voltage: {:.1}V", voltage_mv as f32 / 1000.0);
     invoke_with_feedback("hat_set_io_voltage", args, &label);
@@ -464,10 +553,20 @@ pub fn send_hat_set_io_voltage(voltage_mv: u16) {
 
 pub fn send_hat_setup_swd(target_voltage_mv: u16, connector: u8) {
     #[derive(Serialize)]
-    struct Args { target_voltage_mv: u16, connector: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { target_voltage_mv, connector }).unwrap();
-    let label = format!("SWD Setup: {:.1}V on {}", target_voltage_mv as f32 / 1000.0,
-                        if connector == 0 { "A" } else { "B" });
+    struct Args {
+        target_voltage_mv: u16,
+        connector: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        target_voltage_mv,
+        connector,
+    })
+    .unwrap();
+    let label = format!(
+        "SWD Setup: {:.1}V on {}",
+        target_voltage_mv as f32 / 1000.0,
+        if connector == 0 { "A" } else { "B" }
+    );
     invoke_with_feedback("hat_setup_swd", args, &label);
 }
 
@@ -506,7 +605,41 @@ pub struct LaStreamRuntimeStatus {
     pub chunk_count: u64,
     pub sequence_mismatches: u32,
     pub invalid_frames: u32,
+    pub stop_reason: Option<String>,
     pub last_error: Option<String>,
+}
+
+pub fn summarize_la_stream_status(status: &LaStreamRuntimeStatus) -> String {
+    if let Some(err) = &status.last_error {
+        return format!(
+            "Stream error: {} ({} B, {} packets)",
+            err, status.total_bytes, status.chunk_count
+        );
+    }
+    if let Some(reason) = &status.stop_reason {
+        if reason != "none" {
+            return format!(
+                "Stream stopped: {} ({} B, {} packets)",
+                reason, status.total_bytes, status.chunk_count
+            );
+        }
+    }
+    if status.active {
+        return format!(
+            "Streaming: {} B, {} packets, {} seq errors, {} invalid packets",
+            status.total_bytes,
+            status.chunk_count,
+            status.sequence_mismatches,
+            status.invalid_frames
+        );
+    }
+    if status.total_bytes > 0 || status.chunk_count > 0 {
+        return format!(
+            "Last stream: {} B, {} packets",
+            status.total_bytes, status.chunk_count
+        );
+    }
+    "Stream idle".to_string()
 }
 
 pub async fn la_get_view(start: u64, end: u64, max_points: Option<usize>) -> Option<LaViewData> {
@@ -523,14 +656,19 @@ pub async fn la_get_view(start: u64, end: u64, max_points: Option<usize>) -> Opt
         start_sample: start,
         end_sample: end,
         max_points,
-    }).unwrap();
+    })
+    .unwrap();
     let result = invoke("la_get_view", args).await;
-    serde_wasm_bindgen::from_value::<Option<LaViewData>>(result).ok().flatten()
+    serde_wasm_bindgen::from_value::<Option<LaViewData>>(result)
+        .ok()
+        .flatten()
 }
 
 pub async fn la_get_capture_info() -> Option<LaCaptureInfo> {
     let result = invoke("la_get_capture_info", JsValue::NULL).await;
-    serde_wasm_bindgen::from_value::<Option<LaCaptureInfo>>(result).ok().flatten()
+    serde_wasm_bindgen::from_value::<Option<LaCaptureInfo>>(result)
+        .ok()
+        .flatten()
 }
 
 pub async fn la_invoke_configure(channels: u8, rate_hz: u32, depth: u32, rle_enabled: bool) {
@@ -543,41 +681,75 @@ pub async fn la_invoke_configure(channels: u8, rate_hz: u32, depth: u32, rle_ena
         #[serde(rename = "rleEnabled")]
         rle_enabled: bool,
     }
-    let args = serde_wasm_bindgen::to_value(&Args { channels, rate_hz, depth, rle_enabled }).unwrap();
+    let args = serde_wasm_bindgen::to_value(&Args {
+        channels,
+        rate_hz,
+        depth,
+        rle_enabled,
+    })
+    .unwrap();
     let _ = try_invoke("la_configure", args).await;
 }
 
-pub async fn la_invoke_arm() { let _ = try_invoke("la_arm", JsValue::NULL).await; }
+pub async fn la_invoke_arm() {
+    let _ = try_invoke("la_arm", JsValue::NULL).await;
+}
 
 pub async fn la_export_vcd(path: &str) {
     #[derive(Serialize)]
-    struct Args { path: String }
-    let args = serde_wasm_bindgen::to_value(&Args { path: path.to_string() }).unwrap();
+    struct Args {
+        path: String,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        path: path.to_string(),
+    })
+    .unwrap();
     let _ = invoke("la_export_vcd_file", args).await;
 }
 
 pub async fn la_export_json(path: &str) {
     #[derive(Serialize)]
-    struct Args { path: String }
-    let args = serde_wasm_bindgen::to_value(&Args { path: path.to_string() }).unwrap();
+    struct Args {
+        path: String,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        path: path.to_string(),
+    })
+    .unwrap();
     let _ = invoke("la_export_json", args).await;
 }
 
 pub async fn la_import_json_file(path: &str) -> Option<LaCaptureInfo> {
     #[derive(Serialize)]
-    struct Args { path: String }
-    let args = serde_wasm_bindgen::to_value(&Args { path: path.to_string() }).unwrap();
+    struct Args {
+        path: String,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        path: path.to_string(),
+    })
+    .unwrap();
     let result = invoke("la_import_json", args).await;
     serde_wasm_bindgen::from_value(result).ok()
 }
-pub async fn la_invoke_force() { let _ = try_invoke("la_force", JsValue::NULL).await; }
-pub async fn la_invoke_stop() { let _ = try_invoke("la_stop", JsValue::NULL).await; }
+pub async fn la_invoke_force() {
+    let _ = try_invoke("la_force", JsValue::NULL).await;
+}
+pub async fn la_invoke_stop() {
+    let _ = try_invoke("la_stop", JsValue::NULL).await;
+}
 
-pub async fn la_decode_uart(tx_channel: u8, rx_channel: Option<u8>, baud_rate: u32, start_sample: u64, end_sample: u64) -> Vec<serde_json::Value> {
+pub async fn la_decode_uart(
+    tx_channel: u8,
+    rx_channel: Option<u8>,
+    baud_rate: u32,
+    start_sample: u64,
+    end_sample: u64,
+) -> Vec<serde_json::Value> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct UartCfg {
-        #[serde(rename = "type")] dtype: &'static str,
+        #[serde(rename = "type")]
+        dtype: &'static str,
         tx_channel: u8,
         rx_channel: Option<u8>,
         baud_rate: u32,
@@ -588,51 +760,114 @@ pub async fn la_decode_uart(tx_channel: u8, rx_channel: Option<u8>, baud_rate: u
     }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { config: UartCfg, start_sample: u64, end_sample: u64 }
+    struct Args {
+        config: UartCfg,
+        start_sample: u64,
+        end_sample: u64,
+    }
     let args = serde_wasm_bindgen::to_value(&Args {
-        config: UartCfg { dtype: "uart", tx_channel, rx_channel, baud_rate, data_bits: 8, parity: "none", stop_bits: 1.0, idle_high: true },
-        start_sample, end_sample,
-    }).unwrap();
+        config: UartCfg {
+            dtype: "uart",
+            tx_channel,
+            rx_channel,
+            baud_rate,
+            data_bits: 8,
+            parity: "none",
+            stop_bits: 1.0,
+            idle_high: true,
+        },
+        start_sample,
+        end_sample,
+    })
+    .unwrap();
     let result = invoke("la_decode", args).await;
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
-pub async fn la_decode_i2c(sda_channel: u8, scl_channel: u8, start_sample: u64, end_sample: u64) -> Vec<serde_json::Value> {
+pub async fn la_decode_i2c(
+    sda_channel: u8,
+    scl_channel: u8,
+    start_sample: u64,
+    end_sample: u64,
+) -> Vec<serde_json::Value> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct I2cCfg { #[serde(rename = "type")] dtype: &'static str, sda_channel: u8, scl_channel: u8 }
+    struct I2cCfg {
+        #[serde(rename = "type")]
+        dtype: &'static str,
+        sda_channel: u8,
+        scl_channel: u8,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { config: I2cCfg, start_sample: u64, end_sample: u64 }
+    struct Args {
+        config: I2cCfg,
+        start_sample: u64,
+        end_sample: u64,
+    }
     let args = serde_wasm_bindgen::to_value(&Args {
-        config: I2cCfg { dtype: "i2c", sda_channel, scl_channel },
-        start_sample, end_sample,
-    }).unwrap();
+        config: I2cCfg {
+            dtype: "i2c",
+            sda_channel,
+            scl_channel,
+        },
+        start_sample,
+        end_sample,
+    })
+    .unwrap();
     let result = invoke("la_decode", args).await;
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
 pub async fn la_decode_spi(
-    mosi: u8, miso: u8, clk: u8, cs: u8, cpol: u8, cpha: u8,
-    start_sample: u64, end_sample: u64,
+    mosi: u8,
+    miso: u8,
+    clk: u8,
+    cs: u8,
+    cpol: u8,
+    cpha: u8,
+    start_sample: u64,
+    end_sample: u64,
 ) -> Vec<serde_json::Value> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct SpiCfg {
-        #[serde(rename = "type")] dtype: &'static str,
-        mosi_channel: u8, miso_channel: u8, sclk_channel: u8, cs_channel: u8,
-        cpol: u8, cpha: u8, bit_order: &'static str, word_size: u8, cs_active_low: bool,
+        #[serde(rename = "type")]
+        dtype: &'static str,
+        mosi_channel: u8,
+        miso_channel: u8,
+        sclk_channel: u8,
+        cs_channel: u8,
+        cpol: u8,
+        cpha: u8,
+        bit_order: &'static str,
+        word_size: u8,
+        cs_active_low: bool,
     }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { config: SpiCfg, start_sample: u64, end_sample: u64 }
+    struct Args {
+        config: SpiCfg,
+        start_sample: u64,
+        end_sample: u64,
+    }
     let args = serde_wasm_bindgen::to_value(&Args {
         config: SpiCfg {
-            dtype: "spi", mosi_channel: mosi, miso_channel: miso, sclk_channel: clk,
-            cs_channel: cs, cpol, cpha, bit_order: "msb", word_size: 8, cs_active_low: true,
+            dtype: "spi",
+            mosi_channel: mosi,
+            miso_channel: miso,
+            sclk_channel: clk,
+            cs_channel: cs,
+            cpol,
+            cpha,
+            bit_order: "msb",
+            word_size: 8,
+            cs_active_low: true,
         },
-        start_sample, end_sample,
-    }).unwrap();
+        start_sample,
+        end_sample,
+    })
+    .unwrap();
     let result = invoke("la_decode", args).await;
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
@@ -640,29 +875,80 @@ pub async fn la_decode_spi(
 pub async fn la_delete_range(start: u64, end: u64) -> Option<LaCaptureInfo> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { start_sample: u64, end_sample: u64 }
-    let args = serde_wasm_bindgen::to_value(&Args { start_sample: start, end_sample: end }).unwrap();
+    struct Args {
+        start_sample: u64,
+        end_sample: u64,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        start_sample: start,
+        end_sample: end,
+    })
+    .unwrap();
     let result = invoke("la_delete_range", args).await;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
 /// Single stream cycle: stop → configure → arm → poll → read (USB bulk or UART fallback)
-pub async fn la_stream_cycle(channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8) -> Option<LaCaptureInfo> {
+pub async fn la_stream_cycle(
+    channels: u8,
+    sample_rate_hz: u32,
+    depth: u32,
+    rle_enabled: bool,
+    trigger_type: u8,
+    trigger_channel: u8,
+) -> Option<LaCaptureInfo> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz, depth, rle_enabled, trigger_type, trigger_channel }).unwrap();
+    struct Args {
+        channels: u8,
+        sample_rate_hz: u32,
+        depth: u32,
+        rle_enabled: bool,
+        trigger_type: u8,
+        trigger_channel: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        channels,
+        sample_rate_hz,
+        depth,
+        rle_enabled,
+        trigger_type,
+        trigger_channel,
+    })
+    .unwrap();
     let result = try_invoke("la_stream_cycle", args).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
 /// Start gapless USB streaming — configures + starts continuous DMA→USB stream.
 /// Returns immediately; data is appended to the store in background.
-pub async fn la_stream_usb_start(channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8) -> bool {
+pub async fn la_stream_usb_start(
+    channels: u8,
+    sample_rate_hz: u32,
+    depth: u32,
+    rle_enabled: bool,
+    trigger_type: u8,
+    trigger_channel: u8,
+) -> bool {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { channels: u8, sample_rate_hz: u32, depth: u32, rle_enabled: bool, trigger_type: u8, trigger_channel: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { channels, sample_rate_hz, depth, rle_enabled, trigger_type, trigger_channel }).unwrap();
+    struct Args {
+        channels: u8,
+        sample_rate_hz: u32,
+        depth: u32,
+        rle_enabled: bool,
+        trigger_type: u8,
+        trigger_channel: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        channels,
+        sample_rate_hz,
+        depth,
+        rle_enabled,
+        trigger_type,
+        trigger_channel,
+    })
+    .unwrap();
     // try_invoke returns None for both null (Ok(())) and error — use JS that distinguishes
     let promise = js_sys::Function::new_with_args(
         "cmd, args",
@@ -699,6 +985,57 @@ pub async fn la_stream_usb_status() -> Option<LaStreamRuntimeStatus> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{summarize_la_stream_status, LaStreamRuntimeStatus};
+
+    #[test]
+    fn summarizes_active_stream_status() {
+        let status = LaStreamRuntimeStatus {
+            active: true,
+            total_bytes: 4096,
+            chunk_count: 32,
+            sequence_mismatches: 0,
+            invalid_frames: 0,
+            stop_reason: None,
+            last_error: None,
+        };
+        let summary = summarize_la_stream_status(&status);
+        assert!(summary.contains("Streaming: 4096 B"));
+        assert!(summary.contains("32 packets"));
+    }
+
+    #[test]
+    fn summarizes_stopped_stream_reason() {
+        let status = LaStreamRuntimeStatus {
+            active: false,
+            total_bytes: 8192,
+            chunk_count: 64,
+            sequence_mismatches: 0,
+            invalid_frames: 0,
+            stop_reason: Some("dma_overrun".to_string()),
+            last_error: None,
+        };
+        let summary = summarize_la_stream_status(&status);
+        assert!(summary.contains("Stream stopped: dma_overrun"));
+    }
+
+    #[test]
+    fn summarizes_stream_error() {
+        let status = LaStreamRuntimeStatus {
+            active: false,
+            total_bytes: 120,
+            chunk_count: 2,
+            sequence_mismatches: 1,
+            invalid_frames: 0,
+            stop_reason: Some("sequence_mismatch".to_string()),
+            last_error: Some("sequence mismatch".to_string()),
+        };
+        let summary = summarize_la_stream_status(&status);
+        assert!(summary.contains("Stream error: sequence mismatch"));
+    }
+}
+
 pub async fn la_invoke_set_trigger(trigger_type: u8, channel: u8) {
     #[derive(Serialize)]
     struct Args {
@@ -706,7 +1043,11 @@ pub async fn la_invoke_set_trigger(trigger_type: u8, channel: u8) {
         trigger_type: u8,
         channel: u8,
     }
-    let args = serde_wasm_bindgen::to_value(&Args { trigger_type, channel }).unwrap();
+    let args = serde_wasm_bindgen::to_value(&Args {
+        trigger_type,
+        channel,
+    })
+    .unwrap();
     let _ = try_invoke("la_set_trigger", args).await;
 }
 
@@ -766,8 +1107,13 @@ pub async fn fetch_firmware_info() -> Option<FirmwareInfo> {
 pub async fn upload_firmware(path: &str) -> Result<String, String> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { file_path: String }
-    let args = serde_wasm_bindgen::to_value(&Args { file_path: path.to_string() }).unwrap();
+    struct Args {
+        file_path: String,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        file_path: path.to_string(),
+    })
+    .unwrap();
     let result = invoke("ota_upload_firmware", args).await;
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }

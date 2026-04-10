@@ -8,43 +8,19 @@
 //   - Manage LA state
 // =============================================================================
 
-use crate::la_usb::{decode_capture, hat_usb_present, LaCaptureData, LaUsbConnection};
-use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-use tauri::State;
-
-/// Find the RP2040 BugBuster HAT CDC serial port.
-/// Looks for a serial port associated with VID=0x2E8A, PID=0x000C.
-fn find_rp2040_cdc_port() -> Option<String> {
-    let ports = serialport::available_ports().ok()?;
-    for port in &ports {
-        if let serialport::SerialPortType::UsbPort(usb_info) = &port.port_type {
-            if usb_info.vid == 0x2E8A && usb_info.pid == 0x000C {
-                log::info!(
-                    "[find_rp2040_cdc] Found: {} (VID={:04X} PID={:04X})",
-                    port.port_name,
-                    usb_info.vid,
-                    usb_info.pid
-                );
-                // The CDC data interface (interface 2) is the one we want
-                // On macOS this shows up as a cu.usbmodem port
-                return Some(port.port_name.clone());
-            }
-        }
-    }
-    // Fallback: look for known port patterns
-    for port in &ports {
-        if port.port_name.contains("usbmodem1302") {
-            return Some(port.port_name.clone());
-        }
-    }
-    None
-}
 use crate::bbp;
 use crate::connection_manager::ConnectionManager;
 use crate::la_decoders::{self, Annotation, DecoderConfig};
 use crate::la_store::{LaStore, LaViewData};
+use crate::la_transport::{LaTransport, LockedLaTransport, StreamStopReason};
+use crate::la_usb::{
+    decode_capture, hat_usb_present, LaCaptureData, LaStreamPacket, LaStreamPacketKind,
+    LaUsbConnection, STREAM_INFO_START_REJECTED,
+};
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::State;
 
 type CmdResult<T> = Result<T, String>;
 fn map_err(e: impl std::fmt::Display) -> String {
@@ -59,75 +35,189 @@ pub struct LaStreamRuntimeStatus {
     pub chunk_count: u64,
     pub sequence_mismatches: u32,
     pub invalid_frames: u32,
+    pub stop_reason: Option<String>,
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-struct StreamParseBatch {
-    consumed: usize,
-    next_expected_seq: u8,
-    chunk_count: u64,
-    payload_bytes: u64,
+fn stream_stop_reason_name(reason: u8) -> &'static str {
+    match reason {
+        0 => "none",
+        1 => "host_stop",
+        2 => "usb_short_write",
+        3 => "dma_overrun",
+        STREAM_INFO_START_REJECTED => "start_rejected",
+        _ => "unknown",
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum StreamParseError {
-    InvalidLength(usize),
-    SequenceMismatch { got: u8, expected: u8, dropped: u8 },
+enum StreamPacketOutcome {
+    Continue,
+    Stop,
 }
 
-fn consume_stream_frames<F>(
-    ring_buf: &[u8],
-    expected_seq: u8,
-    mut on_frame: F,
-) -> Result<StreamParseBatch, StreamParseError>
+fn apply_stream_packet<F>(
+    packet: &LaStreamPacket,
+    expected_seq: &mut u8,
+    status: &mut LaStreamRuntimeStatus,
+    mut on_payload: F,
+) -> Result<StreamPacketOutcome, String>
 where
     F: FnMut(&[u8]),
 {
-    let mut consumed = 0usize;
-    let mut next_expected_seq = expected_seq;
-    let mut chunk_count = 0u64;
-    let mut payload_bytes = 0u64;
-
-    while ring_buf.len().saturating_sub(consumed) >= 2 {
-        let seq = ring_buf[consumed];
-        let len = ring_buf[consumed + 1] as usize;
-        if len > 62 {
-            return Err(StreamParseError::InvalidLength(len));
+    match packet.kind {
+        LaStreamPacketKind::Start => {
+            status.active = true;
+            status.stop_reason = None;
+            status.last_error = None;
+            Ok(StreamPacketOutcome::Continue)
         }
+        LaStreamPacketKind::Data => {
+            if packet.seq != *expected_seq {
+                let dropped = if packet.seq > *expected_seq {
+                    packet.seq - *expected_seq
+                } else {
+                    (255 - *expected_seq) + packet.seq + 1
+                };
+                status.active = false;
+                status.sequence_mismatches += 1;
+                status.stop_reason = Some("sequence_mismatch".to_string());
+                status.last_error = Some(format!(
+                    "sequence mismatch: got {}, expected {} (~{} packets dropped)",
+                    packet.seq, *expected_seq, dropped
+                ));
+                return Err(status.last_error.clone().unwrap());
+            }
 
-        let frame_len = 2 + len;
-        if ring_buf.len() - consumed < frame_len {
-            break;
+            *expected_seq = expected_seq.wrapping_add(1);
+            status.chunk_count += 1;
+            status.total_bytes += packet.payload.len() as u64;
+            on_payload(&packet.payload);
+            Ok(StreamPacketOutcome::Continue)
         }
-
-        if seq != next_expected_seq {
-            let dropped = if seq > next_expected_seq {
-                seq - next_expected_seq
-            } else {
-                (255 - next_expected_seq) + seq + 1
-            };
-            return Err(StreamParseError::SequenceMismatch {
-                got: seq,
-                expected: next_expected_seq,
-                dropped,
-            });
+        LaStreamPacketKind::Stop => {
+            status.active = false;
+            status.stop_reason = Some(stream_stop_reason_name(packet.info).to_string());
+            Ok(StreamPacketOutcome::Stop)
         }
+        LaStreamPacketKind::Error => {
+            status.active = false;
+            status.invalid_frames += 1;
+            status.stop_reason = Some(stream_stop_reason_name(packet.info).to_string());
+            status.last_error = Some(format!(
+                "firmware reported stream error: {}",
+                stream_stop_reason_name(packet.info)
+            ));
+            Err(status.last_error.clone().unwrap())
+        }
+    }
+}
 
-        let payload = &ring_buf[consumed + 2..consumed + frame_len];
-        on_frame(payload);
-        consumed += frame_len;
-        next_expected_seq = next_expected_seq.wrapping_add(1);
-        chunk_count += 1;
-        payload_bytes += len as u64;
+/// Core streaming loop — runs synchronously in a `spawn_blocking` context.
+///
+/// Sends STREAM_CMD_START, then reads packets until the device sends STOP, a USB
+/// error occurs, or `running` is cleared by the host. On every exit path the
+/// function guarantees `running = false` and `status.active = false`.
+pub(crate) fn run_stream_loop(
+    transport: &mut impl LaTransport,
+    running: &std::sync::atomic::AtomicBool,
+    store: &std::sync::Mutex<Option<crate::la_store::LaStore>>,
+    status: &std::sync::Mutex<LaStreamRuntimeStatus>,
+    stream_seq: &std::sync::atomic::AtomicU8,
+) -> StreamStopReason {
+    // Teardown helper — must run on every return path.
+    let teardown = |running: &std::sync::atomic::AtomicBool,
+                    status: &std::sync::Mutex<LaStreamRuntimeStatus>| {
+        running.store(false, Ordering::SeqCst);
+        if let Ok(mut s) = status.lock() {
+            s.active = false;
+        }
+    };
+
+    // Send STREAM_CMD_START (0x01).
+    if let Err(e) = transport.send_command(0x01) {
+        teardown(running, status);
+        return StreamStopReason::UsbError(format!("cannot send stream start: {e}"));
     }
 
-    Ok(StreamParseBatch {
-        consumed,
-        next_expected_seq,
-        chunk_count,
-        payload_bytes,
-    })
+    log::info!("[run_stream_loop] Streaming active");
+    let t0 = std::time::Instant::now();
+    let mut expected_seq = 0u8;
+    stream_seq.store(expected_seq, Ordering::SeqCst);
+
+    while running.load(Ordering::SeqCst) {
+        let packet = match transport.read_packet() {
+            Ok(p) => p,
+            Err(e) => {
+                teardown(running, status);
+                return StreamStopReason::UsbError(e.to_string());
+            }
+        };
+
+        let mut status_guard = match status.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("[run_stream_loop] cannot lock stream status: {e}");
+                teardown(running, status);
+                return StreamStopReason::UsbError(format!("status mutex poisoned: {e}"));
+            }
+        };
+
+        match apply_stream_packet(&packet, &mut expected_seq, &mut status_guard, |payload| {
+            if let Ok(mut sg) = store.lock() {
+                if let Some(ref mut s) = *sg {
+                    s.append_raw(payload);
+                }
+            }
+        }) {
+            Ok(StreamPacketOutcome::Continue) => {
+                stream_seq.store(expected_seq, Ordering::SeqCst);
+                if status_guard.chunk_count > 0 && status_guard.chunk_count % 1000 == 0 {
+                    log::info!(
+                        "[run_stream_loop] {} packets, {}B ({:.0} KB/s)",
+                        status_guard.chunk_count,
+                        status_guard.total_bytes,
+                        status_guard.total_bytes as f64
+                            / t0.elapsed().as_secs_f64().max(0.001)
+                            / 1024.0
+                    );
+                }
+                drop(status_guard);
+            }
+            Ok(StreamPacketOutcome::Stop) => {
+                drop(status_guard);
+                log::info!(
+                    "[run_stream_loop] Stopped after {:.2}s",
+                    t0.elapsed().as_secs_f64()
+                );
+                teardown(running, status);
+                return StreamStopReason::Normal;
+            }
+            Err(err) => {
+                // Sequence mismatch or firmware error — status fields already set by apply_stream_packet.
+                let reason = if err.contains("sequence mismatch") {
+                    // Parse expected/got from the error message isn't reliable; use the stored expected.
+                    let got = packet.seq;
+                    let expected = expected_seq;
+                    StreamStopReason::SeqMismatch { expected, got }
+                } else {
+                    StreamStopReason::UsbError(err)
+                };
+                drop(status_guard);
+                log::error!("[run_stream_loop] {reason:?}");
+                teardown(running, status);
+                return reason;
+            }
+        }
+    }
+
+    // running was cleared externally (host stop).
+    log::info!(
+        "[run_stream_loop] Host-stopped after {:.2}s",
+        t0.elapsed().as_secs_f64()
+    );
+    teardown(running, status);
+    StreamStopReason::HostStopped
 }
 
 /// Shared LA USB connection state
@@ -139,9 +229,9 @@ pub struct LaState {
     pub stream_running: Arc<AtomicBool>,
     /// Join handle for the background streaming task, so we can wait for it to finish
     pub stream_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    /// Next expected sequence number for framed stream chunks
+    /// Next expected data-packet sequence number for the vendor-bulk live stream
     pub stream_seq: Arc<AtomicU8>,
-    /// Runtime health and counters for the current/last CDC live stream
+    /// Runtime health and counters for the current/last bulk live stream
     pub stream_status: Arc<Mutex<LaStreamRuntimeStatus>>,
 }
 
@@ -258,14 +348,7 @@ pub async fn la_get_status(
     mgr: State<'_, ConnectionManager>,
     la: State<'_, LaState>,
 ) -> CmdResult<LaStatusResponse> {
-    let state_names = ["idle", "armed", "capturing", "done", "error"];
-    let stream_stop_reason_name = |reason: u8| match reason {
-        0 => "none",
-        1 => "host_stop",
-        2 => "usb_short_write",
-        3 => "dma_overrun",
-        _ => "unknown",
-    };
+    let state_names = ["idle", "armed", "capturing", "done", "streaming", "error"];
 
     let rsp = mgr
         .send_command(bbp::CMD_HAT_LA_STATUS, &[])
@@ -815,17 +898,12 @@ pub async fn la_stream_usb(
     la: State<'_, LaState>,
 ) -> CmdResult<()> {
     log::info!(
-        "[la_stream_usb] Starting gapless CDC stream: ch={} rate={} depth={}",
+        "[la_stream_usb] Starting gapless bulk stream: ch={} rate={} depth={}",
         channels,
         sample_rate_hz,
         depth
     );
 
-    // Stop any previous streaming and wait for the background task to fully exit.
-    // The task holds the CDC serial port open; we must wait for it to release the port
-    // before we can open it again. A 50ms sleep is not enough — port.read() has a 2s
-    // timeout, so the old task can stay alive (and send a stray 0x00 stop command) for
-    // up to 2s after we set stream_running=false.
     la.stream_running.store(false, Ordering::SeqCst);
     {
         let old_task = la.stream_task.lock().map_err(map_err)?.take();
@@ -834,21 +912,9 @@ pub async fn la_stream_usb(
         }
     }
 
-    // Disconnect USB vendor interface if held (it blocks the CDC serial port on macOS)
-    {
-        let mut usb = la.usb.lock().map_err(map_err)?;
-        if usb.is_connected() {
-            usb.disconnect();
-            log::info!("[la_stream_usb] Released USB vendor interface");
-        }
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    // Stop previous capture on RP2040
     let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-    // Configure via BBP (ESP32 → UART → RP2040)
     let mut cfg_buf = vec![channels];
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
     cfg_buf.extend_from_slice(&depth.to_le_bytes());
@@ -859,10 +925,8 @@ pub async fn la_stream_usb(
     mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel])
         .await
         .map_err(map_err)?;
-    // Wait for RP2040 to finish processing configure (goes through ESP32 → UART)
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Initialize store
     {
         let mut store_guard = la.store.lock().map_err(map_err)?;
         *store_guard = Some(LaStore::from_raw(&[], channels, sample_rate_hz));
@@ -872,10 +936,12 @@ pub async fn la_stream_usb(
         *status = LaStreamRuntimeStatus::default();
     }
 
-    // Find RP2040 CDC serial port for direct streaming
-    let cdc_port =
-        find_rp2040_cdc_port().ok_or_else(|| "RP2040 CDC serial port not found".to_string())?;
-    log::info!("[la_stream_usb] Found RP2040 CDC: {}", cdc_port);
+    {
+        let mut usb = la.usb.lock().map_err(map_err)?;
+        if !usb.is_connected() {
+            usb.connect().map_err(map_err)?;
+        }
+    }
 
     la.stream_running.store(true, Ordering::SeqCst);
     let store_mutex = la.store.clone();
@@ -883,212 +949,14 @@ pub async fn la_stream_usb(
     let task_slot = la.stream_task.clone();
     let stream_seq = la.stream_seq.clone();
     let stream_status = la.stream_status.clone();
+    let usb_mutex = la.usb.clone();
 
     let handle = tokio::task::spawn_blocking(move || {
-        // Open CDC serial port
-        let mut port = match serialport::new(&cdc_port, 115200)
-            .timeout(std::time::Duration::from_millis(200))
-            .open()
-        {
-            Ok(p) => p,
-            Err(e) => {
-                log::error!("[la_stream_usb] Cannot open {}: {}", cdc_port, e);
-                running.store(false, Ordering::SeqCst);
-                if let Ok(mut status) = stream_status.lock() {
-                    status.active = false;
-                    status.last_error = Some(format!("cannot open {}: {}", cdc_port, e));
-                }
-                return;
-            }
-        };
-        // Assert DTR so tud_cdc_connected() returns true on the RP2040.
-        // Without DTR, the firmware's cdc_write_reply() is a no-op and
-        // the handshake ("START\n") is never sent.
-        if let Err(e) = port.write_data_terminal_ready(true) {
-            log::warn!("[la_stream_usb] Could not set DTR: {}", e);
-        }
-        log::info!("[la_stream_usb] Opened CDC port");
-
-        // Drain any stale data from previous session
-        {
-            let mut drain = [0u8; 4096];
-            loop {
-                match port.read(&mut drain) {
-                    Ok(n) if n > 0 => {
-                        log::info!("[la_stream_usb] Drained {} stale bytes", n);
-                        continue;
-                    }
-                    _ => break,
-                }
-            }
-        }
-
-        // Send start with retry
-        let mut started = false;
-        for attempt in 0..3 {
-            port.write_all(&[0x01]).ok();
-            port.flush().ok();
-            let mut resp = [0u8; 64];
-            match port.read(&mut resp) {
-                Ok(n) if n > 0 => {
-                    let s = String::from_utf8_lossy(&resp[..n]);
-                    log::info!("[la_stream_usb] Attempt {}: {:?}", attempt, s.trim());
-                    if s.contains("START") {
-                        started = true;
-                        break;
-                    }
-                    // Got ERR — stop and retry
-                    port.write_all(&[0x00]).ok();
-                    port.flush().ok();
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                }
-                _ => {
-                    log::warn!("[la_stream_usb] Attempt {}: no response", attempt);
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                }
-            }
-        }
-        if !started {
-            log::error!("[la_stream_usb] Failed to start stream");
-            running.store(false, Ordering::SeqCst);
-            if let Ok(mut status) = stream_status.lock() {
-                status.active = false;
-                status.last_error = Some("RP2040 did not acknowledge START".to_string());
-            }
-            return;
-        }
-
-        // Read loop
-        log::info!("[la_stream_usb] Streaming active");
-        let mut total_bytes: u64 = 0;
-        let mut chunk_count: u64 = 0;
-        let t0 = std::time::Instant::now();
-        let mut last_progress = std::time::Instant::now();
-        let mut buf = vec![0u8; 8192];
-        let mut ring_buf = Vec::with_capacity(16384);
-        let mut expected_seq = 0u8;
-
-        // Reset sequence for new stream
-        stream_seq.store(0, Ordering::SeqCst);
-        if let Ok(mut status) = stream_status.lock() {
-            status.active = true;
-        }
-
-        // Send stream start command (0x01) via CDC
-        while running.load(Ordering::SeqCst) {
-            let n = match port.read(&mut buf) {
-                Ok(0) => {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    continue;
-                }
-                Ok(n) => n,
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    if last_progress.elapsed() > std::time::Duration::from_secs(1) {
-                        running.store(false, Ordering::SeqCst);
-                        if let Ok(mut status) = stream_status.lock() {
-                            status.active = false;
-                            status.last_error =
-                                Some("stream stalled: no CDC data for >1s".to_string());
-                        }
-                        log::error!("[la_stream_usb] stream stalled: no CDC data for >1s");
-                        break;
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    log::warn!("[la_stream_usb] Read error: {}", e);
-                    running.store(false, Ordering::SeqCst);
-                    if let Ok(mut status) = stream_status.lock() {
-                        status.active = false;
-                        status.last_error = Some(format!("CDC read error: {}", e));
-                    }
-                    break;
-                }
-            };
-
-            ring_buf.extend_from_slice(&buf[..n]);
-            last_progress = std::time::Instant::now();
-
-            match consume_stream_frames(&ring_buf, expected_seq, |payload| {
-                if let Ok(mut sg) = store_mutex.lock() {
-                    if let Some(ref mut s) = *sg {
-                        s.append_raw(payload);
-                    }
-                }
-            }) {
-                Ok(batch) => {
-                    if batch.consumed > 0 {
-                        ring_buf.drain(0..batch.consumed);
-                        last_progress = std::time::Instant::now();
-                    }
-                    expected_seq = batch.next_expected_seq;
-                    stream_seq.store(expected_seq, Ordering::SeqCst);
-                    chunk_count += batch.chunk_count;
-                    total_bytes += batch.payload_bytes;
-                    if let Ok(mut status) = stream_status.lock() {
-                        status.total_bytes = total_bytes;
-                        status.chunk_count = chunk_count;
-                    }
-                }
-                Err(StreamParseError::InvalidLength(len)) => {
-                    log::error!("[la_stream_usb] Invalid framed chunk length: {}", len);
-                    running.store(false, Ordering::SeqCst);
-                    if let Ok(mut status) = stream_status.lock() {
-                        status.active = false;
-                        status.invalid_frames += 1;
-                        status.last_error = Some(format!("invalid framed chunk length {}", len));
-                    }
-                    break;
-                }
-                Err(StreamParseError::SequenceMismatch {
-                    got,
-                    expected,
-                    dropped,
-                }) => {
-                    log::error!(
-                        "[la_stream_usb] Sequence mismatch! Got {}, expected {}. (~{} chunks dropped)",
-                        got, expected, dropped
-                    );
-                    running.store(false, Ordering::SeqCst);
-                    if let Ok(mut status) = stream_status.lock() {
-                        status.active = false;
-                        status.sequence_mismatches += 1;
-                        status.last_error = Some(format!(
-                            "sequence mismatch: got {}, expected {} (~{} chunks dropped)",
-                            got, expected, dropped
-                        ));
-                    }
-                    break;
-                }
-            }
-
-            if chunk_count > 0 && chunk_count % 1000 == 0 {
-                log::info!(
-                    "[la_stream_usb] {} chunks processed, total data: {}B ({:.0} KB/s)",
-                    chunk_count,
-                    total_bytes,
-                    total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0
-                );
-            }
-        }
-
-        // Stop
-        running.store(false, Ordering::SeqCst);
-        port.write_all(&[0x00]).ok();
-        port.flush().ok();
-        if let Ok(mut status) = stream_status.lock() {
-            status.active = false;
-        }
-        log::info!(
-            "[la_stream_usb] Stopped: {} chunks, {} bytes, {:.0} KB/s",
-            chunk_count,
-            total_bytes,
-            total_bytes as f64 / t0.elapsed().as_secs_f64().max(0.001) / 1024.0
-        );
+        let mut transport = LockedLaTransport { usb: usb_mutex.clone() };
+        let _reason = run_stream_loop(&mut transport, &running, &store_mutex, &stream_status, &stream_seq);
+        // reason is logged/stored if needed; existing status fields already capture the outcome
     });
 
-    // Store the task handle so the next call to la_stream_usb can wait for this task to finish
-    // before opening the CDC port again (avoids the "port already open" / stray-stop-command race).
     if let Ok(mut slot) = task_slot.lock() {
         *slot = Some(handle);
     }
@@ -1097,23 +965,19 @@ pub async fn la_stream_usb(
 }
 
 /// Stop gapless USB streaming.
-/// Sends stop command via USB OUT and signals the background reader to stop.
+/// Sends stop via the BBP control plane so the firmware can emit a STOP marker
+/// without contending on the vendor-bulk reader mutex.
 #[tauri::command]
-pub async fn la_stream_usb_stop(la: State<'_, LaState>) -> CmdResult<LaCaptureInfo> {
+pub async fn la_stream_usb_stop(
+    mgr: State<'_, ConnectionManager>,
+    la: State<'_, LaState>,
+) -> CmdResult<LaCaptureInfo> {
     log::info!("[la_stream_usb_stop] Stopping gapless USB stream");
 
-    // Signal background reader to stop
     la.stream_running.store(false, Ordering::SeqCst);
 
-    // Send stop command via USB OUT
-    {
-        let usb = la.usb.lock().map_err(map_err)?;
-        if usb.is_connected() {
-            let _ = usb.send_stream_stop();
-        }
-    }
+    let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
 
-    // Wait for the background task to fully exit (it holds the CDC port open).
     {
         let old_task = la.stream_task.lock().map_err(map_err)?.take();
         if let Some(handle) = old_task {
@@ -1121,7 +985,14 @@ pub async fn la_stream_usb_stop(la: State<'_, LaState>) -> CmdResult<LaCaptureIn
         }
     }
 
-    // Return current store info
+    {
+        let mut status = la.stream_status.lock().map_err(map_err)?;
+        if status.stop_reason.is_none() {
+            status.stop_reason = Some("host_stop".to_string());
+        }
+        status.active = false;
+    }
+
     let store_guard = la.store.lock().map_err(map_err)?;
     let store = store_guard.as_ref().ok_or("No capture data")?;
     Ok(LaCaptureInfo {
@@ -1298,51 +1169,103 @@ pub fn la_delete_range(
 
 #[cfg(test)]
 mod tests {
-    use super::{consume_stream_frames, StreamParseError};
+    use super::{
+        apply_stream_packet, stream_stop_reason_name, LaStreamRuntimeStatus, StreamPacketOutcome,
+    };
+    use crate::la_usb::{LaStreamPacket, LaStreamPacketKind, STREAM_INFO_START_REJECTED};
 
     #[test]
-    fn stream_parser_reassembles_partial_frames_across_reads() {
-        let mut ring = Vec::new();
-        let mut frames = Vec::new();
+    fn start_packet_marks_stream_active() {
+        let packet = LaStreamPacket {
+            kind: LaStreamPacketKind::Start,
+            seq: 0,
+            info: 0,
+            payload: Vec::new(),
+        };
+        let mut status = LaStreamRuntimeStatus::default();
+        let mut expected_seq = 0u8;
+        let outcome = apply_stream_packet(&packet, &mut expected_seq, &mut status, |_| {}).unwrap();
+        assert_eq!(outcome, StreamPacketOutcome::Continue);
+        assert!(status.active);
+        assert_eq!(expected_seq, 0);
+    }
+
+    #[test]
+    fn data_packet_updates_counters_and_sequence() {
+        let packet = LaStreamPacket {
+            kind: LaStreamPacketKind::Data,
+            seq: 0,
+            info: 0,
+            payload: vec![0xAA, 0xBB, 0xCC],
+        };
+        let mut status = LaStreamRuntimeStatus::default();
+        let mut expected_seq = 0u8;
+        let mut payloads = Vec::new();
+
+        let outcome = apply_stream_packet(&packet, &mut expected_seq, &mut status, |payload| {
+            payloads.push(payload.to_vec());
+        })
+        .unwrap();
+
+        assert_eq!(outcome, StreamPacketOutcome::Continue);
+        assert_eq!(expected_seq, 1);
+        assert_eq!(status.chunk_count, 1);
+        assert_eq!(status.total_bytes, 3);
+        assert_eq!(payloads, vec![vec![0xAA, 0xBB, 0xCC]]);
+    }
+
+    #[test]
+    fn sequence_gap_is_terminal_and_recorded() {
+        let packet = LaStreamPacket {
+            kind: LaStreamPacketKind::Data,
+            seq: 2,
+            info: 0,
+            payload: vec![0xAB],
+        };
+        let mut status = LaStreamRuntimeStatus::default();
         let mut expected_seq = 0u8;
 
-        ring.extend_from_slice(&[0x00, 0x03, 0xAA]);
-        let batch =
-            consume_stream_frames(&ring, expected_seq, |payload| frames.push(payload.to_vec()))
-                .unwrap();
-        assert_eq!(batch.consumed, 0);
-        assert!(frames.is_empty());
-
-        ring.extend_from_slice(&[0xBB, 0xCC, 0x01, 0x02, 0x10, 0x11]);
-        let batch =
-            consume_stream_frames(&ring, expected_seq, |payload| frames.push(payload.to_vec()))
-                .unwrap();
-        ring.drain(0..batch.consumed);
-        expected_seq = batch.next_expected_seq;
-
-        assert_eq!(frames, vec![vec![0xAA, 0xBB, 0xCC], vec![0x10, 0x11]]);
-        assert!(ring.is_empty());
-        assert_eq!(expected_seq, 2);
+        let err = apply_stream_packet(&packet, &mut expected_seq, &mut status, |_| {}).unwrap_err();
+        assert!(err.contains("sequence mismatch"));
+        assert_eq!(status.sequence_mismatches, 1);
+        assert_eq!(status.stop_reason.as_deref(), Some("sequence_mismatch"));
+        assert!(!status.active);
     }
 
     #[test]
-    fn stream_parser_rejects_invalid_length() {
-        let ring = vec![0x00, 0x3F];
-        let err = consume_stream_frames(&ring, 0, |_| {}).unwrap_err();
-        assert_eq!(err, StreamParseError::InvalidLength(63));
+    fn stop_packet_records_stop_reason() {
+        let packet = LaStreamPacket {
+            kind: LaStreamPacketKind::Stop,
+            seq: 0,
+            info: 1,
+            payload: Vec::new(),
+        };
+        let mut status = LaStreamRuntimeStatus::default();
+        let mut expected_seq = 0u8;
+
+        let outcome = apply_stream_packet(&packet, &mut expected_seq, &mut status, |_| {}).unwrap();
+        assert_eq!(outcome, StreamPacketOutcome::Stop);
+        assert_eq!(status.stop_reason.as_deref(), Some("host_stop"));
+        assert!(!status.active);
     }
 
     #[test]
-    fn stream_parser_rejects_sequence_gap() {
-        let ring = vec![0x02, 0x01, 0xAB];
-        let err = consume_stream_frames(&ring, 0, |_| {}).unwrap_err();
+    fn error_packet_records_firmware_error() {
+        let packet = LaStreamPacket {
+            kind: LaStreamPacketKind::Error,
+            seq: 0,
+            info: STREAM_INFO_START_REJECTED,
+            payload: Vec::new(),
+        };
+        let mut status = LaStreamRuntimeStatus::default();
+        let mut expected_seq = 0u8;
+
+        let err = apply_stream_packet(&packet, &mut expected_seq, &mut status, |_| {}).unwrap_err();
+        assert!(err.contains("start_rejected"));
+        assert_eq!(status.stop_reason.as_deref(), Some("start_rejected"));
         assert_eq!(
-            err,
-            StreamParseError::SequenceMismatch {
-                got: 2,
-                expected: 0,
-                dropped: 2,
-            }
+            stream_stop_reason_name(STREAM_INFO_START_REJECTED),
+            "start_rejected"
         );
     }
 }

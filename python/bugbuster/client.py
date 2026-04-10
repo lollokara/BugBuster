@@ -1836,7 +1836,14 @@ class BugBuster:
         :raises HatNotPresentError: If no HAT is detected on this device.
         """
         self._require_hat_present()
-        _STATE_NAMES = {0: "idle", 1: "armed", 2: "capturing", 3: "done", 4: "error"}
+        _STATE_NAMES = {
+            0: "idle",
+            1: "armed",
+            2: "capturing",
+            3: "done",
+            4: "streaming",
+            5: "error",
+        }
         _STREAM_STOP_NAMES = {
             0: "none",
             1: "host_stop",

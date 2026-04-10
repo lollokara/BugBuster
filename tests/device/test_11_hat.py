@@ -26,6 +26,13 @@ try:
 except ImportError:
     _SERIAL_AVAILABLE = False
 
+try:
+    import usb.core
+    import usb.util
+    _PYUSB_AVAILABLE = True
+except ImportError:
+    _PYUSB_AVAILABLE = False
+
 pytestmark = [
     pytest.mark.requires_hat,
     pytest.mark.timeout(15),
@@ -427,6 +434,26 @@ def test_hat_la_status(usb_device):
     assert_no_faults(usb_device)
 
 
+@pytest.mark.usb_only
+def test_hat_la_status_includes_stream_diagnostics(usb_device):
+    """
+    LA status should expose the live-stream diagnostic fields even before a
+    full bulk-stream bench run, so later transport failures are inspectable.
+    """
+    usb_device.hat_la_configure(4, 1_000_000, 1000)
+    status = usb_device.hat_la_get_status()
+
+    assert "stream_stop_reason" in status, "LA status missing 'stream_stop_reason'"
+    assert "stream_stop_reason_name" in status, "LA status missing 'stream_stop_reason_name'"
+    assert "stream_overrun_count" in status, "LA status missing 'stream_overrun_count'"
+    assert "stream_short_write_count" in status, "LA status missing 'stream_short_write_count'"
+    assert isinstance(status["stream_stop_reason"], int)
+    assert isinstance(status["stream_stop_reason_name"], str)
+    assert isinstance(status["stream_overrun_count"], int)
+    assert isinstance(status["stream_short_write_count"], int)
+    assert_no_faults(usb_device)
+
+
 # ---------------------------------------------------------------------------
 # SWD debug setup (USB only)
 # ---------------------------------------------------------------------------
@@ -520,6 +547,80 @@ def _find_rp2040_cdc_port():
         if port.vid == 0x2E8A and port.pid == 0x000C:
             return port.device
     return None
+
+
+def _require_rp2040_bulk_interface():
+    if not _PYUSB_AVAILABLE:
+        pytest.skip("pyusb not installed — cannot access RP2040 vendor-bulk interface")
+
+    dev = usb.core.find(idVendor=0x2E8A, idProduct=0x000C)
+    if dev is None:
+        pytest.skip("RP2040 HAT USB device not found (VID=0x2E8A PID=0x000C)")
+
+    try:
+        dev.set_configuration()
+    except usb.core.USBError:
+        pass
+
+    try:
+        usb.util.claim_interface(dev, 3)
+    except usb.core.USBError as e:
+        pytest.skip(f"Cannot claim RP2040 vendor interface 3 ({e}) — close the desktop app first")
+
+    cfg = dev.get_active_configuration()
+    intf = usb.util.find_descriptor(cfg, bInterfaceNumber=3)
+    assert intf is not None, "RP2040 vendor interface 3 not found"
+
+    ep_in = usb.util.find_descriptor(
+        intf,
+        custom_match=lambda e: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN,
+    )
+    ep_out = usb.util.find_descriptor(
+        intf,
+        custom_match=lambda e: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT,
+    )
+    assert ep_in is not None, "RP2040 vendor IN endpoint not found"
+    assert ep_out is not None, "RP2040 vendor OUT endpoint not found"
+    return dev, ep_in, ep_out
+
+
+def _release_rp2040_bulk_interface(dev):
+    if not _PYUSB_AVAILABLE:
+        return
+    try:
+        usb.util.release_interface(dev, 3)
+    except usb.core.USBError:
+        pass
+    usb.util.dispose_resources(dev)
+
+
+def _read_bulk_packet(ep_in, timeout_ms=500):
+    try:
+        raw = bytes(ep_in.read(64, timeout=timeout_ms))
+    except usb.core.USBError as e:
+        pytest.fail(f"Bulk read failed: {e}")
+
+    assert len(raw) >= 4, f"Bulk packet shorter than 4 bytes: {raw!r}"
+    pkt_type = raw[0]
+    seq = raw[1]
+    payload_len = raw[2]
+    info = raw[3]
+    assert payload_len <= 60, f"Invalid bulk payload length {payload_len}"
+    assert len(raw) >= 4 + payload_len, (
+        f"Truncated bulk payload: announced {payload_len}, got {len(raw) - 4}"
+    )
+    payload = raw[4:4 + payload_len]
+    return pkt_type, seq, info, payload
+
+
+def _drain_bulk_packets(ep_in, timeout_ms=100):
+    if not _PYUSB_AVAILABLE:
+        return
+    while True:
+        try:
+            ep_in.read(64, timeout=timeout_ms)
+        except usb.core.USBError:
+            break
 
 
 @pytest.mark.usb_only
@@ -819,3 +920,147 @@ def test_la_usb_stream_duration_truth(usb_device):
         f"overruns={overrun_count}, short_writes={short_write_count}"
     )
     assert_no_faults(usb_device)
+
+
+# ---------------------------------------------------------------------------
+# Logic Analyzer — USB vendor-bulk live stream (new primary stream path)
+# ---------------------------------------------------------------------------
+
+_LA_BULK_PKT_START = 0x01
+_LA_BULK_PKT_DATA = 0x02
+_LA_BULK_PKT_STOP = 0x03
+_LA_BULK_PKT_ERROR = 0x04
+_LA_BULK_INFO_START_REJECTED = 0x80
+
+
+@pytest.mark.usb_only
+def test_la_usb_bulk_reports_failure(usb_device):
+    """
+    Vendor-bulk stream start without a valid configured live stream should return
+    an explicit error packet instead of silently timing out.
+    """
+    dev, ep_in, ep_out = _require_rp2040_bulk_interface()
+    try:
+        usb_device.hat_la_stop()
+        ep_out.write(b"\x01", timeout=500)
+        pkt_type, _seq, info, payload = _read_bulk_packet(ep_in, timeout_ms=1000)
+        assert pkt_type == _LA_BULK_PKT_ERROR, (
+            f"Expected ERROR packet on unconfigured bulk start, got type={pkt_type:#04x}"
+        )
+        assert info == _LA_BULK_INFO_START_REJECTED, (
+            f"Expected start_rejected info byte, got {info:#04x}"
+        )
+        assert payload == b""
+    finally:
+        _release_rp2040_bulk_interface(dev)
+
+
+@pytest.mark.usb_only
+@pytest.mark.timeout(60)
+def test_la_usb_bulk_five_cycles(usb_device):
+    """
+    Live vendor-bulk streaming should survive multiple short start/stop cycles.
+    """
+    dev, ep_in, ep_out = _require_rp2040_bulk_interface()
+    try:
+        channels = 4
+        rate_hz = 1_000_000
+        depth = 100_000
+        results = []
+
+        for _ in range(5):
+            usb_device.hat_la_stop()
+            usb_device.hat_la_configure(channels=channels, rate_hz=rate_hz, depth=depth)
+            usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
+            time.sleep(0.12)
+
+            ep_out.write(b"\x01", timeout=500)
+            pkt_type, _seq, info, payload = _read_bulk_packet(ep_in, timeout_ms=1000)
+            assert pkt_type == _LA_BULK_PKT_START, (
+                f"Expected START packet, got type={pkt_type:#04x}, info={info:#04x}, payload={payload!r}"
+            )
+
+            total_payload = 0
+            expected_seq = 0
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 1.0:
+                pkt_type, seq, info, payload = _read_bulk_packet(ep_in, timeout_ms=500)
+                if pkt_type == _LA_BULK_PKT_DATA:
+                    assert seq == expected_seq, (
+                        f"Sequence mismatch in bulk live stream: got={seq}, expected={expected_seq}"
+                    )
+                    expected_seq = (expected_seq + 1) & 0xFF
+                    total_payload += len(payload)
+                elif pkt_type == _LA_BULK_PKT_ERROR:
+                    pytest.fail(f"Unexpected ERROR packet during bulk live stream: info={info:#04x}")
+                elif pkt_type == _LA_BULK_PKT_STOP:
+                    break
+
+            ep_out.write(b"\x00", timeout=500)
+            _drain_bulk_packets(ep_in)
+            results.append(total_payload)
+            time.sleep(0.1)
+
+        failed = [i + 1 for i, n in enumerate(results) if n <= 0]
+        assert not failed, f"Bulk live stream produced no payload on cycles {failed}: {results}"
+        assert_no_faults(usb_device)
+    finally:
+        _release_rp2040_bulk_interface(dev)
+
+
+@pytest.mark.usb_only
+@pytest.mark.timeout(90)
+def test_la_usb_bulk_duration_truth(usb_device):
+    """
+    For the target bulk live configuration, 10 seconds of streaming should
+    produce 10 seconds of decoded samples within 1%.
+    """
+    dev, ep_in, ep_out = _require_rp2040_bulk_interface()
+    try:
+        channels = 4
+        rate_hz = 1_000_000
+        depth = 100_000
+        usb_device.hat_la_stop()
+        usb_device.hat_la_configure(channels=channels, rate_hz=rate_hz, depth=depth)
+        usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
+        time.sleep(0.12)
+
+        ep_out.write(b"\x01", timeout=500)
+        pkt_type, _seq, info, payload = _read_bulk_packet(ep_in, timeout_ms=1000)
+        assert pkt_type == _LA_BULK_PKT_START, (
+            f"Expected START packet, got type={pkt_type:#04x}, info={info:#04x}, payload={payload!r}"
+        )
+
+        total_payload = 0
+        packet_count = 0
+        expected_seq = 0
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 10.0:
+            pkt_type, seq, info, payload = _read_bulk_packet(ep_in, timeout_ms=1000)
+            if pkt_type == _LA_BULK_PKT_DATA:
+                assert seq == expected_seq, (
+                    f"Sequence mismatch in bulk live stream: got={seq}, expected={expected_seq}"
+                )
+                expected_seq = (expected_seq + 1) & 0xFF
+                total_payload += len(payload)
+                packet_count += 1
+            elif pkt_type == _LA_BULK_PKT_ERROR:
+                pytest.fail(f"Unexpected ERROR packet during bulk live stream: info={info:#04x}")
+            elif pkt_type == _LA_BULK_PKT_STOP:
+                pytest.fail(f"Unexpected STOP packet during bulk live stream: info={info:#04x}")
+
+        measured_duration = time.monotonic() - t0
+        ep_out.write(b"\x00", timeout=500)
+        _drain_bulk_packets(ep_in)
+        samples_per_byte = 8 // channels
+        decoded_samples = total_payload * samples_per_byte
+        decoded_duration = decoded_samples / float(rate_hz)
+
+        assert packet_count > 0, "No bulk live packets received"
+        assert abs(decoded_duration - measured_duration) / measured_duration <= 0.01, (
+            f"Bulk live duration drifted from wall clock: decoded={decoded_duration:.3f}s, "
+            f"measured={measured_duration:.3f}s, payload_bytes={total_payload}, packets={packet_count}"
+        )
+        assert_no_faults(usb_device)
+    finally:
+        _release_rp2040_bulk_interface(dev)

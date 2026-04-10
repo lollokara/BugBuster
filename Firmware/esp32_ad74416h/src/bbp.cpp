@@ -1808,6 +1808,11 @@ static int handleHatLaStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
     put_u32(out, &pos, st.samples_captured);
     put_u32(out, &pos, st.total_samples);
     put_u32(out, &pos, st.actual_rate_hz);
+    put_u8(out, &pos, st.usb_connected);
+    put_u8(out, &pos, st.usb_mounted);
+    put_u8(out, &pos, st.stream_stop_reason);
+    put_u32(out, &pos, st.stream_overrun_count);
+    put_u32(out, &pos, st.stream_short_write_count);
     return (int)pos;
 }
 
