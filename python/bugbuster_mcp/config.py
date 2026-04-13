@@ -36,13 +36,35 @@ SNAPSHOT_POLL_INTERVAL_S = 0.005 # 5 ms between polls (~200 SPS)
 WAVEFORM_PREVIEW_POINTS = 100
 
 # ---------------------------------------------------------------------------
-# Logic analyzer defaults
+# Logic analyzer defaults and limits
 # ---------------------------------------------------------------------------
 
 LA_DEFAULT_RATE_HZ    = 1_000_000   # 1 MHz
 LA_DEFAULT_DEPTH      = 100_000     # samples
 LA_DEFAULT_CHANNELS   = 4
 LA_CAPTURE_TIMEOUT_S  = 5.0
+
+# Hardware limits (RP2040 76KB SRAM buffer)
+LA_MAX_RATE_HZ        = 100_000_000 # 100 MHz (BBP supports 125, but 100 is safer)
+LA_MAX_DEPTH_1CH      = 622_592     # 19456 * 32
+LA_MAX_DEPTH_2CH      = 311_296     # 19456 * 16
+LA_MAX_DEPTH_4CH      = 155_648     # 19456 * 8
+
+# ---------------------------------------------------------------------------
+# UART bridge mappings (BBP Protocol 0x50/0x51)
+# ---------------------------------------------------------------------------
+
+UART_PARITY_MAP = {
+    "none": 0,
+    "odd":  1,
+    "even": 2,
+}
+
+UART_STOP_BITS_MAP = {
+    "1":   0,
+    "1.5": 1,
+    "2":   2,
+}
 
 # ---------------------------------------------------------------------------
 # USB PD allowed voltages (HUSB238 negotiated values)

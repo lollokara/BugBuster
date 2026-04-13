@@ -6,6 +6,7 @@ Tools: usb_pd_status, usb_pd_select, power_control, wifi_status
 
 from __future__ import annotations
 from .. import session
+from ..safety import check_faults_post
 from ..config import USBPD_ALLOWED_VOLTAGES
 
 
@@ -106,11 +107,15 @@ def register(mcp) -> None:
         from bugbuster.constants import PowerControl
         ctrl = PowerControl(_POWER_CONTROL_MAP[key])
         bb.power_set(ctrl, enable)
-        return {
+        warnings = check_faults_post(bb)
+        res = {
             "control": key,
             "enable":  enable,
             "success": True,
         }
+        if warnings:
+            res["warnings"] = warnings
+        return res
 
     @mcp.tool()
     def wifi_status() -> dict:

@@ -9,13 +9,16 @@ import time
 import math
 import logging
 from .. import session
-from ..safety import require_analog_io, require_hat, require_io_mode
+from ..safety import (
+    require_analog_io, require_hat, require_io_mode,
+    require_la_ready, validate_la_config, check_faults_post,
+)
 from ..config import (
     MAX_SNAPSHOT_DURATION_S, DEFAULT_SNAPSHOT_DURATION_S,
     SNAPSHOT_POLL_INTERVAL_S, MAX_SNAPSHOT_SAMPLES,
     WAVEFORM_PREVIEW_POINTS,
     LA_DEFAULT_RATE_HZ, LA_DEFAULT_DEPTH, LA_DEFAULT_CHANNELS,
-    LA_CAPTURE_TIMEOUT_S,
+    LA_CAPTURE_TIMEOUT_S, LA_MAX_RATE_HZ,
 )
 
 log = logging.getLogger(__name__)
@@ -90,7 +93,8 @@ def register(mcp) -> None:
             offset=offset,
             mode=OutputMode.VOLTAGE,
         )
-        return {
+        warnings = check_faults_post(bb)
+        res = {
             "io":        io,
             "channel":   ch,
             "waveform":  wtype,
@@ -99,6 +103,9 @@ def register(mcp) -> None:
             "offset":    offset,
             "success":   True,
         }
+        if warnings:
+            res["warnings"] = warnings
+        return res
 
     @mcp.tool()
     def stop_waveform() -> dict:
@@ -112,7 +119,11 @@ def register(mcp) -> None:
         """
         bb = session.get_client()
         bb.stop_waveform()
-        return {"success": True, "message": "Waveform stopped. DAC holds last value."}
+        warnings = check_faults_post(bb)
+        res = {"success": True, "message": "Waveform stopped. DAC holds last value."}
+        if warnings:
+            res["warnings"] = warnings
+        return res
 
     @mcp.tool()
     def capture_adc_snapshot(
@@ -219,12 +230,12 @@ def register(mcp) -> None:
         Capture digital waveforms using the HAT logic analyzer (RP2040 PIO).
 
         Requires the HAT expansion board. Captures 1-4 channels at up to
-        10 MHz. Uses the PIO state machine for accurate timing.
+        100 MHz. Uses the PIO state machine for accurate timing.
 
         Parameters:
         - channels: Number of channels to capture (1-4).
-        - rate_hz: Sample rate in Hz (default 1 MHz, max 10 MHz).
-        - depth: Number of samples to capture (default 100,000).
+        - rate_hz: Sample rate in Hz (default 1 MHz, max 100 MHz).
+        - depth: Number of samples to capture (default 100,000, max 622,592).
         - trigger_type: Trigger condition — "none", "rising", "falling",
                         "both", "high", or "low" (default "none").
         - trigger_ch: Channel to use for trigger (0-3, default 0).
@@ -233,7 +244,8 @@ def register(mcp) -> None:
                  frequency_hz (per channel), protocol_hints, timing_diagram.
         """
         bb = session.get_client()
-        require_hat(bb)
+        require_la_ready(bb)
+        validate_la_config(channels, rate_hz, depth)
 
         _TRIGGER_MAP = {"none": 0, "rising": 1, "falling": 2, "both": 3, "high": 4, "low": 5}
         trig = trigger_type.lower()
@@ -242,10 +254,6 @@ def register(mcp) -> None:
                 f"Unknown trigger_type {trigger_type!r}. "
                 f"Use: none, rising, falling, both, high, low."
             )
-        if not (1 <= channels <= 4):
-            raise ValueError("channels must be 1-4.")
-        if rate_hz > 10_000_000:
-            raise ValueError("Maximum logic analyzer rate is 10 MHz.")
 
         # Configure
         bb.hat_la_configure(channels=channels, rate_hz=rate_hz, depth=depth)
@@ -263,7 +271,8 @@ def register(mcp) -> None:
         t_start = time.monotonic()
         while time.monotonic() - t_start < LA_CAPTURE_TIMEOUT_S:
             st = bb.hat_la_get_status()
-            if st.get("done") or st.get("state") in ("DONE", "IDLE"):
+            # BBP State 3 = DONE. Some firmware may also report "done": True
+            if st.get("state") == 3 or st.get("stateName") == "DONE" or st.get("done"):
                 break
             time.sleep(0.05)
         else:
@@ -307,7 +316,10 @@ def register(mcp) -> None:
         # Compact timing diagram (text, first 80 samples per channel)
         diagram = _timing_diagram(ch_data, channels, min(depth, 80))
 
-        return {
+        # Check for faults after capture just in case
+        warnings = check_faults_post(bb)
+
+        res = {
             "channels":       channels,
             "rate_hz":        rate_hz,
             "depth":          depth,
@@ -317,6 +329,9 @@ def register(mcp) -> None:
             "protocol_hints": hints,
             "timing_diagram": diagram,
         }
+        if warnings:
+            res["warnings"] = warnings
+        return res
 
 
 def _protocol_hints(freq_hz_list: list, rate_hz: int) -> list[str]:

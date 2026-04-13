@@ -227,12 +227,15 @@ impl Default for ConnectionMode {
     }
 }
 
+use crate::la_usb::DeviceSelector;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionStatus {
     pub mode: ConnectionMode,
     pub port_or_url: String,
     pub device_info: Option<DeviceInfo>,
     pub admin_token: Option<String>,
+    pub la_selector: Option<DeviceSelector>,
 }
 
 impl Default for ConnectionStatus {
@@ -242,6 +245,7 @@ impl Default for ConnectionStatus {
             port_or_url: String::new(),
             device_info: None,
             admin_token: None,
+            la_selector: None,
         }
     }
 }
@@ -256,4 +260,5 @@ pub struct DiscoveredDevice {
     pub name: String,           // Display name
     pub transport: String,      // "usb" or "http"
     pub address: String,        // Port path or URL
+    pub serial_number: Option<String>,
 }

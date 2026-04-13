@@ -931,7 +931,95 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             }
 
             case CMD_IDAC_CALIBRATE: {
-                // TODO: Wire up ADC read callback
+                uint8_t idac_ch = cmd.idacCal.ch;
+                if (idac_ch >= 3) break;
+
+                ESP_LOGI("tasks", "Starting IDAC%u calibration sweep...", idac_ch);
+
+                // 1. Snapshot current state to restore later
+                uint8_t prev_selftest = 0;
+#if ADGS_HAS_SELFTEST
+                prev_selftest = adgs_get_selftest();
+#endif
+                ChannelFunction prev_func = s_device->getChannelFunction(3);
+                AdcRange prev_range = g_deviceState.channels[3].adcRange;
+                AdcConvMux prev_mux = g_deviceState.channels[3].adcMux;
+
+                // 2. Configure MUX for calibration
+                uint8_t cal_sw = 0;
+                static float s_cal_divider = 1.0f;
+                if (idac_ch == 0) { 
+                    cal_sw = U23_SW_3V3_ADJ; 
+                    s_cal_divider = 1.0f; 
+                } else if (idac_ch == 1) { 
+                    cal_sw = U23_SW_VADJ1; 
+                    s_cal_divider = VADJ_DIVIDER_RATIO; 
+                } else if (idac_ch == 2) { 
+                    cal_sw = U23_SW_VADJ2; 
+                    s_cal_divider = VADJ_DIVIDER_RATIO; 
+                }
+
+                if (cal_sw == 0) {
+                    ESP_LOGE("tasks", "No MUX switch defined for IDAC%u calibration", idac_ch);
+                    break;
+                }
+
+#if ADGS_HAS_SELFTEST
+                // Close S4 (Channel D) and the specific rail switch
+                if (!adgs_set_selftest(U23_SW_ADC_CH_D | cal_sw)) {
+                    ESP_LOGE("tasks", "MUX interlock failed - calibration aborted");
+                    break;
+                }
+#else
+                ESP_LOGW("tasks", "Self-test MUX not available - continuing without hardware routing");
+#endif
+
+                // 3. Configure AD74416H Channel D for measurement
+                s_device->setChannelFunction(3, CH_FUNC_VIN);
+                s_device->configureAdc(3, ADC_MUX_LF_TO_AGND, ADC_RNG_0_12V, ADC_RATE_20SPS);
+                
+                // Update conversion mask to include Channel D
+                {
+                    uint8_t chMask = 0;
+                    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        g_deviceState.channels[3].function = CH_FUNC_VIN;
+                        g_deviceState.channels[3].adcRange = ADC_RNG_0_12V;
+                        g_deviceState.channels[3].adcMux   = ADC_MUX_LF_TO_AGND;
+                        for (uint8_t c = 0; c < 4; c++) {
+                            if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
+                                chMask |= (1 << c);
+                        }
+                        xSemaphoreGive(g_stateMutex);
+                    }
+                    s_device->startAdcConversion(true, chMask, 0x0F);
+                }
+
+                vTaskDelay(pdMS_TO_TICKS(200)); // Settling
+
+                // 4. Define ADC read callback for the calibration engine
+                // DS4424_cal_auto uses this to get measured voltages
+                auto read_cb = [](uint8_t /*ch*/) -> float {
+                    uint32_t raw = 0;
+                    if (!tasks_get_device()->readAdcResult(3, &raw)) return 0.0f;
+                    return tasks_get_device()->adcCodeToVoltage(raw, ADC_RNG_0_12V) / s_cal_divider;
+                };
+
+                // 5. Run auto-calibration sweep
+                uint8_t step = (cmd.idacCal.step > 0) ? cmd.idacCal.step : 8;
+                uint16_t settle = (cmd.idacCal.settle_ms > 0) ? cmd.idacCal.settle_ms : 100;
+                ds4424_cal_auto(idac_ch, read_cb, step, settle);
+
+                // 6. Save to NVS
+                ds4424_cal_save();
+
+                // 7. Restore hardware state
+#if ADGS_HAS_SELFTEST
+                adgs_set_selftest(prev_selftest);
+#endif
+                tasks_apply_channel_function(3, prev_func);
+                s_device->configureAdc(3, prev_mux, prev_range, ADC_RATE_20SPS);
+
+                ESP_LOGI("tasks", "IDAC%u calibration complete and saved.", idac_ch);
                 break;
             }
 

@@ -106,7 +106,7 @@ static void set_cors_headers(httpd_req_t *req)
 
 static esp_err_t check_admin_auth(httpd_req_t *req)
 {
-    char token[36] = {0};
+    char token[65] = {0};
     esp_err_t err = httpd_req_get_hdr_value_str(req, ADMIN_TOKEN_HEADER, token, sizeof(token));
     
     if (err == ESP_OK && auth_verify_token(token)) {
@@ -187,6 +187,19 @@ static cJSON* recv_json_body(httpd_req_t *req)
     free(buf);
     return root;
 }
+
+// -----------------------------------------------------------------------------
+// Helper: strict JSON field validation
+// -----------------------------------------------------------------------------
+
+#define VALIDATE_JSON_FIELD(obj, key, type, error_msg) \
+    do { \
+        cJSON *item = cJSON_GetObjectItem(obj, key); \
+        if (!item || !cJSON_Is##type(item)) { \
+            cJSON_Delete(obj); \
+            return send_error(req, 400, error_msg); \
+        } \
+    } while(0)
 
 // -----------------------------------------------------------------------------
 // Helper: extract channel number from URI   /api/channel/X/...
@@ -548,13 +561,6 @@ static esp_err_t handle_get_device_info(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "silicon_id1", (int)id1);
     add_bool_alias(root, "spiOk", "spi_ok", spiOk);
 
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    char macStr[20];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    cJSON_AddStringToObject(root, "macAddress", macStr);
-
     return send_json(req, root);
 }
 
@@ -616,13 +622,9 @@ static esp_err_t handle_post_channel_function(httpd_req_t *req)
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
-    cJSON *funcItem = cJSON_GetObjectItem(doc, "function");
-    if (!funcItem || !cJSON_IsNumber(funcItem)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Missing 'function' field");
-    }
+    VALIDATE_JSON_FIELD(doc, "function", Number, "Missing field 'function'");
 
-    int func = funcItem->valueint;
+    int func = cJSON_GetObjectItem(doc, "function")->valueint;
     if (!is_valid_channel_function(func)) {
         cJSON_Delete(doc);
         return send_error(req, 400, "Invalid function");
@@ -670,7 +672,7 @@ static esp_err_t handle_post_dac(httpd_req_t *req)
         }
     } else {
         cJSON_Delete(doc);
-        return send_error(req, 400, "Body must have 'code', 'voltage', or 'current_mA'");
+        return send_error(req, 400, "Missing field 'code', 'voltage' or 'current_mA' as number");
     }
 
     cJSON_Delete(doc);
@@ -690,15 +692,16 @@ static esp_err_t handle_post_adc_config(httpd_req_t *req)
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
+    VALIDATE_JSON_FIELD(doc, "mux", Number, "Missing field 'mux'");
+    VALIDATE_JSON_FIELD(doc, "range", Number, "Missing field 'range'");
+    VALIDATE_JSON_FIELD(doc, "rate", Number, "Missing field 'rate'");
+
     Command cmd{};
     cmd.type           = CMD_ADC_CONFIG;
     cmd.channel        = (uint8_t)ch;
-    cJSON *muxItem   = cJSON_GetObjectItem(doc, "mux");
-    cJSON *rangeItem = cJSON_GetObjectItem(doc, "range");
-    cJSON *rateItem  = cJSON_GetObjectItem(doc, "rate");
-    cmd.adcCfg.mux     = (AdcConvMux)(muxItem   ? muxItem->valueint   : 0);
-    cmd.adcCfg.range   = (AdcRange)  (rangeItem ? rangeItem->valueint : 0);
-    cmd.adcCfg.rate    = (AdcRate)   (rateItem  ? rateItem->valueint  : 0);
+    cmd.adcCfg.mux     = (AdcConvMux)cJSON_GetObjectItem(doc, "mux")->valueint;
+    cmd.adcCfg.range   = (AdcRange)cJSON_GetObjectItem(doc, "range")->valueint;
+    cmd.adcCfg.rate    = (AdcRate)cJSON_GetObjectItem(doc, "rate")->valueint;
     sendCommand(cmd);
     cJSON_Delete(doc);
 
@@ -886,6 +889,8 @@ static esp_err_t handle_post_avdd_select(httpd_req_t *req)
 // POST /api/device/reset
 static esp_err_t handle_post_device_reset(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     // Consume body (may be empty)
     recv_json_body(req);
 
@@ -909,6 +914,8 @@ static esp_err_t handle_post_device_reset(httpd_req_t *req)
 // POST /api/faults/clear
 static esp_err_t handle_post_clear_all_faults(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     recv_json_body(req);
 
     Command cmd{};
@@ -923,6 +930,8 @@ static esp_err_t handle_post_clear_all_faults(httpd_req_t *req)
 // POST /api/faults/clear/*
 static esp_err_t handle_post_clear_channel_fault(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     int ch = extract_fault_channel(req->uri, "/api/faults/clear/");
     if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
 
@@ -942,6 +951,8 @@ static esp_err_t handle_post_clear_channel_fault(httpd_req_t *req)
 // POST /api/faults/mask
 static esp_err_t handle_post_faults_mask(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
@@ -968,6 +979,8 @@ static esp_err_t handle_post_faults_mask(httpd_req_t *req)
 // POST /api/faults/mask/*
 static esp_err_t handle_post_channel_fault_mask(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     int ch = extract_fault_channel(req->uri, "/api/faults/mask/");
     if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
 
@@ -991,6 +1004,8 @@ static esp_err_t handle_post_channel_fault_mask(httpd_req_t *req)
 // POST /api/diagnostics/config
 static esp_err_t handle_post_diag_config(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
@@ -1157,6 +1172,8 @@ static esp_err_t handle_post_rtd_config(httpd_req_t *req)
 // POST /api/channel/* dispatcher
 static esp_err_t handle_channel_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     const char *suffix = channel_suffix(req->uri);
     if (!suffix) return send_error(req, 400, "Invalid channel URL");
 
@@ -1188,6 +1205,8 @@ static const char* gpio_suffix(const char* uri)
 // POST /api/gpio/* dispatcher
 static esp_err_t handle_gpio_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     const char *suffix = gpio_suffix(req->uri);
     if (!suffix) return send_error(req, 400, "Invalid GPIO URL");
 
@@ -1237,6 +1256,7 @@ static esp_err_t handle_post_dio_config(httpd_req_t *req)
     cJSON *body = recv_json_body(req);
     if (!body) return send_error(req, 400, "Invalid JSON");
 
+    VALIDATE_JSON_FIELD(body, "mode", Number, "Missing field 'mode'");
     int mode = cJSON_GetObjectItem(body, "mode")->valueint;
     cJSON_Delete(body);
 
@@ -1302,6 +1322,8 @@ static esp_err_t handle_get_dio_single(httpd_req_t *req)
 // POST /api/dio/* dispatcher
 static esp_err_t handle_dio_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     const char *p = strstr(req->uri, "/api/dio/");
     if (!p) return send_error(req, 400, "Invalid DIO URI");
     // Find the action after /api/dio/N/
@@ -1381,6 +1403,8 @@ static esp_err_t handle_get_selftest_efuse(httpd_req_t *req)
 // POST /api/selftest/calibrate body: {"channel": 1}
 static esp_err_t handle_post_selftest_calibrate(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     cJSON *body = recv_json_body(req);
     if (!body) return send_error(req, 400, "Invalid JSON");
 
@@ -1513,6 +1537,8 @@ static esp_err_t handle_post_uart_config(httpd_req_t *req)
 // POST /api/uart/* dispatcher
 static esp_err_t handle_uart_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     const char *p = strstr(req->uri, "/api/uart/");
     if (!p) return send_error(req, 400, "Invalid URI");
     p += 10;
@@ -1609,6 +1635,8 @@ static esp_err_t handle_post_idac_voltage(httpd_req_t *req)
 // POST /api/idac dispatch
 static esp_err_t handle_idac_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     if (strstr(req->uri, "/api/idac/code")) return handle_post_idac_code(req);
     if (strstr(req->uri, "/api/idac/voltage")) return handle_post_idac_voltage(req);
     return send_error(req, 404, "Unknown IDAC endpoint");
@@ -1677,6 +1705,8 @@ static esp_err_t handle_post_usbpd_select(httpd_req_t *req)
 // POST /api/usbpd dispatch
 static esp_err_t handle_usbpd_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     if (strstr(req->uri, "/api/usbpd/select")) return handle_post_usbpd_select(req);
     if (strstr(req->uri, "/api/usbpd/caps")) {
         husb238_get_src_cap();
@@ -1817,6 +1847,8 @@ static esp_err_t handle_post_ioexp_fault_config(httpd_req_t *req)
 // POST /api/ioexp dispatch
 static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     if (strstr(req->uri, "/api/ioexp/control")) return handle_post_ioexp_control(req);
     if (strstr(req->uri, "/api/ioexp/fault_config")) return handle_post_ioexp_fault_config(req);
     return send_error(req, 404, "Unknown IO Expander endpoint");
@@ -1856,24 +1888,57 @@ static esp_err_t handle_get_hat(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/hat/la/status
+static esp_err_t handle_get_hat_la_status(httpd_req_t *req)
+{
+    HatLaStatus st = {};
+    if (!hat_la_get_status(&st)) {
+        return send_error(req, 503, "HAT not responding or disconnected");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "state", st.state);
+    cJSON_AddStringToObject(root, "stateName", hat_la_state_name(st.state));
+    cJSON_AddNumberToObject(root, "samplesCaptured", st.samples_captured);
+    cJSON_AddNumberToObject(root, "totalSamples", st.total_samples);
+    cJSON_AddNumberToObject(root, "actualRateHz", st.actual_rate_hz);
+    cJSON_AddNumberToObject(root, "channels", st.channels);
+    cJSON_AddBoolToObject(root, "usbConnected", st.usb_connected);
+    cJSON_AddBoolToObject(root, "usbMounted", st.usb_mounted);
+    cJSON_AddNumberToObject(root, "stopReason", st.stream_stop_reason);
+    cJSON_AddStringToObject(root, "stopReasonName", hat_la_stop_reason_name(st.stream_stop_reason));
+    cJSON_AddNumberToObject(root, "overrunCount", st.stream_overrun_count);
+    cJSON_AddNumberToObject(root, "shortWriteCount", st.stream_short_write_count);
+
+    return send_json(req, root);
+}
+
 // POST /api/hat/config  body: {"pin":0, "function":1} or {"pins":[1,2,3,4]}
 static esp_err_t handle_post_hat_config(httpd_req_t *req)
 {
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
-    cJSON *pinItem = cJSON_GetObjectItem(doc, "pin");
-    cJSON *funcItem = cJSON_GetObjectItem(doc, "function");
+    cJSON *pinItem   = cJSON_GetObjectItem(doc, "pin");
+    cJSON *funcItem  = cJSON_GetObjectItem(doc, "function");
     cJSON *pinsArray = cJSON_GetObjectItem(doc, "pins");
 
     bool ok = false;
 
-    if (pinsArray && cJSON_IsArray(pinsArray) && cJSON_GetArraySize(pinsArray) == HAT_NUM_EXT_PINS) {
+    if (pinsArray && cJSON_IsArray(pinsArray)) {
+        if (cJSON_GetArraySize(pinsArray) != HAT_NUM_EXT_PINS) {
+            cJSON_Delete(doc);
+            return send_error(req, 400, "Field 'pins' must have 4 elements");
+        }
         // Set all pins at once
         HatPinFunction config[HAT_NUM_EXT_PINS];
         for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
             cJSON *item = cJSON_GetArrayItem(pinsArray, i);
-            config[i] = item ? (HatPinFunction)item->valueint : HAT_FUNC_DISCONNECTED;
+            if (!item || !cJSON_IsNumber(item)) {
+                cJSON_Delete(doc);
+                return send_error(req, 400, "Field 'pins' elements must be numbers");
+            }
+            config[i] = (HatPinFunction)item->valueint;
         }
         ok = hat_set_all_pins(config);
     } else if (pinItem && funcItem && cJSON_IsNumber(pinItem) && cJSON_IsNumber(funcItem)) {
@@ -1881,7 +1946,7 @@ static esp_err_t handle_post_hat_config(httpd_req_t *req)
         ok = hat_set_pin((uint8_t)pinItem->valueint, (HatPinFunction)funcItem->valueint);
     } else {
         cJSON_Delete(doc);
-        return send_error(req, 400, "Need {pin, function} or {pins:[...]}");
+        return send_error(req, 400, "Missing {pin, function} as Numbers OR {pins} as Array");
     }
 
     cJSON_Delete(doc);
@@ -1922,6 +1987,8 @@ static esp_err_t handle_post_hat_detect(httpd_req_t *req)
 // POST /api/hat dispatch
 static esp_err_t handle_hat_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     if (strstr(req->uri, "/api/hat/config")) return handle_post_hat_config(req);
     if (strstr(req->uri, "/api/hat/reset")) return handle_post_hat_reset(req);
     if (strstr(req->uri, "/api/hat/detect")) return handle_post_hat_detect(req);
@@ -2034,6 +2101,8 @@ static esp_err_t handle_post_wavegen_stop(httpd_req_t *req)
 // POST /api/wavegen/* dispatcher
 static esp_err_t handle_wavegen_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     if (strstr(req->uri, "/api/wavegen/start")) return handle_post_wavegen_start(req);
     if (strstr(req->uri, "/api/wavegen/stop")) return handle_post_wavegen_stop(req);
     return send_error(req, 404, "Unknown wavegen endpoint");
@@ -2114,6 +2183,8 @@ static esp_err_t handle_post_mux_all(httpd_req_t *req)
 
 static esp_err_t handle_mux_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     if (strstr(req->uri, "/api/mux/switch")) return handle_post_mux_switch(req);
     if (strstr(req->uri, "/api/mux/all")) return handle_post_mux_all(req);
     return send_error(req, 404, "Unknown MUX endpoint");
@@ -2166,6 +2237,8 @@ static esp_err_t handle_post_cal_save(httpd_req_t *req)
 
 static esp_err_t handle_cal_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     if (strstr(req->uri, "/api/idac/cal/point")) return handle_post_cal_point(req);
     if (strstr(req->uri, "/api/idac/cal/clear")) return handle_post_cal_clear(req);
     if (strstr(req->uri, "/api/idac/cal/save")) return handle_post_cal_save(req);
@@ -2175,6 +2248,8 @@ static esp_err_t handle_cal_post_dispatch(httpd_req_t *req)
 // POST /api/lshift/oe  body: {"on":true}
 static esp_err_t handle_post_lshift_oe(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     cJSON *body = recv_json_body(req);
     if (!body) return send_error(req, 400, "Invalid JSON");
     bool on = cJSON_GetObjectItem(body, "on") ? cJSON_IsTrue(cJSON_GetObjectItem(body, "on")) : false;
@@ -2605,6 +2680,11 @@ void initWebServer(void)
         .uri = "/api/hat", .method = HTTP_GET, .handler = handle_get_hat, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_get);
+
+    httpd_uri_t uri_hat_la_status_get = {
+        .uri = "/api/hat/la/status", .method = HTTP_GET, .handler = handle_get_hat_la_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_la_status_get);
 
     httpd_uri_t uri_hat_post = {
         .uri = "/api/hat/*", .method = HTTP_POST, .handler = handle_hat_post_dispatch, .user_ctx = NULL

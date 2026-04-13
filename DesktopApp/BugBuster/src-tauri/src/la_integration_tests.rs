@@ -1,4 +1,4 @@
-//! Integration tests for `run_stream_loop` using `MockLaTransport`.
+//! Integration tests for `run_stream_loop` and `pre_stream_drain` using `MockLaTransport`.
 //!
 //! These tests exercise the streaming loop logic without USB hardware.
 
@@ -9,10 +9,12 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::la_commands::{run_stream_loop, LaStreamRuntimeStatus};
+    use crate::la_commands::{pre_stream_drain, run_stream_loop, LaStreamRuntimeStatus};
     use crate::la_store::LaStore;
     use crate::la_transport::{MockLaTransport, StreamStopReason};
-    use crate::la_usb::{LaStreamPacket, LaStreamPacketKind};
+    use crate::la_usb::{
+        LaStreamPacket, LaStreamPacketKind, LA_USB_CMD_START_STREAM, LA_USB_CMD_STOP,
+    };
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -44,6 +46,11 @@ mod tests {
         AtomicU8::new(0)
     }
 
+    // ── run_stream_loop tests ────────────────────────────────────────────────
+    // These tests assume pre_stream_drain() has already been called externally
+    // (as done by la_stream_usb() before spawning). The FIFO is clean when
+    // run_stream_loop starts — it only sends LA_USB_CMD_START_STREAM.
+
     // ── test 1: happy path ────────────────────────────────────────────────────
 
     #[test]
@@ -68,8 +75,12 @@ mod tests {
         assert_eq!(reason, StreamStopReason::Normal, "Expected Normal stop");
         assert!(!running.load(Ordering::SeqCst), "running must be false after loop");
         assert!(!status.lock().unwrap().active, "status.active must be false after loop");
-        // Verify START command was sent
-        assert!(transport.commands_sent.contains(&0x01), "STREAM_CMD_START must be sent");
+        // Only START command must be sent — drain is done externally now
+        assert_eq!(
+            transport.commands_sent,
+            vec![LA_USB_CMD_START_STREAM],
+            "run_stream_loop must only send START, not STOP"
+        );
     }
 
     // ── test 2: sequence wrap (255→0 is valid) ───────────────────────────────
@@ -77,7 +88,6 @@ mod tests {
     #[test]
     fn test_stream_seq_wrap() {
         // Build a packet list where seq goes 0..=255 then wraps back to 0.
-        // After 256 data packets expected_seq wraps to 0, so seq=0 is valid.
         let mut wrap_packets = vec![make_start()];
         for s in 0u8..=255 {
             wrap_packets.push(make_data(s, b"x"));
@@ -106,13 +116,11 @@ mod tests {
     #[test]
     fn test_oneshot_header_data() {
         // Test the one-shot header format: [u32 LE total_len][raw_data...]
-        // This tests the packet format contract, not run_stream_loop
         let n: u32 = 100;
         let header = n.to_le_bytes();
         let payload = vec![0xABu8; n as usize];
         let full = [&header[..], &payload[..]].concat();
 
-        // Simulate what read_capture_blocking does:
         let reported_len =
             u32::from_le_bytes(full[..4].try_into().unwrap()) as usize;
         let data = &full[4..4 + reported_len];
@@ -152,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_stream_teardown_cleanup() {
-        // Immediate stop — START then STOP with no data
+        // Immediate stop — START confirmation then immediate STOP with no data
         let packets = vec![make_start(), make_stop()];
         let mut transport = MockLaTransport::new(packets);
         let running = running();
@@ -162,7 +170,6 @@ mod tests {
 
         run_stream_loop(&mut transport, &running, &store, &status, &stream_seq);
 
-        // Teardown must ALWAYS run regardless of stop reason
         assert!(
             !running.load(Ordering::SeqCst),
             "running must always be set to false on any exit path"
@@ -173,61 +180,49 @@ mod tests {
         );
     }
 
-    // ── test 6: stale STOP from previous session is drained ──────────────────
-    // When la_stream_usb_stop() sets running=false and the background task exits
-    // without consuming the firmware's STOP marker, the next session must drain
-    // it before entering the data loop (see drain loop in run_stream_loop).
+    // ── pre_stream_drain tests ───────────────────────────────────────────────
+    // pre_stream_drain() is called by la_stream_usb() BEFORE CMD_HAT_LA_CONFIG.
+    // It sends LA_USB_CMD_STOP (0x00) and drains until PKT_STOP.
+
+    // ── test 6: drain consumes stale STOP from previous host-stop ────────────
+    // When a stream was stopped by the host (CMD_HAT_LA_STOP via BBP), the
+    // firmware emits PKT_STOP on vendor-bulk. If the background task exited
+    // before consuming it, the next session must drain it.
 
     #[test]
-    fn test_stream_drains_stale_stop_before_start() {
+    fn test_pre_drain_consumes_stale_stop() {
         let packets = vec![
-            // Stale STOP left in the FIFO by the previous session's host-stop.
+            // Stale STOP left from previous host-stop.
             Ok(LaStreamPacket { kind: LaStreamPacketKind::Stop, seq: 0, info: 1, payload: vec![] }),
-            // Firmware's START confirmation for the new STREAM_CMD_START.
-            make_start(),
-            make_data(0, &[0xDE, 0xAD]),
+            // PKT_STOP generated by our LA_USB_CMD_STOP command.
             make_stop(),
         ];
         let mut transport = MockLaTransport::new(packets);
-        let run_flag = running();
-        let store = empty_store();
-        let status = empty_status();
-        let stream_seq = seq();
 
-        let reason = run_stream_loop(&mut transport, &run_flag, &store, &status, &stream_seq);
+        pre_stream_drain(&mut transport);
 
-        assert_eq!(
-            reason,
-            StreamStopReason::Normal,
-            "stale STOP must be drained, not terminate the new session"
-        );
-        assert!(!run_flag.load(Ordering::SeqCst));
-        assert!(!status.lock().unwrap().active);
-        assert_eq!(status.lock().unwrap().chunk_count, 1, "one DATA chunk expected");
+        assert_eq!(transport.commands_sent, vec![LA_USB_CMD_STOP], "must send STOP command");
+        // The stale STOP was consumed; our LA_USB_CMD_STOP response (the second STOP) remains.
+        // run_stream_loop tolerates this one leftover STOP before PKT_START.
+        assert_eq!(transport.packets.len(), 1, "one STOP (our drain response) must remain for run_stream_loop");
     }
 
-    // ── test 7: multiple stale packets drained before START ──────────────────
+    // ── test 7: drain consumes mixed stale DATA + STOP + START ───────────────
 
     #[test]
-    fn test_stream_drains_multiple_stale_packets() {
+    fn test_pre_drain_consumes_mixed_stale_packets() {
         let packets = vec![
-            // Stale DATA then stale STOP from a previous session.
+            // Stale DATA and START left over from a previous aborted session.
             Ok(LaStreamPacket { kind: LaStreamPacketKind::Data, seq: 42, info: 0, payload: b"x".to_vec() }),
-            Ok(LaStreamPacket { kind: LaStreamPacketKind::Stop, seq: 0, info: 1, payload: vec![] }),
-            // Real session begins here.
-            make_start(),
-            make_data(0, b"real"),
+            Ok(LaStreamPacket { kind: LaStreamPacketKind::Start, seq: 0, info: 0, payload: vec![] }),
+            // PKT_STOP generated by our LA_USB_CMD_STOP command.
             make_stop(),
         ];
         let mut transport = MockLaTransport::new(packets);
-        let run_flag = running();
-        let store = empty_store();
-        let status = empty_status();
-        let stream_seq = seq();
 
-        let reason = run_stream_loop(&mut transport, &run_flag, &store, &status, &stream_seq);
+        pre_stream_drain(&mut transport);
 
-        assert_eq!(reason, StreamStopReason::Normal, "multiple stale packets must all be drained");
-        assert_eq!(status.lock().unwrap().chunk_count, 1, "only real DATA chunk counted");
+        assert_eq!(transport.commands_sent, vec![LA_USB_CMD_STOP]);
+        assert!(transport.packets.is_empty(), "all stale packets must be consumed");
     }
 }

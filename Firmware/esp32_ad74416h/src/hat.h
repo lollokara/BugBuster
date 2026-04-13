@@ -357,6 +357,22 @@ bool hat_set_swd_clock(uint16_t khz);
 
 // --- Logic Analyzer ---
 
+typedef enum {
+    LA_STATE_IDLE = 0,      // Not configured or stopped
+    LA_STATE_ARMED,         // Waiting for trigger
+    LA_STATE_CAPTURING,     // Trigger fired, capturing data
+    LA_STATE_DONE,          // Capture complete, data ready for readout
+    LA_STATE_STREAMING,     // Continuous DMA→USB streaming (double-buffered)
+    LA_STATE_ERROR,         // Error occurred
+} LaState;
+
+typedef enum {
+    LA_STREAM_STOP_NONE = 0,
+    LA_STREAM_STOP_HOST = 1,
+    LA_STREAM_STOP_USB_SHORT_WRITE = 2,
+    LA_STREAM_STOP_DMA_OVERRUN = 3,
+} LaStreamStopReason;
+
 typedef struct {
     uint8_t  state;         // LaState enum
     uint8_t  channels;
@@ -435,6 +451,16 @@ const char* hat_func_name(HatPinFunction func);
  * @brief Get HAT type name string for display.
  */
 const char* hat_type_name(HatType type);
+
+/**
+ * @brief Get LA state name string for display.
+ */
+const char* hat_la_state_name(uint8_t state);
+
+/**
+ * @brief Get LA stream stop reason name string for display.
+ */
+const char* hat_la_stop_reason_name(uint8_t reason);
 
 #ifdef __cplusplus
 }

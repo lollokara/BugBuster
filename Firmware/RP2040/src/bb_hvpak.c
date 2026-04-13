@@ -779,8 +779,8 @@ bool bb_hvpak_get_bridge(BbHvpakBridgeConfig *out)
 
 bool bb_hvpak_set_bridge(const BbHvpakBridgeConfig *cfg)
 {
-    uint8_t uvlo = cfg && cfg->uvlo_enabled ? s_state.desc->bridge_uvlo_enable_value : 0;
     if (!cfg || !hvpak_require_ready()) return false;
+    uint8_t uvlo = cfg->uvlo_enabled ? s_state.desc->bridge_uvlo_enable_value : 0;
     for (int i = 0; i < 2; i++) {
         if (cfg->output_mode[i] > 3 || cfg->ocp_retry[i] > 7) {
             hvpak_set_error(BB_HVPAK_ERR_INVALID_ARGUMENT);

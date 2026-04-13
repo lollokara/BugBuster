@@ -859,33 +859,8 @@ void bb_cmd_task(void *params)
             // LA trigger check + DMA completion
             bb_la_poll();
 
-            // Stream control is handled in usb_thread; this task only feeds data.
-
-            // LA streaming: send completed buffer halves via vendor bulk packets.
-            {
-                const uint8_t *stream_buf;
-                uint32_t stream_len;
-                if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
-                    // Clear the ready flag BEFORE the blocking USB write so the DMA
-                    // IRQ can mark the OTHER half ready while we are transmitting this
-                    // one.  DMA is currently writing the OTHER half, so clearing our
-                    // half's flag is safe for exactly one DMA cycle.
-                    bb_la_stream_buffer_sent(stream_buf);
-                    __dmb(); // ensure flag clear is visible to IRQ before we proceed
-
-                    uint32_t sent = bb_la_usb_write_live(stream_buf, stream_len);
-
-                    // Stop only if the USB write failed (host too slow or disconnected).
-                    if (sent != stream_len) {
-                        bb_la_stream_note_short_write();
-                        bb_la_usb_send_stream_marker(
-                            LA_USB_STREAM_PKT_ERROR,
-                            LA_STREAM_STOP_USB_SHORT_WRITE
-                        );
-                        bb_la_stop();
-                    }
-                }
-            }
+            // Note: LA streaming (feeding buffers to USB) is now handled 
+            // asynchronously by bb_la_usb_send_pending() in the usb_thread.
 
             // Detect LA state transition to DONE and notify ESP32
             LaStatus la_st;

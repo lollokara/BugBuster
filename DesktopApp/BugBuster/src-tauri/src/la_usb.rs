@@ -18,7 +18,8 @@ const LA_INTERFACE_NUM: u8 = 3;
 const LA_EP_IN: u8 = 0x87;
 const LA_EP_OUT: u8 = 0x06;
 
-const STREAM_CMD_START: u8 = 0x01;
+pub const LA_USB_CMD_STOP: u8 = 0x00;
+pub const LA_USB_CMD_START_STREAM: u8 = 0x01;
 
 pub const STREAM_PKT_START: u8 = 0x01;
 pub const STREAM_PKT_DATA: u8 = 0x02;
@@ -98,10 +99,25 @@ pub fn parse_stream_packet(buf: &[u8]) -> Result<LaStreamPacket, LaStreamPacketE
     })
 }
 
+/// Device selection criteria for LA USB connection
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum DeviceSelector {
+    /// Connect to any BugBuster HAT found
+    Any,
+    /// Connect to a device with a specific serial number
+    SerialNumber(String),
+}
+
 /// LA USB connection state
 pub struct LaUsbConnection {
     interface: Option<nusb::Interface>,
     connected: bool,
+}
+
+impl Drop for LaUsbConnection {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
 }
 
 impl LaUsbConnection {
@@ -112,15 +128,28 @@ impl LaUsbConnection {
         }
     }
 
-    pub fn connect(&mut self) -> Result<()> {
+    pub fn connect(&mut self, selector: Option<DeviceSelector>) -> Result<()> {
         let devices = nusb::list_devices().map_err(|e| anyhow!("USB enumeration failed: {}", e))?;
+        let selector = selector.unwrap_or(DeviceSelector::Any);
 
         for dev_info in devices {
             if dev_info.vendor_id() == BB_HAT_VID && dev_info.product_id() == BB_HAT_PID {
+                match &selector {
+                    DeviceSelector::SerialNumber(sn) => {
+                        if dev_info.serial_number() != Some(sn) {
+                            continue;
+                        }
+                    }
+                    DeviceSelector::Any => {
+                        warn!("No LA device selector provided, using first BugBuster HAT found");
+                    }
+                }
+
                 info!(
-                    "Found BugBuster HAT USB device: bus={} addr={}",
+                    "Found BugBuster HAT USB device: bus={} addr={} sn={:?}",
                     dev_info.bus_number(),
-                    dev_info.device_address()
+                    dev_info.device_address(),
+                    dev_info.serial_number()
                 );
 
                 let device = dev_info
@@ -172,6 +201,15 @@ impl LaUsbConnection {
 
     pub fn is_connected(&self) -> bool {
         self.connected
+    }
+
+    pub fn close(&mut self) -> Result<()> {
+        if self.connected {
+            info!("Closing LA USB connection and releasing interface");
+        }
+        self.interface = None;
+        self.connected = false;
+        Ok(())
     }
 
     pub fn read_capture_blocking(&mut self) -> Result<Vec<u8>> {
@@ -257,10 +295,6 @@ impl LaUsbConnection {
         Ok(())
     }
 
-    pub fn send_stream_start(&self) -> Result<()> {
-        info!("LA USB: sending stream start command");
-        self.send_command(STREAM_CMD_START)
-    }
 }
 
 pub fn decode_capture(raw: &[u8], channels: u8) -> Vec<Vec<u8>> {

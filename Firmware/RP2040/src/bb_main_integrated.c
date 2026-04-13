@@ -106,6 +106,9 @@ void usb_thread(void *ptr)
         // Send pending CDC data from bb_cmd_task's ring buffer.
         bb_la_cdc_send_pending();
 
+        // Send pending Vendor Bulk data (LA stream packets or one-shot readout).
+        bb_la_usb_send_pending();
+
 #ifdef PROBE_USB_CONNECTED_LED
         if (!gpio_get(PROBE_USB_CONNECTED_LED) && tud_connected())
             gpio_put(PROBE_USB_CONNECTED_LED, 1);

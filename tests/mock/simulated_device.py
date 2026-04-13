@@ -104,6 +104,7 @@ class SimulatedDevice:
         self.live_status = 0
         self.die_temp_c = 25.0
         self.spi_ok = True
+        self.admin_token = "BB-ADMIN-DEBUG"
 
         # Handler registry: cmd_id (int) -> callable(payload: bytes) -> bytes
         self._handlers: dict = {}
@@ -135,10 +136,10 @@ class SimulatedDevice:
         except Exception:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
 
-    def http_dispatch(self, method: str, path: str, params: dict, body: dict) -> dict:
+    def http_dispatch(self, method: str, path: str, params: dict, body: dict, headers: dict = None) -> dict:
         try:
             from tests.mock import http_routes
-            return http_routes.dispatch(self, method, path, params, body)
+            return http_routes.dispatch(self, method, path, params, body, headers or {})
         except ImportError:
             return {"error": "not implemented"}
 

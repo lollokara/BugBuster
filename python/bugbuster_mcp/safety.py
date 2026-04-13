@@ -12,6 +12,7 @@ from .config import (
     MAX_DAC_VOLTAGE_UNIPOLAR, MAX_DAC_VOLTAGE_BIPOLAR,
     MAX_DAC_CURRENT_MA, MAX_DAC_CURRENT_MA_SAFE,
     VADJ_CONFIRM_THRESHOLD, ANALOG_IOS, ALL_IOS,
+    LA_MAX_RATE_HZ, LA_MAX_DEPTH_1CH, LA_MAX_DEPTH_2CH, LA_MAX_DEPTH_4CH,
 )
 
 
@@ -141,6 +142,56 @@ def require_hat(bb) -> None:
             "HAT commands require USB transport. "
             "Connect via USB (--transport usb) for HAT/SWD/logic-analyzer access."
         )
+
+
+def require_la_ready(bb) -> None:
+    """
+    Ensure the HAT is connected and the Logic Analyzer is in IDLE state.
+    """
+    require_hat(bb)
+    try:
+        status = bb.hat_la_get_status()
+        state = status.get("state", 0)
+        # BBP States: 0=IDLE, 1=ARMED, 2=CAPTURING, 3=DONE, 4=STREAMING, 5=ERROR
+        # 0 and 3 are "ready" for a new config/capture.
+        if state not in (0, 3):
+            # Try to get a name if the client provided it, otherwise use ID
+            name = status.get("stateName", f"BUSY_{state}")
+            raise RuntimeError(
+                f"Logic analyzer is not ready (state: {name}). "
+                f"Stop the current capture first."
+            )
+    except (AttributeError, NotImplementedError):
+        # Transport or library doesn't support LA
+        raise RuntimeError(
+            "Logic analyzer commands are not supported on this transport or device."
+        )
+
+
+def validate_la_config(channels: int, rate_hz: int, depth: int) -> None:
+    """
+    Ensure LA parameters are within hardware limits.
+    """
+    if channels not in (1, 2, 4):
+        raise ValueError(
+            f"Invalid channel count {channels}. The logic analyzer supports 1, 2, or 4 channels."
+        )
+    if rate_hz > LA_MAX_RATE_HZ:
+        raise ValueError(
+            f"Sample rate {rate_hz/1e6:.1f} MHz exceeds the 100 MHz limit."
+        )
+    if rate_hz <= 0:
+        raise ValueError("Sample rate must be positive.")
+
+    # Check depth against channel-specific limit
+    limit = {1: LA_MAX_DEPTH_1CH, 2: LA_MAX_DEPTH_2CH, 4: LA_MAX_DEPTH_4CH}[channels]
+    if depth > limit:
+        raise ValueError(
+            f"Capture depth {depth:,} exceeds the limit for {channels}-channel mode ({limit:,} samples). "
+            f"Reduce depth or number of channels."
+        )
+    if depth < 0:
+        raise ValueError("Capture depth cannot be negative.")
 
 
 # ---------------------------------------------------------------------------

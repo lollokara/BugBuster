@@ -92,6 +92,24 @@ bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info);
 void bb_la_usb_poll_commands(void);
 
 /**
+ * @brief Call from the USB thread (tud_task context) to send pending vendor bulk data.
+ */
+void bb_la_usb_send_pending(void);
+
+/**
+ * @brief Register a large buffer to be streamed via USB bulk IN.
+ *        Used for one-shot readout (HAT_CMD_LA_USB_SEND).
+ * @param buf         The buffer to send
+ * @param total_bytes Total bytes
+ */
+void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes);
+
+/**
+ * @brief Reset the bulk transmit state (aborting any ongoing readout or live stream).
+ */
+void bb_la_usb_abort_bulk(void);
+
+/**
  * @brief Call from the USB thread (tud_task context) to send pending legacy CDC data.
  *        TinyUSB requires CDC writes from the same task as tud_task.
  */

@@ -1,9 +1,17 @@
 """
 LA USB bulk hardware tests — requires real RP2040 with HAT.
 
-Run with: pytest tests/device/test_la_usb_bulk.py --hat -v
+Run with:
+    pytest tests/device/test_la_usb_bulk.py --hat --device-usb /dev/cu.usbmodem1234561 -v
 
-These tests bypass the ESP32/BBP stack and communicate directly with the
+--device-usb is required: before each test the fixture calls CMD_HAT_LA_CONFIG via BBP
+(through the ESP32) to load the RP2040 PIO program (pio_loaded=true). Without this,
+LA_USB_CMD_START_STREAM returns PKT_ERROR(START_REJECTED=0x80) because the RP2040
+guards bb_la_start_stream() behind pio_loaded==true (set by bb_la_configure()).
+LA_USB_CMD_STOP always calls bb_la_stop() which unloads PIO, so configure must be
+called before every streaming attempt, not just once at setup.
+
+These tests otherwise bypass the ESP32/BBP stack and communicate directly with the
 RP2040 vendor bulk interface (interface=3, EP_IN=0x87, EP_OUT=0x06).
 They validate that the firmware correctly implements the LA USB bulk protocol.
 """
@@ -50,6 +58,75 @@ def la_host(request: pytest.FixtureRequest):
 @pytest.mark.usb_only
 @pytest.mark.requires_hat
 class TestLaUsbBulk:
+
+    @pytest.fixture(autouse=True)
+    def configure_la_before_test(self, la_host: LaUsbHost, request: pytest.FixtureRequest) -> None:
+        """
+        Drain stale packets then call CMD_HAT_LA_CONFIG via BBP before each test.
+
+        Before each test: drain the vendor bulk FIFO to empty, then call
+        CMD_HAT_LA_CONFIG via BBP to reload the RP2040 PIO program.
+
+          1. Send STREAM_CMD_STOP, then read until timeout (FIFO truly empty).
+             "Until first PKT_STOP" is not enough: incomplete test cleanup can leave
+             [DATA×N][PKT_STOP][DATA×M] in the FIFO; the remaining DATA packets would
+             be read as the "first packet" of the next STREAM_CMD_START.
+          2. Call hat_la_configure() via BBP — calls bb_la_configure() on the RP2040
+             which runs load_pio_program() and sets pio_loaded=true.
+
+        Without step 1, stale DATA from the previous test pollutes the next test.
+        Without step 2, pio_loaded=false and LA_USB_CMD_START_STREAM returns
+        PKT_ERROR(START_REJECTED=0x80).
+        """
+        port = request.config.getoption("--device-usb", default=None)
+        if port is None:
+            pytest.skip(
+                "LA USB bulk stream tests require --device-usb <port> "
+                "to call CMD_HAT_LA_CONFIG via BBP before each streaming attempt"
+            )
+
+        # Step 1+2: drain vendor bulk FIFO until truly empty.
+        # Send STOP and read until a timeout (FIFO empty), not just until first PKT_STOP.
+        # Stopping until the first PKT_STOP is insufficient: a previous test's incomplete
+        # cleanup can leave [DATA×N][PKT_STOP][DATA×M][PKT_STOP] in the FIFO. Breaking
+        # on the first STOP leaves M DATA packets that would be read as "the first packet"
+        # of the next STREAM_CMD_START. Reading until timeout guarantees the FIFO is clear.
+        try:
+            la_host.send_command(STREAM_CMD_STOP)
+        except Exception:
+            pass  # device may already be idle; proceed to drain
+        for _ in range(8192):
+            try:
+                la_host.read_packet(timeout_ms=150)
+            except Exception:
+                break  # timeout = FIFO truly empty
+
+        # Step 3: reload PIO via BBP.
+        # Retry up to 5 times with 200 ms gaps — the RP2040 may be briefly busy
+        # finishing DMA/PIO teardown after STREAM_CMD_STOP, causing the 300 ms
+        # I2C timeout in hat_command() to fire before bb_la_configure() runs.
+        import bugbuster as bb
+        try:
+            dev = bb.connect_usb(port)
+        except Exception as e:
+            pytest.skip(f"Could not connect to BBP device on {port}: {e}")
+            return
+        configured = False
+        last_err = None
+        try:
+            for attempt in range(5):
+                if attempt > 0:
+                    time.sleep(0.2)
+                try:
+                    dev.hat_la_configure(channels=4, rate_hz=1_000_000, depth=100_000)
+                    configured = True
+                    break
+                except Exception as e:
+                    last_err = e
+        finally:
+            dev.disconnect()
+        if not configured:
+            pytest.skip(f"CMD_HAT_LA_CONFIG failed after 5 attempts: {last_err}")
 
     def test_bulk_interface_mounts(self, la_host: LaUsbHost) -> None:
         """Interface 3 must be claimable — if the fixture ran, it succeeded."""

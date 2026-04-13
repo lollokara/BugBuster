@@ -5,9 +5,28 @@ Routes GET/POST requests to the appropriate handler and returns dicts
 that match what _normalize_http_* functions in client.py expect.
 """
 
+def check_admin_auth(device, headers: dict) -> bool:
+    """Checks for X-BugBuster-Admin-Token header."""
+    token = headers.get("X-BugBuster-Admin-Token")
+    # If device.admin_token is None, auth is disabled
+    if getattr(device, 'admin_token', None) is None:
+        return True
+    return token == device.admin_token
 
-def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
-    key = (method.upper(), path)
+def dispatch(device, method: str, path: str, params: dict, body: dict, headers: dict) -> dict:
+    method = method.upper()
+    # Normalize path: remove leading /api if present
+    if path.startswith("/api"):
+        path = path[4:]
+    if not path.startswith("/"):
+        path = "/" + path
+
+    key = (method, path)
+
+    # Auth enforcement for POST / mutating routes
+    if method == "POST":
+        if not check_admin_auth(device, headers):
+            return {"error": "unauthorized", "code": 401}
 
     # Device version
     if key == ("GET", "/device/version"):
@@ -39,13 +58,16 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
         device.supply_alert_status = 0
         for ch in device.channels:
             ch["channel_alert"] = 0
-        return {}
+        return {"ok": True}
 
     if method == "POST" and path.startswith("/faults/clear/"):
-        ch_idx = int(path.split("/")[-1])
-        if 0 <= ch_idx < len(device.channels):
-            device.channels[ch_idx]["channel_alert"] = 0
-        return {}
+        try:
+            ch_idx = int(path.split("/")[-1])
+            if 0 <= ch_idx < len(device.channels):
+                device.channels[ch_idx]["channel_alert"] = 0
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid channel index"}
 
     # Device reset
     if key == ("POST", "/device/reset"):
@@ -56,74 +78,102 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
             ch["channel_alert"] = 0
         device.alert_status = 0
         device.supply_alert_status = 0
-        return {}
+        # Reset LA state if present
+        if hasattr(device, 'la_state'):
+            device.la_state = "IDLE"
+        return {"ok": True}
 
     # Channel function
     if method == "POST" and path.startswith("/channel/") and path.endswith("/function"):
+        if "function" not in body:
+            return {"error": "missing field: function", "code": 400}
         parts = path.split("/")
-        ch_idx = int(parts[2])
-        if 0 <= ch_idx < len(device.channels):
-            func = int(body.get("function", 0))
-            ch = device.channels[ch_idx]
-            ch["function"] = func
-            if func == 0:  # HIGH_IMP resets DAC/ADC state
-                ch["dac_code"] = 0
-                ch["dac_value"] = 0.0
-        return {}
+        try:
+            ch_idx = int(parts[2])
+            if 0 <= ch_idx < len(device.channels):
+                func = int(body.get("function", 0))
+                ch = device.channels[ch_idx]
+                ch["function"] = func
+                if func == 0:  # HIGH_IMP resets DAC/ADC state
+                    ch["dac_code"] = 0
+                    ch["dac_value"] = 0.0
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid path or body"}
 
     # DAC readback
     if method == "GET" and path.startswith("/channel/") and path.endswith("/dac/readback"):
         parts = path.split("/")
-        ch_idx = int(parts[2])
-        code = 0
-        if 0 <= ch_idx < len(device.channels):
-            code = device.channels[ch_idx]["dac_code"]
-        return {"code": code}
+        try:
+            ch_idx = int(parts[2])
+            code = 0
+            if 0 <= ch_idx < len(device.channels):
+                code = device.channels[ch_idx]["dac_code"]
+            return {"code": code}
+        except ValueError:
+            return {"error": "invalid channel index"}
 
     # DAC set (voltage, current, or raw code)
     if method == "POST" and path.startswith("/channel/") and path.endswith("/dac"):
         parts = path.split("/")
-        ch_idx = int(parts[2])
-        if 0 <= ch_idx < len(device.channels):
-            ch = device.channels[ch_idx]
-            if "voltage" in body:
-                voltage = float(body["voltage"])
-                bipolar = bool(body.get("bipolar", False))
-                ch["dac_value"] = voltage
-                if bipolar:
-                    code = int((voltage / 24.0 + 0.5) * 65535) & 0xFFFF
+        try:
+            ch_idx = int(parts[2])
+            if 0 <= ch_idx < len(device.channels):
+                ch = device.channels[ch_idx]
+                if "voltage" in body:
+                    voltage = float(body["voltage"])
+                    bipolar = bool(body.get("bipolar", False))
+                    ch["dac_value"] = voltage
+                    if bipolar:
+                        code = int((voltage / 24.0 + 0.5) * 65535) & 0xFFFF
+                    else:
+                        code = int((voltage / 12.0) * 65535) & 0xFFFF
+                    ch["dac_code"] = code
+                elif "current_mA" in body:
+                    current_ma = float(body["current_mA"])
+                    ch["dac_value"] = current_ma
+                    ch["dac_code"] = int((current_ma / 25.0) * 65535) & 0xFFFF
+                elif "code" in body:
+                    ch["dac_code"] = int(body["code"]) & 0xFFFF
                 else:
-                    code = int((voltage / 12.0) * 65535) & 0xFFFF
-                ch["dac_code"] = code
-            elif "current_mA" in body:
-                current_ma = float(body["current_mA"])
-                ch["dac_value"] = current_ma
-                ch["dac_code"] = int((current_ma / 25.0) * 65535) & 0xFFFF
-            elif "code" in body:
-                ch["dac_code"] = int(body["code"]) & 0xFFFF
-        return {}
+                    return {"error": "missing field: voltage, current_mA or code", "code": 400}
+            return {"ok": True}
+        except (ValueError, TypeError):
+            return {"error": "invalid value"}
 
     # Channel alert mask
     if method == "POST" and path.startswith("/faults/channel/") and path.endswith("/mask"):
+        if "mask" not in body:
+            return {"error": "missing field: mask", "code": 400}
         parts = path.split("/")
-        ch_idx = int(parts[3])
-        if 0 <= ch_idx < len(device.channels):
-            device.channels[ch_idx]["channel_alert_mask"] = int(body.get("mask", 0xFFFF)) & 0xFFFF
-        return {}
+        try:
+            ch_idx = int(parts[3])
+            if 0 <= ch_idx < len(device.channels):
+                device.channels[ch_idx]["channel_alert_mask"] = int(body.get("mask", 0xFFFF)) & 0xFFFF
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid channel index"}
 
     # Global alert mask
     if key == ("POST", "/faults/mask"):
-        device.alert_mask = int(body.get("alert_mask", 0xFFFF)) & 0xFFFF
-        device.supply_alert_mask = int(body.get("supply_mask", 0xFFFF)) & 0xFFFF
-        return {}
+        if "alert_mask" not in body and "supply_mask" not in body:
+             return {"error": "missing field: alert_mask or supply_mask", "code": 400}
+        if "alert_mask" in body:
+            device.alert_mask = int(body.get("alert_mask", 0xFFFF)) & 0xFFFF
+        if "supply_mask" in body:
+            device.supply_alert_mask = int(body.get("supply_mask", 0xFFFF)) & 0xFFFF
+        return {"ok": True}
 
     # Per-channel fault clear
     if method == "POST" and path.startswith("/faults/channel/") and path.endswith("/clear"):
         parts = path.split("/")
-        ch_idx = int(parts[3])
-        if 0 <= ch_idx < len(device.channels):
-            device.channels[ch_idx]["channel_alert"] = 0
-        return {}
+        try:
+            ch_idx = int(parts[3])
+            if 0 <= ch_idx < len(device.channels):
+                device.channels[ch_idx]["channel_alert"] = 0
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid channel index"}
 
     # Selftest
     if key == ("GET", "/selftest"):
@@ -134,9 +184,12 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
         }
 
     if method == "GET" and path.startswith("/selftest/supply/"):
-        rail = int(path.split("/")[-1])
-        voltages = [12.0, 5.0, 3.3]
-        return {"voltage": voltages[rail] if rail < len(voltages) else -1.0}
+        try:
+            rail = int(path.split("/")[-1])
+            voltages = [12.0, 5.0, 3.3]
+            return {"voltage": voltages[rail] if rail < len(voltages) else -1.0}
+        except ValueError:
+            return {"error": "invalid supply index"}
 
     if key == ("GET", "/selftest/efuse"):
         return {"available": True, "timestamp_ms": 0, "currents": [0.0, 0.0, 0.0, 0.0]}
@@ -165,20 +218,30 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
 
     # GPIO — POST /gpio/{pin}/config
     if method == "POST" and path.startswith("/gpio/") and path.endswith("/config"):
+        if "mode" not in body:
+            return {"error": "missing field: mode", "code": 400}
         parts = path.split("/")
-        pin_id = int(parts[2])
-        if 0 <= pin_id < len(device.gpio):
-            device.gpio[pin_id]["mode"] = int(body.get("mode", 0))
-            device.gpio[pin_id]["pulldown"] = bool(body.get("pulldown", False))
-        return {}
+        try:
+            pin_id = int(parts[2])
+            if 0 <= pin_id < len(device.gpio):
+                device.gpio[pin_id]["mode"] = int(body.get("mode", 0))
+                device.gpio[pin_id]["pulldown"] = bool(body.get("pulldown", False))
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid pin id"}
 
     # GPIO — POST /gpio/{pin}/set
     if method == "POST" and path.startswith("/gpio/") and path.endswith("/set"):
+        if "value" not in body:
+            return {"error": "missing field: value", "code": 400}
         parts = path.split("/")
-        pin_id = int(parts[2])
-        if 0 <= pin_id < len(device.gpio):
-            device.gpio[pin_id]["output"] = bool(body.get("value", False))
-        return {}
+        try:
+            pin_id = int(parts[2])
+            if 0 <= pin_id < len(device.gpio):
+                device.gpio[pin_id]["output"] = bool(body.get("value", False))
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid pin id"}
 
     # DIO — GET /dio → {"ios": [...]}
     if key == ("GET", "/dio"):
@@ -197,34 +260,47 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
 
     # DIO — GET /dio/{io}
     if method == "GET" and path.startswith("/dio/"):
-        io_num = int(path.split("/")[-1])
-        idx = io_num - 1
-        if 0 <= idx < len(device.dio):
-            d = device.dio[idx]
-            return {
-                "io": io_num,
-                "mode": d.get("mode", 0),
-                "value": bool(d.get("output", False)),
-            }
-        return {"io": io_num, "mode": 0, "value": False}
+        try:
+            io_num = int(path.split("/")[-1])
+            idx = io_num - 1
+            if 0 <= idx < len(device.dio):
+                d = device.dio[idx]
+                return {
+                    "io": io_num,
+                    "mode": d.get("mode", 0),
+                    "value": bool(d.get("output", False)),
+                }
+            return {"io": io_num, "mode": 0, "value": False}
+        except ValueError:
+            return {"error": "invalid io number"}
 
     # DIO — POST /dio/{io}/config
     if method == "POST" and path.startswith("/dio/") and path.endswith("/config"):
+        if "mode" not in body:
+            return {"error": "missing field: mode", "code": 400}
         parts = path.split("/")
-        io_num = int(parts[2])
-        idx = io_num - 1
-        if 0 <= idx < len(device.dio):
-            device.dio[idx]["mode"] = int(body.get("mode", 0))
-        return {}
+        try:
+            io_num = int(parts[2])
+            idx = io_num - 1
+            if 0 <= idx < len(device.dio):
+                device.dio[idx]["mode"] = int(body.get("mode", 0))
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid io number"}
 
     # DIO — POST /dio/{io}/set
     if method == "POST" and path.startswith("/dio/") and path.endswith("/set"):
+        if "value" not in body:
+            return {"error": "missing field: value", "code": 400}
         parts = path.split("/")
-        io_num = int(parts[2])
-        idx = io_num - 1
-        if 0 <= idx < len(device.dio):
-            device.dio[idx]["output"] = bool(body.get("value", False))
-        return {}
+        try:
+            io_num = int(parts[2])
+            idx = io_num - 1
+            if 0 <= idx < len(device.dio):
+                device.dio[idx]["output"] = bool(body.get("value", False))
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid io number"}
 
     # MUX — GET /mux → {"states": [b0, b1, b2, b3]}
     if key == ("GET", "/mux"):
@@ -232,24 +308,31 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
 
     # MUX — POST /mux/all
     if key == ("POST", "/mux/all"):
+        if "states" not in body:
+            return {"error": "missing field: states", "code": 400}
         states = body.get("states", [0, 0, 0, 0])
         for i in range(4):
             if i < len(states):
                 device.mux_states[i] = int(states[i]) & 0xFF
-        return {}
+        return {"ok": True}
 
     # MUX — POST /mux/switch
     if key == ("POST", "/mux/switch"):
-        dev_idx  = int(body.get("device", 0))
-        sw_idx   = int(body.get("switch", 0))
-        closed   = bool(body.get("closed", False))
-        if 0 <= dev_idx < 4 and 0 <= sw_idx < 8:
-            if closed:
-                device.mux_states[dev_idx] |= (1 << sw_idx)
-            else:
-                device.mux_states[dev_idx] &= ~(1 << sw_idx)
-                device.mux_states[dev_idx] &= 0xFF
-        return {}
+        if "device" not in body or "switch" not in body or "closed" not in body:
+            return {"error": "missing fields: device, switch or closed", "code": 400}
+        try:
+            dev_idx  = int(body.get("device", 0))
+            sw_idx   = int(body.get("switch", 0))
+            closed   = bool(body.get("closed", False))
+            if 0 <= dev_idx < 4 and 0 <= sw_idx < 8:
+                if closed:
+                    device.mux_states[dev_idx] |= (1 << sw_idx)
+                else:
+                    device.mux_states[dev_idx] &= ~(1 << sw_idx)
+                    device.mux_states[dev_idx] &= 0xFF
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid value"}
 
     # HAT status
     if key == ("GET", "/hat"):
@@ -263,6 +346,20 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
             "fw_version": "1.0",
             "config_confirmed": detected,
             "pin_config": list(pins[:4]),
+        }
+
+    # LA Status — Phase 0 schema
+    if key == ("GET", "/hat/la/status"):
+        state_name = getattr(device, "la_state", "IDLE")
+        return {
+            "stateName": state_name,
+            "stopReasonName": "NONE",
+            "active": state_name != "IDLE",
+            "triggerArmed": False,
+            "samplesCaptured": 0,
+            "maxSamples": 1024,
+            "clockHz": 10000000,
+            "channels": 8
         }
 
     # HAT detect
@@ -295,7 +392,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
                 if i < len(device.hat_pins):
                     device.hat_pins[i] = int(p)
             return {"ok": True}
-        return {"ok": False}
+        return {"error": "missing field: pin or pins", "code": 400}
 
     # HAT SWD setup
     if key == ("POST", "/hat/setup_swd"):
@@ -320,26 +417,36 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
 
     # IDAC set voltage — POST /idac/voltage
     if key == ("POST", "/idac/voltage"):
-        ch_idx = int(body.get("ch", 0))
-        voltage = float(body.get("voltage", 0.0))
-        idac = getattr(device, 'idac', [])
-        if 0 <= ch_idx < len(idac):
-            idac[ch_idx]["target_v"] = voltage
-            idac[ch_idx]["actual_v"] = voltage
-        return {}
+        if "ch" not in body or "voltage" not in body:
+            return {"error": "missing field: ch or voltage", "code": 400}
+        try:
+            ch_idx = int(body.get("ch", 0))
+            voltage = float(body.get("voltage", 0.0))
+            idac = getattr(device, 'idac', [])
+            if 0 <= ch_idx < len(idac):
+                idac[ch_idx]["target_v"] = voltage
+                idac[ch_idx]["actual_v"] = voltage
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid value"}
 
     # IDAC set code — POST /idac/code
     if key == ("POST", "/idac/code"):
-        ch_idx = int(body.get("ch", 0))
-        code = int(body.get("code", 0))
-        idac = getattr(device, 'idac', [])
-        if 0 <= ch_idx < len(idac):
-            idac[ch_idx]["code"] = code
-        return {}
+        if "ch" not in body or "code" not in body:
+            return {"error": "missing field: ch or code", "code": 400}
+        try:
+            ch_idx = int(body.get("ch", 0))
+            code = int(body.get("code", 0))
+            idac = getattr(device, 'idac', [])
+            if 0 <= ch_idx < len(idac):
+                idac[ch_idx]["code"] = code
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid value"}
 
     # IDAC cal save — POST /idac/cal/save
     if key == ("POST", "/idac/cal/save"):
-        return {}
+        return {"ok": True}
 
     # IO expander (PCA9535) power status — GET /ioexp
     if key == ("GET", "/ioexp"):
@@ -358,7 +465,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
 
     # IO expander control — POST /ioexp/control
     if key == ("POST", "/ioexp/control"):
-        return {}
+        return {"ok": True}
 
     # IO expander fault log — GET /ioexp/faults
     if key == ("GET", "/ioexp/faults"):
@@ -366,31 +473,44 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
 
     # IO expander fault config — POST /ioexp/fault_config
     if key == ("POST", "/ioexp/fault_config"):
-        return {}
+        return {"ok": True}
 
     # USB PD status — GET /usbpd
     if key == ("GET", "/usbpd"):
-        _CODE_TO_V = {1: 5, 2: 9, 3: 12, 4: 15, 5: 18, 6: 20}
+        _CODE_TO_V = {1: 5.0, 2: 9.0, 3: 12.0, 4: 15.0, 5: 18.0, 6: 20.0}
         code = getattr(device, 'usbpd_voltage', 1)
-        voltage_v = float(_CODE_TO_V.get(code, 5))
-        pdos = []
-        for v in [5, 9, 12, 15, 18, 20]:
-            pdos.append({"voltage_v": v, "current_a": 3.0, "detected": True})
+        voltage_v = _CODE_TO_V.get(code, 5.0)
+        source_pdos = []
+        for v in [5.0, 9.0, 12.0, 15.0, 18.0, 20.0]:
+            source_pdos.append({
+                "voltage": f"{int(v)}V",
+                "detected": True,
+                "maxCurrentA": 3.0,
+                "maxPowerW": v * 3.0
+            })
         return {
             "present": True,
             "attached": True,
-            "voltage_v": voltage_v,
-            "current_a": 3.0,
-            "power_w": voltage_v * 3.0,
-            "pdos": pdos,
+            "cc": "CC1",
+            "voltageV": voltage_v,
+            "currentA": 3.0,
+            "powerW": voltage_v * 3.0,
+            "pdResponse": 0,
+            "sourcePdos": source_pdos,
+            "selectedPdo": code - 1
         }
 
     # USB PD select voltage — POST /usbpd/select
     if key == ("POST", "/usbpd/select"):
+        if "voltage" not in body:
+            return {"error": "missing field: voltage", "code": 400}
         _V_TO_CODE = {5: 1, 9: 2, 12: 3, 15: 4, 18: 5, 20: 6}
-        voltage = int(body.get("voltage", 5))
-        device.usbpd_voltage = _V_TO_CODE.get(voltage, 1)
-        return {}
+        try:
+            voltage = int(body.get("voltage", 5))
+            device.usbpd_voltage = _V_TO_CODE.get(voltage, 1)
+            return {"ok": True}
+        except ValueError:
+            return {"error": "invalid voltage"}
 
     # WiFi status — GET /wifi
     if key == ("GET", "/wifi"):
@@ -413,7 +533,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict) -> dict:
         return {"ok": True}
 
     # Fallback
-    return {"error": "not implemented", "path": path, "method": method}
+    return {"error": "not implemented", "path": path, "method": method, "code": 404}
 
 
 # ---------------------------------------------------------------------------

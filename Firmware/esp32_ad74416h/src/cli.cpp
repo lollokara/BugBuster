@@ -261,6 +261,22 @@ static void handleCommand(const char* line)
         cmdWifi(args);
     } else if (strcmp(cmd, "idac") == 0) {
         cmdIdac(args);
+    } else if (strcmp(cmd, "idac_cal") == 0) {
+        unsigned int ch = 0, step = 8, settle = 200;
+        int n = sscanf(args, "%u %u %u", &ch, &step, &settle);
+        if (n < 1 || ch > 2) {
+            serial_println("Usage: idac_cal <ch> [step] [settle_ms]");
+            serial_println("  ch: 0=LevelShift 1=VADJ1 2=VADJ2");
+        } else {
+            serial_printf("Triggering auto-calibration for IDAC%u...\r\n", ch);
+            Command ccmd;
+            ccmd.type = CMD_IDAC_CALIBRATE;
+            ccmd.idacCal.ch = (uint8_t)ch;
+            ccmd.idacCal.step = (uint8_t)step;
+            ccmd.idacCal.settle_ms = (uint16_t)settle;
+            sendCommand(ccmd);
+            serial_println("Calibration task started. Check serial logs for progress.");
+        }
     } else if (strcmp(cmd, "usbpd") == 0 || strcmp(cmd, "pd") == 0) {
         cmdUsbpd(args);
     } else if (strcmp(cmd, "pca") == 0 || strcmp(cmd, "ioexp") == 0) {
@@ -1544,9 +1560,13 @@ static void cmdIdac(const char* args)
         unsigned int step = 8, settle = 200;
         sscanf(args, "%u %u", &step, &settle);
         serial_printf("IDAC%u auto-calibration (step=%u, settle=%ums)...\r\n", ch, step, settle);
-        serial_println("NOTE: Requires ADC channel configured for VIN on the measured rail");
-        // TODO: integrate with ADC read callback
-        serial_println("  Calibration not yet wired to ADC - use manual 'idac <ch> code' + 'adc' to calibrate");
+        Command ccmd;
+        ccmd.type = CMD_IDAC_CALIBRATE;
+        ccmd.idacCal.ch = (uint8_t)ch;
+        ccmd.idacCal.step = (uint8_t)step;
+        ccmd.idacCal.settle_ms = (uint16_t)settle;
+        sendCommand(ccmd);
+        serial_println("Calibration task started. Check serial logs for progress.");
     } else {
         serial_printf("Unknown IDAC sub-command: '%s'\r\n", subcmd);
     }

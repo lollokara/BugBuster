@@ -528,6 +528,10 @@ class BugBusterHAL:
         # ── Power on the IO_Block ─────────────────────────────────────────
         self._enable_io_block_power(rt)
 
+        # ── HAT presence check ────────────────────────────────────────────
+        if mode == PortMode.HAT:
+            self._bb._require_hat_present()
+
         # ── Set MUX routing ───────────────────────────────────────────────
         self._set_mux(rt, mode)
 
@@ -608,12 +612,10 @@ class BugBusterHAL:
             ch_data = status["channels"][rt.channel]
             return bool(ch_data.get("din_state", False))
         else:
-            # ESP GPIO: read AD74416H GPIO pin that monitors the ESP GPIO level
-            # For now, fall back to get_status if available
-            log.debug("read_digital(IO %d) via ESP GPIO %d", io, rt.esp_gpio)
+            log.debug("read_digital(IO %d)", io)
             # Ensure GPIO is configured as input before reading
-            self._bb.dio_configure(rt.esp_gpio, 1)  # DIO_MODE_INPUT
-            resp = self._bb.dio_read(rt.esp_gpio)
+            self._bb.dio_configure(io, 1)  # DIO_MODE_INPUT
+            resp = self._bb.dio_read(io)
             if resp and isinstance(resp, dict):
                 return bool(resp.get("value", False))
             return False
@@ -624,9 +626,8 @@ class BugBusterHAL:
         Must be DIGITAL_OUT or DIGITAL_OUT_LOW.
 
         For analog-capable IOs in DIGITAL_OUT mode using the AD74416H channel:
-        drives via DO (digital output) driver.  For all other cases: the MUX
-        routes the ESP GPIO to the physical pin — the firmware manages the
-        actual GPIO level.
+        drives via DO (digital output) driver.  For all other cases: logical
+        IO number is used to drive the pin.
         """
         actual = self._io_mode.get(io, PortMode.DISABLED)
         if actual not in self._DIGITAL_WRITE_MODES:
@@ -638,11 +639,10 @@ class BugBusterHAL:
         if rt.channel is not None and actual == PortMode.DIGITAL_OUT:
             self._bb.set_digital_output(rt.channel, on=state)
         else:
-            log.debug("write_digital(IO %d, %s) via ESP GPIO %d",
-                      io, state, rt.esp_gpio)
+            log.debug("write_digital(IO %d, %s)", io, state)
             # Ensure GPIO is configured as output before writing
-            self._bb.dio_configure(rt.esp_gpio, 2)  # DIO_MODE_OUTPUT
-            self._bb.dio_write(rt.esp_gpio, state)
+            self._bb.dio_configure(io, 2)  # DIO_MODE_OUTPUT
+            self._bb.dio_write(io, state)
 
     # ------------------------------------------------------------------
     # HART (IO 1, 4, 7, 10)

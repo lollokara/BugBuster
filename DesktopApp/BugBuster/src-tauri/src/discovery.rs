@@ -118,11 +118,16 @@ pub fn discover_usb() -> Vec<DiscoveredDevice> {
         match probe_bbp(&port.port_name) {
             Some((proto, fw_maj, fw_min, fw_pat)) => {
                 log::info!("  ✓ BugBuster detected: proto v{}, fw v{}.{}.{}", proto, fw_maj, fw_min, fw_pat);
+                let serial_number = match &port.port_type {
+                    serialport::SerialPortType::UsbPort(usb) => usb.serial_number.clone(),
+                    _ => None,
+                };
                 devices.push(DiscoveredDevice {
                     id: format!("usb:{}", port.port_name),
                     name: format!("BugBuster (fw {}.{}.{})", fw_maj, fw_min, fw_pat),
                     transport: "usb".to_string(),
                     address: port.port_name.clone(),
+                    serial_number,
                 });
             }
             None => {

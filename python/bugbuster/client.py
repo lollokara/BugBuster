@@ -1449,6 +1449,7 @@ class BugBuster:
             :meth:`hat_setup_swd` instead — SWD now lives on a dedicated
             3-pin connector and is no longer assigned per-pin.
         """
+        self._require_hat_present()
         func_val = int(function)
         from .constants import HAT_FUNC_RESERVED_CODES
         if func_val in HAT_FUNC_RESERVED_CODES:
@@ -1474,6 +1475,7 @@ class BugBuster:
         :param functions: List of 4 HatPinFunction values
         :return: True if HAT acknowledged
         """
+        self._require_hat_present()
         assert len(functions) == 4
         if self._usb:
             payload = struct.pack('<4B', *[int(f) for f in functions])
@@ -1485,6 +1487,7 @@ class BugBuster:
 
     def hat_reset(self) -> bool:
         """Reset HAT to default state (all pins disconnected)."""
+        self._require_hat_present()
         if self._usb:
             self._usb_cmd(CmdId.HAT_RESET)
             return True
@@ -1531,6 +1534,7 @@ class BugBuster:
         :param connector: 0 = Connector A (VADJ1), 1 = Connector B (VADJ2)
         :param enable: True to enable power
         """
+        self._require_hat_present()
         if self._usb:
             payload = struct.pack('<BB', connector, int(enable))
             self._usb_cmd(CmdId.HAT_SET_POWER, payload)
@@ -1543,6 +1547,7 @@ class BugBuster:
 
     def hat_get_power(self) -> dict:
         """Get power status for both HAT connectors (enabled, current, fault)."""
+        self._require_hat_present()
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_GET_POWER)
             off = 0
@@ -1571,6 +1576,7 @@ class BugBuster:
 
         :param voltage_mv: Target I/O voltage in millivolts (1200-5500)
         """
+        self._require_hat_present()
         if self._usb:
             payload = struct.pack('<H', voltage_mv)
             self._usb_cmd(CmdId.HAT_SET_IO_VOLT, payload)

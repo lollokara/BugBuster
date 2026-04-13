@@ -59,8 +59,9 @@ pub async fn connect_device(
 #[tauri::command]
 pub async fn disconnect_device(
     mgr: State<'_, ConnectionManager>,
+    app: tauri::AppHandle,
 ) -> CmdResult<()> {
-    mgr.disconnect().await.map_err(map_err)
+    mgr.disconnect(&app).await.map_err(map_err)
 }
 
 #[tauri::command]

@@ -110,8 +110,8 @@ class SimulatedHTTPTransport(HTTPTransport):
     # HTTP methods
     # ------------------------------------------------------------------
 
-    def get(self, path: str, params=None) -> dict:
-        return self._device.http_dispatch("GET", path, params or {}, {})
+    def get(self, path: str, params=None, headers=None) -> dict:
+        return self._device.http_dispatch("GET", path, params or {}, {}, headers or {})
 
     def post(self, path: str, body=None, headers=None) -> dict:
-        return self._device.http_dispatch("POST", path, {}, body or {})
+        return self._device.http_dispatch("POST", path, {}, body or {}, headers or {})

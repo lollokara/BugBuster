@@ -570,6 +570,30 @@ const char* hat_type_name(HatType type)
     }
 }
 
+const char* hat_la_state_name(uint8_t state)
+{
+    switch (state) {
+        case LA_STATE_IDLE:      return "IDLE";
+        case LA_STATE_ARMED:     return "ARMED";
+        case LA_STATE_CAPTURING: return "CAPTURING";
+        case LA_STATE_DONE:      return "DONE";
+        case LA_STATE_STREAMING: return "STREAMING";
+        case LA_STATE_ERROR:     return "ERROR";
+        default:                 return "UNKNOWN";
+    }
+}
+
+const char* hat_la_stop_reason_name(uint8_t reason)
+{
+    switch (reason) {
+        case LA_STREAM_STOP_NONE:            return "NONE";
+        case LA_STREAM_STOP_HOST:            return "HOST";
+        case LA_STREAM_STOP_USB_SHORT_WRITE: return "USB_SHORT_WRITE";
+        case LA_STREAM_STOP_DMA_OVERRUN:     return "DMA_OVERRUN";
+        default:                             return "UNKNOWN";
+    }
+}
+
 // =============================================================================
 // Power Management
 // =============================================================================

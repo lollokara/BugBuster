@@ -46,11 +46,26 @@ impl ConnectionManager {
 
     /// Connect to a device by its discovery ID.
     pub async fn connect(&self, device_id: &str, app: &AppHandle) -> Result<()> {
-        self.disconnect().await?;
+        let mut la_selector = None;
+        if device_id.starts_with("usb:") {
+            let port_name = &device_id[4..];
+            if let Ok(ports) = serialport::available_ports() {
+                if let Some(port) = ports.iter().find(|p| p.port_name == port_name) {
+                    if let serialport::SerialPortType::UsbPort(usb) = &port.port_type {
+                        if let Some(sn) = &usb.serial_number {
+                            log::info!("Discovered serial number {} for LA binding", sn);
+                            la_selector = Some(crate::la_usb::DeviceSelector::SerialNumber(sn.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        self.disconnect(app).await?;
 
         if device_id.starts_with("usb:") {
             let port_name = &device_id[4..];
-            self.connect_usb(port_name, app).await
+            self.connect_usb(port_name, la_selector, app).await
         } else if device_id.starts_with("http:") {
             let base_url = &device_id[5..];
             self.connect_http(base_url, app).await
@@ -59,7 +74,7 @@ impl ConnectionManager {
         }
     }
 
-    async fn connect_usb(&self, port_name: &str, app: &AppHandle) -> Result<()> {
+    async fn connect_usb(&self, port_name: &str, la_selector: Option<crate::la_usb::DeviceSelector>, app: &AppHandle) -> Result<()> {
         let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Message>();
 
         log::info!("Opening USB port: {}", port_name);
@@ -135,6 +150,7 @@ impl ConnectionManager {
             status.port_or_url = port_name.to_string();
             status.device_info = device_info;
             status.admin_token = admin_token;
+            status.la_selector = la_selector;
         }
 
         let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -201,7 +217,7 @@ impl ConnectionManager {
                             }
                             bbp::EVT_DISCONNECT => {
                                 log::warn!("USB reader reported disconnection");
-                                let _ = app_handle.emit("device-disconnected", &serde_json::json!({"reason": "serial_error"}));
+                                let _ = app_handle.emit("device-disconnected", &serde_json::json!({"reason": "serial_error", "stream_running": false}));
                                 break;
                             }
                             _ => {}
@@ -261,6 +277,7 @@ impl ConnectionManager {
             status.port_or_url = base_url.to_string();
             status.device_info = Some(device_info);
             status.admin_token = Some(token);
+            status.la_selector = None; // Reset for WiFi
         }
 
         let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -273,7 +290,7 @@ impl ConnectionManager {
     }
 
     /// Disconnect the current transport.
-    pub async fn disconnect(&self) -> Result<()> {
+    pub async fn disconnect(&self, app: &AppHandle) -> Result<()> {
         // Signal poll loop to exit immediately
         self.poll_shutdown.store(true, Ordering::Release);
 
@@ -290,6 +307,26 @@ impl ConnectionManager {
             let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
             *status = ConnectionStatus::default();
         }
+
+        // Clean up LA state if it exists
+        if let Some(la) = app.try_state::<crate::la_commands::LaState>() {
+            log::info!("Cleaning up LA USB connection due to main disconnect");
+            // Stop any background stream
+            la.stream_running.store(false, Ordering::SeqCst);
+            if let Ok(mut task) = la.stream_task.lock() {
+                if let Some(handle) = task.take() {
+                    handle.abort();
+                }
+            }
+            // Close USB
+            if let Ok(mut usb) = la.usb.lock() {
+                let _ = usb.close();
+            }
+            // Notify frontend
+            let _ = app.emit("la-stream-stopped", &serde_json::json!({"reason": "main_disconnect"}));
+        }
+
+        let _ = app.emit("device-disconnected", &serde_json::json!({"reason": "manual", "stream_running": false}));
 
         Ok(())
     }

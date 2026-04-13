@@ -6,7 +6,8 @@ Tools: setup_serial_bridge, setup_swd, uart_config
 
 from __future__ import annotations
 from .. import session
-from ..safety import require_valid_io, require_hat
+from ..safety import require_valid_io, require_hat, check_faults_post
+from ..config import UART_PARITY_MAP, UART_STOP_BITS_MAP
 
 
 def register(mcp) -> None:
@@ -58,8 +59,9 @@ def register(mcp) -> None:
 
         hal = session.get_hal()
         hal.set_serial(tx=tx_io, rx=rx_io, baudrate=baudrate, bridge=bridge)
+        warnings = check_faults_post(session.get_client())
 
-        return {
+        res = {
             "tx_io":    tx_io,
             "rx_io":    rx_io,
             "baudrate": baudrate,
@@ -70,6 +72,9 @@ def register(mcp) -> None:
                 f"Connect to USB CDC #1 (second virtual COM port) to communicate with the target."
             ),
         }
+        if warnings:
+            res["warnings"] = warnings
+        return res
 
     @mcp.tool()
     def setup_swd(
@@ -117,7 +122,8 @@ def register(mcp) -> None:
                 "Check that the HAT firmware supports this command."
             )
 
-        return {
+        warnings = check_faults_post(bb)
+        res = {
             "success":           True,
             "target_voltage_mv": target_voltage_mv,
             "connector":         connector,
@@ -127,6 +133,9 @@ def register(mcp) -> None:
                 "Connect via OpenOCD or pyOCD using CMSIS-DAP transport."
             ),
         }
+        if warnings:
+            res["warnings"] = warnings
+        return res
 
     @mcp.tool()
     def uart_config(

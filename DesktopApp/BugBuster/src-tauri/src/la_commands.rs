@@ -15,7 +15,7 @@ use crate::la_store::{LaStore, LaViewData};
 use crate::la_transport::{LaTransport, LockedLaTransport, StreamStopReason};
 use crate::la_usb::{
     decode_capture, hat_usb_present, LaCaptureData, LaStreamPacket, LaStreamPacketKind,
-    LaUsbConnection, STREAM_INFO_START_REJECTED,
+    LaUsbConnection, LA_USB_CMD_START_STREAM, LA_USB_CMD_STOP, STREAM_INFO_START_REJECTED,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -113,9 +113,50 @@ where
     }
 }
 
+/// Flush stale packets from the vendor-bulk IN FIFO before starting a new stream.
+///
+/// Sends `LA_USB_CMD_STOP (0x00)` — firmware always responds with `PKT_STOP`
+/// regardless of current state (see `handle_stream_command()` in `bb_la_usb.c`).
+/// All packets received before that `PKT_STOP` are discarded.
+///
+/// **Must be called BEFORE `CMD_HAT_LA_CONFIG`** so that the `bb_la_stop()` side-
+/// effect (which unloads the PIO program) happens before configure reloads it.
+/// If called AFTER configure, the PIO would be unloaded and `bb_la_start_stream()`
+/// would reject the subsequent start with `START_REJECTED`.
+pub(crate) fn pre_stream_drain(transport: &mut impl LaTransport) {
+    if let Err(e) = transport.send_command(LA_USB_CMD_STOP) {
+        log::warn!("[pre_stream_drain] cannot send LA_USB_CMD_STOP: {e}");
+        return;
+    }
+    const MAX_DRAIN: usize = 8192;
+    let mut count = 0usize;
+    loop {
+        match transport.read_packet() {
+            Ok(p) if p.kind == LaStreamPacketKind::Stop => break,
+            Ok(p) => {
+                count += 1;
+                log::debug!("[pre_stream_drain] discarding stale {:?} ({})", p.kind, count);
+                if count >= MAX_DRAIN {
+                    log::warn!("[pre_stream_drain] MAX_DRAIN reached without STOP — aborting drain");
+                    break;
+                }
+            }
+            Err(e) => {
+                log::warn!("[pre_stream_drain] USB error: {e}");
+                break;
+            }
+        }
+    }
+    if count > 0 {
+        log::warn!("[pre_stream_drain] discarded {} stale packets", count);
+    }
+}
+
 /// Core streaming loop — runs synchronously in a `spawn_blocking` context.
 ///
-/// Sends STREAM_CMD_START, then reads packets until the device sends STOP, a USB
+/// Assumes the vendor-bulk FIFO has already been drained by `pre_stream_drain()`
+/// and the firmware PIO has been reloaded by `CMD_HAT_LA_CONFIG`. Sends
+/// `LA_USB_CMD_START_STREAM`, then reads packets until the device sends STOP, a USB
 /// error occurs, or `running` is cleared by the host. On every exit path the
 /// function guarantees `running = false` and `status.active = false`.
 pub(crate) fn run_stream_loop(
@@ -134,27 +175,34 @@ pub(crate) fn run_stream_loop(
         }
     };
 
-    // Send STREAM_CMD_START (0x01).
-    if let Err(e) = transport.send_command(0x01) {
+    // FIFO has been pre-drained by pre_stream_drain() in la_stream_usb() before
+    // spawning this task, and CMD_HAT_LA_CONFIG has reloaded the PIO. Send START.
+    if let Err(e) = transport.send_command(LA_USB_CMD_START_STREAM) {
         teardown(running, status);
         return StreamStopReason::UsbError(format!("cannot send stream start: {e}"));
     }
 
-    // Drain stale packets from the USB IN endpoint FIFO before entering the
-    // data loop. When the host stops a stream via CMD_HAT_LA_STOP (BBP path),
-    // the firmware emits a STOP marker on vendor-bulk IN. If the previous
-    // background task exited through the `running` flag check (i.e. it was
-    // processing a DATA packet, not blocked in read_packet, when `running` was
-    // cleared) the STOP marker is never consumed and sits in the endpoint FIFO.
-    // The next stream's task would read that stale STOP as its first packet
-    // and terminate immediately — "Backend stream stopped" with 0 samples.
+    // Read the immediate firmware response — must be PKT_START or PKT_ERROR.
     //
-    // Fix: after sending STREAM_CMD_START, read and discard packets until we
-    // receive the firmware's START confirmation that corresponds to our command.
-    const MAX_DRAIN: usize = 32;
-    let mut drained = 0usize;
-    loop {
-        let packet = match transport.read_packet() {
+    // One stale PKT_STOP may appear first: pre_stream_drain() drains until the
+    // first PKT_STOP it sees, which could be the stale STOP from the previous
+    // CMD_HAT_LA_STOP (not our LA_USB_CMD_STOP response). In that case our STOP
+    // response is left in the FIFO and arrives here before PKT_START. Tolerate
+    // exactly one such stale STOP and skip it.
+    let first = match transport.read_packet() {
+        Ok(p) => p,
+        Err(e) => {
+            if let Ok(mut s) = status.lock() {
+                s.stop_reason = Some("usb_error".to_string());
+                s.last_error = Some(format!("USB error waiting for stream start: {e}"));
+            }
+            teardown(running, status);
+            return StreamStopReason::UsbError(format!("waiting for stream start: {e}"));
+        }
+    };
+    let start_packet = if first.kind == LaStreamPacketKind::Stop {
+        log::debug!("[run_stream_loop] Skipping one stale STOP before start confirmation");
+        match transport.read_packet() {
             Ok(p) => p,
             Err(e) => {
                 if let Ok(mut s) = status.lock() {
@@ -164,46 +212,40 @@ pub(crate) fn run_stream_loop(
                 teardown(running, status);
                 return StreamStopReason::UsbError(format!("waiting for stream start: {e}"));
             }
-        };
-        match packet.kind {
-            LaStreamPacketKind::Start => {
-                // Firmware confirmed our STREAM_CMD_START — mark active and enter data loop.
-                if let Ok(mut s) = status.lock() {
-                    s.active = true;
-                }
-                break;
+        }
+    } else {
+        first
+    };
+    match start_packet.kind {
+        LaStreamPacketKind::Start => {
+            if let Ok(mut s) = status.lock() {
+                s.active = true;
             }
-            LaStreamPacketKind::Error if packet.info == STREAM_INFO_START_REJECTED => {
-                if let Ok(mut s) = status.lock() {
-                    s.stop_reason = Some("start_rejected".to_string());
-                    s.last_error = Some(format!(
-                        "Firmware rejected stream start (info={:#04x})",
-                        packet.info
-                    ));
-                }
-                teardown(running, status);
-                return StreamStopReason::FirmwareError(packet.info);
+        }
+        LaStreamPacketKind::Error if start_packet.info == STREAM_INFO_START_REJECTED => {
+            if let Ok(mut s) = status.lock() {
+                s.stop_reason = Some("start_rejected".to_string());
+                s.last_error = Some(format!(
+                    "Firmware rejected stream start (info={:#04x})",
+                    start_packet.info
+                ));
             }
-            _ => {
-                drained += 1;
-                log::warn!(
-                    "[run_stream_loop] Discarding stale {:?} packet before START ({}/{})",
-                    packet.kind,
-                    drained,
-                    MAX_DRAIN
-                );
-                if drained >= MAX_DRAIN {
-                    if let Ok(mut s) = status.lock() {
-                        s.stop_reason = Some("drain_overflow".to_string());
-                        s.last_error =
-                            Some("too many stale packets before stream START".to_string());
-                    }
-                    teardown(running, status);
-                    return StreamStopReason::UsbError(
-                        "too many stale packets before stream START; aborting".into(),
-                    );
-                }
+            teardown(running, status);
+            return StreamStopReason::FirmwareError(start_packet.info);
+        }
+        _ => {
+            if let Ok(mut s) = status.lock() {
+                s.stop_reason = Some("protocol_error".to_string());
+                s.last_error = Some(format!(
+                    "Expected PKT_START but got {:?} after stream start",
+                    start_packet.kind
+                ));
             }
+            teardown(running, status);
+            return StreamStopReason::UsbError(format!(
+                "Expected PKT_START but got {:?}",
+                start_packet.kind
+            ));
         }
     }
 
@@ -340,9 +382,10 @@ pub fn la_check_usb() -> CmdResult<bool> {
 
 /// Connect to the RP2040 LA USB interface
 #[tauri::command]
-pub fn la_connect_usb(la: State<'_, LaState>) -> CmdResult<bool> {
+pub fn la_connect_usb(la: State<'_, LaState>, mgr: State<'_, ConnectionManager>) -> CmdResult<bool> {
     let mut usb = la.usb.lock().map_err(map_err)?;
-    usb.connect().map_err(map_err)?;
+    let status = mgr.get_connection_status();
+    usb.connect(status.la_selector).map_err(map_err)?;
     Ok(true)
 }
 
@@ -461,13 +504,15 @@ pub async fn la_read_capture(
     channels: u8,
     sample_rate_hz: u32,
     total_samples: u32,
+    mgr: State<'_, ConnectionManager>,
     la: State<'_, LaState>,
 ) -> CmdResult<LaCaptureData> {
     // Connect if needed (sync, no await)
     {
         let mut usb = la.usb.lock().map_err(map_err)?;
         if !usb.is_connected() {
-            usb.connect().map_err(map_err)?;
+            let status = mgr.get_connection_status();
+            usb.connect(status.la_selector).map_err(map_err)?;
         }
     }
 
@@ -792,7 +837,8 @@ pub async fn la_stream_cycle(
         let mut usb = la.usb.lock().map_err(map_err)?;
         if !usb.is_connected() {
             log::info!("[SC] +{:?} USB connecting...", t_start.elapsed());
-            usb.connect().is_ok()
+            let status = mgr.get_connection_status();
+            usb.connect(status.la_selector).is_ok()
         } else {
             true
         }
@@ -986,6 +1032,19 @@ pub async fn la_stream_usb(
         }
     }
 
+    // Pre-stream drain: flush stale vendor-bulk packets BEFORE configure.
+    // LA_USB_CMD_STOP calls bb_la_stop() on the firmware (unloads PIO); configure
+    // then reloads it. This ordering is critical — drain must come first.
+    {
+        let usb_mutex = la.usb.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut transport = LockedLaTransport { usb: usb_mutex };
+            pre_stream_drain(&mut transport);
+        })
+        .await
+        .map_err(|e| format!("pre_stream_drain task panicked: {e}"))?;
+    }
+
     let mut cfg_buf = vec![channels];
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
     cfg_buf.extend_from_slice(&depth.to_le_bytes());
@@ -1010,7 +1069,8 @@ pub async fn la_stream_usb(
     {
         let mut usb = la.usb.lock().map_err(map_err)?;
         if !usb.is_connected() {
-            usb.connect().map_err(map_err)?;
+            let status = mgr.get_connection_status();
+            usb.connect(status.la_selector).map_err(map_err)?;
         }
     }
 
@@ -1115,7 +1175,8 @@ pub async fn la_read_append_fast(
     {
         let mut usb = la.usb.lock().map_err(map_err)?;
         if !usb.is_connected() {
-            usb.connect().map_err(map_err)?;
+            let status = mgr.get_connection_status();
+            usb.connect(status.la_selector).map_err(map_err)?;
         }
     }
 
@@ -1160,6 +1221,7 @@ pub async fn la_read_append_fast(
 pub async fn la_read_append_usb(
     channels: u8,
     sample_rate_hz: u32,
+    mgr: State<'_, ConnectionManager>,
     la: State<'_, LaState>,
 ) -> CmdResult<LaCaptureInfo> {
     // Quick check: bail if USB not present or not connected
@@ -1169,7 +1231,8 @@ pub async fn la_read_append_usb(
         }
         let mut usb = la.usb.lock().map_err(map_err)?;
         if !usb.is_connected() {
-            usb.connect().map_err(map_err)?;
+            let status = mgr.get_connection_status();
+            usb.connect(status.la_selector).map_err(map_err)?;
         }
     }
 

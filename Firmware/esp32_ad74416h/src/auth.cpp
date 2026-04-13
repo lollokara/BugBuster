@@ -2,43 +2,51 @@
 #include "esp_system.h"
 #include "esp_mac.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "nvs_flash.h"
 #include "nvs.h"
-#include "mbedtls/sha256.h"
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "auth";
-static char s_admin_token[33] = {0};
-
-// Hardware-specific salt for token derivation. 
-// In a real production environment, this should be unique per batch or 
-// randomized at first boot, but for this "zero-config" stage we use a 
-// static firmware salt combined with the unique MAC.
-static const char *AUTH_SALT = "BugBuster_Secure_2026_Salt_!@#";
+static char s_admin_token[65] = {0};
 
 void auth_init(void)
 {
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-
-    // Derive token: SHA256(MAC + SALT)
-    mbedtls_sha256_context ctx;
-    mbedtls_sha256_init(&ctx);
-    mbedtls_sha256_starts(&ctx, 0); // 0 = SHA256
-    mbedtls_sha256_update(&ctx, mac, 6);
-    mbedtls_sha256_update(&ctx, (const uint8_t*)AUTH_SALT, strlen(AUTH_SALT));
-    
-    uint8_t hash[32];
-    mbedtls_sha256_finish(&ctx, hash);
-    mbedtls_sha256_free(&ctx);
-
-    // Convert first 16 bytes of hash to hex string (32 chars)
-    for (int i = 0; i < 16; i++) {
-        sprintf(&s_admin_token[i * 2], "%02x", hash[i]);
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("auth", NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS namespace 'auth': %s", esp_err_to_name(err));
+        return;
     }
-    s_admin_token[32] = '\0';
 
-    ESP_LOGI(TAG, "Admin token derived from hardware ID");
+    size_t size = sizeof(s_admin_token);
+    err = nvs_get_str(nvs, "admin_token", s_admin_token, &size);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "Generating new admin token...");
+        uint8_t random_bytes[32];
+        esp_fill_random(random_bytes, sizeof(random_bytes));
+
+        for (int i = 0; i < 32; i++) {
+            sprintf(&s_admin_token[i * 2], "%02x", random_bytes[i]);
+        }
+        s_admin_token[64] = '\0';
+
+        err = nvs_set_str(nvs, "admin_token", s_admin_token);
+        if (err == ESP_OK) {
+            nvs_commit(nvs);
+            ESP_LOGI(TAG, "New admin token generated and stored in NVS");
+        } else {
+            ESP_LOGE(TAG, "Failed to store admin token in NVS: %s", esp_err_to_name(err));
+        }
+    } else if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Admin token loaded from NVS");
+    } else {
+        ESP_LOGE(TAG, "Failed to load admin token from NVS: %s", esp_err_to_name(err));
+    }
+
+    nvs_close(nvs);
 }
 
 const char* auth_get_admin_token(void)
@@ -49,5 +57,7 @@ const char* auth_get_admin_token(void)
 bool auth_verify_token(const char *token)
 {
     if (!token) return false;
+    // Token must be exactly 64 characters
+    if (strlen(token) != 64) return false;
     return (strcmp(token, s_admin_token) == 0);
 }
