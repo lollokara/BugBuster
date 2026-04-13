@@ -80,11 +80,12 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
 {
     (void) rhport;
     (void) eventid;
-    BaseType_t blah;
+    BaseType_t higher = pdFALSE;
     if (in_isr) {
-        xTaskNotifyFromISR(tud_taskhandle, 0, 0, &blah);
+        xTaskNotifyFromISR(tud_taskhandle, 0, eNoAction, &higher);
+        portYIELD_FROM_ISR(higher);
     } else {
-        xTaskNotify(tud_taskhandle, 0, 0);
+        xTaskNotify(tud_taskhandle, 0, eNoAction);
     }
 }
 

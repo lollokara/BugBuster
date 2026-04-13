@@ -104,4 +104,5 @@ target_link_libraries(bugbuster_hat PRIVATE
 # Keep the image XIP by default; the LA already uses DMA/PIO for the fast path,
 # and forcing copy_to_ram pushes the full firmware over the RP2040 SRAM budget.
 pico_set_binary_type(bugbuster_hat default)
+
 pico_add_extra_outputs(bugbuster_hat)

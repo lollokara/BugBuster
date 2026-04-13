@@ -112,6 +112,9 @@ pub enum DeviceSelector {
 pub struct LaUsbConnection {
     interface: Option<nusb::Interface>,
     connected: bool,
+    /// Internal buffer to hold leftover bytes from vendor-bulk reads, as one
+    /// USB transfer may contain zero, one, or many complete stream frames.
+    stream_buffer: Vec<u8>,
 }
 
 impl Drop for LaUsbConnection {
@@ -125,6 +128,7 @@ impl LaUsbConnection {
         Self {
             interface: None,
             connected: false,
+            stream_buffer: Vec::new(),
         }
     }
 
@@ -186,6 +190,7 @@ impl LaUsbConnection {
 
                 self.interface = Some(iface);
                 self.connected = true;
+                self.stream_buffer.clear();
                 return Ok(());
             }
         }
@@ -207,6 +212,7 @@ impl LaUsbConnection {
         }
         self.interface = None;
         self.connected = false;
+        self.stream_buffer.clear();
         Ok(())
     }
 
@@ -267,27 +273,47 @@ impl LaUsbConnection {
             .as_ref()
             .ok_or_else(|| anyhow!("LA USB not connected"))?;
 
-        // Use a 5-second timeout so a zombie stream task (e.g. after a DMA overrun
-        // that didn't produce a PKT_STOP) eventually releases the USB mutex rather
-        // than blocking it indefinitely and deadlocking the next restart attempt.
-        let rt = tokio::runtime::Handle::current();
-        let completion = rt
-            .block_on(tokio::time::timeout(
+        loop {
+            // 1. Try to parse from the existing buffer
+            if self.stream_buffer.len() >= 4 {
+                let payload_len = self.stream_buffer[2] as usize;
+                let frame_len = 4 + payload_len;
+                if self.stream_buffer.len() >= frame_len {
+                    // We have a full packet. Drain it from the buffer and parse.
+                    let packet_data: Vec<u8> = self.stream_buffer.drain(0..frame_len).collect();
+                    return parse_stream_packet(&packet_data)
+                        .map_err(|e| anyhow!("Invalid live bulk packet {:?}: {:02X?}", e, packet_data));
+                }
+            }
+
+            // 2. Buffer doesn't have a full packet, read more from USB.
+            // Use a 5-second timeout so a zombie stream task (e.g. after a DMA overrun
+            // that didn't produce a PKT_STOP) eventually releases the USB mutex rather
+            // than blocking it indefinitely and deadlocking the next restart attempt.
+            let rt = tokio::runtime::Handle::current();
+            let timeout_result = rt.block_on(tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 iface.bulk_in(LA_EP_IN, RequestBuffer::new(64)),
-            ))
-            .map_err(|_| anyhow!("USB stream read timed out (5 s) — device may be stuck"))?;
+            ));
+            let completion = match timeout_result {
+                Ok(c) => c,
+                Err(_) => {
+                    self.stream_buffer.clear();
+                    return Err(anyhow!("USB stream read timed out (5 s) — device may be stuck"));
+                }
+            };
 
-        let result = completion
-            .into_result()
-            .map_err(|e| anyhow!("USB live bulk read failed: {}", e))?;
+            let result = completion
+                .into_result()
+                .map_err(|e| anyhow!("USB live bulk read failed: {}", e))?;
 
-        if result.is_empty() {
-            return Err(anyhow!("USB live bulk read returned 0 bytes"));
+            if result.is_empty() {
+                return Err(anyhow!("USB live bulk read returned 0 bytes"));
+            }
+
+            self.stream_buffer.extend_from_slice(&result);
+            // Loop back to parse from the newly extended buffer.
         }
-
-        parse_stream_packet(&result)
-            .map_err(|e| anyhow!("Invalid live bulk packet {:?}: {:02X?}", e, result))
     }
 
     pub fn send_command(&self, cmd: u8) -> Result<()> {

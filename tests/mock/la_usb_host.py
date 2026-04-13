@@ -72,7 +72,7 @@ class StreamResult:
     bytes_received: int = 0
     sequence_mismatches: int = 0
     stop_reason: str = "unknown"
-    payload: bytes = field(default_factory=bytes)
+    payload: bytearray = field(default_factory=bytearray)
     errors: list = field(default_factory=list)
 
 
@@ -94,6 +94,7 @@ class LaUsbHost:
     def __init__(self):
         self._dev = None
         self._claimed = False
+        self._stream_buffer = bytearray()
 
     def connect(self, vid: int = VID, pid: int = PID) -> None:
         """Find and claim the RP2040 LA vendor bulk interface."""
@@ -110,43 +111,79 @@ class LaUsbHost:
                 f"Device {vid:#06x}:{pid:#06x} not found. "
                 f"Ensure the RP2040 is connected and in normal mode."
             )
-        dev.set_configuration()
+        try:
+            dev.set_configuration()
+        except Exception:
+            # macOS: device is already configured by the OS; skip set_configuration()
+            pass
         import usb.util
-        usb.util.claim_interface(dev, LA_INTERFACE)
+        try:
+            usb.util.claim_interface(dev, LA_INTERFACE)
+        except Exception:
+            # Interface may already be claimed from a previous run; release and retry
+            usb.util.release_interface(dev, LA_INTERFACE)
+            usb.util.claim_interface(dev, LA_INTERFACE)
         self._dev = dev
         self._claimed = True
+        self._stream_buffer.clear()
 
     def send_command(self, cmd: int) -> None:
         """Send a single-byte command to the bulk OUT endpoint (EP_OUT=0x06)."""
         if self._dev is None:
             raise RuntimeError("Not connected — call connect() first")
-        self._dev.write(EP_OUT, bytes([cmd]))
+        try:
+            self._dev.write(EP_OUT, bytes([cmd]))
+        except Exception:
+            try:
+                import usb.util
+                usb.util.clear_halt(self._dev, EP_OUT)
+            except Exception:
+                pass
+            raise
 
     def read_raw(self, timeout_ms: int = 1000) -> bytes:
-        """Read up to 64 bytes from the bulk IN endpoint (EP_IN=0x87)."""
+        """Read up to 16384 bytes from the bulk IN endpoint (EP_IN=0x87).
+
+        A large read size amortises Python/libusb call overhead across many
+        USB packets, which is critical for sustaining >500 KB/s on Full Speed
+        bulk where each 64-byte packet requires a separate IN token.
+        """
         if self._dev is None:
             raise RuntimeError("Not connected")
-        return bytes(self._dev.read(EP_IN, 64, timeout=timeout_ms))
+        try:
+            return bytes(self._dev.read(EP_IN, 16384, timeout=timeout_ms))
+        except Exception:
+            try:
+                import usb.util
+                usb.util.clear_halt(self._dev, EP_IN)
+            except Exception:
+                pass
+            raise
 
     def read_packet(self, timeout_ms: int = 1000) -> StreamPacket:
-        """Read and parse one stream packet from the device."""
-        raw = self.read_raw(timeout_ms)
-        if len(raw) < 4:
-            raise ValueError(
-                f"Packet too short: got {len(raw)} bytes, expected at least 4"
-            )
-        pkt_type  = raw[0]
-        seq       = raw[1]
-        payload_len = raw[2]
-        info      = raw[3]
-        payload   = bytes(raw[4 : 4 + payload_len])
-        return StreamPacket(
-            pkt_type=pkt_type,
-            seq=seq,
-            payload_len=payload_len,
-            info=info,
-            payload=payload,
-        )
+        """Read and parse one stream packet from the device (with buffering)."""
+        while True:
+            # 1. Try to parse from buffer
+            if len(self._stream_buffer) >= 4:
+                payload_len = self._stream_buffer[2]
+                frame_len = 4 + payload_len
+                if len(self._stream_buffer) >= frame_len:
+                    pkt_data = self._stream_buffer[:frame_len]
+                    del self._stream_buffer[:frame_len]
+                    
+                    return StreamPacket(
+                        pkt_type=pkt_data[0],
+                        seq=pkt_data[1],
+                        payload_len=pkt_data[2],
+                        info=pkt_data[3],
+                        payload=bytes(pkt_data[4:]),
+                    )
+
+            # 2. Read more if needed
+            raw = self.read_raw(timeout_ms)
+            if not raw:
+                raise ValueError("USB read returned 0 bytes")
+            self._stream_buffer.extend(raw)
 
     def stream_capture(self, duration_s: float = 1.0) -> StreamResult:
         """
@@ -154,22 +191,37 @@ class LaUsbHost:
 
         Returns a StreamResult with packet count, byte count, seq mismatches,
         and the accumulated payload.
+
+        After the duration elapses the host sends STOP and then continues to
+        drain DATA packets until PKT_STOP arrives (or a short timeout).  This
+        ensures bytes_received reflects all data the firmware had already
+        queued, which is required for accurate duration-truth accounting.
         """
         result = StreamResult()
 
         self.send_command(STREAM_CMD_START)
 
-        # Expect START packet
+        # Expect START packet — skip stale DATA/STOP left over from a
+        # previous stream (the firmware no longer calls write_clear on
+        # START so residual packets may still be in the USB FIFO).
+        start_pkt = None
         try:
-            start_pkt = self.read_packet(timeout_ms=2000)
+            for _ in range(512):
+                pkt = self.read_packet(timeout_ms=2000)
+                if pkt.pkt_type == PKT_START:
+                    start_pkt = pkt
+                    break
+                elif pkt.pkt_type == PKT_ERROR:
+                    result.errors.append(
+                        f"Received PKT_ERROR while waiting for START: info={pkt.info:#02x}"
+                    )
+                    return result
         except Exception as e:
             result.errors.append(f"Failed to receive START packet: {e}")
             return result
 
-        if start_pkt.pkt_type != PKT_START:
-            result.errors.append(
-                f"Expected START(0x01), got {start_pkt.type_name}"
-            )
+        if start_pkt is None:
+            result.errors.append("Did not receive PKT_START within 512 packets")
             return result
 
         if start_pkt.info == INFO_START_REJECTED:
@@ -191,16 +243,37 @@ class LaUsbHost:
                     result.sequence_mismatches += 1
                 expected_seq = (pkt.seq + 1) & 0xFF
                 result.bytes_received += pkt.payload_len
-                result.payload = result.payload + pkt.payload
+                result.payload.extend(pkt.payload)
                 result.packets_received += 1
 
-            elif pkt.pkt_type in (PKT_STOP, PKT_ERROR):
+            elif pkt.pkt_type == PKT_ERROR:
+                result.stop_reason = "error"
+                result.errors.append(f"Received PKT_ERROR: info={pkt.info:#02x}")
+                return result
+
+            elif pkt.pkt_type == PKT_STOP:
                 result.stop_reason = _STOP_REASON_MAP.get(pkt.info, "normal")
                 return result
 
-        # Duration elapsed — send STOP
+        # Duration elapsed — send STOP, then drain any DATA the firmware had
+        # already queued so bytes_received is accurate for duration-truth tests.
         self.send_command(STREAM_CMD_STOP)
         result.stop_reason = "host_stop"
+        for _ in range(8192):
+            try:
+                pkt = self.read_packet(timeout_ms=300)
+            except Exception:
+                break  # timeout = no more packets
+            if pkt.pkt_type == PKT_DATA:
+                if pkt.seq != expected_seq:
+                    result.sequence_mismatches += 1
+                expected_seq = (pkt.seq + 1) & 0xFF
+                result.bytes_received += pkt.payload_len
+                result.payload.extend(pkt.payload)
+                result.packets_received += 1
+            elif pkt.pkt_type in (PKT_STOP, PKT_ERROR):
+                result.stop_reason = _STOP_REASON_MAP.get(pkt.info, "normal")
+                break
         return result
 
     def oneshot_capture(self) -> bytes:

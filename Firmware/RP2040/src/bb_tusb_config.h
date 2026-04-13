@@ -48,7 +48,18 @@ extern "C" {
 #define CFG_TUD_CDC_RX_BUFSIZE   64
 #define CFG_TUD_CDC_TX_BUFSIZE   4096
 #define CFG_TUD_VENDOR_RX_BUFSIZE 8192
-#define CFG_TUD_VENDOR_TX_BUFSIZE 8192
+#define CFG_TUD_VENDOR_TX_BUFSIZE 16384
+
+// Vendor endpoint staging buffer size.  TinyUSB's vendor driver copies this
+// many bytes from the SW FIFO into ep_buf per transfer callback, then the
+// RP2040 DCD splits them into 64-byte USB packets on the wire.  A larger
+// value means fewer ISR→task→xfer_cb round-trips per DMA half-buffer.
+// 8192 covers most of one DMA half (8739 bytes packetized) in a single
+// transfer, with only one short follow-up xfer for the remainder.
+// NOTE: TinyUSB allocates TWO ep_bufs of this size (TX+RX), so 16384 would
+// consume 32 KB of RAM — too much for RP2040 alongside the 76 KB capture
+// buffer and FreeRTOS heap.
+#define CFG_TUD_VENDOR_EPSIZE    8192
 
 #ifndef TUD_OPT_RP2040_USB_DEVICE_UFRAME_FIX
 #define TUD_OPT_RP2040_USB_DEVICE_UFRAME_FIX 1

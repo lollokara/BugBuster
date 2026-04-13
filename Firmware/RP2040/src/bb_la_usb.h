@@ -3,6 +3,10 @@
 // =============================================================================
 // bb_la_usb.h — Logic Analyzer USB transport helpers
 //
+// la_dbg() — Non-blocking CDC debug helper shared by bb_la_usb.c and bb_la.c.
+// Drops output silently when CDC TX buffer is near-full to avoid blocking the
+// USB task. MUST NOT be called from ISR context (dma_irq_handler etc.).
+//
 // Vendor bulk is the primary LA data path. One-shot capture readout keeps its
 // existing length-prefixed bulk format; live streaming uses packetized bulk
 // frames over the same interface.
@@ -29,6 +33,13 @@
 
 #define LA_USB_STREAM_INFO_NONE           0x00
 #define LA_USB_STREAM_INFO_START_REJECTED 0x80
+
+/**
+ * @brief Non-blocking CDC debug print.
+ *        Drops output silently when CDC TX buffer < 64 bytes.
+ *        MUST NOT be called from ISR context.
+ */
+void bb_la_dbg(const char *fmt, ...);
 
 /**
  * @brief Initialize LA USB streaming.
@@ -110,6 +121,15 @@ void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes);
 void bb_la_usb_abort_bulk(void);
 
 /**
+ * @brief Request a deferred PKT_STOP.  The marker will be emitted by
+ *        bb_la_usb_send_pending() only after the current data buffer has been
+ *        fully drained, guaranteeing clean 64-byte packet alignment on the wire.
+ *        Safe to call from any task context.
+ * @param info  Stop-reason info byte (LA_STREAM_STOP_HOST / DMA_OVERRUN / …)
+ */
+void bb_la_usb_request_deferred_stop(uint8_t info);
+
+/**
  * @brief Call from the USB thread (tud_task context) to send pending legacy CDC data.
  *        TinyUSB requires CDC writes from the same task as tud_task.
  */
@@ -117,3 +137,12 @@ void bb_la_cdc_send_pending(void);
 
 /// Flush the CDC TX ring buffer (call on stream stop to clear stale data).
 void bb_la_cdc_flush_ring(void);
+
+/**
+ * @brief Wake the USB task from an ISR context (e.g. DMA completion IRQ).
+ *        Calls xTaskNotifyFromISR so bb_la_usb_send_pending() runs
+ *        immediately on the next scheduler tick rather than waiting up to
+ *        1 ms for the USB task's periodic timeout.
+ *        No-op when not compiled with DEBUGPROBE_INTEGRATION.
+ */
+void bb_la_usb_notify_task_from_isr(void);

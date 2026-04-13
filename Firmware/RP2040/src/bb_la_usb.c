@@ -17,6 +17,8 @@
 #include "pico/stdlib.h"
 
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include "hardware/sync.h"   // __dmb()
 
 #ifdef DEBUGPROBE_INTEGRATION
@@ -100,6 +102,22 @@ static struct {
     bool header_sent;
 } s_bulk_data;
 
+// Non-blocking CDC debug helper — drops output when CDC TX buffer < 64 bytes.
+// MUST NOT be called from ISR context.
+void bb_la_dbg(const char *fmt, ...) {
+    if (!tud_cdc_connected()) return;
+    if (tud_cdc_write_available() < 64) return;
+    char buf[128];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        tud_cdc_write((const uint8_t *)buf, (uint32_t)n);
+        tud_cdc_write_flush();
+    }
+}
+
 void bb_la_usb_init(void) {
     s_cdc_seq = 0;
     s_live_seq = 0;
@@ -114,6 +132,16 @@ bool bb_la_usb_connected(void) {
     return tud_vendor_n_mounted(BB_LA_VENDOR_ITF);
 }
 
+// Set when abort_bulk() is called from any context; consumed in send_pending()
+// (USB task) to safely call tud_vendor_n_write_clear without task-safety issues.
+static volatile bool s_need_endpoint_rearm = false;
+
+// Deferred stop: when set, send_pending() emits PKT_STOP after the current
+// data buffer is fully drained, guaranteeing clean packet alignment on the wire.
+// Set by the STOP command handler or DMA-overrun path; consumed by send_pending().
+static volatile bool    s_deferred_stop = false;
+static volatile uint8_t s_deferred_stop_info = 0;
+
 void bb_la_usb_abort_bulk(void) {
     uint32_t status = save_and_disable_interrupts();
     s_bulk_data.active = false;
@@ -121,9 +149,18 @@ void bb_la_usb_abort_bulk(void) {
     s_bulk_ctrl_tail = 0;
     s_bulk_ctrl_head = 0;
     restore_interrupts(status);
-    // Do NOT call tud_vendor_n_flush() here — it must run from the USB task
-    // (tud_task context). bb_la_usb_send_pending() flushes at its end, so
-    // the next USB task iteration will flush whatever remains in the TX FIFO.
+    // Signal the USB task to re-arm the endpoint (tud_vendor_n_write_clear must
+    // run from tud_task context — send_pending() will pick this up).
+    s_need_endpoint_rearm = true;
+}
+
+void bb_la_usb_request_deferred_stop(uint8_t info) {
+    s_deferred_stop_info = info;
+    __dmb();
+    s_deferred_stop = true;
+#ifdef DEBUGPROBE_INTEGRATION
+    if (tud_taskhandle) xTaskNotify(tud_taskhandle, 0, eNoAction);
+#endif
 }
 
 bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info) {
@@ -162,6 +199,13 @@ void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes) {
 
 void bb_la_usb_send_pending(void) {
     if (!tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) return;
+
+    // Re-arm the IN endpoint if abort_bulk() was called from any task context.
+    // tud_vendor_n_write_clear() must only run from the USB task (here).
+    if (s_need_endpoint_rearm) {
+        s_need_endpoint_rearm = false;
+        tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
+    }
 
     // 1. Drain control markers (highest priority)
     uint32_t head = s_bulk_ctrl_head;
@@ -204,13 +248,13 @@ void bb_la_usb_send_pending(void) {
                 // LIVE STREAM: Packetized [TYPE:1][SEQ:1][LEN:1][INFO:1][DATA:N]
                 // Each packet is max 64 bytes total, so N=60.
                 while (s_bulk_data.sent_len < s_bulk_data.total_len && usb_avail >= 64) {
-                    uint8_t chunk = (uint8_t)(s_bulk_data.total_len - s_bulk_data.sent_len);
+                    uint32_t chunk = s_bulk_data.total_len - s_bulk_data.sent_len;
                     if (chunk > 60) chunk = 60;
 
                     uint8_t packet[64];
                     packet[0] = LA_USB_STREAM_PKT_DATA;
                     packet[1] = s_live_seq++;
-                    packet[2] = chunk;
+                    packet[2] = (uint8_t)chunk;
                     packet[3] = LA_USB_STREAM_INFO_NONE;
                     memcpy(&packet[4], s_bulk_data.buf + s_bulk_data.sent_len, chunk);
 
@@ -264,7 +308,22 @@ void bb_la_usb_send_pending(void) {
             }
         }
     }
-    
+
+    // 3. Deferred stop: emit PKT_STOP only after the current data buffer is
+    //    fully drained so every DATA packet on the wire is a complete 64-byte
+    //    frame.  Avoids the partial-packet alignment bug that occurs when
+    //    write_clear() truncates an in-flight transfer mid-packet.
+    if (s_deferred_stop && !s_bulk_data.active) {
+        uint32_t avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
+        if (avail >= 4) {
+            uint8_t stop_pkt[4] = {
+                LA_USB_STREAM_PKT_STOP, s_live_seq, 0, s_deferred_stop_info
+            };
+            tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
+            s_deferred_stop = false;
+        }
+    }
+
     tud_vendor_n_flush(BB_LA_VENDOR_ITF);
 }
 
@@ -293,6 +352,17 @@ uint32_t bb_la_usb_write_raw(const uint8_t *buf, uint32_t total_bytes) {
     return cdc_queue_write_framed(buf, total_bytes);
 }
 
+void bb_la_usb_notify_task_from_isr(void)
+{
+#ifdef DEBUGPROBE_INTEGRATION
+    if (tud_taskhandle) {
+        BaseType_t higher = pdFALSE;
+        xTaskNotifyFromISR(tud_taskhandle, 0, eNoAction, &higher);
+        portYIELD_FROM_ISR(higher);
+    }
+#endif
+}
+
 static void cdc_write_reply(const char *msg) {
     if (!tud_cdc_connected()) return;
     tud_cdc_write_str(msg);
@@ -303,7 +373,14 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
     switch (cmd) {
     case LA_USB_CMD_START_STREAM:
         s_cdc_seq = 0;
+        s_deferred_stop = false;   // cancel any pending deferred stop
         bb_la_usb_live_reset_sequence();
+        if (!reply_on_cdc) {
+            // Re-arm the IN endpoint before sending any response.
+            // The host drain loop may have left the endpoint in a stale state
+            // (cancelled read) — write_clear flushes stale data and re-arms it.
+            tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
+        }
         if (!bb_la_start_stream()) {
             if (reply_on_cdc) {
                 cdc_write_reply("ERR\n");
@@ -320,14 +397,17 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
         break;
 
     case LA_USB_CMD_STOP:
-        bb_la_stop();
-        bb_la_usb_abort_bulk();
+        bb_la_stop();            // halt PIO/DMA — no new data after this
         bb_la_cdc_flush_ring();
         if (tud_cdc_connected()) tud_cdc_write_clear();
         if (reply_on_cdc) {
             cdc_write_reply("STOP\n");
         } else {
-            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
+            // Don't abort_bulk / write_clear — let existing data in the FIFO
+            // and any active s_bulk_data drain naturally so the host sees
+            // complete 64-byte stream packets.  The STOP marker is emitted by
+            // send_pending() only after the current buffer is fully sent.
+            bb_la_usb_request_deferred_stop(LA_STREAM_STOP_HOST);
         }
         break;
 

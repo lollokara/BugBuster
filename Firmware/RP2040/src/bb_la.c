@@ -6,6 +6,7 @@
 // =============================================================================
 
 #include "bb_la.h"
+#include <stdio.h>
 #include "bb_config.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
@@ -227,10 +228,13 @@ static void enter_error_state(void)
 // -----------------------------------------------------------------------------
 
 // DMA completion IRQ — fires when all samples have been transferred
+static volatile uint32_t s_dma_irq_count = 0;
+
 static void dma_irq_handler(void)
 {
     if (la_dma_ch >= 0 && dma_channel_get_irq0_status((uint)la_dma_ch)) {
         dma_channel_acknowledge_irq0((uint)la_dma_ch);
+        s_dma_irq_count++;
 
         if (s_la.stream_mode && s_la.state == LA_STATE_STREAMING) {
             // Streaming requires one free half. If the USB side has not released
@@ -254,6 +258,10 @@ static void dma_irq_handler(void)
             uint32_t *next_buf = s_capture_buf + (s_la.stream_dma_buf * s_la.half_words);
             dma_channel_set_write_addr((uint)la_dma_ch, next_buf, false);
             dma_channel_set_trans_count((uint)la_dma_ch, s_la.half_words, true); // true = start
+
+            // Wake USB task immediately so it drains the ready half without
+            // waiting for the 1 ms periodic timeout.
+            bb_la_usb_notify_task_from_isr();
         } else {
             s_la.dma_done = true;
         }
@@ -655,12 +663,17 @@ void bb_la_poll(void)
 
     case LA_STATE_STREAMING:
         if (s_la.stream_overrun) {
-            // Signal the host BEFORE entering error state so the stream task
-            // unblocks immediately instead of waiting for the next STOP command.
-            bb_la_usb_abort_bulk();
-            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP,
-                                         (uint8_t)LA_STREAM_STOP_DMA_OVERRUN);
+            // Let the current data buffer finish sending so the host sees
+            // complete stream packets, then emit PKT_STOP with overrun info.
+            bb_la_usb_request_deferred_stop((uint8_t)LA_STREAM_STOP_DMA_OVERRUN);
             enter_error_state();
+        } else {
+            static uint64_t s_last_hb_us = 0;
+            uint64_t now = time_us_64();
+            if (now - s_last_hb_us >= 1000000ULL) {
+                bb_la_dbg("LA STREAMING: irq=%lu\n", (unsigned long)s_dma_irq_count);
+                s_last_hb_us = now;
+            }
         }
         break;
 
@@ -675,9 +688,29 @@ void bb_la_poll(void)
 
 bool bb_la_start_stream(void)
 {
-    if (s_la.state != LA_STATE_IDLE) return false;
-    if (!s_la.pio_loaded) return false;
-    if (s_la.rle_mode) return false;
+    if (s_la.state != LA_STATE_IDLE) {
+        bb_la_dbg("bb_la_start_stream: rejected (state=%d != IDLE)\n", s_la.state);
+        return false;
+    }
+    // Auto-reload PIO if it was unloaded (e.g. after vendor-bulk STOP) but
+    // a valid configuration is still present from a prior bb_la_configure().
+    // This allows stop → start without a BBP reconfigure round-trip.
+    if (!s_la.pio_loaded) {
+        if (s_la.config.channels == 0 || s_la.config.sample_rate_hz == 0) {
+            bb_la_dbg("bb_la_start_stream: rejected (pio_loaded=0, no valid config)\n");
+            return false;
+        }
+        if (!load_pio_program(s_la.config.channels, false)) {
+            bb_la_dbg("bb_la_start_stream: PIO reload failed\n");
+            s_la.state = LA_STATE_ERROR;
+            return false;
+        }
+        bb_la_dbg("bb_la_start_stream: PIO auto-reloaded\n");
+    }
+    if (s_la.rle_mode) {
+        bb_la_dbg("bb_la_start_stream: rejected (rle_mode=1)\n");
+        return false;
+    }
 
     s_la.stream_mode = true;
     s_la.stream_buf_ready = STREAM_BUF_NONE; // nothing ready yet
@@ -685,9 +718,24 @@ bool bb_la_start_stream(void)
     s_la.stream_overrun = false;
     reset_stream_diagnostics();
 
-    // Split capture buffer into two halves
-    uint32_t max_words = sizeof(s_capture_buf) / sizeof(uint32_t);
-    s_la.half_words = max_words / 2;
+    // Each streaming half-buffer should fit in CFG_TUD_VENDOR_TX_BUFSIZE
+    // (16384 bytes) so the entire half can be queued to the USB FIFO in a
+    // single bb_la_usb_send_pending() call.  This ensures stream_buf_ready
+    // is cleared immediately after the USB task picks up the half, giving
+    // DMA the full half-fill window (~16 ms at 1 MHz/4 ch) before it tries
+    // to swap back.
+    // 2048 words × 4 bytes = 8192 bytes payload → ~8739 bytes with 64-byte
+    // packet framing, well within the 16384-byte FIFO.
+    //
+    // Invariant: (half_words * 4) * 64 / 60 <= CFG_TUD_VENDOR_TX_BUFSIZE
+    //   At 2048 words: 8192 * 64/60 = 8738 bytes < 16384 ✓
+    #define BB_LA_STREAM_HALF_WORDS 2048u
+    _Static_assert(
+        (BB_LA_STREAM_HALF_WORDS * 4u * 64u / 60u) <= 16384u,
+        "LA stream half-buffer + packet headers must fit in CFG_TUD_VENDOR_TX_BUFSIZE (16384)"
+    );
+    s_la.half_words = BB_LA_STREAM_HALF_WORDS;
+    #undef BB_LA_STREAM_HALF_WORDS
 
     // Clear buffer
     memset(s_capture_buf, 0, sizeof(s_capture_buf));
@@ -744,11 +792,13 @@ void bb_la_stream_buffer_sent(const uint8_t *buf)
         return;
     }
 
+    // Check and clear atomically: DMA IRQ could fire between a non-atomic
+    // read and write, overwriting stream_buf_ready with the next half index.
+    uint32_t status = save_and_disable_interrupts();
     if (s_la.stream_buf_ready == sent_half) {
-        uint32_t status = save_and_disable_interrupts();
         s_la.stream_buf_ready = STREAM_BUF_NONE;
-        restore_interrupts(status);
     }
+    restore_interrupts(status);
 }
 
 bool bb_la_get_capture_buffer(const uint8_t **buf_out, uint32_t *len_out)
