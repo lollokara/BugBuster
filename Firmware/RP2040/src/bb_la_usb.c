@@ -142,7 +142,13 @@ static volatile bool s_need_endpoint_rearm = false;
 static volatile bool    s_deferred_stop = false;
 static volatile uint8_t s_deferred_stop_info = 0;
 
+// Track whether we are in an active streaming session (set on START, cleared
+// on STOP/error).  Unlike s_bulk_data.active this stays true between DMA
+// half-buffer handoffs so the USB task keeps its tight polling loop running.
+static volatile bool s_streaming_session = false;
+
 void bb_la_usb_abort_bulk(void) {
+    s_streaming_session = false;
     uint32_t status = save_and_disable_interrupts();
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
@@ -321,16 +327,12 @@ void bb_la_usb_send_pending(void) {
             };
             tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
             s_deferred_stop = false;
+            s_streaming_session = false;
         }
     }
 
     tud_vendor_n_flush(BB_LA_VENDOR_ITF);
 }
-
-// Track whether we are in an active streaming session (set on START, cleared
-// on STOP/error).  Unlike s_bulk_data.active this stays true between DMA
-// half-buffer handoffs so the USB task keeps its tight polling loop running.
-static volatile bool s_streaming_session = false;
 
 bool bb_la_usb_is_streaming(void) {
     return s_streaming_session;
@@ -398,6 +400,7 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
             }
             return;
         }
+        s_streaming_session = true;
         if (reply_on_cdc) {
             cdc_write_reply("START\n");
         } else {
@@ -406,6 +409,7 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
         break;
 
     case LA_USB_CMD_STOP:
+        s_streaming_session = false;
         bb_la_stop();            // halt PIO/DMA — no new data after this
         bb_la_cdc_flush_ring();
         if (tud_cdc_connected()) tud_cdc_write_clear();
