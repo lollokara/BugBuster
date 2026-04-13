@@ -172,4 +172,62 @@ mod tests {
             "status.active must always be set to false on any exit path"
         );
     }
+
+    // ── test 6: stale STOP from previous session is drained ──────────────────
+    // When la_stream_usb_stop() sets running=false and the background task exits
+    // without consuming the firmware's STOP marker, the next session must drain
+    // it before entering the data loop (see drain loop in run_stream_loop).
+
+    #[test]
+    fn test_stream_drains_stale_stop_before_start() {
+        let packets = vec![
+            // Stale STOP left in the FIFO by the previous session's host-stop.
+            Ok(LaStreamPacket { kind: LaStreamPacketKind::Stop, seq: 0, info: 1, payload: vec![] }),
+            // Firmware's START confirmation for the new STREAM_CMD_START.
+            make_start(),
+            make_data(0, &[0xDE, 0xAD]),
+            make_stop(),
+        ];
+        let mut transport = MockLaTransport::new(packets);
+        let run_flag = running();
+        let store = empty_store();
+        let status = empty_status();
+        let stream_seq = seq();
+
+        let reason = run_stream_loop(&mut transport, &run_flag, &store, &status, &stream_seq);
+
+        assert_eq!(
+            reason,
+            StreamStopReason::Normal,
+            "stale STOP must be drained, not terminate the new session"
+        );
+        assert!(!run_flag.load(Ordering::SeqCst));
+        assert!(!status.lock().unwrap().active);
+        assert_eq!(status.lock().unwrap().chunk_count, 1, "one DATA chunk expected");
+    }
+
+    // ── test 7: multiple stale packets drained before START ──────────────────
+
+    #[test]
+    fn test_stream_drains_multiple_stale_packets() {
+        let packets = vec![
+            // Stale DATA then stale STOP from a previous session.
+            Ok(LaStreamPacket { kind: LaStreamPacketKind::Data, seq: 42, info: 0, payload: b"x".to_vec() }),
+            Ok(LaStreamPacket { kind: LaStreamPacketKind::Stop, seq: 0, info: 1, payload: vec![] }),
+            // Real session begins here.
+            make_start(),
+            make_data(0, b"real"),
+            make_stop(),
+        ];
+        let mut transport = MockLaTransport::new(packets);
+        let run_flag = running();
+        let store = empty_store();
+        let status = empty_status();
+        let stream_seq = seq();
+
+        let reason = run_stream_loop(&mut transport, &run_flag, &store, &status, &stream_seq);
+
+        assert_eq!(reason, StreamStopReason::Normal, "multiple stale packets must all be drained");
+        assert_eq!(status.lock().unwrap().chunk_count, 1, "only real DATA chunk counted");
+    }
 }

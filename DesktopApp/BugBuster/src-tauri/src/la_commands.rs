@@ -140,6 +140,73 @@ pub(crate) fn run_stream_loop(
         return StreamStopReason::UsbError(format!("cannot send stream start: {e}"));
     }
 
+    // Drain stale packets from the USB IN endpoint FIFO before entering the
+    // data loop. When the host stops a stream via CMD_HAT_LA_STOP (BBP path),
+    // the firmware emits a STOP marker on vendor-bulk IN. If the previous
+    // background task exited through the `running` flag check (i.e. it was
+    // processing a DATA packet, not blocked in read_packet, when `running` was
+    // cleared) the STOP marker is never consumed and sits in the endpoint FIFO.
+    // The next stream's task would read that stale STOP as its first packet
+    // and terminate immediately — "Backend stream stopped" with 0 samples.
+    //
+    // Fix: after sending STREAM_CMD_START, read and discard packets until we
+    // receive the firmware's START confirmation that corresponds to our command.
+    const MAX_DRAIN: usize = 32;
+    let mut drained = 0usize;
+    loop {
+        let packet = match transport.read_packet() {
+            Ok(p) => p,
+            Err(e) => {
+                if let Ok(mut s) = status.lock() {
+                    s.stop_reason = Some("usb_error".to_string());
+                    s.last_error = Some(format!("USB error waiting for stream start: {e}"));
+                }
+                teardown(running, status);
+                return StreamStopReason::UsbError(format!("waiting for stream start: {e}"));
+            }
+        };
+        match packet.kind {
+            LaStreamPacketKind::Start => {
+                // Firmware confirmed our STREAM_CMD_START — mark active and enter data loop.
+                if let Ok(mut s) = status.lock() {
+                    s.active = true;
+                }
+                break;
+            }
+            LaStreamPacketKind::Error if packet.info == STREAM_INFO_START_REJECTED => {
+                if let Ok(mut s) = status.lock() {
+                    s.stop_reason = Some("start_rejected".to_string());
+                    s.last_error = Some(format!(
+                        "Firmware rejected stream start (info={:#04x})",
+                        packet.info
+                    ));
+                }
+                teardown(running, status);
+                return StreamStopReason::FirmwareError(packet.info);
+            }
+            _ => {
+                drained += 1;
+                log::warn!(
+                    "[run_stream_loop] Discarding stale {:?} packet before START ({}/{})",
+                    packet.kind,
+                    drained,
+                    MAX_DRAIN
+                );
+                if drained >= MAX_DRAIN {
+                    if let Ok(mut s) = status.lock() {
+                        s.stop_reason = Some("drain_overflow".to_string());
+                        s.last_error =
+                            Some("too many stale packets before stream START".to_string());
+                    }
+                    teardown(running, status);
+                    return StreamStopReason::UsbError(
+                        "too many stale packets before stream START; aborting".into(),
+                    );
+                }
+            }
+        }
+    }
+
     log::info!("[run_stream_loop] Streaming active");
     let t0 = std::time::Instant::now();
     let mut expected_seq = 0u8;
@@ -905,15 +972,19 @@ pub async fn la_stream_usb(
     );
 
     la.stream_running.store(false, Ordering::SeqCst);
+    // Stop firmware FIRST so it emits PKT_STOP on vendor-bulk IN.
+    // The background task's bulk_in() is blocking with the USB mutex held; sending
+    // CMD_HAT_LA_STOP causes the RP2040 to send PKT_STOP (see HAT_CMD_LA_STOP
+    // handler in bb_main.c), which unblocks bulk_in() and lets the task exit.
+    // Without this ordering the task never releases the mutex and the new
+    // run_stream_loop deadlocks trying to acquire it.
+    let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
     {
         let old_task = la.stream_task.lock().map_err(map_err)?.take();
         if let Some(handle) = old_task {
-            let _ = tokio::time::timeout(std::time::Duration::from_millis(5000), handle).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
         }
     }
-
-    let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
     let mut cfg_buf = vec![channels];
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
@@ -981,7 +1052,9 @@ pub async fn la_stream_usb_stop(
     {
         let old_task = la.stream_task.lock().map_err(map_err)?.take();
         if let Some(handle) = old_task {
-            let _ = tokio::time::timeout(std::time::Duration::from_millis(5000), handle).await;
+            // 500 ms is generous — firmware sends PKT_STOP immediately on CMD_HAT_LA_STOP
+            // which unblocks the streaming task's bulk_in() call within a few ms.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
         }
     }
 
