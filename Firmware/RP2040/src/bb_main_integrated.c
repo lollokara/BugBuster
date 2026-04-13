@@ -110,6 +110,24 @@ void usb_thread(void *ptr)
         // Send pending Vendor Bulk data (LA stream packets or one-shot readout).
         bb_la_usb_send_pending();
 
+        // STREAMING FAST PATH: When actively streaming LA data, run a tight
+        // inner loop that repeatedly calls tud_task() + send_pending() without
+        // the overhead of poll_commands/cdc_send or the 1ms xTaskNotifyWait.
+        // This maximises the xfer_complete → write_xfer chain throughput.
+        // We still check poll_commands periodically (every 64 iterations) to
+        // handle STOP commands, and yield briefly to let lower-priority tasks
+        // (DAP, bb_cmd) run.
+        if (bb_la_usb_is_streaming()) {
+            for (int fast = 0; fast < 256; fast++) {
+                tud_task();
+                bb_la_usb_send_pending();
+                if ((fast & 63) == 63) {
+                    bb_la_usb_poll_commands();
+                    if (!bb_la_usb_is_streaming()) break;
+                }
+            }
+        }
+
 #ifdef PROBE_USB_CONNECTED_LED
         if (!gpio_get(PROBE_USB_CONNECTED_LED) && tud_connected())
             gpio_put(PROBE_USB_CONNECTED_LED, 1);
@@ -118,7 +136,7 @@ void usb_thread(void *ptr)
 #endif
         if (tud_suspended() || !tud_connected())
             xTaskDelayUntil(&wake, 20);
-        else if (!tud_task_event_ready())
+        else if (!bb_la_usb_is_streaming() && !tud_task_event_ready())
             xTaskNotifyWait(0, 0xFFFFFFFFu, &cmd, 1);
     } while (1);
 }

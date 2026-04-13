@@ -146,3 +146,10 @@ void bb_la_cdc_flush_ring(void);
  *        No-op when not compiled with DEBUGPROBE_INTEGRATION.
  */
 void bb_la_usb_notify_task_from_isr(void);
+
+/**
+ * @brief Returns true while a live stream is actively sending data.
+ *        Used by the USB task loop to switch to a tight polling mode
+ *        that maximises bulk throughput.
+ */
+bool bb_la_usb_is_streaming(void);

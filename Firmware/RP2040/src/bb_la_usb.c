@@ -327,6 +327,15 @@ void bb_la_usb_send_pending(void) {
     tud_vendor_n_flush(BB_LA_VENDOR_ITF);
 }
 
+// Track whether we are in an active streaming session (set on START, cleared
+// on STOP/error).  Unlike s_bulk_data.active this stays true between DMA
+// half-buffer handoffs so the USB task keeps its tight polling loop running.
+static volatile bool s_streaming_session = false;
+
+bool bb_la_usb_is_streaming(void) {
+    return s_streaming_session;
+}
+
 // Keep these for API compatibility but they are now either redirects or internal
 uint32_t bb_la_usb_write(const uint8_t *data, uint32_t len) {
     (void)data; (void)len;
