@@ -328,9 +328,9 @@ class TestDigitalWriteRouting(unittest.TestCase):
         hal, mock_bb = _make_hal()
         hal._io_mode[4] = PortMode.DIGITAL_OUT_LOW
         hal.write_digital(4, True)
-        # IO 4 has esp_gpio=5
-        mock_bb.dio_configure.assert_called_once_with(5, 2)  # gpio=5, mode=OUTPUT
-        mock_bb.dio_write.assert_called_once_with(5, True)
+        # IO 4 uses logical IO 4 in the protocol
+        mock_bb.dio_configure.assert_called_once_with(4, 2)  # io=4, mode=OUTPUT
+        mock_bb.dio_write.assert_called_once_with(4, True)
 
     def test_write_digital_only_io_uses_esp_gpio(self):
         """Digital-only IO (channel=None) always uses ESP GPIO path."""

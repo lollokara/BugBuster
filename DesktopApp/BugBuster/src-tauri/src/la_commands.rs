@@ -115,40 +115,49 @@ where
 
 /// Flush stale packets from the vendor-bulk IN FIFO before starting a new stream.
 ///
-/// Sends `LA_USB_CMD_STOP (0x00)` — firmware always responds with `PKT_STOP`
-/// regardless of current state (see `handle_stream_command()` in `bb_la_usb.c`).
-/// All packets received before that `PKT_STOP` are discarded.
+/// Sends `LA_USB_CMD_STOP (0x00)` twice and drains until `PKT_STOP` each time.
+/// Two passes are kept as a conservative safety net: the firmware's
+/// `HAT_CMD_LA_STOP` now calls `bb_la_usb_abort_bulk()` unconditionally, so the
+/// second pass is rarely needed, but it costs little and guards against any residue
+/// that slips through during the abort→stop race on the firmware side.
 ///
 /// **Must be called BEFORE `CMD_HAT_LA_CONFIG`** so that the `bb_la_stop()` side-
 /// effect (which unloads the PIO program) happens before configure reloads it.
 /// If called AFTER configure, the PIO would be unloaded and `bb_la_start_stream()`
 /// would reject the subsequent start with `START_REJECTED`.
 pub(crate) fn pre_stream_drain(transport: &mut impl LaTransport) {
-    if let Err(e) = transport.send_command(LA_USB_CMD_STOP) {
-        log::warn!("[pre_stream_drain] cannot send LA_USB_CMD_STOP: {e}");
-        return;
-    }
     const MAX_DRAIN: usize = 8192;
-    let mut count = 0usize;
-    loop {
-        match transport.read_packet() {
-            Ok(p) if p.kind == LaStreamPacketKind::Stop => break,
-            Ok(p) => {
-                count += 1;
-                log::debug!("[pre_stream_drain] discarding stale {:?} ({})", p.kind, count);
-                if count >= MAX_DRAIN {
-                    log::warn!("[pre_stream_drain] MAX_DRAIN reached without STOP — aborting drain");
-                    break;
+    for pass in 0u8..2 {
+        if let Err(e) = transport.send_command(LA_USB_CMD_STOP) {
+            log::warn!("[pre_stream_drain] cannot send LA_USB_CMD_STOP (pass {pass}): {e}");
+            return;
+        }
+        let mut count = 0usize;
+        loop {
+            match transport.read_packet() {
+                Ok(p) if p.kind == LaStreamPacketKind::Stop => break,
+                Ok(p) => {
+                    count += 1;
+                    log::debug!(
+                        "[pre_stream_drain] pass {pass}: discarding stale {:?} ({})",
+                        p.kind, count
+                    );
+                    if count >= MAX_DRAIN {
+                        log::warn!(
+                            "[pre_stream_drain] pass {pass}: MAX_DRAIN reached — aborting"
+                        );
+                        break;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[pre_stream_drain] pass {pass}: USB error: {e}");
+                    return;
                 }
             }
-            Err(e) => {
-                log::warn!("[pre_stream_drain] USB error: {e}");
-                break;
-            }
         }
-    }
-    if count > 0 {
-        log::warn!("[pre_stream_drain] discarded {} stale packets", count);
+        if count > 0 {
+            log::warn!("[pre_stream_drain] pass {pass}: discarded {count} stale packets");
+        }
     }
 }
 
@@ -184,11 +193,9 @@ pub(crate) fn run_stream_loop(
 
     // Read the immediate firmware response — must be PKT_START or PKT_ERROR.
     //
-    // One stale PKT_STOP may appear first: pre_stream_drain() drains until the
-    // first PKT_STOP it sees, which could be the stale STOP from the previous
-    // CMD_HAT_LA_STOP (not our LA_USB_CMD_STOP response). In that case our STOP
-    // response is left in the FIFO and arrives here before PKT_START. Tolerate
-    // exactly one such stale STOP and skip it.
+    // pre_stream_drain() sends STOP twice to flush the vendor-bulk FIFO.
+    // MAX_SKIP is a generous safety net for any residual DATA/STOP packets
+    // that arrive before PKT_START in pathological timing windows.
     let first = match transport.read_packet() {
         Ok(p) => p,
         Err(e) => {
@@ -200,9 +207,20 @@ pub(crate) fn run_stream_loop(
             return StreamStopReason::UsbError(format!("waiting for stream start: {e}"));
         }
     };
-    let start_packet = if first.kind == LaStreamPacketKind::Stop {
-        log::debug!("[run_stream_loop] Skipping one stale STOP before start confirmation");
-        match transport.read_packet() {
+    const MAX_SKIP: usize = 512;
+    let mut start_packet = first;
+    let mut skipped = 0usize;
+    while skipped < MAX_SKIP
+        && start_packet.kind != LaStreamPacketKind::Start
+        && start_packet.kind != LaStreamPacketKind::Error
+    {
+        log::debug!(
+            "[run_stream_loop] skipping stale {:?} before PKT_START (count={})",
+            start_packet.kind,
+            skipped
+        );
+        skipped += 1;
+        start_packet = match transport.read_packet() {
             Ok(p) => p,
             Err(e) => {
                 if let Ok(mut s) = status.lock() {
@@ -212,10 +230,11 @@ pub(crate) fn run_stream_loop(
                 teardown(running, status);
                 return StreamStopReason::UsbError(format!("waiting for stream start: {e}"));
             }
-        }
-    } else {
-        first
-    };
+        };
+    }
+    if skipped > 0 {
+        log::warn!("[run_stream_loop] skipped {skipped} stale packets before PKT_START");
+    }
     match start_packet.kind {
         LaStreamPacketKind::Start => {
             if let Ok(mut s) = status.lock() {
@@ -1084,8 +1103,8 @@ pub async fn la_stream_usb(
 
     let handle = tokio::task::spawn_blocking(move || {
         let mut transport = LockedLaTransport { usb: usb_mutex.clone() };
-        let _reason = run_stream_loop(&mut transport, &running, &store_mutex, &stream_status, &stream_seq);
-        // reason is logged/stored if needed; existing status fields already capture the outcome
+        let reason = run_stream_loop(&mut transport, &running, &store_mutex, &stream_status, &stream_seq);
+        log::info!("[la_stream_usb] stream task exited: {:?}", reason);
     });
 
     if let Ok(mut slot) = task_slot.lock() {

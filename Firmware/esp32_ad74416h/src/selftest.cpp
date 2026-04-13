@@ -313,8 +313,15 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
     }
 
     if (adgs_u17_s2_active()) {
-        ESP_LOGE(TAG, "Cannot calibrate: U17 S2 is closed (IO 10 analog mode)");
-        return false;
+        ESP_LOGW(TAG, "U17 S2 active (IO 10 analog), attempting to open...");
+        // Ensure Channel D (terminal 10) is High-Z before opening the switch
+        tasks_apply_channel_function(3, CH_FUNC_HIGH_IMP);
+        adgs_set_switch_safe(U17_DEVICE_IDX, 1, false);
+        
+        if (adgs_u17_s2_active()) {
+            ESP_LOGE(TAG, "Cannot calibrate: U17 S2 is closed and failed to open");
+            return false;
+        }
     }
 
     ESP_LOGI(TAG, "Starting auto-calibration for IDAC channel %d", idac_channel);

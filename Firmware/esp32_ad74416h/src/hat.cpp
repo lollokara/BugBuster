@@ -724,18 +724,18 @@ bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)
 
     // 1. Set HVPAK I/O voltage to match target
     if (!hat_set_io_voltage(target_voltage_mv)) {
-        ESP_LOGE(TAG, "SWD setup: failed to set I/O voltage (hat err=0x%02X, hvpak err=0x%02X)",
+        ESP_LOGW(TAG, "SWD setup: failed to set I/O voltage (hat err=0x%02X, hvpak err=0x%02X). "
+                      "Proceeding anyway (breadboard mode?)",
                  s_last_error, s_state.hvpak_last_error);
-        return false;
     }
-    delay_ms(5);  // HVPAK stabilization
+    delay_ms(50);  // HVPAK stabilization (was 5ms)
 
     // 2. Enable connector power
     if (!hat_set_power(connector, true)) {
         ESP_LOGE(TAG, "SWD setup: failed to enable connector power");
         return false;
     }
-    delay_ms(50);  // Target power-up
+    delay_ms(200);  // Target power-up (was 50ms)
 
     // 3. SWD routing is no longer done via EXP_EXT pin assignment.
     //    The new HAT PCB (2026-04-09) exposes a dedicated 3-pin SWD

@@ -140,9 +140,7 @@ impl LaUsbConnection {
                             continue;
                         }
                     }
-                    DeviceSelector::Any => {
-                        warn!("No LA device selector provided, using first BugBuster HAT found");
-                    }
+                    DeviceSelector::Any => {}
                 }
 
                 info!(
@@ -269,7 +267,17 @@ impl LaUsbConnection {
             .as_ref()
             .ok_or_else(|| anyhow!("LA USB not connected"))?;
 
-        let completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(64)));
+        // Use a 5-second timeout so a zombie stream task (e.g. after a DMA overrun
+        // that didn't produce a PKT_STOP) eventually releases the USB mutex rather
+        // than blocking it indefinitely and deadlocking the next restart attempt.
+        let rt = tokio::runtime::Handle::current();
+        let completion = rt
+            .block_on(tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                iface.bulk_in(LA_EP_IN, RequestBuffer::new(64)),
+            ))
+            .map_err(|_| anyhow!("USB stream read timed out (5 s) — device may be stuck"))?;
+
         let result = completion
             .into_result()
             .map_err(|e| anyhow!("USB live bulk read failed: {}", e))?;

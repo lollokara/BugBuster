@@ -46,20 +46,11 @@ impl ConnectionManager {
 
     /// Connect to a device by its discovery ID.
     pub async fn connect(&self, device_id: &str, app: &AppHandle) -> Result<()> {
-        let mut la_selector = None;
-        if device_id.starts_with("usb:") {
-            let port_name = &device_id[4..];
-            if let Ok(ports) = serialport::available_ports() {
-                if let Some(port) = ports.iter().find(|p| p.port_name == port_name) {
-                    if let serialport::SerialPortType::UsbPort(usb) = &port.port_type {
-                        if let Some(sn) = &usb.serial_number {
-                            log::info!("Discovered serial number {} for LA binding", sn);
-                            la_selector = Some(crate::la_usb::DeviceSelector::SerialNumber(sn.clone()));
-                        }
-                    }
-                }
-            }
-        }
+        // la_selector stays None → DeviceSelector::Any.
+        // The ESP32 CDC port and the RP2040 vendor-bulk interface are separate USB
+        // devices with independent serial numbers; the CDC serial cannot be used to
+        // identify the paired RP2040. Use Any (first matching VID/PID) for now.
+        let la_selector: Option<crate::la_usb::DeviceSelector> = None;
 
         self.disconnect(app).await?;
 

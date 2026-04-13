@@ -47,7 +47,12 @@ void hat_parser_check_timeout(HatFrameParser *p, uint32_t now_ms)
 
 bool hat_parser_feed(HatFrameParser *p, uint8_t byte)
 {
-    // Record time of each byte for timeout detection
+    // Record time of each byte for timeout detection, but ONLY if not in WAIT_SYNC
+    // or if the byte is NOT 0xFF/0x00 (noise). This prevents noisy lines from blocking
+    // timeout reset and ensures 0xFF/0x00 is discarded when looking for sync.
+    if (p->state == WAIT_SYNC && (byte == 0xFF || byte == 0x00)) {
+        return false;
+    }
     p->last_byte_ms = to_ms_since_boot(get_absolute_time());
 
     switch (p->state) {

@@ -128,6 +128,7 @@ void usb_thread(void *ptr)
 
 int main(void)
 {
+    stdio_init_all();
     bi_decl_config();
     board_init();
     usb_serial_init();

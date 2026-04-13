@@ -351,6 +351,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     # LA Status — Phase 0 schema
     if key == ("GET", "/hat/la/status"):
         state_name = getattr(device, "la_state", "IDLE")
+        rate = device.la_config.get("sample_rate", 1000000)
         return {
             "stateName": state_name,
             "stopReasonName": "NONE",
@@ -358,7 +359,8 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             "triggerArmed": False,
             "samplesCaptured": 0,
             "maxSamples": 1024,
-            "clockHz": 10000000,
+            "actualRateHz": rate,
+            "clockHz": rate,
             "channels": 8
         }
 

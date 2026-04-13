@@ -55,16 +55,19 @@ def test_hat_get_status_parses_optional_hvpak_fields():
 
 def test_hat_get_power_parses_optional_hvpak_fields():
     payload = bytearray()
-    payload += bytes([1])
-    payload += struct.pack("<f", 10.0)
-    payload += bytes([0])
-    payload += bytes([0])
-    payload += struct.pack("<f", 0.0)
-    payload += bytes([0])
-    payload += struct.pack("<H", 2500)
+    payload += bytes([1])                      # conn A enabled
+    payload += struct.pack("<f", 10.0)         # conn A current
+    payload += bytes([0])                      # conn A fault
+    payload += bytes([0])                      # conn B enabled
+    payload += struct.pack("<f", 0.0)          # conn B current
+    payload += bytes([0])                      # conn B fault
+    payload += struct.pack("<H", 2500)         # io voltage
     payload += bytes([1, 1, 0])                # hvpak_part, hvpak_ready, hvpak_last_error
 
-    client = BugBuster(_make_usb_transport({CmdId.HAT_GET_POWER: bytes(payload)}))
+    client = BugBuster(_make_usb_transport({
+        CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
+        CmdId.HAT_GET_POWER: bytes(payload),
+    }))
     result = client.hat_get_power()
 
     assert result["io_voltage_mv"] == 2500

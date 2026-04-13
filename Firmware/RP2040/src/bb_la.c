@@ -14,9 +14,11 @@
 #include "hardware/irq.h"
 #include "hardware/structs/pio.h"
 #include "pico/stdlib.h"
+#include "hardware/sync.h"
 
 #include <string.h>
 #include "bb_la_rle.h"
+#include "bb_la_usb.h"
 
 // Generated from PIO files
 #include "bb_la.pio.h"
@@ -242,8 +244,11 @@ static void dma_irq_handler(void)
             }
 
             // Flag completed half, swap to other half, restart DMA
+            uint32_t status = save_and_disable_interrupts();
             s_la.stream_buf_ready = s_la.stream_dma_buf;
+            __dmb();
             s_la.stream_dma_buf ^= 1; // swap 0↔1
+            restore_interrupts(status);
 
             // Reconfigure DMA write address to other half and restart
             uint32_t *next_buf = s_capture_buf + (s_la.stream_dma_buf * s_la.half_words);
@@ -650,6 +655,11 @@ void bb_la_poll(void)
 
     case LA_STATE_STREAMING:
         if (s_la.stream_overrun) {
+            // Signal the host BEFORE entering error state so the stream task
+            // unblocks immediately instead of waiting for the next STOP command.
+            bb_la_usb_abort_bulk();
+            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP,
+                                         (uint8_t)LA_STREAM_STOP_DMA_OVERRUN);
             enter_error_state();
         }
         break;
@@ -708,6 +718,8 @@ bool bb_la_stream_get_buffer(const uint8_t **buf_out, uint32_t *len_out)
 {
     if (s_la.state != LA_STATE_STREAMING) return false;
     if (!buf_out || !len_out) return false;
+    
+    __dmb();
     if (s_la.stream_buf_ready == STREAM_BUF_NONE) return false;
 
     uint32_t *half = s_capture_buf + (s_la.stream_buf_ready * s_la.half_words);
@@ -733,7 +745,9 @@ void bb_la_stream_buffer_sent(const uint8_t *buf)
     }
 
     if (s_la.stream_buf_ready == sent_half) {
+        uint32_t status = save_and_disable_interrupts();
         s_la.stream_buf_ready = STREAM_BUF_NONE;
+        restore_interrupts(status);
     }
 }
 

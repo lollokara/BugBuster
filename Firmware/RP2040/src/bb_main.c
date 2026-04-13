@@ -739,11 +739,18 @@ static void dispatch_command(const HatFrame *frame)
     }
     case HAT_CMD_LA_STOP:
     {
+        // Abort the bulk pipeline when streaming or in error (e.g. DMA overrun).
+        // Abort is safe to call from hat_task as long as tud_vendor_n_flush() is
+        // NOT inside it — the USB task's bb_la_usb_send_pending() will flush next
+        // iteration. We skip abort when IDLE to avoid any USB task contention.
         LaStatus st;
         bb_la_get_status(&st);
-        if (st.state == LA_STATE_STREAMING) {
-            bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
+        if (st.state == LA_STATE_STREAMING || st.state == LA_STATE_ERROR) {
+            bb_la_usb_abort_bulk();
         }
+        // Always queue PKT_STOP so any waiting host stream task is unblocked,
+        // regardless of whether streaming was active.
+        bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
         bb_la_stop();
         send_ok(NULL, 0);
         break;

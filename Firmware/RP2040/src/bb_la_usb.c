@@ -115,12 +115,15 @@ bool bb_la_usb_connected(void) {
 }
 
 void bb_la_usb_abort_bulk(void) {
+    uint32_t status = save_and_disable_interrupts();
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
-    __dmb();
     s_bulk_ctrl_tail = 0;
     s_bulk_ctrl_head = 0;
-    __dmb();
+    restore_interrupts(status);
+    // Do NOT call tud_vendor_n_flush() here — it must run from the USB task
+    // (tud_task context). bb_la_usb_send_pending() flushes at its end, so
+    // the next USB task iteration will flush whatever remains in the TX FIFO.
 }
 
 bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info) {
@@ -144,13 +147,14 @@ bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info) {
 }
 
 void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes) {
+    uint32_t status = save_and_disable_interrupts();
     s_bulk_data.buf = buf;
     s_bulk_data.total_len = total_bytes;
     s_bulk_data.sent_len = 0;
     s_bulk_data.is_live = false;
     s_bulk_data.header_sent = false;
     s_bulk_data.active = true;
-    __dmb();
+    restore_interrupts(status);
 #ifdef DEBUGPROBE_INTEGRATION
     if (tud_taskhandle) xTaskNotify(tud_taskhandle, 0, eNoAction);
 #endif
@@ -170,7 +174,10 @@ void bb_la_usb_send_pending(void) {
         for (int i=0; i<4; i++) pkt[i] = s_bulk_ctrl_buf[(tail + i) % BULK_CTRL_BUF_SIZE];
         tud_vendor_n_write(BB_LA_VENDOR_ITF, pkt, 4);
         tail = (tail + 4) % BULK_CTRL_BUF_SIZE;
+        
+        uint32_t status = save_and_disable_interrupts();
         s_bulk_ctrl_tail = tail;
+        restore_interrupts(status);
     }
 
     // 2. If no control markers, check for data
@@ -179,6 +186,7 @@ void bb_la_usb_send_pending(void) {
         if (!s_bulk_data.active) {
             const uint8_t *stream_buf;
             uint32_t stream_len;
+            uint32_t status = save_and_disable_interrupts();
             if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
                 s_bulk_data.buf = stream_buf;
                 s_bulk_data.total_len = stream_len;
@@ -186,6 +194,7 @@ void bb_la_usb_send_pending(void) {
                 s_bulk_data.is_live = true;
                 s_bulk_data.active = true;
             }
+            restore_interrupts(status);
         }
 
         if (s_bulk_data.active) {
@@ -206,7 +215,11 @@ void bb_la_usb_send_pending(void) {
                     memcpy(&packet[4], s_bulk_data.buf + s_bulk_data.sent_len, chunk);
 
                     tud_vendor_n_write(BB_LA_VENDOR_ITF, packet, (uint32_t)(4 + chunk));
+                    
+                    uint32_t status = save_and_disable_interrupts();
                     s_bulk_data.sent_len += chunk;
+                    restore_interrupts(status);
+
                     usb_avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
                 }
             } else {
@@ -219,7 +232,11 @@ void bb_la_usb_send_pending(void) {
                         header[2] = (uint8_t)((s_bulk_data.total_len >> 16) & 0xFF);
                         header[3] = (uint8_t)((s_bulk_data.total_len >> 24) & 0xFF);
                         tud_vendor_n_write(BB_LA_VENDOR_ITF, header, 4);
+                        
+                        uint32_t status = save_and_disable_interrupts();
                         s_bulk_data.header_sent = true;
+                        restore_interrupts(status);
+                        
                         usb_avail -= 4;
                     }
                 }
@@ -229,7 +246,10 @@ void bb_la_usb_send_pending(void) {
                     if (chunk > usb_avail) chunk = usb_avail;
                     if (chunk > 0) {
                         tud_vendor_n_write(BB_LA_VENDOR_ITF, s_bulk_data.buf + s_bulk_data.sent_len, chunk);
+                        
+                        uint32_t status = save_and_disable_interrupts();
                         s_bulk_data.sent_len += chunk;
+                        restore_interrupts(status);
                     }
                 }
             }
@@ -238,7 +258,9 @@ void bb_la_usb_send_pending(void) {
                 if (s_bulk_data.is_live) {
                     bb_la_stream_buffer_sent(s_bulk_data.buf);
                 }
+                uint32_t status = save_and_disable_interrupts();
                 s_bulk_data.active = false;
+                restore_interrupts(status);
             }
         }
     }

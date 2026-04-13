@@ -169,6 +169,7 @@ async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDe
         name: format!("BugBuster (WiFi: {})", addr),
         transport: "http".to_string(),
         address: addr.to_string(),
+        serial_number: None,
     })
 }
 

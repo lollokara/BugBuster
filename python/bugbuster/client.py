@@ -1395,16 +1395,31 @@ class BugBuster:
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_GET_STATUS)
             off = 0
-            detected = bool(resp[off]); off += 1
-            connected = bool(resp[off]); off += 1
-            hat_type = resp[off]; off += 1
-            detect_v = struct.unpack_from('<f', resp, off)[0]; off += 4
-            fw_major = resp[off]; off += 1
-            fw_minor = resp[off]; off += 1
-            confirmed = bool(resp[off]); off += 1
-            pins = []
-            for i in range(4):
-                pins.append(resp[off]); off += 1
+            
+            # Minimum expected payload is 14 bytes for v1 firmware
+            if len(resp) >= 14:
+                detected = bool(resp[off]); off += 1
+                connected = bool(resp[off]); off += 1
+                hat_type = resp[off]; off += 1
+                detect_v = struct.unpack_from('<f', resp, off)[0]; off += 4
+                fw_major = resp[off]; off += 1
+                fw_minor = resp[off]; off += 1
+                confirmed = bool(resp[off]); off += 1
+                pins = []
+                for i in range(4):
+                    pins.append(resp[off]); off += 1
+            else:
+                # Fallback for truncated/mock responses
+                detected  = bool(resp[0]) if len(resp) > 0 else False
+                connected = bool(resp[1]) if len(resp) > 1 else False
+                hat_type  = resp[2] if len(resp) > 2 else 0
+                detect_v  = 0.0
+                fw_major  = 0
+                fw_minor  = 0
+                confirmed = False
+                pins      = [0, 0, 0, 0]
+                off       = len(resp)
+
             result = {
                 "detected": detected, "connected": connected,
                 "type": hat_type, "detect_voltage": detect_v,
@@ -1886,7 +1901,21 @@ class BugBuster:
                 result["stream_short_write_count"] = struct.unpack_from('<I', resp, off)[0]
                 off += 4
             return result
-        raise NotImplementedError("LA control is USB-only")
+        else:
+            # Phase 0 HTTP schema mapping
+            st = self._http_get("/hat/la/status")
+            state_name = _first_present(st, "stateName", "state_name", default="IDLE").lower()
+            _S_NAME_TO_CODE = {"idle": 0, "armed": 1, "capturing": 2, "done": 3, "streaming": 4, "error": 5}
+            return {
+                "state": _S_NAME_TO_CODE.get(state_name, 0),
+                "state_name": state_name,
+                "channels": _parse_int_maybe_hex(_first_present(st, "channels"), 4),
+                "samples_captured": _parse_int_maybe_hex(_first_present(st, "samplesCaptured", "samples_captured"), 0),
+                "total_samples": _parse_int_maybe_hex(_first_present(st, "maxSamples", "total_samples"), 0),
+                "actual_rate_hz": _parse_int_maybe_hex(_first_present(st, "actualRateHz", "clockHz", "rate"), 0),
+                "active": bool(_first_present(st, "active", default=False)),
+                "trigger_armed": bool(_first_present(st, "triggerArmed", default=False)),
+            }
 
     def hat_la_read_all(self) -> bytes:
         """

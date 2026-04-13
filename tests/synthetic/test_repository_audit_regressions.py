@@ -15,12 +15,14 @@ def sim_device():
 
 @pytest.fixture
 def http_client(sim_device):
-    transport = SimulatedHTTPTransport(sim_device)
+    # Enable HAT simulation
+    transport = SimulatedHTTPTransport(sim_device, hat=True)
     return BugBuster(transport)
 
 @pytest.fixture
 def usb_client(sim_device):
-    transport = SimulatedUSBTransport(sim_device)
+    # Enable HAT simulation
+    transport = SimulatedUSBTransport(sim_device, hat=True)
     return BugBuster(transport)
 
 # ---------------------------------------------------------------------------
@@ -86,26 +88,43 @@ def test_json_malformed_value_fails(sim_device):
 # DIO Regressions
 # ---------------------------------------------------------------------------
 
-def test_dio_hal_read_uses_correct_io_index(usb_client, sim_device):
-    """hal.read_digital(io=1) should call the client with io=1 (not 0 or other)."""
+def test_dio_hal_read_uses_correct_io_index_analog(usb_client, sim_device):
+    """hal.read_digital(io=1) should use AD74416H DIN when in DIGITAL_IN mode."""
     usb_client.connect()
     hal = usb_client.hal
     hal.begin()
     
-    # Configure IO 1 as digital input
+    # Configure IO 1 as digital input (routed to AD74416H ch 0)
     from bugbuster.hal import PortMode
     hal.configure(1, PortMode.DIGITAL_IN)
     
-    # Mock the response for dio_read(1)
-    # Actually, SimulatedDevice.dio is 0-indexed internally, and dio_read(io) uses io-1
-    sim_device.dio[0]["output"] = True # Set IO 1 to High
+    # Set simulated DIN state for channel 0
+    sim_device.channels[0]["din_state"] = True
     
     val = hal.read_digital(1)
     assert val is True
     
-    # Verify it didn't read IO 2
+    sim_device.channels[0]["din_state"] = False
+    assert hal.read_digital(1) is False
+
+def test_dio_hal_read_uses_correct_io_index_digital_only(usb_client, sim_device):
+    """hal.read_digital(io=2) should call dio_read(2)."""
+    usb_client.connect()
+    hal = usb_client.hal
+    hal.begin()
+    
+    # Configure IO 2 as digital input (routed to ESP GPIO via MUX)
+    from bugbuster.hal import PortMode
+    hal.configure(2, PortMode.DIGITAL_IN)
+    
+    # Set simulated GPIO state for IO 2 (index 1 in sim_device.dio)
+    sim_device.dio[1]["output"] = True 
+    
+    val = hal.read_digital(2)
+    assert val is True
+    
     sim_device.dio[1]["output"] = False
-    assert hal.read_digital(1) is True
+    assert hal.read_digital(2) is False
 
 # ---------------------------------------------------------------------------
 # LA Regressions
@@ -124,7 +143,7 @@ def test_la_status_handles_phase0_done_state(usb_client, sim_device):
     
     # If we use MCP tool capture_logic_analyzer, it checks stateName == "DONE"
     from bugbuster_mcp.tools import waveform
-    import mock
+    from unittest import mock
     
     with mock.patch("bugbuster_mcp.session.get_client", return_value=usb_client), \
          mock.patch("bugbuster_mcp.session.get_hal", return_value=usb_client.hal):
@@ -137,14 +156,16 @@ def test_la_status_handles_phase0_done_state(usb_client, sim_device):
             res = waveform.capture_logic_analyzer(channels=4, rate_hz=1000000, depth=100)
             assert res["channels"] == 4
 
-def test_la_status_actual_rate_field(usb_client, sim_device):
-    """LA status should include actual_rate_hz."""
-    usb_client.connect()
+def test_la_status_http_phase0_mapping(http_client, sim_device):
+    """LA status over HTTP should correctly map Phase 0 fields."""
+    http_client.connect()
+    sim_device.la_state = "DONE"
+    sim_device.la_config["sample_rate"] = 25000000
     
-    # In SimulatedDevice core handler for LA_STATUS, it should return the clock rate
-    # Let's check how it's implemented in tests/mock/handlers/hat.py
-    status = usb_client.hat_la_get_status()
-    assert "actual_rate_hz" in status
+    status = http_client.hat_la_get_status()
+    assert status["state_name"] == "done"
+    assert status["state"] == 3
+    assert status["actual_rate_hz"] == 25000000
 
 # ---------------------------------------------------------------------------
 # USB-PD Regressions
