@@ -53,6 +53,40 @@ def pytest_addoption(parser):
             "Without this flag, tests that need a live target are skipped."
         ),
     )
+    parser.addoption(
+        "--sim",
+        action="store_true",
+        default=False,
+        help="Use simulated device (no hardware required)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sim mutual exclusivity + proto version check
+# ---------------------------------------------------------------------------
+
+def pytest_configure(config):
+    try:
+        sim = config.getoption("--sim", default=False)
+        usb = config.getoption("--device-usb", default=None)
+        http = config.getoption("--device-http", default=None)
+        if sim and (usb or http):
+            pytest.exit("ERROR: --sim is mutually exclusive with --device-usb / --device-http")
+    except ValueError:
+        pass  # options not registered yet during collection
+
+
+def pytest_sessionstart(session):
+    try:
+        if session.config.getoption("--sim", default=False):
+            from tests.mock.simulated_device import SimulatedDevice
+            from bugbuster.protocol import BBP_PROTO_VERSION
+            assert SimulatedDevice.PROTO_VERSION == BBP_PROTO_VERSION, (
+                f"Sim PROTO_VERSION {SimulatedDevice.PROTO_VERSION} != "
+                f"BBP_PROTO_VERSION {BBP_PROTO_VERSION}"
+            )
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +182,12 @@ def assert_no_faults(device):
 
 def _make_usb_device(config):
     """Open a USB BugBuster connection or skip if not configured."""
+    if config.getoption("--sim", default=False):
+        from tests.mock import SimulatedDevice, SimulatedUSBTransport
+        hat = config.getoption("--hat", default=False)
+        device = SimulatedDevice()
+        transport = SimulatedUSBTransport(device, hat=hat)
+        return bb.BugBuster(transport)
     port = config.getoption("--device-usb")
     if not port:
         pytest.skip("USB device not specified — pass --device-usb <port>")
@@ -157,6 +197,12 @@ def _make_usb_device(config):
 
 def _make_http_device(config):
     """Open an HTTP BugBuster connection or skip if not configured."""
+    if config.getoption("--sim", default=False):
+        from tests.mock import SimulatedDevice, SimulatedHTTPTransport
+        hat = config.getoption("--hat", default=False)
+        device = SimulatedDevice()
+        transport = SimulatedHTTPTransport(device, hat=hat)
+        return bb.BugBuster(transport)
     host = config.getoption("--device-http")
     if not host:
         pytest.skip("HTTP device not specified — pass --device-http <ip>")
