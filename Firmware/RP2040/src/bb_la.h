@@ -101,6 +101,12 @@ void bb_la_force_trigger(void);
 void bb_la_stop(void);
 
 /**
+ * @brief Stop streaming hardware but preserve ring state for USB drain.
+ * Called by vendor-bulk STOP; bb_la_stop() is deferred until ring is drained.
+ */
+void bb_la_stop_streaming_hw(void);
+
+/**
  * @brief Get current capture status.
  */
 void bb_la_get_status(LaStatus *status);
@@ -147,20 +153,6 @@ void bb_la_stream_buffer_sent(const uint8_t *buf);
  * @return true if capture data is available
  */
 bool bb_la_get_capture_buffer(const uint8_t **buf_out, uint32_t *len_out);
-
-/**
- * @brief Return which half of the double-buffer a pointer belongs to.
- * @param buf   Pointer returned by bb_la_stream_get_buffer()
- * @return 0 if buf is the first half (buffer A), 1 if second half (buffer B)
- */
-uint8_t bb_la_stream_my_half(const uint8_t *buf);
-
-/**
- * @brief Return true if DMA has lapped back into the half currently being sent.
- * Call after bb_la_usb_write_raw — if true, stop the stream (data would be corrupt).
- * @param my_half   Value from bb_la_stream_my_half() for the buffer being transmitted
- */
-bool bb_la_stream_dma_lapped(uint8_t my_half);
 
 /**
  * @brief Record that a live CDC stream stopped because the USB writer

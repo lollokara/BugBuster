@@ -190,6 +190,7 @@ extern "C" {
 #define BBP_CMD_HAT_SET_HVPAK_PWM    0xE8 // Set PWM config
 #define BBP_CMD_HAT_HVPAK_REG_READ   0xE9 // Raw register read
 #define BBP_CMD_HAT_HVPAK_REG_WRITE_MASKED 0xEA // Raw masked register write
+#define BBP_CMD_HAT_LA_LOG_ENABLE          0xEB // Enable/disable RP2040 log relay
 
 // SPI Clock
 #define BBP_CMD_SET_SPI_CLOCK    0xE3  // Set SPI clock speed (Hz, u32)
@@ -213,6 +214,7 @@ extern "C" {
 #define BBP_EVT_DIN             0x83
 #define BBP_EVT_PCA_FAULT       0x84    // PCA9535 fault event (e-fuse trip, PG change)
 #define BBP_EVT_LA_DONE         0x85    // Logic analyzer capture complete
+#define BBP_EVT_LA_LOG          0xEC    // RP2040 log message relay
 
 // -----------------------------------------------------------------------------
 // Error Codes
@@ -234,6 +236,7 @@ extern "C" {
 #define BBP_ERR_HVPAK_UNSUPPORTED_CAP  0x0E
 #define BBP_ERR_HVPAK_INVALID_INDEX    0x0F
 #define BBP_ERR_HVPAK_UNSAFE_REGISTER  0x10
+#define BBP_ERR_TIMEOUT                0x11
 
 // -----------------------------------------------------------------------------
 // ADC Stream Ring Buffer (lock-free, single-producer single-consumer)

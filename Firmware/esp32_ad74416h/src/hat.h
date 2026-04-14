@@ -155,6 +155,7 @@ typedef enum {
 #define HAT_CMD_LA_GET_STATUS   0x34  // Capture state + sample count
 #define HAT_CMD_LA_READ_DATA    0x35  // Read captured data chunk
 #define HAT_CMD_LA_STOP         0x36  // Abort capture
+#define HAT_CMD_LA_LOG_ENABLE   0x39  // Enable/disable log relay to host
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -164,6 +165,7 @@ typedef enum {
 #define HAT_RSP_DAP_STATUS      0x84
 #define HAT_RSP_LA_STATUS       0x85
 #define HAT_RSP_LA_DATA         0x86
+#define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
@@ -329,7 +331,7 @@ bool hat_set_io_voltage(uint16_t mv);
  *        HVPAK backend surface.
  */
 bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                       uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms);
+                       uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len);
 uint8_t hat_get_last_error(void);
 
 /**
@@ -407,6 +409,7 @@ bool hat_la_set_trigger(uint8_t type, uint8_t channel);
 bool hat_la_arm(void);
 bool hat_la_force(void);
 bool hat_la_stop(void);
+bool hat_la_log_enable(bool enable);
 bool hat_la_get_status(HatLaStatus *status);
 
 /**

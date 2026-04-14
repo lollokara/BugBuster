@@ -118,20 +118,6 @@ void bb_la_dbg(const char *fmt, ...) {
     }
 }
 
-void bb_la_usb_init(void) {
-    s_cdc_seq = 0;
-    s_live_seq = 0;
-    memset(&s_bulk_data, 0, sizeof(s_bulk_data));
-}
-
-void bb_la_usb_live_reset_sequence(void) {
-    s_live_seq = 0;
-}
-
-bool bb_la_usb_connected(void) {
-    return tud_vendor_n_mounted(BB_LA_VENDOR_ITF);
-}
-
 // Set when abort_bulk() is called from any context; consumed in send_pending()
 // (USB task) to safely call tud_vendor_n_write_clear without task-safety issues.
 static volatile bool s_need_endpoint_rearm = false;
@@ -155,18 +141,53 @@ static volatile bool s_streaming_session = false;
 // (which would discard the just-sent PKT_STOP marker).
 static volatile bool s_post_stream_rx_rearm = false;
 
+// Set when vendor-bulk STOP uses soft HW stop; consumed by send_pending()
+// after PKT_STOP emission to call bb_la_stop() for full cleanup.
+static volatile bool s_pending_hw_cleanup = false;
+
+void bb_la_usb_init(void) {
+    s_cdc_seq = 0;
+    s_live_seq = 0;
+    memset(&s_bulk_data, 0, sizeof(s_bulk_data));
+    s_bulk_ctrl_head = 0;
+    s_bulk_ctrl_tail = 0;
+    s_need_endpoint_rearm = false;
+    s_rearm_request_count = 0;
+    s_rearm_complete_count = 0;
+    s_deferred_stop = false;
+    s_deferred_stop_info = 0;
+    s_streaming_session = false;
+    s_post_stream_rx_rearm = false;
+    s_pending_hw_cleanup = false;
+}
+
+void bb_la_usb_live_reset_sequence(void) {
+    s_live_seq = 0;
+}
+
+bool bb_la_usb_connected(void) {
+    return tud_vendor_n_mounted(BB_LA_VENDOR_ITF);
+}
+
 void bb_la_usb_abort_bulk(void) {
     s_streaming_session = false;
     uint32_t status = save_and_disable_interrupts();
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
+    s_bulk_data.header_sent = false;
     s_bulk_ctrl_tail = 0;
     s_bulk_ctrl_head = 0;
+    s_pending_hw_cleanup = false;
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
     restore_interrupts(status);
     // Signal the USB task to re-arm the endpoint (tud_vendor_n_write_clear must
     // run from tud_task context — send_pending() will pick this up).
-    s_need_endpoint_rearm = true;
+    if (tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
+        s_need_endpoint_rearm = true;
+    } else {
+        // If not mounted, we can mark it complete immediately
+        s_rearm_complete_count = s_rearm_request_count;
+    }
 }
 
 void bb_la_usb_request_deferred_stop(uint8_t info) {
@@ -213,7 +234,16 @@ void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes) {
 }
 
 void bb_la_usb_send_pending(void) {
-    if (!tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) return;
+    if (!tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
+        // Can't do USB I/O, but clear pending rearm — there is nothing
+        // to rearm on an unmounted interface and leaving the flag set
+        // causes the preflight recovery poll to spin forever.
+        if (s_need_endpoint_rearm) {
+            s_need_endpoint_rearm = false;
+            if (s_rearm_complete_count < UINT8_MAX) s_rearm_complete_count++;
+        }
+        return;
+    }
 
     // Re-arm endpoints if abort_bulk() was called from any task context.
     // tud_vendor_n_write_clear/read_flush must only run from the USB task.
@@ -222,7 +252,10 @@ void bb_la_usb_send_pending(void) {
     // pending read buffer, causing all host writes to time out indefinitely.
     if (s_need_endpoint_rearm) {
         s_need_endpoint_rearm = false;
-        tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
+        // Only re-arm the OUT (RX) endpoint.  write_clear() on the IN (TX)
+        // endpoint can hang the USB task after repeated calls on RP2040 DCD,
+        // and is unnecessary: the deferred-stop mechanism already ensures all
+        // TX data is drained before PKT_STOP is emitted.
         tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
         if (s_rearm_complete_count < UINT8_MAX) s_rearm_complete_count++;
     }
@@ -246,85 +279,82 @@ void bb_la_usb_send_pending(void) {
 
     // 2. If no control markers, check for data
     if (head == tail) {
-        // If not already active, check if a streaming buffer is ready
-        if (!s_bulk_data.active) {
-            const uint8_t *stream_buf;
-            uint32_t stream_len;
-            uint32_t status = save_and_disable_interrupts();
-            if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
-                s_bulk_data.buf = stream_buf;
-                s_bulk_data.total_len = stream_len;
-                s_bulk_data.sent_len = 0;
-                s_bulk_data.is_live = true;
-                s_bulk_data.active = true;
+        // Continuous loop to drain as many ready buffers as possible into USB FIFO
+        while (true) {
+            if (!s_bulk_data.active) {
+                const uint8_t *stream_buf;
+                uint32_t stream_len;
+                // bb_la_stream_get_buffer now pulls from the 4-buffer ring
+                if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
+                    s_bulk_data.buf = stream_buf;
+                    s_bulk_data.total_len = stream_len;
+                    s_bulk_data.sent_len = 0;
+                    s_bulk_data.is_live = true;
+                    s_bulk_data.active = true;
+                } else {
+                    // No more buffers ready in the ring
+                    break;
+                }
             }
-            restore_interrupts(status);
-        }
 
-        if (s_bulk_data.active) {
-            uint32_t usb_avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
-            
-            if (s_bulk_data.is_live) {
-                // LIVE STREAM: Packetized [TYPE:1][SEQ:1][LEN:1][INFO:1][DATA:N]
-                // Each packet is max 64 bytes total, so N=60.
-                while (s_bulk_data.sent_len < s_bulk_data.total_len && usb_avail >= 64) {
-                    uint32_t chunk = s_bulk_data.total_len - s_bulk_data.sent_len;
-                    if (chunk > 60) chunk = 60;
+            if (s_bulk_data.active) {
+                uint32_t usb_avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
+                
+                if (s_bulk_data.is_live) {
+                    // LIVE STREAM: Packetized [TYPE:1][SEQ:1][LEN:1][INFO:1][DATA:N]
+                    // Each packet is max 64 bytes total, so N=60.
+                    while (s_bulk_data.sent_len < s_bulk_data.total_len && usb_avail >= 64) {
+                        uint32_t chunk = s_bulk_data.total_len - s_bulk_data.sent_len;
+                        if (chunk > 60) chunk = 60;
 
-                    uint8_t packet[64];
-                    packet[0] = LA_USB_STREAM_PKT_DATA;
-                    packet[1] = s_live_seq++;
-                    packet[2] = (uint8_t)chunk;
-                    packet[3] = LA_USB_STREAM_INFO_NONE;
-                    memcpy(&packet[4], s_bulk_data.buf + s_bulk_data.sent_len, chunk);
+                        uint8_t packet[64];
+                        packet[0] = LA_USB_STREAM_PKT_DATA;
+                        packet[1] = s_live_seq++;
+                        packet[2] = (uint8_t)chunk;
+                        packet[3] = LA_USB_STREAM_INFO_NONE;
+                        memcpy(&packet[4], s_bulk_data.buf + s_bulk_data.sent_len, chunk);
 
-                    tud_vendor_n_write(BB_LA_VENDOR_ITF, packet, (uint32_t)(4 + chunk));
+                        tud_vendor_n_write(BB_LA_VENDOR_ITF, packet, (uint32_t)(4 + chunk));
+                        s_bulk_data.sent_len += chunk;
+                        usb_avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
+                    }
+                } else {
+                    // ONE-SHOT READOUT: Raw [LEN:4][DATA...]
+                    if (!s_bulk_data.header_sent) {
+                        if (usb_avail >= 4) {
+                            uint8_t header[4];
+                            header[0] = (uint8_t)(s_bulk_data.total_len & 0xFF);
+                            header[1] = (uint8_t)((s_bulk_data.total_len >> 8) & 0xFF);
+                            header[2] = (uint8_t)((s_bulk_data.total_len >> 16) & 0xFF);
+                            header[3] = (uint8_t)((s_bulk_data.total_len >> 24) & 0xFF);
+                            tud_vendor_n_write(BB_LA_VENDOR_ITF, header, 4);
+                            s_bulk_data.header_sent = true;
+                            usb_avail -= 4;
+                        }
+                    }
                     
-                    uint32_t status = save_and_disable_interrupts();
-                    s_bulk_data.sent_len += chunk;
-                    restore_interrupts(status);
+                    if (s_bulk_data.header_sent) {
+                        uint32_t chunk = s_bulk_data.total_len - s_bulk_data.sent_len;
+                        if (chunk > usb_avail) chunk = usb_avail;
+                        if (chunk > 0) {
+                            tud_vendor_n_write(BB_LA_VENDOR_ITF, s_bulk_data.buf + s_bulk_data.sent_len, chunk);
+                            s_bulk_data.sent_len += chunk;
+                        }
+                    }
+                }
 
-                    usb_avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
+                if (s_bulk_data.sent_len >= s_bulk_data.total_len) {
+                    if (s_bulk_data.is_live) {
+                        bb_la_stream_buffer_sent(s_bulk_data.buf); // releases buffer back to ring
+                    }
+                    s_bulk_data.active = false;
+                    // Loop continues to check if NEXT ring buffer is ready
+                } else {
+                    // Current buffer didn't finish (USB FIFO full)
+                    break;
                 }
             } else {
-                // ONE-SHOT READOUT: Raw [LEN:4][DATA...]
-                if (!s_bulk_data.header_sent) {
-                    if (usb_avail >= 4) {
-                        uint8_t header[4];
-                        header[0] = (uint8_t)(s_bulk_data.total_len & 0xFF);
-                        header[1] = (uint8_t)((s_bulk_data.total_len >> 8) & 0xFF);
-                        header[2] = (uint8_t)((s_bulk_data.total_len >> 16) & 0xFF);
-                        header[3] = (uint8_t)((s_bulk_data.total_len >> 24) & 0xFF);
-                        tud_vendor_n_write(BB_LA_VENDOR_ITF, header, 4);
-                        
-                        uint32_t status = save_and_disable_interrupts();
-                        s_bulk_data.header_sent = true;
-                        restore_interrupts(status);
-                        
-                        usb_avail -= 4;
-                    }
-                }
-                
-                if (s_bulk_data.header_sent) {
-                    uint32_t chunk = s_bulk_data.total_len - s_bulk_data.sent_len;
-                    if (chunk > usb_avail) chunk = usb_avail;
-                    if (chunk > 0) {
-                        tud_vendor_n_write(BB_LA_VENDOR_ITF, s_bulk_data.buf + s_bulk_data.sent_len, chunk);
-                        
-                        uint32_t status = save_and_disable_interrupts();
-                        s_bulk_data.sent_len += chunk;
-                        restore_interrupts(status);
-                    }
-                }
-            }
-
-            if (s_bulk_data.sent_len >= s_bulk_data.total_len) {
-                if (s_bulk_data.is_live) {
-                    bb_la_stream_buffer_sent(s_bulk_data.buf);
-                }
-                uint32_t status = save_and_disable_interrupts();
-                s_bulk_data.active = false;
-                restore_interrupts(status);
+                break;
             }
         }
     }
@@ -340,9 +370,15 @@ void bb_la_usb_send_pending(void) {
                 LA_USB_STREAM_PKT_STOP, s_live_seq, 0, s_deferred_stop_info
             };
             tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
+            bb_la_log("PKT_STOP sent: info=%u hw_cleanup=%d", s_deferred_stop_info, s_pending_hw_cleanup);
             s_deferred_stop = false;
             s_streaming_session = false;
             s_post_stream_rx_rearm = true;
+            // Full cleanup after ring is fully drained
+            if (s_pending_hw_cleanup) {
+                s_pending_hw_cleanup = false;
+                bb_la_stop();  // unload PIO, reset ring, state -> IDLE
+            }
         }
     }
 
@@ -417,7 +453,13 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
         s_cdc_seq = 0;
         s_deferred_stop = false;   // cancel any pending deferred stop
         s_post_stream_rx_rearm = false;
+        s_pending_hw_cleanup = false;
         bb_la_usb_live_reset_sequence();
+        // Clear any stuck IN transfers from a prior session's timeout/error.
+        // Done here (once per stream) rather than in the rearm block (every
+        // STOP) because write_clear can hang on RP2040 DCD after repeated calls.
+        tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
+        tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
         if (!bb_la_start_stream()) {
             if (reply_on_cdc) {
                 cdc_write_reply("ERR\n");
@@ -427,6 +469,7 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
             return;
         }
         s_streaming_session = true;
+        bb_la_log("STREAM START ok");
         if (reply_on_cdc) {
             cdc_write_reply("START\n");
         } else {
@@ -436,18 +479,12 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
 
     case LA_USB_CMD_STOP:
         s_streaming_session = false;
-        bb_la_stop();            // halt PIO/DMA — no new data after this
+        bb_la_log("STOP cmd: session=%d cleanup=%d", s_streaming_session, s_pending_hw_cleanup);
+        bb_la_stop_streaming_hw();   // stops HW, preserves ring for drain
         bb_la_cdc_flush_ring();
         if (tud_cdc_connected()) tud_cdc_write_clear();
-        if (reply_on_cdc) {
-            cdc_write_reply("STOP\n");
-        } else {
-            // Don't abort_bulk / write_clear — let existing data in the FIFO
-            // and any active s_bulk_data drain naturally so the host sees
-            // complete 64-byte stream packets.  The STOP marker is emitted by
-            // send_pending() only after the current buffer is fully sent.
-            bb_la_usb_request_deferred_stop(LA_STREAM_STOP_HOST);
-        }
+        s_pending_hw_cleanup = true;
+        bb_la_usb_request_deferred_stop(LA_STREAM_STOP_HOST);
         break;
 
     default:

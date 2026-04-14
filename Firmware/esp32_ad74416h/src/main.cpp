@@ -106,6 +106,9 @@ static void mainLoopTask(void* pvParam)
             selftest_monitor_step();
         }
 
+        // HAT background polling for unsolicited messages (e.g. LA done)
+        hat_poll();
+
         // Heartbeat only in CLI mode (don't pollute binary stream).
         // Also skip if CDC #0 has ever been claimed by BBP — a binary host
         // may reconnect at any time and ASCII text would corrupt the frame.

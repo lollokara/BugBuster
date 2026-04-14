@@ -171,6 +171,7 @@
 #define HAT_CMD_LA_STOP         0x36
 #define HAT_CMD_LA_STREAM_START 0x37
 #define HAT_CMD_LA_USB_SEND     0x38  // Send capture buffer via USB bulk
+#define HAT_CMD_LA_LOG_ENABLE   0x39  // Enable/disable log relay to host
 
 // Responses
 #define HAT_RSP_OK              0x80
@@ -180,6 +181,7 @@
 #define HAT_RSP_DAP_STATUS      0x84
 #define HAT_RSP_LA_STATUS       0x85
 #define HAT_RSP_LA_DATA         0x86
+#define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01

@@ -49,6 +49,13 @@
 void bb_la_dbg(const char *fmt, ...);
 
 /**
+ * @brief Send a log message via HAT UART → ESP32 → host.
+ *        Gated by s_la_log_enabled (default off).
+ *        MUST NOT be called from ISR context.
+ */
+void bb_la_log(const char *fmt, ...);
+
+/**
  * @brief Initialize LA USB streaming.
  */
 void bb_la_usb_init(void);

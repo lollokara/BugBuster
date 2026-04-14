@@ -16,7 +16,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_timer.h"
 #include <string.h>
+#include <inttypes.h>
 
 static const char *TAG = "hat";
 
@@ -30,6 +32,7 @@ static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 #endif
 static bool s_initialized = false;
 static uint8_t s_last_error = 0;
+static SemaphoreHandle_t s_hat_mutex = NULL;
 
 // Dedicated LA-done IRQ (RP2040 GPIO28 → ESP32 PIN_HAT_LA_DONE_IRQ).
 // Set from the GPIO ISR on falling edge, consumed by hat_la_done_consume().
@@ -83,6 +86,9 @@ static bool hat_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t payload_
     frame[pos] = crc8(&frame[2], 1 + payload_len);
     pos++;
 
+    ESP_LOGV(TAG, "TX frame (%" PRIu64 " us):", esp_timer_get_time());
+    ESP_LOG_BUFFER_HEXDUMP(TAG, frame, pos, ESP_LOG_VERBOSE);
+
     int written = uart_write_bytes(HAT_UART_NUM, frame, pos);
     return written == (int)pos;
 }
@@ -90,44 +96,62 @@ static bool hat_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t payload_
 // Receive a response frame from the HAT.
 // Blocks up to timeout_ms. Returns response CMD byte, fills payload/payload_len.
 // Returns 0 on timeout or error.
-static uint8_t hat_recv_frame(uint8_t *payload, uint8_t *payload_len, uint32_t timeout_ms)
+static uint8_t hat_recv_frame(uint8_t *payload, uint8_t *payload_len, uint32_t timeout_ms, uint8_t max_payload_len)
 {
     uint8_t buf[3 + HAT_FRAME_MAX_LEN + 1];
     size_t pos = 0;
-    TickType_t start = xTaskGetTickCount();
-    TickType_t deadline = start + pdMS_TO_TICKS(timeout_ms);
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
 
-    // Wait for SYNC byte
-    while (xTaskGetTickCount() < deadline) {
+    // 1. SYNC search: read byte-by-byte until SYNC found or timeout
+    while (true) {
+        TickType_t now = xTaskGetTickCount();
+        if (now >= deadline) {
+            ESP_LOGD(TAG, "RX timeout: no SYNC (%" PRIu64 " us)", esp_timer_get_time());
+            return 0;
+        }
         uint8_t b;
-        int n = uart_read_bytes(HAT_UART_NUM, &b, 1, pdMS_TO_TICKS(10));
-        if (n == 1 && b == HAT_FRAME_SYNC) {
-            buf[pos++] = b;
-            break;
+        if (uart_read_bytes(HAT_UART_NUM, &b, 1, 1) == 1) {
+            if (b == HAT_FRAME_SYNC) {
+                buf[pos++] = b;
+                ESP_LOGV(TAG, "RX SYNC (0x%02X) @ %" PRIu64 " us", b, esp_timer_get_time());
+                break;
+            } else {
+                ESP_LOGV(TAG, "RX junk (0x%02X) @ %" PRIu64 " us", b, esp_timer_get_time());
+            }
         }
     }
-    if (pos == 0) return 0; // No SYNC received
 
-    // Read LEN + CMD (2 bytes)
+    // 2. Header chunk: read LEN + CMD (2 bytes)
     {
-        TickType_t remaining = deadline - xTaskGetTickCount();
-        if ((int32_t)remaining <= 0) return 0;
-        int n = uart_read_bytes(HAT_UART_NUM, &buf[pos], 2, remaining);
-        if (n != 2) return 0;
+        TickType_t now = xTaskGetTickCount();
+        if (now >= deadline) return 0;
+        int n = uart_read_bytes(HAT_UART_NUM, &buf[pos], 2, deadline - now);
+        if (n != 2) {
+            ESP_LOGD(TAG, "RX error: Header read failed (%d/2)", n);
+            return 0;
+        }
+        ESP_LOGV(TAG, "RX Header @ %" PRIu64 " us: LEN=0x%02X CMD=0x%02X",
+                 esp_timer_get_time(), buf[pos], buf[pos+1]);
         pos += 2;
     }
 
     uint8_t len = buf[1];
     uint8_t cmd = buf[2];
+    if (len > HAT_FRAME_MAX_LEN) {
+        ESP_LOGW(TAG, "RX error: Invalid len %d", len);
+        return 0;
+    }
 
-    if (len > HAT_FRAME_MAX_LEN) return 0; // Invalid
-
-    // Read payload + CRC (len + 1 bytes)
+    // 3. Payload chunk: read payload + CRC (len + 1 bytes)
     if (len + 1 > 0) {
-        TickType_t remaining = deadline - xTaskGetTickCount();
-        if ((int32_t)remaining <= 0) return 0;
-        int n = uart_read_bytes(HAT_UART_NUM, &buf[pos], len + 1, remaining);
-        if (n != (int)(len + 1)) return 0;
+        TickType_t now = xTaskGetTickCount();
+        if (now >= deadline) return 0;
+        int n = uart_read_bytes(HAT_UART_NUM, &buf[pos], len + 1, deadline - now);
+        if (n != (int)(len + 1)) {
+            ESP_LOGD(TAG, "RX error: Payload read failed (%d/%d)", n, len + 1);
+            return 0;
+        }
+        ESP_LOGV(TAG, "RX Payload+CRC @ %" PRIu64 " us", esp_timer_get_time());
         pos += len + 1;
     }
 
@@ -136,52 +160,103 @@ static uint8_t hat_recv_frame(uint8_t *payload, uint8_t *payload_len, uint32_t t
     uint8_t received_crc = buf[3 + len];
     if (expected_crc != received_crc) {
         ESP_LOGW(TAG, "CRC mismatch: expected 0x%02X, got 0x%02X", expected_crc, received_crc);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, buf, pos, ESP_LOG_WARN);
         return 0;
     }
 
-    // Copy payload out
+    // Copy results
     if (payload && len > 0) {
-        memcpy(payload, &buf[3], len);
+        uint8_t to_copy = (len < max_payload_len) ? len : max_payload_len;
+        memcpy(payload, &buf[3], to_copy);
     }
-    if (payload_len) {
-        *payload_len = len;
-    }
+    if (payload_len) *payload_len = len;
 
     return cmd;
 }
 
 // Send command and wait for response. Returns response CMD, fills rsp_payload.
 static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                            uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms)
+                            uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
 {
-    // Aggressively flush any stale data (e.g. unsolicited LA notifications)
-    uart_flush_input(HAT_UART_NUM);
-    {
-        uint8_t drain[64];
-        size_t avail = 0;
-        uart_get_buffered_data_len(HAT_UART_NUM, &avail);
-        while (avail > 0) {
-            int n = uart_read_bytes(HAT_UART_NUM, drain, sizeof(drain), 0);
-            if (n <= 0) break;
-            uart_get_buffered_data_len(HAT_UART_NUM, &avail);
-        }
-    }
-
-    s_last_error = 0;
-    ESP_LOGD(TAG, "TX cmd=0x%02X len=%d", cmd, payload_len);
-
-    if (!hat_send_frame(cmd, payload, payload_len)) {
-        ESP_LOGW(TAG, "Failed to send command 0x%02X", cmd);
+    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
+        ESP_LOGE(TAG, "HAT command 0x%02X: failed to take mutex", cmd);
         return 0;
     }
 
-    uint8_t rsp = hat_recv_frame(rsp_payload, rsp_len, timeout_ms);
-    if (rsp == HAT_RSP_ERROR && rsp_payload && rsp_len && *rsp_len >= 1) {
-        s_last_error = rsp_payload[0];
-        ESP_LOGW(TAG, "HAT command 0x%02X failed with error 0x%02X", cmd, s_last_error);
+    s_last_error = 0;
+    ESP_LOGD(TAG, "TX cmd=0x%02X len=%d (%" PRIu64 " us)", cmd, payload_len, esp_timer_get_time());
+
+    // Task 2.2: RX Flush - clear anything in the buffer before sending our command
+    uart_flush_input(HAT_UART_NUM);
+
+    if (!hat_send_frame(cmd, payload, payload_len)) {
+        ESP_LOGW(TAG, "Failed to send command 0x%02X", cmd);
+        if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
+        return 0;
     }
-    ESP_LOGD(TAG, "RX rsp=0x%02X len=%d (for cmd=0x%02X)", rsp, rsp_len ? *rsp_len : 0, cmd);
-    return rsp;
+
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    uint8_t final_rsp = 0;
+
+    while (true) {
+        TickType_t now = xTaskGetTickCount();
+        if (now >= deadline) {
+            ESP_LOGW(TAG, "HAT command 0x%02X total timeout (deadline reached)", cmd);
+            break;
+        }
+
+        uint32_t remaining_ms = (deadline - now) * portTICK_PERIOD_MS;
+        if (remaining_ms == 0) remaining_ms = 1;
+
+        uint8_t local_payload[HAT_FRAME_MAX_LEN];
+        uint8_t local_len = 0;
+        uint8_t rsp = hat_recv_frame(local_payload, &local_len, remaining_ms, sizeof(local_payload));
+
+        if (rsp == 0) {
+            // Error or individual frame timeout already logged in hat_recv_frame
+            break; 
+        }
+
+        // Handle unsolicited LA status (capture done notification)
+        if (rsp == HAT_RSP_LA_STATUS && cmd != HAT_CMD_LA_GET_STATUS && local_len >= 14) {
+            uint8_t la_state = local_payload[0];
+            if (la_state == 3) {  // LA_STATE_DONE
+                ESP_LOGI(TAG, "LA capture done (unsolicited notification during wait)");
+                if (bbpIsActive()) {
+                    bbpSendEvent(BBP_EVT_LA_DONE, local_payload, local_len);
+                }
+            }
+            // Continue waiting for the response to OUR command
+            ESP_LOGD(TAG, "Discarding unsolicited response 0x%02X, continuing wait for 0x%02X", rsp, cmd);
+            continue;
+        }
+
+        // It's the response we (presumably) wanted, or an error response
+        if (rsp == HAT_RSP_ERROR && local_len >= 1) {
+            s_last_error = local_payload[0];
+            ESP_LOGW(TAG, "HAT command 0x%02X failed with error 0x%02X", cmd, s_last_error);
+        }
+
+        // Copy to caller's buffer
+        if (rsp_payload && local_len > 0) {
+            uint8_t to_copy = (local_len < max_rsp_len) ? local_len : max_rsp_len;
+            memcpy(rsp_payload, local_payload, to_copy);
+        }
+        if (rsp_len) {
+            *rsp_len = local_len;
+        }
+
+        ESP_LOGD(TAG, "RX rsp=0x%02X len=%d (for cmd=0x%02X) @ %" PRIu64 " us", rsp, local_len, cmd, esp_timer_get_time());
+        final_rsp = rsp;
+        break;
+    }
+
+    if (final_rsp == 0) {
+        ESP_LOGW(TAG, "HAT command 0x%02X timed out or failed after %" PRIu32 "ms", cmd, timeout_ms);
+    }
+
+    if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
+    return final_rsp;
 }
 
 // -----------------------------------------------------------------------------
@@ -225,6 +300,10 @@ static HatType voltage_to_hat_type(float v)
 bool hat_init(void)
 {
     memset(&s_state, 0, sizeof(s_state));
+
+    if (s_hat_mutex == NULL) {
+        s_hat_mutex = xSemaphoreCreateMutex();
+    }
 
     // Initialize ADC for detect pin (if available)
 #if !HAT_NO_DETECT
@@ -408,7 +487,7 @@ bool hat_connect(void)
     // Send PING command
     uint8_t rsp[8] = {};
     uint8_t rsp_len = 0;
-    uint8_t cmd = hat_command(HAT_CMD_PING, NULL, 0, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_PING, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
 
     if (cmd != HAT_RSP_OK) {
         s_state.connected = false;
@@ -419,7 +498,7 @@ bool hat_connect(void)
     s_state.last_ping_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
     // Query HAT info
-    cmd = hat_command(HAT_CMD_GET_INFO, NULL, 0, rsp, &rsp_len, 200);
+    cmd = hat_command(HAT_CMD_GET_INFO, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_INFO && rsp_len >= 3) {
         s_state.type = (HatType)rsp[0];
         s_state.fw_version_major = rsp[1];
@@ -458,7 +537,7 @@ bool hat_set_pin(uint8_t ext_pin, HatPinFunction func)
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_SET_PIN_CONFIG, payload, 2, rsp, &rsp_len, 300);
+    uint8_t cmd = hat_command(HAT_CMD_SET_PIN_CONFIG, payload, 2, rsp, &rsp_len, 300, sizeof(rsp));
     if (cmd == HAT_RSP_OK) {
         s_state.pin_config[ext_pin] = func;
         s_state.config_confirmed = true;
@@ -491,7 +570,7 @@ bool hat_set_all_pins(const HatPinFunction config[HAT_NUM_EXT_PINS])
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_SET_PIN_CONFIG, payload, HAT_NUM_EXT_PINS, rsp, &rsp_len, 300);
+    uint8_t cmd = hat_command(HAT_CMD_SET_PIN_CONFIG, payload, HAT_NUM_EXT_PINS, rsp, &rsp_len, 300, sizeof(rsp));
     if (cmd == HAT_RSP_OK) {
         for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
             s_state.pin_config[i] = config[i];
@@ -512,7 +591,7 @@ bool hat_get_pin_config(HatPinFunction config[HAT_NUM_EXT_PINS])
     uint8_t rsp[8] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_GET_PIN_CONFIG, NULL, 0, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_GET_PIN_CONFIG, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_OK && rsp_len >= HAT_NUM_EXT_PINS) {
         for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
             config[i] = (HatPinFunction)rsp[i];
@@ -531,7 +610,7 @@ bool hat_reset(void)
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_RESET, NULL, 0, rsp, &rsp_len, 500);
+    uint8_t cmd = hat_command(HAT_CMD_RESET, NULL, 0, rsp, &rsp_len, 500, sizeof(rsp));
     if (cmd == HAT_RSP_OK) {
         for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
             s_state.pin_config[i] = HAT_FUNC_DISCONNECTED;
@@ -605,7 +684,7 @@ static bool hat_get_io_voltage(void)
     uint8_t rsp[8] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_GET_IO_VOLTAGE, NULL, 0, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_GET_IO_VOLTAGE, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_OK && rsp_len >= 2) {
         uint16_t actual_mv = (uint16_t)rsp[0] | ((uint16_t)rsp[1] << 8);
         if (rsp_len >= 4) {
@@ -635,7 +714,7 @@ bool hat_set_power(HatConnector conn, bool on)
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_SET_POWER, payload, 2, rsp, &rsp_len, 300);
+    uint8_t cmd = hat_command(HAT_CMD_SET_POWER, payload, 2, rsp, &rsp_len, 300, sizeof(rsp));
     if (cmd == HAT_RSP_OK) {
         s_state.connector[conn].enabled = on;
         ESP_LOGI(TAG, "Connector %c power %s", 'A' + conn, on ? "ON" : "OFF");
@@ -652,7 +731,7 @@ bool hat_get_power_status(void)
     uint8_t rsp[16] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_GET_POWER_STATUS, NULL, 0, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_GET_POWER_STATUS, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_POWER_STATUS && rsp_len >= 6) {
         // Connector A
         s_state.connector[0].enabled = rsp[0] != 0;
@@ -682,7 +761,7 @@ bool hat_set_io_voltage(uint16_t mv)
     uint8_t rsp[8] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_SET_IO_VOLTAGE, payload, 2, rsp, &rsp_len, 300);
+    uint8_t cmd = hat_command(HAT_CMD_SET_IO_VOLTAGE, payload, 2, rsp, &rsp_len, 300, sizeof(rsp));
     if (cmd == HAT_RSP_OK && rsp_len >= 2) {
         uint16_t actual_mv = (uint16_t)rsp[0] | ((uint16_t)rsp[1] << 8);
         if (rsp_len >= 4) {
@@ -705,10 +784,10 @@ bool hat_set_io_voltage(uint16_t mv)
 }
 
 bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                       uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms)
+                       uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
 {
     if (!s_state.connected) return false;
-    return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms) == HAT_RSP_OK;
+    return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len) == HAT_RSP_OK;
 }
 
 uint8_t hat_get_last_error(void)
@@ -761,7 +840,7 @@ bool hat_get_dap_status(void)
     uint8_t rsp[16] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_GET_DAP_STATUS, NULL, 0, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_GET_DAP_STATUS, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_DAP_STATUS && rsp_len >= 8) {
         s_state.dap_connected = rsp[0] != 0;
         s_state.target_detected = rsp[1] != 0;
@@ -780,7 +859,7 @@ bool hat_set_swd_clock(uint16_t khz)
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
 
-    uint8_t cmd = hat_command(HAT_CMD_SET_SWD_CLOCK, payload, 2, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_SET_SWD_CLOCK, payload, 2, rsp, &rsp_len, 200, sizeof(rsp));
     return cmd == HAT_RSP_OK;
 }
 
@@ -792,6 +871,9 @@ bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth)
 {
     if (!s_state.connected) return false;
 
+    // Best effort stop before reconfiguring
+    hat_la_stop();
+
     uint8_t payload[9];
     payload[0] = channels;
     memcpy(&payload[1], &rate_hz, 4);
@@ -799,7 +881,7 @@ bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth)
 
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_CONFIG, payload, 9, rsp, &rsp_len, 300) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_CONFIG, payload, 9, rsp, &rsp_len, 500, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_set_trigger(uint8_t type, uint8_t channel)
@@ -808,7 +890,7 @@ bool hat_la_set_trigger(uint8_t type, uint8_t channel)
     uint8_t payload[2] = { type, channel };
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_SET_TRIGGER, payload, 2, rsp, &rsp_len, 200) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_SET_TRIGGER, payload, 2, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_arm(void)
@@ -816,7 +898,7 @@ bool hat_la_arm(void)
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_ARM, NULL, 0, rsp, &rsp_len, 200) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_ARM, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_force(void)
@@ -824,7 +906,7 @@ bool hat_la_force(void)
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_FORCE, NULL, 0, rsp, &rsp_len, 200) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_FORCE, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_stop(void)
@@ -832,7 +914,16 @@ bool hat_la_stop(void)
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_STOP, NULL, 0, rsp, &rsp_len, 200) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_STOP, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
+}
+
+bool hat_la_log_enable(bool enable)
+{
+    if (!s_state.connected) return false;
+    uint8_t payload[1] = { static_cast<uint8_t>(enable ? 1u : 0u) };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_LOG_ENABLE, payload, 1, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_get_status(HatLaStatus *status)
@@ -840,7 +931,7 @@ bool hat_la_get_status(HatLaStatus *status)
     if (!s_state.connected || !status) return false;
     uint8_t rsp[28] = {};
     uint8_t rsp_len = 0;
-    uint8_t cmd = hat_command(HAT_CMD_LA_GET_STATUS, NULL, 0, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_LA_GET_STATUS, NULL, 0, rsp, &rsp_len, 500, sizeof(rsp));
     if (cmd == HAT_RSP_LA_STATUS && rsp_len >= 14) {
         status->state = rsp[0];
         status->channels = rsp[1];
@@ -886,7 +977,7 @@ uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len)
 
     uint8_t rsp[28] = {};
     uint8_t rsp_len = 0;
-    uint8_t cmd = hat_command(HAT_CMD_LA_READ_DATA, payload, 6, rsp, &rsp_len, 200);
+    uint8_t cmd = hat_command(HAT_CMD_LA_READ_DATA, payload, 6, rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_LA_DATA && rsp_len > 0) {
         memcpy(buf, rsp, rsp_len);
         return rsp_len;
@@ -908,12 +999,25 @@ void hat_poll(void)
     uart_get_buffered_data_len(HAT_UART_NUM, &buffered);
     if (buffered == 0) return;
 
-    // Try to receive a frame with very short timeout
-    uint8_t rsp[26] = {};
-    uint8_t rsp_len = 0;
-    uint8_t cmd = hat_recv_frame(rsp, &rsp_len, 5);  // 5ms timeout
+    // Protect UART access
+    if (s_hat_mutex == NULL || xSemaphoreTake(s_hat_mutex, 0) != pdTRUE) return;
 
-    if (cmd == 0) return;  // No valid frame
+    // Try to receive a frame with short timeout
+    uint8_t rsp[HAT_FRAME_MAX_LEN] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_recv_frame(rsp, &rsp_len, 20, HAT_FRAME_MAX_LEN);
+
+    xSemaphoreGive(s_hat_mutex);
+
+    if (cmd == 0) return;  // No valid frame or CRC error
+
+    // Handle unsolicited LA log message relay
+    if (cmd == HAT_RSP_LA_LOG && rsp_len > 0) {
+        if (bbpIsActive()) {
+            bbpSendEvent(BBP_EVT_LA_LOG, rsp, rsp_len);
+        }
+        return;
+    }
 
     // Handle unsolicited LA status (capture done notification)
     if (cmd == HAT_RSP_LA_STATUS && rsp_len >= 14) {

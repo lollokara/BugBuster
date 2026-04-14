@@ -1693,7 +1693,7 @@ static int handleHatHvpakPassthrough(uint16_t seq, uint8_t cmdId,
     uint8_t rsp[32] = {};
     uint8_t rsp_len = 0;
 
-    if (!hat_hvpak_request(hatCmd, payload, (uint8_t)len, rsp, &rsp_len, timeout_ms)) {
+    if (!hat_hvpak_request(hatCmd, payload, (uint8_t)len, rsp, &rsp_len, timeout_ms, sizeof(rsp))) {
         uint8_t hat_err = hat_get_last_error();
         uint8_t bbp_err = BBP_ERR_INVALID_PARAM;
         switch (hat_err) {
@@ -1761,7 +1761,12 @@ static int handleHatLaConfig(uint16_t seq, uint8_t cmdId,
     uint32_t depth = get_u32(payload, &rpos);
 
     if (!hat_la_configure(channels, rate_hz, depth)) {
-        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1;
+        if (hat_get_last_error() == HAT_ERR_BUSY) {
+            sendError(seq, cmdId, BBP_ERR_BUSY);
+        } else {
+            sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        }
+        return -1;
     }
     size_t pos = 0;
     put_u8(out, &pos, channels);
@@ -1775,33 +1780,69 @@ static int handleHatLaTrigger(uint16_t seq, uint8_t cmdId,
 {
     if (len < 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     if (!hat_la_set_trigger(payload[0], payload[1])) {
-        sendError(seq, cmdId, BBP_ERR_BUSY); return -1;
+        if (hat_get_last_error() == HAT_ERR_BUSY) {
+            sendError(seq, cmdId, BBP_ERR_BUSY);
+        } else {
+            sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        }
+        return -1;
     }
     return 0;
 }
 
 static int handleHatLaArm(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
-    if (!hat_la_arm()) { sendError(seq, cmdId, BBP_ERR_BUSY); return -1; }
+    if (!hat_la_arm()) {
+        if (hat_get_last_error() == HAT_ERR_BUSY) {
+            sendError(seq, cmdId, BBP_ERR_BUSY);
+        } else {
+            sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        }
+        return -1;
+    }
     return 0;
 }
 
 static int handleHatLaForce(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
-    if (!hat_la_force()) { sendError(seq, cmdId, BBP_ERR_BUSY); return -1; }
+    if (!hat_la_force()) {
+        if (hat_get_last_error() == HAT_ERR_BUSY) {
+            sendError(seq, cmdId, BBP_ERR_BUSY);
+        } else {
+            sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        }
+        return -1;
+    }
     return 0;
 }
 
 static int handleHatLaStop(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
-    hat_la_stop();
+    if (!hat_la_stop()) {
+        sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        return -1;
+    }
+    return 0;
+}
+
+static int handleHatLaLogEnable(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (!hat_la_log_enable(payload[0] != 0)) {
+        sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        return -1;
+    }
     return 0;
 }
 
 static int handleHatLaStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
     HatLaStatus st = {};
-    hat_la_get_status(&st);
+    if (!hat_la_get_status(&st)) {
+        sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        return -1;
+    }
     size_t pos = 0;
     put_u8(out, &pos, st.state);
     put_u8(out, &pos, st.channels);
@@ -1830,6 +1871,12 @@ static int handleHatLaRead(uint16_t seq, uint8_t cmdId,
 
     uint8_t chunk[256];
     uint8_t actual = hat_la_read_data(offset, chunk, (uint8_t)(read_len > 28 ? 28 : read_len));
+
+    // If read_len > 0 but we got 0, consider it a communication timeout
+    if (read_len > 0 && actual == 0) {
+        sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        return -1;
+    }
 
     size_t pos = 0;
     put_u32(out, &pos, offset);
@@ -2642,6 +2689,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_HAT_LA_STOP:
             rspLen = handleHatLaStop(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_LOG_ENABLE:
+            rspLen = handleHatLaLogEnable(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_HAT_LA_STATUS:
             rspLen = handleHatLaStatus(seq, cmdId, rspBuf);

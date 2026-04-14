@@ -9,6 +9,7 @@
 // =============================================================================
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
@@ -42,6 +43,9 @@ static HatFrameParser s_parser;
 
 // Track previous LA state for detecting DONE transition
 static LaState s_prev_la_state = LA_STATE_IDLE;
+
+// Log relay: when enabled, bb_la_log() messages are sent via HAT UART to host
+static bool s_la_log_enabled = false;
 
 // -----------------------------------------------------------------------------
 // IRQ pin assertion (open-drain, active low, ~1ms pulse)
@@ -777,6 +781,13 @@ static void dispatch_command(const HatFrame *frame)
         break;
     }
 
+    case HAT_CMD_LA_LOG_ENABLE: {
+        if (frame->payload_len < 1) { send_error(HAT_ERR_FRAME); break; }
+        s_la_log_enabled = frame->payload[0] != 0;
+        send_ok(NULL, 0);
+        break;
+    }
+
     default:
         send_error(HAT_ERR_INVALID_CMD);
         break;
@@ -805,6 +816,25 @@ static void bb_la_notify_done(void)
 }
 
 // -----------------------------------------------------------------------------
+// Log relay: send a formatted message to the host via HAT UART
+// Zero overhead when s_la_log_enabled is false.
+// -----------------------------------------------------------------------------
+
+void bb_la_log(const char *fmt, ...)
+{
+    if (!s_la_log_enabled) return;
+    char buf[200];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        if (n > 200) n = 200;
+        send_response(HAT_RSP_LA_LOG, (const uint8_t *)buf, (uint8_t)n);
+    }
+}
+
+// -----------------------------------------------------------------------------
 // BugBuster Command Task
 //
 // When integrated with debugprobe, this function runs as a FreeRTOS task:
@@ -829,6 +859,7 @@ void bb_cmd_task(void *params)
     bb_pins_init();
     bb_swd_init();
     bb_la_init();
+    bb_la_usb_init();
 
     // Configure IRQ pin as open-drain output (shared line, active low).
     // Default state: high-Z (input with pull-up). To assert: set output low.
