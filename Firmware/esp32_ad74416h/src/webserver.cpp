@@ -1909,6 +1909,7 @@ static esp_err_t handle_get_hat_la_status(httpd_req_t *req)
     cJSON_AddStringToObject(root, "stopReasonName", hat_la_stop_reason_name(st.stream_stop_reason));
     cJSON_AddNumberToObject(root, "overrunCount", st.stream_overrun_count);
     cJSON_AddNumberToObject(root, "shortWriteCount", st.stream_short_write_count);
+    cJSON_AddBoolToObject(root, "usbRearmPending", st.usb_rearm_pending);
 
     return send_json(req, root);
 }

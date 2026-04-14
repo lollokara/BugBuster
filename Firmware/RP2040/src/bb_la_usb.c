@@ -135,6 +135,8 @@ bool bb_la_usb_connected(void) {
 // Set when abort_bulk() is called from any context; consumed in send_pending()
 // (USB task) to safely call tud_vendor_n_write_clear without task-safety issues.
 static volatile bool s_need_endpoint_rearm = false;
+static volatile uint8_t s_rearm_request_count = 0;
+static volatile uint8_t s_rearm_complete_count = 0;
 
 // Deferred stop: when set, send_pending() emits PKT_STOP after the current
 // data buffer is fully drained, guaranteeing clean packet alignment on the wire.
@@ -147,6 +149,12 @@ static volatile uint8_t s_deferred_stop_info = 0;
 // half-buffer handoffs so the USB task keeps its tight polling loop running.
 static volatile bool s_streaming_session = false;
 
+// Set when a stream ends (deferred stop emitted); signals poll_commands to
+// do a one-shot read_flush (DCD abort + re-arm) on the OUT endpoint.
+// Separate from s_need_endpoint_rearm to avoid clearing the TX FIFO
+// (which would discard the just-sent PKT_STOP marker).
+static volatile bool s_post_stream_rx_rearm = false;
+
 void bb_la_usb_abort_bulk(void) {
     s_streaming_session = false;
     uint32_t status = save_and_disable_interrupts();
@@ -154,6 +162,7 @@ void bb_la_usb_abort_bulk(void) {
     s_bulk_data.buf = NULL;
     s_bulk_ctrl_tail = 0;
     s_bulk_ctrl_head = 0;
+    if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
     restore_interrupts(status);
     // Signal the USB task to re-arm the endpoint (tud_vendor_n_write_clear must
     // run from tud_task context — send_pending() will pick this up).
@@ -206,11 +215,16 @@ void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes) {
 void bb_la_usb_send_pending(void) {
     if (!tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) return;
 
-    // Re-arm the IN endpoint if abort_bulk() was called from any task context.
-    // tud_vendor_n_write_clear() must only run from the USB task (here).
+    // Re-arm endpoints if abort_bulk() was called from any task context.
+    // tud_vendor_n_write_clear/read_flush must only run from the USB task.
+    // Re-arming the RX (OUT) endpoint is critical: after a USB bus error or
+    // host-side CLEAR_FEATURE(ENDPOINT_HALT), the OUT endpoint may have no
+    // pending read buffer, causing all host writes to time out indefinitely.
     if (s_need_endpoint_rearm) {
         s_need_endpoint_rearm = false;
         tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
+        tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
+        if (s_rearm_complete_count < UINT8_MAX) s_rearm_complete_count++;
     }
 
     // 1. Drain control markers (highest priority)
@@ -328,6 +342,7 @@ void bb_la_usb_send_pending(void) {
             tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
             s_deferred_stop = false;
             s_streaming_session = false;
+            s_post_stream_rx_rearm = true;
         }
     }
 
@@ -336,6 +351,22 @@ void bb_la_usb_send_pending(void) {
 
 bool bb_la_usb_is_streaming(void) {
     return s_streaming_session;
+}
+
+bool bb_la_usb_has_pending_data(void) {
+    return s_bulk_data.active || (s_bulk_ctrl_head != s_bulk_ctrl_tail) || s_deferred_stop;
+}
+
+bool bb_la_usb_rearm_pending(void) {
+    return s_need_endpoint_rearm;
+}
+
+uint8_t bb_la_usb_rearm_request_count(void) {
+    return s_rearm_request_count;
+}
+
+uint8_t bb_la_usb_rearm_complete_count(void) {
+    return s_rearm_complete_count;
 }
 
 // Keep these for API compatibility but they are now either redirects or internal
@@ -385,13 +416,8 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
     case LA_USB_CMD_START_STREAM:
         s_cdc_seq = 0;
         s_deferred_stop = false;   // cancel any pending deferred stop
+        s_post_stream_rx_rearm = false;
         bb_la_usb_live_reset_sequence();
-        if (!reply_on_cdc) {
-            // Re-arm the IN endpoint before sending any response.
-            // The host drain loop may have left the endpoint in a stale state
-            // (cancelled read) — write_clear flushes stale data and re-arms it.
-            tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
-        }
         if (!bb_la_start_stream()) {
             if (reply_on_cdc) {
                 cdc_write_reply("ERR\n");
@@ -438,6 +464,14 @@ void bb_la_usb_poll_commands(void) {
             for (uint32_t i = 0; i < n; i++) {
                 handle_stream_command(cmd_buf[i], false);
             }
+        }
+        // After a stream ends, the host's drain loop may cancel pending
+        // IN/OUT transfers, leaving endpoints stuck busy.  Do a one-shot
+        // read_flush (DCD abort + re-arm) on the OUT endpoint so the host
+        // can send the next START command.
+        if (s_post_stream_rx_rearm) {
+            s_post_stream_rx_rearm = false;
+            tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
         }
     }
     while (tud_cdc_available()) {

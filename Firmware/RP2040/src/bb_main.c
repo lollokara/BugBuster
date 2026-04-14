@@ -708,7 +708,7 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_LA_GET_STATUS: {
         LaStatus st;
         bb_la_get_status(&st);
-        uint8_t rsp[26];
+        uint8_t rsp[28];
         size_t p = 0;
         rsp[p++] = (uint8_t)st.state;
         rsp[p++] = st.channels;
@@ -721,6 +721,9 @@ static void dispatch_command(const HatFrame *frame)
         rsp[p++] = st.stream_stop_reason;
         memcpy(&rsp[p], &st.stream_overrun_count, 4); p += 4;
         memcpy(&rsp[p], &st.stream_short_write_count, 4); p += 4;
+        rsp[p++] = bb_la_usb_rearm_pending() ? 1 : 0;
+        rsp[p++] = bb_la_usb_rearm_request_count();
+        rsp[p++] = bb_la_usb_rearm_complete_count();
         send_response(HAT_RSP_LA_STATUS, rsp, (uint8_t)p);
         break;
     }
@@ -739,15 +742,13 @@ static void dispatch_command(const HatFrame *frame)
     }
     case HAT_CMD_LA_STOP:
     {
-        // Abort the bulk pipeline when streaming or in error (e.g. DMA overrun).
-        // Abort is safe to call from hat_task as long as tud_vendor_n_flush() is
-        // NOT inside it — the USB task's bb_la_usb_send_pending() will flush next
-        // iteration. We skip abort when IDLE to avoid any USB task contention.
-        LaStatus st;
-        bb_la_get_status(&st);
-        if (st.state == LA_STATE_STREAMING || st.state == LA_STATE_ERROR) {
-            bb_la_usb_abort_bulk();
-        }
+        // Always abort the bulk pipeline — this sets s_need_endpoint_rearm
+        // which triggers write_clear + read_flush on the next send_pending()
+        // call.  The clear/flush functions use conditional DCD abort
+        // (only when endpoint is stuck busy), so this is safe even when idle.
+        // This is critical for recovering from host-cancelled IN transfers
+        // that left the endpoint permanently stuck between test runs.
+        bb_la_usb_abort_bulk();
         // Always queue PKT_STOP so any waiting host stream task is unblocked,
         // regardless of whether streaming was active.
         bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
@@ -792,13 +793,14 @@ static void bb_la_notify_done(void)
 {
     LaStatus st;
     bb_la_get_status(&st);
-    uint8_t rsp[14];
+    uint8_t rsp[15];
     size_t p = 0;
     rsp[p++] = (uint8_t)st.state;
     rsp[p++] = st.channels;
     memcpy(&rsp[p], &st.samples_captured, 4); p += 4;
     memcpy(&rsp[p], &st.total_samples, 4); p += 4;
     memcpy(&rsp[p], &st.actual_rate_hz, 4); p += 4;
+    rsp[p++] = bb_la_usb_rearm_pending() ? 1 : 0;
     send_response(HAT_RSP_LA_STATUS, rsp, (uint8_t)p);
 }
 

@@ -728,8 +728,11 @@ bool bb_la_start_stream(void)
     // packet framing, well within the 16384-byte FIFO.
     //
     // Invariant: (half_words * 4) * 64 / 60 <= CFG_TUD_VENDOR_TX_BUFSIZE
-    //   At 2048 words: 8192 * 64/60 = 8738 bytes < 16384 ✓
-    #define BB_LA_STREAM_HALF_WORDS 2048u
+    //   At 3072 words: 12288 * 64/60 = 13107 bytes < 16384 ✓
+    //   Fill time at 1 MHz/4ch: 12288 / 500000 = 24.6 ms (vs 16.4 ms at 2048)
+    //   Larger half-buffers give the USB host more time to consume data,
+    //   reducing DMA overruns caused by host-side USB scheduling jitter.
+    #define BB_LA_STREAM_HALF_WORDS 3072u
     _Static_assert(
         (BB_LA_STREAM_HALF_WORDS * 4u * 64u / 60u) <= 16384u,
         "LA stream half-buffer + packet headers must fit in CFG_TUD_VENDOR_TX_BUFSIZE (16384)"

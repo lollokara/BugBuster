@@ -447,10 +447,16 @@ def test_hat_la_status_includes_stream_diagnostics(usb_device):
     assert "stream_stop_reason_name" in status, "LA status missing 'stream_stop_reason_name'"
     assert "stream_overrun_count" in status, "LA status missing 'stream_overrun_count'"
     assert "stream_short_write_count" in status, "LA status missing 'stream_short_write_count'"
+    assert "usb_rearm_pending" in status, "LA status missing 'usb_rearm_pending'"
+    assert "usb_rearm_request_count" in status, "LA status missing 'usb_rearm_request_count'"
+    assert "usb_rearm_complete_count" in status, "LA status missing 'usb_rearm_complete_count'"
     assert isinstance(status["stream_stop_reason"], int)
     assert isinstance(status["stream_stop_reason_name"], str)
     assert isinstance(status["stream_overrun_count"], int)
     assert isinstance(status["stream_short_write_count"], int)
+    assert isinstance(status["usb_rearm_pending"], bool)
+    assert isinstance(status["usb_rearm_request_count"], int)
+    assert isinstance(status["usb_rearm_complete_count"], int)
     assert_no_faults(usb_device)
 
 
@@ -557,8 +563,107 @@ def test_la_cdc_stream_five_seconds_legacy(usb_device):
     The primary stream path is now vendor-bulk (see test_la_usb_bulk.py).
     """
     import os as _os
-...
-        _os.write(fd, b'\x00')
+    import fcntl as _fcntl
+    import select as _select
+    import struct as _struct
+    import termios as _termios
+
+    if not _SERIAL_AVAILABLE:
+        pytest.skip("pyserial not installed — cannot enumerate RP2040 CDC port")
+
+    rp2040_port = _find_rp2040_cdc_port()
+    if rp2040_port is None:
+        pytest.skip("RP2040 HAT CDC port not found (VID=0x2E8A PID=0x000C)")
+
+    CHANNELS = 4
+    RATE_HZ = 500_000
+    DEPTH = 100_000
+    WINDOW_SEC = 1.0
+    NUM_WINDOWS = 5
+    MIN_BYTES = 50_000
+
+    usb_device.hat_la_stop()
+    usb_device.hat_la_configure(channels=CHANNELS, rate_hz=RATE_HZ, depth=DEPTH)
+    usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
+    time.sleep(0.12)
+
+    try:
+        fd = _os.open(rp2040_port, _os.O_RDWR | _os.O_NOCTTY | _os.O_NONBLOCK)
+    except OSError as e:
+        pytest.skip(f"Cannot open RP2040 CDC port ({e}) — close BugBuster app first")
+
+    try:
+        iflag, oflag, cflag, lflag, _, _, cc = _termios.tcgetattr(fd)
+        cflag = _termios.CS8 | _termios.CREAD | _termios.CLOCAL
+        iflag = _termios.IGNPAR
+        oflag = 0
+        lflag = 0
+        cc = list(cc)
+        cc[_termios.VMIN] = 0
+        cc[_termios.VTIME] = 2
+        _termios.tcsetattr(
+            fd,
+            _termios.TCSANOW,
+            [iflag, oflag, cflag, lflag, _termios.B115200, _termios.B115200, cc],
+        )
+
+        TIOCMBIS = 0x8004746C
+        TIOCM_DTR = 0x0002
+        try:
+            _fcntl.ioctl(fd, TIOCMBIS, _struct.pack("I", TIOCM_DTR))
+        except OSError:
+            pass
+
+        def _read(timeout=0.2):
+            r, _, _ = _select.select([fd], [], [], timeout)
+            return _os.read(fd, 8192) if r else b""
+
+        while _read(0.1):
+            pass
+
+        started = False
+        for _ in range(3):
+            _os.write(fd, b"\x01")
+            resp = _read(0.5)
+            if resp and b"START" in resp:
+                started = True
+                break
+            _os.write(fd, b"\x00")
+            time.sleep(0.3)
+
+        assert started, "RP2040 did not respond with START — is it configured?"
+
+        window_bytes = []
+        ring = bytearray()
+        for _ in range(NUM_WINDOWS):
+            window_total = 0
+            t0 = time.time()
+            while time.time() - t0 < WINDOW_SEC:
+                r, _, _ = _select.select([fd], [], [], 0.005)
+                if not r:
+                    continue
+                try:
+                    chunk = _os.read(fd, 65536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    continue
+                ring.extend(chunk)
+                consumed = 0
+                while len(ring) - consumed >= 2:
+                    length = ring[consumed + 1]
+                    if length > 62:
+                        consumed += 1
+                        continue
+                    if len(ring) - consumed < 2 + length:
+                        break
+                    window_total += length
+                    consumed += 2 + length
+                if consumed:
+                    del ring[:consumed]
+            window_bytes.append(window_total)
+
+        _os.write(fd, b"\x00")
     finally:
         _os.close(fd)
 
@@ -578,12 +683,128 @@ def test_la_cdc_stream_duration_truth_legacy(usb_device):
     The primary stream path is now vendor-bulk (see test_la_usb_bulk.py).
     """
     import os as _os
-...
-        abs(decoded_duration - measured_duration) / measured_duration <= 0.01, (
-            f"Decoded duration drifted from wall clock: decoded={decoded_duration:.3f}s, "
-            f"measured={measured_duration:.3f}s, bytes={total_bytes}, "
-            f"stop_reason={stop_reason}, overruns={overrun_count}, short_writes={short_write_count}"
+    import fcntl as _fcntl
+    import select as _select
+    import struct as _struct
+    import termios as _termios
+
+    if not _SERIAL_AVAILABLE:
+        pytest.skip("pyserial not installed — cannot enumerate RP2040 CDC port")
+
+    rp2040_port = _find_rp2040_cdc_port()
+    if rp2040_port is None:
+        pytest.skip("RP2040 HAT CDC port not found (VID=0x2E8A PID=0x000C)")
+
+    channels = int(_os.getenv("BUGBUSTER_LA_STREAM_CHANNELS", "4"))
+    rate_hz = int(_os.getenv("BUGBUSTER_LA_STREAM_RATE_HZ", "500000"))
+    depth = int(_os.getenv("BUGBUSTER_LA_STREAM_DEPTH", "100000"))
+    stream_sec = float(_os.getenv("BUGBUSTER_LA_STREAM_DURATION_S", "10.0"))
+
+    if channels not in (1, 2, 4):
+        pytest.fail(f"BUGBUSTER_LA_STREAM_CHANNELS must be 1, 2, or 4 (got {channels})")
+
+    usb_device.hat_la_stop()
+    usb_device.hat_la_configure(channels=channels, rate_hz=rate_hz, depth=depth)
+    usb_device.hat_la_set_trigger(LaTriggerType.NONE, channel=0)
+    time.sleep(0.12)
+
+    try:
+        fd = _os.open(rp2040_port, _os.O_RDWR | _os.O_NOCTTY | _os.O_NONBLOCK)
+    except OSError as e:
+        pytest.skip(f"Cannot open RP2040 CDC port ({e}) — close BugBuster app first")
+
+    stop_reason = "unknown"
+    overrun_count = 0
+    short_write_count = 0
+    total_bytes = 0
+    decoded_duration = 0.0
+    measured_duration = 0.0
+
+    try:
+        iflag, oflag, cflag, lflag, _, _, cc = _termios.tcgetattr(fd)
+        cflag = _termios.CS8 | _termios.CREAD | _termios.CLOCAL
+        iflag = _termios.IGNPAR
+        oflag = 0
+        lflag = 0
+        cc = list(cc)
+        cc[_termios.VMIN] = 0
+        cc[_termios.VTIME] = 2
+        _termios.tcsetattr(
+            fd,
+            _termios.TCSANOW,
+            [iflag, oflag, cflag, lflag, _termios.B115200, _termios.B115200, cc],
         )
+
+        TIOCMBIS = 0x8004746C
+        TIOCM_DTR = 0x0002
+        try:
+            _fcntl.ioctl(fd, TIOCMBIS, _struct.pack("I", TIOCM_DTR))
+        except OSError:
+            pass
+
+        def _read(timeout=0.2):
+            r, _, _ = _select.select([fd], [], [], timeout)
+            return _os.read(fd, 8192) if r else b""
+
+        while _read(0.1):
+            pass
+
+        started = False
+        for _ in range(3):
+            _os.write(fd, b"\x01")
+            resp = _read(0.5)
+            if resp and b"START" in resp:
+                started = True
+                break
+            _os.write(fd, b"\x00")
+            time.sleep(0.3)
+
+        assert started, "RP2040 did not respond with START — is it configured?"
+
+        ring = bytearray()
+        measured_start = time.time()
+        while time.time() - measured_start < stream_sec:
+            r, _, _ = _select.select([fd], [], [], 0.005)
+            if not r:
+                continue
+            try:
+                chunk = _os.read(fd, 65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                continue
+            ring.extend(chunk)
+            consumed = 0
+            while len(ring) - consumed >= 2:
+                length = ring[consumed + 1]
+                if length > 62:
+                    consumed += 1
+                    continue
+                if len(ring) - consumed < 2 + length:
+                    break
+                total_bytes += length
+                consumed += 2 + length
+            if consumed:
+                del ring[:consumed]
+
+        measured_duration = time.time() - measured_start
+        _os.write(fd, b"\x00")
+    finally:
+        _os.close(fd)
+
+    status = usb_device.hat_la_get_status()
+    stop_reason = status.get("stream_stop_reason_name", "unknown")
+    overrun_count = status.get("stream_overrun_count", 0)
+    short_write_count = status.get("stream_short_write_count", 0)
+
+    samples_per_byte = 8 // channels
+    decoded_duration = (total_bytes * samples_per_byte) / float(rate_hz)
+
+    assert abs(decoded_duration - measured_duration) / measured_duration <= 0.01, (
+        f"Decoded duration drifted from wall clock: decoded={decoded_duration:.3f}s, "
+        f"measured={measured_duration:.3f}s, bytes={total_bytes}, "
+        f"stop_reason={stop_reason}, overruns={overrun_count}, short_writes={short_write_count}"
+    )
     assert total_bytes > 0, (
         f"No live LA payload bytes received; stop_reason={stop_reason}, "
         f"overruns={overrun_count}, short_writes={short_write_count}"

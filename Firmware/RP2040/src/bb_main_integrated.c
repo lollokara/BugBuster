@@ -110,19 +110,22 @@ void usb_thread(void *ptr)
         // Send pending Vendor Bulk data (LA stream packets or one-shot readout).
         bb_la_usb_send_pending();
 
-        // STREAMING FAST PATH: When actively streaming LA data, pump
-        // tud_task() + send_pending() extra times per outer loop iteration
-        // to reduce the inter-transfer gap.  Each extra tud_task() call
-        // processes a pending xfer_complete event and immediately kicks
-        // off the next write_xfer, achieving back-to-back USB transfers.
-        // We check poll_commands every iteration to stay responsive to
-        // STOP commands from the host.
+        // STREAMING FAST PATH: While actively streaming LA data, stay in
+        // a tight tud_task() + send_pending() loop.  This prevents the
+        // outer loop's overhead (LED, idle-path check) from introducing
+        // gaps between half-buffer drains.  The loop only exits when the
+        // stream ends (STOP/error clears s_streaming_session).
+        // poll_commands is checked every Nth iteration to stay responsive
+        // to STOP commands without adding per-iteration overhead.
         if (bb_la_usb_is_streaming()) {
-            for (int fast = 0; fast < 8; fast++) {
+            uint32_t fast_count = 0;
+            while (bb_la_usb_is_streaming()) {
                 tud_task();
                 bb_la_usb_send_pending();
+                if ((++fast_count & 0x3F) == 0) {  // every 64 iters
+                    bb_la_usb_poll_commands();
+                }
             }
-            bb_la_usb_poll_commands();
         }
 
 #ifdef PROBE_USB_CONNECTED_LED

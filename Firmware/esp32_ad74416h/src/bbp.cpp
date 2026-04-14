@@ -1813,6 +1813,9 @@ static int handleHatLaStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
     put_u8(out, &pos, st.stream_stop_reason);
     put_u32(out, &pos, st.stream_overrun_count);
     put_u32(out, &pos, st.stream_short_write_count);
+    put_u8(out, &pos, st.usb_rearm_pending);
+    put_u8(out, &pos, st.usb_rearm_request_count);
+    put_u8(out, &pos, st.usb_rearm_complete_count);
     return (int)pos;
 }
 

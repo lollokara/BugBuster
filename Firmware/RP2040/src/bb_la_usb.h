@@ -34,6 +34,13 @@
 #define LA_USB_STREAM_INFO_NONE           0x00
 #define LA_USB_STREAM_INFO_START_REJECTED 0x80
 
+// Recovery state for the LA vendor endpoint re-arm path.
+// This is intentionally a single byte so it can ride on the existing LA status
+// payload without widening the frame shape.
+#define BB_LA_USB_RECOVERY_IDLE      0
+#define BB_LA_USB_RECOVERY_PENDING   1
+#define BB_LA_USB_RECOVERY_COMPLETED 2
+
 /**
  * @brief Non-blocking CDC debug print.
  *        Drops output silently when CDC TX buffer < 64 bytes.
@@ -153,3 +160,22 @@ void bb_la_usb_notify_task_from_isr(void);
  *        that maximises bulk throughput.
  */
 bool bb_la_usb_is_streaming(void);
+
+/**
+ * @brief Check if there is pending data to send (active buffer, ctrl markers,
+ *        or deferred stop).  Used by the USB task fast-path to keep pumping
+ *        until the current half-buffer is fully drained.
+ */
+bool bb_la_usb_has_pending_data(void);
+
+/**
+ * @brief True while a STOP/abort-triggered endpoint re-arm is still pending.
+ */
+bool bb_la_usb_rearm_pending(void);
+
+/**
+ * @brief Small saturating counters for STOP-based endpoint recovery.
+ *        Kept at 1 byte each so LA status stays within the HAT frame budget.
+ */
+uint8_t bb_la_usb_rearm_request_count(void);
+uint8_t bb_la_usb_rearm_complete_count(void);

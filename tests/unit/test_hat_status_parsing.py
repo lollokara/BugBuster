@@ -189,6 +189,8 @@ def test_hat_la_status_parses_optional_stream_diagnostics():
     payload += bytes([3])                    # stream_stop_reason=dma_overrun
     payload += struct.pack("<I", 2)          # overrun_count
     payload += struct.pack("<I", 1)          # short_write_count
+    payload += bytes([1])                    # usb_rearm_pending
+    payload += bytes([4, 3])                 # request, complete counts
 
     client = BugBuster(_make_usb_transport({
         CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
@@ -203,3 +205,6 @@ def test_hat_la_status_parses_optional_stream_diagnostics():
     assert result["stream_stop_reason_name"] == "dma_overrun"
     assert result["stream_overrun_count"] == 2
     assert result["stream_short_write_count"] == 1
+    assert result["usb_rearm_pending"] is True
+    assert result["usb_rearm_request_count"] == 4
+    assert result["usb_rearm_complete_count"] == 3

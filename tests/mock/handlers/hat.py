@@ -374,6 +374,8 @@ def _hat_la_status(device):
         buf += struct.pack('<B', 0)
         # stream_overrun_count, stream_short_write_count
         buf += struct.pack('<II', 0, 0)
+        # usb_rearm_pending, request_count, complete_count
+        buf += struct.pack('<BBB', 0, 0, 0)
         return bytes(buf)
     return handler
 

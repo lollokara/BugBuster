@@ -384,6 +384,9 @@ typedef struct {
     uint8_t  stream_stop_reason;
     uint32_t stream_overrun_count;
     uint32_t stream_short_write_count;
+    uint8_t  usb_rearm_pending;
+    uint8_t  usb_rearm_request_count;
+    uint8_t  usb_rearm_complete_count;
 } HatLaStatus;
 
 /**

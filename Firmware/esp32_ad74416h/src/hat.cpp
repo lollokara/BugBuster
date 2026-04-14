@@ -838,7 +838,7 @@ bool hat_la_stop(void)
 bool hat_la_get_status(HatLaStatus *status)
 {
     if (!s_state.connected || !status) return false;
-    uint8_t rsp[26] = {};
+    uint8_t rsp[28] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_LA_GET_STATUS, NULL, 0, rsp, &rsp_len, 200);
     if (cmd == HAT_RSP_LA_STATUS && rsp_len >= 14) {
@@ -859,6 +859,15 @@ bool hat_la_get_status(HatLaStatus *status)
         }
         if (rsp_len >= 25) {
             memcpy(&status->stream_short_write_count, &rsp[21], 4);
+        }
+        if (rsp_len >= 26) {
+            status->usb_rearm_pending = rsp[25];
+        }
+        if (rsp_len >= 27) {
+            status->usb_rearm_request_count = rsp[26];
+        }
+        if (rsp_len >= 28) {
+            status->usb_rearm_complete_count = rsp[27];
         }
         return true;
     }

@@ -1900,6 +1900,15 @@ class BugBuster:
             if len(resp) >= off + 4:
                 result["stream_short_write_count"] = struct.unpack_from('<I', resp, off)[0]
                 off += 4
+            if len(resp) >= off + 1:
+                result["usb_rearm_pending"] = bool(resp[off])
+                off += 1
+            if len(resp) >= off + 1:
+                result["usb_rearm_request_count"] = resp[off]
+                off += 1
+            if len(resp) >= off + 1:
+                result["usb_rearm_complete_count"] = resp[off]
+                off += 1
             return result
         else:
             # Phase 0 HTTP schema mapping
@@ -1915,6 +1924,9 @@ class BugBuster:
                 "actual_rate_hz": _parse_int_maybe_hex(_first_present(st, "actualRateHz", "clockHz", "rate"), 0),
                 "active": bool(_first_present(st, "active", default=False)),
                 "trigger_armed": bool(_first_present(st, "triggerArmed", default=False)),
+                "usb_rearm_pending": bool(_first_present(st, "usbRearmPending", "usb_rearm_pending", default=False)),
+                "usb_rearm_request_count": _parse_int_maybe_hex(_first_present(st, "usbRearmRequestCount", "usb_rearm_request_count"), 0),
+                "usb_rearm_complete_count": _parse_int_maybe_hex(_first_present(st, "usbRearmCompleteCount", "usb_rearm_complete_count"), 0),
             }
 
     def hat_la_read_all(self) -> bytes:
