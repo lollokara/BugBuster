@@ -746,13 +746,10 @@ static void dispatch_command(const HatFrame *frame)
     }
     case HAT_CMD_LA_STOP:
     {
-        // Always abort the bulk pipeline — this sets s_need_endpoint_rearm
-        // which triggers write_clear + read_flush on the next send_pending()
-        // call.  The clear/flush functions use conditional DCD abort
-        // (only when endpoint is stuck busy), so this is safe even when idle.
-        // This is critical for recovering from host-cancelled IN transfers
-        // that left the endpoint permanently stuck between test runs.
-        bb_la_usb_abort_bulk();
+        // Soft-reset USB state without DCD abort.  The host preflight
+        // calls HAT_CMD_LA_USB_RESET once per session (which does a full
+        // DCD write_clear), so the routine STOP path doesn't need it.
+        bb_la_usb_soft_reset();
         // Always queue PKT_STOP so any waiting host stream task is unblocked,
         // regardless of whether streaming was active.
         bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
@@ -784,6 +781,21 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_LA_LOG_ENABLE: {
         if (frame->payload_len < 1) { send_error(HAT_ERR_FRAME); break; }
         s_la_log_enabled = frame->payload[0] != 0;
+        send_ok(NULL, 0);
+        break;
+    }
+
+    case HAT_CMD_LA_USB_RESET: {
+        // Reinitialize the vendor bulk endpoint to a clean state.
+        // Resets all software state (counters, rings, flags) without DCD
+        // abort — write_clear hangs on RP2040 and starves bb_cmd_task.
+        // The host-side reset_stream_buffer() drains any stale TX data.
+        bb_la_log("USB_RESET: mounted=%d", tud_vendor_n_mounted(BB_LA_VENDOR_ITF));
+        bb_la_stop();
+        bb_la_usb_init();
+        // Bump rearm counters so host preflight sees completion
+        bb_la_usb_soft_reset();
+        bb_la_log("USB_RESET: done");
         send_ok(NULL, 0);
         break;
     }

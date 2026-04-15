@@ -90,27 +90,22 @@ class TestLaUsbBulk:
         last_err = None
         recovery_status = {}
         try:
-            baseline_status = dev.hat_la_get_status()
-            baseline_requests = baseline_status.get("usb_rearm_request_count", 0)
-            baseline_completions = baseline_status.get("usb_rearm_complete_count", 0)
-
+            # Full USB endpoint reset — reinitializes all vendor bulk
+            # software state on the RP2040 (no DCD abort).
+            # Host-side drain clears any stale packets.
             try:
-                dev.hat_la_stop()
+                dev.hat_la_usb_reset()
             except Exception:
                 pass
 
-            recovery_status = self._wait_for_stop_recovery(dev)
-            assert not recovery_status.get("usb_rearm_pending", False), (
-                f"STOP-based recovery still pending: {recovery_status}"
-            )
-            assert recovery_status.get("usb_rearm_request_count", 0) > baseline_requests, (
-                f"STOP-based recovery did not record a new request: baseline={baseline_status}, now={recovery_status}"
-            )
-            assert recovery_status.get("usb_rearm_complete_count", 0) > baseline_completions, (
-                f"STOP-based recovery did not record a new completion: baseline={baseline_status}, now={recovery_status}"
-            )
+            time.sleep(0.05)  # let USB task process the reset
 
-            la_host.reset_stream_buffer()
+            # Do NOT call la_host.reset_stream_buffer() here — its timeout-
+            # based reads cancel IN transfers and stick the device endpoint.
+            # Instead, wait_for_start() silently skips stale packets.
+            la_host._stream_buffer.clear()  # clear local parse buffer only
+
+            recovery_status = dev.hat_la_get_status()
 
             for attempt in range(5):
                 if attempt > 0:

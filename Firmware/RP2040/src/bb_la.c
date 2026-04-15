@@ -78,7 +78,11 @@ static struct {
     volatile uint32_t stream_short_write_count;
 } s_la = {};
 
-#define BB_LA_STREAM_RING_SIZE  4u
+#define BB_LA_STREAM_RING_SIZE      8u
+#define BB_LA_STREAM_SEGMENT_WORDS  2432u
+
+_Static_assert(BB_LA_STREAM_RING_SIZE * BB_LA_STREAM_SEGMENT_WORDS * 4 <= BB_LA_BUFFER_SIZE,
+               "streaming ring exceeds capture buffer");
 
 static struct {
     volatile uint8_t head; // next buffer for USB to read
@@ -624,7 +628,7 @@ bool bb_la_start_stream(void)
     s_la.stream_mode = true;
     s_la.stream_overrun = false;
     reset_stream_diagnostics();
-    s_la.half_words = 4096u;
+    s_la.half_words = BB_LA_STREAM_SEGMENT_WORDS;
     s_stream_ring.head = 0;
     s_stream_ring.tail = 0;
     s_stream_ring.count = 0;

@@ -1851,6 +1851,39 @@ class BugBuster:
             return True
         raise NotImplementedError("LA control is USB-only")
 
+    def hat_la_log_enable(self, enable: bool = True) -> bool:
+        """Enable/disable RP2040 log relay via ESP32 side-channel.
+
+        When enabled, ``bb_la_log()`` messages on the RP2040 are forwarded
+        through the HAT UART to the ESP32, which relays them to the host
+        as ``BBP_EVT_LA_LOG`` events.  Register a callback with
+        :meth:`on_la_log` to receive them.
+
+        :param enable: ``True`` to start relaying, ``False`` to stop.
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
+        payload = struct.pack('B', int(enable))
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_LOG_ENABLE, payload)
+            return True
+        raise NotImplementedError("LA log control is USB-only")
+
+    def hat_la_usb_reset(self) -> bool:
+        """Reinitialize the RP2040 vendor bulk endpoint to a clean state.
+
+        Resets all USB transport state and performs a one-shot DCD
+        write_clear + read_flush.  Use once per session (e.g. in test
+        preflight) to recover from stuck endpoints.
+
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_USB_RESET)
+            return True
+        raise NotImplementedError("LA USB reset is USB-only")
+
     def hat_la_get_status(self) -> dict:
         """Get logic analyzer capture status.
 
@@ -2157,6 +2190,23 @@ class BugBuster:
             callback({"alert_status": alert, "supply_alert_status": supply})
 
         self._t.on_event(CmdId.ALERT_EVT, _handler)
+
+    def on_la_log(self, callback: 'Callable[[str], None] | None') -> None:
+        """Register callback for RP2040 log messages relayed via ESP32.
+
+        The callback receives a UTF-8 decoded string for each log message.
+        Pass ``None`` to unregister.  Requires :meth:`hat_la_log_enable`
+        to be called first.
+        """
+        self._require_usb("on_la_log")
+        if callback is None:
+            self._t.remove_event(CmdId.HAT_LA_LOG_EVT)
+            return
+
+        def _handler(data: bytes) -> None:
+            callback(data.decode('utf-8', errors='replace'))
+
+        self._t.on_event(CmdId.HAT_LA_LOG_EVT, _handler)
 
     def on_din_event(self, callback: Callable[[int, bool, int], None]) -> None:
         """

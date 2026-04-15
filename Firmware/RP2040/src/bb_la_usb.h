@@ -131,8 +131,19 @@ void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes);
 
 /**
  * @brief Reset the bulk transmit state (aborting any ongoing readout or live stream).
+ *        Triggers tud_vendor_n_write_clear via send_pending (DCD abort).
+ *        Use only for actual error recovery, not routine cleanup.
  */
 void bb_la_usb_abort_bulk(void);
+
+/**
+ * @brief Reset USB state without DCD abort / write_clear.
+ *        Clears data, control ring, and flags; bumps rearm counters in sync.
+ *        Safe for repeated use (no RP2040 DCD abort_done hang risk).
+ *        Used by HAT_CMD_LA_STOP for routine preflight cleanup.
+ */
+void bb_la_usb_soft_reset(void);
+
 
 /**
  * @brief Request a deferred PKT_STOP.  The marker will be emitted by

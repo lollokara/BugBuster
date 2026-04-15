@@ -917,6 +917,14 @@ bool hat_la_stop(void)
     return hat_command(HAT_CMD_LA_STOP, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
 }
 
+bool hat_la_usb_reset(void)
+{
+    if (!s_state.connected) return false;
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_USB_RESET, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
+}
+
 bool hat_la_log_enable(bool enable)
 {
     if (!s_state.connected) return false;

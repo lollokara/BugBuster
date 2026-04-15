@@ -141,9 +141,16 @@ static volatile bool s_streaming_session = false;
 // (which would discard the just-sent PKT_STOP marker).
 static volatile bool s_post_stream_rx_rearm = false;
 
+// Retry counter for deferred stop emission.  If the IN endpoint is stuck
+// (write_available returns 0), give up after this many send_pending() calls
+// to prevent USB task starvation of other FreeRTOS tasks.
+static volatile uint32_t s_deferred_stop_retries = 0;
+#define DEFERRED_STOP_MAX_RETRIES  5000u  // ~500ms at USB task rate
+
 // Set when vendor-bulk STOP uses soft HW stop; consumed by send_pending()
 // after PKT_STOP emission to call bb_la_stop() for full cleanup.
 static volatile bool s_pending_hw_cleanup = false;
+
 
 void bb_la_usb_init(void) {
     s_cdc_seq = 0;
@@ -159,6 +166,7 @@ void bb_la_usb_init(void) {
     s_streaming_session = false;
     s_post_stream_rx_rearm = false;
     s_pending_hw_cleanup = false;
+    s_deferred_stop_retries = 0;
 }
 
 void bb_la_usb_live_reset_sequence(void) {
@@ -167,6 +175,29 @@ void bb_la_usb_live_reset_sequence(void) {
 
 bool bb_la_usb_connected(void) {
     return tud_vendor_n_mounted(BB_LA_VENDOR_ITF);
+}
+
+void bb_la_usb_soft_reset(void) {
+    bb_la_log("soft_reset: streaming=%d pending=%d", s_streaming_session,
+              bb_la_usb_has_pending_data());
+    s_streaming_session = false;
+    uint32_t status = save_and_disable_interrupts();
+    s_bulk_data.active = false;
+    s_bulk_data.buf = NULL;
+    s_bulk_data.header_sent = false;
+    // Do NOT clear s_bulk_ctrl_{head,tail} — pending PKT_STOP markers
+    // must drain naturally so the host's stop_stream() receives them.
+    s_pending_hw_cleanup = false;
+    // Bump both counters together — no DCD abort needed, so
+    // request and complete stay in sync.
+    if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
+    s_rearm_complete_count = s_rearm_request_count;
+    restore_interrupts(status);
+    // Wake the USB task so it picks up any pending control markers
+    // (e.g., the PKT_STOP queued by HAT_CMD_LA_STOP after this call).
+#ifdef DEBUGPROBE_INTEGRATION
+    if (tud_taskhandle) xTaskNotify(tud_taskhandle, 0, eNoAction);
+#endif
 }
 
 void bb_la_usb_abort_bulk(void) {
@@ -192,6 +223,7 @@ void bb_la_usb_abort_bulk(void) {
 
 void bb_la_usb_request_deferred_stop(uint8_t info) {
     s_deferred_stop_info = info;
+    s_deferred_stop_retries = 0;
     __dmb();
     s_deferred_stop = true;
 #ifdef DEBUGPROBE_INTEGRATION
@@ -240,7 +272,7 @@ void bb_la_usb_send_pending(void) {
         // causes the preflight recovery poll to spin forever.
         if (s_need_endpoint_rearm) {
             s_need_endpoint_rearm = false;
-            if (s_rearm_complete_count < UINT8_MAX) s_rearm_complete_count++;
+            s_rearm_complete_count = s_rearm_request_count;
         }
         return;
     }
@@ -252,12 +284,11 @@ void bb_la_usb_send_pending(void) {
     // pending read buffer, causing all host writes to time out indefinitely.
     if (s_need_endpoint_rearm) {
         s_need_endpoint_rearm = false;
-        // Only re-arm the OUT (RX) endpoint.  write_clear() on the IN (TX)
-        // endpoint can hang the USB task after repeated calls on RP2040 DCD,
-        // and is unnecessary: the deferred-stop mechanism already ensures all
-        // TX data is drained before PKT_STOP is emitted.
+        tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
         tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
-        if (s_rearm_complete_count < UINT8_MAX) s_rearm_complete_count++;
+        // Sync to request count — abort_bulk() may have been called
+        // multiple times between send_pending() iterations.
+        s_rearm_complete_count = s_rearm_request_count;
     }
 
     // 1. Drain control markers (highest priority)
@@ -379,6 +410,17 @@ void bb_la_usb_send_pending(void) {
                 s_pending_hw_cleanup = false;
                 bb_la_stop();  // unload PIO, reset ring, state -> IDLE
             }
+        } else if (++s_deferred_stop_retries >= DEFERRED_STOP_MAX_RETRIES) {
+            // IN endpoint stuck — can't send PKT_STOP.  Give up to
+            // prevent USB task from starving bb_cmd_task (which causes
+            // UART timeouts → 0x11 cascade).
+            bb_la_log("PKT_STOP ABANDONED: retries=%u info=%u", s_deferred_stop_retries, s_deferred_stop_info);
+            s_deferred_stop = false;
+            s_streaming_session = false;
+            if (s_pending_hw_cleanup) {
+                s_pending_hw_cleanup = false;
+                bb_la_stop();
+            }
         }
     }
 
@@ -455,11 +497,6 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
         s_post_stream_rx_rearm = false;
         s_pending_hw_cleanup = false;
         bb_la_usb_live_reset_sequence();
-        // Clear any stuck IN transfers from a prior session's timeout/error.
-        // Done here (once per stream) rather than in the rearm block (every
-        // STOP) because write_clear can hang on RP2040 DCD after repeated calls.
-        tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
-        tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
         if (!bb_la_start_stream()) {
             if (reply_on_cdc) {
                 cdc_write_reply("ERR\n");

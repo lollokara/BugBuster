@@ -172,6 +172,7 @@
 #define HAT_CMD_LA_STREAM_START 0x37
 #define HAT_CMD_LA_USB_SEND     0x38  // Send capture buffer via USB bulk
 #define HAT_CMD_LA_LOG_ENABLE   0x39  // Enable/disable log relay to host
+#define HAT_CMD_LA_USB_RESET    0x3A  // Reinitialize vendor bulk endpoint
 
 // Responses
 #define HAT_RSP_OK              0x80

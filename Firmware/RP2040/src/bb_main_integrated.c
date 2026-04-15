@@ -137,6 +137,11 @@ void usb_thread(void *ptr)
         if (tud_suspended() || !tud_connected())
             xTaskDelayUntil(&wake, 20);
         else if (!bb_la_usb_is_streaming() && !tud_task_event_ready())
+            // Sleep up to 1 tick.  Deferred stop / pending data wake us via
+            // xTaskNotify from request_deferred_stop() or notify_task_from_isr().
+            // Do NOT check has_pending_data() here — it prevents sleeping and
+            // starves bb_cmd_task (priority 1 < USB priority 2), causing HAT
+            // UART timeouts (0x11) when a control marker sits unsent.
             xTaskNotifyWait(0, 0xFFFFFFFFu, &cmd, 1);
     } while (1);
 }

@@ -156,6 +156,7 @@ typedef enum {
 #define HAT_CMD_LA_READ_DATA    0x35  // Read captured data chunk
 #define HAT_CMD_LA_STOP         0x36  // Abort capture
 #define HAT_CMD_LA_LOG_ENABLE   0x39  // Enable/disable log relay to host
+#define HAT_CMD_LA_USB_RESET    0x3A  // Reinitialize vendor bulk endpoint
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -409,6 +410,7 @@ bool hat_la_set_trigger(uint8_t type, uint8_t channel);
 bool hat_la_arm(void);
 bool hat_la_force(void);
 bool hat_la_stop(void);
+bool hat_la_usb_reset(void);
 bool hat_la_log_enable(bool enable);
 bool hat_la_get_status(HatLaStatus *status);
 

@@ -408,6 +408,11 @@ class CmdId(IntEnum):
     HAT_HVPAK_REG_READ   = 0xE9
     HAT_HVPAK_REG_WRITE_MASKED = 0xEA
 
+    # HAT — LA Log Relay
+    HAT_LA_LOG_ENABLE    = 0xEB
+    HAT_LA_LOG_EVT       = 0xEC
+    HAT_LA_USB_RESET     = 0xED
+
     # Misc hardware
     SET_LSHIFT_OE    = 0xE0
     WIFI_GET_STATUS  = 0xE1

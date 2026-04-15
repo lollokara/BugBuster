@@ -227,22 +227,19 @@ class LaUsbHost:
             self._stream_buffer.extend(raw)
 
     def wait_for_start(self, timeout_ms: int = 2000, max_packets: int = 512) -> StreamPacket:
-        """Consume packets until START. Stale DATA before START is a failure."""
+        """Consume packets until START. Silently skips stale DATA/STOP/ERROR
+        from a previous session — this avoids the need for reset_stream_buffer()
+        which cancels IN transfers and sticks the device endpoint."""
+        stale_count = 0
         for _ in range(max_packets):
             pkt = self.read_packet(timeout_ms=timeout_ms)
             if pkt.pkt_type == PKT_START:
+                if stale_count > 0:
+                    pass  # silently consumed stale packets
                 return pkt
-            if pkt.pkt_type == PKT_STOP:
-                continue
-            if pkt.pkt_type == PKT_DATA:
-                raise RuntimeError(
-                    f"Received stale DATA before START: seq={pkt.seq} len={pkt.payload_len}"
-                )
-            if pkt.pkt_type == PKT_ERROR:
-                raise RuntimeError(
-                    f"Received PKT_ERROR while waiting for START: info={pkt.info:#02x}"
-                )
-        raise RuntimeError(f"Did not receive PKT_START within {max_packets} packets")
+            # Skip any stale packet type from previous session
+            stale_count += 1
+        raise RuntimeError(f"Did not receive PKT_START within {max_packets} packets (skipped {stale_count} stale)")
 
     def _record_data_packet(
         self,
