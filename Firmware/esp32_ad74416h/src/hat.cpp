@@ -66,6 +66,22 @@ static uint8_t crc8(const uint8_t *data, size_t len)
 // UART Helpers
 // -----------------------------------------------------------------------------
 
+// Flush the UART RX FIFO to discard any stale or corrupt data (e.g. from a reboot).
+void hat_uart_flush(void)
+{
+    ESP_LOGD(TAG, "Flushing HAT UART RX FIFO");
+    uart_flush_input(HAT_UART_NUM);
+}
+
+// Reset the connection status and flush the UART.
+// Useful when a command times out repeatedly.
+static void hat_reset_connection(void)
+{
+    ESP_LOGW(TAG, "Resetting HAT connection (UART flush)");
+    s_state.connected = false;
+    hat_uart_flush();
+}
+
 // Send a command frame to the HAT. Returns true if bytes were sent.
 static bool hat_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t payload_len)
 {
@@ -175,23 +191,17 @@ static uint8_t hat_recv_frame(uint8_t *payload, uint8_t *payload_len, uint32_t t
 }
 
 // Send command and wait for response. Returns response CMD, fills rsp_payload.
-static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                            uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                                    uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
 {
-    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
-        ESP_LOGE(TAG, "HAT command 0x%02X: failed to take mutex", cmd);
-        return 0;
-    }
-
     s_last_error = 0;
-    ESP_LOGD(TAG, "TX cmd=0x%02X len=%d (%" PRIu64 " us)", cmd, payload_len, esp_timer_get_time());
+    ESP_LOGV(TAG, "TX cmd=0x%02X len=%d (%" PRIu64 " us)", cmd, payload_len, esp_timer_get_time());
 
-    // Task 2.2: RX Flush - clear anything in the buffer before sending our command
+    // Flush any stale data before sending
     uart_flush_input(HAT_UART_NUM);
 
     if (!hat_send_frame(cmd, payload, payload_len)) {
         ESP_LOGW(TAG, "Failed to send command 0x%02X", cmd);
-        if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
         return 0;
     }
 
@@ -200,10 +210,7 @@ static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_
 
     while (true) {
         TickType_t now = xTaskGetTickCount();
-        if (now >= deadline) {
-            ESP_LOGW(TAG, "HAT command 0x%02X total timeout (deadline reached)", cmd);
-            break;
-        }
+        if (now >= deadline) break;
 
         uint32_t remaining_ms = (deadline - now) * portTICK_PERIOD_MS;
         if (remaining_ms == 0) remaining_ms = 1;
@@ -212,10 +219,7 @@ static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_
         uint8_t local_len = 0;
         uint8_t rsp = hat_recv_frame(local_payload, &local_len, remaining_ms, sizeof(local_payload));
 
-        if (rsp == 0) {
-            // Error or individual frame timeout already logged in hat_recv_frame
-            break; 
-        }
+        if (rsp == 0) break; 
 
         // Handle unsolicited LA status (capture done notification)
         if (rsp == HAT_RSP_LA_STATUS && cmd != HAT_CMD_LA_GET_STATUS && local_len >= 14) {
@@ -226,12 +230,10 @@ static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_
                     bbpSendEvent(BBP_EVT_LA_DONE, local_payload, local_len);
                 }
             }
-            // Continue waiting for the response to OUR command
-            ESP_LOGD(TAG, "Discarding unsolicited response 0x%02X, continuing wait for 0x%02X", rsp, cmd);
             continue;
         }
 
-        // It's the response we (presumably) wanted, or an error response
+        // It's the response we wanted, or an error response
         if (rsp == HAT_RSP_ERROR && local_len >= 1) {
             s_last_error = local_payload[0];
             ESP_LOGW(TAG, "HAT command 0x%02X failed with error 0x%02X", cmd, s_last_error);
@@ -242,21 +244,43 @@ static uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_
             uint8_t to_copy = (local_len < max_rsp_len) ? local_len : max_rsp_len;
             memcpy(rsp_payload, local_payload, to_copy);
         }
-        if (rsp_len) {
-            *rsp_len = local_len;
-        }
+        if (rsp_len) *rsp_len = local_len;
 
-        ESP_LOGD(TAG, "RX rsp=0x%02X len=%d (for cmd=0x%02X) @ %" PRIu64 " us", rsp, local_len, cmd, esp_timer_get_time());
+        ESP_LOGV(TAG, "RX rsp=0x%02X len=%d (for cmd=0x%02X) @ %" PRIu64 " us", rsp, local_len, cmd, esp_timer_get_time());
         final_rsp = rsp;
         break;
     }
 
-    if (final_rsp == 0) {
-        ESP_LOGW(TAG, "HAT command 0x%02X timed out or failed after %" PRIu32 "ms", cmd, timeout_ms);
+    return final_rsp;
+}
+
+uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+{
+    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
+        ESP_LOGE(TAG, "HAT command 0x%02X: failed to take mutex", cmd);
+        return 0;
+    }
+
+    uint8_t rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
+
+    // One retry with a connection reset if the first attempt failed (timeout or junk)
+    if (rsp == 0) {
+        ESP_LOGD(TAG, "HAT command 0x%02X first attempt failed, retrying after reset...", cmd);
+        hat_reset_connection();
+        rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
+        if (rsp != 0) {
+            s_state.connected = true; // Connection recovered
+            ESP_LOGI(TAG, "HAT connection recovered during command 0x%02X", cmd);
+        }
+    }
+
+    if (rsp == 0) {
+        ESP_LOGW(TAG, "HAT command 0x%02X failed or timed out after retry", cmd);
     }
 
     if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
-    return final_rsp;
+    return rsp;
 }
 
 // -----------------------------------------------------------------------------
@@ -920,9 +944,14 @@ bool hat_la_stop(void)
 bool hat_la_usb_reset(void)
 {
     if (!s_state.connected) return false;
+    
+    // 1. Flush UART RX to discard bootloader noise or stale data
+    hat_uart_flush();
+
+    // 2. Send reset command with a bit more timeout to allow for device-side SIE reset
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_USB_RESET, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_USB_RESET, NULL, 0, rsp, &rsp_len, 500, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_log_enable(bool enable)

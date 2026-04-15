@@ -27,6 +27,7 @@
 #include "get_serial.h"
 #include "tusb_edpt_handler.h"
 #include "DAP.h"
+#include "bb_la.h"
 #include "bb_la_usb.h"
 #include "hardware/structs/usb.h"
 
@@ -121,9 +122,11 @@ void usb_thread(void *ptr)
             uint32_t fast_count = 0;
             while (bb_la_usb_is_streaming()) {
                 tud_task();
+                bb_la_poll();  // Handle DMA completion on the SAME core as USB
                 bb_la_usb_send_pending();
-                if ((++fast_count & 0x3F) == 0) {  // every 64 iters
+                if ((++fast_count & 0x0F) == 0) {  // every 16 iters
                     bb_la_usb_poll_commands();
+                    taskYIELD();
                 }
             }
         }
@@ -136,13 +139,12 @@ void usb_thread(void *ptr)
 #endif
         if (tud_suspended() || !tud_connected())
             xTaskDelayUntil(&wake, 20);
-        else if (!bb_la_usb_is_streaming() && !tud_task_event_ready())
-            // Sleep up to 1 tick.  Deferred stop / pending data wake us via
+        else if (!bb_la_usb_is_streaming() && !tud_task_event_ready()) {
+            bb_la_poll();  // Keep engine polling on Core 0
+            // Sleep up to 5 ticks.  Deferred stop / pending data wake us via
             // xTaskNotify from request_deferred_stop() or notify_task_from_isr().
-            // Do NOT check has_pending_data() here — it prevents sleeping and
-            // starves bb_cmd_task (priority 1 < USB priority 2), causing HAT
-            // UART timeouts (0x11) when a control marker sits unsent.
-            xTaskNotifyWait(0, 0xFFFFFFFFu, &cmd, 1);
+            xTaskNotifyWait(0, 0xFFFFFFFFu, &cmd, 5);
+        }
     } while (1);
 }
 
@@ -152,6 +154,7 @@ void usb_thread(void *ptr)
 
 int main(void)
 {
+    set_sys_clock_khz(133000, true); // 133MHz (rated) - SMP cores provide enough throughput without 250MHz OC.
     stdio_init_all();
     bi_decl_config();
     board_init();
@@ -166,12 +169,19 @@ int main(void)
 
     // Standard debugprobe tasks
     xTaskCreate(usb_thread, "TUD", configMINIMAL_STACK_SIZE, NULL, TUD_TASK_PRIO, &tud_taskhandle);
+#if(configNUMBER_OF_CORES > 1)
+    vTaskCoreAffinitySet(tud_taskhandle, (1 << 0));  // Pin USB to Core 0
+#endif
+
 #if PICO_RP2040
     xTaskCreate(dev_mon, "WDOG", configMINIMAL_STACK_SIZE, NULL, TUD_TASK_PRIO, &mon_taskhandle);
 #endif
 
     // BugBuster UART command handler task — runs independently of USB/DAP
     xTaskCreate(bb_cmd_task, "BBCMD", 2048, NULL, BB_CMD_TASK_PRIO, &bb_taskhandle);
+#if(configNUMBER_OF_CORES > 1)
+    vTaskCoreAffinitySet(bb_taskhandle, (1 << 1));   // Pin UART Command to Core 1
+#endif
 
     vTaskStartScheduler();
 

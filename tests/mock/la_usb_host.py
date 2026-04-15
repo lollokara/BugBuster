@@ -128,6 +128,9 @@ class LaUsbHost:
         self._dev = dev
         self._claimed = True
         self._stream_buffer.clear()
+        
+        # Non-destructive drain to clear any stale packets without sticking the endpoint
+        self.drain(timeout_ms=50)
 
     def reconnect_interface(self) -> None:
         """Diagnostic fallback only: release/re-claim the USB interface."""
@@ -169,20 +172,6 @@ class LaUsbHost:
                 return True
             except Exception:
                 return False
-
-    def reset_stream_buffer(self) -> None:
-        """Discard locally buffered packets AND drain the OS USB kernel buffer."""
-        self._stream_buffer.clear()
-        # Drain any stale packets left in the libusb/kernel buffer from a
-        # prior session.  Without this, write_clear on the device clears the
-        # device-side FIFO but packets already in the host's kernel buffer
-        # survive and appear as "stale DATA before START" on the next stream.
-        if self._dev is not None:
-            for _ in range(64):
-                try:
-                    self._dev.read(EP_IN, 16384, timeout=5)
-                except Exception:
-                    break
 
     def send_command(self, cmd: int) -> None:
         """Send a single-byte command to the bulk OUT endpoint (EP_OUT=0x06)."""

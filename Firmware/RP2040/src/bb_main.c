@@ -45,7 +45,7 @@ static HatFrameParser s_parser;
 static LaState s_prev_la_state = LA_STATE_IDLE;
 
 // Log relay: when enabled, bb_la_log() messages are sent via HAT UART to host
-static bool s_la_log_enabled = false;
+static volatile bool s_la_log_enabled = false;
 
 // -----------------------------------------------------------------------------
 // IRQ pin assertion (open-drain, active low, ~1ms pulse)
@@ -787,14 +787,11 @@ static void dispatch_command(const HatFrame *frame)
 
     case HAT_CMD_LA_USB_RESET: {
         // Reinitialize the vendor bulk endpoint to a clean state.
-        // Resets all software state (counters, rings, flags) without DCD
-        // abort — write_clear hangs on RP2040 and starves bb_cmd_task.
-        // The host-side reset_stream_buffer() drains any stale TX data.
+        // Triggers a full re-arm via bb_la_usb_abort_bulk, which now
+        // performs a direct SIE reset in the USB task context.
         bb_la_log("USB_RESET: mounted=%d", tud_vendor_n_mounted(BB_LA_VENDOR_ITF));
         bb_la_stop();
-        bb_la_usb_init();
-        // Bump rearm counters so host preflight sees completion
-        bb_la_usb_soft_reset();
+        bb_la_usb_abort_bulk();
         bb_la_log("USB_RESET: done");
         send_ok(NULL, 0);
         break;
@@ -908,8 +905,11 @@ void bb_cmd_task(void *params)
                 bb_irq_pulse();  // Signal ESP32 asynchronously
             }
 
-            // LA trigger check + DMA completion
-            bb_la_poll();
+            // Note: bb_la_poll() is now called on Core 0 during streaming
+            // to ensure low-latency DMA -> USB handoff.
+            if (!bb_la_usb_is_streaming()) {
+                bb_la_poll();
+            }
 
             // Note: LA streaming (feeding buffers to USB) is now handled 
             // asynchronously by bb_la_usb_send_pending() in the usb_thread.
@@ -937,7 +937,7 @@ void bb_cmd_task(void *params)
 
         // Small sleep to avoid busy-loop when no UART data
 #ifdef DEBUGPROBE_INTEGRATION
-        vTaskDelay(0);  // Yield to other FreeRTOS tasks without blocking (avoids UART FIFO overflow)
+        vTaskDelay(1);  // Yield to other FreeRTOS tasks (avoids UART FIFO overflow)
 #else
         sleep_us(100);
 #endif

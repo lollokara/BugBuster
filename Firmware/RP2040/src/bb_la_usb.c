@@ -202,7 +202,7 @@ void bb_la_usb_soft_reset(void) {
 
 void bb_la_usb_abort_bulk(void) {
     s_streaming_session = false;
-    uint32_t status = save_and_disable_interrupts();
+    taskENTER_CRITICAL();
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
     s_bulk_data.header_sent = false;
@@ -210,7 +210,7 @@ void bb_la_usb_abort_bulk(void) {
     s_bulk_ctrl_head = 0;
     s_pending_hw_cleanup = false;
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
-    restore_interrupts(status);
+    taskEXIT_CRITICAL();
     // Signal the USB task to re-arm the endpoint (tud_vendor_n_write_clear must
     // run from tud_task context — send_pending() will pick this up).
     if (tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
@@ -252,17 +252,47 @@ bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info) {
 }
 
 void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes) {
-    uint32_t status = save_and_disable_interrupts();
+    taskENTER_CRITICAL();
     s_bulk_data.buf = buf;
     s_bulk_data.total_len = total_bytes;
     s_bulk_data.sent_len = 0;
     s_bulk_data.is_live = false;
     s_bulk_data.header_sent = false;
     s_bulk_data.active = true;
-    restore_interrupts(status);
+    taskEXIT_CRITICAL();
 #ifdef DEBUGPROBE_INTEGRATION
     if (tud_taskhandle) xTaskNotify(tud_taskhandle, 0, eNoAction);
 #endif
+}
+
+#include "hardware/structs/usb.h"
+#include "hardware/regs/addressmap.h"
+#include "hardware/regs/usb.h"
+
+// Direct SIE buffer_control register manipulation for RP2040.
+// This clears the AVAIL bit for the vendor bulk IN endpoint, releasing
+// it from any stuck busy state without the buggy DCD abort_done spin.
+static void rp2040_sie_endpoint_reset(uint8_t ep_addr) {
+    uint8_t const ep_num = ep_addr & 0x0f;
+    bool const is_in = (ep_addr & 0x80) != 0;
+    
+    // RP2040 DPRAM buffer_control layout (datasheet §4.1.2.5.2):
+    //   EP0: DPRAM_BASE + 0x80 (IN) / 0x84 (OUT)
+    //   EP1-15: DPRAM_BASE + 0x80 + 8*ep_num (IN) / + 4 (OUT)
+    // BugBuster uses single-buffered bulk (buffer 0 only).
+    uint32_t *buf_ctrl;
+    if (ep_num == 0) {
+        buf_ctrl = (uint32_t*)(USBCTRL_DPRAM_BASE + 0x80 + (is_in ? 0 : 4));
+    } else {
+        // RP2040 datasheet 4.1.2.5.2: 
+        // 0x80 + 8*ep_num for IN (buffer 0), 0x84 + 8*ep_num for OUT (buffer 0)
+        buf_ctrl = (uint32_t*)(USBCTRL_DPRAM_BASE + 0x80 + 8 * ep_num + (is_in ? 0 : 4));
+    }
+
+    // Clear everything: AVAIL, FULL, LAST, and the byte count.
+    // This immediately releases the buffer from SIE control.
+    *buf_ctrl = 0;
+    __dmb();
 }
 
 void bb_la_usb_send_pending(void) {
@@ -278,16 +308,21 @@ void bb_la_usb_send_pending(void) {
     }
 
     // Re-arm endpoints if abort_bulk() was called from any task context.
-    // tud_vendor_n_write_clear/read_flush must only run from the USB task.
-    // Re-arming the RX (OUT) endpoint is critical: after a USB bus error or
-    // host-side CLEAR_FEATURE(ENDPOINT_HALT), the OUT endpoint may have no
-    // pending read buffer, causing all host writes to time out indefinitely.
+    // Two-step: hardware SIE reset (AVAIL=0) then TinyUSB software state clear.
     if (s_need_endpoint_rearm) {
         s_need_endpoint_rearm = false;
-        tud_vendor_n_write_clear(BB_LA_VENDOR_ITF);
-        tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
-        // Sync to request count — abort_bulk() may have been called
-        // multiple times between send_pending() iterations.
+        
+        // Step 1: clear hardware AVAIL bit so the SIE releases the stuck buffer.
+        // 0x87: BB_LA_IN_EP, 0x06: BB_LA_OUT_EP
+        rp2040_sie_endpoint_reset(0x87);
+        rp2040_sie_endpoint_reset(0x06);
+
+        // Step 2: clear TinyUSB internal busy flag, TX FIFO, and re-prime.
+        // tud_vendor_n_fifo_clear() calls usbd_edpt_clear_busy() (clears ep->active)
+        // + tu_edpt_stream_clear() + tu_edpt_stream_write_xfer() without any
+        // DCD abort spin — safe now that Step 1 already cleared the hardware.
+        tud_vendor_n_fifo_clear(BB_LA_VENDOR_ITF);
+
         s_rearm_complete_count = s_rearm_request_count;
     }
 
@@ -401,7 +436,6 @@ void bb_la_usb_send_pending(void) {
                 LA_USB_STREAM_PKT_STOP, s_live_seq, 0, s_deferred_stop_info
             };
             tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
-            bb_la_log("PKT_STOP sent: info=%u hw_cleanup=%d", s_deferred_stop_info, s_pending_hw_cleanup);
             s_deferred_stop = false;
             s_streaming_session = false;
             s_post_stream_rx_rearm = true;
@@ -414,7 +448,6 @@ void bb_la_usb_send_pending(void) {
             // IN endpoint stuck — can't send PKT_STOP.  Give up to
             // prevent USB task from starving bb_cmd_task (which causes
             // UART timeouts → 0x11 cascade).
-            bb_la_log("PKT_STOP ABANDONED: retries=%u info=%u", s_deferred_stop_retries, s_deferred_stop_info);
             s_deferred_stop = false;
             s_streaming_session = false;
             if (s_pending_hw_cleanup) {
@@ -506,7 +539,6 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
             return;
         }
         s_streaming_session = true;
-        bb_la_log("STREAM START ok");
         if (reply_on_cdc) {
             cdc_write_reply("START\n");
         } else {
@@ -516,7 +548,6 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
 
     case LA_USB_CMD_STOP:
         s_streaming_session = false;
-        bb_la_log("STOP cmd: session=%d cleanup=%d", s_streaming_session, s_pending_hw_cleanup);
         bb_la_stop_streaming_hw();   // stops HW, preserves ring for drain
         bb_la_cdc_flush_ring();
         if (tud_cdc_connected()) tud_cdc_write_clear();

@@ -222,7 +222,9 @@ impl LaUsbConnection {
             .as_ref()
             .ok_or_else(|| anyhow!("LA USB not connected"))?;
 
-        let header_completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(64)));
+        // 16KB buffer to accommodate large vendor bulk transfers efficiently.
+        // The firmware uses a 2432-word (9728-byte) packet size for streaming.
+        let header_completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(16384)));
         let header_result = header_completion
             .into_result()
             .map_err(|e| anyhow!("USB bulk read header failed: {}", e))?;
@@ -246,7 +248,7 @@ impl LaUsbConnection {
         }
 
         while data.len() < total_len {
-            let completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(64)));
+            let completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(16384)));
             let result = completion
                 .into_result()
                 .map_err(|e| anyhow!("USB bulk read failed at offset {}: {}", data.len(), e))?;
@@ -293,7 +295,8 @@ impl LaUsbConnection {
             let rt = tokio::runtime::Handle::current();
             let timeout_result = rt.block_on(tokio::time::timeout(
                 std::time::Duration::from_secs(5),
-                iface.bulk_in(LA_EP_IN, RequestBuffer::new(64)),
+                // 16KB buffer for efficient streaming.
+                iface.bulk_in(LA_EP_IN, RequestBuffer::new(16384)),
             ));
             let completion = match timeout_result {
                 Ok(c) => c,
