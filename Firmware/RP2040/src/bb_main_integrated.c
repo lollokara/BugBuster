@@ -263,6 +263,10 @@ void tud_resume_cb(void)
 void tud_unmount_cb(void)
 {
     probe_info("Disconnected\n");
+    // Clear streaming state so Core 1 can process BBP commands after reconnect.
+    // Without this, s_streaming_session stays true and the BBP poll loop is
+    // blocked indefinitely → all hat_la_configure() calls time out → 0x11.
+    bb_la_usb_abort_bulk();
     vTaskSuspend(uart_taskhandle);
     vTaskSuspend(dap_taskhandle);
     vTaskDelete(uart_taskhandle);

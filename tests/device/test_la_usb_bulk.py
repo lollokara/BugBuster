@@ -110,6 +110,19 @@ class TestLaUsbBulk:
             except Exception:
                 recovery_status = {}
 
+            # Force RP2040 into a clean state before configure.
+            # hat_la_usb_reset() calls bb_la_stop() + bb_la_usb_abort_bulk() on
+            # the RP2040, clearing s_streaming_session (which would otherwise
+            # block Core 1 from processing BBP commands) and resetting la_state
+            # to IDLE. Without this, a previous test that ended with the vendor
+            # bulk interface still streaming leaves the RP2040 in a state where
+            # bb_la_configure() rejects the next CONFIG → 0x11 cascade.
+            try:
+                dev.hat_la_usb_reset()
+                time.sleep(0.1)
+            except Exception:
+                pass
+
             for attempt in range(5):
                 if attempt > 0:
                     time.sleep(0.2)

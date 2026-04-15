@@ -14,11 +14,13 @@ extern "C" {
     pub async fn listen(event: &str, handler: &Closure<dyn FnMut(JsValue)>) -> JsValue;
 }
 
-/// Safe invoke that returns None instead of panicking on error
+/// Safe invoke that returns None instead of panicking on error.
+/// Ok(()) commands resolve with JS null — we distinguish that from real errors
+/// by having .catch return a sentinel {__err:true} instead of null.
 pub async fn try_invoke(cmd: &str, args: JsValue) -> Option<JsValue> {
     let promise = js_sys::Function::new_with_args(
         "cmd, args",
-        "return window.__TAURI__.core.invoke(cmd, args).catch(function(e) { console.warn('[try_invoke] ' + cmd + ' error:', e); return null; })"
+        "return window.__TAURI__.core.invoke(cmd, args).catch(function(e) { console.warn('[try_invoke] ' + cmd + ' error:', e); return {__err:true,msg:String(e)}; })"
     );
     let result = match promise.call2(&JsValue::NULL, &JsValue::from_str(cmd), &args) {
         Ok(r) => r,
@@ -32,11 +34,11 @@ pub async fn try_invoke(cmd: &str, args: JsValue) -> Option<JsValue> {
     let future = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(result));
     match future.await {
         Ok(val) => {
-            if val.is_null() {
-                None
-            } else {
-                Some(val)
-            }
+            // Check for error sentinel returned by .catch above
+            let is_err = js_sys::Reflect::get(&val, &"__err".into())
+                .map(|v| v.is_truthy())
+                .unwrap_or(false);
+            if is_err { None } else { Some(val) }
         }
         Err(e) => {
             web_sys::console::warn_1(&format!("[try_invoke] {} rejected: {:?}", cmd, e).into());
@@ -77,6 +79,8 @@ pub struct ChannelState {
     pub din_counter: u32,
     pub do_state: bool,
     pub channel_alert: u16,
+    #[serde(default)]
+    pub channel_alert_mask: u16,
     #[serde(default)]
     pub rtd_excitation_ua: u16, // RTD excitation current in µA (500 or 1000; 0 when not RES_MEAS)
 }

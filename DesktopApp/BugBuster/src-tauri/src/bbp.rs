@@ -70,14 +70,21 @@ pub const CMD_SELFTEST_STATUS: u8 = 0x05;
 pub const CMD_SELFTEST_MEASURE_SUPPLY: u8 = 0x06;
 pub const CMD_SELFTEST_EFUSE_CURRENTS: u8 = 0x07;
 pub const CMD_SELFTEST_AUTO_CAL: u8 = 0x08;
+pub const CMD_SELFTEST_INT_SUPPLIES: u8 = 0x09;
 
 // Diagnostics
 pub const CMD_SET_DIAG_CONFIG: u8 = 0x30;
 
-// GPIO
+// GPIO (AD74416H on-chip GPIO pins A–F)
 pub const CMD_GET_GPIO_STATUS: u8 = 0x40;
 pub const CMD_SET_GPIO_CONFIG: u8 = 0x41;
 pub const CMD_SET_GPIO_VALUE: u8 = 0x42;
+
+// Digital IO (ESP32 GPIO-based, routed through MUX)
+pub const CMD_DIO_GET_ALL: u8 = 0x43;
+pub const CMD_DIO_CONFIG: u8 = 0x44;
+pub const CMD_DIO_WRITE: u8 = 0x45;
+pub const CMD_DIO_READ: u8 = 0x46;
 
 // UART Bridge
 pub const CMD_GET_UART_CONFIG: u8 = 0x50;
@@ -121,6 +128,7 @@ pub const CMD_HAT_SET_POWER: u8 = 0xCA;
 pub const CMD_HAT_GET_POWER: u8 = 0xCB;
 pub const CMD_HAT_SET_IO_VOLTAGE: u8 = 0xCC;
 pub const CMD_HAT_SETUP_SWD: u8 = 0xCD;
+pub const CMD_HAT_GET_HVPAK_INFO: u8 = 0xCE;
 // HAT Logic Analyzer
 pub const CMD_HAT_LA_CONFIG: u8 = 0xCF;
 pub const CMD_HAT_LA_ARM: u8 = 0xD5;
@@ -129,8 +137,12 @@ pub const CMD_HAT_LA_STATUS: u8 = 0xD7;
 pub const CMD_HAT_LA_READ: u8 = 0xD8;
 pub const CMD_HAT_LA_STOP: u8 = 0xD9;
 pub const CMD_HAT_LA_TRIGGER: u8 = 0xDA;
-pub const CMD_HAT_LA_STREAM_START: u8 = 0xDB;
-pub const CMD_HAT_LA_USB_SEND: u8 = 0xDC;
+// HAT HVPAK
+pub const CMD_HAT_GET_HVPAK_CAPS: u8 = 0xDB;
+pub const CMD_HAT_GET_HVPAK_LUT: u8 = 0xDC;
+pub const CMD_HAT_SET_HVPAK_LUT: u8 = 0xDD;
+pub const CMD_HAT_GET_HVPAK_BRIDGE: u8 = 0xDE;
+pub const CMD_HAT_SET_HVPAK_BRIDGE: u8 = 0xDF;
 
 // Waveform Generator
 pub const CMD_START_WAVEGEN: u8 = 0xD0;
@@ -147,7 +159,20 @@ pub const CMD_SET_LSHIFT_OE: u8 = 0xE0;
 // WiFi Management
 pub const CMD_WIFI_GET_STATUS: u8 = 0xE1;
 pub const CMD_WIFI_CONNECT: u8 = 0xE2;
+pub const CMD_SET_SPI_CLOCK: u8 = 0xE3;
 pub const CMD_WIFI_SCAN: u8 = 0xE4;
+
+// HAT HVPAK extended
+pub const CMD_HAT_GET_HVPAK_ANALOG: u8 = 0xE5;
+pub const CMD_HAT_SET_HVPAK_ANALOG: u8 = 0xE6;
+pub const CMD_HAT_GET_HVPAK_PWM: u8 = 0xE7;
+pub const CMD_HAT_SET_HVPAK_PWM: u8 = 0xE8;
+pub const CMD_HAT_HVPAK_REG_READ: u8 = 0xE9;
+pub const CMD_HAT_HVPAK_REG_WRITE_MASKED: u8 = 0xEA;
+
+// HAT LA extended
+pub const CMD_HAT_LA_LOG_ENABLE: u8 = 0xEB;
+pub const CMD_HAT_LA_USB_RESET: u8 = 0xED;
 
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;
@@ -168,6 +193,7 @@ pub const EVT_ALERT: u8 = 0x82;
 pub const EVT_DIN: u8 = 0x83;
 pub const EVT_PCA_FAULT: u8 = 0x84;
 pub const EVT_LA_DONE: u8 = 0x85;
+pub const EVT_LA_LOG: u8 = 0xEC;      // RP2040 log message relay
 pub const EVT_DISCONNECT: u8 = 0xFE;  // Synthetic: USB reader thread detected serial error
 
 // -----------------------------------------------------------------------------
@@ -184,6 +210,13 @@ pub const ERR_INVALID_STATE: u8 = 0x07;
 pub const ERR_CRC_FAIL: u8 = 0x08;
 pub const ERR_FRAME_TOO_LARGE: u8 = 0x09;
 pub const ERR_STREAM_ACTIVE: u8 = 0x0A;
+pub const ERR_HVPAK_NO_DEVICE: u8 = 0x0B;
+pub const ERR_HVPAK_TIMEOUT: u8 = 0x0C;
+pub const ERR_HVPAK_UNKNOWN_IDENTITY: u8 = 0x0D;
+pub const ERR_HVPAK_UNSUPPORTED_CAP: u8 = 0x0E;
+pub const ERR_HVPAK_INVALID_INDEX: u8 = 0x0F;
+pub const ERR_HVPAK_UNSAFE_REGISTER: u8 = 0x10;
+pub const ERR_TIMEOUT: u8 = 0x11;
 
 // -----------------------------------------------------------------------------
 // COBS Codec

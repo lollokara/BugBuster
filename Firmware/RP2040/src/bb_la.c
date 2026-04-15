@@ -355,6 +355,13 @@ void bb_la_init(void)
 bool bb_la_configure(const LaConfig *config)
 {
     if (!config) return false;
+    // Auto-stop any lingering state. s_streaming_session must already be false
+    // for Core 1 to reach this call, so calling bb_la_stop() here is safe and
+    // prevents the HAT_RSP_ERROR → BBP_ERR_TIMEOUT (0x11) cascade when a
+    // previous stream's deferred cleanup hasn't fired yet.
+    if (s_la.state != LA_STATE_IDLE && s_la.state != LA_STATE_ERROR) {
+        bb_la_stop();
+    }
     if (s_la.state != LA_STATE_IDLE && s_la.state != LA_STATE_ERROR) return false;
     if (config->channels != 1 && config->channels != 2 && config->channels != 4) return false;
     if (config->sample_rate_hz == 0 || config->depth_samples == 0) return false;

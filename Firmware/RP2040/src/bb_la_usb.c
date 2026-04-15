@@ -513,10 +513,18 @@ void bb_la_usb_send_pending(void) {
                 bb_la_stop();  // unload PIO, reset ring, state -> IDLE
             }
         } else if (++s_deferred_stop_retries >= DEFERRED_STOP_MAX_RETRIES) {
-            // IN endpoint stuck — can't send PKT_STOP.  Give up to
-            // prevent USB task from starving bb_cmd_task (which causes
-            // UART timeouts → 0x11 cascade).
+            // IN endpoint stuck — can't send PKT_STOP in the normal aligned path.
+            // Force an emergency PKT_STOP now: a slightly misaligned packet is
+            // better than leaving the host blocked indefinitely (which causes the
+            // 0x11 cascade on the next BBP session).
             s_deferred_stop = false;
+            {
+                uint8_t stop_pkt[4] = {
+                    LA_USB_STREAM_PKT_STOP, s_live_seq, 0, s_deferred_stop_info
+                };
+                tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
+                tud_vendor_n_flush(BB_LA_VENDOR_ITF);
+            }
             // bb_la_stop() MUST run before clearing s_streaming_session.
             // Core 1 uses !s_streaming_session as the gate to call
             // bb_la_poll() and process BBP commands.  If s_streaming_session

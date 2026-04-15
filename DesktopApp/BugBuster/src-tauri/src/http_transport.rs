@@ -166,6 +166,7 @@ impl HttpTransport {
                     din_counter: ch_json.get("dinCounter").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
                     do_state: ch_json.get("doState").and_then(|v| v.as_bool()).unwrap_or(false),
                     channel_alert: ch_json.get("channelAlert").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                    channel_alert_mask: ch_json.get("channelAlertMask").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
                     rtd_excitation_ua: ch_json.get("rtdExcitationUa").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
                 };
             }

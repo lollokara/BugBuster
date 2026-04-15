@@ -1183,10 +1183,10 @@ pub async fn la_read_append_fast(
         return Err("USB not available".into());
     }
 
-    // Send USB_SEND command to RP2040 (via ESP32/BBP)
-    log::info!("[la_read_append_fast] Sending USB_SEND command");
+    // Reset vendor bulk endpoint on RP2040 before reading
+    log::info!("[la_read_append_fast] Sending LA_USB_RESET command");
     let _rsp = mgr
-        .send_command(bbp::CMD_HAT_LA_USB_SEND, &[])
+        .send_command(bbp::CMD_HAT_LA_USB_RESET, &[])
         .await
         .map_err(map_err)?;
 

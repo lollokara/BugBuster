@@ -88,31 +88,32 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             <div class="badge-hex">"BUGBUSTER_S3_V4"</div>
                         </div>
                         
-                        <div class="board-schematic" style="position: relative; padding: 20px; display: flex; flex-direction: column; gap: 20px; align-items: center; justify-content: center; min-height: 300px;">
+                        <div class="board-schematic" style="position: relative; padding: 30px; display: flex; flex-direction: column; gap: 30px; align-items: center; justify-content: center; min-height: 450px; flex: 1;">
                             
                             // VADJ1 Rail Group (IO 1-6)
-                            <div style="width: 100%; border: 1px dashed rgba(59, 130, 246, 0.2); border-radius: 8px; padding: 15px 10px; position: relative;">
-                                <div style="position: absolute; top: -8px; left: 15px; background: #060a14; padding: 0 8px; color: var(--blue); font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700;">"VADJ1 DOMAIN"</div>
+                            <div style="width: 100%; border: 1px dashed rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 35px 20px; position: relative; background: rgba(59, 130, 246, 0.02);">
+                                <div style="position: absolute; top: -10px; left: 20px; background: #0c1222; padding: 0 12px; color: var(--blue); font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 800; letter-spacing: 1px; border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 4px;">"POWER DOMAIN: VADJ1 (3.3V SAFE)"</div>
                                 
-                                <div style="display: flex; gap: 15px; justify-content: space-around;">
+                                <div style="display: flex; gap: 40px; justify-content: space-around;">
                                     { (0..2).map(|block_idx| {
                                         view! {
-                                            <div class="io-block-visual" style="flex: 1; background: rgba(20, 30, 52, 0.4); border: 1px solid var(--border); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 8px;">
-                                                <div style="display: flex; justify-content: space-around; gap: 5px;">
+                                            <div class="io-block-visual" style="flex: 1; background: rgba(20, 30, 52, 0.6); border: 1px solid var(--border-bright); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 15px; box-shadow: inset 0 0 20px rgba(0,0,0,0.2);">
+                                                <div style="font-size: 10px; color: var(--text-muted); font-weight: 800; letter-spacing: 2px; text-align: center; border-bottom: 1px solid var(--border); padding-bottom: 8px;">{format!("BLOCK {}", block_idx + 1)}</div>
+                                                <div style="display: flex; justify-content: space-around; gap: 15px;">
                                                     { (0..3).map(|pin_offset| {
                                                         let i = block_idx * 3 + pin_offset;
                                                         let is_analog = i == 0 || i == 3;
                                                         let mode = move || config.get().pins[i];
                                                         let name = move || config.get().pin_names[i].clone();
                                                         let color = move || if is_analog { "var(--green)" } else { "var(--blue)" };
-                                                        let glow = move || if is_analog { "0 0 8px var(--green)" } else { "none" };
+                                                        let glow = move || if is_analog { "0 0 15px var(--green)" } else { "0 0 8px rgba(59, 130, 246, 0.3)" };
                                                         
                                                         view! {
-                                                            <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; width: 55px;">
-                                                                <div style=move || format!("width: 12px; height: 12px; border-radius: 2px; border: 2px solid {}; box-shadow: {}; background: rgba(0,0,0,0.5)", color(), glow())></div>
-                                                                <div style="display: flex; flex-direction: column; align-items: center; gap: 1px;">
-                                                                    <span style="font-size: 8px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: center;">{name}</span>
-                                                                    <span style="font-size: 6px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">{move || mode().to_str()}</span>
+                                                            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; width: 85px;">
+                                                                <div style=move || format!("width: 22px; height: 22px; border-radius: 4px; border: 3px solid {}; box-shadow: {}; background: rgba(0,0,0,0.6); transition: all 0.2s;", color(), glow())></div>
+                                                                <div style="display: flex; flex-direction: column; align-items: center; gap: 3px; width: 100%;">
+                                                                    <span style="font-size: 11px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: center; letter-spacing: -0.2px;">{name}</span>
+                                                                    <span style="font-size: 10px; font-weight: 700; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.3); padding: 1px 6px; border-radius: 3px;">{move || mode().to_str()}</span>
                                                                 </div>
                                                             </div>
                                                         }
@@ -125,28 +126,29 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             </div>
 
                             // VADJ2 Rail Group (IO 7-12)
-                            <div style="width: 100%; border: 1px dashed rgba(168, 85, 247, 0.2); border-radius: 8px; padding: 15px 10px; position: relative;">
-                                <div style="position: absolute; top: -8px; left: 15px; background: #060a14; padding: 0 8px; color: var(--purple); font-family: 'JetBrains Mono', monospace; font-size: 9px; font-weight: 700;">"VADJ2 DOMAIN"</div>
+                            <div style="width: 100%; border: 1px dashed rgba(168, 85, 247, 0.3); border-radius: 12px; padding: 35px 20px; position: relative; background: rgba(168, 85, 247, 0.02);">
+                                <div style="position: absolute; top: -10px; left: 20px; background: #0c1222; padding: 0 12px; color: var(--purple); font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 800; letter-spacing: 1px; border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 4px;">"POWER DOMAIN: VADJ2 (HIGH VOLTAGE)"</div>
                                 
-                                <div style="display: flex; gap: 15px; justify-content: space-around;">
+                                <div style="display: flex; gap: 40px; justify-content: space-around;">
                                     { (2..4).map(|block_idx| {
                                         view! {
-                                            <div class="io-block-visual" style="flex: 1; background: rgba(20, 30, 52, 0.4); border: 1px solid var(--border); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 8px;">
-                                                <div style="display: flex; justify-content: space-around; gap: 5px;">
+                                            <div class="io-block-visual" style="flex: 1; background: rgba(20, 30, 52, 0.6); border: 1px solid var(--border-bright); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 15px; box-shadow: inset 0 0 20px rgba(0,0,0,0.2);">
+                                                <div style="font-size: 10px; color: var(--text-muted); font-weight: 800; letter-spacing: 2px; text-align: center; border-bottom: 1px solid var(--border); padding-bottom: 8px;">{format!("BLOCK {}", block_idx + 1)}</div>
+                                                <div style="display: flex; justify-content: space-around; gap: 15px;">
                                                     { (0..3).map(|pin_offset| {
                                                         let i = block_idx * 3 + pin_offset;
                                                         let is_analog = i == 6 || i == 9;
                                                         let mode = move || config.get().pins[i];
                                                         let name = move || config.get().pin_names[i].clone();
                                                         let color = move || if is_analog { "var(--green)" } else { "var(--purple)" };
-                                                        let glow = move || if is_analog { "0 0 8px var(--green)" } else { "none" };
+                                                        let glow = move || if is_analog { "0 0 15px var(--green)" } else { "0 0 8px rgba(168, 85, 247, 0.3)" };
                                                         
                                                         view! {
-                                                            <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; width: 55px;">
-                                                                <div style=move || format!("width: 12px; height: 12px; border-radius: 2px; border: 2px solid {}; box-shadow: {}; background: rgba(0,0,0,0.5)", color(), glow())></div>
-                                                                <div style="display: flex; flex-direction: column; align-items: center; gap: 1px;">
-                                                                    <span style="font-size: 8px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: center;">{name}</span>
-                                                                    <span style="font-size: 6px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">{move || mode().to_str()}</span>
+                                                            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; width: 85px;">
+                                                                <div style=move || format!("width: 22px; height: 22px; border-radius: 4px; border: 3px solid {}; box-shadow: {}; background: rgba(0,0,0,0.6); transition: all 0.2s;", color(), glow())></div>
+                                                                <div style="display: flex; flex-direction: column; align-items: center; gap: 3px; width: 100%;">
+                                                                    <span style="font-size: 11px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; text-align: center; letter-spacing: -0.2px;">{name}</span>
+                                                                    <span style="font-size: 10px; font-weight: 700; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.3); padding: 1px 6px; border-radius: 3px;">{move || mode().to_str()}</span>
                                                                 </div>
                                                             </div>
                                                         }

@@ -918,17 +918,23 @@ void bb_cmd_task(void *params)
             // Detect LA state transition to DONE and notify ESP32
             LaStatus la_st;
             bb_la_get_status(&la_st);
-            if (la_st.state == LA_STATE_DONE && s_prev_la_state != LA_STATE_DONE) {
-                bb_la_notify_done();  // Send unsolicited LA_STATUS frame
-                bb_irq_pulse();       // Also assert IRQ
-                // NOTE: no auto-push via USB — the host reads via gapless stream
-                // or explicitly via HAT_CMD_LA_USB_SEND
-            }
-            if (la_st.state == LA_STATE_ERROR && s_prev_la_state != LA_STATE_ERROR) {
-                bb_la_usb_send_stream_marker(
-                    LA_USB_STREAM_PKT_ERROR,
-                    la_st.stream_stop_reason
-                );
+            // Suppress unsolicited UART status frames while USB streaming is
+            // active or still draining.  An unsolicited frame racing with a
+            // BBP command-response exchange desyncs the ESP32 UART → 0x11.
+            bool usb_idle = !bb_la_usb_is_streaming() && !bb_la_usb_has_pending_data();
+            if (usb_idle) {
+                if (la_st.state == LA_STATE_DONE && s_prev_la_state != LA_STATE_DONE) {
+                    bb_la_notify_done();  // Send unsolicited LA_STATUS frame
+                    bb_irq_pulse();       // Also assert IRQ
+                    // NOTE: no auto-push via USB — the host reads via gapless stream
+                    // or explicitly via HAT_CMD_LA_USB_SEND
+                }
+                if (la_st.state == LA_STATE_ERROR && s_prev_la_state != LA_STATE_ERROR) {
+                    bb_la_usb_send_stream_marker(
+                        LA_USB_STREAM_PKT_ERROR,
+                        la_st.stream_stop_reason
+                    );
+                }
             }
             s_prev_la_state = la_st.state;
 

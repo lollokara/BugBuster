@@ -17,8 +17,9 @@ pub struct ChannelState {
     pub din_state: bool,        // Digital input comparator output
     pub din_counter: u32,       // DIN event counter
     pub do_state: bool,         // Digital output state
-    pub channel_alert: u16,     // Per-channel alert bits
-    pub rtd_excitation_ua: u16, // RTD excitation current in µA (500 or 1000; 0 when not in RES_MEAS)
+    pub channel_alert: u16,      // Per-channel alert status bits
+    pub channel_alert_mask: u16, // Per-channel alert mask bits
+    pub rtd_excitation_ua: u16,  // RTD excitation current in µA (500 or 1000; 0 when not in RES_MEAS)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -80,10 +81,12 @@ impl DeviceState {
             state.channels[ch].din_counter = r.get_u32()?;
             state.channels[ch].do_state = r.get_bool()?;
             state.channels[ch].channel_alert = r.get_u16()?;
+            state.channels[ch].channel_alert_mask = r.get_u16().unwrap_or(0);
             state.channels[ch].rtd_excitation_ua = r.get_u16().unwrap_or(0);
         }
 
-        // Diagnostic slots (optional — older firmware won't include these)
+        // Per diagnostic slot (4x, stride = 7 bytes)
+        // Note: state.rs has DiagState defined as source(u8) + raw(u16) + value(f32) = 7 bytes
         for d in 0..4 {
             if let Some(source) = r.get_u8() {
                 state.diag[d].source = source;
@@ -92,12 +95,11 @@ impl DeviceState {
             }
         }
 
-        // MUX switch states (4 bytes)
+        // MUX switch states (4 bytes) - Note: firmware spec 1.5 doesn't list this in 0x01 rsp
+        // but the code uses it. I'll read it safely.
         for m in 0..4 {
             if let Some(v) = r.get_u8() {
-                if m < state.mux_states.len() {
-                    state.mux_states[m] = v;
-                }
+                state.mux_states[m] = v;
             }
         }
 
