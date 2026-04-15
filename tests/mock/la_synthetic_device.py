@@ -15,14 +15,42 @@ PKT_DATA  = 0x02
 PKT_STOP  = 0x03
 PKT_ERROR = 0x04
 
-# Info byte constants
+# Info byte constants — semantics are packet-type-dependent.
+# In DATA packets: bit 0 (INFO_COMPRESSED) means payload is [value:8][count-1:8] RLE pairs.
+# In STOP packets: full byte = stop reason.
+# The value 0x01 is shared; discrimination is by pkt_type, not info value.
 INFO_NONE           = 0x00
+INFO_COMPRESSED     = 0x01  # DATA only: payload is RLE [value:8][count-1:8] pairs
 INFO_START_REJECTED = 0x80
 INFO_STOP_HOST      = 0x01
 INFO_STOP_USB_ERR   = 0x02
 INFO_STOP_DMA_OVR   = 0x03
 
 STREAM_MAX_PAYLOAD = 60  # max bytes per DATA packet payload
+
+
+def _rle_compress(raw: bytes) -> bytes:
+    """
+    Compress raw bytes to [value:8][count_minus_1:8] pairs.
+
+    Mirrors bb_la_stream_rle_compress() in bb_la_usb.c exactly:
+    max run length is 256 (stored as count-1 = 255).
+    Returns b"" when compressed output >= raw length (fallback signal).
+    """
+    if not raw:
+        return b""
+    out = bytearray()
+    i = 0
+    while i < len(raw):
+        val = raw[i]
+        run = 1
+        while i + run < len(raw) and raw[i + run] == val and run < 256:
+            run += 1
+        out.append(val)
+        out.append(run - 1)
+        i += run
+    compressed = bytes(out)
+    return compressed if len(compressed) < len(raw) else b""
 
 
 def _packet(pkt_type: int, seq: int, info: int, payload: bytes) -> dict:
@@ -105,6 +133,58 @@ class LaSyntheticDevice:
         # Gap: skip seq=gap_at, jump to gap_at+2
         for i in range(gap_at + 2, gap_at + 5):
             packets.append(_packet(PKT_DATA, i & 0xFF, INFO_NONE, b"after_gap"))
+        packets.append(_packet(PKT_STOP, 0, INFO_NONE, b""))
+        return packets
+
+    def generate_rle_stream_packets(
+        self,
+        n_chunks: int = 5,
+        start_seq: int = 0,
+    ) -> list[dict]:
+        """
+        Generate a well-formed stream with RLE-compressed DATA packets.
+
+        Each DATA packet contains 30 RLE pairs (60 bytes) encoding a
+        repeating pattern (0x0F ×15, 0xF0 ×15 per chunk) that compresses well.
+        INFO_COMPRESSED is set on every DATA packet.
+        """
+        packets = [_packet(PKT_START, 0, INFO_NONE, b"")]
+        for i in range(n_chunks):
+            seq = (start_seq + i) & 0xFF
+            # 30 raw bytes that compress to 4 RLE pairs (8 bytes)
+            raw_chunk = bytes([0x0F] * 15 + [0xF0] * 15)
+            compressed = _rle_compress(raw_chunk)
+            assert compressed, "test pattern must be compressible"
+            packets.append(_packet(PKT_DATA, seq, INFO_COMPRESSED, compressed))
+        packets.append(_packet(PKT_STOP, 0, INFO_NONE, b""))
+        return packets
+
+    def generate_rle_stream_packets_from(
+        self,
+        raw: bytes,
+        start_seq: int = 0,
+    ) -> list[dict]:
+        """
+        Compress raw bytes and split into RLE DATA packets (max 60 bytes/packet).
+
+        Falls back to raw (INFO_NONE) if _rle_compress returns empty (not compressible).
+        Mirrors the firmware's per-segment compress-or-fallback decision.
+        """
+        packets = [_packet(PKT_START, 0, INFO_NONE, b"")]
+        seq = start_seq
+        offset = 0
+        while offset < len(raw):
+            chunk = raw[offset:offset + STREAM_MAX_PAYLOAD]
+            offset += len(chunk)
+            compressed = _rle_compress(chunk)
+            if compressed:
+                payload = compressed
+                info = INFO_COMPRESSED
+            else:
+                payload = chunk
+                info = INFO_NONE
+            packets.append(_packet(PKT_DATA, seq & 0xFF, info, payload))
+            seq += 1
         packets.append(_packet(PKT_STOP, 0, INFO_NONE, b""))
         return packets
 

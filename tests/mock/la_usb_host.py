@@ -27,7 +27,12 @@ PKT_STOP  = 0x03
 PKT_ERROR = 0x04
 
 # Info byte constants
+# NOTE: INFO semantics are packet-type-dependent.
+# In DATA packets: bit 0 (INFO_COMPRESSED) means payload is RLE-compressed.
+# In STOP packets: full byte = stop reason (INFO_STOP_HOST=0x01, etc.).
+# The value 0x01 is shared; discrimination is by pkt_type, not info value.
 INFO_NONE           = 0x00
+INFO_COMPRESSED     = 0x01  # DATA packets only: payload is [value:8][count-1:8] RLE pairs
 INFO_START_REJECTED = 0x80
 INFO_STOP_HOST      = 0x01
 INFO_STOP_USB_ERR   = 0x02
@@ -44,6 +49,18 @@ _STOP_REASON_MAP = {
     INFO_STOP_USB_ERR: "usb_short_write",
     INFO_STOP_DMA_OVR: "dma_overrun",
 }
+
+
+def _rle_decompress(data: bytes) -> bytes:
+    """Decompress [value:8][count_minus_1:8] RLE pairs to raw bytes."""
+    out = bytearray()
+    i = 0
+    while i + 1 < len(data):
+        val = data[i]
+        count = data[i + 1] + 1
+        out.extend(bytes([val]) * count)
+        i += 2
+    return bytes(out)
 
 
 @dataclass
@@ -238,8 +255,9 @@ class LaUsbHost:
     ) -> int:
         if pkt.seq != expected_seq:
             result.sequence_mismatches += 1
-        result.bytes_received += pkt.payload_len
-        result.payload.extend(pkt.payload)
+        payload = _rle_decompress(pkt.payload) if (pkt.info & INFO_COMPRESSED) else pkt.payload
+        result.bytes_received += len(payload)  # decompressed bytes for duration calculation
+        result.payload.extend(payload)
         result.packets_received += 1
         return (pkt.seq + 1) & 0xFF
 

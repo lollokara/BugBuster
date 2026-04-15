@@ -135,6 +135,21 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Cursor
     let (cursor_sample, set_cursor_sample) = signal(Option::<u64>::None);
 
+    // Auto-downgrade sample rate if it exceeds bandwidth limits in Stream mode
+    leptos::prelude::create_effect(move |_| {
+        if stream_mode.get() {
+            let ch_count: u8 = channels.get().parse().unwrap_or(4);
+            let max_rate = if ch_count <= 1 { 5000000 }
+                          else if ch_count == 2 { 2000000 }
+                          else { 1000000 };
+            
+            let current_rate: u32 = rate.get_untracked().parse().unwrap_or(1000000);
+            if current_rate > max_rate {
+                set_rate.set(max_rate.to_string());
+            }
+        }
+    });
+
     // Drag state
     let (dragging, set_dragging) = signal(false);
     let (drag_start_x, set_drag_start_x) = signal(0.0f64);
@@ -1448,30 +1463,40 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Sample Rate"</span>
                     <div style="display: flex; gap: 2px">
                         {move || {
-                            // Stream mode limits rates (USB FS ~800KB/s → ~1.6M samples/s for 4ch)
                             let is_stream = stream_mode.get();
-                            let pairs: &[(&str, &str)] = if is_stream {
-                                &[("100k","100000"), ("500k","500000"), ("1M","1000000"), ("2M","2000000")]
+                            let ch_count: u8 = channels.get().parse().unwrap_or(4);
+                            
+                            let max_rate = if is_stream {
+                                if ch_count <= 1 { 5000000 }
+                                else if ch_count == 2 { 2000000 }
+                                else { 1000000 }
                             } else {
-                                &[("100k","100000"), ("500k","500000"), ("1M","1000000"),
-                                  ("5M","5000000"), ("10M","10000000"), ("25M","25000000"),
-                                  ("50M","50000000"), ("100M","125000000")]
+                                125000000
                             };
-                            pairs.iter().map(|(label, val)| {
-                                let v = val.to_string();
-                                let l = label.to_string();
-                                view! {
-                                    <button
-                                        style=move || {
-                                            let active = rate.get() == v;
-                                            format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                                if active { "background: #3b82f6; color: #fff; border: 1px solid #3b82f6" }
-                                                else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                        }
-                                        on:click={ let v2 = val.to_string(); move |_| set_rate.set(v2.clone()) }
-                                    >{l.clone()}</button>
-                                }
-                            }).collect::<Vec<_>>()
+
+                            let all_pairs = &[
+                                ("100k","100000"), ("500k","500000"), ("1M","1000000"),
+                                ("2M","2000000"), ("5M","5000000"), ("10M","10000000"),
+                                ("25M","25000000"), ("50M","50000000"), ("100M","125000000")
+                            ];
+
+                            all_pairs.iter()
+                                .filter(|(_, val)| val.parse::<u32>().unwrap_or(0) <= max_rate)
+                                .map(|(label, val)| {
+                                    let v = val.to_string();
+                                    let l = label.to_string();
+                                    view! {
+                                        <button
+                                            style=move || {
+                                                let active = rate.get() == v;
+                                                format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                                    if active { "background: #3b82f6; color: #fff; border: 1px solid #3b82f6" }
+                                                    else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
+                                            }
+                                            on:click={ let v2 = val.to_string(); move |_| set_rate.set(v2.clone()) }
+                                        >{l.clone()}</button>
+                                    }
+                                }).collect::<Vec<_>>()
                         }}
                     </div>
                 </div>
@@ -1569,6 +1594,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
                             on:click=move |_| {
                                 set_stream_mode.set(true);
+                                set_rle_enabled.set(true);
+                                show_toast("RLE enabled by default on Stream mode", "ok");
                                 // Limit rate to stream-safe values
                                 let r = rate.get_untracked();
                                 let r_hz: u32 = r.parse().unwrap_or(1000000);
@@ -1577,11 +1604,17 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             title="Continuous live capture (limited sample rate)"
                         >"Stream"</button>
                         <button
-                            style=move || format!("font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                            style=move || format!("font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}{}",
                                 if rle_enabled.get() { "background: #06b6d430; color: #06b6d4; border: 1px solid #06b6d4" }
-                                else { "background: transparent; color: #06b6d480; border: 1px solid #06b6d430" })
-                            on:click=move |_| set_rle_enabled.update(|v| *v = !*v)
-                            title="Run-Length Encoding — compresses captures, more depth for slow signals"
+                                else { "background: transparent; color: #06b6d480; border: 1px solid #06b6d430" },
+                                if stream_mode.get() { "; opacity: 0.6; cursor: not-allowed" } else { "" })
+                            disabled=move || stream_mode.get()
+                            on:click=move |_| {
+                                if !stream_mode.get() {
+                                    set_rle_enabled.update(|v| *v = !*v);
+                                }
+                            }
+                            title=move || if stream_mode.get() { "RLE is forced in Stream mode" } else { "Run-Length Encoding — compresses captures, more depth for slow signals" }
                         >"RLE"</button>
                     </div>
                 </div>

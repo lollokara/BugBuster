@@ -1,4 +1,5 @@
 pub mod overview;
+pub mod board;
 pub mod adc;
 pub mod diag;
 pub mod vdac;

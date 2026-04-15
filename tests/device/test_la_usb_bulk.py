@@ -31,7 +31,10 @@ from tests.mock.la_usb_host import (
     PKT_ERROR,
     STREAM_CMD_START,
     STREAM_CMD_STOP,
+    INFO_NONE,
+    INFO_COMPRESSED,
     INFO_START_REJECTED,
+    _rle_decompress,
 )
 
 
@@ -39,15 +42,20 @@ from tests.mock.la_usb_host import (
 # Fixture
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def la_host(request: pytest.FixtureRequest):
-    """Connect LaUsbHost to the real RP2040 device."""
+    """Provide an unconnected LaUsbHost per test.
+
+    The ``configure_la_before_test`` preflight calls ``la_host.connect()``
+    AFTER ``dev.disconnect()`` to avoid the macOS IOKit conflict that arises
+    when pyserial (CDC) and pyusb (vendor bulk interface 3) are open
+    simultaneously on the same USB composite device.
+    """
     if not request.config.getoption("--hat", default=False):
         pytest.skip("--hat flag required for USB bulk hardware tests")
     host = LaUsbHost()
-    host.connect()
     yield host
-    host.close()
+    host.close()  # no-op if connect() was never called (e.g. skipped preflight)
 
 
 # ---------------------------------------------------------------------------
@@ -89,23 +97,18 @@ class TestLaUsbBulk:
         configured = False
         last_err = None
         recovery_status = {}
+
+        # Phase 1: BBP commands only (CDC serial held, vendor bulk NOT touched).
+        # On macOS, pyserial (CDC) and pyusb (vendor bulk interface 3) conflict
+        # when both are open simultaneously — EP_OUT becomes broken after the
+        # first re-claim cycle.  Do all BBP work first, then release CDC before
+        # interacting with the vendor bulk interface (same pattern as
+        # test_la_usb_1mhz.py which is known to work).
         try:
-            # Full USB endpoint reset — reinitializes all vendor bulk
-            # software state on the RP2040 (no DCD abort).
-            # Host-side drain clears any stale packets.
             try:
-                dev.hat_la_usb_reset()
+                recovery_status = dev.hat_la_get_status()
             except Exception:
-                pass
-
-            time.sleep(0.05)  # let USB task process the reset
-
-            # Do NOT call la_host.reset_stream_buffer() here — its timeout-
-            # based reads cancel IN transfers and stick the device endpoint.
-            # Instead, wait_for_start() silently skips stale packets.
-            la_host._stream_buffer.clear()  # clear local parse buffer only
-
-            recovery_status = dev.hat_la_get_status()
+                recovery_status = {}
 
             for attempt in range(5):
                 if attempt > 0:
@@ -117,11 +120,17 @@ class TestLaUsbBulk:
                 except Exception as e:
                     last_err = e
         finally:
-            dev.disconnect()
+            dev.disconnect()  # Release CDC before touching vendor bulk
 
         if not configured:
             pytest.skip(f"CMD_HAT_LA_CONFIG failed after 5 attempts: {last_err}")
-        time.sleep(0.1)
+
+        # Phase 2: connect the vendor bulk interface NOW that CDC is released.
+        # Fresh connect() claims the interface and drains any stale EP_IN packets
+        # from a previous test.  Since CDC is already disconnected, there is no
+        # macOS IOKit conflict between pyserial and pyusb.
+        la_host.connect()
+        time.sleep(0.05)
         return recovery_status
 
     @pytest.fixture(autouse=True)
@@ -407,4 +416,137 @@ class TestLaUsbBulk:
         assert recovered.bytes_received > 0, "Recovered session returned zero payload bytes"
         assert recovered.sequence_mismatches == 0, (
             f"Recovered session had sequence mismatches: {recovered.sequence_mismatches}"
+        )
+
+    # ---------------------------------------------------------------------------
+    # RLE transport compression — real firmware (bb_la_stream_rle_compress)
+    # Mirrors the protocol contract tested synthetically in test_la_usb_synthetic.py
+    # but exercises the actual RP2040 firmware output over USB.
+    # ---------------------------------------------------------------------------
+
+    def _collect_data_packets(
+        self,
+        la_host: LaUsbHost,
+        duration_s: float = 0.5,
+    ) -> list:
+        """Stream for duration_s seconds and return all raw DATA StreamPacket objects."""
+        la_host.send_command(STREAM_CMD_START)
+        la_host.wait_for_start(timeout_ms=2000, max_packets=512)
+
+        packets = []
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < duration_s:
+            try:
+                pkt = la_host.read_packet(timeout_ms=200)
+            except Exception:
+                break
+            if pkt.pkt_type == PKT_DATA:
+                packets.append(pkt)
+            elif pkt.pkt_type in (PKT_STOP, PKT_ERROR):
+                break
+
+        la_host.stop_stream(timeout_ms=2000)
+        return packets
+
+    def test_rle_info_byte_valid_values(self, la_host: LaUsbHost) -> None:
+        """
+        Every DATA packet info byte must be INFO_NONE (0x00) or INFO_COMPRESSED (0x01).
+        No other values are valid — firmware must not emit unknown info bytes.
+        Mirrors: test_rle_packets_have_compressed_flag (structural check).
+        """
+        packets = self._collect_data_packets(la_host, duration_s=0.5)
+        assert packets, "No DATA packets received"
+
+        invalid = [
+            (i, pkt.seq, hex(pkt.info))
+            for i, pkt in enumerate(packets)
+            if pkt.info not in (INFO_NONE, INFO_COMPRESSED)
+        ]
+        assert not invalid, (
+            f"DATA packets with invalid info byte (expected 0x00 or 0x01): {invalid[:5]}"
+        )
+
+    def test_rle_compressed_payload_is_even_length(self, la_host: LaUsbHost) -> None:
+        """
+        INFO_COMPRESSED DATA packets must have even-length payloads.
+        Wire RLE format is [value:8][count-1:8] pairs — odd length is malformed.
+        Mirrors: test_rle_packets_payload_is_even_length.
+        """
+        packets = self._collect_data_packets(la_host, duration_s=0.5)
+        compressed = [p for p in packets if p.info & INFO_COMPRESSED]
+
+        if not compressed:
+            pytest.skip(
+                "No INFO_COMPRESSED packets — input data not compressible "
+                "(ground LA input pins for a deterministic all-zeros signal)"
+            )
+
+        malformed = [
+            (pkt.seq, len(pkt.payload))
+            for pkt in compressed
+            if len(pkt.payload) % 2 != 0
+        ]
+        assert not malformed, (
+            f"INFO_COMPRESSED packets with odd payload length (broken RLE pairs): "
+            f"{malformed[:5]}"
+        )
+
+    def test_rle_compressed_packets_decompress_correctly(self, la_host: LaUsbHost) -> None:
+        """
+        Every INFO_COMPRESSED DATA packet must decompress to a non-empty byte string
+        without error.
+        Mirrors: test_rle_decompress_basic applied to real firmware output.
+        """
+        packets = self._collect_data_packets(la_host, duration_s=0.5)
+        compressed = [p for p in packets if p.info & INFO_COMPRESSED]
+
+        if not compressed:
+            pytest.skip(
+                "No INFO_COMPRESSED packets — input data not compressible "
+                "(ground LA input pins for a deterministic all-zeros signal)"
+            )
+
+        for i, pkt in enumerate(compressed):
+            decompressed = _rle_decompress(pkt.payload)
+            assert len(decompressed) > 0, (
+                f"Compressed packet {i} (seq={pkt.seq}, "
+                f"payload_len={len(pkt.payload)}) decompressed to empty"
+            )
+
+    def test_rle_stream_decoded_bytes_match_timing(
+        self, la_host: LaUsbHost
+    ) -> None:
+        """
+        stream_capture() decompresses RLE packets transparently — bytes_received
+        must reflect decompressed sample bytes so that duration math is correct.
+        A DMA overrun here means the input data is incompressible and 1 MHz / 4ch
+        exceeds USB bandwidth without compression.
+        Mirrors: test_rle_stream_roundtrip (decoded byte count vs rate × duration).
+        """
+        channels = 4
+        rate_hz = 1_000_000
+        duration_s = 0.5
+        samples_per_byte = 8 // channels  # 2 samples per byte for 4ch packed format
+
+        result = la_host.stream_capture(duration_s=duration_s)
+
+        if result.stop_reason == "dma_overrun":
+            pytest.skip(
+                "DMA overrun — input data not compressible enough for 1 MHz / 4ch; "
+                "ground LA input pins to make data compressible"
+            )
+
+        assert result.packets_received > 0, "No DATA packets received"
+        assert result.bytes_received > 0, (
+            "Zero decoded bytes — RLE decompression may not be applied"
+        )
+        assert result.sequence_mismatches == 0, (
+            f"Sequence gaps in RLE stream: {result.sequence_mismatches} mismatches"
+        )
+
+        decoded_s = (result.bytes_received * samples_per_byte) / float(rate_hz)
+        assert abs(decoded_s - duration_s) / duration_s <= 0.15, (
+            f"Decoded duration {decoded_s:.3f}s drifted >15% from target {duration_s}s — "
+            f"bytes_received={result.bytes_received}, packets={result.packets_received}, "
+            f"stop={result.stop_reason}"
         )

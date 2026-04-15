@@ -4,10 +4,11 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, adc::*, diag::*, vdac::*, idac::*, iin::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*, hat::*, la::*};
+use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*, hat::*, la::*};
 
 const TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
+    ("board", "Board"),
     ("adc", "ADC"),
     ("diag", "Diagnostics"),
     ("vdac", "VDAC"),
@@ -333,6 +334,7 @@ pub fn App() -> impl IntoView {
                 <div class="tab-container">
                     {move || match active_tab.get().as_str() {
                         "overview" => view! { <OverviewTab state=device_state /> }.into_any(),
+                        "board" => view! { <BoardTab state=device_state /> }.into_any(),
                         "adc" => view! { <AdcTab state=device_state /> }.into_any(),
                         "diag" => view! { <DiagTab state=device_state /> }.into_any(),
                         "vdac" => view! { <VdacTab state=device_state /> }.into_any(),

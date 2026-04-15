@@ -32,6 +32,11 @@
 #define LA_USB_STREAM_PKT_ERROR 0x04
 
 #define LA_USB_STREAM_INFO_NONE           0x00
+// INFO byte semantics are packet-type-dependent.
+// In DATA packets: bit 0 = payload is RLE-compressed [value:8][count-1:8] pairs.
+// In STOP packets: full byte = stop reason (e.g. 0x01 = host_stop, 0x03 = dma_overrun).
+// The 0x01 value is shared; discrimination is by packet type, not info value.
+#define LA_USB_STREAM_INFO_COMPRESSED     0x01
 #define LA_USB_STREAM_INFO_START_REJECTED 0x80
 
 // Recovery state for the LA vendor endpoint re-arm path.

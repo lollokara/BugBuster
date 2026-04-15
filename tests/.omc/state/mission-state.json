@@ -1,0 +1,79 @@
+{
+  "updatedAt": "2026-04-15T21:24:52.293Z",
+  "missions": [
+    {
+      "id": "session:d98eac65-1a28-47d1-b98c-37a2fe0373fe:none",
+      "source": "session",
+      "name": "none",
+      "objective": "Session mission",
+      "createdAt": "2026-04-15T21:05:16.259Z",
+      "updatedAt": "2026-04-15T21:24:52.293Z",
+      "status": "done",
+      "workerCount": 2,
+      "taskCounts": {
+        "total": 2,
+        "pending": 0,
+        "blocked": 0,
+        "inProgress": 0,
+        "completed": 2,
+        "failed": 0
+      },
+      "agents": [
+        {
+          "name": "tracer:aff6c1d",
+          "role": "tracer",
+          "ownership": "aff6c1d225da45587",
+          "status": "done",
+          "currentStep": null,
+          "latestUpdate": "completed",
+          "completedSummary": null,
+          "updatedAt": "2026-04-15T21:11:50.000Z"
+        },
+        {
+          "name": "writer:a434ad5",
+          "role": "writer",
+          "ownership": "a434ad5d64590fabe",
+          "status": "done",
+          "currentStep": null,
+          "latestUpdate": "completed",
+          "completedSummary": null,
+          "updatedAt": "2026-04-15T21:24:52.293Z"
+        }
+      ],
+      "timeline": [
+        {
+          "id": "session-stop:aff6c1d225da45587:2026-04-15T21:09:49.073Z",
+          "at": "2026-04-15T21:09:49.073Z",
+          "kind": "completion",
+          "agent": "tracer:aff6c1d",
+          "detail": "completed",
+          "sourceKey": "session-stop:aff6c1d225da45587"
+        },
+        {
+          "id": "session-stop:ad203b9ab3a58deb4:2026-04-15T21:11:50.000Z",
+          "at": "2026-04-15T21:11:50.000Z",
+          "kind": "completion",
+          "agent": "tracer:aff6c1d",
+          "detail": "completed",
+          "sourceKey": "session-stop:ad203b9ab3a58deb4"
+        },
+        {
+          "id": "session-start:a434ad5d64590fabe:2026-04-15T21:23:53.019Z",
+          "at": "2026-04-15T21:23:53.019Z",
+          "kind": "update",
+          "agent": "writer:a434ad5",
+          "detail": "started writer:a434ad5",
+          "sourceKey": "session-start:a434ad5d64590fabe"
+        },
+        {
+          "id": "session-stop:a434ad5d64590fabe:2026-04-15T21:24:52.293Z",
+          "at": "2026-04-15T21:24:52.293Z",
+          "kind": "completion",
+          "agent": "writer:a434ad5",
+          "detail": "completed",
+          "sourceKey": "session-stop:a434ad5d64590fabe"
+        }
+      ]
+    }
+  ]
+}

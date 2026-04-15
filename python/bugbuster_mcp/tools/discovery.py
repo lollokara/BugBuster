@@ -186,3 +186,46 @@ def register(mcp) -> None:
             out["summary"] = f"Self-test issues found: {'; '.join(out['warnings'])}"
 
         return out
+
+    @mcp.tool()
+    def list_boards() -> list[str]:
+        """
+        List available board profiles in the bugbuster_mcp/board_profiles directory.
+        Returns a list of board names (without .json extension).
+        """
+        import os
+        profile_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "board_profiles")
+        if not os.path.exists(profile_dir):
+            return []
+        return [
+            f[:-5] for f in os.listdir(profile_dir)
+            if f.endswith(".json")
+        ]
+
+    @mcp.tool()
+    def set_board(name: str) -> str:
+        """
+        Set the active board profile for the current session.
+
+        This provides the AI with structured knowledge about the DUT (pin mapping,
+        voltage domains, safety limits).  Always call this if you know what
+        device is connected to BugBuster.
+
+        Args:
+            name: The name of the board profile (from list_boards).
+        """
+        import os
+        profile_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "board_profiles")
+        profile_path = os.path.join(profile_dir, f"{name}.json")
+        
+        if not os.path.exists(profile_path):
+            return f"Error: Board profile '{name}' not found in {profile_dir}."
+            
+        session.set_active_board(name)
+        profile = session.get_active_board_profile()
+        
+        if profile:
+            desc = profile.get("description", "No description")
+            return f"Board profile set to '{name}' ({desc}).  Use bugbuster://board resource for details."
+        else:
+            return f"Error: Failed to load board profile '{name}'."

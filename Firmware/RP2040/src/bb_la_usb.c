@@ -92,13 +92,47 @@ static volatile uint32_t s_bulk_ctrl_tail = 0;
 
 static uint8_t s_live_seq = 0;
 
+// RLE scratch buffer for transport compression.
+// Written only in send_pending() when s_bulk_data.active == false.
+// send_pending() is non-reentrant (Core 0 / USB task only).
+#define STREAM_RLE_SCRATCH_SIZE 9728u
+static uint8_t s_rle_scratch[STREAM_RLE_SCRATCH_SIZE];
+
+// Observability counters for RLE compression efficiency.
+static uint32_t s_segments_compressed = 0;
+static uint32_t s_segments_raw_fallback = 0;
+
+// Segment-level RLE encoder: [value:8][count_minus_1:8] pairs.
+// Returns compressed length on success (always < src_len), or 0 on fallback
+// (compressed output would be >= src_len — caller sends raw instead).
+static uint32_t bb_la_stream_rle_compress(
+    const uint8_t *src, uint32_t src_len,
+    uint8_t *dst, uint32_t dst_max)
+{
+    uint32_t i = 0, out = 0;
+    while (i < src_len) {
+        uint8_t val = src[i];
+        uint32_t run = 1;
+        while (i + run < src_len && src[i + run] == val && run < 256)
+            run++;
+        if (out + 2 > dst_max)
+            return 0;  // early abort — fallback to raw
+        dst[out++] = val;
+        dst[out++] = (uint8_t)(run - 1);
+        i += run;
+    }
+    return out;
+}
+
 // State for active large buffer transfer (live stream half or one-shot readout)
 static struct {
-    const uint8_t *buf;
+    const uint8_t *buf;       // current send pointer (scratch or raw ring buffer)
+    const uint8_t *ring_buf;  // original ring slot; NULL when already released
     uint32_t total_len;
     uint32_t sent_len;
     bool is_live;
     bool active;
+    bool compressed;          // true when buf points to s_rle_scratch
     bool header_sent;
 } s_bulk_data;
 
@@ -155,6 +189,8 @@ static volatile bool s_pending_hw_cleanup = false;
 void bb_la_usb_init(void) {
     s_cdc_seq = 0;
     s_live_seq = 0;
+    s_segments_compressed = 0;
+    s_segments_raw_fallback = 0;
     memset(&s_bulk_data, 0, sizeof(s_bulk_data));
     s_bulk_ctrl_head = 0;
     s_bulk_ctrl_tail = 0;
@@ -184,10 +220,14 @@ void bb_la_usb_soft_reset(void) {
     uint32_t status = save_and_disable_interrupts();
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
+    s_bulk_data.ring_buf = NULL;
+    s_bulk_data.compressed = false;
     s_bulk_data.header_sent = false;
     // Do NOT clear s_bulk_ctrl_{head,tail} — pending PKT_STOP markers
     // must drain naturally so the host's stop_stream() receives them.
     s_pending_hw_cleanup = false;
+    s_deferred_stop = false;      // cancel any stale deferred stop
+    s_post_stream_rx_rearm = false;
     // Bump both counters together — no DCD abort needed, so
     // request and complete stay in sync.
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
@@ -201,14 +241,18 @@ void bb_la_usb_soft_reset(void) {
 }
 
 void bb_la_usb_abort_bulk(void) {
-    s_streaming_session = false;
     taskENTER_CRITICAL();
+    s_streaming_session = false;
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
+    s_bulk_data.ring_buf = NULL;
+    s_bulk_data.compressed = false;
     s_bulk_data.header_sent = false;
     s_bulk_ctrl_tail = 0;
     s_bulk_ctrl_head = 0;
     s_pending_hw_cleanup = false;
+    s_deferred_stop = false;      // cancel any stale deferred stop
+    s_post_stream_rx_rearm = false;
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
     taskEXIT_CRITICAL();
     // Signal the USB task to re-arm the endpoint (tud_vendor_n_write_clear must
@@ -354,8 +398,28 @@ void bb_la_usb_send_pending(void) {
                 uint32_t stream_len;
                 // bb_la_stream_get_buffer now pulls from the 4-buffer ring
                 if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
-                    s_bulk_data.buf = stream_buf;
-                    s_bulk_data.total_len = stream_len;
+                    // Attempt segment-level RLE compression.
+                    // INVARIANT: s_rle_scratch is written only here, when
+                    // s_bulk_data.active == false.  send_pending() is non-reentrant
+                    // (Core 0 / USB task only — see bb_main_integrated.c).
+                    uint32_t comp_len = bb_la_stream_rle_compress(
+                        stream_buf, stream_len, s_rle_scratch, stream_len);
+                    s_bulk_data.ring_buf = stream_buf;  // save for raw-fallback release
+                    if (comp_len > 0) {
+                        // Compressed: release ring slot immediately, send scratch.
+                        bb_la_stream_buffer_sent(stream_buf);
+                        s_bulk_data.ring_buf = NULL;  // already released
+                        s_bulk_data.buf = s_rle_scratch;
+                        s_bulk_data.total_len = comp_len;
+                        s_bulk_data.compressed = true;
+                        s_segments_compressed++;
+                    } else {
+                        // Raw fallback: ring slot released after full USB drain.
+                        s_bulk_data.buf = stream_buf;
+                        s_bulk_data.total_len = stream_len;
+                        s_bulk_data.compressed = false;
+                        s_segments_raw_fallback++;
+                    }
                     s_bulk_data.sent_len = 0;
                     s_bulk_data.is_live = true;
                     s_bulk_data.active = true;
@@ -379,7 +443,7 @@ void bb_la_usb_send_pending(void) {
                         packet[0] = LA_USB_STREAM_PKT_DATA;
                         packet[1] = s_live_seq++;
                         packet[2] = (uint8_t)chunk;
-                        packet[3] = LA_USB_STREAM_INFO_NONE;
+                        packet[3] = s_bulk_data.compressed ? LA_USB_STREAM_INFO_COMPRESSED : LA_USB_STREAM_INFO_NONE;
                         memcpy(&packet[4], s_bulk_data.buf + s_bulk_data.sent_len, chunk);
 
                         tud_vendor_n_write(BB_LA_VENDOR_ITF, packet, (uint32_t)(4 + chunk));
@@ -412,8 +476,10 @@ void bb_la_usb_send_pending(void) {
                 }
 
                 if (s_bulk_data.sent_len >= s_bulk_data.total_len) {
-                    if (s_bulk_data.is_live) {
-                        bb_la_stream_buffer_sent(s_bulk_data.buf); // releases buffer back to ring
+                    if (s_bulk_data.is_live && s_bulk_data.ring_buf != NULL) {
+                        // Raw fallback: ring slot not yet released, do it now.
+                        bb_la_stream_buffer_sent(s_bulk_data.ring_buf);
+                        s_bulk_data.ring_buf = NULL;
                     }
                     s_bulk_data.active = false;
                     // Loop continues to check if NEXT ring buffer is ready
@@ -451,11 +517,22 @@ void bb_la_usb_send_pending(void) {
             // prevent USB task from starving bb_cmd_task (which causes
             // UART timeouts → 0x11 cascade).
             s_deferred_stop = false;
-            s_streaming_session = false;
+            // bb_la_stop() MUST run before clearing s_streaming_session.
+            // Core 1 uses !s_streaming_session as the gate to call
+            // bb_la_poll() and process BBP commands.  If s_streaming_session
+            // is cleared while la_state is still STREAMING, Core 1 calls
+            // bb_la_configure() which rejects it (state != IDLE/ERROR) and
+            // sends HAT_RSP_ERROR over BB_UART → ESP32 loses UART sync → 0x11.
             if (s_pending_hw_cleanup) {
                 s_pending_hw_cleanup = false;
-                bb_la_stop();
+                bb_la_stop();   // state → IDLE before Core 1 can observe flag
             }
+            s_streaming_session = false;   // clear AFTER state is IDLE
+            // Re-arm both endpoints so the next session can start cleanly.
+            // Without this, s_post_stream_rx_rearm is never set and the OUT
+            // endpoint stays unprimed → all subsequent EP_OUT writes time out.
+            s_post_stream_rx_rearm = true;
+            s_need_endpoint_rearm = true;
         }
     }
 

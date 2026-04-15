@@ -127,6 +127,7 @@ pub fn run() {
             commands::import_config,
             commands::pick_config_save_file,
             commands::pick_config_open_file,
+            commands::save_board_profile,
             // Logic Analyzer
             la_commands::la_check_usb,
             la_commands::la_connect_usb,

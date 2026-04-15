@@ -754,6 +754,7 @@ static void dispatch_command(const HatFrame *frame)
         // regardless of whether streaming was active.
         bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
         bb_la_stop();
+        s_prev_la_state = LA_STATE_IDLE;  // reset edge detector — prevent stale notify-done
         send_ok(NULL, 0);
         break;
     }
@@ -792,6 +793,7 @@ static void dispatch_command(const HatFrame *frame)
         // the command response and returns non-OK → BBP_ERR_TIMEOUT).
         bb_la_stop();
         bb_la_usb_abort_bulk();
+        s_prev_la_state = LA_STATE_IDLE;  // reset edge detector — prevent stale notify-done
         send_ok(NULL, 0);
         break;
     }

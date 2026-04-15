@@ -557,6 +557,7 @@ def _find_rp2040_cdc_port():
 
 @pytest.mark.usb_only
 @pytest.mark.timeout(30)
+@pytest.mark.skip(reason="CDC streaming data path removed — stream data now goes to vendor-bulk only; use test_la_usb_bulk.py for streaming tests")
 def test_la_cdc_stream_five_seconds_legacy(usb_device):
     """
     DIAGNOSTIC/LEGACY: Regression test for the DMA overrun bug on CDC.
@@ -677,6 +678,7 @@ def test_la_cdc_stream_five_seconds_legacy(usb_device):
 
 @pytest.mark.usb_only
 @pytest.mark.timeout(90)
+@pytest.mark.skip(reason="CDC streaming data path removed — stream data now goes to vendor-bulk only; use test_la_usb_bulk.py for streaming tests")
 def test_la_cdc_stream_duration_truth_legacy(usb_device):
     """
     DIAGNOSTIC/LEGACY: Proof test for gapless live streaming over CDC.

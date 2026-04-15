@@ -23,38 +23,30 @@ def test_stream_1mhz_4ch_10s(request: pytest.FixtureRequest):
 
     print(f"\n--- Starting 1 MHz / 4-ch / 10s Proof ---")
 
+    # Phase 1: configure via BBP, then disconnect before claiming vendor bulk.
+    # On macOS, pyserial (CDC0) and pyusb (vendor interface 3) conflict when
+    # both hold the device simultaneously — EP_OUT becomes broken after the
+    # first la_host.close() + re-claim cycle.  Disconnecting BBP first avoids
+    # macOS USB arbitration issues.
     dev = bb.connect_usb(port)
+    print("Preflight: Resetting USB endpoints...")
+    dev.hat_la_usb_reset()
+    time.sleep(0.1)
+
+    print(f"Configuring LA: {rate_hz/1e6:.1f} MHz, {channels} ch...")
+    dev.hat_la_configure(channels=channels, rate_hz=rate_hz, depth=depth)
+    dev.disconnect()  # release CDC0 before claiming vendor interface 3
+
+    # Phase 2: stream directly via vendor bulk (no BBP involved).
+    la_host = LaUsbHost()
+    la_host.connect()
     try:
-        # Enable RP2040 log relay so firmware debug output appears in test output
-        def _rp2040_log(msg: str) -> None:
-            print(f"[RP2040] {msg}", end="", flush=True)
-
-        dev.hat_la_log_enable(True)
-        dev.on_la_log(_rp2040_log)
-
-        print("Preflight: Resetting USB endpoints...")
-        dev.hat_la_usb_reset()
-        time.sleep(0.1)
-
-        print(f"Configuring LA: {rate_hz/1e6:.1f} MHz, {channels} ch...")
-        dev.hat_la_configure(channels=channels, rate_hz=rate_hz, depth=depth)
-
-        # BBP connection stays open during streaming — CDC0 (ESP32) and vendor
-        # bulk (RP2040 interface 3) are independent USB interfaces; no conflict.
-        la_host = LaUsbHost()
-        la_host.connect()
-        try:
-            print(f"Starting stream for {target_s}s...")
-            t_start = time.monotonic()
-            result = la_host.stream_capture(duration_s=target_s)
-            wall_clock = time.monotonic() - t_start
-        finally:
-            la_host.close()
-
+        print(f"Starting stream for {target_s}s...")
+        t_start = time.monotonic()
+        result = la_host.stream_capture(duration_s=target_s)
+        wall_clock = time.monotonic() - t_start
     finally:
-        dev.hat_la_log_enable(False)
-        dev.on_la_log(None)
-        dev.disconnect()
+        la_host.close()
 
     # Calculate decoded duration: 4 channels → 1 nibble/sample → 2 samples/byte
     samples_per_byte = 8 // channels

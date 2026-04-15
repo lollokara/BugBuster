@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"python3 -m pytest device/test_la_usb_bulk.py --hat --device-usb /dev/cu.usbmodem1234561 -v --tb=short -rs 2>&1\",\"timeout\":300000,\"description\":\"Run LA USB bulk tests after full restart\"}",
+  "error": "Exit code 1\n\u001b[1m============================= test session starts ==============================\u001b[0m\nplatform darwin -- Python 3.14.4, pytest-9.0.3, pluggy-1.6.0 -- /opt/homebrew/opt/python@3.14/bin/python3.14\ncachedir: .pytest_cache\nrootdir: /Users/lorenzo/Documents/Sviluppo/BugBuster/tests\nconfigfile: pytest.ini\n\u001b[1mcollecting ... \u001b[0mcollected 14 items\n\ndevice/test_la_usb_bulk.py::TestLaUsbBulk::test_bulk_interface_mounts \u001b[32mPASSED\u001b[0m\u001b[32m [  7%]\u001b[0m\ndevice/test_la_usb_bulk.py::TestLaUsbBu...",
+  "timestamp": "2026-04-15T21:15:47.945Z",
+  "retry_count": 1
+}

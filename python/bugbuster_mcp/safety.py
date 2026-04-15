@@ -6,6 +6,8 @@ Raises ValueError with human-readable messages that the AI can act on.
 """
 
 from __future__ import annotations
+from typing import Optional
+from . import session
 from .config import (
     MAX_VADJ_VOLTAGE, MIN_VADJ_VOLTAGE,
     MAX_VLOGIC, MIN_VLOGIC,
@@ -69,7 +71,19 @@ def require_hal_initialized(hal) -> None:
 # Voltage / current limits
 # ---------------------------------------------------------------------------
 
-def validate_vadj_voltage(voltage: float, confirm: bool = False) -> None:
+def validate_vadj_voltage(voltage: float, index: int = 1, confirm: bool = False) -> None:
+    # Check board profile limits
+    profile = session.get_active_board_profile()
+    if profile:
+        vadj_key = f"vadj{index}"
+        if vadj_key in profile:
+            config = profile[vadj_key]
+            if config.get("locked") and abs(voltage - config.get("value", 0)) > 0.05:
+                raise ValueError(
+                    f"VADJ{index} is locked to {config['value']:.1f} V for the active board profile ('{profile['name']}'). "
+                    "You cannot change it. To unlock, the board profile must be modified."
+                )
+
     if voltage < MIN_VADJ_VOLTAGE:
         raise ValueError(
             f"Requested voltage {voltage:.2f} V is below the minimum {MIN_VADJ_VOLTAGE} V. "
@@ -87,6 +101,16 @@ def validate_vadj_voltage(voltage: float, confirm: bool = False) -> None:
 
 
 def validate_vlogic(voltage: float) -> None:
+    # Check board profile limits
+    profile = session.get_active_board_profile()
+    if profile and "vlogic" in profile:
+        config = profile["vlogic"]
+        if config.get("locked") and abs(voltage - config.get("value", 0)) > 0.05:
+            raise ValueError(
+                f"VLOGIC is locked to {config['value']:.1f} V for the active board profile ('{profile['name']}'). "
+                "You cannot change it. VLOGIC is usually set once at startup via --vlogic."
+            )
+
     if not (MIN_VLOGIC <= voltage <= MAX_VLOGIC):
         raise ValueError(
             f"VLOGIC {voltage:.2f} V is outside the valid range "

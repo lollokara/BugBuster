@@ -128,14 +128,13 @@ void usb_thread(void *ptr)
                 // 4 calls per iteration → ~52 µs average latency → ~680 KB/s,
                 // comfortably above the 500 KB/s needed for 1 MHz / 4 ch.
                 tud_task();
-                tud_task();
-                tud_task();
-                tud_task();
                 bb_la_poll();  // Handle DMA completion on the SAME core as USB
                 bb_la_usb_send_pending();
-                if ((++fast_count & 0x0F) == 0) {  // every 16 iters
+                if ((++fast_count & 0x3F) == 0) {  // every 64 iters
                     bb_la_usb_poll_commands();
-                    taskYIELD();
+                    // If STOP just arrived, emit PKT_STOP in this same iteration
+                    // rather than waiting for the next outer-loop cycle.
+                    bb_la_usb_send_pending();
                 }
             }
         }

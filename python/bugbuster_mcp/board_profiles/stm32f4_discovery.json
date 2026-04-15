@@ -1,0 +1,74 @@
+{
+  "name": "stm32f4_discovery",
+  "description": "STM32F407 Discovery Board",
+  "vlogic": {
+    "value": 3.3,
+    "locked": true
+  },
+  "vadj1": {
+    "value": 3.3,
+    "locked": false
+  },
+  "vadj2": {
+    "value": 5.0,
+    "locked": true
+  },
+  "pins": {
+    "1": {
+      "name": "PA0 (User Button)",
+      "type": "GPIO",
+      "direction": "IN"
+    },
+    "2": {
+      "name": "PA1",
+      "type": "GPIO"
+    },
+    "3": {
+      "name": "USART2_TX",
+      "type": "UART_TX"
+    },
+    "4": {
+      "name": "USART2_RX",
+      "type": "UART_RX"
+    },
+    "5": {
+      "name": "GND",
+      "type": "GROUND"
+    },
+    "6": {
+      "name": "VDD",
+      "type": "POWER",
+      "voltage": 3.3
+    },
+    "7": {
+      "name": "NRST",
+      "type": "RESET"
+    },
+    "8": {
+      "name": "SWDIO",
+      "type": "SWD"
+    },
+    "9": {
+      "name": "SWCLK",
+      "type": "SWD"
+    },
+    "10": {
+      "name": "PC1",
+      "type": "GPIO"
+    },
+    "11": {
+      "name": "PC2",
+      "type": "GPIO"
+    },
+    "12": {
+      "name": "PC3",
+      "type": "GPIO"
+    }
+  },
+  "swd": {
+    "target": "stm32f4x"
+  },
+  "uart": {
+    "baudrate": 115200
+  }
+}

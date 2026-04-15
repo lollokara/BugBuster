@@ -124,7 +124,7 @@ def register(mcp) -> None:
                 "(set via --vlogic at server startup)."
             )
         elif rail in (1, 2):
-            validate_vadj_voltage(voltage, confirm=confirm)
+            validate_vadj_voltage(voltage, index=rail, confirm=confirm)
             hal = session.get_hal()
             hal.set_voltage(rail=rail, voltage=voltage)
             warnings = []

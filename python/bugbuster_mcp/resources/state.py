@@ -12,6 +12,17 @@ from ..config import ANALOG_IOS, ALL_IOS, IO_TO_RAIL, IO_TO_IOBLOCK
 
 def register(mcp) -> None:
 
+    @mcp.resource("bugbuster://board")
+    def board_resource() -> str:
+        """Detailed structured knowledge about the DUT (pin mapping, safety, etc.)."""
+        profile = session.get_active_board_profile()
+        if profile is None:
+            return json.dumps({
+                "status": "No active board profile.",
+                "action": "Use list_boards and set_board tools to load a profile."
+            }, indent=2)
+        return json.dumps(profile, indent=2)
+
     @mcp.resource("bugbuster://status")
     def status_resource() -> str:
         """Full device state snapshot including all channels, power, and faults."""

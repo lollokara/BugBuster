@@ -25,6 +25,7 @@ _bb   = None   # bugbuster.BugBuster instance
 _hal  = None   # bugbuster.BugBusterHAL instance
 _init = False  # True after hal.begin() has been called
 
+_active_board: Optional[str] = None  # Path or name of the active board profile
 
 def configure(
     transport: str,
@@ -97,7 +98,40 @@ def reset_session() -> None:
     _bb   = None
     _hal  = None
     _init = False
+    _active_board = None
     log.info("Session reset.")
+
+
+def set_active_board(name: str) -> None:
+    """Set the name of the active board profile."""
+    global _active_board
+    _active_board = name
+
+
+def get_active_board_profile() -> Optional[dict]:
+    """
+    Return the parsed active board profile, or None if none set.
+    """
+    if _active_board is None:
+        return None
+    
+    import os
+    import json
+    
+    # Locate profile file (expecting .json in board_profiles/)
+    profile_dir = os.path.join(os.path.dirname(__file__), "board_profiles")
+    profile_path = os.path.join(profile_dir, f"{_active_board}.json")
+    
+    if not os.path.exists(profile_path):
+        log.warning("Board profile not found: %s", profile_path)
+        return None
+        
+    try:
+        with open(profile_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        log.error("Failed to load board profile %s: %s", profile_path, e)
+        return None
 
 
 def is_usb() -> bool:

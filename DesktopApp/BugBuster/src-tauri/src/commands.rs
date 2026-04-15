@@ -1423,6 +1423,51 @@ pub async fn import_config(
 }
 
 #[tauri::command]
+pub async fn save_board_profile(
+    profile_json: String,
+) -> CmdResult<()> {
+    // We want to save this to the python/bugbuster_mcp/board_profiles/ directory.
+    // Since we are running in dev mode from the project root (usually),
+    // we can use a relative path.
+    
+    let profile: serde_json::Value = serde_json::from_str(&profile_json)
+        .map_err(|e| format!("Invalid profile JSON: {}", e))?;
+        
+    let name = profile["name"].as_str()
+        .ok_or("Profile must have a 'name' field")?;
+        
+    if name.is_empty() {
+        return Err("Profile name cannot be empty".into());
+    }
+
+    // Sanitize name to prevent directory traversal
+    let safe_name: String = name.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+
+    // Construct path. We assume we are in DesktopApp/BugBuster/ during execution.
+    // The target is ../../python/bugbuster_mcp/board_profiles/
+    let mut path = std::env::current_dir().map_err(|e| e.to_string())?;
+    path.push("..");
+    path.push("..");
+    path.push("python");
+    path.push("bugbuster_mcp");
+    path.push("board_profiles");
+    
+    if !path.exists() {
+        std::fs::create_dir_all(&path).map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    
+    path.push(format!("{}.json", safe_name));
+    
+    std::fs::write(&path, &profile_json)
+        .map_err(|e| format!("Failed to write profile: {}", e))?;
+        
+    log::info!("Board profile saved to {:?}", path);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn pick_config_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
 
