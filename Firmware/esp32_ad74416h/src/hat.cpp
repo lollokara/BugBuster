@@ -233,6 +233,15 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
             continue;
         }
 
+        // Forward log frames transparently — don't treat them as the command response
+        if (rsp == HAT_RSP_LA_LOG) {
+            ESP_LOGD(TAG, "LA log during cmd 0x%02X (len=%d)", cmd, local_len);
+            if (bbpIsActive() && local_len > 0) {
+                bbpSendEvent(BBP_EVT_LA_LOG, local_payload, local_len);
+            }
+            continue;
+        }
+
         // It's the response we wanted, or an error response
         if (rsp == HAT_RSP_ERROR && local_len >= 1) {
             s_last_error = local_payload[0];

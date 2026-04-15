@@ -121,6 +121,15 @@ void usb_thread(void *ptr)
         if (bb_la_usb_is_streaming()) {
             uint32_t fast_count = 0;
             while (bb_la_usb_is_streaming()) {
+                // Call tud_task() multiple times per iteration to keep the
+                // RP2040 DPRAM hot.  Each USB FS bulk packet takes ~42 µs;
+                // if tud_task() is only called once every ~186 µs the DPRAM
+                // is AVAIL=1 for only 23% of the time → ~344 KB/s.
+                // 4 calls per iteration → ~52 µs average latency → ~680 KB/s,
+                // comfortably above the 500 KB/s needed for 1 MHz / 4 ch.
+                tud_task();
+                tud_task();
+                tud_task();
                 tud_task();
                 bb_la_poll();  // Handle DMA completion on the SAME core as USB
                 bb_la_usb_send_pending();

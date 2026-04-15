@@ -787,12 +787,11 @@ static void dispatch_command(const HatFrame *frame)
 
     case HAT_CMD_LA_USB_RESET: {
         // Reinitialize the vendor bulk endpoint to a clean state.
-        // Triggers a full re-arm via bb_la_usb_abort_bulk, which now
-        // performs a direct SIE reset in the USB task context.
-        bb_la_log("USB_RESET: mounted=%d", tud_vendor_n_mounted(BB_LA_VENDOR_ITF));
+        // No bb_la_log() here — log frames sent before send_ok() confuse
+        // hat_command_internal on the ESP32 side (it sees the log frame as
+        // the command response and returns non-OK → BBP_ERR_TIMEOUT).
         bb_la_stop();
         bb_la_usb_abort_bulk();
-        bb_la_log("USB_RESET: done");
         send_ok(NULL, 0);
         break;
     }

@@ -312,10 +312,12 @@ void bb_la_usb_send_pending(void) {
     if (s_need_endpoint_rearm) {
         s_need_endpoint_rearm = false;
         
-        // Step 1: clear hardware AVAIL bit so the SIE releases the stuck buffer.
-        // 0x87: BB_LA_IN_EP, 0x06: BB_LA_OUT_EP
+        // Step 1: clear hardware AVAIL bit on the IN endpoint only.
+        // Only the IN (TX) endpoint can get stuck with AVAIL=1 after a DMA
+        // abort; the OUT (RX) endpoint is not driven by DMA and must NOT be
+        // reset here — clearing its AVAIL without re-priming leaves the host
+        // unable to write (all writes time out).
         rp2040_sie_endpoint_reset(0x87);
-        rp2040_sie_endpoint_reset(0x06);
 
         // Step 2: clear TinyUSB internal busy flag, TX FIFO, and re-prime.
         // tud_vendor_n_fifo_clear() calls usbd_edpt_clear_busy() (clears ep->active)
