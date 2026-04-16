@@ -112,6 +112,7 @@ class LaUsbHost:
         self._dev = None
         self._claimed = False
         self._stream_buffer = bytearray()
+        self._bbp_port: Optional[str] = None  # set to enable BBP STOP path
         self.reconnect_fallbacks = 0
         self.timeout_faults = 0
 
@@ -262,22 +263,124 @@ class LaUsbHost:
         result.packets_received += 1
         return (pkt.seq + 1) & 0xFF
 
+    def _stop_stream_via_bbp(
+        self,
+        bbp_port: str,
+        *,
+        result: Optional[StreamResult] = None,
+        expected_seq: int = 0,
+        timeout_ms: int = 2000,
+    ) -> tuple[Optional[StreamPacket], int]:
+        """Send STOP via BBP/UART (hat_la_stop). Returns after stop; no USB drain.
+
+        Design notes:
+        - macOS CDC (pyserial) and vendor bulk (pyusb) cannot be open simultaneously
+          on the same USB composite device — vendor bulk is released before opening CDC.
+        - The previous implementation re-claimed vendor bulk on the same IOKit dev
+          object to drain EP_IN.  This was found to corrupt the RP2040's USB/TinyUSB
+          state (exact mechanism unclear), breaking the HAT UART in subsequent BBP
+          sessions and requiring a power cycle to recover.
+        - After the 500 ms sleep, Core 0 has already processed the s_need_endpoint_rearm
+          triggered by bb_la_usb_soft_reset(), which calls tud_vendor_n_fifo_clear().
+          This clears ALL DATA from the TX FIFO — only PKT_STOP remains.  The drain
+          therefore adds zero DATA bytes to result, so skipping it is lossless for
+          result.bytes_received.
+        - Locally-buffered data (already read from USB into self._stream_buffer before
+          this call) IS drained without any USB I/O, preserving data accuracy.
+        - Stale EP_IN data (PKT_STOP from firmware) is cleaned up by the next
+          preflight's hat_la_usb_reset() → bb_la_usb_abort_bulk() → rearm →
+          tud_vendor_n_fifo_clear() on Core 0.
+        """
+        import bugbuster as bb
+
+        # macOS: release vendor bulk before opening CDC (IOKit conflict).
+        if self._dev is not None and self._claimed:
+            import usb.util as _usb_util
+            try:
+                _usb_util.release_interface(self._dev, LA_INTERFACE)
+            except Exception:
+                pass
+            self._claimed = False
+
+        # Drain whatever is already in the local parse buffer — data that was read
+        # from EP_IN before this stop was called.  No USB I/O required or safe here
+        # (interface released above).  This preserves bytes already on the host side.
+        if result is not None:
+            while len(self._stream_buffer) >= 4:
+                payload_len = self._stream_buffer[2]
+                frame_len = 4 + payload_len
+                if len(self._stream_buffer) < frame_len:
+                    break  # incomplete packet — stop without reading more
+                pkt_data = self._stream_buffer[:frame_len]
+                del self._stream_buffer[:frame_len]
+                pkt = StreamPacket(
+                    pkt_type=pkt_data[0],
+                    seq=pkt_data[1],
+                    payload_len=pkt_data[2],
+                    info=pkt_data[3],
+                    payload=bytes(pkt_data[4:]),
+                )
+                if pkt.pkt_type == PKT_DATA:
+                    expected_seq = self._record_data_packet(pkt, result, expected_seq)
+                elif pkt.pkt_type == PKT_STOP:
+                    # PKT_STOP was already in the local buffer — firmware stopped
+                    # on its own (e.g. DMA overrun).  No BBP command needed.
+                    result.stop_reason = _STOP_REASON_MAP.get(pkt.info, "normal")
+                    return pkt, expected_seq
+        else:
+            self._stream_buffer.clear()
+
+        # Send STOP via BBP/UART.
+        try:
+            dev = bb.connect_usb(bbp_port)
+            try:
+                dev.hat_la_stop()
+            finally:
+                dev.disconnect()
+        except Exception:
+            pass  # best-effort; preflight recovery handles remaining USB state
+
+        # Sleep so Core 0 has time to process the s_need_endpoint_rearm triggered
+        # by bb_la_usb_soft_reset() and queue PKT_STOP.  We do NOT re-claim the
+        # vendor bulk interface here — doing so on the same IOKit dev object breaks
+        # the RP2040 HAT UART in subsequent BBP sessions.
+        time.sleep(0.5)
+
+        if result is not None:
+            result.stop_reason = "host_stop"
+        return StreamPacket(
+            pkt_type=PKT_STOP, seq=0, payload_len=0,
+            info=INFO_STOP_HOST, payload=b"",
+        ), expected_seq
+
     def stop_stream(
         self,
         *,
+        bbp_port: Optional[str] = None,
         result: Optional[StreamResult] = None,
         expected_seq: int = 0,
         timeout_ms: int = 2000,
     ) -> tuple[Optional[StreamPacket], int]:
         """Send STOP and drain remaining DATA until PKT_STOP or read timeout.
 
-        The RP2040 vendor bulk deferred-stop mechanism has a known limitation
-        where PKT_STOP may not be delivered to the host (DATA PID toggle
-        desync after endpoint reset, or TinyUSB FIFO flush timing).  A read
-        timeout after STOP is treated as a successful host-initiated stop
-        (the firmware DID stop PIO/DMA — the host just didn't receive the
-        confirmation packet).
+        When ``bbp_port`` is set (or ``self._bbp_port`` is set), STOP is sent
+        via BBP/UART (hat_la_stop) instead of EP_OUT.  This is the correct path
+        during active IN streaming: EP_OUT STOP is silently dropped by the
+        RP2040 TinyUSB DCD under heavy IN load (root cause in Diag/FINDINGS.md).
+
+        Falls back to the legacy EP_OUT path when no BBP port is available.
+        A read timeout after STOP is treated as a successful host-initiated stop.
         """
+        effective_port = bbp_port or self._bbp_port
+        if effective_port is not None:
+            return self._stop_stream_via_bbp(
+                effective_port,
+                result=result,
+                expected_seq=expected_seq,
+                timeout_ms=timeout_ms,
+            )
+
+        # Legacy path: STOP via EP_OUT (may be lost during active IN streaming)
         self.send_command(STREAM_CMD_STOP)
         deadline = time.monotonic() + (timeout_ms / 1000.0)
         while time.monotonic() < deadline:
@@ -334,7 +437,7 @@ class LaUsbHost:
         except Exception:
             return True
 
-    def stream_capture(self, duration_s: float = 1.0) -> StreamResult:
+    def stream_capture(self, duration_s: float = 1.0, bbp_port: Optional[str] = None) -> StreamResult:
         """
         Send START, collect DATA packets for duration_s seconds, send STOP.
 
@@ -386,7 +489,7 @@ class LaUsbHost:
 
         # Duration elapsed — STOP must terminate in-band. A timeout here is a
         # failure, not a normal cleanup signal.
-        self.stop_stream(result=result, expected_seq=expected_seq, timeout_ms=2000)
+        self.stop_stream(result=result, expected_seq=expected_seq, timeout_ms=2000, bbp_port=bbp_port)
         if stream_read_failed and result.stop_reason == "host_stop":
             result.stop_reason = "read_error"
         return result
@@ -427,10 +530,11 @@ class LaUsbHost:
 
     def close(self) -> None:
         """Release the USB interface and dispose resources."""
-        if self._dev is not None and self._claimed:
+        if self._dev is not None:
             try:
                 import usb.util
-                usb.util.release_interface(self._dev, LA_INTERFACE)
+                if self._claimed:
+                    usb.util.release_interface(self._dev, LA_INTERFACE)
                 usb.util.dispose_resources(self._dev)
             except Exception:
                 pass

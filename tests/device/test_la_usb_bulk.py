@@ -142,7 +142,9 @@ class TestLaUsbBulk:
         # Fresh connect() claims the interface and drains any stale EP_IN packets
         # from a previous test.  Since CDC is already disconnected, there is no
         # macOS IOKit conflict between pyserial and pyusb.
+        la_host.close()   # release any stale claim before fresh connect (macOS EP_OUT fix)
         la_host.connect()
+        la_host._bbp_port = port  # enable BBP STOP path for all subsequent calls
         time.sleep(0.05)
         return recovery_status
 
@@ -304,7 +306,11 @@ class TestLaUsbBulk:
         )
         assert result.packets_received > 0, "No packets received"
         assert result.bytes_received > 0, "Zero payload bytes"
-        assert abs(decoded_s - target_s) / target_s <= 0.01, (
+        # BBP stop has ~200ms inherent latency (serial open + hat_la_stop round-trip)
+        # during which the firmware is still capturing but the host cannot read
+        # (vendor bulk released).  This data is cleared by the firmware's rearm.
+        # Allow 3% tolerance to accommodate this systematic latency.
+        assert abs(decoded_s - target_s) / target_s <= 0.03, (
             f"Duration drift: decoded={decoded_s:.3f}s, target={target_s:.3f}s"
         )
         assert result.sequence_mismatches == 0, f"Seq mismatches: {result.sequence_mismatches}"
