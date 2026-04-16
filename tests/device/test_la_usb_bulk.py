@@ -46,10 +46,8 @@ from tests.mock.la_usb_host import (
 def la_host(request: pytest.FixtureRequest):
     """Provide an unconnected LaUsbHost per test.
 
-    The ``configure_la_before_test`` preflight calls ``la_host.connect()``
-    AFTER ``dev.disconnect()`` to avoid the macOS IOKit conflict that arises
-    when pyserial (CDC) and pyusb (vendor bulk interface 3) are open
-    simultaneously on the same USB composite device.
+    The ``configure_la_before_test`` preflight isolates the BBP setup commands
+    from the streaming phase to ensure the USB Bulk endpoints are clean.
     """
     if not request.config.getoption("--hat", default=False):
         pytest.skip("--hat flag required for USB bulk hardware tests")
@@ -139,7 +137,7 @@ class TestLaUsbBulk:
         # Phase 2: connect the vendor bulk interface (fresh claim drains stale EP_IN).
         la_host.close()   # release any stale claim before fresh connect
         la_host.connect()
-        la_host._bbp_port = port  # enable BBP STOP path for all subsequent calls
+        # la_host._bbp_port = port  # enable BBP STOP path for all subsequent calls
         time.sleep(0.05)
         return recovery_status
 

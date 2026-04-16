@@ -24,10 +24,8 @@ def test_stream_1mhz_4ch_10s(request: pytest.FixtureRequest):
     print(f"\n--- Starting 1 MHz / 4-ch / 10s Proof ---")
 
     # Phase 1: configure via BBP, then disconnect before claiming vendor bulk.
-    # On macOS, pyserial (CDC0) and pyusb (vendor interface 3) conflict when
-    # both hold the device simultaneously — EP_OUT becomes broken after the
-    # first la_host.close() + re-claim cycle.  Disconnecting BBP first avoids
-    # macOS USB arbitration issues.
+    # We disconnect the BBP client gracefully after configuring to mirror
+    # the exact usage model required to keep EP_OUT stream interrupts isolated.
     dev = bb.connect_usb(port)
     print("Preflight: Resetting USB endpoints...")
     dev.hat_la_usb_reset()

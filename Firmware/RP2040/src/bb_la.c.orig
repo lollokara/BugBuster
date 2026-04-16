@@ -221,8 +221,6 @@ static void halt_capture_runtime(void)
     // Abort DMA BEFORE disabling PIO! If PIO is disabled first, DREQ stops,
     // and dma_channel_abort() will hang forever waiting to flush the datapath.
     if (la_dma_ch >= 0) {
-        hw_clear_bits(&dma_hw->ch[la_dma_ch].ctrl_trig, DMA_CH0_CTRL_TRIG_EN_BITS);
-        hw_set_bits(&dma_hw->ch[la_dma_ch].ctrl_trig, 0x3f << DMA_CH0_CTRL_TRIG_TREQ_SEL_LSB);
         dma_channel_abort((uint)la_dma_ch);
     }
 
@@ -548,8 +546,6 @@ void bb_la_stop_streaming_hw(void)
     // 2. Abort DMA FIRST while PIO still drives DREQ. If PIO stops first,
     // the DMA abort hangs indefinitely.
     if (la_dma_ch >= 0) {
-        hw_clear_bits(&dma_hw->ch[la_dma_ch].ctrl_trig, DMA_CH0_CTRL_TRIG_EN_BITS);
-        hw_set_bits(&dma_hw->ch[la_dma_ch].ctrl_trig, 0x3f << DMA_CH0_CTRL_TRIG_TREQ_SEL_LSB);
         dma_channel_abort((uint)la_dma_ch);
     }
 
