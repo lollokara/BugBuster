@@ -169,11 +169,6 @@ static volatile uint8_t s_deferred_stop_info = 0;
 // half-buffer handoffs so the USB task keeps its tight polling loop running.
 static volatile bool s_streaming_session = false;
 
-// Set when a stream ends (deferred stop emitted); signals poll_commands to
-// do a one-shot read_flush (DCD abort + re-arm) on the OUT endpoint.
-// Separate from s_need_endpoint_rearm to avoid clearing the TX FIFO
-// (which would discard the just-sent PKT_STOP marker).
-static volatile bool s_post_stream_rx_rearm = false;
 
 // Retry counter for deferred stop emission.  If the IN endpoint is stuck
 // (write_available returns 0), give up after this many send_pending() calls
@@ -200,7 +195,6 @@ void bb_la_usb_init(void) {
     s_deferred_stop = false;
     s_deferred_stop_info = 0;
     s_streaming_session = false;
-    s_post_stream_rx_rearm = false;
     s_pending_hw_cleanup = false;
     s_deferred_stop_retries = 0;
 }
@@ -227,7 +221,6 @@ void bb_la_usb_soft_reset(void) {
     // must drain naturally so the host's stop_stream() receives them.
     s_pending_hw_cleanup = false;
     s_deferred_stop = false;      // cancel any stale deferred stop
-    s_post_stream_rx_rearm = false;
     // Bump both counters together — no DCD abort needed, so
     // request and complete stay in sync.
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
@@ -252,7 +245,6 @@ void bb_la_usb_abort_bulk(void) {
     s_bulk_ctrl_head = 0;
     s_pending_hw_cleanup = false;
     s_deferred_stop = false;      // cancel any stale deferred stop
-    s_post_stream_rx_rearm = false;
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
     taskEXIT_CRITICAL();
     // Signal the USB task to re-arm the endpoint (tud_vendor_n_write_clear must
@@ -263,6 +255,10 @@ void bb_la_usb_abort_bulk(void) {
         // If not mounted, we can mark it complete immediately
         s_rearm_complete_count = s_rearm_request_count;
     }
+#ifdef DEBUGPROBE_INTEGRATION
+    // Wake the USB task so send_pending() processes the rearm promptly.
+    if (tud_taskhandle) xTaskNotify(tud_taskhandle, 0, eNoAction);
+#endif
 }
 
 void bb_la_usb_request_deferred_stop(uint8_t info) {
@@ -355,7 +351,15 @@ void bb_la_usb_send_pending(void) {
     // Two-step: hardware SIE reset (AVAIL=0) then TinyUSB software state clear.
     if (s_need_endpoint_rearm) {
         s_need_endpoint_rearm = false;
-        
+
+        // Clear ALL stop-related flags to prevent a stale deferred stop
+        // (read by Core 0 before Core 1's abort_bulk cleared it) from
+        // firing the emergency path and re-setting the rearm flag or
+        // triggering a spurious post-stream RX rearm.
+        s_deferred_stop = false;
+        s_deferred_stop_retries = 0;
+        s_pending_hw_cleanup = false;
+
         // Step 1: clear hardware AVAIL bit on the IN endpoint only.
         // Only the IN (TX) endpoint can get stuck with AVAIL=1 after a DMA
         // abort; the OUT (RX) endpoint is not driven by DMA and must NOT be
@@ -506,7 +510,6 @@ void bb_la_usb_send_pending(void) {
             tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
             s_deferred_stop = false;
             s_streaming_session = false;
-            s_post_stream_rx_rearm = true;
             // Full cleanup after ring is fully drained
             if (s_pending_hw_cleanup) {
                 s_pending_hw_cleanup = false;
@@ -536,10 +539,7 @@ void bb_la_usb_send_pending(void) {
                 bb_la_stop();   // state → IDLE before Core 1 can observe flag
             }
             s_streaming_session = false;   // clear AFTER state is IDLE
-            // Re-arm both endpoints so the next session can start cleanly.
-            // Without this, s_post_stream_rx_rearm is never set and the OUT
-            // endpoint stays unprimed → all subsequent EP_OUT writes time out.
-            s_post_stream_rx_rearm = true;
+            // Re-arm the IN endpoint so the next session can start cleanly.
             s_need_endpoint_rearm = true;
         }
     }
@@ -614,7 +614,6 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
     case LA_USB_CMD_START_STREAM:
         s_cdc_seq = 0;
         s_deferred_stop = false;   // cancel any pending deferred stop
-        s_post_stream_rx_rearm = false;
         s_pending_hw_cleanup = false;
         bb_la_usb_live_reset_sequence();
         if (!bb_la_start_stream()) {
@@ -634,7 +633,11 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
         break;
 
     case LA_USB_CMD_STOP:
-        s_streaming_session = false;
+        // Do NOT clear s_streaming_session here — leave the fast path
+        // running so tud_task() + send_pending() keep draining the TX
+        // FIFO and ring buffers naturally.  The deferred stop mechanism
+        // emits PKT_STOP after all data is drained, and THEN clears
+        // s_streaming_session to exit the fast path.
         bb_la_stop_streaming_hw();   // stops HW, preserves ring for drain
         bb_la_cdc_flush_ring();
         if (tud_cdc_connected()) tud_cdc_write_clear();
@@ -656,14 +659,6 @@ void bb_la_usb_poll_commands(void) {
             for (uint32_t i = 0; i < n; i++) {
                 handle_stream_command(cmd_buf[i], false);
             }
-        }
-        // After a stream ends, the host's drain loop may cancel pending
-        // IN/OUT transfers, leaving endpoints stuck busy.  Do a one-shot
-        // read_flush (DCD abort + re-arm) on the OUT endpoint so the host
-        // can send the next START command.
-        if (s_post_stream_rx_rearm) {
-            s_post_stream_rx_rearm = false;
-            tud_vendor_n_read_flush(BB_LA_VENDOR_ITF);
         }
     }
     while (tud_cdc_available()) {
