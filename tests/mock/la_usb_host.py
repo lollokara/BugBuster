@@ -451,6 +451,7 @@ class LaUsbHost:
         """
         result = StreamResult()
 
+        time.sleep(0.2)  # wait for rearm to complete before writing EP_OUT (race validation)
         self.send_command(STREAM_CMD_START)
 
         try:

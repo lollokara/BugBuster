@@ -1,123 +1,368 @@
+"""
+raw_usb_test.py — Verbose multi-cycle LA streaming diagnostic.
+
+BBP port (ESP32 CDC) and vendor bulk (RP2040 interface 3) are on DIFFERENT
+USB devices — no IOKit conflict, both can stay open simultaneously.
+
+Tests the full start/stop lifecycle. BBP connection is held open for the
+entire run; vendor bulk is held open throughout (no release/re-claim cycles).
+
+Usage:
+    .venv/bin/python Diag/raw_usb_test.py \
+        --port /dev/cu.usbmodem1234561 \
+        --cycles 3 --duration 1.0
+"""
+import argparse
+import sys
+import time
+
+sys.path.insert(0, "python")
+
 import usb.core
 import usb.util
-import time
-import sys
 
-# USB identifiers
+# USB identifiers (RP2040 vendor bulk device)
 VID = 0x2E8A
 PID = 0x000C
 LA_INTERFACE = 3
-EP_IN = 0x87   # bulk IN (device → host)
-EP_OUT = 0x06  # bulk OUT (host → device)
+EP_IN  = 0x87   # bulk IN  (device → host)
+EP_OUT = 0x06   # bulk OUT (host → device)
 
-# Commands
+# Stream commands
 STREAM_CMD_STOP  = 0x00
 STREAM_CMD_START = 0x01
 
-def test_raw_usb():
-    print(f"Searching for device {VID:#06x}:{PID:#06x}...")
-    dev = usb.core.find(idVendor=VID, idProduct=PID)
-    if dev is None:
-        print("Device not found!")
-        return
+# Packet types
+PKT_START = 0x01
+PKT_DATA  = 0x02
+PKT_STOP  = 0x03
+PKT_ERROR = 0x04
 
-    try:
-        if dev.is_kernel_driver_active(LA_INTERFACE):
-            print(f"Detaching kernel driver for interface {LA_INTERFACE}...")
-            dev.detach_kernel_driver(LA_INTERFACE)
-        
-        print(f"Claiming interface {LA_INTERFACE}...")
-        usb.util.claim_interface(dev, LA_INTERFACE)
-    except Exception as e:
-        print(f"Failed to claim interface: {e}")
-        return
+INFO_START_REJECTED = 0x80
 
-    try:
-        # 1. Test raw read (flush any stale data)
-        print("\n--- Phase 1: Initial Drain ---")
+PKT_TYPE_NAMES = {PKT_START: "PKT_START", PKT_DATA: "PKT_DATA",
+                  PKT_STOP: "PKT_STOP",  PKT_ERROR: "PKT_ERROR"}
+
+
+def log(msg: str) -> None:
+    ts = time.monotonic()
+    print(f"[{ts:9.3f}] {msg}", flush=True)
+
+
+def decode_packets(buf: bytes) -> list[dict]:
+    packets, i = [], 0
+    while i + 4 <= len(buf):
+        pkt_type, seq, payload_len, info = buf[i], buf[i+1], buf[i+2], buf[i+3]
+        end = i + 4 + payload_len
+        if end > len(buf):
+            break
+        packets.append({"type": pkt_type, "seq": seq, "payload_len": payload_len,
+                         "info": info, "payload": buf[i+4:end]})
+        i = end
+    return packets
+
+
+def describe_packet(p: dict) -> str:
+    name = PKT_TYPE_NAMES.get(p["type"], f"PKT_0x{p['type']:02x}")
+    extra = ""
+    if p["type"] == PKT_ERROR and p["info"] == INFO_START_REJECTED:
+        extra = " ← bb_la_start_stream() returned false (state not IDLE or pio_loaded=false)"
+    elif p["type"] == PKT_STOP:
+        extra = f" [stop_reason=0x{p['info']:02x}]"
+    return (f"{name} seq={p['seq']} payload_len={p['payload_len']} "
+            f"info=0x{p['info']:02x}{extra}")
+
+
+def drain_ep_in(dev: usb.core.Device, timeout_ms: int = 200, label: str = "drain") -> int:
+    total = 0
+    while True:
         try:
-            raw = dev.read(EP_IN, 16384, timeout=500)
-            print(f"  Read {len(raw)} bytes of stale data")
+            raw = bytes(dev.read(EP_IN, 16384, timeout=timeout_ms))
+            if not raw:
+                break
+            log(f"  [{label}] {len(raw)} bytes: {raw[:16].hex()}{'...' if len(raw)>16 else ''}")
+            for p in decode_packets(raw):
+                log(f"    {describe_packet(p)}")
+            total += len(raw)
         except usb.core.USBTimeoutError:
-            print("  No stale data on EP_IN")
+            break
         except Exception as e:
-            print(f"  Read error: {e}")
+            log(f"  [{label}] read error: {e}")
+            break
+    return total
 
-        # 2. Test raw write (START command)
-        print("\n--- Phase 2: Send START command ---")
+
+def run_cycle(dev: usb.core.Device, bbp, cycle: int, duration_s: float) -> bool:
+    log(f"\n{'='*60}")
+    log(f"CYCLE {cycle}")
+    log(f"{'='*60}")
+
+    # ── 1. BBP preflight (interface stays claimed — different USB device) ─────
+    log("\n[1] BBP preflight (vendor bulk stays open, BBP on separate ESP32 USB)...")
+    try:
+        status = bbp.hat_la_get_status()
+        log(f"  Status before reset: {status}")
+    except Exception as e:
+        log(f"  hat_la_get_status() FAILED: {e}")
+
+    try:
+        bbp.hat_la_usb_reset()
+        log("  hat_la_usb_reset() OK")
+    except Exception as e:
+        log(f"  hat_la_usb_reset() FAILED: {e}")
+    time.sleep(0.1)
+
+    configured = False
+    for attempt in range(5):
+        if attempt > 0:
+            time.sleep(0.2)
         try:
-            sent = dev.write(EP_OUT, [STREAM_CMD_START], timeout=1000)
-            print(f"  Wrote {sent} bytes to EP_OUT (START)")
+            bbp.hat_la_configure(channels=4, rate_hz=1_000_000, depth=100_000)
+            log(f"  hat_la_configure() OK (attempt {attempt+1})")
+            configured = True
+            break
         except Exception as e:
-            print(f"  Write error: {e}")
+            log(f"  hat_la_configure() attempt {attempt+1} FAILED: {e}")
 
-        # 3. Wait for START packet and some data
-        print("\n--- Phase 3: Read Stream ---")
-        t0 = time.monotonic()
-        total_bytes = 0
-        packets = 0
-        while time.monotonic() - t0 < 1.0:
-            try:
-                raw = dev.read(EP_IN, 64, timeout=100)
-                if len(raw) > 0:
-                    data = bytes(raw)
-                    if packets == 0:
-                        print(f"  First packet: {data.hex()}")
-                    packets += 1
-                    total_bytes += len(raw)
-                    if packets % 200 == 0:
-                        print(f"  Received {packets} packets ({total_bytes} bytes)...")
-            except usb.core.USBTimeoutError:
-                if packets > 0:
-                    print("  Stream paused (timeout)")
-                else:
-                    print("  Never received any data")
-                break
-            except Exception as e:
-                print(f"  Read error: {e}")
-                break
-        
-        print(f"  Total: {packets} packets, {total_bytes} bytes")
+    if not configured:
+        log("  PREFLIGHT FAILED — skipping cycle")
+        return False
 
-        # 4. Test STOP command
-        print("\n--- Phase 4: Send STOP command ---")
+    try:
+        status = bbp.hat_la_get_status()
+        log(f"  Status after configure: {status}")
+    except Exception as e:
+        log(f"  hat_la_get_status() post-configure FAILED: {e}")
+
+    # ── 2. Drain stale EP_IN ──────────────────────────────────────────────────
+    log("\n[2] Draining stale EP_IN data...")
+    stale = drain_ep_in(dev, timeout_ms=100, label="stale")
+    if stale == 0:
+        log("  No stale data")
+
+    # ── 3. Send STREAM_CMD_START via EP_OUT ───────────────────────────────────
+    log(f"\n[3] Sending STREAM_CMD_START (0x{STREAM_CMD_START:02x}) to EP_OUT...")
+    try:
+        n = dev.write(EP_OUT, bytes([STREAM_CMD_START]), timeout=2000)
+        log(f"  EP_OUT write: {n} byte(s) accepted by SIE ✓")
+    except Exception as e:
+        log(f"  EP_OUT write FAILED: {e}")
+        return False
+
+    # ── 4. Wait for PKT_START ─────────────────────────────────────────────────
+    log("\n[4] Waiting for PKT_START on EP_IN (timeout=3s)...")
+    buf = bytearray()
+    got_start = False
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 3.0:
         try:
-            sent = dev.write(EP_OUT, [STREAM_CMD_STOP], timeout=1000)
-            print(f"  Wrote {sent} bytes to EP_OUT (STOP)")
+            raw = bytes(dev.read(EP_IN, 16384, timeout=500))
+            buf.extend(raw)
+            log(f"  EP_IN {len(raw)}B: {raw[:16].hex()}{'...' if len(raw)>16 else ''}")
+            for p in decode_packets(bytes(buf)):
+                log(f"  → {describe_packet(p)}")
+                if p["type"] == PKT_START:
+                    got_start = True
+                elif p["type"] == PKT_ERROR:
+                    log(f"  ✗ START REJECTED — bb_la_start_stream() returned false")
+                    log(f"    This means LA state != IDLE or pio_loaded=false after configure")
+            if got_start:
+                log("  ✓ PKT_START received — stream is live")
+                break
+            buf.clear()   # parsed, clear for next read
+        except usb.core.USBTimeoutError:
+            log(f"  EP_IN silent for {time.monotonic()-t0:.2f}s (no data received at all)")
+            log(f"  Possible causes:")
+            log(f"    1. STREAM_CMD_START byte was not received by firmware (EP_OUT broken)")
+            log(f"    2. bb_la_start_stream() returned false but PKT_ERROR also lost")
+            log(f"    3. PKT_START queued but tud_vendor_n_write_available() returned 0")
+            break
         except Exception as e:
-            print(f"  Write error: {e}")
+            log(f"  EP_IN read error: {e}")
+            break
 
-        # 5. Wait for PKT_STOP
-        print("\n--- Phase 5: Drain and look for PKT_STOP ---")
+    if not got_start:
+        log(f"  ✗ FAILED to receive PKT_START")
+        log(f"  Running BBP stop to clean up device state...")
+        try:
+            bbp.hat_la_stop()
+            log(f"  hat_la_stop() OK (cleanup)")
+        except Exception as e:
+            log(f"  hat_la_stop() FAILED (cleanup): {e}")
+        time.sleep(0.5)
+        drain_ep_in(dev, timeout_ms=200, label="post-fail-drain")
+        return False
+
+    # ── 5. Collect DATA ───────────────────────────────────────────────────────
+    log(f"\n[5] Collecting DATA packets for {duration_s}s...")
+    data_pkts, data_bytes, seq_errors = 0, 0, 0
+    expected_seq = 0
+    early_stop = False
+    t0 = time.monotonic()
+    last_log = t0
+
+    while time.monotonic() - t0 < duration_s:
+        try:
+            raw = bytes(dev.read(EP_IN, 16384, timeout=200))
+            for p in decode_packets(raw):
+                if p["type"] == PKT_DATA:
+                    if p["seq"] != expected_seq:
+                        log(f"  SEQ MISMATCH: expected {expected_seq}, got {p['seq']}")
+                        seq_errors += 1
+                    expected_seq = (p["seq"] + 1) & 0xFF
+                    data_pkts += 1
+                    data_bytes += p["payload_len"]
+                elif p["type"] == PKT_STOP:
+                    log(f"  Firmware sent early: {describe_packet(p)}")
+                    early_stop = True
+                elif p["type"] == PKT_ERROR:
+                    log(f"  Unexpected during stream: {describe_packet(p)}")
+            if early_stop:
+                break
+            now = time.monotonic()
+            if now - last_log >= 0.5:
+                elapsed = now - t0
+                log(f"  {data_pkts} pkts / {data_bytes}B / {data_bytes/elapsed/1024:.1f}KB/s")
+                last_log = now
+        except usb.core.USBTimeoutError:
+            log(f"  EP_IN timeout during stream (got {data_pkts} pkts so far)")
+            break
+        except Exception as e:
+            log(f"  EP_IN error during stream: {e}")
+            break
+
+    elapsed = max(time.monotonic() - t0, 0.001)
+    log(f"  Stream done: {data_pkts} DATA pkts, {data_bytes}B, "
+        f"{data_bytes/elapsed/1024:.1f}KB/s, {seq_errors} seq errors")
+
+    # ── 6. STOP via BBP (vendor bulk stays open — no re-claim needed) ─────────
+    if not early_stop:
+        log("\n[6] Sending STOP via BBP (vendor bulk stays open)...")
+        try:
+            bbp.hat_la_stop()
+            log("  hat_la_stop() OK")
+        except Exception as e:
+            log(f"  hat_la_stop() FAILED: {e}")
+
+        # Sleep so Core 0 processes the rearm triggered by bb_la_usb_soft_reset().
+        # PKT_STOP is queued in ctrl buffer by HAT_CMD_LA_STOP handler; rearm runs
+        # first (clears TX FIFO), then ctrl buffer drains → PKT_STOP goes to EP_IN.
+        log("  Sleeping 0.5s for endpoint rearm + PKT_STOP flush...")
+        time.sleep(0.5)
+
+        # ── 7. Wait for PKT_STOP on EP_IN ──────────────────────────────────────
+        log("\n[7] Waiting for PKT_STOP on EP_IN (timeout=3s)...")
+        got_stop = False
         t0 = time.monotonic()
-        found_stop = False
-        drained_packets = 0
         while time.monotonic() - t0 < 3.0:
             try:
-                raw = dev.read(EP_IN, 64, timeout=100)
-                if len(raw) > 0:
-                    data = bytes(raw)
-                    if data[0] == 0x03: # PKT_STOP
-                        print(f"  GOT PKT_STOP: {data.hex()}")
-                        found_stop = True
-                        break
-                    drained_packets += 1
-                    if drained_packets % 200 == 0:
-                        print(f"  Draining... {drained_packets} packets")
+                raw = bytes(dev.read(EP_IN, 16384, timeout=500))
+                log(f"  EP_IN {len(raw)}B: {raw[:16].hex()}{'...' if len(raw)>16 else ''}")
+                for p in decode_packets(raw):
+                    log(f"  → {describe_packet(p)}")
+                    if p["type"] == PKT_STOP:
+                        got_stop = True
             except usb.core.USBTimeoutError:
-                print("  Timeout waiting for PKT_STOP")
+                log(f"  EP_IN timeout waiting for PKT_STOP ({time.monotonic()-t0:.2f}s elapsed)")
                 break
             except Exception as e:
-                print(f"  Read error: {e}")
+                log(f"  EP_IN error: {e}")
                 break
-        
-        if not found_stop:
-            print(f"  FAILED to receive PKT_STOP (drained {drained_packets} packets)")
+            if got_stop:
+                break
 
-    finally:
-        print("\nReleasing interface...")
+        if got_stop:
+            log("  ✓ PKT_STOP received — clean stop")
+        else:
+            log("  ✗ PKT_STOP NOT received — device in dirty state")
+            log("    Possible: rearm cleared TX FIFO before PKT_STOP was flushed,")
+            log("    OR EP_IN transfer stuck after stop")
+    else:
+        log("\n[6/7] Skipped — firmware already sent PKT_STOP")
+        got_stop = True
+
+    try:
+        status = bbp.hat_la_get_status()
+        log(f"  Post-stop status: {status}")
+    except Exception as e:
+        log(f"  hat_la_get_status() post-stop FAILED: {e}")
+
+    success = data_pkts > 0 and seq_errors == 0
+    log(f"\nCYCLE {cycle} {'PASSED ✓' if success else 'FAILED ✗'}")
+    return success
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Verbose LA USB streaming diagnostic")
+    parser.add_argument("--port", required=True,
+                        help="ESP32 BBP serial port (e.g. /dev/cu.usbmodem1234561)")
+    parser.add_argument("--cycles", type=int, default=3)
+    parser.add_argument("--duration", type=float, default=1.0)
+    args = parser.parse_args()
+
+    log(f"raw_usb_test — port={args.port} cycles={args.cycles} duration={args.duration}s")
+    log(f"RP2040 vendor bulk: VID={VID:#06x} PID={PID:#06x} interface={LA_INTERFACE}")
+    log(f"BBP (ESP32 CDC) and vendor bulk (RP2040) are on separate USB devices — no conflict")
+
+    # ── Find and claim RP2040 vendor bulk ─────────────────────────────────────
+    log("\nFinding RP2040 vendor bulk device...")
+    dev = usb.core.find(idVendor=VID, idProduct=PID)
+    if dev is None:
+        log(f"ERROR: Device {VID:#06x}:{PID:#06x} not found")
+        sys.exit(1)
+    log(f"  Found: {dev.manufacturer} / {dev.product}")
+
+    try:
+        usb.util.claim_interface(dev, LA_INTERFACE)
+        log(f"  Claimed interface {LA_INTERFACE}")
+    except Exception:
+        log("  Re-claiming interface...")
         usb.util.release_interface(dev, LA_INTERFACE)
-        print("Done.")
+        time.sleep(0.05)
+        usb.util.claim_interface(dev, LA_INTERFACE)
+
+    # ── Open BBP (ESP32 serial) — stays open for all cycles ──────────────────
+    log(f"\nOpening BBP connection on {args.port} (stays open for all cycles)...")
+    import bugbuster as bb
+    try:
+        bbp = bb.connect_usb(args.port)
+        log("  BBP connected")
+    except Exception as e:
+        log(f"  ERROR: {e}")
+        usb.util.release_interface(dev, LA_INTERFACE)
+        sys.exit(1)
+
+    passed, failed = 0, 0
+    try:
+        for cycle in range(1, args.cycles + 1):
+            ok = run_cycle(dev, bbp, cycle, args.duration)
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+            if cycle < args.cycles:
+                log("\nPausing 0.3s between cycles...")
+                time.sleep(0.3)
+    finally:
+        log("\nFinal cleanup...")
+        try:
+            bbp.disconnect()
+            log("  BBP disconnected")
+        except Exception:
+            pass
+        try:
+            usb.util.release_interface(dev, LA_INTERFACE)
+            log(f"  Interface {LA_INTERFACE} released")
+        except Exception:
+            pass
+        usb.util.dispose_resources(dev)
+        log("  USB resources disposed")
+
+    log(f"\n{'='*60}")
+    log(f"RESULTS: {passed}/{args.cycles} cycles passed, {failed} failed")
+    log(f"{'='*60}")
+    sys.exit(0 if failed == 0 else 1)
+
 
 if __name__ == "__main__":
-    test_raw_usb()
+    main()
