@@ -1008,6 +1008,17 @@ Keepalive / latency measurement. Device echoes immediately.
 4..7    uptime_ms       u32     Device uptime in milliseconds
 ```
 
+#### 0x74 GET_ADMIN_TOKEN
+Retrieve the transient admin token for auth-protected REST endpoints.
+**USB CDC #0 ONLY.**
+
+**Request payload:** (empty)
+**Response payload:**
+```
+0       len             u8      Token length
+1..N    token           char[]  Admin token string
+```
+
 #### 0xFF DISCONNECT
 Graceful exit from binary mode. Device returns to CLI.
 
@@ -1537,8 +1548,31 @@ For large captures, the desktop app uses the RP2040 USB CDC endpoint for bulk tr
 #### 0xD9 HAT_LA_STOP
 Stop an active capture or disarm a waiting trigger.
 
-**Request payload:** Empty.
-**Response payload:** `[state:u8]` (0=IDLE)
+**Request payload:** (empty)
+**Response payload:** (empty)
+
+#### 0xEB HAT_LA_LOG_ENABLE
+Enable or disable verbose debug logging for the logic analyzer subsystem on the HAT UART.
+
+**Request payload:**
+```
+0       enable          bool    1=enable, 0=disable
+```
+
+**Response payload:** (empty)
+
+#### 0xED HAT_LA_USB_RESET
+Force a reset of the HAT's USB subsystem. Useful for clearing hung USB states during streaming.
+
+**Request payload:** (empty)
+**Response payload:** (empty)
+
+#### 0xEE HAT_LA_STREAM_START
+Start continuous streaming mode (double-buffered DMA to USB).
+Capture parameters must be pre-configured via `0xCF HAT_LA_CONFIG`.
+
+**Request payload:** (empty)
+**Response payload:** (empty)
 
 #### RLE Data Format
 
