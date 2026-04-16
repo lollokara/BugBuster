@@ -1241,7 +1241,7 @@ BugBuster is the UART master. PCB mode only.
 resistors creating a voltage divider. ~3.3V = no HAT, ~1.65V = SWD/GPIO HAT.
 
 **EXP_EXT_1-4:** Four I/O lines independently configurable as:
-DISCONNECTED(0), SWDIO(1), SWCLK(2), TRACE1(3), TRACE2(4),
+DISCONNECTED(0), RESERVED(1), RESERVED(2), RESERVED(3), RESERVED(4),
 GPIO1(5), GPIO2(6), GPIO3(7), GPIO4(8).
 
 #### 0xC5 HAT_GET_STATUS
@@ -2097,6 +2097,17 @@ sends an unsolicited UART frame which the ESP32 forwards as this BBP event.
 The host should respond by reading the captured data via the RP2040 USB bulk
 endpoint (interface 3, EP 0x87 IN).
 
+### 7.7 LA Log Event
+
+#### 0xEC LA_LOG (Event)
+Unsolicited log message from RP2040 HAT.
+
+**Event payload:**
+```
+0       len             u8      Message length
+1..N    msg             char[]  Log message
+```
+
 ---
 
 ## 8. Error Handling
@@ -2127,6 +2138,13 @@ the same SEQ as the failed command.
 | 0x08 | ERR_CRC_FAIL | CRC mismatch (informational, frame was discarded) |
 | 0x09 | ERR_FRAME_TOO_LARGE | Decoded frame exceeds max size |
 | 0x0A | ERR_STREAM_ACTIVE | Stream already active (stop first) |
+| 0x0B | HVPAK_NO_DEVICE | HVPAK not detected on I2C |
+| 0x0C | HVPAK_TIMEOUT | HVPAK mailbox timeout |
+| 0x0D | HVPAK_UNKNOWN_IDENTITY | HVPAK identity mismatch |
+| 0x0E | HVPAK_UNSUPPORTED_CAP | HVPAK capability not supported |
+| 0x0F | HVPAK_INVALID_INDEX | HVPAK block index out of range |
+| 0x10 | HVPAK_UNSAFE_REGISTER | HVPAK register access denied |
+| 0x11 | ERR_TIMEOUT | Command or sub-system timeout |
 
 ### 8.3 Host Timeout Strategy
 
@@ -2389,6 +2407,7 @@ Host                                    Device
 | 0x83 | DIN_EVENT | D->H | Digital input state change |
 | 0x84 | PCA_FAULT_EVENT | D->H | E-fuse trip, PG change |
 | 0x85 | LA_DONE_EVENT | D->H | Logic analyzer capture complete |
+| 0xEC | LA_LOG | D->H | Unsolicited log message from HAT |
 
 ## Appendix C: Wire Format Example
 
