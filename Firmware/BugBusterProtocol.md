@@ -1,6 +1,7 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 1.5
+**Version:** 1.6
+**BBP Protocol Version:** 4
 **Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
 **Status:** Active
@@ -1817,7 +1818,7 @@ Returns firmware version, build metadata, and OTA partition information.
   "fwMajor": 1,
   "fwMinor": 0,
   "fwPatch": 0,
-  "protoVersion": 1,
+  "protoVersion": 4,
   "partition": "app0",
   "partitionSize": 1703936,
   "nextPartition": "app1",
