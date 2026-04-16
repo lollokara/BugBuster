@@ -754,7 +754,15 @@ static void dispatch_command(const HatFrame *frame)
         // regardless of whether streaming was active.
         bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
         bb_la_stop();
-        s_prev_la_state = LA_STATE_IDLE;  // reset edge detector — prevent stale notify-done
+        {
+            // Sync edge detector with actual post-stop state.  Hardcoding
+            // LA_STATE_IDLE here causes a spurious bb_la_notify_done() on the
+            // next poll iteration when the LA ended in DONE (finite capture):
+            // the notify frame races with the ESP32 waiting for RSP_OK from
+            // the subsequent hat_la_usb_reset() command → BBP_ERR_TIMEOUT 0x11.
+            LaStatus _st; bb_la_get_status(&_st);
+            s_prev_la_state = _st.state;
+        }
         send_ok(NULL, 0);
         break;
     }
@@ -793,7 +801,12 @@ static void dispatch_command(const HatFrame *frame)
         // the command response and returns non-OK → BBP_ERR_TIMEOUT).
         bb_la_stop();
         bb_la_usb_abort_bulk();
-        s_prev_la_state = LA_STATE_IDLE;  // reset edge detector — prevent stale notify-done
+        {
+            // Same race as HAT_CMD_LA_STOP: sync edge detector with actual state
+            // to prevent spurious notify_done racing the next command's RSP_OK.
+            LaStatus _st; bb_la_get_status(&_st);
+            s_prev_la_state = _st.state;
+        }
         send_ok(NULL, 0);
         break;
     }
