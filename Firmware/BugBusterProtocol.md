@@ -1651,7 +1651,51 @@ Stop waveform generation. Returns channel to HIGH_IMP.
 
 ### 6.15 MUX Switch Matrix (0x90-0x92)
 
-See existing documentation for 0x90 MUX_SET_ALL, 0x91 MUX_GET_ALL, 0x92 MUX_SET_SWITCH.
+The MUX matrix consists of 4x ADGS2414D octal SPST switches daisy-chained on the SPI bus.
+
+#### 0x90 MUX_SET_ALL
+Set the state of all 32 switches in the matrix. To prevent signal contention and protect the level shifters, the firmware enforces a **100 ms safety dead-time** (all switches open) before applying the new state if any switch is being closed.
+
+**Request payload:**
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | mux0 | u8 | State of MUX 0 (U10). Bit 0 = S1, Bit 7 = S8. |
+| 1 | mux1 | u8 | State of MUX 1 (U11). Bit 0 = S1, Bit 7 = S8. |
+| 2 | mux2 | u8 | State of MUX 2 (U16). Bit 0 = S1, Bit 7 = S8. |
+| 3 | mux3 | u8 | State of MUX 3 (U17). Bit 0 = S1, Bit 7 = S8. |
+
+**Response payload:** (empty)
+
+**Web API equivalent:** `POST /api/mux/all` with body `{"states": [0, 0, 0, 0]}`
+
+#### 0x91 MUX_GET_ALL
+Read the current cached state of all 32 switches.
+
+**Request payload:** (empty)
+
+**Response payload:**
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | mux0 | u8 | State of MUX 0 (U10). |
+| 1 | mux1 | u8 | State of MUX 1 (U11). |
+| 2 | mux2 | u8 | State of MUX 2 (U16). |
+| 3 | mux3 | u8 | State of MUX 3 (U17). |
+
+**Web API equivalent:** `GET /api/mux/all`
+
+#### 0x92 MUX_SET_SWITCH
+Set the state of a single switch in the matrix. Enforces safety dead-time for the affected switch group.
+
+**Request payload:**
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | device | u8 | ADGS2414D index (0-3). |
+| 1 | switch | u8 | Switch index (0-7). |
+| 2 | state | u8 | 0 = OPEN (Off), 1 = CLOSED (On). |
+
+**Response payload:** (empty)
+
+**Web API equivalent:** `POST /api/mux/switch` with body `{"device": 0, "switch": 2, "state": true}`
 
 ### 6.16 Scope API (HTTP Polling)
 
