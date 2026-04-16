@@ -585,6 +585,18 @@ bool bb_la_usb_is_streaming(void) {
     return s_streaming_session;
 }
 
+void bb_la_usb_set_streaming(bool active) {
+    if (active) {
+        // Mirror handle_stream_command(LA_USB_CMD_START_STREAM) state init.
+        // Must be called after bb_la_start_stream() succeeds in any path that
+        // bypasses handle_stream_command (e.g. HAT_CMD_LA_STREAM_START via BBP).
+        s_cdc_seq = 0;
+        s_deferred_stop = false;
+        s_pending_hw_cleanup = false;
+    }
+    s_streaming_session = active;
+}
+
 bool bb_la_usb_has_pending_data(void) {
     return s_bulk_data.active || (s_bulk_ctrl_head != s_bulk_ctrl_tail) || s_deferred_stop;
 }

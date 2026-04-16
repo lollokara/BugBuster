@@ -192,6 +192,7 @@ extern "C" {
 #define BBP_CMD_HAT_HVPAK_REG_WRITE_MASKED 0xEA // Raw masked register write
 #define BBP_CMD_HAT_LA_LOG_ENABLE          0xEB // Enable/disable RP2040 log relay
 #define BBP_CMD_HAT_LA_USB_RESET           0xED // Reinitialize vendor bulk endpoint
+#define BBP_CMD_HAT_LA_STREAM_START        0xEE // Start LA streaming over vendor bulk
 
 // SPI Clock
 #define BBP_CMD_SET_SPI_CLOCK    0xE3  // Set SPI clock speed (Hz, u32)

@@ -1,0 +1,21 @@
+# Vendor / submodules — large, not project code
+# pico-sdk kept searchable (actively editing TinyUSB)
+Firmware/RP2040/lib/debugprobe/
+
+# Build artifacts
+Firmware/RP2040/build/
+DesktopApp/target/
+DesktopApp/node_modules/
+python/**/__pycache__/
+**/*.pyc
+
+# PCB / hardware design files
+PCB Material/
+
+# Scratch files at repo root
+test_dedup/
+test_la_bug/
+test_la_bug2/
+
+# Diagnostic scratch
+Diag/

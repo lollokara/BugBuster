@@ -213,6 +213,14 @@ static void halt_capture_runtime(void)
     pio_sm_set_enabled(LA_PIO, LA_TRIGGER_SM, false);
     disable_trigger_irq();
 
+    // Clear stream_mode BEFORE aborting DMA so Core 0's dma_irq_handler()
+    // cannot restart the channel between the abort completing and the BUSY
+    // spin check.  Without this, the IRQ fires (DMA completion on Core 0),
+    // sees stream_mode=true, restarts DMA, then PIO is stopped so no DREQ
+    // ever fires → dma_channel_abort()'s BUSY spin loops forever.
+    s_la.stream_mode = false;
+    __dmb();   // ensure Core 0 sees stream_mode=false before abort is issued
+
     if (la_dma_ch >= 0) {
         dma_channel_abort((uint)la_dma_ch);
     }
@@ -221,7 +229,6 @@ static void halt_capture_runtime(void)
 
     s_la.dma_done = false;
     s_la.triggered = false;
-    s_la.stream_mode = false;
     s_stream_ring.head = 0;
     s_stream_ring.tail = 0;
     s_stream_ring.count = 0;

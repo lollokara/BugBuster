@@ -140,13 +140,13 @@ def run_cycle(dev: usb.core.Device, bbp, cycle: int, duration_s: float) -> bool:
     if stale == 0:
         log("  No stale data")
 
-    # ── 3. Send STREAM_CMD_START via EP_OUT ───────────────────────────────────
-    log(f"\n[3] Sending STREAM_CMD_START (0x{STREAM_CMD_START:02x}) to EP_OUT...")
+    # ── 3. Send STREAM_START via BBP (HAT_CMD_LA_STREAM_START = 0x37) ──────────
+    log(f"\n[3] Sending START via BBP (hat_la_stream_start)...")
     try:
-        n = dev.write(EP_OUT, bytes([STREAM_CMD_START]), timeout=2000)
-        log(f"  EP_OUT write: {n} byte(s) accepted by SIE ✓")
+        bbp.hat_la_stream_start()
+        log(f"  hat_la_stream_start() OK ✓")
     except Exception as e:
-        log(f"  EP_OUT write FAILED: {e}")
+        log(f"  hat_la_stream_start() FAILED: {e}")
         return False
 
     # ── 4. Wait for PKT_START ─────────────────────────────────────────────────
@@ -237,12 +237,24 @@ def run_cycle(dev: usb.core.Device, bbp, cycle: int, duration_s: float) -> bool:
 
     # ── 6. STOP via BBP (vendor bulk stays open — no re-claim needed) ─────────
     if not early_stop:
+        # Pre-stop status — confirm RP2040 state before we issue stop.
+        try:
+            pre_stop_status = bbp.hat_la_get_status()
+            log(f"  Pre-stop status: {pre_stop_status}")
+        except Exception as e:
+            log(f"  hat_la_get_status() pre-stop FAILED: {e}")
+
         log("\n[6] Sending STOP via BBP (vendor bulk stays open)...")
+        t_stop_start = time.perf_counter()
+        stop_ok = False
         try:
             bbp.hat_la_stop()
-            log("  hat_la_stop() OK")
+            t_stop_rsp = time.perf_counter()
+            log(f"  hat_la_stop() OK  rtt={1000*(t_stop_rsp-t_stop_start):.1f}ms")
+            stop_ok = True
         except Exception as e:
-            log(f"  hat_la_stop() FAILED: {e}")
+            t_stop_rsp = time.perf_counter()
+            log(f"  hat_la_stop() FAILED: {e}  rtt={1000*(t_stop_rsp-t_stop_start):.1f}ms")
 
         # Sleep so Core 0 processes the rearm triggered by bb_la_usb_soft_reset().
         # PKT_STOP is queued in ctrl buffer by HAT_CMD_LA_STOP handler; rearm runs
@@ -327,6 +339,13 @@ def main():
     try:
         bbp = bb.connect_usb(args.port)
         log("  BBP connected")
+        # Relay RP2040 bb_la_log() messages to stdout
+        bbp.on_la_log(lambda msg: log(f"  [RP2040] {msg.rstrip()}"))
+        try:
+            bbp.hat_la_log_enable(True)
+            log("  LA log relay enabled")
+        except Exception as e_log:
+            log(f"  LA log relay enable FAILED (non-fatal): {e_log}")
     except Exception as e:
         log(f"  ERROR: {e}")
         usb.util.release_interface(dev, LA_INTERFACE)

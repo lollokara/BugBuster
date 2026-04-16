@@ -195,7 +195,7 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
                                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
 {
     s_last_error = 0;
-    ESP_LOGV(TAG, "TX cmd=0x%02X len=%d (%" PRIu64 " us)", cmd, payload_len, esp_timer_get_time());
+    ESP_LOGI(TAG, "TX cmd=0x%02X len=%d t=%" PRIu64 "us", cmd, payload_len, esp_timer_get_time());
 
     // Flush any stale data before sending
     uart_flush_input(HAT_UART_NUM);
@@ -255,7 +255,7 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
         }
         if (rsp_len) *rsp_len = local_len;
 
-        ESP_LOGV(TAG, "RX rsp=0x%02X len=%d (for cmd=0x%02X) @ %" PRIu64 " us", rsp, local_len, cmd, esp_timer_get_time());
+        ESP_LOGI(TAG, "RX rsp=0x%02X len=%d cmd=0x%02X t=%" PRIu64 "us", rsp, local_len, cmd, esp_timer_get_time());
         final_rsp = rsp;
         break;
     }
@@ -947,7 +947,15 @@ bool hat_la_stop(void)
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_STOP, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_STOP, NULL, 0, rsp, &rsp_len, 2000, sizeof(rsp)) == HAT_RSP_OK;
+}
+
+bool hat_la_stream_start(void)
+{
+    if (!s_state.connected) return false;
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    return hat_command(HAT_CMD_LA_STREAM_START, NULL, 0, rsp, &rsp_len, 2000, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_usb_reset(void)

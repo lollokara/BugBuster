@@ -1851,6 +1851,20 @@ class BugBuster:
             return True
         raise NotImplementedError("LA control is USB-only")
 
+    def hat_la_stream_start(self) -> bool:
+        """Start LA streaming over vendor bulk endpoint.
+
+        Triggers HAT_CMD_LA_STREAM_START on the RP2040, which calls
+        bb_la_start_stream() and queues PKT_START on EP_IN.
+
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
+        if self._usb:
+            self._usb_cmd(CmdId.HAT_LA_STREAM_START)
+            return True
+        raise NotImplementedError("LA control is USB-only")
+
     def hat_la_log_enable(self, enable: bool = True) -> bool:
         """Enable/disable RP2040 log relay via ESP32 side-channel.
 

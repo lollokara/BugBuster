@@ -1834,6 +1834,15 @@ static int handleHatLaUsbReset(uint16_t seq, uint8_t cmdId, uint8_t *out)
     return 0;
 }
 
+static int handleHatLaStreamStart(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    if (!hat_la_stream_start()) {
+        sendError(seq, cmdId, BBP_ERR_TIMEOUT);
+        return -1;
+    }
+    return 0;
+}
+
 static int handleHatLaLogEnable(uint16_t seq, uint8_t cmdId,
                                 const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -2704,6 +2713,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_HAT_LA_USB_RESET:
             rspLen = handleHatLaUsbReset(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_HAT_LA_STREAM_START:
+            rspLen = handleHatLaStreamStart(seq, cmdId, rspBuf);
             break;
         case BBP_CMD_HAT_LA_STATUS:
             rspLen = handleHatLaStatus(seq, cmdId, rspBuf);

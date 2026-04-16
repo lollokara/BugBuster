@@ -746,14 +746,18 @@ static void dispatch_command(const HatFrame *frame)
     }
     case HAT_CMD_LA_STOP:
     {
+        bb_la_log("[STOP] recv streaming=%d\n", (int)bb_la_usb_is_streaming());
         // Soft-reset USB state without DCD abort.  The host preflight
         // calls HAT_CMD_LA_USB_RESET once per session (which does a full
         // DCD write_clear), so the routine STOP path doesn't need it.
         bb_la_usb_soft_reset();
+        bb_la_log("[STOP] soft_reset done\n");
         // Always queue PKT_STOP so any waiting host stream task is unblocked,
         // regardless of whether streaming was active.
         bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_STOP, LA_STREAM_STOP_HOST);
+        bb_la_log("[STOP] pkt_stop queued\n");
         bb_la_stop();
+        bb_la_log("[STOP] la_stop done\n");
         {
             // Sync edge detector with actual post-stop state.  Hardcoding
             // LA_STATE_IDLE here causes a spurious bb_la_notify_done() on the
@@ -763,13 +767,22 @@ static void dispatch_command(const HatFrame *frame)
             LaStatus _st; bb_la_get_status(&_st);
             s_prev_la_state = _st.state;
         }
+        bb_la_log("[STOP] sending RSP_OK\n");
         send_ok(NULL, 0);
+        bb_la_log("[STOP] RSP_OK sent\n");
         break;
     }
     case HAT_CMD_LA_STREAM_START:
         bb_la_usb_live_reset_sequence();
         if (!bb_la_start_stream()) { send_error(HAT_ERR_BUSY); }
         else {
+            // Must mirror handle_stream_command(START) by marking the session
+            // active BEFORE queuing PKT_START.  Without this flag:
+            //   - bb_la_usb_is_streaming() returns false during the stream
+            //   - Core 1's guard lets bb_la_poll() run on the wrong core
+            //   - usb_idle=true allows bb_la_notify_done() to send a spurious
+            //     HAT UART frame → ESP32 BBP seq desync → 0x11 cascade
+            bb_la_usb_set_streaming(true);
             send_ok(NULL, 0);
             bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_START, LA_USB_STREAM_INFO_NONE);
         }

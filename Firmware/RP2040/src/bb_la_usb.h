@@ -185,6 +185,21 @@ void bb_la_usb_notify_task_from_isr(void);
 bool bb_la_usb_is_streaming(void);
 
 /**
+ * @brief Mark streaming session as started (active=true) or ended (active=false).
+ *
+ * Must be called after a successful bb_la_start_stream() in any code path
+ * that bypasses handle_stream_command() (e.g. HAT_CMD_LA_STREAM_START via
+ * BBP/UART).  Without this, bb_la_usb_is_streaming() returns false and:
+ *   - Core 1 calls bb_la_poll() during an active stream (wrong core, races Core 0)
+ *   - usb_idle=true allows bb_la_notify_done() to fire and send a spurious HAT
+ *     UART frame, which desyncs the ESP32 BBP seq counter → 0x11 cascade.
+ *
+ * Also resets s_cdc_seq, s_deferred_stop, and s_pending_hw_cleanup to mirror
+ * handle_stream_command(LA_USB_CMD_START_STREAM, ...) state initialisation.
+ */
+void bb_la_usb_set_streaming(bool active);
+
+/**
  * @brief Check if there is pending data to send (active buffer, ctrl markers,
  *        or deferred stop).  Used by the USB task fast-path to keep pumping
  *        until the current half-buffer is fully drained.

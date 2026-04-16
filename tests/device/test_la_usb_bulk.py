@@ -98,12 +98,10 @@ class TestLaUsbBulk:
         last_err = None
         recovery_status = {}
 
-        # Phase 1: BBP commands only (CDC serial held, vendor bulk NOT touched).
-        # On macOS, pyserial (CDC) and pyusb (vendor bulk interface 3) conflict
-        # when both are open simultaneously — EP_OUT becomes broken after the
-        # first re-claim cycle.  Do all BBP work first, then release CDC before
-        # interacting with the vendor bulk interface (same pattern as
-        # test_la_usb_1mhz.py which is known to work).
+        # Phase 1: BBP commands (configure + usb_reset via ESP32 CDC).
+        # BBP (ESP32 CDC/pyserial) and vendor bulk (RP2040 pyusb) are on DIFFERENT
+        # USB devices — no IOKit conflict.  BBP connection is kept transient here
+        # so it doesn't hold open a serial port across the full test duration.
         try:
             try:
                 recovery_status = dev.hat_la_get_status()
@@ -138,11 +136,8 @@ class TestLaUsbBulk:
         if not configured:
             pytest.skip(f"CMD_HAT_LA_CONFIG failed after 5 attempts: {last_err}")
 
-        # Phase 2: connect the vendor bulk interface NOW that CDC is released.
-        # Fresh connect() claims the interface and drains any stale EP_IN packets
-        # from a previous test.  Since CDC is already disconnected, there is no
-        # macOS IOKit conflict between pyserial and pyusb.
-        la_host.close()   # release any stale claim before fresh connect (macOS EP_OUT fix)
+        # Phase 2: connect the vendor bulk interface (fresh claim drains stale EP_IN).
+        la_host.close()   # release any stale claim before fresh connect
         la_host.connect()
         la_host._bbp_port = port  # enable BBP STOP path for all subsequent calls
         time.sleep(0.05)
@@ -225,7 +220,7 @@ class TestLaUsbBulk:
         """
         Sending STOP command while streaming must produce a PKT_STOP packet.
         """
-        la_host.send_command(STREAM_CMD_START)
+        la_host.start_stream()
         la_host.wait_for_start(timeout_ms=2000, max_packets=512)
         
         # Read some data
