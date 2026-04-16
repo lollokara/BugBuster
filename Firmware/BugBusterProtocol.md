@@ -68,7 +68,7 @@ by normal CLI typing. The device scans incoming CLI bytes for this 4-byte sequen
 
 **Device responds** (raw bytes):
 ```
-0xBB 0x42 0x55 0x47 <PROTO_VER:1> <FW_VER_MAJOR:1> <FW_VER_MINOR:1> <FW_VER_PATCH:1>
+0xBB 0x42 0x55 0x47 0x04 0x01 0x06 0x00
 ```
 
 After sending this response, the device:
@@ -324,7 +324,10 @@ Per diagnostic slot (4x, starting at offset 127, stride = 7 bytes):
 +1      raw_code            u16     Raw diagnostic ADC code
 +3      value               f32     Converted value (V or C)
 
-Total response: 15 + (4 x 28) + (4 x 7) = 155 bytes
+MUX state (4 bytes, starting at offset 155):
++0-3    mux_state           u8[4]   Current state of 4 MUX devices (Bit 0 = S1)
+
+Total response: 15 + (4 x 28) + (4 x 7) + 4 = 159 bytes
 ```
 
 #### 0x02 GET_DEVICE_INFO
@@ -1242,10 +1245,20 @@ Get HAT detection state, connection status, and current pin configuration.
 7       fw_major        u8      HAT firmware version major
 8       fw_minor        u8      HAT firmware version minor
 9       confirmed       bool    Last config was acknowledged by HAT
-10      ext1_func       u8      EXP_EXT_1 function (HatPinFunction)
-11      ext2_func       u8      EXP_EXT_2 function
-12      ext3_func       u8      EXP_EXT_3 function
-13      ext4_func       u8      EXP_EXT_4 function
+10-13   ext_func        u8[4]   EXP_EXT_1 to EXP_EXT_4 functions
+14      a_enabled       bool    Connector A power
+15      a_current_ma    f32     Connector A current
+19      a_fault         bool    Connector A fault
+20      b_enabled       bool    Connector B power
+21      b_current_ma    f32     Connector B current
+25      b_fault         bool    Connector B fault
+26      io_voltage_mv   u16     HVPAK IO voltage
+28      hvpak_part      u8      HVPAK identity
+29      hvpak_ready     bool    HVPAK mailbox ready
+30      hvpak_last_err  u8      HVPAK error code
+31      dap_connected   bool    CMSIS-DAP host connected
+32      target_detect   bool    SWD target detected
+33      target_dpidr    u32     Target DPIDR
 ```
 
 #### 0xC6 HAT_SET_PIN
@@ -2134,8 +2147,8 @@ Host                                    Device
   │                                       │
   │──── 0xBB 0x42 0x55 0x47 ────────────>│  (magic bytes)
   │                                       │
-  │<──── 0xBB 0x42 0x55 0x47 0x01 ───────│  (ACK, proto v1, fw version)
-  │         0x01 0x00 0x01                │
+  │<──── 0xBB 0x42 0x55 0x47 0x04 ───────│  (ACK, proto v4, fw version)
+  │         0x01 0x06 0x00                │
   │                                       │  (device enters binary mode)
   │                                       │
   │──── [COBS: CMD seq=1 GET_STATUS] ───>│
