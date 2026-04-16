@@ -1,6 +1,6 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 1.6
+**Version:** 1.8
 **BBP Protocol Version:** 4
 **Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
@@ -1681,7 +1681,7 @@ Read the current cached state of all 32 switches.
 | 2 | mux2 | u8 | State of MUX 2 (U16). |
 | 3 | mux3 | u8 | State of MUX 3 (U17). |
 
-**Web API equivalent:** `GET /api/mux/all`
+**Web API equivalent:** `GET /api/mux`
 
 #### 0x92 MUX_SET_SWITCH
 Set the state of a single switch in the matrix. Enforces safety dead-time for the affected switch group.
@@ -1695,7 +1695,7 @@ Set the state of a single switch in the matrix. Enforces safety dead-time for th
 
 **Response payload:** (empty)
 
-**Web API equivalent:** `POST /api/mux/switch` with body `{"device": 0, "switch": 2, "state": true}`
+**Web API equivalent:** `POST /api/mux/set` with body `{"device": 0, "switch": 1, "closed": true}`
 
 ### 6.16 Scope API (HTTP Polling)
 
@@ -1939,6 +1939,74 @@ The device writes to the inactive OTA partition, validates the image, sets it as
 ```
 
 If the new firmware fails to boot (crashes before `esp_ota_mark_app_valid_cancel_rollback()`), the bootloader automatically reverts to the previous partition.
+
+### 6.21 Debug Status
+
+#### GET /api/debug
+Returns the combined status of all I2C buses and attached devices (DS4424, HUSB238, PCA9535). Useful for hardware diagnostics and identifying I2C bus health.
+
+**Response:**
+```json
+{
+  "i2cBusOk": true,
+  "ds4424": {
+    "present": true,
+    "ch0": { "code": 0, "targetV": 12.0 },
+    "ch1": { "code": 0, "targetV": 12.0 },
+    "ch2": { "code": 0, "targetV": 3.3 }
+  },
+  "husb238": {
+    "present": true,
+    "attached": true,
+    "voltageV": 20.0,
+    "currentA": 5.0
+  },
+  "pca9535": {
+    "present": true,
+    "input0": 255,
+    "input1": 255,
+    "output0": 0,
+    "output1": 0
+  }
+}
+```
+
+### 6.22 MUX Control (REST)
+
+These endpoints provide RESTful access to the MUX switch matrix.
+
+#### GET /api/mux
+Returns the current state of all 32 switches as a JSON array of 4 bytes (one per device). Each byte represents the 8 switches of one ADGS2414D device (Bit 0 = S1).
+
+**Response:**
+```json
+{
+  "states": [0, 0, 0, 0],
+  "numDevices": 4,
+  "physicalDevices": 4
+}
+```
+
+#### POST /api/mux/set
+Set the state of a single switch in the matrix.
+
+**Request Body:**
+```json
+{
+  "device": 0,
+  "switch": 1,
+  "closed": true
+}
+```
+
+**Response:**
+```json
+{
+  "device": 0,
+  "switch": 1,
+  "closed": true
+}
+```
 
 ---
 
@@ -2309,6 +2377,7 @@ Host                                    Device
 | 1.5 | 2026-03-29 | Added WIFI_SCAN (0xE4); WiFi credentials persist in NVS |
 | 1.6 | 2026-03-30 | Added SET_LSHIFT_OE (0xE0), SET_SPI_CLOCK (0xE3) sections; OTA update endpoint (POST /api/ota/upload); device version endpoint (GET /api/device/version); A/B OTA partition table with rollback |
 | 1.7 | 2026-03-31 | Added SET_RTD_CONFIG (0x1D) command for RTD excitation current selection (125/250 µA); GET_STATUS per-channel payload extended by 2 bytes (rtd_excitation_ua u16, stride 26→28, total 147→155 bytes); adc_value for RES_MEAS now returned in Ohms (R = V_adc / I_exc) |
+| 1.8 | 2026-04-01 | Added GET /api/debug and POST /api/mux/set REST endpoints |
 
 ---
 
@@ -2352,10 +2421,10 @@ Host                                    Device
 | 0x70 | DEVICE_RESET | H->D | -- | `POST /api/device/reset` |
 | 0x71 | REGISTER_READ | H->D | addr | CLI `rreg` |
 | 0x72 | REGISTER_WRITE | H->D | addr, val | CLI `wreg` |
-| 0x73 | SET_WATCHDOG | H->D | enable, timeout | (new, USB only) |
-| 0x90 | MUX_SET_ALL | H->D | 4 states | (new) |
-| 0x91 | MUX_GET_ALL | H->D | -- | (new) |
-| 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | (new) |
+| 0x74 | GET_ADMIN_TOKEN | H->D | -- | (new, USB only) |
+| 0x90 | MUX_SET_ALL | H->D | 4 states | `POST /api/mux/all` |
+| 0x91 | MUX_GET_ALL | H->D | -- | `GET /api/mux` |
+| 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | `POST /api/mux/set` |
 | 0xA0 | IDAC_GET_STATUS | H->D | -- | `GET /api/idac` |
 | 0xA1 | IDAC_SET_CODE | H->D | ch, code | `POST /api/idac/code` |
 | 0xA2 | IDAC_SET_VOLTAGE | H->D | ch, voltage | `POST /api/idac/voltage` |
