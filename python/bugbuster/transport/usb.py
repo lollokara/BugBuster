@@ -17,6 +17,7 @@ import threading
 import queue
 import struct
 import logging
+import random
 from typing import Callable, Optional
 
 import serial  # pyserial
@@ -62,7 +63,7 @@ class USBTransport:
         self._timeout  = timeout
 
         self._serial: Optional[serial.Serial] = None
-        self._seq   = 0
+        self._seq   = random.randint(0x1000, 0xFFF0)
         self._seq_lock = threading.Lock()
 
         # seq -> queue.Queue that receives the response payload (bytes) or an exception
@@ -199,6 +200,16 @@ class USBTransport:
             target=self._reader_loop, name="bbp-reader", daemon=True
         )
         self._reader_thread.start()
+
+        # Drain stale BBP frames from previous sessions. The ESP32 CDC TX
+        # buffer may contain responses to timed-out commands from a prior
+        # connection. Give the reader thread time to consume and discard
+        # them (they won't match any pending seq number and are logged as
+        # "Received unexpected RSP/ERR").
+        # NOTE: Do NOT call reset_input_buffer() — on macOS CDC devices
+        # tcflush() does not reliably flush the kernel USB receive buffer.
+        import time as _time
+        _time.sleep(0.15)
 
         return self.proto_version, self.fw_version
 

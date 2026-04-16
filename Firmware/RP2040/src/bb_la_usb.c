@@ -174,7 +174,7 @@ static volatile bool s_streaming_session = false;
 // (write_available returns 0), give up after this many send_pending() calls
 // to prevent USB task starvation of other FreeRTOS tasks.
 static volatile uint32_t s_deferred_stop_retries = 0;
-#define DEFERRED_STOP_MAX_RETRIES  5000u  // ~500ms at USB task rate
+#define DEFERRED_STOP_MAX_RETRIES  10000u  // ~1s at USB task rate
 
 // Set when vendor-bulk STOP uses soft HW stop; consumed by send_pending()
 // after PKT_STOP emission to call bb_la_stop() for full cleanup.
@@ -207,9 +207,37 @@ bool bb_la_usb_connected(void) {
     return tud_vendor_n_mounted(BB_LA_VENDOR_ITF);
 }
 
+#include "hardware/structs/usb.h"
+#include "hardware/regs/addressmap.h"
+#include "hardware/regs/usb.h"
+
+// Direct SIE buffer_control register manipulation for RP2040.
+// This clears the AVAIL bit for the vendor bulk IN endpoint, releasing
+// it from any stuck busy state without the buggy DCD abort_done spin.
+static void rp2040_sie_endpoint_reset(uint8_t ep_addr) {
+    uint8_t const ep_num = ep_addr & 0x0f;
+    bool const is_in = (ep_addr & 0x80) != 0;
+
+    // RP2040 DPRAM buffer_control layout (datasheet §4.1.2.5.2):
+    //   EP0: DPRAM_BASE + 0x80 (IN) / 0x84 (OUT)
+    //   EP1-15: DPRAM_BASE + 0x80 + 8*ep_num (IN) / + 4 (OUT)
+    // BugBuster uses single-buffered bulk (buffer 0 only).
+    uint32_t *buf_ctrl;
+    if (ep_num == 0) {
+        buf_ctrl = (uint32_t*)(USBCTRL_DPRAM_BASE + 0x80 + (is_in ? 0 : 4));
+    } else {
+        // RP2040 datasheet 4.1.2.5.2: 
+        // 0x80 + 8*ep_num for IN (buffer 0), 0x84 + 8*ep_num for OUT (buffer 0)
+        buf_ctrl = (uint32_t*)(USBCTRL_DPRAM_BASE + 0x80 + 8 * ep_num + (is_in ? 0 : 4));
+    }
+
+    // Clear everything: AVAIL, FULL, LAST, and the byte count.
+    // This immediately releases the buffer from SIE control.
+    *buf_ctrl = 0;
+    __dmb();
+}
+
 void bb_la_usb_soft_reset(void) {
-    bb_la_log("soft_reset: streaming=%d pending=%d", s_streaming_session,
-              bb_la_usb_has_pending_data());
     s_streaming_session = false;
     uint32_t status = save_and_disable_interrupts();
     s_bulk_data.active = false;
@@ -221,6 +249,17 @@ void bb_la_usb_soft_reset(void) {
     // must drain naturally so the host's stop_stream() receives them.
     s_pending_hw_cleanup = false;
     s_deferred_stop = false;      // cancel any stale deferred stop
+    s_deferred_stop_retries = 0;
+
+    // Reset hardware IN endpoint to release stuck AVAIL bit.
+    // Do NOT call TinyUSB stream functions here — soft_reset runs on
+    // Core 1 (HAT UART handler) and races with tud_task on Core 0.
+    // Only do direct SIE register writes; the full TinyUSB cleanup
+    // (fifo_clear + rx_reprime) happens via s_need_endpoint_rearm on Core 0.
+    rp2040_sie_endpoint_reset(0x87); // IN only — safe direct register write
+    if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
+    s_need_endpoint_rearm = true;    // defer TinyUSB cleanup to Core 0
+
     // Bump both counters together — no DCD abort needed, so
     // request and complete stay in sync.
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
@@ -305,36 +344,6 @@ void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes) {
 #endif
 }
 
-#include "hardware/structs/usb.h"
-#include "hardware/regs/addressmap.h"
-#include "hardware/regs/usb.h"
-
-// Direct SIE buffer_control register manipulation for RP2040.
-// This clears the AVAIL bit for the vendor bulk IN endpoint, releasing
-// it from any stuck busy state without the buggy DCD abort_done spin.
-static void rp2040_sie_endpoint_reset(uint8_t ep_addr) {
-    uint8_t const ep_num = ep_addr & 0x0f;
-    bool const is_in = (ep_addr & 0x80) != 0;
-    
-    // RP2040 DPRAM buffer_control layout (datasheet §4.1.2.5.2):
-    //   EP0: DPRAM_BASE + 0x80 (IN) / 0x84 (OUT)
-    //   EP1-15: DPRAM_BASE + 0x80 + 8*ep_num (IN) / + 4 (OUT)
-    // BugBuster uses single-buffered bulk (buffer 0 only).
-    uint32_t *buf_ctrl;
-    if (ep_num == 0) {
-        buf_ctrl = (uint32_t*)(USBCTRL_DPRAM_BASE + 0x80 + (is_in ? 0 : 4));
-    } else {
-        // RP2040 datasheet 4.1.2.5.2: 
-        // 0x80 + 8*ep_num for IN (buffer 0), 0x84 + 8*ep_num for OUT (buffer 0)
-        buf_ctrl = (uint32_t*)(USBCTRL_DPRAM_BASE + 0x80 + 8 * ep_num + (is_in ? 0 : 4));
-    }
-
-    // Clear everything: AVAIL, FULL, LAST, and the byte count.
-    // This immediately releases the buffer from SIE control.
-    *buf_ctrl = 0;
-    __dmb();
-}
-
 void bb_la_usb_send_pending(void) {
     if (!tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
         // Can't do USB I/O, but clear pending rearm — there is nothing
@@ -373,6 +382,16 @@ void bb_la_usb_send_pending(void) {
         // DCD abort spin — safe now that Step 1 already cleared the hardware.
         tud_vendor_n_fifo_clear(BB_LA_VENDOR_ITF);
 
+        // Step 3: force-clear OUT endpoint hardware, then re-prime.
+        // When the host releases the USB interface, macOS cancels pending OUT
+        // transfers.  vendord_xfer_cb never fires, so TinyUSB's busy flag is
+        // stale.  The SIE might still show AVAIL=1 from the old transfer, but
+        // the host has abandoned it — the endpoint is effectively dead.
+        // Clear the SIE register first (AVAIL→0), then rx_reprime detects
+        // AVAIL=0 and does clear_busy + fresh re-prime.
+        rp2040_sie_endpoint_reset(0x06);  // OUT: clear stale AVAIL
+        tud_vendor_n_rx_reprime(BB_LA_VENDOR_ITF);  // re-prime cleanly
+
         s_rearm_complete_count = s_rearm_request_count;
     }
 
@@ -387,6 +406,7 @@ void bb_la_usb_send_pending(void) {
         for (int i=0; i<4; i++) pkt[i] = s_bulk_ctrl_buf[(tail + i) % BULK_CTRL_BUF_SIZE];
         tud_vendor_n_write(BB_LA_VENDOR_ITF, pkt, 4);
         tail = (tail + 4) % BULK_CTRL_BUF_SIZE;
+        s_deferred_stop_retries = 0;  // DATA MOVING
         
         uint32_t status = save_and_disable_interrupts();
         s_bulk_ctrl_tail = tail;
@@ -395,8 +415,11 @@ void bb_la_usb_send_pending(void) {
 
     // 2. If no control markers, check for data
     if (head == tail) {
-        // Continuous loop to drain as many ready buffers as possible into USB FIFO
-        while (true) {
+        // Continuous loop to drain ready buffers into USB FIFO.
+        // LIMIT to 2 buffers per call to ensure poll_commands() and tud_task()
+        // get a chance to process host commands (like STOP).
+        int loops = 0;
+        while (loops < 2) {
             if (!s_bulk_data.active) {
                 const uint8_t *stream_buf;
                 uint32_t stream_len;
@@ -452,6 +475,7 @@ void bb_la_usb_send_pending(void) {
 
                         tud_vendor_n_write(BB_LA_VENDOR_ITF, packet, (uint32_t)(4 + chunk));
                         s_bulk_data.sent_len += chunk;
+                        s_deferred_stop_retries = 0;  // DATA MOVING
                         usb_avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
                     }
                 } else {
@@ -465,6 +489,7 @@ void bb_la_usb_send_pending(void) {
                             header[3] = (uint8_t)((s_bulk_data.total_len >> 24) & 0xFF);
                             tud_vendor_n_write(BB_LA_VENDOR_ITF, header, 4);
                             s_bulk_data.header_sent = true;
+                            s_deferred_stop_retries = 0;  // DATA MOVING
                             usb_avail -= 4;
                         }
                     }
@@ -475,6 +500,7 @@ void bb_la_usb_send_pending(void) {
                         if (chunk > 0) {
                             tud_vendor_n_write(BB_LA_VENDOR_ITF, s_bulk_data.buf + s_bulk_data.sent_len, chunk);
                             s_bulk_data.sent_len += chunk;
+                            s_deferred_stop_retries = 0;  // DATA MOVING
                         }
                     }
                 }
@@ -486,6 +512,7 @@ void bb_la_usb_send_pending(void) {
                         s_bulk_data.ring_buf = NULL;
                     }
                     s_bulk_data.active = false;
+                    loops++;
                     // Loop continues to check if NEXT ring buffer is ready
                 } else {
                     // Current buffer didn't finish (USB FIFO full)
@@ -501,26 +528,28 @@ void bb_la_usb_send_pending(void) {
     //    fully drained so every DATA packet on the wire is a complete 64-byte
     //    frame.  Avoids the partial-packet alignment bug that occurs when
     //    write_clear() truncates an in-flight transfer mid-packet.
-    if (s_deferred_stop && !s_bulk_data.active) {
+    if (s_deferred_stop) {
         uint32_t avail = tud_vendor_n_write_available(BB_LA_VENDOR_ITF);
-        if (avail >= 4) {
+        if (!s_bulk_data.active && avail >= 4) {
             uint8_t stop_pkt[4] = {
                 LA_USB_STREAM_PKT_STOP, s_live_seq, 0, s_deferred_stop_info
             };
             tud_vendor_n_write(BB_LA_VENDOR_ITF, stop_pkt, 4);
             s_deferred_stop = false;
-            s_streaming_session = false;
             // Full cleanup after ring is fully drained
             if (s_pending_hw_cleanup) {
                 s_pending_hw_cleanup = false;
                 bb_la_stop();  // unload PIO, reset ring, state -> IDLE
             }
+            __dmb();  // Ensure state=IDLE visible to Core 1 before clearing flag
+            s_streaming_session = false;
         } else if (++s_deferred_stop_retries >= DEFERRED_STOP_MAX_RETRIES) {
             // IN endpoint stuck — can't send PKT_STOP in the normal aligned path.
             // Force an emergency PKT_STOP now: a slightly misaligned packet is
             // better than leaving the host blocked indefinitely (which causes the
             // 0x11 cascade on the next BBP session).
             s_deferred_stop = false;
+            s_bulk_data.active = false; // Abort data drain
             {
                 uint8_t stop_pkt[4] = {
                     LA_USB_STREAM_PKT_STOP, s_live_seq, 0, s_deferred_stop_info
@@ -538,6 +567,7 @@ void bb_la_usb_send_pending(void) {
                 s_pending_hw_cleanup = false;
                 bb_la_stop();   // state → IDLE before Core 1 can observe flag
             }
+            __dmb();  // Ensure state=IDLE visible to Core 1 before clearing flag
             s_streaming_session = false;   // clear AFTER state is IDLE
             // Re-arm the IN endpoint so the next session can start cleanly.
             s_need_endpoint_rearm = true;
