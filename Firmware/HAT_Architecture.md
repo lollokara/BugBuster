@@ -28,9 +28,12 @@
 │                        HAT Board                             │
 │                                                              │
 │  RP2040 (debugprobe fork + BugBuster extensions)             │
-│  ├── USB ────────────── CMSIS-DAP v2 + CDC UART bridge       │
+│  ├── USB IF 0 ─────── Vendor bulk — LA data plane           │
+│  │                     (EP 0x06 OUT / 0x87 IN)               │
+│  ├── USB IF 1 ─────── CMSIS-DAP v2 (HID/vendor)              │
+│  ├── USB IF 2/3 ────── CDC UART bridge to target             │
 │  ├── PIO 0 ──────────── SWD engine (from debugprobe)         │
-│  ├── PIO 1 ──────────── Logic analyzer / signal capture      │
+│  ├── PIO 1 ──────────── Logic analyzer capture (4 SMs)       │
 │  ├── UART0 (slave) ──── BugBuster management bus             │
 │  └── GPIO ───────────── Connector enables, HVPAK, LEDs       │
 │                                                              │
@@ -49,6 +52,33 @@
 │  └── GND                                                     │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### 1.1 Host USB topology (HAT present)
+
+The HAT enumerates **three** USB interfaces alongside the ESP32's CDC ports.
+When the HAT is installed the host sees two independent USB devices — one
+per MCU — and uses each for different classes of traffic:
+
+```mermaid
+flowchart LR
+  HOST["Host application<br/>(desktop / MCP / OpenOCD)"]
+  ESP32["ESP32-S3<br/>USB CDC #0"]
+  RP["RP2040<br/>USB composite"]
+
+  HOST -->|"BBP v4 — control plane<br/>(commands, status, events)"| ESP32
+  HOST -->|"Vendor bulk IF0<br/>EP 0x06 / 0x87<br/>LA streaming & readout"| RP
+  HOST -->|"CMSIS-DAP v2 IF1<br/>EP 0x04 / 0x85"| RP
+  HOST -->|"CDC bridge IF2/3<br/>target UART"| RP
+
+  ESP32 -->|"HAT UART 921600 8N1<br/>config / status / HVPAK"| RP
+```
+
+**Key property:** LA data and SWD debug traffic do NOT traverse the ESP32 or
+the HAT UART. The ESP32 only configures and arms the LA (via
+`HAT_LA_CONFIG` / `HAT_LA_ARM` / `HAT_LA_STREAM_START` over the HAT UART);
+sample data flows directly from the RP2040's vendor-bulk endpoint to the
+host. See [`../Docs/LogicAnalyzer.md`](../Docs/LogicAnalyzer.md) for the
+full packet format and rearm protocol.
 
 ---
 
@@ -83,10 +113,16 @@ CMSIS-DAP protocol handling, and USB descriptors. Instead, we fork and extend.
 - PIO 0: SWD engine (SWCLK output, SWDIO bidirectional)
 - PIO 1: Available for our logic analyzer
 
-**USB endpoints:**
-- EP 0x04/0x85: CMSIS-DAP commands (HID or vendor bulk)
-- EP 0x02/0x83: CDC UART data
-- EP 0x81: CDC notification
+**USB endpoints (as shipped on `bb-hat-2.0`):**
+- EP `0x06/0x87`: **BB_LA vendor bulk** — Logic Analyzer streaming / readout (interface 0)
+- EP `0x04/0x85`: CMSIS-DAP commands (interface 1, vendor class per DAP v2 spec)
+- EP `0x02/0x83`: CDC UART data (target bridge)
+- EP `0x81`: CDC notification
+
+The LA interface is deliberately placed on interface **0** so TinyUSB's
+built-in vendor driver claims it; the custom DAP driver
+(`lib/debugprobe/src/tusb_edpt_handler.c`) claims interface 1 only. Prior to
+2026-04 the indices were swapped and TinyUSB/DAP fought for ownership.
 
 ### 2.3 Integration Strategy
 
@@ -295,16 +331,35 @@ with an active debug session.
 | 0x35 | LA_READ_DATA | offset(u32), len(u16) | Read captured data chunk |
 | 0x36 | LA_STOP | — | Abort capture |
 
-**Bandwidth Consideration:**
+**Bandwidth — chosen path (implemented in `bb-hat-2.0`):**
 
-UART at 115200 baud = ~11 KB/s throughput. For a 200KB capture buffer, full readout
-takes ~18 seconds. This is acceptable for **offline capture** (capture fast, read back slow).
+The HAT UART (even at 921600 baud ≈ 92 KB/s) cannot carry sustained LA data
+above a few hundred kHz across 4 channels. The RP2040's LA data path is
+therefore a **dedicated USB vendor-bulk interface** (IF0, EP `0x06` OUT /
+`0x87` IN) that the host claims directly via libusb. This keeps LA streaming
+off the HAT UART and off the ESP32 entirely.
 
-For real-time streaming, options:
-1. **Compress on RP2040:** RLE for digital signals (typical 10:1 compression)
-2. **RP2040 USB bulk endpoint:** Add a vendor bulk endpoint to debugprobe's USB descriptor
-   for high-speed LA data streaming (12 Mbps = ~1.2 MB/s)
-3. **Reduced rate:** Stream 4 channels at ≤10 kHz via UART in real-time
+- **Interface 0** is claimed by TinyUSB's built-in vendor driver
+  (`BB_LA_VENDOR_ITF = 0`); interface 1 is the CMSIS-DAP vendor interface
+  claimed by the custom DAP driver.
+- **Packet layout:** 4-byte header (`[type:u8][seq:u8][payload_len:u8][info:u8]`)
+  plus 0–60 bytes of payload, so a full 64-byte FS USB bulk packet is one
+  frame.
+- **Packet types:** `PKT_START`, `PKT_DATA` (raw or RLE), `PKT_STOP`
+  (with stop-reason info byte), `PKT_ERROR`.
+- **Ring buffer:** 8 slots × 2432 bytes ≈ 19.5 KB on the RP2040 — sized so
+  the host has ~5 ms of slack at 1 MHz / 4 ch before DMA overrun.
+- **Throughput ceiling:** ~1.1 MB/s sustained (USB 2.0 Full-Speed).
+- **Consecutive-run rearm:** `HAT_LA_STOP` performs a STOP-first preflight,
+  SIE endpoint reset, then `tud_vendor_n_fifo_clear` — see
+  [`../Docs/LogicAnalyzer.md`](../Docs/LogicAnalyzer.md) §6.1.
+
+RLE compression (typical 10:1 on digital signals) is still used to trade CPU
+for bandwidth inside a single run, but is now about fitting noisy signals
+into the link rather than fitting any signal at all.
+
+One-shot readout (e.g. `HAT_CMD_LA_USB_SEND` for offline capture-then-dump)
+uses the same vendor-bulk endpoint with a simpler length-prefixed format.
 
 **Simultaneous SWD + LA:**
 

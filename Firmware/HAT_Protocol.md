@@ -1,7 +1,7 @@
 # BugBuster HAT Protocol Specification
 
-**Version:** 1.0
-**Date:** 2026-04-02
+**Version:** 1.1 (LA data-plane clarifications for `bb-hat-2.0`)
+**Date:** 2026-04-17
 **Transport:** UART 921600 8N1 (GPIO43 TX, GPIO44 RX)
 **Roles:** BugBuster = Master, HAT = Slave
 
@@ -10,6 +10,31 @@
 ## 1. Overview
 
 The HAT (Hardware Attached on Top) protocol defines communication between the BugBuster main board and expansion HAT boards connected via the HAT header. BugBuster is always the bus master — it initiates all transactions. The HAT responds to commands and may assert the shared interrupt line (GPIO15, open-drain) to request attention.
+
+### 1.0 Scope — what this UART carries (and doesn't)
+
+This UART protocol is the **HAT control plane**: configuration, status polling,
+power management, pin routing, HVPAK access, and Logic Analyzer *arming*.
+Frames are small (≤ 32-byte payload) and master-polled.
+
+**High-bandwidth data does NOT flow over this UART.** The RP2040 HAT exposes
+its own USB device, and the host talks to it directly for:
+
+- **CMSIS-DAP v2 SWD debug** — vendor interface 1 (EP `0x04`/`0x85`). Host
+  debug tools (OpenOCD, pyOCD, probe-rs, VS Code) connect straight to the
+  RP2040 USB; neither BugBuster nor this UART is in the debug path.
+- **Logic Analyzer streaming and one-shot readout** — vendor bulk interface 0
+  (EP `0x06`/`0x87`). LA sample bytes stream from PIO 1 → DMA → USB FIFO →
+  host libusb claim, completely bypassing this UART. See
+  [`../Docs/LogicAnalyzer.md`](../Docs/LogicAnalyzer.md) for the packet
+  format, ring buffer sizing, and rearm protocol.
+- **Target UART bridge** — CDC interfaces 2/3 on the RP2040 USB.
+
+So this HAT UART protocol sees `HAT_LA_CONFIG` / `HAT_LA_ARM` /
+`HAT_LA_STREAM_START` / `HAT_LA_STOP` (tiny control frames) but never the
+captured samples themselves. That split is what makes sustained 1 MHz / 4-ch
+LA streaming possible — a 921600-baud UART could never carry 4 MB/s of raw
+LA data.
 
 ### 1.1 Physical Interface
 

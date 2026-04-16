@@ -1578,8 +1578,7 @@ Force a reset of the HAT's USB subsystem. Useful for clearing hung USB states du
 **Response payload:** (empty)
 
 #### 0xEE HAT_LA_STREAM_START
-Start continuous streaming mode (double-buffered DMA to USB).
-Capture parameters must be pre-configured via `0xCF HAT_LA_CONFIG`.
+Start continuous streaming mode. Capture parameters must be pre-configured via `0xCF HAT_LA_CONFIG` and the capture must be `ARM`'d. This opcode is a **control** command — it tells the RP2040 to begin emitting `PKT_START` followed by `PKT_DATA` on its vendor-bulk IN endpoint. Sample bytes themselves do NOT traverse this BBP link; see §6.13d below for the out-of-band data path.
 
 **Request payload:** (empty)
 **Response payload:** (empty)
@@ -1595,6 +1594,88 @@ Bits [27:0]  = 28-bit run length (number of consecutive identical samples)
 ```
 
 Maximum run length per entry: 268,435,455 (0x0FFFFFFF). Runs exceeding this are split across multiple entries. Typical compression ratio for digital signals: 10–100×.
+
+### 6.13d HAT LA USB Data Plane (out-of-band)
+
+Logic Analyzer sample data is transported over a **dedicated USB vendor-bulk
+interface on the RP2040 HAT**, not over this BBP link. BBP opcodes
+(`HAT_LA_CONFIG`, `HAT_LA_ARM`, `HAT_LA_STREAM_START`, `HAT_LA_STOP`,
+`HAT_LA_USB_RESET`) are the **control plane**; the RP2040's USB endpoint is
+the **data plane**. The host must open both to use streaming.
+
+The ESP32 is not in the LA data path. This is what allows sustained 1 MHz /
+4-channel streaming even while BBP is busy with unrelated commands.
+
+**Interface — RP2040 USB composite device:**
+
+| Interface | Class | Endpoints | Purpose |
+|---|---|---|---|
+| **0 (vendor)** | Vendor-specific | `0x06` OUT · `0x87` IN (64 B FS) | **LA streaming / readout** |
+| 1 (vendor) | Vendor-specific | `0x04` OUT · `0x85` IN | CMSIS-DAP v2 |
+| 2-3 (CDC) | Communications | `0x81` / `0x02` / `0x83` | Target UART bridge |
+
+**Packet layout** (every bulk packet, both directions):
+
+```
+offset  field        type  notes
+ 0      type         u8    0x01=START, 0x02=DATA, 0x03=STOP, 0x04=ERROR
+ 1      seq          u8    wraps mod 256; reset to 0 on each START
+ 2      payload_len  u8    0..60 bytes
+ 3      info         u8    type-dependent (see table below)
+ 4..    payload      u8[]  present on DATA only
+```
+
+Maximum payload is 60 bytes so header + payload fits one 64-byte FS bulk
+packet.
+
+**`info` byte semantics by packet type:**
+
+| Type | `info` | Meaning |
+|---|---|---|
+| `PKT_START` (0x01) | `0x00` | stream armed, data follows |
+| `PKT_START` (0x01) | `0x80` | `START_REJECTED` — config invalid or already streaming |
+| `PKT_DATA` (0x02)  | `0x00` | raw sample bytes (packing depends on 1/2/4 ch config) |
+| `PKT_DATA` (0x02)  | `0x01` | `COMPRESSED` — payload is RLE pairs `[value:u8][count−1:u8]` |
+| `PKT_STOP` (0x03)  | `0x01` | `HOST` — host issued `HAT_LA_STOP` |
+| `PKT_STOP` (0x03)  | `0x02` | `USB_SHORT_WRITE` — TinyUSB FIFO backpressure deadlock |
+| `PKT_STOP` (0x03)  | `0x03` | `DMA_OVERRUN` — PIO FIFO overflowed before DMA could drain |
+| `PKT_ERROR` (0x04) | `0x01..` | reserved for future error codes |
+
+**One-shot readout** (`0xD8 HAT_LA_READ`) uses the same vendor-bulk endpoint
+but with a simpler length-prefixed framing: one 4-byte little-endian byte
+count followed by the raw buffer. No RLE packetisation on this path.
+
+**Rearm protocol (consecutive runs):**
+
+Host MUST issue `HAT_LA_STOP` before any new `HAT_LA_STREAM_START`, even if
+the previous stream finished naturally. On each STOP the RP2040 firmware:
+
+1. Flushes in-flight DMA.
+2. Resets the SIE registers for EP `0x87`.
+3. Calls `tud_vendor_n_fifo_clear()` to align software + hardware FIFOs.
+
+The rearm state is exposed via `HAT_LA_STATUS` (`0xD7`):
+
+| Field | Meaning |
+|---|---|
+| `usb_rearm_pending` | `1` while STOP→SIE→FIFO sequence is in flight |
+| `usb_rearm_request_count` | host-initiated rearm attempts |
+| `usb_rearm_complete_count` | successful rearms (should equal `request_count`) |
+
+If `request_count > complete_count` persistently, the vendor interface is
+stuck; send `HAT_LA_USB_RESET` (`0xED`) to force a USB-bus-level re-enumeration
+of the RP2040.
+
+**Throughput budget:**
+
+- RP2040 USB is Full-Speed (12 Mbps) — ceiling ≈ 1.1 MB/s sustained on vendor
+  bulk with low fragmentation.
+- At 1 MHz × 4 ch × 1 B = 1 MB/s raw; within budget.
+- RLE typically buys 10–30× reduction on digital workloads, so compressed
+  streams can simulate much higher effective sample rates.
+
+Full reference implementation and host-side parser guidance:
+[`../Docs/LogicAnalyzer.md`](../Docs/LogicAnalyzer.md).
 
 ### 6.14 HUSB238 USB PD (I2C, addr 0x08)
 
