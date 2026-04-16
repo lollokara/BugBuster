@@ -208,6 +208,7 @@ bool bb_la_usb_connected(void) {
 }
 
 #include "hardware/structs/usb.h"
+#include "hardware/structs/usb_dpram.h"
 #include "hardware/regs/addressmap.h"
 #include "hardware/regs/usb.h"
 
@@ -231,10 +232,13 @@ static void rp2040_sie_endpoint_reset(uint8_t ep_addr) {
         buf_ctrl = (uint32_t*)(USBCTRL_DPRAM_BASE + 0x80 + 8 * ep_num + (is_in ? 0 : 4));
     }
 
-    // Clear everything: AVAIL, FULL, LAST, and the byte count.
-    // This immediately releases the buffer from SIE control.
-    *buf_ctrl = 0;
-    __dmb();
+    // Only reset if the SIE currently holds the buffer (AVAIL=1).
+    // Resetting when AVAIL=0 (data already received) discards the byte count
+    // and makes TinyUSB/host think the endpoint is empty, causing timeouts.
+    if (*buf_ctrl & USB_BUF_CTRL_AVAIL) {
+        *buf_ctrl = 0;
+        __dmb();
+    }
 }
 
 void bb_la_usb_soft_reset(void) {
