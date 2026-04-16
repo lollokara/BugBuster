@@ -15,7 +15,7 @@ use crate::la_store::{LaStore, LaViewData};
 use crate::la_transport::{LaTransport, LockedLaTransport, StreamStopReason};
 use crate::la_usb::{
     decode_capture, hat_usb_present, LaCaptureData, LaStreamPacket, LaStreamPacketKind,
-    LaUsbConnection, LA_USB_CMD_START_STREAM, LA_USB_CMD_STOP, STREAM_INFO_START_REJECTED,
+    LaUsbConnection, STREAM_INFO_START_REJECTED,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -91,8 +91,24 @@ where
 
             *expected_seq = expected_seq.wrapping_add(1);
             status.chunk_count += 1;
-            status.total_bytes += packet.payload.len() as u64;
-            on_payload(&packet.payload);
+
+            if (packet.info & 0x01) != 0 {
+                // RLE Compressed payload: pairs of [value:8][count_minus_1:8]
+                let mut uncompressed = Vec::with_capacity(packet.payload.len() * 2);
+                let mut i = 0;
+                while i + 1 < packet.payload.len() {
+                    let val = packet.payload[i];
+                    let count = (packet.payload[i + 1] as usize) + 1;
+                    uncompressed.resize(uncompressed.len() + count, val);
+                    i += 2;
+                }
+                status.total_bytes += uncompressed.len() as u64;
+                on_payload(&uncompressed);
+            } else {
+                status.total_bytes += packet.payload.len() as u64;
+                on_payload(&packet.payload);
+            }
+
             Ok(StreamPacketOutcome::Continue)
         }
         LaStreamPacketKind::Stop => {
@@ -115,59 +131,55 @@ where
 
 /// Flush stale packets from the vendor-bulk IN FIFO before starting a new stream.
 ///
-/// Sends `LA_USB_CMD_STOP (0x00)` twice and drains until `PKT_STOP` each time.
-/// Two passes are kept as a conservative safety net: the firmware's
-/// `HAT_CMD_LA_STOP` now calls `bb_la_usb_abort_bulk()` unconditionally, so the
-/// second pass is rarely needed, but it costs little and guards against any residue
-/// that slips through during the abort→stop race on the firmware side.
-///
-/// **Must be called BEFORE `CMD_HAT_LA_CONFIG`** so that the `bb_la_stop()` side-
-/// effect (which unloads the PIO program) happens before configure reloads it.
-/// If called AFTER configure, the PIO would be unloaded and `bb_la_start_stream()`
-/// would reject the subsequent start with `START_REJECTED`.
-pub(crate) fn pre_stream_drain(transport: &mut impl LaTransport) {
+/// Pass 4 change: STOP is now routed via BBP `CMD_HAT_LA_STOP` (see callers) so
+/// this function no longer writes to the EP_OUT path — that path becomes
+/// unresponsive after the first stop/rearm cycle on RP2040 TinyUSB (see
+/// `tests/mock/la_usb_host.py:274` and `:344`). It now only performs a short
+/// bounded read loop to discard any residual bytes left in the IN FIFO after
+/// the firmware STOP already sent by the caller. A read timeout / USB error is
+/// treated as "fully drained" and returns Ok.
+pub(crate) fn pre_stream_drain(transport: &mut impl LaTransport) -> Result<(), String> {
     const MAX_DRAIN: usize = 8192;
-    for pass in 0u8..2 {
-        if let Err(e) = transport.send_command(LA_USB_CMD_STOP) {
-            log::warn!("[pre_stream_drain] cannot send LA_USB_CMD_STOP (pass {pass}): {e}");
-            return;
-        }
-        let mut count = 0usize;
-        loop {
-            match transport.read_packet() {
-                Ok(p) if p.kind == LaStreamPacketKind::Stop => break,
-                Ok(p) => {
-                    count += 1;
-                    log::debug!(
-                        "[pre_stream_drain] pass {pass}: discarding stale {:?} ({})",
-                        p.kind, count
-                    );
-                    if count >= MAX_DRAIN {
-                        log::warn!(
-                            "[pre_stream_drain] pass {pass}: MAX_DRAIN reached — aborting"
-                        );
-                        break;
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[pre_stream_drain] pass {pass}: USB error: {e}");
-                    return;
+    let mut count = 0usize;
+    let mut saw_stop = false;
+    loop {
+        match transport.read_packet() {
+            Ok(p) if p.kind == LaStreamPacketKind::Stop => {
+                saw_stop = true;
+                break;
+            }
+            Ok(p) => {
+                count += 1;
+                log::debug!(
+                    "[pre_stream_drain] discarding stale {:?} ({})",
+                    p.kind, count
+                );
+                if count >= MAX_DRAIN {
+                    log::warn!("[pre_stream_drain] MAX_DRAIN reached — aborting");
+                    return Err("MAX_DRAIN reached".to_string());
                 }
             }
-        }
-        if count > 0 {
-            log::warn!("[pre_stream_drain] pass {pass}: discarded {count} stale packets");
+            Err(e) => {
+                // Treat read timeout / no-data as a successful drain. Firmware
+                // has already been stopped via BBP by the caller, so an empty
+                // FIFO is the expected steady-state.
+                log::debug!("[pre_stream_drain] read ended after {count} packets: {e}");
+                break;
+            }
         }
     }
+    if count > 0 {
+        log::warn!("[pre_stream_drain] discarded {count} stale packets (saw_stop={saw_stop})");
+    }
+    Ok(())
 }
 
 /// Core streaming loop — runs synchronously in a `spawn_blocking` context.
 ///
-/// Assumes the vendor-bulk FIFO has already been drained by `pre_stream_drain()`
-/// and the firmware PIO has been reloaded by `CMD_HAT_LA_CONFIG`. Sends
-/// `LA_USB_CMD_START_STREAM`, then reads packets until the device sends STOP, a USB
-/// error occurs, or `running` is cleared by the host. On every exit path the
-/// function guarantees `running = false` and `status.active = false`.
+/// Pass 4 change: START is now sent via BBP `CMD_HAT_LA_STREAM_START` by the
+/// caller BEFORE this loop is spawned. This function only reads packets. The
+/// first packet is expected to be PKT_START; on any error path `running` is
+/// cleared and `status.active` set to false.
 pub(crate) fn run_stream_loop(
     transport: &mut impl LaTransport,
     running: &std::sync::atomic::AtomicBool,
@@ -184,16 +196,7 @@ pub(crate) fn run_stream_loop(
         }
     };
 
-    // FIFO has been pre-drained by pre_stream_drain() in la_stream_usb() before
-    // spawning this task, and CMD_HAT_LA_CONFIG has reloaded the PIO. Send START.
-    if let Err(e) = transport.send_command(LA_USB_CMD_START_STREAM) {
-        teardown(running, status);
-        return StreamStopReason::UsbError(format!("cannot send stream start: {e}"));
-    }
-
     // Read the immediate firmware response — must be PKT_START or PKT_ERROR.
-    //
-    // pre_stream_drain() sends STOP twice to flush the vendor-bulk FIFO.
     // MAX_SKIP is a generous safety net for any residual DATA/STOP packets
     // that arrive before PKT_START in pathological timing windows.
     let first = match transport.read_packet() {
@@ -1030,19 +1033,16 @@ pub async fn la_stream_usb(
     la: State<'_, LaState>,
 ) -> CmdResult<()> {
     log::info!(
-        "[la_stream_usb] Starting gapless bulk stream: ch={} rate={} depth={}",
+        "[la_stream_usb] phase=entry ch={} rate={} depth={}",
         channels,
         sample_rate_hz,
         depth
     );
 
     la.stream_running.store(false, Ordering::SeqCst);
-    // Stop firmware FIRST so it emits PKT_STOP on vendor-bulk IN.
-    // The background task's bulk_in() is blocking with the USB mutex held; sending
-    // CMD_HAT_LA_STOP causes the RP2040 to send PKT_STOP (see HAT_CMD_LA_STOP
-    // handler in bb_main.c), which unblocks bulk_in() and lets the task exit.
-    // Without this ordering the task never releases the mutex and the new
-    // run_stream_loop deadlocks trying to acquire it.
+    // Stop firmware FIRST via BBP (control plane, not vendor-bulk EP_OUT).
+    // CMD_HAT_LA_STOP causes the RP2040 to send PKT_STOP on vendor-bulk IN,
+    // unblocking any prior background task's bulk_in() so it can exit.
     let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
     {
         let old_task = la.stream_task.lock().map_err(map_err)?.take();
@@ -1051,18 +1051,24 @@ pub async fn la_stream_usb(
         }
     }
 
-    // Pre-stream drain: flush stale vendor-bulk packets BEFORE configure.
-    // LA_USB_CMD_STOP calls bb_la_stop() on the firmware (unloads PIO); configure
-    // then reloads it. This ordering is critical — drain must come first.
+    // 500 ms settle after BBP STOP — gives RP2040 Core 0 time to process
+    // s_need_endpoint_rearm / tud_vendor_n_fifo_clear() before we drain/start.
+    // Matches tests/mock/la_usb_host.py:331 behavior.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    log::info!("[la_stream_usb] phase=after_fw_settle_500ms");
+
+    // Pre-stream drain: flush any residual vendor-bulk IN bytes (STOP was
+    // already sent via BBP above). Short bounded read — not fatal on error.
     {
         let usb_mutex = la.usb.clone();
-        tokio::task::spawn_blocking(move || {
+        let _drain_res = tokio::task::spawn_blocking(move || {
             let mut transport = LockedLaTransport { usb: usb_mutex };
-            pre_stream_drain(&mut transport);
+            pre_stream_drain(&mut transport)
         })
         .await
         .map_err(|e| format!("pre_stream_drain task panicked: {e}"))?;
     }
+    log::info!("[la_stream_usb] phase=after_drain");
 
     let mut cfg_buf = vec![channels];
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
@@ -1074,6 +1080,7 @@ pub async fn la_stream_usb(
     mgr.send_command(bbp::CMD_HAT_LA_TRIGGER, &[trigger_type, trigger_channel])
         .await
         .map_err(map_err)?;
+    log::info!("[la_stream_usb] phase=after_config");
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     {
@@ -1089,7 +1096,19 @@ pub async fn la_stream_usb(
         let mut usb = la.usb.lock().map_err(map_err)?;
         if !usb.is_connected() {
             let status = mgr.get_connection_status();
-            usb.connect(status.la_selector).map_err(map_err)?;
+            log::info!(
+                "[la_stream_usb] reconnecting USB, la_selector={:?}",
+                status.la_selector
+            );
+            match usb.connect(status.la_selector) {
+                Ok(()) => log::info!("[la_stream_usb] phase=usb_reconnected"),
+                Err(e) => {
+                    log::error!("[la_stream_usb] usb.connect failed: {e}");
+                    return Err(map_err(e));
+                }
+            }
+        } else {
+            log::info!("[la_stream_usb] phase=usb_already_connected");
         }
     }
 
@@ -1110,6 +1129,17 @@ pub async fn la_stream_usb(
     if let Ok(mut slot) = task_slot.lock() {
         *slot = Some(handle);
     }
+    log::info!("[la_stream_usb] phase=spawned");
+
+    // Send START via BBP control plane (not EP_OUT) — the RP2040 handler
+    // HAT_CMD_LA_STREAM_START triggers bb_la_start_stream() which emits
+    // PKT_START on vendor-bulk IN. The background task above is already
+    // blocked in read_packet() waiting for it.
+    // See tests/mock/la_usb_host.py:344 for the canonical reference.
+    mgr.send_command(bbp::CMD_HAT_LA_STREAM_START, &[])
+        .await
+        .map_err(map_err)?;
+    log::info!("[la_stream_usb] phase=bbp_stream_start_sent");
 
     Ok(())
 }
@@ -1122,11 +1152,51 @@ pub async fn la_stream_usb_stop(
     mgr: State<'_, ConnectionManager>,
     la: State<'_, LaState>,
 ) -> CmdResult<LaCaptureInfo> {
-    log::info!("[la_stream_usb_stop] Stopping gapless USB stream");
+    log::info!("[la_stream_usb_stop] phase=entry");
 
-    la.stream_running.store(false, Ordering::SeqCst);
+    // Reentrance guard: if the stream is already stopped AND no background
+    // task is pending, short-circuit to prevent redundant BBP STOP + 500ms
+    // settle round-trips when the frontend fires multiple stops in a row.
+    let was_running = la.stream_running.swap(false, Ordering::SeqCst);
+    let task_present = la
+        .stream_task
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false);
+    if !was_running && !task_present {
+        log::info!("[la_stream_usb_stop] phase=already_stopped");
+        // Still mirror the status fields so the frontend sees consistent state.
+        if let Ok(mut status) = la.stream_status.lock() {
+            status.active = false;
+        }
+        let store_guard = la.store.lock().map_err(map_err)?;
+        return match store_guard.as_ref() {
+            Some(store) => Ok(LaCaptureInfo {
+                channels: store.channels,
+                sample_rate_hz: store.sample_rate_hz,
+                total_samples: store.total_samples,
+                duration_sec: store.total_duration_sec(),
+                trigger_sample: store.trigger_sample,
+            }),
+            None => Ok(LaCaptureInfo {
+                channels: 0,
+                sample_rate_hz: 0,
+                total_samples: 0,
+                duration_sec: 0.0,
+                trigger_sample: None,
+            }),
+        };
+    }
+
+    if let Ok(mut status) = la.stream_status.lock() {
+        if status.stop_reason.is_none() {
+            status.stop_reason = Some("host_stop".to_string());
+        }
+        status.active = false;
+    }
 
     let _ = mgr.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
+    log::info!("[la_stream_usb_stop] phase=after_fw_stop");
 
     {
         let old_task = la.stream_task.lock().map_err(map_err)?.take();
@@ -1136,24 +1206,79 @@ pub async fn la_stream_usb_stop(
             let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
         }
     }
+    log::info!("[la_stream_usb_stop] phase=after_task_join");
 
-    {
-        let mut status = la.stream_status.lock().map_err(map_err)?;
-        if status.stop_reason.is_none() {
-            status.stop_reason = Some("host_stop".to_string());
+    // 500 ms settle after BBP STOP so Core 0 can process s_need_endpoint_rearm
+    // and tud_vendor_n_fifo_clear() before we drain. Mirrors la_usb_host.py:331.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    log::info!("[la_stream_usb_stop] phase=after_fw_settle_500ms");
+
+    // Rearm the IN endpoint: flush any lingering vendor-bulk packets so the
+    // next la_stream_usb start doesn't see stale data. Same pattern as the
+    // start path at line ~1074 above (spawn_blocking + LockedLaTransport).
+    // Track drain success — only force-disconnect if drain couldn't complete
+    // cleanly (Fix 2): a clean PKT_STOP means the endpoint isn't stuck, so
+    // leaving the handle connected avoids the reconnect flakiness that breaks
+    // the 2nd Arm after a stop.
+    let drain_ok = {
+        let usb_mutex = la.usb.clone();
+        let join = tokio::task::spawn_blocking(move || {
+            let mut transport = LockedLaTransport { usb: usb_mutex };
+            pre_stream_drain(&mut transport)
+        })
+        .await;
+        match join {
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => {
+                log::warn!("[la_stream_usb_stop] pre_stream_drain reported error: {e}");
+                false
+            }
+            Err(e) => {
+                log::warn!("[la_stream_usb_stop] pre_stream_drain task panicked: {e}");
+                false
+            }
         }
-        status.active = false;
+    };
+    log::info!("[la_stream_usb_stop] phase=after_drain drain_ok={drain_ok}");
+
+    // Force-release the USB interface only if the drain couldn't complete
+    // cleanly. If drain saw PKT_STOP, the endpoint is healthy — leave the
+    // handle connected so the next la_stream_usb start can skip reconnect
+    // (Fix 2: avoids the 2nd-Arm regression from pass 2).
+    if !drain_ok {
+        let mut usb = la.usb.lock().map_err(map_err)?;
+        if usb.is_connected() {
+            if let Err(e) = usb.disconnect() {
+                log::warn!("[la_stream_usb_stop] usb.disconnect() failed: {e}");
+            } else {
+                log::info!("[la_stream_usb_stop] phase=usb_disconnected (drain failed)");
+            }
+        }
+    } else {
+        log::info!("[la_stream_usb_stop] phase=keep_usb_connected (drain ok)");
     }
 
+    // Default response when there's no store yet (stopped before any data).
     let store_guard = la.store.lock().map_err(map_err)?;
-    let store = store_guard.as_ref().ok_or("No capture data")?;
-    Ok(LaCaptureInfo {
-        channels: store.channels,
-        sample_rate_hz: store.sample_rate_hz,
-        total_samples: store.total_samples,
-        duration_sec: store.total_duration_sec(),
-        trigger_sample: store.trigger_sample,
-    })
+    match store_guard.as_ref() {
+        Some(store) => Ok(LaCaptureInfo {
+            channels: store.channels,
+            sample_rate_hz: store.sample_rate_hz,
+            total_samples: store.total_samples,
+            duration_sec: store.total_duration_sec(),
+            trigger_sample: store.trigger_sample,
+        }),
+        None => {
+            log::info!("[la_stream_usb_stop] no store — returning empty LaCaptureInfo");
+            Ok(LaCaptureInfo {
+                channels: 0,
+                sample_rate_hz: 0,
+                total_samples: 0,
+                duration_sec: 0.0,
+                trigger_sample: None,
+            })
+        }
+    }
 }
 
 /// Check if USB streaming is currently active

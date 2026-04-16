@@ -25,7 +25,7 @@ use la_commands::LaState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,bugbuster_lib=debug,bugbuster=debug")).init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -128,6 +128,9 @@ pub fn run() {
             commands::pick_config_save_file,
             commands::pick_config_open_file,
             commands::save_board_profile,
+            commands::pick_profile_save_path,
+            commands::set_pin_drive_strength,
+            commands::set_efuse_config,
             // Logic Analyzer
             la_commands::la_check_usb,
             la_commands::la_connect_usb,

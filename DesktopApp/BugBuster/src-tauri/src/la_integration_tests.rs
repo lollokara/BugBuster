@@ -12,9 +12,7 @@ mod tests {
     use crate::la_commands::{pre_stream_drain, run_stream_loop, LaStreamRuntimeStatus};
     use crate::la_store::LaStore;
     use crate::la_transport::{MockLaTransport, StreamStopReason};
-    use crate::la_usb::{
-        LaStreamPacket, LaStreamPacketKind, LA_USB_CMD_START_STREAM, LA_USB_CMD_STOP,
-    };
+    use crate::la_usb::{LaStreamPacket, LaStreamPacketKind};
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -75,11 +73,11 @@ mod tests {
         assert_eq!(reason, StreamStopReason::Normal, "Expected Normal stop");
         assert!(!running.load(Ordering::SeqCst), "running must be false after loop");
         assert!(!status.lock().unwrap().active, "status.active must be false after loop");
-        // Only START command must be sent — drain is done externally now
-        assert_eq!(
-            transport.commands_sent,
-            vec![LA_USB_CMD_START_STREAM],
-            "run_stream_loop must only send START, not STOP"
+        // Pass 4: run_stream_loop no longer sends any EP_OUT commands — START
+        // is now routed via BBP by the caller. No commands should be sent.
+        assert!(
+            transport.commands_sent.is_empty(),
+            "run_stream_loop must not send any EP_OUT commands (START is via BBP)"
         );
     }
 
@@ -181,57 +179,42 @@ mod tests {
     }
 
     // ── pre_stream_drain tests ───────────────────────────────────────────────
-    // pre_stream_drain() is called by la_stream_usb() BEFORE CMD_HAT_LA_CONFIG.
-    // It sends LA_USB_CMD_STOP (0x00) and drains until PKT_STOP.
-
-    // ── test 6: double-drain flushes DATA that appears after first PKT_STOP ──
-    // The firmware's HAT_CMD_LA_STOP handler omits bb_la_usb_abort_bulk(), so
-    // DATA packets already enqueued in the tinyUSB TX ring arrive AFTER the
-    // HAT-triggered PKT_STOP. pre_stream_drain() sends STOP twice: pass 0 drains
-    // up to the HAT PKT_STOP; pass 1 drains the residual DATA + STREAM PKT_STOP.
+    // Pass 4: pre_stream_drain() no longer writes EP_OUT. STOP is routed via BBP
+    // by the caller (la_stream_usb / la_stream_usb_stop). This function only
+    // does a short bounded read loop to consume any residual vendor-bulk IN
+    // bytes. A read ending (timeout / Err) is treated as a successful drain.
 
     #[test]
     fn test_pre_drain_consumes_stale_stop() {
         let packets = vec![
-            // Pass-0 reads: stale DATA followed by HAT_CMD_LA_STOP's PKT_STOP.
             make_data(3, b"stale"),
-            Ok(LaStreamPacket { kind: LaStreamPacketKind::Stop, seq: 0, info: 1, payload: vec![] }),
-            // Pass-1 reads: DATA that slipped through after HAT stop, then our STOP's PKT_STOP.
-            make_data(4, b"after_hat"),
             make_stop(),
         ];
         let mut transport = MockLaTransport::new(packets);
 
-        pre_stream_drain(&mut transport);
-
-        assert_eq!(
-            transport.commands_sent,
-            vec![LA_USB_CMD_STOP, LA_USB_CMD_STOP],
-            "must send two STOP commands (double-pass drain)"
+        let res = pre_stream_drain(&mut transport);
+        assert!(res.is_ok(), "drain must succeed when PKT_STOP is seen");
+        assert!(
+            transport.commands_sent.is_empty(),
+            "pre_stream_drain must not send any EP_OUT commands"
         );
-        assert!(transport.packets.is_empty(), "double-drain must consume all stale packets");
+        assert!(transport.packets.is_empty(), "drain must consume all stale packets");
     }
-
-    // ── test 7: double-drain when FIFO is already clean ──────────────────────
-    // Both passes see immediate PKT_STOP — no stale data.
 
     #[test]
     fn test_pre_drain_consumes_mixed_stale_packets() {
         let packets = vec![
-            // Stale DATA and START before first PKT_STOP.
             Ok(LaStreamPacket { kind: LaStreamPacketKind::Data, seq: 42, info: 0, payload: b"x".to_vec() }),
             Ok(LaStreamPacket { kind: LaStreamPacketKind::Start, seq: 0, info: 0, payload: vec![] }),
-            make_stop(), // ends pass 0
-            make_stop(), // ends pass 1 (FIFO clean on second pass)
+            make_stop(),
         ];
         let mut transport = MockLaTransport::new(packets);
 
-        pre_stream_drain(&mut transport);
-
-        assert_eq!(
-            transport.commands_sent,
-            vec![LA_USB_CMD_STOP, LA_USB_CMD_STOP],
-            "must send two STOP commands"
+        let res = pre_stream_drain(&mut transport);
+        assert!(res.is_ok(), "drain must succeed after consuming stale packets");
+        assert!(
+            transport.commands_sent.is_empty(),
+            "pre_stream_drain must not send any EP_OUT commands"
         );
         assert!(transport.packets.is_empty(), "all packets consumed");
     }

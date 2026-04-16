@@ -91,6 +91,19 @@ fn stream_status_badge(status: &LaStreamRuntimeStatus) -> &'static str {
 #[component]
 pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let _ = state;
+    // Render epoch — each LaTab mount claims a new epoch so stale render
+    // loops from prior mounts exit promptly (Bug Issue 6, now mirrored for LA).
+    let render_epoch: RwSignal<u64> = RwSignal::new(0u64);
+    let my_epoch = render_epoch.get_untracked().wrapping_add(1);
+    render_epoch.set(my_epoch);
+    on_cleanup(move || {
+        render_epoch.set(render_epoch.get_untracked().wrapping_add(1));
+    });
+
+    // Reset shared LAST_CANVAS_SIZE on fresh mount so the DPR/size pass
+    // recomputes from scratch (prevents zoomed-top-left render from stale state).
+    LAST_CANVAS_SIZE.with(|c| c.set((0, 0, 0)));
+
     // Capture state
     let (capture_info, set_capture_info) = signal(Option::<LaCaptureInfo>::None);
     let (view_data, set_view_data) = signal(Option::<LaViewData>::None);
@@ -212,6 +225,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let data = view_data.get();
         let cursor = cursor_sample.get();
         let fmt = ann_fmt.get(); // track format at top level so changes always redraw
+        // Stale-mount guard (Fix 1): a newer LaTab has taken over — skip render.
+        if render_epoch.get_untracked() != my_epoch { return; }
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
@@ -1652,9 +1667,25 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                             if is_stream {
                                 // Stream mode: try gapless USB streaming first, fall back to cycle-based
-                                set_streaming.set(true);
+                                set_streaming.set(false);
                                 set_stream_runtime.set(LaStreamRuntimeStatus::default());
                                 spawn_local(async move {
+                                    // Defensive stop only if backend says a stream is active —
+                                    // avoids firing a full BBP STOP + 500ms settle round-trip
+                                    // when there's nothing to stop (Pass 4).
+                                    if la_stream_usb_active().await {
+                                        let _ = la_stream_usb_stop().await;
+                                        // Small delay between defensive stop and start — the
+                                        // backend's own 500ms settle inside la_stream_usb_stop
+                                        // already covers firmware rearm; this is extra margin.
+                                        let p = js_sys::Promise::new(&mut |resolve, _| {
+                                            web_sys::window().unwrap()
+                                                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 150).unwrap();
+                                        });
+                                        let _ = wasm_bindgen_futures::JsFuture::from(p).await;
+                                    }
+                                    set_streaming.set(true);
+
                                     web_sys::console::log_1(&format!("[STREAM] Starting gapless USB: ch={} rate={} depth={}", ch, r, d).into());
 
                                     // Try gapless USB streaming (bypasses ESP32 for data path)
@@ -1675,6 +1706,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         let mut first_capture = true;
                                         let mut inactive_count = 0u32;
                                         while streaming.get_untracked() {
+                                            if render_epoch.get_untracked() != my_epoch { break; }
                                             let p = js_sys::Promise::new(&mut |resolve, _| {
                                                 web_sys::window().unwrap()
                                                     .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 200).unwrap();
@@ -1714,8 +1746,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             }
                                         }
 
-                                        // Stop gapless stream
-                                        if let Some(info) = la_stream_usb_stop().await {
+                                        // Loop exited — the Stop / Clear handlers have already
+                                        // called la_stream_usb_stop() (or will, on reentrance
+                                        // the backend short-circuits). Only fetch info/status
+                                        // here so we don't emit a redundant BBP STOP round-trip
+                                        // (Pass 4: collapse redundant stops).
+                                        if let Some(info) = la_get_capture_info().await {
                                             set_ci5.set(Some(info));
                                         }
                                         if let Some(status) = la_stream_usb_status().await {
@@ -1727,6 +1763,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         let mut first_capture = true;
                                         let mut cycle = 0u32;
                                         while streaming.get_untracked() {
+                                            if render_epoch.get_untracked() != my_epoch { break; }
                                             cycle += 1;
                                             let t0 = js_sys::Date::now();
                                             let info = la_stream_cycle(ch, r, d, rle_en, tt, tc).await;
@@ -1836,12 +1873,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 >"Force"</button>
                 <button style="font-size: 10px; padding: 3px 12px; background: #ef444425; color: #ef4444; border: 1px solid #ef444450; border-radius: 4px; cursor: pointer"
                     on:click=move |_| {
-                        set_streaming.set(false);
-                        spawn_local(async {
-                            // Stop USB gapless stream if active
+                        // Always reset streaming flag, even if the invoke rejects
+                        // (Bug 7) — guarantees the next Arm isn't gated by a stale bit.
+                        spawn_local(async move {
                             let _ = la_stream_usb_stop().await;
-                            // Also send BBP stop (for cycle-based / ESP32 path)
                             la_invoke_stop().await;
+                            set_streaming.set(false);
                             show_toast("Stopped", "ok");
                         });
                     }

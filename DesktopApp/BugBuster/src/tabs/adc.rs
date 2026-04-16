@@ -2,9 +2,30 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
 use crate::tauri_bridge::{self, *};
+use crate::components::channel_sparkline::ChannelSparkline;
+
+const SPARK_CAP: usize = 120;
 
 #[component]
 pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    // Per-channel rolling ring buffers of recent ADC values (capped at SPARK_CAP).
+    let history: [RwSignal<Vec<f32>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
+
+    // Push new sample whenever DeviceState.channels[i].adc_value changes.
+    Effect::new(move |_| {
+        let ds = state.get();
+        for (i, ch) in ds.channels.iter().enumerate().take(4) {
+            let v = ch.adc_value;
+            history[i].update(|buf| {
+                buf.push(v);
+                if buf.len() > SPARK_CAP {
+                    let drop = buf.len() - SPARK_CAP;
+                    buf.drain(0..drop);
+                }
+            });
+        }
+    });
+
     view! {
         <div class="tab-content">
             <div class="tab-desc">"Analog-to-Digital Converter readings for all 4 channels. Configure the ADC range, sampling rate, and input multiplexer per channel. Values update in real-time."</div>
@@ -13,12 +34,11 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     let ds = state.get();
                     ds.channels.into_iter().enumerate().map(|(i, ch)| {
                         let ch_idx = i as u8;
-                        let has_adc = matches!(ch.function, 3 | 4 | 5 | 7 | 11 | 12); // VIN, IIN_EXT, IIN_LOOP, RES, HART variants
+                        let has_adc = matches!(ch.function, 3 | 4 | 5 | 7 | 11 | 12);
                         let color = CH_COLORS[i];
                         let is_res = ch.function == 7;
                         let range_info = ADC_RANGE_OPTIONS.iter().find(|r| r.0 == ch.adc_range);
                         let (rng_min, rng_max) = range_info.map(|r| (r.2, r.3)).unwrap_or((0.0, 12.0));
-                        // For RES_MEAS: bar spans 0..max_r where max_r = rng_max / I_exc
                         let (bar_min, bar_max) = if is_res {
                             let excitation_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
                             let i_exc = excitation_ua as f32 * 1e-6;
@@ -30,6 +50,8 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let pct = if span > 0.0 { ((ch.adc_value - bar_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 };
                         let unit = if matches!(ch.function, 4 | 5 | 11 | 12) { "mA" } else if is_res { "Ω" } else { "V" };
                         let exc_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
+                        let hist = history[i];
+                        let spark_color = color.to_string();
 
                         view! {
                             <div class="card channel-card" class:ch-disabled=!has_adc>
@@ -58,6 +80,13 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 <div class="bar-gauge" style=format!("--bar-color: {}", color)>
                                                     <div class="bar-fill-dynamic" style=format!("width: {}%", pct)></div>
                                                 </div>
+
+                                                <ChannelSparkline
+                                                    values=Signal::from(hist)
+                                                    min=Signal::derive(move || bar_min)
+                                                    max=Signal::derive(move || bar_max)
+                                                    color=spark_color
+                                                />
 
                                                 <div class="config-section">
                                                     <div class="config-row">
@@ -90,17 +119,29 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                     </div>
                                                     <div class="config-row">
                                                         <label>"Mux"</label>
-                                                        <select class="dropdown"
-                                                            prop:value=ch.adc_mux.to_string()
-                                                            on:change=move |e| {
-                                                                let mux: u8 = event_target_value(&e).parse().unwrap_or(0);
-                                                                send_adc_config(ch_idx, mux, ch.adc_range, ch.adc_rate);
+                                                        // Fix 4: For VOUT (1) / VIN (3) channels the only valid mux
+                                                        // is LF_TO_AGND (0). Force it there and disable the dropdown.
+                                                        {
+                                                            let force_mux_zero = ch.function == 1 || ch.function == 3;
+                                                            if force_mux_zero && ch.adc_mux != 0 {
+                                                                send_adc_config(ch_idx, 0, ch.adc_range, ch.adc_rate);
                                                             }
-                                                        >
-                                                            {ADC_MUX_OPTIONS.iter().map(|(code, name)| {
-                                                                view! { <option value=code.to_string()>{*name}</option> }
-                                                            }).collect::<Vec<_>>()}
-                                                        </select>
+                                                            view! {
+                                                                <select class="dropdown"
+                                                                    prop:value=move || if force_mux_zero { "0".to_string() } else { ch.adc_mux.to_string() }
+                                                                    prop:disabled=force_mux_zero
+                                                                    on:change=move |e| {
+                                                                        if force_mux_zero { return; }
+                                                                        let mux: u8 = event_target_value(&e).parse().unwrap_or(0);
+                                                                        send_adc_config(ch_idx, mux, ch.adc_range, ch.adc_rate);
+                                                                    }
+                                                                >
+                                                                    {ADC_MUX_OPTIONS.iter().map(|(code, name)| {
+                                                                        view! { <option value=code.to_string()>{*name}</option> }
+                                                                    }).collect::<Vec<_>>()}
+                                                                </select>
+                                                            }
+                                                        }
                                                     </div>
                                                     {if is_res { Some(view! {
                                                         <div class="config-row">
@@ -135,16 +176,24 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 #[derive(Serialize)]
 struct AdcConfigArgs { channel: u8, mux: u8, range: u8, rate: u8 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdcStartArgs { channel_mask: u8, divider: u8 }
+
 fn send_adc_config(ch: u8, mux: u8, range: u8, rate: u8) {
-    // Stop ADC stream, apply config, restart stream to avoid conflicts
+    // Stop ADC stream, apply config, restart stream to avoid conflicts.
+    // (Bug 6) — must restart the stream after config, or UI reads go stale.
     spawn_local(async move {
-        // Stop any running stream
         let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
         sleep_ms(200).await;
 
-        // Apply config
         let args = serde_wasm_bindgen::to_value(&AdcConfigArgs { channel: ch, mux, range, rate }).unwrap();
         let _ = invoke("set_adc_config", args).await;
+
+        // Resume stream for all 4 channels (mask 0b1111). Divider 0 = default rate.
+        let start_args = serde_wasm_bindgen::to_value(&AdcStartArgs { channel_mask: 0x0F, divider: 0 }).unwrap();
+        let _ = invoke("start_adc_stream", start_args).await;
+        log(&format!("[send_adc_config] ch={} mux={} range={} rate={} (stream restarted)", ch, mux, range, rate));
     });
 }
 

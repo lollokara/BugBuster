@@ -6,6 +6,7 @@ pub mod vdac;
 pub mod idac;
 pub mod din;
 pub mod dout;
+pub mod hv_io;
 pub mod faults;
 pub mod gpio;
 pub mod uart;

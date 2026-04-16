@@ -5,20 +5,89 @@ use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
 use crate::tauri_bridge::*;
 
-#[component]
-pub fn WavegenTab() -> impl IntoView {
-    let (channel, set_channel) = signal(0u8);
-    let (waveform, set_waveform) = signal("sine".to_string());
-    let (mode, set_mode) = signal("voltage".to_string()); // "voltage" or "current"
-    let (freq_hz, set_freq_hz) = signal(1.0f64);
-    let (amplitude, set_amplitude) = signal(5.0f64);
-    let (offset, set_offset) = signal(0.0f64);
-    let (running, set_running) = signal(false);
-    let (sending, set_sending) = signal(false);
+/// Decode channel_alert bits (per ad74416h.h:294-300) for UI display.
+const CHANNEL_ALERT_BITS: &[(u16, &str)] = &[
+    (0x0001, "DIN_SC"),
+    (0x0002, "DIN_OC"),
+    (0x0004, "DO_SC"),
+    (0x0008, "DO_TIMEOUT"),
+    (0x0010, "AIO_SC"),
+    (0x0020, "AIO_OC"),
+    (0x0040, "VIOUT_SHUTDOWN"),
+];
 
-    let (edit_freq, set_edit_freq) = signal("1.0".to_string());
-    let (edit_amp, set_edit_amp) = signal("5.0".to_string());
-    let (edit_off, set_edit_off) = signal("0.0".to_string());
+fn decode_channel_alert(bits: u16) -> String {
+    let names: Vec<&str> = CHANNEL_ALERT_BITS
+        .iter()
+        .filter_map(|(b, n)| if bits & b != 0 { Some(*n) } else { None })
+        .collect();
+    if names.is_empty() { format!("0x{:04X}", bits) } else { names.join(",") }
+}
+
+/// Hoisted Wavegen UI state — lives in app-level context so signals survive
+/// tab switches (Bug Issue 5). Use `use_context::<WavegenUiState>()` inside
+/// `WavegenTab`.
+#[derive(Clone, Copy)]
+pub struct WavegenUiState {
+    pub channel: RwSignal<u8>,
+    pub waveform: RwSignal<String>,
+    pub mode: RwSignal<String>, // "voltage" or "current"
+    pub freq_hz: RwSignal<f64>,
+    pub amplitude: RwSignal<f64>,
+    pub offset: RwSignal<f64>,
+    pub running: RwSignal<bool>,
+    pub sending: RwSignal<bool>,
+    pub edit_freq: RwSignal<String>,
+    pub edit_amp: RwSignal<String>,
+    pub edit_off: RwSignal<String>,
+}
+
+impl WavegenUiState {
+    pub fn new() -> Self {
+        Self {
+            channel: RwSignal::new(0u8),
+            waveform: RwSignal::new("sine".to_string()),
+            mode: RwSignal::new("voltage".to_string()),
+            freq_hz: RwSignal::new(1.0f64),
+            amplitude: RwSignal::new(5.0f64),
+            offset: RwSignal::new(0.0f64),
+            running: RwSignal::new(false),
+            sending: RwSignal::new(false),
+            edit_freq: RwSignal::new("1.0".to_string()),
+            edit_amp: RwSignal::new("5.0".to_string()),
+            edit_off: RwSignal::new("0.0".to_string()),
+        }
+    }
+}
+
+#[component]
+pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    let ui = use_context::<WavegenUiState>()
+        .expect("WavegenUiState not provided — call provide_context(WavegenUiState::new()) in App");
+
+    let channel = ui.channel.read_only();
+    let set_channel = ui.channel.write_only();
+    let waveform = ui.waveform.read_only();
+    let set_waveform = ui.waveform.write_only();
+    let mode = ui.mode.read_only();
+    let set_mode = ui.mode.write_only();
+    let freq_hz = ui.freq_hz.read_only();
+    let set_freq_hz = ui.freq_hz.write_only();
+    let amplitude = ui.amplitude.read_only();
+    let set_amplitude = ui.amplitude.write_only();
+    let offset = ui.offset.read_only();
+    let set_offset = ui.offset.write_only();
+    let running = ui.running.read_only();
+    let set_running = ui.running.write_only();
+    let sending = ui.sending.read_only();
+    let set_sending = ui.sending.write_only();
+
+    let edit_freq = ui.edit_freq.read_only();
+    let set_edit_freq = ui.edit_freq.write_only();
+    let edit_amp = ui.edit_amp.read_only();
+    let set_edit_amp = ui.edit_amp.write_only();
+    let edit_off = ui.edit_off.read_only();
+    let set_edit_off = ui.edit_off.write_only();
 
     let preview_ref = NodeRef::<leptos::html::Canvas>::new();
 
@@ -114,17 +183,29 @@ pub fn WavegenTab() -> impl IntoView {
             #[derive(Serialize)]
             #[serde(rename_all = "camelCase")]
             struct Args { channel: u8, waveform: String, freq_hz: f64, amplitude: f64, offset: f64, mode: String }
+            let ch_idx = channel.get_untracked();
+            let wf_val = waveform.get_untracked();
+            let mode_val = mode.get_untracked();
+            let f_val = freq_hz.get_untracked();
+            let a_val = amplitude.get_untracked();
+            let o_val = offset.get_untracked();
+            // AIO_SC diagnostic log: user reports short-circuit fault when wavegen
+            // is active. Record request context so we can correlate with backend
+            // [wavegen_start] + [faults] edges.
+            web_sys::console::log_1(&format!(
+                "[wavegen_start] ch={} mode={} wf={} freq={} amp={} off={}",
+                ch_idx, mode_val, wf_val, f_val, a_val, o_val
+            ).into());
             let args = serde_wasm_bindgen::to_value(&Args {
-                channel: channel.get_untracked(),
-                waveform: waveform.get_untracked(),
-                freq_hz: freq_hz.get_untracked(),
-                amplitude: amplitude.get_untracked(),
-                offset: offset.get_untracked(),
-                mode: mode.get_untracked(),
+                channel: ch_idx,
+                waveform: wf_val.clone(),
+                freq_hz: f_val,
+                amplitude: a_val,
+                offset: o_val,
+                mode: mode_val,
             }).unwrap();
-            let wf_name = waveform.get_untracked();
-            let ch_name = CH_NAMES[channel.get_untracked() as usize];
-            let label = format!("Start {} {}Hz on CH {}", wf_name, freq_hz.get_untracked(), ch_name);
+            let ch_name = CH_NAMES[ch_idx as usize];
+            let label = format!("Start {} {}Hz on CH {}", wf_val, f_val, ch_name);
             spawn_local(async move {
                 let _ = invoke("start_wavegen", args).await;
                 set_running.set(true);
@@ -214,6 +295,33 @@ pub fn WavegenTab() -> impl IntoView {
                             <span class="scope-btn-dot" class:running=move || running.get()></span>
                             {move || if sending.get() { "Sending..." } else if running.get() { "Stop Generator" } else { "Start Generator" }}
                         </button>
+
+                        // Fault badge for the active wavegen channel (Fix 3).
+                        {move || {
+                            let ch_idx = channel.get() as usize;
+                            let ds = state.get();
+                            let alert = ds.channels.get(ch_idx).map(|c| c.channel_alert).unwrap_or(0);
+                            if alert != 0 {
+                                let decoded = decode_channel_alert(alert);
+                                Some(view! {
+                                    <div style="margin-top: 8px; padding: 6px 10px; background: #ef444425; color: #ef4444; border: 1px solid #ef444480; border-radius: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
+                                        {format!("FAULT: {}", decoded)}
+                                    </div>
+                                })
+                            } else { None }
+                        }}
+
+                        // Clear faults for the active wavegen channel (Fix 3).
+                        <button class="btn btn-sm" style="margin-top: 6px; background: #f59e0b25; color: #f59e0b; border: 1px solid #f59e0b50"
+                            on:click=move |_| {
+                                let ch_idx = channel.get_untracked();
+                                #[derive(Serialize)]
+                                struct Args { channel: u8 }
+                                let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx }).unwrap();
+                                let label = format!("Clear faults on CH {}", CH_NAMES[ch_idx as usize]);
+                                invoke_with_feedback("clear_channel_alert", args, &label);
+                            }
+                        >"Clear faults"</button>
                         <p class="wavegen-hint">
                             {move || format!("Will set CH {} to {} mode on start",
                                 CH_NAMES[channel.get() as usize],

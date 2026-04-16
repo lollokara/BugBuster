@@ -1,12 +1,56 @@
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 use serde::Serialize;
 use crate::tauri_bridge::*;
+use crate::components::channel_sparkline::ChannelSparkline;
+
+const SPARK_CAP: usize = 120;
 
 #[component]
 pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let slider_vals: [RwSignal<f64>; 4] = std::array::from_fn(|_| RwSignal::new(0.0));
     let dirty: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
     let bipolar: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
+
+    // Per-channel rolling history of dac_value for the sparkline.
+    let history: [RwSignal<Vec<f32>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
+    Effect::new(move |_| {
+        let ds = state.get();
+        for (i, ch) in ds.channels.iter().enumerate().take(4) {
+            let v = ch.dac_value;
+            history[i].update(|buf| {
+                buf.push(v);
+                if buf.len() > SPARK_CAP {
+                    let d = buf.len() - SPARK_CAP;
+                    buf.drain(0..d);
+                }
+            });
+        }
+    });
+
+    // Fix 4: On VDAC tab mount, auto-fix any VOUT channel whose ADC mux is not
+    // 0 (LF_TO_AGND). Mux != 0 for VOUT means the ADC will measure the wrong
+    // node (typically reading 0V). Log to console so the user sees the auto-fix.
+    Effect::new(move |_| {
+        let ds = state.get();
+        for (i, ch) in ds.channels.iter().enumerate().take(4) {
+            if ch.function == 1 && ch.adc_mux != 0 {
+                let ch_idx = i as u8;
+                let range = ch.adc_range;
+                let rate = ch.adc_rate;
+                web_sys::console::log_1(&format!(
+                    "[VDAC] auto-fix: CH {} VOUT mux was {} — forcing 0 (LF_TO_AGND)",
+                    i, ch.adc_mux
+                ).into());
+                spawn_local(async move {
+                    #[derive(Serialize)]
+                    struct A { channel: u8, mux: u8, range: u8, rate: u8 }
+                    let args = serde_wasm_bindgen::to_value(&A { channel: ch_idx, mux: 0, range, rate }).unwrap();
+                    let _ = invoke("set_adc_config", args).await;
+                });
+            }
+        }
+    });
 
     view! {
         <div class="tab-content">
@@ -54,6 +98,19 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 <div class="bar-gauge" style=format!("--bar-color: {}", color)>
                                                     <div class="bar-fill-dynamic" style=format!("width: {}%", pct)></div>
                                                 </div>
+
+                                                <div class="card-details" style="margin-top: 4px;">
+                                                    <span>{format!("Readback (DAC): {:.3} V", ch.dac_value)}</span>
+                                                </div>
+                                                <div class="card-details" style="margin-top: 2px;">
+                                                    <span>{format!("ADC (ext): {:.3} V", ch.adc_value)}</span>
+                                                </div>
+                                                <ChannelSparkline
+                                                    values=Signal::from(history[i])
+                                                    min=Signal::derive(move || min_v as f32)
+                                                    max=Signal::derive(move || max_v as f32)
+                                                    color=color.to_string()
+                                                />
 
                                                 <div class="config-row">
                                                     <label>"Range"</label>
@@ -135,6 +192,7 @@ struct DacVoltageArgs { channel: u8, voltage: f32, bipolar: bool }
 struct VoutRangeArgs { channel: u8, bipolar: bool }
 
 fn send_dac_voltage(ch: u8, voltage: f32, bipolar: bool) {
+    web_sys::console::log_1(&format!("[VDAC] ch={} V={:.3} bipolar={}", ch, voltage, bipolar).into());
     let args = serde_wasm_bindgen::to_value(&DacVoltageArgs { channel: ch, voltage, bipolar }).unwrap();
     let label = format!("Set CH {} to {:.3}V", CH_NAMES[ch as usize], voltage);
     invoke_with_feedback("set_dac_voltage", args, &label);

@@ -216,6 +216,13 @@ impl LaUsbConnection {
         Ok(())
     }
 
+    /// Drop the claimed interface so the next `connect()` re-claims it fresh.
+    /// Used after a clean stop cycle to clear a stuck macOS libusb IN endpoint
+    /// (Bug: second Arm after Stop times out waiting for PKT_START).
+    pub fn disconnect(&mut self) -> Result<()> {
+        self.close()
+    }
+
     pub fn read_capture_blocking(&mut self) -> Result<Vec<u8>> {
         let iface = self
             .interface

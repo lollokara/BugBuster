@@ -119,6 +119,16 @@ pub async fn set_dac_voltage(
     bipolar: bool,
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
+    // Validate range BEFORE sending to firmware so the toast surfaces a real error.
+    let (lo, hi) = if bipolar { (-12.0_f32, 12.0_f32) } else { (0.0_f32, 12.0_f32) };
+    if voltage < lo || voltage > hi {
+        log::error!(
+            "[set_dac_voltage] REJECT ch={} V={} bipolar={} — out of range [{}, {}]",
+            channel, voltage, bipolar, lo, hi
+        );
+        return Err(format!("voltage {} out of range for bipolar={}", voltage, bipolar));
+    }
+    log::info!("[set_dac_voltage] ch={} V={} bipolar={}", channel, voltage, bipolar);
     let mut pw = PayloadWriter::new();
     pw.put_u8(channel);
     pw.put_f32(voltage);
@@ -148,6 +158,7 @@ pub async fn set_adc_config(
     rate: u8,
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
+    log::info!("[set_adc_config] ch={} mux={} range={} rate={}", channel, mux, range, rate);
     let mut pw = PayloadWriter::new();
     pw.put_u8(channel);
     pw.put_u8(mux);
@@ -593,6 +604,7 @@ pub async fn stop_adc_stream(
 pub async fn start_scope_stream(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
+    log::info!("[start_scope_stream] sending CMD_START_SCOPE_STREAM, payload_len=0");
     mgr.send_command(bbp::CMD_START_SCOPE_STREAM, &[]).await.map_err(map_err)?;
     Ok(())
 }
@@ -601,6 +613,7 @@ pub async fn start_scope_stream(
 pub async fn stop_scope_stream(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
+    log::info!("[stop_scope_stream] sending CMD_STOP_SCOPE_STREAM, payload_len=0");
     mgr.send_command(bbp::CMD_STOP_SCOPE_STREAM, &[]).await.map_err(map_err)?;
     Ok(())
 }
@@ -641,10 +654,11 @@ pub async fn start_wavegen(
     pw.put_f32(offset as f32);
     pw.put_u8(mode_val);
 
+    log::info!(
+        "[wavegen_start] ch={} mode={} wf={} freq={} amp={} off={}",
+        channel, mode, waveform, freq_hz, amplitude, offset
+    );
     mgr.send_command(bbp::CMD_START_WAVEGEN, &pw.buf).await.map_err(map_err)?;
-
-    log::info!("Wavegen started: ch={} mode={} wf={} freq={} amp={} off={}",
-               channel, mode, waveform, freq_hz, amplitude, offset);
     Ok(())
 }
 
@@ -1425,46 +1439,124 @@ pub async fn import_config(
 #[tauri::command]
 pub async fn save_board_profile(
     profile_json: String,
-) -> CmdResult<()> {
-    // We want to save this to the python/bugbuster_mcp/board_profiles/ directory.
-    // Since we are running in dev mode from the project root (usually),
-    // we can use a relative path.
-    
+    target_path: Option<String>,
+) -> CmdResult<String> {
+    // Parse + validate the profile.
     let profile: serde_json::Value = serde_json::from_str(&profile_json)
-        .map_err(|e| format!("Invalid profile JSON: {}", e))?;
-        
+        .map_err(|e| {
+            log::error!("[save_board_profile] invalid JSON: {}", e);
+            format!("Invalid profile JSON: {}", e)
+        })?;
+
     let name = profile["name"].as_str()
-        .ok_or("Profile must have a 'name' field")?;
-        
+        .ok_or_else(|| {
+            log::error!("[save_board_profile] missing 'name' field");
+            "Profile must have a 'name' field".to_string()
+        })?;
+
     if name.is_empty() {
+        log::error!("[save_board_profile] empty name");
         return Err("Profile name cannot be empty".into());
     }
 
-    // Sanitize name to prevent directory traversal
-    let safe_name: String = name.chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-        .collect();
+    // If a user-picked path is supplied, write exactly there. Otherwise fall
+    // back to the repo's python/bugbuster_mcp/board_profiles/ directory.
+    let path = if let Some(t) = target_path.filter(|s| !s.is_empty()) {
+        let p = std::path::PathBuf::from(t);
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    log::error!("[save_board_profile] mkdir {:?} failed: {}", parent, e);
+                    format!("Failed to create directory: {}", e)
+                })?;
+            }
+        }
+        p
+    } else {
+        // Sanitize name to prevent directory traversal.
+        let safe_name: String = name.chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
 
-    // Construct path. We assume we are in DesktopApp/BugBuster/ during execution.
-    // The target is ../../python/bugbuster_mcp/board_profiles/
-    let mut path = std::env::current_dir().map_err(|e| e.to_string())?;
-    path.push("..");
-    path.push("..");
-    path.push("python");
-    path.push("bugbuster_mcp");
-    path.push("board_profiles");
-    
-    if !path.exists() {
-        std::fs::create_dir_all(&path).map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-    
-    path.push(format!("{}.json", safe_name));
-    
-    std::fs::write(&path, &profile_json)
-        .map_err(|e| format!("Failed to write profile: {}", e))?;
-        
-    log::info!("Board profile saved to {:?}", path);
+        // Resolve the repo-root board_profiles dir:
+        //  - BUGBUSTER_REPO_ROOT override (useful for packaged builds), OR
+        //  - CARGO_MANIFEST_DIR (DesktopApp/BugBuster/src-tauri) -> climb 3x.
+        let mut path = if let Ok(root) = std::env::var("BUGBUSTER_REPO_ROOT") {
+            std::path::PathBuf::from(root)
+        } else {
+            let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            // src-tauri -> BugBuster -> DesktopApp -> <repo root>
+            manifest
+                .parent().unwrap_or(&manifest)
+                .parent().unwrap_or(&manifest)
+                .parent().unwrap_or(&manifest)
+                .to_path_buf()
+        };
+        path.push("python");
+        path.push("bugbuster_mcp");
+        path.push("board_profiles");
+
+        if !path.exists() {
+            std::fs::create_dir_all(&path).map_err(|e| {
+                log::error!("[save_board_profile] mkdir {:?} failed: {}", path, e);
+                format!("Failed to create directory: {}", e)
+            })?;
+        }
+
+        path.push(format!("{}.json", safe_name));
+        path
+    };
+
+    std::fs::write(&path, &profile_json).map_err(|e| {
+        log::error!("[save_board_profile] write {:?} failed: {}", path, e);
+        format!("Failed to write profile: {}", e)
+    })?;
+
+    let saved = path.to_string_lossy().to_string();
+    log::info!("Board profile saved to {}", saved);
+    Ok(saved)
+}
+
+/// Configure per-pin drive strength (e.g. 2 kΩ series resistor for protected
+/// drive). Currently a stub that only logs the request; hardware wiring
+/// (likely via PCA GPIO expander controlling series-resistor bypass switches)
+/// is pending firmware support.
+#[tauri::command]
+pub async fn set_pin_drive_strength(pin: u8, drive: u8) -> CmdResult<()> {
+    log::info!("[set_pin_drive_strength] pin={} drive={} (stub — no firmware wiring yet)", pin, drive);
     Ok(())
+}
+
+/// Configure software current limit for one of the 4 efuse blocks.
+/// efuse index: 0=VADJ1-A, 1=VADJ1-B, 2=VADJ2-A, 3=VADJ2-B.
+/// Stub — logs only until firmware wiring lands.
+#[tauri::command]
+pub async fn set_efuse_config(efuse: u8, sw_limit_ma: u16, enabled: bool) -> CmdResult<()> {
+    log::info!("[set_efuse_config] efuse={} sw_limit_ma={} enabled={}", efuse, sw_limit_ma, enabled);
+    Ok(())
+}
+
+/// Open a native "Save As" dialog for a board profile JSON file.
+/// Returns the picked absolute path, or None if the user cancelled.
+#[tauri::command]
+pub async fn pick_profile_save_path(app: tauri::AppHandle, default_name: Option<String>) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dlg = app.dialog()
+        .file()
+        .set_title("Export Board Profile")
+        .add_filter("Board Profile", &["json"]);
+    if let Some(name) = default_name.filter(|s| !s.is_empty()) {
+        let safe: String = name.chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        let fname = if safe.is_empty() { "board_profile.json".to_string() } else { format!("{}.json", safe) };
+        dlg = dlg.set_file_name(&fname);
+    } else {
+        dlg = dlg.set_file_name("board_profile.json");
+    }
+    let path = dlg.blocking_save_file();
+    Ok(path.map(|p| p.to_string()))
 }
 
 #[tauri::command]

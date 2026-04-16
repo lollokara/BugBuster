@@ -368,6 +368,10 @@ impl ConnectionManager {
             let mut consecutive_failures: u32 = 0;
             const MAX_RETRIES: u32 = 3;
 
+            // Edge-detect channel_alert transitions (Bug Issue 5 — AIO_SC diag).
+            // Log only the bits that went 0 -> 1 since last poll to avoid spam.
+            let mut last_ch_alert: [u16; 4] = [0; 4];
+
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
 
@@ -389,6 +393,36 @@ impl ConnectionManager {
                 match result {
                     Ok(state) => {
                         consecutive_failures = 0;
+                        // Edge-log channel_alert rising bits (Issue 5 AIO_SC diag).
+                        // Decode rising bits into names per ad74416h.h:294-300.
+                        const CHANNEL_ALERT_BITS: &[(u16, &str)] = &[
+                            (0x0001, "DIN_SC"),
+                            (0x0002, "DIN_OC"),
+                            (0x0004, "DO_SC"),
+                            (0x0008, "DO_TIMEOUT"),
+                            (0x0010, "AIO_SC"),
+                            (0x0020, "AIO_OC"),
+                            (0x0040, "VIOUT_SHUTDOWN"),
+                        ];
+                        for (i, ch) in state.channels.iter().enumerate().take(4) {
+                            let rising = ch.channel_alert & !last_ch_alert[i];
+                            if rising != 0 {
+                                let names: Vec<&str> = CHANNEL_ALERT_BITS
+                                    .iter()
+                                    .filter_map(|(bit, name)| if rising & bit != 0 { Some(*name) } else { None })
+                                    .collect();
+                                let names_joined = if names.is_empty() {
+                                    "unknown".to_string()
+                                } else {
+                                    names.join(",")
+                                };
+                                log::warn!(
+                                    "[faults] ch{} rising=0x{:04X} ({}) full=0x{:04X}",
+                                    i, rising, names_joined, ch.channel_alert
+                                );
+                            }
+                            last_ch_alert[i] = ch.channel_alert;
+                        }
                         if let Ok(mut ds) = device_state.lock() {
                             *ds = state.clone();
                         }

@@ -4,19 +4,16 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, din::*, dout::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*, hat::*, la::*};
+use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, hv_io::*, faults::*, gpio::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*, hat::*, la::*};
 
 const TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
     ("board", "Board"),
     ("adc", "ADC"),
-    ("diag", "Diagnostics"),
     ("vdac", "VDAC"),
     ("idac", "IDAC"),
     ("iin", "IIN"),
-    ("din", "DIN"),
-    ("dout", "DOUT"),
-    ("faults", "Faults"),
+    ("hv_io", "HV IO"),
     ("gpio", "GPIO"),
     ("uart", "UART"),
     ("scope", "Scope"),
@@ -28,6 +25,8 @@ const TABS: &[(&str, &str)] = &[
     ("ioexp", "IO Expander"),
     ("hat", "HAT"),
     ("la", "Logic Analyzer"),
+    ("faults", "Faults"),
+    ("diag", "Diagnostics"),
 ];
 
 #[component]
@@ -39,6 +38,17 @@ pub fn App() -> impl IntoView {
     let (device_state, set_device_state) = signal(DeviceState::default());
     let (active_tab, set_active_tab) = signal("overview".to_string());
     let uart_config = RwSignal::new(UartConfigState::new());
+
+    // Hoist scope UI state so it survives tab switches (Bug 1).
+    let scope_ui_state = crate::tabs::scope::ScopeUiState::new();
+    provide_context(scope_ui_state);
+    // Install app-lifetime scope acquisition manager (Pass 7 — 2.2/2.3):
+    // centralises the scope-data listener + start/stop Effect so they survive
+    // ScopeTab unmount/remount without producing a restart storm.
+    crate::tabs::scope::install_scope_lifetime_manager(scope_ui_state, device_state);
+
+    // Hoist wavegen UI state (Bug Issue 5 — state loss on tab switch).
+    provide_context(crate::tabs::wavegen::WavegenUiState::new());
 
     // Toast notification system
     let (toasts, set_toasts) = signal(Vec::<(String, String, f64)>::new()); // (msg, kind, timestamp)
@@ -53,21 +63,23 @@ pub fn App() -> impl IntoView {
                 let kind = js_sys::Reflect::get(detail, &"kind".into())
                     .ok().and_then(|v| v.as_string()).unwrap_or_else(|| "info".into());
                 let now = js_sys::Date::now();
+                // Errors persist longer (10 s) so users can actually read them;
+                // other toasts auto-dismiss after 3 s as before.
+                let dismiss_ms: u32 = if kind == "err" { 10_000 } else { 3_000 };
                 set_toasts.update(|t| {
                     t.push((msg, kind, now));
                     // Keep max 5 toasts
                     if t.len() > 5 { t.remove(0); }
                 });
-                // Auto-remove after 3 seconds
                 let set_t = set_toasts;
                 spawn_local(async move {
                     let promise = js_sys::Promise::new(&mut |resolve, _| {
                         web_sys::window().unwrap()
-                            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 3000).unwrap();
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, dismiss_ms as i32).unwrap();
                     });
                     wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
                     set_t.update(|t| {
-                        t.retain(|(_, _, ts)| js_sys::Date::now() - ts < 3000.0);
+                        t.retain(|(_, _, ts)| js_sys::Date::now() - ts < dismiss_ms as f64);
                     });
                 });
             }
@@ -340,13 +352,12 @@ pub fn App() -> impl IntoView {
                         "vdac" => view! { <VdacTab state=device_state /> }.into_any(),
                         "idac" => view! { <IdacTab state=device_state /> }.into_any(),
                         "iin" => view! { <IinTab state=device_state /> }.into_any(),
-                        "din" => view! { <DinTab state=device_state /> }.into_any(),
-                        "dout" => view! { <DoutTab state=device_state /> }.into_any(),
+                        "hv_io" => view! { <HvIoTab state=device_state /> }.into_any(),
                         "faults" => view! { <FaultsTab state=device_state /> }.into_any(),
                         "gpio" => view! { <GpioTab state=device_state /> }.into_any(),
                         "uart" => view! { <UartTab uart_config=uart_config /> }.into_any(),
                         "scope" => view! { <ScopeTab state=device_state /> }.into_any(),
-                        "wavegen" => view! { <WavegenTab /> }.into_any(),
+                        "wavegen" => view! { <WavegenTab state=device_state /> }.into_any(),
                         "sigpath" => view! { <SignalPathTab state=device_state /> }.into_any(),
                         "voltages" => view! { <VoltagesTab state=device_state /> }.into_any(),
                         "calibration" => view! { <CalibrationTab state=device_state /> }.into_any(),

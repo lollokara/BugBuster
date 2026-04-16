@@ -1,6 +1,9 @@
 use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;
+use crate::components::channel_sparkline::ChannelSparkline;
+
+const SPARK_CAP: usize = 120;
 
 fn send_ch_func(ch: u8, func: u8) {
     #[derive(Serialize)]
@@ -23,6 +26,22 @@ fn send_adc_cfg(ch: u8, mux: u8, range: u8, rate: u8) {
 
 #[component]
 pub fn IinTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    // Per-channel rolling history of adc_value (mA) for sparkline.
+    let history: [RwSignal<Vec<f32>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
+    Effect::new(move |_| {
+        let ds = state.get();
+        for (i, ch) in ds.channels.iter().enumerate().take(4) {
+            let v = ch.adc_value;
+            history[i].update(|buf| {
+                buf.push(v);
+                if buf.len() > SPARK_CAP {
+                    let d = buf.len() - SPARK_CAP;
+                    buf.drain(0..d);
+                }
+            });
+        }
+    });
+
     view! {
         <div class="tab-content">
             <div class="tab-desc">"Current input measurement. Set channels to IIN External (device measures, external loop power) or IIN Loop (device powers the loop and measures). Reads 0-25 mA."</div>
@@ -111,6 +130,13 @@ pub fn IinTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                     <span>"0 mA"</span>
                                                     <span>"25 mA"</span>
                                                 </div>
+
+                                                <ChannelSparkline
+                                                    values=Signal::from(history[i])
+                                                    min=Signal::derive(move || -25.0f32)
+                                                    max=Signal::derive(move || 25.0f32)
+                                                    color=color.to_string()
+                                                />
 
                                                 // Raw ADC info
                                                 <div class="card-details" style="margin-top: 8px">

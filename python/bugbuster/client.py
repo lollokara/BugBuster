@@ -1785,17 +1785,18 @@ class BugBuster:
     # ── HAT Logic Analyzer ───────────────────────────────────────────
     # ------------------------------------------------------------------
 
-    def hat_la_configure(self, channels: int = 4, rate_hz: int = 1000000, depth: int = 100000) -> bool:
+    def hat_la_configure(self, channels: int = 4, rate_hz: int = 1000000, depth: int = 100000, rle_enabled: bool = False) -> bool:
         """
         Configure the HAT logic analyzer.
 
         :param channels: Number of channels (1, 2, or 4)
         :param rate_hz:  Sample rate in Hz (max ~100MHz for 1ch, ~25MHz for 4ch)
         :param depth:    Total samples to capture
+        :param rle_enabled: Enable run-length encoding for memory/stream modes
         :raises HatNotPresentError: If no HAT is detected on this device.
         """
         self._require_hat_present()
-        payload = struct.pack('<BII', channels, rate_hz, depth)
+        payload = struct.pack('<BIIB', channels, rate_hz, depth, 1 if rle_enabled else 0)
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_CONFIG, payload)
             return True
@@ -1864,6 +1865,117 @@ class BugBuster:
             self._usb_cmd(CmdId.HAT_LA_STREAM_START)
             return True
         raise NotImplementedError("LA control is USB-only")
+
+    def hat_la_stream_usb_cycle(self, duration_s: float = 1.0) -> list:
+        """
+        Execute a gapless capture reading from the dedicated Logic Analyzer USB Vendor Bulk Interface.
+        Requires pyusb (`pip install pyusb`) as an optional dependency.
+
+        This commands EP_OUT to start the stream, continuously polls EP_IN to aggregate data, and
+        gracefully halts it. It handles decompression of RLE payloads inherently.
+
+        :param duration_s: Native streaming duration boundary before graceful termination is invoked.
+        :returns: List of decoded channel arrays extracted from the payloads.
+        :raises ImportError: If PyUSB is omitted from the underlying python suite.
+        """
+        self._require_hat_present()
+        import time
+        try:
+            import usb.core
+            import usb.util
+        except ImportError:
+            raise ImportError(
+                "pyusb is required for high-speed streaming capability: pip install pyusb"
+            )
+
+        dev = usb.core.find(idVendor=0x2E8A, idProduct=0x000C)
+        if dev is None:
+            raise RuntimeError("BugBuster device (VID 0x2E8A, PID 0x000C) not found.")
+            
+        LA_INTERFACE = 3
+        EP_IN = 0x87
+        EP_OUT = 0x06
+        
+        try:
+            import platform
+            if platform.system() != "Darwin":
+                try: pass # dev.set_configuration() # Optional based on env
+                except: pass
+            
+            # Flush existing claims
+            try: usb.util.claim_interface(dev, LA_INTERFACE)
+            except Exception:
+                usb.util.release_interface(dev, LA_INTERFACE)
+                usb.util.claim_interface(dev, LA_INTERFACE)
+
+            # Pre-flight teardown to assert clean state
+            try: dev.write(EP_OUT, bytes([0x00]), timeout=2000) # STREAM_CMD_STOP
+            except usb.core.USBError: pass
+            time.sleep(0.05)
+            
+            # Start hardware pump
+            dev.write(EP_OUT, bytes([0x01]), timeout=2000) # STREAM_CMD_START
+            
+            t_start = time.monotonic()
+            stream_buf = bytearray()
+            aggregated_payload = bytearray()
+            
+            PKT_START = 0x01
+            PKT_DATA = 0x02
+            PKT_STOP = 0x03
+            PKT_ERROR = 0x04
+
+            active = False
+            while (time.monotonic() - t_start) < duration_s:
+                try:
+                    chunk = dev.read(EP_IN, 16384, timeout=500)
+                    if chunk:
+                        stream_buf.extend(chunk)
+                except usb.core.USBError as e:
+                    if e.errno in (110, 60, 10060) or "timeout" in str(e).lower():
+                        continue
+                    raise
+
+                # Parse frame packets
+                while len(stream_buf) >= 4:
+                    pkt_type = stream_buf[0]
+                    payload_len = stream_buf[2]
+                    info = stream_buf[3]
+                    frame_len = 4 + payload_len
+                    if len(stream_buf) < frame_len:
+                        break # Incomplete frame, wait for next transfer
+                        
+                    payload = stream_buf[4:frame_len]
+                    del stream_buf[0:frame_len]
+                    
+                    if pkt_type == PKT_START:
+                        active = True
+                    elif pkt_type == PKT_DATA and active:
+                        if info & 0x01: # INFO_COMPRESSED
+                            # RLE logic
+                            i = 0
+                            while i + 1 < len(payload):
+                                val = payload[i]
+                                count = payload[i+1] + 1
+                                aggregated_payload.extend(bytes([val]) * count)
+                                i += 2
+                        else:
+                            aggregated_payload.extend(payload)
+                    elif pkt_type == PKT_STOP:
+                        break
+                    elif pkt_type == PKT_ERROR:
+                        print(f"Firmware rejected stream (info={info})")
+                        break
+
+        finally:
+            try: dev.write(EP_OUT, bytes([0x00]), timeout=2000)
+            except: pass
+            try: usb.util.release_interface(dev, LA_INTERFACE)
+            except: pass
+            
+        status = self.hat_la_get_status()
+        channels = status.get("channels", 4)
+        return self.hat_la_decode(bytes(aggregated_payload), channels=channels)
 
     def hat_la_log_enable(self, enable: bool = True) -> bool:
         """Enable/disable RP2040 log relay via ESP32 side-channel.

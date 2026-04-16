@@ -111,6 +111,25 @@ with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     print(f"IO 2: {'HIGH' if r['value'] else 'LOW'}")
 ```
 
+### Logic Analyzer (High-Speed Streaming)
+
+The Logic Analyzer can stream continuous 4-channel pin state samples at up to 1MHz (or 1-channel up to 5MHz) natively using PyUSB on the vendor bulk endpoint (requires USB).
+
+```python
+import bugbuster as bb
+
+with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
+    # Configure LA for 4 channels, 1MHz, enabling hw-accelerated RLE compression
+    dev.hat_la_configure(channels=4, rate_hz=1000000, depth=100000, rle_enabled=True)
+    
+    # Execute a gapless USB Bulk capture for 0.5 seconds 
+    # (Requires: pip install pyusb)
+    data = dev.hat_la_stream_usb_cycle(duration_s=0.5)
+    
+    # Returns a list of decoded channel bit streams
+    print(f"Captured {len(data[0])} decompressed samples")
+```
+
 ## Hardware Overview
 
 ```mermaid
@@ -274,6 +293,9 @@ bb.connect_http(host, port=80, timeout=5.0) -> BugBuster
 
 **ADC Streaming (USB only):**
 `start_adc_stream()`, `stop_adc_stream()`, `on_scope_data()`
+
+**Logic Analyzer (USB only):**
+`hat_la_configure()`, `hat_la_set_trigger()`, `hat_la_stream_start()`, `hat_la_stream_usb_cycle()`, `hat_la_stop()`, `hat_la_read_all()`, `hat_la_decode()`
 
 **Waveform Generator:**
 `start_waveform()`, `stop_waveform()`

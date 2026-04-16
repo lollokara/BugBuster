@@ -173,6 +173,11 @@ pub const CMD_HAT_HVPAK_REG_WRITE_MASKED: u8 = 0xEA;
 // HAT LA extended
 pub const CMD_HAT_LA_LOG_ENABLE: u8 = 0xEB;
 pub const CMD_HAT_LA_USB_RESET: u8 = 0xED;
+// LA stream start via BBP — forwards HAT_CMD_LA_STREAM_START (0x37) to RP2040.
+// Routing START/STOP via BBP avoids the EP_OUT vendor-bulk path which becomes
+// unresponsive after the first stop/rearm cycle on RP2040 TinyUSB.
+// See tests/mock/la_usb_host.py:344, BBP_CMD_HAT_LA_STREAM_START in esp32 bbp.h.
+pub const CMD_HAT_LA_STREAM_START: u8 = 0xEE;
 
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;

@@ -68,8 +68,9 @@ by normal CLI typing. The device scans incoming CLI bytes for this 4-byte sequen
 
 **Device responds** (raw bytes):
 ```
-0xBB 0x42 0x55 0x47 0x04 0x01 0x06 0x00
+0xBB 0x42 0x55 0x47 0x04 0x01 0x08 0x00 [MAC_0..5]
 ```
+(magic[4] + proto_v[1] + fw_major[1] + fw_minor[1] + fw_patch[1] + mac[6])
 
 After sending this response, the device:
 1. Stops the CLI parser
@@ -77,7 +78,7 @@ After sending this response, the device:
 3. Enters binary mode (all subsequent I/O on CDC #0 uses COBS framing)
 4. Sets an internal flag `g_binaryMode = true`
 
-The host must wait for the 8-byte response before sending COBS-framed messages.
+The host must wait for the 14-byte response before sending COBS-framed messages.
 
 ### 3.2 Binary -> CLI (Disconnect)
 
@@ -303,7 +304,7 @@ Offset  Field               Type    Description
 11      supply_alert_mask   u16     Supply alert mask
 13      live_status         u16     Live status register
 
-Per channel (4x, starting at offset 15, stride = 28 bytes):
+Per channel (4x, starting at offset 15, stride = 30 bytes):
 +0      channel_id          u8      Channel index (0-3)
 +1      function            u8      Channel function code (0-12)
 +2      adc_raw             u24     ADC raw code (24-bit)
@@ -317,17 +318,18 @@ Per channel (4x, starting at offset 15, stride = 28 bytes):
 +19     din_counter         u32     DIN event counter
 +23     do_state            bool    Digital output state
 +24     channel_alert       u16     Per-channel alert bits
-+26     rtd_excitation_ua   u16     RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
++26     channel_alert_mask  u16     Per-channel alert mask bits
++28     rtd_excitation_ua   u16     RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
 
-Per diagnostic slot (4x, starting at offset 127, stride = 7 bytes):
+Per diagnostic slot (4x, starting at offset 135, stride = 7 bytes):
 +0      source              u8      Diagnostic source code (0-13)
 +1      raw_code            u16     Raw diagnostic ADC code
 +3      value               f32     Converted value (V or C)
 
-MUX state (4 bytes, starting at offset 155):
+MUX state (4 bytes, starting at offset 163):
 +0-3    mux_state           u8[4]   Current state of 4 MUX devices (Bit 0 = S1)
 
-Total response: 15 + (4 x 28) + (4 x 7) + 4 = 159 bytes
+Total response: 15 + (4 x 30) + (4 x 7) + 4 = 167 bytes
 ```
 
 #### 0x02 GET_DEVICE_INFO
@@ -1521,6 +1523,14 @@ Get current capture status.
 2       samples_captured u32    Samples captured so far (LE)
 6       total_samples   u32     Target depth (LE)
 10      actual_rate_hz  u32     Actual sample rate (LE)
+14      usb_connected   bool    RP2040 USB cable attached
+15      usb_mounted     bool    RP2040 USB host configured
+16      stop_reason     u8      Reason for last stream stop
+17      overrun_count   u32     Number of DMA overruns detected
+21      short_writes    u32     Number of short USB writes
+25      rearm_pending   bool    USB rearm is waiting for host
+26      rearm_req_count u8      Count of rearm requests sent
+27      rearm_ack_count u8      Count of rearm ACKs received
 ```
 
 | State | Name | Description |
@@ -1695,7 +1705,7 @@ Set the state of a single switch in the matrix. Enforces safety dead-time for th
 
 **Response payload:** (empty)
 
-**Web API equivalent:** `POST /api/mux/set` with body `{"device": 0, "switch": 1, "closed": true}`
+**Web API equivalent:** `POST /api/mux/switch` with body `{"device": 0, "switch": 1, "closed": true}`
 
 ### 6.16 Scope API (HTTP Polling)
 
@@ -1987,7 +1997,7 @@ Returns the current state of all 32 switches as a JSON array of 4 bytes (one per
 }
 ```
 
-#### POST /api/mux/set
+#### POST /api/mux/switch
 Set the state of a single switch in the matrix.
 
 **Request Body:**
@@ -2172,8 +2182,7 @@ Unsolicited log message from RP2040 HAT.
 
 **Event payload:**
 ```
-0       len             u8      Message length
-1..N    msg             char[]  Log message
+0..N    msg             char[]  Log message string
 ```
 
 ---
@@ -2279,7 +2288,7 @@ not a practical concern.
 - Open at any baud rate (CDC ignores baud rate, it's USB-native)
 - Set DTR high (signals connection to device)
 - Send the handshake magic bytes
-- Wait for 8-byte handshake response
+- Wait for 14-byte handshake response
 - Begin COBS-framed communication
 
 **Recommended host libraries:**
@@ -2377,7 +2386,7 @@ Host                                    Device
 | 1.5 | 2026-03-29 | Added WIFI_SCAN (0xE4); WiFi credentials persist in NVS |
 | 1.6 | 2026-03-30 | Added SET_LSHIFT_OE (0xE0), SET_SPI_CLOCK (0xE3) sections; OTA update endpoint (POST /api/ota/upload); device version endpoint (GET /api/device/version); A/B OTA partition table with rollback |
 | 1.7 | 2026-03-31 | Added SET_RTD_CONFIG (0x1D) command for RTD excitation current selection (125/250 µA); GET_STATUS per-channel payload extended by 2 bytes (rtd_excitation_ua u16, stride 26→28, total 147→155 bytes); adc_value for RES_MEAS now returned in Ohms (R = V_adc / I_exc) |
-| 1.8 | 2026-04-01 | Added GET /api/debug and POST /api/mux/set REST endpoints |
+| 1.8 | 2026-04-01 | Added GET /api/debug and POST /api/mux/switch REST endpoints |
 
 ---
 
@@ -2424,7 +2433,7 @@ Host                                    Device
 | 0x74 | GET_ADMIN_TOKEN | H->D | -- | (new, USB only) |
 | 0x90 | MUX_SET_ALL | H->D | 4 states | `POST /api/mux/all` |
 | 0x91 | MUX_GET_ALL | H->D | -- | `GET /api/mux` |
-| 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | `POST /api/mux/set` |
+| 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | `POST /api/mux/switch` |
 | 0xA0 | IDAC_GET_STATUS | H->D | -- | `GET /api/idac` |
 | 0xA1 | IDAC_SET_CODE | H->D | ch, code | `POST /api/idac/code` |
 | 0xA2 | IDAC_SET_VOLTAGE | H->D | ch, voltage | `POST /api/idac/voltage` |
@@ -2453,6 +2462,9 @@ Host                                    Device
 | 0xD8 | HAT_LA_READ | H->D | offset, len | LA: read data chunk |
 | 0xD9 | HAT_LA_STOP | H->D | -- | LA: stop capture |
 | 0xDA | HAT_LA_TRIGGER | H->D | type, channel | LA: set trigger |
+| 0xEB | HAT_LA_LOG_ENABLE | H->D | enable | LA: log relay control |
+| 0xED | HAT_LA_USB_RESET | H->D | -- | LA: reset USB endpoint |
+| 0xEE | HAT_LA_STREAM_START | H->D | -- | LA: start USB stream |
 | 0xC0 | USBPD_GET_STATUS | H->D | -- | `GET /api/usbpd` |
 | 0xC1 | USBPD_SELECT_PDO | H->D | voltage | `POST /api/usbpd/select` |
 | 0xC2 | USBPD_GO | H->D | command | (new) |

@@ -1,11 +1,30 @@
 use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;
+use crate::components::channel_sparkline::ChannelSparkline;
+
+const SPARK_CAP: usize = 120;
 
 #[component]
 pub fn IdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let slider_vals: [RwSignal<f64>; 4] = std::array::from_fn(|_| RwSignal::new(0.0));
     let dirty: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
+
+    // Per-channel history of dac_value (mA for IOUT) for sparkline.
+    let history: [RwSignal<Vec<f32>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
+    Effect::new(move |_| {
+        let ds = state.get();
+        for (i, ch) in ds.channels.iter().enumerate().take(4) {
+            let v = ch.dac_value;
+            history[i].update(|buf| {
+                buf.push(v);
+                if buf.len() > SPARK_CAP {
+                    let d = buf.len() - SPARK_CAP;
+                    buf.drain(0..d);
+                }
+            });
+        }
+    });
 
     view! {
         <div class="tab-content">
@@ -51,6 +70,13 @@ pub fn IdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 <div class="bar-gauge" style=format!("--bar-color: {}", color)>
                                                     <div class="bar-fill-dynamic" style=format!("width: {}%", pct)></div>
                                                 </div>
+
+                                                <ChannelSparkline
+                                                    values=Signal::from(history[i])
+                                                    min=Signal::derive(move || 0.0f32)
+                                                    max=Signal::derive(move || 25.0f32)
+                                                    color=color.to_string()
+                                                />
 
                                                 <div class="slider-section">
                                                     <input type="range" class="slider slider-colored"
