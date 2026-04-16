@@ -3,6 +3,13 @@ cmake_minimum_required(VERSION 3.13)
 set(CMAKE_BUILD_TYPE RelWithDebInfo)
 
 set(PICO_SDK_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/pico-sdk)
+# Force Pico SDK to use our forked TinyUSB (lib/tinyusb) which adds
+# tud_vendor_n_fifo_clear and tud_vendor_n_rx_reprime used by bb_la_usb.c.
+# Without this, pico_sdk_init() resolves TinyUSB from ${PICO_SDK_PATH}/lib/tinyusb
+# (upstream) and the link step fails with undefined references to those symbols.
+# PICO_TINYUSB_PATH is honoured from either an env var or a CMake cache entry;
+# FORCE ensures this value wins even if something up-tree pre-defined it.
+set(PICO_TINYUSB_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/tinyusb CACHE PATH "TinyUSB path" FORCE)
 set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards)
 include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 

@@ -4,3 +4,6 @@
 [submodule "Firmware/RP2040/lib/debugprobe"]
 	path = Firmware/RP2040/lib/debugprobe
 	url = https://github.com/raspberrypi/debugprobe.git
+[submodule "Firmware/RP2040/lib/tinyusb"]
+	path = Firmware/RP2040/lib/tinyusb
+	url = https://github.com/lollokara/tinyusb.git
