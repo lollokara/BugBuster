@@ -548,7 +548,11 @@ pub async fn mux_set_all(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<()> {
     if states.len() < 4 { return Err("Need 4 device states".to_string()); }
-    mgr.send_command(bbp::CMD_MUX_SET_ALL, &states[..4]).await.map_err(map_err)?;
+    log::info!("[mux_set_all] states={:?}", &states[..4.min(states.len())]);
+    mgr.send_command(bbp::CMD_MUX_SET_ALL, &states[..4]).await.map_err(|e| {
+        log::warn!("[mux_set_all] send failed: {e:?}");
+        map_err(e)
+    })?;
     Ok(())
 }
 
@@ -571,7 +575,11 @@ pub async fn mux_set_switch(
     pw.put_u8(device);
     pw.put_u8(switch_num);
     pw.put_bool(state);
-    mgr.send_command(bbp::CMD_MUX_SET_SWITCH, &pw.buf).await.map_err(map_err)?;
+    log::info!("[mux_set_switch] device={} switch_num={} state={} payload={:?}", device, switch_num, state, pw.buf);
+    mgr.send_command(bbp::CMD_MUX_SET_SWITCH, &pw.buf).await.map_err(|e| {
+        log::warn!("[mux_set_switch] send failed: {e:?}");
+        map_err(e)
+    })?;
     Ok(())
 }
 

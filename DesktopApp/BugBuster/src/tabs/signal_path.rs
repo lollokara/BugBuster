@@ -127,11 +127,30 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let new_state = !on;
         let a = serde_wasm_bindgen::to_value(&A { device: d as u8, switch_num: s as u8, state: new_state }).unwrap();
         let label = format!("MUX{} S{} {}", d + 1, s + 1, if new_state { "ON" } else { "OFF" });
+        web_sys::console::log_1(&format!("[mux] toggle device={} switch={} new_state={}", d, s, new_state).into());
         invoke_with_feedback("mux_set_switch", a, &label);
+        // Readback after 50 ms to verify firmware applied the state
+        let expected = st;
+        spawn_local(async move {
+            slp(50).await;
+            let got = crate::tauri_bridge::try_invoke("mux_get_all", wasm_bindgen::JsValue::NULL).await;
+            web_sys::console::log_1(&format!("[mux] readback after toggle: {:?}", got).into());
+            if let Some(val) = got {
+                if let Ok(returned) = serde_wasm_bindgen::from_value::<Vec<u8>>(val) {
+                    if returned.len() >= 4 && returned[..4] != expected[..4] {
+                        web_sys::console::warn_1(&format!(
+                            "[mux] state mismatch! expected={:?} got={:?}",
+                            &expected[..4], &returned[..4]
+                        ).into());
+                    }
+                }
+            }
+        });
         set_mux.set(st);
     };
 
     let pre = move |s: [u8; 4]| {
+        web_sys::console::log_1(&format!("[mux] preset states={:?}", s).into());
         let a = serde_wasm_bindgen::to_value(&serde_json::json!({"states": s.to_vec()})).unwrap();
         invoke_with_feedback("mux_set_all", a, "Apply MUX preset");
         set_mux.set(s);

@@ -1173,8 +1173,9 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
 
 /* ---- Pin map ---- */
 .board-pinmap {
-    display: flex; flex-direction: column; gap: 10px;
-    padding: 12px 14px; min-height: 0; overflow: auto;
+    flex: 1 1 0; min-height: 0; overflow: hidden;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 12px 14px;
 }
 .board-pinmap-head {
     display: flex; align-items: baseline; gap: 10px;
@@ -1182,10 +1183,11 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
 }
 .board-pinmap-sub { font-size: 0.7rem; color: var(--text-muted); }
 
-.board-pinmap-domains { display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; }
+.board-pinmap-domains { display: flex; flex-direction: column; gap: 6px; flex: 1 1 0; min-height: 0; }
 .board-domain-row {
+    flex: 1 1 0; min-height: 0;
     display: flex; align-items: stretch; gap: 10px;
-    padding: 10px; border-radius: 10px;
+    padding: 8px; border-radius: 10px;
     border: 1px dashed var(--border);
     background: rgba(255,255,255,0.015);
 }
@@ -1204,8 +1206,8 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
 .board-domain-vadj2 .board-domain-tag { color: var(--purple); }
 
 .board-pin-row {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
-    flex: 1;
+    flex: 1 1 0; min-height: 0;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
 }
 
 /* Horizontal domain tag (row label "VADJ1-A · IO1-3"). */
@@ -1219,7 +1221,7 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
 .board-pin-tile {
     position: relative;
     display: flex; flex-direction: column; align-items: stretch; gap: 3px;
-    padding: 8px 8px 10px;
+    padding: 6px 6px 8px;
     background: rgba(20,30,52,0.55);
     border: 1px solid var(--border-bright);
     border-top: 3px solid var(--border-bright);
@@ -1227,7 +1229,7 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
     cursor: pointer;
     transition: transform 0.15s, border-color 0.2s, box-shadow 0.2s, background 0.2s;
     color: var(--text); font-family: inherit;
-    text-align: left; min-height: 60px;
+    text-align: left; min-height: 0; height: 100%;
 }
 .board-pin-tile:hover {
     transform: translateY(-1px);
@@ -1250,7 +1252,7 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
 
 .board-pin-num {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.62rem; font-weight: 800; letter-spacing: 0.5px;
+    font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
     color: var(--text-muted);
 }
 .board-pin-icon {
@@ -1259,7 +1261,7 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
     font-family: 'JetBrains Mono', monospace;
 }
 .board-pin-name {
-    font-size: 0.72rem; font-weight: 600; color: var(--text);
+    font-size: 11px; font-weight: 600; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .board-pin-mode {
