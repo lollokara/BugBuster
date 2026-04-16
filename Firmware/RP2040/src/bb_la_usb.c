@@ -363,6 +363,7 @@ void bb_la_usb_send_pending(void) {
     // Re-arm endpoints if abort_bulk() was called from any task context.
     // Two-step: hardware SIE reset (AVAIL=0) then TinyUSB software state clear.
     if (s_need_endpoint_rearm) {
+
         s_need_endpoint_rearm = false;
 
         // Clear ALL stop-related flags to prevent a stale deferred stop
@@ -393,7 +394,7 @@ void bb_la_usb_send_pending(void) {
         // the host has abandoned it — the endpoint is effectively dead.
         // Clear the SIE register first (AVAIL→0), then rx_reprime detects
         // AVAIL=0 and does clear_busy + fresh re-prime.
-        rp2040_sie_endpoint_reset(0x06);  // OUT: clear stale AVAIL
+        //rp2040_sie_endpoint_reset(0x06);  // OUT: clear stale AVAIL
         tud_vendor_n_rx_reprime(BB_LA_VENDOR_ITF);  // re-prime cleanly
 
         s_rearm_complete_count = s_rearm_request_count;
@@ -658,11 +659,13 @@ static void cdc_write_reply(const char *msg) {
 static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
     switch (cmd) {
     case LA_USB_CMD_START_STREAM:
+        bb_la_log("[USB_START] cmd received\n");
         s_cdc_seq = 0;
         s_deferred_stop = false;   // cancel any pending deferred stop
         s_pending_hw_cleanup = false;
         bb_la_usb_live_reset_sequence();
         if (!bb_la_start_stream()) {
+            bb_la_log("[USB_START] start_stream REJECTED\n");
             if (reply_on_cdc) {
                 cdc_write_reply("ERR\n");
             } else {
@@ -670,6 +673,7 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
             }
             return;
         }
+        bb_la_log("[USB_START] streaming started\n");
         s_streaming_session = true;
         if (reply_on_cdc) {
             cdc_write_reply("START\n");
@@ -702,6 +706,7 @@ void bb_la_usb_poll_commands(void) {
     if (tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
         while (tud_vendor_n_available(BB_LA_VENDOR_ITF) > 0) {
             uint32_t n = tud_vendor_n_read(BB_LA_VENDOR_ITF, cmd_buf, sizeof(cmd_buf));
+            bb_la_log("[poll_cmd] got %u bytes, cmd[0]=0x%02x\n", n, n > 0 ? cmd_buf[0] : 0xFF);
             for (uint32_t i = 0; i < n; i++) {
                 handle_stream_command(cmd_buf[i], false);
             }

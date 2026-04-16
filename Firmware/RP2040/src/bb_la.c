@@ -632,6 +632,8 @@ void bb_la_poll(void)
 
 bool bb_la_start_stream(void)
 {
+    bb_la_log("[start_stream] state=%d pio=%d rle=%d\n",
+              (int)s_la.state, (int)s_la.pio_loaded, (int)s_la.rle_mode);
     if (s_la.state != LA_STATE_IDLE) return false;
     if (!s_la.pio_loaded) {
         if (s_la.config.channels == 0 || s_la.config.sample_rate_hz == 0) return false;
