@@ -19,6 +19,7 @@ _EVENT_ONLY_CMDS = {
     "ALERT_EVT",
     "DIN_EVT",
     "PCA_FAULT_EVT",
+    "HAT_LA_LOG_EVT",
 }
 
 

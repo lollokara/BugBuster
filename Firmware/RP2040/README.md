@@ -3,6 +3,8 @@
 Firmware for the BugBuster HAT expansion board, based on a fork of
 [raspberrypi/debugprobe](https://github.com/raspberrypi/debugprobe).
 
+**Current version:** `bb-hat-2.0` (PROBE_VERSION in `CMakeLists.txt`; USB descriptor string).
+
 ## Architecture
 
 - **debugprobe core** (unmodified): CMSIS-DAP v2, SWD via PIO 0, CDC UART bridge, SWO
@@ -102,3 +104,6 @@ make -j$(nproc)
 - **Modes**: Raw (DMA with completion IRQ) or RLE-compressed (PIO FIFO polling)
 - **Trigger**: Rising/falling/both-edge, level high/low on any channel (PIO-to-PIO hardware trigger)
 - **DMA**: Dynamically claimed channel with interrupt-driven completion detection
+- **Streaming**: vendor-bulk endpoint `0x87` (8×2432 ring buffer).  Supports 1 MHz / 4-ch continuous capture with SMP core affinity and SIE reset on rearm.  Host re-use across consecutive runs requires a STOP-first preflight; recovery counters (`usb_rearm_pending`, `request_count`, `complete_count`) are surfaced via `HAT_LA_STATUS`.
+- **LA-done IRQ**: RP2040 GPIO8 pulses the shared ESP32 IRQ line when a capture transitions to DONE, allowing the host-side LA task to consume without polling.
+- **Log relay**: `bb_la_log()` messages forwarded to the host as BBP `0xEC LA_LOG` events when enabled via `HAT_LA_LOG_ENABLE`.

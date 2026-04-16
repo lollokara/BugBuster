@@ -112,6 +112,13 @@ def _get_status(device):
         for _ in range(4):
             buf += struct.pack('<BHf', 0, 0, 0.0)
 
+        # MUX state (4 bytes at offset 163) — added for BBP v4 GET_STATUS.
+        # Source the 4-device state from the simulator if available.
+        mux_states = getattr(device, "mux_states", [0, 0, 0, 0])
+        if not isinstance(mux_states, (list, tuple)) or len(mux_states) != 4:
+            mux_states = [0, 0, 0, 0]
+        buf += struct.pack('<BBBB', *(b & 0xFF for b in mux_states))
+
         return bytes(buf)
     return handler
 

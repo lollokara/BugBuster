@@ -552,6 +552,16 @@ static esp_err_t handle_get_device_info(httpd_req_t *req)
     snprintf(id0Str, sizeof(id0Str), "0x%04X", id0);
     snprintf(id1Str, sizeof(id1Str), "0x%04X", id1);
 
+    // Expose the primary station MAC so HTTP clients can key their pairing
+    // store on the same identifier the USB handshake provides (BBP v4 §3.1).
+    // Without this field the desktop app keyed pairing on "00:00:00:00:00:00"
+    // and demanded USB re-authorisation on every HTTP connect.
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "siliconRev", (int)rev);
     cJSON_AddNumberToObject(root, "silicon_rev", (int)rev);
@@ -559,6 +569,8 @@ static esp_err_t handle_get_device_info(httpd_req_t *req)
     cJSON_AddStringToObject(root, "siliconId1", id1Str);
     cJSON_AddNumberToObject(root, "silicon_id0", (int)id0);
     cJSON_AddNumberToObject(root, "silicon_id1", (int)id1);
+    cJSON_AddStringToObject(root, "macAddress", macStr);
+    cJSON_AddStringToObject(root, "mac_address", macStr);
     add_bool_alias(root, "spiOk", "spi_ok", spiOk);
 
     return send_json(req, root);

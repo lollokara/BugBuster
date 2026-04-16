@@ -11,6 +11,11 @@ from bugbuster.constants import CmdId, ErrorCode
 from bugbuster.transport.usb import DeviceError
 
 
+def _noop_ok(payload: bytes) -> bytes:
+    """Handler that acknowledges the command with an empty response."""
+    return b""
+
+
 def _ensure_hat_state(device) -> None:
     """Add HAT-related state attributes to device if not already present."""
     if not hasattr(device, "hat_pins"):
@@ -108,6 +113,12 @@ def register(device) -> None:
     device.register_handler(CmdId.HAT_LA_READ,    _hat_la_read(device))
     device.register_handler(CmdId.HAT_LA_STOP,    _hat_la_stop(device))
     device.register_handler(CmdId.HAT_LA_TRIGGER, _hat_la_trigger(device))
+    # LA streaming / log-relay handlers (BBP v4 additions).  The simulator
+    # acknowledges these so the client surface is exercised end-to-end, but
+    # does not model USB-bulk streaming or RP2040 log fan-out.
+    device.register_handler(CmdId.HAT_LA_LOG_ENABLE,   _noop_ok)
+    device.register_handler(CmdId.HAT_LA_USB_RESET,    _noop_ok)
+    device.register_handler(CmdId.HAT_LA_STREAM_START, _noop_ok)
 
     # HVPAK advanced handlers
     device.register_handler(CmdId.HAT_GET_HVPAK_CAPS,        _hat_get_hvpak_caps(device))

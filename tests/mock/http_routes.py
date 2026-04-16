@@ -36,13 +36,31 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             "fwPatch": device.fw_version[2],
         }
 
+    # Combined I2C diagnostics — mirrors firmware /api/debug.
+    if key == ("GET", "/debug"):
+        return {
+            "i2cBusOk": True,
+            "ds4424": {"present": True},
+            "husb238": {"present": True, "attached": False, "voltageV": 0, "currentA": 0},
+            "pca9535": {
+                "present": True,
+                "input0": 0, "input1": 0,
+                "output0": 0, "output1": 0,
+            },
+        }
+
     # Device info
     if key == ("GET", "/device/info"):
+        # Mirror the firmware: expose macAddress so HTTP pairing flows
+        # (desktop + python client get_mac_address) can be exercised hardware-free.
+        mac = getattr(device, "mac_address", "aa:bb:cc:00:11:22")
         return {
             "spi_ok": device.spi_ok,
             "silicon_rev": 1,
             "silicon_id0": 0xABCD,
             "silicon_id1": 0x1234,
+            "macAddress": mac,
+            "mac_address": mac,
         }
 
     # Full status snapshot
@@ -572,7 +590,7 @@ def _status_dict(device) -> dict:
         "live_status": device.live_status,
         "channels": channels,
         "diagnostics": [],
-        "mux_states": [],
+        "mux_states": list(getattr(device, "mux_states", [0, 0, 0, 0])[:4]),
     }
 
 

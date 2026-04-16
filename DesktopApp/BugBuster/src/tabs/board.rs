@@ -25,7 +25,17 @@ impl PinMode {
             PinMode::GPIO => "GPIO",
             PinMode::GPI => "GPI",
             PinMode::GPO => "GPO",
-            PinMode::Analog => "Analog",
+            PinMode::Analog => "ADC",
+        }
+    }
+
+    pub fn to_badge(&self) -> &'static str {
+        match self {
+            PinMode::NC => "·",
+            PinMode::GPIO => "GPIO",
+            PinMode::GPI => "GPI",
+            PinMode::GPO => "GPO",
+            PinMode::Analog => "ADC",
         }
     }
 
@@ -404,11 +414,7 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     </div>
                                     <div class="board-pin-row">
                                         {(pin_range_start..pin_range_end).map(|i| {
-                                            let cfg = config.get();
-                                            let mode = cfg.pins[i];
-                                            let name = cfg.pin_names[i].clone();
                                             let analog_cap = is_analog_capable(i);
-                                            let sel = selected_pin.get() == i;
                                             let tile_cls = format!("board-pin-tile {}", dom_cls_str);
                                             view! {
                                                 <button class=tile_cls
@@ -416,12 +422,17 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                     on:click=move |_| selected_pin.set(i)
                                                 >
                                                     <span class="board-pin-num">{format!("IO{:02}", i + 1)}</span>
-                                                    <span class="board-pin-icon">{pin_icon(mode)}</span>
-                                                    <span class="board-pin-name">{name}</span>
-                                                    <span class="board-pin-mode">{mode.to_str()}</span>
-                                                    <span class="board-pin-dot" class:board-dot-set=move || matches!(config.get().pins[i], PinMode::NC) == false></span>
+                                                    <div class="board-pin-main">
+                                                        <span class="board-pin-badge"
+                                                            class:board-badge-set=move || config.get().pins[i] != PinMode::NC
+                                                            class:board-badge-weak=move || config.get().pin_drive[i] == DriveStrength::Weak2k
+                                                        >
+                                                            {move || config.get().pins[i].to_badge()}
+                                                        </span>
+                                                    </div>
+                                                    <span class="board-pin-name">{move || config.get().pin_names[i].clone()}</span>
                                                     {if analog_cap { Either::Left(view! { <span class="board-pin-cap" title="Analog capable">"~"</span> }) } else { Either::Right(()) }}
-                                                    {if sel { Either::Left(view! { <span class="board-pin-arrow"></span> }) } else { Either::Right(()) }}
+                                                    {move || if selected_pin.get() == i { Either::Left(view! { <span class="board-pin-arrow"></span> }) } else { Either::Right(()) }}
                                                 </button>
                                             }
                                         }).collect::<Vec<_>>()}
@@ -475,7 +486,7 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <option value="GPI" selected=matches!(mode, PinMode::GPI)>"GPI — Digital input"</option>
                                     <option value="GPO" selected=matches!(mode, PinMode::GPO)>"GPO — Digital output"</option>
                                     {if analog_cap {
-                                        Either::Left(view! { <option value="Analog" selected=matches!(mode, PinMode::Analog)>"Analog"</option> })
+                                        Either::Left(view! { <option value="Analog" selected=matches!(mode, PinMode::Analog)>"ADC"</option> })
                                     } else { Either::Right(()) }}
                                 </select>
                             </div>

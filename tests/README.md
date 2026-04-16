@@ -1,7 +1,18 @@
 # BugBuster Test Suite
 
-Hardware-in-the-loop test framework for the BugBuster industrial I/O board.
-Tests cover the Python API, HTTP REST endpoints, and (via both) the ESP32 and RP2040 firmware.
+Test framework for the BugBuster industrial I/O board.  Covers the Python API,
+the HTTP REST endpoints, and &mdash; via both &mdash; the ESP32 and RP2040 firmware.
+
+The suite has three layers:
+
+| Layer | Dir | Needs hardware? | What it validates |
+|---|---|---|---|
+| **Unit** | `tests/unit/` | no | Pure-Python logic: parsers, HAL routing, HAT guards, rail-lock enforcement, auth flow |
+| **Simulator** | `tests/simulator/` + `tests/mock/` | no | End-to-end USB + HTTP transport round-trips against `SimulatedDevice` (102 BBP handlers, `/api/*` surface) |
+| **Device** | `tests/device/` | yes (or `--sim`) | The same tests, driven against real hardware over USB / HTTP, or against the simulator with `--sim` |
+
+Current posture: **174 unit + 246 sim/device passing**, 64 skipped (HAT / SWD / LA
+hardware-only).
 
 ## Setup (macOS)
 
@@ -84,6 +95,22 @@ pytest tests/ --device-usb=/dev/cu.usbmodem1234 -v
 pytest tests/ --device-http=192.168.4.1 -k "not usb_only" -v
 pytest tests/device/test_02_channels.py --device-usb=/dev/cu.usbmodem1234 -v
 ```
+
+### Hardware-free (simulator)
+
+All unit tests and the full `device/` suite can run without a board by routing
+through `tests/mock/SimulatedDevice` and `tests/mock/http_routes.py`:
+
+```bash
+# From repo root
+PYTHONPATH=python:tests pytest tests/unit tests/simulator -q
+PYTHONPATH=python:tests pytest tests/device --sim -q
+```
+
+The simulator implements every BBP CmdId handler (see
+`tests/simulator/test_sim_completeness.py`) and mirrors the firmware's `/api`
+schema, including the BBP v4 `macAddress` field on `/api/device/info` and the
+admin-token pairing flow (injected automatically by `SimulatedHTTPTransport`).
 
 ## Test markers
 

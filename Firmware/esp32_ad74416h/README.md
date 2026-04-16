@@ -3,13 +3,22 @@
 Main controller firmware for BugBuster, running on ESP32-S3 (DFRobot FireBeetle 2).
 Controls the AD74416H quad-channel analog I/O chip via SPI, provides USB and WiFi connectivity.
 
+**Current version:** `3.0.0` (BBP wire protocol `v4`)
+
 ## Architecture
 
 - **FreeRTOS** with 4 main tasks: ADC poll, fault monitor, command processor, main loop
 - **Dual USB CDC**: CLI interface + UART bridge
-- **BBP Protocol**: COBS-encoded binary protocol over USB for high-throughput streaming
-- **HTTP REST API**: 20+ endpoints for WiFi clients
+- **BBP Protocol**: COBS-encoded binary protocol over USB for high-throughput streaming.
+  BBP v4 handshake is **14 bytes** (magic[4] + proto[1] + fw[3] + mac[6]); older 8-byte responses are accepted as a legacy fallback.
+- **HTTP REST API**: 24+ endpoints under `/api/*` for WiFi clients.  Mutating routes
+  require an admin token (`X-BugBuster-Admin-Token` header) issued via the USB
+  `GET_ADMIN_TOKEN` (0x74) opcode.  `/api/device/info` now emits `macAddress`
+  so pairing can key on the same identifier as the USB handshake.
 - **HAT expansion**: UART interface to RP2040 HAT board (921600 baud)
+- **Simulated device**: a hardware-free simulator in `tests/mock/` implements
+  every BBP handler plus the `/api` surface, so the Python client + MCP server
+  can be exercised end-to-end without a board.
 
 ### Key Components
 

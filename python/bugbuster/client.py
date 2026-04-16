@@ -162,6 +162,36 @@ def _normalize_http_wifi_status(raw: dict) -> dict:
     }
 
 
+def _normalize_http_usbpd(raw: dict) -> dict:
+    """Map the firmware /api/usbpd camelCase payload onto the snake_case
+    shape the USB binary parser produces (``voltage_v``/``current_a``/
+    ``power_w``/``pdos``), so callers can ignore the transport."""
+    raw_pdos = _first_present(raw, "pdos", "sourcePdos", "source_pdos", default=[]) or []
+    pdos = []
+    for entry in raw_pdos:
+        if not isinstance(entry, dict):
+            continue
+        mc = _first_present(entry, "max_current", "maxCurrentA", "maxCurrent",
+                            "max_current_a", default=0) or 0
+        pdos.append({
+            "detected": bool(_first_present(entry, "detected", default=False)),
+            "max_current": mc,
+            "voltage": _first_present(entry, "voltage", default=None),
+        })
+    return {
+        "present": bool(_first_present(raw, "present", default=False)),
+        "attached": bool(_first_present(raw, "attached", default=False)),
+        "cc_direction": _first_present(raw, "cc_direction", "cc", "ccDirection", default=0),
+        "pd_response": _parse_int_maybe_hex(
+            _first_present(raw, "pd_response", "pdResponse", default=0), 0
+        ),
+        "voltage_v": float(_first_present(raw, "voltage_v", "voltageV", default=0.0) or 0.0),
+        "current_a": float(_first_present(raw, "current_a", "currentA", default=0.0) or 0.0),
+        "power_w":   float(_first_present(raw, "power_w", "powerW", default=0.0) or 0.0),
+        "pdos": pdos,
+    }
+
+
 def _normalize_http_hat_status(raw: dict) -> dict:
     pin_cfg = _first_present(raw, "pin_config", "pinConfig", default=[])
     if pin_cfg and isinstance(pin_cfg[0], dict):
@@ -396,6 +426,28 @@ class BugBuster:
             return self._t.fw_version
         info = self._http_get("/device/version")
         return info["fwMajor"], info["fwMinor"], info["fwPatch"]
+
+    def get_mac_address(self) -> Optional[str]:
+        """
+        Return the device MAC address as ``"aa:bb:cc:dd:ee:ff"``, or ``None``
+        if unavailable.
+
+        USB: taken from the 14-byte BBP v4 handshake response. Legacy
+        firmware that returns only 8 bytes yields ``None``.
+
+        HTTP: read from ``/api/device/info`` (``macAddress`` / ``mac_address``
+        field). Legacy firmware that omits the field yields ``None``.
+        """
+        if self._usb:
+            mac = getattr(self._t, "mac", None)
+            if not mac:
+                return None
+            return ":".join(f"{b:02x}" for b in mac)
+        info = self._http_get("/device/info")
+        mac = _first_present(info, "macAddress", "mac_address", default=None)
+        if not mac or mac == "00:00:00:00:00:00":
+            return None
+        return str(mac)
 
     def get_device_info(self) -> DeviceInfo:
         """Read silicon identification (revision + ID words)."""
@@ -1200,6 +1252,21 @@ class BugBuster:
             self._usb_cmd(CmdId.MUX_SET_SWITCH, payload)
         else:
             self._http_post("/mux/switch", {"device": device, "switch": switch, "closed": closed})
+
+    def get_debug_info(self) -> dict:
+        """
+        Combined I2C-bus diagnostics (DS4424 / HUSB238 / PCA9535).
+
+        **HTTP only** — mirrors ``GET /api/debug``.  There is no equivalent
+        single BBP opcode; on USB use :meth:`idac_get_status`,
+        :meth:`usbpd_get_status` and :meth:`power_get_status` individually.
+        """
+        if self._usb:
+            raise NotImplementedError(
+                "get_debug_info() is HTTP-only. Use idac_get_status(), "
+                "usbpd_get_status() and power_get_status() over USB."
+            )
+        return self._http_get("/debug")
 
     # ------------------------------------------------------------------
     # ── IDAC — adjustable power supply voltages ──────────────────────
@@ -2515,8 +2582,7 @@ class BugBuster:
         if self._usb:
             resp = self._usb_cmd(CmdId.USBPD_GET_STATUS)
             return _parse_usbpd_status(resp)
-        else:
-            return self._http_get("/usbpd")
+        return _normalize_http_usbpd(self._http_get("/usbpd"))
 
     def usbpd_select_voltage(self, voltage_v: int) -> None:
         """
@@ -2646,6 +2712,13 @@ def _parse_status(resp: bytes) -> dict:
         val,    = struct.unpack_from('<f', resp, off + 3)
         diagnostics.append({"source": src, "raw_code": rc, "value": val})
 
+    # MUX state: 4 bytes at offset 163 (BugBusterProtocol.md §GET_STATUS).
+    # Older firmware returns a 163-byte response without this block — degrade
+    # gracefully to an empty list so clients don't crash mid-upgrade.
+    mux_states: list[int] = []
+    if len(resp) >= 167:
+        mux_states = list(struct.unpack_from('<BBBB', resp, 163))
+
     return {
         "spi_ok": spi_ok, "die_temp_c": die_temp,
         "alert_status": alert_status, "alert_mask": alert_mask,
@@ -2653,6 +2726,7 @@ def _parse_status(resp: bytes) -> dict:
         "supply_alert_mask": supply_alert_mask,
         "live_status": live_status,
         "channels": channels, "diagnostics": diagnostics,
+        "mux_states": mux_states,
     }
 
 

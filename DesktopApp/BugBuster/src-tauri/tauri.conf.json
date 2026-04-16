@@ -1,12 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "bugbuster",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "identifier": "com.bugbuster",
   "build": {
-    "beforeDevCommand": {"script": "trunk serve", "cwd": ".."},
+    "beforeDevCommand": {
+      "script": "trunk serve",
+      "cwd": ".."
+    },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": {"script": "trunk build", "cwd": ".."},
+    "beforeBuildCommand": {
+      "script": "trunk build",
+      "cwd": ".."
+    },
     "frontendDist": "../dist"
   },
   "app": {

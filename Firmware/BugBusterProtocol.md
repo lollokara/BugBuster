@@ -1,6 +1,6 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 1.8
+**Version:** 3.0.0
 **BBP Protocol Version:** 4
 **Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)

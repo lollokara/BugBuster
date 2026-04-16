@@ -1255,29 +1255,33 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
     font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
     color: var(--text-muted);
 }
-.board-pin-icon {
-    font-size: 1rem; line-height: 1; color: var(--text);
-    text-align: center; margin: 2px 0;
-    font-family: 'JetBrains Mono', monospace;
-}
 .board-pin-name {
     font-size: 11px; font-weight: 600; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.board-pin-mode {
+.board-pin-main {
+    display: flex; align-items: center; justify-content: center;
+    flex: 1; margin: 4px 0;
+}
+.board-pin-badge {
+    padding: 2px 6px; border-radius: 4px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem; color: var(--text-dim);
-    letter-spacing: 0.5px;
+    font-size: 10px; font-weight: 800; line-height: 1;
+    color: var(--text-dim);
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.05);
+    transition: all 0.2s;
 }
-.board-pin-dot {
-    position: absolute; top: 6px; right: 6px;
-    width: 7px; height: 7px; border-radius: 50%;
-    background: rgba(245,158,11,0.5);
-    box-shadow: 0 0 4px rgba(245,158,11,0.4);
+.board-pin-badge.board-badge-set {
+    background: #065f46; /* Darker green for contrast */
+    color: white;
+    box-shadow: 0 0 8px rgba(16,185,129,0.3);
+    border-color: rgba(255,255,255,0.2);
+    font-size: 11px;
 }
-.board-pin-dot.board-dot-set {
-    background: var(--green);
-    box-shadow: 0 0 5px var(--green);
+.board-pin-badge.board-badge-weak {
+    background: #9a3412; /* Darker orange for contrast */
+    box-shadow: 0 0 8px rgba(249,115,22,0.3);
 }
 .board-pin-cap {
     position: absolute; bottom: 4px; right: 6px;

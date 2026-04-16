@@ -29,6 +29,11 @@ class SimulatedUSBTransport(USBTransport):
         # Attributes that client.py reads off the transport
         self.proto_version = device.PROTO_VERSION
         self.fw_version = device.fw_version   # (major, minor, patch)
+        # Mirror the 14-byte BBP v4 handshake MAC so get_mac_address() works
+        # against the simulator. Use a stable dummy MAC unless the device
+        # overrides it.
+        mac_str = getattr(device, "mac_address", "aa:bb:cc:00:11:22")
+        self.mac = bytes(int(b, 16) for b in mac_str.split(":"))
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -110,8 +115,27 @@ class SimulatedHTTPTransport(HTTPTransport):
     # HTTP methods
     # ------------------------------------------------------------------
 
+    def _auth_headers(self, headers) -> dict:
+        """Inject the device's admin token if the caller didn't already set it.
+
+        The real firmware enforces an admin token on all mutating routes
+        (webserver.cpp:check_admin_auth).  The Python HTTPTransport does not
+        implement the pairing flow (desktop does it via Tauri), so the
+        simulator grants access by trusting the in-process token directly.
+        """
+        token = getattr(self._device, "admin_token", None)
+        if token is None:
+            return headers or {}
+        merged = dict(headers or {})
+        merged.setdefault("X-BugBuster-Admin-Token", token)
+        return merged
+
     def get(self, path: str, params=None, headers=None) -> dict:
-        return self._device.http_dispatch("GET", path, params or {}, {}, headers or {})
+        return self._device.http_dispatch(
+            "GET", path, params or {}, {}, self._auth_headers(headers),
+        )
 
     def post(self, path: str, body=None, headers=None) -> dict:
-        return self._device.http_dispatch("POST", path, {}, body or {}, headers or {})
+        return self._device.http_dispatch(
+            "POST", path, {}, body or {}, self._auth_headers(headers),
+        )

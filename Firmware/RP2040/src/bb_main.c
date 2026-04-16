@@ -36,8 +36,8 @@ extern TaskHandle_t tud_taskhandle;
 #endif
 
 // Firmware version
-#define BB_HAT_FW_MAJOR  1
-#define BB_HAT_FW_MINOR  1
+#define BB_HAT_FW_MAJOR  2
+#define BB_HAT_FW_MINOR  0
 
 static HatFrameParser s_parser;
 

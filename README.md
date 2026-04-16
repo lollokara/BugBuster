@@ -510,37 +510,41 @@ Built with **Tauri v2** (Rust backend) and **Leptos 0.7** (WASM frontend). The a
 <table>
   <tr>
     <td align="center">
-      <img src="Docs/Images/ScreenHome.png" alt="Device discovery" width="420"/>
-      <br/><sub><b>Discovery</b> &mdash; auto-detects over USB or WiFi</sub>
+      <img src="Docs/Images/ScreenOverview.png" alt="Overview tab" width="420"/>
+      <br/><sub><b>Overview</b> &mdash; live 4-ch readings, SPI health, temperature</sub>
     </td>
     <td align="center">
-      <img src="Docs/Images/ScreenHome2.png" alt="Overview tab" width="420"/>
-      <br/><sub><b>Overview</b> &mdash; live 4-ch readings, SPI health, temperature</sub>
+      <img src="Docs/Images/ScreenBoard.png" alt="Board configuration tab" width="420"/>
+      <br/><sub><b>Board</b> &mdash; pin assignments, rail lock, profile import/export</sub>
     </td>
   </tr>
   <tr>
     <td align="center">
-      <img src="Docs/Images/ScreenHome3.png" alt="Waveform generator" width="420"/>
+      <img src="Docs/Images/ScreenWaveGen.png" alt="Waveform generator" width="420"/>
       <br/><sub><b>WaveGen</b> &mdash; sine, square, triangle, sawtooth with live preview</sub>
     </td>
     <td align="center">
-      <img src="Docs/Images/ScreenHome4.png" alt="Signal path / MUX matrix" width="420"/>
+      <img src="Docs/Images/ScreenSignalPath.png" alt="Signal path / MUX matrix" width="420"/>
       <br/><sub><b>Signal Path</b> &mdash; interactive 32-switch MUX visualization</sub>
     </td>
   </tr>
   <tr>
     <td align="center">
-      <img src="Docs/Images/ScreenHome5.png" alt="Voltages tab" width="420"/>
-      <br/><sub><b>Voltages</b> &mdash; DCDC adjustment with calibration curves</sub>
+      <img src="Docs/Images/ScreenScope.png" alt="Oscilloscope tab" width="420"/>
+      <br/><sub><b>Scope</b> &mdash; real-time ADC streaming with BBSC + CSV recording</sub>
     </td>
     <td align="center">
-      <img src="Docs/Images/ScreenHome6.png" alt="UART bridge" width="420"/>
-      <br/><sub><b>UART Bridge</b> &mdash; configurable baud, pins, data format</sub>
+      <img src="Docs/Images/ScreenLogicAnalyzer.png" alt="Logic analyzer tab" width="420"/>
+      <br/><sub><b>Logic Analyzer</b> &mdash; 1&ndash;4 ch capture up to 125 MHz, RLE, decoders</sub>
     </td>
   </tr>
   <tr>
-    <td align="center" colspan="2">
-      <img src="Docs/Images/ScreenHome7.png" alt="Diagnostics tab" width="420"/>
+    <td align="center">
+      <img src="Docs/Images/ScreenUART.png" alt="UART bridge" width="420"/>
+      <br/><sub><b>UART Bridge</b> &mdash; configurable baud, pins, data format</sub>
+    </td>
+    <td align="center">
+      <img src="Docs/Images/ScreenDiagnostics.png" alt="Diagnostics tab" width="420"/>
       <br/><sub><b>Diagnostics</b> &mdash; supply monitoring, fault alerts, OTA firmware update</sub>
     </td>
   </tr>
@@ -569,7 +573,8 @@ Built with **Tauri v2** (Rust backend) and **Leptos 0.7** (WASM frontend). The a
 | **USB PD** | USB Power Delivery status and PDO selection |
 | **IO Expander** | PCA9535 GPIO expander control and fault monitoring |
 | **HAT** | HAT board detection, SWD target status, connector power |
-| **Logic Analyzer** | 1&ndash;4 ch capture, minimap, decoders (UART/I2C/SPI), annotations, RLE, export |
+| **Board** | Active board profile &mdash; pin assignments, VADJ/VLOGIC rail lock, profile import/export |
+| **Logic Analyzer** | 1&ndash;4 ch capture up to 1 MHz vendor-bulk stream, minimap, decoders (UART/I2C/SPI), annotations, RLE, export |
 
 </details>
 
@@ -717,35 +722,55 @@ After flashing, the device broadcasts a WiFi AP:
 
 ## Testing
 
-### Hardware Test Suite
+### Test Suite
 
-A comprehensive **pytest**-based test suite validates device functionality against real hardware. 12 modules, 120+ tests.
+A comprehensive **pytest**-based suite covering **unit**, **simulator** (hardware-free), and **device** (real-hardware) layers.
 
 ```bash
 cd tests
 pip install -r requirements-test.txt
-python run_tests.py                       # Full suite
-pytest device/test_02_channels.py -v      # Single module
+
+# Hardware-free — runs in CI and locally without a board
+PYTHONPATH=../python:../tests pytest unit simulator -q
+
+# Device-sim — exercises the full client + transport stack against the simulator
+PYTHONPATH=../python:../tests pytest device --sim -q
+
+# Real hardware
+pytest device/test_02_channels.py -v      # Single module against USB device
 pytest device/test_11_hat.py -v --hat     # HAT-specific
 ```
+
+Current posture: **174 unit + 246 sim/device passing**, 64 skipped (HAT/SWD/LA hardware-only).
 
 <details>
 <summary><strong>Test modules</strong></summary>
 
 | Module | Coverage |
 |---|---|
-| `test_01_core` | Ping, status, reset, firmware info |
-| `test_02_channels` | All 12 channel functions, ADC/DAC |
-| `test_03_gpio` | AD74416H GPIO pins A&ndash;F |
-| `test_04_mux` | MUX matrix routing (32 switches) |
-| `test_05_power` | DCDC supplies, IDAC, e-fuses |
-| `test_06_usbpd` | USB Power Delivery negotiation |
-| `test_07_wavegen` | Waveform generator (4 wave types) |
-| `test_08_wifi` | WiFi AP/STA modes |
-| `test_09_selftest` | Built-in diagnostics |
-| `test_10_streaming` | ADC/scope streaming |
-| `test_11_hat` | HAT expansion board (requires `--hat`) |
-| `test_12_faults` | Alert and fault handling |
+| `unit/test_hal` | HAL routing, PortMode → ChannelFunction mapping, switch selection |
+| `unit/test_parsers` | Binary response parsers (status, faults, wifi, usbpd) |
+| `unit/test_hat_guards` | HAT-presence guard on LA / SWD entry points |
+| `unit/test_rail_lock` | Board-profile VADJ1 / VADJ2 / VLOGIC lock enforcement |
+| `unit/test_auth_flow` | Admin-token handshake for HTTP mutating routes |
+| `simulator/test_sim_completeness` | Every BBP CmdId has a handler; proto-version sync |
+| `simulator/test_sim_core` | USB + HTTP transport round-trips against SimulatedDevice |
+| `device/test_01_core` | Ping, status, reset, firmware info |
+| `device/test_02_channels` | All 12 channel functions, ADC/DAC |
+| `device/test_03_gpio` | AD74416H GPIO pins A&ndash;F |
+| `device/test_04_mux` | MUX matrix routing (32 switches) |
+| `device/test_05_power` | DCDC supplies, IDAC, e-fuses |
+| `device/test_06_usbpd` | USB Power Delivery negotiation |
+| `device/test_07_wavegen` | Waveform generator (4 wave types) |
+| `device/test_08_wifi` | WiFi AP/STA modes |
+| `device/test_09_selftest` | Built-in diagnostics |
+| `device/test_10_streaming` | ADC / scope streaming |
+| `device/test_11_hat` | HAT expansion board (requires `--hat`) |
+| `device/test_12_faults` | Alert and fault handling |
+| `device/test_13_dio` | Digital I/O read/write |
+| `device/test_14_uart` | UART bridge configuration |
+| `device/test_15_swd` | SWD probe setup (requires HAT) |
+| `device/test_la_usb_1mhz` | 1 MHz / 4-ch LA vendor-bulk streaming (requires HAT) |
 
 </details>
 
@@ -766,7 +791,7 @@ BugBuster/
 │   │   └── partitions.csv      A/B OTA partition table
 │   ├── RP2040/                 HAT expansion board firmware (Pico SDK + debugprobe)
 │   │   └── src/                Logic analyzer, SWD probe, power management, USB
-│   ├── BugBusterProtocol.md    BBP protocol specification (v1.5)
+│   ├── BugBusterProtocol.md    BBP protocol specification (v3.0.0 / BBP v4)
 │   ├── FirmwareStructure.md    Firmware reference
 │   ├── HAT_Architecture.md     HAT expansion board design
 │   └── HAT_Protocol.md         HAT UART protocol specification

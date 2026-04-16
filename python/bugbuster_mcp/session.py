@@ -84,7 +84,7 @@ def reset_session() -> None:
     """
     Disconnect and drop all state.  The next tool call will reconnect.
     """
-    global _bb, _hal, _init
+    global _bb, _hal, _init, _active_board
     if _bb is not None:
         try:
             if _hal is not None:

@@ -45,10 +45,33 @@ impl HttpTransport {
             return Err(anyhow!("Not a BugBuster device"));
         }
 
-        let mac = info.get("macAddress")
+        // Prefer macAddress, fall back to mac_address for snake_case
+        // consistency.  ESP firmware ≥ 3.0.0 always emits one of these.
+        // Older firmware omits the field — don't block the connection in
+        // that case: warn and fall back to a host-URL sentinel so read-only
+        // HTTP still works.  Any mutating call will then naturally surface
+        // the `pairing-required` toast in `connection_manager::connect_http`
+        // (no saved token can match a `legacy:<url>` key), which points the
+        // user at the real fix: updating the firmware.
+        let reported = info.get("macAddress")
+            .or_else(|| info.get("mac_address"))
             .and_then(|v| v.as_str())
-            .unwrap_or("00:00:00:00:00:00")
-            .to_string();
+            .map(|s| s.to_string());
+
+        let mac = match reported {
+            Some(m) if !m.is_empty() && m != "00:00:00:00:00:00" => m,
+            _ => {
+                let sentinel = format!("legacy:{}", base_url);
+                log::warn!(
+                    "Device at {} did not report a MAC address over HTTP — \
+                     using sentinel '{}' for pairing. Update to ESP firmware \
+                     ≥ 3.0.0 so /api/device/info exposes `macAddress` for \
+                     proper MAC-keyed pairing.",
+                    base_url, sentinel,
+                );
+                sentinel
+            }
+        };
 
         log::info!("HTTP transport connected to {} (MAC: {})", base_url, mac);
 

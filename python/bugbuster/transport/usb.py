@@ -4,7 +4,8 @@ USB Binary Transport for the BugBuster device.
 Protocol overview:
   1. Open the CDC serial port.
   2. Send the 4-byte magic handshake (0xBB 0x42 0x55 0x47).
-  3. Wait for the 8-byte response (magic + proto_ver + fw_major/minor/patch).
+  3. Wait for the 14-byte response (magic + proto_ver + fw_major/minor/patch + mac[6]).
+     Legacy firmware (pre-BBP v4) returns only 8 bytes and is accepted as a fallback.
   4. All subsequent traffic is COBS-framed with a 0x00 delimiter.
   5. Each CMD frame carries a monotonically increasing 16-bit SEQ number.
      The device echoes SEQ in its RSP/ERR response so the host can match them.
@@ -79,6 +80,7 @@ class USBTransport:
         # Firmware info filled in after connect()
         self.proto_version = None
         self.fw_version    = None   # (major, minor, patch)
+        self.mac           = None   # bytes of length 6, or None for legacy fw
 
     # ------------------------------------------------------------------
     # Connection management
@@ -120,6 +122,10 @@ class USBTransport:
             settle_deadline = _time.time() + settle_timeout
             deadline        = None
             settle_quiet_s  = 0.20
+            # BBP v4 response is 14 bytes (magic[4] + proto[1] + fw[3] + mac[6]).
+            # Older firmware returned 8 (no MAC). We prefer 14 but accept 8 after
+            # a short grace window so legacy devices still connect.
+            grace_deadline  = None
 
             while True:
                 now = _time.time()
@@ -138,8 +144,15 @@ class USBTransport:
                     last_rx = now
 
                 idx = buf.find(HANDSHAKE_MAGIC)
-                if idx != -1 and len(buf) >= idx + 8:
-                    return bytes(buf[idx:idx + 8])
+                if idx != -1:
+                    available = len(buf) - idx
+                    if available >= 14:
+                        return bytes(buf[idx:idx + 14])
+                    if available >= 8:
+                        if grace_deadline is None:
+                            grace_deadline = now + 0.15
+                        elif now > grace_deadline:
+                            return bytes(buf[idx:idx + 8])
 
                 if not magic_sent:
                     quiet_for = now - last_rx
@@ -190,9 +203,19 @@ class USBTransport:
 
         self.proto_version = resp[4]
         self.fw_version    = (resp[5], resp[6], resp[7])
+        if len(resp) >= 14:
+            self.mac = bytes(resp[8:14])
+            mac_str  = ":".join(f"{b:02x}" for b in self.mac)
+        else:
+            self.mac = None
+            mac_str  = "unknown"
+            log.warning(
+                "Legacy 8-byte handshake — device did not send MAC. "
+                "Update firmware to BBP v4+ to enable MAC reporting."
+            )
         log.info(
-            "Connected to BugBuster fw=%d.%d.%d protocol=%d via %s",
-            *self.fw_version, self.proto_version, self._port,
+            "Connected to BugBuster fw=%d.%d.%d protocol=%d mac=%s via %s",
+            *self.fw_version, self.proto_version, mac_str, self._port,
         )
 
         self._running = True

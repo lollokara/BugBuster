@@ -358,3 +358,63 @@ The AI will call `configure_io(1, "ANALOG_IN")` → `capture_adc_snapshot(1, dur
 > "Set IO 4 to output 3.3 V."
 
 The AI will call `set_supply_voltage(rail=1, voltage=3.3)` → `configure_io(4, "ANALOG_OUT")` → `write_voltage(4, 3.3)` → check for faults.
+
+---
+
+## Board profiles
+
+A **board profile** is a JSON file describing the DUT's pin map, rail locks,
+SWD target, and UART baudrate.  When a profile is active, the MCP safety layer
+refuses to change any rail marked `locked: true`, so an AI cannot accidentally
+drive VLOGIC to 5 V on a 3.3 V board.
+
+Schema (nested — see [`Docs/board_profiles.md`](../../Docs/board_profiles.md)):
+
+```json
+{
+  "name": "stm32f4_discovery",
+  "description": "STM32F407 Discovery reference board",
+  "vlogic": { "value": 3.3, "locked": true },
+  "vadj1":  { "value": 3.3, "locked": true },
+  "vadj2":  { "value": 5.0, "locked": false },
+  "pins": {
+    "1": { "name": "PA0_BTN", "type": "GPIO",    "direction": "IN" },
+    "3": { "name": "USART2_TX", "type": "UART_TX", "direction": "OUT" },
+    "4": { "name": "USART2_RX", "type": "UART_RX", "direction": "IN" },
+    "8": { "name": "SWDIO",   "type": "SWD",    "direction": "INOUT" },
+    "9": { "name": "SWCLK",   "type": "SWD",    "direction": "OUT" }
+  },
+  "swd":  { "target": "stm32f4x" },
+  "uart": { "baudrate": 115200 }
+}
+```
+
+Profiles live in `python/bugbuster_mcp/board_profiles/*.json` and are loaded
+via three tools and one resource:
+
+| Surface | What it does |
+|---|---|
+| `list_boards()` | Enumerate available profile names |
+| `set_board(name)` | Activate a profile; subsequent tool calls consult it |
+| `bugbuster://board` | Resource exposing the active profile (or `null`) |
+| `safety.validate_vadj_voltage` / `validate_vlogic` | Reject any change that violates a locked rail |
+
+The desktop app's **Board** tab writes profiles to the same directory, so an
+exported profile is immediately visible to the MCP server.
+
+---
+
+## Hardware-free testing
+
+All MCP tools can be exercised end-to-end against the in-process simulator
+in `tests/mock/`, without a board:
+
+```bash
+PYTHONPATH=python:tests pytest tests/unit tests/simulator -q
+PYTHONPATH=python:tests pytest tests/device --sim -q
+```
+
+The simulator implements every BBP CmdId and mirrors the firmware `/api`
+schema, including the BBP v4 `macAddress` field on `/api/device/info` (required
+by the desktop pairing flow).  See [`../../tests/README.md`](../../tests/README.md)
+for the layered test taxonomy.

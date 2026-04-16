@@ -493,8 +493,18 @@ impl ConnectionManager {
         }
     }
 
+    /// Normalise a MAC address for use as a pairing-store key.
+    ///
+    /// USB handshake formats MAC as uppercase (`D0:CF:...`), firmware
+    /// `/api/device/info` emits lowercase (`d0:cf:...`). Without
+    /// normalisation, tokens saved over USB never match HTTP lookups.
+    fn normalize_mac(mac: &str) -> String {
+        mac.to_ascii_lowercase()
+    }
+
     /// Save a token to persistent storage.
     pub fn save_token(&self, mac: String, token: String, app: &AppHandle) {
+        let mac = Self::normalize_mac(&mac);
         let mut map_clone = HashMap::new();
         if let Ok(mut tokens) = self.tokens.lock() {
             tokens.insert(mac, token);
@@ -533,6 +543,15 @@ impl ConnectionManager {
 
     /// Get a stored token for a device MAC.
     pub fn get_token(&self, mac: &str) -> Option<String> {
-        self.tokens.lock().ok()?.get(mac).cloned()
+        let key = Self::normalize_mac(mac);
+        let tokens = self.tokens.lock().ok()?;
+        // Direct hit on the normalised key first, then fall back to a
+        // case-insensitive scan to rescue tokens saved before this fix.
+        if let Some(t) = tokens.get(&key) {
+            return Some(t.clone());
+        }
+        tokens.iter()
+            .find(|(k, _)| k.to_ascii_lowercase() == key)
+            .map(|(_, v)| v.clone())
     }
 }
