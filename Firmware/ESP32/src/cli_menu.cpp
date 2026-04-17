@@ -103,6 +103,7 @@ static bool     s_active           = false;
 static bool     s_alt_out          = false;
 static bool     s_want_exit        = false;
 static uint32_t s_last_redraw_ms   = 0;
+static uint32_t s_slow_snap_last_ms = 0;
 static uint32_t s_last_probe_ms    = 0;
 static bool     s_force_redraw     = true;
 static bool     s_last_esc_was_lone = false;     // for double-ESC detection
@@ -188,6 +189,8 @@ typedef enum {
 // Signal tab field count: 32 switch cells + 1 reset-all row
 #define SIGNAL_GRID_CELLS   32   // 4 devices x 8 switches
 #define NUM_SIGNAL_FIELDS   (SIGNAL_GRID_CELLS + 1)
+#define SIGNAL_RESET_FIELD  0    // Reset row is first (field 0)
+#define SIGNAL_GRID_BASE    1    // Grid cells start at field 1
 
 // HAT tab rows
 typedef enum {
@@ -723,6 +726,52 @@ static void present(void) {
 // Snapshot
 // ===========================================================================
 
+// Slow snapshot: SPI reads, WiFi, HAT — called at ~500 ms cadence.
+static void take_snapshot_slow(void) {
+    // ADGS fault state — SPI read, done outside mutex to avoid contention
+    s_snap.adgsErrorFlags = adgs_read_error_flags();
+    s_snap.adgsFaulted    = adgs_is_faulted();
+
+    // HAT status — no mutex needed, hat_get_state() is its own guard
+    {
+        const HatState* hs = hat_get_state();
+        s_snap.hatDetected  = hat_detected();
+        s_snap.hatType      = hs ? (uint8_t)hs->type : (uint8_t)HAT_TYPE_NONE;
+        s_snap.hatConnected = hs ? hs->connected : false;
+    }
+
+    // WiFi status — wifi_manager accessors are lock-free reads
+    {
+        bool connected = wifi_is_connected();
+        if (connected) {
+            const char* ip   = wifi_get_sta_ip();
+            const char* ssid = wifi_get_sta_ssid();
+            strncpy(s_snap.ipStr, ip   ? ip   : "-", sizeof(s_snap.ipStr)  - 1);
+            strncpy(s_snap.ssid,  ssid ? ssid : "",  sizeof(s_snap.ssid)   - 1);
+            s_snap.ipStr[sizeof(s_snap.ipStr) - 1] = 0;
+            s_snap.ssid [sizeof(s_snap.ssid)  - 1] = 0;
+            s_snap.rssi = (int8_t)wifi_get_rssi();
+        } else {
+            strncpy(s_snap.ipStr, "-", sizeof(s_snap.ipStr) - 1);
+            s_snap.ipStr[sizeof(s_snap.ipStr) - 1] = 0;
+            s_snap.ssid[0] = 0;
+            s_snap.rssi = -128;
+        }
+    }
+
+    // Board profile (own NVS-backed cache, no mutex needed)
+    const BoardProfile* bp = board_profile_get_active();
+    if (bp) {
+        strncpy(s_snap.profileId,   bp->id,   sizeof(s_snap.profileId)   - 1);
+        strncpy(s_snap.profileName, bp->name, sizeof(s_snap.profileName) - 1);
+        s_snap.profileId  [sizeof(s_snap.profileId)   - 1] = 0;
+        s_snap.profileName[sizeof(s_snap.profileName) - 1] = 0;
+    } else {
+        s_snap.profileId[0]   = 0;
+        snprintf(s_snap.profileName, sizeof(s_snap.profileName), "(none)");
+    }
+}
+
 static bool take_snapshot(void) {
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(5)) != pdTRUE) return false;
     s_snap.spiOk             = g_deviceState.spiOk;
@@ -754,8 +803,8 @@ static bool take_snapshot(void) {
     s_snap.vadj1  = g_deviceState.idac.state[1].target_v;
     s_snap.vadj2  = g_deviceState.idac.state[2].target_v;
     // USB-PD
-    s_snap.pdVoltage = g_deviceState.usbpd.voltage_v;
-    s_snap.pdCurrent = g_deviceState.usbpd.current_a;
+    s_snap.pdVoltage  = g_deviceState.usbpd.voltage_v;
+    s_snap.pdCurrent  = g_deviceState.usbpd.current_a;
     s_snap.pdAttached = g_deviceState.usbpd.attached;
     // Power tab: PCA9535 state
     {
@@ -774,49 +823,6 @@ static bool take_snapshot(void) {
     // Signal tab: MUX state (API main devices only)
     adgs_get_api_states(s_snap.muxState);
     xSemaphoreGive(g_stateMutex);
-
-    // ADGS fault state — SPI read, done outside mutex to avoid contention
-    s_snap.adgsErrorFlags = adgs_read_error_flags();
-    s_snap.adgsFaulted    = adgs_is_faulted();
-
-    // HAT status (Fix 3) — no mutex needed, hat_get_state() is its own guard
-    {
-        const HatState* hs = hat_get_state();
-        s_snap.hatDetected  = hat_detected();
-        s_snap.hatType      = hs ? (uint8_t)hs->type : (uint8_t)HAT_TYPE_NONE;
-        s_snap.hatConnected = hs ? hs->connected : false;
-    }
-
-    // WiFi status (Fix 5) — wifi_manager accessors are lock-free reads
-    {
-        bool connected = wifi_is_connected();
-        if (connected) {
-            const char* ip   = wifi_get_sta_ip();
-            const char* ssid = wifi_get_sta_ssid();
-            strncpy(s_snap.ipStr, ip   ? ip   : "-", sizeof(s_snap.ipStr)  - 1);
-            strncpy(s_snap.ssid,  ssid ? ssid : "",  sizeof(s_snap.ssid)   - 1);
-            s_snap.ipStr[sizeof(s_snap.ipStr) - 1] = 0;
-            s_snap.ssid [sizeof(s_snap.ssid)  - 1] = 0;
-            s_snap.rssi = (int8_t)wifi_get_rssi();
-        } else {
-            strncpy(s_snap.ipStr, "-", sizeof(s_snap.ipStr) - 1);
-            s_snap.ipStr[sizeof(s_snap.ipStr) - 1] = 0;
-            s_snap.ssid[0] = 0;
-            s_snap.rssi = -128;
-        }
-    }
-
-    // Board profile (own NVS-backed cache, no mutex needed)
-    const BoardProfile* bp = board_profile_get_active();
-    if (bp) {
-        strncpy(s_snap.profileId,   bp->id,   sizeof(s_snap.profileId)   - 1);
-        strncpy(s_snap.profileName, bp->name, sizeof(s_snap.profileName) - 1);
-        s_snap.profileId  [sizeof(s_snap.profileId)   - 1] = 0;
-        s_snap.profileName[sizeof(s_snap.profileName) - 1] = 0;
-    } else {
-        s_snap.profileId[0]   = 0;
-        snprintf(s_snap.profileName, sizeof(s_snap.profileName), "(none)");
-    }
 
     s_snap.valid = true;
     return true;
@@ -1603,18 +1609,19 @@ static void activate_power_field(PowerField field) {
 }
 
 static void activate_signal_field(int field) {
-    if (field < SIGNAL_GRID_CELLS) {
-        int dev = field / 8;
-        int sw  = field % 8;
+    if (field == SIGNAL_RESET_FIELD) {
+        // Reset-all row (field 0)
+        open_confirm("Open all 32 switches (reset)?", cb_signal_reset_all, nullptr);
+    } else {
+        int gf  = field - SIGNAL_GRID_BASE;
+        int dev = gf / 8;
+        int sw  = gf % 8;
         bool cur = (s_snap.muxState[dev] >> sw) & 1;
         bool ok = adgs_set_api_switch_safe((uint8_t)dev, (uint8_t)sw, !cur);
         char msg[64];
         snprintf(msg, sizeof(msg), "MUX%d SW%d -> %s %s",
                  dev, sw, !cur ? "CLOSED" : "OPEN", ok ? "" : "(FAILED)");
         show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
-    } else {
-        // Reset-all row
-        open_confirm("Open all 32 switches (reset)?", cb_signal_reset_all, nullptr);
     }
 }
 
@@ -2387,34 +2394,34 @@ static void render_signal_tab(void) {
     draw_textf(row, lc, s_snap.adgsFaulted ? TERM_FG_B_RED : TERM_FG_DEFAULT, 0,
                "error_flags=0x%02X  faulted=%s",
                s_snap.adgsErrorFlags, s_snap.adgsFaulted ? "YES" : "NO");
-    row += 2;
+    row++;
+
+    // Reset-all row (SIGNAL_RESET_FIELD = 0, first selectable row)
+    {
+        bool sel     = (s_field == SIGNAL_RESET_FIELD);
+        uint8_t fg   = sel ? TERM_FG_B_YELLOW : TERM_FG_DEFAULT;
+        uint8_t attr = sel ? ATTR_BOLD : 0;
+        draw_textf(row, lc, fg, attr,
+                   "%sReset all (open)", sel ? "> " : "  ");
+        row++;
+    }
 
     // Column header
     draw_textf(row, lc, TERM_FG_B_BLACK, 0,
                "Dev  SW0 SW1 SW2 SW3 SW4 SW5 SW6 SW7");
     row++;
 
-    // 4x8 grid
+    // 4x8 grid (fields SIGNAL_GRID_BASE .. SIGNAL_GRID_BASE+31)
     for (int dev = 0; dev < ADGS_API_MAIN_DEVICES; dev++) {
-        int grid_field = dev * 8;
         draw_textf(row + dev, lc, TERM_FG_DEFAULT, 0, " %d  ", dev);
         for (int sw = 0; sw < 8; sw++) {
             bool closed = (s_snap.muxState[dev] >> sw) & 1;
-            bool sel = (s_field == grid_field + sw);
+            bool sel    = (s_field == SIGNAL_GRID_BASE + dev * 8 + sw);
             uint8_t fg   = sel ? TERM_FG_B_YELLOW : (closed ? TERM_FG_B_GREEN : TERM_FG_DEFAULT);
             uint8_t attr = sel ? ATTR_BOLD : 0;
             draw_textf(row + dev, lc + 5 + sw * 4, fg, attr, "%s", closed ? "[X]" : "[ ]");
         }
     }
-    row += ADGS_API_MAIN_DEVICES + 1;
-
-    // Reset-all row
-    int reset_field = SIGNAL_GRID_CELLS;
-    bool sel = (s_field == reset_field);
-    uint8_t fg   = sel ? TERM_FG_B_YELLOW : TERM_FG_DEFAULT;
-    uint8_t attr = sel ? ATTR_BOLD : 0;
-    draw_textf(row, lc, fg, attr,
-               "%sReset all (open)", sel ? "> " : "  ");
 }
 
 // --- HAT tab ----------------------------------------------------------------
@@ -2891,22 +2898,50 @@ static void on_arrow(char dir) {
         return;
     }
 
-    // Signal tab: 2D grid navigation (Up/Down moves row=device, Left/Right moves col=switch)
-    // within the grid region; outside the grid falls through to normal Up/Down.
-    // Fix 1: Left at col 0 changes tab (prev); Right at col 7 of last device changes tab (next).
-    // On the Reset-all row, Left/Right always change tabs (no horizontal grid there).
+    // Signal tab: 2D grid navigation.
+    // Field 0 (SIGNAL_RESET_FIELD) = Reset-all row (no Up/Down grid nav).
+    // Fields SIGNAL_GRID_BASE..SIGNAL_GRID_BASE+31 = 4x8 switch grid.
+    // Left at sw=0 → prev tab; Right at sw=7 && last dev → next tab.
+    // Up from grid dev=0 → back to Reset row; Down from Reset row → grid dev=0 sw=0.
     if (s_tab == TAB_SIGNAL && (dir == 'A' || dir == 'B' || dir == 'C' || dir == 'D')) {
-        if ((int)s_field < SIGNAL_GRID_CELLS) {
-            int dev = (int)s_field / 8;
-            int sw  = (int)s_field % 8;
-            if (dir == 'A') {       // Up — prev device row
-                if (dev > 0) dev--;
-            } else if (dir == 'B') { // Down — next device row
+        if (s_field == SIGNAL_RESET_FIELD) {
+            // On the Reset row
+            if (dir == 'A') {
+                // Up: no-op (already at top)
+            } else if (dir == 'B') {
+                // Down: jump into grid at dev=0 sw=0
+                s_signal_dev = 0;
+                s_signal_sw  = 0;
+                s_field      = (uint8_t)(SIGNAL_GRID_BASE);
+            } else if (dir == 'D') {
+                // Left: prev tab
+                if (s_tab > 0) s_tab = (MenuTab)((int)s_tab - 1);
+                s_field = 0;
+            } else if (dir == 'C') {
+                // Right: next tab
+                if ((int)s_tab + 1 < NUM_TABS) s_tab = (MenuTab)((int)s_tab + 1);
+                s_field = 0;
+            }
+        } else {
+            // In the grid
+            int gf  = (int)s_field - SIGNAL_GRID_BASE;
+            int dev = gf / 8;
+            int sw  = gf % 8;
+            if (dir == 'A') {       // Up
+                if (dev > 0) {
+                    dev--;
+                } else {
+                    // Back to Reset row
+                    s_field = (uint8_t)SIGNAL_RESET_FIELD;
+                    s_force_redraw = true;
+                    return;
+                }
+            } else if (dir == 'B') { // Down
                 if (dev + 1 < ADGS_API_MAIN_DEVICES) dev++;
-                else s_field = (uint8_t)SIGNAL_GRID_CELLS; // move to Reset row
+                // else stay on last row (no wrap to Reset row going down)
             } else if (dir == 'D') { // Left
                 if (sw == 0) {
-                    // Edge: change to prev tab
+                    // Edge: prev tab
                     if (s_tab > 0) s_tab = (MenuTab)((int)s_tab - 1);
                     s_field = 0;
                     s_force_redraw = true;
@@ -2917,32 +2952,23 @@ static void on_arrow(char dir) {
                 bool last_col = (sw == 7);
                 bool last_dev = (dev == ADGS_API_MAIN_DEVICES - 1);
                 if (last_col && last_dev) {
-                    // Edge: change to next tab
+                    // Edge: next tab
                     if ((int)s_tab + 1 < NUM_TABS) s_tab = (MenuTab)((int)s_tab + 1);
                     s_field = 0;
                     s_force_redraw = true;
                     return;
                 }
-                if (sw + 1 < 8) sw++;
+                if (sw < 7) {
+                    sw++;
+                } else {
+                    // sw==7 but not last dev: wrap to next dev sw=0
+                    dev++;
+                    sw = 0;
+                }
             }
-            if ((int)s_field < SIGNAL_GRID_CELLS) {
-                s_field = (uint8_t)(dev * 8 + sw);
-                s_signal_dev = (uint8_t)dev;
-                s_signal_sw  = (uint8_t)sw;
-            }
-        } else {
-            // On the Reset row — Left/Right change tabs
-            if (dir == 'A') {
-                // Move back into grid (last row, same sw column)
-                s_field = (uint8_t)((ADGS_API_MAIN_DEVICES - 1) * 8 + s_signal_sw);
-            } else if (dir == 'D') { // Left — prev tab
-                if (s_tab > 0) s_tab = (MenuTab)((int)s_tab - 1);
-                s_field = 0;
-            } else if (dir == 'C') { // Right — next tab
-                if ((int)s_tab + 1 < NUM_TABS) s_tab = (MenuTab)((int)s_tab + 1);
-                s_field = 0;
-            }
-            // Down does nothing on Reset row
+            s_field      = (uint8_t)(SIGNAL_GRID_BASE + dev * 8 + sw);
+            s_signal_dev = (uint8_t)dev;
+            s_signal_sw  = (uint8_t)sw;
         }
         s_force_redraw = true;
         return;
@@ -3147,10 +3173,10 @@ static void render_field_hint(int row) {
             default: break;
         }
     } else if (s_tab == TAB_SIGNAL) {
-        if (s_field < SIGNAL_GRID_CELLS) {
-            hint = "Hint: switches use safe make-before-break sequencing; readback verifies actual state.";
-        } else {
+        if (s_field == SIGNAL_RESET_FIELD) {
             hint = "Hint: opens all switches simultaneously; brief power glitch possible.";
+        } else {
+            hint = "Hint: switches use safe make-before-break sequencing; readback verifies actual state.";
         }
     } else if (s_tab == TAB_HAT) {
         switch (s_field) {
@@ -3288,19 +3314,22 @@ extern "C" void cli_menu_enter(void) {
         return;
     }
     enter_alt_screen();
-    s_active           = true;
-    s_alt_out          = false;
-    s_want_exit        = false;
-    s_last_redraw_ms   = 0;
-    s_last_probe_ms    = millis_now();
-    s_force_redraw     = true;
-    s_pstate           = ST_NORMAL;
+    s_active            = true;
+    s_alt_out           = false;
+    s_want_exit         = false;
+    s_last_redraw_ms    = 0;
+    s_slow_snap_last_ms = 0;
+    s_last_probe_ms     = millis_now();
+    s_force_redraw      = true;
+    s_pstate            = ST_NORMAL;
     s_last_esc_was_lone = false;
-    s_modal_top        = -1;
-    s_toast_msg[0]     = 0;
+    s_modal_top         = -1;
+    s_toast_msg[0]      = 0;
+    take_snapshot_slow();
     invalidate_front();
     render_full();
-    s_last_redraw_ms = millis_now();
+    s_last_redraw_ms    = millis_now();
+    s_slow_snap_last_ms = millis_now();
 }
 
 extern "C" void cli_menu_leave(void) {
@@ -3380,7 +3409,13 @@ extern "C" void cli_menu_tick(void) {
     // modal shows feedback promptly).
     // (No-op: handled in feed_esc on next byte.)
 
-    if (now - s_last_redraw_ms < 60 && !s_force_redraw) return;
+    // Slow snapshot: SPI + WiFi + HAT reads at ~500 ms cadence
+    if (now - s_slow_snap_last_ms >= 500) {
+        s_slow_snap_last_ms = now;
+        take_snapshot_slow();
+    }
+
+    if (now - s_last_redraw_ms < 100 && !s_force_redraw) return;
     s_last_redraw_ms = now;
     render_full();
 }

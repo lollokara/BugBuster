@@ -23,6 +23,26 @@ import {
 } from "../../state/signals";
 
 const CH_NAMES = ["A", "B", "C", "D"] as const;
+const OUTPUT_FUNCTION_CODES = new Set([1, 2, 10]);
+
+function functionCodeFromChannel(ch: any): number {
+  const raw = ch?.functionCode ?? ch?.function_code;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  const fn = String(ch?.function ?? "").toUpperCase();
+  if (fn === "VOUT") return 1;
+  if (fn === "IOUT") return 2;
+  if (fn === "IOUT_HART") return 10;
+  return -1;
+}
+
+function displayValueFromChannel(ch: any, funcCode: number): number {
+  const adc = Number(ch?.adcValue ?? ch?.adc_value ?? NaN);
+  const dac = Number(ch?.dacValue ?? ch?.dac_value ?? NaN);
+  if (OUTPUT_FUNCTION_CODES.has(funcCode)) {
+    return Number.isFinite(dac) ? dac : adc;
+  }
+  return adc;
+}
 
 function funcLabel(code: number | undefined, fallback?: string): string {
   if (typeof code === "number" && CHANNEL_FUNCTION_LABELS[code]) {
@@ -48,10 +68,10 @@ export function Overview() {
     if (!status || !Array.isArray(status.channels)) return;
     const arr = status.channels;
     const vals: [number, number, number, number] = [
-      Number(arr[0]?.adcValue ?? arr[0]?.adc_value ?? 0),
-      Number(arr[1]?.adcValue ?? arr[1]?.adc_value ?? 0),
-      Number(arr[2]?.adcValue ?? arr[2]?.adc_value ?? 0),
-      Number(arr[3]?.adcValue ?? arr[3]?.adc_value ?? 0),
+      displayValueFromChannel(arr[0], functionCodeFromChannel(arr[0])),
+      displayValueFromChannel(arr[1], functionCodeFromChannel(arr[1])),
+      displayValueFromChannel(arr[2], functionCodeFromChannel(arr[2])),
+      displayValueFromChannel(arr[3], functionCodeFromChannel(arr[3])),
     ];
     pushChannelSamples(vals);
   }, [status]);
@@ -117,14 +137,9 @@ export function Overview() {
       <div class="overview-channels">
         {[0, 1, 2, 3].map((i) => {
           const ch = channels[i] ?? {};
-          const funcCode = Number(ch.functionCode ?? ch.function_code ?? ch.function ?? -1);
+          const funcCode = functionCodeFromChannel(ch);
           const funcName = funcLabel(funcCode, ch.function);
-          const adc = Number(ch.adcValue ?? ch.adc_value ?? NaN);
-          const dac = Number(ch.dacValue ?? ch.dac_value ?? NaN);
-          const isOutputMode = funcCode === 1 || funcCode === 2 || funcCode === 10;
-          const displayValue = isOutputMode
-            ? (Number.isFinite(dac) ? dac : adc)
-            : adc;
+          const displayValue = displayValueFromChannel(ch, funcCode);
           return (
             <GlassCard key={i} title={`Channel ${CH_NAMES[i]}`}>
               <div class="ch-tile-head">
