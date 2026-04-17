@@ -2,7 +2,7 @@
 // ScopePanel — toolbar + left rail + ScopeCanvas.
 // =============================================================================
 
-import { useMemo } from "preact/hooks";
+import { useMemo, useState } from "preact/hooks";
 import { ScopeCanvas, CH_COLORS } from "../../scope/ScopeCanvas";
 import {
   scopeBuffer,
@@ -16,10 +16,14 @@ import {
   scopeTriggerLevel,
 } from "../../state/signals";
 import {
-  ADMIN_TOKEN_HEADER,
-  getCachedToken,
+  api,
+  PairingRequiredError,
 } from "../../api/client";
 import { deviceMac } from "../../state/signals";
+import {
+  WAVEGEN_MODE_OPTIONS,
+  WAVEGEN_WAVEFORM_OPTIONS,
+} from "../../config/options";
 
 const CH_LETTERS = ["A", "B", "C", "D"] as const;
 const TIME_BASES: { label: string; seconds: number }[] = [
@@ -70,38 +74,6 @@ function computeStats(ch: number): ChStats {
     min: mn,
     max: mx,
   };
-}
-
-async function wavegenStart(type: string) {
-  const mac = deviceMac.value;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (mac) {
-    const tok = getCachedToken(mac);
-    if (tok) headers[ADMIN_TOKEN_HEADER] = tok;
-  }
-  try {
-    await fetch("/api/wavegen/start", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ type, freq: 100, amplitude: 1, offset: 0 }),
-    });
-  } catch {
-    /* ignore — UI-only */
-  }
-}
-
-async function wavegenStop() {
-  const mac = deviceMac.value;
-  const headers: Record<string, string> = {};
-  if (mac) {
-    const tok = getCachedToken(mac);
-    if (tok) headers[ADMIN_TOKEN_HEADER] = tok;
-  }
-  try {
-    await fetch("/api/wavegen/stop", { method: "POST", headers });
-  } catch {
-    /* ignore */
-  }
 }
 
 function ChannelRailCard({ index }: { index: number }) {
@@ -178,11 +150,59 @@ export function ScopePanel() {
   const mode = scopePlotMode.value;
   const tb = scopeTimeBase.value;
   const trig = scopeTriggerLevel.value;
+  const mac = deviceMac.value;
+  const [wgChannel, setWgChannel] = useState<0 | 1 | 2 | 3>(0);
+  const [wgWaveform, setWgWaveform] = useState<0 | 1 | 2 | 3>(0);
+  const [wgMode, setWgMode] = useState<0 | 1>(0);
+  const [wgFreq, setWgFreq] = useState<number>(10);
+  const [wgAmplitude, setWgAmplitude] = useState<number>(1);
+  const [wgOffset, setWgOffset] = useState<number>(0);
+  const [wgBusy, setWgBusy] = useState<boolean>(false);
+  const [wgStatus, setWgStatus] = useState<string | null>(null);
 
   const clearBuffer = () => {
     scopeSeq.value = 0;
     // mutate via assignment (signals detect new reference)
     scopeBuffer.value = [];
+  };
+
+  const startWavegen = async () => {
+    if (!mac) return;
+    setWgBusy(true);
+    setWgStatus(null);
+    try {
+      await api.wavegen.start(mac, {
+        channel: wgChannel,
+        waveform: wgWaveform,
+        mode: wgMode,
+        freq_hz: Math.min(100, Math.max(0.01, wgFreq)),
+        amplitude: wgAmplitude,
+        offset: wgOffset,
+      });
+      setWgStatus("Wavegen started");
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) {
+        setWgStatus(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setWgBusy(false);
+    }
+  };
+
+  const stopWavegen = async () => {
+    if (!mac) return;
+    setWgBusy(true);
+    setWgStatus(null);
+    try {
+      await api.wavegen.stop(mac);
+      setWgStatus("Wavegen stopped");
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) {
+        setWgStatus(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setWgBusy(false);
+    }
   };
 
   return (
@@ -235,12 +255,106 @@ export function ScopePanel() {
         <ScopeCanvas />
 
         <div class="scope-wavegen">
-          <span class="uppercase-tag">WaveGen @100 Hz</span>
-          <button class="pill" onClick={() => wavegenStart("sine")}>Sine</button>
-          <button class="pill" onClick={() => wavegenStart("triangle")}>Triangle</button>
-          <button class="pill" onClick={() => wavegenStart("square")}>Square</button>
-          <button class="pill" onClick={() => wavegenStart("sawtooth")}>Sawtooth</button>
-          <button class="pill" onClick={wavegenStop}>Stop</button>
+          <span class="uppercase-tag">WaveGen</span>
+          <div class="analog-row">
+            <label>Channel</label>
+            <select
+              class="input"
+              value={String(wgChannel)}
+              onChange={(e) =>
+                setWgChannel(
+                  parseInt((e.currentTarget as HTMLSelectElement).value, 10) as 0 | 1 | 2 | 3,
+                )
+              }
+            >
+              {[0, 1, 2, 3].map((c) => (
+                <option key={c} value={String(c)}>
+                  CH {CH_LETTERS[c]}
+                </option>
+              ))}
+            </select>
+            <label>Mode</label>
+            <select
+              class="input"
+              value={String(wgMode)}
+              onChange={(e) =>
+                setWgMode(parseInt((e.currentTarget as HTMLSelectElement).value, 10) as 0 | 1)
+              }
+            >
+              {WAVEGEN_MODE_OPTIONS.map((m) => (
+                <option key={m.code} value={String(m.code)}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div class="analog-row">
+            <label>Waveform</label>
+            <select
+              class="input"
+              value={String(wgWaveform)}
+              onChange={(e) =>
+                setWgWaveform(
+                  parseInt((e.currentTarget as HTMLSelectElement).value, 10) as 0 | 1 | 2 | 3,
+                )
+              }
+            >
+              {WAVEGEN_WAVEFORM_OPTIONS.map((w) => (
+                <option key={w.code} value={String(w.code)}>
+                  {w.label}
+                </option>
+              ))}
+            </select>
+            <label>Freq (Hz)</label>
+            <input
+              class="input"
+              type="number"
+              step="0.01"
+              min={0.01}
+              max={100}
+              value={String(wgFreq)}
+              onInput={(e) =>
+                setWgFreq(parseFloat((e.currentTarget as HTMLInputElement).value || "10"))
+              }
+            />
+          </div>
+          <div class="analog-row">
+            <label>Amplitude</label>
+            <input
+              class="input"
+              type="number"
+              step="0.001"
+              value={String(wgAmplitude)}
+              onInput={(e) =>
+                setWgAmplitude(parseFloat((e.currentTarget as HTMLInputElement).value || "0"))
+              }
+            />
+            <label>Offset</label>
+            <input
+              class="input"
+              type="number"
+              step="0.001"
+              value={String(wgOffset)}
+              onInput={(e) =>
+                setWgOffset(parseFloat((e.currentTarget as HTMLInputElement).value || "0"))
+              }
+            />
+          </div>
+          <div class="kv-row">
+            <button class="btn primary" disabled={!mac || wgBusy} onClick={startWavegen}>
+              {wgBusy ? "Applying…" : "Start WaveGen"}
+            </button>
+            <button class="btn" disabled={!mac || wgBusy} onClick={stopWavegen}>
+              Stop
+            </button>
+          </div>
+          {wgStatus && <div class="text-dim">{wgStatus}</div>}
+        </div>
+        <div class="scope-wavegen">
+          <span class="uppercase-tag">Desktop-Only Scope Features</span>
+          <div class="text-dim">
+            Recording/export workflows and LA USB vendor-bulk streaming remain desktop-only.
+          </div>
         </div>
       </div>
     </div>

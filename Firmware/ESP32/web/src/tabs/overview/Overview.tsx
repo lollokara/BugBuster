@@ -2,40 +2,32 @@
 // Overview tab — 2x2 channel tiles + pairing card + supply rails strip.
 // =============================================================================
 
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
 import { BarGauge } from "../../components/BarGauge";
 import { Sparkline } from "../../components/Sparkline";
 import { CH_COLORS } from "../../scope/ScopeCanvas";
+import { api, PairingRequiredError } from "../../api/client";
+import {
+  CHANNEL_FUNCTION_LABELS,
+  CHANNEL_FUNCTION_OPTIONS,
+} from "../../config/options";
 import {
   deviceStatus,
   deviceInfo,
   pairingInfo,
+  deviceMac,
   channelSparks,
   pushChannelSamples,
 } from "../../state/signals";
 
 const CH_NAMES = ["A", "B", "C", "D"] as const;
 
-// AD74416H CH_FUNC codes (subset). Keep labels short.
-// TODO: verify shape from firmware
-const CH_FUNC_LABEL: Record<number, string> = {
-  0: "HI-Z",
-  1: "VOUT",
-  2: "IOUT",
-  3: "VIN",
-  4: "IIN-LOOP",
-  5: "EXT-RTD-2W",
-  6: "EXT-RTD-3W",
-  7: "IIN-EXT-PWR",
-  8: "RES-MEAS",
-  9: "DIN-LOGIC",
-  10: "DIN-LOOP",
-};
-
 function funcLabel(code: number | undefined, fallback?: string): string {
-  if (typeof code === "number" && CH_FUNC_LABEL[code]) return CH_FUNC_LABEL[code]!;
+  if (typeof code === "number" && CHANNEL_FUNCTION_LABELS[code]) {
+    return CHANNEL_FUNCTION_LABELS[code]!;
+  }
   if (fallback) return fallback;
   if (typeof code === "number") return `CH_FUNC_${code}`;
   return "—";
@@ -45,6 +37,11 @@ export function Overview() {
   const status = deviceStatus.value;
   const info = deviceInfo.value;
   const pairing = pairingInfo.value;
+  const mac = deviceMac.value;
+  const [busy, setBusy] = useState<number | null>(null);
+  const [vadj1, setVadj1] = useState<number>(NaN);
+  const [vadj2, setVadj2] = useState<number>(NaN);
+  const [vbus, setVbus] = useState<number>(NaN);
 
   // Feed sparkline ring whenever status updates with fresh ADC values.
   useEffect(() => {
@@ -63,17 +60,36 @@ export function Overview() {
   const diagnostics = status?.diagnostics ?? {};
   const dieTemp = Number(diagnostics.dieTemp ?? diagnostics.die_temp ?? status?.dieTemp ?? NaN);
 
-  // Supply rails — tolerate various shapes from firmware.
-  // TODO: verify shape from firmware
-  const vadj1 = Number(
-    diagnostics.vadj1 ?? status?.vadj1 ?? status?.rails?.vadj1 ?? NaN,
-  );
-  const vadj2 = Number(
-    diagnostics.vadj2 ?? status?.vadj2 ?? status?.rails?.vadj2 ?? NaN,
-  );
-  const vbus = Number(
-    diagnostics.vbus ?? diagnostics.usbVbus ?? status?.usbpd?.vbus ?? NaN,
-  );
+  // Supply rails are fetched from dedicated endpoints.
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const [s0, s1, pd] = await Promise.allSettled([
+          api.selftestSupply(0),
+          api.selftestSupply(1),
+          api.usbpd(),
+        ]);
+        if (!alive) return;
+        if (s0.status === "fulfilled") {
+          setVadj1(Number((s0.value as any)?.voltage ?? NaN));
+        }
+        if (s1.status === "fulfilled") {
+          setVadj2(Number((s1.value as any)?.voltage ?? NaN));
+        }
+        if (pd.status === "fulfilled") {
+          setVbus(Number((pd.value as any)?.voltageV ?? NaN));
+        }
+      } catch {
+        /* ignore transient poll failures */
+      }
+      if (alive) setTimeout(tick, 2500);
+    };
+    tick();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const fwStr = info
     ? (info as any).fwMajor !== undefined
@@ -82,6 +98,19 @@ export function Overview() {
     : "—";
 
   const sparks = channelSparks.value;
+  const setFunction = async (ch: number, func: number) => {
+    if (!mac) return;
+    setBusy(ch);
+    try {
+      await api.channel.setFunction(mac, ch, func);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) {
+        console.warn("setFunction failed", e);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <div class="overview-grid">
@@ -91,13 +120,35 @@ export function Overview() {
           const funcCode = Number(ch.functionCode ?? ch.function_code ?? ch.function ?? -1);
           const funcName = funcLabel(funcCode, ch.function);
           const adc = Number(ch.adcValue ?? ch.adc_value ?? NaN);
+          const dac = Number(ch.dacValue ?? ch.dac_value ?? NaN);
+          const isOutputMode = funcCode === 1 || funcCode === 2 || funcCode === 10;
+          const displayValue = isOutputMode
+            ? (Number.isFinite(dac) ? dac : adc)
+            : adc;
           return (
             <GlassCard key={i} title={`Channel ${CH_NAMES[i]}`}>
               <div class="ch-tile-head">
                 <span class="ch-swatch" style={{ color: CH_COLORS[i], background: CH_COLORS[i] }} />
                 <span class="uppercase-tag">{funcName}</span>
               </div>
-              <BigValue value={adc} unit="V" precision={3} />
+              <div class="analog-row" style={{ marginTop: "6px" }}>
+                <label class="uppercase-tag">Function</label>
+                <select
+                  class="input"
+                  value={String(Number.isFinite(funcCode) ? funcCode : 0)}
+                  disabled={!mac || busy === i}
+                  onChange={(e) =>
+                    setFunction(i, parseInt((e.currentTarget as HTMLSelectElement).value, 10))
+                  }
+                >
+                  {CHANNEL_FUNCTION_OPTIONS.map((opt) => (
+                    <option key={opt.code} value={String(opt.code)}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <BigValue value={displayValue} unit="V" precision={3} />
               <div style={{ marginTop: "10px" }}>
                 <Sparkline values={sparks[i] ?? []} color={CH_COLORS[i]} height={56} />
               </div>

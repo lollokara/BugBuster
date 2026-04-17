@@ -63,9 +63,9 @@ static bool is_pin_excluded(int pin)
 // ---------------------------------------------------------------------------
 
 static const UartBridgeConfig DEFAULT_CONFIGS[2] = {
-    { .uart_num = 1, .tx_pin = 17, .rx_pin = 18, .baudrate = 115200,
+    { .uart_num = 1, .tx_pin = 17, .rx_pin = 18, .baudrate = 921600,
       .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = true },
-    { .uart_num = 2, .tx_pin = 15, .rx_pin = 16, .baudrate = 115200,
+    { .uart_num = 2, .tx_pin = 15, .rx_pin = 16, .baudrate = 921600,
       .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = true },
 };
 

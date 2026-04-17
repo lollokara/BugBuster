@@ -19,6 +19,7 @@
 #include "cli_term.h"
 #include "cli_edit.h"
 #include "cli_tui.h"
+#include "cli_menu.h"
 #include "cli_history.h"
 #include "serial_io.h"
 #include "bbp.h"
@@ -173,6 +174,36 @@ void cliProcess()
 
             if (cli_tui_want_exit()) {
                 cli_tui_clear_want_exit();
+                s_showPrompt = true;
+                return;
+            }
+        }
+        return;
+    }
+
+    // --------------------------------------------------------------
+    // Interactive menu mode
+    // --------------------------------------------------------------
+    if (cli_menu_active()) {
+        cli_menu_tick();
+
+        while (serial_available()) {
+            uint8_t b = (uint8_t)serial_read();
+
+            if (b == 0xBB) cli_menu_preempt();
+
+            if (bbpDetectHandshake(b)) {
+                cli_menu_leave();
+                cli_edit_reset();
+                s_showPrompt = true;
+                return;
+            }
+            if (b == 0xBB) continue;
+
+            cli_menu_feed(b);
+
+            if (cli_menu_want_exit()) {
+                cli_menu_clear_want_exit();
                 s_showPrompt = true;
                 return;
             }

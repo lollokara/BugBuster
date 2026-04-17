@@ -76,34 +76,6 @@ static const char* diagSourceUnit(uint8_t source) {
 }
 
 // ---------------------------------------------------------------------------
-// menu (was printMainMenu)
-// ---------------------------------------------------------------------------
-
-extern "C" void cli_cmd_menu(const char* args)
-{
-    (void)args;
-    serial_print(
-        "\r\n"
-        "+--------------------------------------------+\r\n"
-        "|        BugBuster - AD74416H Tester         |\r\n"
-        "+--------------------------------------------+\r\n"
-        "| 1. status    - Full device overview        |\r\n"
-        "| 2. temp      - Die temperature             |\r\n"
-        "| 3. adc       - Read ADC channels           |\r\n"
-        "| 4. diag      - ADC diagnostics             |\r\n"
-        "| 5. dac       - Set DAC output              |\r\n"
-        "| 6. func      - Set channel function        |\r\n"
-        "| 7. din       - Digital input states        |\r\n"
-        "| 8. do        - Digital output control      |\r\n"
-        "| 9. faults    - Fault register dump         |\r\n"
-        "| 0. help      - Full command reference      |\r\n"
-        "+--------------------------------------------+\r\n"
-        "| Type a command or number, press Enter.     |\r\n"
-        "+--------------------------------------------+\r\n"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // status - Full overview
 // ---------------------------------------------------------------------------
 

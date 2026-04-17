@@ -30,7 +30,7 @@ def main():
         description="Continuously trigger ADGS mux writes for oscilloscope probing."
     )
     parser.add_argument("--port", default="/dev/cu.usbmodem1234561")
-    parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--period", type=float, default=1.0,
                         help="Delay between write attempts in seconds.")
     parser.add_argument("--dev", type=int, default=0)

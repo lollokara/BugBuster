@@ -87,7 +87,7 @@ export function PairingModal() {
               <span class="mono">minicom</span>,{" "}
               <span class="mono">pio device monitor</span>, Arduino Serial
               Monitor…) on the <span class="mono">CDC0</span> port at{" "}
-              <span class="mono">115200&nbsp;8N1</span>.
+              <span class="mono">921600&nbsp;8N1</span>.
             </li>
             <li>
               At the <span class="mono">&gt;</span> prompt, type{" "}

@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
 
 #include <string.h>
 
@@ -48,6 +49,7 @@ static constexpr uint8_t kProfileCount = sizeof(kProfiles) / sizeof(kProfiles[0]
 // -----------------------------------------------------------------------------
 
 static const BoardProfile *s_active = nullptr;
+static portMUX_TYPE        s_lock   = portMUX_INITIALIZER_UNLOCKED;
 
 static const BoardProfile *find_by_id(const char *id)
 {
@@ -90,7 +92,10 @@ void board_profile_init(void)
 
 const BoardProfile *board_profile_get_active(void)
 {
-    return s_active;
+    taskENTER_CRITICAL(&s_lock);
+    const BoardProfile *p = s_active;
+    taskEXIT_CRITICAL(&s_lock);
+    return p;
 }
 
 bool board_profile_select(const char *id)
@@ -110,7 +115,7 @@ bool board_profile_select(const char *id)
 
     err = nvs_set_str(nvs, "active_id", p->id);
     if (err == ESP_OK) {
-        nvs_commit(nvs);
+        err = nvs_commit(nvs);
     }
     nvs_close(nvs);
 
@@ -119,7 +124,9 @@ bool board_profile_select(const char *id)
         return false;
     }
 
+    taskENTER_CRITICAL(&s_lock);
     s_active = p;
+    taskEXIT_CRITICAL(&s_lock);
     ESP_LOGI(TAG, "Board profile selected: %s (%s)", p->name, p->id);
     return true;
 }

@@ -1,7 +1,7 @@
 // =============================================================================
 // hat.cpp - HAT Expansion Board Driver
 //
-// Handles detection (GPIO47 ADC), UART communication (GPIO43/44, 115200 8N1),
+// Handles detection (GPIO47 ADC), UART communication (GPIO43/44, 921600 8N1),
 // and EXP_EXT_1-4 pin configuration for attached HAT boards.
 // PCB mode only.
 // =============================================================================

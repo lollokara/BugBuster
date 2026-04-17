@@ -10,7 +10,7 @@
 
 import { useEffect, useRef } from "preact/hooks";
 import { useSignal } from "@preact/signals";
-import { api } from "../../api/client";
+import { api, PairingRequiredError } from "../../api/client";
 import { deviceStatus, deviceMac } from "../../state/signals";
 
 /* ---------- Constants (verbatim from signal_path.rs) ---------- */
@@ -118,6 +118,7 @@ export function SignalPath() {
   const ef = useSignal<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
   const oe = useSignal<boolean>(false);
   const tooSmall = useSignal<boolean>(false);
+  const opStatus = useSignal<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -164,7 +165,7 @@ export function SignalPath() {
       try {
         const r = await api.ioexp();
         if (!alive || !r) return;
-        const en = r.enable ?? r.en ?? r;
+        const en = r.enables ?? r.enable ?? r.en ?? r;
         const v1 = !!(en?.vadj1 ?? r.vadj1_en ?? r.vadj1);
         const v2 = !!(en?.vadj2 ?? r.vadj2_en ?? r.vadj2);
         psu.value = [v1, v2];
@@ -274,7 +275,9 @@ export function SignalPath() {
   };
 
   const toggleSwitch = (d: number, s: number) => {
+    opStatus.value = null;
     const cur = mux.value.slice() as [number, number, number, number];
+    const prev = cur.slice() as [number, number, number, number];
     const on = ((cur[d]! >> s) & 1) !== 0;
     const mac = deviceMac.value;
     let newByte = cur[d]!;
@@ -288,44 +291,79 @@ export function SignalPath() {
     cur[d] = newByte;
     mux.value = cur;
     if (mac) {
-      api.mux.setSwitch(mac, d, s, !on).catch(() => { /* ignore */ });
+      api.mux.setSwitch(mac, d, s, !on).catch((e) => {
+        mux.value = prev;
+        if (!(e instanceof PairingRequiredError)) {
+          opStatus.value = e instanceof Error ? e.message : "MUX switch update failed";
+        }
+      });
     }
   };
 
   const applyPreset = (states: readonly [number, number, number, number]) => {
+    opStatus.value = null;
     const mac = deviceMac.value;
+    const prev = mux.value.slice() as [number, number, number, number];
     mux.value = [states[0], states[1], states[2], states[3]];
     if (mac) {
-      api.mux.setAll(mac, [states[0], states[1], states[2], states[3]]).catch(() => { /* ignore */ });
+      api.mux
+        .setAll(mac, [states[0], states[1], states[2], states[3]])
+        .catch((e) => {
+          mux.value = prev;
+          if (!(e instanceof PairingRequiredError)) {
+            opStatus.value = e instanceof Error ? e.message : "MUX preset apply failed";
+          }
+        });
     }
   };
 
   const togglePsu = (i: 0 | 1) => {
+    opStatus.value = null;
     const mac = deviceMac.value;
+    const prev = psu.value.slice() as [boolean, boolean];
     const next = (psu.value.slice() as [boolean, boolean]);
     next[i] = !next[i];
     psu.value = next;
     if (mac) {
-      api.ioexp.setControl(mac, i === 0 ? "vadj1" : "vadj2", next[i]).catch(() => { /* ignore */ });
+      api.ioexp.setControl(mac, i === 0 ? "vadj1" : "vadj2", next[i]).catch((e) => {
+        psu.value = prev;
+        if (!(e instanceof PairingRequiredError)) {
+          opStatus.value = e instanceof Error ? e.message : "PSU toggle failed";
+        }
+      });
     }
   };
 
   const toggleEfuse = (i: 0 | 1 | 2 | 3) => {
+    opStatus.value = null;
     const mac = deviceMac.value;
+    const prev = ef.value.slice() as [boolean, boolean, boolean, boolean];
     const next = ef.value.slice() as [boolean, boolean, boolean, boolean];
     next[i] = !next[i];
     ef.value = next;
     if (mac) {
-      api.ioexp.setControl(mac, EFUSE_CTRL_NAMES[i]!, next[i]).catch(() => { /* ignore */ });
+      api.ioexp.setControl(mac, EFUSE_CTRL_NAMES[i]!, next[i]).catch((e) => {
+        ef.value = prev;
+        if (!(e instanceof PairingRequiredError)) {
+          opStatus.value = e instanceof Error ? e.message : "EFuse toggle failed";
+        }
+      });
     }
   };
 
   const toggleOe = () => {
+    opStatus.value = null;
     const mac = deviceMac.value;
+    const prev = oe.value;
     const next = !oe.value;
     oe.value = next;
     if (mac) {
-      api.lshift.setOe(mac, next).catch(() => { /* ignore */ });
+      api.lshift.setOe(mac, next).catch((e) => {
+        oe.value = prev;
+        if (!(e instanceof PairingRequiredError)) {
+          opStatus.value = e instanceof Error ? e.message : "LShift OE update failed";
+        }
+      });
     }
   };
 
@@ -357,6 +395,12 @@ export function SignalPath() {
         <span class="signal-leg-item" style={{ color: C_EXT }}>● External</span>
         <span class="signal-leg-item" style={{ color: "#ef4444" }}>● Power</span>
       </div>
+
+      {opStatus.value && (
+        <div class="text-err" style={{ fontSize: "0.8rem", marginTop: "6px" }}>
+          {opStatus.value}
+        </div>
+      )}
 
       <div ref={wrapRef} class="signal-canvas-wrap">
         <canvas ref={canvasRef} class="signal-canvas" onClick={onCanvasClick} />

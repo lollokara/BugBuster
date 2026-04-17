@@ -159,9 +159,13 @@ static esp_err_t send_error(httpd_req_t *req, int code, const char *msg)
 
 static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
 {
-    if (error == HTTPD_404_NOT_FOUND || error == HTTPD_405_METHOD_NOT_ALLOWED) {
+    if (error == HTTPD_404_NOT_FOUND) {
         set_cors_headers(req);
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    }
+    if (error == HTTPD_405_METHOD_NOT_ALLOWED) {
+        set_cors_headers(req);
+        return httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
     }
 
     return httpd_resp_send_err(req, error, NULL);
@@ -323,6 +327,7 @@ static esp_err_t handle_root(httpd_req_t *req)
     }
     set_cors_headers(req);
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
     char buf[512];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
@@ -387,11 +392,12 @@ static esp_err_t handle_static_asset(httpd_req_t *req)
 
     // Build /spiffs<uri> path (bounded).
     char fs_path[160];
-    size_t copy_len = uri_len < sizeof(fs_path) - 9 /* "/spiffs" + NUL */
-                          ? uri_len
-                          : sizeof(fs_path) - 9;
+    if (uri_len + sizeof("/spiffs") > sizeof(fs_path)) {
+        set_cors_headers(req);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Path too long");
+    }
     int written = snprintf(fs_path, sizeof(fs_path), "/spiffs%.*s",
-                           (int)copy_len, uri);
+                           (int)uri_len, uri);
     if (written <= 0 || (size_t)written >= sizeof(fs_path)) {
         set_cors_headers(req);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Path too long");
@@ -994,7 +1000,8 @@ static esp_err_t handle_post_device_reset(httpd_req_t *req)
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
 
     // Consume body (may be empty)
-    recv_json_body(req);
+    cJSON *body = recv_json_body(req);
+    if (body) cJSON_Delete(body);
 
     Command cmd{};
     cmd.type = CMD_CLEAR_ALERTS;
@@ -1018,7 +1025,8 @@ static esp_err_t handle_post_clear_all_faults(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
 
-    recv_json_body(req);
+    cJSON *body = recv_json_body(req);
+    if (body) cJSON_Delete(body);
 
     Command cmd{};
     cmd.type = CMD_CLEAR_ALERTS;
@@ -1037,7 +1045,8 @@ static esp_err_t handle_post_clear_channel_fault(httpd_req_t *req)
     int ch = extract_fault_channel(req->uri, "/api/faults/clear/");
     if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
 
-    recv_json_body(req);
+    cJSON *body = recv_json_body(req);
+    if (body) cJSON_Delete(body);
 
     Command cmd{};
     cmd.type    = CMD_CLEAR_CHANNEL_ALERT;

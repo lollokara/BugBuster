@@ -1,5 +1,5 @@
 // =============================================================================
-// Analog tab — ADC / VDAC / IDAC / IIN / Diagnostics.
+// Analog tab — desktop-parity control surface (ADC / VDAC / IDAC / IIN / DIAG)
 // =============================================================================
 
 import { useEffect, useState } from "preact/hooks";
@@ -7,85 +7,121 @@ import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
 import { api, PairingRequiredError } from "../../api/client";
 import { deviceStatus, deviceMac } from "../../state/signals";
+import {
+  ADC_MUX_OPTIONS,
+  ADC_RANGE_OPTIONS,
+  ADC_RATE_OPTIONS,
+  DIAG_SOURCE_OPTIONS,
+} from "../../config/options";
 
 const CH_NAMES = ["A", "B", "C", "D"] as const;
 
-// TODO: verify shape from firmware — these are the scope ranges from tauri_bridge.rs.
-const ADC_RANGES: { code: number; label: string }[] = [
-  { code: 0, label: "±2.5V" },
-  { code: 1, label: "±12V" },
-  { code: 2, label: "0–12V" },
-  { code: 3, label: "±25V" },
-  { code: 4, label: "0–25V" },
-  { code: 5, label: "0–104mV" },
-  { code: 6, label: "±104mV" },
-  { code: 7, label: "0–25mA" },
-];
-
-const ADC_RATES: { code: number; label: string }[] = [
-  { code: 0, label: "10 SPS" },
-  { code: 1, label: "20 SPS" },
-  { code: 2, label: "200 SPS" },
-  { code: 3, label: "1 kSPS" },
-  { code: 4, label: "4.8 kSPS" },
-];
-
-interface ChannelState {
-  adcValue?: number;
-  function?: string;
-  functionCode?: number;
-  rangeCode?: number;
-  rateCode?: number;
-  muxCode?: number;
-  dacCode?: number;
-  vdacReadback?: number;
-  iinReadback?: number;
-}
-
-function readChannel(status: any, i: number): ChannelState {
+function readChannel(status: any, i: number) {
   const arr = status?.channels;
   if (!Array.isArray(arr)) return {};
   const c = arr[i] ?? {};
   return {
     adcValue: Number(c.adcValue ?? c.adc_value ?? NaN),
-    function: c.function,
-    functionCode: Number(c.functionCode ?? c.function_code ?? c.function ?? -1),
-    rangeCode: Number(c.rangeCode ?? c.adc_range ?? c.range ?? 0),
-    rateCode: Number(c.rateCode ?? c.adc_rate ?? c.rate ?? 0),
-    muxCode: Number(c.muxCode ?? c.adc_mux ?? c.mux ?? 0),
+    functionCode: Number(c.functionCode ?? c.function_code ?? -1),
+    rangeCode: Number(c.adcRange ?? c.adc_range ?? 0),
+    rateCode: Number(c.adcRate ?? c.adc_rate ?? 0),
+    muxCode: Number(c.adcMux ?? c.adc_mux ?? 0),
     dacCode: Number(c.dacCode ?? c.dac_code ?? NaN),
-    vdacReadback: Number(c.vdac ?? c.vdacReadback ?? NaN),
-    iinReadback: Number(c.iin ?? c.iinValue ?? NaN),
+    dacValue: Number(c.dacValue ?? c.dac_value ?? NaN),
+    iinValue: Number(c.iinValue ?? c.iin ?? NaN),
   };
 }
 
 function AdcCard() {
   const status = deviceStatus.value;
+  const mac = deviceMac.value;
+  const [pending, setPending] = useState<Record<number, { mux: number; range: number; rate: number }>>({});
+
+  const apply = async (ch: number) => {
+    if (!mac) return;
+    const cfg = pending[ch];
+    if (!cfg) return;
+    try {
+      await api.channel.setAdcConfig(mac, ch, cfg.mux, cfg.range, cfg.rate);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("setAdcConfig failed", e);
+    }
+  };
+
   return (
     <GlassCard title="ADC Channels">
       <div class="analog-grid">
         {[0, 1, 2, 3].map((i) => {
           const c = readChannel(status, i);
+          const cfg = pending[i] ?? {
+            mux: Number.isFinite(c.muxCode) ? c.muxCode : 0,
+            range: Number.isFinite(c.rangeCode) ? c.rangeCode : 0,
+            rate: Number.isFinite(c.rateCode) ? c.rateCode : 0,
+          };
           return (
             <div class="analog-item" key={i}>
               <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
-              <BigValue value={Number.isFinite(c.adcValue) ? c.adcValue! : NaN} unit="V" precision={3} />
+              <BigValue value={Number(c.adcValue ?? NaN)} unit="V" precision={3} />
               <div class="analog-row">
-                <label class="uppercase-tag">Range</label>
-                <select class="input" value={String(c.rangeCode ?? 0)}>
-                  {ADC_RANGES.map((r) => (
-                    <option key={r.code} value={String(r.code)}>{r.label}</option>
+                <label>Range</label>
+                <select
+                  class="input"
+                  value={String(cfg.range)}
+                  onChange={(e) =>
+                    setPending((p) => ({
+                      ...p,
+                      [i]: { ...cfg, range: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                    }))
+                  }
+                >
+                  {ADC_RANGE_OPTIONS.map((r) => (
+                    <option key={r.code} value={String(r.code)}>
+                      {r.label}
+                    </option>
                   ))}
                 </select>
               </div>
               <div class="analog-row">
-                <label class="uppercase-tag">Rate</label>
-                <select class="input" value={String(c.rateCode ?? 0)}>
-                  {ADC_RATES.map((r) => (
-                    <option key={r.code} value={String(r.code)}>{r.label}</option>
+                <label>Rate</label>
+                <select
+                  class="input"
+                  value={String(cfg.rate)}
+                  onChange={(e) =>
+                    setPending((p) => ({
+                      ...p,
+                      [i]: { ...cfg, rate: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                    }))
+                  }
+                >
+                  {ADC_RATE_OPTIONS.map((r) => (
+                    <option key={r.code} value={String(r.code)}>
+                      {r.label}
+                    </option>
                   ))}
                 </select>
               </div>
+              <div class="analog-row">
+                <label>Mux</label>
+                <select
+                  class="input"
+                  value={String(cfg.mux)}
+                  onChange={(e) =>
+                    setPending((p) => ({
+                      ...p,
+                      [i]: { ...cfg, mux: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                    }))
+                  }
+                >
+                  {ADC_MUX_OPTIONS.map((r) => (
+                    <option key={r.code} value={String(r.code)}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button class="btn" disabled={!mac} onClick={() => apply(i)}>
+                Apply ADC
+              </button>
             </div>
           );
         })}
@@ -97,14 +133,13 @@ function AdcCard() {
 function VdacCard() {
   const status = deviceStatus.value;
   const mac = deviceMac.value;
-  const [pending, setPending] = useState<Record<number, number>>({});
+  const [pendingCode, setPendingCode] = useState<Record<number, number>>({});
+  const [pendingVoltage, setPendingVoltage] = useState<Record<number, number>>({});
+  const [bipolar, setBipolar] = useState<Record<number, boolean>>({});
 
-  const setCode = (ch: number, code: number) => {
-    setPending((p) => ({ ...p, [ch]: code }));
-  };
-  const commit = async (ch: number) => {
+  const setCode = async (ch: number) => {
     if (!mac) return;
-    const code = pending[ch];
+    const code = pendingCode[ch];
     if (code == null) return;
     try {
       await api.channel.setDac(mac, ch, code);
@@ -113,27 +148,70 @@ function VdacCard() {
     }
   };
 
+  const setVoltage = async (ch: number) => {
+    if (!mac) return;
+    const voltage = pendingVoltage[ch];
+    if (voltage == null) return;
+    try {
+      await api.channel.setDacVoltage(mac, ch, voltage, !!bipolar[ch]);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("setDacVoltage failed", e);
+    }
+  };
+
+  const setRange = async (ch: number, value: boolean) => {
+    setBipolar((p) => ({ ...p, [ch]: value }));
+    if (!mac) return;
+    try {
+      await api.channel.setVoutRange(mac, ch, value);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("setVoutRange failed", e);
+    }
+  };
+
   return (
-    <GlassCard title="VDAC">
+    <GlassCard title="VDAC (code/voltage/range)">
       <div class="analog-grid">
         {[0, 1, 2, 3].map((i) => {
           const c = readChannel(status, i);
-          const current = pending[i] ?? (Number.isFinite(c.dacCode) ? c.dacCode! : 0);
+          const code = pendingCode[i] ?? (Number.isFinite(c.dacCode) ? c.dacCode : 0);
+          const voltage = pendingVoltage[i] ?? (Number.isFinite(c.dacValue) ? c.dacValue : 0);
+          const isBipolar = !!bipolar[i];
           return (
             <div class="analog-item" key={i}>
               <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
-              <BigValue value={Number.isFinite(c.vdacReadback) ? c.vdacReadback! : NaN} unit="V" precision={3} />
+              <BigValue value={Number(c.dacValue ?? NaN)} unit="V" precision={3} />
               <div class="analog-row">
+                <label>Bipolar</label>
+                <input type="checkbox" checked={isBipolar} onChange={(e) => setRange(i, (e.currentTarget as HTMLInputElement).checked)} />
+              </div>
+              <div class="analog-row">
+                <label>DAC code</label>
                 <input
-                  type="range"
+                  class="input"
+                  type="number"
                   min={0}
                   max={65535}
-                  value={current}
-                  onInput={(e) => setCode(i, parseInt((e.currentTarget as HTMLInputElement).value, 10))}
-                  onChange={() => commit(i)}
+                  value={String(code)}
+                  onInput={(e) => setPendingCode((p) => ({ ...p, [i]: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) }))}
                 />
-                <span class="mono">{current}</span>
               </div>
+              <button class="btn" disabled={!mac} onClick={() => setCode(i)}>
+                Apply code
+              </button>
+              <div class="analog-row">
+                <label>Voltage</label>
+                <input
+                  class="input"
+                  type="number"
+                  step="0.001"
+                  value={String(voltage)}
+                  onInput={(e) => setPendingVoltage((p) => ({ ...p, [i]: parseFloat((e.currentTarget as HTMLInputElement).value || "0") }))}
+                />
+              </div>
+              <button class="btn" disabled={!mac} onClick={() => setVoltage(i)}>
+                Apply voltage
+              </button>
             </div>
           );
         })}
@@ -142,16 +220,14 @@ function VdacCard() {
   );
 }
 
-interface IdacInfo {
-  rails?: {
-    name: string;
-    voltage: number;
-    slot: number;
-  }[];
-}
-
 function IdacCard() {
-  const [data, setData] = useState<IdacInfo | null>(null);
+  const mac = deviceMac.value;
+  const [data, setData] = useState<any>(null);
+  const [pendingCode, setPendingCode] = useState<Record<number, number>>({});
+  const [pendingVoltage, setPendingVoltage] = useState<Record<number, number>>({});
+  const [calCode, setCalCode] = useState<Record<number, number>>({});
+  const [calV, setCalV] = useState<Record<number, number>>({});
+
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -165,32 +241,101 @@ function IdacCard() {
       if (alive) setTimeout(tick, 2000);
     };
     tick();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const rails = Array.isArray(data?.rails) ? data!.rails! : [];
-  const display = rails.length > 0
-    ? rails
-    : [
-        { name: "LevelShift", voltage: NaN, slot: 0 },
-        { name: "VADJ1", voltage: NaN, slot: 1 },
-        { name: "VADJ2", voltage: NaN, slot: 2 },
-      ];
+  const channels = Array.isArray(data?.channels) ? data.channels : [];
+  const setCode = async (ch: number) => {
+    if (!mac) return;
+    try {
+      await api.idacSetCode(mac, ch, pendingCode[ch] ?? 0);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("idacSetCode failed", e);
+    }
+  };
+  const setVoltage = async (ch: number) => {
+    if (!mac) return;
+    try {
+      await api.idacSetVoltage(mac, ch, pendingVoltage[ch] ?? 0);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("idacSetVoltage failed", e);
+    }
+  };
+  const addCal = async (ch: number) => {
+    if (!mac) return;
+    try {
+      await api.idacCalPoint(mac, ch, calCode[ch] ?? 0, calV[ch] ?? 0);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("idacCalPoint failed", e);
+    }
+  };
+  const clearCal = async (ch: number) => {
+    if (!mac) return;
+    try {
+      await api.idacCalClear(mac, ch);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("idacCalClear failed", e);
+    }
+  };
+  const saveCal = async () => {
+    if (!mac) return;
+    try {
+      await api.idacCalSave(mac);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("idacCalSave failed", e);
+    }
+  };
 
   return (
-    <GlassCard title="IDAC Rails">
+    <GlassCard title="IDAC Rails / Calibration">
       <div class="analog-grid">
-        {display.map((rail, idx) => (
-          <div class="analog-item" key={idx}>
-            <div class="uppercase-tag">{rail.name}</div>
-            <BigValue value={Number.isFinite(rail.voltage) ? rail.voltage : NaN} unit="V" precision={3} />
-            <div class="analog-row">
-              <span class="uppercase-tag">Slot</span>
-              <span class="mono">{rail.slot}</span>
+        {channels.map((ch: any, idx: number) => {
+          const code = pendingCode[idx] ?? Number(ch.code ?? 0);
+          const voltage = pendingVoltage[idx] ?? Number(ch.targetV ?? 0);
+          return (
+            <div class="analog-item" key={idx}>
+              <div class="uppercase-tag">{ch.name ?? `CH ${idx}`}</div>
+              <BigValue value={Number(ch.targetV ?? NaN)} unit="V" precision={3} />
+              <div class="analog-row">
+                <label>Code</label>
+                <input class="input" type="number" min={-127} max={127} value={String(code)} onInput={(e) => setPendingCode((p) => ({ ...p, [idx]: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) }))} />
+              </div>
+              <button class="btn" disabled={!mac} onClick={() => setCode(idx)}>
+                Apply code
+              </button>
+              <div class="analog-row">
+                <label>Voltage</label>
+                <input class="input" type="number" step="0.001" value={String(voltage)} onInput={(e) => setPendingVoltage((p) => ({ ...p, [idx]: parseFloat((e.currentTarget as HTMLInputElement).value || "0") }))} />
+              </div>
+              <button class="btn" disabled={!mac} onClick={() => setVoltage(idx)}>
+                Apply V
+              </button>
+              <details>
+                <summary class="uppercase-tag">Calibration</summary>
+                <div class="analog-row">
+                  <label>Cal code</label>
+                  <input class="input" type="number" min={-127} max={127} value={String(calCode[idx] ?? 0)} onInput={(e) => setCalCode((p) => ({ ...p, [idx]: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) }))} />
+                </div>
+                <div class="analog-row">
+                  <label>Measured V</label>
+                  <input class="input" type="number" step="0.001" value={String(calV[idx] ?? 0)} onInput={(e) => setCalV((p) => ({ ...p, [idx]: parseFloat((e.currentTarget as HTMLInputElement).value || "0") }))} />
+                </div>
+                <button class="btn" disabled={!mac} onClick={() => addCal(idx)}>
+                  Add point
+                </button>
+                <button class="btn" disabled={!mac} onClick={() => clearCal(idx)}>
+                  Clear ch
+                </button>
+              </details>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+      <button class="btn primary" disabled={!mac} onClick={saveCal}>
+        Save calibration
+      </button>
     </GlassCard>
   );
 }
@@ -202,18 +347,12 @@ function IinCard() {
       <div class="analog-grid">
         {[0, 1, 2, 3].map((i) => {
           const c = readChannel(status, i);
-          const isIin = c.functionCode === 4 || c.functionCode === 7;
           return (
             <div class="analog-item" key={i}>
               <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
-              <BigValue
-                value={isIin && Number.isFinite(c.iinReadback) ? c.iinReadback! : NaN}
-                unit="mA"
-                precision={2}
-              />
-              <div class="analog-row">
-                <span class="uppercase-tag">Mode</span>
-                <span class="mono">{isIin ? "IIN" : "—"}</span>
+              <BigValue value={Number(c.iinValue ?? NaN)} unit="mA" precision={2} />
+              <div class="mono text-dim">
+                ADC {Number.isFinite(Number(c.adcValue ?? NaN)) ? Number(c.adcValue ?? 0).toFixed(3) : "—"} V
               </div>
             </div>
           );
@@ -224,7 +363,11 @@ function IinCard() {
 }
 
 function DiagnosticsCard() {
+  const mac = deviceMac.value;
   const [diag, setDiag] = useState<any>(null);
+  const [slot, setSlot] = useState(0);
+  const [source, setSource] = useState(0);
+
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -238,42 +381,48 @@ function DiagnosticsCard() {
       if (alive) setTimeout(tick, 1500);
     };
     tick();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const slots = Array.isArray(diag?.slots)
-    ? diag.slots
-    : diag && typeof diag === "object"
-      ? Object.keys(diag).map((k) => ({
-          name: k,
-          raw: typeof diag[k] === "object" ? diag[k]?.raw : null,
-          value: typeof diag[k] === "object" ? diag[k]?.value : diag[k],
-          unit: typeof diag[k] === "object" ? diag[k]?.unit : null,
-        }))
-      : [];
+  const apply = async () => {
+    if (!mac) return;
+    try {
+      await api.diagnosticsSetConfig(mac, slot, source);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("diagnosticsSetConfig failed", e);
+    }
+  };
 
   return (
     <GlassCard title="Diagnostic Slots">
-      <table class="kv-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Value</th>
-            <th>Raw</th>
-            <th>Unit</th>
-          </tr>
-        </thead>
-        <tbody>
-          {slots.map((s: any, idx: number) => (
-            <tr key={idx}>
-              <td>{s.name ?? "—"}</td>
-              <td class="mono">{typeof s.value === "number" ? s.value.toFixed(3) : String(s.value ?? "—")}</td>
-              <td class="mono">{s.raw ?? "—"}</td>
-              <td>{s.unit ?? ""}</td>
-            </tr>
+      <div class="analog-row">
+        <label>Slot</label>
+        <input class="input" type="number" min={0} max={3} value={String(slot)} onInput={(e) => setSlot(parseInt((e.currentTarget as HTMLInputElement).value || "0", 10))} />
+      </div>
+      <div class="analog-row">
+        <label>Source</label>
+        <select
+          class="input"
+          value={String(source)}
+          onChange={(e) =>
+            setSource(
+              parseInt((e.currentTarget as HTMLSelectElement).value || "0", 10),
+            )
+          }
+        >
+          {DIAG_SOURCE_OPTIONS.map((opt) => (
+            <option key={opt.code} value={String(opt.code)}>
+              {opt.label}
+            </option>
           ))}
-        </tbody>
-      </table>
+        </select>
+      </div>
+      <button class="btn" disabled={!mac} onClick={apply}>
+        Apply diagnostic source
+      </button>
+      <pre class="debug-dump mono">{JSON.stringify(diag, null, 2)}</pre>
     </GlassCard>
   );
 }

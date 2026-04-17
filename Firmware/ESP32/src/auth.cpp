@@ -53,8 +53,12 @@ void auth_init(void)
 
         err = nvs_set_str(nvs, "admin_token", s_admin_token);
         if (err == ESP_OK) {
-            nvs_commit(nvs);
-            ESP_LOGI(TAG, "New admin token generated and stored in NVS");
+            err = nvs_commit(nvs);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "New admin token generated and stored in NVS");
+            } else {
+                ESP_LOGE(TAG, "Failed to commit admin token to NVS: %s", esp_err_to_name(err));
+            }
         } else {
             ESP_LOGE(TAG, "Failed to store admin token in NVS: %s", esp_err_to_name(err));
         }
