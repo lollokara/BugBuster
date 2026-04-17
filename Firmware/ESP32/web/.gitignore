@@ -1,0 +1,6 @@
+node_modules
+.vite
+.DS_Store
+*.log
+dist
+# Build output lands in ../data/ (checked in for firmware flashing)

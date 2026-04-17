@@ -154,7 +154,7 @@ v4. Tags: `esp-fw-v3.0.0`, `hat-fw-v2.0`, `desktop-v0.5.0`.
   test module list expanded; simulator testing quickstart added.
 - `python/bugbuster_mcp/README.md` — new Board Profiles section with schema
   example; hardware-free testing section.
-- `Firmware/esp32_ad74416h/README.md` — 14-byte handshake, admin-token
+- `Firmware/ESP32/README.md` — 14-byte handshake, admin-token
   enforcement, simulator reference.
 - `Firmware/RP2040/README.md` — LA vendor-bulk streaming, SMP/SIE rearm,
   LA-done IRQ, log relay.

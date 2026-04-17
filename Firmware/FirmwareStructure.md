@@ -1,7 +1,7 @@
 ## PROJECT STRUCTURE
 ```
 Firmware/
-├── esp32_ad74416h/                   # ESP32-S3 main controller firmware
+├── ESP32/                   # ESP32-S3 main controller firmware
 │   ├── platformio.ini                # PlatformIO configuration
 │   ├── CMakeLists.txt                # ESP-IDF build configuration
 │   ├── partitions.csv                # Flash partition table

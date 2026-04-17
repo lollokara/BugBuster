@@ -6,7 +6,7 @@ name: ESP32 Firmware
     paths:
       - ".github/workflows/esp32-firmware.yml"
       - "Firmware/tools/firmware_version.py"
-      - "Firmware/esp32_ad74416h/**"
+      - "Firmware/ESP32/**"
   push:
     branches:
       - main
@@ -15,7 +15,7 @@ name: ESP32 Firmware
     paths:
       - ".github/workflows/esp32-firmware.yml"
       - "Firmware/tools/firmware_version.py"
-      - "Firmware/esp32_ad74416h/**"
+      - "Firmware/ESP32/**"
 
 permissions:
   contents: write
@@ -56,14 +56,14 @@ jobs:
 
       - name: Build ESP32 firmware
         run: |
-          pio run -d Firmware/esp32_ad74416h -e esp32s3
-          pio run -d Firmware/esp32_ad74416h -e esp32s3 -t buildfs
+          pio run -d Firmware/ESP32 -e esp32s3
+          pio run -d Firmware/ESP32 -e esp32s3 -t buildfs
 
       - name: Package ESP32 artifacts
         shell: bash
         run: |
           version="${{ steps.version.outputs.version }}"
-          build_dir="Firmware/esp32_ad74416h/.pio/build/esp32s3"
+          build_dir="Firmware/ESP32/.pio/build/esp32s3"
           out_dir="dist/esp32-firmware"
           mkdir -p "$out_dir"
 

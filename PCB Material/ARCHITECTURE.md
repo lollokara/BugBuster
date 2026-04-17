@@ -95,7 +95,7 @@ ESP32-S3
 
 ## 3. Firmware Architecture
 
-**Location:** `Firmware/esp32_ad74416h/`
+**Location:** `Firmware/ESP32/`
 **Framework:** ESP-IDF (native, no Arduino), built with PlatformIO
 **Board:** DFRobot FireBeetle 2 ESP32-S3 (`espressif32@6.9.0`)
 
@@ -273,7 +273,7 @@ g_deviceState                   ConnectionManager                Leptos signals
 
 ## 6. File Index
 
-### 6.1 Firmware (`Firmware/esp32_ad74416h/src/`)
+### 6.1 Firmware (`Firmware/ESP32/src/`)
 
 | File | Description |
 |------|-------------|
@@ -346,9 +346,9 @@ g_deviceState                   ConnectionManager                Leptos signals
 |------|-------------|
 | `Firmware/BugBusterProtocol.md` | Full BBP protocol specification (framing, handshake, commands, streaming) |
 | `Firmware/FirmwareStructure.md` | Firmware reference: ADC/DAC config, channel functions, HTTP endpoints, task structure |
-| `Firmware/esp32_ad74416h/platformio.ini` | PlatformIO build config (ESP-IDF, ESP32-S3) |
-| `Firmware/esp32_ad74416h/partitions.csv` | Flash partition table (app + SPIFFS) |
-| `Firmware/esp32_ad74416h/data/index.html` | Embedded web dashboard (served via SPIFFS) |
+| `Firmware/ESP32/platformio.ini` | PlatformIO build config (ESP-IDF, ESP32-S3) |
+| `Firmware/ESP32/partitions.csv` | Flash partition table (app + SPIFFS) |
+| `Firmware/ESP32/data/index.html` | Embedded web dashboard (served via SPIFFS) |
 | `DesktopApp/BugBuster/Cargo.toml` | Frontend workspace Cargo config (Leptos 0.7, wasm-bindgen) |
 | `DesktopApp/BugBuster/src-tauri/Cargo.toml` | Backend Cargo config (Tauri 2, serialport, tokio, reqwest) |
 | `DesktopApp/BugBuster/Trunk.toml` | Trunk build config for WASM (serves on port 1420) |
@@ -466,7 +466,7 @@ WavegenState::start() spawns tokio task at 100 updates/sec
 **Prerequisites:** PlatformIO CLI or IDE, ESP-IDF toolchain (auto-installed by PlatformIO).
 
 ```bash
-cd Firmware/esp32_ad74416h
+cd Firmware/ESP32
 
 # Build
 pio run -e esp32s3

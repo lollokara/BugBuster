@@ -55,3 +55,5 @@ CLAUDE.md
 AGENTS.md
 /Firmware/RP2040/.omc
 /DesktopApp/BugBuster/src-tauri/.omc
+/Firmware/ESP32/managed_components
+/Firmware/ESP32/.omc

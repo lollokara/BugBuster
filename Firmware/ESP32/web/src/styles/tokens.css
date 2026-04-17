@@ -1,0 +1,86 @@
+/* =============================================================================
+   Design tokens — ported verbatim from DesktopApp/BugBuster/styles.css
+   so the on-device UI shares the desktop scientific-glass visual language.
+   ============================================================================= */
+
+/* Variable-font WOFF2, latin subset only — keeps SPIFFS under ~200 KB of fonts.
+   The variable format covers weights 100..900 with a single file per family. */
+@import "@fontsource-variable/inter/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
+:root {
+  /* Surfaces */
+  --bg0: #060a14;
+  --bg1: #0c1222;
+  --bg2: #141c2e;
+  --surface: rgba(18, 27, 46, 0.6);
+  --glass: rgba(20, 30, 52, 0.55);
+  --glass-bright: rgba(28, 40, 64, 0.65);
+  --border: rgba(100, 130, 180, 0.10);
+  --border-bright: rgba(100, 140, 200, 0.18);
+  --glow-subtle: rgba(59, 130, 246, 0.04);
+
+  /* Text */
+  --text: #e2e8f0;
+  --text-dim: #8b9dc3;
+  --text-muted: #5a6d8a;
+
+  /* Accents */
+  --blue: #3b82f6;
+  --green: #10b981;
+  --amber: #f59e0b;
+  --rose: #ef4444;
+  --purple: #a855f7;
+  --cyan: #06b6d4;
+
+  /* Channel palette — matches DesktopApp/BugBuster/src/tauri_bridge.rs CH_COLORS */
+  --ch-0: #3b82f6;
+  --ch-1: #10b981;
+  --ch-2: #f59e0b;
+  --ch-3: #a855f7;
+
+  /* Shape */
+  --radius: 12px;
+  --radius-sm: 8px;
+
+  /* Typography — "Variable" suffixes match the @fontsource-variable packages. */
+  font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg0);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg0);
+  color: var(--text);
+}
+
+.mono {
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.35);
+  color: #fff;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 130, 180, 0.18);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(100, 130, 180, 0.32); }

@@ -210,7 +210,7 @@ cargo tauri build     # release bundle
 
 ```bash
 # ESP32-S3
-cd Firmware/esp32_ad74416h
+cd Firmware/ESP32
 pio run -e esp32s3 -t upload
 pio run -e esp32s3 -t uploadfs   # web UI to SPIFFS
 
@@ -294,7 +294,7 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 | **MCP tools & prompts** (28 tools, 4 prompts, 6 resources) | [`python/bugbuster_mcp/README.md`](python/bugbuster_mcp/README.md) |
 | **Python library** (low-level client + HAL, transports, examples) | [`python/README.md`](python/README.md) |
 | **Desktop app** (21 tabs, screenshots, build & release) | [`DesktopApp/BugBuster/README.md`](DesktopApp/BugBuster/README.md) |
-| **ESP32-S3 firmware** (FreeRTOS tasks, BBP, HTTP) | [`Firmware/esp32_ad74416h/README.md`](Firmware/esp32_ad74416h/README.md) |
+| **ESP32-S3 firmware** (FreeRTOS tasks, BBP, HTTP) | [`Firmware/ESP32/README.md`](Firmware/ESP32/README.md) |
 | **RP2040 HAT firmware** (debugprobe fork, LA, SWD, HVPAK) | [`Firmware/RP2040/README.md`](Firmware/RP2040/README.md) |
 | **BBP v4 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
 | **HAT UART protocol** (ESP32 ↔ RP2040, 921600 8N1) | [`Firmware/HAT_Protocol.md`](Firmware/HAT_Protocol.md) |
@@ -313,7 +313,7 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 ```
 BugBuster/
 ├── Firmware/
-│   ├── esp32_ad74416h/          ESP-IDF firmware (PlatformIO) — main controller
+│   ├── ESP32/                   ESP-IDF firmware (PlatformIO) — main controller
 │   ├── RP2040/                  HAT firmware (Pico SDK + debugprobe fork)
 │   ├── BugBusterProtocol.md     BBP v4 wire format (USB CDC + HTTP REST)
 │   ├── HAT_Protocol.md          ESP32 ↔ RP2040 UART framing

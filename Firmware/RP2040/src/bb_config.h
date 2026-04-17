@@ -94,7 +94,7 @@
 // -----------------------------------------------------------------------------
 // Pulsed low for ~2 µs by bb_la.c whenever the LA transitions to LA_STATE_DONE,
 // so the ESP32 can stop polling hat_la_get_status() over the UART bridge.
-// Wired to ESP32-S3 GPIO18 (PIN_HAT_LA_DONE_IRQ in Firmware/esp32_ad74416h/src/hat.h).
+// Wired to ESP32-S3 GPIO18 (PIN_HAT_LA_DONE_IRQ in Firmware/ESP32/src/hat.h).
 // Push-pull output on this side (only the RP2040 drives this line); idle high.
 #define BB_LA_DONE_PIN      28      // GPIO28 — active-low LA-done pulse to ESP32
 

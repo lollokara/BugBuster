@@ -1,0 +1,25 @@
+{
+  "name": "bugbuster-web",
+  "version": "0.1.0",
+  "description": "BugBuster ESP32-S3 on-device web UI (Preact + Signals, built with Vite, shipped from LittleFS)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "preact": "^10.22.0",
+    "@preact/signals": "^1.2.3",
+    "@fontsource-variable/jetbrains-mono": "^5.0.21",
+    "@fontsource-variable/inter": "^5.0.18"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.8.2",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "@types/node": "^20.12.11"
+  }
+}

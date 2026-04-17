@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\".venv/bin/python -c \\\"import usb.core; devs = usb.core.find(find_all=True); [print(f'VID={d.idVendor:#06x} PID={d.idProduct:#06x}') for d in devs]\\\"\",\"description\":\"List all USB devices vi...",
-  "error": "Exit code 127\n(eval):1: no such file or directory: .venv/bin/python",
-  "timestamp": "2026-04-16T14:42:19.650Z",
-  "retry_count": 3
-}

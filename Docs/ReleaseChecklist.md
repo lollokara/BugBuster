@@ -37,7 +37,7 @@ update both.
 
 ### ESP32 (single file)
 
-1. **`Firmware/esp32_ad74416h/src/bbp.h`** — `BBP_FW_VERSION_MAJOR` /
+1. **`Firmware/ESP32/src/bbp.h`** — `BBP_FW_VERSION_MAJOR` /
    `_MINOR` / `_PATCH`. CI joins them with dots.
 
 ### Desktop (three files, validated in lockstep)
@@ -85,7 +85,7 @@ across three files:
 
 | File | Constant |
 |---|---|
-| `Firmware/esp32_ad74416h/src/bbp.h` | `BBP_PROTO_VERSION` |
+| `Firmware/ESP32/src/bbp.h` | `BBP_PROTO_VERSION` |
 | `python/bugbuster/protocol.py` | `BBP_PROTO_VERSION` |
 | `DesktopApp/BugBuster/src-tauri/src/bbp.rs` | `PROTO_VERSION` |
 
@@ -95,7 +95,7 @@ the protocol version:
 
 ```bash
 grep -n "PROTO_VERSION" \
-  Firmware/esp32_ad74416h/src/bbp.h \
+  Firmware/ESP32/src/bbp.h \
   python/bugbuster/protocol.py \
   DesktopApp/BugBuster/src-tauri/src/bbp.rs
 ```
