@@ -21,6 +21,7 @@
 #include "cli_tui.h"
 #include "cli_menu.h"
 #include "cli_history.h"
+#include "cli_cmds_dev.h"
 #include "serial_io.h"
 #include "bbp.h"
 
@@ -258,4 +259,8 @@ void cliProcess()
             return;
         }
     }
+
+    // Keep long-running IDAC calibration progress visible without spawning
+    // background CDC writers (TinyUSB CLI path is single-owner in practice).
+    cli_cmds_dev_tick();
 }

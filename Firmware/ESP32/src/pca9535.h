@@ -5,13 +5,13 @@
 //
 // Pin mapping (from schematic):
 //   Port 0:
-//     P0.0 = LOGIC_PG      (Input)  - Main logic power good
+//     P0.0 = LOGIC_EN      (Output) - Main logic enable
 //     P0.1 = VADJ_1_PG     (Input)  - V_ADJ1 power good
 //     P0.2 = VADJ_1_EN     (Output) - V_ADJ1 enable
 //     P0.3 = VADJ_2_EN     (Output) - V_ADJ2 enable
 //     P0.4 = VADJ_2_PG     (Input)  - V_ADJ2 power good
 //     P0.5 = EN_15V_A      (Output) - ±15V analog supply enable
-//     P0.6 = EN_MUX        (Output) - MUX power enable
+//     P0.6 = EN_MUX        (Output) - Legacy (unused on current PCB rev)
 //     P0.7 = EN_USB_HUB    (Output) - USB hub enable
 //
 //   Port 1:
@@ -32,7 +32,7 @@
 extern "C" {
 #endif
 
-// PCA9535 Register Addresses
+// PCA9535 Register Addresses (base window, identical on PCA9535 and PCAL9535A)
 #define PCA9535_REG_INPUT0   0x00  // Input Port 0 (read-only)
 #define PCA9535_REG_INPUT1   0x01  // Input Port 1 (read-only)
 #define PCA9535_REG_OUTPUT0  0x02  // Output Port 0
@@ -42,8 +42,17 @@ extern "C" {
 #define PCA9535_REG_CONFIG0  0x06  // Configuration Port 0
 #define PCA9535_REG_CONFIG1  0x07  // Configuration Port 1
 
+// PCAL9535A "Agile I/O" enhanced registers (NXP only; PCA9535 NACKs / wraps)
+// Populated on the BugBuster PCB; breadboard uses legacy PCA9535 and ignores these.
+#define PCAL_REG_INPUT_LATCH0 0x44  // Input latch port 0 (bit=1 enables latch)
+#define PCAL_REG_INPUT_LATCH1 0x45  // Input latch port 1
+#define PCAL_REG_INT_MASK0    0x4A  // Interrupt mask port 0 (bit=0 unmasks)
+#define PCAL_REG_INT_MASK1    0x4B  // Interrupt mask port 1
+#define PCAL_REG_INT_STATUS0  0x4C  // Interrupt status port 0 (read-only, clears on read)
+#define PCAL_REG_INT_STATUS1  0x4D  // Interrupt status port 1
+
 // Port 0 pin masks
-#define PCA9535_LOGIC_PG     (1 << 0)  // P0.0 Input
+#define PCA9535_LOGIC_EN     (1 << 0)  // P0.0 Output
 #define PCA9535_VADJ1_PG     (1 << 1)  // P0.1 Input
 #define PCA9535_VADJ1_EN     (1 << 2)  // P0.2 Output
 #define PCA9535_VADJ2_EN     (1 << 3)  // P0.3 Output
@@ -53,10 +62,10 @@ extern "C" {
 #define PCA9535_EN_USB_HUB   (1 << 7)  // P0.7 Output
 
 // Port 0: input mask (pins configured as inputs)
-// P0.0 (LOGIC_PG), P0.1 (VADJ1_PG), P0.4 (VADJ2_PG)
-#define PCA9535_PORT0_INPUT_MASK  (PCA9535_LOGIC_PG | PCA9535_VADJ1_PG | PCA9535_VADJ2_PG)
+// P0.1 (VADJ1_PG), P0.4 (VADJ2_PG)
+#define PCA9535_PORT0_INPUT_MASK  (PCA9535_VADJ1_PG | PCA9535_VADJ2_PG)
 // Port 0: output mask
-#define PCA9535_PORT0_OUTPUT_MASK (PCA9535_VADJ1_EN | PCA9535_VADJ2_EN | PCA9535_EN_15V_A | PCA9535_EN_MUX | PCA9535_EN_USB_HUB)
+#define PCA9535_PORT0_OUTPUT_MASK (PCA9535_LOGIC_EN | PCA9535_VADJ1_EN | PCA9535_VADJ2_EN | PCA9535_EN_15V_A | PCA9535_EN_MUX | PCA9535_EN_USB_HUB)
 
 // Port 1 pin masks (E-Fuses)
 #define PCA9535_EFUSE_EN_1   (1 << 0)  // P1.0 Output
@@ -150,7 +159,7 @@ typedef struct {
 
 /**
  * @brief Initialize PCA9535 driver. Probes device, configures pin directions,
- *        and sets all outputs to OFF (safe start).
+ *        enables LOGIC_EN + EN_15V_A + EN_USB_HUB at boot, and keeps others OFF.
  * @return true if device found
  */
 bool pca9535_init(void);

@@ -234,9 +234,11 @@ impl Transport for UsbTransport {
 
         // Longer timeout for commands that block on firmware side (WiFi connect = up to 10s)
         let timeout_ms = match cmd_id {
-            0xE2 => 65000, // BBP_CMD_WIFI_CONNECT: firmware retries up to 5x with backoff
-            0xE4 => 8000,  // BBP_CMD_WIFI_SCAN: blocking scan ~3-5s
-            _    => 2000,
+            bbp::CMD_WIFI_CONNECT => 65000,       // firmware retries up to 5x with backoff
+            bbp::CMD_WIFI_SCAN => 8000,           // blocking scan ~3-5s
+            bbp::CMD_SELFTEST_AUTO_CAL => 30000,  // IDAC sweep + measurement loop
+            bbp::CMD_SELFTEST_INT_SUPPLIES => 15000, // multi-phase diagnostic sampling
+            _ => 2000,
         };
         let response = tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await;
 

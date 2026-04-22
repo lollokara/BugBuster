@@ -13,6 +13,35 @@ use crate::bbp;
 use crate::state::{ChannelState, DeviceState, DiagState};
 use crate::transport::Transport;
 
+fn encode_husb_current_code(max_current_a: f64) -> u8 {
+    // HUSB238 current-code table in 0.5A..5.0A non-linear steps.
+    const TABLE: [f64; 16] = [
+        0.5, 0.7, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25,
+        2.5, 2.75, 3.0, 3.25, 3.5, 4.0, 4.5, 5.0,
+    ];
+    let mut best_idx = 0usize;
+    let mut best_err = f64::INFINITY;
+    for (i, v) in TABLE.iter().enumerate() {
+        let err = (max_current_a - *v).abs();
+        if err < best_err {
+            best_err = err;
+            best_idx = i;
+        }
+    }
+    best_idx as u8
+}
+
+fn encode_husb_voltage_code(voltage_v: f64) -> u8 {
+    // BBP currently treats these codes as informational only; keep closest match.
+    if voltage_v >= 19.0 { 6 }
+    else if voltage_v >= 17.0 { 5 }
+    else if voltage_v >= 14.0 { 4 }
+    else if voltage_v >= 11.0 { 3 }
+    else if voltage_v >= 8.0 { 2 }
+    else if voltage_v >= 4.0 { 1 }
+    else { 0 }
+}
+
 pub struct HttpTransport {
     client: Client,       // Fast client for status polls and normal commands
     slow_client: Client,  // Slow client for WiFi connect/scan (long-blocking)
@@ -226,6 +255,81 @@ impl Transport for HttpTransport {
 
         // Map BBP command IDs to HTTP REST API calls
         match cmd_id {
+            // Self-test / calibration
+            bbp::CMD_SELFTEST_STATUS => {
+                let json = self.get_json("/api/selftest").await?;
+                let mut pw = bbp::PayloadWriter::new();
+                let boot = json.get("boot");
+                let cal = json.get("cal").or_else(|| json.get("calibration"));
+                pw.put_bool(boot.and_then(|v| v.get("ran")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(boot.and_then(|v| v.get("passed")).and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_f32(boot.and_then(|v| v.get("vadj1V")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(boot.and_then(|v| v.get("vadj2V")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(boot.and_then(|v| v.get("vlogicV")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_u8(cal.and_then(|v| v.get("status")).and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_u8(cal.and_then(|v| v.get("channel")).and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_u8(cal.and_then(|v| v.get("points")).and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_f32(cal.and_then(|v| v.get("lastVoltageV")).and_then(|v| v.as_f64()).unwrap_or(-1.0) as f32);
+                pw.put_f32(cal.and_then(|v| v.get("errorMv")).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                Ok(pw.buf)
+            }
+
+            bbp::CMD_SELFTEST_MEASURE_SUPPLY => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let rail = payload[0];
+                let json = self.get_json(&format!("/api/selftest/supply/{}", rail)).await?;
+                let mut pw = bbp::PayloadWriter::new();
+                pw.put_u8(rail);
+                pw.put_f32(json.get("voltage").and_then(|v| v.as_f64()).unwrap_or(-1.0) as f32);
+                Ok(pw.buf)
+            }
+
+            bbp::CMD_SELFTEST_EFUSE_CURRENTS => {
+                let json = self.get_json("/api/selftest/efuse").await?;
+                let mut pw = bbp::PayloadWriter::new();
+                pw.put_bool(json.get("available").and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_u32(json.get("timestampMs").and_then(|v| v.as_u64()).unwrap_or(0) as u32);
+                let efuses = json.get("efuses").and_then(|v| v.as_array());
+                for i in 0..4 {
+                    let cur = efuses.and_then(|a| a.get(i))
+                        .and_then(|v| v.get("currentA"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(-1.0);
+                    pw.put_f32(cur as f32);
+                }
+                Ok(pw.buf)
+            }
+
+            bbp::CMD_SELFTEST_AUTO_CAL => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let channel = payload[0];
+                let json = self.post_json("/api/selftest/calibrate", &serde_json::json!({"channel": channel})).await?;
+                let mut pw = bbp::PayloadWriter::new();
+                pw.put_u8(json.get("status").and_then(|v| v.as_u64()).unwrap_or(3) as u8);
+                pw.put_u8(json.get("channel").and_then(|v| v.as_u64()).unwrap_or(channel as u64) as u8);
+                pw.put_u8(json.get("points").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_f32(json.get("lastVoltageV").and_then(|v| v.as_f64()).unwrap_or(-1.0) as f32);
+                pw.put_f32(json.get("errorMv").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                Ok(pw.buf)
+            }
+
+            bbp::CMD_SELFTEST_INT_SUPPLIES => {
+                let json = self.get_json_slow("/api/selftest/supplies").await?;
+                let mut pw = bbp::PayloadWriter::new();
+                pw.put_bool(json.get("valid").and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_bool(json.get("suppliesOk").and_then(|v| v.as_bool()).unwrap_or(false));
+                pw.put_f32(json.get("avddHiV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(json.get("dvccV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(json.get("avccV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(json.get("avssV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(json.get("tempC").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                Ok(pw.buf)
+            }
+
             bbp::CMD_SET_CH_FUNC => {
                 if payload.len() < 2 {
                     return Err(anyhow!("Invalid payload"));
@@ -464,17 +568,23 @@ impl Transport for HttpTransport {
                 pw.put_bool(json.get("attached").and_then(|v| v.as_bool()).unwrap_or(false));
                 pw.put_bool(json.get("cc").and_then(|v| v.as_str()).unwrap_or("CC1") == "CC2");
                 pw.put_u8(json.get("pdResponse").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
-                pw.put_u8(0); // voltage code (not in JSON, unused)
-                pw.put_u8(0); // current code (not in JSON, unused)
-                pw.put_f32(json.get("voltageV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
-                pw.put_f32(json.get("currentA").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                let voltage_v = json.get("voltageV").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let current_a = json.get("currentA").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                pw.put_u8(encode_husb_voltage_code(voltage_v));
+                pw.put_u8(encode_husb_current_code(current_a));
+                pw.put_f32(voltage_v as f32);
+                pw.put_f32(current_a as f32);
                 pw.put_f32(json.get("powerW").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
                 // Source PDOs
                 let pdos = json.get("sourcePdos").and_then(|v| v.as_array());
                 for i in 0..6 {
                     let pdo = pdos.and_then(|a| a.get(i));
                     pw.put_bool(pdo.and_then(|p| p.get("detected")).and_then(|v| v.as_bool()).unwrap_or(false));
-                    pw.put_u8(0); // current code (not available, decode_husb_current handles it)
+                    let max_current = pdo
+                        .and_then(|p| p.get("maxCurrentA"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.5);
+                    pw.put_u8(encode_husb_current_code(max_current));
                 }
                 pw.put_u8(json.get("selectedPdo").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
                 Ok(pw.buf)

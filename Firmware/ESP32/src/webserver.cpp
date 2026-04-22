@@ -1455,7 +1455,7 @@ static esp_err_t handle_dio_post_dispatch(httpd_req_t *req)
 // GET /api/selftest — boot result + cal status
 static esp_err_t handle_get_selftest(httpd_req_t *req)
 {
-    const SelftestBootResult *boot = selftest_boot_check();
+    const SelftestBootResult *boot = selftest_get_boot_result();
     const SelftestCalResult  *cal  = selftest_get_cal_result();
 
     cJSON *root = cJSON_CreateObject();
@@ -1470,6 +1470,7 @@ static esp_err_t handle_get_selftest(httpd_req_t *req)
     cJSON_AddNumberToObject(c, "status", cal->status);
     cJSON_AddNumberToObject(c, "channel", cal->channel);
     cJSON_AddNumberToObject(c, "points", cal->points_collected);
+    cJSON_AddNumberToObject(c, "lastVoltageV", cal->last_measured_v);
     cJSON_AddNumberToObject(c, "errorMv", cal->error_mv);
 
     return send_json(req, root);
@@ -1532,6 +1533,7 @@ static esp_err_t handle_post_selftest_calibrate(httpd_req_t *req)
     cJSON_AddNumberToObject(resp, "status", cal->status);
     cJSON_AddNumberToObject(resp, "channel", cal->channel);
     cJSON_AddNumberToObject(resp, "points", cal->points_collected);
+    cJSON_AddNumberToObject(resp, "lastVoltageV", cal->last_measured_v);
     cJSON_AddNumberToObject(resp, "errorMv", cal->error_mv);
     cJSON_AddBoolToObject(resp, "ok", true);
     return send_json(req, resp);

@@ -70,8 +70,20 @@ typedef struct {
     uint8_t  status;            // CAL_STATUS_*
     uint8_t  channel;           // IDAC channel being calibrated (1 or 2)
     uint8_t  points_collected;  // number of cal points measured so far
+    float    last_measured_v;   // latest measured rail voltage during sweep (-1 if none yet)
     float    error_mv;          // final error after calibration (if success)
 } SelftestCalResult;
+
+// Persistent trace of last calibration stage across warm resets.
+typedef struct {
+    uint32_t magic;
+    uint8_t  stage;             // implementation-defined stage marker
+    uint8_t  channel;
+    uint8_t  point;
+    int8_t   code;
+    int32_t  measured_mv;
+    uint8_t  active;            // 1 while calibration in progress
+} SelftestCalTrace;
 
 /**
  * @brief  Initialize the self-test module.
@@ -88,6 +100,11 @@ void selftest_init(void);
  * @return Pointer to the boot result (static, valid until next call).
  */
 const SelftestBootResult* selftest_boot_check(void);
+
+/**
+ * @brief  Get cached boot self-test result without triggering new measurements.
+ */
+const SelftestBootResult* selftest_get_boot_result(void);
 
 /**
  * @brief  Measure a single supply rail using U23 + ADC Channel D.
@@ -143,6 +160,8 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel);
  * @brief  Get the current calibration status / result.
  */
 const SelftestCalResult* selftest_get_cal_result(void);
+const SelftestCalTrace* selftest_get_cal_trace(void);
+void selftest_clear_cal_trace(void);
 
 /**
  * @brief  Check if self-test / calibration is currently using U23.

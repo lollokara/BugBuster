@@ -1022,7 +1022,7 @@ static int handleDioRead(uint16_t seq, uint8_t cmdId,
 // 0x05 SELFTEST_STATUS — get boot result + cal status
 static int handleSelftestStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
-    const SelftestBootResult *boot = selftest_boot_check();  // returns cached if already ran
+    const SelftestBootResult *boot = selftest_get_boot_result();
     const SelftestCalResult  *cal  = selftest_get_cal_result();
 
     size_t pos = 0;
@@ -1036,6 +1036,7 @@ static int handleSelftestStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
     put_u8(out, &pos, cal->status);
     put_u8(out, &pos, cal->channel);
     put_u8(out, &pos, cal->points_collected);
+    put_f32(out, &pos, cal->last_measured_v);
     put_f32(out, &pos, cal->error_mv);
     return (int)pos;
 }
@@ -1087,6 +1088,7 @@ static int handleSelftestAutoCal(uint16_t seq, uint8_t cmdId,
     put_u8(out, &pos, cal->status);
     put_u8(out, &pos, cal->channel);
     put_u8(out, &pos, cal->points_collected);
+    put_f32(out, &pos, cal->last_measured_v);
     put_f32(out, &pos, cal->error_mv);
     return (int)pos;
 }

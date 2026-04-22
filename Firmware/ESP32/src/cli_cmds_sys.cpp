@@ -18,9 +18,11 @@
 #include "husb238.h"
 #include "pca9535.h"
 #include "adgs2414d.h"
+#include "selftest.h"
 #include "ad74416h_regs.h"
 #include "auth.h"
 #include "esp_mac.h"
+#include "esp_system.h"
 
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -402,6 +404,63 @@ extern "C" void cli_cmd_pca(const char* args)
 }
 
 // ---------------------------------------------------------------------------
+// E-fuse current monitor (via U23 self-test path)
+// ---------------------------------------------------------------------------
+
+extern "C" void cli_cmd_efuse_current(const char* args)
+{
+    while (args && *args == ' ') args++;
+
+    // Cached background monitor view (non-intrusive)
+    if (args && strcmp(args, "cached") == 0) {
+        const SelftestEfuseCurrents *ec = selftest_get_efuse_currents();
+        serial_println("\r\n--- E-Fuse Currents (cached monitor) ---");
+        serial_printf("  available=%s  timestamp=%lu ms\r\n",
+                      ec->available ? "YES" : "NO",
+                      (unsigned long)ec->timestamp_ms);
+        for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++) {
+            float a = ec->current_a[i];
+            if (a >= 0.0f) {
+                serial_printf("  EFUSE%d: %.4f A (%.1f mA)\r\n", i + 1, a, a * 1000.0f);
+            } else {
+                serial_printf("  EFUSE%d: inactive/unavailable\r\n", i + 1);
+            }
+        }
+        return;
+    }
+
+    int only = 0;  // 0 = all
+    if (args && *args) {
+        unsigned int ef = 0;
+        if (sscanf(args, "%u", &ef) != 1 || ef < 1 || ef > 4) {
+            serial_println("Usage: efusei [1|2|3|4|cached]");
+            serial_println("  efusei         Directly measure all 4 e-fuse currents");
+            serial_println("  efusei <n>     Directly measure one e-fuse current");
+            serial_println("  efusei cached  Show cached background monitor values");
+            return;
+        }
+        only = (int)ef;
+    }
+
+    serial_println("\r\n--- E-Fuse Currents (direct U23 measurement) ---");
+    serial_println("  Note: uses U23 self-test path; IO10 analog interlock must be open.");
+    bool any_ok = false;
+    for (int ef = 1; ef <= 4; ef++) {
+        if (only && ef != only) continue;
+        float a = selftest_measure_efuse_current((uint8_t)ef);
+        if (a >= 0.0f) {
+            serial_printf("  EFUSE%d: %.4f A (%.1f mA)\r\n", ef, a, a * 1000.0f);
+            any_ok = true;
+        } else {
+            serial_printf("  EFUSE%d: unavailable (interlock / measurement blocked)\r\n", ef);
+        }
+    }
+    if (!any_ok) {
+        serial_println("  Hint: ensure U17 S2 (IO10 analog path) is open and e-fuse is enabled.");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // I2C bus scan
 // ---------------------------------------------------------------------------
 
@@ -613,3 +672,36 @@ extern "C" void cli_cmd_token(const char* args)
     serial_println("");
 }
 
+extern "C" void cli_cmd_rstinfo(const char* args)
+{
+    (void)args;
+    esp_reset_reason_t rr = esp_reset_reason();
+    const char *name = "UNKNOWN";
+    switch (rr) {
+        case ESP_RST_UNKNOWN:   name = "UNKNOWN"; break;
+        case ESP_RST_POWERON:   name = "POWERON"; break;
+        case ESP_RST_EXT:       name = "EXTERNAL_PIN"; break;
+        case ESP_RST_SW:        name = "SOFTWARE"; break;
+        case ESP_RST_PANIC:     name = "PANIC"; break;
+        case ESP_RST_INT_WDT:   name = "INT_WDT"; break;
+        case ESP_RST_TASK_WDT:  name = "TASK_WDT"; break;
+        case ESP_RST_WDT:       name = "OTHER_WDT"; break;
+        case ESP_RST_DEEPSLEEP: name = "DEEPSLEEP"; break;
+        case ESP_RST_BROWNOUT:  name = "BROWNOUT"; break;
+        case ESP_RST_SDIO:      name = "SDIO"; break;
+        case ESP_RST_USB:       name = "USB"; break;
+        case ESP_RST_JTAG:      name = "JTAG"; break;
+        case ESP_RST_EFUSE:     name = "EFUSE"; break;
+        case ESP_RST_PWR_GLITCH:name = "PWR_GLITCH"; break;
+        case ESP_RST_CPU_LOCKUP:name = "CPU_LOCKUP"; break;
+        default: break;
+    }
+    serial_println("\r\n--- Reset Info ---");
+    serial_printf("  esp_reset_reason: %d (%s)\r\n", (int)rr, name);
+    const SelftestCalTrace *tr = selftest_get_cal_trace();
+    if (tr && tr->magic == 0xC411B007u) {
+        serial_printf("  cal_trace: stage=%u active=%u ch=%u point=%u code=%d measured=%ld mV\r\n",
+                      (unsigned)tr->stage, (unsigned)tr->active, (unsigned)tr->channel,
+                      (unsigned)tr->point, (int)tr->code, (long)tr->measured_mv);
+    }
+}

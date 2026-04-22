@@ -43,6 +43,7 @@ void cli_cmd_clear_faults(const char* args);
 
 void cli_cmd_idac(const char* args);
 void cli_cmd_idac_cal(const char* args);
+void cli_cmds_dev_tick(void);
 
 #ifdef __cplusplus
 }

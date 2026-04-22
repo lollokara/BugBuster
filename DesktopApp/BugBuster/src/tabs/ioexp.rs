@@ -8,7 +8,7 @@ const SUPPLY_CONTROLS: &[(u8, &str, &str, &str)] = &[
     (0, "VADJ1",  "#10b981", "3-15V Rail A"),
     (1, "VADJ2",  "#06b6d4", "3-15V Rail B"),
     (2, "+/-15V", "#f59e0b", "AD74416H Analog"),
-    (3, "MUX",    "#a855f7", "ADGS2414D Power"),
+    (3, "LOGIC_EN", "#a855f7", "Main Logic Enable"),
     (4, "USB Hub", "#3b82f6", "USB Hub IC"),
 ];
 
@@ -29,7 +29,7 @@ pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
-            <div class="tab-desc">"PCA9535 16-bit GPIO expander status and control. Manages power supply enables (V_ADJ1, V_ADJ2, +/-15V, MUX), E-Fuse output protection per connector (P1-P4), and monitors power-good signals."</div>
+            <div class="tab-desc">"PCA9535 16-bit GPIO expander status and control. Manages power supply enables (V_ADJ1, V_ADJ2, +/-15V, LOGIC_EN), E-Fuse output protection per connector (P1-P4), and monitors power-good signals."</div>
 
             {move || {
                 let st = ioexp.get();
@@ -75,7 +75,7 @@ pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         <div style="margin-bottom: 16px">
                             <div style="font-size: 10px; font-weight: 600; color: var(--text-dim); margin-bottom: 8px; letter-spacing: 1px; text-transform: uppercase">"Power Good Status"</div>
                             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px">
-                                {render_power_good("LOGIC_PG", "Main 3.3V LDO", logic_pg)}
+                                {render_power_good("LOGIC_EN", "Main Logic Enable", logic_pg)}
                                 {render_power_good("VADJ1_PG", "LTM8063 #1 -> P1,P2", vadj1_pg)}
                                 {render_power_good("VADJ2_PG", "LTM8063 #2 -> P3,P4", vadj2_pg)}
                             </div>

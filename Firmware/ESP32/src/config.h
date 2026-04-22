@@ -15,25 +15,44 @@
 
 // -----------------------------------------------------------------------------
 // SPI Pin Definitions (AD74416H uses SYNC as active-low chip select)
+// Values below are the PCB schematic assignment. Breadboard hand-wiring used
+// GPIO8/9/10/11 — rebuild with -DBREADBOARD_MODE=1 for the old breadboard map.
 // -----------------------------------------------------------------------------
+#if BREADBOARD_MODE
 #define PIN_SDO         GPIO_NUM_8    // MISO - Serial Data Out (from AD74416H)
 #define PIN_SDI         GPIO_NUM_9    // MOSI - Serial Data In  (to AD74416H)
-#define PIN_SYNC        GPIO_NUM_10   // CS   - Active low frame sync (chip select)
+#define PIN_SYNC        GPIO_NUM_10   // CS   - Active low frame sync
 #define PIN_SCLK        GPIO_NUM_11   // SCLK - SPI clock
+#else
+#define PIN_SDO         GPIO_NUM_18   // MISO - PCB: AD74416H SDO
+#define PIN_SDI         GPIO_NUM_17   // MOSI - PCB: AD74416H SDI
+#define PIN_SYNC        GPIO_NUM_40   // CS   - PCB: AD74416H SYNC
+#define PIN_SCLK        GPIO_NUM_16   // SCLK - PCB: AD74416H SCLK
+#endif
 
 // -----------------------------------------------------------------------------
 // Control / Status Pin Definitions
+// PCB note: PIN_RESET is GPIO45, which is the ESP32-S3 VDD_SPI strapping pin.
+// The PCB pulls GPIO45 HIGH at boot so the strap reads 3.3V (correct for the
+// on-module flash). The firmware drives RESET from this GPIO after boot.
 // -----------------------------------------------------------------------------
+#if BREADBOARD_MODE
 #define PIN_RESET       GPIO_NUM_5    // Active low hardware reset
 #define PIN_ADC_RDY     GPIO_NUM_6    // Open-drain, active low - ADC conversion ready
 #define PIN_ALERT       GPIO_NUM_7    // Open-drain, active low - fault/alert output
+#else
+#define PIN_RESET       GPIO_NUM_45   // PCB: AD74416H RESET (ext. pull-HIGH at boot)
+#define PIN_ADC_RDY     GPIO_NUM_38   // PCB: AD74416H ADC_RDY
+#define PIN_ALERT       GPIO_NUM_39   // PCB: AD74416H ALERT
+#endif
 
 // -----------------------------------------------------------------------------
 // BREADBOARD_MODE: Set to 1 for breadboard testing, 0 for final PCB
-// Changes: I2C pins, MUX CS pin, device count, I2C speed
+// Changes: I2C pins, MUX CS pin, device count, I2C speed, PCAL9535A init
+// Build override: pio run -e esp32s3 -- -DBREADBOARD_MODE=1
 // -----------------------------------------------------------------------------
 #ifndef BREADBOARD_MODE
-#define BREADBOARD_MODE  1
+#define BREADBOARD_MODE  0
 #endif
 
 // -----------------------------------------------------------------------------
@@ -59,7 +78,7 @@
 #if BREADBOARD_MODE
 #define PIN_MUX_INT     GPIO_NUM_NC   // Not connected on breadboard (conflicts with I2C_SCL on GPIO4)
 #else
-#define PIN_MUX_INT     GPIO_NUM_4    // PCB: PCA9535 INT output → ESP32
+#define PIN_MUX_INT     GPIO_NUM_3    // PCB: PCAL9535A INT output → ESP32 (GPIO4 now free for DIO IO3)
 #endif
 
 // -----------------------------------------------------------------------------
@@ -93,9 +112,9 @@
 #define U23_SW_EFUSE2_IMON  0x04   // S3 (bit 2): EFUSE_MON_2
 #define U23_SW_ADC_CH_D     0x08   // S4 (bit 3): AD74416H Channel D → shared rail
 #define U23_SW_EFUSE4_IMON  0x10   // S5 (bit 4): EFUSE_MON_4
-#define U23_SW_VADJ1        0x20   // S6 (bit 5): VADJ1_BUCK (via R107/R109 divider)
-#define U23_SW_VADJ2        0x40   // S7 (bit 6): VADJ2_BUCK (via R108/R110 divider)
-#define U23_SW_3V3_ADJ      0x80   // S8 (bit 7): 3V3_ADJ (VLOGIC, direct)
+#define U23_SW_3V3_ADJ      0x20   // S6 (bit 5): 3V3_ADJ (VLOGIC, direct)
+#define U23_SW_VADJ1        0x40   // S7 (bit 6): VADJ1_BUCK (via R107/R109 divider)
+#define U23_SW_VADJ2        0x80   // S8 (bit 7): VADJ2_BUCK (via R108/R110 divider)
 
 // VADJ voltage divider ratio: R_bottom / (R_top + R_bottom) = 100k / (34.8k + 100k)
 #define VADJ_DIVIDER_RATIO  0.7418f

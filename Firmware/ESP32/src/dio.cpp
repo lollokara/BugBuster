@@ -35,21 +35,19 @@ static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
 
 #else  // PCB mode
 
-// PCB mode: GPIOs from MUX_GPIO_MAP in adgs2414d.h.
-// These connect to one side of the ADGS2414D analog switches; the other
-// side goes to the physical terminal block pins.
+// PCB mode: GPIOs from the shipped schematic. Each listed GPIO is routed to
+// one side of an ADGS2414D analog switch; the other side goes to the physical
+// terminal-block pin. AD74416H SPI/control and PCA9535 INT were moved off
+// these GPIOs on the PCB, so the breadboard-era "WARNING" about shared pins
+// no longer applies.
 //
-// WARNING: IOs 4-6 share GPIOs with AD74416H control (RESET=5, RDY=6, ALERT=7)
-// and IOs 9-12 share with SPI (SCLK=11, CS=10, SDI=9, SDO=8).
-// The final PCB will reassign these — update this table when the PCB is done.
-//
-// IO_Block 1 (U10): IO 1=GPIO1,  IO 2=GPIO2,  IO 3=GPIO3
-// IO_Block 2 (U11): IO 4=GPIO5,  IO 5=GPIO6,  IO 6=GPIO7
-// IO_Block 3 (U16): IO 7=GPIO13, IO 8=GPIO12, IO 9=GPIO11
+// IO_Block 1 (U10): IO 1=GPIO1,  IO 2=GPIO2,  IO 3=GPIO4   (GPIO3 now = PCAL INT)
+// IO_Block 2 (U11): IO 4=GPIO5,  IO 5=GPIO6,  IO 6=GPIO7   (AD74416H ctrl moved to 45/38/39)
+// IO_Block 3 (U16): IO 7=GPIO13, IO 8=GPIO12, IO 9=GPIO11  (SPI moved to 16/17/18/40)
 // IO_Block 4 (U17): IO10=GPIO10, IO11=GPIO9,  IO12=GPIO8
 
 static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
-     1,   2,   3,     // IO_Block 1: IO 1, 2, 3
+     1,   2,   4,     // IO_Block 1: IO 1, 2, 3
      5,   6,   7,     // IO_Block 2: IO 4, 5, 6
     13,  12,  11,     // IO_Block 3: IO 7, 8, 9
     10,   9,   8,     // IO_Block 4: IO 10, 11, 12

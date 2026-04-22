@@ -35,21 +35,30 @@ static BridgeState s_bridges[CDC_BRIDGE_COUNT] = {};
 // ---------------------------------------------------------------------------
 
 static const int EXCLUDED_PINS[] = {
-    0,              // Strapping pin (boot)
-    5, 6, 7,        // AD74416H control (RESET, ADC_RDY, ALERT)
-    8, 9, 10, 11,   // AD74416H SPI (SDO, SDI, SYNC, SCLK)
-    19, 20,          // USB D-/D+
-    45, 46,          // Strapping pins
-    -1               // Sentinel
+    0,                  // Strapping pin (boot)
+    PIN_RESET,          // AD74416H RESET
+    PIN_ADC_RDY,        // AD74416H ADC_RDY
+    PIN_ALERT,          // AD74416H ALERT
+    PIN_SDO,            // AD74416H SPI MISO
+    PIN_SDI,            // AD74416H SPI MOSI
+    PIN_SYNC,           // AD74416H SYNC/CS
+    PIN_SCLK,           // AD74416H SPI SCLK
+    PIN_MUX_CS,         // ADGS2414D CS
+    PIN_I2C_SDA,        // I2C shared bus SDA
+    PIN_I2C_SCL,        // I2C shared bus SCL
+    19, 20,             // USB D-/D+
+    45, 46,             // Strapping pins
+    -1                  // Sentinel
 };
 
-static bool is_pin_excluded(int pin)
+static bool is_pin_excluded_for_bridge(int pin, int self_bridge_id)
 {
     for (int i = 0; EXCLUDED_PINS[i] >= 0; i++) {
         if (EXCLUDED_PINS[i] == pin) return true;
     }
     // Also check if pin is used by another bridge
     for (int b = 0; b < CDC_BRIDGE_COUNT; b++) {
+        if (b == self_bridge_id) continue;
         if (s_bridges[b].config.enabled) {
             if (s_bridges[b].config.tx_pin == pin || s_bridges[b].config.rx_pin == pin)
                 return true;
@@ -58,14 +67,23 @@ static bool is_pin_excluded(int pin)
     return false;
 }
 
+// Compatibility helper for existing call sites that validate "generic" pins
+// outside the context of one configured bridge.
+static bool is_pin_excluded(int pin)
+{
+    return is_pin_excluded_for_bridge(pin, -1);
+}
+
 // ---------------------------------------------------------------------------
 // Default configs
 // ---------------------------------------------------------------------------
 
 static const UartBridgeConfig DEFAULT_CONFIGS[2] = {
-    { .uart_num = 1, .tx_pin = 17, .rx_pin = 18, .baudrate = 921600,
+    // Bridge 0 defaults to external IO lines (IO1/IO2 on the terminal map):
+    // GPIO1 TX, GPIO2 RX.
+    { .uart_num = 1, .tx_pin = 1, .rx_pin = 2, .baudrate = 921600,
       .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = true },
-    { .uart_num = 2, .tx_pin = 15, .rx_pin = 16, .baudrate = 921600,
+    { .uart_num = 2, .tx_pin = 47, .rx_pin = 48, .baudrate = 921600,
       .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = true },
 };
 
@@ -155,6 +173,28 @@ static bool install_uart(int id)
     }
 
     if (!cfg.enabled) return true;
+
+    if (cfg.tx_pin < 0 || cfg.rx_pin < 0 || cfg.tx_pin == cfg.rx_pin ||
+        is_pin_excluded_for_bridge(cfg.tx_pin, id) ||
+        is_pin_excluded_for_bridge(cfg.rx_pin, id)) {
+        ESP_LOGW(TAG, "Bridge %d: invalid/conflicting pins TX=%d RX=%d; trying defaults",
+                 id, cfg.tx_pin, cfg.rx_pin);
+
+        UartBridgeConfig fallback = DEFAULT_CONFIGS[id < 2 ? id : 0];
+        if (fallback.tx_pin >= 0 && fallback.rx_pin >= 0 &&
+            fallback.tx_pin != fallback.rx_pin &&
+            !is_pin_excluded_for_bridge(fallback.tx_pin, id) &&
+            !is_pin_excluded_for_bridge(fallback.rx_pin, id)) {
+            bs.config = fallback;
+            nvs_save_config(id, &bs.config);
+            ESP_LOGI(TAG, "Bridge %d remapped to defaults: UART%d TX=%d RX=%d",
+                     id, bs.config.uart_num, bs.config.tx_pin, bs.config.rx_pin);
+        } else {
+            ESP_LOGE(TAG, "Bridge %d: defaults also invalid; disabling bridge", id);
+            bs.config.enabled = false;
+            return true;
+        }
+    }
 
     uart_config_t uart_cfg = {};
     uart_cfg.baud_rate  = (int)cfg.baudrate;

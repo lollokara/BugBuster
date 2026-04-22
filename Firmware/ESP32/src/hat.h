@@ -51,10 +51,11 @@ extern "C" {
 #define PIN_HAT_DETECT      GPIO_NUM_47   // ADC input for HAT identification
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to HAT
 #define PIN_HAT_RX          GPIO_NUM_44   // UART RX from HAT
-#define PIN_HAT_IRQ         GPIO_NUM_15   // Shared open-drain interrupt
-// Dedicated LA-done interrupt input from RP2040 GPIO28 (BB_LA_DONE_PIN).
-// Active-low pulse (~2 µs) every time the LA transitions to LA_STATE_DONE.
-#define PIN_HAT_LA_DONE_IRQ GPIO_NUM_18
+#define PIN_HAT_IRQ         GPIO_NUM_15   // Shared open-drain interrupt (also carries LA-done signal on PCB)
+// On the PCB the dedicated LA-done wire is retired: GPIO18 is now SPI SDO for
+// the AD74416H, and the RP2040 LA-done pulse is delivered via PIN_HAT_IRQ
+// (shared with other HAT interrupts). hat.cpp guards (pin >= 0), so NC is safe.
+#define PIN_HAT_LA_DONE_IRQ GPIO_NUM_NC
 #endif
 
 #define HAT_UART_NUM        UART_NUM_0

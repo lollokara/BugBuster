@@ -972,10 +972,27 @@ pub async fn usbpd_select_pdo(
     let mut pw = PayloadWriter::new();
     pw.put_u8(voltage);
     mgr.send_command(bbp::CMD_USBPD_SELECT_PDO, &pw.buf).await.map_err(map_err)?;
-    // Trigger negotiation
-    let mut pw2 = PayloadWriter::new();
-    pw2.put_u8(0x01); // GO_SELECT_PDO
-    mgr.send_command(bbp::CMD_USBPD_GO, &pw2.buf).await.map_err(map_err)?;
+    // Trigger negotiation. Some adapters/controllers occasionally NACK this
+    // command transiently even when SELECT_PDO was accepted; retry and avoid
+    // surfacing a hard UI failure for that case.
+    let mut go_err: Option<anyhow::Error> = None;
+    for _ in 0..3 {
+        let mut pw2 = PayloadWriter::new();
+        pw2.put_u8(0x01); // GO_SELECT_PDO
+        match mgr.send_command(bbp::CMD_USBPD_GO, &pw2.buf).await {
+            Ok(_) => {
+                go_err = None;
+                break;
+            }
+            Err(e) => {
+                go_err = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            }
+        }
+    }
+    if let Some(e) = go_err {
+        log::warn!("usbpd_select_pdo: GO command failed after retries: {}", e);
+    }
     Ok(())
 }
 
@@ -1614,6 +1631,7 @@ pub fn parse_selftest_status(data: &[u8]) -> serde_json::Value {
             "status":  r.get_u8().unwrap_or(0),
             "channel": r.get_u8().unwrap_or(0),
             "points":  r.get_u8().unwrap_or(0),
+            "lastVoltageV": r.get_f32().unwrap_or(-1.0),
             "errorMv": r.get_f32().unwrap_or(0.0),
         }
     })
@@ -1623,13 +1641,17 @@ pub fn parse_selftest_auto_cal(data: &[u8]) -> serde_json::Value {
     let status   = data.get(0).copied().unwrap_or(3);
     let cal_ch   = data.get(1).copied().unwrap_or(0);
     let points   = data.get(2).copied().unwrap_or(0);
-    let error_mv = if data.len() >= 7 {
+    let last_voltage_v = if data.len() >= 7 {
         f32::from_le_bytes([data[3], data[4], data[5], data[6]])
+    } else { -1.0 };
+    let error_mv = if data.len() >= 11 {
+        f32::from_le_bytes([data[7], data[8], data[9], data[10]])
     } else { 0.0 };
     serde_json::json!({
         "status":  status,
         "channel": cal_ch,
         "points":  points,
+        "lastVoltageV": last_voltage_v,
         "errorMv": error_mv,
     })
 }

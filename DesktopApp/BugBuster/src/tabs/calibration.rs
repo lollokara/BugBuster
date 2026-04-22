@@ -1,5 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::time::Duration;
+use wasm_bindgen::JsValue;
 use crate::tauri_bridge::*;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -10,19 +12,25 @@ enum CalState {
     Failed,
 }
 
+const CAL_TOTAL_POINTS: u32 = 100;
+
 fn do_auto_cal(
     ch: u8,
     set_cal_state: WriteSignal<CalState>,
     set_cal_channel: WriteSignal<u8>,
     set_cal_points: WriteSignal<u32>,
+    set_cal_last_voltage_v: WriteSignal<f32>,
     set_cal_error_mv: WriteSignal<f32>,
+    set_last_points: WriteSignal<u32>,
     set_cal_log: WriteSignal<Vec<String>>,
 ) {
     set_cal_channel.set(ch);
     set_cal_state.set(CalState::Running);
     set_cal_log.set(Vec::new());
     set_cal_points.set(0);
+    set_cal_last_voltage_v.set(-1.0);
     set_cal_error_mv.set(0.0);
+    set_last_points.set(0);
 
     let ch_name = match ch { 1 => "VADJ1", 2 => "VADJ2", _ => "IDAC" };
     set_cal_log.update(|l| l.push(format!("Starting auto-calibration for {} (IDAC ch {})", ch_name, ch)));
@@ -38,22 +46,14 @@ fn do_auto_cal(
 
         if let Ok(r) = serde_wasm_bindgen::from_value::<serde_json::Value>(result) {
             let status = r.get("status").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
-            let points = r.get("points").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let error = r.get("errorMv").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-
-            set_cal_points.set(points);
-            set_cal_error_mv.set(error);
-
-            if status == 2 {
-                set_cal_log.update(|l| l.push(format!("Complete: {} points, error = {:.1} mV", points, error)));
-                set_cal_log.update(|l| l.push("Saved to NVS. Level shifter and e-fuses restored.".into()));
-                set_cal_state.set(CalState::Complete);
-            } else {
-                set_cal_log.update(|l| l.push(format!("Failed (status={})", status)));
+            if status == 3 {
+                set_cal_log.update(|l| l.push("Calibration start rejected (busy/interlock/error).".into()));
                 set_cal_state.set(CalState::Failed);
+            } else {
+                set_cal_log.update(|l| l.push("Calibration started. Polling status...".into()));
             }
         } else {
-            set_cal_log.update(|l| l.push("Error: failed to parse response".into()));
+            set_cal_log.update(|l| l.push("Error: failed to start calibration".into()));
             set_cal_state.set(CalState::Failed);
         }
     });
@@ -66,7 +66,10 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (cal_channel, set_cal_channel) = signal(0u8);
     let (cal_log, set_cal_log) = signal(Vec::<String>::new());
     let (cal_points, set_cal_points) = signal(0u32);
+    let (cal_last_voltage_v, set_cal_last_voltage_v) = signal(-1.0f32);
     let (cal_error_mv, set_cal_error_mv) = signal(0.0f32);
+    let (last_points, set_last_points) = signal(0u32);
+    let poll_handle = RwSignal::new(None::<IntervalHandle>);
 
     Effect::new(move |_| {
         let _ = state.get();
@@ -75,6 +78,58 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 set_idac.set(st);
             }
         });
+    });
+
+    // While calibration is running, poll selftest status on a fixed interval.
+    Effect::new(move |_| {
+        let running = cal_state.get() == CalState::Running;
+        if running {
+            if poll_handle.get_untracked().is_none() {
+                let handle = leptos::prelude::set_interval_with_handle(
+                    move || {
+                        if cal_state.get_untracked() != CalState::Running {
+                            return;
+                        }
+                        spawn_local(async move {
+                            let result = invoke("selftest_status", JsValue::NULL).await;
+                            if let Ok(v) = serde_wasm_bindgen::from_value::<serde_json::Value>(result) {
+                                let cal = v.get("cal").cloned().unwrap_or(serde_json::Value::Null);
+                                let status = cal.get("status").and_then(|x| x.as_u64()).unwrap_or(0) as u8;
+                                let points = cal.get("points").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                                let measured_v = cal.get("lastVoltageV").and_then(|x| x.as_f64()).unwrap_or(-1.0) as f32;
+                                let error = cal.get("errorMv").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                                set_cal_points.set(points);
+                                set_cal_last_voltage_v.set(measured_v);
+                                set_cal_error_mv.set(error);
+
+                                let prev_points = last_points.get_untracked();
+                                if points > prev_points {
+                                    set_cal_log.update(|l| l.push(format!(
+                                        "Progress: {}/{} points, measured {:.4} V",
+                                        points, CAL_TOTAL_POINTS, measured_v
+                                    )));
+                                    set_last_points.set(points);
+                                }
+
+                                if status == 2 {
+                                    set_cal_log.update(|l| l.push(format!("Complete: {} points, error = {:.1} mV", points, error)));
+                                    set_cal_log.update(|l| l.push("Saved to NVS. Level shifter and e-fuses restored.".into()));
+                                    set_cal_state.set(CalState::Complete);
+                                } else if status == 3 {
+                                    set_cal_log.update(|l| l.push(format!("Failed (status={})", status)));
+                                    set_cal_state.set(CalState::Failed);
+                                }
+                            }
+                        });
+                    },
+                    Duration::from_millis(400),
+                ).ok();
+                poll_handle.set(handle);
+            }
+        } else if let Some(h) = poll_handle.get_untracked() {
+            h.clear();
+            poll_handle.set(None);
+        }
     });
 
     view! {
@@ -129,7 +184,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                         </div>
                                                         <button class="btn btn-primary" style="width: 100%; padding: 10px; font-size: 12px"
                                                             disabled=move || !idac.get().present
-                                                            on:click=move |_| do_auto_cal(0, set_cal_state, set_cal_channel, set_cal_points, set_cal_error_mv, set_cal_log)
+                                                            on:click=move |_| do_auto_cal(0, set_cal_state, set_cal_channel, set_cal_points, set_cal_last_voltage_v, set_cal_error_mv, set_last_points, set_cal_log)
                                                         >"Auto-Calibrate VLOGIC"</button>
                                                     </div>
                                                 </div>
@@ -155,7 +210,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                         </div>
                                                         <button class="btn btn-primary" style="width: 100%; padding: 10px; font-size: 12px"
                                                             disabled=move || !idac.get().present
-                                                            on:click=move |_| do_auto_cal(1, set_cal_state, set_cal_channel, set_cal_points, set_cal_error_mv, set_cal_log)
+                                                            on:click=move |_| do_auto_cal(1, set_cal_state, set_cal_channel, set_cal_points, set_cal_last_voltage_v, set_cal_error_mv, set_last_points, set_cal_log)
                                                         >"Auto-Calibrate VADJ1"</button>
                                                     </div>
                                                 </div>
@@ -181,7 +236,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                         </div>
                                                         <button class="btn btn-primary" style="width: 100%; padding: 10px; font-size: 12px"
                                                             disabled=move || !idac.get().present
-                                                            on:click=move |_| do_auto_cal(2, set_cal_state, set_cal_channel, set_cal_points, set_cal_error_mv, set_cal_log)
+                                                            on:click=move |_| do_auto_cal(2, set_cal_state, set_cal_channel, set_cal_points, set_cal_last_voltage_v, set_cal_error_mv, set_last_points, set_cal_log)
                                                         >"Auto-Calibrate VADJ2"</button>
                                                     </div>
                                                 </div>
@@ -222,6 +277,12 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     </p>
                                     <div style="font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-bottom: 16px">
                                         {format!("IDAC{} → DCDC → R divider → U23 → Ch D ADC", ch)}
+                                    </div>
+                                    <div style="font-size: 11px; color: #3b82f6; font-family: 'JetBrains Mono', monospace; margin-bottom: 8px">
+                                        {move || format!("Progress: {}/{} points", cal_points.get(), CAL_TOTAL_POINTS)}
+                                    </div>
+                                    <div style="font-size: 11px; color: #10b981; font-family: 'JetBrains Mono', monospace; margin-bottom: 8px">
+                                        {move || format!("Measured: {:.4} V", cal_last_voltage_v.get())}
                                     </div>
                                     <div style="max-height: 120px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 9px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); text-align: left">
                                         {move || cal_log.get().iter().rev().take(20).map(|l| {

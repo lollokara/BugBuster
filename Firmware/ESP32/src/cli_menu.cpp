@@ -5,7 +5,7 @@
 // Overview       <-> overview/         <-> parity (read-only)
 // CH0..CH3       <-> analog/           <-> parity (function, ADC mux/range/rate, DAC, DO, alerts)
 // Power          <-> system/           <-> parity subset (VADJ sliders, e-fuse, 15V, MUX/USB hub)
-// Signal         <-> signal/SignalPath <-> parity (32-switch grid, reset preset)
+// Signal         <-> signal/SignalPath <-> parity (full MUX grid, reset preset)
 // HAT            <-> system/ (HAT card)<-> parity (pin pickers, conn power, IO voltage, detect/reset)
 // Settings       <-> system/           <-> parity (board profile, USB-PD, faults, diag, calibration)
 // -----------------------------------------------------------------------------
@@ -186,8 +186,8 @@ typedef enum {
     NUM_PWR_FIELDS
 } PowerField;
 
-// Signal tab field count: 32 switch cells + 1 reset-all row
-#define SIGNAL_GRID_CELLS   32   // 4 devices x 8 switches
+// Signal tab field count: all daisy-chain devices x 8 switches + 1 reset-all row
+#define SIGNAL_GRID_CELLS   (ADGS_NUM_DEVICES * 8)
 #define NUM_SIGNAL_FIELDS   (SIGNAL_GRID_CELLS + 1)
 #define SIGNAL_RESET_FIELD  0    // Reset row is first (field 0)
 #define SIGNAL_GRID_BASE    1    // Grid cells start at field 1
@@ -259,7 +259,7 @@ struct MenuSnapshot {
     bool      vadj2Pg;
     bool      logicPg;
     // Signal tab
-    uint8_t   muxState[ADGS_API_MAIN_DEVICES];
+    uint8_t   muxState[ADGS_NUM_DEVICES];
     // ADGS fault state (populated in take_snapshot, outside mutex — SPI call)
     uint8_t   adgsErrorFlags;
     bool      adgsFaulted;
@@ -820,8 +820,8 @@ static bool take_snapshot(void) {
         s_snap.vadj2Pg  = io.vadj2_pg;
         s_snap.logicPg  = io.logic_pg;
     }
-    // Signal tab: MUX state (API main devices only)
-    adgs_get_api_states(s_snap.muxState);
+    // Signal tab: full MUX state (includes self-test device)
+    adgs_get_all_states(s_snap.muxState);
     xSemaphoreGive(g_stateMutex);
 
     s_snap.valid = true;
@@ -1230,7 +1230,7 @@ static void cb_toggle_mux(bool yes, void*) {
     bool new_state = !s_snap.muxEn;
     bool ok = pca9535_set_control(PCA_CTRL_MUX_EN, new_state);
     char msg[48];
-    snprintf(msg, sizeof(msg), "MUX pwr -> %s %s",
+    snprintf(msg, sizeof(msg), "Logic EN -> %s %s",
              new_state ? "ON" : "OFF", ok ? "" : "(FAILED)");
     show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
 }
@@ -1321,8 +1321,8 @@ static void cal_progress_tick(ModalFrame* f, void*) {
             break;
         case CAL_STATUS_RUNNING:
             f->progress_status  = "Calibrating...";
-            // points_collected out of DS4424_CAL_MAX_POINTS
-            f->progress_percent = (r->points_collected * 100) / 16;
+            // points_collected out of the 100-point auto-cal sweep.
+            f->progress_percent = r->points_collected;
             if (f->progress_percent > 99) f->progress_percent = 99;
             break;
         case CAL_STATUS_SUCCESS:
@@ -1597,7 +1597,7 @@ static void activate_power_field(PowerField field) {
                          cb_toggle_15v, nullptr);
             break;
         case PWR_FIELD_MUX:
-            open_confirm(s_snap.muxEn ? "Disable MUX power?" : "Enable MUX power?",
+            open_confirm(s_snap.muxEn ? "Disable Logic EN?" : "Enable Logic EN?",
                          cb_toggle_mux, nullptr);
             break;
         case PWR_FIELD_USBHUB:
@@ -1611,13 +1611,27 @@ static void activate_power_field(PowerField field) {
 static void activate_signal_field(int field) {
     if (field == SIGNAL_RESET_FIELD) {
         // Reset-all row (field 0)
-        open_confirm("Open all 32 switches (reset)?", cb_signal_reset_all, nullptr);
+        open_confirm("Open all switches (reset)?", cb_signal_reset_all, nullptr);
     } else {
         int gf  = field - SIGNAL_GRID_BASE;
         int dev = gf / 8;
         int sw  = gf % 8;
         bool cur = (s_snap.muxState[dev] >> sw) & 1;
-        bool ok = adgs_set_api_switch_safe((uint8_t)dev, (uint8_t)sw, !cur);
+        bool ok = false;
+        if (dev < ADGS_API_MAIN_DEVICES) {
+            ok = adgs_set_api_switch_safe((uint8_t)dev, (uint8_t)sw, !cur);
+        } else {
+            // Expose self-test device (U23) in CLI for debug workflows.
+            // U23 is not part of ADGS_MAIN_DEVICES, so use the dedicated API.
+#if ADGS_HAS_SELFTEST
+            if (dev == ADGS_SELFTEST_DEV) {
+                uint8_t next = s_snap.muxState[dev];
+                if (!cur) next |=  (uint8_t)(1u << sw);
+                else      next &= (uint8_t)~(1u << sw);
+                ok = adgs_set_selftest(next);
+            }
+#endif
+        }
         char msg[64];
         snprintf(msg, sizeof(msg), "MUX%d SW%d -> %s %s",
                  dev, sw, !cur ? "CLOSED" : "OPEN", ok ? "" : "(FAILED)");
@@ -1961,8 +1975,8 @@ static void render_overview(void) {
         // VLOGIC
         {
             uint8_t fg = s_snap.logicPg ? (uint8_t)TERM_FG_B_GREEN : (uint8_t)TERM_FG_B_YELLOW;
-            snprintf(vbuf, sizeof(vbuf), "%.3f V  PG:%s",
-                     s_snap.vlogic, s_snap.logicPg ? "OK" : "NO");
+            snprintf(vbuf, sizeof(vbuf), "%.3f V  EN:%s",
+                     s_snap.vlogic, s_snap.logicPg ? "ON" : "OFF");
             draw_dotted_leader(row+1, rc, rw, "VLOGIC", vbuf,
                                (uint8_t)TERM_FG_DEFAULT, fg, 0);
         }
@@ -2338,7 +2352,7 @@ static void render_power_tab(void) {
     items[PWR_FIELD_VADJ2].label = "VADJ2";
 
     snprintf(items[PWR_FIELD_VLOGIC].value, sizeof(items[0].value),
-             "%.3f V  PG:%s", s_snap.vlogic, s_snap.logicPg ? "OK" : "NO");
+             "%.3f V  EN:%s", s_snap.vlogic, s_snap.logicPg ? "ON" : "OFF");
     items[PWR_FIELD_VLOGIC].label = "Level-Shifter";
 
     for (int i = 0; i < 4; i++) {
@@ -2359,7 +2373,7 @@ static void render_power_tab(void) {
 
     snprintf(items[PWR_FIELD_MUX].value, sizeof(items[0].value),
              "%s", s_snap.muxEn ? "ON" : "OFF");
-    items[PWR_FIELD_MUX].label = "MUX Power";
+    items[PWR_FIELD_MUX].label = "Logic EN";
 
     snprintf(items[PWR_FIELD_USBHUB].value, sizeof(items[0].value),
              "%s", s_snap.usbHubEn ? "ON" : "OFF");
@@ -2411,8 +2425,8 @@ static void render_signal_tab(void) {
                "Dev  SW0 SW1 SW2 SW3 SW4 SW5 SW6 SW7");
     row++;
 
-    // 4x8 grid (fields SIGNAL_GRID_BASE .. SIGNAL_GRID_BASE+31)
-    for (int dev = 0; dev < ADGS_API_MAIN_DEVICES; dev++) {
+    // Nx8 grid (fields SIGNAL_GRID_BASE .. SIGNAL_GRID_BASE+SIGNAL_GRID_CELLS-1)
+    for (int dev = 0; dev < ADGS_NUM_DEVICES; dev++) {
         draw_textf(row + dev, lc, TERM_FG_DEFAULT, 0, " %d  ", dev);
         for (int sw = 0; sw < 8; sw++) {
             bool closed = (s_snap.muxState[dev] >> sw) & 1;
@@ -2900,7 +2914,7 @@ static void on_arrow(char dir) {
 
     // Signal tab: 2D grid navigation.
     // Field 0 (SIGNAL_RESET_FIELD) = Reset-all row (no Up/Down grid nav).
-    // Fields SIGNAL_GRID_BASE..SIGNAL_GRID_BASE+31 = 4x8 switch grid.
+    // Fields SIGNAL_GRID_BASE..SIGNAL_GRID_BASE+SIGNAL_GRID_CELLS-1 = Nx8 switch grid.
     // Left at sw=0 → prev tab; Right at sw=7 && last dev → next tab.
     // Up from grid dev=0 → back to Reset row; Down from Reset row → grid dev=0 sw=0.
     if (s_tab == TAB_SIGNAL && (dir == 'A' || dir == 'B' || dir == 'C' || dir == 'D')) {
@@ -2937,7 +2951,7 @@ static void on_arrow(char dir) {
                     return;
                 }
             } else if (dir == 'B') { // Down
-                if (dev + 1 < ADGS_API_MAIN_DEVICES) dev++;
+                if (dev + 1 < ADGS_NUM_DEVICES) dev++;
                 // else stay on last row (no wrap to Reset row going down)
             } else if (dir == 'D') { // Left
                 if (sw == 0) {
@@ -2950,7 +2964,7 @@ static void on_arrow(char dir) {
                 sw--;
             } else if (dir == 'C') { // Right
                 bool last_col = (sw == 7);
-                bool last_dev = (dev == ADGS_API_MAIN_DEVICES - 1);
+                bool last_dev = (dev == ADGS_NUM_DEVICES - 1);
                 if (last_col && last_dev) {
                     // Edge: next tab
                     if ((int)s_tab + 1 < NUM_TABS) s_tab = (MenuTab)((int)s_tab + 1);

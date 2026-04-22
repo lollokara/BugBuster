@@ -10,11 +10,13 @@
 
 #include "cli_cmds_dev.h"
 #include "cli_shared.h"
+#include "cli_term.h"
 #include "serial_io.h"
 #include "tasks.h"
 #include "ad74416h_regs.h"
 #include "config.h"
 #include "ds4424.h"
+#include "selftest.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -23,6 +25,43 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+static bool s_cal_live_report = false;
+static uint8_t s_cal_last_points = 0xFF;
+static uint32_t s_cal_last_print_ms = 0;
+
+extern "C" void cli_cmds_dev_tick(void)
+{
+    if (!s_cal_live_report) return;
+
+    const SelftestCalResult *cal = selftest_get_cal_result();
+    if (!cal) {
+        term_println("  calibration status unavailable");
+        s_cal_live_report = false;
+        return;
+    }
+
+    uint32_t now = millis_now();
+    bool changed = (cal->points_collected != s_cal_last_points);
+    bool periodic = (now - s_cal_last_print_ms) >= 1000;
+    if (changed || periodic) {
+        int32_t mv = (int32_t)(cal->last_measured_v * 1000.0f);
+        term_printf("  progress: %u/100  measured=%ld mV\r\n",
+                    (unsigned)cal->points_collected, (long)mv);
+        s_cal_last_points = cal->points_collected;
+        s_cal_last_print_ms = now;
+    }
+
+    if (cal->status == CAL_STATUS_SUCCESS) {
+        term_printf("Calibration complete: points=%u error=%.1f mV\r\n",
+                    (unsigned)cal->points_collected, cal->error_mv);
+        s_cal_live_report = false;
+    } else if (cal->status == CAL_STATUS_FAILED) {
+        term_printf("Calibration FAILED at point=%u\r\n",
+                    (unsigned)cal->points_collected);
+        s_cal_live_report = false;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Name-lookup helpers (copied verbatim from cli.cpp)
@@ -962,16 +1001,12 @@ extern "C" void cli_cmd_idac(const char* args)
             serial_println("  FAILED");
         }
     } else if (strcmp(subcmd, "cal") == 0) {
-        unsigned int step = 8, settle = 200;
-        sscanf(args, "%u %u", &step, &settle);
-        serial_printf("IDAC%u auto-calibration (step=%u, settle=%ums)...\r\n", ch, step, settle);
-        Command ccmd;
-        ccmd.type = CMD_IDAC_CALIBRATE;
-        ccmd.idacCal.ch = (uint8_t)ch;
-        ccmd.idacCal.step = (uint8_t)step;
-        ccmd.idacCal.settle_ms = (uint16_t)settle;
-        sendCommand(ccmd);
-        serial_println("Calibration task started. Check serial logs for progress.");
+        serial_printf("IDAC%u auto-calibration via selftest path...\r\n", ch);
+        if (!selftest_start_auto_calibrate((uint8_t)ch)) {
+            serial_println("Calibration start FAILED (busy/interlock/error).");
+            return;
+        }
+        serial_println("Calibration started.");
     } else {
         serial_printf("Unknown IDAC sub-command: '%s'\r\n", subcmd);
     }
@@ -980,20 +1015,22 @@ extern "C" void cli_cmd_idac(const char* args)
 // Extracted from the inline dispatcher block in the original cli.cpp.
 extern "C" void cli_cmd_idac_cal(const char* args)
 {
-    unsigned int ch = 0, step = 8, settle = 200;
-    int n = sscanf(args, "%u %u %u", &ch, &step, &settle);
+    unsigned int ch = 0;
+    int n = sscanf(args, "%u", &ch);
     if (n < 1 || ch > 2) {
-        serial_println("Usage: idac_cal <ch> [step] [settle_ms]");
+        serial_println("Usage: idac_cal <ch>");
         serial_println("  ch: 0=LevelShift 1=VADJ1 2=VADJ2");
         return;
     }
 
     serial_printf("Triggering auto-calibration for IDAC%u...\r\n", ch);
-    Command ccmd;
-    ccmd.type = CMD_IDAC_CALIBRATE;
-    ccmd.idacCal.ch = (uint8_t)ch;
-    ccmd.idacCal.step = (uint8_t)step;
-    ccmd.idacCal.settle_ms = (uint16_t)settle;
-    sendCommand(ccmd);
-    serial_println("Calibration task started. Check serial logs for progress.");
+    if (!selftest_start_auto_calibrate((uint8_t)ch)) {
+        serial_println("Calibration start FAILED (busy/interlock/error).");
+        return;
+    }
+
+    serial_println("Calibration started. Live status follows in background:");
+    s_cal_live_report = true;
+    s_cal_last_points = 0xFF;
+    s_cal_last_print_ms = 0;
 }

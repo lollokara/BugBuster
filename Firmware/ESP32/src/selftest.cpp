@@ -13,6 +13,9 @@
 #include "pca9535.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_attr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 
 #include <string.h>
 #include <math.h>
@@ -29,7 +32,14 @@ static SelftestBootResult    s_boot_result   = {};
 static SelftestEfuseCurrents s_efuse_curr   = {};
 static SelftestSupplyVoltages s_supply_volt  = {};
 static SelftestCalResult     s_cal_result   = {};
+static SelftestCalResult     s_cal_result_snapshot = {};
 static bool                  s_initialized  = false;
+static TaskHandle_t          s_cal_task     = NULL;
+static portMUX_TYPE          s_cal_lock = portMUX_INITIALIZER_UNLOCKED;
+static constexpr uint32_t    CAL_TRACE_MAGIC = 0xC411B007u;
+static RTC_DATA_ATTR SelftestCalTrace s_cal_trace_rtc = {};
+
+static constexpr uint8_t CAL_EXPECTED_POINTS = 100;
 
 // Non-blocking monitor state machine
 // Cycles: EFUSE1 → EFUSE2 → EFUSE3 → EFUSE4 → VADJ1 → VADJ2 → 3V3_ADJ → repeat
@@ -47,9 +57,9 @@ static const uint8_t EFUSE_IMON_SW[5] = {
 
 // U23 switch masks for each supply rail
 static const uint8_t RAIL_SW[SELFTEST_RAIL_COUNT] = {
-    U23_SW_VADJ1,           // VADJ1 → S6 (bit 5)
-    U23_SW_VADJ2,           // VADJ2 → S7 (bit 6)
-    U23_SW_3V3_ADJ,         // 3V3_ADJ → S8 (bit 7)
+    U23_SW_VADJ1,           // VADJ1 → S7 (bit 6)
+    U23_SW_VADJ2,           // VADJ2 → S8 (bit 7)
+    U23_SW_3V3_ADJ,         // 3V3_ADJ → S6 (bit 5)
 };
 
 // Whether each rail has a voltage divider and its correction factor
@@ -75,36 +85,42 @@ static float read_channel_d(uint8_t adc_range)
     AD74416H *dev = tasks_get_device();
     if (!dev) return -1.0f;
 
-    // Configure Ch D as VIN with the requested range
-    dev->setChannelFunction(3, CH_FUNC_VIN);
+    // Configure Ch D as VIN with the requested range and ensure conversion
+    // sequence includes channel D (tasks_apply_channel_function rebuilds chMask).
+    tasks_apply_channel_function(3, CH_FUNC_VIN);
     dev->configureAdc(3,
                       ADC_MUX_LF_TO_AGND,
                       (AdcRange)adc_range,
                       ADC_RATE_200SPS_H);
 
-    // Wait for ADC to produce a valid reading (need at least 2 conversion cycles)
-    delay_ms(50);
+    // DCDC output + divider node settle time before sampling.
+    delay_ms(200);
 
-    // Read the ADC value
-    uint32_t raw = 0;
-    dev->readAdcResult(3, &raw);
-
-    // Convert raw to voltage based on range
-    float voltage = 0.0f;
-    switch (adc_range) {
-        case 0: // V_0_12
-            voltage = (float)raw / 16777216.0f * 12.0f;
-            break;
-        case 5: // V_0_625MV
-            voltage = (float)raw / 16777216.0f * 0.625f;
-            break;
-        default:
-            voltage = (float)raw / 16777216.0f * 12.0f;
-            break;
+    // Take 5 readings and use median to reject transients.
+    float samples[5] = {0};
+    for (int i = 0; i < 5; i++) {
+        uint32_t raw = 0;
+        if (!dev->readAdcResult(3, &raw)) {
+            tasks_apply_channel_function(3, CH_FUNC_HIGH_IMP);
+            return -1.0f;
+        }
+        samples[i] = dev->adcCodeToVoltage(raw, (AdcRange)adc_range);
+        delay_ms(40);
     }
+    // Insertion sort (N=5) then take median.
+    for (int i = 1; i < 5; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) {
+            samples[j + 1] = samples[j];
+            j--;
+        }
+        samples[j + 1] = key;
+    }
+    float voltage = samples[2];
 
     // Return Ch D to HIGH_IMP
-    dev->setChannelFunction(3, CH_FUNC_HIGH_IMP);
+    tasks_apply_channel_function(3, CH_FUNC_HIGH_IMP);
 
     return voltage;
 }
@@ -132,6 +148,20 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     return v;
 }
 
+static void selftest_auto_cal_task(void *arg);
+static void selftest_run_auto_calibrate(uint8_t idac_channel);
+
+static void cal_trace_update(uint8_t stage, uint8_t ch, uint8_t point, int8_t code, float measured_v, bool active)
+{
+    s_cal_trace_rtc.magic = CAL_TRACE_MAGIC;
+    s_cal_trace_rtc.stage = stage;
+    s_cal_trace_rtc.channel = ch;
+    s_cal_trace_rtc.point = point;
+    s_cal_trace_rtc.code = code;
+    s_cal_trace_rtc.measured_mv = (int32_t)(measured_v * 1000.0f);
+    s_cal_trace_rtc.active = active ? 1 : 0;
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -150,6 +180,11 @@ void selftest_init(void)
     s_efuse_curr.available = false;
     s_supply_volt.available = false;
     s_cal_result.status = CAL_STATUS_IDLE;
+    s_cal_result.last_measured_v = -1.0f;
+    s_cal_result_snapshot = s_cal_result;
+    if (s_cal_trace_rtc.magic != CAL_TRACE_MAGIC) {
+        selftest_clear_cal_trace();
+    }
     s_initialized = true;
 
     ESP_LOGI(TAG, "Self-test module initialized (U23 at device index %d)", ADGS_SELFTEST_DEV);
@@ -157,6 +192,10 @@ void selftest_init(void)
 
 const SelftestBootResult* selftest_boot_check(void)
 {
+    if (s_boot_result.ran) {
+        return &s_boot_result;
+    }
+
     ESP_LOGI(TAG, "Running boot self-test...");
     s_boot_result.ran = true;
     s_boot_result.passed = true;
@@ -189,6 +228,11 @@ const SelftestBootResult* selftest_boot_check(void)
     }
 
     ESP_LOGI(TAG, "Boot self-test %s", s_boot_result.passed ? "PASSED" : "FAILED");
+    return &s_boot_result;
+}
+
+const SelftestBootResult* selftest_get_boot_result(void)
+{
     return &s_boot_result;
 }
 
@@ -239,6 +283,9 @@ void selftest_monitor_step(void)
 {
     // Don't run if calibration is active or U17 S2 is closed
     if (s_cal_result.status == CAL_STATUS_RUNNING) return;
+    // If U23 is manually active (e.g. CLI Signal tab debug), do not touch it.
+    // Monitor measurements route through U23 and would otherwise clear user state.
+    if (adgs_selftest_active()) return;
 
     if (adgs_u17_s2_active()) {
         s_efuse_curr.available = false;
@@ -307,7 +354,7 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         return false;
     }
 
-    if (s_cal_result.status == CAL_STATUS_RUNNING) {
+    if (s_cal_result.status == CAL_STATUS_RUNNING || s_cal_task != NULL) {
         ESP_LOGW(TAG, "Calibration already running");
         return false;
     }
@@ -324,15 +371,99 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         }
     }
 
-    ESP_LOGI(TAG, "Starting auto-calibration for IDAC channel %d", idac_channel);
+    ESP_LOGI(TAG, "Queueing auto-calibration for IDAC channel %d", idac_channel);
+    taskENTER_CRITICAL(&s_cal_lock);
     s_cal_result.status = CAL_STATUS_RUNNING;
     s_cal_result.channel = idac_channel;
     s_cal_result.points_collected = 0;
+    s_cal_result.last_measured_v = -1.0f;
     s_cal_result.error_mv = 0;
+    taskEXIT_CRITICAL(&s_cal_lock);
+    cal_trace_update(1, idac_channel, 0, 0, -1.0f, true);
+
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        selftest_auto_cal_task,
+        "selftest_cal",
+        6144,
+        (void *)(uintptr_t)idac_channel,
+        2,
+        &s_cal_task,
+        1
+    );
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "Failed to spawn auto-calibration task");
+        taskENTER_CRITICAL(&s_cal_lock);
+        s_cal_result.status = CAL_STATUS_FAILED;
+        taskEXIT_CRITICAL(&s_cal_lock);
+        cal_trace_update(7, idac_channel, 0, 0, -1.0f, false);
+        s_cal_task = NULL;
+        return false;
+    }
+
+    return true;
+}
+
+static void selftest_auto_cal_task(void *arg)
+{
+    const uint8_t idac_channel = (uint8_t)(uintptr_t)arg;
+    selftest_run_auto_calibrate(idac_channel);
+    s_cal_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void selftest_run_auto_calibrate(uint8_t idac_channel)
+{
+    ESP_LOGI(TAG, "Starting auto-calibration worker for IDAC channel %d", idac_channel);
+    cal_trace_update(2, idac_channel, 0, 0, -1.0f, true);
+
+    // Determine target rail for this calibration channel
+    uint8_t rail;
+    if (idac_channel == 0)      rail = SELFTEST_RAIL_3V3_ADJ;  // VLOGIC
+    else if (idac_channel == 1) rail = SELFTEST_RAIL_VADJ1;
+    else                        rail = SELFTEST_RAIL_VADJ2;
+
+    // Track supply state so we can restore it after calibration.
+    bool rail_was_on = true;
+    bool rail_toggled = false;
+    PcaControl rail_ctrl = PCA_CTRL_15V_EN;  // placeholder; only used when rail_needs_enable=true
+    const bool rail_needs_enable =
+        (rail == SELFTEST_RAIL_VADJ1) || (rail == SELFTEST_RAIL_VADJ2);
+
+    if (rail_needs_enable) {
+        const PCA9535State *pca = pca9535_get_state();
+        if (!pca || !pca->present) {
+            ESP_LOGE(TAG, "Cannot calibrate rail %u: PCA9535 state unavailable", rail);
+            taskENTER_CRITICAL(&s_cal_lock);
+            s_cal_result.status = CAL_STATUS_FAILED;
+            taskEXIT_CRITICAL(&s_cal_lock);
+            cal_trace_update(7, idac_channel, 0, 0, -1.0f, false);
+            return;
+        }
+
+        if (rail == SELFTEST_RAIL_VADJ1) {
+            rail_was_on = pca->vadj1_en;
+            rail_ctrl = PCA_CTRL_VADJ1_EN;
+        } else {
+            rail_was_on = pca->vadj2_en;
+            rail_ctrl = PCA_CTRL_VADJ2_EN;
+        }
+
+        if (!rail_was_on) {
+            ESP_LOGI(TAG, "  Enabling target supply rail before calibration");
+            if (!pca9535_set_control(rail_ctrl, true)) {
+                ESP_LOGE(TAG, "Failed to enable target supply rail");
+                taskENTER_CRITICAL(&s_cal_lock);
+                s_cal_result.status = CAL_STATUS_FAILED;
+                taskEXIT_CRITICAL(&s_cal_lock);
+                cal_trace_update(7, idac_channel, 0, 0, -1.0f, false);
+                return;
+            }
+            rail_toggled = true;
+            delay_ms(120);  // allow regulator and divider node to settle
+        }
+    }
 
     // ── Safety: disable level shifter OE and all e-fuses during calibration ──
-    // This prevents any signal from reaching the physical terminals while we
-    // manipulate the DCDC voltage across its full range.
     ESP_LOGI(TAG, "  Safety: disabling level shifter OE and all e-fuses");
     pin_write(PIN_LSHIFT_OE, 0);  // level shifter OFF
 
@@ -348,52 +479,89 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
     }
     delay_ms(50);  // let e-fuses discharge
 
-    // Determine which U23 switch to use for this IDAC channel
-    uint8_t rail;
-    if (idac_channel == 0)      rail = SELFTEST_RAIL_3V3_ADJ;  // VLOGIC
-    else if (idac_channel == 1) rail = SELFTEST_RAIL_VADJ1;
-    else                        rail = SELFTEST_RAIL_VADJ2;
-
     // Clear existing calibration for this channel
     ds4424_cal_clear(idac_channel);
 
-    // Sweep IDAC codes from -100 to +100 in steps of 20
-    // At each step: set code → wait for DCDC to settle → measure via U23
-    const int8_t codes[] = { -100, -80, -60, -40, -20, 0, 20, 40, 60, 80, 100 };
-    const int num_codes = sizeof(codes) / sizeof(codes[0]);
+    // Sweep order (requested):
+    // 1) Start at DAC=0, move negative until top rail region.
+    // 2) Return to DAC=0 and soak.
+    // 3) Move positive to the lower rail region.
+    // Total points kept at 100.
+    const int neg_points = CAL_EXPECTED_POINTS / 2;   // 50
+    const int pos_points = CAL_EXPECTED_POINTS - neg_points; // 50
+    // VLOGIC (IDAC0) should span full DAC code magnitude (127).
+    // VADJ channels keep ±100 span as previously requested.
+    const int sweep_code_limit = (idac_channel == 0) ? 127 : 100;
 
-    float target_v = 8.0f;
+    // Rail-specific clamp thresholds requested by user:
+    // - VADJ rails: stop at 15V high / 3V low
+    // - VLOGIC:     stop at 5V high / 1.8V low
+    float stop_high_v = 15.0f;
+    float stop_low_v  = 3.0f;
+    if (rail == SELFTEST_RAIL_3V3_ADJ) {
+        stop_high_v = 5.0f;
+        stop_low_v  = 1.8f;
+    }
+    // Verify near midpoint of the permitted span.
+    float target_v = 0.5f * (stop_high_v + stop_low_v);
     float verify_v = -1.0f;
 
-    for (int i = 0; i < num_codes; i++) {
-        int8_t code = codes[i];
+    int point_idx = 0;
 
-        // Set IDAC code
+    auto add_cal_point = [&](int8_t code) -> bool {
+        cal_trace_update(3, idac_channel, (uint8_t)point_idx, code, -1.0f, true);
         ds4424_set_code(idac_channel, code);
-        delay_ms(300);  // wait for DCDC output to settle
+        delay_ms(200);  // extra settle before median sampling
 
-        // Measure actual voltage via U23
         float measured_v = selftest_measure_supply(rail);
         if (measured_v < 0) {
             ESP_LOGE(TAG, "  Cal point code=%d: measurement failed", code);
+            taskENTER_CRITICAL(&s_cal_lock);
             s_cal_result.status = CAL_STATUS_FAILED;
+            taskEXIT_CRITICAL(&s_cal_lock);
+            cal_trace_update(7, idac_channel, (uint8_t)point_idx, code, measured_v, false);
             ds4424_set_code(idac_channel, 0);
-            // Restore safety state
-            goto restore;
+            return false;
         }
 
         ESP_LOGI(TAG, "  Cal point: code=%+4d → %.4f V", code, measured_v);
-
-        // Add calibration point
         ds4424_cal_add_point(idac_channel, code, measured_v);
-        s_cal_result.points_collected++;
+        point_idx++;
+        taskENTER_CRITICAL(&s_cal_lock);
+        s_cal_result.points_collected = (uint8_t)point_idx;
+        s_cal_result.last_measured_v = measured_v;
+        taskEXIT_CRITICAL(&s_cal_lock);
+        cal_trace_update(4, idac_channel, (uint8_t)point_idx, code, measured_v, true);
+        return true;
+    };
+
+    // Phase 1: start from 0 and sweep negative.
+    for (int i = 0; i < neg_points; i++) {
+        int code_i = -(sweep_code_limit * i) / (neg_points - 1);  // 0 .. -limit
+        if (!add_cal_point((int8_t)code_i)) goto restore;
+        if (s_cal_result.last_measured_v >= stop_high_v) {
+            ESP_LOGI(TAG, "  Reached high stop %.2fV at code=%d", stop_high_v, code_i);
+            break;
+        }
     }
 
-    // Return IDAC to code 0 (nominal)
+    // Phase 2: return to midpoint and let DCDC settle deeply.
+    ds4424_set_code(idac_channel, 0);
+    delay_ms(10000);
+
+    // Phase 3: sweep positive (exclude zero duplicate, end at +100).
+    for (int i = 1; i <= pos_points; i++) {
+        int code_i = (sweep_code_limit * i) / pos_points;  // +..+limit for 50 points
+        if (!add_cal_point((int8_t)code_i)) goto restore;
+        if (s_cal_result.last_measured_v <= stop_low_v) {
+            ESP_LOGI(TAG, "  Reached low stop %.2fV at code=%d", stop_low_v, code_i);
+            break;
+        }
+    }
+
     ds4424_set_code(idac_channel, 0);
     delay_ms(100);
 
-    // Verify: set to a test voltage and compare
     ds4424_set_voltage(idac_channel, target_v);
     delay_ms(300);
     verify_v = selftest_measure_supply(rail);
@@ -405,16 +573,19 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
                  target_v, verify_v, s_cal_result.error_mv);
     }
 
-    // Save calibration to NVS
     ds4424_cal_save();
 
+    taskENTER_CRITICAL(&s_cal_lock);
     s_cal_result.status = CAL_STATUS_SUCCESS;
+    s_cal_result.points_collected = (uint8_t)point_idx;
+    taskEXIT_CRITICAL(&s_cal_lock);
+    cal_trace_update(9, idac_channel, (uint8_t)point_idx, 0, verify_v, false);
     ESP_LOGI(TAG, "Auto-calibration complete for IDAC ch%d (%d points, error=%.1f mV)",
              idac_channel, s_cal_result.points_collected, s_cal_result.error_mv);
 
 restore:
-    // ── Restore safety state: re-enable level shifter OE and e-fuses ──
-    ESP_LOGI(TAG, "  Restoring level shifter OE and e-fuses");
+    cal_trace_update(8, idac_channel, (uint8_t)point_idx, ds4424_get_code(idac_channel), s_cal_result.last_measured_v, false);
+    ESP_LOGI(TAG, "  Restoring level shifter OE, e-fuses, and temporary supply state");
     pin_write(PIN_LSHIFT_OE, 1);  // level shifter back ON
     if (pca_before && pca_before->present) {
         for (int i = 0; i < 4; i++) {
@@ -423,18 +594,33 @@ restore:
             }
         }
     }
-
-    return s_cal_result.status == CAL_STATUS_SUCCESS;
+    if (rail_toggled) {
+        pca9535_set_control(rail_ctrl, false);
+    }
 }
 
 const SelftestCalResult* selftest_get_cal_result(void)
 {
-    return &s_cal_result;
+    taskENTER_CRITICAL(&s_cal_lock);
+    s_cal_result_snapshot = s_cal_result;
+    taskEXIT_CRITICAL(&s_cal_lock);
+    return &s_cal_result_snapshot;
+}
+
+const SelftestCalTrace* selftest_get_cal_trace(void)
+{
+    return &s_cal_trace_rtc;
+}
+
+void selftest_clear_cal_trace(void)
+{
+    memset(&s_cal_trace_rtc, 0, sizeof(s_cal_trace_rtc));
+    s_cal_trace_rtc.magic = CAL_TRACE_MAGIC;
 }
 
 bool selftest_is_busy(void)
 {
-    return s_cal_result.status == CAL_STATUS_RUNNING || adgs_selftest_active();
+    return s_cal_result.status == CAL_STATUS_RUNNING || s_cal_task != NULL || adgs_selftest_active();
 }
 
 #endif // ADGS_HAS_SELFTEST
@@ -557,6 +743,11 @@ const SelftestBootResult* selftest_boot_check(void) {
     return &dummy;
 }
 
+const SelftestBootResult* selftest_get_boot_result(void) {
+    static SelftestBootResult dummy = { false, false, -1, -1, -1 };
+    return &dummy;
+}
+
 float selftest_measure_supply(uint8_t rail)         { return -1.0f; }
 float selftest_measure_efuse_current(uint8_t efuse)  { return -1.0f; }
 
@@ -580,6 +771,13 @@ const SelftestCalResult* selftest_get_cal_result(void) {
     static SelftestCalResult dummy = {};
     return &dummy;
 }
+
+const SelftestCalTrace* selftest_get_cal_trace(void) {
+    static SelftestCalTrace dummy = {};
+    return &dummy;
+}
+
+void selftest_clear_cal_trace(void) {}
 
 bool selftest_is_busy(void) { return false; }
 

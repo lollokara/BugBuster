@@ -433,7 +433,11 @@ pub fn send_usbpd_select_pdo(voltage: u8) {
         voltage: u8,
     }
     let args = serde_wasm_bindgen::to_value(&Args { voltage }).unwrap();
-    let label = format!("Select USB PD {}V", voltage);
+    let voltage_v = match voltage {
+        1 => 5, 2 => 9, 3 => 12, 4 => 15, 5 => 18, 6 => 20,
+        _ => voltage as i32,
+    };
+    let label = format!("Select USB PD {}V", voltage_v);
     invoke_with_feedback("usbpd_select_pdo", args, &label);
 }
 

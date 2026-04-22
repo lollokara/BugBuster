@@ -32,6 +32,7 @@
 #include "auth.h"
 #include "board_profile.h"
 #include "esp_ota_ops.h"
+#include "esp_system.h"
 
 // -----------------------------------------------------------------------------
 // Global objects
@@ -142,11 +143,16 @@ extern "C" void app_main(void)
     breathe_for(500);  // breathing animation during USB enumeration wait
     serial_init();
     serial_println("\n[BugBuster] Booting (ESP-IDF)...");
+    esp_reset_reason_t rr = esp_reset_reason();
+    serial_printf("[BugBuster] Reset reason: %d\r\n", (int)rr);
 
     // 2. RESET pin HIGH immediately
     pin_mode_output(PIN_RESET);
     pin_write(PIN_RESET, 1);
     serial_println("[BugBuster] RESET pin HIGH");
+    serial_printf("[BugBuster] Build map: BREADBOARD_MODE=%d, SPI SDI=%d SDO=%d SCLK=%d CS_ADC=%d CS_MUX=%d\r\n",
+                  (int)BREADBOARD_MODE, (int)PIN_SDI, (int)PIN_SDO, (int)PIN_SCLK,
+                  (int)PIN_SYNC, (int)PIN_MUX_CS);
 
     // 3. ALERT and ADC_RDY pins
     pin_mode_input_pullup(PIN_ALERT);
@@ -187,44 +193,7 @@ extern "C" void app_main(void)
         }
     }
 
-    // 7. AD74416H device init
-    serial_println("[BugBuster] Initialising AD74416H...");
-    bool spiOk = device.begin();
-    serial_printf("[BugBuster] AD74416H SPI: %s\r\n", spiOk ? "OK" : "VERIFY FAILED");
-    g_deviceState.spiOk = spiOk;
-
-    // Confirm OTA image is valid — if this is a new firmware via OTA and it reached
-    // here successfully, mark it as good. If the firmware crashes before this point,
-    // the bootloader will automatically roll back to the previous partition.
-    esp_ota_mark_app_valid_cancel_rollback();
-
-    // 7. Diagnostics setup
-    device.setupDiagnostics();
-
-    // 8. ADC: start with diagnostics only (no channels - all HIGH_IMP)
-    device.startAdcConversion(true, 0x00, 0x0F);
-    serial_println("[BugBuster] ADC continuous (diag only)");
-
-    // 9. MUX switch matrix — MUST init BEFORE starting RTOS tasks
-    //    (the ADC poll task uses the SPI bus continuously; MUX init needs
-    //     exclusive SPI access for the first write-verify to succeed)
-    adgs_init();
-    serial_println("[BugBuster] MUX matrix initialized");
-
-    // 9a. Digital IO (ESP32 GPIO-based, 12 logical IOs)
-    dio_init();
-    serial_println("[BugBuster] Digital IO initialized");
-
-    // 9b. Self-test / calibration module
-    selftest_init();
-    serial_println("[BugBuster] Self-test module initialized");
-
-    // 10. FreeRTOS tasks — starts ADC poll, fault monitor, command processor
-    //     (after MUX init so SPI bus sharing works correctly)
-    initTasks(device);
-    serial_println("[BugBuster] RTOS tasks started");
-
-    // 10b. I2C bus and devices (non-blocking: won't prevent boot if absent)
+    // 7. I2C bus and devices (non-blocking: won't prevent boot if absent)
     serial_println("[BugBuster] Initializing I2C bus...");
     if (i2c_bus_init()) {
         serial_println("[BugBuster] I2C bus OK (SDA=42 SCL=41)");
@@ -250,8 +219,16 @@ extern "C" void app_main(void)
             serial_println("[BugBuster] HUSB238 USB-PD: NOT FOUND (0x08)");
         }
 
-        // PCA9535 GPIO Expander
-        if (pca9535_init()) {
+        // PCA9535 GPIO Expander (supply enables)
+        bool pca_ok = false;
+        for (int attempt = 1; attempt <= 5 && !pca_ok; attempt++) {
+            pca_ok = pca9535_init();
+            if (!pca_ok) {
+                serial_printf("[BugBuster] PCA9535 init attempt %d/5 failed\r\n", attempt);
+                delay_ms(120);
+            }
+        }
+        if (pca_ok) {
             serial_println("[BugBuster] PCA9535 IO Exp: OK (0x23)");
             pca9535_install_isr();
             pca9535_register_fault_callback(pca_fault_handler);
@@ -262,6 +239,50 @@ extern "C" void app_main(void)
         serial_println("[BugBuster] I2C bus FAILED");
         g_deviceState.i2cOk = false;
     }
+
+    // 8. Reset AD74416H AFTER supply enables are configured.
+    // Required by PCB bring-up: hold RESET low 100 ms, then release high.
+    pin_write(PIN_RESET, 0);
+    delay_ms(100);
+    pin_write(PIN_RESET, 1);
+    serial_println("[BugBuster] AD74416H RESET pulse done (LOW 100 ms -> HIGH)");
+
+    // 9. AD74416H device init (after supply bring-up and reset pulse)
+    serial_println("[BugBuster] Initialising AD74416H...");
+    bool spiOk = device.begin();
+    serial_printf("[BugBuster] AD74416H SPI: %s\r\n", spiOk ? "OK" : "VERIFY FAILED");
+    g_deviceState.spiOk = spiOk;
+
+    // Confirm OTA image is valid — if this is a new firmware via OTA and it reached
+    // here successfully, mark it as good. If the firmware crashes before this point,
+    // the bootloader will automatically roll back to the previous partition.
+    esp_ota_mark_app_valid_cancel_rollback();
+
+    // 10. Diagnostics setup
+    device.setupDiagnostics();
+
+    // 11. ADC: start with diagnostics only (no channels - all HIGH_IMP)
+    device.startAdcConversion(true, 0x00, 0x0F);
+    serial_println("[BugBuster] ADC continuous (diag only)");
+
+    // 12. MUX switch matrix — MUST init BEFORE starting RTOS tasks
+    //     (the ADC poll task uses the SPI bus continuously; MUX init needs
+    //      exclusive SPI access for the first write-verify to succeed)
+    adgs_init();
+    serial_println("[BugBuster] MUX matrix initialized");
+
+    // 12a. Digital IO (ESP32 GPIO-based, 12 logical IOs)
+    dio_init();
+    serial_println("[BugBuster] Digital IO initialized");
+
+    // 12b. Self-test / calibration module
+    selftest_init();
+    serial_println("[BugBuster] Self-test module initialized");
+
+    // 13. FreeRTOS tasks — starts ADC poll, fault monitor, command processor
+    //     (after MUX init so SPI bus sharing works correctly)
+    initTasks(device);
+    serial_println("[BugBuster] RTOS tasks started");
 
     // HAT expansion board (PCB mode only — GPIO47 ADC detect + UART0 on GPIO43/44)
     if (hat_init()) {
@@ -277,22 +298,22 @@ extern "C" void app_main(void)
         }
     }
 
-    // 11. UART bridge (CDC #1+ ↔ UART)
+    // 14. UART bridge (CDC #1+ ↔ UART)
     uart_bridge_init();
     uart_bridge_start();
     serial_println("[BugBuster] UART bridge started");
 
-    // 11. Web server
+    // 15. Web server
     initWebServer();
     serial_println("[BugBuster] Web server on port 80");
 
-    // 12. CLI + BBP
+    // 16. CLI + BBP
     cliInit(device);
     bbpInit(&device, &spiDriver);
     serial_println("[BugBuster] CLI ready. Type 'help'.");
     serial_println("[BugBuster] BBP ready (binary protocol on CDC #0).");
     serial_println("[BugBuster] Boot complete.");
 
-    // 13. Main loop task (CLI/BBP + heartbeat)
+    // 17. Main loop task (CLI/BBP + heartbeat)
     xTaskCreatePinnedToCore(mainLoopTask, "mainLoop", 8192, NULL, 1, NULL, 0);
 }

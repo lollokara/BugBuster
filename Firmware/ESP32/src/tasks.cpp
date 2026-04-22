@@ -8,6 +8,7 @@
 #include "husb238.h"
 #include "pca9535.h"
 #include "hat.h"
+#include "adgs2414d.h"   // PCB mode uses adgs_get_selftest / adgs_set_selftest (ADGS_HAS_SELFTEST=1)
 #include "esp_timer.h"
 #include "esp_log.h"
 #include <math.h>
