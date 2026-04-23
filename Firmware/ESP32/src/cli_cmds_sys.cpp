@@ -404,60 +404,77 @@ extern "C" void cli_cmd_pca(const char* args)
 }
 
 // ---------------------------------------------------------------------------
-// E-fuse current monitor (via U23 self-test path)
+// Supply rail cached monitor
 // ---------------------------------------------------------------------------
 
-extern "C" void cli_cmd_efuse_current(const char* args)
+extern "C" void cli_cmd_supplies(const char* args)
+{
+    (void)args;
+
+    static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
+
+    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
+    serial_println("\r\n--- Supply Voltages (cached monitor) ---");
+    serial_printf("  available=%s  timestamp=%lu ms\r\n",
+                  sv->available ? "YES" : "NO",
+                  (unsigned long)sv->timestamp_ms);
+    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
+        float v = sv->voltage[i];
+        if (v >= 0.0f) {
+            serial_printf("  %s: %.3f V\r\n", rail_names[i], v);
+        } else {
+            serial_printf("  %s: disabled\r\n", rail_names[i]);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Selftest service controls
+// ---------------------------------------------------------------------------
+
+extern "C" void cli_cmd_selftest(const char* args)
 {
     while (args && *args == ' ') args++;
 
-    // Cached background monitor view (non-intrusive)
-    if (args && strcmp(args, "cached") == 0) {
-        const SelftestEfuseCurrents *ec = selftest_get_efuse_currents();
-        serial_println("\r\n--- E-Fuse Currents (cached monitor) ---");
-        serial_printf("  available=%s  timestamp=%lu ms\r\n",
-                      ec->available ? "YES" : "NO",
-                      (unsigned long)ec->timestamp_ms);
-        for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++) {
-            float a = ec->current_a[i];
-            if (a >= 0.0f) {
-                serial_printf("  EFUSE%d: %.4f A (%.1f mA)\r\n", i + 1, a, a * 1000.0f);
-            } else {
-                serial_printf("  EFUSE%d: inactive/unavailable\r\n", i + 1);
-            }
+    if (!args || !*args) {
+        serial_printf("Selftest worker: %s\r\n",
+                      selftest_worker_enabled() ? "ON" : "off");
+        serial_printf("Supply monitor active: %s\r\n",
+                      selftest_is_supply_monitor_active() ? "YES" : "no");
+        serial_println("Usage: selftest worker [on|off]");
+        return;
+    }
+
+    char sub[16] = {};
+    char value[16] = {};
+    int fields = sscanf(args, "%15s %15s", sub, value);
+    if (fields >= 1 && strcmp(sub, "worker") == 0) {
+        if (fields == 1) {
+            serial_printf("Selftest worker: %s\r\n",
+                          selftest_worker_enabled() ? "ON" : "off");
+            serial_println("Usage: selftest worker [on|off]");
+            return;
+        }
+
+        bool enable = false;
+        if (strcmp(value, "on") == 0 || strcmp(value, "1") == 0) {
+            enable = true;
+        } else if (strcmp(value, "off") == 0 || strcmp(value, "0") == 0) {
+            enable = false;
+        } else {
+            serial_println("Usage: selftest worker [on|off]");
+            return;
+        }
+
+        if (selftest_set_worker_enabled(enable)) {
+            serial_printf("Selftest worker %s\r\n", enable ? "enabled" : "disabled");
+        } else {
+            serial_println("Failed to persist selftest worker state");
         }
         return;
     }
 
-    int only = 0;  // 0 = all
-    if (args && *args) {
-        unsigned int ef = 0;
-        if (sscanf(args, "%u", &ef) != 1 || ef < 1 || ef > 4) {
-            serial_println("Usage: efusei [1|2|3|4|cached]");
-            serial_println("  efusei         Directly measure all 4 e-fuse currents");
-            serial_println("  efusei <n>     Directly measure one e-fuse current");
-            serial_println("  efusei cached  Show cached background monitor values");
-            return;
-        }
-        only = (int)ef;
-    }
-
-    serial_println("\r\n--- E-Fuse Currents (direct U23 measurement) ---");
-    serial_println("  Note: uses U23 self-test path; IO10 analog interlock must be open.");
-    bool any_ok = false;
-    for (int ef = 1; ef <= 4; ef++) {
-        if (only && ef != only) continue;
-        float a = selftest_measure_efuse_current((uint8_t)ef);
-        if (a >= 0.0f) {
-            serial_printf("  EFUSE%d: %.4f A (%.1f mA)\r\n", ef, a, a * 1000.0f);
-            any_ok = true;
-        } else {
-            serial_printf("  EFUSE%d: unavailable (interlock / measurement blocked)\r\n", ef);
-        }
-    }
-    if (!any_ok) {
-        serial_println("  Hint: ensure U17 S2 (IO10 analog path) is open and e-fuse is enabled.");
-    }
+    serial_println("Usage: selftest worker [on|off]");
 }
 
 // ---------------------------------------------------------------------------

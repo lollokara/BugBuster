@@ -1,7 +1,7 @@
 // =============================================================================
-// selftest.cpp - Self-Test, Calibration, and E-fuse Current Monitoring
+// selftest.cpp - Self-Test, Calibration, and Supply Rail Monitoring
 //
-// Uses U23 (5th ADGS2414D) to route VADJ / IMON / 3V3_ADJ to Channel D.
+// Uses U23 (5th ADGS2414D) to route VADJ / 3V3_ADJ to Channel D.
 // See selftest.h for the public API and config.h for switch definitions.
 // =============================================================================
 
@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 
@@ -29,7 +30,6 @@ static const char *TAG = "selftest";
 // -----------------------------------------------------------------------------
 
 static SelftestBootResult    s_boot_result   = {};
-static SelftestEfuseCurrents s_efuse_curr   = {};
 static SelftestSupplyVoltages s_supply_volt  = {};
 static SelftestCalResult     s_cal_result   = {};
 static SelftestCalResult     s_cal_result_snapshot = {};
@@ -38,22 +38,16 @@ static TaskHandle_t          s_cal_task     = NULL;
 static portMUX_TYPE          s_cal_lock = portMUX_INITIALIZER_UNLOCKED;
 static constexpr uint32_t    CAL_TRACE_MAGIC = 0xC411B007u;
 static RTC_DATA_ATTR SelftestCalTrace s_cal_trace_rtc = {};
+static bool                  s_worker_enabled = false;
 
 static constexpr uint8_t CAL_EXPECTED_POINTS = 100;
+static constexpr const char *SELFTEST_NVS_NAMESPACE = "selftest";
+static constexpr const char *SELFTEST_NVS_WORKER_EN = "st_worker_en";
 
 // Non-blocking monitor state machine
-// Cycles: EFUSE1 → EFUSE2 → EFUSE3 → EFUSE4 → VADJ1 → VADJ2 → 3V3_ADJ → repeat
-static uint8_t s_monitor_idx = 0;  // 0-3 = efuse, 4-6 = supply rail
-#define MONITOR_TOTAL_CHANNELS  7  // 4 efuses + 3 supply rails
-
-// U23 switch masks for each e-fuse IMON pin
-static const uint8_t EFUSE_IMON_SW[5] = {
-    0,                      // index 0 unused (e-fuses are 1-based)
-    U23_SW_EFUSE1_IMON,     // efuse 1 → S2 (bit 1)
-    U23_SW_EFUSE2_IMON,     // efuse 2 → S3 (bit 2)
-    U23_SW_EFUSE3_IMON,     // efuse 3 → S1 (bit 0)
-    U23_SW_EFUSE4_IMON,     // efuse 4 → S5 (bit 4)
-};
+// Cycles: VADJ1 → VADJ2 → 3V3_ADJ → repeat
+static uint8_t s_monitor_idx = 0;  // 0=VADJ1, 1=VADJ2, 2=3V3_ADJ
+#define MONITOR_TOTAL_CHANNELS  3  // 3 supply rails
 
 // U23 switch masks for each supply rail
 static const uint8_t RAIL_SW[SELFTEST_RAIL_COUNT] = {
@@ -68,6 +62,11 @@ static const float RAIL_CORRECTION[SELFTEST_RAIL_COUNT] = {
     1.0f / VADJ_DIVIDER_RATIO,  // VADJ2: same divider
     1.0f,                        // 3V3_ADJ: direct, no divider
 };
+
+static constexpr int CAL_STABLE_SAMPLE_COUNT = 5;
+static constexpr int CAL_STABLE_SETTLE_EXTRA_MS = 350;
+static constexpr int CAL_STABLE_INTER_SAMPLE_MS = 30;
+static constexpr float CAL_STABLE_MAX_DEV_MV = 50.0f;
 
 // -----------------------------------------------------------------------------
 // Internal helpers
@@ -162,9 +161,20 @@ static float read_channel_d(uint8_t adc_range)
 // Returns voltage in volts, or -1 on error.
 static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
 {
-    // The measurement path: close S4 (Ch D → shared rail) + source switch
-    uint8_t sw_byte = U23_SW_ADC_CH_D | source_sw;
+    // Pre-discharge: tie Ch D to the shared rail alone (no source) so the
+    // ~10 nF on the Ch D input bleeds through R106 (1 MΩ) to GND. τ ≈ 10 ms;
+    // wait 50 ms (~5τ) so the cap is near zero before the real source closes.
+    // Prevents stored charge from a prior measurement (e.g. 6.7 V from a VADJ
+    // read via the 0.7418 divider) from being dumped into the next source's
+    // op-amp output on the next measurement path.
+    if (!adgs_set_selftest(U23_SW_ADC_CH_D)) {
+        ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S2 active?)");
+        return -1.0f;
+    }
+    delay_ms(50);
 
+    // Measurement: close S4 + source switch
+    uint8_t sw_byte = U23_SW_ADC_CH_D | source_sw;
     if (!adgs_set_selftest(sw_byte)) {
         ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S2 active?)");
         return -1.0f;
@@ -194,6 +204,114 @@ static void cal_trace_update(uint8_t stage, uint8_t ch, uint8_t point, int8_t co
     s_cal_trace_rtc.active = active ? 1 : 0;
 }
 
+static void clear_supply_monitor_cache(void)
+{
+    s_supply_volt.available = false;
+    s_supply_volt.timestamp_ms = 0;
+    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
+        s_supply_volt.voltage[i] = -1.0f;
+    }
+    s_monitor_idx = 0;
+}
+
+static bool load_worker_enabled_from_nvs(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(SELFTEST_NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        return false;
+    }
+
+    uint8_t value = 0;
+    err = nvs_get_u8(nvs, SELFTEST_NVS_WORKER_EN, &value);
+    nvs_close(nvs);
+    return (err == ESP_OK) && (value != 0);
+}
+
+static bool store_worker_enabled_to_nvs(bool enabled)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(SELFTEST_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open selftest NVS: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    err = nvs_set_u8(nvs, SELFTEST_NVS_WORKER_EN, enabled ? 1 : 0);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to persist worker state: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
+static float median5(float *samples)
+{
+    for (int i = 1; i < CAL_STABLE_SAMPLE_COUNT; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) {
+            samples[j + 1] = samples[j];
+            j--;
+        }
+        samples[j + 1] = key;
+    }
+    return samples[CAL_STABLE_SAMPLE_COUNT / 2];
+}
+
+static bool capture_supply_block(uint8_t rail, float *samples, float *dev_mv_out, float *median_out)
+{
+    float min_v = 0.0f;
+    float max_v = 0.0f;
+    for (int i = 0; i < CAL_STABLE_SAMPLE_COUNT; i++) {
+        float v = selftest_measure_supply(rail);
+        if (v < 0.0f) {
+            return false;
+        }
+        samples[i] = v;
+        if (i == 0) {
+            min_v = v;
+            max_v = v;
+        } else {
+            if (v < min_v) min_v = v;
+            if (v > max_v) max_v = v;
+        }
+        if (i < (CAL_STABLE_SAMPLE_COUNT - 1)) {
+            delay_ms(CAL_STABLE_INTER_SAMPLE_MS);
+        }
+    }
+    *dev_mv_out = (max_v - min_v) * 1000.0f;
+    *median_out = median5(samples);
+    return true;
+}
+
+static bool measure_supply_stable_for_cal(uint8_t rail, float *measured_v)
+{
+    float samples[CAL_STABLE_SAMPLE_COUNT] = {0};
+    float dev_mv = 0.0f;
+    float median_v = -1.0f;
+
+    delay_ms(CAL_STABLE_SETTLE_EXTRA_MS);
+    if (!capture_supply_block(rail, samples, &dev_mv, &median_v)) {
+        return false;
+    }
+
+    if (dev_mv > CAL_STABLE_MAX_DEV_MV) {
+        ESP_LOGW(TAG, "  Supply not stable yet (dev=%.1f mV), retrying sample block", dev_mv);
+        if (!capture_supply_block(rail, samples, &dev_mv, &median_v)) {
+            return false;
+        }
+    }
+
+    *measured_v = median_v;
+    return true;
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -201,25 +319,21 @@ static void cal_trace_update(uint8_t stage, uint8_t ch, uint8_t point, int8_t co
 void selftest_init(void)
 {
     memset(&s_boot_result, 0, sizeof(s_boot_result));
-    memset(&s_efuse_curr, 0, sizeof(s_efuse_curr));
     memset(&s_supply_volt, 0, sizeof(s_supply_volt));
     memset(&s_cal_result, 0, sizeof(s_cal_result));
 
-    for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++)
-        s_efuse_curr.current_a[i] = -1.0f;
-    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++)
-        s_supply_volt.voltage[i] = -1.0f;
-    s_efuse_curr.available = false;
-    s_supply_volt.available = false;
+    clear_supply_monitor_cache();
     s_cal_result.status = CAL_STATUS_IDLE;
     s_cal_result.last_measured_v = -1.0f;
     s_cal_result_snapshot = s_cal_result;
     if (s_cal_trace_rtc.magic != CAL_TRACE_MAGIC) {
         selftest_clear_cal_trace();
     }
+    s_worker_enabled = load_worker_enabled_from_nvs();
     s_initialized = true;
 
-    ESP_LOGI(TAG, "Self-test module initialized (U23 at device index %d)", ADGS_SELFTEST_DEV);
+    ESP_LOGI(TAG, "Self-test module initialized (U23 at device index %d, worker %s)",
+             ADGS_SELFTEST_DEV, s_worker_enabled ? "enabled" : "disabled");
 }
 
 const SelftestBootResult* selftest_boot_check(void)
@@ -280,39 +394,41 @@ float selftest_measure_supply(uint8_t rail)
     return raw_v * RAIL_CORRECTION[rail];
 }
 
-float selftest_measure_efuse_current(uint8_t efuse)
-{
-    if (efuse < 1 || efuse > SELFTEST_EFUSE_COUNT) return -1.0f;
-
-    // Check interlock
-    if (adgs_u17_s2_active()) {
-        return -1.0f;  // cannot measure while IO 10 analog is active
-    }
-
-    // Use 0-12V range — IMON voltage at 1.8A is ~990 mV, well within range
-    // (0-625mV range would clip at ~1.14A; use 0-12V for safety, less resolution is OK)
-    float v_imon = measure_via_u23(EFUSE_IMON_SW[efuse], 0 /* V_0_12 */);
-    if (v_imon < 0) return -1.0f;
-
-    // Convert IMON voltage to current: I = V / (G_IMON × R_IOCP)
-    // V_IMON = I_OUT × IMON_MV_PER_A / 1000
-    // I_OUT = V_IMON / (IMON_MV_PER_A / 1000)
-    float current_a = v_imon / (IMON_MV_PER_A / 1000.0f);
-    return current_a;
-}
-
-const SelftestEfuseCurrents* selftest_get_efuse_currents(void)
-{
-    return &s_efuse_curr;
-}
-
 const SelftestSupplyVoltages* selftest_get_supply_voltages(void)
 {
     return &s_supply_volt;
 }
 
+bool selftest_worker_enabled(void)
+{
+    return s_worker_enabled;
+}
+
+bool selftest_set_worker_enabled(bool enabled)
+{
+    bool persisted = store_worker_enabled_to_nvs(enabled);
+    if (!persisted) {
+        return false;
+    }
+
+    s_worker_enabled = enabled;
+    if (!enabled) {
+        clear_supply_monitor_cache();
+    }
+    ESP_LOGI(TAG, "Supply monitor worker %s", enabled ? "enabled" : "disabled");
+    return true;
+}
+
+bool selftest_is_supply_monitor_active(void)
+{
+    return s_worker_enabled &&
+           s_cal_result.status != CAL_STATUS_RUNNING &&
+           !adgs_u17_s2_active();
+}
+
 void selftest_monitor_step(void)
 {
+    if (!s_worker_enabled) return;
     // Don't run if calibration is active or U17 S2 is closed
     if (s_cal_result.status == CAL_STATUS_RUNNING) return;
     // If U23 is manually active (e.g. CLI Signal tab debug), do not touch it.
@@ -320,62 +436,46 @@ void selftest_monitor_step(void)
     if (adgs_selftest_active()) return;
 
     if (adgs_u17_s2_active()) {
-        s_efuse_curr.available = false;
         s_supply_volt.available = false;
-        for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++)
-            s_efuse_curr.current_a[i] = -1.0f;
         for (int i = 0; i < SELFTEST_RAIL_COUNT; i++)
             s_supply_volt.voltage[i] = -1.0f;
         return;
     }
 
-    // Each call measures ONE channel, then advances to the next.
+    // Each call measures ONE supply rail, then advances to the next.
     // The MUX dead-time between switches is handled by measure_via_u23()
     // which opens all switches, waits, then closes the new path.
-    // By measuring only one channel per call, we let the main loop run
+    // By measuring only one rail per call, we let the main loop run
     // between measurements.
 
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
-    // Get PCA9535 state to check which rails/efuses are enabled
+    // Get PCA9535 state to check which rails are enabled
     const PCA9535State *pca = pca9535_get_state();
 
-    if (s_monitor_idx < SELFTEST_EFUSE_COUNT) {
-        // Measure e-fuse current (indices 0-3 → efuse 1-4)
-        uint8_t ef = s_monitor_idx + 1;
-
-        // Skip inactive e-fuses — only measure if enabled via PCA9535
-        if (pca && pca->present && pca->efuse_en[s_monitor_idx]) {
-            float current = selftest_measure_efuse_current(ef);
-            s_efuse_curr.current_a[s_monitor_idx] = current;
-        } else {
-            s_efuse_curr.current_a[s_monitor_idx] = -1.0f;  // inactive
-        }
-        s_efuse_curr.available = true;
-        s_efuse_curr.timestamp_ms = now_ms;
+    // state 0 → VADJ1, state 1 → VADJ2, state 2 → 3V3_ADJ
+    bool should_sample = false;
+    if (s_monitor_idx == 0) {
+        // VADJ1 — only sample if enable bit is set
+        should_sample = pca && pca->present && pca->vadj1_en;
+    } else if (s_monitor_idx == 1) {
+        // VADJ2 — only sample if enable bit is set
+        should_sample = pca && pca->present && pca->vadj2_en;
     } else {
-        // Measure supply voltage (indices 4-6 → rail 0-2)
-        uint8_t rail = s_monitor_idx - SELFTEST_EFUSE_COUNT;
-
-        // Skip rails whose regulator is not enabled
-        bool rail_active = false;
-        if (pca && pca->present) {
-            if (rail == SELFTEST_RAIL_VADJ1)     rail_active = pca->vadj1_en;
-            else if (rail == SELFTEST_RAIL_VADJ2) rail_active = pca->vadj2_en;
-            else if (rail == SELFTEST_RAIL_3V3_ADJ) rail_active = true;  // always on when PCA present
-        }
-
-        if (rail_active) {
-            float voltage = selftest_measure_supply(rail);
-            s_supply_volt.voltage[rail] = voltage;
-        } else {
-            s_supply_volt.voltage[rail] = -1.0f;  // inactive
-        }
-        s_supply_volt.available = true;
-        s_supply_volt.timestamp_ms = now_ms;
+        // 3V3_ADJ / VLOGIC — always-on rail, always sample
+        should_sample = true;
     }
 
-    // Advance to next channel, wrapping around
+    if (should_sample) {
+        float v = selftest_measure_supply((uint8_t)s_monitor_idx);
+        s_supply_volt.voltage[s_monitor_idx] = v;
+    } else {
+        s_supply_volt.voltage[s_monitor_idx] = -1.0f;
+    }
+    s_supply_volt.timestamp_ms = now_ms;
+    s_supply_volt.available = true;
+
+    // Advance to next rail, wrapping around
     s_monitor_idx = (s_monitor_idx + 1) % MONITOR_TOTAL_CHANNELS;
 }
 
@@ -543,10 +643,19 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
     auto add_cal_point = [&](int8_t code) -> bool {
         cal_trace_update(3, idac_channel, (uint8_t)point_idx, code, -1.0f, true);
         ds4424_set_code(idac_channel, code);
-        delay_ms(200);  // extra settle before median sampling
+        delay_ms(200);  // baseline settle before measurement
 
-        float measured_v = selftest_measure_supply(rail);
-        if (measured_v < 0) {
+        float measured_v = -1.0f;
+        const bool is_vadj_rail =
+            (rail == SELFTEST_RAIL_VADJ1) || (rail == SELFTEST_RAIL_VADJ2);
+        bool ok = false;
+        if (is_vadj_rail) {
+            ok = measure_supply_stable_for_cal(rail, &measured_v);
+        } else {
+            measured_v = selftest_measure_supply(rail);
+            ok = measured_v >= 0.0f;
+        }
+        if (!ok) {
             ESP_LOGE(TAG, "  Cal point code=%d: measurement failed", code);
             taskENTER_CRITICAL(&s_cal_lock);
             s_cal_result.status = CAL_STATUS_FAILED;
@@ -781,14 +890,6 @@ const SelftestBootResult* selftest_get_boot_result(void) {
 }
 
 float selftest_measure_supply(uint8_t rail)         { return -1.0f; }
-float selftest_measure_efuse_current(uint8_t efuse)  { return -1.0f; }
-
-const SelftestEfuseCurrents* selftest_get_efuse_currents(void) {
-    static SelftestEfuseCurrents dummy = {};
-    for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++) dummy.current_a[i] = -1.0f;
-    dummy.available = false;
-    return &dummy;
-}
 
 const SelftestSupplyVoltages* selftest_get_supply_voltages(void) {
     static SelftestSupplyVoltages dummy = {};
@@ -796,7 +897,11 @@ const SelftestSupplyVoltages* selftest_get_supply_voltages(void) {
     dummy.available = false;
     return &dummy;
 }
+
 void selftest_monitor_step(void) {}
+bool selftest_worker_enabled(void) { return false; }
+bool selftest_set_worker_enabled(bool enabled) { (void)enabled; return false; }
+bool selftest_is_supply_monitor_active(void) { return false; }
 bool selftest_start_auto_calibrate(uint8_t ch) { return false; }
 
 const SelftestCalResult* selftest_get_cal_result(void) {

@@ -17,7 +17,12 @@ mod tests {
     // ── helpers ──────────────────────────────────────────────────────────────
 
     fn make_start() -> Result<LaStreamPacket> {
-        Ok(LaStreamPacket { kind: LaStreamPacketKind::Start, seq: 0, info: 0, payload: vec![] })
+        Ok(LaStreamPacket {
+            kind: LaStreamPacketKind::Start,
+            seq: 0,
+            info: 0,
+            payload: vec![],
+        })
     }
     fn make_data(seq: u8, payload: &[u8]) -> Result<LaStreamPacket> {
         Ok(LaStreamPacket {
@@ -28,7 +33,12 @@ mod tests {
         })
     }
     fn make_stop() -> Result<LaStreamPacket> {
-        Ok(LaStreamPacket { kind: LaStreamPacketKind::Stop, seq: 0, info: 0, payload: vec![] })
+        Ok(LaStreamPacket {
+            kind: LaStreamPacketKind::Stop,
+            seq: 0,
+            info: 0,
+            payload: vec![],
+        })
     }
 
     fn empty_store() -> Mutex<Option<LaStore>> {
@@ -71,8 +81,14 @@ mod tests {
         let reason = run_stream_loop(&mut transport, &running, &store, &status, &stream_seq);
 
         assert_eq!(reason, StreamStopReason::Normal, "Expected Normal stop");
-        assert!(!running.load(Ordering::SeqCst), "running must be false after loop");
-        assert!(!status.lock().unwrap().active, "status.active must be false after loop");
+        assert!(
+            !running.load(Ordering::SeqCst),
+            "running must be false after loop"
+        );
+        assert!(
+            !status.lock().unwrap().active,
+            "status.active must be false after loop"
+        );
         // Pass 4: run_stream_loop no longer sends any EP_OUT commands — START
         // is now routed via BBP by the caller. No commands should be sent.
         assert!(
@@ -119,8 +135,7 @@ mod tests {
         let payload = vec![0xABu8; n as usize];
         let full = [&header[..], &payload[..]].concat();
 
-        let reported_len =
-            u32::from_le_bytes(full[..4].try_into().unwrap()) as usize;
+        let reported_len = u32::from_le_bytes(full[..4].try_into().unwrap()) as usize;
         let data = &full[4..4 + reported_len];
 
         assert_eq!(reported_len, 100);
@@ -150,8 +165,14 @@ mod tests {
             StreamStopReason::UsbError(_) => {} // expected
             other => panic!("Expected UsbError, got {other:?}"),
         }
-        assert!(!running.load(Ordering::SeqCst), "running must be false after USB error");
-        assert!(!status.lock().unwrap().active, "status.active must be false after USB error");
+        assert!(
+            !running.load(Ordering::SeqCst),
+            "running must be false after USB error"
+        );
+        assert!(
+            !status.lock().unwrap().active,
+            "status.active must be false after USB error"
+        );
     }
 
     // ── test 5: teardown always runs ─────────────────────────────────────────
@@ -186,10 +207,7 @@ mod tests {
 
     #[test]
     fn test_pre_drain_consumes_stale_stop() {
-        let packets = vec![
-            make_data(3, b"stale"),
-            make_stop(),
-        ];
+        let packets = vec![make_data(3, b"stale"), make_stop()];
         let mut transport = MockLaTransport::new(packets);
 
         let res = pre_stream_drain(&mut transport);
@@ -198,20 +216,36 @@ mod tests {
             transport.commands_sent.is_empty(),
             "pre_stream_drain must not send any EP_OUT commands"
         );
-        assert!(transport.packets.is_empty(), "drain must consume all stale packets");
+        assert!(
+            transport.packets.is_empty(),
+            "drain must consume all stale packets"
+        );
     }
 
     #[test]
     fn test_pre_drain_consumes_mixed_stale_packets() {
         let packets = vec![
-            Ok(LaStreamPacket { kind: LaStreamPacketKind::Data, seq: 42, info: 0, payload: b"x".to_vec() }),
-            Ok(LaStreamPacket { kind: LaStreamPacketKind::Start, seq: 0, info: 0, payload: vec![] }),
+            Ok(LaStreamPacket {
+                kind: LaStreamPacketKind::Data,
+                seq: 42,
+                info: 0,
+                payload: b"x".to_vec(),
+            }),
+            Ok(LaStreamPacket {
+                kind: LaStreamPacketKind::Start,
+                seq: 0,
+                info: 0,
+                payload: vec![],
+            }),
             make_stop(),
         ];
         let mut transport = MockLaTransport::new(packets);
 
         let res = pre_stream_drain(&mut transport);
-        assert!(res.is_ok(), "drain must succeed after consuming stale packets");
+        assert!(
+            res.is_ok(),
+            "drain must succeed after consuming stale packets"
+        );
         assert!(
             transport.commands_sent.is_empty(),
             "pre_stream_drain must not send any EP_OUT commands"
@@ -226,9 +260,9 @@ mod tests {
     #[test]
     fn test_run_stream_loop_skips_stale_packets_before_start() {
         let packets = vec![
-            make_data(42, b"stale"),          // leftover DATA from old session
-            make_stop(),                       // leftover STOP from drain residue
-            make_start(),                      // real PKT_START from new session
+            make_data(42, b"stale"), // leftover DATA from old session
+            make_stop(),             // leftover STOP from drain residue
+            make_start(),            // real PKT_START from new session
             make_data(0, &[1, 2, 3, 4]),
             make_stop(),
         ];
@@ -240,7 +274,11 @@ mod tests {
 
         let reason = run_stream_loop(&mut transport, &run_flag, &store, &status, &stream_seq);
 
-        assert_eq!(reason, StreamStopReason::Normal, "must stream normally after skipping stale packets");
+        assert_eq!(
+            reason,
+            StreamStopReason::Normal,
+            "must stream normally after skipping stale packets"
+        );
         assert!(!run_flag.load(Ordering::SeqCst));
         assert!(!status.lock().unwrap().active);
     }

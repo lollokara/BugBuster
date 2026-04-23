@@ -38,7 +38,11 @@ pub async fn try_invoke(cmd: &str, args: JsValue) -> Option<JsValue> {
             let is_err = js_sys::Reflect::get(&val, &"__err".into())
                 .map(|v| v.is_truthy())
                 .unwrap_or(false);
-            if is_err { None } else { Some(val) }
+            if is_err {
+                None
+            } else {
+                Some(val)
+            }
         }
         Err(e) => {
             web_sys::console::warn_1(&format!("[try_invoke] {} rejected: {:?}", cmd, e).into());
@@ -269,6 +273,168 @@ pub fn log(msg: &str) {
 }
 
 // -----------------------------------------------------------------------------
+// Supply Voltages Cache
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupplyRail {
+    pub rail: u8,
+    pub name: String,
+    pub voltage_v: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelftestSuppliesCached {
+    pub available: bool,
+    pub timestamp_ms: u32,
+    pub rails: Vec<SupplyRail>,
+}
+
+pub async fn fetch_selftest_supplies_cached() -> Option<SelftestSuppliesCached> {
+    let result = invoke("selftest_supplies_cached", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelftestStatus {
+    pub boot: SelftestBootStatus,
+    pub cal: SelftestCalStatus,
+    #[serde(default)]
+    pub worker_enabled: bool,
+    #[serde(default)]
+    pub supply_monitor_active: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelftestBootStatus {
+    pub ran: bool,
+    pub passed: bool,
+    pub vadj1_v: f32,
+    pub vadj2_v: f32,
+    pub vlogic_v: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelftestCalStatus {
+    pub status: u8,
+    pub channel: u8,
+    pub points: u8,
+    pub last_voltage_v: f32,
+    pub error_mv: f32,
+}
+
+pub async fn fetch_selftest_status() -> Option<SelftestStatus> {
+    let result = try_invoke("selftest_status", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn fetch_selftest_worker_enabled() -> Option<bool> {
+    let result = try_invoke("selftest_worker_get", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub fn send_selftest_worker(enabled: bool) {
+    #[derive(Serialize)]
+    struct Args {
+        enabled: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { enabled }).unwrap();
+    let label = if enabled {
+        "Enable supply monitor"
+    } else {
+        "Disable supply monitor"
+    };
+    invoke_with_feedback("selftest_worker_set", args, label);
+}
+
+// -----------------------------------------------------------------------------
+// Quick Setups
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupSlot {
+    pub index: u8,
+    pub occupied: bool,
+    pub summary_hash: u8,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupList {
+    pub supported: bool,
+    pub slots: Vec<QuickSetupSlot>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupPayload {
+    pub slot: u8,
+    pub json: String,
+    pub name: Option<String>,
+    pub byte_len: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupActionResult {
+    pub slot: u8,
+    pub status: u8,
+    pub ok: bool,
+    pub message: String,
+}
+
+pub async fn fetch_quicksetup_list() -> Option<QuickSetupList> {
+    let result = try_invoke("quicksetup_list", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn quicksetup_get_slot(slot: u8) -> Option<QuickSetupPayload> {
+    #[derive(Serialize)]
+    struct Args {
+        slot: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { slot }).unwrap();
+    let result = try_invoke("quicksetup_get", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn quicksetup_save_slot(slot: u8) -> Option<QuickSetupPayload> {
+    #[derive(Serialize)]
+    struct Args {
+        slot: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { slot }).unwrap();
+    let result = try_invoke("quicksetup_save", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn quicksetup_apply_slot(slot: u8) -> Option<QuickSetupActionResult> {
+    #[derive(Serialize)]
+    struct Args {
+        slot: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { slot }).unwrap();
+    let result = try_invoke("quicksetup_apply", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn quicksetup_delete_slot(slot: u8) -> Option<QuickSetupActionResult> {
+    #[derive(Serialize)]
+    struct Args {
+        slot: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { slot }).unwrap();
+    let result = try_invoke("quicksetup_delete", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+// -----------------------------------------------------------------------------
 // I2C Device types (DS4424 IDAC)
 // -----------------------------------------------------------------------------
 
@@ -289,36 +455,48 @@ pub struct IdacChannelState {
     pub calibrated: bool,
     #[serde(default)]
     pub cal_points: Vec<IdacCalPoint>,
+    pub cal_poly: Option<[f32; 4]>, // fitted cubic in normalized code cn = code/127
     pub name: String,
 }
 
-/// Interpolate calibration data to get voltage for a given DAC code.
-/// Falls back to formula if no calibration.
-pub fn idac_interpolate_voltage(ch: &IdacChannelState, code: i8) -> f32 {
-    if ch.cal_points.len() >= 2 {
-        let mut pts = ch.cal_points.clone();
-        pts.sort_by_key(|p| p.code);
-        // Find bracketing points (sorted by code)
-        for i in 0..pts.len() - 1 {
-            let c0 = pts[i].code;
-            let c1 = pts[i + 1].code;
-            if (code >= c0 && code <= c1) || (code <= c0 && code >= c1) {
-                if c1 != c0 {
-                    let t = (code - c0) as f32 / (c1 - c0) as f32;
-                    return pts[i].voltage + t * (pts[i + 1].voltage - pts[i].voltage);
-                }
+fn idac_poly_voltage(ch: &IdacChannelState, code: i8) -> Option<f32> {
+    let poly = ch.cal_poly?;
+    let cn = code as f32 / 127.0;
+    // Horner: a0 + cn*(a1 + cn*(a2 + cn*a3))
+    Some(poly[0] + cn * (poly[1] + cn * (poly[2] + cn * poly[3])))
+}
+
+fn idac_point_voltage(ch: &IdacChannelState, code: i8) -> Option<f32> {
+    if ch.cal_points.len() < 2 {
+        return None;
+    }
+    let mut pts = ch.cal_points.clone();
+    pts.sort_by_key(|p| p.code);
+    for pair in pts.windows(2) {
+        let c0 = pair[0].code;
+        let c1 = pair[1].code;
+        if (code >= c0 && code <= c1) || (code <= c0 && code >= c1) {
+            if c1 != c0 {
+                let t = (code - c0) as f32 / (c1 - c0) as f32;
+                return Some(pair[0].voltage + t * (pair[1].voltage - pair[0].voltage));
             }
         }
-        // Extrapolate from edges
-        if code <= pts[0].code {
-            return pts[0].voltage;
-        }
-        if code >= pts[pts.len() - 1].code {
-            return pts[pts.len() - 1].voltage;
-        }
     }
-    // Formula fallback
-    ch.midpoint_v - (code as f32 * ch.step_mv / 1000.0)
+    if code <= pts[0].code {
+        Some(pts[0].voltage)
+    } else {
+        pts.last().map(|p| p.voltage)
+    }
+}
+
+pub fn idac_interpolate_voltage(ch: &IdacChannelState, code: i8) -> f32 {
+    idac_poly_voltage(ch, code)
+        .or_else(|| idac_point_voltage(ch, code))
+        .unwrap_or_else(|| ch.midpoint_v - (code as f32 * ch.step_mv / 1000.0))
+}
+
+pub fn idac_interpolate_voltage_opt(ch: &IdacChannelState, code: i8) -> Option<f32> {
+    idac_poly_voltage(ch, code).or_else(|| idac_point_voltage(ch, code))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -366,7 +544,7 @@ pub fn send_pca_control(control: u8, on: bool) {
         0 => "VADJ1",
         1 => "VADJ2",
         2 => "+/-15V",
-        3 => "MUX",
+        3 => "LOGIC_EN",
         4 => "USB Hub",
         5 => "EFuse1",
         6 => "EFuse2",
@@ -431,7 +609,12 @@ pub fn send_usbpd_select_pdo(voltage: u8) {
     }
     let args = serde_wasm_bindgen::to_value(&Args { voltage }).unwrap();
     let voltage_v = match voltage {
-        1 => 5, 2 => 9, 3 => 12, 4 => 15, 5 => 18, 6 => 20,
+        1 => 5,
+        2 => 9,
+        3 => 12,
+        4 => 15,
+        5 => 18,
+        6 => 20,
         _ => voltage as i32,
     };
     let label = format!("Select USB PD {}V", voltage_v);

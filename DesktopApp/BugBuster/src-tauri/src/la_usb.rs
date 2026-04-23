@@ -290,8 +290,9 @@ impl LaUsbConnection {
                 if self.stream_buffer.len() >= frame_len {
                     // We have a full packet. Drain it from the buffer and parse.
                     let packet_data: Vec<u8> = self.stream_buffer.drain(0..frame_len).collect();
-                    return parse_stream_packet(&packet_data)
-                        .map_err(|e| anyhow!("Invalid live bulk packet {:?}: {:02X?}", e, packet_data));
+                    return parse_stream_packet(&packet_data).map_err(|e| {
+                        anyhow!("Invalid live bulk packet {:?}: {:02X?}", e, packet_data)
+                    });
                 }
             }
 
@@ -309,7 +310,9 @@ impl LaUsbConnection {
                 Ok(c) => c,
                 Err(_) => {
                     self.stream_buffer.clear();
-                    return Err(anyhow!("USB stream read timed out (5 s) — device may be stuck"));
+                    return Err(anyhow!(
+                        "USB stream read timed out (5 s) — device may be stuck"
+                    ));
                 }
             };
 
@@ -338,7 +341,6 @@ impl LaUsbConnection {
             .map_err(|e| anyhow!("USB bulk OUT failed: {}", e))?;
         Ok(())
     }
-
 }
 
 pub fn decode_capture(raw: &[u8], channels: u8) -> Vec<Vec<u8>> {

@@ -11,7 +11,13 @@
 import { useEffect, useRef } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { api, PairingRequiredError } from "../../api/client";
-import { deviceStatus, deviceMac } from "../../state/signals";
+import {
+  deviceStatus,
+  deviceMac,
+  supplyMonitorActive,
+  startSelftestStatusPolling,
+} from "../../state/signals";
+import { ChDOverlay } from "../../components/ChDOverlay";
 
 /* ---------- Constants (verbatim from signal_path.rs) ---------- */
 
@@ -43,8 +49,7 @@ const GPIO_PAIR_LABELS: ReadonlyArray<readonly [string, string, string]> = [
 const ADC_LABELS = ["CH A", "CH B", "CH D", "CH C"] as const;
 const EXT_LABELS = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"] as const;
 
-// PCB swap: physical P3 is wired to EFUSE4, P4 to EFUSE3 (silkscreen crossed).
-const EFUSE_CTRL_NAMES = ["efuse1", "efuse2", "efuse4", "efuse3"] as const;
+const EFUSE_CTRL_NAMES = ["efuse1", "efuse2", "efuse3", "efuse4"] as const;
 
 /* ---------- Drawing helpers ---------- */
 
@@ -125,6 +130,8 @@ export function SignalPath() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const dimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  useEffect(() => startSelftestStatusPolling(), []);
 
   /* ---- Poll /api/mux state (fallback when status.muxStates missing) ---- */
   useEffect(() => {
@@ -262,13 +269,18 @@ export function SignalPath() {
     const ry = rt + ch * rh;
     const lh = (rh - 12) / 8.5;
     const g = lh * 0.4;
-    // Compute per-switch Y positions identical to renderer, invert to find which switch
+    const syArr: number[] = new Array(8);
+    for (let s = 0; s < 8; s++) {
+      const gap = s >= 6 ? g * 2 : s >= 4 ? g : 0;
+      syArr[s] = ry + 6 + s * lh + gap;
+    }
+    for (let s = 0; s < 8; s++) {
+      syArr[s] = 2 * ry + rh - syArr[s]!;
+    }
     let best = -1;
     let bestD = Infinity;
     for (let s = 0; s < 8; s++) {
-      const gap = s >= 6 ? g * 2 : s >= 4 ? g : 0;
-      const sy = ry + 6 + s * lh + gap;
-      const d = Math.abs(y - sy);
+      const d = Math.abs(y - syArr[s]!);
       if (d < bestD) { bestD = d; best = s; }
     }
     if (best < 0 || bestD > lh * 0.8) return;
@@ -404,10 +416,22 @@ export function SignalPath() {
       )}
 
       <div ref={wrapRef} class="signal-canvas-wrap">
-        <canvas ref={canvasRef} class="signal-canvas" onClick={onCanvasClick} />
-        {tooSmall.value && (
-          <div class="signal-too-small">Window too narrow — widen to at least 600×400 px.</div>
-        )}
+        <ChDOverlay
+          active={supplyMonitorActive.value}
+          overlayStyle={{
+            top: "calc(42px + 10px + ((100% - 42px - 10px - 4px) / 4) * 2)",
+            bottom: "auto",
+            height: "calc((100% - 42px - 10px - 4px) / 4)",
+            borderLeft: "none",
+            borderRight: "none",
+            borderRadius: 0,
+          }}
+        >
+          <canvas ref={canvasRef} class="signal-canvas" onClick={onCanvasClick} />
+          {tooSmall.value && (
+            <div class="signal-too-small">Window too narrow — widen to at least 600×400 px.</div>
+          )}
+        </ChDOverlay>
       </div>
     </div>
   );
@@ -506,6 +530,9 @@ function render(
     for (let s = 0; s < 8; s++) {
       const gap = s >= 6 ? g * 2 : s >= 4 ? g : 0;
       sy[s] = ry + 6 + s * lh + gap;
+    }
+    for (let s = 0; s < 8; s++) {
+      sy[s] = 2 * ry + rh - sy[s]!;
     }
 
     /* --- MUX chip --- */
@@ -720,32 +747,26 @@ function render(
 
     const pinYs = [
       ct + 14,
-      mainCy,
-      aux1Cy,
       aux2Cy,
+      aux1Cy,
+      mainCy,
       ct + connH - 8,
     ];
 
     const pinX = cnL + 8;
     const numX = cnR - 14;
 
-    /* Pin 1: V_ADJ */
+    /* Pin 1: GND */
     c.font = "8px monospace"; c.textAlign = "left";
-    c.fillStyle = pw ? "#ef444499" : "#1e2d40";
-    c.fillText(psuLbl, pinX, pinYs[0]! + 3);
+    c.fillStyle = "#1e2d40";
+    c.fillText("GND", pinX, pinYs[0]! + 3);
     c.textAlign = "right"; c.fillStyle = "#253040"; c.font = "7px monospace";
     c.fillText("1", numX, pinYs[0]! + 3);
-    c.fillStyle = pw ? "#ef4444" : "#1e293b";
-    c.beginPath(); c.arc(numX - 10, pinYs[0]!, 4, 0, Math.PI * 2); c.fill();
-    if (pw) {
-      c.fillStyle = "rgba(239,68,68,0.12)";
-      c.beginPath(); c.arc(numX - 10, pinYs[0]!, 8, 0, Math.PI * 2); c.fill();
-    }
 
-    /* Pin 2: Main */
+    /* Pin 2: Aux2 */
     c.font = "bold 10px monospace"; c.textAlign = "left";
-    c.fillStyle = mainOn ? mainC : "#253040";
-    c.fillText("Main", pinX, pinYs[1]! + 4);
+    c.fillStyle = aux2On ? aux2C : "#253040";
+    c.fillText("Aux2", pinX, pinYs[1]! + 4);
     c.textAlign = "right"; c.fillStyle = "#334155"; c.font = "7px monospace";
     c.fillText("2", numX, pinYs[1]! + 3);
 
@@ -756,18 +777,24 @@ function render(
     c.textAlign = "right"; c.fillStyle = "#334155"; c.font = "7px monospace";
     c.fillText("3", numX, pinYs[2]! + 3);
 
-    /* Pin 4: Aux2 */
+    /* Pin 4: Main */
     c.font = "bold 10px monospace"; c.textAlign = "left";
-    c.fillStyle = aux2On ? aux2C : "#253040";
-    c.fillText("Aux2", pinX, pinYs[3]! + 4);
+    c.fillStyle = mainOn ? mainC : "#253040";
+    c.fillText("Main", pinX, pinYs[3]! + 4);
     c.textAlign = "right"; c.fillStyle = "#334155"; c.font = "7px monospace";
     c.fillText("4", numX, pinYs[3]! + 3);
 
-    /* Pin 5: GND */
+    /* Pin 5: V_ADJ */
     c.font = "8px monospace"; c.textAlign = "left";
-    c.fillStyle = "#1e2d40";
-    c.fillText("GND", pinX, pinYs[4]! + 3);
+    c.fillStyle = pw ? "#ef444499" : "#1e2d40";
+    c.fillText(psuLbl, pinX, pinYs[4]! + 3);
     c.textAlign = "right"; c.fillStyle = "#253040"; c.font = "7px monospace";
     c.fillText("5", numX, pinYs[4]! + 3);
+    c.fillStyle = pw ? "#ef4444" : "#1e293b";
+    c.beginPath(); c.arc(numX - 10, pinYs[4]!, 4, 0, Math.PI * 2); c.fill();
+    if (pw) {
+      c.fillStyle = "rgba(239,68,68,0.12)";
+      c.beginPath(); c.arc(numX - 10, pinYs[4]!, 8, 0, Math.PI * 2); c.fill();
+    }
   }
 }

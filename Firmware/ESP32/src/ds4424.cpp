@@ -613,6 +613,87 @@ float ds4424_step_mv(uint8_t ch)
     return (c->ifs_ua * 1e-6f / 127.0f) * c->r_int_kohm * 1e6f;  // result in mV
 }
 
+bool ds4424_cal_fit_cubic(uint8_t ch, float coeffs[4])
+{
+    coeffs[0] = coeffs[1] = coeffs[2] = coeffs[3] = 0.0f;
+
+    if (ch >= DS4424_NUM_CHANNELS) return false;
+    const DS4424CalData *cal = &s_state.cal[ch];
+    if (!cal->valid || cal->count < 4) return false;
+
+    // Build normal equations S * x = Y for least-squares cubic fit.
+    // Model: V = a0 + a1*cn + a2*cn^2 + a3*cn^3,  cn = code/127.0
+    // S[i][j] = sum(cn^(i+j)),  Y[i] = sum(V * cn^i)
+    double S[4][4] = {};
+    double Y[4]    = {};
+    const int n = (int)cal->count;
+
+    for (int k = 0; k < n; k++) {
+        double cn = cal->points[k].dac_code / 127.0;
+        double v  = (double)cal->points[k].measured_v;
+        double pw[7];   // cn^0 .. cn^6
+        pw[0] = 1.0;
+        for (int e = 1; e <= 6; e++) pw[e] = pw[e - 1] * cn;
+
+        for (int i = 0; i < 4; i++) {
+            Y[i] += v * pw[i];
+            for (int j = 0; j < 4; j++) {
+                S[i][j] += pw[i + j];
+            }
+        }
+    }
+
+    // Gauss elimination with partial pivoting (in-place on augmented matrix)
+    double A[4][5];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) A[i][j] = S[i][j];
+        A[i][4] = Y[i];
+    }
+
+    for (int col = 0; col < 4; col++) {
+        // Find pivot
+        int pivot = col;
+        double best = fabs(A[col][col]);
+        for (int row = col + 1; row < 4; row++) {
+            double v = fabs(A[row][col]);
+            if (v > best) { best = v; pivot = row; }
+        }
+        if (best < 1e-12) {
+            // Singular — cannot fit
+            return false;
+        }
+        // Swap rows
+        if (pivot != col) {
+            for (int j = 0; j <= 4; j++) {
+                double tmp = A[col][j];
+                A[col][j] = A[pivot][j];
+                A[pivot][j] = tmp;
+            }
+        }
+        // Eliminate below
+        for (int row = col + 1; row < 4; row++) {
+            double factor = A[row][col] / A[col][col];
+            for (int j = col; j <= 4; j++) {
+                A[row][j] -= factor * A[col][j];
+            }
+        }
+    }
+
+    // Back-substitution
+    double x[4];
+    for (int i = 3; i >= 0; i--) {
+        x[i] = A[i][4];
+        for (int j = i + 1; j < 4; j++) x[i] -= A[i][j] * x[j];
+        x[i] /= A[i][i];
+    }
+
+    coeffs[0] = (float)x[0];
+    coeffs[1] = (float)x[1];
+    coeffs[2] = (float)x[2];
+    coeffs[3] = (float)x[3];
+    return true;
+}
+
 void ds4424_get_range(uint8_t ch, float *v_min, float *v_max)
 {
     if (ch >= DS4424_NUM_CHANNELS) return;

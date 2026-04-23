@@ -29,5 +29,7 @@ pub trait Transport: Send + Sync {
     fn transport_name(&self) -> &str;
 
     /// HTTP base URL (only for HTTP transport, None for USB).
-    fn base_url(&self) -> Option<String> { None }
+    fn base_url(&self) -> Option<String> {
+        None
+    }
 }

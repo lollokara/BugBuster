@@ -5,9 +5,9 @@
 // Filters out tty.* duplicates, bridge ports, and non-BugBuster devices.
 // =============================================================================
 
-use std::time::Duration;
 use crate::bbp;
 use crate::state::DiscoveredDevice;
+use std::time::Duration;
 
 /// Espressif USB VID (default for ESP32-S3 TinyUSB)
 const ESPRESSIF_VID: u16 = 0x303A;
@@ -48,10 +48,16 @@ fn probe_bbp(port_name: &str) -> Option<(u8, u8, u8, u8)> {
                             let rsp = &buf[i..i + bbp::HANDSHAKE_RSP_LEN];
                             if let Some(info) = bbp::HandshakeInfo::parse(rsp) {
                                 // Send DISCONNECT to return to CLI mode
-                                let disconnect_frame = bbp::Message::build_frame(1, bbp::CMD_DISCONNECT, &[]);
+                                let disconnect_frame =
+                                    bbp::Message::build_frame(1, bbp::CMD_DISCONNECT, &[]);
                                 let _ = port.write_all(&disconnect_frame);
                                 let _ = port.flush();
-                                return Some((info.proto_version, info.fw_major, info.fw_minor, info.fw_patch));
+                                return Some((
+                                    info.proto_version,
+                                    info.fw_major,
+                                    info.fw_minor,
+                                    info.fw_patch,
+                                ));
                             }
                         }
                     }
@@ -78,38 +84,41 @@ pub fn discover_usb() -> Vec<DiscoveredDevice> {
     };
 
     // Collect candidate ports, filtering platform-specific duplicates
-    let candidates: Vec<_> = ports.into_iter().filter(|port| {
-        // macOS: skip tty.* duplicates (cu.* and tty.* are the same device)
-        #[cfg(target_os = "macos")]
-        if port.port_name.contains("/tty.") {
-            return false;
-        }
-
-        match &port.port_type {
-            serialport::SerialPortType::UsbPort(usb) => {
-                // Skip RP2040 BugBuster HAT CDC (used for LA streaming, not BBP)
-                if usb.vid == 0x2E8A && usb.pid == 0x000C {
-                    return false;
-                }
-                usb.vid == ESPRESSIF_VID
-                    || usb.manufacturer.as_deref().map_or(false, |m| {
-                        let ml = m.to_lowercase();
-                        ml.contains("espressif") || ml.contains("bugbuster")
-                    })
-            }
-            // macOS: CDC devices may appear as generic types
+    let candidates: Vec<_> = ports
+        .into_iter()
+        .filter(|port| {
+            // macOS: skip tty.* duplicates (cu.* and tty.* are the same device)
             #[cfg(target_os = "macos")]
-            _ => port.port_name.contains("usbmodem"),
-            // Linux: ttyACM devices are CDC/ACM
-            #[cfg(target_os = "linux")]
-            _ => port.port_name.contains("ttyACM"),
-            // Windows: all COM ports with USB info are candidates
-            #[cfg(target_os = "windows")]
-            _ => false, // Only match on UsbPort type
-            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            _ => false,
-        }
-    }).collect();
+            if port.port_name.contains("/tty.") {
+                return false;
+            }
+
+            match &port.port_type {
+                serialport::SerialPortType::UsbPort(usb) => {
+                    // Skip RP2040 BugBuster HAT CDC (used for LA streaming, not BBP)
+                    if usb.vid == 0x2E8A && usb.pid == 0x000C {
+                        return false;
+                    }
+                    usb.vid == ESPRESSIF_VID
+                        || usb.manufacturer.as_deref().map_or(false, |m| {
+                            let ml = m.to_lowercase();
+                            ml.contains("espressif") || ml.contains("bugbuster")
+                        })
+                }
+                // macOS: CDC devices may appear as generic types
+                #[cfg(target_os = "macos")]
+                _ => port.port_name.contains("usbmodem"),
+                // Linux: ttyACM devices are CDC/ACM
+                #[cfg(target_os = "linux")]
+                _ => port.port_name.contains("ttyACM"),
+                // Windows: all COM ports with USB info are candidates
+                #[cfg(target_os = "windows")]
+                _ => false, // Only match on UsbPort type
+                #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                _ => false,
+            }
+        })
+        .collect();
 
     log::info!("Found {} USB candidates, probing...", candidates.len());
 
@@ -117,7 +126,13 @@ pub fn discover_usb() -> Vec<DiscoveredDevice> {
         log::info!("Probing {}...", port.port_name);
         match probe_bbp(&port.port_name) {
             Some((proto, fw_maj, fw_min, fw_pat)) => {
-                log::info!("  ✓ BugBuster detected: proto v{}, fw v{}.{}.{}", proto, fw_maj, fw_min, fw_pat);
+                log::info!(
+                    "  ✓ BugBuster detected: proto v{}, fw v{}.{}.{}",
+                    proto,
+                    fw_maj,
+                    fw_min,
+                    fw_pat
+                );
                 let serial_number = match &port.port_type {
                     serialport::SerialPortType::UsbPort(usb) => usb.serial_number.clone(),
                     _ => None,
@@ -145,7 +160,9 @@ fn get_local_subnets() -> Vec<String> {
     if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
         for (_name, ip) in ifaces {
             if let std::net::IpAddr::V4(v4) = ip {
-                if v4.is_loopback() { continue; }
+                if v4.is_loopback() {
+                    continue;
+                }
                 let octets = v4.octets();
                 let subnet = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
                 if !subnets.contains(&subnet) {
@@ -161,9 +178,13 @@ fn get_local_subnets() -> Vec<String> {
 async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDevice> {
     let url = format!("{}/api/device/info", addr);
     let resp = client.get(&url).send().await.ok()?;
-    if !resp.status().is_success() { return None; }
+    if !resp.status().is_success() {
+        return None;
+    }
     let json: serde_json::Value = resp.json().await.ok()?;
-    if json.get("spiOk").is_none() { return None; }
+    if json.get("spiOk").is_none() {
+        return None;
+    }
     Some(DiscoveredDevice {
         id: format!("http:{}", addr),
         name: format!("BugBuster (WiFi: {})", addr),
@@ -197,16 +218,16 @@ pub async fn discover_http() -> Vec<DiscoveredDevice> {
     // Probe in parallel batches of 50 for speed
     let mut devices = Vec::new();
     for chunk in candidates.chunks(50) {
-        let futs: Vec<_> = chunk.iter()
-            .map(|addr| probe_http(&client, addr))
-            .collect();
+        let futs: Vec<_> = chunk.iter().map(|addr| probe_http(&client, addr)).collect();
         let results = futures::future::join_all(futs).await;
         for dev in results.into_iter().flatten() {
             log::info!("  ✓ Found BugBuster at {}", dev.address);
             devices.push(dev);
         }
         // Stop early if we found one (no need to scan the rest)
-        if !devices.is_empty() { break; }
+        if !devices.is_empty() {
+            break;
+        }
     }
 
     devices

@@ -9,11 +9,11 @@ mod discovery;
 mod http_transport;
 mod la_commands;
 mod la_decoders;
+#[cfg(test)]
+mod la_integration_tests;
 mod la_store;
 #[cfg(test)]
 mod la_store_tests;
-#[cfg(test)]
-mod la_integration_tests;
 mod la_transport;
 mod la_usb;
 mod state;
@@ -25,7 +25,10 @@ use la_commands::LaState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,bugbuster_lib=debug,bugbuster=debug")).init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,bugbuster_lib=debug,bugbuster=debug"),
+    )
+    .init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -93,9 +96,17 @@ pub fn run() {
             commands::idac_cal_save,
             // Self-Test / Auto-Calibration
             commands::selftest_status,
+            commands::selftest_worker_get,
+            commands::selftest_worker_set,
             commands::selftest_measure_supply,
-            commands::selftest_efuse_currents,
+            commands::selftest_supplies_cached,
             commands::selftest_auto_calibrate,
+            // Quick Setups
+            commands::quicksetup_list,
+            commands::quicksetup_get,
+            commands::quicksetup_save,
+            commands::quicksetup_apply,
+            commands::quicksetup_delete,
             // PCA9535 GPIO Expander
             commands::pca_get_status,
             commands::pca_set_control,

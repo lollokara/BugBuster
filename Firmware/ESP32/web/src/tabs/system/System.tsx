@@ -10,6 +10,7 @@ import {
   PairingRequiredError,
   type BoardProfile,
   type BoardState,
+  type SelftestSuppliesCached,
 } from "../../api/client";
 import {
   HAT_PIN_FUNCTION_OPTIONS,
@@ -19,7 +20,14 @@ import {
   UART_STOP_BITS_OPTIONS,
   USBPD_VOLTAGE_OPTIONS,
 } from "../../config/options";
-import { boardState, deviceMac } from "../../state/signals";
+import {
+  boardState,
+  deviceMac,
+  selftestWorkerEnabled,
+  supplyMonitorActive,
+  setSelftestStatus,
+  startSelftestStatusPolling,
+} from "../../state/signals";
 
 function useInterval<T>(fn: () => Promise<T>, ms: number) {
   const [value, setValue] = useState<T | null>(null);
@@ -591,6 +599,7 @@ function IoExpControlCard() {
   const mac = deviceMac.value;
   const data = useInterval(() => api.ioexp(), 1500) as any;
   const faultLog = useInterval(() => api.ioexp.faults(), 3000) as any;
+  const suppliesCached = useInterval(() => api.selftestSuppliesCached(), 2000) as SelftestSuppliesCached | null;
   const [faultCfg, setFaultCfg] = useState({ auto_disable: true, log_events: true });
   const [busyControl, setBusyControl] = useState<string | null>(null);
 
@@ -687,6 +696,21 @@ function IoExpControlCard() {
         <summary class="uppercase-tag">Fault Log</summary>
         <pre class="debug-dump mono">{JSON.stringify(faultLog, null, 2)}</pre>
       </details>
+      <div style={{ marginTop: "10px" }}>
+        <div class="uppercase-tag" style={{ marginBottom: "6px" }}>Live Supply Voltages</div>
+        {suppliesCached && !suppliesCached.available && (
+          <div class="text-dim" style={{ color: "#f59e0b", marginBottom: "4px" }}>interlock blocked</div>
+        )}
+        {(suppliesCached?.rails ?? []).map((r) => (
+          <div class="kv-row" key={r.rail} style={{ opacity: suppliesCached?.available === false ? 0.5 : 1 }}>
+            <span class="uppercase-tag">{r.name}</span>
+            <span class="mono">
+              {r.voltageV < 0 ? <span class="text-dim">disabled</span> : `${r.voltageV.toFixed(3)} V`}
+            </span>
+          </div>
+        ))}
+        {!suppliesCached && <div class="text-dim" style={{ fontSize: "11px" }}>—</div>}
+      </div>
     </GlassCard>
   );
 }
@@ -839,11 +863,15 @@ function SelftestServiceCard() {
   const mac = deviceMac.value;
   const summary = useInterval(() => api.selftest(), 3000) as any;
   const supplies = useInterval(() => api.selftestSupplies(), 5000) as any;
-  const efuse = useInterval(() => api.selftestEfuse(), 5000) as any;
+  const suppliesCached = useInterval(() => api.selftestSuppliesCached(), 2000) as SelftestSuppliesCached | null;
   const [railValues, setRailValues] = useState<Record<number, number>>({});
   const [calChannel, setCalChannel] = useState(0);
-  const [busy, setBusy] = useState<null | "probe0" | "probe1" | "probe2" | "cal" | "reset">(null);
+  const [busy, setBusy] = useState<null | "probe0" | "probe1" | "probe2" | "cal" | "reset" | "worker">(null);
   const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (summary) setSelftestStatus(summary);
+  }, [summary]);
 
   const probeRail = async (rail: 0 | 1 | 2) => {
     setBusy(`probe${rail}` as "probe0" | "probe1" | "probe2");
@@ -896,15 +924,43 @@ function SelftestServiceCard() {
     }
   };
 
+  const toggleWorker = async () => {
+    if (!mac) return;
+    setBusy("worker");
+    setStatus(null);
+    try {
+      setSelftestStatus(await api.selftestWorker(mac, !selftestWorkerEnabled.value));
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) {
+        setStatus(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const cal = summary?.calibration ?? {};
   const boot = summary?.boot ?? {};
-  const efuses = Array.isArray(efuse?.efuses) ? efuse.efuses : [];
 
   return (
     <GlassCard title="Selftest / Service">
       <div class="kv-row"><span class="uppercase-tag">Boot Selftest</span><span class="mono">{boot?.ran ? (boot?.passed ? "PASS" : "FAIL") : "N/A"}</span></div>
       <div class="kv-row"><span class="uppercase-tag">Cal Status</span><span class="mono">{String(cal?.status ?? "—")}</span></div>
       <div class="kv-row"><span class="uppercase-tag">Cal Error</span><span class="mono">{Number.isFinite(Number(cal?.errorMv)) ? `${Number(cal.errorMv).toFixed(1)} mV` : "—"}</span></div>
+      <div class="kv-row">
+        <span class="uppercase-tag">Supply monitor (opt-in)</span>
+        <button
+          class={"pill" + (selftestWorkerEnabled.value ? " active" : "")}
+          disabled={!mac || busy !== null}
+          onClick={toggleWorker}
+        >
+          {busy === "worker" ? "..." : selftestWorkerEnabled.value ? "ON" : "OFF"}
+        </button>
+      </div>
+      <div class="kv-row">
+        <span class="uppercase-tag">Monitor Active</span>
+        <Led state={supplyMonitorActive.value ? "on" : "off"} label={supplyMonitorActive.value ? "Active" : "Idle"} />
+      </div>
 
       <details>
         <summary class="uppercase-tag">Supply Probes</summary>
@@ -916,27 +972,24 @@ function SelftestServiceCard() {
         <div class="kv-row"><span class="uppercase-tag">VADJ1</span><span class="mono">{Number.isFinite(railValues[0]) ? `${railValues[0]!.toFixed(3)} V` : "—"}</span></div>
         <div class="kv-row"><span class="uppercase-tag">VADJ2</span><span class="mono">{Number.isFinite(railValues[1]) ? `${railValues[1]!.toFixed(3)} V` : "—"}</span></div>
         <div class="kv-row"><span class="uppercase-tag">3V3_ADJ</span><span class="mono">{Number.isFinite(railValues[2]) ? `${railValues[2]!.toFixed(3)} V` : "—"}</span></div>
+        <div class="uppercase-tag" style={{ marginTop: "10px", marginBottom: "4px" }}>Live cache</div>
+        {suppliesCached && !suppliesCached.available && (
+          <div class="text-dim" style={{ color: "#f59e0b", marginBottom: "4px" }}>interlock blocked</div>
+        )}
+        {(suppliesCached?.rails ?? []).map((r) => (
+          <div class="kv-row" key={r.rail} style={{ opacity: suppliesCached?.available === false ? 0.5 : 1 }}>
+            <span class="uppercase-tag">{r.name}</span>
+            <span class="mono">
+              {r.voltageV < 0 ? <span class="text-dim">disabled</span> : `${r.voltageV.toFixed(3)} V`}
+            </span>
+          </div>
+        ))}
+        {!suppliesCached && <div class="text-dim" style={{ fontSize: "11px" }}>—</div>}
       </details>
 
       <details>
         <summary class="uppercase-tag">Internal Supplies</summary>
         <pre class="debug-dump mono">{JSON.stringify(supplies, null, 2)}</pre>
-      </details>
-
-      <details>
-        <summary class="uppercase-tag">EFuse Currents</summary>
-        <table class="kv-table">
-          <thead><tr><th>EFuse</th><th>Current (A)</th></tr></thead>
-          <tbody>
-            {efuses.map((e: any, idx: number) => (
-              <tr key={idx}>
-                <td class="mono">{e?.efuse ?? idx + 1}</td>
-                <td class="mono">{Number.isFinite(Number(e?.currentA)) ? Number(e.currentA).toFixed(4) : "—"}</td>
-              </tr>
-            ))}
-            {efuses.length === 0 && <tr><td colSpan={2} class="text-dim">No EFuse data</td></tr>}
-          </tbody>
-        </table>
       </details>
 
       <div class="analog-row" style={{ marginTop: "8px" }}>
@@ -994,6 +1047,8 @@ function DesktopOnlyCard() {
 }
 
 export function System() {
+  useEffect(() => startSelftestStatusPolling(), []);
+
   return (
     <div class="tab-stack">
       <BoardCard />

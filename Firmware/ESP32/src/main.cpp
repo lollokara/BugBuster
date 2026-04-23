@@ -105,7 +105,9 @@ static void mainLoopTask(void* pvParam)
         // Background self-test monitoring step (~0.5 Hz, one channel per call)
         if (now - lastSelftestPoll >= 2000) {
             lastSelftestPoll = now;
-            selftest_monitor_step();
+            if (selftest_worker_enabled()) {
+                selftest_monitor_step();
+            }
         }
 
         // HAT background polling for unsolicited messages (e.g. LA done)

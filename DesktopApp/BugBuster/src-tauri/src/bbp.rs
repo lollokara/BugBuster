@@ -68,9 +68,11 @@ pub const CMD_SET_CH_ALERT_MASK: u8 = 0x23;
 // Self-Test / Calibration
 pub const CMD_SELFTEST_STATUS: u8 = 0x05;
 pub const CMD_SELFTEST_MEASURE_SUPPLY: u8 = 0x06;
-pub const CMD_SELFTEST_EFUSE_CURRENTS: u8 = 0x07;
+pub const CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED: u8 = 0x07;
+pub const CMD_SELFTEST_EFUSE_CURRENTS: u8 = CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED;
 pub const CMD_SELFTEST_AUTO_CAL: u8 = 0x08;
 pub const CMD_SELFTEST_INT_SUPPLIES: u8 = 0x09;
+pub const CMD_SELFTEST_WORKER: u8 = 0x0B;
 
 // Diagnostics
 pub const CMD_SET_DIAG_CONFIG: u8 = 0x30;
@@ -179,6 +181,13 @@ pub const CMD_HAT_LA_USB_RESET: u8 = 0xED;
 // See tests/mock/la_usb_host.py:344, BBP_CMD_HAT_LA_STREAM_START in esp32 bbp.h.
 pub const CMD_HAT_LA_STREAM_START: u8 = 0xEE;
 
+// Quick Setups
+pub const CMD_QS_LIST: u8 = 0xF0;
+pub const CMD_QS_GET: u8 = 0xF1;
+pub const CMD_QS_SAVE: u8 = 0xF2;
+pub const CMD_QS_APPLY: u8 = 0xF3;
+pub const CMD_QS_DELETE: u8 = 0xF4;
+
 // System
 pub const CMD_DEVICE_RESET: u8 = 0x70;
 pub const CMD_REG_READ: u8 = 0x71;
@@ -198,8 +207,8 @@ pub const EVT_ALERT: u8 = 0x82;
 pub const EVT_DIN: u8 = 0x83;
 pub const EVT_PCA_FAULT: u8 = 0x84;
 pub const EVT_LA_DONE: u8 = 0x85;
-pub const EVT_LA_LOG: u8 = 0xEC;      // RP2040 log message relay
-pub const EVT_DISCONNECT: u8 = 0xFE;  // Synthetic: USB reader thread detected serial error
+pub const EVT_LA_LOG: u8 = 0xEC; // RP2040 log message relay
+pub const EVT_DISCONNECT: u8 = 0xFE; // Synthetic: USB reader thread detected serial error
 
 // -----------------------------------------------------------------------------
 // Error Codes
@@ -325,8 +334,13 @@ impl Message {
         let rx_crc = u16::from_le_bytes([data[crc_offset], data[crc_offset + 1]]);
         let calc_crc = crc16(&data[..crc_offset]);
         if rx_crc != calc_crc {
-            log::warn!("CRC mismatch: rx=0x{:04X} calc=0x{:04X}, len={}, data={:02X?}",
-                       rx_crc, calc_crc, data.len(), &data[..std::cmp::min(data.len(), 32)]);
+            log::warn!(
+                "CRC mismatch: rx=0x{:04X} calc=0x{:04X}, len={}, data={:02X?}",
+                rx_crc,
+                calc_crc,
+                data.len(),
+                &data[..std::cmp::min(data.len(), 32)]
+            );
             return None;
         }
 
@@ -406,7 +420,7 @@ impl HandshakeInfo {
         if data[0..4] != MAGIC {
             return None;
         }
-        
+
         // MAC address is at bytes 8..14
         let mac = format!(
             "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
@@ -446,11 +460,17 @@ impl FrameAccumulator {
         for &byte in data {
             if byte == FRAME_DELIMITER {
                 if !self.buf.is_empty() {
-                    log::debug!("COBS frame ({} encoded bytes): {:02X?}", self.buf.len(),
-                               &self.buf[..std::cmp::min(self.buf.len(), 32)]);
+                    log::debug!(
+                        "COBS frame ({} encoded bytes): {:02X?}",
+                        self.buf.len(),
+                        &self.buf[..std::cmp::min(self.buf.len(), 32)]
+                    );
                     if let Some(decoded) = cobs_decode(&self.buf) {
-                        log::debug!("Decoded ({} bytes): {:02X?}", decoded.len(),
-                                   &decoded[..std::cmp::min(decoded.len(), 32)]);
+                        log::debug!(
+                            "Decoded ({} bytes): {:02X?}",
+                            decoded.len(),
+                            &decoded[..std::cmp::min(decoded.len(), 32)]
+                        );
                         if let Some(msg) = Message::parse(&decoded) {
                             messages.push(msg);
                         }
@@ -487,7 +507,9 @@ pub struct PayloadWriter {
 
 impl PayloadWriter {
     pub fn new() -> Self {
-        Self { buf: Vec::with_capacity(32) }
+        Self {
+            buf: Vec::with_capacity(32),
+        }
     }
 
     pub fn put_u8(&mut self, v: u8) {
@@ -636,7 +658,7 @@ mod tests {
         let data = [0x01, 0x00, 0x00, 0x01]; // CMD, seq=0, cmd=GET_STATUS
         let crc = crc16(&data);
         assert_ne!(crc, 0); // Just check it produces something
-        // Same data should produce same CRC
+                            // Same data should produce same CRC
         assert_eq!(crc, crc16(&data));
     }
 
@@ -677,7 +699,9 @@ mod tests {
 
     #[test]
     fn test_handshake_parse() {
-        let data = [0xBB, 0x42, 0x55, 0x47, 0x04, 0x01, 0x02, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        let data = [
+            0xBB, 0x42, 0x55, 0x47, 0x04, 0x01, 0x02, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+        ];
         let info = HandshakeInfo::parse(&data).unwrap();
         assert_eq!(info.proto_version, 4);
         assert_eq!(info.fw_major, 1);
@@ -759,8 +783,10 @@ mod tests {
         let data = vec![0x00, 0x11, 0x00, 0x00, 0x22, 0x00];
         let encoded = cobs_encode(&data);
         // Encoded stream must never contain 0x00
-        assert!(!encoded.iter().any(|&b| b == 0x00),
-                "COBS encoded data must not contain zero bytes");
+        assert!(
+            !encoded.iter().any(|&b| b == 0x00),
+            "COBS encoded data must not contain zero bytes"
+        );
         let decoded = cobs_decode(&encoded).unwrap();
         assert_eq!(data, decoded);
     }
@@ -797,7 +823,10 @@ mod tests {
 
     #[test]
     fn test_message_parse_truncated_empty() {
-        assert!(Message::parse(&[]).is_none(), "Empty data should return None");
+        assert!(
+            Message::parse(&[]).is_none(),
+            "Empty data should return None"
+        );
     }
 
     #[test]
@@ -813,7 +842,10 @@ mod tests {
         let mut raw = Message::build(MSG_CMD, 1, CMD_PING, &[]);
         let len = raw.len();
         raw[len - 1] ^= 0xFF; // Flip bits in CRC
-        assert!(Message::parse(&raw).is_none(), "Corrupted CRC should return None");
+        assert!(
+            Message::parse(&raw).is_none(),
+            "Corrupted CRC should return None"
+        );
     }
 
     #[test]
@@ -893,7 +925,10 @@ mod tests {
 
         // After reset, the partial data is gone; feed the rest should not yield a message
         let msgs = acc.feed(&frame[mid..]);
-        assert!(msgs.is_empty(), "Reset should discard buffered partial data");
+        assert!(
+            msgs.is_empty(),
+            "Reset should discard buffered partial data"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -905,8 +940,11 @@ mod tests {
         // CRC-16/CCITT-FALSE for "123456789" is 0x29B1
         let data = b"123456789";
         let crc = crc16(data);
-        assert_eq!(crc, 0x29B1,
-                   "CRC-16/CCITT-FALSE of '123456789' should be 0x29B1, got 0x{:04X}", crc);
+        assert_eq!(
+            crc, 0x29B1,
+            "CRC-16/CCITT-FALSE of '123456789' should be 0x29B1, got 0x{:04X}",
+            crc
+        );
     }
 
     #[test]

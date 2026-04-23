@@ -5,8 +5,14 @@
 import { useEffect, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
+import { ChDOverlay } from "../../components/ChDOverlay";
 import { api, PairingRequiredError } from "../../api/client";
-import { deviceStatus, deviceMac } from "../../state/signals";
+import {
+  deviceStatus,
+  deviceMac,
+  supplyMonitorActive,
+  startSelftestStatusPolling,
+} from "../../state/signals";
 import {
   ADC_MUX_OPTIONS,
   ADC_RANGE_OPTIONS,
@@ -59,70 +65,72 @@ function AdcCard() {
             rate: Number.isFinite(c.rateCode) ? c.rateCode : 0,
           };
           return (
-            <div class="analog-item" key={i}>
-              <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
-              <BigValue value={Number(c.adcValue ?? NaN)} unit="V" precision={3} />
-              <div class="analog-row">
-                <label>Range</label>
-                <select
-                  class="input"
-                  value={String(cfg.range)}
-                  onChange={(e) =>
-                    setPending((p) => ({
-                      ...p,
-                      [i]: { ...cfg, range: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
-                    }))
-                  }
-                >
-                  {ADC_RANGE_OPTIONS.map((r) => (
-                    <option key={r.code} value={String(r.code)}>
-                      {r.label}
-                    </option>
-                  ))}
-                </select>
+            <ChDOverlay key={i} active={i === 3 && supplyMonitorActive.value}>
+              <div class="analog-item">
+                <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
+                <BigValue value={Number(c.adcValue ?? NaN)} unit="V" precision={3} />
+                <div class="analog-row">
+                  <label>Range</label>
+                  <select
+                    class="input"
+                    value={String(cfg.range)}
+                    onChange={(e) =>
+                      setPending((p) => ({
+                        ...p,
+                        [i]: { ...cfg, range: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                      }))
+                    }
+                  >
+                    {ADC_RANGE_OPTIONS.map((r) => (
+                      <option key={r.code} value={String(r.code)}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div class="analog-row">
+                  <label>Rate</label>
+                  <select
+                    class="input"
+                    value={String(cfg.rate)}
+                    onChange={(e) =>
+                      setPending((p) => ({
+                        ...p,
+                        [i]: { ...cfg, rate: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                      }))
+                    }
+                  >
+                    {ADC_RATE_OPTIONS.map((r) => (
+                      <option key={r.code} value={String(r.code)}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div class="analog-row">
+                  <label>Mux</label>
+                  <select
+                    class="input"
+                    value={String(cfg.mux)}
+                    onChange={(e) =>
+                      setPending((p) => ({
+                        ...p,
+                        [i]: { ...cfg, mux: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                      }))
+                    }
+                  >
+                    {ADC_MUX_OPTIONS.map((r) => (
+                      <option key={r.code} value={String(r.code)}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button class="btn" disabled={!mac} onClick={() => apply(i)}>
+                  Apply ADC
+                </button>
               </div>
-              <div class="analog-row">
-                <label>Rate</label>
-                <select
-                  class="input"
-                  value={String(cfg.rate)}
-                  onChange={(e) =>
-                    setPending((p) => ({
-                      ...p,
-                      [i]: { ...cfg, rate: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
-                    }))
-                  }
-                >
-                  {ADC_RATE_OPTIONS.map((r) => (
-                    <option key={r.code} value={String(r.code)}>
-                      {r.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div class="analog-row">
-                <label>Mux</label>
-                <select
-                  class="input"
-                  value={String(cfg.mux)}
-                  onChange={(e) =>
-                    setPending((p) => ({
-                      ...p,
-                      [i]: { ...cfg, mux: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
-                    }))
-                  }
-                >
-                  {ADC_MUX_OPTIONS.map((r) => (
-                    <option key={r.code} value={String(r.code)}>
-                      {r.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <button class="btn" disabled={!mac} onClick={() => apply(i)}>
-                Apply ADC
-              </button>
-            </div>
+            </ChDOverlay>
           );
         })}
       </div>
@@ -178,7 +186,8 @@ function VdacCard() {
           const voltage = pendingVoltage[i] ?? (Number.isFinite(c.dacValue) ? c.dacValue : 0);
           const isBipolar = !!bipolar[i];
           return (
-            <div class="analog-item" key={i}>
+            <ChDOverlay key={i} active={i === 3 && supplyMonitorActive.value}>
+            <div class="analog-item">
               <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
               <BigValue value={Number(c.dacValue ?? NaN)} unit="V" precision={3} />
               <div class="analog-row">
@@ -213,6 +222,7 @@ function VdacCard() {
                 Apply voltage
               </button>
             </div>
+            </ChDOverlay>
           );
         })}
       </div>
@@ -348,13 +358,15 @@ function IinCard() {
         {[0, 1, 2, 3].map((i) => {
           const c = readChannel(status, i);
           return (
-            <div class="analog-item" key={i}>
+            <ChDOverlay key={i} active={i === 3 && supplyMonitorActive.value}>
+            <div class="analog-item">
               <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
               <BigValue value={Number(c.iinValue ?? NaN)} unit="mA" precision={2} />
               <div class="mono text-dim">
                 ADC {Number.isFinite(Number(c.adcValue ?? NaN)) ? Number(c.adcValue ?? 0).toFixed(3) : "—"} V
               </div>
             </div>
+            </ChDOverlay>
           );
         })}
       </div>
@@ -428,6 +440,8 @@ function DiagnosticsCard() {
 }
 
 export function Analog() {
+  useEffect(() => startSelftestStatusPolling(), []);
+
   return (
     <div class="tab-stack">
       <AdcCard />

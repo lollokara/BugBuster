@@ -70,9 +70,10 @@ extern "C" {
 // Self-Test / Calibration / E-fuse Monitoring
 #define BBP_CMD_SELFTEST_STATUS         0x05  // Get boot self-test result + cal status
 #define BBP_CMD_SELFTEST_MEASURE_SUPPLY 0x06  // Measure a supply rail via U23
-#define BBP_CMD_SELFTEST_EFUSE_CURRENTS 0x07  // Get all e-fuse currents
+#define BBP_CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED 0x07  // Get cached supply rail voltages
 #define BBP_CMD_SELFTEST_AUTO_CAL       0x08  // Start automatic IDAC calibration
 #define BBP_CMD_SELFTEST_INT_SUPPLIES  0x09  // Measure internal ADC supplies (AVDD, DVCC, etc.)
+#define BBP_CMD_SELFTEST_WORKER        0x0B  // Enable/disable/query supply monitor worker
 
 // Channel Configuration
 #define BBP_CMD_SET_CH_FUNC     0x10
@@ -194,6 +195,13 @@ extern "C" {
 #define BBP_CMD_HAT_LA_LOG_ENABLE          0xEB // Enable/disable RP2040 log relay
 #define BBP_CMD_HAT_LA_USB_RESET           0xED // Reinitialize vendor bulk endpoint
 #define BBP_CMD_HAT_LA_STREAM_START        0xEE // Start LA streaming over vendor bulk
+
+// Quick Setups
+#define BBP_CMD_QS_LIST       0xF0  // List quick setup slots
+#define BBP_CMD_QS_GET        0xF1  // Get quick setup JSON
+#define BBP_CMD_QS_SAVE       0xF2  // Save current state to slot
+#define BBP_CMD_QS_APPLY      0xF3  // Apply slot
+#define BBP_CMD_QS_DELETE     0xF4  // Delete slot
 
 // SPI Clock
 #define BBP_CMD_SET_SPI_CLOCK    0xE3  // Set SPI clock speed (Hz, u32)

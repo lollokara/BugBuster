@@ -20,6 +20,7 @@
 #include "hat.h"
 #include "auth.h"
 #include "wifi_manager.h"
+#include "quicksetup.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_mac.h"
@@ -1079,17 +1080,42 @@ static int handleSelftestMeasureSupply(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
-// 0x07 SELFTEST_EFUSE_CURRENTS — get all e-fuse currents
-static int handleSelftestEfuseCurrents(uint16_t seq, uint8_t cmdId, uint8_t *out)
+// 0x07 SELFTEST_SUPPLY_VOLTAGES_CACHED — get cached supply rail voltages
+static int handleSelftestSupplyVoltagesCached(uint16_t seq, uint8_t cmdId, uint8_t *out)
 {
-    const SelftestEfuseCurrents *ec = selftest_get_efuse_currents();
+    if (selftest_worker_enabled()) {
+        selftest_monitor_step();
+    }
+    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
 
     size_t pos = 0;
-    put_bool(out, &pos, ec->available);
-    put_u32(out, &pos, ec->timestamp_ms);
-    for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++) {
-        put_f32(out, &pos, ec->current_a[i]);
+    put_bool(out, &pos, sv->available);
+    put_u32(out, &pos, sv->timestamp_ms);
+    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
+        put_f32(out, &pos, sv->voltage[i]);
     }
+    return (int)pos;
+}
+
+// 0x0B SELFTEST_WORKER — payload 0=disable, 1=enable, 0xFF=query
+static int handleSelftestWorker(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    uint8_t op = payload[0];
+    if (op == 0x00 || op == 0x01) {
+        if (!selftest_set_worker_enabled(op != 0)) {
+            sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+            return -1;
+        }
+    } else if (op != 0xFF) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, selftest_worker_enabled() ? 1 : 0);
     return (int)pos;
 }
 
@@ -1260,9 +1286,9 @@ static int handleIdacGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
     size_t pos = 0;
     put_bool(out, &pos, st->present);
     for (uint8_t ch = 0; ch < DS4424_NUM_CHANNELS; ch++) {
-        // Channel fixed header footprint without calibration points:
-        // ch(1) + code(1) + 6*f32(24) + calibrated(1) + cal_count(1) = 28 bytes
-        if (pos + 28 > BBP_MAX_PAYLOAD) {
+        // Per-channel footprint:
+        // ch(1) + code(1) + 6*f32(24) + calibrated(1) + polyValid(1) + 4*f32(16) = 44 bytes
+        if (pos + 44 > BBP_MAX_PAYLOAD) {
             ESP_LOGW(TAG, "IDAC_GET_STATUS truncated before ch%u (payload full)", ch);
             break;
         }
@@ -1275,20 +1301,14 @@ static int handleIdacGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_f32(out, &pos, st->config[ch].v_max);
         put_f32(out, &pos, ds4424_step_mv(ch));
         put_bool(out, &pos, st->cal[ch].valid);
-        // Calibration points (code, voltage pairs)
-        size_t count_pos = pos;
-        put_u8(out, &pos, 0);  // patched with included count below
-        uint8_t included = 0;
-        for (uint8_t p = 0; p < st->cal[ch].count; p++) {
-            if (pos + 5 > BBP_MAX_PAYLOAD) {
-                ESP_LOGW(TAG, "IDAC_GET_STATUS points truncated at ch%u p%u", ch, p);
-                break;
-            }
-            put_u8(out, &pos, (uint8_t)(st->cal[ch].points[p].dac_code & 0xFF));
-            put_f32(out, &pos, st->cal[ch].points[p].measured_v);
-            included++;
-        }
-        out[count_pos] = included;
+        // Cubic polynomial fit: V = a0 + a1*cn + a2*cn^2 + a3*cn^3, cn = code/127.0
+        float poly[4] = {0};
+        bool have_poly = ds4424_cal_fit_cubic(ch, poly);
+        put_bool(out, &pos, have_poly);
+        put_f32(out, &pos, poly[0]);
+        put_f32(out, &pos, poly[1]);
+        put_f32(out, &pos, poly[2]);
+        put_f32(out, &pos, poly[3]);
     }
     return (int)pos;
 }
@@ -2243,6 +2263,111 @@ static int handleWifiScan(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+// --- Quick Setups ---
+
+static int handleQuickSetupList(uint16_t seq, uint8_t cmdId, uint8_t *out)
+{
+    QuickSetupSlotInfo slots[QUICKSETUP_SLOT_COUNT];
+    QuickSetupStatus st = quicksetup_list(slots);
+    if (st != QUICKSETUP_OK) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+
+    uint8_t bitmap = 0;
+    for (uint8_t i = 0; i < QUICKSETUP_SLOT_COUNT; i++) {
+        if (slots[i].occupied) bitmap |= (uint8_t)(1u << i);
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, bitmap);
+    for (uint8_t i = 0; i < QUICKSETUP_SLOT_COUNT; i++) {
+        put_u8(out, &pos, slots[i].occupied ? slots[i].summary_hash : 0);
+    }
+    return (int)pos;
+}
+
+static int handleQuickSetupGet(uint16_t seq, uint8_t cmdId,
+                               const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t out_len = 0;
+    QuickSetupStatus st = quicksetup_get(payload[0], (char *)out, BBP_MAX_PAYLOAD, &out_len);
+    if (st == QUICKSETUP_INVALID_SLOT) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+    if (st == QUICKSETUP_NOT_FOUND) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    if (st != QUICKSETUP_OK) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    return (int)out_len;
+}
+
+static int handleQuickSetupSave(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t out_len = 0;
+    QuickSetupStatus st = quicksetup_save(payload[0], (char *)out, BBP_MAX_PAYLOAD, &out_len);
+    if (st == QUICKSETUP_INVALID_SLOT) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+    if (st == QUICKSETUP_TOO_LARGE || st == QUICKSETUP_BUFFER_TOO_SMALL) {
+        sendError(seq, cmdId, BBP_ERR_FRAME_TOO_LARGE);
+        return -1;
+    }
+    if (st != QUICKSETUP_OK) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    return (int)out_len;
+}
+
+static int handleQuickSetupApply(uint16_t seq, uint8_t cmdId,
+                                 const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    QuickSetupApplyReport report;
+    QuickSetupStatus st = quicksetup_apply(payload[0], &report);
+    if (st == QUICKSETUP_INVALID_SLOT) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    if (st == QUICKSETUP_OK) {
+        out[0] = 0;
+    } else if (st == QUICKSETUP_NOT_FOUND) {
+        out[0] = 1;
+    } else {
+        out[0] = 2;
+    }
+    return 1;
+}
+
+static int handleQuickSetupDelete(uint16_t seq, uint8_t cmdId,
+                                  const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    bool existed = false;
+    QuickSetupStatus st = quicksetup_delete(payload[0], &existed);
+    if (st == QUICKSETUP_INVALID_SLOT) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+    if (st != QUICKSETUP_OK && st != QUICKSETUP_NOT_FOUND) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    out[0] = existed ? 0 : 1;
+    return 1;
+}
+
 // --- Streaming commands ---
 
 static int handleStartAdcStream(uint16_t seq, uint8_t cmdId,
@@ -2490,14 +2615,17 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
         case BBP_CMD_SELFTEST_MEASURE_SUPPLY:
             rspLen = handleSelftestMeasureSupply(seq, cmdId, payload, payloadLen, rspBuf);
             break;
-        case BBP_CMD_SELFTEST_EFUSE_CURRENTS:
-            rspLen = handleSelftestEfuseCurrents(seq, cmdId, rspBuf);
+        case BBP_CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED:
+            rspLen = handleSelftestSupplyVoltagesCached(seq, cmdId, rspBuf);
             break;
         case BBP_CMD_SELFTEST_AUTO_CAL:
             rspLen = handleSelftestAutoCal(seq, cmdId, payload, payloadLen, rspBuf);
             break;
         case BBP_CMD_SELFTEST_INT_SUPPLIES:
             rspLen = handleSelftestIntSupplies(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_SELFTEST_WORKER:
+            rspLen = handleSelftestWorker(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- Channel Config ---
@@ -2813,6 +2941,23 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             rspLen = handleWifiScan(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
+        // --- Quick Setups ---
+        case BBP_CMD_QS_LIST:
+            rspLen = handleQuickSetupList(seq, cmdId, rspBuf);
+            break;
+        case BBP_CMD_QS_GET:
+            rspLen = handleQuickSetupGet(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_QS_SAVE:
+            rspLen = handleQuickSetupSave(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_QS_APPLY:
+            rspLen = handleQuickSetupApply(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_QS_DELETE:
+            rspLen = handleQuickSetupDelete(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+
         case BBP_CMD_GET_ADMIN_TOKEN:
             rspLen = handleGetAdminToken(seq, cmdId, rspBuf);
             break;
@@ -2954,6 +3099,7 @@ void bbpInit(AD74416H *device, AD74416H_SPI *spi)
     if (!s_txMutex) {
         s_txMutex = xSemaphoreCreateMutex();
     }
+    quicksetup_init();
     ESP_LOGI(TAG, "BBP initialized (proto v%d, fw v%d.%d.%d)",
              BBP_PROTO_VERSION, BBP_FW_VERSION_MAJOR,
              BBP_FW_VERSION_MINOR, BBP_FW_VERSION_PATCH);

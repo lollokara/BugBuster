@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
+    use crate::la_decoders::{i2c, spi, uart};
     use crate::la_store::LaStore;
-    use crate::la_decoders::{uart, i2c, spi};
 
     #[test]
     fn test_uart_decode() {
@@ -40,7 +40,7 @@ mod tests {
                 store.transitions[0].push((current_sample, 1));
             }
             current_sample += spb;
-            
+
             // Gap between bytes
             current_sample += spb * 2;
         }
@@ -116,12 +116,15 @@ mod tests {
         // STOP: SDA rises while SCL=1
         // SCL is already 1 from last push_bit
         store.transitions[1].push((t, 1)); // Ensure SCL is high (it should be)
-        store.transitions[0].push((t + step/2, 1)); // SDA rises
+        store.transitions[0].push((t + step / 2, 1)); // SDA rises
         t += step;
 
         store.total_samples = t;
 
-        let cfg = i2c::I2cConfig { sda_channel: 0, scl_channel: 1 };
+        let cfg = i2c::I2cConfig {
+            sda_channel: 0,
+            scl_channel: 1,
+        };
         let annotations = i2c::decode(&cfg, &store, 0, store.total_samples);
 
         // Expected: S, 0x3C W, ACK, 0xAA, ACK, P
@@ -146,7 +149,9 @@ mod tests {
         let step = 10;
 
         // Initial: CS=1, SCLK=0, MOSI=0, MISO=0
-        for ch in 0..4 { store.transitions[ch].push((0, 0)); }
+        for ch in 0..4 {
+            store.transitions[ch].push((0, 0));
+        }
         store.transitions[3][0] = (0, 1); // CS=1
 
         // CS falls
@@ -200,7 +205,7 @@ mod tests {
 
         // Expected: 1 MOSI annotation, 1 MISO annotation
         assert_eq!(annotations.len(), 2);
-        
+
         let mosi_ann = annotations.iter().find(|a| a.channel == 0).unwrap();
         let miso_ann = annotations.iter().find(|a| a.channel == 1).unwrap();
 

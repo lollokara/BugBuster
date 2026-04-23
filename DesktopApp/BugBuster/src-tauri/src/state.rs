@@ -6,35 +6,35 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChannelState {
-    pub function: u8,           // ChannelFunction code (0-12)
-    pub adc_raw: u32,           // 24-bit ADC code
-    pub adc_value: f32,         // Converted value (V or mA)
-    pub adc_range: u8,          // AdcRange code
-    pub adc_rate: u8,           // AdcRate code
-    pub adc_mux: u8,            // AdcConvMux code
-    pub dac_code: u16,          // Active DAC code
-    pub dac_value: f32,         // Converted DAC value
-    pub din_state: bool,        // Digital input comparator output
-    pub din_counter: u32,       // DIN event counter
-    pub do_state: bool,         // Digital output state
+    pub function: u8,            // ChannelFunction code (0-12)
+    pub adc_raw: u32,            // 24-bit ADC code
+    pub adc_value: f32,          // Converted value (V or mA)
+    pub adc_range: u8,           // AdcRange code
+    pub adc_rate: u8,            // AdcRate code
+    pub adc_mux: u8,             // AdcConvMux code
+    pub dac_code: u16,           // Active DAC code
+    pub dac_value: f32,          // Converted DAC value
+    pub din_state: bool,         // Digital input comparator output
+    pub din_counter: u32,        // DIN event counter
+    pub do_state: bool,          // Digital output state
     pub channel_alert: u16,      // Per-channel alert status bits
     pub channel_alert_mask: u16, // Per-channel alert mask bits
-    pub rtd_excitation_ua: u16,  // RTD excitation current in µA (500 or 1000; 0 when not in RES_MEAS)
+    pub rtd_excitation_ua: u16, // RTD excitation current in µA (500 or 1000; 0 when not in RES_MEAS)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiagState {
-    pub source: u8,             // Diagnostic source code (0-13)
-    pub raw_code: u16,          // Raw diagnostic ADC code
-    pub value: f32,             // Converted value (V or C)
+    pub source: u8,    // Diagnostic source code (0-13)
+    pub raw_code: u16, // Raw diagnostic ADC code
+    pub value: f32,    // Converted value (V or C)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GpioState {
-    pub mode: u8,               // GpioSelect mode (0-4)
-    pub output: bool,           // GPO_DATA state
-    pub input: bool,            // GPI_DATA state
-    pub pulldown: bool,         // GP_WK_PD_EN
+    pub mode: u8,       // GpioSelect mode (0-4)
+    pub output: bool,   // GPO_DATA state
+    pub input: bool,    // GPI_DATA state
+    pub pulldown: bool, // GP_WK_PD_EN
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -122,12 +122,6 @@ impl DeviceState {
 // -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IdacCalPoint {
-    pub code: i8,
-    pub voltage: f32,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IdacChannelState {
     pub code: i8,
     pub target_v: f32,
@@ -136,7 +130,7 @@ pub struct IdacChannelState {
     pub v_max: f32,
     pub step_mv: f32,
     pub calibrated: bool,
-    pub cal_points: Vec<IdacCalPoint>,
+    pub cal_poly: Option<[f32; 4]>, // fitted cubic in normalized code cn = code/127
     pub name: String,
 }
 
@@ -190,6 +184,63 @@ pub struct IoExpState {
     pub en_mux: bool,
     pub en_usb_hub: bool,
     pub efuses: Vec<EfuseState>,
+}
+
+// -----------------------------------------------------------------------------
+// Supply Voltages Cache (BBP 0x07)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupplyRail {
+    pub rail: u8,
+    pub name: String,
+    pub voltage_v: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelftestSuppliesCached {
+    pub available: bool,
+    pub timestamp_ms: u32,
+    pub rails: Vec<SupplyRail>,
+}
+
+// -----------------------------------------------------------------------------
+// Quick Setups (BBP 0xF0..0xF4)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupSlot {
+    pub index: u8,
+    pub occupied: bool,
+    pub summary_hash: u8,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupList {
+    pub supported: bool,
+    pub slots: Vec<QuickSetupSlot>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupPayload {
+    pub slot: u8,
+    pub json: String,
+    pub name: Option<String>,
+    pub byte_len: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSetupActionResult {
+    pub slot: u8,
+    pub status: u8,
+    pub ok: bool,
+    pub message: String,
 }
 
 // -----------------------------------------------------------------------------
@@ -268,9 +319,9 @@ impl Default for ConnectionStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredDevice {
-    pub id: String,             // Unique identifier
-    pub name: String,           // Display name
-    pub transport: String,      // "usb" or "http"
-    pub address: String,        // Port path or URL
+    pub id: String,        // Unique identifier
+    pub name: String,      // Display name
+    pub transport: String, // "usb" or "http"
+    pub address: String,   // Port path or URL
     pub serial_number: Option<String>,
 }

@@ -77,11 +77,12 @@ static void decode_inputs(void)
 
     // E-Fuse faults are active LOW (fault when pin is low), but only meaningful
     // when the corresponding e-fuse output is enabled.
+    // PCB silkscreen cross: physical P3 wired to EFUSE_EN_4, P4 to EFUSE_EN_3 — swap here so tools see natural efuse1..4 order.
     bool raw_fault[4] = {
         (s_state.input1 & PCA9535_EFUSE_FLT_1) == 0,
         (s_state.input1 & PCA9535_EFUSE_FLT_2) == 0,
-        (s_state.input1 & PCA9535_EFUSE_FLT_3) == 0,
         (s_state.input1 & PCA9535_EFUSE_FLT_4) == 0,
+        (s_state.input1 & PCA9535_EFUSE_FLT_3) == 0,
     };
     for (int i = 0; i < 4; i++) {
         s_state.efuse_flt[i] = s_state.efuse_en[i] && raw_fault[i];
@@ -103,8 +104,8 @@ static void decode_outputs(void)
 
     s_state.efuse_en[0] = (s_state.output1 & PCA9535_EFUSE_EN_1) != 0;
     s_state.efuse_en[1] = (s_state.output1 & PCA9535_EFUSE_EN_2) != 0;
-    s_state.efuse_en[2] = (s_state.output1 & PCA9535_EFUSE_EN_3) != 0;
-    s_state.efuse_en[3] = (s_state.output1 & PCA9535_EFUSE_EN_4) != 0;
+    s_state.efuse_en[2] = (s_state.output1 & PCA9535_EFUSE_EN_4) != 0;  // PCB cross: P3→EFUSE_EN_4 pin
+    s_state.efuse_en[3] = (s_state.output1 & PCA9535_EFUSE_EN_3) != 0;  // PCB cross: P4→EFUSE_EN_3 pin
 }
 
 bool pca9535_init(void)
@@ -275,9 +276,9 @@ bool pca9535_set_control(PcaControl ctrl, bool on)
         case PCA_CTRL_EFUSE2_EN:
             return pca9535_set_bit(1, 2, on);
         case PCA_CTRL_EFUSE3_EN:
-            return pca9535_set_bit(1, 4, on);
+            return pca9535_set_bit(1, 6, on);  // PCB cross: logical EFUSE3 drives physical P3 (bit 6 = EFUSE_EN_4 pin)
         case PCA_CTRL_EFUSE4_EN:
-            return pca9535_set_bit(1, 6, on);
+            return pca9535_set_bit(1, 4, on);  // PCB cross: logical EFUSE4 drives physical P4 (bit 4 = EFUSE_EN_3 pin)
         default:
             return false;
     }

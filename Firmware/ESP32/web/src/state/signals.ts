@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { signal, computed } from "@preact/signals";
-import type { BoardState, DeviceInfo, PairingInfo } from "../api/client";
+import { api, type BoardState, type DeviceInfo, type PairingInfo, type SelftestStatus } from "../api/client";
 
 /* ---- Pairing ---- */
 
@@ -19,6 +19,68 @@ export const deviceMac = computed(() =>
 
 /** Last /api/status snapshot. Typed as `any` for now — refine incrementally. */
 export const deviceStatus = signal<any>(null);
+
+/* ---- Selftest monitor ---- */
+
+export const selftestStatus = signal<SelftestStatus | null>(null);
+export const selftestWorkerEnabled = signal<boolean>(false);
+export const supplyMonitorActive = signal<boolean>(false);
+
+let selftestPollRefs = 0;
+let selftestPollTimer: number | null = null;
+let selftestPollInFlight = false;
+let selftestLastLocalWriteMs = 0;
+
+function applySelftestStatus(status: SelftestStatus): void {
+  selftestStatus.value = status;
+  selftestWorkerEnabled.value = !!status.workerEnabled;
+  supplyMonitorActive.value = !!status.supplyMonitorActive;
+}
+
+async function pollSelftestStatus(): Promise<void> {
+  if (selftestPollRefs <= 0 || selftestPollInFlight) return;
+  selftestPollInFlight = true;
+  const startedMs = Date.now();
+  try {
+    const status = await api.selftestStatus();
+    // Avoid stale poll responses overriding a newer user-triggered toggle.
+    if (startedMs >= selftestLastLocalWriteMs) {
+      applySelftestStatus(status);
+    }
+  } catch {
+    /* Older firmware may not expose the extended response yet; keep last state. */
+  } finally {
+    selftestPollInFlight = false;
+    if (selftestPollRefs > 0) {
+      selftestPollTimer = window.setTimeout(() => {
+        void pollSelftestStatus();
+      }, 2500);
+    }
+  }
+}
+
+export function setSelftestStatus(status: SelftestStatus): void {
+  selftestLastLocalWriteMs = Date.now();
+  applySelftestStatus(status);
+}
+
+export function startSelftestStatusPolling(): () => void {
+  selftestPollRefs += 1;
+  if (selftestPollRefs === 1) {
+    if (selftestPollTimer !== null) {
+      window.clearTimeout(selftestPollTimer);
+      selftestPollTimer = null;
+    }
+    void pollSelftestStatus();
+  }
+  return () => {
+    selftestPollRefs = Math.max(0, selftestPollRefs - 1);
+    if (selftestPollRefs === 0 && selftestPollTimer !== null) {
+      window.clearTimeout(selftestPollTimer);
+      selftestPollTimer = null;
+    }
+  };
+}
 
 /* ---- Board profile ---- */
 

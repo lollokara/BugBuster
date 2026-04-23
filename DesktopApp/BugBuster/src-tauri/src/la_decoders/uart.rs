@@ -2,9 +2,9 @@
 // la_decoders/uart.rs — UART protocol decoder
 // =============================================================================
 
-use serde::{Serialize, Deserialize};
 use super::{Annotation, AnnotationType};
 use crate::la_store::LaStore;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,9 +41,18 @@ pub fn decode(cfg: &UartConfig, store: &LaStore, start: u64, end: u64) -> Vec<An
     annotations
 }
 
-fn decode_channel(cfg: &UartConfig, store: &LaStore, start: u64, end: u64, ch: u8, annotations: &mut Vec<Annotation>) {
+fn decode_channel(
+    cfg: &UartConfig,
+    store: &LaStore,
+    start: u64,
+    end: u64,
+    ch: u8,
+    annotations: &mut Vec<Annotation>,
+) {
     let sr = store.sample_rate_hz as f64;
-    if sr == 0.0 || cfg.baud_rate == 0 { return; }
+    if sr == 0.0 || cfg.baud_rate == 0 {
+        return;
+    }
 
     let samples_per_bit = sr / cfg.baud_rate as f64;
     let idle_val: u8 = if cfg.idle_high { 1 } else { 0 };
@@ -54,7 +63,9 @@ fn decode_channel(cfg: &UartConfig, store: &LaStore, start: u64, end: u64, ch: u
 
     while i < transitions.len() {
         let (sample, val) = transitions[i];
-        if sample > end { break; }
+        if sample > end {
+            break;
+        }
 
         // Look for start bit: transition from idle to active
         if val == active_val {
@@ -66,23 +77,38 @@ fn decode_channel(cfg: &UartConfig, store: &LaStore, start: u64, end: u64, ch: u
             for bit in 0..cfg.data_bits {
                 let bit_center = start_bit_sample as f64 + (1.5 + bit as f64) * samples_per_bit;
                 let bit_sample = bit_center as u64;
-                if bit_sample > end { valid = false; break; }
+                if bit_sample > end {
+                    valid = false;
+                    break;
+                }
                 let bit_val = store.get_value_at(ch, bit_sample);
                 // Standard UART: HIGH=1, LOW=0. Inverted UART: flip polarity.
                 let data_bit = if cfg.idle_high { bit_val } else { 1 - bit_val };
                 byte_val |= data_bit << bit;
             }
 
-            if !valid { i += 1; continue; }
+            if !valid {
+                i += 1;
+                continue;
+            }
 
             let parity_bits = if cfg.parity != "none" { 1 } else { 0 };
             let mut parity_ok = true;
             if parity_bits > 0 {
-                let parity_center = start_bit_sample as f64 + (1.5 + cfg.data_bits as f64) * samples_per_bit;
+                let parity_center =
+                    start_bit_sample as f64 + (1.5 + cfg.data_bits as f64) * samples_per_bit;
                 let parity_val = store.get_value_at(ch, parity_center as u64);
                 let data_parity = byte_val.count_ones() as u8 & 1;
-                let expected = if cfg.parity == "even" { data_parity } else { 1 - data_parity };
-                let actual = if cfg.idle_high { parity_val } else { 1 - parity_val };
+                let expected = if cfg.parity == "even" {
+                    data_parity
+                } else {
+                    1 - data_parity
+                };
+                let actual = if cfg.idle_high {
+                    parity_val
+                } else {
+                    1 - parity_val
+                };
                 parity_ok = actual == expected;
             }
 
@@ -91,7 +117,9 @@ fn decode_channel(cfg: &UartConfig, store: &LaStore, start: u64, end: u64, ch: u
             let stop_val = store.get_value_at(ch, stop_center as u64);
             let frame_ok = stop_val == idle_val;
 
-            let end_sample = start_bit_sample + ((1.0 + cfg.data_bits as f64 + parity_bits as f64 + cfg.stop_bits as f64) * samples_per_bit) as u64;
+            let end_sample = start_bit_sample
+                + ((1.0 + cfg.data_bits as f64 + parity_bits as f64 + cfg.stop_bits as f64)
+                    * samples_per_bit) as u64;
 
             let text = if byte_val >= 0x20 && byte_val <= 0x7E {
                 format!("'{}'", byte_val as char)
@@ -99,12 +127,24 @@ fn decode_channel(cfg: &UartConfig, store: &LaStore, start: u64, end: u64, ch: u
                 format!("0x{:02X}", byte_val)
             };
 
-            let detail = format!("UART {}: {} ({})",
+            let detail = format!(
+                "UART {}: {} ({})",
                 if ch == cfg.tx_channel { "TX" } else { "RX" },
                 text,
-                if !frame_ok { "FRAME ERR" } else if !parity_ok { "PARITY ERR" } else { "OK" });
+                if !frame_ok {
+                    "FRAME ERR"
+                } else if !parity_ok {
+                    "PARITY ERR"
+                } else {
+                    "OK"
+                }
+            );
 
-            let ann_type = if !frame_ok || !parity_ok { AnnotationType::Error } else { AnnotationType::Data };
+            let ann_type = if !frame_ok || !parity_ok {
+                AnnotationType::Error
+            } else {
+                AnnotationType::Data
+            };
 
             annotations.push(Annotation {
                 start_sample: start_bit_sample,
@@ -117,7 +157,9 @@ fn decode_channel(cfg: &UartConfig, store: &LaStore, start: u64, end: u64, ch: u
             });
 
             let next_sample = end_sample;
-            while i < transitions.len() && transitions[i].0 < next_sample { i += 1; }
+            while i < transitions.len() && transitions[i].0 < next_sample {
+                i += 1;
+            }
             continue;
         }
 

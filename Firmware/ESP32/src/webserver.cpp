@@ -33,6 +33,7 @@
 #include "auth.h"
 #include "board_profile.h"
 #include "wifi_manager.h"
+#include "quicksetup.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -49,8 +50,10 @@ static const char* http_status_string(int code)
     switch (code) {
         case 200: return "200 OK";
         case 400: return "400 Bad Request";
+        case 401: return "401 Unauthorized";
         case 404: return "404 Not Found";
         case 405: return "405 Method Not Allowed";
+        case 409: return "409 Conflict";
         case 500: return "500 Internal Server Error";
         case 503: return "503 Service Unavailable";
         default:  return NULL;
@@ -144,6 +147,20 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
     free(body);
     cJSON_Delete(root);
     return ESP_OK;
+}
+
+static esp_err_t send_raw_json(httpd_req_t *req, const char *body, int code = 200)
+{
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    if (code != 200) {
+        const char *status = http_status_string(code);
+        if (status) {
+            httpd_resp_set_status(req, status);
+        }
+    }
+    return httpd_resp_sendstr(req, body ? body : "{}");
 }
 
 // -----------------------------------------------------------------------------
@@ -1473,6 +1490,9 @@ static esp_err_t handle_get_selftest(httpd_req_t *req)
     cJSON_AddNumberToObject(c, "lastVoltageV", cal->last_measured_v);
     cJSON_AddNumberToObject(c, "errorMv", cal->error_mv);
 
+    cJSON_AddBoolToObject(root, "workerEnabled", selftest_worker_enabled());
+    cJSON_AddBoolToObject(root, "supplyMonitorActive", selftest_is_supply_monitor_active());
+
     return send_json(req, root);
 }
 
@@ -1493,23 +1513,56 @@ static esp_err_t handle_get_selftest_supply(httpd_req_t *req)
     return send_json(req, resp);
 }
 
-// GET /api/selftest/efuse — all e-fuse currents
-static esp_err_t handle_get_selftest_efuse(httpd_req_t *req)
+// GET /api/selftest/supplies/cached — cached supply rail voltages
+static esp_err_t handle_get_selftest_supplies_cached(httpd_req_t *req)
 {
-    selftest_monitor_step();
-    const SelftestEfuseCurrents *ec = selftest_get_efuse_currents();
+    if (selftest_worker_enabled()) {
+        selftest_monitor_step();
+    }
+    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
+
+    static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
 
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "available", ec->available);
-    cJSON_AddNumberToObject(root, "timestampMs", ec->timestamp_ms);
-    cJSON *arr = cJSON_AddArrayToObject(root, "efuses");
-    for (int i = 0; i < SELFTEST_EFUSE_COUNT; i++) {
+    cJSON_AddBoolToObject(root, "available", sv->available);
+    cJSON_AddNumberToObject(root, "timestampMs", sv->timestamp_ms);
+    cJSON *arr = cJSON_AddArrayToObject(root, "rails");
+    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
         cJSON *obj = cJSON_CreateObject();
-        cJSON_AddNumberToObject(obj, "efuse", i + 1);
-        cJSON_AddNumberToObject(obj, "currentA", ec->current_a[i]);
+        cJSON_AddNumberToObject(obj, "rail", i);
+        cJSON_AddStringToObject(obj, "name", rail_names[i]);
+        cJSON_AddNumberToObject(obj, "voltageV", sv->voltage[i]);
         cJSON_AddItemToArray(arr, obj);
     }
     return send_json(req, root);
+}
+
+// POST /api/selftest/worker body: {"enabled": true}
+static esp_err_t handle_post_selftest_worker(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *enabled_item = cJSON_GetObjectItem(body, "enabled");
+    if (!enabled_item || !cJSON_IsBool(enabled_item)) {
+        cJSON_Delete(body);
+        return send_error(req, 400, "Missing boolean field: enabled");
+    }
+
+    bool enabled = cJSON_IsTrue(enabled_item);
+    cJSON_Delete(body);
+
+    if (!selftest_set_worker_enabled(enabled)) {
+        return send_error(req, 500, "Failed to persist worker state");
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddBoolToObject(resp, "workerEnabled", selftest_worker_enabled());
+    cJSON_AddBoolToObject(resp, "supplyMonitorActive", selftest_is_supply_monitor_active());
+    return send_json(req, resp);
 }
 
 // POST /api/selftest/calibrate body: {"channel": 1}
@@ -1553,6 +1606,125 @@ static esp_err_t handle_get_selftest_supplies(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "avssV", s->avss_v);
     cJSON_AddNumberToObject(root, "tempC", s->temp_c);
     return send_json(req, root);
+}
+
+// =============================================================================
+// Quick Setup endpoints
+// =============================================================================
+
+static int extract_quicksetup_slot(const char *uri, const char **suffix)
+{
+    const char *prefix = "/api/quicksetup/";
+    const char *p = strstr(uri, prefix);
+    if (!p) return -1;
+    p += strlen(prefix);
+    if (*p < '0' || *p > '3') return -1;
+    int slot = *p - '0';
+    p++;
+    if (*p == '/') p++;
+    if (suffix) *suffix = p;
+    return slot;
+}
+
+// GET /api/quicksetup
+static esp_err_t handle_get_quicksetup_list(httpd_req_t *req)
+{
+    QuickSetupSlotInfo slots[QUICKSETUP_SLOT_COUNT];
+    QuickSetupStatus st = quicksetup_list(slots);
+    if (st != QUICKSETUP_OK) {
+        return send_error(req, 500, "Quick setup storage unavailable");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "slots");
+    for (uint8_t i = 0; i < QUICKSETUP_SLOT_COUNT; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "index", slots[i].index);
+        cJSON_AddBoolToObject(obj, "occupied", slots[i].occupied);
+        if (slots[i].occupied) {
+            cJSON *summary = cJSON_CreateObject();
+            cJSON_AddStringToObject(summary, "name", slots[i].name);
+            cJSON_AddNumberToObject(summary, "ts", slots[i].ts);
+            cJSON_AddNumberToObject(summary, "size", slots[i].size);
+            cJSON_AddNumberToObject(summary, "hash", slots[i].summary_hash);
+            cJSON_AddItemToObject(obj, "summary", summary);
+        } else {
+            cJSON_AddItemToObject(obj, "summary", cJSON_CreateNull());
+        }
+        cJSON_AddItemToArray(arr, obj);
+    }
+    return send_json(req, root);
+}
+
+// GET /api/quicksetup/{0-3}
+static esp_err_t handle_get_quicksetup_slot(httpd_req_t *req)
+{
+    const char *suffix = NULL;
+    int slot = extract_quicksetup_slot(req->uri, &suffix);
+    if (slot < 0 || (suffix && *suffix != '\0')) {
+        return send_error(req, 400, "Invalid quick setup slot");
+    }
+
+    char json[QUICKSETUP_MAX_JSON_BYTES + 1];
+    size_t len = 0;
+    QuickSetupStatus st = quicksetup_get((uint8_t)slot, json, sizeof(json), &len);
+    if (st == QUICKSETUP_NOT_FOUND) return send_error(req, 404, "Quick setup slot empty");
+    if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
+    if (st != QUICKSETUP_OK) return send_error(req, 500, "Quick setup storage unavailable");
+    return send_raw_json(req, json);
+}
+
+// POST /api/quicksetup/{0-3}[/{apply|delete}]
+static esp_err_t handle_quicksetup_post_dispatch(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    const char *suffix = NULL;
+    int slot = extract_quicksetup_slot(req->uri, &suffix);
+    if (slot < 0) return send_error(req, 400, "Invalid quick setup slot");
+
+    if (!suffix || *suffix == '\0') {
+        char json[QUICKSETUP_MAX_JSON_BYTES + 1];
+        size_t len = 0;
+        QuickSetupStatus st = quicksetup_save((uint8_t)slot, json, sizeof(json), &len);
+        if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
+        if (st == QUICKSETUP_TOO_LARGE) return send_error(req, 500, "Quick setup snapshot too large");
+        if (st != QUICKSETUP_OK) return send_error(req, 500, "Quick setup save failed");
+        return send_raw_json(req, json);
+    }
+
+    if (strcmp(suffix, "apply") == 0) {
+        QuickSetupApplyReport report;
+        QuickSetupStatus st = quicksetup_apply((uint8_t)slot, &report);
+        if (st == QUICKSETUP_NOT_FOUND) return send_error(req, 404, "Quick setup slot empty");
+        if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
+
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddBoolToObject(root, "ok", st == QUICKSETUP_OK);
+        cJSON_AddBoolToObject(root, "applied", st == QUICKSETUP_OK);
+        if (st != QUICKSETUP_OK) {
+            cJSON *failed = cJSON_AddArrayToObject(root, "failed");
+            for (uint8_t i = 0; i < report.failed_count; i++) {
+                cJSON_AddItemToArray(failed, cJSON_CreateString(report.failed[i]));
+            }
+        }
+        return send_json(req, root, st == QUICKSETUP_OK ? 200 : 409);
+    }
+
+    if (strcmp(suffix, "delete") == 0) {
+        bool existed = false;
+        QuickSetupStatus st = quicksetup_delete((uint8_t)slot, &existed);
+        if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
+        if (st != QUICKSETUP_OK && st != QUICKSETUP_NOT_FOUND) {
+            return send_error(req, 500, "Quick setup delete failed");
+        }
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddBoolToObject(root, "ok", true);
+        cJSON_AddBoolToObject(root, "deleted", existed);
+        return send_json(req, root);
+    }
+
+    return send_error(req, 404, "Unknown quick setup endpoint");
 }
 
 // =============================================================================
@@ -1696,6 +1868,11 @@ static esp_err_t handle_get_idac(httpd_req_t *req)
         cJSON_AddBoolToObject(obj, "calibrated", st->cal[ch].valid);
         const char *names[] = {"LevelShift", "V_ADJ1", "V_ADJ2"};
         cJSON_AddStringToObject(obj, "name", names[ch]);
+        float poly[4] = {0};
+        bool have_poly = ds4424_cal_fit_cubic(ch, poly);
+        cJSON_AddBoolToObject(obj, "polyValid", have_poly);
+        cJSON *poly_arr = cJSON_AddArrayToObject(obj, "calPoly");
+        for (int i = 0; i < 4; i++) cJSON_AddNumberToObject(poly_arr, NULL, (double)poly[i]);
         cJSON_AddItemToArray(channels, obj);
     }
     return send_json(req, root);
@@ -2700,8 +2877,10 @@ void initWebServer(void)
         return;
     }
 
+    quicksetup_init();
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 64;
+    config.max_uri_handlers = 72;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     config.stack_size       = 12288;  // Increased for OTA buffer
 
@@ -2833,10 +3012,15 @@ void initWebServer(void)
     };
     httpd_register_uri_handler(s_server, &uri_selftest_supply);
 
-    httpd_uri_t uri_selftest_efuse = {
-        .uri = "/api/selftest/efuse", .method = HTTP_GET, .handler = handle_get_selftest_efuse, .user_ctx = NULL
+    httpd_uri_t uri_selftest_supplies_cached = {
+        .uri = "/api/selftest/supplies/cached", .method = HTTP_GET, .handler = handle_get_selftest_supplies_cached, .user_ctx = NULL
     };
-    httpd_register_uri_handler(s_server, &uri_selftest_efuse);
+    httpd_register_uri_handler(s_server, &uri_selftest_supplies_cached);
+
+    httpd_uri_t uri_selftest_worker = {
+        .uri = "/api/selftest/worker", .method = HTTP_POST, .handler = handle_post_selftest_worker, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_selftest_worker);
 
     httpd_uri_t uri_selftest_cal = {
         .uri = "/api/selftest/calibrate", .method = HTTP_POST, .handler = handle_post_selftest_calibrate, .user_ctx = NULL
@@ -2847,6 +3031,23 @@ void initWebServer(void)
         .uri = "/api/selftest/supplies", .method = HTTP_GET, .handler = handle_get_selftest_supplies, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_selftest_supplies);
+
+    // ----- Quick Setup routes -----
+
+    httpd_uri_t uri_quicksetup_list = {
+        .uri = "/api/quicksetup", .method = HTTP_GET, .handler = handle_get_quicksetup_list, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_quicksetup_list);
+
+    httpd_uri_t uri_quicksetup_get = {
+        .uri = "/api/quicksetup/*", .method = HTTP_GET, .handler = handle_get_quicksetup_slot, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_quicksetup_get);
+
+    httpd_uri_t uri_quicksetup_post = {
+        .uri = "/api/quicksetup/*", .method = HTTP_POST, .handler = handle_quicksetup_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_quicksetup_post);
 
     // ----- UART bridge routes -----
 

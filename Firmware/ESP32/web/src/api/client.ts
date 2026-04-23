@@ -19,6 +19,17 @@ export class PairingRequiredError extends Error {
   }
 }
 
+export class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly statusText: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
 export interface DeviceInfo {
   siliconRev: number;
   siliconId0: string;
@@ -31,6 +42,53 @@ export interface PairingInfo {
   macAddress: string;
   tokenFingerprint: string | null;
   transport: "http" | "usb";
+}
+
+export interface SelftestSuppliesCached {
+  available: boolean;
+  timestampMs: number;
+  rails: Array<{ rail: number; name: string; voltageV: number }>;
+}
+
+export interface SelftestStatus {
+  boot?: {
+    ran?: boolean;
+    passed?: boolean;
+    vadj1V?: number;
+    vadj2V?: number;
+    vlogicV?: number;
+  };
+  calibration?: {
+    status?: number;
+    channel?: number;
+    points?: number;
+    lastVoltageV?: number;
+    errorMv?: number;
+  };
+  workerEnabled?: boolean;
+  supplyMonitorActive?: boolean;
+}
+
+export interface QuickSetupSummary {
+  index?: number;
+  occupied?: boolean;
+  summary?: unknown;
+  name?: string;
+  ts?: number;
+  timestamp?: number;
+  updatedAt?: string;
+}
+
+export interface QuickSetupList {
+  slots: QuickSetupSummary[];
+}
+
+export type QuickSetupPayload = Record<string, unknown>;
+
+export interface QuickSetupApplyResult {
+  ok?: boolean;
+  applied?: unknown;
+  failed?: string[];
 }
 
 export interface BoardRail {
@@ -122,7 +180,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     } catch {
       /* ignore parse error */
     }
-    throw new Error(msg);
+    throw new HttpError(res.status, res.statusText, msg);
   }
 
   if (res.status === 204) return undefined as T;
@@ -382,14 +440,42 @@ export const api = {
       mac,
       admin: true,
     }),
-  selftest: () => request<any>("/api/selftest"),
+  selftestStatus: () => request<SelftestStatus>("/api/selftest"),
+  selftest: () => request<SelftestStatus>("/api/selftest"),
+  selftestWorker: (mac: string, enabled: boolean) =>
+    request<SelftestStatus>("/api/selftest/worker", {
+      method: "POST",
+      body: { enabled },
+      mac,
+      admin: true,
+    }),
   selftestSupplies: () => request<any>("/api/selftest/supplies"),
-  selftestEfuse: () => request<any>("/api/selftest/efuse"),
+  selftestSuppliesCached: () => request<SelftestSuppliesCached>("/api/selftest/supplies/cached"),
   selftestSupply: (rail: number) => request<any>(`/api/selftest/supply/${rail}`),
   selftestCalibrate: (mac: string, channel: number) =>
     request<any>("/api/selftest/calibrate", {
       method: "POST",
       body: { channel },
+      mac,
+      admin: true,
+    }),
+  quicksetupList: () => request<QuickSetupList>("/api/quicksetup"),
+  quicksetupGet: (slot: number) => request<QuickSetupPayload>(`/api/quicksetup/${slot}`),
+  quicksetupSave: (mac: string, slot: number) =>
+    request<QuickSetupPayload>(`/api/quicksetup/${slot}`, {
+      method: "POST",
+      mac,
+      admin: true,
+    }),
+  quicksetupApply: (mac: string, slot: number) =>
+    request<QuickSetupApplyResult>(`/api/quicksetup/${slot}/apply`, {
+      method: "POST",
+      mac,
+      admin: true,
+    }),
+  quicksetupDelete: (mac: string, slot: number) =>
+    request<void>(`/api/quicksetup/${slot}/delete`, {
+      method: "POST",
       mac,
       admin: true,
     }),

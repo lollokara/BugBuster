@@ -154,9 +154,12 @@ const CliCommand g_cliCommands[] = {
       "pca [<name> <0|1>]",
       "PCA9535 GPIO expander (vadj1/vadj2/15v/mux/usb/efuse1-4)", NULL,
       cli_complete_pca_name },
-    { "efusei",   "imon",   cli_cmd_efuse_current, CAT_I2C_BUS,
-      "efusei [1|2|3|4|cached]",
-      "Measure e-fuse currents via U23 (or show cached monitor values)", NULL },
+    { "supplies", NULL,     cli_cmd_supplies,      CAT_I2C_BUS,
+      "supplies",
+      "Show cached supply rail voltages (VADJ1, VADJ2, VLOGIC)", NULL },
+    { "selftest", NULL,     cli_cmd_selftest,      CAT_I2C_BUS,
+      "selftest worker [on|off]",
+      "Enable/disable supply monitor (opt-in, default off)", NULL },
 
     // ---- Network ----
     { "wifi",     NULL,     cli_cmd_wifi,          CAT_NETWORK,

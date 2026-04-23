@@ -1,15 +1,15 @@
 #pragma once
 
 // =============================================================================
-// selftest.h - Self-Test, Calibration, and E-fuse Current Monitoring
+// selftest.h - Self-Test, Calibration, and Supply Rail Monitoring
 //
 // Uses U23 (5th ADGS2414D in the daisy-chain) to route internal power rails
-// and e-fuse IMON pins to AD74416H Channel D for measurement.
+// to AD74416H Channel D for measurement.
 //
 // Key features:
 //   - Boot-time supply verification (VADJ1, VADJ2, 3V3_ADJ)
 //   - Automatic IDAC calibration (no external connections needed)
-//   - Background e-fuse current monitoring via IMON pins
+//   - Background supply rail monitoring (VADJ1, VADJ2, 3V3_ADJ)
 //   - Safety interlocks with U17 S2 (IO 10 analog mode)
 //
 // PCB mode only — all functions are no-ops when ADGS_HAS_SELFTEST == 0.
@@ -29,13 +29,6 @@ extern "C" {
 #define SELFTEST_RAIL_3V3_ADJ   2   // 3V3_ADJ / VLOGIC (direct)
 #define SELFTEST_RAIL_COUNT     3
 
-// E-fuse identifiers (1-4 to match IO_Block numbering)
-#define SELFTEST_EFUSE_1        1
-#define SELFTEST_EFUSE_2        2
-#define SELFTEST_EFUSE_3        3
-#define SELFTEST_EFUSE_4        4
-#define SELFTEST_EFUSE_COUNT    4
-
 // Calibration status
 #define CAL_STATUS_IDLE         0
 #define CAL_STATUS_RUNNING      1
@@ -51,18 +44,11 @@ typedef struct {
     float    vlogic_v;                      // measured 3V3_ADJ voltage
 } SelftestBootResult;
 
-// E-fuse current monitoring result
+// Background supply rail monitoring result
 typedef struct {
-    float    current_a[SELFTEST_EFUSE_COUNT];  // measured current in amps (-1 = unavailable)
-    uint32_t timestamp_ms;                      // when last measured
-    bool     available;                         // false if U17 S2 is closed
-} SelftestEfuseCurrents;
-
-// Supply voltage monitoring result (background)
-typedef struct {
-    float    voltage[SELFTEST_RAIL_COUNT];     // VADJ1, VADJ2, 3V3_ADJ in volts (-1 = inactive)
-    uint32_t timestamp_ms;
-    bool     available;
+    float    voltage[SELFTEST_RAIL_COUNT];  // VADJ1, VADJ2, 3V3_ADJ; -1.0f if disabled or unavailable
+    uint32_t timestamp_ms;                  // when last measured
+    bool     available;                     // false if U17 S2 interlock closed
 } SelftestSupplyVoltages;
 
 // Calibration result
@@ -115,34 +101,41 @@ const SelftestBootResult* selftest_get_boot_result(void);
 float selftest_measure_supply(uint8_t rail);
 
 /**
- * @brief  Measure a single e-fuse output current via IMON.
+ * @brief  Get the cached supply rail voltages (from background monitoring).
  *
- * @param efuse  E-fuse number (1–4)
- * @return Current in amps, or -1.0f if unavailable (U17 S2 closed or error).
- */
-float selftest_measure_efuse_current(uint8_t efuse);
-
-/**
- * @brief  Get the cached e-fuse current readings (from background monitoring).
- *
- * @return Pointer to the e-fuse currents (static, updated periodically).
- */
-const SelftestEfuseCurrents* selftest_get_efuse_currents(void);
-
-/**
- * @brief  Get the cached supply voltage readings (from background monitoring).
+ * @return Pointer to the supply voltages (static, updated periodically).
  */
 const SelftestSupplyVoltages* selftest_get_supply_voltages(void);
 
 /**
+ * @brief  Get whether the background supply monitor worker is enabled.
+ *         Default is disabled; persisted in NVS key selftest/st_worker_en.
+ */
+bool selftest_worker_enabled(void);
+
+/**
+ * @brief  Enable or disable the background supply monitor worker.
+ *         The new state is persisted to NVS.
+ *
+ * @return true if the in-memory state was updated and NVS commit succeeded.
+ */
+bool selftest_set_worker_enabled(bool enabled);
+
+/**
+ * @brief  True when the supply monitor is enabled and not blocked by
+ *         calibration or the Channel D analog interlock.
+ */
+bool selftest_is_supply_monitor_active(void);
+
+/**
  * @brief  Non-blocking background monitor step.
  *         Call periodically (e.g. every 200 ms from a task).
- *         Each call measures ONE channel (e-fuse or supply), cycling through
- *         all active channels over multiple calls.  This avoids blocking the
- *         main loop while still respecting MUX dead-time between switches.
+ *         Each call measures ONE supply rail, cycling through all three rails
+ *         over multiple calls.  This avoids blocking the main loop while still
+ *         respecting MUX dead-time between switches.
  *
  *         Only runs if U17 S2 is open and calibration is not active.
- *         Monitors only active e-fuses and enabled voltage rails.
+ *         Skips rails whose PCA9535 enable bit is false (except 3V3_ADJ).
  */
 void selftest_monitor_step(void);
 

@@ -55,7 +55,11 @@ impl UsbTransport {
             loop {
                 match reader_port.read(&mut drain) {
                     Ok(n) if n > 0 => {
-                        log::debug!("Drained {} bytes: {:?}", n, std::str::from_utf8(&drain[..n]).unwrap_or("(binary)"));
+                        log::debug!(
+                            "Drained {} bytes: {:?}",
+                            n,
+                            std::str::from_utf8(&drain[..n]).unwrap_or("(binary)")
+                        );
                     }
                     _ => break,
                 }
@@ -81,7 +85,7 @@ impl UsbTransport {
                     // Search for magic pattern in accumulated bytes
                     if ring.len() >= bbp::HANDSHAKE_RSP_LEN {
                         for i in 0..=(ring.len() - bbp::HANDSHAKE_RSP_LEN) {
-                            if ring[i..i+4] == bbp::MAGIC {
+                            if ring[i..i + 4] == bbp::MAGIC {
                                 found_offset = Some(i);
                                 break;
                             }
@@ -102,9 +106,8 @@ impl UsbTransport {
 
         log::info!("Handshake raw stream ({} bytes): {:02X?}", ring.len(), ring);
 
-        let off = found_offset.ok_or_else(|| {
-            anyhow!("Handshake magic not found in response: {:02X?}", ring)
-        })?;
+        let off = found_offset
+            .ok_or_else(|| anyhow!("Handshake magic not found in response: {:02X?}", ring))?;
         let rsp = &ring[off..off + bbp::HANDSHAKE_RSP_LEN];
         let handshake_info = HandshakeInfo::parse(rsp)
             .ok_or_else(|| anyhow!("Invalid handshake at offset {}: {:02X?}", off, rsp))?;
@@ -143,7 +146,9 @@ impl UsbTransport {
                                 if msg.is_response() || msg.is_error() {
                                     // Match to pending command by seq
                                     if let Ok(mut pend) = reader_pending.lock() {
-                                        if let Some(idx) = pend.iter().position(|p| p.seq == msg.seq) {
+                                        if let Some(idx) =
+                                            pend.iter().position(|p| p.seq == msg.seq)
+                                        {
                                             let p = pend.remove(idx);
                                             let _ = p.tx.send(msg);
                                         }
@@ -250,13 +255,19 @@ impl Transport for UsbTransport {
         // Register pending response
         let (tx, rx) = oneshot::channel();
         {
-            let mut pend = self.pending.lock().map_err(|_| anyhow!("Pending lock poisoned"))?;
+            let mut pend = self
+                .pending
+                .lock()
+                .map_err(|_| anyhow!("Pending lock poisoned"))?;
             pend.push(PendingCommand { seq, tx });
         }
 
         // Write frame to serial port
         {
-            let mut writer_lock = self.writer.lock().map_err(|_| anyhow!("Writer lock poisoned"))?;
+            let mut writer_lock = self
+                .writer
+                .lock()
+                .map_err(|_| anyhow!("Writer lock poisoned"))?;
             if let Some(ref mut port) = *writer_lock {
                 port.write_all(&frame)?;
                 port.flush()?;
@@ -267,9 +278,9 @@ impl Transport for UsbTransport {
 
         // Longer timeout for commands that block on firmware side (WiFi connect = up to 10s)
         let timeout_ms = match cmd_id {
-            bbp::CMD_WIFI_CONNECT => 65000,       // firmware retries up to 5x with backoff
-            bbp::CMD_WIFI_SCAN => 8000,           // blocking scan ~3-5s
-            bbp::CMD_SELFTEST_AUTO_CAL => 30000,  // IDAC sweep + measurement loop
+            bbp::CMD_WIFI_CONNECT => 65000, // firmware retries up to 5x with backoff
+            bbp::CMD_WIFI_SCAN => 8000,     // blocking scan ~3-5s
+            bbp::CMD_SELFTEST_AUTO_CAL => 30000, // IDAC sweep + measurement loop
             bbp::CMD_SELFTEST_INT_SUPPLIES => 15000, // multi-phase diagnostic sampling
             _ => 2000,
         };
@@ -279,7 +290,11 @@ impl Transport for UsbTransport {
             Ok(Ok(msg)) => {
                 if msg.is_error() {
                     let err_code = msg.error_code().unwrap_or(0);
-                    Err(anyhow!("Device error 0x{:02X} for cmd 0x{:02X}", err_code, cmd_id))
+                    Err(anyhow!(
+                        "Device error 0x{:02X} for cmd 0x{:02X}",
+                        err_code,
+                        cmd_id
+                    ))
                 } else {
                     Ok(msg.payload)
                 }

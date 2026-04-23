@@ -2,9 +2,9 @@
 // la_decoders/i2c.rs — I2C protocol decoder
 // =============================================================================
 
-use serde::{Serialize, Deserialize};
 use super::{Annotation, AnnotationType};
 use crate::la_store::LaStore;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,7 +15,10 @@ pub struct I2cConfig {
 
 impl Default for I2cConfig {
     fn default() -> Self {
-        Self { sda_channel: 0, scl_channel: 1 }
+        Self {
+            sda_channel: 0,
+            scl_channel: 1,
+        }
     }
 }
 
@@ -40,7 +43,9 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
 
     for i in 1..sda_trans.len() {
         let sample = sda_trans[i].0;
-        if sample < start || sample > end { continue; }
+        if sample < start || sample > end {
+            continue;
+        }
 
         let scl_val = store.get_value_at(cfg.scl_channel, sample);
         if scl_val == 1 {
@@ -83,9 +88,14 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
         });
 
         // Find SCL rising edges after START until next START/STOP
-        let next_event_sample = if ev_idx + 1 < events.len() { events[ev_idx + 1].0 } else { end };
+        let next_event_sample = if ev_idx + 1 < events.len() {
+            events[ev_idx + 1].0
+        } else {
+            end
+        };
 
-        let edges: Vec<u64> = scl_rising.iter()
+        let edges: Vec<u64> = scl_rising
+            .iter()
             .filter(|&&s| s > start_sample && s < next_event_sample)
             .copied()
             .collect();
@@ -103,7 +113,11 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
             }
 
             // ACK/NAK bit
-            let ack_sample = if bit_idx + 8 < edges.len() { edges[bit_idx + 8] } else { break };
+            let ack_sample = if bit_idx + 8 < edges.len() {
+                edges[bit_idx + 8]
+            } else {
+                break;
+            };
             let ack_val = store.get_value_at(cfg.sda_channel, ack_sample);
             let ack_str = if ack_val == 0 { "ACK" } else { "NAK" };
 
@@ -117,7 +131,11 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
                     start_sample: byte_start,
                     end_sample: byte_end,
                     text: format!("0x{:02X} {}", addr, rw),
-                    detail: format!("I2C Address 0x{:02X} {}", addr, if rw == "R" { "Read" } else { "Write" }),
+                    detail: format!(
+                        "I2C Address 0x{:02X} {}",
+                        addr,
+                        if rw == "R" { "Read" } else { "Write" }
+                    ),
                     ann_type: AnnotationType::Address,
                     row: 0,
                     channel: cfg.sda_channel,
@@ -142,7 +160,11 @@ pub fn decode(cfg: &I2cConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
                 end_sample: ack_sample + 5,
                 text: ack_str.into(),
                 detail: format!("I2C {}", ack_str),
-                ann_type: if ack_val == 0 { AnnotationType::Info } else { AnnotationType::Error },
+                ann_type: if ack_val == 0 {
+                    AnnotationType::Info
+                } else {
+                    AnnotationType::Error
+                },
                 row: 0,
                 channel: cfg.scl_channel,
             });

@@ -2,9 +2,9 @@
 // la_decoders/spi.rs — SPI protocol decoder
 // =============================================================================
 
-use serde::{Serialize, Deserialize};
 use super::{Annotation, AnnotationType};
 use crate::la_store::LaStore;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,11 +13,11 @@ pub struct SpiConfig {
     pub miso_channel: u8,
     pub sclk_channel: u8,
     pub cs_channel: u8,
-    pub cpol: u8,               // Clock polarity: 0 or 1
-    pub cpha: u8,               // Clock phase: 0 or 1
-    pub bit_order: String,      // "msb" or "lsb"
-    pub word_size: u8,          // Bits per word (default 8)
-    pub cs_active_low: bool,    // true = CS active low (standard)
+    pub cpol: u8,            // Clock polarity: 0 or 1
+    pub cpha: u8,            // Clock phase: 0 or 1
+    pub bit_order: String,   // "msb" or "lsb"
+    pub word_size: u8,       // Bits per word (default 8)
+    pub cs_active_low: bool, // true = CS active low (standard)
 }
 
 impl Default for SpiConfig {
@@ -60,8 +60,8 @@ pub fn decode(cfg: &SpiConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
             let s = sclk_trans[i].0;
             if s >= start && s <= end {
                 // 0xFF = no CS line — always active
-                let cs_ok = cfg.cs_channel == 0xFF
-                    || store.get_value_at(cfg.cs_channel, s) == cs_active;
+                let cs_ok =
+                    cfg.cs_channel == 0xFF || store.get_value_at(cfg.cs_channel, s) == cs_active;
                 if cs_ok {
                     sample_edges.push(s);
                 }
@@ -71,7 +71,9 @@ pub fn decode(cfg: &SpiConfig, store: &LaStore, start: u64, end: u64) -> Vec<Ann
 
     // Group edges into words
     let ws = cfg.word_size as usize;
-    if ws == 0 { return annotations; }
+    if ws == 0 {
+        return annotations;
+    }
 
     let mut edge_idx = 0;
     while edge_idx + ws <= sample_edges.len() {

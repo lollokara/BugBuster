@@ -41,7 +41,9 @@ typedef struct {
 } DS4424CalPoint;
 
 // Per-channel calibration data
-#define DS4424_CAL_MAX_POINTS  16
+// Must be ≥ CAL_EXPECTED_POINTS (100, in selftest.cpp) so the autocal sweep
+// is not silently truncated by ds4424_cal_add_point().
+#define DS4424_CAL_MAX_POINTS  100
 typedef struct {
     DS4424CalPoint points[DS4424_CAL_MAX_POINTS];
     uint8_t        count;
@@ -162,6 +164,16 @@ bool ds4424_cal_save(void);
  * @return true if at least one channel's calibration was loaded
  */
 bool ds4424_cal_load(void);
+
+/**
+ * @brief Fit a cubic polynomial V = a0 + a1*cn + a2*cn^2 + a3*cn^3
+ *        where cn = code/127.0 to the stored calibration points for channel ch.
+ * @param ch      Channel 0-2
+ * @param coeffs  Output array of 4 coefficients [a0, a1, a2, a3] (f32)
+ * @return true if fit succeeded (need >= 4 points and non-singular normal matrix),
+ *         false if cal->count < 4, cal not valid, or singular — coeffs zeroed on failure.
+ */
+bool ds4424_cal_fit_cubic(uint8_t ch, float coeffs[4]);
 
 /**
  * @brief Get channel configuration (for display/debug).

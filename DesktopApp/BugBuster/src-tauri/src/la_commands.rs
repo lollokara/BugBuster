@@ -152,7 +152,8 @@ pub(crate) fn pre_stream_drain(transport: &mut impl LaTransport) -> Result<(), S
                 count += 1;
                 log::debug!(
                     "[pre_stream_drain] discarding stale {:?} ({})",
-                    p.kind, count
+                    p.kind,
+                    count
                 );
                 if count >= MAX_DRAIN {
                     log::warn!("[pre_stream_drain] MAX_DRAIN reached — aborting");
@@ -404,7 +405,10 @@ pub fn la_check_usb() -> CmdResult<bool> {
 
 /// Connect to the RP2040 LA USB interface
 #[tauri::command]
-pub fn la_connect_usb(la: State<'_, LaState>, mgr: State<'_, ConnectionManager>) -> CmdResult<bool> {
+pub fn la_connect_usb(
+    la: State<'_, LaState>,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<bool> {
     let mut usb = la.usb.lock().map_err(map_err)?;
     let status = mgr.get_connection_status();
     usb.connect(status.la_selector).map_err(map_err)?;
@@ -1121,8 +1125,16 @@ pub async fn la_stream_usb(
     let usb_mutex = la.usb.clone();
 
     let handle = tokio::task::spawn_blocking(move || {
-        let mut transport = LockedLaTransport { usb: usb_mutex.clone() };
-        let reason = run_stream_loop(&mut transport, &running, &store_mutex, &stream_status, &stream_seq);
+        let mut transport = LockedLaTransport {
+            usb: usb_mutex.clone(),
+        };
+        let reason = run_stream_loop(
+            &mut transport,
+            &running,
+            &store_mutex,
+            &stream_status,
+            &stream_seq,
+        );
         log::info!("[la_stream_usb] stream task exited: {:?}", reason);
     });
 
@@ -1158,11 +1170,7 @@ pub async fn la_stream_usb_stop(
     // task is pending, short-circuit to prevent redundant BBP STOP + 500ms
     // settle round-trips when the frontend fires multiple stops in a row.
     let was_running = la.stream_running.swap(false, Ordering::SeqCst);
-    let task_present = la
-        .stream_task
-        .lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false);
+    let task_present = la.stream_task.lock().map(|g| g.is_some()).unwrap_or(false);
     if !was_running && !task_present {
         log::info!("[la_stream_usb_stop] phase=already_stopped");
         // Still mirror the status fields so the frontend sees consistent state.

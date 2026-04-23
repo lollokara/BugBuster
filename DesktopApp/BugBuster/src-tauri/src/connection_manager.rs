@@ -5,10 +5,10 @@
 // Uses tokio::sync::Mutex for the transport since we need to hold it across await.
 // =============================================================================
 
-use std::sync::{Arc, Mutex as StdMutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::{anyhow, Result};
 use tauri::{AppHandle, Emitter, Manager};
@@ -65,7 +65,12 @@ impl ConnectionManager {
         }
     }
 
-    async fn connect_usb(&self, port_name: &str, la_selector: Option<crate::la_usb::DeviceSelector>, app: &AppHandle) -> Result<()> {
+    async fn connect_usb(
+        &self,
+        port_name: &str,
+        la_selector: Option<crate::la_usb::DeviceSelector>,
+        app: &AppHandle,
+    ) -> Result<()> {
         let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Message>();
 
         log::info!("Opening USB port: {}", port_name);
@@ -74,9 +79,7 @@ impl ConnectionManager {
         let first_attempt = {
             let pn = port_name_owned.clone();
             let tx = event_tx_clone.clone();
-            tokio::task::spawn_blocking(move || {
-                UsbTransport::connect(&pn, tx)
-            }).await?
+            tokio::task::spawn_blocking(move || UsbTransport::connect(&pn, tx)).await?
         };
         let transport = match first_attempt {
             Ok(t) => t,
@@ -85,9 +88,7 @@ impl ConnectionManager {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 let pn = port_name_owned.clone();
                 let tx = event_tx_clone.clone();
-                tokio::task::spawn_blocking(move || {
-                    UsbTransport::connect(&pn, tx)
-                }).await??
+                tokio::task::spawn_blocking(move || UsbTransport::connect(&pn, tx)).await??
             }
         };
         log::info!("USB handshake completed successfully");
@@ -100,10 +101,13 @@ impl ConnectionManager {
                     h.proto_version,
                     bbp::PROTO_VERSION
                 );
-                let _ = app.emit("version-mismatch", &serde_json::json!({
-                    "device_version": h.proto_version,
-                    "expected_version": bbp::PROTO_VERSION,
-                }));
+                let _ = app.emit(
+                    "version-mismatch",
+                    &serde_json::json!({
+                        "device_version": h.proto_version,
+                        "expected_version": bbp::PROTO_VERSION,
+                    }),
+                );
             }
         }
 
@@ -120,7 +124,7 @@ impl ConnectionManager {
             if rsp.len() > 1 {
                 let len = rsp[0] as usize;
                 if rsp.len() >= 1 + len {
-                    let token = String::from_utf8_lossy(&rsp[1..1+len]).to_string();
+                    let token = String::from_utf8_lossy(&rsp[1..1 + len]).to_string();
                     if let Some(h) = transport.handshake_info() {
                         log::info!("Retrieved admin token via USB for device {}", h.mac_address);
                         self.save_token(h.mac_address.clone(), token.clone(), app);
@@ -136,7 +140,10 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
+            let mut status = self
+                .connection_status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             status.mode = ConnectionMode::Usb;
             status.port_or_url = port_name.to_string();
             status.device_info = device_info;
@@ -144,7 +151,11 @@ impl ConnectionManager {
             status.la_selector = la_selector;
         }
 
-        let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let status = self
+            .connection_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let _ = app.emit("connection-status", &status);
 
         // Spawn event listener for USB stream data
@@ -156,10 +167,9 @@ impl ConnectionManager {
 
             loop {
                 // Use a short timeout so we can flush the buffer periodically
-                match tokio::time::timeout(
-                    std::time::Duration::from_millis(10),
-                    event_rx.recv()
-                ).await {
+                match tokio::time::timeout(std::time::Duration::from_millis(10), event_rx.recv())
+                    .await
+                {
                     Ok(Some(msg)) => {
                         match msg.cmd_id {
                             bbp::EVT_ADC_DATA => {
@@ -170,14 +180,21 @@ impl ConnectionManager {
                                         if let Some(ref mut rec) = *guard {
                                             // Parse count from payload and write raw sample data
                                             if msg.payload.len() >= 7 {
-                                                let count = u16::from_le_bytes([msg.payload[5], msg.payload[6]]) as usize;
+                                                let count = u16::from_le_bytes([
+                                                    msg.payload[5],
+                                                    msg.payload[6],
+                                                ])
+                                                    as usize;
                                                 let mask = msg.payload[0];
-                                                let num_ch = (0..4).filter(|b| mask & (1 << b) != 0).count();
+                                                let num_ch =
+                                                    (0..4).filter(|b| mask & (1 << b) != 0).count();
                                                 let data_len = count * num_ch * 3;
                                                 let data_end = 7 + data_len;
                                                 if msg.payload.len() >= data_end {
                                                     use std::io::Write;
-                                                    let _ = rec.writer.write_all(&msg.payload[7..data_end]);
+                                                    let _ = rec
+                                                        .writer
+                                                        .write_all(&msg.payload[7..data_end]);
                                                     rec.sample_count += count as u64;
                                                 }
                                             }
@@ -243,12 +260,21 @@ impl ConnectionManager {
         // 2. Check for Pairing (Admin Token)
         let admin_token = self.get_token(&mac);
         if admin_token.is_none() {
-            log::warn!("HTTP connection to {} (MAC: {}) requires pairing via USB", base_url, mac);
-            let _ = app.emit("pairing-required", &serde_json::json!({
-                "mac": mac,
-                "url": base_url,
-            }));
-            return Err(anyhow!("Pairing required: connect via USB once to authorize this computer"));
+            log::warn!(
+                "HTTP connection to {} (MAC: {}) requires pairing via USB",
+                base_url,
+                mac
+            );
+            let _ = app.emit(
+                "pairing-required",
+                &serde_json::json!({
+                    "mac": mac,
+                    "url": base_url,
+                }),
+            );
+            return Err(anyhow!(
+                "Pairing required: connect via USB once to authorize this computer"
+            ));
         }
 
         let token = admin_token.unwrap();
@@ -263,7 +289,10 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
+            let mut status = self
+                .connection_status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             status.mode = ConnectionMode::Http;
             status.port_or_url = base_url.to_string();
             status.device_info = Some(device_info);
@@ -271,7 +300,11 @@ impl ConnectionManager {
             status.la_selector = None; // Reset for WiFi
         }
 
-        let status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let status = self
+            .connection_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let _ = app.emit("connection-status", &status);
 
         self.start_polling(app.clone());
@@ -295,7 +328,10 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self.connection_status.lock().unwrap_or_else(|e| e.into_inner());
+            let mut status = self
+                .connection_status
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *status = ConnectionStatus::default();
         }
 
@@ -314,10 +350,16 @@ impl ConnectionManager {
                 let _ = usb.close();
             }
             // Notify frontend
-            let _ = app.emit("la-stream-stopped", &serde_json::json!({"reason": "main_disconnect"}));
+            let _ = app.emit(
+                "la-stream-stopped",
+                &serde_json::json!({"reason": "main_disconnect"}),
+            );
         }
 
-        let _ = app.emit("device-disconnected", &serde_json::json!({"reason": "manual", "stream_running": false}));
+        let _ = app.emit(
+            "device-disconnected",
+            &serde_json::json!({"reason": "manual", "stream_running": false}),
+        );
 
         Ok(())
     }
@@ -338,12 +380,18 @@ impl ConnectionManager {
 
     /// Get current device state.
     pub fn get_device_state(&self) -> DeviceState {
-        self.device_state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.device_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Get current connection status.
     pub fn get_connection_status(&self) -> ConnectionStatus {
-        self.connection_status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.connection_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Start the status polling loop.
@@ -407,10 +455,17 @@ impl ConnectionManager {
                         for (i, ch) in state.channels.iter().enumerate().take(4) {
                             let rising = ch.channel_alert & !last_ch_alert[i];
                             if rising != 0 {
-                                let names: Vec<&str> = CHANNEL_ALERT_BITS
-                                    .iter()
-                                    .filter_map(|(bit, name)| if rising & bit != 0 { Some(*name) } else { None })
-                                    .collect();
+                                let names: Vec<&str> =
+                                    CHANNEL_ALERT_BITS
+                                        .iter()
+                                        .filter_map(|(bit, name)| {
+                                            if rising & bit != 0 {
+                                                Some(*name)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
                                 let names_joined = if names.is_empty() {
                                     "unknown".to_string()
                                 } else {
@@ -418,7 +473,10 @@ impl ConnectionManager {
                                 };
                                 log::warn!(
                                     "[faults] ch{} rising=0x{:04X} ({}) full=0x{:04X}",
-                                    i, rising, names_joined, ch.channel_alert
+                                    i,
+                                    rising,
+                                    names_joined,
+                                    ch.channel_alert
                                 );
                             }
                             last_ch_alert[i] = ch.channel_alert;
@@ -550,7 +608,8 @@ impl ConnectionManager {
         if let Some(t) = tokens.get(&key) {
             return Some(t.clone());
         }
-        tokens.iter()
+        tokens
+            .iter()
             .find(|(k, _)| k.to_ascii_lowercase() == key)
             .map(|(_, v)| v.clone())
     }

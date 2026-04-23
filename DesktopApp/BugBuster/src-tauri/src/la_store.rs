@@ -6,7 +6,7 @@
 // Supports viewport extraction for rendering and VCD export.
 // =============================================================================
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// A single transition: (sample_index, new_value)
 pub type Transition = (u64, u8);
@@ -51,7 +51,14 @@ impl LaStore {
         total_samples: u64,
         trigger_sample: Option<u64>,
     ) -> Self {
-        LaStore { channels, sample_rate_hz, transitions, total_samples, trigger_sample, cached_density: None }
+        LaStore {
+            channels,
+            sample_rate_hz,
+            transitions,
+            total_samples,
+            trigger_sample,
+            cached_density: None,
+        }
     }
 
     /// Create from raw packed bitstream (from RP2040 capture)
@@ -92,13 +99,16 @@ impl LaStore {
     pub fn append_raw(&mut self, raw: &[u8]) {
         self.cached_density = None;
         let bits_per_sample = self.channels as usize;
-        if bits_per_sample == 0 { return; }
+        if bits_per_sample == 0 {
+            return;
+        }
 
         // Get the last known value per channel to detect transitions
-        let mut prev_values: Vec<u8> = (0..self.channels as usize).map(|ch| {
-            self.transitions[ch].last().map(|&(_, v)| v)
-                .unwrap_or(0xFF) // impossible value forces first transition if store was empty
-        }).collect();
+        let mut prev_values: Vec<u8> = (0..self.channels as usize)
+            .map(|ch| {
+                self.transitions[ch].last().map(|&(_, v)| v).unwrap_or(0xFF) // impossible value forces first transition if store was empty
+            })
+            .collect();
 
         let mut sample_idx = self.total_samples;
 
@@ -126,7 +136,13 @@ impl LaStore {
     /// Get transitions visible in a sample range for a channel.
     /// Includes one transition before `start` to establish initial value.
     /// If `max_points` is provided, decimates data using a min/max envelope.
-    pub fn get_visible(&self, ch: u8, start: u64, end: u64, max_points: Option<usize>) -> (Vec<Transition>, bool) {
+    pub fn get_visible(
+        &self,
+        ch: u8,
+        start: u64,
+        end: u64,
+        max_points: Option<usize>,
+    ) -> (Vec<Transition>, bool) {
         if ch as usize >= self.transitions.len() {
             return (vec![], false);
         }
@@ -166,8 +182,11 @@ impl LaStore {
                         let mut has_1 = false;
 
                         while i < raw.len() && raw[i].0 < current_bucket {
-                            if raw[i].1 == 0 { has_0 = true; }
-                            else { has_1 = true; }
+                            if raw[i].1 == 0 {
+                                has_0 = true;
+                            } else {
+                                has_1 = true;
+                            }
                             i += 1;
                         }
 
@@ -200,7 +219,9 @@ impl LaStore {
 
     /// Convert sample index to time in seconds
     pub fn sample_to_time(&self, sample: u64) -> f64 {
-        if self.sample_rate_hz == 0 { return 0.0; }
+        if self.sample_rate_hz == 0 {
+            return 0.0;
+        }
         sample as f64 / self.sample_rate_hz as f64
     }
 
@@ -213,11 +234,16 @@ impl LaStore {
     pub fn density_histogram(&mut self, buckets: usize) -> Vec<u16> {
         #[cfg(debug_assertions)]
         let t0 = std::time::Instant::now();
-        if buckets == 0 || self.total_samples == 0 { return vec![0; buckets.max(1)]; }
+        if buckets == 0 || self.total_samples == 0 {
+            return vec![0; buckets.max(1)];
+        }
         if let Some(ref cached) = self.cached_density {
             if cached.len() == buckets {
                 #[cfg(debug_assertions)]
-                log::info!("[density_histogram] cache hit, {}µs", t0.elapsed().as_micros());
+                log::info!(
+                    "[density_histogram] cache hit, {}µs",
+                    t0.elapsed().as_micros()
+                );
                 return cached.clone();
             }
         }
@@ -231,17 +257,23 @@ impl LaStore {
         }
         self.cached_density = Some(hist.clone());
         #[cfg(debug_assertions)]
-        log::info!("[density_histogram] computed, took {}µs", t0.elapsed().as_micros());
+        log::info!(
+            "[density_histogram] computed, took {}µs",
+            t0.elapsed().as_micros()
+        );
         hist
     }
 
     /// Extract viewport data for frontend rendering
     pub fn to_view_data(&mut self, start: u64, end: u64, max_points: Option<usize>) -> LaViewData {
         let mut decimated = false;
-        let mut channel_transitions: Vec<Vec<(u64, u8)>> = Vec::with_capacity(self.channels as usize);
+        let mut channel_transitions: Vec<Vec<(u64, u8)>> =
+            Vec::with_capacity(self.channels as usize);
         for ch in 0..self.channels {
             let (v, was_decimated) = self.get_visible(ch, start, end, max_points);
-            if was_decimated { decimated = true; }
+            if was_decimated {
+                decimated = true;
+            }
             channel_transitions.push(v);
         }
 
@@ -323,14 +355,18 @@ impl LaStore {
 
     /// Get value of a channel at a specific sample index
     pub fn get_value_at(&self, ch: u8, sample: u64) -> u8 {
-        if ch as usize >= self.transitions.len() { return 0; }
+        if ch as usize >= self.transitions.len() {
+            return 0;
+        }
         let trans = &self.transitions[ch as usize];
 
         // Find the last transition at or before this sample
         let idx = trans.partition_point(|&(s, _)| s <= sample);
         if idx == 0 {
             // No transition before this point — assume initial state
-            if trans.is_empty() { return 0; }
+            if trans.is_empty() {
+                return 0;
+            }
             return trans[0].1 ^ 1; // opposite of first change
         }
         trans[idx - 1].1
@@ -339,11 +375,15 @@ impl LaStore {
     /// Delete all samples in [start, end] and shift subsequent samples left.
     pub fn delete_range(&mut self, start: u64, end: u64) -> u64 {
         self.cached_density = None;
-        if end < start { return 0; }
+        if end < start {
+            return 0;
+        }
         let removed = end - start + 1;
         for ch in 0..self.channels {
             let ch_idx = ch as usize;
-            if ch_idx >= self.transitions.len() { continue; }
+            if ch_idx >= self.transitions.len() {
+                continue;
+            }
 
             // 1. Capture signal states before and after the cut
             let _val_before = self.get_value_at(ch, start.saturating_sub(1));
@@ -368,7 +408,11 @@ impl LaStore {
             let natural_val_at_start = {
                 let idx = ch_trans.partition_point(|&(s, _)| s <= start);
                 if idx == 0 {
-                    if ch_trans.is_empty() { 0 } else { ch_trans[0].1 ^ 1 }
+                    if ch_trans.is_empty() {
+                        0
+                    } else {
+                        ch_trans[0].1 ^ 1
+                    }
                 } else {
                     ch_trans[idx - 1].1
                 }
