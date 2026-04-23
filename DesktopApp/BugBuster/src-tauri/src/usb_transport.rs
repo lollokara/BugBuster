@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
-use crate::bbp::{self, FrameAccumulator, HandshakeInfo, Message};
+use crate::bbp::{self, FrameAccumulator, HandshakeInfo, Message, PayloadReader};
 use crate::state::DeviceState;
 use crate::transport::Transport;
 
@@ -202,6 +202,39 @@ impl UsbTransport {
     fn next_seq(&self) -> u16 {
         self.seq_counter.fetch_add(1, Ordering::Relaxed)
     }
+
+    fn merge_gpio_status_payload(state: &mut DeviceState, payload: &[u8]) {
+        // Firmware BBP shape: 12 * (gpio_id, mode, output, input, pulldown) => 60 bytes.
+        let mut r = PayloadReader::new(payload);
+
+        while r.remaining() >= 5 {
+            let gpio_id = match r.get_u8() {
+                Some(v) if (v as usize) < state.gpio.len() => v as usize,
+                _ => break,
+            };
+            let mode = match r.get_u8() {
+                Some(v) => v,
+                None => break,
+            };
+            let output = match r.get_bool() {
+                Some(v) => v,
+                None => break,
+            };
+            let input = match r.get_bool() {
+                Some(v) => v,
+                None => break,
+            };
+            let pulldown = match r.get_bool() {
+                Some(v) => v,
+                None => break,
+            };
+
+            state.gpio[gpio_id].mode = mode;
+            state.gpio[gpio_id].output = output;
+            state.gpio[gpio_id].input = input;
+            state.gpio[gpio_id].pulldown = pulldown;
+        }
+    }
 }
 
 #[async_trait]
@@ -264,8 +297,10 @@ impl Transport for UsbTransport {
 
     async fn get_status(&self) -> Result<DeviceState> {
         let payload = self.send_command(bbp::CMD_GET_STATUS, &[]).await?;
-        DeviceState::from_status_payload(&payload)
-            .ok_or_else(|| anyhow!("Failed to parse status response"))
+        let state = DeviceState::from_status_payload(&payload)
+            .ok_or_else(|| anyhow!("Failed to parse status response"))?;
+
+        Ok(state)
     }
 
     fn is_connected(&self) -> bool {

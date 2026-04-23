@@ -25,7 +25,7 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     let ch_colors = ["#10b981", "#06b6d4", "#ff4d6a"];
     let ch_titles = [
-        "Level Shifter Voltage (LTM8078 Out2)",
+        "Level Shifter Voltage (TPS74601PDRVT)",
         "V_ADJ1 — Domain A (LTM8063 #1 → P1, P2)",
         "V_ADJ2 — Domain B (LTM8063 #2 → P3, P4)",
     ];
@@ -67,6 +67,7 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 code_vals[i].set(ch.code as i32);
                             }
 
+                            let has_cal_data = ch.calibrated || ch.cal_points.len() >= 2;
                             let display_code = if code_dirty[i].get() { code_vals[i].get() as i8 } else { ch.code };
                             // Compute preview voltage from code using calibration data
                             let code_voltage = idac_interpolate_voltage(&ch, display_code);
@@ -74,6 +75,8 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 code_voltage
                             } else if dirty[i].get() {
                                 slider_vals[i].get() as f32
+                            } else if has_cal_data {
+                                idac_interpolate_voltage(&ch, ch.code)
                             } else {
                                 ch.target_v
                             };
@@ -96,11 +99,15 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             // Sink (negative code) raises voltage, Source (positive code) lowers voltage
                             let step_v = ch.step_mv / 1000.0;
                             // Max sink code: how many steps from midpoint to safe_max
-                            let max_sink_code = if step_v > 0.0 {
+                            let max_sink_code = if i == 0 {
+                                127
+                            } else if step_v > 0.0 {
                                 (((safe_max - ch.midpoint_v) / step_v).floor() as i32).clamp(0, 127)
                             } else { 0 };
                             // Max source code: how many steps from midpoint down to safe_min
-                            let max_src_code = if step_v > 0.0 {
+                            let max_src_code = if i == 0 {
+                                127
+                            } else if step_v > 0.0 {
                                 (((ch.midpoint_v - safe_min) / step_v).floor() as i32).clamp(0, 127)
                             } else { 0 };
                             // DAC code range: -max_sink_code (raises V) to +max_src_code (lowers V)
@@ -116,8 +123,16 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             {ch_titles[i]}
                                         </div>
                                         <div style="display: flex; gap: 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim)">
-                                            <span>{format!("V_FB: {}V", v_fb)}</span>
-                                            <span>{format!("R_int: {}kΩ", ch_rint)}</span>
+                                            {if i == 0 {
+                                                view! { <span>"TPS74601PDRVT midpoint model: 3.3V"</span> }.into_any()
+                                            } else {
+                                                view! {
+                                                    <>
+                                                        <span>{format!("V_FB: {}V", v_fb)}</span>
+                                                        <span>{format!("R_int: {}kΩ", ch_rint)}</span>
+                                                    </>
+                                                }.into_any()
+                                            }}
                                         </div>
                                     </div>
                                     <div class="card-body">
@@ -125,8 +140,21 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11px; font-family: 'JetBrains Mono', monospace; margin-bottom: 12px">
                                             <span style="color: var(--text-dim)">"Midpoint:"</span>
                                             <span style="font-weight: 600">{format!("{:.1}V", ch.midpoint_v)}</span>
-                                            <span style="color: var(--text-dim)">"R_FB:"</span>
-                                            <span>{format!("{:.1}kΩ", r_fb)}<span style="color: var(--text-dim); font-size: 9px">" (FB→GND)"</span></span>
+                                            {if i == 0 {
+                                                view! {
+                                                    <>
+                                                        <span style="color: var(--text-dim)">"Regulator:"</span>
+                                                        <span>"TPS74601PDRVT"</span>
+                                                    </>
+                                                }.into_any()
+                                            } else {
+                                                view! {
+                                                    <>
+                                                        <span style="color: var(--text-dim)">"R_FB:"</span>
+                                                        <span>{format!("{:.1}kΩ", r_fb)}<span style="color: var(--text-dim); font-size: 9px">" (FB→GND)"</span></span>
+                                                    </>
+                                                }.into_any()
+                                            }}
                                             <span style="color: var(--text-dim)">"I_FS:"</span>
                                             <span>{format!("{:.0}µA", ifs_ua)}</span>
                                             <span style="color: var(--text-dim)">"R_FS:"</span>
@@ -239,7 +267,7 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         // Calibration status
                                         <div style="font-size: 10px; font-family: 'JetBrains Mono', monospace; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--text-dim)">
                                             <span>"Calibration: "</span>
-                                            {if ch.calibrated {
+                                            {if has_cal_data {
                                                 view! { <span style="color: #10b981; font-weight: 600">"Active ✓"</span> }.into_any()
                                             } else {
                                                 view! { <span style="color: var(--text-dim)">"Not calibrated (using formula)"</span> }.into_any()
@@ -248,12 +276,23 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                                         // Formula reference
                                         <div style="font-size: 9px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); line-height: 1.8; margin-top: 6px">
-                                            <div><b style="color: var(--text)">{if i == 0 { "LTM8078:" } else { "LTM8063:" }}</b>
-                                                {format!(" R_FB={}k/(V_mid/{}-1)", ch_rint, v_fb)}</div>
+                                            {if i == 0 {
+                                                view! {
+                                                    <div>
+                                                        <b style="color: var(--text)">"TPS74601PDRVT:"</b>
+                                                        " midpoint 3.3V, full IDAC code span (−127..+127)"
+                                                    </div>
+                                                }.into_any()
+                                            } else {
+                                                view! {
+                                                    <div><b style="color: var(--text)">"LTM8063:"</b>
+                                                        {format!(" R_FB={}k/(V_mid/{}-1)", ch_rint, v_fb)}</div>
+                                                }.into_any()
+                                            }}
                                             <div><b style="color: var(--text)">"DS4424:"</b>" R_FS=(0.976×127)/(16×I_FS)"</div>
                                             <div><b style="color: var(--text)">"Range:"</b>
                                                 {format!(" {:.1}V–{:.1}V", ch.v_min, ch.v_max)}
-                                                {if ch.calibrated { " (calibrated)" } else { " (formula)" }}</div>
+                                                {if has_cal_data { " (calibrated)" } else { " (formula)" }}</div>
                                         </div>
                                     </div>
                                 </div>

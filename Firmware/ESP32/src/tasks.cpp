@@ -3,7 +3,9 @@
 // =============================================================================
 
 #include "tasks.h"
+#include "adc_leds.h"
 #include "bbp.h"
+#include "dio.h"
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
@@ -317,11 +319,17 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 }
             }
 
-            // --- Read GPIO input states ---
-            bool gpioIn[AD74416H_NUM_GPIOS];
-            for (uint8_t g = 0; g < AD74416H_NUM_GPIOS; g++) {
-                gpioIn[g] = s_device->readGpioInput(g);
+            // --- Read GPIO input states (AD74416H A-F) ---
+            bool gpioIn[6];
+            if (s_device) {
+                for (uint8_t g = 0; g < 6; g++) {
+                    gpioIn[g] = s_device->readGpioInput(g);
+                }
             }
+
+            // --- Read Digital IO input states (ESP32 DIO) ---
+            dio_poll_inputs();
+            const DioState* allDio = dio_get_all();
 
             // --- Read diagnostics every 5th iteration (~1 second) ---
             float dieTemp = 0.0f;
@@ -393,8 +401,11 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                     }
                 }
 
-                for (uint8_t g = 0; g < AD74416H_NUM_GPIOS; g++) {
+                for (uint8_t g = 0; g < 6; g++) {
                     g_deviceState.gpio[g].inputVal = gpioIn[g];
+                }
+                for (uint8_t g = 0; g < 12; g++) {
+                    g_deviceState.dio[g].inputVal = allDio[g].input_level;
                 }
 
                 if (readDiag) {
@@ -433,6 +444,9 @@ static void taskFaultMonitor(void* /*pvParameters*/)
             prevAlertStatus = alertStatus;
             prevSupplyAlertStatus = supplyAlertStatus;
         }
+
+        // Update AD74416H GPIO status LEDs (~200 ms, throttled internally)
+        adc_leds_tick();
 
         iteration++;
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -539,15 +553,22 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
 
 bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown)
 {
-    if (!s_device || gpio >= AD74416H_NUM_GPIOS || mode > GPIO_SEL_DO_EXT) {
+    if (gpio >= 12 || mode > GPIO_SEL_DO_EXT) {
         return false;
     }
 
-    s_device->configureGpio(gpio, mode, pulldown);
+    // Map GpioSelect (0=HI_Z, 1=OUT, 2=IN, 3=DIN, 4=DOUT) to DIO_MODE (0=DIS, 1=IN, 2=OUT)
+    uint8_t dioMode = DIO_MODE_DISABLED;
+    if (mode == GPIO_SEL_OUTPUT)     dioMode = DIO_MODE_OUTPUT;
+    else if (mode == GPIO_SEL_INPUT) dioMode = DIO_MODE_INPUT;
+    // Note: DIN_OUT and DO_EXT not supported by ESP32, fallback to DISABLED or as requested by user
+
+    // IO numbering in dio is 1-12
+    dio_configure_ext(gpio + 1, dioMode, pulldown);
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.gpio[gpio].mode = (uint8_t)mode;
-        g_deviceState.gpio[gpio].pulldown = pulldown;
+        g_deviceState.dio[gpio].mode = (uint8_t)mode;
+        g_deviceState.dio[gpio].pulldown = pulldown;
         xSemaphoreGive(g_stateMutex);
     }
 
@@ -556,14 +577,14 @@ bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown)
 
 bool tasks_apply_gpio_output(uint8_t gpio, bool value)
 {
-    if (!s_device || gpio >= AD74416H_NUM_GPIOS) {
+    if (gpio >= 12) {
         return false;
     }
 
-    s_device->setGpioOutput(gpio, value);
+    dio_write(gpio + 1, value);
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.gpio[gpio].outputVal = value;
+        g_deviceState.dio[gpio].outputVal = value;
         xSemaphoreGive(g_stateMutex);
     }
 

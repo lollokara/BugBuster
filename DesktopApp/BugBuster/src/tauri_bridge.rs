@@ -295,8 +295,9 @@ pub struct IdacChannelState {
 /// Interpolate calibration data to get voltage for a given DAC code.
 /// Falls back to formula if no calibration.
 pub fn idac_interpolate_voltage(ch: &IdacChannelState, code: i8) -> f32 {
-    if ch.calibrated && ch.cal_points.len() >= 2 {
-        let pts = &ch.cal_points;
+    if ch.cal_points.len() >= 2 {
+        let mut pts = ch.cal_points.clone();
+        pts.sort_by_key(|p| p.code);
         // Find bracketing points (sorted by code)
         for i in 0..pts.len() - 1 {
             let c0 = pts[i].code;
@@ -309,15 +310,11 @@ pub fn idac_interpolate_voltage(ch: &IdacChannelState, code: i8) -> f32 {
             }
         }
         // Extrapolate from edges
-        if code < pts[0].code && pts.len() >= 2 {
-            let slope = (pts[1].voltage - pts[0].voltage) / (pts[1].code - pts[0].code) as f32;
-            return pts[0].voltage + slope * (code - pts[0].code) as f32;
+        if code <= pts[0].code {
+            return pts[0].voltage;
         }
-        if code > pts[pts.len() - 1].code && pts.len() >= 2 {
-            let last = pts.len() - 1;
-            let slope = (pts[last].voltage - pts[last - 1].voltage)
-                / (pts[last].code - pts[last - 1].code) as f32;
-            return pts[last].voltage + slope * (code - pts[last].code) as f32;
+        if code >= pts[pts.len() - 1].code {
+            return pts[pts.len() - 1].voltage;
         }
     }
     // Formula fallback

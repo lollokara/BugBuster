@@ -65,10 +65,10 @@ extern "C" {
 // [device][group] → ESP GPIO number for the direct-drive switch
 // Group A = S1/S2, Group B = S5/S6, Group C = S7/S8
 static const uint8_t MUX_GPIO_MAP[4][3] = {
-    { 1,  2,  3},   // U10 (MUX1): IO1→S1, IO2→S5, IO3→S7
-    { 5,  6,  7},   // U11 (MUX2): IO5→S1, IO6→S5, IO7→S7
-    {13, 12, 11},   // U16 (MUX3): IO13→S1, IO12→S5, IO11→S7
-    {10,  9,  8},   // U17 (MUX4): IO10→S1, IO9→S5, IO8→S7
+    { 1,  2,  4},   // U10 (MUX1): IO1→S1,  IO2→S5,  IO3→S7
+    { 5,  6,  7},   // U11 (MUX2): IO4→S1,  IO5→S5,  IO6→S7
+    {13, 12, 11},   // U16 (MUX3): IO10→S1, IO11→S5, IO12→S7
+    {10,  9,  8},   // U17 (MUX4): IO7→S1,  IO8→S5,  IO9→S7
 };
 
 /**

@@ -56,6 +56,18 @@ function maskToHex(mask: number | undefined): string {
   return `0x${(safe & 0xffff).toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
+const UART_IO_MAP: ReadonlyArray<readonly [number, number]> = [
+  [1, 1], [2, 2], [3, 4],
+  [4, 5], [5, 6], [6, 7],
+  [7, 10], [8, 9], [9, 8],
+  [10, 13], [11, 12], [12, 11],
+];
+
+function ioLabelForGpio(gpio: number): string {
+  const entry = UART_IO_MAP.find(([, g]) => g === gpio);
+  return entry ? `IO${entry[0]} (GPIO${entry[1]})` : `GPIO${gpio}`;
+}
+
 function BoardCard() {
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -399,8 +411,8 @@ function UartCard() {
     setBridgeId(activeId);
     setForm({
       uartNum: Number(active?.uartNum ?? 1),
-      txPin: Number(active?.txPin ?? 17),
-      rxPin: Number(active?.rxPin ?? 18),
+      txPin: Number(active?.txPin ?? 1),
+      rxPin: Number(active?.rxPin ?? 2),
       baudrate: Number(active?.baudrate ?? 115200),
       dataBits: Number(active?.dataBits ?? 8),
       parity: Number(active?.parity ?? 0),
@@ -450,14 +462,14 @@ function UartCard() {
               {[0, 1, 2].map((v) => <option key={v} value={String(v)}>{v}</option>)}
             </select>
           </div>
-          <div class="analog-row"><label>TX Pin</label>
+          <div class="analog-row"><label>TX IO</label>
             <select class="input" value={String(form.txPin)} onChange={(e) => { setFormDirty(true); setForm({ ...form, txPin: parseInt((e.currentTarget as HTMLSelectElement).value, 10) }); }}>
-              {availablePins.map((v: number) => <option key={v} value={String(v)}>{v}</option>)}
+              {availablePins.map((v: number) => <option key={v} value={String(v)}>{ioLabelForGpio(v)}</option>)}
             </select>
           </div>
-          <div class="analog-row"><label>RX Pin</label>
+          <div class="analog-row"><label>RX IO</label>
             <select class="input" value={String(form.rxPin)} onChange={(e) => { setFormDirty(true); setForm({ ...form, rxPin: parseInt((e.currentTarget as HTMLSelectElement).value, 10) }); }}>
-              {availablePins.map((v: number) => <option key={v} value={String(v)}>{v}</option>)}
+              {availablePins.map((v: number) => <option key={v} value={String(v)}>{ioLabelForGpio(v)}</option>)}
             </select>
           </div>
           <div class="analog-row"><label>Baud</label>

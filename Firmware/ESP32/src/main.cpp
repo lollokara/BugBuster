@@ -31,6 +31,7 @@
 #include "hat.h"
 #include "auth.h"
 #include "board_profile.h"
+#include "adc_leds.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 
@@ -283,6 +284,11 @@ extern "C" void app_main(void)
     //     (after MUX init so SPI bus sharing works correctly)
     initTasks(device);
     serial_println("[BugBuster] RTOS tasks started");
+
+    // 13a. Status LEDs — configure AD74416H GPIOs A..F as push-pull outputs
+    //      Must run after initTasks() so tasks_get_device() returns a valid pointer.
+    adc_leds_init();
+    serial_println("[BugBuster] AD74416H status LEDs initialized");
 
     // HAT expansion board (PCB mode only — GPIO47 ADC detect + UART0 on GPIO43/44)
     if (hat_init()) {

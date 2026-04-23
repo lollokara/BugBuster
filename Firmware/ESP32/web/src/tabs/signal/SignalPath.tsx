@@ -31,19 +31,20 @@ const C_CHIP = "#0e1629";
 const C_CHIP_BD = "#1e3050";
 
 const ACCENTS = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"] as const;
-const MUX_REF = ["U10", "U11", "U16", "U17"] as const;
+const MUX_REF = ["U10", "U11", "U17", "U16"] as const;
 
 const GPIO_PAIR_LABELS: ReadonlyArray<readonly [string, string, string]> = [
   ["IO1", "IO2", "IO3"],
-  ["IO5", "IO6", "IO7"],
-  ["IO13", "IO12", "IO11"],
-  ["IO10", "IO9", "IO8"],
+  ["IO4", "IO5", "IO6"],
+  ["IO7", "IO8", "IO9"],
+  ["IO10", "IO11", "IO12"],
 ];
 
-const ADC_LABELS = ["CH A", "CH B", "CH C", "CH D"] as const;
+const ADC_LABELS = ["CH A", "CH B", "CH D", "CH C"] as const;
 const EXT_LABELS = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"] as const;
 
-const EFUSE_CTRL_NAMES = ["efuse1", "efuse2", "efuse3", "efuse4"] as const;
+// PCB swap: physical P3 is wired to EFUSE4, P4 to EFUSE3 (silkscreen crossed).
+const EFUSE_CTRL_NAMES = ["efuse1", "efuse2", "efuse4", "efuse3"] as const;
 
 /* ---------- Drawing helpers ---------- */
 

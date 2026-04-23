@@ -230,8 +230,7 @@ static int extract_gpio(const char* uri)
     const char *p = strstr(uri, prefix);
     if (!p) return -1;
     p += strlen(prefix);
-    if (*p >= '0' && *p <= '5') return *p - '0';
-    return -1;
+    return atoi(p);
 }
 
 // -----------------------------------------------------------------------------
@@ -678,12 +677,13 @@ static esp_err_t handle_get_gpio(httpd_req_t *req)
     cJSON *root = cJSON_CreateArray();
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        for (uint8_t g = 0; g < AD74416H_NUM_GPIOS; g++) {
-            const GpioState& gs = g_deviceState.gpio[g];
+        for (uint8_t g = 0; g < 12; g++) {
+            const GpioState& gs = g_deviceState.dio[g];
             cJSON *obj = cJSON_CreateObject();
             cJSON_AddNumberToObject(obj, "id", g);
             cJSON_AddNumberToObject(obj, "pin", g);
-            char name[2] = { (char)('A' + g), '\0' };
+            char name[8];
+            snprintf(name, sizeof(name), "IO %d", g + 1);
             cJSON_AddStringToObject(obj, "name", name);
             cJSON_AddNumberToObject(obj, "mode", gs.mode);
             cJSON_AddStringToObject(obj, "modeName", gpioModeName(gs.mode));
@@ -1159,7 +1159,7 @@ static esp_err_t handle_post_diag_config(httpd_req_t *req)
 static esp_err_t handle_post_gpio_config(httpd_req_t *req)
 {
     int g = extract_gpio(req->uri);
-    if (g < 0) return send_error(req, 400, "GPIO must be 0-5");
+    if (g < 0 || g > 11) return send_error(req, 400, "GPIO must be 0-11");
 
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
@@ -1192,7 +1192,7 @@ static esp_err_t handle_post_gpio_config(httpd_req_t *req)
 static esp_err_t handle_post_gpio_set(httpd_req_t *req)
 {
     int g = extract_gpio(req->uri);
-    if (g < 0) return send_error(req, 400, "GPIO must be 0-5");
+    if (g < 0 || g > 11) return send_error(req, 400, "GPIO must be 0-11");
 
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");

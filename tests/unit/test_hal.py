@@ -175,10 +175,10 @@ class TestSetMux(unittest.TestCase):
     def test_different_devices_independent(self):
         """IOs on different mux devices write to separate state slots."""
         hal, mock_bb = _make_hal()
-        # IO 7 is on mux_device 2, position 1
+        # IO 7 is on mux_device 3, position 1
         rt7 = hal._routing[7]
         hal._set_mux(rt7, PortMode.ANALOG_OUT)
-        self.assertEqual(hal._mux_state[2], _SW_A_ADC)
+        self.assertEqual(hal._mux_state[3], _SW_A_ADC)
         self.assertEqual(hal._mux_state[0], 0)  # device 0 untouched
 
     def test_multiple_ios_same_device_coexist(self):
@@ -352,7 +352,7 @@ class TestDigitalWriteRouting(unittest.TestCase):
         hal, mock_bb = _make_hal()
         hal._io_mode[10] = PortMode.DIGITAL_OUT
         hal.write_digital(10, False)
-        mock_bb.set_digital_output.assert_called_once_with(3, on=False)
+        mock_bb.set_digital_output.assert_called_once_with(2, on=False)
 
 
 # =========================================================================
@@ -377,20 +377,22 @@ class TestEnableIoBlockPower(unittest.TestCase):
         mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
         mock_bb.power_set.assert_any_call(PowerControl.EFUSE2, on=True)
 
-    def test_block2_io7_enables_vadj2_and_efuse3(self):
+    def test_block2_io7_enables_vadj2_and_efuse4(self):
+        # PCB swap: physical P3 (IO7..IO9) is wired to EFUSE4
         hal, mock_bb = _make_hal()
         rt = hal._routing[7]
         hal._enable_io_block_power(rt)
         mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE3, on=True)
+        mock_bb.power_set.assert_any_call(PowerControl.EFUSE4, on=True)
         mock_bb.idac_set_voltage.assert_called_once_with(2, 12.0)
 
-    def test_block2_io12_enables_vadj2_and_efuse4(self):
+    def test_block2_io12_enables_vadj2_and_efuse3(self):
+        # PCB swap: physical P4 (IO10..IO12) is wired to EFUSE3
         hal, mock_bb = _make_hal()
         rt = hal._routing[12]
         hal._enable_io_block_power(rt)
         mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE4, on=True)
+        mock_bb.power_set.assert_any_call(PowerControl.EFUSE3, on=True)
 
     def test_supply_not_re_enabled_if_already_on(self):
         hal, mock_bb = _make_hal()
@@ -402,15 +404,16 @@ class TestEnableIoBlockPower(unittest.TestCase):
         mock_bb.power_set.assert_not_called()
 
     def test_efuse_skipped_if_already_on(self):
+        # PCB swap: IO7 routes through EFUSE4 (physical P3 wiring)
         hal, mock_bb = _make_hal()
-        hal._efuses_on.add(PowerControl.EFUSE3)
+        hal._efuses_on.add(PowerControl.EFUSE4)
         rt = hal._routing[7]
         hal._enable_io_block_power(rt)
-        # supply (VADJ2) should be enabled, but efuse3 should not
+        # supply (VADJ2) should be enabled, but efuse4 should not
         power_calls = mock_bb.power_set.call_args_list
         called_controls = [c[0][0] for c in power_calls]
         self.assertIn(PowerControl.VADJ2, called_controls)
-        self.assertNotIn(PowerControl.EFUSE3, called_controls)
+        self.assertNotIn(PowerControl.EFUSE4, called_controls)
 
     def test_ios_sharing_same_efuse_only_enable_once(self):
         """IO 1 and IO 2 share EFUSE1 — second call should skip it."""

@@ -100,9 +100,10 @@ extern "C" {
 #define BBP_CMD_SET_DIAG_CONFIG 0x30
 
 // GPIO (AD74416H on-chip GPIO pins A–F)
-#define BBP_CMD_GET_GPIO_STATUS 0x40
-#define BBP_CMD_SET_GPIO_CONFIG 0x41
-#define BBP_CMD_SET_GPIO_VALUE  0x42
+#define BBP_CMD_GET_GPIO_STATUS     0x40
+#define BBP_CMD_SET_GPIO_CONFIG     0x41
+#define BBP_CMD_SET_GPIO_VALUE      0x42
+#define BBP_CMD_ADC_LEDS_SET_MODE   0x47  // 1-byte payload: 0=auto, 1=manual
 
 // Digital IO (ESP32 GPIO-based, 12 logical IOs routed through MUX)
 #define BBP_CMD_DIO_GET_ALL     0x43    // Read all 12 IO states

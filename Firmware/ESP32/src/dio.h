@@ -41,6 +41,7 @@ typedef struct {
     uint8_t  mode;          // DIO_MODE_*
     bool     output_level;  // Last written output level
     bool     input_level;   // Last read input level
+    bool     pulldown;      // Internal pull-down enabled
 } DioState;
 
 /**
@@ -59,6 +60,16 @@ void dio_init(void);
  * @return true on success, false if io is out of range or not mapped
  */
 bool dio_configure(uint8_t io, uint8_t mode);
+
+/**
+ * @brief  Configure an IO's direction and pulldown.
+ *
+ * @param io        IO number (1–12)
+ * @param mode      DIO_MODE_DISABLED, DIO_MODE_INPUT, or DIO_MODE_OUTPUT
+ * @param pulldown  true = enable internal pulldown (INPUT or DISABLED mode only)
+ * @return true on success
+ */
+bool dio_configure_ext(uint8_t io, uint8_t mode, bool pulldown);
 
 /**
  * @brief  Set an output IO level.

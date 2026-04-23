@@ -51,6 +51,23 @@ static const int EXCLUDED_PINS[] = {
     -1                  // Sentinel
 };
 
+// PCB IO terminal -> ESP32 GPIO routing (IO1..IO12).
+static const int UART_IO_GPIO_MAP[] = {
+    1, 2, 4,      // IO1, IO2, IO3
+    5, 6, 7,      // IO4, IO5, IO6
+    10, 9, 8,     // IO7, IO8, IO9
+    13, 12, 11,   // IO10, IO11, IO12
+    -1
+};
+
+static bool is_uart_io_gpio(int pin)
+{
+    for (int i = 0; UART_IO_GPIO_MAP[i] >= 0; i++) {
+        if (UART_IO_GPIO_MAP[i] == pin) return true;
+    }
+    return false;
+}
+
 static bool is_pin_excluded_for_bridge(int pin, int self_bridge_id)
 {
     for (int i = 0; EXCLUDED_PINS[i] >= 0; i++) {
@@ -79,12 +96,11 @@ static bool is_pin_excluded(int pin)
 // ---------------------------------------------------------------------------
 
 static const UartBridgeConfig DEFAULT_CONFIGS[2] = {
-    // Bridge 0 defaults to external IO lines (IO1/IO2 on the terminal map):
-    // GPIO1 TX, GPIO2 RX.
+    // Bridge defaults map to PCB IO terminals and start DISABLED by default.
     { .uart_num = 1, .tx_pin = 1, .rx_pin = 2, .baudrate = 921600,
-      .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = true },
-    { .uart_num = 2, .tx_pin = 47, .rx_pin = 48, .baudrate = 921600,
-      .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = true },
+      .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = false },
+    { .uart_num = 2, .tx_pin = 5, .rx_pin = 6, .baudrate = 921600,
+      .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = false },
 };
 
 // ---------------------------------------------------------------------------
@@ -128,7 +144,7 @@ static bool nvs_load_config(int id, UartBridgeConfig *cfg)
     ok = ok && (nvs_get_u8(h, "parity", &u8) == ESP_OK);    cfg->parity = u8;
     ok = ok && (nvs_get_u8(h, "stop_bits", &u8) == ESP_OK); cfg->stop_bits = u8;
     if (nvs_get_u8(h, "enabled", &u8) == ESP_OK) cfg->enabled = (u8 != 0);
-    else cfg->enabled = true;
+    else cfg->enabled = false;
 
     nvs_close(h);
     return ok;
@@ -175,6 +191,7 @@ static bool install_uart(int id)
     if (!cfg.enabled) return true;
 
     if (cfg.tx_pin < 0 || cfg.rx_pin < 0 || cfg.tx_pin == cfg.rx_pin ||
+        !is_uart_io_gpio(cfg.tx_pin) || !is_uart_io_gpio(cfg.rx_pin) ||
         is_pin_excluded_for_bridge(cfg.tx_pin, id) ||
         is_pin_excluded_for_bridge(cfg.rx_pin, id)) {
         ESP_LOGW(TAG, "Bridge %d: invalid/conflicting pins TX=%d RX=%d; trying defaults",
@@ -329,16 +346,11 @@ bool uart_bridge_is_connected(int id)
 
 int uart_bridge_get_available_pins(int *out_pins, int max_pins)
 {
-    // ESP32-S3 GPIOs: 0-21, 35-48
-    static const int ALL_GPIOS[] = {
-        1, 2, 3, 4, 12, 13, 14, 15, 16, 17, 18, 21,
-        35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 47, 48,
-        -1
-    };
     int count = 0;
-    for (int i = 0; ALL_GPIOS[i] >= 0 && count < max_pins; i++) {
-        if (!is_pin_excluded(ALL_GPIOS[i])) {
-            out_pins[count++] = ALL_GPIOS[i];
+    for (int i = 0; UART_IO_GPIO_MAP[i] >= 0 && count < max_pins; i++) {
+        const int pin = UART_IO_GPIO_MAP[i];
+        if (!is_pin_excluded(pin)) {
+            out_pins[count++] = pin;
         }
     }
     return count;

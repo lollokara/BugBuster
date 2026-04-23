@@ -868,8 +868,15 @@ impl Transport for HttpTransport {
         // Merge GPIO state if available
         if let Ok(resp) = gpio_res {
             if let Ok(gpio_json) = resp.json::<Value>().await {
-                if let Some(gpios) = gpio_json.get("gpios").and_then(|v| v.as_array()) {
-                    for (i, g) in gpios.iter().enumerate().take(6) {
+                // firmware returns a top-level array for /api/gpio
+                let gpios_array = if gpio_json.is_array() {
+                    gpio_json.as_array()
+                } else {
+                    gpio_json.get("gpios").and_then(|v| v.as_array())
+                };
+
+                if let Some(gpios) = gpios_array {
+                    for (i, g) in gpios.iter().enumerate().take(12) {
                         state.gpio[i] = crate::state::GpioState {
                             mode: g.get("mode").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
                             output: g.get("output").and_then(|v| v.as_bool()).unwrap_or(false),

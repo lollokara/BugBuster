@@ -6,6 +6,7 @@
 // =============================================================================
 
 #include "bbp.h"
+#include "adc_leds.h"
 #include "usb_cdc.h"
 #include "tasks.h"
 #include "config.h"
@@ -369,6 +370,14 @@ static int handleGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_u8(out, &pos, muxStates[m]);
     }
 
+    // Append 12 ESP32 GPIO states (DIO)
+    for (uint8_t g = 0; g < 12; g++) {
+        put_u8(out, &pos, g_deviceState.dio[g].mode);
+        put_bool(out, &pos, g_deviceState.dio[g].outputVal);
+        put_bool(out, &pos, g_deviceState.dio[g].inputVal);
+        put_bool(out, &pos, g_deviceState.dio[g].pulldown);
+    }
+
     xSemaphoreGive(g_stateMutex);
     return (int)pos;
 }
@@ -486,12 +495,12 @@ static int handleGetGpioStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         return -1;
     }
 
-    for (uint8_t g = 0; g < 6; g++) {
+    for (uint8_t g = 0; g < 12; g++) {
         put_u8(out, &pos, g);
-        put_u8(out, &pos, g_deviceState.gpio[g].mode);
-        put_bool(out, &pos, g_deviceState.gpio[g].outputVal);
-        put_bool(out, &pos, g_deviceState.gpio[g].inputVal);
-        put_bool(out, &pos, g_deviceState.gpio[g].pulldown);
+        put_u8(out, &pos, g_deviceState.dio[g].mode);
+        put_bool(out, &pos, g_deviceState.dio[g].outputVal);
+        put_bool(out, &pos, g_deviceState.dio[g].inputVal);
+        put_bool(out, &pos, g_deviceState.dio[g].pulldown);
     }
 
     xSemaphoreGive(g_stateMutex);
@@ -897,7 +906,7 @@ static int handleSetGpioConfig(uint16_t seq, uint8_t cmdId,
     uint8_t gpio = get_u8(payload, &rpos);
     uint8_t mode = get_u8(payload, &rpos);
     bool pulldown = get_bool(payload, &rpos);
-    if (gpio >= 6) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (gpio >= 12) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     if (!tasks_apply_gpio_config(gpio, (GpioSelect)mode, pulldown)) {
         sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
         return -1;
@@ -914,14 +923,28 @@ static int handleSetGpioValue(uint16_t seq, uint8_t cmdId,
     size_t rpos = 0;
     uint8_t gpio = get_u8(payload, &rpos);
     bool value = get_bool(payload, &rpos);
-    if (gpio >= 6) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    if (gpio >= 12) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
     if (!tasks_apply_gpio_output(gpio, value)) {
         sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
         return -1;
     }
 
+    // Host is taking manual control of an AD74416H GPIO — suspend auto LED updates
+    // so the status LED driver does not fight the host's GPIO writes.
+    adc_leds_set_manual(true);
+
     memcpy(out, payload, 2);
     return 2;
+}
+
+static int handleAdcLedsSetMode(uint16_t seq, uint8_t cmdId,
+                                 const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 1) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    bool manual = (payload[0] != 0);
+    adc_leds_set_manual(manual);
+    out[0] = payload[0];
+    return 1;
 }
 
 // -----------------------------------------------------------------------------
@@ -1237,6 +1260,12 @@ static int handleIdacGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
     size_t pos = 0;
     put_bool(out, &pos, st->present);
     for (uint8_t ch = 0; ch < DS4424_NUM_CHANNELS; ch++) {
+        // Channel fixed header footprint without calibration points:
+        // ch(1) + code(1) + 6*f32(24) + calibrated(1) + cal_count(1) = 28 bytes
+        if (pos + 28 > BBP_MAX_PAYLOAD) {
+            ESP_LOGW(TAG, "IDAC_GET_STATUS truncated before ch%u (payload full)", ch);
+            break;
+        }
         put_u8(out, &pos, ch);
         put_u8(out, &pos, (uint8_t)(st->state[ch].dac_code & 0xFF));
         put_f32(out, &pos, st->state[ch].target_v);
@@ -1247,11 +1276,19 @@ static int handleIdacGetStatus(uint16_t seq, uint8_t cmdId, uint8_t *out)
         put_f32(out, &pos, ds4424_step_mv(ch));
         put_bool(out, &pos, st->cal[ch].valid);
         // Calibration points (code, voltage pairs)
-        put_u8(out, &pos, st->cal[ch].count);
+        size_t count_pos = pos;
+        put_u8(out, &pos, 0);  // patched with included count below
+        uint8_t included = 0;
         for (uint8_t p = 0; p < st->cal[ch].count; p++) {
+            if (pos + 5 > BBP_MAX_PAYLOAD) {
+                ESP_LOGW(TAG, "IDAC_GET_STATUS points truncated at ch%u p%u", ch, p);
+                break;
+            }
             put_u8(out, &pos, (uint8_t)(st->cal[ch].points[p].dac_code & 0xFF));
             put_f32(out, &pos, st->cal[ch].points[p].measured_v);
+            included++;
         }
+        out[count_pos] = included;
     }
     return (int)pos;
 }
@@ -2426,7 +2463,7 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
     size_t         payloadLen = msgLen - BBP_HEADER_SIZE - BBP_CRC_SIZE;
 
     // Response buffer
-    uint8_t rspBuf[512];
+    uint8_t rspBuf[BBP_MAX_PAYLOAD];
     int rspLen = 0;
 
     s_lastFrameMs = millis_now();
@@ -2535,6 +2572,9 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_SET_GPIO_VALUE:
             rspLen = handleSetGpioValue(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_ADC_LEDS_SET_MODE:
+            rspLen = handleAdcLedsSetMode(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- Digital IO (ESP32 GPIO) ---

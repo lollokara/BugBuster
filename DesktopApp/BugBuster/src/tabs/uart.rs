@@ -6,8 +6,21 @@ const BAUD_OPTIONS: &[u32] = &[300, 1200, 2400, 4800, 9600, 19200, 38400, 57600,
 const PARITY_OPTIONS: &[(u8, &str)] = &[(0, "None"), (1, "Odd"), (2, "Even")];
 const STOP_BITS_OPTIONS: &[(u8, &str)] = &[(0, "1"), (1, "1.5"), (2, "2")];
 
-// Available GPIOs for UART (matching firmware's uart_bridge_get_available_pins)
-const AVAILABLE_PINS: &[u8] = &[1, 2, 3, 4, 12, 13, 14, 15, 16, 17, 18, 21, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 47, 48];
+// PCB IO terminal numbering -> ESP32 GPIO mapping.
+const UART_IO_MAP: &[(u8, u8)] = &[
+    (1, 1), (2, 2), (3, 4),
+    (4, 5), (5, 6), (6, 7),
+    (7, 10), (8, 9), (9, 8),
+    (10, 13), (11, 12), (12, 11),
+];
+
+fn io_label_for_gpio(gpio: u8) -> String {
+    UART_IO_MAP
+        .iter()
+        .find(|(_, g)| *g == gpio)
+        .map(|(io, g)| format!("IO{} (GPIO{})", io, g))
+        .unwrap_or_else(|| format!("GPIO{}", gpio))
+}
 
 #[derive(Clone, Serialize)]
 struct UartConfig {
@@ -45,7 +58,7 @@ pub fn UartTab(
 
     view! {
         <div class="tab-content">
-            <div class="tab-desc">"UART bridge configuration. Maps ESP32 hardware UARTs to GPIO pins for transparent serial communication between USB CDC and external devices. Set baud rate, parity, and pin assignments."</div>
+            <div class="tab-desc">"UART bridge configuration. Bridge is disabled by default and can be routed to any PCB IO (IO1..IO12)."</div>
             <div class="uart-layout">
                 <div class="card uart-card">
                     <div class="card-header">
@@ -59,24 +72,24 @@ pub fn UartTab(
 
                         <div class="config-section">
                             <div class="config-row">
-                                <label>"TX Pin"</label>
+                                <label>"TX IO"</label>
                                 <select class="dropdown"
                                     prop:value={move || uart_config.get().tx_pin.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.tx_pin = event_target_value(&e).parse().unwrap_or(17))
+                                    on:change=move |e| uart_config.update(|c| c.tx_pin = event_target_value(&e).parse().unwrap_or(1))
                                 >
-                                    {AVAILABLE_PINS.iter().map(|p| {
-                                        view! { <option value=p.to_string()>{format!("GPIO {}", p)}</option> }
+                                    {UART_IO_MAP.iter().map(|(io, gpio)| {
+                                        view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
                                     }).collect::<Vec<_>>()}
                                 </select>
                             </div>
                             <div class="config-row">
-                                <label>"RX Pin"</label>
+                                <label>"RX IO"</label>
                                 <select class="dropdown"
                                     prop:value={move || uart_config.get().rx_pin.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.rx_pin = event_target_value(&e).parse().unwrap_or(18))
+                                    on:change=move |e| uart_config.update(|c| c.rx_pin = event_target_value(&e).parse().unwrap_or(2))
                                 >
-                                    {AVAILABLE_PINS.iter().map(|p| {
-                                        view! { <option value=p.to_string()>{format!("GPIO {}", p)}</option> }
+                                    {UART_IO_MAP.iter().map(|(io, gpio)| {
+                                        view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
                                     }).collect::<Vec<_>>()}
                                 </select>
                             </div>
@@ -138,7 +151,10 @@ pub fn UartTab(
                             <span class="uart-config-str">
                                 {move || {
                                     let c = uart_config.get();
-                                    format!("GPIO{} → GPIO{} | {} {}{}{}", c.tx_pin, c.rx_pin, c.baud, c.data_bits,
+                                    format!("{} → {} | {} {}{}{}",
+                                        io_label_for_gpio(c.tx_pin),
+                                        io_label_for_gpio(c.rx_pin),
+                                        c.baud, c.data_bits,
                                         match c.parity { 1 => "O", 2 => "E", _ => "N" },
                                         match c.stop_bits { 1 => "1.5", 2 => "2", _ => "1" })
                                 }}
@@ -160,7 +176,7 @@ pub fn UartTab(
                         </div>
                         <div class="uart-info-item">
                             <span class="uart-info-label">"Device Side"</span>
-                            <span class="uart-info-value">{move || format!("ESP32 UART1 (TX: GPIO{}, RX: GPIO{})", uart_config.get().tx_pin, uart_config.get().rx_pin)}</span>
+                            <span class="uart-info-value">{move || format!("ESP32 UART1 (TX: {}, RX: {})", io_label_for_gpio(uart_config.get().tx_pin), io_label_for_gpio(uart_config.get().rx_pin))}</span>
                         </div>
                         <div class="uart-info-item">
                             <span class="uart-info-label">"Usage"</span>
@@ -190,13 +206,13 @@ impl UartConfigState {
     pub fn new() -> Self {
         Self {
             uart_num: 1,
-            tx_pin: 17,
-            rx_pin: 18,
+            tx_pin: 1,
+            rx_pin: 2,
             baud: 115200,
             data_bits: 8,
             parity: 0,
             stop_bits: 0,
-            enabled: true,
+            enabled: false,
         }
     }
 }

@@ -1150,13 +1150,13 @@ class BugBuster:
         self,
         bridge_id: int   = 0,
         uart_num:  int   = 1,
-        tx_pin:    int   = 17,
-        rx_pin:    int   = 18,
+        tx_pin:    int   = 1,
+        rx_pin:    int   = 2,
         baudrate:  int   = 115200,
         data_bits: int   = 8,
         parity:    int   = 0,
         stop_bits: int   = 0,
-        enabled:   bool  = True,
+        enabled:   bool  = False,
     ) -> None:
         """
         Configure a UART bridge.
@@ -1184,7 +1184,7 @@ class BugBuster:
         stop_bits : int
             Stop bits — 0=1 stop bit, 1=1.5, 2=2 (default 0).
         enabled : bool
-            Activate the bridge immediately (default True).
+            Activate the bridge immediately (default False).
         """
         self._require_usb("set_uart_config")
         payload = struct.pack(

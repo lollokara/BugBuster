@@ -43,14 +43,14 @@ static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
 //
 // IO_Block 1 (U10): IO 1=GPIO1,  IO 2=GPIO2,  IO 3=GPIO4   (GPIO3 now = PCAL INT)
 // IO_Block 2 (U11): IO 4=GPIO5,  IO 5=GPIO6,  IO 6=GPIO7   (AD74416H ctrl moved to 45/38/39)
-// IO_Block 3 (U16): IO 7=GPIO13, IO 8=GPIO12, IO 9=GPIO11  (SPI moved to 16/17/18/40)
-// IO_Block 4 (U17): IO10=GPIO10, IO11=GPIO9,  IO12=GPIO8
+// IO_Block 3 (U17): IO 7=GPIO10, IO 8=GPIO9,  IO 9=GPIO8   (SPI moved to 16/17/18/40)
+// IO_Block 4 (U16): IO10=GPIO13, IO11=GPIO12, IO12=GPIO11
 
 static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
      1,   2,   4,     // IO_Block 1: IO 1, 2, 3
      5,   6,   7,     // IO_Block 2: IO 4, 5, 6
-    13,  12,  11,     // IO_Block 3: IO 7, 8, 9
-    10,   9,   8,     // IO_Block 4: IO 10, 11, 12
+    10,   9,   8,     // IO_Block 3: IO 7, 8, 9
+    13,  12,  11,     // IO_Block 4: IO 10, 11, 12
 };
 
 #endif
@@ -81,12 +81,18 @@ void dio_init(void)
         s_io[i].mode         = DIO_MODE_DISABLED;
         s_io[i].output_level = false;
         s_io[i].input_level  = false;
+        s_io[i].pulldown     = false;
     }
     ESP_LOGI(TAG, "DIO initialized (%d IOs, %s mode)",
              DIO_NUM_IOS, BREADBOARD_MODE ? "breadboard" : "PCB");
 }
 
 bool dio_configure(uint8_t io, uint8_t mode)
+{
+    return dio_configure_ext(io, mode, false);
+}
+
+bool dio_configure_ext(uint8_t io, uint8_t mode, bool pulldown)
 {
     if (!valid_io(io)) {
         ESP_LOGE(TAG, "Invalid IO %d (must be %d–%d)", io, DIO_FIRST_IO, DIO_LAST_IO);
@@ -101,19 +107,19 @@ bool dio_configure(uint8_t io, uint8_t mode)
     }
 
     gpio_num_t gpin = (gpio_num_t)pin;
+    gpio_pull_mode_t pull = pulldown ? GPIO_PULLDOWN_ONLY : GPIO_FLOATING;
 
     switch (mode) {
     case DIO_MODE_DISABLED:
         gpio_reset_pin(gpin);
-        // Set to input with no pull to avoid driving the pin
         gpio_set_direction(gpin, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(gpin, GPIO_FLOATING);
+        gpio_set_pull_mode(gpin, pull);
         break;
 
     case DIO_MODE_INPUT:
         gpio_reset_pin(gpin);
         gpio_set_direction(gpin, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(gpin, GPIO_FLOATING);
+        gpio_set_pull_mode(gpin, pull);
         break;
 
     case DIO_MODE_OUTPUT:
@@ -129,10 +135,12 @@ bool dio_configure(uint8_t io, uint8_t mode)
     }
 
     s_io[i].mode = mode;
-    ESP_LOGD(TAG, "IO %d (GPIO%d) -> %s",
+    s_io[i].pulldown = pulldown;
+    ESP_LOGD(TAG, "IO %d (GPIO%d) -> %s (pulldown=%s)",
              io, pin,
              mode == DIO_MODE_INPUT ? "INPUT" :
-             mode == DIO_MODE_OUTPUT ? "OUTPUT" : "DISABLED");
+             mode == DIO_MODE_OUTPUT ? "OUTPUT" : "DISABLED",
+             pulldown ? "YES" : "NO");
     return true;
 }
 

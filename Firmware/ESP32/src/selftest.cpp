@@ -85,6 +85,38 @@ static float read_channel_d(uint8_t adc_range)
     AD74416H *dev = tasks_get_device();
     if (!dev) return -1.0f;
 
+    // Snapshot Channel D config so self-test measurement does not clobber
+    // the user's manual function/config selection.
+    ChannelFunction prev_func = CH_FUNC_HIGH_IMP;
+    AdcConvMux prev_mux = ADC_MUX_LF_TO_AGND;
+    AdcRange prev_range = ADC_RNG_0_12V;
+    AdcRate prev_rate = ADC_RATE_20SPS;
+    bool have_prev_cfg = false;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        prev_func = (ChannelFunction)g_deviceState.channels[3].function;
+        prev_mux = g_deviceState.channels[3].adcMux;
+        prev_range = g_deviceState.channels[3].adcRange;
+        prev_rate = g_deviceState.channels[3].adcRate;
+        have_prev_cfg = true;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    auto restore_channel_d = [&]() {
+        tasks_apply_channel_function(3, prev_func);
+        if (have_prev_cfg &&
+            prev_func != CH_FUNC_HIGH_IMP &&
+            prev_func != CH_FUNC_DIN_LOGIC &&
+            prev_func != CH_FUNC_DIN_LOOP) {
+            dev->configureAdc(3, prev_mux, prev_range, prev_rate);
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                g_deviceState.channels[3].adcMux = prev_mux;
+                g_deviceState.channels[3].adcRange = prev_range;
+                g_deviceState.channels[3].adcRate = prev_rate;
+                xSemaphoreGive(g_stateMutex);
+            }
+        }
+    };
+
     // Configure Ch D as VIN with the requested range and ensure conversion
     // sequence includes channel D (tasks_apply_channel_function rebuilds chMask).
     tasks_apply_channel_function(3, CH_FUNC_VIN);
@@ -101,7 +133,7 @@ static float read_channel_d(uint8_t adc_range)
     for (int i = 0; i < 5; i++) {
         uint32_t raw = 0;
         if (!dev->readAdcResult(3, &raw)) {
-            tasks_apply_channel_function(3, CH_FUNC_HIGH_IMP);
+            restore_channel_d();
             return -1.0f;
         }
         samples[i] = dev->adcCodeToVoltage(raw, (AdcRange)adc_range);
@@ -119,8 +151,8 @@ static float read_channel_d(uint8_t adc_range)
     }
     float voltage = samples[2];
 
-    // Return Ch D to HIGH_IMP
-    tasks_apply_channel_function(3, CH_FUNC_HIGH_IMP);
+    // Restore previous Channel D function/config.
+    restore_channel_d();
 
     return voltage;
 }

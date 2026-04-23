@@ -238,7 +238,7 @@ function DinDoutCard() {
 function GpioCard() {
   const mac = deviceMac.value;
   const data = useInterval(() => api.gpio(), 1000);
-  const pins = Array.isArray(data?.pins) ? data.pins : [];
+  const pins = Array.isArray(data) ? data : [];
 
   const setConfig = async (gpio: number, mode: number, pulldown: boolean) => {
     if (!mac) return;
@@ -259,81 +259,27 @@ function GpioCard() {
   };
 
   return (
-    <GlassCard title="ESP32 GPIO">
+    <GlassCard title="ESP32 GPIO (12)">
       <div class="dio-grid-compact">
         {pins.length === 0 && <span class="text-dim">No data</span>}
         {pins.map((p: any, idx: number) => {
-          const gpio = Number(p.pin ?? idx);
+          const gpio = Number(p.id ?? idx);
           const mode = Number(p.mode ?? 0);
           const output = !!p.output;
+          const input = !!p.input;
           const pulldown = !!p.pulldown;
           return (
             <div class="dio-cell" key={idx}>
-              <Led state={!!p.input ? "on" : "off"} />
-              <span class="mono">GP{gpio}</span>
+              <Led state={input ? "on" : "off"} />
+              <span class="mono">IO {gpio + 1}</span>
               <select class="input" value={String(mode)} onChange={(e) => setConfig(gpio, parseInt((e.currentTarget as HTMLSelectElement).value, 10), pulldown)}>
                 <option value="0">HIGH_IMP</option>
                 <option value="1">OUTPUT</option>
                 <option value="2">INPUT</option>
-                <option value="3">DIN_OUT</option>
-                <option value="4">DO_EXT</option>
               </select>
               <button class={"pill" + (output ? " active" : "")} onClick={() => setOutput(gpio, !output)}>
                 {output ? "HIGH" : "LOW"}
               </button>
-            </div>
-          );
-        })}
-      </div>
-    </GlassCard>
-  );
-}
-
-function DioCard() {
-  const mac = deviceMac.value;
-  const data = useInterval(() => api.dio(), 1000);
-  const ios = Array.isArray(data?.ios) ? data.ios : [];
-
-  const setMode = async (io: number, mode: number) => {
-    if (!mac) return;
-    try {
-      await api.dioSetConfig(mac, io, mode);
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) console.warn("dioSetConfig failed", e);
-    }
-  };
-
-  const setValue = async (io: number, value: boolean) => {
-    if (!mac) return;
-    try {
-      await api.dioSetValue(mac, io, value);
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) console.warn("dioSetValue failed", e);
-    }
-  };
-
-  return (
-    <GlassCard title="ESP32 DIO (12)">
-      <div class="dio-grid-compact">
-        {ios.length === 0 && <span class="text-dim">No data</span>}
-        {ios.map((p: any, idx: number) => {
-          const io = Number(p.io ?? idx + 1);
-          const mode = Number(p.mode ?? 0);
-          const value = mode === 2 ? !!p.output : !!p.input;
-          return (
-            <div class="dio-cell" key={idx}>
-              <Led state={value ? "on" : "off"} />
-              <span class="mono">D{io}</span>
-              <select class="input" value={String(mode)} onChange={(e) => setMode(io, parseInt((e.currentTarget as HTMLSelectElement).value, 10))}>
-                <option value="0">disabled</option>
-                <option value="1">input</option>
-                <option value="2">output</option>
-              </select>
-              {mode === 2 && (
-                <button class={"pill" + (value ? " active" : "")} onClick={() => setValue(io, !value)}>
-                  {value ? "HIGH" : "LOW"}
-                </button>
-              )}
             </div>
           );
         })}
@@ -390,7 +336,6 @@ export function Digital() {
     <div class="tab-stack">
       <DinDoutCard />
       <GpioCard />
-      <DioCard />
       <IoExpCard />
     </div>
   );

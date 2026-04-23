@@ -16,7 +16,8 @@ const PCA_EFUSE2_EN: u8 = 6;
 const PCA_EFUSE3_EN: u8 = 7;
 const PCA_EFUSE4_EN: u8 = 8;
 
-const PCA_EFUSE_IDS: [u8; 4] = [PCA_EFUSE1_EN, PCA_EFUSE2_EN, PCA_EFUSE3_EN, PCA_EFUSE4_EN];
+// PCB swap: physical P3 is wired to EFUSE4, P4 to EFUSE3 (silkscreen crossed).
+const PCA_EFUSE_IDS: [u8; 4] = [PCA_EFUSE1_EN, PCA_EFUSE2_EN, PCA_EFUSE4_EN, PCA_EFUSE3_EN];
 
 #[derive(Serialize)]
 struct PcaSetControlArgs { control: u8, on: bool }
@@ -47,7 +48,7 @@ const C_CHIP: &str = "#0e1629";
 const C_CHIP_BD: &str = "#1e3050";
 
 const ACCENTS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
-const MUX_REF: [&str; 4] = ["U10", "U11", "U16", "U17"];
+const MUX_REF: [&str; 4] = ["U10", "U11", "U17", "U16"];
 
 // Switch input topology:
 // GPIO pairs: IO goes through level shifter, then SPLITS:
@@ -60,13 +61,13 @@ const MUX_REF: [&str; 4] = ["U10", "U11", "U16", "U17"];
 // GPIO label names (one per pair, shown before LS)
 const GPIO_PAIR_LABELS: [[&str; 3]; 4] = [
     ["IO1", "IO2", "IO3"],     // U10: pair1=S1/S2, pair2=S5/S6, pair3=S7/S8
-    ["IO5", "IO6", "IO7"],     // U11
-    ["IO13", "IO12", "IO11"],  // U16
-    ["IO10", "IO9", "IO8"],    // U17
+    ["IO4", "IO5", "IO6"],     // U11
+    ["IO7", "IO8", "IO9"],      // U17
+    ["IO10", "IO11", "IO12"],   // U16
 ];
 
 // S3 and S4 labels
-const ADC_LABELS: [&str; 4] = ["CH A", "CH B", "CH C", "CH D"];
+const ADC_LABELS: [&str; 4] = ["CH A", "CH B", "CH D", "CH C"];
 const EXT_LABELS: [&str; 4] = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"];
 
 #[component]

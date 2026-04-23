@@ -237,28 +237,23 @@ def _digital_mux_c() -> dict:
 # Maps IO number → ESP32 GPIO pin used for the digital drive signal.
 # This pin is routed through the MUX to the physical IO terminal.
 #
-# WARNING: IOs 4–6 and 9–12 have GPIO pin conflicts with SPI/control pins
-# in the current firmware config.h.  These assignments may be preliminary
-# and need verification on the final PCB.  IOs 1–3 and 7–8 are confirmed
-# free in PCB mode.
-
 ESP_GPIO_MAP: dict[int, int] = {
     # From MUX_GPIO_MAP[0] — U10 (IO_Block 1)
     1:  1,    # ESP GPIO 1
     2:  2,    # ESP GPIO 2
-    3:  3,    # ESP GPIO 3
+    3:  4,    # ESP GPIO 4
     # From MUX_GPIO_MAP[1] — U11 (IO_Block 2)
-    4:  5,    # ESP GPIO 5  [!] conflicts with PIN_RESET in config.h
-    5:  6,    # ESP GPIO 6  [!] conflicts with PIN_ADC_RDY
-    6:  7,    # ESP GPIO 7  [!] conflicts with PIN_ALERT
-    # From MUX_GPIO_MAP[2] — U16 (IO_Block 3)
-    7:  13,   # ESP GPIO 13
-    8:  12,   # ESP GPIO 12
-    9:  11,   # ESP GPIO 11 [!] conflicts with SPI_SCLK
-    # From MUX_GPIO_MAP[3] — U17 (IO_Block 4)
-    10: 10,   # ESP GPIO 10 [!] conflicts with SPI_CS_ADC
-    11: 9,    # ESP GPIO 9  [!] conflicts with SPI_SDI
-    12: 8,    # ESP GPIO 8  [!] conflicts with SPI_SDO
+    4:  5,    # ESP GPIO 5
+    5:  6,    # ESP GPIO 6
+    6:  7,    # ESP GPIO 7
+    # From MUX_GPIO_MAP[3] — U17 (IO_Block 3)
+    7:  10,   # ESP GPIO 10
+    8:  9,    # ESP GPIO 9
+    9:  8,    # ESP GPIO 8
+    # From MUX_GPIO_MAP[2] — U16 (IO_Block 4)
+    10: 13,   # ESP GPIO 13
+    11: 12,   # ESP GPIO 12
+    12: 11,   # ESP GPIO 11
 }
 
 
@@ -316,32 +311,34 @@ DEFAULT_ROUTING: dict[int, IORouting] = {
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
                   supply_idac=1, valid_modes=DIGITAL_IO_MODES),
 
-    # ── BLOCK 2, IO_BLOCK 3 — device 2 (U16), VADJ2, EFUSE3 ─────────────
-    7:  IORouting(7,  block=2, io_block=3, position=1, channel=2,
-                  mux_device=2, mux_map=_analog_mux(),    esp_gpio=13,
-                  efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
-    8:  IORouting(8,  block=2, io_block=3, position=2, channel=None,
-                  mux_device=2, mux_map=_digital_mux_b(), esp_gpio=12,
-                  efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
-    9:  IORouting(9,  block=2, io_block=3, position=3, channel=None,
-                  mux_device=2, mux_map=_digital_mux_c(), esp_gpio=11,
-                  efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
-
-    # ── BLOCK 2, IO_BLOCK 4 — device 3 (U17), VADJ2, EFUSE4 ─────────────
-    10: IORouting(10, block=2, io_block=4, position=1, channel=3,
+    # ── BLOCK 2, IO_BLOCK 3 — device 3 (U17), VADJ2, EFUSE4 ─────────────
+    # PCB swap: physical connector 3 is wired to EFUSE4 (silkscreen EFUSE3↔EFUSE4 crossed)
+    7:  IORouting(7,  block=2, io_block=3, position=1, channel=3,
                   mux_device=3, mux_map=_analog_mux(),    esp_gpio=10,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=ANALOG_IO_MODES),
-    11: IORouting(11, block=2, io_block=4, position=2, channel=None,
+    8:  IORouting(8,  block=2, io_block=3, position=2, channel=None,
                   mux_device=3, mux_map=_digital_mux_b(), esp_gpio=9,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
-    12: IORouting(12, block=2, io_block=4, position=3, channel=None,
+    9:  IORouting(9,  block=2, io_block=3, position=3, channel=None,
                   mux_device=3, mux_map=_digital_mux_c(), esp_gpio=8,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
+
+    # ── BLOCK 2, IO_BLOCK 4 — device 2 (U16), VADJ2, EFUSE3 ─────────────
+    # PCB swap: physical connector 4 is wired to EFUSE3
+    10: IORouting(10, block=2, io_block=4, position=1, channel=2,
+                  mux_device=2, mux_map=_analog_mux(),    esp_gpio=13,
+                  efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
+                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
+    11: IORouting(11, block=2, io_block=4, position=2, channel=None,
+                  mux_device=2, mux_map=_digital_mux_b(), esp_gpio=12,
+                  efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
+    12: IORouting(12, block=2, io_block=4, position=3, channel=None,
+                  mux_device=2, mux_map=_digital_mux_c(), esp_gpio=11,
+                  efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
 }
 

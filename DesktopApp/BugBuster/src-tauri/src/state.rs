@@ -48,7 +48,7 @@ pub struct DeviceState {
     pub live_status: u16,
     pub channels: [ChannelState; 4],
     pub diag: [DiagState; 4],
-    pub gpio: [GpioState; 6],
+    pub gpio: [GpioState; 12],
     pub mux_states: [u8; 4],
 }
 
@@ -100,6 +100,16 @@ impl DeviceState {
         for m in 0..4 {
             if let Some(v) = r.get_u8() {
                 state.mux_states[m] = v;
+            }
+        }
+
+        // ESP32 GPIO states (12 pins * 4 bytes each = 48 bytes)
+        for g in 0..12 {
+            if r.remaining() >= 4 {
+                state.gpio[g].mode = r.get_u8().unwrap_or(0);
+                state.gpio[g].output = r.get_bool().unwrap_or(false);
+                state.gpio[g].input = r.get_bool().unwrap_or(false);
+                state.gpio[g].pulldown = r.get_bool().unwrap_or(false);
             }
         }
 

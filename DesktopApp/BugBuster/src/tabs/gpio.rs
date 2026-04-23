@@ -2,13 +2,11 @@ use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;
 
-const GPIO_NAMES: [&str; 6] = ["A", "B", "C", "D", "E", "F"];
-
 #[component]
 pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     view! {
         <div class="tab-content">
-            <div class="tab-desc">"PCA9535 16-bit GPIO expander status and control. Manages power supply enables (V_ADJ1, V_ADJ2, +/-15V, MUX), E-Fuse output protection per connector (P1-P4), and monitors power-good signals."</div>
+            <div class="tab-desc">"ESP32 Direct Digital IO status and control. These 12 IOs are routed through the analog MUX matrix to the terminal blocks."</div>
             <div class="channel-grid">
                 {move || {
                     let ds = state.get();
@@ -21,7 +19,7 @@ pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         view! {
                             <div class="card">
                                 <div class="card-header">
-                                    <span class="channel-label">{format!("GPIO {}", GPIO_NAMES[i])}</span>
+                                    <span class="channel-label">{format!("IO {}", i + 1)}</span>
                                     <span class="channel-func">{mode_name}</span>
                                 </div>
                                 <div class="card-body">
@@ -35,7 +33,7 @@ pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 send_gpio_config(gpio_idx, mode, g.pulldown);
                                             }
                                         >
-                                            {GPIO_MODE_OPTIONS.iter().map(|(code, name)| {
+                                            {GPIO_MODE_OPTIONS.iter().filter(|(c, _)| *c <= 2).map(|(code, name)| {
                                                 view! { <option value=code.to_string()>{*name}</option> }
                                             }).collect::<Vec<_>>()}
                                         </select>
@@ -102,13 +100,13 @@ fn send_gpio_config(gpio: u8, mode: u8, pulldown: bool) {
     let mode_name = GPIO_MODE_OPTIONS.iter()
         .find(|(c, _)| *c == mode)
         .map(|(_, n)| *n).unwrap_or("?");
-    let label = format!("Set GPIO {} to {}{}", GPIO_NAMES[gpio as usize], mode_name,
+    let label = format!("Set IO {} to {}{}", gpio + 1, mode_name,
         if pulldown { " (pull-down)" } else { "" });
     invoke_with_feedback("set_gpio_config", args, &label);
 }
 
 fn send_gpio_value(gpio: u8, value: bool) {
     let args = serde_wasm_bindgen::to_value(&GpioValueArgs { gpio, value }).unwrap();
-    let label = format!("Set GPIO {} {}", GPIO_NAMES[gpio as usize], if value { "HIGH" } else { "LOW" });
+    let label = format!("Set IO {} {}", gpio + 1, if value { "HIGH" } else { "LOW" });
     invoke_with_feedback("set_gpio_value", args, &label);
 }

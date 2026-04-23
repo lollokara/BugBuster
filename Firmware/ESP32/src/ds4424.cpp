@@ -191,22 +191,11 @@ static bool write_dac(uint8_t ch, int8_t code)
                     break;
                 }
             }
-            // Extrapolate if outside range
-            if (code < cal->points[0].dac_code && cal->count >= 2) {
-                int8_t c0 = cal->points[0].dac_code;
-                int8_t c1 = cal->points[1].dac_code;
-                if (c1 != c0) {
-                    float slope = (cal->points[1].measured_v - cal->points[0].measured_v) / (float)(c1 - c0);
-                    v = cal->points[0].measured_v + slope * (float)(code - c0);
-                }
-            } else if (code > cal->points[cal->count - 1].dac_code && cal->count >= 2) {
-                int last = cal->count - 1;
-                int8_t c0 = cal->points[last - 1].dac_code;
-                int8_t c1 = cal->points[last].dac_code;
-                if (c1 != c0) {
-                    float slope = (cal->points[last].measured_v - cal->points[last - 1].measured_v) / (float)(c1 - c0);
-                    v = cal->points[last].measured_v + slope * (float)(code - c1);
-                }
+            // Outside calibrated code window: saturate to nearest measured edge.
+            if (code <= cal->points[0].dac_code) {
+                v = cal->points[0].measured_v;
+            } else if (code >= cal->points[cal->count - 1].dac_code) {
+                v = cal->points[cal->count - 1].measured_v;
             }
             s_state.state[ch].target_v = v;
         } else {
@@ -377,34 +366,17 @@ int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
                 return (int8_t)code_i;
             }
         }
-        // Extrapolate if target is outside calibrated range
-        // Try first two points (for low voltage extrapolation)
-        if (cal->count >= 2) {
-            float v_first = cal->points[0].measured_v;
-            float v_last = cal->points[cal->count - 1].measured_v;
-            float v_lo = (v_first < v_last) ? v_first : v_last;
-            float v_hi = (v_first > v_last) ? v_first : v_last;
-
-            if (volts <= v_lo || volts >= v_hi) {
-                // Use the two points nearest to the target for extrapolation
-                int idx = 0;
-                if (volts >= v_hi) {
-                    idx = cal->count - 2;  // Last two points
-                }
-                float ev0 = cal->points[idx].measured_v;
-                float ev1 = cal->points[idx + 1].measured_v;
-                int8_t ec0 = cal->points[idx].dac_code;
-                int8_t ec1 = cal->points[idx + 1].dac_code;
-                if (ev1 != ev0) {
-                    float t = (volts - ev0) / (ev1 - ev0);
-                    float code_f = (float)ec0 + t * (float)(ec1 - ec0);
-                    int code_i = (code_f >= 0) ? (int)floorf(code_f) : (int)ceilf(code_f);
-                    if (code_i > 127) code_i = 127;
-                    if (code_i < -127) code_i = -127;
-                    return (int8_t)code_i;
-                }
+        // Outside calibrated voltage window: use nearest measured calibration point.
+        int best_idx = 0;
+        float best_err = fabsf(cal->points[0].measured_v - volts);
+        for (int i = 1; i < (int)cal->count; i++) {
+            float err = fabsf(cal->points[i].measured_v - volts);
+            if (err < best_err) {
+                best_err = err;
+                best_idx = i;
             }
         }
+        return cal->points[best_idx].dac_code;
     }
 
     // Fall back to formula-based calculation
