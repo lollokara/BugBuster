@@ -5,12 +5,12 @@
   "identifier": "com.bugbuster",
   "build": {
     "beforeDevCommand": {
-      "script": "NO_COLOR=false trunk serve",
+      "script": "trunk serve",
       "cwd": ".."
     },
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": {
-      "script": "NO_COLOR=false trunk build",
+      "script": "trunk build",
       "cwd": ".."
     },
     "frontendDist": "../dist"

@@ -99,6 +99,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_COLOR: "false"
         with:
           projectPath: DesktopApp/BugBuster/src-tauri
           tauriScript: cargo tauri
