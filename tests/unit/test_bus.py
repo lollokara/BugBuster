@@ -49,15 +49,15 @@ def _bus() -> BugBusterBusManager:
 class TestI2CBusPlanning(unittest.TestCase):
     def test_i2c_plan_resolves_mux_power_and_gpio(self):
         plan = _bus().plan_i2c(
-            sda=2,
-            scl=3,
+            sda=1,
+            scl=2,
             io_voltage=3.3,
             supply_voltage=3.3,
         )
 
         self.assertEqual(plan.kind, "i2c")
-        self.assertEqual(plan.pins, {"sda": 2, "scl": 3})
-        self.assertEqual(plan.esp_gpios, {"sda": 2, "scl": 4})
+        self.assertEqual(plan.pins, {"sda": 1, "scl": 2})
+        self.assertEqual(plan.esp_gpios, {"sda": 4, "scl": 2})
         self.assertEqual(plan.mux_states, (0x50, 0x00, 0x00, 0x00))
         self.assertEqual(plan.supplies, ("VADJ1",))
         self.assertEqual(plan.efuses, ("EFUSE1",))
@@ -69,8 +69,8 @@ class TestI2CBusPlanning(unittest.TestCase):
 
     def test_i2c_plan_serializes_reserved_scan_addresses(self):
         payload = _bus().plan_i2c(
-            sda=2,
-            scl=3,
+            sda=1,
+            scl=2,
             io_voltage=3.3,
             supply_voltage=3.3,
         ).as_dict()
@@ -81,8 +81,8 @@ class TestI2CBusPlanning(unittest.TestCase):
 
     def test_internal_pullups_warn_above_100khz(self):
         plan = _bus().plan_i2c(
-            sda=2,
-            scl=3,
+            sda=1,
+            scl=2,
             io_voltage=3.3,
             supply_voltage=3.3,
             pullups="internal",
@@ -100,16 +100,16 @@ class TestI2CBusPlanning(unittest.TestCase):
 class TestSPIBusPlanning(unittest.TestCase):
     def test_spi_plan_resolves_multi_io_block_muxes(self):
         plan = _bus().plan_spi(
-            sck=3,
+            sck=1,
             mosi=2,
-            miso=5,
-            cs=6,
+            miso=4,
+            cs=5,
             io_voltage=3.3,
             supply_voltage=3.3,
         )
 
         self.assertEqual(plan.kind, "spi")
-        self.assertEqual(plan.esp_gpios, {"sck": 4, "mosi": 2, "miso": 6, "cs": 7})
+        self.assertEqual(plan.esp_gpios, {"sck": 4, "mosi": 2, "miso": 7, "cs": 6})
         self.assertEqual(plan.mux_states, (0x50, 0x50, 0x00, 0x00))
         self.assertEqual(plan.supplies, ("VADJ1",))
         self.assertEqual(plan.efuses, ("EFUSE1", "EFUSE2"))
@@ -120,10 +120,10 @@ class TestSPIBusPlanning(unittest.TestCase):
         bus = BugBusterBusManager(client)
 
         plan = bus.setup_spi(
-            sck=3,
+            sck=1,
             mosi=2,
-            miso=5,
-            cs=6,
+            miso=4,
+            cs=5,
             io_voltage=3.3,
             supply_voltage=3.3,
             frequency_hz=1_000_000,
@@ -134,12 +134,12 @@ class TestSPIBusPlanning(unittest.TestCase):
         client.ext_spi_setup.assert_called_with(
             sck_gpio=4,
             mosi_gpio=2,
-            miso_gpio=6,
-            cs_gpio=7,
+            miso_gpio=7,
+            cs_gpio=6,
             frequency_hz=1_000_000,
             mode=0,
         )
-        self.assertEqual(plan.esp_gpios, {"sck": 4, "mosi": 2, "miso": 6, "cs": 7})
+        self.assertEqual(plan.esp_gpios, {"sck": 4, "mosi": 2, "miso": 7, "cs": 6})
 
     def test_spi_jedec_id_parses_transfer_response(self):
         client = MagicMock()
@@ -207,14 +207,14 @@ class TestBugBusterBusFacade(unittest.TestCase):
 
         plan = bb.bus_plan(
             "i2c",
-            sda=2,
-            scl=3,
+            sda=1,
+            scl=2,
             io_voltage=3.3,
             supply_voltage=3.3,
         )
 
         self.assertEqual(plan["kind"], "i2c")
-        self.assertEqual(plan["esp_gpios"], {"sda": 2, "scl": 4})
+        self.assertEqual(plan["esp_gpios"], {"sda": 4, "scl": 2})
 
     def test_unknown_bus_kind_is_rejected(self):
         bb = BugBuster(DummyTransport())
@@ -242,8 +242,8 @@ class TestI2CBusExecution(unittest.TestCase):
         bus = BugBusterBusManager(client)
 
         plan = bus.setup_i2c(
-            sda=2,
-            scl=3,
+            sda=1,
+            scl=2,
             io_voltage=3.3,
             supply_voltage=3.3,
             frequency_hz=400_000,
@@ -256,19 +256,19 @@ class TestI2CBusExecution(unittest.TestCase):
         client.power_set.assert_any_call(PowerControl.EFUSE1, on=True)
         client.mux_set_all.assert_called_with([0x50, 0x00, 0x00, 0x00])
         client.ext_i2c_setup.assert_called_with(
-            sda_gpio=2,
-            scl_gpio=4,
+            sda_gpio=4,
+            scl_gpio=2,
             frequency_hz=400_000,
             pullups="external",
         )
-        self.assertEqual(plan.esp_gpios, {"sda": 2, "scl": 4})
+        self.assertEqual(plan.esp_gpios, {"sda": 4, "scl": 2})
 
     def test_i2c_scan_can_setup_and_scan(self):
         client = MagicMock()
         client.ext_i2c_scan.return_value = [0x50, 0x68]
         bus = BugBusterBusManager(client)
 
-        result = bus.i2c_scan(sda=2, scl=3, io_voltage=3.3, supply_voltage=3.3)
+        result = bus.i2c_scan(sda=1, scl=2, io_voltage=3.3, supply_voltage=3.3)
 
         self.assertEqual(result["addresses"], ["0x50", "0x68"])
         self.assertEqual(result["address_values"], [0x50, 0x68])

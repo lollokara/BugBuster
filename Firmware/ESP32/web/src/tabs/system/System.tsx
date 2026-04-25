@@ -65,10 +65,10 @@ function maskToHex(mask: number | undefined): string {
 }
 
 const UART_IO_MAP: ReadonlyArray<readonly [number, number]> = [
-  [1, 1], [2, 2], [3, 4],
-  [4, 5], [5, 6], [6, 7],
-  [7, 10], [8, 9], [9, 8],
-  [10, 13], [11, 12], [12, 11],
+  [1, 4], [2, 2], [3, 1],
+  [4, 7], [5, 6], [6, 5],
+  [7, 8], [8, 9], [9, 10],
+  [10, 11], [11, 12], [12, 13],
 ];
 
 function ioLabelForGpio(gpio: number): string {

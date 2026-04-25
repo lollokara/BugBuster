@@ -287,11 +287,11 @@ The server enforces hardware protection at the tool layer:
 ### IO capability reference
 
 ```
-IOs 1, 4, 7, 10  — analog-capable
+IOs 3, 6, 9, 12  — analog-capable
   Modes: ANALOG_IN, ANALOG_OUT, CURRENT_IN, CURRENT_OUT, RTD, HART, HAT
   Plus all digital modes below
 
-IOs 2,3,5,6,8,9,11,12  — digital only
+IOs 1,2,4,5,7,8,10,11  — digital only
   Modes: DIGITAL_IN, DIGITAL_OUT, DIGITAL_IN_LOW, DIGITAL_OUT_LOW, DISABLED
 
 All IOs: DISABLED (safe default, high-impedance)

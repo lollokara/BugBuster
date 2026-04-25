@@ -28,34 +28,34 @@ class TestMCPBusTools(unittest.TestCase):
 
     def test_plan_i2c_bus_is_dry_run(self):
         payload = self.mcp.tools["plan_i2c_bus"](
-            sda_io=2,
-            scl_io=3,
+            sda_io=1,
+            scl_io=2,
             supply_voltage=3.3,
         )
 
         self.assertTrue(payload["success"])
         self.assertTrue(payload["dry_run"])
-        self.assertEqual(payload["esp_gpios"], {"sda": 2, "scl": 4})
+        self.assertEqual(payload["esp_gpios"], {"sda": 4, "scl": 2})
         self.assertEqual(payload["mux_states"], [0x50, 0x00, 0x00, 0x00])
         self.assertIn("0x7F", payload["reserved_addresses_skipped"])
 
     def test_plan_spi_bus_is_dry_run(self):
         payload = self.mcp.tools["plan_spi_bus"](
-            sck_io=3,
+            sck_io=1,
             mosi_io=2,
-            miso_io=5,
-            cs_io=6,
+            miso_io=4,
+            cs_io=5,
             supply_voltage=3.3,
         )
 
         self.assertTrue(payload["success"])
         self.assertTrue(payload["dry_run"])
-        self.assertEqual(payload["esp_gpios"], {"sck": 4, "mosi": 2, "miso": 6, "cs": 7})
+        self.assertEqual(payload["esp_gpios"], {"sck": 4, "mosi": 2, "miso": 7, "cs": 6})
         self.assertEqual(payload["mux_states"], [0x50, 0x50, 0x00, 0x00])
 
     def test_plan_i2c_bus_validates_io(self):
         with self.assertRaises(ValueError):
-            self.mcp.tools["plan_i2c_bus"](sda_io=0, scl_io=3, supply_voltage=3.3)
+            self.mcp.tools["plan_i2c_bus"](sda_io=0, scl_io=2, supply_voltage=3.3)
 
     def test_scan_i2c_bus_uses_session_client(self):
         fake_bb = MagicMock()
@@ -69,8 +69,8 @@ class TestMCPBusTools(unittest.TestCase):
 
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
             payload = self.mcp.tools["scan_i2c_bus"](
-                sda_io=2,
-                scl_io=3,
+                sda_io=1,
+                scl_io=2,
                 supply_voltage=3.3,
             )
 
@@ -87,10 +87,10 @@ class TestMCPBusTools(unittest.TestCase):
 
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
             payload = self.mcp.tools["spi_transfer"](
-                sck_io=3,
+                sck_io=1,
                 mosi_io=2,
-                miso_io=5,
-                cs_io=6,
+                miso_io=4,
+                cs_io=5,
                 supply_voltage=3.3,
                 data=[0x9F, 0x00],
             )
@@ -109,9 +109,9 @@ class TestMCPBusTools(unittest.TestCase):
 
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
             payload = self.mcp.tools["spi_jedec_id"](
-                sck_io=3,
-                miso_io=5,
-                cs_io=6,
+                sck_io=1,
+                miso_io=4,
+                cs_io=5,
                 supply_voltage=3.3,
             )
 

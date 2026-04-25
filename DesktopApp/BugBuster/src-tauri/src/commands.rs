@@ -916,7 +916,18 @@ pub async fn selftest_status(mgr: State<'_, ConnectionManager>) -> CmdResult<ser
         .send_command(bbp::CMD_SELFTEST_STATUS, &[])
         .await
         .map_err(map_err)?;
-    Ok(parse_selftest_status(&rsp))
+    let mut status = parse_selftest_status(&rsp);
+    if rsp.len() < SELFTEST_STATUS_WITH_WORKER_FLAGS_LEN {
+        let enabled = mgr
+            .send_command(bbp::CMD_SELFTEST_WORKER, &[0xFF])
+            .await
+            .ok()
+            .and_then(|rsp| rsp.first().copied())
+            .unwrap_or(0)
+            != 0;
+        apply_legacy_selftest_worker_fallback(&mut status, enabled);
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -2020,6 +2031,8 @@ pub async fn pick_config_open_file(app: tauri::AppHandle) -> CmdResult<Option<St
 // value.  Command handlers are thin wrappers that call these.
 // =============================================================================
 
+const SELFTEST_STATUS_WITH_WORKER_FLAGS_LEN: usize = 27;
+
 pub fn parse_selftest_status(data: &[u8]) -> serde_json::Value {
     let mut r = bbp::PayloadReader::new(data);
     let boot_ran = r.get_bool().unwrap_or(false);
@@ -2053,6 +2066,22 @@ pub fn parse_selftest_status(data: &[u8]) -> serde_json::Value {
         "workerEnabled": worker_enabled,
         "supplyMonitorActive": supply_monitor_active,
     })
+}
+
+fn apply_legacy_selftest_worker_fallback(status: &mut serde_json::Value, worker_enabled: bool) {
+    if let Some(obj) = status.as_object_mut() {
+        obj.insert(
+            "workerEnabled".to_string(),
+            serde_json::json!(worker_enabled),
+        );
+        // Older USB firmware exposes the worker query byte but not the active
+        // reservation flag. Treat enabled as reserved so CH-D cannot be edited
+        // out from under the supply monitor.
+        obj.insert(
+            "supplyMonitorActive".to_string(),
+            serde_json::json!(worker_enabled),
+        );
+    }
 }
 
 fn normalize_selftest_status_json(json: &serde_json::Value) -> serde_json::Value {
@@ -2682,6 +2711,27 @@ mod tests {
         let v = parse_selftest_status(&data);
         assert_eq!(v["workerEnabled"], false);
         assert_eq!(v["supplyMonitorActive"], false);
+    }
+
+    #[test]
+    fn legacy_selftest_status_fallback_reserves_channel_d_when_worker_enabled() {
+        let mut v = parse_selftest_status(&build(|w| {
+            w.put_bool(true);
+            w.put_bool(true);
+            w.put_f32(12.34);
+            w.put_f32(11.98);
+            w.put_f32(3.302);
+            w.put_u8(0);
+            w.put_u8(2);
+            w.put_u8(7);
+            w.put_f32(4.2);
+            w.put_f32(1.5);
+        }));
+
+        apply_legacy_selftest_worker_fallback(&mut v, true);
+
+        assert_eq!(v["workerEnabled"], true);
+        assert_eq!(v["supplyMonitorActive"], true);
     }
 
     #[test]

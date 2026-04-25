@@ -147,7 +147,7 @@ def register(mcp) -> None:
                 "shapes":     ["sine", "square", "triangle", "sawtooth"],
                 "freq_min_hz": 0.01,
                 "freq_max_hz": 100.0,
-                "channels":   [1, 4, 7, 10],
+                "channels":   [3, 6, 9, 12],
             },
             "logic_analyzer": {
                 "max_channels":  4,

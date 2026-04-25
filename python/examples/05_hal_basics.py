@@ -161,27 +161,27 @@ with bb.connect_usb(USB_PORT) as dev:
 
 
     # =====================================================================
-    # 3. ANALOG OUTPUT (IO 1, 4, 7, 10 only)
+    # 3. ANALOG OUTPUT (IO 3, 6, 9, 12 only)
     # =====================================================================
     # configure() is the equivalent of Arduino's pinMode().
     # It handles: power sequencing, MUX routing, AD74416H channel setup.
     #
     # write_voltage() sets the DAC output in volts.
 
-    print("--- Analog Output (IO 1) ---")
-    hal.configure(1, PortMode.ANALOG_OUT)           # 0-12 V unipolar
-    hal.write_voltage(1, 5.0)
-    print("  IO 1 -> 5.0 V output")
+    print("--- Analog Output (IO 3) ---")
+    hal.configure(3, PortMode.ANALOG_OUT)           # 0-12 V unipolar
+    hal.write_voltage(3, 5.0)
+    print("  IO 3 -> 5.0 V output")
 
     # Bipolar mode: configure() with bipolar=True enables -12 to +12 V range
-    # hal.configure(1, PortMode.ANALOG_OUT, bipolar=True)
-    # hal.write_voltage(1, -3.0, bipolar=True)
+    # hal.configure(3, PortMode.ANALOG_OUT, bipolar=True)
+    # hal.write_voltage(3, -3.0, bipolar=True)
 
     time.sleep(0.1)
 
 
     # =====================================================================
-    # 4. ANALOG INPUT (IO 1, 4, 7, 10 only)
+    # 4. ANALOG INPUT (IO 3, 6, 9, 12 only)
     # =====================================================================
     # read_voltage() returns the measured voltage from the AD74416H ADC.
     #
@@ -189,17 +189,17 @@ with bb.connect_usb(USB_PORT) as dev:
     # The AD74416H has a single shared ADC that sequences across all active
     # channels.  The first reading after a configuration change may be stale.
 
-    print("\n--- Analog Input (IO 4) ---")
-    hal.configure(4, PortMode.ANALOG_IN)
+    print("\n--- Analog Input (IO 6) ---")
+    hal.configure(6, PortMode.ANALOG_IN)
     time.sleep(1.0)   # ADC settle time
 
-    readings = [hal.read_voltage(4) for _ in range(5)]
+    readings = [hal.read_voltage(6) for _ in range(5)]
     avg = sum(readings) / len(readings)
-    print(f"  IO 4 average over 5 reads: {avg:.4f} V")
+    print(f"  IO 6 average over 5 reads: {avg:.4f} V")
 
 
     # =====================================================================
-    # 5. CURRENT OUTPUT / INPUT (IO 1, 4, 7, 10 only)
+    # 5. CURRENT OUTPUT / INPUT (IO 3, 6, 9, 12 only)
     # =====================================================================
     # 4-20 mA process loop support:
     #   CURRENT_OUT: sources current (0-25 mA, typically 4-20 mA)
@@ -208,35 +208,35 @@ with bb.connect_usb(USB_PORT) as dev:
     # write_current() sets output in milliamps.
     # read_current()  returns measured current in milliamps.
 
-    print("\n--- Current Output (IO 7) ---")
-    hal.configure(7, PortMode.CURRENT_OUT)
+    print("\n--- Current Output (IO 9) ---")
+    hal.configure(9, PortMode.CURRENT_OUT)
 
     for pct in [0, 25, 50, 75, 100]:
         ma = 4.0 + (pct / 100.0) * 16.0   # 4-20 mA from 0-100%
-        hal.write_current(7, ma)
+        hal.write_current(9, ma)
         time.sleep(0.05)
         print(f"  {pct:3d}% -> {ma:.2f} mA")
 
 
     # =====================================================================
-    # 6. RTD / RESISTANCE MEASUREMENT (IO 1, 4, 7, 10 only)
+    # 6. RTD / RESISTANCE MEASUREMENT (IO 3, 6, 9, 12 only)
     # =====================================================================
     # Measures resistance using the AD74416H's built-in excitation current.
     #
     # Default: 1 mA excitation -> max ~625 ohm (good for PT100 up to ~260 C)
     # Optional: 500 uA excitation -> max ~1250 ohm (for PT1000 or high-R sensors)
-    #   hal.configure(10, PortMode.RTD, rtd_ma_1=False)  # 500 uA
+    #   hal.configure(12, PortMode.RTD, rtd_ma_1=False)  # 500 uA
     #
     # read_resistance()         -> ohms
     # read_temperature_pt100()  -> degrees C (linear Callendar-Van Dusen)
     # read_temperature_pt1000() -> degrees C
 
-    print("\n--- RTD Measurement (IO 10) ---")
-    hal.configure(10, PortMode.RTD)
+    print("\n--- RTD Measurement (IO 12) ---")
+    hal.configure(12, PortMode.RTD)
     time.sleep(1.0)   # ADC settle
 
-    ohms = hal.read_resistance(10)
-    temp = hal.read_temperature_pt100(10)
+    ohms = hal.read_resistance(12)
+    temp = hal.read_temperature_pt100(12)
     print(f"  Resistance: {ohms:.2f} ohm")
     print(f"  PT100 temp: {temp:.1f} C")
 

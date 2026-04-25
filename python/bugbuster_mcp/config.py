@@ -77,7 +77,7 @@ USBPD_ALLOWED_VOLTAGES = {5, 9, 12, 15, 18, 20}  # V
 # ---------------------------------------------------------------------------
 
 # IOs that can be used in analog modes (route to AD74416H)
-ANALOG_IOS = frozenset({1, 4, 7, 10})
+ANALOG_IOS = frozenset({3, 6, 9, 12})
 
 # All valid IO numbers
 ALL_IOS = frozenset(range(1, 13))

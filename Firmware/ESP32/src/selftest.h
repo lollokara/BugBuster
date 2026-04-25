@@ -10,7 +10,7 @@
 //   - Boot-time supply verification (VADJ1, VADJ2, 3V3_ADJ)
 //   - Automatic IDAC calibration (no external connections needed)
 //   - Background supply rail monitoring (VADJ1, VADJ2, 3V3_ADJ)
-//   - Safety interlocks with U17 S2 (IO 10 analog mode)
+//   - Safety interlocks with U17 S2 (IO 9 analog mode)
 //
 // PCB mode only — all functions are no-ops when ADGS_HAS_SELFTEST == 0.
 // =============================================================================

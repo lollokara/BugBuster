@@ -78,7 +78,7 @@
 #if BREADBOARD_MODE
 #define PIN_MUX_INT     GPIO_NUM_NC   // Not connected on breadboard (conflicts with I2C_SCL on GPIO4)
 #else
-#define PIN_MUX_INT     GPIO_NUM_3    // PCB: PCAL9535A INT output → ESP32 (GPIO4 now free for DIO IO3)
+#define PIN_MUX_INT     GPIO_NUM_3    // PCB: PCAL9535A INT output → ESP32 (GPIO4 now free for DIO IO1)
 #endif
 
 // -----------------------------------------------------------------------------

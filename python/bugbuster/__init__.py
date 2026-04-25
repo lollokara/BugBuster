@@ -29,11 +29,11 @@ behind simple ``configure() / read() / write()`` calls::
         hal = bb.hal
         hal.begin(supply_voltage=12.0, vlogic=3.3)
 
-        hal.configure(1, PortMode.ANALOG_OUT)
-        hal.write_voltage(1, 5.0)
+        hal.configure(3, PortMode.ANALOG_OUT)
+        hal.write_voltage(3, 5.0)
 
-        hal.configure(4, PortMode.ANALOG_IN)
-        print(f"IO 4: {hal.read_voltage(4):.4f} V")
+        hal.configure(6, PortMode.ANALOG_IN)
+        print(f"IO 6: {hal.read_voltage(6):.4f} V")
 
         hal.configure(2, PortMode.DIGITAL_OUT)
         hal.write_digital(2, True)
@@ -45,8 +45,8 @@ Hardware overview
 -----------------
 12 IOs in 2 Blocks x 2 IO_Blocks x 3 IOs:
 
-- **IO 1, 4, 7, 10** — analog-capable (ADC, DAC, 4-20 mA, RTD, HART, HAT)
-- **IO 2, 3, 5, 6, 8, 9, 11, 12** — digital only (high/low drive GPIO)
+- **IO 3, 6, 9, 12** — analog-capable (ADC, DAC, 4-20 mA, RTD, HART, HAT)
+- **IO 1, 2, 4, 5, 7, 8, 10, 11** — digital only (high/low drive GPIO)
 - **VADJ1** (3-15 V) powers IO 1-6; **VADJ2** powers IO 7-12
 - **VLOGIC** (1.8-5 V) sets the logic level for all digital IOs
 

@@ -35,7 +35,7 @@ mcp = FastMCP(
         "Always call configure_io before read/write operations on any IO. "
         "The MUX matrix is managed automatically by configure_io — "
         "each IO can only be in one mode (analog OR digital, not both simultaneously). "
-        "IOs 1, 4, 7, 10 support analog modes; all 12 IOs support digital modes. "
+        "IOs 3, 6, 9, 12 support analog modes; all 12 IOs support digital modes. "
         "E-fuse protection is enabled automatically by configure_io for output modes. "
         "Safety limits: DAC max 12 V unipolar, current max 8 mA by default, "
         "VADJ max 15 V (requires confirm=True above 12 V)."

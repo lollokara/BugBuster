@@ -610,7 +610,7 @@ bool adgs_set_selftest(uint8_t sw_byte)
 
     // Safety interlock: U17 S2 must be open before ANY U23 switch can close
     if (sw_byte != 0 && adgs_u17_s2_active()) {
-        ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U17 S2 (IO10 analog) is closed!");
+        ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U17 S2 (IO9 analog) is closed!");
         return false;
     }
 

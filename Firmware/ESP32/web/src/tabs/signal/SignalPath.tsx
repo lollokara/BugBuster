@@ -40,10 +40,10 @@ const ACCENTS = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"] as const;
 const MUX_REF = ["U10", "U11", "U17", "U16"] as const;
 
 const GPIO_PAIR_LABELS: ReadonlyArray<readonly [string, string, string]> = [
-  ["IO1", "IO2", "IO3"],
-  ["IO4", "IO5", "IO6"],
-  ["IO7", "IO8", "IO9"],
-  ["IO10", "IO11", "IO12"],
+  ["IO3", "IO2", "IO1"],
+  ["IO6", "IO5", "IO4"],
+  ["IO9", "IO8", "IO7"],
+  ["IO12", "IO11", "IO10"],
 ];
 
 const ADC_LABELS = ["CH A", "CH B", "CH D", "CH C"] as const;
@@ -756,6 +756,8 @@ function render(
     const pinX = cnL + 8;
     const numX = cnR - 14;
 
+    const ioLabels = GPIO_PAIR_LABELS[ch]!;
+
     /* Pin 1: GND */
     c.font = "8px monospace"; c.textAlign = "left";
     c.fillStyle = "#1e2d40";
@@ -763,24 +765,24 @@ function render(
     c.textAlign = "right"; c.fillStyle = "#253040"; c.font = "7px monospace";
     c.fillText("1", numX, pinYs[0]! + 3);
 
-    /* Pin 2: Aux2 */
+    /* Pin 2: IOx (Group C) */
     c.font = "bold 10px monospace"; c.textAlign = "left";
     c.fillStyle = aux2On ? aux2C : "#253040";
-    c.fillText("Aux2", pinX, pinYs[1]! + 4);
+    c.fillText(ioLabels[2]!, pinX, pinYs[1]! + 4);
     c.textAlign = "right"; c.fillStyle = "#334155"; c.font = "7px monospace";
     c.fillText("2", numX, pinYs[1]! + 3);
 
-    /* Pin 3: Aux1 */
+    /* Pin 3: IOx+1 (Group B) */
     c.font = "bold 10px monospace"; c.textAlign = "left";
     c.fillStyle = aux1On ? aux1C : "#253040";
-    c.fillText("Aux1", pinX, pinYs[2]! + 4);
+    c.fillText(ioLabels[1]!, pinX, pinYs[2]! + 4);
     c.textAlign = "right"; c.fillStyle = "#334155"; c.font = "7px monospace";
     c.fillText("3", numX, pinYs[2]! + 3);
 
-    /* Pin 4: Main */
+    /* Pin 4: analog-capable IO (Group A) */
     c.font = "bold 10px monospace"; c.textAlign = "left";
     c.fillStyle = mainOn ? mainC : "#253040";
-    c.fillText("Main", pinX, pinYs[3]! + 4);
+    c.fillText(ioLabels[0]!, pinX, pinYs[3]! + 4);
     c.textAlign = "right"; c.fillStyle = "#334155"; c.font = "7px monospace";
     c.fillText("4", numX, pinYs[3]! + 3);
 

@@ -53,10 +53,10 @@ static const int EXCLUDED_PINS[] = {
 
 // PCB IO terminal -> ESP32 GPIO routing (IO1..IO12).
 static const int UART_IO_GPIO_MAP[] = {
-    1, 2, 4,      // IO1, IO2, IO3
-    5, 6, 7,      // IO4, IO5, IO6
-    10, 9, 8,     // IO7, IO8, IO9
-    13, 12, 11,   // IO10, IO11, IO12
+    4, 2, 1,      // IO1, IO2, IO3
+    7, 6, 5,      // IO4, IO5, IO6
+    8, 9, 10,     // IO7, IO8, IO9
+    11, 12, 13,   // IO10, IO11, IO12
     -1
 };
 
@@ -97,9 +97,9 @@ static bool is_pin_excluded(int pin)
 
 static const UartBridgeConfig DEFAULT_CONFIGS[2] = {
     // Bridge defaults map to PCB IO terminals and start DISABLED by default.
-    { .uart_num = 1, .tx_pin = 1, .rx_pin = 2, .baudrate = 921600,
+    { .uart_num = 1, .tx_pin = 4, .rx_pin = 2, .baudrate = 921600,
       .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = false },
-    { .uart_num = 2, .tx_pin = 5, .rx_pin = 6, .baudrate = 921600,
+    { .uart_num = 2, .tx_pin = 7, .rx_pin = 6, .baudrate = 921600,
       .data_bits = 8, .parity = 0, .stop_bits = 1, .enabled = false },
 };
 

@@ -335,7 +335,7 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 <div class="card-body" style="text-align: center; padding: 24px">
                                     <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 16px">
                                         "Check that the supply is enabled and U23 is connected. "
-                                        "Ensure IO 10 is not in analog mode (safety interlock)."
+                                        "Ensure IO 9 is not in analog mode (safety interlock)."
                                     </p>
                                     <div style="max-height: 150px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 9px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); text-align: left; margin-bottom: 16px">
                                         {move || cal_log.get().iter().map(|l| {

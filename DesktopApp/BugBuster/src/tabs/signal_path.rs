@@ -60,10 +60,10 @@ const MUX_REF: [&str; 4] = ["U10", "U11", "U17", "U16"];
 // type: p=gpio pair direct, q=gpio pair resistor, a=adc, e=ext
 // GPIO label names (one per pair, shown before LS)
 const GPIO_PAIR_LABELS: [[&str; 3]; 4] = [
-    ["IO1", "IO2", "IO3"],     // U10: pair1=S1/S2, pair2=S5/S6, pair3=S7/S8
-    ["IO4", "IO5", "IO6"],     // U11
-    ["IO7", "IO8", "IO9"],      // U17
-    ["IO10", "IO11", "IO12"],   // U16
+    ["IO3", "IO2", "IO1"],     // U10: pair1=S1/S2 (analog), pair2=S5/S6, pair3=S7/S8
+    ["IO6", "IO5", "IO4"],     // U11
+    ["IO9", "IO8", "IO7"],     // U17
+    ["IO12", "IO11", "IO10"],  // U16
 ];
 
 // S3 and S4 labels
@@ -461,61 +461,61 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let aux1_c = sw_color(aux1_sw);
                 let aux2_c = sw_color(aux2_sw);
 
-                // Pin Y positions aligned to traces
+                // Connector order is GND, IOx, IOx+1, IOx+2 (analog), VCC.
                 let pin_ys = [
-                    ct + 14.0,      // Pin 1: V_ADJ (at top of connector)
-                    main_cy,        // Pin 2: Main — aligned with Group A trace
-                    aux1_cy,        // Pin 3: Aux1 — aligned with Group B trace
-                    aux2_cy,        // Pin 4: Aux2 — aligned with Group C trace
-                    ct + conn_h - 8.0, // Pin 5: GND (at bottom)
+                    ct + 14.0,
+                    aux2_cy,
+                    aux1_cy,
+                    main_cy,
+                    ct + conn_h - 8.0,
                 ];
+                let io_labels = GPIO_PAIR_LABELS[ch];
 
                 c.set_font("bold 10px monospace");
                 c.set_text_align("left");
                 let pin_x = cn_l + 8.0;
                 let num_x = cn_r - 14.0;
 
-                // Pin 1: V_ADJ (power) — smaller font, pushed back
+                // Pin 1: GND
                 c.set_font("8px monospace"); c.set_text_align("left");
-                c.set_fill_style_str(if pw { "#ef444499" } else { "#1e2d40" });
-                let _ = c.fill_text(psu_lbl, pin_x, pin_ys[0] + 3.0);
+                c.set_fill_style_str("#1e2d40");
+                let _ = c.fill_text("GND", pin_x, pin_ys[0] + 3.0);
                 c.set_text_align("right"); c.set_fill_style_str("#253040"); c.set_font("7px monospace");
                 let _ = c.fill_text("1", num_x, pin_ys[0] + 3.0);
-                // PWR dot
-                c.set_fill_style_str(if pw { "#ef4444" } else { "#1e293b" });
-                c.begin_path(); c.arc(num_x - 10.0, pin_ys[0], 4.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
-                if pw {
-                    c.set_fill_style_str("rgba(239,68,68,0.12)");
-                    c.begin_path(); c.arc(num_x - 10.0, pin_ys[0], 8.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
-                }
 
-                // Pin 2: Main (OUT1)
+                // Pin 2: IOx (Group C)
                 c.set_font("bold 10px monospace"); c.set_text_align("left");
-                c.set_fill_style_str(if main_on { main_c } else { "#253040" });
-                let _ = c.fill_text("Main", pin_x, pin_ys[1] + 4.0);
+                c.set_fill_style_str(if aux2_on { aux2_c } else { "#253040" });
+                let _ = c.fill_text(io_labels[2], pin_x, pin_ys[1] + 4.0);
                 c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
                 let _ = c.fill_text("2", num_x, pin_ys[1] + 3.0);
 
-                // Pin 3: Aux1 (OUT2)
+                // Pin 3: IOx+1 (Group B)
                 c.set_font("bold 10px monospace"); c.set_text_align("left");
                 c.set_fill_style_str(if aux1_on { aux1_c } else { "#253040" });
-                let _ = c.fill_text("Aux1", pin_x, pin_ys[2] + 4.0);
+                let _ = c.fill_text(io_labels[1], pin_x, pin_ys[2] + 4.0);
                 c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
                 let _ = c.fill_text("3", num_x, pin_ys[2] + 3.0);
 
-                // Pin 4: Aux2 (OUT3)
+                // Pin 4: analog-capable IO (Group A)
                 c.set_font("bold 10px monospace"); c.set_text_align("left");
-                c.set_fill_style_str(if aux2_on { aux2_c } else { "#253040" });
-                let _ = c.fill_text("Aux2", pin_x, pin_ys[3] + 4.0);
+                c.set_fill_style_str(if main_on { main_c } else { "#253040" });
+                let _ = c.fill_text(io_labels[0], pin_x, pin_ys[3] + 4.0);
                 c.set_text_align("right"); c.set_fill_style_str("#334155"); c.set_font("7px monospace");
                 let _ = c.fill_text("4", num_x, pin_ys[3] + 3.0);
 
-                // Pin 5: GND — smaller font, pushed back
+                // Pin 5: V_ADJ (power)
                 c.set_font("8px monospace"); c.set_text_align("left");
-                c.set_fill_style_str("#1e2d40");
-                let _ = c.fill_text("GND", pin_x, pin_ys[4] + 3.0);
+                c.set_fill_style_str(if pw { "#ef444499" } else { "#1e2d40" });
+                let _ = c.fill_text(psu_lbl, pin_x, pin_ys[4] + 3.0);
                 c.set_text_align("right"); c.set_fill_style_str("#253040"); c.set_font("7px monospace");
                 let _ = c.fill_text("5", num_x, pin_ys[4] + 3.0);
+                c.set_fill_style_str(if pw { "#ef4444" } else { "#1e293b" });
+                c.begin_path(); c.arc(num_x - 10.0, pin_ys[4], 4.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
+                if pw {
+                    c.set_fill_style_str("rgba(239,68,68,0.12)");
+                    c.begin_path(); c.arc(num_x - 10.0, pin_ys[4], 8.0, 0.0, std::f64::consts::TAU).unwrap(); c.fill();
+                }
             }
         }
     });

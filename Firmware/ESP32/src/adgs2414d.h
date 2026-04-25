@@ -65,10 +65,10 @@ extern "C" {
 // [device][group] → ESP GPIO number for the direct-drive switch
 // Group A = S1/S2, Group B = S5/S6, Group C = S7/S8
 static const uint8_t MUX_GPIO_MAP[4][3] = {
-    { 1,  2,  4},   // U10 (MUX1): IO1→S1,  IO2→S5,  IO3→S7
-    { 5,  6,  7},   // U11 (MUX2): IO4→S1,  IO5→S5,  IO6→S7
-    {13, 12, 11},   // U16 (MUX3): IO10→S1, IO11→S5, IO12→S7
-    {10,  9,  8},   // U17 (MUX4): IO7→S1,  IO8→S5,  IO9→S7
+    { 1,  2,  4},   // U10 (MUX1): IO3→S1,  IO2→S5,  IO1→S7
+    { 5,  6,  7},   // U11 (MUX2): IO6→S1,  IO5→S5,  IO4→S7
+    {13, 12, 11},   // U16 (MUX3): IO12→S1, IO11→S5, IO10→S7
+    {10,  9,  8},   // U17 (MUX4): IO9→S1,  IO8→S5,  IO7→S7
 };
 
 /**
@@ -194,7 +194,7 @@ bool adgs_set_selftest(uint8_t sw_byte);
 uint8_t adgs_get_selftest(void);
 
 /**
- * @brief Check if U17 S2 is currently closed (IO 10 analog mode).
+ * @brief Check if U17 S2 is currently closed (IO 9 analog mode).
  *        When true, U23 must NOT close any switches.
  */
 bool adgs_u17_s2_active(void);

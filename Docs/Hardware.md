@@ -65,21 +65,21 @@ blocks of 3 IOs each:
 
 ```
 Block 1 (VADJ1, 3-15 V)              Block 2 (VADJ2, 3-15 V)
-  IO_Block 1  [E-fuse 1, MUX U10]      IO_Block 3  [E-fuse 3, MUX U16]
-    IO 1  — analog + digital + HAT       IO 7  — analog + digital + HAT
+  IO_Block 1  [E-fuse 1, MUX U10]      IO_Block 3  [E-fuse 4, MUX U17]
+    IO 1  — digital only                  IO 7  — digital only
     IO 2  — digital only                  IO 8  — digital only
-    IO 3  — digital only                  IO 9  — digital only
-  IO_Block 2  [E-fuse 2, MUX U11]      IO_Block 4  [E-fuse 4, MUX U17]
-    IO 4  — analog + digital + HAT       IO 10 — analog + digital + HAT
+    IO 3  — analog + digital + HAT        IO 9  — analog + digital + HAT
+  IO_Block 2  [E-fuse 2, MUX U11]      IO_Block 4  [E-fuse 3, MUX U16]
+    IO 4  — digital only                  IO 10 — digital only
     IO 5  — digital only                  IO 11 — digital only
-    IO 6  — digital only                  IO 12 — digital only
+    IO 6  — analog + digital + HAT        IO 12 — analog + digital + HAT
 ```
 
 Each IO is routed through an ADGS2414D octal SPST switch — functions are
 **mutually exclusive** (exactly one active path at a time).  VLOGIC controls
 the logic level for all digital IOs through TXS0108E level shifters.
 
-Analog-capable IOs (1, 4, 7, 10) can act as voltage input, current input,
+Analog-capable IOs (3, 6, 9, 12) can act as voltage input, current input,
 voltage output, current source, RTD excitation probe, or be routed to the HAT
 connector for SWD / LA.
 

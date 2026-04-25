@@ -45,7 +45,7 @@ The **Board** tab in the Desktop App allows you to:
 4. **Export Profile**: Generates a JSON profile that you can save to the `board_profiles/` directory for the MCP server to use.
 
 ### IO Block Constraints
-- **IOs 1, 4, 7, 10**: Support "Analog" modes (ADC/DAC/RTD).
+- **IOs 3, 6, 9, 12**: Support "Analog" modes (ADC/DAC/RTD).
 - **All other IOs**: Digital-only (GPIO, GPI, GPO).
 - **VADJ1**: Powers IOs 1 through 6.
 - **VADJ2**: Powers IOs 7 through 12.

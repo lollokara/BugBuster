@@ -43,20 +43,20 @@ def register(mcp) -> None:
         Equivalent to Arduino pinMode(). Must be called before read/write operations.
 
         Parameters:
-        - io: IO number 1-12. IOs 1, 4, 7, 10 support analog modes; others are digital-only.
+        - io: IO number 1-12. IOs 3, 6, 9, 12 support analog modes; others are digital-only.
         - mode: Operating mode string. One of:
             DISABLED        — Safe high-impedance state (default)
-            ANALOG_IN       — Voltage input (0-12 V, 24-bit ADC). IOs 1,4,7,10 only.
-            ANALOG_OUT      — Voltage output (0-12 V DAC). IOs 1,4,7,10 only.
-            CURRENT_IN      — 4-20 mA input (externally powered). IOs 1,4,7,10 only.
-            CURRENT_OUT     — 4-20 mA current source. IOs 1,4,7,10 only.
+            ANALOG_IN       — Voltage input (0-12 V, 24-bit ADC). IOs 3,6,9,12 only.
+            ANALOG_OUT      — Voltage output (0-12 V DAC). IOs 3,6,9,12 only.
+            CURRENT_IN      — 4-20 mA input (externally powered). IOs 3,6,9,12 only.
+            CURRENT_OUT     — 4-20 mA current source. IOs 3,6,9,12 only.
             DIGITAL_IN      — GPIO input (high-drive level shifter).
             DIGITAL_OUT     — GPIO output (high-drive level shifter).
             DIGITAL_IN_LOW  — GPIO input (low-drive level shifter).
             DIGITAL_OUT_LOW — GPIO output (low-drive level shifter).
-            RTD             — Resistance/PT100/PT1000 measurement. IOs 1,4,7,10 only.
-            HART            — HART modem overlay (4-20 mA with HART). IOs 1,4,7,10 only.
-            HAT             — Route IO to HAT expansion connector. IOs 1,4,7,10 only.
+            RTD             — Resistance/PT100/PT1000 measurement. IOs 3,6,9,12 only.
+            HART            — HART modem overlay (4-20 mA with HART). IOs 3,6,9,12 only.
+            HAT             — Route IO to HAT expansion connector. IOs 3,6,9,12 only.
         - bipolar: Enable ±12 V range for ANALOG_IN/ANALOG_OUT (default: 0-12 V only).
 
         Returns: io, mode, success, warnings.

@@ -709,13 +709,14 @@ If U17 S2 is closed, all self-test measurement commands return -1.  If U23 is
 active, U17 S2 cannot be closed.
 
 HTTP equivalents:
-- `GET /api/selftest` — boot result + calibration status
+- `GET /api/selftest` — boot result, calibration status, and supply-monitor worker state
 - `GET /api/selftest/supply/{rail}` — measure supply rail (0=VADJ1, 1=VADJ2, 2=3V3_ADJ)
 - `GET /api/selftest/efuse` — all 4 e-fuse currents
 - `POST /api/selftest/calibrate` body `{"channel": 1}` — start auto-calibration
+- `POST /api/selftest/worker` body `{"enabled": true}` — enable/disable the supply monitor worker
 
 #### 0x05 SELFTEST_STATUS
-Get boot self-test result and calibration status.
+Get boot self-test result, calibration status, and supply-monitor worker state.
 
 **Request payload:** (empty)
 
@@ -729,7 +730,10 @@ Get boot self-test result and calibration status.
 14      cal_status      u8      0=idle, 1=running, 2=success, 3=failed
 15      cal_channel     u8      IDAC channel being calibrated
 16      cal_points      u8      calibration points collected
-17      cal_error_mv    f32     final error in mV (if success)
+17      last_voltage_v  f32     last measured calibration voltage
+21      cal_error_mv    f32     final error in mV (if success)
+25      worker_enabled  bool    supply monitor worker is enabled
+26      supply_monitor_active bool worker currently owns the U23/CH-D diagnostic path
 ```
 
 #### 0x06 SELFTEST_MEASURE_SUPPLY

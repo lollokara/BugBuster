@@ -65,20 +65,21 @@ Known GPIO mapping detail:
 
 | Physical IO | ESP32 GPIO |
 |---|---:|
-| IO1 | 47 |
+| IO1 | 4 |
 | IO2 | 2 |
-| IO3 | 4 |
-| IO4 | 5 |
+| IO3 | 1 |
+| IO4 | 7 |
 | IO5 | 6 |
-| IO6 | 7 |
-| IO7 | 15 |
-| IO8 | 16 |
-| IO9 | 17 |
-| IO10 | 18 |
-| IO11 | 21 |
-| IO12 | 38 |
+| IO6 | 5 |
+| IO7 | 8 |
+| IO8 | 9 |
+| IO9 | 10 |
+| IO10 | 11 |
+| IO11 | 12 |
+| IO12 | 13 |
 
-IO3 maps to ESP32 GPIO4. Do not assume physical IO number equals GPIO number.
+IO3/IO6/IO9/IO12 are the analog-capable connector positions. Do not assume
+physical IO number equals GPIO number.
 
 ---
 
@@ -104,8 +105,8 @@ import bugbuster as bb
 
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     plan = dev.bus.plan_i2c(
-        sda=2,
-        scl=3,
+        sda=1,
+        scl=2,
         io_voltage=3.3,
         supply_voltage=3.3,
         frequency_hz=400_000,
@@ -118,8 +119,8 @@ Expected important fields:
 ```python
 {
     "kind": "i2c",
-    "pins": {"sda": 2, "scl": 3},
-    "esp_gpios": {"sda": 2, "scl": 4},
+    "pins": {"sda": 1, "scl": 2},
+    "esp_gpios": {"sda": 4, "scl": 2},
     "mux_states": [0x50, 0x00, 0x00, 0x00],
     "supplies": ["VADJ1"],
     "efuses": ["EFUSE1"],
@@ -133,8 +134,8 @@ import bugbuster as bb
 
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     result = dev.bus.i2c_scan(
-        sda=2,
-        scl=3,
+        sda=1,
+        scl=2,
         io_voltage=3.3,
         supply_voltage=3.3,
         frequency_hz=400_000,
@@ -153,8 +154,8 @@ configured, omit `sda` and `scl` to scan the active session.
 ```python
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     dev.bus.setup_i2c(
-        sda=2,
-        scl=3,
+        sda=1,
+        scl=2,
         io_voltage=3.3,
         supply_voltage=3.3,
     )
@@ -168,10 +169,10 @@ with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
 ```python
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     dev.bus.setup_spi(
-        sck=3,
+        sck=1,
         mosi=2,
-        miso=5,
-        cs=6,
+        miso=4,
+        cs=5,
         io_voltage=3.3,
         supply_voltage=3.3,
         frequency_hz=1_000_000,
@@ -213,10 +214,10 @@ Example:
 ```python
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     dev.bus.setup_spi(
-        sck=3,
+        sck=1,
         mosi=2,
-        miso=5,
-        cs=6,
+        miso=4,
+        cs=5,
         io_voltage=3.3,
         supply_voltage=3.3,
     )
@@ -390,8 +391,8 @@ Use a known I2C peripheral powered at 3.3 V with external pull-ups.
 ```python
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     scan = dev.bus.i2c_scan(
-        sda=2,
-        scl=3,
+        sda=1,
+        scl=2,
         io_voltage=3.3,
         supply_voltage=3.3,
     )
@@ -406,10 +407,10 @@ Use a target that supports JEDEC `0x9F`.
 ```python
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     dev.bus.setup_spi(
-        sck=3,
+        sck=1,
         mosi=2,
-        miso=5,
-        cs=6,
+        miso=4,
+        cs=5,
         io_voltage=3.3,
         supply_voltage=3.3,
     )

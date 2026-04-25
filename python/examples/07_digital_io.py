@@ -11,27 +11,27 @@ on the ESP32 dev-board headers.
 
 IO numbering and GPIO mapping
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Each IO_Block has 3 IOs.  The first IO in each block is also the one
+Each IO_Block has 3 IOs.  The third IO in each block is also the one
 that can be routed to the AD74416H analog channel via the MUX.
 
     +-----------+-----+------------------+-----------------------------------+
     | IO_Block  | IO  | GPIO (breadboard)| GPIO (PCB)                        |
     +-----------+-----+------------------+-----------------------------------+
-    | 1 (VADJ1) |  1  |  2               |  1     (analog-capable, Ch A)     |
+    | 1 (VADJ1) |  1  | 15               |  4                                |
     |           |  2  |  3               |  2                                |
-    |           |  3  | 13               |  3                                |
+    |           |  3  |  2               |  1     (analog-capable, Ch A)     |
     +-----------+-----+------------------+-----------------------------------+
-    | 2 (VADJ1) |  4  | 21               |  5     (analog-capable, Ch B)     |
+    | 2 (VADJ1) |  4  | 36               |  7                                |
     |           |  5  | 35               |  6                                |
-    |           |  6  | 36               |  7                                |
+    |           |  6  | 21               |  5     (analog-capable, Ch B)     |
     +-----------+-----+------------------+-----------------------------------+
-    | 3 (VADJ2) |  7  | 37               | 13     (analog-capable, Ch C)     |
+    | 3 (VADJ2) |  7  | 39               |  8                                |
     |           |  8  | 38               | 12                                |
-    |           |  9  | 39               | 11                                |
+    |           |  9  | 37               | 10     (analog-capable, Ch D)     |
     +-----------+-----+------------------+-----------------------------------+
-    | 4 (VADJ2) | 10  | 40               | 10     (analog-capable, Ch D)     |
-    |           | 11  | 47               |  9                                |
-    |           | 12  | 48               |  8                                |
+    | 4 (VADJ2) | 10  | 48               | 11                                |
+    |           | 11  | 47               | 12                                |
+    |           | 12  | 40               | 13     (analog-capable, Ch C)     |
     +-----------+-----+------------------+-----------------------------------+
 
 IO modes

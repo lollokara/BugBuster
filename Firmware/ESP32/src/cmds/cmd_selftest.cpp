@@ -19,8 +19,8 @@
 // SELFTEST_STATUS  payload: (none)
 // resp: bool ran, bool passed, f32 vadj1_v, f32 vadj2_v, f32 vlogic_v,
 //       u8 cal_status, u8 cal_channel, u8 points_collected,
-//       f32 last_measured_v, f32 error_mv
-// Wire format matches legacy handleSelftestStatus (bbp.cpp:1056-1074).
+//       f32 last_measured_v, f32 error_mv,
+//       bool worker_enabled, bool supply_monitor_active
 // ---------------------------------------------------------------------------
 static int handler_selftest_status(const uint8_t *payload, size_t len,
                                    uint8_t *resp, size_t *resp_len)
@@ -41,6 +41,8 @@ static int handler_selftest_status(const uint8_t *payload, size_t len,
     bbp_put_u8(resp, &pos, cal->points_collected);
     bbp_put_f32(resp, &pos, cal->last_measured_v);
     bbp_put_f32(resp, &pos, cal->error_mv);
+    bbp_put_bool(resp, &pos, selftest_worker_enabled());
+    bbp_put_bool(resp, &pos, selftest_is_supply_monitor_active());
     *resp_len = pos;
     return (int)pos;
 }

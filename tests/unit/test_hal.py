@@ -48,7 +48,7 @@ class TestRoutingTableConsistency(unittest.TestCase):
         self.assertEqual(set(DEFAULT_ROUTING.keys()), set(range(1, 13)))
 
     def test_analog_ios_have_channel(self):
-        for io_num in (1, 4, 7, 10):
+        for io_num in ANALOG_IOS:
             rt = DEFAULT_ROUTING[io_num]
             self.assertIsNotNone(
                 rt.channel,
@@ -116,7 +116,7 @@ class TestSetMux(unittest.TestCase):
 
     def test_analog_io_analog_mode_sets_adc_bit(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[1]  # analog IO, position 1, mux_device 0
+        rt = hal._routing[3]  # analog IO, group A, mux_device 0
         hal._set_mux(rt, PortMode.ANALOG_IN)
         # Should set bit 1 (S2 = ADC) in device 0
         expected_state = [_SW_A_ADC, 0, 0, 0]
@@ -124,28 +124,28 @@ class TestSetMux(unittest.TestCase):
 
     def test_analog_io_digital_high_sets_esp_high_bit(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[1]
+        rt = hal._routing[3]
         hal._set_mux(rt, PortMode.DIGITAL_IN)
         expected_state = [_SW_A_ESP_HIGH, 0, 0, 0]
         mock_bb.mux_set_all.assert_called_with(expected_state)
 
     def test_analog_io_digital_low_sets_esp_low_bit(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[1]
+        rt = hal._routing[3]
         hal._set_mux(rt, PortMode.DIGITAL_OUT_LOW)
         expected_state = [_SW_A_ESP_LOW, 0, 0, 0]
         mock_bb.mux_set_all.assert_called_with(expected_state)
 
     def test_analog_io_hat_sets_hat_bit(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[1]
+        rt = hal._routing[3]
         hal._set_mux(rt, PortMode.HAT)
         expected_state = [_SW_A_HAT, 0, 0, 0]
         mock_bb.mux_set_all.assert_called_with(expected_state)
 
     def test_analog_io_disabled_clears_group_a(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[1]
+        rt = hal._routing[3]
         # First set something, then disable
         hal._mux_state[0] = 0xFF
         hal._set_mux(rt, PortMode.DISABLED)
@@ -168,14 +168,14 @@ class TestSetMux(unittest.TestCase):
 
     def test_position3_digital_high_sets_group_c(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[3]  # position 3, mux_device 0
+        rt = hal._routing[1]  # position 3, mux_device 0
         hal._set_mux(rt, PortMode.DIGITAL_OUT)
         expected_state = [_SW_C_ESP_HIGH, 0, 0, 0]
         mock_bb.mux_set_all.assert_called_with(expected_state)
 
     def test_position3_digital_low_sets_group_c_low(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[3]
+        rt = hal._routing[1]
         hal._set_mux(rt, PortMode.DIGITAL_OUT_LOW)
         expected_state = [_SW_C_ESP_LOW, 0, 0, 0]
         mock_bb.mux_set_all.assert_called_with(expected_state)
@@ -183,18 +183,18 @@ class TestSetMux(unittest.TestCase):
     def test_different_devices_independent(self):
         """IOs on different mux devices write to separate state slots."""
         hal, mock_bb = _make_hal()
-        # IO 7 is on mux_device 3, position 1
-        rt7 = hal._routing[7]
-        hal._set_mux(rt7, PortMode.ANALOG_OUT)
+        # IO 9 is on mux_device 3, group A
+        rt9 = hal._routing[9]
+        hal._set_mux(rt9, PortMode.ANALOG_OUT)
         self.assertEqual(hal._mux_state[3], _SW_A_ADC)
         self.assertEqual(hal._mux_state[0], 0)  # device 0 untouched
 
     def test_multiple_ios_same_device_coexist(self):
-        """IOs 1 (pos 1), 2 (pos 2), 3 (pos 3) share device 0 without conflict."""
+        """IOs 1 (pos 3), 2 (pos 2), 3 (pos 1) share device 0 without conflict."""
         hal, mock_bb = _make_hal()
-        hal._set_mux(hal._routing[1], PortMode.ANALOG_IN)   # group A
+        hal._set_mux(hal._routing[3], PortMode.ANALOG_IN)   # group A
         hal._set_mux(hal._routing[2], PortMode.DIGITAL_OUT)  # group B
-        hal._set_mux(hal._routing[3], PortMode.DIGITAL_OUT)  # group C
+        hal._set_mux(hal._routing[1], PortMode.DIGITAL_OUT)  # group C
         expected = _SW_A_ADC | _SW_B_ESP_HIGH | _SW_C_ESP_HIGH
         self.assertEqual(hal._mux_state[0], expected)
 
@@ -229,7 +229,7 @@ class TestModeValidation(unittest.TestCase):
     def test_hat_rejected_on_digital_only_io(self):
         hal, _ = _make_hal()
         with self.assertRaises(ValueError):
-            hal.configure(12, PortMode.HAT)
+            hal.configure(10, PortMode.HAT)
 
     def test_digital_mode_accepted_on_digital_only_io(self):
         hal, mock_bb = _make_hal()
@@ -239,13 +239,13 @@ class TestModeValidation(unittest.TestCase):
 
     def test_analog_mode_accepted_on_analog_io(self):
         hal, mock_bb = _make_hal()
-        hal.configure(1, PortMode.ANALOG_IN)
-        self.assertEqual(hal._io_mode[1], PortMode.ANALOG_IN)
+        hal.configure(3, PortMode.ANALOG_IN)
+        self.assertEqual(hal._io_mode[3], PortMode.ANALOG_IN)
 
     def test_digital_mode_accepted_on_analog_io(self):
         hal, mock_bb = _make_hal()
-        hal.configure(4, PortMode.DIGITAL_OUT)
-        self.assertEqual(hal._io_mode[4], PortMode.DIGITAL_OUT)
+        hal.configure(6, PortMode.DIGITAL_OUT)
+        self.assertEqual(hal._io_mode[6], PortMode.DIGITAL_OUT)
 
     def test_disabled_accepted_on_any_io(self):
         hal, mock_bb = _make_hal()
@@ -265,7 +265,7 @@ class TestModeValidation(unittest.TestCase):
         hal = BugBusterHAL(mock_bb)
         # _powered_up is False by default
         with self.assertRaises(RuntimeError):
-            hal.configure(1, PortMode.ANALOG_IN)
+            hal.configure(3, PortMode.ANALOG_IN)
 
 
 # =========================================================================
@@ -278,22 +278,22 @@ class TestDigitalReadRouting(unittest.TestCase):
     def test_read_analog_io_digital_in_uses_get_status(self):
         """Analog IO (channel != None) in DIGITAL_IN reads via get_status DIN."""
         hal, mock_bb = _make_hal()
-        hal._io_mode[1] = PortMode.DIGITAL_IN
+        hal._io_mode[3] = PortMode.DIGITAL_IN
         mock_bb.get_status.return_value = {
             "channels": {0: {"din_state": True}},
         }
-        result = hal.read_digital(1)
+        result = hal.read_digital(3)
         mock_bb.get_status.assert_called_once()
         self.assertTrue(result)
 
     def test_read_analog_io_digital_in_low_uses_esp_gpio(self):
         """Analog IO in DIGITAL_IN_LOW reads via ESP GPIO (dio path)."""
         hal, mock_bb = _make_hal()
-        hal._io_mode[1] = PortMode.DIGITAL_IN_LOW
+        hal._io_mode[3] = PortMode.DIGITAL_IN_LOW
         mock_bb.dio_read.return_value = {"value": True}
-        result = hal.read_digital(1)
-        mock_bb.dio_configure.assert_called_once_with(1, 1)  # gpio=1, mode=INPUT
-        mock_bb.dio_read.assert_called_once_with(1)
+        result = hal.read_digital(3)
+        mock_bb.dio_configure.assert_called_once_with(3, 1)  # io=3, mode=INPUT
+        mock_bb.dio_read.assert_called_once_with(3)
         self.assertTrue(result)
 
     def test_read_digital_only_io_uses_esp_gpio(self):
@@ -309,9 +309,9 @@ class TestDigitalReadRouting(unittest.TestCase):
 
     def test_read_digital_wrong_mode_raises(self):
         hal, _ = _make_hal()
-        hal._io_mode[1] = PortMode.ANALOG_IN
+        hal._io_mode[3] = PortMode.ANALOG_IN
         with self.assertRaises(RuntimeError):
-            hal.read_digital(1)
+            hal.read_digital(3)
 
     def test_read_digital_returns_false_on_empty_response(self):
         hal, mock_bb = _make_hal()
@@ -327,39 +327,39 @@ class TestDigitalWriteRouting(unittest.TestCase):
     def test_write_analog_io_digital_out_uses_set_digital_output(self):
         """Analog IO (channel != None) in DIGITAL_OUT writes via AD74416H."""
         hal, mock_bb = _make_hal()
-        hal._io_mode[4] = PortMode.DIGITAL_OUT
-        hal.write_digital(4, True)
+        hal._io_mode[6] = PortMode.DIGITAL_OUT
+        hal.write_digital(6, True)
         mock_bb.set_digital_output.assert_called_once_with(1, on=True)
 
     def test_write_analog_io_digital_out_low_uses_esp_gpio(self):
         """Analog IO in DIGITAL_OUT_LOW writes via ESP GPIO."""
         hal, mock_bb = _make_hal()
-        hal._io_mode[4] = PortMode.DIGITAL_OUT_LOW
-        hal.write_digital(4, True)
-        # IO 4 uses logical IO 4 in the protocol
-        mock_bb.dio_configure.assert_called_once_with(4, 2)  # io=4, mode=OUTPUT
-        mock_bb.dio_write.assert_called_once_with(4, True)
+        hal._io_mode[6] = PortMode.DIGITAL_OUT_LOW
+        hal.write_digital(6, True)
+        # IO 6 uses logical IO 6 in the protocol
+        mock_bb.dio_configure.assert_called_once_with(6, 2)  # io=6, mode=OUTPUT
+        mock_bb.dio_write.assert_called_once_with(6, True)
 
     def test_write_digital_only_io_uses_esp_gpio(self):
         """Digital-only IO (channel=None) always uses ESP GPIO path."""
         hal, mock_bb = _make_hal()
-        hal._io_mode[3] = PortMode.DIGITAL_OUT
-        hal.write_digital(3, False)
-        # IO 3: channel=None, so takes the else branch even for DIGITAL_OUT
-        mock_bb.dio_configure.assert_called_once_with(3, 2)
-        mock_bb.dio_write.assert_called_once_with(3, False)
+        hal._io_mode[1] = PortMode.DIGITAL_OUT
+        hal.write_digital(1, False)
+        # IO 1: channel=None, so takes the else branch even for DIGITAL_OUT
+        mock_bb.dio_configure.assert_called_once_with(1, 2)
+        mock_bb.dio_write.assert_called_once_with(1, False)
 
     def test_write_digital_wrong_mode_raises(self):
         hal, _ = _make_hal()
-        hal._io_mode[1] = PortMode.DIGITAL_IN
+        hal._io_mode[3] = PortMode.DIGITAL_IN
         with self.assertRaises(RuntimeError):
-            hal.write_digital(1, True)
+            hal.write_digital(3, True)
 
     def test_write_digital_off(self):
         """Verify False state is passed through."""
         hal, mock_bb = _make_hal()
-        hal._io_mode[10] = PortMode.DIGITAL_OUT
-        hal.write_digital(10, False)
+        hal._io_mode[12] = PortMode.DIGITAL_OUT
+        hal.write_digital(12, False)
         mock_bb.set_digital_output.assert_called_once_with(2, on=False)
 
 
@@ -370,9 +370,9 @@ class TestDigitalWriteRouting(unittest.TestCase):
 class TestEnableIoBlockPower(unittest.TestCase):
     """Verify _enable_io_block_power() activates the correct PCA controls."""
 
-    def test_block1_io1_enables_vadj1_and_efuse1(self):
+    def test_block1_io3_enables_vadj1_and_efuse1(self):
         hal, mock_bb = _make_hal()
-        rt = hal._routing[1]
+        rt = hal._routing[3]
         hal._enable_io_block_power(rt)
         mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
         mock_bb.power_set.assert_any_call(PowerControl.EFUSE1, on=True)
@@ -385,10 +385,10 @@ class TestEnableIoBlockPower(unittest.TestCase):
         mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
         mock_bb.power_set.assert_any_call(PowerControl.EFUSE2, on=True)
 
-    def test_block2_io7_enables_vadj2_and_efuse4(self):
+    def test_block2_io9_enables_vadj2_and_efuse4(self):
         # PCB swap: physical P3 (IO7..IO9) is wired to EFUSE4
         hal, mock_bb = _make_hal()
-        rt = hal._routing[7]
+        rt = hal._routing[9]
         hal._enable_io_block_power(rt)
         mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
         mock_bb.power_set.assert_any_call(PowerControl.EFUSE4, on=True)
@@ -412,10 +412,10 @@ class TestEnableIoBlockPower(unittest.TestCase):
         mock_bb.power_set.assert_not_called()
 
     def test_efuse_skipped_if_already_on(self):
-        # PCB swap: IO7 routes through EFUSE4 (physical P3 wiring)
+        # PCB swap: IO9 routes through EFUSE4 (physical P3 wiring)
         hal, mock_bb = _make_hal()
         hal._efuses_on.add(PowerControl.EFUSE4)
-        rt = hal._routing[7]
+        rt = hal._routing[9]
         hal._enable_io_block_power(rt)
         # supply (VADJ2) should be enabled, but efuse4 should not
         power_calls = mock_bb.power_set.call_args_list
@@ -424,9 +424,9 @@ class TestEnableIoBlockPower(unittest.TestCase):
         self.assertNotIn(PowerControl.EFUSE4, called_controls)
 
     def test_ios_sharing_same_efuse_only_enable_once(self):
-        """IO 1 and IO 2 share EFUSE1 — second call should skip it."""
+        """IO 3 and IO 2 share EFUSE1 — second call should skip it."""
         hal, mock_bb = _make_hal()
-        hal._enable_io_block_power(hal._routing[1])
+        hal._enable_io_block_power(hal._routing[3])
         mock_bb.reset_mock()
         hal._enable_io_block_power(hal._routing[2])
         # VADJ1 and EFUSE1 already on — nothing should be called

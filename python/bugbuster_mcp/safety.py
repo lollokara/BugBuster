@@ -33,7 +33,7 @@ def require_analog_io(io: int, operation: str = "this operation") -> None:
     if io not in ANALOG_IOS:
         raise ValueError(
             f"IO {io} does not support {operation}. "
-            f"Analog modes (voltage, current, RTD) are only available on IOs 1, 4, 7, and 10."
+            f"Analog modes (voltage, current, RTD) are only available on IOs 3, 6, 9, and 12."
         )
 
 

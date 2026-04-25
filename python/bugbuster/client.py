@@ -1272,7 +1272,7 @@ class BugBuster:
                 "currents": [0.5, 0.3, -1.0, 0.1]   # amps, -1 = unavailable
             }
 
-        ``available`` is False when U17 S2 is closed (IO 10 in analog mode).
+        ``available`` is False when U17 S2 is closed (IO 9 in analog mode).
         """
         if self._usb:
             resp = self._usb_cmd(CmdId.SELFTEST_EFUSE_CURRENTS)

@@ -15,19 +15,19 @@ e-fuse output) and a GND pin.
     │                                                                         │
     │   IO_Block 1 (EFUSE1, MUX U10)    IO_Block 2 (EFUSE2, MUX U11)       │
     │   ┌─────────────────────┐          ┌─────────────────────┐             │
-    │   │ IO 1  — analog/HAT  │          │ IO 4  — analog/HAT  │             │
+    │   │ IO 1  — digital     │          │ IO 4  — digital     │             │
     │   │ IO 2  — digital     │          │ IO 5  — digital     │             │
-    │   │ IO 3  — digital     │          │ IO 6  — digital     │             │
+    │   │ IO 3  — analog/HAT  │          │ IO 6  — analog/HAT  │             │
     │   │ VCC   GND           │          │ VCC   GND           │             │
     │   └─────────────────────┘          └─────────────────────┘             │
     ├─────────────────────────────────────────────────────────────────────────┤
     │ BLOCK 2 — VADJ2 (3–15 V adjustable, IDAC ch 2)                       │
     │                                                                         │
-    │   IO_Block 3 (EFUSE3, MUX U16)    IO_Block 4 (EFUSE4, MUX U17)       │
+    │   IO_Block 3 (EFUSE4, MUX U17)    IO_Block 4 (EFUSE3, MUX U16)       │
     │   ┌─────────────────────┐          ┌─────────────────────┐             │
-    │   │ IO 7  — analog/HAT  │          │ IO 10 — analog/HAT  │             │
+    │   │ IO 7  — digital     │          │ IO 10 — digital     │             │
     │   │ IO 8  — digital     │          │ IO 11 — digital     │             │
-    │   │ IO 9  — digital     │          │ IO 12 — digital     │             │
+    │   │ IO 9  — analog/HAT  │          │ IO 12 — analog/HAT  │             │
     │   │ VCC   GND           │          │ VCC   GND           │             │
     │   └─────────────────────┘          └─────────────────────┘             │
     └─────────────────────────────────────────────────────────────────────────┘
@@ -42,7 +42,7 @@ Each IO_Block is served by one ADGS2414D (8 SPST switches):
     ┌─────────┬────────────────┬───────────────────────────────────────────┐
     │ Group   │ Switches       │ IO / function                             │
     ├─────────┼────────────────┼───────────────────────────────────────────┤
-    │ A       │ S1–S4 (bits 0-3)│ Analog-capable IO (pos. 1 in IO_Block)   │
+    │ A       │ S1–S4 (bits 0-3)│ Analog-capable IO (pos. 3 in connector)  │
     │         │                │  S1 = ESP GPIO high drive                 │
     │         │                │  S2 = AD74416H channel (analog modes)     │
     │         │                │  S3 = ESP GPIO low drive                  │
@@ -52,7 +52,7 @@ Each IO_Block is served by one ADGS2414D (8 SPST switches):
     │         │                │  S5 = ESP GPIO high drive                 │
     │         │                │  S6 = ESP GPIO low drive                  │
     ├─────────┼────────────────┼───────────────────────────────────────────┤
-    │ C       │ S7–S8 (bits 6-7)│ Digital IO (pos. 3 in IO_Block)          │
+    │ C       │ S7–S8 (bits 6-7)│ Digital IO (pos. 1 in connector)         │
     │         │                │  S7 = ESP GPIO high drive                 │
     │         │                │  S8 = ESP GPIO low drive                  │
     └─────────┴────────────────┴───────────────────────────────────────────┘
@@ -70,11 +70,11 @@ Quick start::
         hal.set_voltage(rail=1, voltage=12.0)
         hal.set_vlogic(3.3)
 
-        hal.configure(1, PortMode.ANALOG_OUT)
-        hal.write_voltage(1, 5.0)
+        hal.configure(3, PortMode.ANALOG_OUT)
+        hal.write_voltage(3, 5.0)
 
-        hal.configure(4, PortMode.ANALOG_IN)
-        print(hal.read_voltage(4))
+        hal.configure(6, PortMode.ANALOG_IN)
+        print(hal.read_voltage(6))
 
         hal.configure(2, PortMode.DIGITAL_OUT)
         hal.write_digital(2, True)
@@ -107,8 +107,8 @@ class PortMode(IntEnum):
     Operating mode for a physical IO (1–12).
 
     ┌──────────────────┬────────────────────────────────┬──────────┬──────────┐
-    │ Mode             │ Description                    │ IO 1,4,  │ IO 2,3,  │
-    │                  │                                │ 7,10     │ 5,6,8,9, │
+    │ Mode             │ Description                    │ IO 3,6,  │ IO 1,2,  │
+    │                  │                                │ 9,12     │ 4,5,7,8, │
     │                  │                                │ (analog) │ 11,12    │
     ├──────────────────┼────────────────────────────────┼──────────┼──────────┤
     │ DISABLED         │ Safe default / disconnected     │ ✓        │ ✓        │
@@ -158,7 +158,7 @@ DIGITAL_IO_MODES = frozenset({
     PortMode.DIGITAL_IN_LOW, PortMode.DIGITAL_OUT_LOW,
 })
 
-ANALOG_IOS = frozenset({1, 4, 7, 10})
+ANALOG_IOS = frozenset({3, 6, 9, 12})
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ ANALOG_IOS = frozenset({1, 4, 7, 10})
 # ---------------------------------------------------------------------------
 # Derived from firmware adgs2414d.h MUX_GPIO_MAP and group masks.
 #
-# Group A (bits 0–3): analog-capable IO (position 1 in each IO_Block)
+# Group A (bits 0–3): analog-capable IO (position 3 in each connector)
 #   S1 (bit 0) = ESP GPIO high drive
 #   S2 (bit 1) = AD74416H channel (for all analog/current/RTD/HART modes)
 #   S3 (bit 2) = ESP GPIO low drive
@@ -176,7 +176,7 @@ ANALOG_IOS = frozenset({1, 4, 7, 10})
 #   S5 (bit 4) = ESP GPIO high drive
 #   S6 (bit 5) = ESP GPIO low drive
 #
-# Group C (bits 6–7): digital IO (position 3)
+# Group C (bits 6–7): digital IO (position 1)
 #   S7 (bit 6) = ESP GPIO high drive
 #   S8 (bit 7) = ESP GPIO low drive
 
@@ -239,21 +239,21 @@ def _digital_mux_c() -> dict:
 #
 ESP_GPIO_MAP: dict[int, int] = {
     # From MUX_GPIO_MAP[0] — U10 (IO_Block 1)
-    1:  1,    # ESP GPIO 1
+    1:  4,    # ESP GPIO 4
     2:  2,    # ESP GPIO 2
-    3:  4,    # ESP GPIO 4
+    3:  1,    # ESP GPIO 1
     # From MUX_GPIO_MAP[1] — U11 (IO_Block 2)
-    4:  5,    # ESP GPIO 5
+    4:  7,    # ESP GPIO 7
     5:  6,    # ESP GPIO 6
-    6:  7,    # ESP GPIO 7
+    6:  5,    # ESP GPIO 5
     # From MUX_GPIO_MAP[3] — U17 (IO_Block 3)
-    7:  10,   # ESP GPIO 10
+    7:  8,    # ESP GPIO 8
     8:  9,    # ESP GPIO 9
-    9:  8,    # ESP GPIO 8
+    9:  10,   # ESP GPIO 10
     # From MUX_GPIO_MAP[2] — U16 (IO_Block 4)
-    10: 13,   # ESP GPIO 13
+    10: 11,   # ESP GPIO 11
     11: 12,   # ESP GPIO 12
-    12: 11,   # ESP GPIO 11
+    12: 13,   # ESP GPIO 13
 }
 
 
@@ -267,7 +267,7 @@ class IORouting:
     io_num:      int
     block:       int                    # Power block (1 or 2)
     io_block:    int                    # IO_Block (1–4)
-    position:    int                    # Position within IO_Block (1=analog, 2–3=digital)
+    position:    int                    # MUX group position (1=Group A analog, 2=Group B, 3=Group C)
     channel:     Optional[int]          # AD74416H channel (0–3) or None
     mux_device:  int                    # ADGS2414D device index (0–3)
     mux_map:     dict                   # PortMode → switch bitmask
@@ -284,62 +284,62 @@ class IORouting:
 
 DEFAULT_ROUTING: dict[int, IORouting] = {
     # ── BLOCK 1, IO_BLOCK 1 — device 0 (U10), VADJ1, EFUSE1 ─────────────
-    1:  IORouting(1,  block=1, io_block=1, position=1, channel=0,
-                  mux_device=0, mux_map=_analog_mux(),    esp_gpio=1,
+    1:  IORouting(1,  block=1, io_block=1, position=3, channel=None,
+                  mux_device=0, mux_map=_digital_mux_c(), esp_gpio=4,
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=ANALOG_IO_MODES),
+                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
     2:  IORouting(2,  block=1, io_block=1, position=2, channel=None,
                   mux_device=0, mux_map=_digital_mux_b(), esp_gpio=2,
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
                   supply_idac=1, valid_modes=DIGITAL_IO_MODES),
-    3:  IORouting(3,  block=1, io_block=1, position=3, channel=None,
-                  mux_device=0, mux_map=_digital_mux_c(), esp_gpio=4,
+    3:  IORouting(3,  block=1, io_block=1, position=1, channel=0,
+                  mux_device=0, mux_map=_analog_mux(),    esp_gpio=1,
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
+                  supply_idac=1, valid_modes=ANALOG_IO_MODES),
 
     # ── BLOCK 1, IO_BLOCK 2 — device 1 (U11), VADJ1, EFUSE2 ─────────────
-    4:  IORouting(4,  block=1, io_block=2, position=1, channel=1,
-                  mux_device=1, mux_map=_analog_mux(),    esp_gpio=5,
+    4:  IORouting(4,  block=1, io_block=2, position=3, channel=None,
+                  mux_device=1, mux_map=_digital_mux_c(), esp_gpio=7,
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=ANALOG_IO_MODES),
+                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
     5:  IORouting(5,  block=1, io_block=2, position=2, channel=None,
                   mux_device=1, mux_map=_digital_mux_b(), esp_gpio=6,
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
                   supply_idac=1, valid_modes=DIGITAL_IO_MODES),
-    6:  IORouting(6,  block=1, io_block=2, position=3, channel=None,
-                  mux_device=1, mux_map=_digital_mux_c(), esp_gpio=7,
+    6:  IORouting(6,  block=1, io_block=2, position=1, channel=1,
+                  mux_device=1, mux_map=_analog_mux(),    esp_gpio=5,
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
-                  supply_idac=1, valid_modes=DIGITAL_IO_MODES),
+                  supply_idac=1, valid_modes=ANALOG_IO_MODES),
 
     # ── BLOCK 2, IO_BLOCK 3 — device 3 (U17), VADJ2, EFUSE4 ─────────────
     # PCB swap: physical connector 3 is wired to EFUSE4 (silkscreen EFUSE3↔EFUSE4 crossed)
-    7:  IORouting(7,  block=2, io_block=3, position=1, channel=3,
-                  mux_device=3, mux_map=_analog_mux(),    esp_gpio=10,
+    7:  IORouting(7,  block=2, io_block=3, position=3, channel=None,
+                  mux_device=3, mux_map=_digital_mux_c(), esp_gpio=8,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     8:  IORouting(8,  block=2, io_block=3, position=2, channel=None,
                   mux_device=3, mux_map=_digital_mux_b(), esp_gpio=9,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
-    9:  IORouting(9,  block=2, io_block=3, position=3, channel=None,
-                  mux_device=3, mux_map=_digital_mux_c(), esp_gpio=8,
+    9:  IORouting(9,  block=2, io_block=3, position=1, channel=3,
+                  mux_device=3, mux_map=_analog_mux(),    esp_gpio=10,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
+                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
 
     # ── BLOCK 2, IO_BLOCK 4 — device 2 (U16), VADJ2, EFUSE3 ─────────────
     # PCB swap: physical connector 4 is wired to EFUSE3
-    10: IORouting(10, block=2, io_block=4, position=1, channel=2,
-                  mux_device=2, mux_map=_analog_mux(),    esp_gpio=13,
+    10: IORouting(10, block=2, io_block=4, position=3, channel=None,
+                  mux_device=2, mux_map=_digital_mux_c(), esp_gpio=11,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
+                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     11: IORouting(11, block=2, io_block=4, position=2, channel=None,
                   mux_device=2, mux_map=_digital_mux_b(), esp_gpio=12,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
-    12: IORouting(12, block=2, io_block=4, position=3, channel=None,
-                  mux_device=2, mux_map=_digital_mux_c(), esp_gpio=11,
+    12: IORouting(12, block=2, io_block=4, position=1, channel=2,
+                  mux_device=2, mux_map=_analog_mux(),    esp_gpio=13,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
-                  supply_idac=2, valid_modes=DIGITAL_IO_MODES),
+                  supply_idac=2, valid_modes=ANALOG_IO_MODES),
 }
 
 
@@ -543,7 +543,7 @@ class BugBusterHAL:
                   rt.mux_map.get(mode, 0), rt.channel)
 
     # ------------------------------------------------------------------
-    # Analog read / write (IO 1, 4, 7, 10 only)
+    # Analog read / write (IO 3, 6, 9, 12 only)
     # ------------------------------------------------------------------
 
     def read_voltage(self, io: int) -> float:
@@ -642,7 +642,7 @@ class BugBusterHAL:
             self._bb.dio_write(io, state)
 
     # ------------------------------------------------------------------
-    # HART (IO 1, 4, 7, 10)
+    # HART (IO 3, 6, 9, 12)
     # ------------------------------------------------------------------
 
     def write_hart_current(self, io: int, current_ma: float) -> None:
@@ -852,13 +852,13 @@ class BugBusterHAL:
     def probe_routing(self, source_io: int = 1, test_voltage: float = 3.0,
                       threshold: float = 0.5) -> dict:
         """
-        Semi-automated MUX routing discovery for analog IOs (1, 4, 7, 10).
+        Semi-automated MUX routing discovery for analog IOs (3, 6, 9, 12).
 
         Sets *source_io* to VOUT, then sweeps all 32 switches and reads
         the other analog channels.  Returns hit map to fill in the routing.
         """
         if source_io not in ANALOG_IOS:
-            raise ValueError(f"Need analog IO (1/4/7/10), got {source_io}")
+            raise ValueError(f"Need analog IO (3/6/9/12), got {source_io}")
 
         bb      = self._bb
         results = {}

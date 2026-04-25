@@ -78,12 +78,12 @@ with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     hal = dev.hal
     hal.begin(supply_voltage=12.0, vlogic=3.3)
 
-    # Analog I/O (IO 1, 4, 7, 10 only)
-    hal.configure(1, PortMode.ANALOG_OUT)
-    hal.write_voltage(1, 5.0)
+    # Analog I/O (IO 3, 6, 9, 12 only)
+    hal.configure(3, PortMode.ANALOG_OUT)
+    hal.write_voltage(3, 5.0)
 
-    hal.configure(4, PortMode.ANALOG_IN)
-    print(f"IO 4: {hal.read_voltage(4):.4f} V")
+    hal.configure(6, PortMode.ANALOG_IN)
+    print(f"IO 6: {hal.read_voltage(6):.4f} V")
 
     # Digital I/O (all 12 IOs)
     hal.configure(2, PortMode.DIGITAL_OUT)
@@ -119,18 +119,18 @@ level-shifter, e-fuse, and ESP32 GPIO routing.
 ```python
 with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     scan = dev.bus.i2c_scan(
-        sda=2,
-        scl=3,
+        sda=1,
+        scl=2,
         io_voltage=3.3,
         supply_voltage=3.3,
     )
     print(scan["addresses"])
 
     dev.bus.setup_spi(
-        sck=3,
+        sck=1,
         mosi=2,
-        miso=5,
-        cs=6,
+        miso=4,
+        cs=5,
         io_voltage=3.3,
         supply_voltage=3.3,
     )
@@ -246,8 +246,8 @@ flowchart LR
 
 | IO | Type | MUX Options |
 |----|------|-------------|
-| **1, 4, 7, 10** | Analog-capable | ESP GPIO (high/low drive) · AD74416H channel · HAT passthrough |
-| **2, 3, 5, 6, 8, 9, 11, 12** | Digital-only | ESP GPIO (high drive) · ESP GPIO (low drive) |
+| **3, 6, 9, 12** | Analog-capable | ESP GPIO (high/low drive) · AD74416H channel · HAT passthrough |
+| **1, 2, 4, 5, 7, 8, 10, 11** | Digital-only | ESP GPIO (high drive) · ESP GPIO (low drive) |
 
 ### Supply Rails
 

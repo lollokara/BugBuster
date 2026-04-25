@@ -285,7 +285,7 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let efuse_domain_cls = |e: usize| -> &'static str {
         if e < 2 { "vadj1" } else { "vadj2" }
     };
-    let is_analog_capable = |i: usize| matches!(i, 0 | 3 | 6 | 9);
+    let is_analog_capable = |i: usize| matches!(i, 2 | 5 | 8 | 11);
 
     // Push efuse config to backend stub.
     let push_efuse = move |efuse: u8, sw_limit_ma: u16, enabled: bool| {
@@ -531,7 +531,7 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             {if warn {
                                 Either::Left(view! {
                                     <div class="board-inspector-warn">
-                                        "Analog function not available on this pin. Only IO1/IO4/IO7/IO10 support analog."
+                                        "Analog function not available on this pin. Only IO3/IO6/IO9/IO12 support analog."
                                     </div>
                                 })
                             } else { Either::Right(()) }}

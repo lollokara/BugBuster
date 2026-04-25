@@ -23,7 +23,7 @@ def register(mcp) -> None:
         Uses the 24-bit ADC (AD74416H) for high-accuracy measurement.
 
         Parameters:
-        - io: IO number — must be 1, 4, 7, or 10 (analog-capable IOs).
+        - io: IO number — must be 3, 6, 9, or 12 (analog-capable IOs).
 
         Returns: io, voltage_v (float), unit ("V").
         """
@@ -43,7 +43,7 @@ def register(mcp) -> None:
         Measures 4-20 mA loop current using the AD74416H current input mode.
 
         Parameters:
-        - io: IO number — must be 1, 4, 7, or 10.
+        - io: IO number — must be 3, 6, 9, or 12.
 
         Returns: io, current_ma (float), unit ("mA").
         """
@@ -67,7 +67,7 @@ def register(mcp) -> None:
         resulting voltage to compute resistance.
 
         Parameters:
-        - io: IO number — must be 1, 4, 7, or 10.
+        - io: IO number — must be 3, 6, 9, or 12.
         - as_temp: Optional temperature conversion.
             "" or "none" — return raw resistance in ohms.
             "pt100"      — convert to °C using PT100 curve (100 Ω nominal).
@@ -112,7 +112,7 @@ def register(mcp) -> None:
         Uses the 16-bit AD74416H DAC.
 
         Parameters:
-        - io: IO number — must be 1, 4, 7, or 10.
+        - io: IO number — must be 3, 6, 9, or 12.
         - voltage: Output voltage in volts.
             Unipolar mode (default): 0.0 to 12.0 V.
             Bipolar mode: -12.0 to +12.0 V.

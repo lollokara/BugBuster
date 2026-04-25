@@ -20,17 +20,17 @@ static const char *TAG = "dio";
 // Breadboard mode: map to unused ESP32-S3 GPIOs that don't conflict with
 // SPI (8-11), I2C (1,4), ADC control (5-7), MUX CS (12), OE (14), USB (19,20).
 //
-// IO_Block 1: IO 1=GPIO2,  IO 2=GPIO3,   IO 3=GPIO15
-// IO_Block 2: IO 4=GPIO21, IO 5=GPIO35,  IO 6=GPIO36
-// IO_Block 3: IO 7=GPIO37, IO 8=GPIO38,  IO 9=GPIO39
-// IO_Block 4: IO10=GPIO40, IO11=GPIO47,  IO12=GPIO48
+// IO_Block 1: IO 1=GPIO15, IO 2=GPIO3,  IO 3=GPIO2
+// IO_Block 2: IO 4=GPIO36, IO 5=GPIO35, IO 6=GPIO21
+// IO_Block 3: IO 7=GPIO39, IO 8=GPIO38, IO 9=GPIO37
+// IO_Block 4: IO10=GPIO48, IO11=GPIO47, IO12=GPIO40
 // NOTE: GPIO13 reserved for WS2812B LEDs in breadboard mode
 
 static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
-     2,   3,  15,     // IO_Block 1: IO 1, 2, 3 (IO3 was 13, moved to 15 — 13 is LEDs)
-    21,  35,  36,     // IO_Block 2: IO 4, 5, 6
-    37,  38,  39,     // IO_Block 3: IO 7, 8, 9
-    40,  47,  48,     // IO_Block 4: IO 10, 11, 12
+    15,   3,   2,     // IO_Block 1: IO 1, 2, 3
+    36,  35,  21,     // IO_Block 2: IO 4, 5, 6
+    39,  38,  37,     // IO_Block 3: IO 7, 8, 9
+    48,  47,  40,     // IO_Block 4: IO 10, 11, 12
 };
 
 #else  // PCB mode
@@ -41,16 +41,16 @@ static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
 // these GPIOs on the PCB, so the breadboard-era "WARNING" about shared pins
 // no longer applies.
 //
-// IO_Block 1 (U10): IO 1=GPIO1,  IO 2=GPIO2,  IO 3=GPIO4   (GPIO3 now = PCAL INT)
-// IO_Block 2 (U11): IO 4=GPIO5,  IO 5=GPIO6,  IO 6=GPIO7   (AD74416H ctrl moved to 45/38/39)
-// IO_Block 3 (U17): IO 7=GPIO10, IO 8=GPIO9,  IO 9=GPIO8   (SPI moved to 16/17/18/40)
-// IO_Block 4 (U16): IO10=GPIO13, IO11=GPIO12, IO12=GPIO11
+// IO_Block 1 (U10): IO 1=GPIO4,  IO 2=GPIO2,  IO 3=GPIO1   (IO3 is analog-capable)
+// IO_Block 2 (U11): IO 4=GPIO7,  IO 5=GPIO6,  IO 6=GPIO5   (IO6 is analog-capable)
+// IO_Block 3 (U17): IO 7=GPIO8,  IO 8=GPIO9,  IO 9=GPIO10  (IO9 is analog-capable)
+// IO_Block 4 (U16): IO10=GPIO11, IO11=GPIO12, IO12=GPIO13  (IO12 is analog-capable)
 
 static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
-     1,   2,   4,     // IO_Block 1: IO 1, 2, 3
-     5,   6,   7,     // IO_Block 2: IO 4, 5, 6
-    10,   9,   8,     // IO_Block 3: IO 7, 8, 9
-    13,  12,  11,     // IO_Block 4: IO 10, 11, 12
+     4,   2,   1,     // IO_Block 1: IO 1, 2, 3
+     7,   6,   5,     // IO_Block 2: IO 4, 5, 6
+     8,   9,  10,     // IO_Block 3: IO 7, 8, 9
+    11,  12,  13,     // IO_Block 4: IO 10, 11, 12
 };
 
 #endif

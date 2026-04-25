@@ -2848,7 +2848,7 @@ bugbuster_mcp/
 ### 31.4 MUX Routing Contract
 
 The HAL's `configure()` method (called by `configure_io`) automatically sets the ADGS2414D MUX switches. Each IO can only be in one mode at a time:
-- IOs 1, 4, 7, 10 (analog-capable): routes to AD74416H channel (S2) OR ESP GPIO (S1/S3) OR HAT (S4) — mutually exclusive
+- IOs 3, 6, 9, 12 (analog-capable): routes to AD74416H channel (S2) OR ESP GPIO (S1/S3) OR HAT (S4) — mutually exclusive
 - IOs 2,3,5,6,8,9,11,12 (digital-only): routes to ESP GPIO high-drive (S5/S7) OR low-drive (S6/S8)
 
 `configure_io` must be called before any read/write operation. The MUX state is tracked in `hal._io_mode` and `hal._mux_state`.

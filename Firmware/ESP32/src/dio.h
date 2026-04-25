@@ -13,8 +13,8 @@
 // ESP32 GPIO pins themselves.
 //
 // IO numbering: 1–12 (matches the HAL port numbers)
-//   IO 1, 4, 7, 10 — analog-capable (position 1 in each IO_Block)
-//   IO 2, 3, 5, 6, 8, 9, 11, 12 — digital-only (positions 2 & 3)
+//   IO 3, 6, 9, 12 — analog-capable (position 3 in each connector block)
+//   IO 1, 2, 4, 5, 7, 8, 10, 11 — digital-only
 //
 // All 12 IOs can be used as digital input or output through this module.
 // =============================================================================
