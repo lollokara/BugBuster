@@ -305,6 +305,24 @@ void bbpInit(AD74416H *device, AD74416H_SPI *spi);
 bool bbpIsActive(void);
 
 /**
+ * @brief Perform a live SPI read of the DAC_ACTIVE register for channel ch.
+ *        Matches the semantics of the legacy BBP GET_DAC_READBACK handler.
+ * @param ch        Channel 0-3
+ * @param code_out  Receives the active DAC code
+ * @return true on success, false if BBP not yet initialized
+ */
+bool bbp_dac_read_active(uint8_t ch, uint16_t *code_out);
+
+/**
+ * @brief Thin public wrappers around the module-private s_spi pointer.
+ *        Used by cmd_misc.cpp and cmd_status.cpp to perform live SPI
+ *        operations without exposing the full AD74416H_SPI object.
+ */
+bool bbp_spi_read_reg(uint8_t addr, uint16_t *value_out);
+bool bbp_spi_write_reg(uint8_t addr, uint16_t value);
+bool bbp_spi_set_clock(uint32_t hz);
+
+/**
  * @brief Try to detect handshake magic in incoming CLI bytes.
  * @param byte  The incoming byte
  * @return true if handshake detected and binary mode entered
@@ -344,8 +362,46 @@ void bbpPushAdcSample(const uint32_t raw[4], uint32_t timestamp_us);
 /** @brief Get ADC stream channel mask (0 if inactive). */
 uint8_t bbpAdcStreamMask(void);
 
+/**
+ * @brief Start ADC streaming.  Sets s_adcStreamMask/Div, resets ring buffer.
+ *        If div == 0 it is clamped to 1.  Returns the effective sample rate
+ *        (fastest active channel rate / div) via *rate_out (may be NULL).
+ *        Caller must check bbpAdcStreamMask() == 0 before calling.
+ */
+void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out);
+
+/** @brief Stop ADC streaming (sets s_adcStreamMask to 0). */
+void bbpStopAdcStream(void);
+
 /** @brief Check if scope streaming is active. */
 bool bbpScopeStreamActive(void);
+
+/**
+ * @brief Start scope streaming.  Syncs s_scopeLastSeq to current scope seq
+ *        so only new frames are sent after this call.
+ *        Caller must check bbpScopeStreamActive() == false before calling.
+ */
+void bbpStartScopeStream(void);
+
+/** @brief Stop scope streaming (clears s_scopeStreamActive). */
+void bbpStopScopeStream(void);
+
+/**
+ * @brief Start waveform generation.
+ *        Applies channel function synchronously (avoids scheduler race),
+ *        stores config in g_deviceState.wavegen under g_stateMutex, then
+ *        notifies s_wavegenTask.
+ *
+ *  @param channel   DAC channel 0-3
+ *  @param waveform  WaveformType enum value (0-3)
+ *  @param freq_hz   Frequency in Hz (0.1 – 100.0)
+ *  @param amplitude Amplitude in appropriate units
+ *  @param offset    DC offset in appropriate units
+ *  @param mode      WavegenMode (0 = VOUT, 1 = IOUT)
+ */
+void bbpStartWavegen(uint8_t channel, uint8_t waveform,
+                     float freq_hz, float amplitude, float offset,
+                     uint8_t mode);
 
 /** @brief Stop wavegen task if running (called on disconnect/reset). */
 void bbpStopWavegen(void);

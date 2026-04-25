@@ -2713,7 +2713,8 @@ class BugBuster:
             payload = struct.pack('<BH', channel, mask & 0xFFFF)
             self._usb_cmd(CmdId.SET_CH_ALERT_MASK, payload)
         else:
-            self._http_post(f"/faults/channel/{channel}/mask", {"mask": mask & 0xFFFF})
+            # Firmware route: POST /api/faults/mask/<ch> (registered in webserver.cpp).
+            self._http_post(f"/faults/mask/{channel}", {"mask": mask & 0xFFFF})
 
     def set_alert_mask(self, alert_mask: int, supply_mask: int) -> None:
         """Set the global alert and supply alert masks."""

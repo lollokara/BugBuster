@@ -37,6 +37,7 @@
 #include "wifi_manager.h"
 #include "quicksetup.h"
 #include "ext_bus.h"
+#include "http_adapter.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -2178,13 +2179,23 @@ static esp_err_t handle_post_idac_voltage(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// Forward decl — handle_cal_post_dispatch is defined later but referenced here.
+static esp_err_t handle_cal_post_dispatch(httpd_req_t *req);
+
 // POST /api/idac dispatch
+//
+// NOTE: esp_http_server matches the first registered URI handler, so the
+// `/api/idac/*` wildcard registered at startup catches *all* /api/idac/...
+// paths — including the more specific `/api/idac/cal/*` route. To avoid
+// permanently shadowing the cal handlers, route /api/idac/cal/... requests
+// here through `handle_cal_post_dispatch` before reporting unknown.
 static esp_err_t handle_idac_post_dispatch(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
 
     if (strstr(req->uri, "/api/idac/code")) return handle_post_idac_code(req);
     if (strstr(req->uri, "/api/idac/voltage")) return handle_post_idac_voltage(req);
+    if (strstr(req->uri, "/api/idac/cal/")) return handle_cal_post_dispatch(req);
     return send_error(req, 404, "Unknown IDAC endpoint");
 }
 
@@ -3883,6 +3894,9 @@ void initWebServer(void)
     httpd_register_uri_handler(s_server, &uri_options);
 
     ESP_LOGI(TAG, "All URI handlers registered");
+
+    // Registry-backed adapter routes (Slice 2: DAC commands)
+    http_adapter_register(s_server);
 }
 
 void stopWebServer(void)

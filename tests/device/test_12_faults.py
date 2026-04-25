@@ -204,8 +204,14 @@ def test_set_channel_alert_mask(device):
     Verify the mask can be set to all-enabled and all-disabled, and that
     get_faults() reflects the change.
     """
+    # The HTTP path enqueues a Command that the cmd task drains asynchronously
+    # before g_deviceState reflects the new mask. Give it a moment to settle
+    # before reading back.
+    settle = 0.05
+
     # Set channel 0 alert mask to all-enabled
     device.set_channel_alert_mask(0, 0xFFFF)
+    time.sleep(settle)
     faults = device.get_faults()
     ch0 = faults["channels"][0]
     assert ch0["mask"] == 0xFFFF, (
@@ -214,6 +220,7 @@ def test_set_channel_alert_mask(device):
 
     # Disable all alerts on channel 0
     device.set_channel_alert_mask(0, 0x0000)
+    time.sleep(settle)
     faults = device.get_faults()
     ch0 = faults["channels"][0]
     assert ch0["mask"] == 0x0000, (
@@ -222,3 +229,4 @@ def test_set_channel_alert_mask(device):
 
     # Restore default (all alerts enabled)
     device.set_channel_alert_mask(0, 0xFFFF)
+    time.sleep(settle)

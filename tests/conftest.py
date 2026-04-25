@@ -58,6 +58,16 @@ def pytest_addoption(parser):
         default=False,
         help="Use simulated device (no hardware required)",
     )
+    parser.addoption(
+        "--admin-token",
+        metavar="TOKEN",
+        default=None,
+        help=(
+            "Admin token for HTTP authentication (X-BugBuster-Admin-Token). "
+            "If omitted and --device-usb is also given, the token is fetched "
+            "from the device over USB once at session start."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +204,43 @@ def _make_usb_device(config):
     return dev
 
 
+# Session-cached admin token so we fetch from USB at most once.
+_admin_token_cache: dict = {"resolved": False, "token": None}
+
+
+def _resolve_admin_token(config):
+    """
+    Resolve the admin token for HTTP authentication.
+
+    Priority:
+      1. --admin-token CLI option (explicit override)
+      2. Fetch from device over USB if --device-usb is given
+      3. None (HTTP-only mode without auth — destructive endpoints will 401)
+    """
+    if _admin_token_cache["resolved"]:
+        return _admin_token_cache["token"]
+
+    token = config.getoption("--admin-token", default=None)
+    if not token:
+        port = config.getoption("--device-usb", default=None)
+        if port:
+            try:
+                tmp = bb.connect_usb(port)
+                try:
+                    token = tmp.get_admin_token()
+                finally:
+                    tmp.disconnect()
+            except Exception as e:
+                # Don't fail collection — HTTP tests requiring auth will surface
+                # the issue with their own 401, while unauth HTTP tests still run.
+                print(f"[conftest] USB admin-token fetch failed: {e}")
+                token = None
+
+    _admin_token_cache["resolved"] = True
+    _admin_token_cache["token"] = token
+    return token
+
+
 def _make_http_device(config):
     """Open an HTTP BugBuster connection or skip if not configured."""
     if config.getoption("--sim", default=False):
@@ -206,6 +253,9 @@ def _make_http_device(config):
     if not host:
         pytest.skip("HTTP device not specified — pass --device-http <ip>")
     dev = bb.connect_http(host)
+    token = _resolve_admin_token(config)
+    if token:
+        dev._admin_token = token  # noqa: SLF001 — public-by-convention
     return dev
 
 

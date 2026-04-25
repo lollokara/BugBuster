@@ -136,8 +136,13 @@ def test_pca_set_control_all_controls(device):
     """
     Cycle through all PowerControl values, enabling then disabling each.
     Verifies the API accepts all valid control codes.
+
+    USB_HUB is excluded: disabling it physically detaches the device from the
+    host's USB tree, breaking the test session's USB-CDC connection mid-run.
     """
     for ctrl in PowerControl:
+        if ctrl == PowerControl.USB_HUB:
+            continue  # would detach the host USB connection
         device.power_set(ctrl, True)
         time.sleep(0.02)
         device.power_set(ctrl, False)

@@ -32,6 +32,7 @@
 #include "auth.h"
 #include "board_profile.h"
 #include "adc_leds.h"
+#include "cmd_registry.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 
@@ -306,6 +307,11 @@ extern "C" void app_main(void)
     //     (after MUX init so SPI bus sharing works correctly)
     initTasks(device);
     serial_println("[BugBuster] RTOS tasks started");
+
+    // 13b. Command registry — must be after initTasks (handlers use sendCommand)
+    //      and before initWebServer (http_adapter_register needs the registry)
+    cmd_registry_init();
+    serial_println("[BugBuster] Command registry initialized");
 
     // 13a. Status LEDs — configure AD74416H GPIOs A..F as push-pull outputs
     //      Must run after initTasks() so tasks_get_device() returns a valid pointer.

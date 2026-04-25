@@ -9,6 +9,7 @@
 #include "cli_cmdtab.h"
 #include "cli_cmds_dev.h"
 #include "cli_cmds_sys.h"
+#include "cli_cmd_adapter.h"
 #include "cli_term.h"
 #include "cli_tui.h"
 #include "cli_history.h"
@@ -173,6 +174,15 @@ const CliCommand g_cliCommands[] = {
     { "spiclock", NULL,     cli_cmd_spiclock,      CAT_DIAG,
       "spiclock [<Hz>]",
       "Get / set SPI clock frequency (100kHz .. 20MHz)", NULL },
+
+    // ---- Registry adapter ----
+    { "cmd",  NULL,     cli_cmd_generic,       CAT_DIAG,
+      "cmd <name> [key=value ...]",
+      "Dispatch any registered command by name (see 'cmds')", NULL,
+      cli_cmd_adapter_complete },
+    { "cmds", NULL,     cli_cmd_list,          CAT_DIAG,
+      "cmds [filter]",
+      "List all registered commands with arg specs", NULL },
 };
 
 #pragma GCC diagnostic pop

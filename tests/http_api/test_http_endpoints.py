@@ -34,10 +34,23 @@ def base_url(request):
 
 
 @pytest.fixture
-def session():
-    """Return a shared requests.Session with a short timeout."""
+def session(request):
+    """
+    Return a shared requests.Session with the admin token attached if available.
+
+    The token is resolved by tests/conftest.py from --admin-token (explicit) or
+    by fetching from the device over USB when --device-usb is also passed. If
+    no token is available, requests still go out unauthenticated and tests that
+    need auth will see 401s.
+    """
+    # Reuse the conftest-level resolver (cached for the session)
+    from conftest import _resolve_admin_token  # type: ignore
+
     s = requests.Session()
     s.headers.update({"Content-Type": "application/json"})
+    token = _resolve_admin_token(request.config)
+    if token:
+        s.headers["X-BugBuster-Admin-Token"] = token
     yield s
     s.close()
 
