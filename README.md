@@ -299,6 +299,7 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 | **BBP v4 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
 | **HAT UART protocol** (ESP32 ↔ RP2040, 921600 8N1) | [`Firmware/HAT_Protocol.md`](Firmware/HAT_Protocol.md) |
 | **HAT architecture** (RP2040, debugprobe, HVPAK, connectors) | [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) |
+| **External I2C/SPI bus engine** (routed IOs, Python/MCP usage, BBP/HTTP endpoints) | [`Docs/ExternalBus.md`](Docs/ExternalBus.md) |
 | **Logic Analyzer & vendor-bulk streaming** | [`Docs/LogicAnalyzer.md`](Docs/LogicAnalyzer.md) |
 | **Hardware** (ICs, power topology, ESP32 pinout) | [`Docs/Hardware.md`](Docs/Hardware.md) |
 | **Board profiles** (schema, rail lock, MCP integration) | [`Docs/board_profiles.md`](Docs/board_profiles.md) |

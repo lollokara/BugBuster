@@ -13,6 +13,7 @@ def register_all(mcp) -> None:
     from .digital    import register as reg_digital
     from .waveform   import register as reg_waveform
     from .debug      import register as reg_debug
+    from .bus        import register as reg_bus
     from .power      import register as reg_power
     from .advanced   import register as reg_advanced
 
@@ -22,5 +23,6 @@ def register_all(mcp) -> None:
     reg_digital(mcp)
     reg_waveform(mcp)
     reg_debug(mcp)
+    reg_bus(mcp)
     reg_power(mcp)
     reg_advanced(mcp)

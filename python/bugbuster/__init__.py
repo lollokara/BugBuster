@@ -86,6 +86,7 @@ from .constants import (
 )
 from .transport import USBTransport, HTTPTransport
 from .hal import BugBusterHAL, PortMode
+from .bus import BugBusterBusManager, BusPlanError, BusRouteEntry, BusRoutePlan
 
 __all__ = [
     # Factory functions
@@ -102,6 +103,10 @@ __all__ = [
     # HAL
     "BugBusterHAL",
     "PortMode",
+    "BugBusterBusManager",
+    "BusPlanError",
+    "BusRouteEntry",
+    "BusRoutePlan",
 
     # Transports (for advanced use)
     "USBTransport",

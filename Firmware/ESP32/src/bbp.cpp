@@ -21,6 +21,7 @@
 #include "auth.h"
 #include "wifi_manager.h"
 #include "quicksetup.h"
+#include "ext_bus.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_mac.h"
@@ -2126,6 +2127,233 @@ static int handleSetSpiClock(uint16_t seq, uint8_t cmdId,
     return (int)pos;
 }
 
+static int handleExtI2cSetup(uint16_t seq, uint8_t cmdId,
+                             const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 7) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t sda_gpio = get_u8(payload, &rpos);
+    uint8_t scl_gpio = get_u8(payload, &rpos);
+    uint32_t frequency_hz = get_u32(payload, &rpos);
+    bool internal_pullups = get_bool(payload, &rpos);
+
+    if (!ext_i2c_setup(sda_gpio, scl_gpio, frequency_hz, internal_pullups)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, sda_gpio);
+    put_u8(out, &pos, scl_gpio);
+    put_u32(out, &pos, frequency_hz);
+    put_bool(out, &pos, internal_pullups);
+    return (int)pos;
+}
+
+static int handleExtI2cScan(uint16_t seq, uint8_t cmdId,
+                            const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 5) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t start_addr = get_u8(payload, &rpos);
+    uint8_t stop_addr = get_u8(payload, &rpos);
+    bool skip_reserved = get_bool(payload, &rpos);
+    uint16_t timeout_ms = get_u16(payload, &rpos);
+
+    uint8_t addrs[128] = {};
+    size_t count = 0;
+    if (!ext_i2c_scan(start_addr, stop_addr, skip_reserved, addrs, sizeof(addrs), &count, timeout_ms)) {
+        sendError(seq, cmdId, ext_i2c_ready() ? BBP_ERR_INVALID_PARAM : BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, (uint8_t)count);
+    for (size_t i = 0; i < count; i++) {
+        put_u8(out, &pos, addrs[i]);
+    }
+    return (int)pos;
+}
+
+static int handleExtI2cWrite(uint16_t seq, uint8_t cmdId,
+                             const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t addr = get_u8(payload, &rpos);
+    uint16_t timeout_ms = get_u16(payload, &rpos);
+    uint8_t wr_len = get_u8(payload, &rpos);
+    if (len < 4 + wr_len) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+
+    if (!ext_i2c_write(addr, payload + rpos, wr_len, timeout_ms)) {
+        sendError(seq, cmdId, ext_i2c_ready() ? BBP_ERR_TIMEOUT : BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    out[0] = wr_len;
+    return 1;
+}
+
+static int handleExtI2cRead(uint16_t seq, uint8_t cmdId,
+                            const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t addr = get_u8(payload, &rpos);
+    uint16_t timeout_ms = get_u16(payload, &rpos);
+    uint8_t rd_len = get_u8(payload, &rpos);
+    if (rd_len == 0 || rd_len > BBP_MAX_PAYLOAD - 1) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    if (!ext_i2c_read(addr, out + 1, rd_len, timeout_ms)) {
+        sendError(seq, cmdId, ext_i2c_ready() ? BBP_ERR_TIMEOUT : BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    out[0] = rd_len;
+    return 1 + rd_len;
+}
+
+static int handleExtI2cWriteRead(uint16_t seq, uint8_t cmdId,
+                                 const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 5) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t addr = get_u8(payload, &rpos);
+    uint16_t timeout_ms = get_u16(payload, &rpos);
+    uint8_t wr_len = get_u8(payload, &rpos);
+    uint8_t rd_len = get_u8(payload, &rpos);
+    if (wr_len == 0 || rd_len == 0 || rd_len > BBP_MAX_PAYLOAD - 1 || len < 5 + wr_len) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    if (!ext_i2c_write_read(addr, payload + rpos, wr_len, out + 1, rd_len, timeout_ms)) {
+        sendError(seq, cmdId, ext_i2c_ready() ? BBP_ERR_TIMEOUT : BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    out[0] = rd_len;
+    return 1 + rd_len;
+}
+
+static int handleExtSpiSetup(uint16_t seq, uint8_t cmdId,
+                             const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 9) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t sck_gpio = get_u8(payload, &rpos);
+    uint8_t mosi_gpio = get_u8(payload, &rpos);
+    uint8_t miso_gpio = get_u8(payload, &rpos);
+    uint8_t cs_gpio = get_u8(payload, &rpos);
+    uint32_t frequency_hz = get_u32(payload, &rpos);
+    uint8_t mode = get_u8(payload, &rpos);
+
+    if (!ext_spi_setup(sck_gpio, mosi_gpio, miso_gpio, cs_gpio, frequency_hz, mode)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u8(out, &pos, sck_gpio);
+    put_u8(out, &pos, mosi_gpio);
+    put_u8(out, &pos, miso_gpio);
+    put_u8(out, &pos, cs_gpio);
+    put_u32(out, &pos, frequency_hz);
+    put_u8(out, &pos, mode);
+    return (int)pos;
+}
+
+static int handleExtSpiTransfer(uint16_t seq, uint8_t cmdId,
+                                const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint16_t timeout_ms = get_u16(payload, &rpos);
+    uint16_t tx_len = get_u16(payload, &rpos);
+    if (len < 4 + tx_len || tx_len > 512) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    size_t rx_len = tx_len;
+    if (!ext_spi_transfer(payload + rpos, tx_len, out + 2, &rx_len, timeout_ms)) {
+        sendError(seq, cmdId, ext_spi_ready() ? BBP_ERR_TIMEOUT : BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    size_t pos = 0;
+    put_u16(out, &pos, (uint16_t)rx_len);
+    return (int)(2 + rx_len);
+}
+
+static int handleExtJobSubmit(uint16_t seq, uint8_t cmdId,
+                              const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 3) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint8_t kind = get_u8(payload, &rpos);
+    uint16_t timeout_ms = get_u16(payload, &rpos);
+
+    uint32_t job_id = 0;
+    bool ok = false;
+    if (kind == EXT_BUS_JOB_I2C_READ) {
+        if (len < rpos + 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+        uint8_t addr = get_u8(payload, &rpos);
+        uint8_t read_len = get_u8(payload, &rpos);
+        ok = ext_job_submit_i2c_read(addr, read_len, timeout_ms, &job_id);
+    } else if (kind == EXT_BUS_JOB_I2C_WRITE_READ) {
+        if (len < rpos + 3) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+        uint8_t addr = get_u8(payload, &rpos);
+        uint8_t wr_len = get_u8(payload, &rpos);
+        uint8_t read_len = get_u8(payload, &rpos);
+        if (len < rpos + wr_len) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+        ok = ext_job_submit_i2c_write_read(addr, payload + rpos, wr_len, read_len, timeout_ms, &job_id);
+    } else if (kind == EXT_BUS_JOB_SPI_TRANSFER) {
+        if (len < rpos + 2) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+        uint16_t tx_len = get_u16(payload, &rpos);
+        if (len < rpos + tx_len) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+        ok = ext_job_submit_spi_transfer(payload + rpos, tx_len, timeout_ms, &job_id);
+    } else {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    if (!ok) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_STATE);
+        return -1;
+    }
+    size_t pos = 0;
+    put_u32(out, &pos, job_id);
+    return (int)pos;
+}
+
+static int handleExtJobGet(uint16_t seq, uint8_t cmdId,
+                           const uint8_t *payload, size_t len, uint8_t *out)
+{
+    if (len < 4) { sendError(seq, cmdId, BBP_ERR_INVALID_PARAM); return -1; }
+    size_t rpos = 0;
+    uint32_t job_id = get_u32(payload, &rpos);
+
+    uint8_t status = EXT_BUS_JOB_EMPTY;
+    uint8_t kind = 0;
+    size_t result_len = 0;
+    uint8_t result[512] = {};
+    if (!ext_job_get(job_id, &status, &kind, result, sizeof(result), &result_len)) {
+        sendError(seq, cmdId, BBP_ERR_INVALID_PARAM);
+        return -1;
+    }
+
+    size_t pos = 0;
+    put_u32(out, &pos, job_id);
+    put_u8(out, &pos, status);
+    put_u8(out, &pos, kind);
+    put_u16(out, &pos, (uint16_t)result_len);
+    if (result_len > 0) {
+        memcpy(out + pos, result, result_len);
+        pos += result_len;
+    }
+    return (int)pos;
+}
+
 static int handlePing(uint16_t seq, uint8_t cmdId,
                        const uint8_t *payload, size_t len, uint8_t *out)
 {
@@ -2795,6 +3023,35 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
             break;
         case BBP_CMD_PCA_GET_FAULT_LOG:
             rspLen = handlePcaGetFaultLog(seq, cmdId, rspBuf);
+            break;
+
+        // --- External target bus engine ---
+        case BBP_CMD_EXT_I2C_SETUP:
+            rspLen = handleExtI2cSetup(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_I2C_SCAN:
+            rspLen = handleExtI2cScan(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_I2C_WRITE:
+            rspLen = handleExtI2cWrite(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_I2C_READ:
+            rspLen = handleExtI2cRead(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_I2C_WRITE_READ:
+            rspLen = handleExtI2cWriteRead(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_SPI_SETUP:
+            rspLen = handleExtSpiSetup(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_SPI_TRANSFER:
+            rspLen = handleExtSpiTransfer(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_JOB_SUBMIT:
+            rspLen = handleExtJobSubmit(seq, cmdId, payload, payloadLen, rspBuf);
+            break;
+        case BBP_CMD_EXT_JOB_GET:
+            rspLen = handleExtJobGet(seq, cmdId, payload, payloadLen, rspBuf);
             break;
 
         // --- HAT Expansion Board ---

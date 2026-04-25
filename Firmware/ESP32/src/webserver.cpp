@@ -36,6 +36,7 @@
 #include "board_profile.h"
 #include "wifi_manager.h"
 #include "quicksetup.h"
+#include "ext_bus.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -2789,6 +2790,259 @@ static esp_err_t handle_cal_post_dispatch(httpd_req_t *req)
     return send_error(req, 404, "Unknown calibration endpoint");
 }
 
+// =============================================================================
+// External routed bus handlers
+// =============================================================================
+
+static void json_add_optional_gpio(cJSON *obj, const char *key, uint8_t gpio)
+{
+    if (gpio == 0xFF) cJSON_AddNullToObject(obj, key);
+    else cJSON_AddNumberToObject(obj, key, gpio);
+}
+
+static bool json_get_u8(cJSON *body, const char *key, uint8_t *out, bool required, uint8_t fallback = 0)
+{
+    cJSON *item = cJSON_GetObjectItem(body, key);
+    if (!item || cJSON_IsNull(item)) {
+        if (required) return false;
+        *out = fallback;
+        return true;
+    }
+    if (!cJSON_IsNumber(item) || item->valueint < 0 || item->valueint > 255) return false;
+    *out = (uint8_t)item->valueint;
+    return true;
+}
+
+static bool json_get_u16(cJSON *body, const char *key, uint16_t *out, uint16_t fallback)
+{
+    cJSON *item = cJSON_GetObjectItem(body, key);
+    if (!item) {
+        *out = fallback;
+        return true;
+    }
+    if (!cJSON_IsNumber(item) || item->valueint < 0 || item->valueint > 65535) return false;
+    *out = (uint16_t)item->valueint;
+    return true;
+}
+
+static bool json_get_u32(cJSON *body, const char *key, uint32_t *out, uint32_t fallback)
+{
+    cJSON *item = cJSON_GetObjectItem(body, key);
+    if (!item) {
+        *out = fallback;
+        return true;
+    }
+    if (!cJSON_IsNumber(item) || item->valuedouble < 0) return false;
+    *out = (uint32_t)item->valuedouble;
+    return true;
+}
+
+static bool json_get_bytes(cJSON *body, const char *key, uint8_t *out, size_t max_len, size_t *out_len)
+{
+    cJSON *arr = cJSON_GetObjectItem(body, key);
+    if (!arr || !cJSON_IsArray(arr)) return false;
+    size_t count = (size_t)cJSON_GetArraySize(arr);
+    if (count > max_len) return false;
+    for (size_t i = 0; i < count; i++) {
+        cJSON *item = cJSON_GetArrayItem(arr, (int)i);
+        if (!item || !cJSON_IsNumber(item) || item->valueint < 0 || item->valueint > 255) return false;
+        out[i] = (uint8_t)item->valueint;
+    }
+    *out_len = count;
+    return true;
+}
+
+static esp_err_t handle_get_bus_status(httpd_req_t *req)
+{
+    bool i2c_ready = false, i2c_pullups = false, spi_ready = false;
+    uint8_t sda = 0xFF, scl = 0xFF, sck = 0xFF, mosi = 0xFF, miso = 0xFF, cs = 0xFF, mode = 0;
+    uint32_t i2c_hz = 0, spi_hz = 0;
+    ext_i2c_get_status(&i2c_ready, &sda, &scl, &i2c_hz, &i2c_pullups);
+    ext_spi_get_status(&spi_ready, &sck, &mosi, &miso, &cs, &spi_hz, &mode);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *i2c = cJSON_AddObjectToObject(root, "i2c");
+    cJSON_AddBoolToObject(i2c, "ready", i2c_ready);
+    json_add_optional_gpio(i2c, "sdaGpio", sda);
+    json_add_optional_gpio(i2c, "sclGpio", scl);
+    cJSON_AddNumberToObject(i2c, "frequencyHz", i2c_hz);
+    cJSON_AddBoolToObject(i2c, "internalPullups", i2c_pullups);
+
+    cJSON *spi = cJSON_AddObjectToObject(root, "spi");
+    cJSON_AddBoolToObject(spi, "ready", spi_ready);
+    json_add_optional_gpio(spi, "sckGpio", sck);
+    json_add_optional_gpio(spi, "mosiGpio", mosi);
+    json_add_optional_gpio(spi, "misoGpio", miso);
+    json_add_optional_gpio(spi, "csGpio", cs);
+    cJSON_AddNumberToObject(spi, "frequencyHz", spi_hz);
+    cJSON_AddNumberToObject(spi, "mode", mode);
+    return send_json(req, root);
+}
+
+static esp_err_t handle_post_bus_i2c_setup(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    uint8_t sda = 0, scl = 0;
+    uint32_t hz = 400000;
+    bool ok = json_get_u8(body, "sdaGpio", &sda, true) &&
+              json_get_u8(body, "sclGpio", &scl, true) &&
+              json_get_u32(body, "frequencyHz", &hz, 400000);
+    bool pullups = cJSON_IsTrue(cJSON_GetObjectItem(body, "internalPullups"));
+    cJSON_Delete(body);
+    if (!ok) return send_error(req, 400, "Invalid I2C setup fields");
+    if (!ext_i2c_setup(sda, scl, hz, pullups)) return send_error(req, 400, "I2C setup failed");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "sdaGpio", sda);
+    cJSON_AddNumberToObject(root, "sclGpio", scl);
+    cJSON_AddNumberToObject(root, "frequencyHz", hz);
+    cJSON_AddBoolToObject(root, "internalPullups", pullups);
+    return send_json(req, root);
+}
+
+static esp_err_t handle_post_bus_i2c_scan(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    uint8_t start = 0x08, stop = 0x77;
+    uint16_t timeout_ms = 50;
+    bool ok = json_get_u8(body, "startAddr", &start, false, 0x08) &&
+              json_get_u8(body, "stopAddr", &stop, false, 0x77) &&
+              json_get_u16(body, "timeoutMs", &timeout_ms, 50);
+    bool skip_reserved = !cJSON_IsFalse(cJSON_GetObjectItem(body, "skipReserved"));
+    cJSON_Delete(body);
+    if (!ok) return send_error(req, 400, "Invalid I2C scan fields");
+    uint8_t addrs[128] = {};
+    size_t count = 0;
+    if (!ext_i2c_scan(start, stop, skip_reserved, addrs, sizeof(addrs), &count, timeout_ms)) {
+        return send_error(req, 409, ext_i2c_ready() ? "I2C scan failed" : "I2C not configured");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "addresses");
+    for (size_t i = 0; i < count; i++) cJSON_AddItemToArray(arr, cJSON_CreateNumber(addrs[i]));
+    cJSON_AddNumberToObject(root, "count", count);
+    return send_json(req, root);
+}
+
+static esp_err_t handle_post_bus_i2c_write(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    uint8_t addr = 0, bytes[255] = {};
+    uint16_t timeout_ms = 100;
+    size_t len = 0;
+    bool ok = json_get_u8(body, "address", &addr, true) &&
+              json_get_u16(body, "timeoutMs", &timeout_ms, 100) &&
+              json_get_bytes(body, "data", bytes, sizeof(bytes), &len);
+    cJSON_Delete(body);
+    if (!ok) return send_error(req, 400, "Invalid I2C write fields");
+    if (!ext_i2c_write(addr, bytes, len, timeout_ms)) return send_error(req, 409, "I2C write failed");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "written", len);
+    return send_json(req, root);
+}
+
+static esp_err_t handle_post_bus_i2c_read(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    uint8_t addr = 0, length = 0, bytes[255] = {};
+    uint16_t timeout_ms = 100;
+    bool ok = json_get_u8(body, "address", &addr, true) &&
+              json_get_u8(body, "length", &length, true) &&
+              json_get_u16(body, "timeoutMs", &timeout_ms, 100);
+    cJSON_Delete(body);
+    if (!ok || length == 0) return send_error(req, 400, "Invalid I2C read fields");
+    if (!ext_i2c_read(addr, bytes, length, timeout_ms)) return send_error(req, 409, "I2C read failed");
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "data");
+    for (uint8_t i = 0; i < length; i++) cJSON_AddItemToArray(arr, cJSON_CreateNumber(bytes[i]));
+    return send_json(req, root);
+}
+
+static esp_err_t handle_post_bus_i2c_write_read(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    uint8_t addr = 0, read_len = 0, write_bytes[255] = {}, read_bytes[255] = {};
+    uint16_t timeout_ms = 100;
+    size_t write_len = 0;
+    bool ok = json_get_u8(body, "address", &addr, true) &&
+              json_get_u8(body, "readLength", &read_len, true) &&
+              json_get_u16(body, "timeoutMs", &timeout_ms, 100) &&
+              json_get_bytes(body, "writeData", write_bytes, sizeof(write_bytes), &write_len);
+    cJSON_Delete(body);
+    if (!ok || read_len == 0 || write_len == 0) return send_error(req, 400, "Invalid I2C write-read fields");
+    if (!ext_i2c_write_read(addr, write_bytes, write_len, read_bytes, read_len, timeout_ms)) {
+        return send_error(req, 409, "I2C write-read failed");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "data");
+    for (uint8_t i = 0; i < read_len; i++) cJSON_AddItemToArray(arr, cJSON_CreateNumber(read_bytes[i]));
+    return send_json(req, root);
+}
+
+static esp_err_t handle_post_bus_spi_setup(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    uint8_t sck = 0, mosi = 0xFF, miso = 0xFF, cs = 0xFF, mode = 0;
+    uint32_t hz = 1000000;
+    bool ok = json_get_u8(body, "sckGpio", &sck, true) &&
+              json_get_u8(body, "mosiGpio", &mosi, false, 0xFF) &&
+              json_get_u8(body, "misoGpio", &miso, false, 0xFF) &&
+              json_get_u8(body, "csGpio", &cs, false, 0xFF) &&
+              json_get_u8(body, "mode", &mode, false, 0) &&
+              json_get_u32(body, "frequencyHz", &hz, 1000000);
+    cJSON_Delete(body);
+    if (!ok) return send_error(req, 400, "Invalid SPI setup fields");
+    if (!ext_spi_setup(sck, mosi, miso, cs, hz, mode)) return send_error(req, 400, "SPI setup failed");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "sckGpio", sck);
+    json_add_optional_gpio(root, "mosiGpio", mosi);
+    json_add_optional_gpio(root, "misoGpio", miso);
+    json_add_optional_gpio(root, "csGpio", cs);
+    cJSON_AddNumberToObject(root, "frequencyHz", hz);
+    cJSON_AddNumberToObject(root, "mode", mode);
+    return send_json(req, root);
+}
+
+static esp_err_t handle_post_bus_spi_transfer(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    uint8_t tx[512] = {}, rx[512] = {};
+    uint16_t timeout_ms = 100;
+    size_t tx_len = 0;
+    bool ok = json_get_u16(body, "timeoutMs", &timeout_ms, 100) &&
+              json_get_bytes(body, "data", tx, sizeof(tx), &tx_len);
+    cJSON_Delete(body);
+    if (!ok || tx_len == 0) return send_error(req, 400, "Invalid SPI transfer fields");
+    size_t rx_len = tx_len;
+    if (!ext_spi_transfer(tx, tx_len, rx, &rx_len, timeout_ms)) {
+        return send_error(req, 409, ext_spi_ready() ? "SPI transfer failed" : "SPI not configured");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "data");
+    for (size_t i = 0; i < rx_len; i++) cJSON_AddItemToArray(arr, cJSON_CreateNumber(rx[i]));
+    return send_json(req, root);
+}
+
+static esp_err_t handle_bus_post_dispatch(httpd_req_t *req)
+{
+    if (strstr(req->uri, "/api/bus/i2c/setup")) return handle_post_bus_i2c_setup(req);
+    if (strstr(req->uri, "/api/bus/i2c/scan")) return handle_post_bus_i2c_scan(req);
+    if (strstr(req->uri, "/api/bus/i2c/write_read")) return handle_post_bus_i2c_write_read(req);
+    if (strstr(req->uri, "/api/bus/i2c/write")) return handle_post_bus_i2c_write(req);
+    if (strstr(req->uri, "/api/bus/i2c/read")) return handle_post_bus_i2c_read(req);
+    if (strstr(req->uri, "/api/bus/spi/setup")) return handle_post_bus_spi_setup(req);
+    if (strstr(req->uri, "/api/bus/spi/transfer")) return handle_post_bus_spi_transfer(req);
+    return send_error(req, 404, "Unknown bus endpoint");
+}
+
 // POST /api/lshift/oe  body: {"on":true}
 static esp_err_t handle_post_lshift_oe(httpd_req_t *req)
 {
@@ -3533,6 +3787,18 @@ void initWebServer(void)
         .uri = "/api/idac/cal/*", .method = HTTP_POST, .handler = handle_cal_post_dispatch, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_cal_post);
+
+    // ----- External routed bus routes -----
+
+    httpd_uri_t uri_bus_status = {
+        .uri = "/api/bus/status", .method = HTTP_GET, .handler = handle_get_bus_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_bus_status);
+
+    httpd_uri_t uri_bus_post = {
+        .uri = "/api/bus/*", .method = HTTP_POST, .handler = handle_bus_post_dispatch, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_bus_post);
 
     // ----- Level Shifter OE -----
 

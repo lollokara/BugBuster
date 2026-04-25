@@ -101,8 +101,9 @@ function BoardCard() {
   }, []);
 
   const state = boardState.value;
-  const active: BoardProfile | undefined = state?.available.find(
-    (b) => b.id === state.active,
+  const available = Array.isArray(state?.available) ? state!.available : [];
+  const active: BoardProfile | undefined = available.find(
+    (b) => b.id === state!.active,
   );
 
   const apply = async () => {
@@ -140,7 +141,7 @@ function BoardCard() {
           }
         >
           <option value="">(none)</option>
-          {state?.available.map((b) => (
+          {available.map((b) => (
             <option key={b.id} value={b.id}>{b.name}</option>
           ))}
         </select>

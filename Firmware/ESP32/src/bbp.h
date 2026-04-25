@@ -144,6 +144,15 @@ extern "C" {
 #define BBP_CMD_PCA_SET_FAULT_CFG   0xB3  // Configure fault auto-disable + logging
 #define BBP_CMD_PCA_GET_FAULT_LOG   0xB4  // Get recent PCA fault events
 
+// External target bus engine (routed IO pins)
+#define BBP_CMD_EXT_I2C_SETUP       0xB8  // Configure external I2C peripheral pins/frequency
+#define BBP_CMD_EXT_I2C_SCAN        0xB9  // Scan external I2C bus
+#define BBP_CMD_EXT_I2C_WRITE       0xBA  // Write bytes to external I2C device
+#define BBP_CMD_EXT_I2C_READ        0xBB  // Read bytes from external I2C device
+#define BBP_CMD_EXT_I2C_WRITE_READ  0xBC  // Register-style write then repeated-start read
+#define BBP_CMD_EXT_SPI_SETUP       0xBD  // Configure external SPI peripheral pins/frequency
+#define BBP_CMD_EXT_SPI_TRANSFER    0xBE  // Full-duplex SPI transfer
+
 // Waveform Generator
 #define BBP_CMD_START_WAVEGEN       0xD0  // Start waveform generation
 #define BBP_CMD_STOP_WAVEGEN        0xD1  // Stop waveform generation
@@ -212,6 +221,8 @@ extern "C" {
 #define BBP_CMD_REG_WRITE       0x72
 #define BBP_CMD_SET_WATCHDOG    0x73  // Enable/disable AD74416H watchdog timer
 #define BBP_CMD_GET_ADMIN_TOKEN 0x74  // Retrieve derived admin token (USB only)
+#define BBP_CMD_EXT_JOB_SUBMIT  0x75  // Queue deferred external I2C/SPI operation
+#define BBP_CMD_EXT_JOB_GET     0x76  // Poll deferred external I2C/SPI operation
 #define BBP_CMD_PING            0xFE
 #define BBP_CMD_DISCONNECT      0xFF
 

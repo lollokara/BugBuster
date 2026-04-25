@@ -14,6 +14,7 @@ from bugbuster.hal import (
     ANALOG_IO_MODES,
     DIGITAL_IO_MODES,
     PortMode,
+    ESP_GPIO_MAP,
     _SW_A_ESP_HIGH,
     _SW_A_ADC,
     _SW_A_ESP_LOW,
@@ -90,6 +91,14 @@ class TestRoutingTableConsistency(unittest.TestCase):
     def test_each_io_has_esp_gpio(self):
         for io_num, rt in DEFAULT_ROUTING.items():
             self.assertIsInstance(rt.esp_gpio, int, f"IO {io_num} missing esp_gpio")
+
+    def test_each_io_esp_gpio_matches_firmware_map(self):
+        for io_num, rt in DEFAULT_ROUTING.items():
+            self.assertEqual(
+                rt.esp_gpio,
+                ESP_GPIO_MAP[io_num],
+                f"IO {io_num} esp_gpio must match firmware MUX_GPIO_MAP",
+            )
 
     def test_block_assignment(self):
         for io_num in range(1, 7):

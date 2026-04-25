@@ -111,6 +111,34 @@ with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
     print(f"IO 2: {'HIGH' if r['value'] else 'LOW'}")
 ```
 
+### External I2C/SPI Bus Engine
+
+Use physical IO numbers and let `dev.bus` resolve power, MUX, VLOGIC,
+level-shifter, e-fuse, and ESP32 GPIO routing.
+
+```python
+with bb.connect_usb("/dev/cu.usbmodem1234561") as dev:
+    scan = dev.bus.i2c_scan(
+        sda=2,
+        scl=3,
+        io_voltage=3.3,
+        supply_voltage=3.3,
+    )
+    print(scan["addresses"])
+
+    dev.bus.setup_spi(
+        sck=3,
+        mosi=2,
+        miso=5,
+        cs=6,
+        io_voltage=3.3,
+        supply_voltage=3.3,
+    )
+    print(dev.bus.spi_jedec_id())
+```
+
+Full guide: [`Docs/ExternalBus.md`](../Docs/ExternalBus.md).
+
 ### Logic Analyzer (High-Speed Streaming)
 
 The Logic Analyzer can stream continuous 4-channel pin state samples at up to 1MHz (or 1-channel up to 5MHz) natively using PyUSB on the vendor bulk endpoint (requires USB).

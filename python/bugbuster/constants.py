@@ -337,6 +337,8 @@ class CmdId(IntEnum):
     REGISTER_WRITE   = 0x72
     SET_WATCHDOG     = 0x73
     GET_ADMIN_TOKEN  = 0x74
+    EXT_JOB_SUBMIT   = 0x75
+    EXT_JOB_GET      = 0x76
 
     # Unsolicited events
     ADC_DATA_EVT     = 0x80
@@ -365,6 +367,15 @@ class CmdId(IntEnum):
     PCA_SET_PORT       = 0xB2
     PCA_SET_FAULT_CFG  = 0xB3
     PCA_GET_FAULT_LOG  = 0xB4
+
+    # External target bus engine (routed IO pins)
+    EXT_I2C_SETUP      = 0xB8
+    EXT_I2C_SCAN       = 0xB9
+    EXT_I2C_WRITE      = 0xBA
+    EXT_I2C_READ       = 0xBB
+    EXT_I2C_WRITE_READ = 0xBC
+    EXT_SPI_SETUP      = 0xBD
+    EXT_SPI_TRANSFER   = 0xBE
 
     # HAT Expansion Board — Core
     HAT_GET_STATUS   = 0xC5

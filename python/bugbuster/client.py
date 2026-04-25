@@ -264,6 +264,7 @@ class BugBuster:
         self._usb       = isinstance(transport, USBTransport)
         self._connected = False
         self._hal       = None
+        self._bus       = None
         # Cached HAT presence: None = unknown (probe on demand), bool = known
         self._hat_present_cache = None
         self._admin_token = None
@@ -296,6 +297,29 @@ class BugBuster:
             from .hal import BugBusterHAL
             self._hal = BugBusterHAL(self)
         return self._hal
+
+    @property
+    def bus(self):
+        """
+        Lazy-initialized external I2C/SPI bus manager.
+
+        The current implementation exposes side-effect-free route planning so
+        callers can preview the power, MUX, and ESP32 GPIO mapping before the
+        firmware-owned timing engine is enabled.
+        """
+        if self._bus is None:
+            from .bus import BugBusterBusManager
+            self._bus = BugBusterBusManager(self)
+        return self._bus
+
+    def bus_plan(self, kind: str, **kwargs) -> dict:
+        """Return a serializable I2C/SPI route plan without touching hardware."""
+        kind = kind.lower()
+        if kind == "i2c":
+            return self.bus.plan_i2c(**kwargs).as_dict()
+        if kind == "spi":
+            return self.bus.plan_spi(**kwargs).as_dict()
+        raise ValueError("kind must be 'i2c' or 'spi'")
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -933,6 +957,249 @@ class BugBuster:
             }
         else:
             return self._http_get(f"/dio/{io}")
+
+    # ------------------------------------------------------------------
+    # ── External target I2C bus (routed IO pins) ───────────────────────
+    # ------------------------------------------------------------------
+
+    def ext_i2c_setup(
+        self,
+        *,
+        sda_gpio: int,
+        scl_gpio: int,
+        frequency_hz: int = 400_000,
+        pullups: str = "external",
+    ) -> dict:
+        internal_pullups = pullups.lower() == "internal"
+        if not self._usb:
+            return self._http_post("/bus/i2c/setup", {
+                "sdaGpio": sda_gpio,
+                "sclGpio": scl_gpio,
+                "frequencyHz": int(frequency_hz),
+                "internalPullups": internal_pullups,
+            })
+        payload = struct.pack("<BBIB", sda_gpio, scl_gpio, int(frequency_hz), int(internal_pullups))
+        resp = self._usb_cmd(CmdId.EXT_I2C_SETUP, payload)
+        return {
+            "sda_gpio": resp[0],
+            "scl_gpio": resp[1],
+            "frequency_hz": struct.unpack_from("<I", resp, 2)[0],
+            "internal_pullups": bool(resp[6]),
+        }
+
+    def ext_i2c_scan(
+        self,
+        *,
+        start_addr: int = 0x08,
+        stop_addr: int = 0x77,
+        skip_reserved: bool = True,
+        timeout_ms: int = 50,
+    ) -> list[int]:
+        """Scan the configured external I2C bus."""
+        if not self._usb:
+            raw = self._http_post("/bus/i2c/scan", {
+                "startAddr": start_addr,
+                "stopAddr": stop_addr,
+                "skipReserved": skip_reserved,
+                "timeoutMs": timeout_ms,
+            })
+            return [int(addr) for addr in raw.get("addresses", [])]
+        payload = struct.pack("<BBBH", start_addr & 0x7F, stop_addr & 0x7F, int(skip_reserved), timeout_ms & 0xFFFF)
+        resp = self._usb_cmd(CmdId.EXT_I2C_SCAN, payload)
+        count = resp[0]
+        return list(resp[1:1 + count])
+
+    def ext_i2c_write(self, address: int, data: bytes | bytearray | list[int], *, timeout_ms: int = 100) -> int:
+        """Write bytes to the configured external I2C bus."""
+        raw = bytes(data)
+        if len(raw) > 255:
+            raise ValueError("I2C write payload must be <=255 bytes")
+        if not self._usb:
+            resp = self._http_post("/bus/i2c/write", {
+                "address": address & 0x7F,
+                "timeoutMs": timeout_ms,
+                "data": list(raw),
+            })
+            return int(resp.get("written", 0))
+        payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, len(raw)) + raw
+        resp = self._usb_cmd(CmdId.EXT_I2C_WRITE, payload)
+        return resp[0]
+
+    def ext_i2c_read(self, address: int, length: int, *, timeout_ms: int = 100) -> bytes:
+        """Read bytes from the configured external I2C bus."""
+        if not (1 <= length <= 255):
+            raise ValueError("I2C read length must be 1-255 bytes")
+        if not self._usb:
+            resp = self._http_post("/bus/i2c/read", {
+                "address": address & 0x7F,
+                "length": length,
+                "timeoutMs": timeout_ms,
+            })
+            return bytes(resp.get("data", []))
+        payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, length)
+        resp = self._usb_cmd(CmdId.EXT_I2C_READ, payload)
+        count = resp[0]
+        return bytes(resp[1:1 + count])
+
+    def ext_i2c_write_read(
+        self,
+        address: int,
+        write_data: bytes | bytearray | list[int],
+        read_length: int,
+        *,
+        timeout_ms: int = 100,
+    ) -> bytes:
+        """Write bytes then repeated-start read from the configured external I2C bus."""
+        raw = bytes(write_data)
+        if not (1 <= len(raw) <= 255):
+            raise ValueError("I2C write-read write payload must be 1-255 bytes")
+        if not (1 <= read_length <= 255):
+            raise ValueError("I2C write-read length must be 1-255 bytes")
+        if not self._usb:
+            resp = self._http_post("/bus/i2c/write_read", {
+                "address": address & 0x7F,
+                "writeData": list(raw),
+                "readLength": read_length,
+                "timeoutMs": timeout_ms,
+            })
+            return bytes(resp.get("data", []))
+        payload = struct.pack("<BHBB", address & 0x7F, timeout_ms & 0xFFFF, len(raw), read_length) + raw
+        resp = self._usb_cmd(CmdId.EXT_I2C_WRITE_READ, payload)
+        count = resp[0]
+        return bytes(resp[1:1 + count])
+
+    # ------------------------------------------------------------------
+    # ── External target SPI bus (routed IO pins) ───────────────────────
+    # ------------------------------------------------------------------
+
+    def ext_spi_setup(
+        self,
+        *,
+        sck_gpio: int,
+        mosi_gpio: int | None = None,
+        miso_gpio: int | None = None,
+        cs_gpio: int | None = None,
+        frequency_hz: int = 1_000_000,
+        mode: int = 0,
+    ) -> dict:
+        """Configure the ESP32 external SPI peripheral on already-routed GPIOs."""
+        if not self._usb:
+            return self._http_post("/bus/spi/setup", {
+                "sckGpio": sck_gpio,
+                "mosiGpio": mosi_gpio,
+                "misoGpio": miso_gpio,
+                "csGpio": cs_gpio,
+                "frequencyHz": int(frequency_hz),
+                "mode": mode,
+            })
+        nc = 0xFF
+        payload = struct.pack(
+            "<BBBBIB",
+            sck_gpio,
+            nc if mosi_gpio is None else mosi_gpio,
+            nc if miso_gpio is None else miso_gpio,
+            nc if cs_gpio is None else cs_gpio,
+            int(frequency_hz),
+            mode & 0x03,
+        )
+        resp = self._usb_cmd(CmdId.EXT_SPI_SETUP, payload)
+        return {
+            "sck_gpio": resp[0],
+            "mosi_gpio": None if resp[1] == nc else resp[1],
+            "miso_gpio": None if resp[2] == nc else resp[2],
+            "cs_gpio": None if resp[3] == nc else resp[3],
+            "frequency_hz": struct.unpack_from("<I", resp, 4)[0],
+            "mode": resp[8],
+        }
+
+    def ext_spi_transfer(self, data: bytes | bytearray | list[int], *, timeout_ms: int = 100) -> bytes:
+        """Run a bounded full-duplex transfer on the configured external SPI bus."""
+        raw = bytes(data)
+        if not (1 <= len(raw) <= 512):
+            raise ValueError("SPI transfer length must be 1-512 bytes")
+        if not self._usb:
+            resp = self._http_post("/bus/spi/transfer", {
+                "data": list(raw),
+                "timeoutMs": timeout_ms,
+            })
+            return bytes(resp.get("data", []))
+        payload = struct.pack("<HH", timeout_ms & 0xFFFF, len(raw)) + raw
+        resp = self._usb_cmd(CmdId.EXT_SPI_TRANSFER, payload)
+        count = struct.unpack_from("<H", resp, 0)[0]
+        return bytes(resp[2:2 + count])
+
+    def ext_job_submit_i2c_read(self, address: int, length: int, *, timeout_ms: int = 100) -> int:
+        """Queue a deferred I2C read in ESP32 RAM/PSRAM and return its job id."""
+        if not self._usb:
+            raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
+        if not (1 <= length <= 255):
+            raise ValueError("I2C deferred read length must be 1-255 bytes")
+        payload = struct.pack("<BHBB", 1, timeout_ms & 0xFFFF, address & 0x7F, length)
+        resp = self._usb_cmd(CmdId.EXT_JOB_SUBMIT, payload)
+        return struct.unpack_from("<I", resp, 0)[0]
+
+    def ext_job_submit_i2c_write_read(
+        self,
+        address: int,
+        write_data: bytes | bytearray | list[int],
+        read_length: int,
+        *,
+        timeout_ms: int = 100,
+    ) -> int:
+        """Queue a deferred I2C write/read transaction and return its job id."""
+        if not self._usb:
+            raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
+        raw = bytes(write_data)
+        if not (1 <= len(raw) <= 255):
+            raise ValueError("I2C deferred write payload must be 1-255 bytes")
+        if not (1 <= read_length <= 255):
+            raise ValueError("I2C deferred read length must be 1-255 bytes")
+        payload = struct.pack(
+            "<BHBBB",
+            2,
+            timeout_ms & 0xFFFF,
+            address & 0x7F,
+            len(raw),
+            read_length,
+        ) + raw
+        resp = self._usb_cmd(CmdId.EXT_JOB_SUBMIT, payload)
+        return struct.unpack_from("<I", resp, 0)[0]
+
+    def ext_job_submit_spi_transfer(self, data: bytes | bytearray | list[int], *, timeout_ms: int = 100) -> int:
+        """Queue a deferred SPI transfer and return its job id."""
+        if not self._usb:
+            raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
+        raw = bytes(data)
+        if not (1 <= len(raw) <= 512):
+            raise ValueError("SPI deferred transfer length must be 1-512 bytes")
+        payload = struct.pack("<BHH", 3, timeout_ms & 0xFFFF, len(raw)) + raw
+        resp = self._usb_cmd(CmdId.EXT_JOB_SUBMIT, payload)
+        return struct.unpack_from("<I", resp, 0)[0]
+
+    def ext_job_get(self, job_id: int) -> dict:
+        """Poll a deferred external bus job."""
+        if not self._usb:
+            raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
+        resp = self._usb_cmd(CmdId.EXT_JOB_GET, struct.pack("<I", job_id & 0xFFFFFFFF))
+        result_len = struct.unpack_from("<H", resp, 6)[0]
+        return {
+            "job_id": struct.unpack_from("<I", resp, 0)[0],
+            "status": resp[4],
+            "status_name": {
+                0: "empty",
+                1: "queued",
+                2: "running",
+                3: "done",
+                4: "error",
+            }.get(resp[4], "unknown"),
+            "kind": resp[5],
+            "kind_name": {
+                1: "i2c_read",
+                2: "i2c_write_read",
+                3: "spi_transfer",
+            }.get(resp[5], "unknown"),
+            "data": bytes(resp[8:8 + result_len]),
+        }
 
     # ------------------------------------------------------------------
     # ── Self-Test / Calibration / E-fuse Monitoring ────────────────────

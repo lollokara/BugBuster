@@ -293,7 +293,7 @@ DEFAULT_ROUTING: dict[int, IORouting] = {
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
                   supply_idac=1, valid_modes=DIGITAL_IO_MODES),
     3:  IORouting(3,  block=1, io_block=1, position=3, channel=None,
-                  mux_device=0, mux_map=_digital_mux_c(), esp_gpio=3,
+                  mux_device=0, mux_map=_digital_mux_c(), esp_gpio=4,
                   efuse=PowerControl.EFUSE1, supply=PowerControl.VADJ1,
                   supply_idac=1, valid_modes=DIGITAL_IO_MODES),
 

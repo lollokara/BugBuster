@@ -120,6 +120,15 @@ pub const CMD_PCA_SET_PORT: u8 = 0xB2;
 pub const CMD_PCA_SET_FAULT_CFG: u8 = 0xB3;
 pub const CMD_PCA_GET_FAULT_LOG: u8 = 0xB4;
 
+// External target bus engine (routed IO pins)
+pub const CMD_EXT_I2C_SETUP: u8 = 0xB8;
+pub const CMD_EXT_I2C_SCAN: u8 = 0xB9;
+pub const CMD_EXT_I2C_WRITE: u8 = 0xBA;
+pub const CMD_EXT_I2C_READ: u8 = 0xBB;
+pub const CMD_EXT_I2C_WRITE_READ: u8 = 0xBC;
+pub const CMD_EXT_SPI_SETUP: u8 = 0xBD;
+pub const CMD_EXT_SPI_TRANSFER: u8 = 0xBE;
+
 // HAT Expansion Board
 pub const CMD_HAT_GET_STATUS: u8 = 0xC5;
 pub const CMD_HAT_SET_PIN: u8 = 0xC6;
@@ -194,6 +203,8 @@ pub const CMD_REG_READ: u8 = 0x71;
 pub const CMD_REG_WRITE: u8 = 0x72;
 pub const CMD_SET_WATCHDOG: u8 = 0x73;
 pub const CMD_GET_ADMIN_TOKEN: u8 = 0x74;
+pub const CMD_EXT_JOB_SUBMIT: u8 = 0x75;
+pub const CMD_EXT_JOB_GET: u8 = 0x76;
 pub const CMD_PING: u8 = 0xFE;
 pub const CMD_DISCONNECT: u8 = 0xFF;
 
