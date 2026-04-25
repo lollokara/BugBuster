@@ -296,6 +296,15 @@ export const api = {
     }),
 
   status: () => request<any>("/api/status"),
+  /** Coalesced snapshot for the Overview tab — equivalent to fetching
+   *  /api/idac + /api/ioexp + /api/selftest/supply/{0,1,2} in one shot.
+   *  May 404 on firmware predating this endpoint; caller should fall back
+   *  to the legacy 5-call path. */
+  overview: () => request<{
+    idac: any;
+    ioexp: any;
+    rails: Array<{ rail: number; name: string; voltage: number; ok: boolean }>;
+  }>("/api/overview"),
   scope: (since: number) => request<{ seq: number; samples: number[][] }>(
     `/api/scope?since=${since}`,
   ),

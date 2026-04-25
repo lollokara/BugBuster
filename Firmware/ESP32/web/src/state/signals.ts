@@ -4,7 +4,6 @@
 
 import { signal, computed } from "@preact/signals";
 import { api, type BoardState, type DeviceInfo, type PairingInfo, type SelftestStatus } from "../api/client";
-import { createWriteGuard } from "./editGuard";
 
 /* ---- Pairing ---- */
 
@@ -30,7 +29,11 @@ export const supplyMonitorActive = signal<boolean>(false);
 let selftestPollRefs = 0;
 let selftestPollTimer: number | null = null;
 let selftestPollInFlight = false;
-const selftestWriteGuard = createWriteGuard();
+// Stale-poll suppression: if a poll started before the user's last write
+// (plus a 750 ms grace for firmware-side propagation), we discard its
+// response so the UI doesn't bounce back to the pre-write state.
+let selftestLastLocalWriteMs = 0;
+const SELFTEST_WRITE_GRACE_MS = 750;
 
 function applySelftestStatus(status: SelftestStatus): void {
   selftestStatus.value = status;
@@ -44,8 +47,7 @@ async function pollSelftestStatus(): Promise<void> {
   const startedMs = Date.now();
   try {
     const status = await api.selftestStatus();
-    // Avoid stale poll responses overriding a newer user-triggered toggle.
-    if (selftestWriteGuard.shouldApplyPoll(startedMs)) {
+    if (startedMs >= selftestLastLocalWriteMs + SELFTEST_WRITE_GRACE_MS) {
       applySelftestStatus(status);
     }
   } catch {
@@ -61,7 +63,7 @@ async function pollSelftestStatus(): Promise<void> {
 }
 
 export function setSelftestStatus(status: SelftestStatus): void {
-  selftestWriteGuard.bumpLocalWrite();
+  selftestLastLocalWriteMs = Date.now();
   applySelftestStatus(status);
 }
 

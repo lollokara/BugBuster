@@ -11,6 +11,13 @@ use serde::{Deserialize, Serialize};
 /// A single transition: (sample_index, new_value)
 pub type Transition = (u64, u8);
 
+/// Per-channel transition cap. The store is intentionally bounded so a
+/// runaway capture (e.g. a noisy floating input) can't OOM the host.
+/// Anything past this is dropped silently — the `overflow` flag below is
+/// set so callers (and the frontend, via the `la-store-overflow` event)
+/// can surface "ACQUISITION TRUNCATED" to the user.
+pub const LA_STORE_MAX_TRANSITIONS_PER_CHANNEL: usize = 1_000_000;
+
 /// Run-length encoded capture storage
 #[derive(Debug, Clone, Default)]
 pub struct LaStore {
@@ -20,6 +27,10 @@ pub struct LaStore {
     pub transitions: Vec<Vec<Transition>>,
     pub total_samples: u64,
     pub trigger_sample: Option<u64>,
+    /// Set to true the first time a channel hits LA_STORE_MAX_TRANSITIONS;
+    /// subsequent samples on full channels are dropped. Sticky for the
+    /// lifetime of the store (cleared on `clear()` / new capture).
+    pub overflow: bool,
     cached_density: Option<Vec<u16>>,
 }
 
@@ -40,6 +51,11 @@ pub struct LaViewData {
     pub density: Vec<u16>,
     /// True if the data was decimated (LOD) for this viewport
     pub decimated: bool,
+    /// True if at least one channel hit `LA_STORE_MAX_TRANSITIONS_PER_CHANNEL`
+    /// during this capture and additional samples were dropped. Frontends
+    /// should surface this as an "ACQUISITION TRUNCATED" badge — silent
+    /// drop is the most-painful failure mode.
+    pub overflow: bool,
 }
 
 impl LaStore {
@@ -57,6 +73,7 @@ impl LaStore {
             transitions,
             total_samples,
             trigger_sample,
+            overflow: false,
             cached_density: None,
         }
     }
@@ -90,6 +107,7 @@ impl LaStore {
             transitions,
             total_samples: sample_idx,
             trigger_sample: None,
+            overflow: false,
             cached_density: None,
         }
     }
@@ -118,10 +136,21 @@ impl LaStore {
                 for ch in 0..self.channels as usize {
                     let val = (byte >> (bit_pos + ch)) & 1;
                     if val != prev_values[ch] {
-                        // Limit total transitions per channel to avoid memory explosion (1M per channel)
-                        if self.transitions[ch].len() < 1_000_000 {
+                        if self.transitions[ch].len() < LA_STORE_MAX_TRANSITIONS_PER_CHANNEL {
                             self.transitions[ch].push((sample_idx, val));
                             prev_values[ch] = val;
+                        } else if !self.overflow {
+                            // First channel to hit the cap — set the sticky
+                            // flag so callers can emit `la-store-overflow`
+                            // exactly once and the UI can render an
+                            // "ACQUISITION TRUNCATED" badge.
+                            self.overflow = true;
+                            log::warn!(
+                                "la_store: channel {} hit transition cap ({}), \
+                                 capture will be truncated",
+                                ch,
+                                LA_STORE_MAX_TRANSITIONS_PER_CHANNEL,
+                            );
                         }
                     }
                 }
@@ -289,6 +318,7 @@ impl LaStore {
             channel_transitions,
             density,
             decimated,
+            overflow: self.overflow,
         }
     }
 

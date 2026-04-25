@@ -256,10 +256,12 @@ extern "C" void app_main(void)
     serial_printf("[BugBuster] AD74416H SPI: %s\r\n", spiOk ? "OK" : "VERIFY FAILED");
     g_deviceState.spiOk = spiOk;
 
-    // Confirm OTA image is valid — if this is a new firmware via OTA and it reached
-    // here successfully, mark it as good. If the firmware crashes before this point,
-    // the bootloader will automatically roll back to the previous partition.
-    esp_ota_mark_app_valid_cancel_rollback();
+    // OTA validation is deferred until after we know the core hardware came up.
+    // If `device.begin()` fails (e.g. an OTA introduced a regression that
+    // breaks SPI verify), leaving the partition unconfirmed lets the
+    // bootloader auto-rollback on the next reboot. The actual call is made
+    // further below once both the I2C bus AND the AD74416 SPI verify have
+    // succeeded — see "OTA confirm" comment.
 
     // 10. Diagnostics setup
     device.setupDiagnostics();
@@ -271,8 +273,26 @@ extern "C" void app_main(void)
     // 12. MUX switch matrix — MUST init BEFORE starting RTOS tasks
     //     (the ADC poll task uses the SPI bus continuously; MUX init needs
     //      exclusive SPI access for the first write-verify to succeed)
-    adgs_init();
-    serial_println("[BugBuster] MUX matrix initialized");
+    bool muxOk = adgs_init();
+    g_deviceState.muxOk = muxOk;
+    if (muxOk) {
+        serial_println("[BugBuster] MUX matrix initialized");
+    } else {
+        serial_println("[BugBuster] MUX matrix init FAILED — switch commands will silently no-op");
+    }
+
+    // OTA confirm: SPI verified, I2C bus up, MUX matrix registered. If
+    // we got here this OTA image is healthy enough to keep. If any of
+    // those flags is false we deliberately skip the call so the bootloader
+    // rolls back on the next reboot.
+    if (g_deviceState.spiOk && g_deviceState.i2cOk && g_deviceState.muxOk) {
+        esp_ota_mark_app_valid_cancel_rollback();
+        serial_println("[BugBuster] OTA partition marked valid");
+    } else {
+        serial_printf("[BugBuster] OTA partition NOT marked valid (spiOk=%d i2cOk=%d muxOk=%d) "
+                      "— bootloader will roll back on next reboot if a previous partition exists\r\n",
+                      g_deviceState.spiOk, g_deviceState.i2cOk, g_deviceState.muxOk);
+    }
 
     // 12a. Digital IO (ESP32 GPIO-based, 12 logical IOs)
     dio_init();
@@ -304,6 +324,8 @@ extern "C" void app_main(void)
         } else {
             serial_println("[BugBuster] HAT: none detected");
         }
+    } else {
+        serial_println("[BugBuster] HAT: init FAILED — features disabled");
     }
 
     // 14. UART bridge (CDC #1+ ↔ UART)

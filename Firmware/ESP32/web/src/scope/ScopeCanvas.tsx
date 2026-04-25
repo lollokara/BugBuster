@@ -4,13 +4,13 @@
 //
 // Responsibilities:
 //  - DPR-aware canvas that resizes with ResizeObserver.
-//  - 30 Hz poll of /api/scope?since=seq to append fresh samples.
+//  - SSE consumer of /api/scope/stream (with fallback poll on /api/scope).
 //  - RAF draw loop with grid, per-channel polylines, trigger, cursors.
 //  - Mouse pan on X axis, wheel zoom on scopeTimeBase.
 // =============================================================================
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, PairingRequiredError } from "../api/client";
+import { api } from "../api/client";
 import {
   scopeBuffer,
   scopeChannelEnabled,
@@ -66,31 +66,97 @@ export function ScopeCanvas() {
     return () => ro.disconnect();
   }, []);
 
-  // ---- Scope polling loop (30 Hz) -----------------------------------------
+  // ---- Scope stream via SSE -----------------------------------------------
+  // Replaces the previous 33 ms (~30 req/s) polling loop. We open a single
+  // EventSource against /api/scope/stream and let the firmware push new
+  // sample buckets as they're produced. Net effect: per-tab polling drops
+  // from ~30 req/s to ~0 req/s while idle, and the device sends data only
+  // when it actually has new samples. EventSource handles auto-reconnect
+  // for transient disconnects on its own. We fall back to one-shot polling
+  // via /api/scope on browsers without EventSource, and gracefully degrade
+  // if the device firmware predates this endpoint (we'll see an immediate
+  // error event and silently stop trying).
   useEffect(() => {
     let alive = true;
-    const tick = async () => {
-      if (!alive) return;
-      if (scopeRunning.value) {
-        try {
-          const resp = await api.scope(scopeSeq.value);
-          if (resp && Array.isArray(resp.samples) && resp.samples.length > 0) {
-            pushScopeSamples(
-              typeof resp.seq === "number" ? resp.seq : scopeSeq.value,
-              resp.samples,
-            );
-          }
-        } catch (e) {
-          if (!(e instanceof PairingRequiredError)) {
-            // Swallow — scope endpoint may 404/5xx during boot.
+    let es: EventSource | null = null;
+    let pollFallbackTimer: number | null = null;
+    let usingFallback = false;
+    let consecutiveErrors = 0;
+
+    const handleSamples = (seq: number, samples: number[][]) => {
+      if (!Array.isArray(samples) || samples.length === 0) return;
+      pushScopeSamples(seq, samples);
+    };
+
+    const startFallbackPolling = () => {
+      if (usingFallback) return;
+      usingFallback = true;
+      const tick = async () => {
+        if (!alive) return;
+        if (
+          scopeRunning.value &&
+          typeof document !== "undefined" &&
+          document.visibilityState !== "hidden"
+        ) {
+          try {
+            const resp = await api.scope(scopeSeq.value);
+            if (resp && Array.isArray(resp.samples) && resp.samples.length > 0) {
+              handleSamples(
+                typeof resp.seq === "number" ? resp.seq : scopeSeq.value,
+                resp.samples,
+              );
+            }
+          } catch {
+            /* swallow */
           }
         }
-      }
-      if (alive) setTimeout(tick, 33);
+        if (alive) pollFallbackTimer = window.setTimeout(tick, 250);
+      };
+      void tick();
     };
-    tick();
+
+    if (typeof EventSource === "undefined") {
+      startFallbackPolling();
+    } else {
+      try {
+        es = new EventSource("/api/scope/stream");
+        es.onmessage = (ev) => {
+          if (!alive || !scopeRunning.value) return;
+          try {
+            const data = JSON.parse(ev.data);
+            const seq =
+              typeof data.seq === "number" ? data.seq : scopeSeq.value;
+            handleSamples(seq, data.samples ?? []);
+          } catch {
+            /* malformed event — drop */
+          }
+        };
+        es.onerror = () => {
+          // EventSource will auto-retry on its own, but if the endpoint
+          // does not exist (older firmware), error fires immediately and
+          // repeatedly. After three quick errors, give up and poll.
+          consecutiveErrors += 1;
+          if (consecutiveErrors >= 3 && !usingFallback) {
+            es?.close();
+            es = null;
+            startFallbackPolling();
+          }
+        };
+      } catch {
+        startFallbackPolling();
+      }
+    }
+
     return () => {
       alive = false;
+      if (es) {
+        es.close();
+        es = null;
+      }
+      if (pollFallbackTimer !== null) {
+        window.clearTimeout(pollFallbackTimer);
+        pollFallbackTimer = null;
+      }
     };
   }, []);
 

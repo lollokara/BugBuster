@@ -325,21 +325,6 @@ impl HttpTransport {
         Ok(resp.json().await?)
     }
 
-    /// GET with a per-request timeout override (mirror of post_json_with_timeout).
-    #[allow(dead_code)]
-    async fn get_json_with_timeout(
-        &self,
-        path: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Value> {
-        let url = format!("{}{}", self.base_url, path);
-        let resp = self.client.get(&url).timeout(timeout).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
-        }
-        Ok(resp.json().await?)
-    }
-
     /// Map channel function string from webserver to numeric ID used by BBP.
     fn parse_function(v: &Value) -> u8 {
         if let Some(n) = v.as_u64() {

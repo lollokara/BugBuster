@@ -298,7 +298,7 @@ static uint8_t get_group_mask(uint8_t sw)
 // Public API
 // -----------------------------------------------------------------------------
 
-void adgs_init(void)
+bool adgs_init(void)
 {
     // Create SPI bus mutex if not already created
     if (g_spi_bus_mutex == NULL) {
@@ -327,7 +327,7 @@ void adgs_init(void)
         esp_err_t ret = spi_bus_add_device(SPI2_HOST, &devcfg, &s_spi_dev);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to add SPI device: %s", esp_err_to_name(ret));
-            return;
+            return false;
         }
         ESP_LOGI(TAG, "SPI device added, hardware CS on GPIO%d", PIN_MUX_CS);
     }
@@ -353,6 +353,7 @@ void adgs_init(void)
 
     ESP_LOGI(TAG, "ADGS2414D mux matrix initialized (%d devices, CS=GPIO%d, LShift OE=GPIO%d)",
              ADGS_NUM_DEVICES, PIN_MUX_CS, PIN_LSHIFT_OE);
+    return true;
 }
 
 void adgs_set_all_raw(const uint8_t states[ADGS_MAIN_DEVICES])

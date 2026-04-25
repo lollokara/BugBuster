@@ -75,8 +75,14 @@ static const uint8_t MUX_GPIO_MAP[4][3] = {
  * @brief Initialize the ADGS2414D mux matrix.
  *        Configures CS pin, enables level shifters, resets all switches,
  *        and enters daisy-chain mode.
+ *
+ * @return true on success; false if the SPI device could not be registered.
+ *         On failure, subsequent adgs_set_*() calls silently no-op so the
+ *         rest of the firmware keeps running, but the caller should mark
+ *         the MUX subsystem as faulted in g_deviceState so /api/status
+ *         reflects reality rather than appearing healthy.
  */
-void adgs_init(void);
+bool adgs_init(void);
 
 /**
  * @brief Set all 4 devices' switch states in one SPI transaction.

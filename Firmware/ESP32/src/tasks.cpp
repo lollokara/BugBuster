@@ -11,9 +11,11 @@
 #include "pca9535.h"
 #include "hat.h"
 #include "adgs2414d.h"   // PCB mode uses adgs_get_selftest / adgs_set_selftest (ADGS_HAS_SELFTEST=1)
+#include "serial_io.h"   // serial_println for fatal init diagnostics
 #include "esp_timer.h"
 #include "esp_log.h"
 #include <math.h>
+#include <stdlib.h>      // abort()
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -1282,13 +1284,21 @@ void initTasks(AD74416H& device)
     g_deviceState.diag[2].source = 2;  // DVCC
     g_deviceState.diag[3].source = 3;  // AVCC
 
-    // Create mutex
+    // Create mutex. Out-of-heap here is unrecoverable — abort with a
+    // diagnostic line so the post-reboot reset reason has context, rather
+    // than the bare configASSERT halt that hides the cause.
     g_stateMutex = xSemaphoreCreateMutex();
-    configASSERT(g_stateMutex);
+    if (!g_stateMutex) {
+        serial_println("[BugBuster] FATAL: g_stateMutex creation failed (out of heap?)");
+        abort();
+    }
 
     // Create command queue (16 deep)
     g_cmdQueue = xQueueCreate(16, sizeof(Command));
-    configASSERT(g_cmdQueue);
+    if (!g_cmdQueue) {
+        serial_println("[BugBuster] FATAL: g_cmdQueue creation failed (out of heap?)");
+        abort();
+    }
 
     // Start tasks pinned to Core 1
     xTaskCreatePinnedToCore(

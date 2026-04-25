@@ -331,9 +331,24 @@ int wifi_scan(wifi_scan_result_t* results, int max_results)
 
     uint16_t fetch = (ap_count > (uint16_t)max_results) ? (uint16_t)max_results : ap_count;
     wifi_ap_record_t* records = (wifi_ap_record_t*)malloc(fetch * sizeof(wifi_ap_record_t));
-    if (!records) return 0;
+    if (!records) {
+        // Clear the driver's internal AP list even on alloc failure so the
+        // next scan starts from a clean slate.
+        esp_wifi_clear_ap_list();
+        return 0;
+    }
 
-    esp_wifi_scan_get_ap_records(&fetch, records);
+    // Snapshot fetch so the loop bound is decoupled from any value the
+    // driver writes back into the variable mid-call.
+    uint16_t requested = fetch;
+    esp_err_t get_err = esp_wifi_scan_get_ap_records(&fetch, records);
+    if (get_err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_scan_get_ap_records: %s", esp_err_to_name(get_err));
+        free(records);
+        esp_wifi_clear_ap_list();
+        return 0;
+    }
+    if (fetch > requested) fetch = requested;  // defensive
 
     for (int i = 0; i < (int)fetch; i++) {
         strncpy(results[i].ssid, (const char*)records[i].ssid, 32);
@@ -343,5 +358,8 @@ int wifi_scan(wifi_scan_result_t* results, int max_results)
     }
 
     free(records);
+    // get_ap_records normally drains the internal buffer; call clear
+    // explicitly to make the cleanup contract obvious.
+    esp_wifi_clear_ap_list();
     return (int)fetch;
 }

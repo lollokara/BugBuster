@@ -119,6 +119,7 @@ struct DeviceState {
 
     // I2C device states (updated by i2c poll task)
     bool             i2cOk;             // I2C bus healthy
+    bool             muxOk;             // ADGS2414D MUX matrix init succeeded
     DS4424State      idac;              // DS4424 IDAC state
     Husb238State     usbpd;             // HUSB238 USB-PD state
     PCA9535State     ioexp;             // PCA9535 GPIO expander state

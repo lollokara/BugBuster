@@ -14,6 +14,8 @@
 #include "esp_log.h"
 #include "esp_spiffs.h"
 #include "esp_timer.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
 
 #include "tasks.h"
 #include "config.h"
@@ -437,15 +439,42 @@ static esp_err_t handle_static_asset(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Path too long");
     }
 
-    FILE *f = fopen(fs_path, "rb");
+    // If the build emitted a precompressed sibling (vite-config.ts gzipEmitter)
+    // and the browser advertises gzip support, prefer that. Saves ~70% on
+    // text/* assets and is purely a transport optimization — clients that
+    // omit Accept-Encoding still get the uncompressed file.
+    bool serve_gzipped = false;
+    char gz_path[160];
+    char accept_enc[64] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Accept-Encoding", accept_enc,
+                                    sizeof(accept_enc)) == ESP_OK &&
+        strstr(accept_enc, "gzip") != NULL) {
+        if (snprintf(gz_path, sizeof(gz_path), "%s.gz", fs_path) >= 0 &&
+            (size_t)snprintf(NULL, 0, "%s.gz", fs_path) < sizeof(gz_path)) {
+            FILE *gf = fopen(gz_path, "rb");
+            if (gf) {
+                fclose(gf);
+                serve_gzipped = true;
+            }
+        }
+    }
+
+    const char *open_path = serve_gzipped ? gz_path : fs_path;
+    FILE *f = fopen(open_path, "rb");
     if (!f) {
-        ESP_LOGW(TAG, "Asset not found: %s", fs_path);
+        ESP_LOGW(TAG, "Asset not found: %s", open_path);
         set_cors_headers(req);
         return httpd_resp_send_404(req);
     }
 
     set_cors_headers(req);
     httpd_resp_set_type(req, mime_from_path(fs_path));
+    if (serve_gzipped) {
+        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+        // Vary so an HTTP cache does not feed a gzip body to a client that
+        // only accepts identity (rare, but free correctness).
+        httpd_resp_set_hdr(req, "Vary", "Accept-Encoding");
+    }
     // Hashed filenames are cache-safe; tune to taste.
     httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000, immutable");
 
@@ -469,6 +498,8 @@ static esp_err_t handle_get_status(httpd_req_t *req)
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         add_bool_alias(root, "spiOk", "spi_ok", g_deviceState.spiOk);
+        add_bool_alias(root, "i2cOk", "i2c_ok", g_deviceState.i2cOk);
+        add_bool_alias(root, "muxOk", "mux_ok", g_deviceState.muxOk);
         cJSON_AddNumberToObject(root, "dieTemp", g_deviceState.dieTemperature);
         cJSON_AddNumberToObject(root, "die_temp_c", g_deviceState.dieTemperature);
         add_number_alias(root, "alertStatus", "alert_status", g_deviceState.alertStatus);
@@ -523,6 +554,12 @@ static esp_err_t handle_get_status(httpd_req_t *req)
         cJSON_Delete(root);
         return send_error(req, 503, "State mutex timeout");
     }
+
+    // Heap telemetry — cheap to compute, free to ship, makes leaks obvious
+    // in the desktop status bar / web overview without needing a CLI shell.
+    cJSON_AddNumberToObject(root, "freeHeap", (double)esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root, "minFreeHeap", (double)esp_get_minimum_free_heap_size());
+    cJSON_AddNumberToObject(root, "uptimeMs", (double)millis_now());
 
     return send_json(req, root);
 }
@@ -635,6 +672,128 @@ static esp_err_t handle_get_scope(httpd_req_t *req)
         cJSON_AddNumberToObject(root, "seq", 0);
     }
     return send_json(req, root);
+}
+
+// GET /api/scope/stream  — Server-Sent Events stream of scope buckets.
+//
+// Replaces the old 30 Hz polling loop on the web client. Holds the http
+// connection open and writes one `data: { ... }\n\n` event whenever new
+// buckets arrive (i.e. whenever `sb.seq` advances past the last seq we
+// emitted). Uses non-blocking-ish chunked sends; `httpd_resp_send_chunk`
+// returns ESP_FAIL the moment the client TCP socket goes away (tab closed,
+// reconnect, navigation), which is our cue to exit and free the worker.
+//
+// Caveats:
+// - Holds one ESP-IDF httpd worker for the duration of the stream. With the
+//   current pool size and a single browser this is fine; if multiple tabs
+//   ever open the scope concurrently we may need to bump
+//   CONFIG_HTTPD_MAX_OPEN_SOCKETS.
+// - Iterates at ~10 Hz with vTaskDelay so it doesn't spin; this caps event
+//   latency at ~100 ms. For a homemade scope that's well below human
+//   perception and it lets the HTTP socket close quickly when the tab is
+//   hidden.
+static esp_err_t handle_get_scope_stream(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/event-stream");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    httpd_resp_set_hdr(req, "Connection", "keep-alive");
+    httpd_resp_set_hdr(req, "X-Accel-Buffering", "no");
+    set_cors_headers(req);
+
+    // Send a leading retry hint so the browser's auto-reconnect spaces out
+    // a little if the device reboots. EventSource default is 3 s — bump to
+    // 5 s to be gentler on the ESP32.
+    httpd_resp_send_chunk(req, "retry: 5000\n\n", 13);
+
+    uint16_t last_seq = 0;
+    bool primed = false;
+    // Heartbeat keeps proxies / NAT translations from collapsing the
+    // connection while no buckets are produced.
+    uint32_t last_heartbeat_ms = millis_now();
+    const uint32_t HEARTBEAT_MS = 15000;
+
+    for (;;) {
+        bool sent_data = false;
+
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            const ScopeBuffer& sb = g_deviceState.scope;
+            uint16_t cur_seq = sb.seq;
+            uint16_t head    = sb.head;
+
+            if (!primed) {
+                // First message after connect: send the most recent bucket
+                // so the client has something to draw immediately rather
+                // than waiting for a fresh bucket to be produced.
+                if (cur_seq != 0) {
+                    last_seq = (uint16_t)(cur_seq - 1);
+                }
+                primed = true;
+            }
+
+            uint16_t avail = (uint16_t)(cur_seq - last_seq);
+            if (avail > 0) {
+                if (avail > SCOPE_BUF_SIZE) avail = SCOPE_BUF_SIZE;
+                if (avail > 32) avail = 32;
+
+                cJSON *root = cJSON_CreateObject();
+                cJSON_AddNumberToObject(root, "seq", cur_seq);
+                cJSON *samples = cJSON_AddArrayToObject(root, "samples");
+
+                uint16_t start = (head + SCOPE_BUF_SIZE - avail) % SCOPE_BUF_SIZE;
+                for (uint16_t n = 0; n < avail; n++) {
+                    uint16_t idx = (start + n) % SCOPE_BUF_SIZE;
+                    const ScopeBucket& bk = sb.buckets[idx];
+                    cJSON *pt = cJSON_CreateArray();
+                    cJSON_AddItemToArray(pt, cJSON_CreateNumber(bk.timestamp_ms));
+                    float invCount = (bk.count > 0) ? (1.0f / bk.count) : 0.0f;
+                    for (uint8_t ch = 0; ch < 4; ch++) {
+                        cJSON_AddItemToArray(pt, cJSON_CreateNumber(bk.vSum[ch] * invCount));
+                    }
+                    for (uint8_t ch = 0; ch < 4; ch++) {
+                        cJSON_AddItemToArray(pt, cJSON_CreateNumber(bk.vMin[ch]));
+                        cJSON_AddItemToArray(pt, cJSON_CreateNumber(bk.vMax[ch]));
+                    }
+                    cJSON_AddItemToArray(samples, pt);
+                }
+                xSemaphoreGive(g_stateMutex);
+
+                char *body = cJSON_PrintUnformatted(root);
+                cJSON_Delete(root);
+                if (!body) {
+                    return ESP_FAIL;
+                }
+                // SSE wire format: "data: <json>\n\n"
+                size_t blen = strlen(body);
+                if (httpd_resp_send_chunk(req, "data: ", 6) != ESP_OK ||
+                    httpd_resp_send_chunk(req, body, blen) != ESP_OK ||
+                    httpd_resp_send_chunk(req, "\n\n", 2) != ESP_OK) {
+                    free(body);
+                    return ESP_OK; // client disconnected — clean exit
+                }
+                free(body);
+
+                last_seq = cur_seq;
+                last_heartbeat_ms = millis_now();
+                sent_data = true;
+            } else {
+                xSemaphoreGive(g_stateMutex);
+            }
+        }
+
+        // Heartbeat (an SSE comment line) keeps the connection alive across
+        // intermediate proxies even when no scope buckets are flowing.
+        if (!sent_data) {
+            uint32_t now = millis_now();
+            if (now - last_heartbeat_ms >= HEARTBEAT_MS) {
+                if (httpd_resp_send_chunk(req, ": keep-alive\n\n", 14) != ESP_OK) {
+                    return ESP_OK;
+                }
+                last_heartbeat_ms = now;
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
 }
 
 // GET /api/diagnostics
@@ -1552,6 +1711,81 @@ static esp_err_t handle_get_selftest_supplies_cached(httpd_req_t *req)
         cJSON_AddNumberToObject(obj, "voltageV", sv->voltage[i]);
         cJSON_AddItemToArray(arr, obj);
     }
+    return send_json(req, root);
+}
+
+// GET /api/overview — coalesced snapshot for the on-device Overview tab.
+// One request returns the same data the tab used to fetch via 5 separate
+// calls (idac, ioexp, selftest/supply/{0,1,2}). Drops Overview's polling
+// budget from 5 reqs / 2.5 s to 1 req / 2.5 s. Layout is intentionally
+// flat — older clients can keep using the per-resource endpoints.
+static esp_err_t handle_get_overview(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+
+    // ---- IDAC: { present, channels:[{id,code,targetV,...}, ...] } ----
+    {
+        const DS4424State *st = ds4424_get_state();
+        cJSON *idac = cJSON_AddObjectToObject(root, "idac");
+        cJSON_AddBoolToObject(idac, "present", st->present);
+        cJSON *channels = cJSON_AddArrayToObject(idac, "channels");
+        for (uint8_t ch = 0; ch < 3; ch++) {
+            cJSON *obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(obj, "id", ch);
+            cJSON_AddNumberToObject(obj, "code", st->state[ch].dac_code);
+            cJSON_AddNumberToObject(obj, "targetV", st->state[ch].target_v);
+            cJSON_AddNumberToObject(obj, "midpointV", st->config[ch].midpoint_v);
+            cJSON_AddNumberToObject(obj, "vMin", st->config[ch].v_min);
+            cJSON_AddNumberToObject(obj, "vMax", st->config[ch].v_max);
+            cJSON_AddNumberToObject(obj, "stepMv", ds4424_step_mv(ch));
+            cJSON_AddBoolToObject(obj, "calibrated", st->cal[ch].valid);
+            const char *names[] = {"LevelShift", "V_ADJ1", "V_ADJ2"};
+            cJSON_AddStringToObject(obj, "name", names[ch]);
+            float poly[4] = {0};
+            bool have_poly = ds4424_cal_fit_cubic(ch, poly);
+            cJSON_AddBoolToObject(obj, "polyValid", have_poly);
+            cJSON *poly_arr = cJSON_AddArrayToObject(obj, "calPoly");
+            for (int i = 0; i < 4; i++) cJSON_AddNumberToObject(poly_arr, NULL, (double)poly[i]);
+            cJSON_AddItemToArray(channels, obj);
+        }
+    }
+
+    // ---- IOExp: enables + powerGood (no need for raw input/output regs
+    // here; Overview only consumes `enables`). ----
+    {
+        pca9535_update();
+        const PCA9535State *st = pca9535_get_state();
+        cJSON *ioexp = cJSON_AddObjectToObject(root, "ioexp");
+        cJSON_AddBoolToObject(ioexp, "present", st->present);
+        cJSON *en = cJSON_AddObjectToObject(ioexp, "enables");
+        cJSON_AddBoolToObject(en, "vadj1", st->vadj1_en);
+        cJSON_AddBoolToObject(en, "vadj2", st->vadj2_en);
+        cJSON_AddBoolToObject(en, "analog15v", st->en_15v);
+        cJSON_AddBoolToObject(en, "mux", st->en_mux);
+        cJSON_AddBoolToObject(en, "usbHub", st->en_usb_hub);
+        cJSON *pg = cJSON_AddObjectToObject(ioexp, "powerGood");
+        cJSON_AddBoolToObject(pg, "logic", st->logic_pg);
+        cJSON_AddBoolToObject(pg, "vadj1", st->vadj1_pg);
+        cJSON_AddBoolToObject(pg, "vadj2", st->vadj2_pg);
+    }
+
+    // ---- Supplies: rails 0..2 measured voltages. Mirrors the wire format
+    // of /api/selftest/supply/{rail} so the UI can fall back to the legacy
+    // 3-call path for older firmware. ----
+    {
+        cJSON *rails = cJSON_AddArrayToObject(root, "rails");
+        static const char *names[] = {"VADJ1", "VADJ2", "3V3_ADJ"};
+        for (uint8_t i = 0; i < 3; i++) {
+            float voltage = selftest_measure_supply(i);
+            cJSON *obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(obj, "rail", i);
+            cJSON_AddStringToObject(obj, "name", names[i]);
+            cJSON_AddNumberToObject(obj, "voltage", voltage);
+            cJSON_AddBoolToObject(obj, "ok", voltage >= 0);
+            cJSON_AddItemToArray(rails, obj);
+        }
+    }
+
     return send_json(req, root);
 }
 
@@ -2920,6 +3154,14 @@ void initWebServer(void)
     config.max_uri_handlers = 72;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     config.stack_size       = 12288;  // Increased for OTA buffer
+    // SSE handlers (e.g. /api/scope/stream) hold a worker socket open for
+    // the lifetime of the browser tab. lru_purge_enable lets the httpd
+    // evict the least-recently-used connection when a new one arrives, so
+    // a forgotten tab can't permanently starve other clients.
+    config.lru_purge_enable = true;
+    // Bump from the default 7 — leaves headroom for one persistent SSE +
+    // concurrent REST polls without deadlocking.
+    config.max_open_sockets = 10;
 
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {
@@ -2972,6 +3214,11 @@ void initWebServer(void)
         .uri = "/api/scope", .method = HTTP_GET, .handler = handle_get_scope, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_scope);
+
+    httpd_uri_t uri_scope_stream = {
+        .uri = "/api/scope/stream", .method = HTTP_GET, .handler = handle_get_scope_stream, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_scope_stream);
 
     httpd_uri_t uri_gpio = {
         .uri = "/api/gpio", .method = HTTP_GET, .handler = handle_get_gpio, .user_ctx = NULL
@@ -3043,6 +3290,11 @@ void initWebServer(void)
         .uri = "/api/selftest", .method = HTTP_GET, .handler = handle_get_selftest, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_selftest_get);
+
+    httpd_uri_t uri_overview = {
+        .uri = "/api/overview", .method = HTTP_GET, .handler = handle_get_overview, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_overview);
 
     httpd_uri_t uri_selftest_supply = {
         .uri = "/api/selftest/supply/*", .method = HTTP_GET, .handler = handle_get_selftest_supply, .user_ctx = NULL

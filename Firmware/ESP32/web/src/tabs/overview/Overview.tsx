@@ -95,26 +95,30 @@ export function Overview() {
   }, [status]);
 
   useEffect(() => {
+    // Single coalesced fetch — the web bundle and firmware ship together,
+    // so we don't bother probing for the legacy 5-call path. If a user runs
+    // mismatched versions they'll see one tick of stale data and a console
+    // error, which is acceptable and self-healing on the next reflash.
     let alive = true;
     const tick = async () => {
-      const [idacResult, ioexpResult, r0, r1, r2] = await Promise.allSettled([
-        api.idac(),
-        api.ioexp(),
-        api.selftestSupply(0),
-        api.selftestSupply(1),
-        api.selftestSupply(2),
-      ]);
-      if (!alive) return;
-      if (idacResult.status === "fulfilled") setIdac(idacResult.value);
-      if (ioexpResult.status === "fulfilled") setIoexp(ioexpResult.value);
-      const next: Record<number, number> = {};
-      [r0, r1, r2].forEach((result, rail) => {
-        if (result.status === "fulfilled") {
-          const voltage = Number((result.value as any)?.voltage ?? (result.value as any)?.voltageV ?? NaN);
-          if (Number.isFinite(voltage)) next[rail] = voltage;
+      try {
+        const snap = await api.overview();
+        if (!alive) return;
+        if (snap.idac) setIdac(snap.idac);
+        if (snap.ioexp) setIoexp(snap.ioexp);
+        if (Array.isArray(snap.rails)) {
+          const next: Record<number, number> = {};
+          for (const r of snap.rails) {
+            const v = Number(r?.voltage ?? NaN);
+            if (Number.isFinite(v)) next[r.rail] = v;
+          }
+          setRails((prev) => ({ ...prev, ...next }));
         }
-      });
-      setRails((prev) => ({ ...prev, ...next }));
+      } catch (e) {
+        if (!(e instanceof PairingRequiredError)) {
+          console.warn("overview poll failed", e);
+        }
+      }
       if (alive) window.setTimeout(tick, 2500);
     };
     void tick();
