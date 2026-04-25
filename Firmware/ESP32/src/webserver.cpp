@@ -475,8 +475,11 @@ static esp_err_t handle_static_asset(httpd_req_t *req)
         // only accepts identity (rare, but free correctness).
         httpd_resp_set_hdr(req, "Vary", "Accept-Encoding");
     }
-    // Hashed filenames are cache-safe; tune to taste.
-    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000, immutable");
+    // Short max-age without immutable — SPIFFS assets can change on the same
+    // URL when firmware is redeployed without a content-hash change (e.g. after
+    // a define-only rebuild).  5 minutes is enough to avoid per-click fetches
+    // while still letting browsers pick up fresh content after a SPIFFS update.
+    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=300");
 
     char buf[1024];
     size_t n;
@@ -3007,6 +3010,104 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
     return ret;
 }
 
+// POST /api/ota/uploadfs — Upload SPIFFS filesystem image (binary body = spiffs.bin)
+// Unmounts SPIFFS, writes the raw image to the partition, and remounts.
+// This lets the desktop app / curl push a new web UI without USB access.
+static esp_err_t handle_uploadfs(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
+    if (!part) {
+        return send_error(req, 500, "SPIFFS partition not found");
+    }
+
+    if (req->content_len <= 0 || (size_t)req->content_len > part->size) {
+        return send_error(req, 400, "Invalid SPIFFS image size");
+    }
+
+    ESP_LOGI(TAG, "SPIFFS upload started: %d bytes -> partition '%s' (%lu bytes)",
+             req->content_len, part->label, (unsigned long)part->size);
+
+    // Must unmount before writing to the raw partition
+    esp_vfs_spiffs_unregister(NULL);
+
+    esp_err_t err = esp_partition_erase_range(part, 0, part->size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SPIFFS erase failed: %s", esp_err_to_name(err));
+        esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = NULL,
+                                       .max_files = 5, .format_if_mount_failed = false };
+        esp_vfs_spiffs_register(&conf);
+        return send_error(req, 500, esp_err_to_name(err));
+    }
+
+    char *buf = (char*)malloc(4096);
+    if (!buf) {
+        esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = NULL,
+                                       .max_files = 5, .format_if_mount_failed = false };
+        esp_vfs_spiffs_register(&conf);
+        return send_error(req, 500, "Out of memory");
+    }
+
+    int remaining = req->content_len;
+    int offset    = 0;
+    bool failed   = false;
+
+    while (remaining > 0) {
+        int to_read = (remaining > 4096) ? 4096 : remaining;
+        // Pad last chunk to 4-byte boundary (flash write requirement)
+        int to_write = (to_read + 3) & ~3;
+        if (to_write > to_read) memset(buf + to_read, 0xFF, to_write - to_read);
+
+        int received = httpd_req_recv(req, buf, to_read);
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ESP_LOGE(TAG, "SPIFFS recv error at offset %d", offset);
+            failed = true;
+            break;
+        }
+
+        int actual_write = (received + 3) & ~3;
+        err = esp_partition_write(part, offset, buf, actual_write);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "SPIFFS write failed at offset %d: %s", offset, esp_err_to_name(err));
+            failed = true;
+            break;
+        }
+
+        remaining -= received;
+        offset    += received;
+
+        if (offset % (64 * 1024) < 4096) {
+            ESP_LOGI(TAG, "SPIFFS upload: %d / %d bytes (%d%%)",
+                     offset, req->content_len, offset * 100 / req->content_len);
+        }
+    }
+
+    free(buf);
+
+    // Remount regardless of outcome so the device stays usable
+    esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = NULL,
+                                   .max_files = 5, .format_if_mount_failed = false };
+    err = esp_vfs_spiffs_register(&conf);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SPIFFS remount failed: %s", esp_err_to_name(err));
+    }
+
+    if (failed) {
+        return send_error(req, 500, "SPIFFS write failed");
+    }
+
+    ESP_LOGI(TAG, "SPIFFS upload complete: %d bytes", offset);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddNumberToObject(root, "bytesWritten", offset);
+    return send_json(req, root);
+}
+
 // =============================================================================
 // Board profile + pairing handlers
 // =============================================================================
@@ -3475,6 +3576,11 @@ void initWebServer(void)
         .uri = "/api/ota/upload", .method = HTTP_POST, .handler = handle_ota_upload, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_ota);
+
+    httpd_uri_t uri_uploadfs = {
+        .uri = "/api/ota/uploadfs", .method = HTTP_POST, .handler = handle_uploadfs, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_uploadfs);
 
     // ----- Board profile + pairing -----
 

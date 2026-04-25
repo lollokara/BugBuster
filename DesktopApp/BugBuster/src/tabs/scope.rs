@@ -658,7 +658,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
             let draw_start = js_sys::Date::now();
             let Some(canvas) = canvas_ref.get() else { continue };
-            let canvas: HtmlCanvasElement = canvas.into();
+            let canvas: HtmlCanvasElement = canvas;
             if first_iter {
                 canvas.set_width(0);
                 canvas.set_height(0);

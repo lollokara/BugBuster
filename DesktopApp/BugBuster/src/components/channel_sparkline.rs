@@ -31,7 +31,7 @@ pub fn ChannelSparkline(
         // Defer to next tick so the canvas is mounted and sized.
         spawn_local(async move {
             let Some(canvas_el) = canvas_ref.get() else { return };
-            let canvas: HtmlCanvasElement = canvas_el.into();
+            let canvas: HtmlCanvasElement = canvas_el;
 
             let dpr = web_sys::window()
                 .map(|w| w.device_pixel_ratio())
@@ -66,7 +66,7 @@ pub fn ChannelSparkline(
             // Baseline (zero line if within range)
             let span = (vmax - vmin).max(1e-6);
             if vmin < 0.0 && vmax > 0.0 {
-                let y0 = h as f64 - (((-vmin) / span) as f64) * h as f64;
+                let y0 = h - (((-vmin) / span) as f64) * h;
                 ctx.set_stroke_style_str("rgba(148,163,184,0.15)");
                 ctx.set_line_width(0.5);
                 ctx.begin_path();
@@ -80,11 +80,11 @@ pub fn ChannelSparkline(
             ctx.set_line_width(1.2);
             ctx.begin_path();
             let n = vs.len();
-            let step = (w as f64) / ((n - 1).max(1) as f64);
+            let step = w / ((n - 1).max(1) as f64);
             for (i, v) in vs.iter().enumerate() {
                 let x = i as f64 * step;
                 let norm = ((*v - vmin) / span).clamp(0.0, 1.0) as f64;
-                let y = h as f64 - norm * h as f64;
+                let y = h - norm * h;
                 if i == 0 {
                     ctx.move_to(x, y);
                 } else {

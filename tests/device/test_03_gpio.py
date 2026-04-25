@@ -7,7 +7,6 @@ and cycling through all 6 pins in OUTPUT mode.
 
 import time
 import pytest
-import bugbuster as bb
 from bugbuster import GpioMode
 from conftest import assert_no_faults
 

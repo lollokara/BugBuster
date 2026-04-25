@@ -6,7 +6,7 @@ and verify the parsers extract every field correctly.
 """
 
 import struct
-from typing import Optional, List
+from typing import Optional
 
 import pytest
 

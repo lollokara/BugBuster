@@ -18,6 +18,9 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (quicksetup_busy, set_quicksetup_busy) = signal(None::<u8>);
     let supply_codes: [RwSignal<i32>; 3] = std::array::from_fn(|_| RwSignal::new(0));
     let supply_dirty: [RwSignal<bool>; 3] = std::array::from_fn(|_| RwSignal::new(false));
+    // True while a selftest_worker_set command is in flight — prevents the 2 s
+    // poll loop from overwriting the optimistic worker_enabled toggle state.
+    let worker_pending: RwSignal<bool> = RwSignal::new(false);
 
     spawn_local(async move {
         refresh_quicksetup_slots(set_quicksetup_supported, set_quicksetup_slots).await;
@@ -34,9 +37,17 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let snap = state.get_untracked();
             if snap.spi_ok || !snap.channels.is_empty() {
                 if let Some(st) = fetch_selftest_status().await {
-                    set_selftest.set(st);
+                    if worker_pending.get_untracked() {
+                        // A toggle command is in flight — update boot/cal but
+                        // don't overwrite the optimistic worker_enabled state.
+                        set_selftest.update(|s| { s.boot = st.boot; s.cal = st.cal; });
+                    } else {
+                        set_selftest.set(st);
+                    }
                 } else if let Some(enabled) = fetch_selftest_worker_enabled().await {
-                    set_selftest.update(|s| s.worker_enabled = enabled);
+                    if !worker_pending.get_untracked() {
+                        set_selftest.update(|s| s.worker_enabled = enabled);
+                    }
                 }
                 if let Some(st) = fetch_idac_status().await {
                     set_idac.set(st);
@@ -73,13 +84,24 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             <div class="toggle" class:active=move || selftest.get().worker_enabled
                                 on:click=move |_| {
                                     let enabled = !selftest.get_untracked().worker_enabled;
+                                    // Optimistic update
                                     set_selftest.update(|s| {
                                         s.worker_enabled = enabled;
-                                        if !enabled {
-                                            s.supply_monitor_active = false;
-                                        }
+                                        if !enabled { s.supply_monitor_active = false; }
                                     });
-                                    send_selftest_worker(enabled);
+                                    worker_pending.set(true);
+                                    spawn_local(async move {
+                                        let actual = fetch_selftest_worker_set(enabled).await;
+                                        // Confirm with device-returned state (or keep optimistic on error)
+                                        set_selftest.update(|s| {
+                                            s.worker_enabled = actual.unwrap_or(enabled);
+                                            if !s.worker_enabled { s.supply_monitor_active = false; }
+                                        });
+                                        worker_pending.set(false);
+                                        let label = if enabled { "Enable supply monitor" } else { "Disable supply monitor" };
+                                        let kind = if actual.is_some() { "ok" } else { "err" };
+                                        show_toast(label, kind);
+                                    });
                                 }
                             ><div class="toggle-thumb"></div></div>
                         </label>
@@ -164,7 +186,8 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 {if ch_d_reserved {
                                     view! { <DiagnosticOverlay /> }.into_any()
                                 } else {
-                                    view! { <></> }.into_any()
+                                    let _: () = view! { <></> };
+                                    ().into_any()
                                 }}
                             </div>
                         }

@@ -80,7 +80,8 @@ def register(mcp) -> None:
         from bugbuster.hal import PortMode
         require_io_mode(hal, io, PortMode.RTD, "read_resistance")
 
-        result = {"io": io}
+        from typing import Any
+        result: dict[str, Any] = {"io": io}
         ohms = hal.read_resistance(io)
         result["resistance_ohm"] = round(ohms, 4)
 

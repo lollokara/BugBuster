@@ -14,6 +14,7 @@ enum CalState {
 
 const CAL_TOTAL_POINTS: u32 = 100;
 
+#[allow(clippy::too_many_arguments)]
 fn do_auto_cal(
     ch: u8,
     set_cal_state: WriteSignal<CalState>,
@@ -166,8 +167,8 @@ pub fn CalibrationTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px">
                                         // VLOGIC
                                         {
-                                            let has_cal = idac_st.channels.get(0).map(|c| c.calibrated).unwrap_or(false);
-                                            let midpoint = idac_st.channels.get(0).map(|c| c.midpoint_v).unwrap_or(0.0);
+                                            let has_cal = idac_st.channels.first().map(|c| c.calibrated).unwrap_or(false);
+                                            let midpoint = idac_st.channels.first().map(|c| c.midpoint_v).unwrap_or(0.0);
                                             view! {
                                                 <div class="card" style="border-left: 3px solid #10b981">
                                                     <div class="card-body" style="padding: 16px">

@@ -7,7 +7,6 @@ attempting to connect to a network (which would require credentials).
 """
 
 import pytest
-import bugbuster as bb
 from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(30)]  # WiFi scan can take up to 5 s

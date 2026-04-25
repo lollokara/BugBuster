@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use serde::{Serialize, Deserialize};
+use serde::Serialize;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
 use crate::tauri_bridge::*;
@@ -192,7 +192,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             slp(40).await;
             if !alive.get_untracked() { break; }
             let Some(cv) = cr.get() else { continue };
-            let cv: HtmlCanvasElement = cv.into();
+            let cv: HtmlCanvasElement = cv;
             let dp = web_sys::window().unwrap().device_pixel_ratio();
             let rc = cv.get_bounding_client_rect();
             let (w, h) = (rc.width(), rc.height());
@@ -522,7 +522,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     let on_click = move |e: leptos::ev::MouseEvent| {
         let Some(cv) = cr.get() else { return };
-        let cv: HtmlCanvasElement = cv.clone().into();
+        let cv: HtmlCanvasElement = cv.clone();
         let r = cv.get_bounding_client_rect();
         let (x, y, w, h) = (e.client_x() as f64 - r.left(), e.client_y() as f64 - r.top(), r.width(), r.height());
         let rt2 = 52.0; let rh2 = (h - rt2) / 4.0;

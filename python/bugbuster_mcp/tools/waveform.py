@@ -10,7 +10,7 @@ import math
 import logging
 from .. import session
 from ..safety import (
-    require_analog_io, require_hat, require_io_mode,
+    require_analog_io, require_io_mode,
     require_la_ready, validate_la_config, check_faults_post,
 )
 from ..config import (
@@ -18,7 +18,7 @@ from ..config import (
     SNAPSHOT_POLL_INTERVAL_S, MAX_SNAPSHOT_SAMPLES,
     WAVEFORM_PREVIEW_POINTS,
     LA_DEFAULT_RATE_HZ, LA_DEFAULT_DEPTH, LA_DEFAULT_CHANNELS,
-    LA_CAPTURE_TIMEOUT_S, LA_MAX_RATE_HZ,
+    LA_CAPTURE_TIMEOUT_S,
 )
 
 log = logging.getLogger(__name__)
@@ -375,8 +375,9 @@ def _timing_diagram(ch_data: list, n_channels: int, n_points: int) -> str:
             continue
         # Build a binary string from first n_points samples
         # ch_data[chi] is a flat list of 0/1 bits (one per sample)
-        row = []
-        samples = ch_data[chi]
+        row: list[str] = []
+        from typing import Any
+        samples: list[Any] = ch_data[chi]
         for t in range(n_points):
             if t < len(samples):
                 val = samples[t]

@@ -243,7 +243,7 @@ pub fn invoke_with_feedback(cmd: &str, args: JsValue, label: &str) {
                     show_toast(&format!("Failed: {}", label), "err");
                     log(&format!("CMD FAIL [{}]: {}", cmd, result_str));
                 } else {
-                    show_toast(&format!("{}", label), "ok");
+                    show_toast(&label.to_string(), "ok");
                 }
             }
             None => {
@@ -275,27 +275,6 @@ pub fn log(msg: &str) {
 // -----------------------------------------------------------------------------
 // Supply Voltages Cache
 // -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupplyRail {
-    pub rail: u8,
-    pub name: String,
-    pub voltage_v: f32,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SelftestSuppliesCached {
-    pub available: bool,
-    pub timestamp_ms: u32,
-    pub rails: Vec<SupplyRail>,
-}
-
-pub async fn fetch_selftest_supplies_cached() -> Option<SelftestSuppliesCached> {
-    let result = invoke("selftest_supplies_cached", JsValue::NULL).await;
-    serde_wasm_bindgen::from_value(result).ok()
-}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -338,18 +317,17 @@ pub async fn fetch_selftest_worker_enabled() -> Option<bool> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
-pub fn send_selftest_worker(enabled: bool) {
+/// Awaitable version of selftest_worker_set — returns the confirmed enabled state
+/// from the device (or None on error). Use this instead of send_selftest_worker
+/// when the caller needs to know the actual outcome before updating UI.
+pub async fn fetch_selftest_worker_set(enabled: bool) -> Option<bool> {
     #[derive(Serialize)]
     struct Args {
         enabled: bool,
     }
     let args = serde_wasm_bindgen::to_value(&Args { enabled }).unwrap();
-    let label = if enabled {
-        "Enable supply monitor"
-    } else {
-        "Disable supply monitor"
-    };
-    invoke_with_feedback("selftest_worker_set", args, label);
+    let result = try_invoke("selftest_worker_set", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
 }
 
 // -----------------------------------------------------------------------------
@@ -475,12 +453,11 @@ fn idac_point_voltage(ch: &IdacChannelState, code: i8) -> Option<f32> {
     for pair in pts.windows(2) {
         let c0 = pair[0].code;
         let c1 = pair[1].code;
-        if (code >= c0 && code <= c1) || (code <= c0 && code >= c1) {
-            if c1 != c0 {
+        if ((code >= c0 && code <= c1) || (code <= c0 && code >= c1))
+            && c1 != c0 {
                 let t = (code - c0) as f32 / (c1 - c0) as f32;
                 return Some(pair[0].voltage + t * (pair[1].voltage - pair[0].voltage));
             }
-        }
     }
     if code <= pts[0].code {
         Some(pts[0].voltage)
@@ -1007,6 +984,7 @@ pub async fn la_decode_i2c(
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn la_decode_spi(
     mosi: u8,
     miso: u8,

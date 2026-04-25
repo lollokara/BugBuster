@@ -51,3 +51,8 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 # Cache: bump with octal PSRAM (default 16 KB/32 KB is too small for external RAM workloads)
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
+
+# LWIP: raise socket limit so the httpd can open max_open_sockets=10 connections.
+# httpd reserves 3 sockets internally; 10 + 3 = 13, so 16 gives comfortable headroom.
+# Default LWIP_MAX_SOCKETS=7 is too small for SSE streaming + concurrent REST polls.
+CONFIG_LWIP_MAX_SOCKETS=16

@@ -19,7 +19,6 @@ SCOPE_DATA_EVT payload layout (matching client.py _handler):
 import math
 import struct
 import threading
-import time
 
 from bugbuster.constants import CmdId
 

@@ -7,7 +7,7 @@ pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (pd, set_pd) = signal(UsbPdState::default());
 
     // Poll USB PD status whenever device state updates
-    let set_pd_clone = set_pd.clone();
+    let set_pd_clone = set_pd;
     Effect::new(move |_| {
         let _ = state.get(); // subscribe to state changes
         spawn_local(async move {

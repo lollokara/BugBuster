@@ -30,10 +30,8 @@ from tests.mock.la_usb_host import (
     PKT_STOP,
     PKT_ERROR,
     STREAM_CMD_START,
-    STREAM_CMD_STOP,
     INFO_NONE,
     INFO_COMPRESSED,
-    INFO_START_REJECTED,
     _rle_decompress,
 )
 
@@ -263,7 +261,6 @@ class TestLaUsbBulk:
         overruns that abort the stream before the target duration is reached.
         """
         port = request.config.getoption("--device-usb")
-        import bugbuster as bb
 
         channels = 4
         rate_hz = 500_000

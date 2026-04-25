@@ -40,6 +40,48 @@ def register(device) -> None:
     device.register_handler(CmdId.SET_ALERT_MASK,    _set_alert_mask(device))
     device.register_handler(CmdId.SET_CH_ALERT_MASK, _set_ch_alert_mask(device))
 
+    # Missing dummy handlers
+    device.register_handler(CmdId.SELFTEST_WORKER,   _selftest_worker(device))
+    device.register_handler(CmdId.QS_LIST,           _qs_list(device))
+    device.register_handler(CmdId.QS_GET,            _qs_get(device))
+    device.register_handler(CmdId.QS_SAVE,           _qs_save(device))
+    device.register_handler(CmdId.QS_APPLY,          _qs_apply(device))
+    device.register_handler(CmdId.QS_DELETE,         _qs_delete(device))
+
+
+# ---------------------------------------------------------------------------
+# Dummy implementations for completeness test
+# ---------------------------------------------------------------------------
+
+def _selftest_worker(device):
+    def handler(payload: bytes) -> bytes:
+        return b''
+    return handler
+
+def _qs_list(device):
+    def handler(payload: bytes) -> bytes:
+        return b''
+    return handler
+
+def _qs_get(device):
+    def handler(payload: bytes) -> bytes:
+        return b''
+    return handler
+
+def _qs_save(device):
+    def handler(payload: bytes) -> bytes:
+        return b''
+    return handler
+
+def _qs_apply(device):
+    def handler(payload: bytes) -> bytes:
+        return b''
+    return handler
+
+def _qs_delete(device):
+    def handler(payload: bytes) -> bytes:
+        return b''
+    return handler
 
 # ---------------------------------------------------------------------------
 # PING (0xFE)

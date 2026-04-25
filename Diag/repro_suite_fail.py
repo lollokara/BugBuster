@@ -13,9 +13,7 @@ import bugbuster as bb
 from tests.mock.la_usb_host import (
     LaUsbHost,
     STREAM_CMD_START,
-    PKT_START,
     PKT_DATA,
-    PKT_STOP,
     LA_INTERFACE,
 )
 

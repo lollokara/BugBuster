@@ -6,7 +6,7 @@ Neither class calls super().__init__() to avoid importing serial/requests.
 """
 
 import threading
-from bugbuster.transport.usb import USBTransport, DeviceError
+from bugbuster.transport.usb import USBTransport
 from bugbuster.transport.http import HTTPTransport
 
 

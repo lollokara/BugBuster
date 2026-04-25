@@ -69,7 +69,8 @@ def register(mcp) -> None:
     def faults_resource() -> str:
         """Active hardware faults with remediation hints."""
         bb  = session.get_client()
-        out = {"faults": [], "fault_log": []}
+        from typing import Any
+        out: dict[str, Any] = {"faults": [], "fault_log": []}
         try:
             f = bb.get_faults()
             out["ad74416h_faults"] = f

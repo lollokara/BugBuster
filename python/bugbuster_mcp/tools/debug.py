@@ -7,7 +7,6 @@ Tools: setup_serial_bridge, setup_swd, uart_config
 from __future__ import annotations
 from .. import session
 from ..safety import require_valid_io, require_hat, check_faults_post
-from ..config import UART_PARITY_MAP, UART_STOP_BITS_MAP
 
 
 def register(mcp) -> None:
@@ -140,10 +139,10 @@ def register(mcp) -> None:
     @mcp.tool()
     def uart_config(
         bridge_id: int  = 0,
-        baudrate:  int  = None,
-        data_bits: int  = None,
-        parity:    str  = None,
-        stop_bits: int  = None,
+        baudrate:  Optional[int]  = None,
+        data_bits: Optional[int]  = None,
+        parity:    Optional[str]  = None,
+        stop_bits: Optional[int]  = None,
     ) -> dict:
         """
         Read or update UART bridge configuration.
@@ -181,7 +180,7 @@ def register(mcp) -> None:
         if parity:
             parity_key = parity.lower()
             if parity_key not in _PARITY_MAP:
-                raise ValueError(f"parity must be 'none', 'even', or 'odd'.")
+                raise ValueError("parity must be 'none', 'even', or 'odd'.")
             new_parity = _PARITY_MAP[parity_key]
         else:
             new_parity = cfg.get("parity", 0)

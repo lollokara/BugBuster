@@ -11,8 +11,6 @@ HTTP transport does not support streaming — that is tested separately.
 import time
 import threading
 import pytest
-import bugbuster as bb
-from bugbuster import ChannelFunction, AdcRate
 from conftest import assert_no_faults
 
 pytestmark = [
@@ -177,14 +175,14 @@ def test_scope_data_format(usb_device):
         assert "channels" in ev, f"Scope event missing 'channels': {list(ev.keys())}"
 
         channels = ev["channels"]
-        assert isinstance(channels, list), f"'channels' must be list"
+        assert isinstance(channels, list), "'channels' must be list"
         assert len(channels) == 4, f"Expected 4 scope channels, got {len(channels)}"
 
         for i, ch in enumerate(channels):
             assert "avg" in ch, f"Scope channel[{i}] missing 'avg'"
             assert "min" in ch, f"Scope channel[{i}] missing 'min'"
             assert "max" in ch, f"Scope channel[{i}] missing 'max'"
-            assert isinstance(ch["avg"], (int, float)), f"avg must be numeric"
+            assert isinstance(ch["avg"], (int, float)), "avg must be numeric"
             assert ch["min"] <= ch["avg"] <= ch["max"] or ch["min"] == ch["max"] == ch["avg"], (
                 f"Channel[{i}]: min <= avg <= max violated: {ch}"
             )

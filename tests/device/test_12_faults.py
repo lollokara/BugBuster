@@ -7,7 +7,6 @@ and DIN event callback registration.
 
 import time
 import pytest
-import bugbuster as bb
 from bugbuster import ChannelFunction
 
 pytestmark = [pytest.mark.timeout(10)]

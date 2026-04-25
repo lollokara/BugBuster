@@ -178,6 +178,19 @@ fn get_local_subnets() -> Vec<String> {
 async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDevice> {
     let url = format!("{}/api/device/info", addr);
     let resp = client.get(&url).send().await.ok()?;
+
+    // 403 means the device exists but requires an admin token — it's still a
+    // BugBuster; surface it so the connection path can retry with stored tokens.
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        return Some(DiscoveredDevice {
+            id: format!("http:{}", addr),
+            name: format!("BugBuster (WiFi: {})", addr),
+            transport: "http".to_string(),
+            address: addr.to_string(),
+            serial_number: None,
+        });
+    }
+
     if !resp.status().is_success() {
         return None;
     }

@@ -6,7 +6,6 @@ device presence when powered from a PD-capable source.
 """
 
 import pytest
-import bugbuster as bb
 from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(10)]

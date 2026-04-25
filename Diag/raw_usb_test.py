@@ -141,10 +141,10 @@ def run_cycle(dev: usb.core.Device, bbp, cycle: int, duration_s: float) -> bool:
         log("  No stale data")
 
     # ── 3. Send STREAM_START via BBP (HAT_CMD_LA_STREAM_START = 0x37) ──────────
-    log(f"\n[3] Sending START via BBP (hat_la_stream_start)...")
+    log("\n[3] Sending START via BBP (hat_la_stream_start)...")
     try:
         bbp.hat_la_stream_start()
-        log(f"  hat_la_stream_start() OK ✓")
+        log("  hat_la_stream_start() OK ✓")
     except Exception as e:
         log(f"  hat_la_stream_start() FAILED: {e}")
         return False
@@ -164,29 +164,29 @@ def run_cycle(dev: usb.core.Device, bbp, cycle: int, duration_s: float) -> bool:
                 if p["type"] == PKT_START:
                     got_start = True
                 elif p["type"] == PKT_ERROR:
-                    log(f"  ✗ START REJECTED — bb_la_start_stream() returned false")
-                    log(f"    This means LA state != IDLE or pio_loaded=false after configure")
+                    log("  ✗ START REJECTED — bb_la_start_stream() returned false")
+                    log("    This means LA state != IDLE or pio_loaded=false after configure")
             if got_start:
                 log("  ✓ PKT_START received — stream is live")
                 break
             buf.clear()   # parsed, clear for next read
         except usb.core.USBTimeoutError:
             log(f"  EP_IN silent for {time.monotonic()-t0:.2f}s (no data received at all)")
-            log(f"  Possible causes:")
-            log(f"    1. STREAM_CMD_START byte was not received by firmware (EP_OUT broken)")
-            log(f"    2. bb_la_start_stream() returned false but PKT_ERROR also lost")
-            log(f"    3. PKT_START queued but tud_vendor_n_write_available() returned 0")
+            log("  Possible causes:")
+            log("    1. STREAM_CMD_START byte was not received by firmware (EP_OUT broken)")
+            log("    2. bb_la_start_stream() returned false but PKT_ERROR also lost")
+            log("    3. PKT_START queued but tud_vendor_n_write_available() returned 0")
             break
         except Exception as e:
             log(f"  EP_IN read error: {e}")
             break
 
     if not got_start:
-        log(f"  ✗ FAILED to receive PKT_START")
-        log(f"  Running BBP stop to clean up device state...")
+        log("  ✗ FAILED to receive PKT_START")
+        log("  Running BBP stop to clean up device state...")
         try:
             bbp.hat_la_stop()
-            log(f"  hat_la_stop() OK (cleanup)")
+            log("  hat_la_stop() OK (cleanup)")
         except Exception as e:
             log(f"  hat_la_stop() FAILED (cleanup): {e}")
         time.sleep(0.5)
@@ -314,7 +314,7 @@ def main():
 
     log(f"raw_usb_test — port={args.port} cycles={args.cycles} duration={args.duration}s")
     log(f"RP2040 vendor bulk: VID={VID:#06x} PID={PID:#06x} interface={LA_INTERFACE}")
-    log(f"BBP (ESP32 CDC) and vendor bulk (RP2040) are on separate USB devices — no conflict")
+    log("BBP (ESP32 CDC) and vendor bulk (RP2040) are on separate USB devices — no conflict")
 
     # ── Find and claim RP2040 vendor bulk ─────────────────────────────────────
     log("\nFinding RP2040 vendor bulk device...")

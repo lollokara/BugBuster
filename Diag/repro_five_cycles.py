@@ -40,7 +40,6 @@ Options:
 import argparse
 import sys
 import time
-import traceback
 
 sys.path.insert(0, "python")
 
@@ -167,7 +166,7 @@ def run_cycle(
     log(f"{'='*70}")
 
     # ── Phase 1: _stop_preflight_and_configure ─────────────────────────
-    log(f"\n  [Phase 1] _stop_preflight_and_configure (mirrors pytest fixture)")
+    log("\n  [Phase 1] _stop_preflight_and_configure (mirrors pytest fixture)")
 
     # 1a. Connect BBP (transient, like the test does)
     bbp = keep_bbp_handle
@@ -223,7 +222,7 @@ def run_cycle(
             last_err = e
 
     if not configured:
-        log(f"  ✗ CONFIG FAILED after 5 attempts — this is the 0x11 cascade!")
+        log("  ✗ CONFIG FAILED after 5 attempts — this is the 0x11 cascade!")
         log(f"  ✗ Last error: {last_err}")
         # Diagnostic: try to get status even though configure failed
         try:
@@ -247,7 +246,7 @@ def run_cycle(
     if keep_bbp_handle is None:
         try:
             bbp.disconnect()
-            log(f"  BBP disconnected (before vendor bulk phase)")
+            log("  BBP disconnected (before vendor bulk phase)")
         except Exception as e:
             log(f"  BBP disconnect FAILED: {e}")
 
@@ -256,7 +255,7 @@ def run_cycle(
         usb.util.release_interface(usb_dev, LA_INTERFACE)
         time.sleep(0.05)
         usb.util.claim_interface(usb_dev, LA_INTERFACE)
-        log(f"  Vendor bulk interface re-claimed (fresh)")
+        log("  Vendor bulk interface re-claimed (fresh)")
     except Exception as e:
         log(f"  Interface re-claim FAILED: {e}")
 
@@ -265,7 +264,7 @@ def run_cycle(
     if stale:
         log(f"  Drained {stale}B stale EP_IN data")
     else:
-        log(f"  No stale EP_IN data")
+        log("  No stale EP_IN data")
 
     # ── Phase 2: stream_capture (mirrors la_host.stream_capture) ───────
     log(f"\n  [Phase 2] stream_capture (duration={duration_s}s)")
@@ -302,7 +301,7 @@ def run_cycle(
         except: pass
 
     # 2b. Wait for PKT_START
-    log(f"  Waiting for PKT_START (timeout=2s)...")
+    log("  Waiting for PKT_START (timeout=2s)...")
     got_start = False
     stream_buf = bytearray()
     t0 = time.monotonic()
@@ -342,7 +341,7 @@ def run_cycle(
             break
 
     if not got_start:
-        log(f"  ✗ FAILED to receive PKT_START")
+        log("  ✗ FAILED to receive PKT_START")
         return False, "no_pkt_start"
 
     # 2c. Collect DATA packets for duration_s
@@ -408,7 +407,7 @@ def run_cycle(
             if ptype == PKT_DATA:
                 local_drain_pkts += 1
             elif ptype == PKT_STOP:
-                log(f"  PKT_STOP found in local buffer (firmware self-stopped)")
+                log("  PKT_STOP found in local buffer (firmware self-stopped)")
                 early_stop = True
                 break
         if local_drain_pkts:
@@ -438,7 +437,7 @@ def run_cycle(
                 except: pass
 
         # Sleep 0.5s — mirrors _stop_stream_via_bbp
-        log(f"  Sleeping 0.5s (endpoint rearm window)...")
+        log("  Sleeping 0.5s (endpoint rearm window)...")
         time.sleep(0.5)
 
     # Final status check
@@ -494,9 +493,9 @@ def main():
 
     log(f"repro_five_cycles — port={args.port} cycles={args.cycles} "
         f"duration={args.duration}s keep_bbp={args.keep_bbp}")
-    log(f"Reproducing: test_stream_five_cycles (5-cycle start/stop with "
-        f"_stop_preflight_and_configure between each cycle)")
-    log(f"Looking for: 0x11 error on hat_la_configure() after multiple cycles")
+    log("Reproducing: test_stream_five_cycles (5-cycle start/stop with "
+        "_stop_preflight_and_configure between each cycle)")
+    log("Looking for: 0x11 error on hat_la_configure() after multiple cycles")
 
     # Find RP2040 vendor bulk device
     log("\nFinding RP2040 vendor bulk device...")
@@ -593,16 +592,16 @@ def main():
         first_fail = next((c, r) for c, ok, r in results if not ok)
         log(f"  First failure at cycle {first_fail[0]}: {first_fail[1]}")
         if "0x11" in str(first_fail[1]) or "configure_failed" in str(first_fail[1]):
-            log(f"  Root cause: 0x11 = UART sync loss between ESP32 and RP2040")
-            log(f"  The RP2040 is likely still in STREAMING state when configure")
-            log(f"  is called. bb_la_configure() rejects it (state != IDLE/ERROR)")
-            log(f"  and sends HAT_RSP_ERROR over BB_UART. The ESP32 misinterprets")
-            log(f"  the response, losing UART framing → all subsequent BBP commands")
-            log(f"  fail with 0x11 (which is actually CmdId.SET_DAC_CODE being read")
-            log(f"  as an error code byte).")
-            log(f"")
-            log(f"  Likely race: s_streaming_session or la_state not fully cleared")
-            log(f"  before Core 1 processes the next hat_la_configure() via BBP.")
+            log("  Root cause: 0x11 = UART sync loss between ESP32 and RP2040")
+            log("  The RP2040 is likely still in STREAMING state when configure")
+            log("  is called. bb_la_configure() rejects it (state != IDLE/ERROR)")
+            log("  and sends HAT_RSP_ERROR over BB_UART. The ESP32 misinterprets")
+            log("  the response, losing UART framing → all subsequent BBP commands")
+            log("  fail with 0x11 (which is actually CmdId.SET_DAC_CODE being read")
+            log("  as an error code byte).")
+            log("")
+            log("  Likely race: s_streaming_session or la_state not fully cleared")
+            log("  before Core 1 processes the next hat_la_configure() via BBP.")
         log(f"{'='*70}")
 
     sys.exit(0 if failed == 0 else 1)

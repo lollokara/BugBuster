@@ -8,7 +8,6 @@ Provides:
   - Session-scoped autouse reset fixture
 """
 
-import time
 import pytest
 import bugbuster as bb
 from bugbuster import ChannelFunction

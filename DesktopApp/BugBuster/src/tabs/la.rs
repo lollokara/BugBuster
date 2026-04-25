@@ -18,7 +18,7 @@ const MINIMAP_HEIGHT: f64 = 28.0;
 const SIGNAL_MARGIN: f64 = 8.0;
 
 thread_local! {
-    static LAST_CANVAS_SIZE: Cell<(u32, u32, u32)> = Cell::new((0, 0, 0));
+    static LAST_CANVAS_SIZE: Cell<(u32, u32, u32)> = const { Cell::new((0, 0, 0)) };
 }
 
 fn format_time(seconds: f64) -> String {
@@ -61,7 +61,7 @@ fn reformat_ann(text: &str, fmt: &str, ann_type: &str) -> String {
             "dec" => format!("{}{}", v, suffix),
             "ascii" => {
                 let b = v as u8;
-                if b >= 0x20 && b <= 0x7E {
+                if (0x20..=0x7E).contains(&b) {
                     format!("'{}'", b as char)
                 } else {
                     format!("\\x{:02X}", v)
@@ -149,7 +149,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (cursor_sample, set_cursor_sample) = signal(Option::<u64>::None);
 
     // Auto-downgrade sample rate if it exceeds bandwidth limits in Stream mode
-    leptos::prelude::create_effect(move |_| {
+    leptos::prelude::Effect::new(move |_| {
         if stream_mode.get() {
             let ch_count: u8 = channels.get().parse().unwrap_or(4);
             let max_rate = if ch_count <= 1 { 5000000 }
@@ -230,7 +230,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: HtmlCanvasElement = canvas_el.into();
+        let canvas: HtmlCanvasElement = canvas_el;
         let Some(ctx) = canvas.get_context("2d").ok().flatten() else {
             return;
         };
@@ -1038,8 +1038,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Mouse handlers for zoom/pan/cursor
     // rAF scroll throttle: coalesce rapid wheel events into one signal update per frame
     thread_local! {
-        static PENDING_VIEWPORT: RefCell<Option<(u64, u64)>> = RefCell::new(None);
-        static RAF_SCHEDULED: Cell<bool> = Cell::new(false);
+        static PENDING_VIEWPORT: RefCell<Option<(u64, u64)>> = const { RefCell::new(None) };
+        static RAF_SCHEDULED: Cell<bool> = const { Cell::new(false) };
     }
 
     let on_wheel = move |e: web_sys::WheelEvent| {
@@ -1055,7 +1055,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: HtmlCanvasElement = canvas_el.into();
+        let canvas: HtmlCanvasElement = canvas_el;
         let rect = canvas.get_bounding_client_rect();
         let mouse_x = e.client_x() as f64 - rect.left();
         let w = canvas.client_width() as f64;
@@ -1105,7 +1105,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: HtmlCanvasElement = canvas_el.into();
+        let canvas: HtmlCanvasElement = canvas_el;
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
@@ -1145,7 +1145,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: HtmlCanvasElement = canvas_el.into();
+        let canvas: HtmlCanvasElement = canvas_el;
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let y = e.client_y() as f64 - rect.top();
@@ -1217,7 +1217,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let Some(canvas_el) = canvas_ref.get() else {
                     return;
                 };
-                let canvas: HtmlCanvasElement = canvas_el.into();
+                let canvas: HtmlCanvasElement = canvas_el;
                 let rect = canvas.get_bounding_client_rect();
                 let x = e.client_x() as f64 - rect.left();
                 (x - drag_start_x.get_untracked()).abs()
@@ -1231,7 +1231,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: HtmlCanvasElement = canvas_el.into();
+        let canvas: HtmlCanvasElement = canvas_el;
         let rect = canvas.get_bounding_client_rect();
         let x = e.client_x() as f64 - rect.left();
         let w = canvas.client_width() as f64;
@@ -1265,9 +1265,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             "uart" => {
                                 ch_names.insert(*ch_a, "TX".into());
                                 // Only register RX if it's enabled (extra = "baud,rxch")
-                                let has_rx = extra
-                                    .splitn(2, ',')
-                                    .nth(1)
+                                let has_rx = extra.split_once(',').map(|x| x.1)
                                     .and_then(|s| s.parse::<u8>().ok())
                                     .is_some();
                                 if has_rx {
@@ -1453,7 +1451,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         // Click on the last enabled → reduce count
                                         let new_count = if i < ch_count {
                                             // Clicking an enabled channel: disable from this one onwards (min 1)
-                                            (i as u8).max(1)
+                                            i.max(1)
                                         } else {
                                             // Clicking a disabled channel: enable up to and including it
                                             i + 1

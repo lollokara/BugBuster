@@ -68,7 +68,10 @@ pub struct HttpTransport {
 impl HttpTransport {
     /// Connect to the device via HTTP. Verifies connectivity with /api/device/info.
     /// Returns (Self, mac_address) on success.
-    pub async fn connect(base_url: &str) -> Result<(Self, String)> {
+    ///
+    /// `candidate_tokens` is the list of all stored admin tokens to try when the
+    /// device responds with 403 (auth required but no token header sent yet).
+    pub async fn connect(base_url: &str, candidate_tokens: &[String]) -> Result<(Self, String)> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(3))
             .pool_max_idle_per_host(4)
@@ -80,12 +83,36 @@ impl HttpTransport {
         // Verify the device is reachable
         let url = format!("{}/api/device/info", base_url);
         let resp = client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("Device returned HTTP {}", resp.status()));
-        }
 
-        // Parse response to confirm it's a BugBuster and extract MAC
-        let info: Value = resp.json().await?;
+        // Parse response to confirm it's a BugBuster and extract MAC.
+        // If the device returns 403, iterate stored tokens and retry with each
+        // as X-BugBuster-Admin-Token until one succeeds.
+        let info: Value = if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            let mut authed_info: Option<Value> = None;
+            for token in candidate_tokens {
+                let r = client
+                    .get(&url)
+                    .header("X-BugBuster-Admin-Token", token)
+                    .send()
+                    .await?;
+                if r.status().is_success() {
+                    authed_info = Some(r.json().await?);
+                    break;
+                }
+            }
+            match authed_info {
+                Some(i) => i,
+                None => return Err(anyhow!(
+                    "Device at {} requires authentication and no stored token matched — \
+                     connect via USB once to pair",
+                    base_url
+                )),
+            }
+        } else if !resp.status().is_success() {
+            return Err(anyhow!("Device returned HTTP {}", resp.status()));
+        } else {
+            resp.json().await?
+        };
         if info.get("spiOk").is_none() {
             return Err(anyhow!("Not a BugBuster device"));
         }

@@ -10,6 +10,7 @@ use wasm_bindgen::JsValue;
 use crate::tauri_bridge::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum PinMode {
     NC,
     GPIO,
@@ -604,16 +605,5 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 <span class="board-status-hint">"Click a pin above, then use the inspector to configure mode, name and drive."</span>
             </div>
         </div>
-    }
-}
-
-/// Single-char icon for a pin mode (used in pin tiles).
-fn pin_icon(mode: PinMode) -> &'static str {
-    match mode {
-        PinMode::NC => "·",
-        PinMode::GPIO => "\u{21C4}", // ⇄
-        PinMode::GPI => "\u{2193}",  // ↓
-        PinMode::GPO => "\u{2191}",  // ↑
-        PinMode::Analog => "\u{223F}", // ∿
     }
 }

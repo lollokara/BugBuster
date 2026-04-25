@@ -14,7 +14,6 @@ Note: stop_waveform() takes no arguments (stops globally).
 
 import time
 import pytest
-import bugbuster as bb
 from bugbuster import ChannelFunction, WaveformType, OutputMode
 from conftest import assert_no_faults
 

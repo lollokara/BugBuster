@@ -163,7 +163,7 @@ def register(mcp) -> None:
         from .. import session as _sess
         _sess.reset_session()
         # Re-initialize
-        hal = session.get_hal()
+        session.get_hal()
         return {
             "success": True,
             "message": "Device reset and HAL re-initialized. All IOs are now DISABLED.",

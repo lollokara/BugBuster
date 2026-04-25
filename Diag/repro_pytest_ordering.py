@@ -275,8 +275,8 @@ def main():
     args = parser.parse_args()
 
     log(f"repro_pytest_ordering — port={args.port}")
-    log(f"Reproducing: test_stream_start_packet_arrives → test_stream_marker_seq_transparent")
-    log(f"          → test_rle_compressed_payload_is_even_length → test_stream_1mhz_4ch_10s")
+    log("Reproducing: test_stream_start_packet_arrives → test_stream_marker_seq_transparent")
+    log("          → test_rle_compressed_payload_is_even_length → test_stream_1mhz_4ch_10s")
 
     # Find RP2040 vendor bulk device
     log("\nFinding RP2040 vendor bulk device...")
@@ -294,7 +294,7 @@ def main():
     log(f"  Interface {LA_INTERFACE} claimed")
 
     # Open BBP once and keep it open for log relay throughout
-    log(f"\nOpening BBP (stays open for entire run)...")
+    log("\nOpening BBP (stays open for entire run)...")
     import bugbuster as bb
     bbp = bb.connect_usb(args.port)
     log("  BBP connected")
@@ -399,7 +399,7 @@ def main():
 
             # Extra log-drain pause to see any late log frames
             time.sleep(0.05)
-            log(f"  [D] (50ms log-drain pause after usb_reset)")
+            log("  [D] (50ms log-drain pause after usb_reset)")
 
             t = time.perf_counter()
             try:
@@ -422,21 +422,21 @@ def main():
                 # We DO replicate: vendor bulk stays claimed (no release/re-claim).
                 stale = drain_ep_in(dev, timeout_ms=100, label="D/stale")
                 if stale == 0:
-                    log(f"  [D] no stale EP_IN data")
+                    log("  [D] no stale EP_IN data")
 
-                log(f"\n  [D] Phase 2: stream via EP_OUT START (no BBP port, mirrors test)...")
+                log("\n  [D] Phase 2: stream via EP_OUT START (no BBP port, mirrors test)...")
                 got_start = wait_for_pkt_start(dev, bbp, timeout_ms=2000, label="D/wait") if ep_out_start(dev, bbp, label="D") else False
 
                 if got_start:
-                    log(f"  [D] streaming 3s (abbreviated from 10s for repro speed)...")
+                    log("  [D] streaming 3s (abbreviated from 10s for repro speed)...")
                     n, nb, se = collect_data(dev, duration_s=3.0, label="D/data")
                     elapsed = 3.0
                     log(f"  [D] collected {n} pkts / {nb}B / {nb/elapsed/1024:.1f}KB/s / {se} seq errors")
                     # Stop via EP_OUT (mirrors the test which has no bbp_port on la_host)
-                    log(f"  [D] sending STREAM_CMD_STOP via EP_OUT...")
+                    log("  [D] sending STREAM_CMD_STOP via EP_OUT...")
                     try:
                         dev.write(EP_OUT, bytes([STREAM_CMD_STOP]), timeout=2000)
-                        log(f"  [D] EP_OUT STOP sent")
+                        log("  [D] EP_OUT STOP sent")
                     except Exception as e:
                         log(f"  [D] EP_OUT STOP failed: {e}")
                     # Drain until PKT_STOP or timeout

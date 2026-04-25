@@ -9,7 +9,6 @@ available over the binary protocol (HTTP provides a simplified summary).
 """
 
 import pytest
-import bugbuster as bb
 from conftest import assert_no_faults
 
 pytestmark = [pytest.mark.timeout(20)]
@@ -46,7 +45,7 @@ def test_selftest_status_boot_fields(device):
 
     assert isinstance(boot, dict), f"boot must be dict, got {type(boot)}"
     assert "ran" in boot, f"boot dict missing 'ran': {boot}"
-    assert isinstance(boot["ran"], (bool, int)), f"boot.ran must be bool/int"
+    assert isinstance(boot["ran"], (bool, int)), "boot.ran must be bool/int"
     assert_no_faults(device)
 
 

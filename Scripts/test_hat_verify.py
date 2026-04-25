@@ -7,7 +7,6 @@ import logging
 sys.path.append(os.path.join(os.getcwd(), "python"))
 
 from bugbuster import connect_usb
-from bugbuster.transport.usb import DeviceError
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("hat_verify")

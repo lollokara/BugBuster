@@ -1,0 +1,569 @@
+[1m============================= test session starts ==============================[0m
+platform darwin -- Python 3.14.4, pytest-9.0.3, pluggy-1.6.0 -- /Users/lorenzo/Documents/Sviluppo/BugBuster/.tmp_venv/bin/python3.14
+cachedir: .pytest_cache
+metadata: {'Python': '3.14.4', 'Platform': 'macOS-26.4.1-arm64-arm-64bit-Mach-O', 'Packages': {'pytest': '9.0.3', 'pluggy': '1.6.0'}, 'Plugins': {'xdist': '3.8.0', 'json-report': '1.5.0', 'timeout': '2.4.0', 'metadata': '3.1.1', 'html': '4.2.0'}}
+rootdir: /Users/lorenzo/Documents/Sviluppo/BugBuster/tests
+configfile: pytest.ini
+plugins: xdist-3.8.0, json-report-1.5.0, timeout-2.4.0, metadata-3.1.1, html-4.2.0
+[1mcollecting ... [0mcollected 538 items / 1 skipped
+
+tests/device/test_01_core.py::test_ping [33mSKIPPED[0m (USB device not spec...)[33m [  0%][0m
+tests/device/test_01_core.py::test_firmware_version[usb] [33mSKIPPED[0m (US...)[32m [  0%][0m
+tests/device/test_01_core.py::test_firmware_version[http] [33mSKIPPED[0m (H...)[32m [  0%][0m
+tests/device/test_01_core.py::test_device_info[usb] [33mSKIPPED[0m (USB dev...)[32m [  0%][0m
+tests/device/test_01_core.py::test_device_info[http] [33mSKIPPED[0m (HTTP d...)[32m [  0%][0m
+tests/device/test_01_core.py::test_get_status[usb] [33mSKIPPED[0m (USB devi...)[32m [  1%][0m
+tests/device/test_01_core.py::test_get_status[http] [33mSKIPPED[0m (HTTP de...)[32m [  1%][0m
+tests/device/test_01_core.py::test_reset_clears_state[usb] [33mSKIPPED[0m (...)[32m [  1%][0m
+tests/device/test_01_core.py::test_reset_clears_state[http] [33mSKIPPED[0m[32m      [  1%][0m
+tests/device/test_01_core.py::test_get_faults_returns_dict[usb] [33mSKIPPED[0m[32m  [  1%][0m
+tests/device/test_01_core.py::test_get_faults_returns_dict[http] [33mSKIPPED[0m[32m [  2%][0m
+tests/device/test_01_core.py::test_check_faults_returns_list[usb] [33mSKIPPED[0m[32m [  2%][0m
+tests/device/test_01_core.py::test_check_faults_returns_list[http] [33mSKIPPED[0m[32m [  2%][0m
+tests/device/test_01_core.py::test_firmware_version_consistent[usb] [33mSKIPPED[0m[32m [  2%][0m
+tests/device/test_01_core.py::test_firmware_version_consistent[http] [33mSKIPPED[0m[32m [  2%][0m
+tests/device/test_01_core.py::test_status_has_die_temperature[usb] [33mSKIPPED[0m[32m [  2%][0m
+tests/device/test_01_core.py::test_status_has_die_temperature[http] [33mSKIPPED[0m[32m [  3%][0m
+tests/device/test_02_channels.py::test_set_high_imp[usb] [33mSKIPPED[0m (US...)[32m [  3%][0m
+tests/device/test_02_channels.py::test_set_high_imp[http] [33mSKIPPED[0m (H...)[32m [  3%][0m
+tests/device/test_02_channels.py::test_vout_set_and_readback[usb] [33mSKIPPED[0m[32m [  3%][0m
+tests/device/test_02_channels.py::test_vout_set_and_readback[http] [33mSKIPPED[0m[32m [  3%][0m
+tests/device/test_02_channels.py::test_vout_range_unipolar[usb] [33mSKIPPED[0m[32m  [  4%][0m
+tests/device/test_02_channels.py::test_vout_range_unipolar[http] [33mSKIPPED[0m[32m [  4%][0m
+tests/device/test_02_channels.py::test_vout_range_bipolar[usb] [33mSKIPPED[0m[32m   [  4%][0m
+tests/device/test_02_channels.py::test_vout_range_bipolar[http] [33mSKIPPED[0m[32m  [  4%][0m
+tests/device/test_02_channels.py::test_set_dac_code_raw[usb] [33mSKIPPED[0m[32m     [  4%][0m
+tests/device/test_02_channels.py::test_set_dac_code_raw[http] [33mSKIPPED[0m[32m    [  5%][0m
+tests/device/test_02_channels.py::test_iout_set_and_readback[usb] [33mSKIPPED[0m[32m [  5%][0m
+tests/device/test_02_channels.py::test_iout_set_and_readback[http] [33mSKIPPED[0m[32m [  5%][0m
+tests/device/test_02_channels.py::test_current_limit_25ma[usb] [33mSKIPPED[0m[32m   [  5%][0m
+tests/device/test_02_channels.py::test_current_limit_25ma[http] [33mSKIPPED[0m[32m  [  5%][0m
+tests/device/test_02_channels.py::test_current_limit_8ma[usb] [33mSKIPPED[0m[32m    [  5%][0m
+tests/device/test_02_channels.py::test_current_limit_8ma[http] [33mSKIPPED[0m[32m   [  6%][0m
+tests/device/test_02_channels.py::test_vin_configure[usb] [33mSKIPPED[0m (U...)[32m [  6%][0m
+tests/device/test_02_channels.py::test_vin_configure[http] [33mSKIPPED[0m (...)[32m [  6%][0m
+tests/device/test_02_channels.py::test_adc_config_all_rates[usb] [33mSKIPPED[0m[32m [  6%][0m
+tests/device/test_02_channels.py::test_adc_config_all_rates[http] [33mSKIPPED[0m[32m [  6%][0m
+tests/device/test_02_channels.py::test_adc_config_all_ranges[usb] [33mSKIPPED[0m[32m [  7%][0m
+tests/device/test_02_channels.py::test_adc_config_all_ranges[http] [33mSKIPPED[0m[32m [  7%][0m
+tests/device/test_02_channels.py::test_get_adc_value[usb] [33mSKIPPED[0m (U...)[32m [  7%][0m
+tests/device/test_02_channels.py::test_get_adc_value[http] [33mSKIPPED[0m (...)[32m [  7%][0m
+tests/device/test_02_channels.py::test_iin_ext_configure[usb] [33mSKIPPED[0m[32m    [  7%][0m
+tests/device/test_02_channels.py::test_iin_ext_configure[http] [33mSKIPPED[0m[32m   [  7%][0m
+tests/device/test_02_channels.py::test_iin_loop_configure[usb] [33mSKIPPED[0m[32m   [  8%][0m
+tests/device/test_02_channels.py::test_iin_loop_configure[http] [33mSKIPPED[0m[32m  [  8%][0m
+tests/device/test_02_channels.py::test_din_logic_configure[usb] [33mSKIPPED[0m[32m  [  8%][0m
+tests/device/test_02_channels.py::test_din_logic_configure[http] [33mSKIPPED[0m[32m [  8%][0m
+tests/device/test_02_channels.py::test_din_logic_validate_threshold_range[usb] [33mSKIPPED[0m[32m [  8%][0m
+tests/device/test_02_channels.py::test_din_logic_validate_threshold_range[http] [33mSKIPPED[0m[32m [  9%][0m
+tests/device/test_02_channels.py::test_din_debounce_validate_range[usb] [33mSKIPPED[0m[32m [  9%][0m
+tests/device/test_02_channels.py::test_din_debounce_validate_range[http] [33mSKIPPED[0m[32m [  9%][0m
+tests/device/test_02_channels.py::test_rtd_configure[usb] [33mSKIPPED[0m (U...)[32m [  9%][0m
+tests/device/test_02_channels.py::test_rtd_configure[http] [33mSKIPPED[0m (...)[32m [  9%][0m
+tests/device/test_02_channels.py::test_rtd_configure_1ma[usb] [33mSKIPPED[0m[32m    [ 10%][0m
+tests/device/test_02_channels.py::test_rtd_configure_1ma[http] [33mSKIPPED[0m[32m   [ 10%][0m
+tests/device/test_02_channels.py::test_do_configure[usb] [33mSKIPPED[0m (US...)[32m [ 10%][0m
+tests/device/test_02_channels.py::test_do_configure[http] [33mSKIPPED[0m (H...)[32m [ 10%][0m
+tests/device/test_02_channels.py::test_channel_switch_via_high_imp[usb] [33mSKIPPED[0m[32m [ 10%][0m
+tests/device/test_02_channels.py::test_channel_switch_via_high_imp[http] [33mSKIPPED[0m[32m [ 10%][0m
+tests/device/test_02_channels.py::test_all_channels_independent[usb] [33mSKIPPED[0m[32m [ 11%][0m
+tests/device/test_02_channels.py::test_all_channels_independent[http] [33mSKIPPED[0m[32m [ 11%][0m
+tests/device/test_03_gpio.py::test_gpio_get_all[usb] [33mSKIPPED[0m (USB de...)[32m [ 11%][0m
+tests/device/test_03_gpio.py::test_gpio_get_all[http] [33mSKIPPED[0m (HTTP ...)[32m [ 11%][0m
+tests/device/test_03_gpio.py::test_gpio_set_output_high[usb] [33mSKIPPED[0m[32m     [ 11%][0m
+tests/device/test_03_gpio.py::test_gpio_set_output_high[http] [33mSKIPPED[0m[32m    [ 12%][0m
+tests/device/test_03_gpio.py::test_gpio_set_output_low[usb] [33mSKIPPED[0m[32m      [ 12%][0m
+tests/device/test_03_gpio.py::test_gpio_set_output_low[http] [33mSKIPPED[0m[32m     [ 12%][0m
+tests/device/test_03_gpio.py::test_gpio_set_input[usb] [33mSKIPPED[0m (USB ...)[32m [ 12%][0m
+tests/device/test_03_gpio.py::test_gpio_set_input[http] [33mSKIPPED[0m (HTT...)[32m [ 12%][0m
+tests/device/test_03_gpio.py::test_gpio_set_high_imp[usb] [33mSKIPPED[0m (U...)[32m [ 13%][0m
+tests/device/test_03_gpio.py::test_gpio_set_high_imp[http] [33mSKIPPED[0m (...)[32m [ 13%][0m
+tests/device/test_03_gpio.py::test_gpio_all_pins_output_mode[usb] [33mSKIPPED[0m[32m [ 13%][0m
+tests/device/test_03_gpio.py::test_gpio_all_pins_output_mode[http] [33mSKIPPED[0m[32m [ 13%][0m
+tests/device/test_03_gpio.py::test_gpio_toggle_output[usb] [33mSKIPPED[0m (...)[32m [ 13%][0m
+tests/device/test_03_gpio.py::test_gpio_toggle_output[http] [33mSKIPPED[0m[32m      [ 13%][0m
+tests/device/test_03_gpio.py::test_gpio_set_input_with_pulldown[usb] [33mSKIPPED[0m[32m [ 14%][0m
+tests/device/test_03_gpio.py::test_gpio_set_input_with_pulldown[http] [33mSKIPPED[0m[32m [ 14%][0m
+tests/device/test_03_gpio.py::test_gpio_multiple_simultaneous[usb] [33mSKIPPED[0m[32m [ 14%][0m
+tests/device/test_03_gpio.py::test_gpio_multiple_simultaneous[http] [33mSKIPPED[0m[32m [ 14%][0m
+tests/device/test_04_mux.py::test_mux_get_all_returns_4_bytes[usb] [33mSKIPPED[0m[32m [ 14%][0m
+tests/device/test_04_mux.py::test_mux_get_all_returns_4_bytes[http] [33mSKIPPED[0m[32m [ 15%][0m
+tests/device/test_04_mux.py::test_mux_set_all_open[usb] [33mSKIPPED[0m (USB...)[32m [ 15%][0m
+tests/device/test_04_mux.py::test_mux_set_all_open[http] [33mSKIPPED[0m (HT...)[32m [ 15%][0m
+tests/device/test_04_mux.py::test_mux_set_all_close_first[usb] [33mSKIPPED[0m[32m   [ 15%][0m
+tests/device/test_04_mux.py::test_mux_set_all_close_first[http] [33mSKIPPED[0m[32m  [ 15%][0m
+tests/device/test_04_mux.py::test_mux_single_switch_close[usb] [33mSKIPPED[0m[32m   [ 15%][0m
+tests/device/test_04_mux.py::test_mux_single_switch_close[http] [33mSKIPPED[0m[32m  [ 16%][0m
+tests/device/test_04_mux.py::test_mux_single_switch_open[usb] [33mSKIPPED[0m[32m    [ 16%][0m
+tests/device/test_04_mux.py::test_mux_single_switch_open[http] [33mSKIPPED[0m[32m   [ 16%][0m
+tests/device/test_04_mux.py::test_mux_round_trip[usb] [33mSKIPPED[0m (USB d...)[32m [ 16%][0m
+tests/device/test_04_mux.py::test_mux_round_trip[http] [33mSKIPPED[0m (HTTP...)[32m [ 16%][0m
+tests/device/test_04_mux.py::test_mux_per_device_control[usb] [33mSKIPPED[0m[32m    [ 17%][0m
+tests/device/test_04_mux.py::test_mux_per_device_control[http] [33mSKIPPED[0m[32m   [ 17%][0m
+tests/device/test_04_mux.py::test_mux_set_all_open_restore[usb] [33mSKIPPED[0m[32m  [ 17%][0m
+tests/device/test_04_mux.py::test_mux_set_all_open_restore[http] [33mSKIPPED[0m[32m [ 17%][0m
+tests/device/test_04_mux.py::test_mux_set_all_invalid_length_raises[usb] [33mSKIPPED[0m[32m [ 17%][0m
+tests/device/test_04_mux.py::test_mux_set_all_invalid_length_raises[http] [33mSKIPPED[0m[32m [ 18%][0m
+tests/device/test_05_power.py::test_idac_get_status[usb] [33mSKIPPED[0m (US...)[32m [ 18%][0m
+tests/device/test_05_power.py::test_idac_get_status[http] [33mSKIPPED[0m (H...)[32m [ 18%][0m
+tests/device/test_05_power.py::test_idac_set_voltage_vadj1[usb] [33mSKIPPED[0m[32m  [ 18%][0m
+tests/device/test_05_power.py::test_idac_set_voltage_vadj1[http] [33mSKIPPED[0m[32m [ 18%][0m
+tests/device/test_05_power.py::test_idac_set_voltage_vadj2[usb] [33mSKIPPED[0m[32m  [ 18%][0m
+tests/device/test_05_power.py::test_idac_set_voltage_vadj2[http] [33mSKIPPED[0m[32m [ 19%][0m
+tests/device/test_05_power.py::test_idac_set_code[usb] [33mSKIPPED[0m (USB ...)[32m [ 19%][0m
+tests/device/test_05_power.py::test_idac_set_code[http] [33mSKIPPED[0m (HTT...)[32m [ 19%][0m
+tests/device/test_05_power.py::test_idac_set_code_midscale[usb] [33mSKIPPED[0m[32m  [ 19%][0m
+tests/device/test_05_power.py::test_idac_set_code_midscale[http] [33mSKIPPED[0m[32m [ 19%][0m
+tests/device/test_05_power.py::test_power_get_status[usb] [33mSKIPPED[0m (U...)[32m [ 20%][0m
+tests/device/test_05_power.py::test_power_get_status[http] [33mSKIPPED[0m (...)[32m [ 20%][0m
+tests/device/test_05_power.py::test_pca_set_control_enable_mux[usb] [33mSKIPPED[0m[32m [ 20%][0m
+tests/device/test_05_power.py::test_pca_set_control_enable_mux[http] [33mSKIPPED[0m[32m [ 20%][0m
+tests/device/test_05_power.py::test_pca_set_control_disable_mux[usb] [33mSKIPPED[0m[32m [ 20%][0m
+tests/device/test_05_power.py::test_pca_set_control_disable_mux[http] [33mSKIPPED[0m[32m [ 21%][0m
+tests/device/test_05_power.py::test_pca_set_control_vadj1[usb] [33mSKIPPED[0m[32m   [ 21%][0m
+tests/device/test_05_power.py::test_pca_set_control_vadj1[http] [33mSKIPPED[0m[32m  [ 21%][0m
+tests/device/test_05_power.py::test_pca_set_control_all_controls[usb] [33mSKIPPED[0m[32m [ 21%][0m
+tests/device/test_05_power.py::test_pca_set_control_all_controls[http] [33mSKIPPED[0m[32m [ 21%][0m
+tests/device/test_05_power.py::test_power_fault_log[usb] [33mSKIPPED[0m (US...)[32m [ 21%][0m
+tests/device/test_05_power.py::test_power_fault_log[http] [33mSKIPPED[0m (H...)[32m [ 22%][0m
+tests/device/test_05_power.py::test_idac_cal_save[usb] [33mSKIPPED[0m (USB ...)[32m [ 22%][0m
+tests/device/test_05_power.py::test_idac_cal_save[http] [33mSKIPPED[0m (HTT...)[32m [ 22%][0m
+tests/device/test_05_power.py::test_set_watchdog [33mSKIPPED[0m (USB device...)[32m [ 22%][0m
+tests/device/test_05_power.py::test_power_set_fault_config[usb] [33mSKIPPED[0m[32m  [ 22%][0m
+tests/device/test_05_power.py::test_power_set_fault_config[http] [33mSKIPPED[0m[32m [ 23%][0m
+tests/device/test_06_usbpd.py::test_usbpd_get_status[usb] [33mSKIPPED[0m (U...)[32m [ 23%][0m
+tests/device/test_06_usbpd.py::test_usbpd_get_status[http] [33mSKIPPED[0m (...)[32m [ 23%][0m
+tests/device/test_06_usbpd.py::test_usbpd_status_voltage_sane[usb] [33mSKIPPED[0m[32m [ 23%][0m
+tests/device/test_06_usbpd.py::test_usbpd_status_voltage_sane[http] [33mSKIPPED[0m[32m [ 23%][0m
+tests/device/test_06_usbpd.py::test_usbpd_status_has_pdos[usb] [33mSKIPPED[0m[32m   [ 23%][0m
+tests/device/test_06_usbpd.py::test_usbpd_status_has_pdos[http] [33mSKIPPED[0m[32m  [ 24%][0m
+tests/device/test_06_usbpd.py::test_usbpd_present_is_bool[usb] [33mSKIPPED[0m[32m   [ 24%][0m
+tests/device/test_06_usbpd.py::test_usbpd_present_is_bool[http] [33mSKIPPED[0m[32m  [ 24%][0m
+tests/device/test_06_usbpd.py::test_usbpd_attached_is_bool[usb] [33mSKIPPED[0m[32m  [ 24%][0m
+tests/device/test_06_usbpd.py::test_usbpd_attached_is_bool[http] [33mSKIPPED[0m[32m [ 24%][0m
+tests/device/test_06_usbpd.py::test_usbpd_power_values_sane[usb] [33mSKIPPED[0m[32m [ 25%][0m
+tests/device/test_06_usbpd.py::test_usbpd_power_values_sane[http] [33mSKIPPED[0m[32m [ 25%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_sine[usb] [33mSKIPPED[0m[32m [ 25%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_sine[http] [33mSKIPPED[0m[32m [ 25%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_square[usb] [33mSKIPPED[0m[32m [ 25%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_square[http] [33mSKIPPED[0m[32m [ 26%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_triangle[usb] [33mSKIPPED[0m[32m [ 26%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_triangle[http] [33mSKIPPED[0m[32m [ 26%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_sawtooth[usb] [33mSKIPPED[0m[32m [ 26%][0m
+tests/device/test_07_wavegen.py::test_start_stop_wavegen_sawtooth[http] [33mSKIPPED[0m[32m [ 26%][0m
+tests/device/test_07_wavegen.py::test_wavegen_current_mode[usb] [33mSKIPPED[0m[32m  [ 26%][0m
+tests/device/test_07_wavegen.py::test_wavegen_current_mode[http] [33mSKIPPED[0m[32m [ 27%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[usb-0.5] [33mSKIPPED[0m[32m [ 27%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[usb-1.0] [33mSKIPPED[0m[32m [ 27%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[usb-10.0] [33mSKIPPED[0m[32m [ 27%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[usb-50.0] [33mSKIPPED[0m[32m [ 27%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[usb-100.0] [33mSKIPPED[0m[32m [ 28%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[http-0.5] [33mSKIPPED[0m[32m [ 28%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[http-1.0] [33mSKIPPED[0m[32m [ 28%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[http-10.0] [33mSKIPPED[0m[32m [ 28%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[http-50.0] [33mSKIPPED[0m[32m [ 28%][0m
+tests/device/test_07_wavegen.py::test_wavegen_frequency_range[http-100.0] [33mSKIPPED[0m[32m [ 28%][0m
+tests/device/test_07_wavegen.py::test_wavegen_stop_all_channels[usb] [33mSKIPPED[0m[32m [ 29%][0m
+tests/device/test_07_wavegen.py::test_wavegen_stop_all_channels[http] [33mSKIPPED[0m[32m [ 29%][0m
+tests/device/test_07_wavegen.py::test_wavegen_switch_types[usb] [33mSKIPPED[0m[32m  [ 29%][0m
+tests/device/test_07_wavegen.py::test_wavegen_switch_types[http] [33mSKIPPED[0m[32m [ 29%][0m
+tests/device/test_08_wifi.py::test_wifi_get_status[usb] [33mSKIPPED[0m (USB...)[32m [ 29%][0m
+tests/device/test_08_wifi.py::test_wifi_get_status[http] [33mSKIPPED[0m (HT...)[32m [ 30%][0m
+tests/device/test_08_wifi.py::test_wifi_status_has_required_fields[usb] [33mSKIPPED[0m[32m [ 30%][0m
+tests/device/test_08_wifi.py::test_wifi_status_has_required_fields[http] [33mSKIPPED[0m[32m [ 30%][0m
+tests/device/test_08_wifi.py::test_wifi_status_ip_is_string[usb] [33mSKIPPED[0m[32m [ 30%][0m
+tests/device/test_08_wifi.py::test_wifi_status_ip_is_string[http] [33mSKIPPED[0m[32m [ 30%][0m
+tests/device/test_08_wifi.py::test_wifi_status_rssi_is_numeric[usb] [33mSKIPPED[0m[32m [ 31%][0m
+tests/device/test_08_wifi.py::test_wifi_status_rssi_is_numeric[http] [33mSKIPPED[0m[32m [ 31%][0m
+tests/device/test_08_wifi.py::test_wifi_scan[usb] [33mSKIPPED[0m (USB devic...)[32m [ 31%][0m
+tests/device/test_08_wifi.py::test_wifi_scan[http] [33mSKIPPED[0m (HTTP dev...)[32m [ 31%][0m
+tests/device/test_08_wifi.py::test_wifi_scan_entry_format[usb] [33mSKIPPED[0m[32m   [ 31%][0m
+tests/device/test_08_wifi.py::test_wifi_scan_entry_format[http] [33mSKIPPED[0m[32m  [ 31%][0m
+tests/device/test_08_wifi.py::test_wifi_status_consistent[usb] [33mSKIPPED[0m[32m   [ 32%][0m
+tests/device/test_08_wifi.py::test_wifi_status_consistent[http] [33mSKIPPED[0m[32m  [ 32%][0m
+tests/device/test_09_selftest.py::test_selftest_status[usb] [33mSKIPPED[0m[32m      [ 32%][0m
+tests/device/test_09_selftest.py::test_selftest_status[http] [33mSKIPPED[0m[32m     [ 32%][0m
+tests/device/test_09_selftest.py::test_selftest_status_boot_fields[usb] [33mSKIPPED[0m[32m [ 32%][0m
+tests/device/test_09_selftest.py::test_selftest_status_boot_fields[http] [33mSKIPPED[0m[32m [ 33%][0m
+tests/device/test_09_selftest.py::test_selftest_status_cal_fields[usb] [33mSKIPPED[0m[32m [ 33%][0m
+tests/device/test_09_selftest.py::test_selftest_status_cal_fields[http] [33mSKIPPED[0m[32m [ 33%][0m
+tests/device/test_09_selftest.py::test_selftest_measure_supply_vadj1 [33mSKIPPED[0m[32m [ 33%][0m
+tests/device/test_09_selftest.py::test_selftest_measure_supply_all_rails [33mSKIPPED[0m[32m [ 33%][0m
+tests/device/test_09_selftest.py::test_selftest_efuse_currents [33mSKIPPED[0m[32m   [ 34%][0m
+tests/device/test_09_selftest.py::test_selftest_auto_calibrate [33mSKIPPED[0m[32m   [ 34%][0m
+tests/device/test_09_selftest.py::test_selftest_status_cal_idle_after_boot [33mSKIPPED[0m[32m [ 34%][0m
+tests/device/test_09_selftest.py::test_internal_supplies [33mSKIPPED[0m (US...)[32m [ 34%][0m
+tests/device/test_10_streaming.py::test_adc_stream_starts_and_stops [33mSKIPPED[0m[32m [ 34%][0m
+tests/device/test_10_streaming.py::test_adc_stream_events_have_data [33mSKIPPED[0m[32m [ 34%][0m
+tests/device/test_10_streaming.py::test_adc_stream_mask_matches_channels [33mSKIPPED[0m[32m [ 35%][0m
+tests/device/test_10_streaming.py::test_adc_stream_sample_rate [33mSKIPPED[0m[32m   [ 35%][0m
+tests/device/test_10_streaming.py::test_scope_stream_starts_and_stops [33mSKIPPED[0m[32m [ 35%][0m
+tests/device/test_10_streaming.py::test_scope_data_format [33mSKIPPED[0m (U...)[32m [ 35%][0m
+tests/device/test_10_streaming.py::test_streaming_not_supported_over_http [33mSKIPPED[0m[32m [ 35%][0m
+tests/device/test_10_streaming.py::test_adc_stream_restart [33mSKIPPED[0m (...)[32m [ 36%][0m
+tests/device/test_11_hat.py::test_hat_get_status[usb] [33mSKIPPED[0m (HAT t...)[32m [ 36%][0m
+tests/device/test_11_hat.py::test_hat_get_status[http] [33mSKIPPED[0m (HAT ...)[32m [ 36%][0m
+tests/device/test_11_hat.py::test_hat_status_has_pin_config[usb] [33mSKIPPED[0m[32m [ 36%][0m
+tests/device/test_11_hat.py::test_hat_status_has_pin_config[http] [33mSKIPPED[0m[32m [ 36%][0m
+tests/device/test_11_hat.py::test_hat_status_optional_hvpak_metadata[usb] [33mSKIPPED[0m[32m [ 36%][0m
+tests/device/test_11_hat.py::test_hat_status_optional_hvpak_metadata[http] [33mSKIPPED[0m[32m [ 37%][0m
+tests/device/test_11_hat.py::test_hat_detect[usb] [33mSKIPPED[0m (HAT tests...)[32m [ 37%][0m
+tests/device/test_11_hat.py::test_hat_detect[http] [33mSKIPPED[0m (HAT test...)[32m [ 37%][0m
+tests/device/test_11_hat.py::test_hat_reset[usb] [33mSKIPPED[0m (HAT tests ...)[32m [ 37%][0m
+tests/device/test_11_hat.py::test_hat_reset[http] [33mSKIPPED[0m (HAT tests...)[32m [ 37%][0m
+tests/device/test_11_hat.py::test_hat_set_pin[usb] [33mSKIPPED[0m (HAT test...)[32m [ 38%][0m
+tests/device/test_11_hat.py::test_hat_set_pin[http] [33mSKIPPED[0m (HAT tes...)[32m [ 38%][0m
+tests/device/test_11_hat.py::test_hat_set_pin_all_functions[usb] [33mSKIPPED[0m[32m [ 38%][0m
+tests/device/test_11_hat.py::test_hat_set_pin_all_functions[http] [33mSKIPPED[0m[32m [ 38%][0m
+tests/device/test_11_hat.py::test_hat_set_all_pins[usb] [33mSKIPPED[0m (HAT...)[32m [ 38%][0m
+tests/device/test_11_hat.py::test_hat_set_all_pins[http] [33mSKIPPED[0m (HA...)[32m [ 39%][0m
+tests/device/test_11_hat.py::test_hat_get_power_usb [33mSKIPPED[0m (HAT tes...)[32m [ 39%][0m
+tests/device/test_11_hat.py::test_hat_get_power_http_raises [33mSKIPPED[0m[32m      [ 39%][0m
+tests/device/test_11_hat.py::test_hat_get_hvpak_info_usb [33mSKIPPED[0m (HA...)[32m [ 39%][0m
+tests/device/test_11_hat.py::test_hat_get_hvpak_caps_usb_if_ready [33mSKIPPED[0m[32m [ 39%][0m
+tests/device/test_11_hat.py::test_hat_hvpak_lut_roundtrip_usb_if_supported [33mSKIPPED[0m[32m [ 39%][0m
+tests/device/test_11_hat.py::test_hat_hvpak_bridge_roundtrip_usb_if_supported [33mSKIPPED[0m[32m [ 40%][0m
+tests/device/test_11_hat.py::test_hat_hvpak_analog_roundtrip_usb_if_supported [33mSKIPPED[0m[32m [ 40%][0m
+tests/device/test_11_hat.py::test_hat_hvpak_pwm_roundtrip_usb_if_supported [33mSKIPPED[0m[32m [ 40%][0m
+tests/device/test_11_hat.py::test_hat_hvpak_reg_write_masked_rejects_unsafe_register [33mSKIPPED[0m[32m [ 40%][0m
+tests/device/test_11_hat.py::test_hat_set_power_usb [33mSKIPPED[0m (HAT tes...)[32m [ 40%][0m
+tests/device/test_11_hat.py::test_hat_set_io_voltage_http_raises [33mSKIPPED[0m[32m [ 41%][0m
+tests/device/test_11_hat.py::test_hat_la_configure [33mSKIPPED[0m (HAT test...)[32m [ 41%][0m
+tests/device/test_11_hat.py::test_hat_la_arm_and_stop [33mSKIPPED[0m (HAT t...)[32m [ 41%][0m
+tests/device/test_11_hat.py::test_hat_la_force_trigger [33mSKIPPED[0m (HAT ...)[32m [ 41%][0m
+tests/device/test_11_hat.py::test_hat_la_status [33mSKIPPED[0m (HAT tests r...)[32m [ 41%][0m
+tests/device/test_11_hat.py::test_hat_la_status_includes_stream_diagnostics [33mSKIPPED[0m[32m [ 42%][0m
+tests/device/test_11_hat.py::test_la_trigger_types [33mSKIPPED[0m (HAT test...)[32m [ 42%][0m
+tests/device/test_11_hat.py::test_la_read_data [33mSKIPPED[0m (HAT tests re...)[32m [ 42%][0m
+tests/device/test_11_hat.py::test_la_cdc_stream_five_seconds_legacy [33mSKIPPED[0m[32m [ 42%][0m
+tests/device/test_11_hat.py::test_la_cdc_stream_duration_truth_legacy [33mSKIPPED[0m[32m [ 42%][0m
+tests/device/test_12_faults.py::test_clear_all_alerts[usb] [33mSKIPPED[0m (...)[32m [ 42%][0m
+tests/device/test_12_faults.py::test_clear_all_alerts[http] [33mSKIPPED[0m[32m      [ 43%][0m
+tests/device/test_12_faults.py::test_clear_alerts_no_error_after_clear[usb] [33mSKIPPED[0m[32m [ 43%][0m
+tests/device/test_12_faults.py::test_clear_alerts_no_error_after_clear[http] [33mSKIPPED[0m[32m [ 43%][0m
+tests/device/test_12_faults.py::test_check_faults_returns_list[usb] [33mSKIPPED[0m[32m [ 43%][0m
+tests/device/test_12_faults.py::test_check_faults_returns_list[http] [33mSKIPPED[0m[32m [ 43%][0m
+tests/device/test_12_faults.py::test_check_faults_consistent[usb] [33mSKIPPED[0m[32m [ 44%][0m
+tests/device/test_12_faults.py::test_check_faults_consistent[http] [33mSKIPPED[0m[32m [ 44%][0m
+tests/device/test_12_faults.py::test_clear_per_channel_alert[usb] [33mSKIPPED[0m[32m [ 44%][0m
+tests/device/test_12_faults.py::test_clear_per_channel_alert[http] [33mSKIPPED[0m[32m [ 44%][0m
+tests/device/test_12_faults.py::test_alert_mask_set[usb] [33mSKIPPED[0m (US...)[32m [ 44%][0m
+tests/device/test_12_faults.py::test_alert_mask_set[http] [33mSKIPPED[0m (H...)[32m [ 44%][0m
+tests/device/test_12_faults.py::test_alert_mask_disable_all[usb] [33mSKIPPED[0m[32m [ 45%][0m
+tests/device/test_12_faults.py::test_alert_mask_disable_all[http] [33mSKIPPED[0m[32m [ 45%][0m
+tests/device/test_12_faults.py::test_din_event_registration [33mSKIPPED[0m[32m      [ 45%][0m
+tests/device/test_12_faults.py::test_din_event_callback_type [33mSKIPPED[0m[32m     [ 45%][0m
+tests/device/test_12_faults.py::test_faults_after_reset[usb] [33mSKIPPED[0m[32m     [ 45%][0m
+tests/device/test_12_faults.py::test_faults_after_reset[http] [33mSKIPPED[0m[32m    [ 46%][0m
+tests/device/test_12_faults.py::test_get_faults_raw_structure[usb] [33mSKIPPED[0m[32m [ 46%][0m
+tests/device/test_12_faults.py::test_get_faults_raw_structure[http] [33mSKIPPED[0m[32m [ 46%][0m
+tests/device/test_12_faults.py::test_set_channel_alert_mask[usb] [33mSKIPPED[0m[32m [ 46%][0m
+tests/device/test_12_faults.py::test_set_channel_alert_mask[http] [33mSKIPPED[0m[32m [ 46%][0m
+tests/device/test_13_dio.py::test_dio_configure_output[usb] [33mSKIPPED[0m[32m      [ 47%][0m
+tests/device/test_13_dio.py::test_dio_configure_output[http] [33mSKIPPED[0m[32m     [ 47%][0m
+tests/device/test_13_dio.py::test_dio_configure_input[usb] [33mSKIPPED[0m (...)[32m [ 47%][0m
+tests/device/test_13_dio.py::test_dio_configure_input[http] [33mSKIPPED[0m[32m      [ 47%][0m
+tests/device/test_13_dio.py::test_dio_get_all[usb] [33mSKIPPED[0m (USB devi...)[32m [ 47%][0m
+tests/device/test_13_dio.py::test_dio_get_all[http] [33mSKIPPED[0m (HTTP de...)[32m [ 47%][0m
+tests/device/test_13_dio.py::test_dio_restore_disabled[usb] [33mSKIPPED[0m[32m      [ 48%][0m
+tests/device/test_13_dio.py::test_dio_restore_disabled[http] [33mSKIPPED[0m[32m     [ 48%][0m
+tests/device/test_14_uart.py::test_get_uart_config [33mSKIPPED[0m (USB devi...)[32m [ 48%][0m
+tests/device/test_14_uart.py::test_get_uart_pins [33mSKIPPED[0m (USB device...)[32m [ 48%][0m
+tests/device/test_14_uart.py::test_set_uart_config [33mSKIPPED[0m (USB devi...)[32m [ 48%][0m
+tests/device/test_15_swd.py::test_hat_setup_swd_returns_true [33mSKIPPED[0m[32m     [ 49%][0m
+tests/device/test_15_swd.py::test_hat_setup_swd_accepts_both_connectors [33mSKIPPED[0m[32m [ 49%][0m
+tests/device/test_15_swd.py::test_hat_setup_swd_no_expext_side_effects [33mSKIPPED[0m[32m [ 49%][0m
+tests/device/test_15_swd.py::test_hat_set_pin_rejects_reserved_swd_codes[1] [33mSKIPPED[0m[32m [ 49%][0m
+tests/device/test_15_swd.py::test_hat_set_pin_rejects_reserved_swd_codes[2] [33mSKIPPED[0m[32m [ 49%][0m
+tests/device/test_15_swd.py::test_hat_set_pin_rejects_reserved_swd_codes[3] [33mSKIPPED[0m[32m [ 50%][0m
+tests/device/test_15_swd.py::test_hat_set_pin_rejects_reserved_swd_codes[4] [33mSKIPPED[0m[32m [ 50%][0m
+tests/device/test_15_swd.py::test_hat_setup_swd_cmsis_dap_enumerates [33mSKIPPED[0m[32m [ 50%][0m
+tests/device/test_15_swd.py::test_hat_swd_target_detected [33mSKIPPED[0m (S...)[32m [ 50%][0m
+tests/device/test_15_swd.py::test_hat_setup_swd_multiple_voltages [33mSKIPPED[0m[32m [ 50%][0m
+tests/device/test_15_swd.py::test_pyocd_lists_cmsis_dap_probe [33mSKIPPED[0m[32m    [ 50%][0m
+tests/device/test_15_swd.py::test_openocd_recognizes_cmsis_dap_probe [33mSKIPPED[0m[32m [ 51%][0m
+tests/device/test_15_swd.py::test_openocd_halts_target_over_swd [33mSKIPPED[0m[32m  [ 51%][0m
+tests/device/test_la_usb_1mhz.py::test_stream_1mhz_4ch_10s [33mSKIPPED[0m (...)[32m [ 51%][0m
+tests/http_api/test_http_endpoints.py::test_health_get_status [33mSKIPPED[0m[32m    [ 51%][0m
+tests/http_api/test_http_endpoints.py::test_status_has_spi_ok [33mSKIPPED[0m[32m    [ 51%][0m
+tests/http_api/test_http_endpoints.py::test_get_version [33mSKIPPED[0m (HTT...)[32m [ 52%][0m
+tests/http_api/test_http_endpoints.py::test_scope_endpoint_returns_seq [33mSKIPPED[0m[32m [ 52%][0m
+tests/http_api/test_http_endpoints.py::test_scope_first_call_not_empty [33mSKIPPED[0m[32m [ 52%][0m
+tests/http_api/test_http_endpoints.py::test_scope_polling_sequence [33mSKIPPED[0m[32m [ 52%][0m
+tests/http_api/test_http_endpoints.py::test_channel_set_function [33mSKIPPED[0m[32m [ 52%][0m
+tests/http_api/test_http_endpoints.py::test_channel_get_adc [33mSKIPPED[0m[32m      [ 52%][0m
+tests/http_api/test_http_endpoints.py::test_mux_get [33mSKIPPED[0m (HTTP de...)[32m [ 53%][0m
+tests/http_api/test_http_endpoints.py::test_mux_set_all [33mSKIPPED[0m (HTT...)[32m [ 53%][0m
+tests/http_api/test_http_endpoints.py::test_idac_get_status [33mSKIPPED[0m[32m      [ 53%][0m
+tests/http_api/test_http_endpoints.py::test_wifi_get_status [33mSKIPPED[0m[32m      [ 53%][0m
+tests/http_api/test_http_endpoints.py::test_404_unknown_endpoint [33mSKIPPED[0m[32m [ 53%][0m
+tests/http_api/test_http_endpoints.py::test_bad_json_returns_400 [33mSKIPPED[0m[32m [ 54%][0m
+tests/http_api/test_http_endpoints.py::test_gpio_get [33mSKIPPED[0m (HTTP d...)[32m [ 54%][0m
+tests/http_api/test_http_endpoints.py::test_usbpd_get [33mSKIPPED[0m (HTTP ...)[32m [ 54%][0m
+tests/http_api/test_http_endpoints.py::test_get_faults [33mSKIPPED[0m (HTTP...)[32m [ 54%][0m
+tests/simulator/test_sim_completeness.py::test_proto_version_matches [32mPASSED[0m[32m [ 54%][0m
+tests/simulator/test_sim_completeness.py::test_all_cmdids_have_handlers [31mFAILED[0m[31m [ 55%][0m
+tests/simulator/test_sim_completeness.py::test_unknown_cmdid_returns_error_not_crash [32mPASSED[0m[31m [ 55%][0m
+tests/simulator/test_sim_completeness.py::test_state_roundtrip_channel_function [32mPASSED[0m[31m [ 55%][0m
+tests/simulator/test_sim_completeness.py::test_ping_roundtrip [32mPASSED[0m[31m     [ 55%][0m
+tests/simulator/test_sim_completeness.py::test_http_route_coverage [32mPASSED[0m[31m [ 55%][0m
+tests/simulator/test_sim_completeness.py::test_http_auth_enforcement [32mPASSED[0m[31m [ 55%][0m
+tests/simulator/test_sim_completeness.py::test_http_json_validation [32mPASSED[0m[31m [ 56%][0m
+tests/simulator/test_sim_core.py::test_get_status_structure[_usb_client] [32mPASSED[0m[31m [ 56%][0m
+tests/simulator/test_sim_core.py::test_get_status_structure[_http_client] [32mPASSED[0m[31m [ 56%][0m
+tests/simulator/test_sim_core.py::test_get_device_info_fields[_usb_client] [32mPASSED[0m[31m [ 56%][0m
+tests/simulator/test_sim_core.py::test_get_device_info_fields[_http_client] [32mPASSED[0m[31m [ 56%][0m
+tests/simulator/test_sim_core.py::test_hat_detect_no_hat [32mPASSED[0m[31m          [ 57%][0m
+tests/simulator/test_sim_core.py::test_hat_detect_with_hat [32mPASSED[0m[31m        [ 57%][0m
+tests/simulator/test_sim_core.py::test_idac_get_status_usb [32mPASSED[0m[31m        [ 57%][0m
+tests/simulator/test_sim_core.py::test_idac_get_status_http [32mPASSED[0m[31m       [ 57%][0m
+tests/simulator/test_sim_core.py::test_usbpd_status_http [32mPASSED[0m[31m          [ 57%][0m
+tests/simulator/test_sim_core.py::test_wifi_scan_http_returns_list [32mPASSED[0m[31m [ 57%][0m
+tests/simulator/test_sim_core.py::test_power_get_status_http [32mPASSED[0m[31m      [ 58%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_oneshot_header_format [32mPASSED[0m[31m [ 58%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_stream_sequence_ordering [32mPASSED[0m[31m [ 58%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_stream_gap_detection [32mPASSED[0m[31m [ 58%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_stream_stop_reasons [32mPASSED[0m[31m [ 58%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_stream_restart_clean [32mPASSED[0m[31m [ 59%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_decompress_basic [32mPASSED[0m[31m [ 59%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_decompress_max_count [32mPASSED[0m[31m [ 59%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_decompress_empty [32mPASSED[0m[31m [ 59%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_decompress_odd_trailing_byte_ignored [32mPASSED[0m[31m [ 59%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_compress_basic [32mPASSED[0m[31m [ 60%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_compress_max_run_splits [32mPASSED[0m[31m [ 60%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_compress_fallback_for_incompressible [32mPASSED[0m[31m [ 60%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_compress_decompress_roundtrip [32mPASSED[0m[31m [ 60%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_packets_have_compressed_flag [32mPASSED[0m[31m [ 60%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_packets_payload_is_even_length [32mPASSED[0m[31m [ 60%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_stream_roundtrip [32mPASSED[0m[31m [ 61%][0m
+tests/synthetic/test_la_usb_synthetic.py::test_rle_stream_raw_fallback [32mPASSED[0m[31m [ 61%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_auth_post_no_token_fails [31mFAILED[0m[31m [ 61%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_auth_post_invalid_token_fails [32mPASSED[0m[31m [ 61%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_auth_post_valid_token_succeeds [32mPASSED[0m[31m [ 61%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_json_missing_required_field_fails [32mPASSED[0m[31m [ 62%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_json_malformed_value_fails [32mPASSED[0m[31m [ 62%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_dio_hal_read_uses_correct_io_index_analog [32mPASSED[0m[31m [ 62%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_dio_hal_read_uses_correct_io_index_digital_only [32mPASSED[0m[31m [ 62%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_la_status_handles_phase0_done_state [32mPASSED[0m[31m [ 62%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_la_status_http_phase0_mapping [32mPASSED[0m[31m [ 63%][0m
+tests/synthetic/test_repository_audit_regressions.py::test_usbpd_schema_alignment [31mFAILED[0m[31m [ 63%][0m
+tests/unit/test_auth_flow.py::test_token_fetch_on_connect [32mPASSED[0m[31m         [ 63%][0m
+tests/unit/test_auth_flow.py::test_token_injection_in_http_post [32mPASSED[0m[31m   [ 63%][0m
+tests/unit/test_auth_flow.py::test_http_only_no_token [32mPASSED[0m[31m             [ 63%][0m
+tests/unit/test_auth_flow.py::test_get_admin_token_caching [32mPASSED[0m[31m        [ 63%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_all_12_ios_present [32mPASSED[0m[31m [ 64%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_analog_ios_have_analog_modes [32mPASSED[0m[31m [ 64%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_analog_ios_have_channel [32mPASSED[0m[31m [ 64%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_block_assignment [32mPASSED[0m[31m [ 64%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_channels_are_0_through_3 [32mPASSED[0m[31m [ 64%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_digital_ios_have_digital_modes [32mPASSED[0m[31m [ 65%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_digital_only_ios_have_no_channel [32mPASSED[0m[31m [ 65%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_each_io_has_esp_gpio [32mPASSED[0m[31m [ 65%][0m
+tests/unit/test_hal.py::TestRoutingTableConsistency::test_mux_device_indices_valid [32mPASSED[0m[31m [ 65%][0m
+tests/unit/test_hal.py::TestSetMux::test_analog_io_analog_mode_sets_adc_bit [32mPASSED[0m[31m [ 65%][0m
+tests/unit/test_hal.py::TestSetMux::test_analog_io_digital_high_sets_esp_high_bit [32mPASSED[0m[31m [ 65%][0m
+tests/unit/test_hal.py::TestSetMux::test_analog_io_digital_low_sets_esp_low_bit [32mPASSED[0m[31m [ 66%][0m
+tests/unit/test_hal.py::TestSetMux::test_analog_io_disabled_clears_group_a [32mPASSED[0m[31m [ 66%][0m
+tests/unit/test_hal.py::TestSetMux::test_analog_io_hat_sets_hat_bit [32mPASSED[0m[31m [ 66%][0m
+tests/unit/test_hal.py::TestSetMux::test_different_devices_independent [32mPASSED[0m[31m [ 66%][0m
+tests/unit/test_hal.py::TestSetMux::test_multiple_ios_same_device_coexist [32mPASSED[0m[31m [ 66%][0m
+tests/unit/test_hal.py::TestSetMux::test_position2_digital_high_sets_group_b [32mPASSED[0m[31m [ 67%][0m
+tests/unit/test_hal.py::TestSetMux::test_position2_digital_low_sets_group_b_low [32mPASSED[0m[31m [ 67%][0m
+tests/unit/test_hal.py::TestSetMux::test_position3_digital_high_sets_group_c [32mPASSED[0m[31m [ 67%][0m
+tests/unit/test_hal.py::TestSetMux::test_position3_digital_low_sets_group_c_low [32mPASSED[0m[31m [ 67%][0m
+tests/unit/test_hal.py::TestModeValidation::test_analog_mode_accepted_on_analog_io [32mPASSED[0m[31m [ 67%][0m
+tests/unit/test_hal.py::TestModeValidation::test_analog_mode_rejected_on_digital_only_io [32mPASSED[0m[31m [ 68%][0m
+tests/unit/test_hal.py::TestModeValidation::test_configure_before_begin_raises [32mPASSED[0m[31m [ 68%][0m
+tests/unit/test_hal.py::TestModeValidation::test_current_mode_rejected_on_digital_only_io [32mPASSED[0m[31m [ 68%][0m
+tests/unit/test_hal.py::TestModeValidation::test_digital_mode_accepted_on_analog_io [32mPASSED[0m[31m [ 68%][0m
+tests/unit/test_hal.py::TestModeValidation::test_digital_mode_accepted_on_digital_only_io [32mPASSED[0m[31m [ 68%][0m
+tests/unit/test_hal.py::TestModeValidation::test_disabled_accepted_on_any_io [32mPASSED[0m[31m [ 68%][0m
+tests/unit/test_hal.py::TestModeValidation::test_hart_rejected_on_digital_only_io [32mPASSED[0m[31m [ 69%][0m
+tests/unit/test_hal.py::TestModeValidation::test_hat_rejected_on_digital_only_io [32mPASSED[0m[31m [ 69%][0m
+tests/unit/test_hal.py::TestModeValidation::test_invalid_io_number_raises [32mPASSED[0m[31m [ 69%][0m
+tests/unit/test_hal.py::TestModeValidation::test_rtd_rejected_on_digital_only_io [32mPASSED[0m[31m [ 69%][0m
+tests/unit/test_hal.py::TestDigitalReadRouting::test_read_analog_io_digital_in_low_uses_esp_gpio [32mPASSED[0m[31m [ 69%][0m
+tests/unit/test_hal.py::TestDigitalReadRouting::test_read_analog_io_digital_in_uses_get_status [32mPASSED[0m[31m [ 70%][0m
+tests/unit/test_hal.py::TestDigitalReadRouting::test_read_digital_only_io_uses_esp_gpio [32mPASSED[0m[31m [ 70%][0m
+tests/unit/test_hal.py::TestDigitalReadRouting::test_read_digital_returns_false_on_empty_response [32mPASSED[0m[31m [ 70%][0m
+tests/unit/test_hal.py::TestDigitalReadRouting::test_read_digital_wrong_mode_raises [32mPASSED[0m[31m [ 70%][0m
+tests/unit/test_hal.py::TestDigitalWriteRouting::test_write_analog_io_digital_out_low_uses_esp_gpio [32mPASSED[0m[31m [ 70%][0m
+tests/unit/test_hal.py::TestDigitalWriteRouting::test_write_analog_io_digital_out_uses_set_digital_output [32mPASSED[0m[31m [ 71%][0m
+tests/unit/test_hal.py::TestDigitalWriteRouting::test_write_digital_off [32mPASSED[0m[31m [ 71%][0m
+tests/unit/test_hal.py::TestDigitalWriteRouting::test_write_digital_only_io_uses_esp_gpio [32mPASSED[0m[31m [ 71%][0m
+tests/unit/test_hal.py::TestDigitalWriteRouting::test_write_digital_wrong_mode_raises [32mPASSED[0m[31m [ 71%][0m
+tests/unit/test_hal.py::TestEnableIoBlockPower::test_block1_io1_enables_vadj1_and_efuse1 [32mPASSED[0m[31m [ 71%][0m
+tests/unit/test_hal.py::TestEnableIoBlockPower::test_block1_io5_enables_vadj1_and_efuse2 [32mPASSED[0m[31m [ 71%][0m
+tests/unit/test_hal.py::TestEnableIoBlockPower::test_block2_io12_enables_vadj2_and_efuse3 [32mPASSED[0m[31m [ 72%][0m
+tests/unit/test_hal.py::TestEnableIoBlockPower::test_block2_io7_enables_vadj2_and_efuse4 [32mPASSED[0m[31m [ 72%][0m
+tests/unit/test_hal.py::TestEnableIoBlockPower::test_efuse_skipped_if_already_on [32mPASSED[0m[31m [ 72%][0m
+tests/unit/test_hal.py::TestEnableIoBlockPower::test_ios_sharing_same_efuse_only_enable_once [32mPASSED[0m[31m [ 72%][0m
+tests/unit/test_hal.py::TestEnableIoBlockPower::test_supply_not_re_enabled_if_already_on [32mPASSED[0m[31m [ 72%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_la_arm_raises [32mPASSED[0m[31m [ 73%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_la_configure_raises [32mPASSED[0m[31m [ 73%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_la_force_raises [32mPASSED[0m[31m [ 73%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_la_get_status_raises [32mPASSED[0m[31m [ 73%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_la_read_all_raises [32mPASSED[0m[31m [ 73%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_la_set_trigger_raises [32mPASSED[0m[31m [ 73%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_la_stop_raises [32mPASSED[0m[31m [ 74%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_no_la_or_swd_command_dispatched_when_hat_absent [32mPASSED[0m[31m [ 74%][0m
+tests/unit/test_hat_guards.py::TestHatGuardRaisesWhenAbsent::test_swd_setup_raises [32mPASSED[0m[31m [ 74%][0m
+tests/unit/test_hat_guards.py::TestHatGuardAllowsWhenPresent::test_la_configure_dispatches [32mPASSED[0m[31m [ 74%][0m
+tests/unit/test_hat_guards.py::TestHatGuardAllowsWhenPresent::test_swd_setup_dispatches [32mPASSED[0m[31m [ 74%][0m
+tests/unit/test_hat_guards.py::TestHatGuardCache::test_cache_avoids_repeat_status_query [32mPASSED[0m[31m [ 75%][0m
+tests/unit/test_hat_guards.py::TestHatGuardCache::test_hat_detect_resets_cache_so_new_state_takes_effect [32mPASSED[0m[31m [ 75%][0m
+tests/unit/test_hat_guards.py::TestHatSetPinRejectsReservedFunctionCodes::test_accepts_disconnected_and_gpio [32mPASSED[0m[31m [ 75%][0m
+tests/unit/test_hat_guards.py::TestHatSetPinRejectsReservedFunctionCodes::test_rejects_slot_1_swdio [32mPASSED[0m[31m [ 75%][0m
+tests/unit/test_hat_guards.py::TestHatSetPinRejectsReservedFunctionCodes::test_rejects_slot_2_swclk [32mPASSED[0m[31m [ 75%][0m
+tests/unit/test_hat_guards.py::TestHatSetPinRejectsReservedFunctionCodes::test_rejects_slot_3_trace1 [32mPASSED[0m[31m [ 76%][0m
+tests/unit/test_hat_guards.py::TestHatSetPinRejectsReservedFunctionCodes::test_rejects_slot_4_trace2 [32mPASSED[0m[31m [ 76%][0m
+tests/unit/test_hat_guards.py::TestHatSetPinRejectsReservedFunctionCodes::test_reserved_rejected_before_transport_call [32mPASSED[0m[31m [ 76%][0m
+tests/unit/test_hat_guards.py::TestHatSetupSwdDoesNotTouchExpExt::test_hat_setup_swd_dispatches_no_set_pin_commands [32mPASSED[0m[31m [ 76%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_status_parses_optional_hvpak_fields [32mPASSED[0m[31m [ 76%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_power_parses_optional_hvpak_fields [32mPASSED[0m[31m [ 76%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_hvpak_info_parses_payload [32mPASSED[0m[31m [ 77%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_hvpak_caps_parses_payload [32mPASSED[0m[31m [ 77%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_hvpak_lut_parses_payload [32mPASSED[0m[31m [ 77%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_hvpak_bridge_parses_payload [32mPASSED[0m[31m [ 77%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_hvpak_analog_parses_payload [32mPASSED[0m[31m [ 77%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_get_hvpak_pwm_parses_payload [32mPASSED[0m[31m [ 78%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_hvpak_reg_helpers_parse_payload [32mPASSED[0m[31m [ 78%][0m
+tests/unit/test_hat_status_parsing.py::test_device_error_uses_new_hvpak_error_names [32mPASSED[0m[31m [ 78%][0m
+tests/unit/test_hat_status_parsing.py::test_hat_la_status_parses_optional_stream_diagnostics [32mPASSED[0m[31m [ 78%][0m
+tests/unit/test_http_transport.py::test_post_injects_admin_header [32mPASSED[0m[31m [ 78%][0m
+tests/unit/test_http_transport.py::test_post_without_admin_token_omits_header [32mPASSED[0m[31m [ 78%][0m
+tests/unit/test_http_transport.py::test_set_admin_token_roundtrip [32mPASSED[0m[31m [ 79%][0m
+tests/unit/test_http_transport.py::test_verify_pairing_success [32mPASSED[0m[31m    [ 79%][0m
+tests/unit/test_http_transport.py::test_verify_pairing_failure [32mPASSED[0m[31m    [ 79%][0m
+tests/unit/test_http_transport.py::test_verify_pairing_without_candidate_returns_false [32mPASSED[0m[31m [ 79%][0m
+tests/unit/test_http_transport.py::test_get_board_returns_available_list [32mPASSED[0m[31m [ 79%][0m
+tests/unit/test_http_transport.py::test_set_board_posts_boardId_and_sends_admin_header [32mPASSED[0m[31m [ 80%][0m
+tests/unit/test_http_transport.py::test_get_mac_address_prefers_camelCase [32mPASSED[0m[31m [ 80%][0m
+tests/unit/test_http_transport.py::test_get_mac_address_falls_back_to_snake_case [32mPASSED[0m[31m [ 80%][0m
+tests/unit/test_http_transport.py::test_get_mac_address_returns_none_when_missing [32mPASSED[0m[31m [ 80%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_encode[\x01\x02\x03-\x04\x01\x02\x03] [32mPASSED[0m[31m [ 80%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_encode[\x00-\x01\x01] [32mPASSED[0m[31m [ 81%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_encode[\x00\x00-\x01\x01\x01] [32mPASSED[0m[31m [ 81%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_encode[\x01\x00\x02-\x02\x01\x02\x02] [32mPASSED[0m[31m [ 81%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_encode[\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe-\xff\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\x01] [32mPASSED[0m[31m [ 81%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_encode[\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff-\xff\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\x02\xff] [32mPASSED[0m[31m [ 81%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_roundtrip[\x01\x02\x03] [32mPASSED[0m[31m [ 81%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_roundtrip[\x00] [32mPASSED[0m[31m [ 82%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_roundtrip[\x00\x00] [32mPASSED[0m[31m [ 82%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_roundtrip[\x01\x00\x02] [32mPASSED[0m[31m [ 82%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_roundtrip[\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff] [32mPASSED[0m[31m [ 82%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_roundtrip[Hello World] [32mPASSED[0m[31m [ 82%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_cobs_roundtrip[\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff] [32mPASSED[0m[31m [ 83%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_crc16_ccitt [32mPASSED[0m[31m    [ 83%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_frame_roundtrip [32mPASSED[0m[31m [ 83%][0m
+tests/unit/test_parsers.py::TestCobsProtocol::test_get_admin_token_id [32mPASSED[0m[31m [ 83%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_spi_ok_true [32mPASSED[0m[31m [ 83%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_spi_ok_false [32mPASSED[0m[31m [ 84%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_die_temp [32mPASSED[0m[31m  [ 84%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_die_temp_negative [32mPASSED[0m[31m [ 84%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_header_u16_fields[alert_status-4660] [32mPASSED[0m[31m [ 84%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_header_u16_fields[alert_mask-43981] [32mPASSED[0m[31m [ 84%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_header_u16_fields[supply_alert_status-255] [32mPASSED[0m[31m [ 84%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_header_u16_fields[supply_alert_mask-65280] [32mPASSED[0m[31m [ 85%][0m
+tests/unit/test_parsers.py::TestParseStatusHeader::test_header_u16_fields[live_status-23130] [32mPASSED[0m[31m [ 85%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_four_channels_present [32mPASSED[0m[31m [ 85%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_channel_ids [32mPASSED[0m[31m [ 85%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_channel_function_codes [32mPASSED[0m[31m [ 85%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_raw_24bit [32mPASSED[0m[31m [ 86%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_value_float [32mPASSED[0m[31m [ 86%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_range[0] [32mPASSED[0m[31m [ 86%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_range[1] [32mPASSED[0m[31m [ 86%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_range[2] [32mPASSED[0m[31m [ 86%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_range[5] [32mPASSED[0m[31m [ 86%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_range[7] [32mPASSED[0m[31m [ 87%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_rate[0] [32mPASSED[0m[31m [ 87%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_rate[1] [32mPASSED[0m[31m [ 87%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_rate[4] [32mPASSED[0m[31m [ 87%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_rate[9] [32mPASSED[0m[31m [ 87%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_rate[13] [32mPASSED[0m[31m [ 88%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_mux[0] [32mPASSED[0m[31m [ 88%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_mux[1] [32mPASSED[0m[31m [ 88%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_mux[2] [32mPASSED[0m[31m [ 88%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_mux[3] [32mPASSED[0m[31m [ 88%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_adc_mux[4] [32mPASSED[0m[31m [ 89%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_dac_code [32mPASSED[0m[31m [ 89%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_dac_value_float [32mPASSED[0m[31m [ 89%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_din_state [32mPASSED[0m[31m [ 89%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_din_counter [32mPASSED[0m[31m [ 89%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_do_state [32mPASSED[0m[31m [ 89%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_channel_alert [32mPASSED[0m[31m [ 90%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_channel_alert_mask [32mPASSED[0m[31m [ 90%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_rtd_excitation_ua [32mPASSED[0m[31m [ 90%][0m
+tests/unit/test_parsers.py::TestParseStatusChannels::test_all_channels_different_values [32mPASSED[0m[31m [ 90%][0m
+tests/unit/test_parsers.py::TestParseStatusChannelLayout::test_channel_block_is_30_bytes [32mPASSED[0m[31m [ 90%][0m
+tests/unit/test_parsers.py::TestParseStatusChannelLayout::test_total_payload_size [32mPASSED[0m[31m [ 91%][0m
+tests/unit/test_parsers.py::TestParseStatusDiagnostics::test_four_diagnostics_present [32mPASSED[0m[31m [ 91%][0m
+tests/unit/test_parsers.py::TestParseStatusDiagnostics::test_diagnostic_values [32mPASSED[0m[31m [ 91%][0m
+tests/unit/test_parsers.py::TestParseStatusDiagnostics::test_diagnostics_offset_135 [32mPASSED[0m[31m [ 91%][0m
+tests/unit/test_parsers.py::TestParseFaults::test_header_fields [32mPASSED[0m[31m   [ 91%][0m
+tests/unit/test_parsers.py::TestParseFaults::test_four_channels [32mPASSED[0m[31m   [ 92%][0m
+tests/unit/test_parsers.py::TestParseFaults::test_channel_faults [32mPASSED[0m[31m  [ 92%][0m
+tests/unit/test_parsers.py::TestParseFaults::test_all_zeros [32mPASSED[0m[31m       [ 92%][0m
+tests/unit/test_parsers.py::TestParseFaults::test_payload_size [32mPASSED[0m[31m    [ 92%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_1ch_single_byte [32mPASSED[0m[31m [ 92%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_1ch_multiple_bytes [32mPASSED[0m[31m [ 92%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_2ch_single_byte [32mPASSED[0m[31m [ 93%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_4ch_single_byte [32mPASSED[0m[31m [ 93%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_4ch_all_high [32mPASSED[0m[31m    [ 93%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_4ch_all_low [32mPASSED[0m[31m     [ 93%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_1ch_all_zeros [32mPASSED[0m[31m   [ 93%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_1ch_all_ones [32mPASSED[0m[31m    [ 94%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_empty_input [32mPASSED[0m[31m     [ 94%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_sample_count_per_byte[1-8] [32mPASSED[0m[31m [ 94%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_sample_count_per_byte[2-4] [32mPASSED[0m[31m [ 94%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_sample_count_per_byte[4-2] [32mPASSED[0m[31m [ 94%][0m
+tests/unit/test_parsers.py::TestHatLaDecode::test_2ch_multiple_bytes [32mPASSED[0m[31m [ 94%][0m
+tests/unit/test_parsers.py::TestParseStatusEdgeCases::test_empty_payload_raises [32mPASSED[0m[31m [ 95%][0m
+tests/unit/test_parsers.py::TestParseStatusEdgeCases::test_header_only_raises [32mPASSED[0m[31m [ 95%][0m
+tests/unit/test_parsers.py::TestParseStatusEdgeCases::test_partial_channels_raises [32mPASSED[0m[31m [ 95%][0m
+tests/unit/test_parsers.py::TestParseStatusEdgeCases::test_missing_diagnostics_raises [32mPASSED[0m[31m [ 95%][0m
+tests/unit/test_parsers.py::TestParseStatusEdgeCases::test_one_extra_byte_still_works [32mPASSED[0m[31m [ 95%][0m
+tests/unit/test_parsers.py::TestParseFaultsEdgeCases::test_empty_payload_raises [32mPASSED[0m[31m [ 96%][0m
+tests/unit/test_parsers.py::TestParseFaultsEdgeCases::test_header_only_raises [32mPASSED[0m[31m [ 96%][0m
+tests/unit/test_protocol_constants.py::test_python_cmdid_matches_firmware[BBP_CMD_SELFTEST_WORKER-SELFTEST_WORKER] [32mPASSED[0m[31m [ 96%][0m
+tests/unit/test_protocol_constants.py::test_python_cmdid_matches_firmware[BBP_CMD_QS_LIST-QS_LIST] [32mPASSED[0m[31m [ 96%][0m
+tests/unit/test_protocol_constants.py::test_python_cmdid_matches_firmware[BBP_CMD_QS_GET-QS_GET] [32mPASSED[0m[31m [ 96%][0m
+tests/unit/test_protocol_constants.py::test_python_cmdid_matches_firmware[BBP_CMD_QS_SAVE-QS_SAVE] [32mPASSED[0m[31m [ 97%][0m
+tests/unit/test_protocol_constants.py::test_python_cmdid_matches_firmware[BBP_CMD_QS_APPLY-QS_APPLY] [32mPASSED[0m[31m [ 97%][0m
+tests/unit/test_protocol_constants.py::test_python_cmdid_matches_firmware[BBP_CMD_QS_DELETE-QS_DELETE] [32mPASSED[0m[31m [ 97%][0m
+tests/unit/test_protocol_constants.py::test_desktop_const_matches_python[BBP_CMD_SELFTEST_WORKER-SELFTEST_WORKER] [32mPASSED[0m[31m [ 97%][0m
+tests/unit/test_protocol_constants.py::test_desktop_const_matches_python[BBP_CMD_QS_LIST-QS_LIST] [32mPASSED[0m[31m [ 97%][0m
+tests/unit/test_protocol_constants.py::test_desktop_const_matches_python[BBP_CMD_QS_GET-QS_GET] [32mPASSED[0m[31m [ 97%][0m
+tests/unit/test_protocol_constants.py::test_desktop_const_matches_python[BBP_CMD_QS_SAVE-QS_SAVE] [32mPASSED[0m[31m [ 98%][0m
+tests/unit/test_protocol_constants.py::test_desktop_const_matches_python[BBP_CMD_QS_APPLY-QS_APPLY] [32mPASSED[0m[31m [ 98%][0m
+tests/unit/test_protocol_constants.py::test_desktop_const_matches_python[BBP_CMD_QS_DELETE-QS_DELETE] [32mPASSED[0m[31m [ 98%][0m
+tests/unit/test_protocol_constants.py::test_quicksetup_block_is_contiguous [32mPASSED[0m[31m [ 98%][0m
+tests/unit/test_rail_lock.py::RailLockTests::test_no_profile_falls_through_to_hardware_limits [32mPASSED[0m[31m [ 98%][0m
+tests/unit/test_rail_lock.py::RailLockTests::test_vadj1_locked_allows_matching_voltage [32mPASSED[0m[31m [ 99%][0m
+tests/unit/test_rail_lock.py::RailLockTests::test_vadj1_locked_blocks_mismatched_voltage [32mPASSED[0m[31m [ 99%][0m
+tests/unit/test_rail_lock.py::RailLockTests::test_vadj1_unlocked_allows_change [32mPASSED[0m[31m [ 99%][0m
+tests/unit/test_rail_lock.py::RailLockTests::test_vadj2_lock_checked_independently [32mPASSED[0m[31m [ 99%][0m
+tests/unit/test_rail_lock.py::RailLockTests::test_vlogic_locked_allows_matching_voltage [32mPASSED[0m[31m [ 99%][0m
+tests/unit/test_rail_lock.py::RailLockTests::test_vlogic_locked_blocks_change [32mPASSED[0m[31m [100%][0m
+
+=================================== FAILURES ===================================
+[31m[1m________________________ test_all_cmdids_have_handlers _________________________[0m
+[1m[31mtests/simulator/test_sim_completeness.py[0m:38: in test_all_cmdids_have_handlers
+    [0m[94massert[39;49;00m [95mnot[39;49;00m unhandled, [33mf[39;49;00m[33m"[39;49;00m[33mMissing handlers for: [39;49;00m[33m{[39;49;00m[c.name[90m [39;49;00m[94mfor[39;49;00m[90m [39;49;00mc[90m [39;49;00m[95min[39;49;00m[90m [39;49;00munhandled][33m}[39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: Missing handlers for: ['SELFTEST_WORKER', 'QS_LIST', 'QS_GET', 'QS_SAVE', 'QS_APPLY', 'QS_DELETE'][0m
+[1m[31mE   assert not [<CmdId.SELFTEST_WORKER: 11>, <CmdId.QS_LIST: 240>, <CmdId.QS_GET: 241>, <CmdId.QS_SAVE: 242>, <CmdId.QS_APPLY: 243>, <CmdId.QS_DELETE: 244>][0m
+[31m[1m________________________ test_auth_post_no_token_fails _________________________[0m
+[1m[31mtests/synthetic/test_repository_audit_regressions.py[0m:38: in test_auth_post_no_token_fails
+    [0m[94massert[39;49;00m resp.get([33m"[39;49;00m[33mcode[39;49;00m[33m"[39;49;00m) == [94m401[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: assert None == 401[0m
+[1m[31mE    +  where None = <built-in method get of dict object at 0x108b55040>('code')[0m
+[1m[31mE    +    where <built-in method get of dict object at 0x108b55040> = {'ok': True}.get[0m
+[31m[1m_________________________ test_usbpd_schema_alignment __________________________[0m
+[1m[31mtests/synthetic/test_repository_audit_regressions.py[0m:179: in test_usbpd_schema_alignment
+    [0m[94massert[39;49;00m [33m"[39;49;00m[33mvoltageV[39;49;00m[33m"[39;49;00m [95min[39;49;00m status[90m[39;49;00m
+[1m[31mE   AssertionError: assert 'voltageV' in {'attached': True, 'cc_direction': 'CC1', 'current_a': 3.0, 'pd_response': 0, ...}[0m
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m tests/simulator/test_sim_completeness.py::[1mtest_all_cmdids_have_handlers[0m - AssertionError: Missing handlers for: ['SELFTEST_WORKER', 'QS_LIST', 'QS_GE...
+[31mFAILED[0m tests/synthetic/test_repository_audit_regressions.py::[1mtest_auth_post_no_token_fails[0m - AssertionError: assert None == 401
+[31mFAILED[0m tests/synthetic/test_repository_audit_regressions.py::[1mtest_usbpd_schema_alignment[0m - AssertionError: assert 'voltageV' in {'attached': True, 'cc_direction': 'CC...
+[31m================== [31m[1m3 failed[0m, [32m241 passed[0m, [33m295 skipped[0m[31m in 1.86s[0m[31m ==================[0m

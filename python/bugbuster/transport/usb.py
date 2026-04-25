@@ -16,7 +16,6 @@ See BugBusterProtocol.md §2–§5 for the complete wire specification.
 
 import threading
 import queue
-import struct
 import logging
 import random
 from typing import Callable, Optional
@@ -196,10 +195,14 @@ class USBTransport:
                     except Exception:
                         pass
                 else:
-                    self._serial.close()
+                    if self._serial is not None:
+                        self._serial.close()
                     raise ConnectionError(
                         f"BBP handshake timed out — received: {last_handshake_buf}"
                     )
+
+        if resp is None:
+            raise ConnectionError("Handshake returned no response")
 
         self.proto_version = resp[4]
         self.fw_version    = (resp[5], resp[6], resp[7])
@@ -274,8 +277,9 @@ class USBTransport:
             self._pending[seq] = resp_queue
 
         frame = build_frame(seq, cmd_id, payload)
-        self._serial.write(frame)
-        self._serial.flush()
+        if self._serial is not None:
+            self._serial.write(frame)
+            self._serial.flush()
 
         try:
             result = resp_queue.get(timeout=self._timeout)

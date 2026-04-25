@@ -1,0 +1,177 @@
+Python/setup.py:1: error: Library stubs not installed for "setuptools"  [import-untyped]
+Python/setup.py:1: note: Hint: "python3 -m pip install types-setuptools"
+tests/run_tests.py:32: error: Cannot find implementation or library stub for module named "rich.console"  [import-not-found]
+tests/run_tests.py:33: error: Cannot find implementation or library stub for module named "rich.table"  [import-not-found]
+tests/run_tests.py:34: error: Cannot find implementation or library stub for module named "rich"  [import-not-found]
+Scripts/test_spi_clock_sweep.py:8: error: Library stubs not installed for "serial"  [import-untyped]
+tests/mock/handlers/streaming.py:144: error: No overload variant of "__setitem__" of "list" matches argument types "int", "Thread"  [call-overload]
+tests/mock/handlers/streaming.py:144: note: Possible overload variants:
+tests/mock/handlers/streaming.py:144: note:     def __setitem__(self, SupportsIndex, None, /) -> None
+tests/mock/handlers/streaming.py:144: note:     def __setitem__(self, slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], Iterable[None], /) -> None
+Python/bugbuster/hal.py:373: error: Incompatible default for parameter "routing" (default has type "None", parameter has type "dict[Any, Any]")  [assignment]
+Python/bugbuster/hal.py:373: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster/hal.py:373: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster/hal.py:395: error: Incompatible default for parameter "supply_voltage" (default has type "None", parameter has type "float")  [assignment]
+Python/bugbuster/hal.py:395: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster/hal.py:395: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster/hal.py:396: error: Incompatible default for parameter "vlogic" (default has type "None", parameter has type "float")  [assignment]
+Python/bugbuster/hal.py:396: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster/hal.py:396: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster/transport/usb.py:24: error: Library stubs not installed for "serial"  [import-untyped]
+Python/bugbuster/transport/usb.py:24: note: Hint: "python3 -m pip install types-pyserial"
+Python/bugbuster/transport/usb.py:24: note: (or run "mypy --install-types" to install all missing stub packages)
+Python/bugbuster/transport/usb.py:24: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports
+Python/bugbuster/transport/usb.py:137: error: Item "None" of "Any | None" has no attribute "read"  [union-attr]
+Python/bugbuster/transport/usb.py:160: error: Item "None" of "Any | None" has no attribute "write"  [union-attr]
+Python/bugbuster/transport/usb.py:161: error: Item "None" of "Any | None" has no attribute "flush"  [union-attr]
+Python/bugbuster/transport/usb.py:204: error: Value of type "bytes | None" is not indexable  [index]
+Python/bugbuster/transport/usb.py:204: error: Incompatible types in assignment (expression has type "int | Any", variable has type "None")  [assignment]
+Python/bugbuster/transport/usb.py:205: error: Incompatible types in assignment (expression has type "tuple[int | Any, int | Any, int | Any]", variable has type "None")  [assignment]
+Python/bugbuster/transport/usb.py:205: error: Value of type "bytes | None" is not indexable  [index]
+Python/bugbuster/transport/usb.py:206: error: Argument 1 to "len" has incompatible type "bytes | None"; expected "Sized"  [arg-type]
+Python/bugbuster/transport/usb.py:207: error: Incompatible types in assignment (expression has type "bytes", variable has type "None")  [assignment]
+Python/bugbuster/transport/usb.py:207: error: Value of type "bytes | None" is not indexable  [index]
+Python/bugbuster/transport/usb.py:208: error: "None" has no attribute "__iter__" (not iterable)  [attr-defined]
+Python/bugbuster/transport/usb.py:216: error: Expected iterable as variadic argument  [misc]
+Python/bugbuster/transport/usb.py:237: error: Incompatible return value type (got "tuple[None, None]", expected "tuple[int, tuple[int, int, int]]")  [return-value]
+Python/bugbuster/transport/usb.py:277: error: Item "None" of "Any | None" has no attribute "write"  [union-attr]
+Python/bugbuster/transport/usb.py:278: error: Item "None" of "Any | None" has no attribute "flush"  [union-attr]
+Python/bugbuster/transport/usb.py:333: error: Item "None" of "Any | None" has no attribute "read"  [union-attr]
+tests/mock/simulated_transport.py:36: error: Incompatible types in assignment (expression has type "bytes", variable has type "None")  [assignment]
+Python/bugbuster/client.py:284: error: Incompatible types in assignment (expression has type "str", variable has type "None")  [assignment]
+Python/bugbuster/client.py:336: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "send_command"  [union-attr]
+Python/bugbuster/client.py:339: error: Item "USBTransport" of "USBTransport | HTTPTransport" has no attribute "get"  [union-attr]
+Python/bugbuster/client.py:341: error: Incompatible default for parameter "body" (default has type "None", parameter has type "dict[Any, Any]")  [assignment]
+Python/bugbuster/client.py:341: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster/client.py:341: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster/client.py:342: error: Need type annotation for "headers" (hint: "headers: dict[<type>, <type>] = ...")  [var-annotated]
+Python/bugbuster/client.py:345: error: Item "USBTransport" of "USBTransport | HTTPTransport" has no attribute "post"  [union-attr]
+Python/bugbuster/client.py:426: error: Incompatible return value type (got "tuple[int, int, int] | None", expected "tuple[Any, ...]")  [return-value]
+Python/bugbuster/client.py:1447: error: Incompatible types in assignment (expression has type "bool", variable has type "None")  [assignment]
+Python/bugbuster/client.py:1609: error: Incompatible types in assignment (expression has type "bool", variable has type "None")  [assignment]
+Python/bugbuster/client.py:1951: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Python/bugbuster/client.py:1951: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Python/bugbuster/client.py:1952: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Python/bugbuster/client.py:2201: error: Need type annotation for "result"  [var-annotated]
+Python/bugbuster/client.py:2338: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "on_event"  [union-attr]
+Python/bugbuster/client.py:2347: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "remove_event"  [union-attr]
+Python/bugbuster/client.py:2369: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "on_event"  [union-attr]
+Python/bugbuster/client.py:2385: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "on_event"  [union-attr]
+Python/bugbuster/client.py:2396: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "remove_event"  [union-attr]
+Python/bugbuster/client.py:2402: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "on_event"  [union-attr]
+Python/bugbuster/client.py:2417: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "on_event"  [union-attr]
+Python/bugbuster/client.py:2423: error: Incompatible default for parameter "channel" (default has type "None", parameter has type "int")  [assignment]
+Python/bugbuster/client.py:2423: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster/client.py:2423: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster/client.py:2569: error: Item "HTTPTransport" of "USBTransport | HTTPTransport" has no attribute "on_event"  [union-attr]
+Python/bugbuster/client.py:2630: error: Incompatible return value type (got "dict[Any, Any]", expected "bool")  [return-value]
+tests/mock/simulated_device.py:110: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/mock/simulated_device.py:139: error: Incompatible default for parameter "headers" (default has type "None", parameter has type "dict[Any, Any]")  [assignment]
+tests/mock/simulated_device.py:139: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+tests/mock/simulated_device.py:139: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/session.py:32: error: Incompatible default for parameter "port" (default has type "None", parameter has type "str")  [assignment]
+Python/bugbuster_mcp/session.py:32: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/session.py:32: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+tests/mock/la_usb_host.py:115: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]
+tests/mock/la_usb_host.py:122: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+tests/mock/la_usb_host.py:122: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+tests/mock/la_usb_host.py:123: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+tests/device/diag_la_stream_steps.py:14: error: Library stubs not installed for "mock.la_usb_host"  [import-untyped]
+tests/device/diag_la_stream_steps.py:14: note: Hint: "python3 -m pip install types-mock"
+Diag/repro_pytest_ordering.py:24: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Diag/repro_pytest_ordering.py:24: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/repro_pytest_ordering.py:25: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Diag/repro_five_cycles.py:47: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Diag/repro_five_cycles.py:47: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/repro_five_cycles.py:48: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Diag/repro_0x11_debug.py:24: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Diag/repro_0x11_debug.py:24: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/repro_0x11_debug.py:25: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Diag/raw_usb_test.py:21: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Diag/raw_usb_test.py:21: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/raw_usb_test.py:22: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Diag/full_usb_test.py:1: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Diag/full_usb_test.py:1: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/full_usb_test.py:2: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Python/examples/07_digital_io.py:149: error: Incompatible types in assignment (expression has type "int", variable has type "dict[Any, Any]")  [assignment]
+Python/examples/07_digital_io.py:150: error: Argument 1 to "dio_configure" of "BugBuster" has incompatible type "dict[Any, Any]"; expected "int"  [arg-type]
+Python/examples/07_digital_io.py:153: error: Incompatible types in assignment (expression has type "int", variable has type "dict[Any, Any]")  [assignment]
+Python/examples/07_digital_io.py:154: error: Argument 1 to "dio_write" of "BugBuster" has incompatible type "dict[Any, Any]"; expected "int"  [arg-type]
+Python/examples/07_digital_io.py:156: error: Argument 1 to "dio_write" of "BugBuster" has incompatible type "dict[Any, Any]"; expected "int"  [arg-type]
+Python/examples/07_digital_io.py:178: error: Incompatible types in assignment (expression has type "int", variable has type "dict[Any, Any]")  [assignment]
+Python/examples/07_digital_io.py:179: error: Argument 1 to "dio_configure" of "BugBuster" has incompatible type "dict[Any, Any]"; expected "int"  [arg-type]
+Python/examples/05_hal_basics.py:100: error: Library stubs not installed for "serial"  [import-untyped]
+Python/bugbuster_mcp/tools/advanced.py:23: error: Incompatible default for parameter "states" (default has type "None", parameter has type "list[Any]")  [assignment]
+Python/bugbuster_mcp/tools/advanced.py:23: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/tools/advanced.py:23: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/tools/advanced.py:126: error: Incompatible default for parameter "voltage" (default has type "None", parameter has type "float")  [assignment]
+Python/bugbuster_mcp/tools/advanced.py:126: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/tools/advanced.py:126: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/tools/advanced.py:127: error: Incompatible default for parameter "code" (default has type "None", parameter has type "int")  [assignment]
+Python/bugbuster_mcp/tools/advanced.py:127: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/tools/advanced.py:127: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/tools/discovery.py:93: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:95: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:98: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:100: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:109: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:115: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:118: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:120: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:129: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:153: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:156: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:169: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:174: error: "object" has no attribute "append"  [attr-defined]
+Python/bugbuster_mcp/tools/discovery.py:186: error: Argument 1 to "join" of "str" has incompatible type "object"; expected "Iterable[str]"  [arg-type]
+Diag/repro_suite_fail_v2.py:5: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Diag/repro_suite_fail_v2.py:5: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/repro_suite_fail_v2.py:6: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Diag/repro_suite_fail.py:5: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+Diag/repro_suite_fail.py:5: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/repro_suite_fail.py:6: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Diag/diag_la_streaming.py:38: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+Diag/diag_la_streaming.py:38: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+Diag/diag_la_streaming.py:60: error: Cannot assign to a method  [method-assign]
+Diag/diag_la_streaming.py:184: error: "object" has no attribute "append"  [attr-defined]
+Diag/diag_la_streaming.py:202: error: Unsupported operand types for + ("object" and "int")  [operator]
+Diag/diag_la_streaming.py:216: error: "object" has no attribute "append"  [attr-defined]
+Diag/diag_la_streaming.py:219: error: "object" has no attribute "append"  [attr-defined]
+Diag/diag_la_streaming.py:231: error: "object" has no attribute "append"  [attr-defined]
+tests/device/test_15_swd.py:24: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_14_uart.py:11: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_13_dio.py:12: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_11_hat.py:20: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_11_hat.py:23: error: Library stubs not installed for "serial"  [import-untyped]
+tests/device/test_11_hat.py:24: error: Library stubs not installed for "serial.tools.list_ports"  [import-untyped]
+tests/device/test_11_hat.py:24: error: Library stubs not installed for "serial.tools"  [import-untyped]
+tests/device/test_11_hat.py:30: error: Cannot find implementation or library stub for module named "usb.core"  [import-not-found]
+tests/device/test_11_hat.py:30: error: Cannot find implementation or library stub for module named "usb"  [import-not-found]
+tests/device/test_11_hat.py:31: error: Cannot find implementation or library stub for module named "usb.util"  [import-not-found]
+tests/device/test_10_streaming.py:16: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_09_selftest.py:13: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_08_wifi.py:11: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_07_wavegen.py:19: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_06_usbpd.py:10: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_05_power.py:18: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_04_mux.py:16: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_03_gpio.py:12: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_02_channels.py:11: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+tests/device/test_01_core.py:12: error: Cannot find implementation or library stub for module named "conftest"  [import-not-found]
+Python/bugbuster_mcp/tools/debug.py:143: error: Incompatible default for parameter "baudrate" (default has type "None", parameter has type "int")  [assignment]
+Python/bugbuster_mcp/tools/debug.py:143: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/tools/debug.py:143: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/tools/debug.py:144: error: Incompatible default for parameter "data_bits" (default has type "None", parameter has type "int")  [assignment]
+Python/bugbuster_mcp/tools/debug.py:144: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/tools/debug.py:144: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/tools/debug.py:145: error: Incompatible default for parameter "parity" (default has type "None", parameter has type "str")  [assignment]
+Python/bugbuster_mcp/tools/debug.py:145: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/tools/debug.py:145: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/tools/debug.py:146: error: Incompatible default for parameter "stop_bits" (default has type "None", parameter has type "int")  [assignment]
+Python/bugbuster_mcp/tools/debug.py:146: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+Python/bugbuster_mcp/tools/debug.py:146: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+Python/bugbuster_mcp/tools/analog.py:91: error: Incompatible types in assignment (expression has type "str", target has type "int")  [assignment]
+Python/bugbuster_mcp/tools/analog.py:95: error: Incompatible types in assignment (expression has type "str", target has type "int")  [assignment]
+Python/bugbuster_mcp/tools/analog.py:97: error: Incompatible types in assignment (expression has type "str", target has type "int")  [assignment]
+Python/bugbuster_mcp/tools/waveform.py:170: error: Need type annotation for "samples" (hint: "samples: list[<type>] = ...")  [var-annotated]
+Found 138 errors in 41 files (checked 89 source files)

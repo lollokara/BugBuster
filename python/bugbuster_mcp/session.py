@@ -29,7 +29,7 @@ _active_board: Optional[str] = None  # Path or name of the active board profile
 
 def configure(
     transport: str,
-    port:      str   = None,
+    port:      Optional[str] = None,
     host:      str   = "192.168.4.1",
     vlogic:    float = 3.3,
 ) -> None:

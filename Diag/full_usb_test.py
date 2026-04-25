@@ -2,7 +2,6 @@ import usb.core
 import usb.util
 import time
 import sys
-import struct
 
 # Add project root to path for imports
 import os

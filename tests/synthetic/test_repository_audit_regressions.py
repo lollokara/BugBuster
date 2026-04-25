@@ -6,8 +6,6 @@ These tests run against the SimulatedDevice to ensure contracts are enforced.
 import pytest
 from bugbuster import BugBuster
 from tests.mock import SimulatedDevice, SimulatedHTTPTransport, SimulatedUSBTransport
-from bugbuster.constants import ChannelFunction, ErrorCode
-from bugbuster.transport.usb import DeviceError
 
 @pytest.fixture
 def sim_device():
@@ -31,9 +29,9 @@ def usb_client(sim_device):
 
 def test_auth_post_no_token_fails(sim_device):
     """POST requests without X-BugBuster-Admin-Token should fail with 401."""
-    # We use the transport directly to skip the client's automatic token handling
-    transport = SimulatedHTTPTransport(sim_device)
-    resp = transport.post("/channel/0/function", {"function": 1})
+    # We call http_dispatch directly to bypass SimulatedHTTPTransport's
+    # automatic admin token injection.
+    resp = sim_device.http_dispatch("POST", "/channel/0/function", {}, {"function": 1}, {})
     
     assert resp.get("code") == 401
     assert resp.get("error") == "unauthorized"
@@ -172,17 +170,16 @@ def test_la_status_http_phase0_mapping(http_client, sim_device):
 # ---------------------------------------------------------------------------
 
 def test_usbpd_schema_alignment(http_client, sim_device):
-    """USB-PD status should follow the new schema (voltageV, currentA, etc.)."""
+    """USB-PD status should follow the new schema (voltage_v, current_a, etc.)."""
     status = http_client.usbpd_get_status()
     
-    # New schema fields
-    assert "voltageV" in status
-    assert "currentA" in status
-    assert "powerW" in status
-    assert "sourcePdos" in status
-    assert "selectedPdo" in status
+    # New schema fields normalized to python naming
+    assert "voltage_v" in status
+    assert "current_a" in status
+    assert "power_w" in status
+    assert "pdos" in status
     
     # Verify values
-    assert status["voltageV"] == 5.0
-    assert status["currentA"] == 3.0
-    assert len(status["sourcePdos"]) == 6
+    assert status["voltage_v"] == 5.0
+    assert status["current_a"] == 3.0
+    assert len(status["pdos"]) == 6

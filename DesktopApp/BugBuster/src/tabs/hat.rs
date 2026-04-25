@@ -156,11 +156,11 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let io_opts = io_volt_options.clone();
 
                 // Cache connector state for closures (avoid move issues with Vec)
-                let conn_a_en = st.connectors.get(0).map(|c| c.enabled).unwrap_or(false);
+                let conn_a_en = st.connectors.first().map(|c| c.enabled).unwrap_or(false);
                 let conn_b_en = st.connectors.get(1).map(|c| c.enabled).unwrap_or(false);
-                let conn_a_ma = st.connectors.get(0).map(|c| c.current_ma).unwrap_or(0.0);
+                let conn_a_ma = st.connectors.first().map(|c| c.current_ma).unwrap_or(0.0);
                 let conn_b_ma = st.connectors.get(1).map(|c| c.current_ma).unwrap_or(0.0);
-                let conn_a_fault = st.connectors.get(0).map(|c| c.fault).unwrap_or(false);
+                let conn_a_fault = st.connectors.first().map(|c| c.fault).unwrap_or(false);
                 let conn_b_fault = st.connectors.get(1).map(|c| c.fault).unwrap_or(false);
 
                 view! {

@@ -13,7 +13,7 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let code_dirty: [RwSignal<bool>; 3] = std::array::from_fn(|_| RwSignal::new(false));
 
     // Poll IDAC status periodically
-    let set_idac_clone = set_idac.clone();
+    let set_idac_clone = set_idac;
     Effect::new(move |_| {
         let _ = state.get(); // subscribe to state changes
         spawn_local(async move {
@@ -111,8 +111,8 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 (((ch.midpoint_v - safe_min) / step_v).floor() as i32).clamp(0, 127)
                             } else { 0 };
                             // DAC code range: -max_sink_code (raises V) to +max_src_code (lowers V)
-                            let code_min: i32 = -(max_sink_code as i32);  // most negative = highest voltage
-                            let code_max: i32 = max_src_code as i32;      // most positive = lowest voltage
+                            let code_min: i32 = -max_sink_code;  // most negative = highest voltage
+                            let code_max: i32 = max_src_code;      // most positive = lowest voltage
 
                             let ch_idx = i as u8;
 
@@ -184,10 +184,10 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         <input type="range" class="slider slider-colored"
                                             style=format!("--slider-color: {}; width: 100%", color)
                                             min=-code_max max=max_sink_code step="1"
-                                            prop:value=move || (-code_vals[i].get()).clamp(-code_max, max_sink_code as i32)
+                                            prop:value=move || (-code_vals[i].get()).clamp(-code_max, max_sink_code)
                                             on:input=move |e| {
                                                 if let Ok(v) = event_target_value(&e).parse::<i32>() {
-                                                    let clamped = v.clamp(-code_max, max_sink_code as i32);
+                                                    let clamped = v.clamp(-code_max, max_sink_code);
                                                     code_vals[i].set(-clamped);
                                                     code_dirty[i].set(true);
                                                     dirty[i].set(true);

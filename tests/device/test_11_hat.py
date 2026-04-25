@@ -14,7 +14,6 @@ HAT features tested:
 
 import time
 import pytest
-import bugbuster as bb
 from bugbuster.constants import LaTriggerType, HatPinFunction
 from bugbuster.transport.usb import DeviceError
 from conftest import assert_no_faults
@@ -200,7 +199,7 @@ def test_hat_get_power_usb(usb_device):
     assert isinstance(result, dict), f"hat_get_power() must return dict, got {type(result)}"
     assert "connectors" in result, "hat_get_power() missing 'connectors'"
     connectors = result["connectors"]
-    assert isinstance(connectors, list), f"connectors must be list"
+    assert isinstance(connectors, list), "connectors must be list"
     assert len(connectors) == 2, f"Expected 2 HAT connectors, got {len(connectors)}"
 
     for i, conn in enumerate(connectors):
@@ -425,7 +424,7 @@ def test_hat_la_status(usb_device):
     usb_device.hat_la_configure(4, 1_000_000, 1000)
     status = usb_device.hat_la_get_status()
 
-    assert isinstance(status, dict), f"hat_la_get_status() must return dict"
+    assert isinstance(status, dict), "hat_la_get_status() must return dict"
     assert "state" in status, "LA status missing 'state'"
     assert "state_name" in status, "LA status missing 'state_name'"
     assert status["state"] in (0, 1, 2, 3, 4), (

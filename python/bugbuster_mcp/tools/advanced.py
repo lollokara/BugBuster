@@ -123,8 +123,8 @@ def register(mcp) -> None:
     def idac_control(
         action:  str,
         channel: int   = 0,
-        voltage: float = None,
-        code:    int   = None,
+        voltage: Optional[float] = None,
+        code:    Optional[int]   = None,
     ) -> dict:
         """
         Direct control of the DS4424 IDAC (current DAC) that adjusts power supply voltages.

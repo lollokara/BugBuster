@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;

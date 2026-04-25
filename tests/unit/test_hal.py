@@ -5,7 +5,7 @@ Runs WITHOUT hardware — all client calls are mocked.
 """
 
 import unittest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from bugbuster.hal import (
     BugBusterHAL,
@@ -14,7 +14,6 @@ from bugbuster.hal import (
     ANALOG_IO_MODES,
     DIGITAL_IO_MODES,
     PortMode,
-    IORouting,
     _SW_A_ESP_HIGH,
     _SW_A_ADC,
     _SW_A_ESP_LOW,
@@ -24,7 +23,7 @@ from bugbuster.hal import (
     _SW_C_ESP_HIGH,
     _SW_C_ESP_LOW,
 )
-from bugbuster.constants import PowerControl, ChannelFunction
+from bugbuster.constants import PowerControl
 
 
 def _make_hal():

@@ -142,7 +142,8 @@ def register(mcp) -> None:
         all_pass (bool), warnings (list).
         """
         bb  = session.get_client()
-        out = {"all_pass": True, "warnings": []}
+        from typing import Any
+        out: dict[str, Any] = {"all_pass": True, "warnings": []}
 
         # Boot test status
         try:

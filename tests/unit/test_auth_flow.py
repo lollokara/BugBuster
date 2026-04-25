@@ -1,5 +1,4 @@
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from bugbuster.client import BugBuster
 from bugbuster.constants import CmdId
 from bugbuster.transport.usb import USBTransport

@@ -17,7 +17,7 @@ pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (ioexp, set_ioexp) = signal(IoExpState::default());
 
     // Poll PCA status whenever device state updates
-    let set_ioexp_clone = set_ioexp.clone();
+    let set_ioexp_clone = set_ioexp;
     Effect::new(move |_| {
         let _ = state.get(); // subscribe to state changes
         spawn_local(async move {

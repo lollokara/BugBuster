@@ -197,7 +197,7 @@ def test_mux_get(base_url, session):
     data = resp.json()
     assert "states" in data, f"MUX response missing 'states': {list(data.keys())}"
     states = data["states"]
-    assert isinstance(states, list), f"states must be a list"
+    assert isinstance(states, list), "states must be a list"
     assert len(states) == 4, f"Expected 4 MUX device bytes, got {len(states)}"
 
 
@@ -243,7 +243,7 @@ def test_wifi_get_status(base_url, session):
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     data = resp.json()
-    assert isinstance(data, dict), f"WiFi response must be dict"
+    assert isinstance(data, dict), "WiFi response must be dict"
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +306,7 @@ def test_usbpd_get(base_url, session):
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     data = resp.json()
-    assert isinstance(data, dict), f"USBPD response must be dict"
+    assert isinstance(data, dict), "USBPD response must be dict"
 
 
 # ---------------------------------------------------------------------------
@@ -321,4 +321,4 @@ def test_get_faults(base_url, session):
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     data = resp.json()
-    assert isinstance(data, dict), f"Faults response must be dict"
+    assert isinstance(data, dict), "Faults response must be dict"

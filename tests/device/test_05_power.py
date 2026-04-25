@@ -13,7 +13,6 @@ IDAC channel mapping:
 
 import time
 import pytest
-import bugbuster as bb
 from bugbuster import PowerControl
 from conftest import assert_no_faults
 

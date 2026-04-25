@@ -21,7 +21,7 @@ def test_stream_1mhz_4ch_10s(request: pytest.FixtureRequest):
     target_s = 10.0
     depth = 11_000_000  # > 10s at 1MHz — stops on duration not depth
 
-    print(f"\n--- Starting 1 MHz / 4-ch / 10s Proof ---")
+    print("\n--- Starting 1 MHz / 4-ch / 10s Proof ---")
 
     # Phase 1: configure via BBP, then disconnect before claiming vendor bulk.
     # We disconnect the BBP client gracefully after configuring to mirror

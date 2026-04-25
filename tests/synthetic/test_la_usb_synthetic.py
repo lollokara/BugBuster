@@ -5,21 +5,14 @@ Tests the packet protocol contract using LaSyntheticDevice.
 All assertions are against the documented bb_la_usb.h / la_usb.rs spec.
 """
 import struct
-import pytest
 
 from tests.mock.la_synthetic_device import (
     LaSyntheticDevice,
-    PKT_START,
     PKT_DATA,
-    PKT_STOP,
-    PKT_ERROR,
-    INFO_NONE,
     INFO_COMPRESSED,
     INFO_STOP_HOST,
     INFO_STOP_USB_ERR,
     INFO_STOP_DMA_OVR,
-    INFO_START_REJECTED,
-    STREAM_MAX_PAYLOAD,
     _rle_compress,
 )
 from tests.mock.la_usb_host import _rle_decompress

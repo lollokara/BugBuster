@@ -7,7 +7,6 @@ UART bridge functions require USB transport (binary protocol).
 """
 
 import pytest
-import bugbuster as bb
 from conftest import assert_no_faults
 
 pytestmark = [

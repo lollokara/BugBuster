@@ -267,7 +267,12 @@ impl ConnectionManager {
             self.load_tokens(app);
         }
 
-        let (mut transport, mac) = HttpTransport::connect(base_url).await?;
+        let candidate_tokens: Vec<String> = self
+            .tokens
+            .lock()
+            .map(|t| t.values().cloned().collect())
+            .unwrap_or_default();
+        let (mut transport, mac) = HttpTransport::connect(base_url, &candidate_tokens).await?;
 
         // 2. Check for Pairing (Admin Token)
         let admin_token = self.get_token(&mac);

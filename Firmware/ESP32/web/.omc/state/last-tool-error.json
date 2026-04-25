@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd /Users/lorenzo/Documents/Sviluppo/BugBuster/Firmware/ESP32 && pio run -e esp32s3 -t uploadfs --upload-port /dev/cu.usbmodem1234563 2>&1\",\"timeout\":120000,\"description\":\"Upload SPIFFS vi...",
+  "error": "Exit code 1\n********************************************************************************\nObsolete PIO Core v6.1.18 is used (previous was 6.1.19)\nPlease remove multiple PIO Cores from a system:\nhttps://docs.platformio.org/en/latest/core/installation/troubleshooting.html\n********************************************************************************\nProcessing esp32s3 (platform: espressif32@6.9.0; board: dfrobot_firebeetle2_esp32s3; framework: espidf)\n-----------------------------------------...",
+  "timestamp": "2026-04-25T09:37:14.440Z",
+  "retry_count": 2
+}

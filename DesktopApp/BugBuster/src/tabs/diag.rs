@@ -317,7 +317,7 @@ fn FirmwareSection() -> impl IntoView {
                                     let path: Option<String> = serde_wasm_bindgen::from_value(result).ok().flatten();
 
                                     if let Some(p) = path {
-                                        ota_status.set(format!("Uploading {}...", p.split('/').last().unwrap_or(&p)));
+                                        ota_status.set(format!("Uploading {}...", p.split('/').next_back().unwrap_or(&p)));
                                         match upload_firmware(&p).await {
                                             Ok(msg) => ota_status.set(msg),
                                             Err(e) => ota_status.set(format!("Error: {}", e)),
@@ -360,7 +360,7 @@ fn WifiSection() -> impl IntoView {
     };
     poll();
     let _interval = leptos::prelude::set_interval_with_handle(
-        move || poll(),
+        poll,
         std::time::Duration::from_secs(2),
     );
 

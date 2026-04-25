@@ -294,7 +294,7 @@ def main():
     log(f"  Interface {LA_INTERFACE} claimed")
 
     # Open BBP once and keep it open for log relay throughout
-    log(f"\nOpening BBP (stays open for entire run)...")
+    log("\nOpening BBP (stays open for entire run)...")
     import bugbuster as bb
     bbp = bb.connect_usb(args.port)
     log("  BBP connected")

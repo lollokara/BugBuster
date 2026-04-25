@@ -100,7 +100,7 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let amp = amplitude.get();
         let off = offset.get();
         let Some(canvas) = preview_ref.get() else { return };
-        let canvas: HtmlCanvasElement = canvas.into();
+        let canvas: HtmlCanvasElement = canvas;
         let dpr = web_sys::window().unwrap().device_pixel_ratio();
         let rect = canvas.get_bounding_client_rect();
         let w = rect.width();

@@ -74,7 +74,7 @@ def parse_adc_readings(lines):
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else PORT
 
-    print(f"=== SPI Clock Sweep Test ===")
+    print("=== SPI Clock Sweep Test ===")
     print(f"Port: {port}  |  1-20 MHz  |  {READS_PER_STEP} reads/step\n")
 
     ser = open_serial(port, BAUD)

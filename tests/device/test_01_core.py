@@ -7,7 +7,6 @@ Tests run over both USB and HTTP transports (parametrized via the 'device' fixtu
 
 import time
 import pytest
-import bugbuster as bb
 from bugbuster import ChannelFunction
 from conftest import assert_no_faults
 

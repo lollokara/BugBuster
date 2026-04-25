@@ -1,16 +1,12 @@
 import time
-import struct
-import random
 import sys
 import argparse
-from typing import Optional
 
 # Add project root to path for imports
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import bugbuster as bb
-from bugbuster import client
 from tests.mock.la_usb_host import (
     LaUsbHost, STREAM_CMD_START, STREAM_CMD_STOP,
     PKT_START, PKT_DATA, PKT_STOP
@@ -94,7 +90,7 @@ def run_cycle(port, cycle_num):
         time.sleep(0.5)
 
     # Phase 3: Post-check
-    print(f"  [BBP] Final health check...")
+    print("  [BBP] Final health check...")
     dev = bb.connect_usb(port)
     try:
         status = dev.hat_la_get_status()

@@ -2,8 +2,6 @@
 import sys
 import time
 import argparse
-import usb.core
-import usb.util
 import logging
 
 # Add project paths
@@ -14,10 +12,8 @@ import bugbuster as bb
 from tests.mock.la_usb_host import (
     LaUsbHost,
     STREAM_CMD_START,
-    PKT_START,
     PKT_DATA,
     PKT_STOP,
-    LA_INTERFACE,
 )
 
 # Setup logging to see what bugbuster client is doing

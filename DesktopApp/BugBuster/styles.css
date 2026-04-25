@@ -1452,3 +1452,4 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
     width: 14px; height: 14px; margin: 0; cursor: pointer;
     accent-color: var(--blue);
 }
+\n@media (prefers-reduced-motion: reduce) {\n  *, ::before, ::after {\n    animation-duration: 0.01ms !important;\n    animation-iteration-count: 1 !important;\n    transition-duration: 0.01ms !important;\n    scroll-behavior: auto !important;\n  }\n}

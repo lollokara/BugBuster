@@ -6,7 +6,6 @@ Raises ValueError with human-readable messages that the AI can act on.
 """
 
 from __future__ import annotations
-from typing import Optional
 from . import session
 from .config import (
     MAX_VADJ_VOLTAGE, MIN_VADJ_VOLTAGE,
@@ -43,7 +42,6 @@ def require_io_mode(hal, io: int, expected_modes, operation: str) -> None:
     Verify the IO is in one of the expected PortMode values.
     hal must be an initialized BugBusterHAL.
     """
-    from bugbuster.hal import PortMode
     current = hal._io_mode.get(io)
     if isinstance(expected_modes, (list, tuple, set, frozenset)):
         modes = set(expected_modes)

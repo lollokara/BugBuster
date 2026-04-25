@@ -398,7 +398,7 @@ fn ParticleBackground() -> impl IntoView {
         slp(50).await;
 
         let Some(el) = canvas_ref.get() else { return };
-        let canvas: HtmlCanvasElement = el.into();
+        let canvas: HtmlCanvasElement = el;
         let ctx: CanvasRenderingContext2d = canvas
             .get_context("2d").unwrap().unwrap()
             .dyn_into().unwrap();

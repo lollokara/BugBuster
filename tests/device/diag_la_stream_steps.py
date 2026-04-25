@@ -4,14 +4,12 @@ Diagnostic: trace LA stream lifecycle step-by-step to find where error 0x11 appe
 Run: .venv/bin/python3 tests/device/diag_la_stream_steps.py /dev/cu.usbmodem1234561
 """
 import sys
-import time
-import struct
 
 sys.path.insert(0, "python")
 sys.path.insert(0, "tests")
 
 import bugbuster as bb
-from mock.la_usb_host import LaUsbHost, STREAM_CMD_START, STREAM_CMD_STOP, PKT_START, PKT_STOP, PKT_DATA, PKT_ERROR
+from mock.la_usb_host import LaUsbHost, STREAM_CMD_START, STREAM_CMD_STOP, PKT_STOP, PKT_DATA, PKT_ERROR
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/cu.usbmodem1234561"
 step = 0

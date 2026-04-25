@@ -25,12 +25,22 @@ function gzipEmitter(): Plugin {
       for (const fileName of Object.keys(bundle)) {
         if (!COMPRESSIBLE.test(fileName)) continue;
         const item = bundle[fileName]!;
-        const source =
+        let raw: Buffer =
           item.type === "asset"
             ? typeof item.source === "string"
               ? Buffer.from(item.source)
               : Buffer.from(item.source)
             : Buffer.from((item as any).code, "utf-8");
+        // Vite replaces __VITE_PRELOAD__ → [] in the written .js files, but
+        // gzipEmitter runs in generateBundle before that substitution.  Do it
+        // here so the .gz files match what the browser expects: an empty deps
+        // array rather than the __VITE_PRELOAD__ identifier (which would
+        // resolve to window.__VITE_PRELOAD__ at runtime and cause a crash if
+        // it is a function with .length > 0).
+        if (raw.includes("__VITE_PRELOAD__")) {
+          raw = Buffer.from(raw.toString("utf-8").replace(/__VITE_PRELOAD__/g, "[]"), "utf-8");
+        }
+        const source = raw;
         if (source.length < 1024) continue;
         const compressed = gzipSync(source, {
           level: zlibConstants.Z_BEST_COMPRESSION,
@@ -63,6 +73,13 @@ export default defineConfig(({ mode }) => {
     plugins: [preact(), gzipEmitter()],
     root: ".",
     base: "./",
+    // Replace __VITE_PRELOAD__ with a no-op polyfill so that dynamic chunk
+    // imports work on the ESP32 where the Vite polyfill chunk is never loaded.
+    // Without this the browser throws "ReferenceError: __VITE_PRELOAD__ is not
+    // defined" when navigating to any lazy-loaded route.
+    define: {
+      __VITE_PRELOAD__: "((f) => f())",
+    },
     build: {
       outDir: path.resolve(__dirname, "../data"),
       emptyOutDir: true,
@@ -70,8 +87,17 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
       minify: "esbuild",
       target: "es2020",
+      // Disable module preload polyfill — ESP32 serves content from SPIFFS and
+      // cannot inject the polyfill reliably, causing "__VITE_PRELOAD__ is not
+      // defined" at runtime. Dynamic imports still work; they just aren't hinted.
+      modulePreload: false,
       rollupOptions: {
         output: {
+          // Embed build timestamp so chunk content — and therefore their
+          // content-hash filenames — change on every rebuild.  Without this,
+          // browsers that previously cached chunks as `immutable` keep serving
+          // stale content even after a SPIFFS update.
+          banner: `/* bb-build:${Date.now()} */`,
           // Keep filenames short — SPIFFS has a 32-char path limit (ESP-IDF
           // CONFIG_SPIFFS_OBJ_NAME_LEN default). Long fontsource names like
           // `jetbrains-mono-latin-wght-normal-<hash>.woff2` (56 chars) are

@@ -27,8 +27,7 @@ from .transport.http import HTTPTransport
 from .constants import (
     CmdId, ChannelFunction, AdcRange, AdcRate, AdcMux,
     GpioMode, WaveformType, OutputMode, RtdCurrent,
-    VoutRange, CurrentLimit, DoMode, AvddSelect,
-    PowerControl, UsbPdVoltage, ErrorCode,
+    VoutRange, CurrentLimit, PowerControl,
 )
 
 log = logging.getLogger(__name__)
@@ -2322,7 +2321,6 @@ class BugBuster:
             mask |= (1 << ch)
 
         if callback:
-            from .constants import CmdId as _C
             def _handler(payload: bytes):
                 ch_mask  = payload[0]
                 # samples follow: N groups of active-channel readings
@@ -2420,7 +2418,7 @@ class BugBuster:
     # ── Fault management ─────────────────────────────────────────────
     # ------------------------------------------------------------------
 
-    def clear_alerts(self, channel: int = None) -> None:
+    def clear_alerts(self, channel: int | None = None) -> None:
         """
         Clear alert flags.  Pass a *channel* index to clear only that channel;
         omit or pass ``None`` to clear all channels at once.

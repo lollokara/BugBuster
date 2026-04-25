@@ -7,7 +7,6 @@ DAC readback, voltage/current range, current limit, and channel independence.
 
 import time
 import pytest
-import bugbuster as bb
 from conftest import assert_no_faults
 from bugbuster import (
     ChannelFunction,

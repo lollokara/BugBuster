@@ -85,14 +85,14 @@ Quick start::
 
 import time
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from enum import IntEnum
 
 from .constants import (
     ChannelFunction, AdcMux, AdcRange, AdcRate,
     VoutRange, CurrentLimit, RtdCurrent,
-    PowerControl, GpioMode,
+    PowerControl,
 )
 
 log = logging.getLogger(__name__)
@@ -370,7 +370,7 @@ class BugBusterHAL:
     def __init__(
         self,
         client,
-        routing:        dict    = None,
+        routing:        dict | None    = None,
         supply_voltage: float   = 12.0,
         vlogic:         float   = 3.3,
         adc_rate:       AdcRate = AdcRate.SPS_200_H,

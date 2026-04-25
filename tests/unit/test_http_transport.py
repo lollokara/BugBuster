@@ -4,7 +4,7 @@ Unit tests for HTTPTransport admin-token threading and board endpoints.
 These mock requests.Session so no real device or network is required.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
