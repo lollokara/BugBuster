@@ -1,16 +1,23 @@
 // =============================================================================
 // API client — typed fetch wrapper around the ESP32 /api surface.
 //
-// Auth: admin token is cached in localStorage under bb:admin-token:<MAC>
-// and sent as X-BugBuster-Admin-Token on mutating requests. On a 401 we
-// clear the cache and raise an event so the app can re-open the pairing
-// modal.
+// Auth: admin token is cached under bb:admin-token:<MAC>. Default storage is
+// sessionStorage so the credential is dropped when the browser tab closes —
+// that contains the blast radius if the on-device origin is ever XSSed. The
+// pairing modal can opt the user into "remember on this device", which
+// promotes the entry to localStorage. We always read both storages and
+// write to whichever the user picked; the legacy localStorage entries from
+// before this change are migrated into sessionStorage on first read so a
+// browser refresh after the upgrade keeps users paired without re-entry.
+// On a 401 we clear the cache and raise an event so the app can re-open
+// the pairing modal.
 // =============================================================================
 
 /** Matches the #define ADMIN_TOKEN_HEADER in Firmware/ESP32/src/config.h */
 export const ADMIN_TOKEN_HEADER = "X-BugBuster-Admin-Token";
 
 const TOKEN_KEY_PREFIX = "bb:admin-token:";
+const REMEMBER_KEY_PREFIX = "bb:remember-token:";
 
 export class PairingRequiredError extends Error {
   constructor() {
@@ -115,25 +122,95 @@ function tokenKey(mac: string): string {
   return TOKEN_KEY_PREFIX + mac.toLowerCase();
 }
 
-export function getCachedToken(mac: string): string | null {
+function rememberKey(mac: string): string {
+  return REMEMBER_KEY_PREFIX + mac.toLowerCase();
+}
+
+/** Whether the user opted into persistent (across-tab-close) storage for
+ *  this device. Tracked separately from the token so we can know the policy
+ *  even when the token is missing. */
+export function isPersistentlyRemembered(mac: string): boolean {
   try {
-    return localStorage.getItem(tokenKey(mac));
+    return localStorage.getItem(rememberKey(mac)) === "1";
   } catch {
-    return null;
+    return false;
   }
 }
 
-export function setCachedToken(mac: string, token: string): void {
+export function getCachedToken(mac: string): string | null {
+  const key = tokenKey(mac);
+  // sessionStorage first (current default), then localStorage (opt-in or
+  // pre-migration legacy entry). If we find a legacy localStorage entry but
+  // the user hasn't opted into persistence, migrate it into sessionStorage
+  // so the next refresh follows the new policy.
   try {
-    localStorage.setItem(tokenKey(mac), token);
+    const session = sessionStorage.getItem(key);
+    if (session) return session;
+  } catch {
+    /* sessionStorage may be unavailable in some embeds; fall through */
+  }
+  try {
+    const persistent = localStorage.getItem(key);
+    if (persistent) {
+      if (!isPersistentlyRemembered(mac)) {
+        // Legacy entry from before the storage migration. Move into
+        // sessionStorage so it gets dropped on next browser-close.
+        try {
+          sessionStorage.setItem(key, persistent);
+          localStorage.removeItem(key);
+        } catch {
+          /* ignore */
+        }
+      }
+      return persistent;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function setCachedToken(
+  mac: string,
+  token: string,
+  options: { remember?: boolean } = {},
+): void {
+  const key = tokenKey(mac);
+  const persist = options.remember ?? isPersistentlyRemembered(mac);
+  try {
+    if (persist) {
+      localStorage.setItem(key, token);
+      localStorage.setItem(rememberKey(mac), "1");
+      // Don't keep a duplicate in sessionStorage — single source of truth.
+      try {
+        sessionStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    } else {
+      sessionStorage.setItem(key, token);
+      try {
+        localStorage.removeItem(key);
+        localStorage.removeItem(rememberKey(mac));
+      } catch {
+        /* ignore */
+      }
+    }
   } catch {
     /* ignore quota errors — next request will just prompt again */
   }
 }
 
 export function clearCachedToken(mac: string): void {
+  const key = tokenKey(mac);
   try {
-    localStorage.removeItem(tokenKey(mac));
+    sessionStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+  try {
+    localStorage.removeItem(key);
+    localStorage.removeItem(rememberKey(mac));
   } catch {
     /* ignore */
   }
@@ -192,16 +269,30 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 export const api = {
   deviceInfo: () => request<DeviceInfo>("/api/device/info"),
   pairingInfo: () => request<PairingInfo>("/api/pairing/info"),
-  pairingVerify: (mac: string, token: string) =>
+  pairingVerify: (
+    mac: string,
+    token: string,
+    options: { remember?: boolean } = {},
+  ) =>
     fetch("/api/pairing/verify", {
       method: "POST",
       headers: { [ADMIN_TOKEN_HEADER]: token },
     }).then((r) => {
       if (r.status === 200) {
-        setCachedToken(mac, token);
+        setCachedToken(mac, token, options);
         return true;
       }
       return false;
+    }),
+
+  /** Ask the device to rotate its admin token. Returns the new 64-char
+   *  token. Caller should `setCachedToken` to commit it locally. Requires a
+   *  currently-paired admin session (server enforces). */
+  pairingRotate: (mac: string) =>
+    request<{ ok: boolean; token: string }>("/api/pairing/rotate", {
+      method: "POST",
+      mac,
+      admin: true,
     }),
 
   status: () => request<any>("/api/status"),

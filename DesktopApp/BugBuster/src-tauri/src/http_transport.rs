@@ -3,11 +3,13 @@
 // =============================================================================
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::Value;
+use tauri::{AppHandle, Emitter};
 
 use crate::bbp;
 use crate::state::{ChannelState, DeviceState, DiagState};
@@ -54,6 +56,13 @@ pub struct HttpTransport {
     slow_client: Client, // Slow client for WiFi connect/scan (long-blocking)
     base_url: String,
     connected: AtomicBool,
+    // Bug 2: HTTP scope streaming. The shared `scope_polling` flag controls a
+    // background tokio task started by CMD_START_SCOPE_STREAM and stopped by
+    // CMD_STOP_SCOPE_STREAM. The task GETs `/api/scope?since=<seq>` ~10 Hz and
+    // emits the same `scope-data` event the USB transport emits, so the
+    // existing frontend listener (parse_scope_event) works unchanged.
+    scope_polling: Arc<AtomicBool>,
+    app_handle: Option<AppHandle>,
 }
 
 impl HttpTransport {
@@ -118,9 +127,120 @@ impl HttpTransport {
             slow_client,
             base_url: base_url.to_string(),
             connected: AtomicBool::new(true),
+            scope_polling: Arc::new(AtomicBool::new(false)),
+            app_handle: None,
         };
 
         Ok((transport, mac))
+    }
+
+    /// Inject a Tauri AppHandle for emitting streaming events (e.g.
+    /// `scope-data` from the HTTP scope polling task).
+    pub fn set_app_handle(&mut self, app: AppHandle) {
+        self.app_handle = Some(app);
+    }
+
+    /// Start the background scope polling task. Idempotent — repeat calls
+    /// while polling is active are a no-op (Bug 2).
+    fn start_scope_polling(&self) -> Result<()> {
+        if self.scope_polling.swap(true, Ordering::AcqRel) {
+            return Ok(()); // already running
+        }
+        let app = self
+            .app_handle
+            .clone()
+            .ok_or_else(|| anyhow!("HttpTransport missing AppHandle for scope streaming"))?;
+        let client = self.client.clone();
+        let base_url = self.base_url.clone();
+        let polling = self.scope_polling.clone();
+
+        tokio::spawn(async move {
+            let mut last_seq: i64 = -1;
+            while polling.load(Ordering::Acquire) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if !polling.load(Ordering::Acquire) {
+                    break;
+                }
+
+                let since_param = if last_seq < 0 {
+                    String::new()
+                } else {
+                    format!("?since={}", last_seq)
+                };
+                let url = format!("{}/api/scope{}", base_url, since_param);
+                let resp = match client.get(&url).send().await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        log::warn!("scope poll request failed: {}", e);
+                        continue;
+                    }
+                };
+                if !resp.status().is_success() {
+                    log::warn!("scope poll HTTP {}", resp.status());
+                    continue;
+                }
+                let json: Value = match resp.json().await {
+                    Ok(j) => j,
+                    Err(e) => {
+                        log::warn!("scope poll JSON parse failed: {}", e);
+                        continue;
+                    }
+                };
+
+                if let Some(seq) = json.get("seq").and_then(|v| v.as_i64()) {
+                    last_seq = seq;
+                }
+                let samples = match json.get("samples").and_then(|v| v.as_array()) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                let first_seq = last_seq
+                    .saturating_sub(samples.len() as i64 - 1)
+                    .max(0) as u32;
+                for (i, bucket) in samples.iter().enumerate() {
+                    let arr = match bucket.as_array() {
+                        Some(a) if a.len() >= 13 => a,
+                        _ => continue,
+                    };
+                    // Format: [t, ch0avg..ch3avg, ch0min,ch0max,ch1min,ch1max,...]
+                    let t_ms = arr[0].as_f64().unwrap_or(0.0) as u32;
+                    let avg = [
+                        arr[1].as_f64().unwrap_or(0.0) as f32,
+                        arr[2].as_f64().unwrap_or(0.0) as f32,
+                        arr[3].as_f64().unwrap_or(0.0) as f32,
+                        arr[4].as_f64().unwrap_or(0.0) as f32,
+                    ];
+                    let mut min = [0f32; 4];
+                    let mut max = [0f32; 4];
+                    for ch in 0..4 {
+                        min[ch] = arr[5 + ch * 2].as_f64().unwrap_or(0.0) as f32;
+                        max[ch] = arr[5 + ch * 2 + 1].as_f64().unwrap_or(0.0) as f32;
+                    }
+
+                    // Build EVT_SCOPE_DATA-compatible payload (parse_scope_event
+                    // requires >=58 bytes; reads avg at pos 10/22/34/46 in
+                    // 12-byte channel blocks of [avg f32, min f32, max f32]).
+                    let mut payload = Vec::with_capacity(58);
+                    let bucket_seq = first_seq + i as u32;
+                    payload.extend_from_slice(&bucket_seq.to_le_bytes()); // 0..4
+                    payload.extend_from_slice(&t_ms.to_le_bytes()); // 4..8
+                    payload.extend_from_slice(&1u16.to_le_bytes()); // 8..10  count placeholder
+                    for ch in 0..4 {
+                        payload.extend_from_slice(&avg[ch].to_le_bytes()); // pos+0..pos+4
+                        payload.extend_from_slice(&min[ch].to_le_bytes()); // pos+4..pos+8
+                        payload.extend_from_slice(&max[ch].to_le_bytes()); // pos+8..pos+12
+                    }
+                    let _ = app.emit("scope-data", &payload);
+                }
+            }
+            log::info!("scope polling task exited");
+        });
+        Ok(())
+    }
+
+    fn stop_scope_polling(&self) {
+        self.scope_polling.store(false, Ordering::Release);
     }
 
     /// Set the admin token for future POST requests.
@@ -174,6 +294,46 @@ impl HttpTransport {
     async fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self.client.post(&url).json(body).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// POST with a per-request timeout override. Used for commands that the
+    /// USB transport hardens with explicit long timeouts (e.g.
+    /// SELFTEST_AUTO_CAL ≈ 30 s — see usb_transport.rs:280-287). Without this
+    /// the HTTP path would surface false "no response" errors on otherwise
+    /// valid blocking firmware operations.
+    async fn post_json_with_timeout(
+        &self,
+        path: &str,
+        body: &Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .post(&url)
+            .timeout(timeout)
+            .json(body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// GET with a per-request timeout override (mirror of post_json_with_timeout).
+    #[allow(dead_code)]
+    async fn get_json_with_timeout(
+        &self,
+        path: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Value> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self.client.get(&url).timeout(timeout).send().await?;
         if !resp.status().is_success() {
             return Err(anyhow!("HTTP {} from {}", resp.status(), path));
         }
@@ -358,7 +518,41 @@ impl Transport for HttpTransport {
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.0) as f32,
                 );
+                pw.put_bool(
+                    json.get("workerEnabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                );
+                pw.put_bool(
+                    json.get("supplyMonitorActive")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                );
                 Ok(pw.buf)
+            }
+
+            bbp::CMD_SELFTEST_WORKER => {
+                // Match USB framing (firmware bbp.cpp handleSelftestWorker):
+                // payload: 0=disable, 1=enable, 0xFF=query. Response: u8(workerEnabled).
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let op = payload[0];
+                let json = if op == 0xFF {
+                    self.get_json("/api/selftest").await?
+                } else {
+                    self.post_json(
+                        "/api/selftest/worker",
+                        &serde_json::json!({"enabled": op != 0}),
+                    )
+                    .await?
+                };
+                let worker_enabled = json
+                    .get("workerEnabled")
+                    .or_else(|| json.get("enabled"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(vec![if worker_enabled { 1 } else { 0 }])
             }
 
             bbp::CMD_SELFTEST_MEASURE_SUPPLY => {
@@ -405,10 +599,14 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload"));
                 }
                 let channel = payload[0];
+                // Match USB transport hardening (usb_transport.rs:283): IDAC
+                // sweep + measurement loop can take ~30 s. The default 3 s
+                // request timeout would abort a perfectly valid run.
                 let json = self
-                    .post_json(
+                    .post_json_with_timeout(
                         "/api/selftest/calibrate",
                         &serde_json::json!({"channel": channel}),
+                        std::time::Duration::from_secs(35),
                     )
                     .await?;
                 let mut pw = bbp::PayloadWriter::new();
@@ -666,8 +864,20 @@ impl Transport for HttpTransport {
                         .and_then(|c| c.get("calibrated").and_then(|v| v.as_bool()))
                         .unwrap_or(false);
                     pw.put_bool(calibrated);
-                    // Calibration points (not available via HTTP API — send 0 count)
-                    pw.put_u8(0);
+                    // Polynomial fit (firmware /api/idac exposes polyValid + calPoly[4]).
+                    // Match USB framing in commands.rs::parse_idac_status.
+                    let poly = ch.and_then(|c| c.get("calPoly").and_then(|v| v.as_array()));
+                    let poly_valid = ch
+                        .and_then(|c| c.get("polyValid").and_then(|v| v.as_bool()))
+                        .unwrap_or(false);
+                    pw.put_bool(poly_valid);
+                    for j in 0..4 {
+                        let v = poly
+                            .and_then(|a| a.get(j))
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
+                        pw.put_f32(v as f32);
+                    }
                 }
                 Ok(pw.buf)
             }
@@ -1120,11 +1330,174 @@ impl Transport for HttpTransport {
                 Ok(buf)
             }
 
-            // Streaming not supported over HTTP
-            bbp::CMD_START_ADC_STREAM
-            | bbp::CMD_STOP_ADC_STREAM
-            | bbp::CMD_START_SCOPE_STREAM
-            | bbp::CMD_STOP_SCOPE_STREAM => Err(anyhow!("Streaming not supported over HTTP")),
+            // Scope streaming over HTTP — emulated via /api/scope polling.
+            // ADC streaming over HTTP is intentionally unsupported (high-rate
+            // raw samples would overwhelm the WebServer thread); the scope
+            // bucket endpoint provides bounded ~10 Hz updates that keep the
+            // Scope tab usable on WiFi (Bug 2).
+            bbp::CMD_START_SCOPE_STREAM => {
+                self.start_scope_polling()?;
+                Ok(vec![])
+            }
+            bbp::CMD_STOP_SCOPE_STREAM => {
+                self.stop_scope_polling();
+                Ok(vec![])
+            }
+            bbp::CMD_START_ADC_STREAM | bbp::CMD_STOP_ADC_STREAM => {
+                Err(anyhow!("ADC streaming not supported over HTTP"))
+            }
+
+            // -----------------------------------------------------------
+            // Quick Setup slots (BBP 0xF0..0xF4)
+            //
+            // Each arm calls the matching REST endpoint registered in
+            // Firmware/ESP32/src/webserver.cpp:3054-3066 and reframes the
+            // response in the exact byte layout the firmware emits over USB
+            // (Firmware/ESP32/src/bbp.cpp::handleQuickSetup*). That keeps the
+            // existing parse_quicksetup_* helpers in commands.rs working
+            // unchanged across both transports.
+            // -----------------------------------------------------------
+            bbp::CMD_QS_LIST => {
+                let json = self.get_json("/api/quicksetup").await?;
+                let mut bitmap: u8 = 0;
+                let mut hashes: [u8; 4] = [0; 4];
+                if let Some(arr) = json.get("slots").and_then(|v| v.as_array()) {
+                    for (i, slot) in arr.iter().enumerate().take(4) {
+                        let occupied = slot
+                            .get("occupied")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if occupied {
+                            bitmap |= 1u8 << i;
+                            // The firmware truncates the summary hash to u8 in
+                            // the BBP framing (handleQuickSetupList) even
+                            // though the JSON exposes the full 32-bit value.
+                            hashes[i] = slot
+                                .get("summary")
+                                .and_then(|s| s.get("hash"))
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u8;
+                        }
+                    }
+                }
+                let mut buf = Vec::with_capacity(5);
+                buf.push(bitmap);
+                buf.extend_from_slice(&hashes);
+                Ok(buf)
+            }
+
+            bbp::CMD_QS_GET => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let slot = payload[0];
+                let url = format!("{}/api/quicksetup/{}", self.base_url, slot);
+                let resp = self.client.get(&url).send().await?;
+                if !resp.status().is_success() {
+                    // 404 = empty slot maps cleanly to BBP_ERR_INVALID_STATE
+                    // semantics; surface as a Rust error so the parser layer
+                    // sees an empty response rather than spurious bytes.
+                    return Err(anyhow!(
+                        "HTTP {} from /api/quicksetup/{}",
+                        resp.status(),
+                        slot
+                    ));
+                }
+                // Firmware returns the raw stored JSON (no envelope), so the
+                // body bytes ARE the BBP payload. Cap to BBP_MAX_PAYLOAD via
+                // QUICKSETUP_MAX_JSON_BYTES which the parser already enforces.
+                Ok(resp.bytes().await?.to_vec())
+            }
+
+            bbp::CMD_QS_SAVE => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let slot = payload[0];
+                let url = format!("{}/api/quicksetup/{}", self.base_url, slot);
+                // POST with empty JSON body (firmware ignores body on save —
+                // it snapshots the live device state into the slot).
+                let resp = self
+                    .client
+                    .post(&url)
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await?;
+                if !resp.status().is_success() {
+                    return Err(anyhow!(
+                        "HTTP {} from /api/quicksetup/{}",
+                        resp.status(),
+                        slot
+                    ));
+                }
+                Ok(resp.bytes().await?.to_vec())
+            }
+
+            bbp::CMD_QS_APPLY => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let slot = payload[0];
+                let url = format!("{}/api/quicksetup/{}/apply", self.base_url, slot);
+                // 200 / 409 are both well-formed responses; map status code
+                // to the BBP single-byte status the parser expects:
+                //   0 = applied, 1 = slot empty (404), 2 = apply error.
+                let resp = self
+                    .client
+                    .post(&url)
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await?;
+                let status_code = resp.status();
+                let json: Value = resp
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let status_byte: u8 = if status_code.is_success()
+                    && json
+                        .get("ok")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                {
+                    0
+                } else if status_code.as_u16() == 404 {
+                    1
+                } else {
+                    2
+                };
+                Ok(vec![status_byte])
+            }
+
+            bbp::CMD_QS_DELETE => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let slot = payload[0];
+                let url = format!("{}/api/quicksetup/{}/delete", self.base_url, slot);
+                let resp = self
+                    .client
+                    .post(&url)
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await?;
+                if !resp.status().is_success() {
+                    return Err(anyhow!(
+                        "HTTP {} from /api/quicksetup/{}/delete",
+                        resp.status(),
+                        slot
+                    ));
+                }
+                let json: Value = resp
+                    .json()
+                    .await
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                // BBP status: 0 = deleted, 1 = was not present.
+                let existed = json
+                    .get("deleted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(vec![if existed { 0 } else { 1 }])
+            }
 
             _ => Err(anyhow!(
                 "Command 0x{:02X} not implemented for HTTP transport",
@@ -1178,6 +1551,9 @@ impl Transport for HttpTransport {
 
     async fn disconnect(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
+        // Stop the scope-polling task so it doesn't keep emitting after the
+        // user has disconnected (Bug 2).
+        self.stop_scope_polling();
         log::info!("HTTP transport disconnected from {}", self.base_url);
         Ok(())
     }

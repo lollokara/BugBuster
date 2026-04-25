@@ -282,6 +282,7 @@ class CmdId(IntEnum):
     SELFTEST_EFUSE_CURRENTS = 0x07
     SELFTEST_AUTO_CAL       = 0x08
     SELFTEST_INT_SUPPLIES   = 0x09
+    SELFTEST_WORKER         = 0x0B  # enable/disable/query supply-monitor worker
 
     # Channel configuration
     SET_CHANNEL_FUNC = 0x10
@@ -420,6 +421,13 @@ class CmdId(IntEnum):
     WIFI_CONNECT     = 0xE2
     SET_SPI_CLOCK    = 0xE3
     WIFI_SCAN        = 0xE4
+
+    # Quick Setup slots (NVS-backed snapshot store, 4 slots: 0..3)
+    QS_LIST          = 0xF0  # list slots (returns occupied bitmap + per-slot summary hash)
+    QS_GET           = 0xF1  # read slot JSON
+    QS_SAVE          = 0xF2  # snapshot current state into slot
+    QS_APPLY         = 0xF3  # apply slot to live device state
+    QS_DELETE        = 0xF4  # erase slot
 
     # Session control
     PING             = 0xFE

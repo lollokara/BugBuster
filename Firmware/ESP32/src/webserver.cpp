@@ -99,7 +99,25 @@ static void add_bool_alias(cJSON *obj, const char *camel, const char *snake, boo
 
 static void set_cors_headers(httpd_req_t *req)
 {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    // The on-device UI is always served same-origin from this same httpd, so
+    // it does not need any Access-Control-Allow-Origin header to make
+    // authenticated XHRs. We deliberately do NOT emit a wildcard origin: that
+    // combined with the X-BugBuster-Admin-Token header was effectively a
+    // CSRF amplifier (any browser context could mint admin requests).
+    //
+    // For convenience during local UI development against a flashed device
+    // (e.g. running `vite dev` on the same machine and proxying), echo the
+    // request Origin only if it is a localhost loopback. Anything else is
+    // intentionally rejected by the browser's same-origin policy because we
+    // simply never advertise it as allowed.
+    char origin[96] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK) {
+        if (strncmp(origin, "http://localhost", 16) == 0 ||
+            strncmp(origin, "http://127.0.0.1", 16) == 0) {
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin);
+            httpd_resp_set_hdr(req, "Vary", "Origin");
+        }
+    }
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, " ADMIN_TOKEN_HEADER);
 }
@@ -2113,13 +2131,11 @@ static esp_err_t handle_get_ioexp_faults(httpd_req_t *req)
 // POST /api/ioexp/fault_config  body: {"auto_disable":true, "log_events":true}
 static esp_err_t handle_post_ioexp_fault_config(httpd_req_t *req)
 {
-    char buf[128];
-    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (ret <= 0) return send_error(req, 400, "Empty body");
-    buf[ret] = '\0';
-
-    cJSON *json = cJSON_Parse(buf);
-    if (!json) return send_error(req, 400, "Invalid JSON");
+    // Use the shared bounded reader (1024 byte cap) so this endpoint matches
+    // the size contract of every other JSON POST and rejects oversized bodies
+    // with the same semantics.
+    cJSON *json = recv_json_body(req);
+    if (!json) return send_error(req, 400, "Invalid JSON or body too large");
 
     PcaFaultConfig cfg;
     cfg.auto_disable_efuse = cJSON_IsTrue(cJSON_GetObjectItem(json, "auto_disable"));
@@ -2866,6 +2882,27 @@ static esp_err_t handle_post_pairing_verify(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// POST /api/pairing/rotate  (admin-token header)
+// Generates a fresh 64-char hex admin token, overwrites the previous one in
+// NVS, and returns the new token in the response body. The caller (web UI)
+// is expected to immediately stash it in its own cache — the old token is
+// already invalid by the time this returns 200, so any device the user has
+// previously paired must re-pair manually.
+static esp_err_t handle_post_pairing_rotate(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Unauthorized");
+    }
+    char fresh[65] = {0};
+    if (!auth_rotate_token(fresh)) {
+        return send_error(req, 500, "Token rotation failed");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "token", fresh);
+    return send_json(req, root);
+}
+
 // =============================================================================
 // Server init / stop
 // =============================================================================
@@ -3208,6 +3245,11 @@ void initWebServer(void)
         .uri = "/api/pairing/verify", .method = HTTP_POST, .handler = handle_post_pairing_verify, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_pairing_verify);
+
+    httpd_uri_t uri_pairing_rotate = {
+        .uri = "/api/pairing/rotate", .method = HTTP_POST, .handler = handle_post_pairing_rotate, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_pairing_rotate);
 
     // ----- OPTIONS (CORS preflight) -----
 

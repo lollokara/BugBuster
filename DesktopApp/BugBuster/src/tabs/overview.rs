@@ -23,18 +23,27 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         refresh_quicksetup_slots(set_quicksetup_supported, set_quicksetup_slots).await;
     });
 
+    // Alive flag — flips false on tab unmount so the 2 s status poll terminates.
+    let alive: RwSignal<bool> = RwSignal::new(true);
+    on_cleanup(move || alive.set(false));
+
     spawn_local(async move {
         loop {
-            if let Some(st) = fetch_selftest_status().await {
-                set_selftest.set(st);
-            } else if let Some(enabled) = fetch_selftest_worker_enabled().await {
-                set_selftest.update(|s| s.worker_enabled = enabled);
-            }
-            if let Some(st) = fetch_idac_status().await {
-                set_idac.set(st);
-            }
-            if let Some(st) = fetch_pca_status().await {
-                set_ioexp.set(st);
+            if !alive.get_untracked() { break; }
+            // Skip fetches when disconnected to avoid spamming failed BBP commands.
+            let snap = state.get_untracked();
+            if snap.spi_ok || !snap.channels.is_empty() {
+                if let Some(st) = fetch_selftest_status().await {
+                    set_selftest.set(st);
+                } else if let Some(enabled) = fetch_selftest_worker_enabled().await {
+                    set_selftest.update(|s| s.worker_enabled = enabled);
+                }
+                if let Some(st) = fetch_idac_status().await {
+                    set_idac.set(st);
+                }
+                if let Some(st) = fetch_pca_status().await {
+                    set_ioexp.set(st);
+                }
             }
             overview_sleep_ms(2000).await;
         }

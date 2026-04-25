@@ -4,6 +4,7 @@
 
 import { signal, computed } from "@preact/signals";
 import { api, type BoardState, type DeviceInfo, type PairingInfo, type SelftestStatus } from "../api/client";
+import { createWriteGuard } from "./editGuard";
 
 /* ---- Pairing ---- */
 
@@ -29,7 +30,7 @@ export const supplyMonitorActive = signal<boolean>(false);
 let selftestPollRefs = 0;
 let selftestPollTimer: number | null = null;
 let selftestPollInFlight = false;
-let selftestLastLocalWriteMs = 0;
+const selftestWriteGuard = createWriteGuard();
 
 function applySelftestStatus(status: SelftestStatus): void {
   selftestStatus.value = status;
@@ -44,7 +45,7 @@ async function pollSelftestStatus(): Promise<void> {
   try {
     const status = await api.selftestStatus();
     // Avoid stale poll responses overriding a newer user-triggered toggle.
-    if (startedMs >= selftestLastLocalWriteMs) {
+    if (selftestWriteGuard.shouldApplyPoll(startedMs)) {
       applySelftestStatus(status);
     }
   } catch {
@@ -60,7 +61,7 @@ async function pollSelftestStatus(): Promise<void> {
 }
 
 export function setSelftestStatus(status: SelftestStatus): void {
-  selftestLastLocalWriteMs = Date.now();
+  selftestWriteGuard.bumpLocalWrite();
   applySelftestStatus(status);
 }
 

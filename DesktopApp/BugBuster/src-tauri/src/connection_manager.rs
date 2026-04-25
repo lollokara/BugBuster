@@ -9,6 +9,13 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
+
+/// How long after a per-channel write to suppress polled overwrites of the
+/// affected fields. Covers HTTP latency (~50–300 ms) plus a margin so that the
+/// poll loop never clobbers a fresh user value with the firmware-pre-apply
+/// snapshot. Bug 3 (ADC mode set sometimes does not stick over WiFi).
+const WRITE_SUPPRESS: Duration = Duration::from_millis(500);
 
 use anyhow::{anyhow, Result};
 use tauri::{AppHandle, Emitter, Manager};
@@ -31,6 +38,10 @@ pub struct ConnectionManager {
     poll_shutdown: Arc<AtomicBool>,
     // Persistent admin tokens keyed by device MAC
     tokens: Arc<StdMutex<HashMap<String, String>>>,
+    // Per-channel write timestamps — used to suppress polled state overwrites
+    // for the channel's adc/function fields right after a user-initiated write
+    // (Bug 3). Keyed by channel index 0..3.
+    recent_writes: Arc<StdMutex<[Option<Instant>; 4]>>,
 }
 
 impl ConnectionManager {
@@ -41,6 +52,7 @@ impl ConnectionManager {
             connection_status: Arc::new(StdMutex::new(ConnectionStatus::default())),
             poll_shutdown: Arc::new(AtomicBool::new(false)),
             tokens: Arc::new(StdMutex::new(HashMap::new())),
+            recent_writes: Arc::new(StdMutex::new([None; 4])),
         }
     }
 
@@ -279,6 +291,9 @@ impl ConnectionManager {
 
         let token = admin_token.unwrap();
         transport.set_admin_token(&token)?;
+        // Inject AppHandle so background scope-polling task can emit
+        // `scope-data` events (Bug 2).
+        transport.set_app_handle(app.clone());
 
         let mut device_info = DeviceInfo::default();
         device_info.mac_address = Some(mac);
@@ -366,6 +381,46 @@ impl ConnectionManager {
 
     /// Send a command through the active transport.
     pub async fn send_command(&self, cmd_id: u8, payload: &[u8]) -> Result<Vec<u8>> {
+        // Optimistically apply user intent to the locally cached device state
+        // and mark the channel as recently written. The poll loop will then
+        // suppress overwrites of these fields for WRITE_SUPPRESS, so a
+        // pre-apply poll snapshot can't revert the UI (Bug 3 — ADC mode set
+        // sometimes does not stick over WiFi).
+        if !payload.is_empty() {
+            let ch = payload[0];
+            if ch < 4 {
+                let mark = match cmd_id {
+                    bbp::CMD_SET_ADC_CONFIG if payload.len() >= 4 => {
+                        if let Ok(mut ds) = self.device_state.lock() {
+                            if let Some(cur) = ds.channels.get_mut(ch as usize) {
+                                cur.adc_mux = payload[1];
+                                cur.adc_range = payload[2];
+                                cur.adc_rate = payload[3];
+                            }
+                        }
+                        true
+                    }
+                    bbp::CMD_SET_CH_FUNC if payload.len() >= 2 => {
+                        if let Ok(mut ds) = self.device_state.lock() {
+                            if let Some(cur) = ds.channels.get_mut(ch as usize) {
+                                cur.function = payload[1];
+                            }
+                        }
+                        true
+                    }
+                    bbp::CMD_SET_DAC_CODE
+                    | bbp::CMD_SET_DAC_VOLTAGE
+                    | bbp::CMD_SET_DAC_CURRENT => true,
+                    _ => false,
+                };
+                if mark {
+                    if let Ok(mut writes) = self.recent_writes.lock() {
+                        writes[ch as usize] = Some(Instant::now());
+                    }
+                }
+            }
+        }
+
         let t = self.transport.lock().await;
         match t.as_ref() {
             Some(transport) => {
@@ -402,6 +457,7 @@ impl ConnectionManager {
         let transport = self.transport.clone();
         let device_state = self.device_state.clone();
         let connection_status = self.connection_status.clone();
+        let recent_writes = self.recent_writes.clone();
 
         tokio::spawn(async move {
             // Determine poll interval based on transport type
@@ -439,8 +495,43 @@ impl ConnectionManager {
                 };
 
                 match result {
-                    Ok(state) => {
+                    Ok(mut state) => {
                         consecutive_failures = 0;
+
+                        // Bug 3 suppression: for any channel with a recent
+                        // write (CMD_SET_ADC_CONFIG / CMD_SET_CH_FUNC / DAC),
+                        // preserve the previously emitted adc-config and
+                        // function values rather than letting a pre-apply
+                        // poll snapshot revert the user's change. The window
+                        // (WRITE_SUPPRESS) covers HTTP latency + firmware
+                        // command-queue drain.
+                        let prev_state = device_state
+                            .lock()
+                            .ok()
+                            .map(|g| g.clone())
+                            .unwrap_or_default();
+                        if let Ok(mut writes) = recent_writes.lock() {
+                            let now = Instant::now();
+                            for ch in 0..4 {
+                                let suppress = matches!(
+                                    writes[ch],
+                                    Some(t) if now.duration_since(t) < WRITE_SUPPRESS
+                                );
+                                if suppress {
+                                    if let (Some(prev), Some(cur)) = (
+                                        prev_state.channels.get(ch),
+                                        state.channels.get_mut(ch),
+                                    ) {
+                                        cur.function = prev.function;
+                                        cur.adc_mux = prev.adc_mux;
+                                        cur.adc_range = prev.adc_range;
+                                        cur.adc_rate = prev.adc_rate;
+                                    }
+                                } else if writes[ch].is_some() {
+                                    writes[ch] = None;
+                                }
+                            }
+                        }
                         // Edge-log channel_alert rising bits (Issue 5 AIO_SC diag).
                         // Decode rising bits into names per ad74416h.h:294-300.
                         const CHANNEL_ALERT_BITS: &[(u16, &str)] = &[

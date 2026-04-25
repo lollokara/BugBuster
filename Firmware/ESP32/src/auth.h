@@ -31,6 +31,20 @@ bool auth_verify_token(const char *token);
  */
 bool auth_token_fingerprint(char out[17]);
 
+/**
+ * @brief Generate a fresh 64-char hex admin token, persist it to NVS, and
+ *        return it via @p out (65 bytes: 64 hex chars + NUL). Existing token
+ *        is overwritten — any previously-paired client must re-pair using
+ *        the new token. Intended for the "rotate token" UX in the on-device
+ *        web pairing modal so a user who suspects credential leakage can
+ *        invalidate the old token without flashing the firmware.
+ *
+ * @return true on success (token populated AND committed to NVS); false if
+ *         random source failed or NVS commit failed (in which case the
+ *         in-memory token is unchanged).
+ */
+bool auth_rotate_token(char out[65]);
+
 #ifdef __cplusplus
 }
 #endif

@@ -112,18 +112,26 @@ static void nvs_save_config(int id, const UartBridgeConfig *cfg)
     char ns[20];
     snprintf(ns, sizeof(ns), "uart_br_%d", id);
     nvs_handle_t h;
-    if (nvs_open(ns, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, "uart_num", cfg->uart_num);
-        nvs_set_i32(h, "tx_pin", cfg->tx_pin);
-        nvs_set_i32(h, "rx_pin", cfg->rx_pin);
-        nvs_set_u32(h, "baud", cfg->baudrate);
-        nvs_set_u8(h, "data_bits", cfg->data_bits);
-        nvs_set_u8(h, "parity", cfg->parity);
-        nvs_set_u8(h, "stop_bits", cfg->stop_bits);
-        nvs_set_u8(h, "enabled", cfg->enabled ? 1 : 0);
-        nvs_commit(h);
-        nvs_close(h);
+    esp_err_t err = nvs_open(ns, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open(%s) failed: %s", ns, esp_err_to_name(err));
+        return;
+    }
+    nvs_set_u8(h, "uart_num", cfg->uart_num);
+    nvs_set_i32(h, "tx_pin", cfg->tx_pin);
+    nvs_set_i32(h, "rx_pin", cfg->rx_pin);
+    nvs_set_u32(h, "baud", cfg->baudrate);
+    nvs_set_u8(h, "data_bits", cfg->data_bits);
+    nvs_set_u8(h, "parity", cfg->parity);
+    nvs_set_u8(h, "stop_bits", cfg->stop_bits);
+    nvs_set_u8(h, "enabled", cfg->enabled ? 1 : 0);
+    esp_err_t commit_err = nvs_commit(h);
+    nvs_close(h);
+    if (commit_err == ESP_OK) {
         ESP_LOGI(TAG, "Bridge %d config saved to NVS", id);
+    } else {
+        ESP_LOGE(TAG, "nvs_commit failed for bridge %d: %s", id,
+                 esp_err_to_name(commit_err));
     }
 }
 

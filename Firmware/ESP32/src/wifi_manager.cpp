@@ -44,12 +44,26 @@ static void reconnect_timer_cb(TimerHandle_t xTimer)
 static void nvs_save_sta_credentials(const char* ssid, const char* pass)
 {
     nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_str(h, "sta_ssid", ssid);
-        nvs_set_str(h, "sta_pass", pass);
-        nvs_commit(h);
-        nvs_close(h);
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open(%s) failed: %s", NVS_NAMESPACE, esp_err_to_name(err));
+        return;
+    }
+    esp_err_t set_err = nvs_set_str(h, "sta_ssid", ssid);
+    if (set_err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_str(sta_ssid) failed: %s", esp_err_to_name(set_err));
+    }
+    set_err = nvs_set_str(h, "sta_pass", pass);
+    if (set_err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_str(sta_pass) failed: %s", esp_err_to_name(set_err));
+    }
+    esp_err_t commit_err = nvs_commit(h);
+    nvs_close(h);
+    if (commit_err == ESP_OK) {
         ESP_LOGI(TAG, "STA credentials saved to NVS");
+    } else {
+        ESP_LOGE(TAG, "nvs_commit failed for STA credentials: %s",
+                 esp_err_to_name(commit_err));
     }
 }
 

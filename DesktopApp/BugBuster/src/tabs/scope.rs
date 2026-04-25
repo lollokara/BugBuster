@@ -546,10 +546,17 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // responsive. Previously stats (Min/Max/Mean/RMS/Vpp/Freq) were recomputed
     // inside every view render across 4 channels, which scanned up to
     // STATS_WINDOW points per tick and starved the WASM thread (A5).
+    // Skip the scan when idle (not running and no new buckets) to drop CPU.
     spawn_local(async move {
+        let mut last_seen_counter: u32 = 0;
         loop {
             sleep_ms(500).await;
             if render_epoch.get_untracked() != my_epoch { break; }
+            let sc = sample_counter.get_untracked();
+            if !running.get_untracked() && sc == last_seen_counter {
+                continue;
+            }
+            last_seen_counter = sc;
             let now = js_sys::Date::now();
             let ts = now - window_sec.get_untracked() * 1000.0;
             let ch_en = channels_en.get_untracked();
@@ -622,23 +629,29 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // See the note above near the scope-data listener comment.
 
     // Render loop — 20 FPS when running (save main-thread budget), 30 FPS idle.
+    // When idle with nothing to redraw, back off to 5 Hz to keep CPU low.
     spawn_local(async move {
         let mut first_iter = true;
         let mut last_perf_log = 0.0f64;
         loop {
-            let delay = if running.get_untracked() { 50 } else { 33 };
+            // Snapshot once per iteration; the same values gate both the
+            // pre-sleep idle backoff and the post-sleep redraw skip.
+            let sc = sample_counter.get_untracked();
+            let ldc = last_draw_counter.get_untracked();
+            let cursor_active = cursor_x.get_untracked().is_some()
+                || cursor_a.get_untracked().is_some()
+                || cursor_b.get_untracked().is_some();
+            let is_running = running.get_untracked();
+            let idle = !is_running && sc == ldc && !cursor_active;
+            // Background CPU win: a hidden Scope tab (running=false, no
+            // pending redraw) used to wake at 30 Hz; now backs off to 5 Hz.
+            let delay = if is_running { 50 } else if idle { 200 } else { 33 };
             sleep_ms(delay).await;
 
             if render_epoch.get_untracked() != my_epoch { break; }
 
             // Skip redraw when nothing changed AND no interactive cursor moved.
-            // (Cheap guard: sample_counter is bumped per bucket arrival.)
-            let sc = sample_counter.get_untracked();
-            let ldc = last_draw_counter.get_untracked();
-            let has_cursor_move = cursor_x.get_untracked().is_some()
-                || cursor_a.get_untracked().is_some()
-                || cursor_b.get_untracked().is_some();
-            if sc == ldc && !has_cursor_move && !running.get_untracked() {
+            if idle {
                 continue;
             }
             last_draw_counter.set(sc);

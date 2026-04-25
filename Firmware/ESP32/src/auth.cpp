@@ -81,7 +81,58 @@ bool auth_verify_token(const char *token)
     if (!token) return false;
     // Token must be exactly 64 characters
     if (strlen(token) != 64) return false;
-    return (strcmp(token, s_admin_token) == 0);
+    // Constant-time comparison: avoid leaking common-prefix length via timing.
+    // Both buffers are guaranteed 64 bytes here (length checked above and
+    // s_admin_token is 64 hex chars when populated); if the device token
+    // hasn't been initialised this returns false because s_admin_token is all
+    // zeros, which won't match any 64-char hex string.
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < 64; i++) {
+        diff |= (uint8_t)token[i] ^ (uint8_t)s_admin_token[i];
+    }
+    return diff == 0;
+}
+
+bool auth_rotate_token(char out[65])
+{
+    if (!out) return false;
+
+    // Generate 32 fresh random bytes and render as 64 hex chars.
+    uint8_t random_bytes[32];
+    esp_fill_random(random_bytes, sizeof(random_bytes));
+    char fresh[65] = {0};
+    for (int i = 0; i < 32; i++) {
+        sprintf(&fresh[i * 2], "%02x", random_bytes[i]);
+    }
+    fresh[64] = '\0';
+
+    // Persist BEFORE swapping the in-memory token: if NVS write fails we
+    // leave the previous token active (caller can retry), instead of
+    // ending up with an in-memory token that won't survive reboot.
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("auth", NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "auth_rotate_token: nvs_open failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = nvs_set_str(nvs, "admin_token", fresh);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "auth_rotate_token: nvs_set_str failed: %s", esp_err_to_name(err));
+        nvs_close(nvs);
+        return false;
+    }
+    err = nvs_commit(nvs);
+    nvs_close(nvs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "auth_rotate_token: nvs_commit failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    // Commit to memory and return.
+    memcpy(s_admin_token, fresh, sizeof(fresh));
+    memcpy(out, fresh, sizeof(fresh));
+    ESP_LOGI(TAG, "Admin token rotated");
+    return true;
 }
 
 bool auth_token_fingerprint(char out[17])

@@ -76,7 +76,20 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (psu, set_psu) = signal([false; 2]);
     let (ef, set_ef) = signal([false; 4]);
     let (oe, set_oe) = signal(false); // Level shifter OE (UI-only, ESP32 GPIO14)
+    // In-flight guards: when the user toggles a PSU/EF, the 500 ms PCA poll can
+    // overwrite the optimistic update with stale state until the firmware
+    // applies the new value (~50–300 ms). These flags suppress polling
+    // overwrites for ~700 ms after a user action.
+    let psu_inflight: [RwSignal<bool>; 2] = std::array::from_fn(|_| RwSignal::new(false));
+    let ef_inflight: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
     let cr = NodeRef::<leptos::html::Canvas>::new();
+
+    // Alive flag — flips false on tab unmount so background loops terminate.
+    // Without this, the 25 Hz canvas redraw and 500 ms PCA poll keep running
+    // forever after the user navigates away (one of the major contributors to
+    // the "100 % CPU in idle" complaint).
+    let alive: RwSignal<bool> = RwSignal::new(true);
+    on_cleanup(move || alive.set(false));
 
     // Sync MUX state from device-state event
     Effect::new(move || {
@@ -91,16 +104,33 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let mut fail_count = 0u32;
         loop {
             slp(500).await;
+            if !alive.get_untracked() { break; }
             let result = invoke("pca_get_status", wasm_bindgen::JsValue::NULL).await;
             if let Ok(st) = serde_wasm_bindgen::from_value::<IoExpState>(result) {
                 fail_count = 0;
                 if st.present {
-                    set_psu.set([st.vadj1_en, st.vadj2_en]);
-                    let mut ef_arr = [false; 4];
+                    // Skip overwriting fields that have a recent user action in
+                    // flight — otherwise the toggle UI flickers back to the
+                    // pre-write firmware state until the next poll catches up.
+                    let psu_new = [st.vadj1_en, st.vadj2_en];
+                    set_psu.update(|v| {
+                        for i in 0..2 {
+                            if !psu_inflight[i].get_untracked() {
+                                v[i] = psu_new[i];
+                            }
+                        }
+                    });
+                    let mut ef_new = [false; 4];
                     for (i, e) in st.efuses.iter().enumerate().take(4) {
-                        ef_arr[i] = e.enabled;
+                        ef_new[i] = e.enabled;
                     }
-                    set_ef.set(ef_arr);
+                    set_ef.update(|v| {
+                        for i in 0..4 {
+                            if !ef_inflight[i].get_untracked() {
+                                v[i] = ef_new[i];
+                            }
+                        }
+                    });
                 }
             } else {
                 fail_count += 1;
@@ -160,6 +190,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     spawn_local(async move {
         loop {
             slp(40).await;
+            if !alive.get_untracked() { break; }
             let Some(cv) = cr.get() else { continue };
             let cv: HtmlCanvasElement = cv.into();
             let dp = web_sys::window().unwrap().device_pixel_ratio();
@@ -532,21 +563,36 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[0]
                         on:click=move |_| {
                             let new_val = !psu.get_untracked()[0];
+                            psu_inflight[0].set(true);
                             send_pca_control(PCA_VADJ1_EN, new_val);
                             set_psu.update(|v| v[0] = new_val);
+                            spawn_local(async move {
+                                slp(700).await;
+                                psu_inflight[0].set(false);
+                            });
                         }>"V_ADJ1"</button>
                     <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[1]
                         on:click=move |_| {
                             let new_val = !psu.get_untracked()[1];
+                            psu_inflight[1].set(true);
                             send_pca_control(PCA_VADJ2_EN, new_val);
                             set_psu.update(|v| v[1] = new_val);
+                            spawn_local(async move {
+                                slp(700).await;
+                                psu_inflight[1].set(false);
+                            });
                         }>"V_ADJ2"</button>
                     {(0..4).map(|i| view! {
                         <button class="sp-ef-btn" class:sp-ef-on=move || ef.get()[i]
                             on:click=move |_| {
                                 let new_val = !ef.get_untracked()[i];
+                                ef_inflight[i].set(true);
                                 send_pca_control(PCA_EFUSE_IDS[i], new_val);
                                 set_ef.update(|v| v[i] = new_val);
+                                spawn_local(async move {
+                                    slp(700).await;
+                                    ef_inflight[i].set(false);
+                                });
                             }>{format!("EF{}", i+1)}</button>
                     }).collect::<Vec<_>>()}
                 </div>
