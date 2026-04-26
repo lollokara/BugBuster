@@ -1,0 +1,314 @@
+*************************************************************
+FileName = BugBuster_HAT.GBR
+AutoAperture = True
+*************************************************************
+Generating : Top Layer
+      File : BugBuster_HAT.GTL
+
+    Adding Layer      : Top Layer
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+    D11
+    D12
+    D14
+    D19
+    D20
+    D21
+    D22
+    D23
+    D24
+    D25
+    D26
+    D27
+    D28
+    D29
+    D30
+    D31
+    D32
+    D33
+    D34
+    D35
+    D36
+    D37
+    D39
+    D40
+    D41
+    D42
+    D59
+    D60
+    D61
+    D62
+    D63
+    D65
+    D66
+    D67
+    D68
+    D69
+    D70
+    D71
+    D72
+    D73
+    D74
+*************************************************************
+
+*************************************************************
+Generating : Mid Layer 1
+      File : BugBuster_HAT.G1
+
+    Adding Layer      : Mid Layer 1
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+    D11
+    D59
+    D60
+    D61
+    D62
+    D63
+    D65
+    D72
+    D74
+*************************************************************
+
+*************************************************************
+Generating : Mid Layer 2
+      File : BugBuster_HAT.G2
+
+    Adding Layer      : Mid Layer 2
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+    D11
+    D14
+    D59
+    D60
+    D61
+    D62
+    D63
+    D65
+    D72
+    D73
+    D74
+*************************************************************
+
+*************************************************************
+Generating : Bottom Layer
+      File : BugBuster_HAT.GBL
+
+    Adding Layer      : Bottom Layer
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+    D11
+    D14
+    D59
+    D60
+    D61
+    D62
+    D63
+    D65
+    D70
+    D72
+    D73
+    D74
+*************************************************************
+
+*************************************************************
+Generating : Bottom Paste
+      File : BugBuster_HAT.GBP
+
+    Adding Layer      : Bottom Paste
+
+    Adding Layer      : Bottom Layer
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+*************************************************************
+
+*************************************************************
+Generating : Bottom Overlay
+      File : BugBuster_HAT.GBO
+
+    Adding Layer      : Bottom Overlay
+
+
+Used DCodes :
+    D75
+*************************************************************
+
+*************************************************************
+Generating : Route Tool Path
+      File : BugBuster_HAT.GM4
+
+    Adding Layer      : Route Tool Path
+
+
+Used DCodes :
+    D11
+*************************************************************
+
+*************************************************************
+Generating : Top Overlay
+      File : BugBuster_HAT.GTO
+
+    Adding Layer      : Top Overlay
+
+
+Used DCodes :
+    D10
+    D11
+    D12
+    D13
+    D14
+    D15
+    D16
+    D17
+    D18
+*************************************************************
+
+*************************************************************
+Generating : Top Paste
+      File : BugBuster_HAT.GTP
+
+    Adding Layer      : Top Paste
+
+    Adding Layer      : Top Layer
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+    D19
+    D20
+    D21
+    D22
+    D23
+    D24
+    D25
+    D26
+    D27
+    D28
+    D29
+    D30
+    D31
+    D32
+    D33
+    D34
+    D35
+    D36
+    D37
+    D38
+    D39
+    D40
+    D41
+    D42
+*************************************************************
+
+*************************************************************
+Generating : Top Solder
+      File : BugBuster_HAT.GTS
+
+    Adding Layer      : Top Solder
+
+    Adding Layer      : Top Layer
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+    D23
+    D24
+    D26
+    D28
+    D30
+    D34
+    D36
+    D37
+    D39
+    D40
+    D41
+    D43
+    D44
+    D45
+    D46
+    D47
+    D48
+    D49
+    D50
+    D51
+    D52
+    D53
+    D54
+    D55
+    D56
+    D57
+    D58
+    D59
+    D60
+    D61
+    D62
+    D63
+    D64
+    D65
+*************************************************************
+
+*************************************************************
+Generating : Bottom Solder
+      File : BugBuster_HAT.GBS
+
+    Adding Layer      : Bottom Solder
+
+    Adding Layer      : Bottom Layer
+
+    Adding Layer      : Multi-Layer
+
+
+Used DCodes :
+    D58
+    D59
+    D60
+    D61
+    D62
+    D63
+    D64
+    D65
+*************************************************************
+
+*************************************************************
+Generating : Drill Drawing
+      File : BugBuster_HAT.GD1
+
+    Adding Drill Pair : Top Layer-Bottom Layer
+
+    Adding Layer      : Drill Drawing
+
+
+Used DCodes :
+    D76
+    D77
+*************************************************************
+
+*************************************************************
+Generating : Drill Guide
+      File : BugBuster_HAT.GG1
+
+    Adding Drill Pair : Top Layer-Bottom Layer
+
+    Adding Layer      : Drill Guide
+
+
+Used DCodes :
+    D76
+*************************************************************
+

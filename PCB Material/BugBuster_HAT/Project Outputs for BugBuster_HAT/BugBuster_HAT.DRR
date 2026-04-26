@@ -1,0 +1,21 @@
+----------------------------------------------------------------------------------------------------------------------------------
+NCDrill File Report For: BugBuster_HAT.PcbDoc   26/04/2026  20:49:04
+----------------------------------------------------------------------------------------------------------------------------------
+
+Layer Pair : Top Layer to Bottom Layer
+ASCII RoundHoles File : BugBuster_HAT-RoundHoles.TXT
+ASCII SlotHoles File : BugBuster_HAT-SlotHoles.TXT
+
+Tool       Hole Size               Hole Tolerance               Hole Type       Hole Count   Plated         Tool Travel
+----------------------------------------------------------------------------------------------------------------------------------
+T1      0.2mm (8mil)                                              Round             1542      PTH        3788.95mm (149.17inch)
+T2      0.4mm (16mil)                                             Round             16        PTH        13.25mm (0.52inch)
+T3      0.6mm (24mil)                                             Slot              4         PTH        36.25mm (1.43inch)
+T4      1.1mm (43mil)           +0mm (0mil)/-0.25mm (10mil)       Round             10        PTH        25.40mm (1.00inch)
+T5      1.1mm (43mil)                                             Round             24        PTH        235.45mm (9.27inch)
+T6      1.4mm (55mil)                                             Round             10        PTH        87.30mm (3.44inch)
+T7      3.3mm (130mil)                                            Round             4         PTH        328.85mm (12.95inch)
+----------------------------------------------------------------------------------------------------------------------------------
+Totals                                                                              1610
+
+Total Processing Time (hh:mm:ss) : 00:00:00

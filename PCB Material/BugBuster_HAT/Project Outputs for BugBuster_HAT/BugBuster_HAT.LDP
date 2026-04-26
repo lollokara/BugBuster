@@ -1,0 +1,3 @@
+Layer Pairs Export File for PCB: C:\Users\Public\Documents\Altium\BugBuster\PCB Material\BugBuster_HAT\BugBuster_HAT.PcbDoc
+LayersSetName=Top_Bot_Thru_Holes|DrillFile=bugbuster_hat-roundholes.txt|DrillLayers=gtl,g1,g2,gbl
+LayersSetName=Top_Bot_Slot_Holes|DrillFile=bugbuster_hat-slotholes.txt|DrillLayers=gtl,g1,g2,gbl
