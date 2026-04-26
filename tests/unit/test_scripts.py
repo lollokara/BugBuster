@@ -43,12 +43,18 @@ class TestScriptCmdIds:
 # SCRIPT_EVAL wire format
 # ---------------------------------------------------------------------------
 
+def _eval_payload(src: bytes, persist: bool = False) -> bytes:
+    """Build a SCRIPT_EVAL payload: u8 flags, u16 src_len, src."""
+    flags = 0x01 if persist else 0x00
+    return struct.pack('<BH', flags, len(src)) + src
+
+
 class TestScriptEvalWire:
     def test_eval_response_structure(self):
         """SCRIPT_EVAL returns u8 enqueued + u32 script_id (5 bytes)."""
         device = SimulatedDevice()
         src = b"print('hello')"
-        payload = struct.pack('<H', len(src)) + src
+        payload = _eval_payload(src)
         resp = device.dispatch(int(CmdId.SCRIPT_EVAL), payload)
         assert len(resp) == 5
         enqueued = resp[0]
@@ -60,7 +66,7 @@ class TestScriptEvalWire:
         device = SimulatedDevice()
         for expected_id in (1, 2, 3):
             src = b"x = 1"
-            payload = struct.pack('<H', len(src)) + src
+            payload = _eval_payload(src)
             resp = device.dispatch(int(CmdId.SCRIPT_EVAL), payload)
             script_id, = struct.unpack_from('<I', resp, 1)
             assert script_id == expected_id
@@ -68,7 +74,7 @@ class TestScriptEvalWire:
     def test_eval_marks_running(self):
         device = SimulatedDevice()
         src = b"pass"
-        payload = struct.pack('<H', len(src)) + src
+        payload = _eval_payload(src)
         device.dispatch(int(CmdId.SCRIPT_EVAL), payload)
         assert device.script_running is True
 
@@ -101,8 +107,7 @@ class TestScriptStatusWire:
     def test_status_after_eval(self):
         device = SimulatedDevice()
         src = b"x = 42"
-        payload = struct.pack('<H', len(src)) + src
-        device.dispatch(int(CmdId.SCRIPT_EVAL), payload)
+        device.dispatch(int(CmdId.SCRIPT_EVAL), _eval_payload(src))
         resp = device.dispatch(int(CmdId.SCRIPT_STATUS), b'')
         is_running = bool(resp[0])
         total_runs, = struct.unpack_from('<I', resp, 5)
@@ -125,8 +130,7 @@ class TestScriptLogsWire:
     def test_logs_populated_after_eval(self):
         device = SimulatedDevice()
         src = b"print('test')"
-        payload = struct.pack('<H', len(src)) + src
-        device.dispatch(int(CmdId.SCRIPT_EVAL), payload)
+        device.dispatch(int(CmdId.SCRIPT_EVAL), _eval_payload(src))
         resp = device.dispatch(int(CmdId.SCRIPT_LOGS), b'')
         count, = struct.unpack_from('<H', resp, 0)
         assert count > 0
@@ -136,8 +140,7 @@ class TestScriptLogsWire:
     def test_logs_drained_after_read(self):
         device = SimulatedDevice()
         src = b"pass"
-        payload = struct.pack('<H', len(src)) + src
-        device.dispatch(int(CmdId.SCRIPT_EVAL), payload)
+        device.dispatch(int(CmdId.SCRIPT_EVAL), _eval_payload(src))
         # First drain
         device.dispatch(int(CmdId.SCRIPT_LOGS), b'')
         # Second drain should be empty

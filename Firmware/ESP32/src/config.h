@@ -217,7 +217,9 @@ static inline uint32_t millis_now(void) {
 // =============================================================================
 // MicroPython scripting (Phase 1)
 // =============================================================================
-#define MP_HEAP_SIZE      (1u * 1024u * 1024u)   // 1 MB GC heap in PSRAM
-#define MP_TASK_STACK     (16u * 1024u)           // FreeRTOS task stack (bytes)
-#define MP_QUEUE_DEPTH    4u                       // Script command queue depth
-#define MP_LOG_RING_SIZE  4096u                    // Log ring buffer size (bytes)
+#define MP_HEAP_SIZE           (1u * 1024u * 1024u)   // 1 MB GC heap in PSRAM
+#define MP_TASK_STACK          (16u * 1024u)           // FreeRTOS task stack (bytes)
+#define MP_QUEUE_DEPTH         4u                       // Script command queue depth
+#define MP_LOG_RING_SIZE       4096u                    // Log ring buffer size (bytes)
+#define MP_PERSISTENT_IDLE_MS  (10u * 60u * 1000u)     // Auto-reset VM after 10 min idle
+#define MP_IDLE_CHECK_MS       10000u                   // Queue poll interval in persistent mode

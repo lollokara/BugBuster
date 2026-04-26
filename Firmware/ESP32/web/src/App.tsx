@@ -22,6 +22,7 @@ const Analog = lazy(() => import("./tabs/analog/Analog").then((m) => ({ default:
 const Digital = lazy(() => import("./tabs/digital/Digital").then((m) => ({ default: m.Digital })));
 const SignalPath = lazy(() => import("./tabs/signal/SignalPath").then((m) => ({ default: m.SignalPath })));
 const System = lazy(() => import("./tabs/system/System").then((m) => ({ default: m.System })));
+const Scripts = lazy(() => import("./tabs/scripts/Scripts").then((m) => ({ default: m.Scripts })));
 
 type TabId =
   | "overview"
@@ -29,7 +30,8 @@ type TabId =
   | "analog"
   | "digital"
   | "signal"
-  | "system";
+  | "system"
+  | "scripts";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -38,6 +40,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "digital", label: "Digital" },
   { id: "signal", label: "Signal Path" },
   { id: "system", label: "System" },
+  { id: "scripts", label: "Scripts" },
 ];
 
 const activeTab = signal<TabId>("overview");
@@ -150,6 +153,7 @@ export function App() {
           {activeTab.value === "digital" && <Digital />}
           {activeTab.value === "signal" && <SignalPath />}
           {activeTab.value === "system" && <System />}
+          {activeTab.value === "scripts" && <Scripts />}
         </Suspense>
       </main>
 

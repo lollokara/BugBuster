@@ -20,10 +20,15 @@ functions at the bottom of this file::
 
 import struct
 import logging
+import warnings
 from typing import Callable, Optional, Union
 
 from .transport.usb  import USBTransport
 from .transport.http import HTTPTransport
+
+
+class BugBusterWarning(UserWarning):
+    """General-purpose warning for the BugBuster host-side library."""
 from .constants import (
     CmdId, ChannelFunction, AdcRange, AdcRate, AdcMux,
     GpioMode, WaveformType, OutputMode, RtdCurrent,
@@ -47,7 +52,11 @@ DeviceInfo  = namedtuple("DeviceInfo",  ["spi_ok", "silicon_rev", "silicon_id0",
 PingResult  = namedtuple("PingResult",  ["token", "uptime_ms"])
 GpioStatus  = namedtuple("GpioStatus",  ["id", "mode", "output", "input", "pulldown"])
 IdacChannel        = namedtuple("IdacChannel",        ["code", "target_v", "actual_v", "v_min", "v_max", "calibrated"])
-ScriptStatusResult = namedtuple("ScriptStatusResult", ["is_running", "script_id", "total_runs", "total_errors", "last_error"])
+ScriptStatusResult = namedtuple("ScriptStatusResult",
+    ["is_running", "script_id", "total_runs", "total_errors", "last_error",
+     "mode", "globals_bytes_est", "globals_count", "auto_reset_count",
+     "last_eval_at_ms", "idle_for_ms", "watermark_soft_hit"],
+    defaults=(0, 0, 0, 0, 0, 0, False))
 AutorunStatus      = namedtuple("AutorunStatus",      ["enabled", "has_script", "io12_high", "last_run_ok", "last_run_id"])
 
 
@@ -270,6 +279,9 @@ class BugBuster:
         # Cached HAT presence: None = unknown (probe on demand), bool = known
         self._hat_present_cache = None
         self._admin_token = None
+        # Unit-testable pre-send hook: set to a callable to inject failures.
+        # Cleared automatically after each fire (one-shot).
+        self._usb_pre_send_hook = None
 
     def get_admin_token(self) -> str:
         """
@@ -357,8 +369,45 @@ class BugBuster:
     # ------------------------------------------------------------------
 
     def _usb_cmd(self, cmd_id: int, payload: bytes = b'') -> bytes:
-        """Send a binary command and return the raw response payload."""
-        return self._t.send_command(cmd_id, payload)
+        """
+        Send a binary command and return the raw response payload.
+
+        On ``TimeoutError`` the input buffer is drained for 50 ms and the
+        command is retried once.  If the second attempt also times out the
+        original exception is re-raised.
+
+        A unit-testable pre-send hook is available: set
+        ``client._usb_pre_send_hook`` to a callable that is invoked (with no
+        arguments) before each ``send_command`` call.  The hook may raise to
+        simulate transport failures.  After firing, the hook is cleared to
+        None so it triggers only once per installation.
+        """
+        def _attempt():
+            hook = self._usb_pre_send_hook
+            if hook is not None:
+                self._usb_pre_send_hook = None
+                hook()
+            return self._t.send_command(cmd_id, payload)
+
+        try:
+            return _attempt()
+        except TimeoutError as exc:
+            # Drain any stale bytes from the serial input buffer (best-effort)
+            _port = getattr(self._t, '_port', None)
+            if _port is not None:
+                import time as _time
+                deadline = _time.monotonic() + 0.05
+                while _time.monotonic() < deadline:
+                    try:
+                        if not _port.read(256):
+                            break
+                    except Exception:
+                        break
+            # Single retry
+            try:
+                return _attempt()
+            except TimeoutError:
+                raise exc
 
     def _http_get(self, path: str, **params) -> dict:
         return self._t.get(path, params=params or None)
@@ -446,31 +495,65 @@ class BugBuster:
     # ── On-Device Scripting (USB only) ──────────────────────────────────
     # ------------------------------------------------------------------
 
-    def script_eval(self, src: str) -> "ScriptStatusResult":
+    def script_session(self) -> "ScriptSession":
+        """
+        Return a :class:`~bugbuster.script.ScriptSession` bound to this client.
+
+        Use as a context manager to open a persistent MicroPython VM, run
+        multiple evals with shared state, and tear down cleanly::
+
+            with bb.script_session() as s:
+                s.eval("x = 5")
+                logs = s.eval("print(x)")
+        """
+        from .script import ScriptSession
+        return ScriptSession(client=self)
+
+    def script_eval(self, src: str, persist: bool = False) -> "ScriptStatusResult":
         """
         Submit *src* (a Python string) to the on-device MicroPython engine.
 
-        USB only.  Returns a :class:`ScriptStatusResult` reflecting the
-        engine state immediately after enqueue.  Raises ``ValueError`` if
-        *src* exceeds 32 KB or the queue is full (``enqueued == False``).
+        USB: prepends a flags byte (bit0=persist) before the u16 src_len.
+        HTTP: appends ``?persist=true`` when *persist* is True.
+        Returns a :class:`ScriptStatusResult` reflecting the engine state
+        immediately after enqueue.  Raises ``ValueError`` if *src* exceeds
+        32 KB.  Raises ``RuntimeError`` if the queue is full.
         """
-        self._require_usb("script_eval")
         encoded = src.encode("utf-8")
         if len(encoded) > 32 * 1024:
             raise ValueError(f"script source too large: {len(encoded)} bytes (max 32768)")
-        payload = struct.pack('<H', len(encoded)) + encoded
-        resp = self._usb_cmd(CmdId.SCRIPT_EVAL, payload)
-        enqueued = bool(resp[0])
-        script_id, = struct.unpack_from('<I', resp, 1)
-        if not enqueued:
-            raise RuntimeError("script_eval: device queue full or busy")
-        return ScriptStatusResult(
-            is_running=True,
-            script_id=script_id,
-            total_runs=0,
-            total_errors=0,
-            last_error="",
-        )
+
+        if self._usb:
+            flags = 0x01 if persist else 0x00
+            payload = struct.pack('<B', flags) + struct.pack('<H', len(encoded)) + encoded
+            resp = self._usb_cmd(CmdId.SCRIPT_EVAL, payload)
+            enqueued = bool(resp[0])
+            script_id, = struct.unpack_from('<I', resp, 1)
+            if not enqueued:
+                raise RuntimeError("script_eval: device queue full or busy")
+            return ScriptStatusResult(
+                is_running=True,
+                script_id=script_id,
+                total_runs=0,
+                total_errors=0,
+                last_error="",
+            )
+        else:
+            qs = "?persist=true" if persist else ""
+            headers = {"Content-Type": "text/plain; charset=utf-8"}
+            if self._admin_token:
+                headers["X-BugBuster-Admin-Token"] = self._admin_token
+            data = self._t.post(f"/scripts/eval{qs}", encoded, headers=headers)
+            if not data.get("ok"):
+                raise RuntimeError(f"script_eval: {data.get('err', 'unknown error')}")
+            script_id = int(data.get("id", 0))
+            return ScriptStatusResult(
+                is_running=True,
+                script_id=script_id,
+                total_runs=0,
+                total_errors=0,
+                last_error="",
+            )
 
     def script_status(self) -> "ScriptStatusResult":
         """
@@ -485,13 +568,52 @@ class BugBuster:
         total_errors, = struct.unpack_from('<I', resp, pos); pos += 4
         err_len = resp[pos]; pos += 1
         last_error = resp[pos:pos + err_len].decode("utf-8", errors="replace")
+        pos += err_len
+
+        # V2-A extended fields (length-gated for backward compat with older firmware)
+        # Format: u8 mode, u32 globals_bytes_est, u32 globals_count,
+        #         u32 auto_reset_count, u32 last_eval_at_ms, u32 idle_for_ms,
+        #         u8 watermark_soft_hit
+        mode = 0; globals_bytes_est = 0; globals_count = 0
+        auto_reset_count = 0; last_eval_at_ms = 0; idle_for_ms = 0
+        watermark_soft_hit = False
+        if len(resp) >= pos + 1 + 4 + 4 + 4 + 4 + 4 + 1:
+            mode = resp[pos]; pos += 1
+            globals_bytes_est, = struct.unpack_from('<I', resp, pos); pos += 4
+            globals_count, = struct.unpack_from('<I', resp, pos); pos += 4
+            auto_reset_count, = struct.unpack_from('<I', resp, pos); pos += 4
+            last_eval_at_ms, = struct.unpack_from('<I', resp, pos); pos += 4
+            idle_for_ms, = struct.unpack_from('<I', resp, pos); pos += 4
+            watermark_soft_hit = bool(resp[pos]); pos += 1
+
         return ScriptStatusResult(
             is_running=is_running,
             script_id=script_id,
             total_runs=total_runs,
             total_errors=total_errors,
             last_error=last_error,
+            mode=mode,
+            globals_bytes_est=globals_bytes_est,
+            globals_count=globals_count,
+            auto_reset_count=auto_reset_count,
+            last_eval_at_ms=last_eval_at_ms,
+            idle_for_ms=idle_for_ms,
+            watermark_soft_hit=watermark_soft_hit,
         )
+
+    def script_reset(self) -> None:
+        """
+        Request an immediate VM teardown (persistent mode only).
+
+        USB: sends BBP_CMD_SCRIPT_AUTORUN sub=4.
+        HTTP: POST /api/scripts/reset.
+        No-op if the VM is already in EPHEMERAL mode.
+        """
+        if self._usb:
+            payload = struct.pack('<B', 4)  # sub=4 RESET_VM
+            self._usb_cmd(CmdId.SCRIPT_AUTORUN, payload)
+        else:
+            self._http_post("/scripts/reset")
 
     def script_logs(self) -> str:
         """

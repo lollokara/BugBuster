@@ -22,15 +22,26 @@ extern "C" {
 void scripting_init(void);
 
 // ---------------------------------------------------------------------------
+// Interpreter persistence mode
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    SCRIPTING_MODE_EPHEMERAL  = 0,  // Default: gc_init/mp_init/mp_deinit per eval
+    SCRIPTING_MODE_PERSISTENT = 1,  // VM stays alive across evals; reset on idle/watermark
+} ScriptingMode;
+
+// ---------------------------------------------------------------------------
 // Script submission
 // ---------------------------------------------------------------------------
 
 /**
  * Copy src into a heap buffer and enqueue for execution.
+ * persist=true keeps the MicroPython VM alive after eval (persistent mode).
+ * In persistent mode, persist=false is a no-op (sticky until explicit reset).
  * Returns true if enqueued, false if the queue is full or src is NULL.
  * Thread-safe; callable from any context.
  */
-bool scripting_run_string(const char *src, size_t len);
+bool scripting_run_string(const char *src, size_t len, bool persist);
 
 /**
  * Load the named script file from SPIFFS and enqueue it for execution.
@@ -90,9 +101,27 @@ typedef struct {
     uint32_t total_runs;
     uint32_t total_errors;
     char     last_error_msg[64];
+    // V2-A persistent-mode fields (zero in EPHEMERAL mode)
+    ScriptingMode mode;              // current interpreter persistence mode
+    uint32_t globals_bytes_est;      // estimated bytes used by global dict (0 when VM idle)
+    uint32_t globals_count;          // number of entries in the global dict
+    uint32_t auto_reset_count;       // how many times watermark/idle triggered auto-reset
+    uint32_t last_eval_at_ms;        // xTaskGetTickCount() ms of last eval enqueue
+    uint32_t idle_for_ms;            // ms since last eval (0 when running)
+    bool     watermark_soft_hit;     // true if GC heap >= MP_HEAP_SOFT_WATERMARK_PCT
 } ScriptStatus;
 
 void scripting_get_status(ScriptStatus *out);
+
+// ---------------------------------------------------------------------------
+// VM reset (persistent mode only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Request an immediate VM teardown and re-init.
+ * No-op in EPHEMERAL mode.  Safe to call from any context.
+ */
+void scripting_reset_vm(void);
 
 #ifdef __cplusplus
 }

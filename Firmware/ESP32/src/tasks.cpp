@@ -1285,8 +1285,10 @@ void initTasks(AD74416H& device)
 {
     s_device = &device;
 
-    // Initialise state to safe defaults
-    memset(&g_deviceState, 0, sizeof(g_deviceState));
+    // Initialise channel/diag defaults. Do NOT memset the whole struct —
+    // i2cOk/muxOk/spiOk are set by main.cpp BEFORE initTasks() runs and
+    // a memset here would silently clobber them, leaving status badges
+    // and LEDs reporting permanent failure even when hardware is fine.
     for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
         g_deviceState.channels[ch].function = CH_FUNC_HIGH_IMP;
         g_deviceState.channels[ch].adcRange = ADC_RNG_0_12V;

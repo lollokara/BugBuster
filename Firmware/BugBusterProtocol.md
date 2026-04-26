@@ -2119,9 +2119,16 @@ Submit a Python source string for evaluation.
 
 **Request payload:**
 ```
-0-1     src_len     u16     Length of source in bytes (max 32768)
-2..     src         bytes   UTF-8 Python source (no NUL terminator)
+0       flags       u8      Bit flags: bit0 = persist (1 = persistent VM mode)
+1-2     src_len     u16     Length of source in bytes (max 32768)
+3..     src         bytes   UTF-8 Python source (no NUL terminator)
 ```
+
+`flags` bit 0 (`persist`): when set, the MicroPython VM is kept alive across
+evaluations (persistent mode). Persistent mode is sticky — once entered, it
+remains active until an explicit RESET_VM (sub=4), idle timeout (10 min), or
+hard heap watermark auto-reset. Setting `persist=0` after entering persistent
+mode is a no-op.
 
 **Response payload:**
 ```
@@ -2241,12 +2248,14 @@ of the request payload to select the operation.
 
 **Sub-commands:**
 
-| sub | Name     | Description                                    |
-|-----|----------|------------------------------------------------|
-| 0   | STATUS   | Read current autorun state                     |
-| 1   | ENABLE   | Set a script as the autorun target             |
-| 2   | DISABLE  | Remove autorun sentinel (non-destructive)      |
-| 3   | RUN_NOW  | Run /spiffs/autorun.py immediately (no gates)  |
+| sub | Name             | Description                                    |
+|-----|------------------|------------------------------------------------|
+| 0   | STATUS           | Read current autorun state                     |
+| 1   | ENABLE           | Set a script as the autorun target             |
+| 2   | DISABLE          | Remove autorun sentinel (non-destructive)      |
+| 3   | RUN_NOW          | Run /spiffs/autorun.py immediately (no gates)  |
+| 4   | RESET_VM         | Teardown persistent VM immediately (V2-A)      |
+| 5   | STATUS_PERSISTED | Read persistent-mode interpreter state (V2-A)  |
 
 **sub=0 STATUS**
 
@@ -2298,6 +2307,34 @@ Response:
 1       script_id     u32         Assigned script ID
 5       err_len       u8          Length of error string (0 if ok)
 6       err           char[e]     Error description (if err_len > 0)
+```
+
+**sub=4 RESET_VM** (V2-A)
+
+Request: `[0x04]`
+
+Response:
+```
+0       ok            u8          1 = reset requested (no-op in EPHEMERAL mode)
+```
+
+Requests an immediate teardown of the persistent MicroPython VM. The VM will
+be torn down at the next idle check (within `MP_IDLE_CHECK_MS`, default 10 s).
+After reset the engine reverts to EPHEMERAL mode.
+
+HTTP equivalent: `POST /api/scripts/reset`
+
+**sub=5 STATUS_PERSISTED** (V2-A)
+
+Request: `[0x05]`
+
+Response:
+```
+0       mode              u8      0 = EPHEMERAL, 1 = PERSISTENT
+1-4     globals_bytes     u32     Estimated bytes used by global dict (0 when VM idle)
+5-8     auto_reset_count  u32     Number of watermark / idle auto-resets since boot
+9-12    last_eval_at_ms   u32     Tick-count ms of last eval enqueue (0 = never)
+13-16   idle_for_ms       u32     Ms elapsed since last eval (0 if never evaluated)
 ```
 
 **Three-gate boot safety (autorun_boot_check on power-up):**

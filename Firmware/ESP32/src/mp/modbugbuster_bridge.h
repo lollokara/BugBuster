@@ -37,6 +37,10 @@ bool bugbuster_mp_spi_transfer(const uint8_t *tx, size_t tx_len,
                                 uint8_t *rx, size_t *inout_rx_len,
                                 uint16_t timeout_ms);
 
+// ── Network binding (V2-E) — implemented in net_bridge.cpp ──────────────────
+// (declarations live in net_bridge.h; this comment marks the boundary so
+//  future phases know where to add analogous bridge groups.)
+
 #ifdef __cplusplus
 }
 #endif

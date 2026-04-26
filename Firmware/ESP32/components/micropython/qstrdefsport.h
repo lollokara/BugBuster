@@ -1,5 +1,11 @@
 // Port-specific qstr definitions for BugBuster MicroPython port.
 
+// V2-C: .frozen qstr needed when MICROPY_MODULE_FROZEN_MPY=1 (runtime.c:147).
+// Added unconditionally here because the qstr pipeline Step 5 preprocesses
+// qstrdefsport.h with -DNO_QSTR which may not carry MICROPY_MODULE_FROZEN
+// into the preprocessor correctly in all configurations.
+Q(.frozen)
+
 Q(bugbuster)
 Q(Channel)
 Q(sleep)

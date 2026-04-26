@@ -1,8 +1,9 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
 # BugBuster partition table — 16 MB flash, A/B OTA + SPIFFS (web UI + data)
-# Layout: 20 KB NVS | 8 KB otadata | 6 MB app0 | 6 MB app1 | 3.9 MB SPIFFS
+# Layout: 20 KB NVS | 8 KB otadata | 6 MB app0 | 6 MB app1 | 3.65 MB SPIFFS | 256 KB coredump
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xe000,   0x2000,
 app0,     app,  ota_0,   0x10000,  0x600000,
 app1,     app,  ota_1,   0x610000, 0x600000,
-spiffs,   data, spiffs,  0xc10000, 0x3f0000,
+spiffs,   data, spiffs,  0xc10000, 0x3b0000,
+coredump, data, coredump,0xfc0000, 0x40000,

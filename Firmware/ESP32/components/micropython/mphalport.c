@@ -3,6 +3,7 @@
 
 #include "py/mpconfig.h"
 #include "py/runtime.h"
+#include "py/persistentcode.h"  // mp_native_relocate (V2-D)
 #include "py/mpstate.h"
 #include "py/gc.h"
 #include "py/lexer.h"
@@ -25,6 +26,8 @@ extern bool scripting_stop_requested(void);
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_rom_sys.h"
+#include "esp_heap_caps.h"
+#include "esp_attr.h"  // IRAM_ATTR — kept for V2-D re-attempt (currently #if 0)
 
 // Spinlock for atomic sections (declared extern in mphalport.h)
 portMUX_TYPE mp_atomic_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -60,6 +63,41 @@ void mp_hal_delay_ms(mp_uint_t ms) {
         }
     }
 }
+// ── V2-D: native code exec pool — DEFERRED TO V3 ─────────────────────────────
+// LX7 emitter at MP v1.24.1 crashes the device on first @native call regardless
+// of: heap_caps_malloc(MALLOC_CAP_EXEC), static IRAM pool, mp_native_relocate(),
+// Cache_Invalidate_ICache_All(), CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n. Symptom:
+// totalRuns stays at 0, USB CDC re-enumerates → device reset before any log.
+// Re-attempt requires JTAG fault PC capture or MP v1.25+ bump. See plan.
+#if 0
+#define BB_NATIVE_POOL_BYTES   (16 * 1024)
+static IRAM_ATTR uint8_t s_bb_native_pool[BB_NATIVE_POOL_BYTES] __attribute__((aligned(4)));
+static size_t s_bb_native_used = 0;
+
+void *bb_native_code_commit(void *buf, size_t len, void *reloc) {
+    (void)reloc;
+    size_t need = (len + 3u) & ~3u;
+    if (s_bb_native_used + need > BB_NATIVE_POOL_BYTES) {
+        mp_raise_msg(&mp_type_MemoryError,
+                     MP_ERROR_TEXT("native: IRAM pool exhausted (16KB)"));
+    }
+    void *exec_buf = (void *)(s_bb_native_pool + s_bb_native_used);
+    memcpy(exec_buf, buf, len);
+    if (reloc) {
+        mp_native_relocate(reloc, exec_buf, (uintptr_t)exec_buf);
+    }
+    Cache_Invalidate_ICache_All();
+    s_bb_native_used += need;
+    return exec_buf;
+}
+#endif // V2-D deferred
+
+// Stub kept callable so scripting.cpp's vm_do_deinit() doesn't need #ifdefs.
+// When V2-D is re-enabled, replace with the real free-all body above.
+void bb_native_code_free_all(void) {
+    /* no-op while V2-D is deferred */
+}
+
 #endif // NO_QSTR
 
 // ── stdout (return mp_uint_t to match py/mphal.h declaration) ────────────────

@@ -12,6 +12,7 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "config.h"
+#include "repl_ws.h"
 
 // MicroPython core headers — must be wrapped in extern "C" because MP is
 // compiled as C, and its headers don't include their own extern "C" guards.
@@ -53,6 +54,7 @@ typedef struct {
     uint32_t id;
     char    *payload;   // heap-allocated copy; freed by task after run
     size_t   len;
+    bool     persist;   // V2-A: true = switch to / stay in PERSISTENT mode
 } ScriptCmd;
 
 // ---------------------------------------------------------------------------
@@ -80,6 +82,17 @@ static uint32_t     s_next_id = 1;
 // Scripting enabled flag (false if PSRAM alloc failed)
 static bool s_enabled = false;
 
+// V2-A persistent-mode state (owned exclusively by taskMicroPython)
+static ScriptingMode     s_mode           = SCRIPTING_MODE_EPHEMERAL;
+static bool              s_vm_initialized = false;  // true while VM is alive across evals
+static volatile bool     s_reset_requested = false; // set by scripting_reset_vm()
+static uint32_t          s_last_eval_ms   = 0;      // ms tick of last eval dequeue
+static uint32_t          s_auto_reset_count = 0;    // watermark/idle auto-resets
+
+// GC heap watermark thresholds (percentage of MP_HEAP_SIZE)
+#define MP_HEAP_SOFT_WATERMARK_PCT  80u
+#define MP_HEAP_HARD_WATERMARK_PCT  95u
+
 // ---------------------------------------------------------------------------
 // Forward declarations for C linkage (called from C translation units)
 // ---------------------------------------------------------------------------
@@ -88,11 +101,15 @@ extern "C" void  scripting_log_push(const char *str, size_t len);
 extern "C" bool  scripting_stop_requested(void);
 extern "C" void  scripting_vm_hook(void);
 extern "C" void  scripting_init(void);
-extern "C" bool  scripting_run_string(const char *src, size_t len);
+extern "C" bool  scripting_run_string(const char *src, size_t len, bool persist);
 extern "C" bool  scripting_run_file(const char *name, uint32_t *out_id);
 extern "C" void  scripting_stop(void);
 extern "C" size_t scripting_get_logs(char *out, size_t max);
 extern "C" void  scripting_get_status(ScriptStatus *out);
+extern "C" void  scripting_reset_vm(void);
+
+// V2-D: native exec pool cleanup — implemented in mphalport.c (C linkage).
+extern "C" void  bb_native_code_free_all(void);
 
 // ---------------------------------------------------------------------------
 // Log ring implementation
@@ -156,6 +173,9 @@ void scripting_log_push(const char *str, size_t len)
 {
     // Tee to stderr for IDF console visibility
     fwrite(str, 1, len, stderr);
+
+    // V2-B disabled: would forward to WebSocket REPL when implemented.
+    // repl_ws_forward(str, len);
 
     if (!s_log_mutex) return;
     if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -251,6 +271,59 @@ static void status_set_done(bool had_error, const char *err_msg)
     }
 }
 
+// Update V2-A persistent-mode fields that require MP task context (gc_info etc.).
+// MUST be called from taskMicroPython only (while VM is alive).
+// Caller must hold s_status_mutex.
+static void status_update_mp_fields_locked(void)
+{
+    s_status.mode             = s_mode;
+    s_status.auto_reset_count = s_auto_reset_count;
+    s_status.last_eval_at_ms  = s_last_eval_ms;
+
+    if (s_last_eval_ms == 0) {
+        s_status.idle_for_ms = 0;
+    } else {
+        uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        s_status.idle_for_ms = now_ms - s_last_eval_ms;
+    }
+
+    if (s_vm_initialized) {
+        gc_info_t info;
+        gc_info(&info);
+        size_t used = info.total - info.free;
+        s_status.globals_bytes_est = (uint32_t)used;
+
+        // Count globals
+        mp_obj_dict_t *gdict = mp_globals_get();
+        s_status.globals_count = gdict ? (uint32_t)gdict->map.used : 0;
+
+        // Soft watermark: used >= 80% of heap
+        s_status.watermark_soft_hit = (used * 100u >= (size_t)MP_HEAP_SIZE * MP_HEAP_SOFT_WATERMARK_PCT);
+    } else {
+        s_status.globals_bytes_est  = 0;
+        s_status.globals_count      = 0;
+        s_status.watermark_soft_hit = false;
+    }
+}
+
+// Update non-MP persistent fields that are safe to call from any context.
+// Caller must hold s_status_mutex.
+static void status_update_safe_fields_locked(void)
+{
+    s_status.mode             = s_mode;
+    s_status.auto_reset_count = s_auto_reset_count;
+    s_status.last_eval_at_ms  = s_last_eval_ms;
+
+    if (s_last_eval_ms == 0) {
+        s_status.idle_for_ms = 0;
+    } else {
+        uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        s_status.idle_for_ms = now_ms - s_last_eval_ms;
+    }
+    // globals_bytes_est, globals_count, watermark_soft_hit are updated by the
+    // MP task via status_update_mp_fields_locked(); leave them as-is here.
+}
+
 void scripting_get_status(ScriptStatus *out)
 {
     if (!out) return;
@@ -259,6 +332,8 @@ void scripting_get_status(ScriptStatus *out)
         return;
     }
     if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        // Refresh non-MP fields (safe from any thread)
+        status_update_safe_fields_locked();
         memcpy(out, &s_status, sizeof(s_status));
         xSemaphoreGive(s_status_mutex);
     }
@@ -267,6 +342,34 @@ void scripting_get_status(ScriptStatus *out)
 // ---------------------------------------------------------------------------
 // MicroPython task — one hermetic eval per dequeued ScriptCmd
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// vm_init / vm_deinit helpers — called from taskMicroPython only
+// ---------------------------------------------------------------------------
+
+static void vm_do_init(void)
+{
+    gc_init(s_gc_heap, (char *)s_gc_heap + MP_HEAP_SIZE);
+    mp_init();
+
+#if MICROPY_VFS
+    {
+        mp_obj_t vfs = MP_OBJ_TYPE_GET_SLOT(&mp_type_vfs_posix, make_new)(
+            &mp_type_vfs_posix, 0, 0, NULL);
+        mp_obj_t mount_args[2] = { vfs, mp_obj_new_str("/", 1) };
+        mp_vfs_mount(NULL, 2, mount_args, (mp_map_t *)&mp_const_empty_map);
+    }
+#endif
+
+    s_vm_initialized = true;
+}
+
+static void vm_do_deinit(void)
+{
+    mp_deinit();
+    bb_native_code_free_all();
+    s_vm_initialized = false;
+}
 
 static void taskMicroPython(void *pvParam)
 {
@@ -282,7 +385,79 @@ static void taskMicroPython(void *pvParam)
     ScriptCmd cmd;
 
     for (;;) {
-        if (xQueueReceive(s_queue, &cmd, portMAX_DELAY) != pdTRUE) continue;
+        // ---------------------------------------------------------------
+        // In PERSISTENT mode use a timed receive so we can check idle
+        // timeout and reset requests even when no scripts are queued.
+        // In EPHEMERAL mode keep portMAX_DELAY (zero overhead).
+        // ---------------------------------------------------------------
+        TickType_t wait_ticks = (s_mode == SCRIPTING_MODE_PERSISTENT)
+                                ? pdMS_TO_TICKS(MP_IDLE_CHECK_MS)
+                                : portMAX_DELAY;
+
+        if (xQueueReceive(s_queue, &cmd, wait_ticks) != pdTRUE) {
+            // Timeout — only happens in PERSISTENT mode.
+            // Check: explicit reset request OR idle timeout OR hard watermark.
+            if (s_mode != SCRIPTING_MODE_PERSISTENT) continue;
+
+            bool do_reset = s_reset_requested;
+
+            if (!do_reset && s_vm_initialized && s_last_eval_ms != 0) {
+                uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+                if ((now_ms - s_last_eval_ms) >= MP_PERSISTENT_IDLE_MS) {
+                    ESP_LOGI(TAG, "Persistent VM: idle timeout, resetting");
+                    do_reset = true;
+                }
+            }
+
+            if (!do_reset && s_vm_initialized) {
+                gc_info_t info;
+                gc_info(&info);
+                size_t used = info.total - info.free;
+                if (used * 100u >= (size_t)MP_HEAP_SIZE * MP_HEAP_HARD_WATERMARK_PCT) {
+                    ESP_LOGW(TAG, "Persistent VM: hard watermark hit (%zu/%u bytes), resetting",
+                             used, (unsigned)MP_HEAP_SIZE);
+                    do_reset = true;
+                }
+            }
+
+            if (do_reset && s_vm_initialized) {
+                vm_do_deinit();
+                s_mode = SCRIPTING_MODE_EPHEMERAL;
+                s_reset_requested = false;
+                s_auto_reset_count++;
+                if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    status_update_mp_fields_locked();
+                    xSemaphoreGive(s_status_mutex);
+                }
+                ESP_LOGI(TAG, "Persistent VM reset complete (auto_resets=%u)", (unsigned)s_auto_reset_count);
+            } else {
+                s_reset_requested = false;
+            }
+            continue;
+        }
+
+        // ---------------------------------------------------------------
+        // We dequeued a ScriptCmd.
+        // ---------------------------------------------------------------
+
+        // Honor a pending reset request BEFORE running this eval. Otherwise
+        // a script enqueued immediately after /api/scripts/reset would run
+        // on the old persistent VM and the reset would silently no-op.
+        if (s_reset_requested) {
+            if (s_vm_initialized) vm_do_deinit();
+            s_mode = SCRIPTING_MODE_EPHEMERAL;
+            s_reset_requested = false;
+            s_auto_reset_count++;
+            ESP_LOGI(TAG, "Persistent VM reset honored before eval id=%u", (unsigned)cmd.id);
+        }
+
+        // In EPHEMERAL mode with persist=true: switch to persistent mode.
+        // In PERSISTENT mode: persist flag is sticky (ignored if false).
+        if (cmd.persist && s_mode == SCRIPTING_MODE_EPHEMERAL) {
+            s_mode = SCRIPTING_MODE_PERSISTENT;
+        }
+
+        s_last_eval_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
         // Clear stop flag at the start of each new script
         s_stop_requested = false;
@@ -291,23 +466,10 @@ static void taskMicroPython(void *pvParam)
         bool had_error = false;
         char err_msg[64] = {0};
 
-        // Re-initialize GC heap and interpreter for each eval (hermetic)
-        gc_init(s_gc_heap, (char *)s_gc_heap + MP_HEAP_SIZE);
-        mp_init();
-
-#if MICROPY_VFS
-        // Mount VfsPosix at "/" so scripts can open files via their full SPIFFS
-        // paths (e.g. "/spiffs/scripts/foo.py").  VfsPosix root "" means no
-        // prefix is prepended — absolute paths pass through to the POSIX layer.
-        // Must run after mp_init(), inside the task that owns the MP state.
-        {
-            // No root arg: VfsPosix uses paths as-is (empty root prefix).
-            mp_obj_t vfs = MP_OBJ_TYPE_GET_SLOT(&mp_type_vfs_posix, make_new)(
-                &mp_type_vfs_posix, 0, 0, NULL);
-            mp_obj_t mount_args[2] = { vfs, mp_obj_new_str("/", 1) };
-            mp_vfs_mount(NULL, 2, mount_args, (mp_map_t *)&mp_const_empty_map);
+        // Initialize VM if not already alive (ephemeral always; persistent on first use)
+        if (!s_vm_initialized) {
+            vm_do_init();
         }
-#endif
 
         nlr_buf_t nlr;
         if (nlr_push(&nlr) == 0) {
@@ -334,10 +496,32 @@ static void taskMicroPython(void *pvParam)
             }
         }
 
-        mp_deinit();
+        // In EPHEMERAL mode: tear down VM after every eval.
+        // In PERSISTENT mode: keep VM alive; check hard watermark.
+        if (s_mode == SCRIPTING_MODE_EPHEMERAL) {
+            vm_do_deinit();
+        } else {
+            // Check hard watermark immediately after eval
+            gc_info_t info;
+            gc_info(&info);
+            size_t used = info.total - info.free;
+            if (used * 100u >= (size_t)MP_HEAP_SIZE * MP_HEAP_HARD_WATERMARK_PCT) {
+                ESP_LOGW(TAG, "Persistent VM: hard watermark after eval (%zu/%u), resetting",
+                         used, (unsigned)MP_HEAP_SIZE);
+                vm_do_deinit();
+                s_mode = SCRIPTING_MODE_EPHEMERAL;
+                s_auto_reset_count++;
+            }
+        }
 
         // Free the payload copy
         free(cmd.payload);
+
+        // Update persistent-mode status fields under mutex
+        if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            status_update_mp_fields_locked();
+            xSemaphoreGive(s_status_mutex);
+        }
 
         status_set_done(had_error, err_msg);
     }
@@ -398,7 +582,7 @@ void scripting_init(void)
 // scripting_run_string — copy src and enqueue
 // ---------------------------------------------------------------------------
 
-bool scripting_run_string(const char *src, size_t len)
+bool scripting_run_string(const char *src, size_t len, bool persist)
 {
     if (!s_enabled || !src || len == 0 || !s_queue) return false;
 
@@ -420,6 +604,7 @@ bool scripting_run_string(const char *src, size_t len)
     cmd.id      = s_next_id++;
     cmd.payload = payload;
     cmd.len     = len;
+    cmd.persist = persist;
 
     if (xQueueSend(s_queue, &cmd, 0) != pdTRUE) {
         free(payload);
@@ -427,6 +612,15 @@ bool scripting_run_string(const char *src, size_t len)
         return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// scripting_reset_vm — request VM teardown from any context
+// ---------------------------------------------------------------------------
+
+void scripting_reset_vm(void)
+{
+    s_reset_requested = true;
 }
 
 // ---------------------------------------------------------------------------

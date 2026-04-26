@@ -41,6 +41,8 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "autorun.h"
+#include "repl_ws.h"
+#include "serial_io.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -51,6 +53,22 @@ extern AD74416H_SPI spiDriver;
 static const char* TAG = "webserver";
 
 static httpd_handle_t s_server = NULL;
+
+static esp_err_t register_uri_handler_checked(httpd_handle_t server, const httpd_uri_t *uri, int line)
+{
+    const char *path = (uri && uri->uri) ? uri->uri : "<null>";
+    int method = uri ? (int)uri->method : -1;
+    serial_printf("[webserver] register line=%d method=%d uri=%s\r\n", line, method, path);
+    esp_err_t err = httpd_register_uri_handler(server, uri);
+    serial_printf("[webserver] register result line=%d err=%d uri=%s\r\n", line, (int)err, path);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "URI register failed line=%d method=%d uri=%s err=%s",
+                 line, method, path, esp_err_to_name(err));
+    }
+    return err;
+}
+
+#define httpd_register_uri_handler(server, uri) register_uri_handler_checked((server), (uri), __LINE__)
 
 static const char* http_status_string(int code)
 {
@@ -3538,6 +3556,16 @@ static esp_err_t handle_post_scripts_eval(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
 
+    // Parse optional ?persist=true query parameter
+    bool persist = false;
+    char query[64] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char persist_val[8] = {0};
+        if (httpd_query_key_value(query, "persist", persist_val, sizeof(persist_val)) == ESP_OK) {
+            persist = (strcmp(persist_val, "true") == 0 || strcmp(persist_val, "1") == 0);
+        }
+    }
+
     int total = req->content_len;
     if (total <= 0 || total > SCRIPTS_EVAL_MAX_BYTES) {
         return send_error(req, 400, "Body must be 1-32768 bytes of Python source");
@@ -3563,7 +3591,7 @@ static esp_err_t handle_post_scripts_eval(httpd_req_t *req)
     }
     src[total] = '\0';
 
-    bool ok = scripting_run_string(src, (size_t)total);
+    bool ok = scripting_run_string(src, (size_t)total, persist);
     free(src);
 
     cJSON *root = cJSON_CreateObject();
@@ -3612,6 +3640,26 @@ static esp_err_t handle_get_scripts_status(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "totalRuns", st.total_runs);
     cJSON_AddNumberToObject(root, "totalErrors", st.total_errors);
     cJSON_AddStringToObject(root, "lastError", st.last_error_msg);
+    // V2-A persistent-mode fields
+    cJSON_AddNumberToObject(root, "mode", (int)st.mode);
+    cJSON_AddNumberToObject(root, "globalsBytes", st.globals_bytes_est);
+    cJSON_AddNumberToObject(root, "globalsCount", st.globals_count);
+    cJSON_AddNumberToObject(root, "autoResetCount", st.auto_reset_count);
+    cJSON_AddNumberToObject(root, "lastEvalAtMs", st.last_eval_at_ms);
+    cJSON_AddNumberToObject(root, "idleForMs", st.idle_for_ms);
+    cJSON_AddBoolToObject(root, "watermarkSoftHit", st.watermark_soft_hit);
+    return send_json(req, root);
+}
+
+// POST /api/scripts/reset — reset the persistent VM
+static esp_err_t handle_post_scripts_reset(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    scripting_reset_vm();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
     return send_json(req, root);
 }
 
@@ -3858,7 +3906,7 @@ void initWebServer(void)
     quicksetup_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 80;
+    config.max_uri_handlers = 128;  // V2-A push count to 77+4=81 over old 80 cap → silent overflow → boot crash
     config.uri_match_fn     = httpd_uri_match_wildcard;
     config.stack_size       = 12288;  // Increased for OTA buffer
     // SSE handlers (e.g. /api/scope/stream) hold a worker socket open for
@@ -4273,6 +4321,16 @@ void initWebServer(void)
         .uri = "/api/scripts/run-file", .method = HTTP_POST, .handler = handle_post_scripts_run_file, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_scripts_run_file);
+
+    httpd_uri_t uri_scripts_reset = {
+        .uri = "/api/scripts/reset", .method = HTTP_POST, .handler = handle_post_scripts_reset, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_scripts_reset);
+
+    // ----- MicroPython WebSocket REPL (V2-B) — DEBUG INSTRUMENTED -----
+    ESP_LOGI(TAG, "[V2B-DBG] before repl_ws_register, free heap=%u", (unsigned)esp_get_free_heap_size());
+    repl_ws_register(s_server);
+    ESP_LOGI(TAG, "[V2B-DBG] after repl_ws_register, free heap=%u", (unsigned)esp_get_free_heap_size());
 
     // ----- Autorun routes -----
 

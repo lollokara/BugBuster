@@ -23,11 +23,14 @@
 #include "auth.h"
 #include "esp_mac.h"
 #include "esp_system.h"
+#include "esp_core_dump.h"
+#include "esp_partition.h"
 
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "mbedtls/base64.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -55,6 +58,131 @@ static const char* gpioModeName(uint8_t mode) {
         case 4: return "DO_EXT";
         default: return "UNKNOWN";
     }
+}
+
+// ---------------------------------------------------------------------------
+// coredump diagnostics
+// ---------------------------------------------------------------------------
+
+static void coredump_print_summary(void)
+{
+    esp_err_t check = esp_core_dump_image_check();
+    if (check == ESP_ERR_NOT_FOUND) {
+        serial_println("[coredump] none stored");
+        return;
+    }
+    if (check != ESP_OK) {
+        serial_printf("[coredump] stored image is invalid: %s\r\n", esp_err_to_name(check));
+        return;
+    }
+
+    size_t addr = 0;
+    size_t size = 0;
+    esp_err_t err = esp_core_dump_image_get(&addr, &size);
+    if (err == ESP_OK) {
+        serial_printf("[coredump] flash image: addr=0x%08x size=%u bytes\r\n",
+                      (unsigned)addr, (unsigned)size);
+    }
+
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+    char reason[192] = {0};
+    err = esp_core_dump_get_panic_reason(reason, sizeof(reason));
+    if (err == ESP_OK && reason[0] != '\0') {
+        serial_printf("[coredump] panic: %s\r\n", reason);
+    }
+
+    esp_core_dump_summary_t summary = {};
+    err = esp_core_dump_get_summary(&summary);
+    if (err == ESP_OK) {
+        serial_printf("[coredump] task=%s tcb=0x%08x pc=0x%08x cause=%u vaddr=0x%08x\r\n",
+                      summary.exc_task,
+                      (unsigned)summary.exc_tcb,
+                      (unsigned)summary.exc_pc,
+                      (unsigned)summary.ex_info.exc_cause,
+                      (unsigned)summary.ex_info.exc_vaddr);
+        serial_printf("[coredump] backtrace depth=%u corrupted=%u:",
+                      (unsigned)summary.exc_bt_info.depth,
+                      (unsigned)summary.exc_bt_info.corrupted);
+        uint32_t depth = summary.exc_bt_info.depth;
+        if (depth > 16) depth = 16;
+        for (uint32_t i = 0; i < depth; i++) {
+            serial_printf(" 0x%08x", (unsigned)summary.exc_bt_info.bt[i]);
+        }
+        serial_println("");
+    } else {
+        serial_printf("[coredump] summary unavailable: %s\r\n", esp_err_to_name(err));
+    }
+#endif
+}
+
+static void coredump_dump_base64(void)
+{
+    esp_err_t check = esp_core_dump_image_check();
+    if (check != ESP_OK) {
+        serial_printf("[coredump] cannot dump: %s\r\n", esp_err_to_name(check));
+        return;
+    }
+
+    size_t addr = 0;
+    size_t size = 0;
+    esp_err_t err = esp_core_dump_image_get(&addr, &size);
+    if (err != ESP_OK) {
+        serial_printf("[coredump] image_get failed: %s\r\n", esp_err_to_name(err));
+        return;
+    }
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, "coredump");
+    if (!part || addr < part->address || (addr + size) > (part->address + part->size)) {
+        serial_println("[coredump] coredump partition/address mismatch");
+        return;
+    }
+
+    uint8_t raw[384];
+    unsigned char enc[sizeof(raw) * 4 / 3 + 8];
+    size_t offset = addr - part->address;
+    size_t remaining = size;
+
+    serial_printf("===== BUGBUSTER CORE DUMP START addr=0x%08x size=%u =====\r\n",
+                  (unsigned)addr, (unsigned)size);
+    while (remaining > 0) {
+        size_t chunk = remaining < sizeof(raw) ? remaining : sizeof(raw);
+        err = esp_partition_read(part, offset, raw, chunk);
+        if (err != ESP_OK) {
+            serial_printf("\r\n[coredump] read failed at offset 0x%08x: %s\r\n",
+                          (unsigned)offset, esp_err_to_name(err));
+            break;
+        }
+
+        size_t olen = 0;
+        int b64 = mbedtls_base64_encode(enc, sizeof(enc), &olen, raw, chunk);
+        if (b64 != 0) {
+            serial_printf("\r\n[coredump] base64 encode failed: %d\r\n", b64);
+            break;
+        }
+        enc[olen] = '\0';
+        serial_println((const char*)enc);
+
+        offset += chunk;
+        remaining -= chunk;
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    serial_println("===== BUGBUSTER CORE DUMP END =====");
+}
+
+extern "C" void coredump_diag_print_boot_report(void)
+{
+    esp_err_t check = esp_core_dump_image_check();
+    if (check == ESP_ERR_NOT_FOUND) {
+        return;
+    }
+
+    serial_println("");
+    serial_println("=== Saved ESP panic coredump detected ===");
+    coredump_print_summary();
+    serial_println("[coredump] Use `coredump dump` to print base64 ELF data.");
+    serial_println("[coredump] Use `coredump clear` after capture.");
+    serial_println("");
 }
 
 // ---------------------------------------------------------------------------
@@ -721,4 +849,32 @@ extern "C" void cli_cmd_rstinfo(const char* args)
                       (unsigned)tr->stage, (unsigned)tr->active, (unsigned)tr->channel,
                       (unsigned)tr->point, (int)tr->code, (long)tr->measured_mv);
     }
+}
+
+extern "C" void cli_cmd_coredump(const char* args)
+{
+    while (args && *args == ' ') args++;
+    if (!args || *args == '\0' || strcmp(args, "info") == 0) {
+        coredump_print_summary();
+        return;
+    }
+
+    if (strcmp(args, "dump") == 0) {
+        coredump_dump_base64();
+        return;
+    }
+
+    if (strcmp(args, "clear") == 0 || strcmp(args, "erase") == 0) {
+        esp_err_t err = esp_core_dump_image_erase();
+        if (err == ESP_OK) {
+            serial_println("[coredump] cleared");
+        } else if (err == ESP_ERR_NOT_FOUND) {
+            serial_println("[coredump] none stored");
+        } else {
+            serial_printf("[coredump] clear failed: %s\r\n", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    serial_println("Usage: coredump [info|dump|clear]");
 }

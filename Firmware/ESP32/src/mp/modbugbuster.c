@@ -12,6 +12,11 @@ extern const mp_obj_type_t bugbuster_channel_type;
 extern const mp_obj_type_t bugbuster_i2c_type;
 extern const mp_obj_type_t bugbuster_spi_type;
 
+// V2-E — network function objects defined in modbugbuster_net.c
+MP_DECLARE_CONST_FUN_OBJ_KW(bugbuster_http_get_obj);
+MP_DECLARE_CONST_FUN_OBJ_KW(bugbuster_http_post_obj);
+MP_DECLARE_CONST_FUN_OBJ_KW(bugbuster_mqtt_publish_obj);
+
 static mp_obj_t bugbuster_sleep(mp_obj_t ms_in)
 {
     mp_int_t ms = mp_obj_get_int(ms_in);
@@ -29,6 +34,10 @@ static const mp_rom_map_elem_t bugbuster_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_Channel), MP_ROM_PTR(&bugbuster_channel_type) },
     { MP_ROM_QSTR(MP_QSTR_I2C), MP_ROM_PTR(&bugbuster_i2c_type) },
     { MP_ROM_QSTR(MP_QSTR_SPI), MP_ROM_PTR(&bugbuster_spi_type) },
+    // V2-E — network bindings
+    { MP_ROM_QSTR(MP_QSTR_http_get),      MP_ROM_PTR(&bugbuster_http_get_obj) },
+    { MP_ROM_QSTR(MP_QSTR_http_post),     MP_ROM_PTR(&bugbuster_http_post_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mqtt_publish),  MP_ROM_PTR(&bugbuster_mqtt_publish_obj) },
 
     { MP_ROM_QSTR(MP_QSTR_FUNC_HIGH_IMP), MP_ROM_INT(CH_FUNC_HIGH_IMP) },
     { MP_ROM_QSTR(MP_QSTR_FUNC_VOUT), MP_ROM_INT(CH_FUNC_VOUT) },

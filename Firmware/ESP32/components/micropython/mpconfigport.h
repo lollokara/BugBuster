@@ -32,10 +32,24 @@
 #define MICROPY_GC_SPLIT_HEAP               (1)
 #define MICROPY_GC_SPLIT_HEAP_AUTO          (1)
 
-// ── Emitters — disable all native emitters; bytecode only ─────────────────────
+// ── Emitters — V2-D DEFERRED TO V3 ───────────────────────────────────────────
+// Native LX7 emitter was implemented but device crashes on first @native call
+// even after fixing: heap_caps_malloc(MALLOC_CAP_EXEC), static IRAM pool,
+// mp_native_relocate(), Cache_Invalidate_ICache_All(), CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n.
+// Root cause is "LX7 emitter edge case at MP v1.24.1" per scripting-plan-v2.md.
+// Re-attempt requires: JTAG fault PC capture, instruction-dump diff, OR MP v1.25+ bump.
+// To re-enable: flip XTENSAWIN to (1), uncomment MP_PLAT_COMMIT_EXEC, and the
+// bb_native_code_* implementation in mphalport.c (currently #if 0).
 #define MICROPY_EMIT_XTENSAWIN              (0)
 #define MICROPY_EMIT_XTENSA                 (0)
 #define MICROPY_PERSISTENT_CODE_LOAD        (1)
+// #define MP_PLAT_COMMIT_EXEC(buf, len, reloc) bb_native_code_commit(buf, len, reloc)
+
+// ── Frozen modules (V2-C) ─────────────────────────────────────────────────────
+// Redundant with CMake compile defs but defensive: ensures the defines are
+// present even when compiling files that include mpconfigport.h directly.
+#define MICROPY_MODULE_FROZEN_MPY           (1)
+#define MICROPY_QSTR_EXTRA_POOL             mp_qstr_frozen_const_pool
 
 // ── Optimisations ─────────────────────────────────────────────────────────────
 #ifndef MICROPY_OPT_COMPUTED_GOTO
@@ -127,6 +141,12 @@ typedef long mp_off_t;
 #define MICROPY_HW_BOARD_NAME               "BugBuster-ESP32S3"
 #define MICROPY_HW_MCU_NAME                 "ESP32-S3"
 #define MICROPY_PY_SYS_PLATFORM             "esp32"
+
+// ── Native exec commit hook (V2-D) ────────────────────────────────────────────
+// Declared here so the MP_PLAT_COMMIT_EXEC macro (above) can reference it in
+// any .c file that includes mpconfigport.h. Implementation in mphalport.c.
+#include <stddef.h>
+void *bb_native_code_commit(void *buf, size_t len, void *reloc);
 
 // ── Cooperative stop: VM polls stop flag at every back-edge ──────────────────
 // scripting_vm_hook() is defined in scripting.cpp (extern "C").

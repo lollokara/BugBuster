@@ -27,6 +27,16 @@ def register(device) -> None:
     if not hasattr(device, "script_files"):
         device.script_files = {}
 
+    # V2-A persistent-mode state
+    if not hasattr(device, "script_mode"):
+        device.script_mode = 0                # 0=EPHEMERAL, 1=PERSISTENT
+    if not hasattr(device, "script_globals_bytes"):
+        device.script_globals_bytes = 0
+    if not hasattr(device, "script_auto_reset_count"):
+        device.script_auto_reset_count = 0
+    if not hasattr(device, "script_last_eval_at_ms"):
+        device.script_last_eval_at_ms = 0
+
     device.register_handler(CmdId.SCRIPT_EVAL,     _script_eval(device))
     device.register_handler(CmdId.SCRIPT_STATUS,   _script_status(device))
     device.register_handler(CmdId.SCRIPT_LOGS,     _script_logs(device))
@@ -40,17 +50,27 @@ def register(device) -> None:
 
 # ---------------------------------------------------------------------------
 # SCRIPT_EVAL (0xF5)
-# payload: u16 src_len, char[src_len] src
+# payload: u8 flags, u16 src_len, char[src_len] src
+#          flags bit0: persist (1 = persistent mode)
 # resp:    u8 enqueued, u32 script_id
 # ---------------------------------------------------------------------------
 
 def _script_eval(device):
     def handler(payload: bytes) -> bytes:
-        if len(payload) < 2:
+        if len(payload) < 3:
             return struct.pack('<BI', 0, 0)
-        src_len, = struct.unpack_from('<H', payload, 0)
-        if src_len > _SCRIPT_MAX_SRC or len(payload) < 2 + src_len:
+        flags = payload[0]
+        persist = bool(flags & 0x01)
+        src_len, = struct.unpack_from('<H', payload, 1)
+        if src_len > _SCRIPT_MAX_SRC or len(payload) < 3 + src_len:
             return struct.pack('<BI', 0, 0)
+
+        # Apply persist flag (sticky in persistent mode)
+        if persist and device.script_mode == 0:
+            device.script_mode = 1
+
+        import time
+        device.script_last_eval_at_ms = int(time.monotonic() * 1000)
 
         # Enqueue: bump script_id, mark running
         device.script_id += 1
@@ -58,7 +78,7 @@ def _script_eval(device):
         device.script_total_runs += 1
         device.script_last_error = ""
         # Append a synthetic log line so tests can verify SCRIPT_LOGS
-        src = payload[2:2 + src_len].decode("utf-8", errors="replace")
+        src = payload[3:3 + src_len].decode("utf-8", errors="replace")
         device.script_log_ring += f"[eval:{device.script_id}] {src[:40]}\n"
 
         return struct.pack('<BI', 1, device.script_id)
@@ -271,6 +291,28 @@ def _script_autorun(device):
             device.autorun_last_run_ok = True
             device.script_log_ring += f"[autorun:{device.script_id}] {device.autorun_script_name}\n"
             return struct.pack('<BIB', 1, device.script_id, 0)
+
+        if sub == 4:
+            # RESET_VM — reset persistent VM state
+            device.script_mode = 0
+            device.script_globals_bytes = 0
+            device.script_auto_reset_count += 1
+            return struct.pack('<B', 1)  # ok
+
+        if sub == 5:
+            # STATUS_PERSISTED — return persistent-mode fields
+            import time
+            idle_ms = 0
+            if device.script_last_eval_at_ms > 0:
+                now_ms = int(time.monotonic() * 1000)
+                idle_ms = now_ms - device.script_last_eval_at_ms
+            return struct.pack('<BIIII',
+                device.script_mode,
+                device.script_globals_bytes,
+                device.script_auto_reset_count,
+                device.script_last_eval_at_ms,
+                idle_ms,
+            )
 
         err = b'bad sub'
         return struct.pack('<BB', 0, len(err)) + err

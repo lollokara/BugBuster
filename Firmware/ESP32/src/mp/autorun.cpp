@@ -155,7 +155,7 @@ static bool run_autorun_script(void)
     }
     src_buf[n] = '\0';
 
-    bool enqueued = scripting_run_string(src_buf, n);
+    bool enqueued = scripting_run_string(src_buf, n, false);
     // scripting_run_string copies the payload internally; free our PSRAM buf.
     heap_caps_free(src_buf);
     if (!enqueued) {

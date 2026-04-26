@@ -50,6 +50,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_channel.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_i2c.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_spi.c
+        ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_net.c
     )
 
     # ── qstr source list (all sources that contain Q(...) macros) ─────────────
@@ -65,6 +66,33 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set(MICROPY_QSTRDEFS_PY ${MICROPY_PY_DIR}/qstrdefs.h)
     set(MICROPY_QSTRDEFS_PORT ${CMAKE_CURRENT_LIST_DIR}/qstrdefsport.h)
 
+    # ── Frozen content output path (set here so idf_component_register can use it) ──
+    set(MICROPY_FROZEN_CONTENT ${CMAKE_BINARY_DIR}/frozen_content.c)
+
+    # Generate a stub frozen_content.c if it does not yet exist.
+    # The full V2-C makemanifest.py pipeline will overwrite this when ready.
+    # Without this file the MicroPython runtime.c fails to compile because
+    # MICROPY_MODULE_FROZEN_MPY=1 (set in mpconfigport.h) enables frozen
+    # module support which requires mp_qstr_frozen_const_pool to be defined.
+    if(NOT EXISTS ${MICROPY_FROZEN_CONTENT})
+        file(WRITE ${MICROPY_FROZEN_CONTENT}
+"//\n// Content for MICROPY_MODULE_FROZEN_STR\n//\n"
+"//\n// Content for MICROPY_MODULE_FROZEN_MPY\n//\n"
+"#include \"py/emitglue.h\"\n"
+"extern const qstr_pool_t mp_qstr_const_pool;\n"
+"const qstr_pool_t mp_qstr_frozen_const_pool = {\n"
+"    #if MICROPY_QSTR_BYTES_IN_HASH\n"
+"    (qstr_pool_t*)&mp_qstr_const_pool, MP_QSTRnumber_of, 0, 0, 0, NULL, NULL, {},\n"
+"    #else\n"
+"    (qstr_pool_t*)&mp_qstr_const_pool, MP_QSTRnumber_of, 0, 0, 0, NULL, {},\n"
+"    #endif\n"
+"};\n"
+"const char mp_frozen_names[] = { MP_FROZEN_STR_NAMES \"\\0\"};\n"
+"const mp_raw_code_t *const mp_frozen_mpy_content[] = {NULL};\n"
+        )
+        message(STATUS "MicroPython: wrote empty frozen_content.c stub (V2-C not yet built)")
+    endif()
+
     # ── IDF components required by MicroPython core ───────────────────────────
     list(APPEND IDF_COMPONENTS
         app_update
@@ -76,6 +104,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         esp_hw_support
         esp_netif
         esp_partition
+        esp_mm
         esp_pm
         esp_psram
         esp_ringbuf
@@ -105,6 +134,7 @@ idf_component_register(
         ${MICROPY_SOURCE_EXTMOD}
         ${MICROPY_SOURCE_SHARED}
         ${MICROPY_SOURCE_PORT}
+        ${MICROPY_FROZEN_CONTENT}
     INCLUDE_DIRS
         ${MICROPY_INC_CORE}
         ${MICROPY_INC_USERMOD}
@@ -118,10 +148,18 @@ idf_component_register(
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set(MICROPY_TARGET ${COMPONENT_TARGET})
 
+    # esp_mm: pull in include dirs so mphalport.c can find esp_cache.h.
+    # idf_component_register REQUIRES adds link deps but not include paths for
+    # the micropython component itself; we must wire them in explicitly.
+    idf_component_get_property(esp_mm_incdirs esp_mm INCLUDE_DIRS)
+    target_include_directories(${MICROPY_TARGET} PRIVATE ${esp_mm_incdirs})
+
     # ── Compile definitions ───────────────────────────────────────────────────
     # VFS/LFS/fatfs disabled in Phase 0 — those lib sources are not included.
     target_compile_definitions(${MICROPY_TARGET} PUBLIC
         ${MICROPY_DEF_CORE}
+        MICROPY_MODULE_FROZEN_MPY=1
+        MICROPY_QSTR_EXTRA_POOL=mp_qstr_frozen_const_pool
     )
 
     # Suppress upstream warnings
@@ -314,6 +352,39 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     )
     if(_res)
         message(FATAL_ERROR "MicroPython: makeqstrdata.py failed (${_res})")
+    endif()
+
+    # ── Block A — build mpy-cross host binary (idempotent) ───────────────────
+    # Binary lands at mpy-cross/build/mpy-cross (not mpy-cross/mpy-cross).
+    set(MPYCROSS_BIN ${MICROPY_DIR}/mpy-cross/build/mpy-cross)
+    if(NOT EXISTS ${MPYCROSS_BIN})
+        execute_process(
+            COMMAND make -j4
+            WORKING_DIRECTORY ${MICROPY_DIR}/mpy-cross
+            RESULT_VARIABLE _r
+        )
+        if(_r)
+            message(FATAL_ERROR "mpy-cross build failed (${_r})")
+        endif()
+    endif()
+
+    # ── Block B — frozen_content.c ───────────────────────────────────────────
+    # -b must be CMAKE_BINARY_DIR because mpy-tool.py reads
+    # ${build_dir}/genhdr/qstrdefs.preprocessed.h (generated in Step 5 above).
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} ${MICROPY_DIR}/tools/makemanifest.py
+            -o ${MICROPY_FROZEN_CONTENT}
+            -b ${CMAKE_BINARY_DIR}
+            --mpy-cross-flags=-march=xtensawin
+            -v "MPY_DIR=${MICROPY_DIR}"
+            -v "PORT_DIR=${CMAKE_CURRENT_LIST_DIR}"
+            -v "MPY_LIB_DIR="
+            ${CMAKE_CURRENT_LIST_DIR}/manifest.py
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RESULT_VARIABLE _r
+    )
+    if(_r)
+        message(FATAL_ERROR "makemanifest.py failed (${_r})")
     endif()
 
     # ── Step 7: moduledefs.h ──────────────────────────────────────────────────

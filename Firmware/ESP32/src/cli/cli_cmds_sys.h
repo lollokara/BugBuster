@@ -24,6 +24,9 @@ void cli_cmd_muxtest(const char* args);
 void cli_cmd_spiclock(const char* args);
 void cli_cmd_token(const char* args);
 void cli_cmd_rstinfo(const char* args);
+void cli_cmd_coredump(const char* args);
+
+void coredump_diag_print_boot_report(void);
 
 #ifdef __cplusplus
 }

@@ -32,6 +32,7 @@
 #include "hat.h"
 #include "auth.h"
 #include "board_profile.h"
+#include "cli_cmds_sys.h"
 #include "adc_leds.h"
 #include "cmd_registry.h"
 #include "scripting.h"
@@ -151,6 +152,7 @@ extern "C" void app_main(void)
     serial_println("\n[BugBuster] Booting (ESP-IDF)...");
     esp_reset_reason_t rr = esp_reset_reason();
     serial_printf("[BugBuster] Reset reason: %d\r\n", (int)rr);
+    coredump_diag_print_boot_report();
 
     // 2. RESET pin HIGH immediately
     pin_mode_output(PIN_RESET);
@@ -246,12 +248,22 @@ extern "C" void app_main(void)
         g_deviceState.i2cOk = false;
     }
 
-    // 8. Reset AD74416H AFTER supply enables are configured.
-    // Required by PCB bring-up: hold RESET low 100 ms, then release high.
+    // 8a. Wait for ±15V analog supply (EN_15V_A on PCA9535 P0.5) to settle.
+    //     PCA9535 just enabled the rail; the AD74416H needs stable AVDD/VDDH
+    //     before any SPI access or it returns garbage on verify.
+    //     Without this delay, "AD74416H SPI: VERIFY FAILED" is seen on cold boot.
+    delay_ms(500);
+    serial_println("[BugBuster] VANALOG ±15V settle (500 ms)");
+
+    // 8b. Reset AD74416H AFTER supply enables are configured AND settled.
+    // Required by PCB bring-up: hold RESET low 100 ms, then release high,
+    // then wait another 100 ms for the chip's internal POR to complete
+    // before attempting SPI verify.
     pin_write(PIN_RESET, 0);
     delay_ms(100);
     pin_write(PIN_RESET, 1);
-    serial_println("[BugBuster] AD74416H RESET pulse done (LOW 100 ms -> HIGH)");
+    delay_ms(100);
+    serial_println("[BugBuster] AD74416H RESET pulse done (LOW 100 ms -> HIGH, +100 ms POR settle)");
 
     // 9. AD74416H device init (after supply bring-up and reset pulse)
     serial_println("[BugBuster] Initialising AD74416H...");
@@ -333,6 +345,7 @@ extern "C" void app_main(void)
     serial_println("[BugBuster] UART bridge started");
 
     // 15. Web server
+    coredump_diag_print_boot_report();
     initWebServer();
     serial_println("[BugBuster] Web server on port 80");
 

@@ -58,6 +58,30 @@ function gzipEmitter(): Plugin {
 }
 
 /**
+ * Replace __VITE_PRELOAD__ with a no-op polyfill so that dynamic chunk
+ * imports work on the ESP32 where the Vite polyfill chunk is never loaded.
+ * Without this the browser throws "ReferenceError: __VITE_PRELOAD__ is not
+ * defined" when navigating to any lazy-loaded route.
+ *
+ * Previously this was done via Vite's `define` option, but esbuild's define
+ * rejects arrow-function expressions when processing CommonJS modules (such as
+ * @lezer/lr, a CodeMirror transitive dependency). Using a renderChunk plugin
+ * instead runs after esbuild and avoids the restriction.
+ */
+function preloadPolyfill(): Plugin {
+  return {
+    name: "bb-preload-polyfill",
+    apply: "build",
+    renderChunk(code) {
+      if (code.includes("__VITE_PRELOAD__")) {
+        return { code: code.replace(/__VITE_PRELOAD__/g, "((f)=>f())"), map: null };
+      }
+      return null;
+    },
+  };
+}
+
+/**
  * BugBuster web UI — Vite build config.
  *
  * Output lands in ../data/ so `pio run -t uploadfs` picks it up without
@@ -70,16 +94,9 @@ export default defineConfig(({ mode }) => {
   const target = env.BB_DEV_TARGET ?? "http://192.168.1.1";
 
   return {
-    plugins: [preact(), gzipEmitter()],
+    plugins: [preact(), preloadPolyfill(), gzipEmitter()],
     root: ".",
     base: "./",
-    // Replace __VITE_PRELOAD__ with a no-op polyfill so that dynamic chunk
-    // imports work on the ESP32 where the Vite polyfill chunk is never loaded.
-    // Without this the browser throws "ReferenceError: __VITE_PRELOAD__ is not
-    // defined" when navigating to any lazy-loaded route.
-    define: {
-      __VITE_PRELOAD__: "((f) => f())",
-    },
     build: {
       outDir: path.resolve(__dirname, "../data"),
       emptyOutDir: true,
