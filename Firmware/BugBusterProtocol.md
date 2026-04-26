@@ -2105,6 +2105,220 @@ Set the state of a single switch in the matrix.
 
 ---
 
+### 6.23 On-Device Scripting
+
+MicroPython scripts run on the ESP32-S3 inside a dedicated FreeRTOS task.
+All four commands are **USB-only** (cable-gated; no HTTP surface, no auth token
+required).  BBP wire-protocol version stays at **4** — no handshake change.
+
+Script source max: **32 768 bytes** (32 KB).
+Log ring drain: up to **1020 bytes** per call.
+
+#### 0xF5 SCRIPT_EVAL
+Submit a Python source string for evaluation.
+
+**Request payload:**
+```
+0-1     src_len     u16     Length of source in bytes (max 32768)
+2..     src         bytes   UTF-8 Python source (no NUL terminator)
+```
+
+**Response payload:**
+```
+0       enqueued    u8/bool 1 = accepted, 0 = queue full or too large
+1-4     script_id   u32     Engine-assigned ID for this script (valid when enqueued=1)
+```
+
+#### 0xF6 SCRIPT_STATUS
+Query the script engine state.
+
+**Request payload:** (none)
+
+**Response payload:**
+```
+0       is_running    u8/bool 1 = a script is currently executing
+1-4     script_id     u32     ID of the current (or last) script
+5-8     total_runs    u32     Lifetime eval count
+9-12    total_errors  u32     Lifetime error count
+13      err_len       u8      Length of last_error string (0-64)
+14..    last_error    bytes   Last error message (no NUL, UTF-8)
+```
+
+#### 0xF7 SCRIPT_LOGS
+Drain up to 1020 bytes from the script stdout ring buffer.  Call repeatedly
+until `count == 0` to fully drain.
+
+**Request payload:** (none)
+
+**Response payload:**
+```
+0-1     count       u16     Number of log bytes returned
+2..     log_bytes   bytes   Script stdout bytes (UTF-8)
+```
+
+#### 0xF8 SCRIPT_STOP
+Request the running script to stop cooperatively.  The VM polls a flag and
+raises `KeyboardInterrupt` at the next opcode boundary.
+
+**Request payload:** (none)
+**Response payload:** (none)
+
+---
+
+#### 0xF9 SCRIPT_UPLOAD
+Upload a Python script file to SPIFFS persistent storage.  Name rules:
+1–32 characters, `[A-Za-z0-9_.-]`, must end in `.py`, must not start with `.`.
+
+**Request payload:**
+```
+0       name_len    u8          Length of script name in bytes (1–32)
+1       name        char[n]     Script filename (e.g. "hello.py")
+1+n     body_len    u16         Length of Python source in bytes (0–32768)
+3+n     body        u8[body]    Python source bytes
+```
+
+**Response payload:**
+```
+0       ok          u8          1 = stored, 0 = error
+1       err_len     u8          Length of error string (0 if ok)
+2       err         char[e]     Error description (if err_len > 0)
+```
+
+---
+
+#### 0xFA SCRIPT_LIST
+List all script files currently stored on SPIFFS.
+
+**Request payload:** (none)
+
+**Response payload:**
+```
+0       count       u8          Number of script files
+1+      entries     ...         Repeated count times:
+                    name_len u8     Length of name
+                    name char[n]    Script filename
+```
+
+---
+
+#### 0xFB SCRIPT_RUN_FILE
+Load a stored script from SPIFFS and enqueue it for execution.  Equivalent
+to SCRIPT_EVAL but the source is read from storage rather than the payload.
+
+**Request payload:**
+```
+0       name_len    u8          Length of script name (1–32)
+1       name        char[n]     Script filename
+```
+
+**Response payload:**
+```
+0       enqueued    u8          1 = enqueued, 0 = failed (queue full or file not found)
+1       script_id   u32         Assigned script execution ID (0 if not enqueued)
+```
+
+---
+
+#### 0xFC SCRIPT_DELETE
+Delete a stored script file from SPIFFS.
+
+**Request payload:**
+```
+0       name_len    u8          Length of script name (1–32)
+1       name        char[n]     Script filename
+```
+
+**Response payload:**
+```
+0       ok          u8          1 = deleted, 0 = error
+1       err_len     u8          Length of error string (0 if ok)
+2       err         char[e]     Error description (if err_len > 0)
+```
+
+#### 0xFD SCRIPT_AUTORUN
+Autorun configuration and on-demand run. Uses a sub-byte multiplex in byte 0
+of the request payload to select the operation.
+
+**Sub-commands:**
+
+| sub | Name     | Description                                    |
+|-----|----------|------------------------------------------------|
+| 0   | STATUS   | Read current autorun state                     |
+| 1   | ENABLE   | Set a script as the autorun target             |
+| 2   | DISABLE  | Remove autorun sentinel (non-destructive)      |
+| 3   | RUN_NOW  | Run /spiffs/autorun.py immediately (no gates)  |
+
+**sub=0 STATUS**
+
+Request: `[0x00]`
+
+Response:
+```
+0       enabled       u8          1 = sentinel /spiffs/.autorun_enabled exists
+1       has_script    u8          1 = /spiffs/autorun.py exists
+2       io12_high     u8          IO12 sample at query. 1 = HIGH = gate PASSES (default, internal pull-up). 0 = LOW = gate BLOCKS (jumper / button to GND).
+3       last_run_ok   u8          1 = most recent autorun completed without error
+4       last_run_id   u32         script_id of last autorun attempt (0 = never)
+```
+
+**sub=1 ENABLE**
+
+Request:
+```
+0       sub           u8          0x01
+1       name_len      u8          Length of script name (1–32)
+2       name          char[n]     Name of stored script to set as autorun target
+```
+
+Response:
+```
+0       ok            u8          1 = success, 0 = error
+1       err_len       u8          Length of error string (0 if ok)
+2       err           char[e]     Error description (if err_len > 0)
+```
+
+**sub=2 DISABLE**
+
+Request: `[0x02]`
+
+Response:
+```
+0       ok            u8          1 = success (idempotent — returns 1 even if already disabled)
+1       err_len       u8          0 normally
+2       err           char[e]     Error description (if err_len > 0)
+```
+
+**sub=3 RUN_NOW**
+
+Request: `[0x03]`
+
+Response:
+```
+0       ok            u8          1 = script enqueued, 0 = error (e.g. no autorun.py)
+1       script_id     u32         Assigned script ID
+5       err_len       u8          Length of error string (0 if ok)
+6       err           char[e]     Error description (if err_len > 0)
+```
+
+**Three-gate boot safety (autorun_boot_check on power-up):**
+1. Sentinel `/spiffs/.autorun_enabled` must exist.
+2. 5-second boot grace window: any inbound BBP frame, HTTP request, or CLI
+   keystroke cancels autorun for this boot cycle.
+3. IO12 must read HIGH at boot. Default (internal pull-up + nothing wired) is
+   HIGH → autorun runs. Hold IO12 LOW (jumper to GND, button, external 10 kΩ
+   pull-down) to suppress autorun: hold-LOW-to-disable.
+
+OTA rollback: `esp_ota_mark_app_valid_cancel_rollback()` is called inside
+`autorun_boot_check()` after the grace window — a crash before this point
+causes the ESP-IDF bootloader to roll back to the previous OTA slot.
+
+HTTP equivalents (all require admin token):
+- `GET  /api/scripts/autorun/status`
+- `POST /api/scripts/autorun/enable?name=<filename>`
+- `POST /api/scripts/autorun/disable`
+
+---
+
 ## 7. Streaming Protocol
 
 The primary advantage of BBP over HTTP: continuous, push-based data delivery

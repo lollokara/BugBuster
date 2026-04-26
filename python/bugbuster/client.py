@@ -46,7 +46,9 @@ AdcResult   = namedtuple("AdcResult",   ["raw", "value", "range", "rate", "mux"]
 DeviceInfo  = namedtuple("DeviceInfo",  ["spi_ok", "silicon_rev", "silicon_id0", "silicon_id1"])
 PingResult  = namedtuple("PingResult",  ["token", "uptime_ms"])
 GpioStatus  = namedtuple("GpioStatus",  ["id", "mode", "output", "input", "pulldown"])
-IdacChannel = namedtuple("IdacChannel", ["code", "target_v", "actual_v", "v_min", "v_max", "calibrated"])
+IdacChannel        = namedtuple("IdacChannel",        ["code", "target_v", "actual_v", "v_min", "v_max", "calibrated"])
+ScriptStatusResult = namedtuple("ScriptStatusResult", ["is_running", "script_id", "total_runs", "total_errors", "last_error"])
+AutorunStatus      = namedtuple("AutorunStatus",      ["enabled", "has_script", "io12_high", "last_run_ok", "last_run_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +441,306 @@ class BugBuster:
         resp    = self._usb_cmd(CmdId.PING, payload)
         tok, uptime = struct.unpack_from('<II', resp)
         return PingResult(token=tok, uptime_ms=uptime)
+
+    # ------------------------------------------------------------------
+    # ── On-Device Scripting (USB only) ──────────────────────────────────
+    # ------------------------------------------------------------------
+
+    def script_eval(self, src: str) -> "ScriptStatusResult":
+        """
+        Submit *src* (a Python string) to the on-device MicroPython engine.
+
+        USB only.  Returns a :class:`ScriptStatusResult` reflecting the
+        engine state immediately after enqueue.  Raises ``ValueError`` if
+        *src* exceeds 32 KB or the queue is full (``enqueued == False``).
+        """
+        self._require_usb("script_eval")
+        encoded = src.encode("utf-8")
+        if len(encoded) > 32 * 1024:
+            raise ValueError(f"script source too large: {len(encoded)} bytes (max 32768)")
+        payload = struct.pack('<H', len(encoded)) + encoded
+        resp = self._usb_cmd(CmdId.SCRIPT_EVAL, payload)
+        enqueued = bool(resp[0])
+        script_id, = struct.unpack_from('<I', resp, 1)
+        if not enqueued:
+            raise RuntimeError("script_eval: device queue full or busy")
+        return ScriptStatusResult(
+            is_running=True,
+            script_id=script_id,
+            total_runs=0,
+            total_errors=0,
+            last_error="",
+        )
+
+    def script_status(self) -> "ScriptStatusResult":
+        """
+        Return the current script engine status.  USB only.
+        """
+        self._require_usb("script_status")
+        resp = self._usb_cmd(CmdId.SCRIPT_STATUS)
+        pos = 0
+        is_running = bool(resp[pos]); pos += 1
+        script_id, = struct.unpack_from('<I', resp, pos); pos += 4
+        total_runs, = struct.unpack_from('<I', resp, pos); pos += 4
+        total_errors, = struct.unpack_from('<I', resp, pos); pos += 4
+        err_len = resp[pos]; pos += 1
+        last_error = resp[pos:pos + err_len].decode("utf-8", errors="replace")
+        return ScriptStatusResult(
+            is_running=is_running,
+            script_id=script_id,
+            total_runs=total_runs,
+            total_errors=total_errors,
+            last_error=last_error,
+        )
+
+    def script_logs(self) -> str:
+        """
+        Drain up to 1020 bytes from the on-device script log ring.
+
+        USB only.  Returns a ``str`` (UTF-8, errors replaced).
+        Call repeatedly until the returned string is empty to drain fully.
+        """
+        self._require_usb("script_logs")
+        resp = self._usb_cmd(CmdId.SCRIPT_LOGS)
+        count, = struct.unpack_from('<H', resp, 0)
+        return resp[2:2 + count].decode("utf-8", errors="replace")
+
+    def script_stop(self) -> None:
+        """
+        Request the running script to stop cooperatively.  USB only.
+        """
+        self._require_usb("script_stop")
+        self._usb_cmd(CmdId.SCRIPT_STOP)
+
+    def script_upload(self, name: str, src: str) -> None:
+        """
+        Upload *src* (Python source string) as a script named *name* to SPIFFS.
+
+        USB: uses BBP_CMD_SCRIPT_UPLOAD (0xF9).
+        HTTP: POST /api/scripts/files?name=<name> with raw body.
+        Raises ``ValueError`` on invalid name or oversized source.
+        Raises ``RuntimeError`` if the device reports an error.
+        """
+        if len(name) > 32 or not name.endswith(".py"):
+            raise ValueError(f"invalid script name: {name!r}")
+        encoded = src.encode("utf-8")
+        if len(encoded) > 32 * 1024:
+            raise ValueError(f"script source too large: {len(encoded)} bytes (max 32768)")
+
+        if self._usb:
+            name_b = name.encode("utf-8")
+            payload = (bytes([len(name_b)]) + name_b +
+                       struct.pack('<H', len(encoded)) + encoded)
+            resp = self._usb_cmd(CmdId.SCRIPT_UPLOAD, payload)
+            ok = bool(resp[0])
+            err_len = resp[1]
+            err_msg = resp[2:2 + err_len].decode("utf-8", errors="replace")
+            if not ok:
+                raise RuntimeError(f"script_upload failed: {err_msg}")
+        else:
+            import urllib.parse
+            qs = urllib.parse.urlencode({"name": name})
+            headers = {"Content-Type": "text/x-python; charset=utf-8"}
+            if self._admin_token:
+                headers["X-BugBuster-Admin-Token"] = self._admin_token
+            result = self._t.post(f"/scripts/files?{qs}", encoded, headers=headers)
+            if not result.get("ok"):
+                raise RuntimeError(f"script_upload failed: {result.get('err', 'unknown')}")
+
+    def script_list(self) -> list:
+        """
+        Return a list of script names stored on SPIFFS.
+
+        USB: uses BBP_CMD_SCRIPT_LIST (0xFA).
+        HTTP: GET /api/scripts/files.
+        Returns a list of strings.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SCRIPT_LIST)
+            count = resp[0]
+            pos = 1
+            names = []
+            for _ in range(count):
+                nl = resp[pos]; pos += 1
+                names.append(resp[pos:pos + nl].decode("utf-8", errors="replace"))
+                pos += nl
+            return names
+        else:
+            result = self._http_get("/scripts/files")
+            return result.get("files", [])
+
+    def script_get(self, name: str) -> str:
+        """
+        Download the source of the script named *name* from SPIFFS.
+
+        HTTP only (no BBP equivalent for raw file download).
+        Returns the script source as a string.
+        Raises ``RuntimeError`` if not found.
+        """
+        import urllib.parse
+        qs = urllib.parse.urlencode({"name": name})
+        # Use transport GET directly for text response
+        headers = {}
+        if self._admin_token:
+            headers["X-BugBuster-Admin-Token"] = self._admin_token
+        result = self._t.get(f"/scripts/files/get?{qs}", headers=headers)
+        if isinstance(result, str):
+            return result
+        raise RuntimeError(f"script_get failed for {name!r}")
+
+    def script_delete(self, name: str) -> None:
+        """
+        Delete the script named *name* from SPIFFS.
+
+        USB: uses BBP_CMD_SCRIPT_DELETE (0xFC).
+        HTTP: DELETE /api/scripts/files?name=<name>.
+        Raises ``RuntimeError`` if the device reports an error.
+        """
+        if self._usb:
+            name_b = name.encode("utf-8")
+            payload = bytes([len(name_b)]) + name_b
+            resp = self._usb_cmd(CmdId.SCRIPT_DELETE, payload)
+            ok = bool(resp[0])
+            err_len = resp[1]
+            err_msg = resp[2:2 + err_len].decode("utf-8", errors="replace")
+            if not ok:
+                raise RuntimeError(f"script_delete failed: {err_msg}")
+        else:
+            import urllib.parse
+            qs = urllib.parse.urlencode({"name": name})
+            headers = {}
+            if self._admin_token:
+                headers["X-BugBuster-Admin-Token"] = self._admin_token
+            result = self._t.delete(f"/scripts/files?{qs}", headers=headers)
+            if not result.get("ok"):
+                raise RuntimeError(f"script_delete failed: {result.get('err', 'unknown')}")
+
+    def script_run_file(self, name: str) -> "ScriptStatusResult":
+        """
+        Run the stored script named *name* from SPIFFS.
+
+        USB: uses BBP_CMD_SCRIPT_RUN_FILE (0xFB).
+        HTTP: POST /api/scripts/run-file?name=<name>.
+        Returns a :class:`ScriptStatusResult` (is_running=True on success).
+        Raises ``RuntimeError`` if the device reports failure.
+        """
+        if self._usb:
+            name_b = name.encode("utf-8")
+            payload = bytes([len(name_b)]) + name_b
+            resp = self._usb_cmd(CmdId.SCRIPT_RUN_FILE, payload)
+            ok = bool(resp[0])
+            script_id, = struct.unpack_from('<I', resp, 1)
+            if not ok:
+                raise RuntimeError("script_run_file: queue full or file not found")
+            return ScriptStatusResult(
+                is_running=True,
+                script_id=script_id,
+                total_runs=0,
+                total_errors=0,
+                last_error="",
+            )
+        else:
+            import urllib.parse
+            qs = urllib.parse.urlencode({"name": name})
+            result = self._http_post(f"/scripts/run-file?{qs}")
+            if not result.get("ok"):
+                raise RuntimeError(f"script_run_file failed: {result.get('err', 'unknown')}")
+            return ScriptStatusResult(
+                is_running=True,
+                script_id=int(result.get("id", 0)),
+                total_runs=0,
+                total_errors=0,
+                last_error="",
+            )
+
+    # ── Autorun (Phase 6b) ──────────────────────────────────────────────────
+
+    def script_autorun_status(self) -> "AutorunStatus":
+        """
+        Return the current autorun configuration and last-run outcome.
+
+        USB: uses BBP_CMD_SCRIPT_AUTORUN (0xFD) sub=0.
+        HTTP: GET /api/scripts/autorun/status.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SCRIPT_AUTORUN, bytes([0]))
+            enabled     = bool(resp[0])
+            has_script  = bool(resp[1])
+            io12_high   = bool(resp[2])
+            last_run_ok = bool(resp[3])
+            last_run_id, = struct.unpack_from('<I', resp, 4)
+            return AutorunStatus(enabled, has_script, io12_high, last_run_ok, last_run_id)
+        else:
+            d = self._http_get("/scripts/autorun/status")
+            return AutorunStatus(
+                enabled     = bool(d.get("enabled",     False)),
+                has_script  = bool(d.get("has_script",  False)),
+                io12_high   = bool(d.get("io12_high",   False)),
+                last_run_ok = bool(d.get("last_run_ok", False)),
+                last_run_id = int(d.get("last_run_id",  0)),
+            )
+
+    def script_autorun_enable(self, name: str) -> None:
+        """
+        Enable autorun: copy script *name* → /spiffs/autorun.py and create sentinel.
+
+        USB: uses BBP_CMD_SCRIPT_AUTORUN (0xFD) sub=1.
+        HTTP: POST /api/scripts/autorun/enable?name=<name>.
+        Raises ``RuntimeError`` on failure.
+        """
+        if self._usb:
+            name_b  = name.encode("utf-8")
+            payload = bytes([1, len(name_b)]) + name_b
+            resp    = self._usb_cmd(CmdId.SCRIPT_AUTORUN, payload)
+            ok      = bool(resp[0])
+            if not ok:
+                err_len = resp[1]
+                err_msg = resp[2:2 + err_len].decode("utf-8", errors="replace")
+                raise RuntimeError(f"script_autorun_enable failed: {err_msg}")
+        else:
+            import urllib.parse
+            qs     = urllib.parse.urlencode({"name": name})
+            result = self._http_post(f"/scripts/autorun/enable?{qs}")
+            if not result.get("ok"):
+                raise RuntimeError(f"script_autorun_enable failed: {result.get('err', 'unknown')}")
+
+    def script_autorun_disable(self) -> None:
+        """
+        Disable autorun: remove sentinel (autorun.py is left in place).
+
+        USB: uses BBP_CMD_SCRIPT_AUTORUN (0xFD) sub=2.
+        HTTP: POST /api/scripts/autorun/disable.
+        Raises ``RuntimeError`` on failure.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.SCRIPT_AUTORUN, bytes([2]))
+            ok   = bool(resp[0])
+            if not ok:
+                err_len = resp[1]
+                err_msg = resp[2:2 + err_len].decode("utf-8", errors="replace")
+                raise RuntimeError(f"script_autorun_disable failed: {err_msg}")
+        else:
+            result = self._http_post("/scripts/autorun/disable")
+            if not result.get("ok"):
+                raise RuntimeError(f"script_autorun_disable failed: {result.get('err', 'unknown')}")
+
+    def script_autorun_run_now(self) -> int:
+        """
+        Immediately run /spiffs/autorun.py, bypassing all boot gates.
+        USB only — raises ``NotImplementedError`` over HTTP.
+
+        Returns the assigned script_id.
+        Raises ``RuntimeError`` on failure.
+        """
+        self._require_usb("script_autorun_run_now")
+        resp = self._usb_cmd(CmdId.SCRIPT_AUTORUN, bytes([3]))
+        ok   = bool(resp[0])
+        script_id, = struct.unpack_from('<I', resp, 1)
+        if not ok:
+            err_len = resp[5]
+            err_msg = resp[6:6 + err_len].decode("utf-8", errors="replace")
+            raise RuntimeError(f"script_autorun_run_now failed: {err_msg}")
+        return script_id
 
     def get_firmware_version(self) -> tuple:
         """

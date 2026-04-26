@@ -5,6 +5,7 @@ name: ESP32 Firmware
   pull_request:
     paths:
       - ".github/workflows/esp32-firmware.yml"
+      - ".gitmodules"
       - "Firmware/tools/firmware_version.py"
       - "Firmware/ESP32/**"
   push:
@@ -14,6 +15,7 @@ name: ESP32 Firmware
       - "esp-fw-v*"
     paths:
       - ".github/workflows/esp32-firmware.yml"
+      - ".gitmodules"
       - "Firmware/tools/firmware_version.py"
       - "Firmware/ESP32/**"
 
@@ -31,6 +33,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
 
       - name: Setup Python
         uses: actions/setup-python@v6.2.0

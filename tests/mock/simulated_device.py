@@ -90,6 +90,21 @@ class SimulatedDevice:
         # SPI clock
         self.spi_clock_hz = 1_000_000
 
+        # On-device scripting state
+        self.script_running      = False
+        self.script_id           = 0
+        self.script_total_runs   = 0
+        self.script_total_errors = 0
+        self.script_last_error   = ""
+        self.script_log_ring     = ""
+
+        # Autorun state (Phase 6b)
+        self.autorun_enabled     = False
+        self.autorun_script_name = None   # name of the script set as autorun
+        self.autorun_io12_high   = False  # simulated IO12 gate level
+        self.autorun_last_run_ok = False
+        self.autorun_last_run_id = 0
+
         # DIO state: 12 logical digital IOs (1-indexed in protocol, 0-indexed here)
         self.dio = [{"mode": 0, "output": False, "input": False} for _ in range(12)]
 
@@ -215,5 +230,11 @@ class SimulatedDevice:
         try:
             from tests.mock.handlers import streaming
             streaming.register(self)
+        except ImportError:
+            pass
+
+        try:
+            from tests.mock.handlers import scripts
+            scripts.register(self)
         except ImportError:
             pass

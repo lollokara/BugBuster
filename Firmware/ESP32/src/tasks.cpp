@@ -475,9 +475,10 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
         return;
     }
 
-    // The hardware auto-sets correct ADC_CONFIG defaults (CONV_MUX, CONV_RANGE)
-    // when CH_FUNC_SETUP is written (datasheet Table 22).  Read back instead of
-    // overwriting.
+    // The hardware auto-sets ADC_CONFIG defaults (CONV_MUX, CONV_RANGE) when
+    // CH_FUNC_SETUP is written. Read them back, then apply the same corrections
+    // used by the tested desktop paths where the defaults measure the wrong
+    // node or range for our board-level signal path.
     uint16_t adcCfgReg = 0;
     extern AD74416H_SPI spiDriver;
     if (!spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(channel), &adcCfgReg)) {
@@ -495,6 +496,20 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
         func == CH_FUNC_IIN_EXT_PWR_HART ||
         func == CH_FUNC_IIN_LOOP_PWR_HART) {
         hwRange = ADC_RNG_NEG0_3125_0_3125V;
+    }
+
+    // VOUT/VIN: desktop ADC and VDAC tabs force LF->AGND because the device
+    // default is HF->LF (current-sense differential), which reads near 0 V for
+    // voltage output/readback on this hardware.
+    if (func == CH_FUNC_VOUT || func == CH_FUNC_VIN) {
+        hwMux = ADC_MUX_LF_TO_AGND;
+    }
+
+    // VOUT readback also needs the full unipolar voltage range immediately.
+    // Otherwise scripts can read stale/overrange values until the ADC poller's
+    // auto-ranging climbs out of the hardware millivolt default.
+    if (func == CH_FUNC_VOUT) {
+        hwRange = ADC_RNG_0_12V;
     }
 
     // RES_MEAS: force 2-wire RTD mode, enable excitation current, and use

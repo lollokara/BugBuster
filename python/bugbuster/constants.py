@@ -440,6 +440,17 @@ class CmdId(IntEnum):
     QS_APPLY         = 0xF3  # apply slot to live device state
     QS_DELETE        = 0xF4  # erase slot
 
+    # On-Device Scripting
+    SCRIPT_EVAL      = 0xF5  # submit Python source for eval (max 32 KB)
+    SCRIPT_STATUS    = 0xF6  # get script engine status
+    SCRIPT_LOGS      = 0xF7  # drain script log ring
+    SCRIPT_STOP      = 0xF8  # request cooperative stop
+    SCRIPT_UPLOAD    = 0xF9  # upload script file to SPIFFS
+    SCRIPT_LIST      = 0xFA  # list stored script files
+    SCRIPT_RUN_FILE  = 0xFB  # run a stored script file
+    SCRIPT_DELETE    = 0xFC  # delete a stored script file
+    SCRIPT_AUTORUN   = 0xFD  # autorun control (sub-byte multiplex)
+
     # Session control
     PING             = 0xFE
     DISCONNECT       = 0xFF

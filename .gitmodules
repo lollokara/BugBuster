@@ -7,3 +7,6 @@
 [submodule "Firmware/RP2040/lib/tinyusb"]
 	path = Firmware/RP2040/lib/tinyusb
 	url = https://github.com/lollokara/tinyusb.git
+[submodule "Firmware/ESP32/components/micropython/micropython"]
+	path = Firmware/ESP32/components/micropython/micropython
+	url = https://github.com/micropython/micropython.git

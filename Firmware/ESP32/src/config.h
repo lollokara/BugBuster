@@ -213,3 +213,11 @@ static inline void delay_us(uint32_t us) {
 static inline uint32_t millis_now(void) {
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
 }
+
+// =============================================================================
+// MicroPython scripting (Phase 1)
+// =============================================================================
+#define MP_HEAP_SIZE      (1u * 1024u * 1024u)   // 1 MB GC heap in PSRAM
+#define MP_TASK_STACK     (16u * 1024u)           // FreeRTOS task stack (bytes)
+#define MP_QUEUE_DEPTH    4u                       // Script command queue depth
+#define MP_LOG_RING_SIZE  4096u                    // Log ring buffer size (bytes)
