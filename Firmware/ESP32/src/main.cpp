@@ -357,7 +357,14 @@ extern "C" void app_main(void)
     serial_println("[BugBuster] Boot complete.");
 
     // 17. Main loop task (CLI/BBP + heartbeat)
-    xTaskCreatePinnedToCore(mainLoopTask, "mainLoop", 8192, NULL, 1, NULL, 0);
+    TaskHandle_t mainLoopHandle = nullptr;
+    BaseType_t mainLoopOk = xTaskCreatePinnedToCore(
+        mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0);
+    if (mainLoopOk != pdPASS || mainLoopHandle == nullptr) {
+        serial_println("[BugBuster] ERROR: mainLoopTask creation failed");
+        ESP_LOGE("main_task", "mainLoopTask creation failed (ret=%d handle=%p)",
+                 (int)mainLoopOk, (void *)mainLoopHandle);
+    }
 
     // 18. Autorun boot check — MUST run after mainLoopTask so that CLI/BBP
     //     activity can be detected during the grace window.

@@ -60,6 +60,12 @@ static BbpAdcStreamBuf s_adcBuf = {};
 static uint8_t  s_rxBuf[RX_BUF_SIZE];
 static uint16_t s_rxLen = 0;
 
+// Single-threaded scratch buffers for BBP decode/dispatch. Keeping them at
+// file scope avoids burning another 2 KB of stack every time the desktop
+// sends a command.
+static uint8_t  s_decodedBuf[BBP_MAX_PAYLOAD];
+static uint8_t  s_rspBuf[BBP_MAX_PAYLOAD];
+
 // TX work buffers — protected by s_txMutex since sendMsg can be called from
 // multiple tasks (BBP command task + event publishers: alert task, HAT task,
 // main ISR deferred task). Without this mutex the shared buffers were being
@@ -379,16 +385,15 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
     const uint8_t *payload    = msg + BBP_HEADER_SIZE;
     size_t         payloadLen = msgLen - BBP_HEADER_SIZE - BBP_CRC_SIZE;
 
-    uint8_t rspBuf[BBP_MAX_PAYLOAD];
     size_t  rsp_len = 0;
 
     s_lastFrameMs = millis_now();
     autorun_note_inbound();
 
     // Registry adapter: intercepts all 120 registered opcodes.
-    int arc = bbp_adapter_dispatch(cmdId, payload, payloadLen, rspBuf, &rsp_len);
+    int arc = bbp_adapter_dispatch(cmdId, payload, payloadLen, s_rspBuf, &rsp_len);
     if (arc == 0) {
-        sendResponse(seq, cmdId, rspBuf, rsp_len);
+        sendResponse(seq, cmdId, s_rspBuf, rsp_len);
         return;
     } else if (arc > 0) {
         sendError(seq, cmdId, (uint8_t)arc);
@@ -636,10 +641,9 @@ void bbpProcess(void)
             if (byte == BBP_FRAME_DELIMITER) {
                 // End of frame - decode and dispatch
                 if (s_rxLen > 0) {
-                    uint8_t decoded[BBP_MAX_PAYLOAD];
-                    size_t decodedLen = bbp_cobs_decode(s_rxBuf, s_rxLen, decoded);
+                    size_t decodedLen = bbp_cobs_decode(s_rxBuf, s_rxLen, s_decodedBuf);
                     if (decodedLen >= BBP_MIN_MSG_SIZE && decodedLen <= BBP_MAX_PAYLOAD) {
-                        dispatchMessage(decoded, decodedLen);
+                        dispatchMessage(s_decodedBuf, decodedLen);
                     }
                     s_rxLen = 0;
                 }

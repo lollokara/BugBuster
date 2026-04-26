@@ -2208,9 +2208,8 @@ static esp_err_t handle_cal_post_dispatch(httpd_req_t *req);
 //
 // NOTE: esp_http_server matches the first registered URI handler, so the
 // `/api/idac/*` wildcard registered at startup catches *all* /api/idac/...
-// paths — including the more specific `/api/idac/cal/*` route. To avoid
-// permanently shadowing the cal handlers, route /api/idac/cal/... requests
-// here through `handle_cal_post_dispatch` before reporting unknown.
+// paths. Keep cal requests routed through this dispatcher instead of
+// registering a second overlapping `/api/idac/cal/*` handler.
 static esp_err_t handle_idac_post_dispatch(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
@@ -4181,13 +4180,6 @@ void initWebServer(void)
     };
     httpd_register_uri_handler(s_server, &uri_mux_post);
 
-    // ----- IDAC Calibration routes -----
-
-    httpd_uri_t uri_cal_post = {
-        .uri = "/api/idac/cal/*", .method = HTTP_POST, .handler = handle_cal_post_dispatch, .user_ctx = NULL
-    };
-    httpd_register_uri_handler(s_server, &uri_cal_post);
-
     // ----- External routed bus routes -----
 
     httpd_uri_t uri_bus_status = {
@@ -4327,10 +4319,7 @@ void initWebServer(void)
     };
     httpd_register_uri_handler(s_server, &uri_scripts_reset);
 
-    // ----- MicroPython WebSocket REPL (V2-B) — DEBUG INSTRUMENTED -----
-    ESP_LOGI(TAG, "[V2B-DBG] before repl_ws_register, free heap=%u", (unsigned)esp_get_free_heap_size());
     repl_ws_register(s_server);
-    ESP_LOGI(TAG, "[V2B-DBG] after repl_ws_register, free heap=%u", (unsigned)esp_get_free_heap_size());
 
     // ----- Autorun routes -----
 

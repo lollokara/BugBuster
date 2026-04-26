@@ -12,6 +12,7 @@
 #include "py/mperrno.h"
 #include "shared/readline/readline.h"
 #include "mphalport.h"
+#include "../../src/net/serial_io.h"
 
 // Forward declarations for scripting.cpp functions.
 // Plain C forward-declare — no extern "C" wrapper needed in a .c file.
@@ -109,8 +110,13 @@ mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
 
 // ── stdin ─────────────────────────────────────────────────────────────────────
 int mp_hal_stdin_rx_chr(void) {
-    // Phase 1: no interactive input source (no REPL)
-    return 0;
+    // MicroPython shares CDC #0 with the BugBuster CLI. Read one byte from the
+    // same CDC stream instead of faking EOF, so any interactive console path
+    // layered on top of stdin can actually receive keystrokes.
+    while (!serial_available()) {
+        vTaskDelay(1);
+    }
+    return serial_read();
 }
 
 // ── Interrupt character ───────────────────────────────────────────────────────

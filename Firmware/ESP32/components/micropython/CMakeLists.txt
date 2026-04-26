@@ -158,7 +158,6 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # VFS/LFS/fatfs disabled in Phase 0 — those lib sources are not included.
     target_compile_definitions(${MICROPY_TARGET} PUBLIC
         ${MICROPY_DEF_CORE}
-        MICROPY_MODULE_FROZEN_MPY=1
         MICROPY_QSTR_EXTRA_POOL=mp_qstr_frozen_const_pool
     )
 
