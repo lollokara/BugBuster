@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ESP32_BBP = ROOT / "Firmware" / "ESP32" / "src" / "bbp.h"
+ESP32_BBP = ROOT / "Firmware" / "ESP32" / "src" / "bbp" / "bbp.h"
 RP2040_CMAKE = ROOT / "Firmware" / "RP2040" / "CMakeLists.txt"
 
 
