@@ -223,6 +223,7 @@ static bool apply_power_and_mux(const BusRouteEntry **routes, size_t count,
 extern "C" bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
                                        uint32_t freq_hz, bool internal_pullups,
                                        float supply_v, float vlogic_v,
+                                       bool allow_split_supplies,
                                        char *err, size_t err_len)
 {
     // ── Validate ────────────────────────────────────────────────────────────
@@ -250,8 +251,8 @@ extern "C" bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
         return false;
     }
 
-    // Check split-supply: both pins must use the same supply rail (v1: no split)
-    if (sda_r->supply_ctrl != scl_r->supply_ctrl) {
+    // Check split-supply: both pins must use the same supply rail (unless allowed)
+    if (!allow_split_supplies && (sda_r->supply_ctrl != scl_r->supply_ctrl)) {
         set_err(err, err_len, "I2C pins span multiple supplies; split supply not supported in v1");
         return false;
     }
@@ -288,6 +289,7 @@ extern "C" bool bus_planner_apply_spi(uint8_t sck_io,
                                        uint8_t cs_io_or_0,
                                        uint32_t freq_hz, uint8_t mode,
                                        float supply_v, float vlogic_v,
+                                       bool allow_split_supplies,
                                        char *err, size_t err_len)
 {
     // ── Validate ────────────────────────────────────────────────────────────
@@ -353,11 +355,13 @@ extern "C" bool bus_planner_apply_spi(uint8_t sck_io,
         routes[n_routes++] = cs_r;
     }
 
-    // Check split-supply: all active pins must use the same supply rail (v1)
-    for (size_t i = 1; i < n_routes; i++) {
-        if (routes[i]->supply_ctrl != routes[0]->supply_ctrl) {
-            set_err(err, err_len, "SPI pins span multiple supplies; split supply not supported in v1");
-            return false;
+    // Check split-supply: all active pins must use the same supply rail (unless allowed)
+    if (!allow_split_supplies) {
+        for (size_t i = 1; i < n_routes; i++) {
+            if (routes[i]->supply_ctrl != routes[0]->supply_ctrl) {
+                set_err(err, err_len, "SPI pins span multiple supplies; split supply not supported in v1");
+                return false;
+            }
         }
     }
 

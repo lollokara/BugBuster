@@ -38,7 +38,7 @@ static mp_obj_t bugbuster_i2c_make_new(const mp_obj_type_t *type,
                                         size_t n_args, size_t n_kw,
                                         const mp_obj_t *args)
 {
-    enum { ARG_sda_io, ARG_scl_io, ARG_freq, ARG_pullups, ARG_supply, ARG_vlogic };
+    enum { ARG_sda_io, ARG_scl_io, ARG_freq, ARG_pullups, ARG_supply, ARG_vlogic, ARG_allow_split_supplies };
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_sda_io,  MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
         { MP_QSTR_scl_io,  MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
@@ -46,6 +46,7 @@ static mp_obj_t bugbuster_i2c_make_new(const mp_obj_type_t *type,
         { MP_QSTR_pullups, MP_ARG_KW_ONLY  | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_QSTR(MP_QSTR_external)} },
         { MP_QSTR_supply,  MP_ARG_KW_ONLY  | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
         { MP_QSTR_vlogic,  MP_ARG_KW_ONLY  | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
+        { MP_QSTR_allow_split_supplies, MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
     };
 
     mp_arg_val_t parsed[MP_ARRAY_SIZE(allowed_args)];
@@ -83,6 +84,7 @@ static mp_obj_t bugbuster_i2c_make_new(const mp_obj_type_t *type,
         ? 3.3f : (float)mp_obj_get_float(parsed[ARG_supply].u_obj);
     float vlogic_v = (parsed[ARG_vlogic].u_obj == mp_const_none)
         ? 3.3f : (float)mp_obj_get_float(parsed[ARG_vlogic].u_obj);
+    bool allow_split_supplies = parsed[ARG_allow_split_supplies].u_bool;
 
     if (supply_v > 5.0f) {
         mp_raise_ValueError(MP_ERROR_TEXT("supply > 5.0 V not allowed"));
@@ -92,6 +94,7 @@ static mp_obj_t bugbuster_i2c_make_new(const mp_obj_type_t *type,
     if (!bugbuster_mp_i2c_setup((uint8_t)sda_io, (uint8_t)scl_io,
                                  freq, internal_pullups,
                                  supply_v, vlogic_v,
+                                 allow_split_supplies,
                                  err, sizeof(err))) {
         mp_raise_ValueError(err[0] ? err : "I2C setup failed");
     }

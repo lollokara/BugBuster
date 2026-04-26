@@ -72,17 +72,13 @@
 #define MICROPY_USE_INTERNAL_ERRNO          (0)
 #define MICROPY_USE_INTERNAL_PRINTF         (0)
 #define MICROPY_SCHEDULER_DEPTH             (8)
-// VFS deliberately DISABLED in Phase 6a.
-// Initial attempt enabled MICROPY_VFS=1 + MICROPY_VFS_POSIX=1 to expose import
-// + open() against /spiffs/, but that pulls in extmod/vfs_fat.c (FAT VFS) and
-// extmod/vfs_posix.c which require <poll.h> and FFCONF_H — neither available
-// under our ESP-IDF newlib/no-fat config. Phase 6a only needs RUN-by-name,
-// which is satisfied by script_storage.cpp + scripting_run_file (file is read
-// by C fopen + fed to the existing eval queue). Future phase can revisit MP
-// VFS if user-script `import` from /spiffs/ becomes a requirement; that will
-// need vfs_fat exclusion + a poll.h shim.
-#define MICROPY_VFS                         (0)
-#define MICROPY_READER_VFS                  (0)
+// VFS enabled to allow user-script `import` from /spiffs/scripts/.
+// Requires vfs_fat exclusion and poll.h shim in CMakeLists.txt.
+#define MICROPY_VFS                         (1)
+#define MICROPY_READER_VFS                  (1)
+#define MICROPY_VFS_POSIX                   (1)
+#define MICROPY_VFS_FAT                     (0)
+#define MICROPY_PY_VFS                      (0)
 
 // ── Threading — disabled in Phase 0 (no mpthreadport.h needed) ───────────────
 #define MICROPY_PY_THREAD                   (0)

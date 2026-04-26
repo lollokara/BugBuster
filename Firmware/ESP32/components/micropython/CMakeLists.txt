@@ -25,6 +25,15 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # extmod.cmake sets MICROPY_SOURCE_EXTMOD, MICROPY_OOFATFS_DIR, etc.
     include(${MICROPY_DIR}/extmod/extmod.cmake)
 
+    # Filter out vfs_fat files — we don't have/need FATFS under ESP-IDF newlib.
+    set(_EXTMOD_FILTERED "")
+    foreach(_s ${MICROPY_SOURCE_EXTMOD})
+        if(NOT _s MATCHES "vfs_fat")
+            list(APPEND _EXTMOD_FILTERED ${_s})
+        endif()
+    endforeach()
+    set(MICROPY_SOURCE_EXTMOD ${_EXTMOD_FILTERED})
+
     # usermod.cmake — creates the empty 'usermod' INTERFACE library target.
     include(${MICROPY_DIR}/py/usermod.cmake)
 
@@ -139,6 +148,7 @@ idf_component_register(
         ${MICROPY_INC_CORE}
         ${MICROPY_INC_USERMOD}
         ${CMAKE_CURRENT_LIST_DIR}
+        ${CMAKE_CURRENT_LIST_DIR}/shim
         ${CMAKE_BINARY_DIR}
         ${MICROPY_GENHDR_DIR}
     REQUIRES
@@ -191,6 +201,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
                 list(APPEND MICROPY_CPP_FLAGS "-I${_i}")
             endif()
         endforeach()
+        list(APPEND MICROPY_CPP_FLAGS "-I${CMAKE_CURRENT_LIST_DIR}/shim")
     endif()
     if(_mp_def)
         foreach(_d ${_mp_def})

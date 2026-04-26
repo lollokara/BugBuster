@@ -357,7 +357,7 @@ static void vm_do_init(void)
         mp_obj_t vfs = MP_OBJ_TYPE_GET_SLOT(&mp_type_vfs_posix, make_new)(
             &mp_type_vfs_posix, 0, 0, NULL);
         mp_obj_t mount_args[2] = { vfs, mp_obj_new_str("/", 1) };
-        mp_vfs_mount(NULL, 2, mount_args, (mp_map_t *)&mp_const_empty_map);
+        mp_vfs_mount(2, mount_args, (mp_map_t *)&mp_const_empty_map);
     }
 #endif
 

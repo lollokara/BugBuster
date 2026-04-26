@@ -19,7 +19,7 @@ from bugbuster.constants import CmdId
 
 
 REPO = Path(__file__).resolve().parents[2]
-ESP32_BBP_H = REPO / "Firmware" / "ESP32" / "src" / "bbp.h"
+ESP32_BBP_H = REPO / "Firmware" / "ESP32" / "src" / "bbp" / "bbp.h"
 DESKTOP_BBP_RS = REPO / "DesktopApp" / "BugBuster" / "src-tauri" / "src" / "bbp.rs"
 
 

@@ -2,7 +2,8 @@
 // =============================================================================
 // scripting.h — Public API for the MicroPython on-device scripting engine.
 //
-// Phase 1: in-memory eval only. No VFS, no file-run, no HTTP transport yet.
+// Phase 2: persistent VM, VFS, file-run, HTTP/BBP transport.
+// VFS enables `import` from /spiffs/scripts/.
 // DO NOT include MicroPython headers here — would create circular includes.
 // =============================================================================
 

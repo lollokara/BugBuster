@@ -37,7 +37,7 @@ static mp_obj_t bugbuster_spi_make_new(const mp_obj_type_t *type,
                                         const mp_obj_t *args)
 {
     enum { ARG_sck_io, ARG_mosi_io, ARG_miso_io, ARG_cs_io,
-           ARG_freq, ARG_mode, ARG_supply, ARG_vlogic };
+           ARG_freq, ARG_mode, ARG_supply, ARG_vlogic, ARG_allow_split_supplies };
     static const mp_arg_t allowed_args[] = {
         { MP_QSTR_sck_io,  MP_ARG_REQUIRED | MP_ARG_INT, {.u_int = 0} },
         { MP_QSTR_mosi_io, MP_ARG_KW_ONLY  | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
@@ -47,6 +47,7 @@ static mp_obj_t bugbuster_spi_make_new(const mp_obj_type_t *type,
         { MP_QSTR_mode,    MP_ARG_KW_ONLY  | MP_ARG_INT, {.u_int = 0} },
         { MP_QSTR_supply,  MP_ARG_KW_ONLY  | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
         { MP_QSTR_vlogic,  MP_ARG_KW_ONLY  | MP_ARG_OBJ, {.u_rom_obj = MP_ROM_NONE} },
+        { MP_QSTR_allow_split_supplies, MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = false} },
     };
 
     mp_arg_val_t parsed[MP_ARRAY_SIZE(allowed_args)];
@@ -85,6 +86,7 @@ static mp_obj_t bugbuster_spi_make_new(const mp_obj_type_t *type,
         ? 3.3f : (float)mp_obj_get_float(parsed[ARG_supply].u_obj);
     float vlogic_v = (parsed[ARG_vlogic].u_obj == mp_const_none)
         ? 3.3f : (float)mp_obj_get_float(parsed[ARG_vlogic].u_obj);
+    bool allow_split_supplies = parsed[ARG_allow_split_supplies].u_bool;
 
     if (supply_v > 5.0f) {
         mp_raise_ValueError(MP_ERROR_TEXT("supply > 5.0 V not allowed"));
@@ -95,6 +97,7 @@ static mp_obj_t bugbuster_spi_make_new(const mp_obj_type_t *type,
                                  (uint8_t)mosi_io, (uint8_t)miso_io, (uint8_t)cs_io,
                                  freq, mode,
                                  supply_v, vlogic_v,
+                                 allow_split_supplies,
                                  err, sizeof(err))) {
         mp_raise_ValueError(err[0] ? err : "SPI setup failed");
     }

@@ -21,10 +21,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { EditorView, lineNumbers, keymap } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Prec } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { python } from "@codemirror/lang-python";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { closeBrackets, autocompletion } from "@codemirror/autocomplete";
+import { bugbusterCompletions } from "./completions";
 import {
   ADMIN_TOKEN_HEADER,
   getCachedToken,
@@ -113,6 +115,9 @@ function CodeEditor({ initialDoc, onDocChange, editorViewRef }: EditorProps) {
           lineNumbers(),
           python(),
           oneDark,
+          closeBrackets(),
+          autocompletion(),
+          Prec.highest(EditorState.languageData.of(() => [{ autocomplete: bugbusterCompletions }])),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               onDocChange(update.state.doc.toString());
@@ -153,35 +158,43 @@ function CodeEditor({ initialDoc, onDocChange, editorViewRef }: EditorProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Status badge
+// Status Badge helper
 // ---------------------------------------------------------------------------
 
 function StatusBadge({ status }: { status: ScriptStatus | null }) {
-  if (!status) {
-    return <span class="text-dim" style={{ fontSize: "0.78rem" }}>—</span>;
-  }
-  const kb = status.globalsBytes != null
-    ? (status.globalsBytes / 1024).toFixed(1) + " KB"
-    : "?";
+  if (!status) return <span class="text-dim">…</span>;
+
+  const running = status.running;
+  const isPersistent = status.mode === "persistent";
+  const err = status.lastError;
+
   return (
-    <span style={{ fontSize: "0.78rem", display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-      <span class="uppercase-tag">{status.mode ?? "—"}</span>
-      <span class="mono text-dim">heap: {kb}</span>
-      {status.autoResetCount != null && (
-        <span class="mono text-dim">resets: {status.autoResetCount}</span>
-      )}
-      {status.watermarkSoftHit && (
-        <span style={{ color: "var(--rose)", fontWeight: 600 }}>MEM!</span>
-      )}
-      {status.running && (
-        <span style={{ color: "var(--green)" }}>running</span>
-      )}
-      {status.lastError && (
-        <span style={{ color: "var(--rose)", maxWidth: "300px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={status.lastError}>
-          err: {status.lastError}
+    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+      {isPersistent && (
+        <span class="uppercase-tag" style={{ color: "var(--amber)", fontSize: "0.7rem" }}>
+          persistent vm
         </span>
       )}
-    </span>
+      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <div
+          style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "50%",
+            background: running ? "var(--green)" : "var(--text-muted)",
+            boxShadow: running ? "0 0 8px var(--green)" : "none",
+          }}
+        />
+        <span style={{ fontSize: "0.78rem", fontWeight: 500, color: running ? "var(--text)" : "var(--text-dim)" }}>
+          {running ? "RUNNING" : "IDLE"}
+        </span>
+      </div>
+      {err && (
+        <span class="text-rose" style={{ fontSize: "0.72rem", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={err}>
+          Error: {err}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -217,13 +230,13 @@ export function Scripts() {
   const [newFileName, setNewFileName] = useState("");
 
   // -------------------------------------------------------------------------
-  // Fetch file list
+  // API actions
   // -------------------------------------------------------------------------
 
   const fetchFiles = useCallback(async () => {
     try {
       const res = await apiFetch("/api/scripts/files");
-      const data = await res.json() as { files?: string[] };
+      const data = await res.json() as { files: string[] };
       setFiles(Array.isArray(data.files) ? data.files : []);
     } catch (e) {
       if (!(e instanceof PairingRequiredError)) {
@@ -265,13 +278,16 @@ export function Scripts() {
     loadFile(name);
   };
 
-  // -------------------------------------------------------------------------
-  // New file
-  // -------------------------------------------------------------------------
-
   const handleNewFile = () => {
-    if (isDirty && !window.confirm("You have unsaved changes. Discard them?")) return;
-    const name = newFileName.trim() || "untitled.py";
+    let name = newFileName.trim();
+    if (!name) return;
+    if (!name.endsWith(".py")) name += ".py";
+
+    if (files.includes(name)) {
+      alert("File already exists");
+      return;
+    }
+
     setSelectedFile(name);
     setIsUnsaved(true);
     setIsDirty(false);
@@ -309,11 +325,37 @@ export function Scripts() {
   };
 
   // -------------------------------------------------------------------------
-  // Run file
+  // Delete
+  // -------------------------------------------------------------------------
+
+  const handleDelete = async () => {
+    if (!selectedFile || isUnsaved) return;
+    if (!window.confirm(`Delete ${selectedFile}?`)) return;
+
+    setBusy("delete");
+    try {
+      await apiFetch(`/api/scripts/files?name=${encodeURIComponent(selectedFile)}`, {
+        method: "DELETE",
+      });
+      setSelectedFile(null);
+      setEditorDoc("");
+      setEditorKey((k) => k + 1);
+      await fetchFiles();
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Run (saved file)
   // -------------------------------------------------------------------------
 
   const handleRunFile = async () => {
-    if (!selectedFile || isDirty || isUnsaved) return;
+    if (!selectedFile || isUnsaved || isDirty) return;
     setBusy("run");
     setError(null);
     try {
@@ -357,37 +399,23 @@ export function Scripts() {
   };
 
   // -------------------------------------------------------------------------
-  // Stop
+  // Stop / Reset
   // -------------------------------------------------------------------------
 
   const handleStop = async () => {
     setBusy("stop");
-    setError(null);
     try {
       await apiFetch("/api/scripts/stop", { method: "POST" });
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
     } finally {
       setBusy(null);
     }
   };
 
-  // -------------------------------------------------------------------------
-  // Reset VM
-  // -------------------------------------------------------------------------
-
   const handleReset = async () => {
-    if (!window.confirm("Reset the MicroPython VM? All runtime state will be cleared.")) return;
+    if (!window.confirm("Reset the MicroPython VM? This clears all global state.")) return;
     setBusy("reset");
-    setError(null);
     try {
       await apiFetch("/api/scripts/reset", { method: "POST" });
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
     } finally {
       setBusy(null);
     }
@@ -400,16 +428,11 @@ export function Scripts() {
   const handleSetAutorun = async () => {
     if (!selectedFile || isUnsaved) return;
     setBusy("autorun-enable");
-    setError(null);
     try {
       await apiFetch(`/api/scripts/autorun/enable?name=${encodeURIComponent(selectedFile)}`, {
         method: "POST",
       });
-      await fetchAutorunStatus();
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
+      await fetchAutorun();
     } finally {
       setBusy(null);
     }
@@ -417,56 +440,25 @@ export function Scripts() {
 
   const handleDisableAutorun = async () => {
     setBusy("autorun-disable");
-    setError(null);
     try {
       await apiFetch("/api/scripts/autorun/disable", { method: "POST" });
-      await fetchAutorunStatus();
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
+      await fetchAutorun();
     } finally {
       setBusy(null);
     }
   };
 
-  const fetchAutorunStatus = async () => {
+  const fetchAutorun = useCallback(async () => {
     try {
       const res = await apiFetch("/api/scripts/autorun/status");
       const data = await res.json() as AutorunStatus;
       setAutorunStatus(data);
-    } catch {
-      /* ignore */
-    }
-  };
+    } catch { /* ignore */ }
+  }, []);
 
-  // -------------------------------------------------------------------------
-  // Delete
-  // -------------------------------------------------------------------------
-
-  const handleDelete = async () => {
-    if (!selectedFile || isUnsaved) return;
-    if (!window.confirm(`Delete "${selectedFile}"?`)) return;
-    setBusy("delete");
-    setError(null);
-    try {
-      await apiFetch(`/api/scripts/files?name=${encodeURIComponent(selectedFile)}`, {
-        method: "DELETE",
-      });
-      setSelectedFile(null);
-      setIsUnsaved(false);
-      setIsDirty(false);
-      setEditorDoc("");
-      setEditorKey((k) => k + 1);
-      await fetchFiles();
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      setBusy(null);
-    }
-  };
+  useEffect(() => {
+    fetchAutorun();
+  }, [fetchAutorun]);
 
   // -------------------------------------------------------------------------
   // Status polling (1 s)
@@ -480,14 +472,10 @@ export function Scripts() {
         const res = await apiFetch("/api/scripts/status");
         const data = await res.json() as ScriptStatus;
         if (alive) setVmStatus(data);
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
       if (alive) setTimeout(tick, 1000);
     };
     tick();
-    // Also fetch autorun status once on mount
-    fetchAutorunStatus();
     return () => { alive = false; };
   }, []);
 
@@ -546,239 +534,300 @@ export function Scripts() {
   // -------------------------------------------------------------------------
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "calc(100vh - 110px)", minHeight: "500px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
 
-      {/* Header row: title + VM status */}
-      <div class="glass-card" style={{ padding: "10px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span class="card-title" style={{ marginBottom: 0 }}>MicroPython Scripts</span>
-            {autorunActive && (
-              <span class="uppercase-tag" style={{ color: "var(--green)", fontSize: "0.7rem" }}>
-                autorun: {autorunName ?? "?"}
-              </span>
-            )}
-          </div>
-          <StatusBadge status={vmStatus} />
-        </div>
-      </div>
-
-      {/* Main editor area */}
-      <div style={{ display: "flex", gap: "12px", flex: 1, minHeight: 0 }}>
-
-        {/* Left pane: file tree */}
-        <div class="glass-card" style={{ width: "180px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "6px", overflow: "hidden" }}>
-          <div class="card-title" style={{ marginBottom: "6px" }}>Files</div>
-
-          {/* New file controls */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <input
-              class="input"
-              placeholder="new-file.py"
-              value={newFileName}
-              style={{ fontSize: "0.78rem", padding: "4px 8px" }}
-              onInput={(e) => setNewFileName((e.currentTarget as HTMLInputElement).value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleNewFile(); }}
-            />
-            <button class="btn" style={{ fontSize: "0.78rem", padding: "4px 8px" }} onClick={handleNewFile}>
-              + New
-            </button>
-          </div>
-
-          <div style={{ width: "100%", height: "1px", background: "var(--border)", margin: "2px 0" }} />
-
-          {/* File list */}
-          <div style={{ overflowY: "auto", flex: 1 }}>
-            {files.length === 0 && (
-              <div class="text-dim" style={{ fontSize: "0.78rem", padding: "4px 0" }}>No files</div>
-            )}
-            {files.map((f) => (
-              <div
-                key={f}
-                onClick={() => handleFileSelect(f)}
-                style={{
-                  padding: "5px 8px",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.82rem",
-                  fontFamily: "var(--mono, monospace)",
-                  background: selectedFile === f && !isUnsaved ? "rgba(59,130,246,0.12)" : "transparent",
-                  color: selectedFile === f && !isUnsaved ? "var(--blue)" : "var(--text-dim)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  transition: "background 0.15s",
-                }}
-              >
-                {f}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Right pane: toolbar + editor */}
-        <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, gap: "8px" }}>
-
-          {/* Toolbar */}
-          <div class="glass-card" style={{ padding: "8px 12px" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-
-              {/* File name display */}
-              {selectedFile && (
-                <span class="mono" style={{ fontSize: "0.82rem", color: isDirty ? "var(--amber)" : "var(--text-dim)", marginRight: "4px" }}>
-                  {selectedFile}{isDirty ? " *" : ""}{isUnsaved ? " (new)" : ""}
+      {/* FIXED HEADER AND EDITOR SECTION */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "calc(100vh - 160px)", minHeight: "650px" }}>
+        {/* Header row: title + VM status */}
+        <div class="glass-card" style={{ padding: "10px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span class="card-title" style={{ marginBottom: 0 }}>MicroPython Scripts</span>
+              {autorunActive && (
+                <span class="uppercase-tag" style={{ color: "var(--green)", fontSize: "0.7rem" }}>
+                  autorun: {autorunName ?? "?"}
                 </span>
               )}
+            </div>
+            <StatusBadge status={vmStatus} />
+          </div>
+        </div>
 
-              <button
-                class="btn primary"
-                disabled={!canSave}
-                onClick={handleSave}
-                title="Save to device"
-              >
-                {busy === "save" ? "Saving…" : "Save"}
-              </button>
+        {/* Main editor area */}
+        <div style={{ display: "flex", gap: "12px", flex: 1, minHeight: 0 }}>
 
-              <button
-                class="btn"
-                disabled={!canRunFile}
-                onClick={handleRunFile}
-                title="Run saved file"
-              >
-                {busy === "run" ? "Running…" : "Run"}
-              </button>
+          {/* Left pane: file tree */}
+          <div class="glass-card" style={{ width: "180px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "6px", overflow: "hidden" }}>
+            <div class="card-title" style={{ marginBottom: "6px" }}>Files</div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                <button
-                  class="btn"
-                  disabled={busy !== null}
-                  onClick={handleEval}
-                  title="Eval editor contents"
-                >
-                  {busy === "eval" ? "Eval…" : "Run (eval)"}
-                </button>
-                <label style={{ fontSize: "0.75rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: "3px", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={persistEval}
-                    onChange={(e) => setPersistEval((e.currentTarget as HTMLInputElement).checked)}
-                  />
-                  persist
-                </label>
-              </div>
-
-              <button
-                class="btn"
-                disabled={busy !== null}
-                onClick={handleStop}
-                title="Stop running script"
-              >
-                {busy === "stop" ? "Stopping…" : "Stop"}
-              </button>
-
-              <button
-                class="btn"
-                disabled={busy !== null}
-                onClick={handleReset}
-                title="Reset MicroPython VM"
-              >
-                {busy === "reset" ? "Resetting…" : "Reset VM"}
-              </button>
-
-              <div style={{ height: "20px", width: "1px", background: "var(--border)" }} />
-
-              <button
-                class={`btn${autorunActive && autorunName === selectedFile ? " primary" : ""}`}
-                disabled={!canSetAutorun}
-                onClick={handleSetAutorun}
-                title="Set as autorun on boot"
-              >
-                {busy === "autorun-enable" ? "Setting…" : "Set autorun"}
-              </button>
-
-              <button
-                class="btn"
-                disabled={!autorunActive || busy !== null}
-                onClick={handleDisableAutorun}
-                title="Disable autorun"
-              >
-                {busy === "autorun-disable" ? "Disabling…" : "Disable autorun"}
-              </button>
-
-              <div style={{ height: "20px", width: "1px", background: "var(--border)" }} />
-
-              <button
-                class="btn"
-                style={{ color: "var(--rose)", borderColor: "rgba(239,68,68,0.3)" }}
-                disabled={!canDelete}
-                onClick={handleDelete}
-                title="Delete file"
-              >
-                {busy === "delete" ? "Deleting…" : "Delete"}
+            {/* New file controls */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <input
+                class="input"
+                placeholder="new-file.py"
+                value={newFileName}
+                style={{ fontSize: "0.78rem", padding: "4px 8px" }}
+                onInput={(e) => setNewFileName((e.currentTarget as HTMLInputElement).value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleNewFile(); }}
+              />
+              <button class="btn" style={{ fontSize: "0.78rem", padding: "4px 8px" }} onClick={handleNewFile}>
+                + New
               </button>
             </div>
 
-            {error && (
-              <div style={{ marginTop: "6px", color: "var(--rose)", fontSize: "0.78rem" }}>
-                {error}
-              </div>
-            )}
+            <div style={{ width: "100%", height: "1px", background: "var(--border)", margin: "2px 0" }} />
+
+            {/* File list */}
+            <div style={{ overflowY: "auto", flex: 1 }}>
+              {files.length === 0 && (
+                <div class="text-dim" style={{ fontSize: "0.78rem", padding: "4px 0" }}>No files</div>
+              )}
+              {files.map((f) => (
+                <div
+                  key={f}
+                  onClick={() => handleFileSelect(f)}
+                  style={{
+                    padding: "5px 8px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "0.82rem",
+                    fontFamily: "var(--mono, monospace)",
+                    background: selectedFile === f && !isUnsaved ? "rgba(59,130,246,0.12)" : "transparent",
+                    color: selectedFile === f && !isUnsaved ? "var(--blue)" : "var(--text-dim)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    transition: "background 0.15s",
+                  }}
+                >
+                  {f}
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* CodeMirror editor */}
-          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            {selectedFile ? (
-              <CodeEditor
-                key={editorKey}
-                initialDoc={editorDoc}
-                onDocChange={handleDocChange}
-                editorViewRef={editorViewRef as any}
-              />
-            ) : (
-              <div
-                class="glass-card"
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "var(--text-muted)",
-                  fontSize: "0.85rem",
-                }}
-              >
-                Select a file or create a new one
+          {/* Right pane: toolbar + editor */}
+          <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, gap: "8px" }}>
+
+            {/* Toolbar */}
+            <div class="glass-card" style={{ padding: "8px 12px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+
+                {/* File name display */}
+                {selectedFile && (
+                  <span class="mono" style={{ fontSize: "0.82rem", color: isDirty ? "var(--amber)" : "var(--text-dim)", marginRight: "4px" }}>
+                    {selectedFile}{isDirty ? " *" : ""}{isUnsaved ? " (new)" : ""}
+                  </span>
+                )}
+
+                <button
+                  class="btn primary"
+                  disabled={!canSave}
+                  onClick={handleSave}
+                  title="Save to device"
+                >
+                  {busy === "save" ? "Saving…" : "Save"}
+                </button>
+
+                <button
+                  class="btn"
+                  disabled={!canRunFile}
+                  onClick={handleRunFile}
+                  title="Run saved file"
+                >
+                  {busy === "run" ? "Running…" : "Run"}
+                </button>
+
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <button
+                    class="btn"
+                    disabled={busy !== null}
+                    onClick={handleEval}
+                    title="Eval editor contents"
+                  >
+                    {busy === "eval" ? "Eval…" : "Run (eval)"}
+                  </button>
+                  <label style={{ fontSize: "0.75rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: "3px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={persistEval}
+                      onChange={(e) => setPersistEval((e.currentTarget as HTMLInputElement).checked)}
+                    />
+                    persist
+                  </label>
+                </div>
+
+                <button
+                  class="btn"
+                  disabled={busy !== null}
+                  onClick={handleStop}
+                  title="Stop running script"
+                >
+                  {busy === "stop" ? "Stopping…" : "Stop"}
+                </button>
+
+                <button
+                  class="btn"
+                  disabled={busy !== null}
+                  onClick={handleReset}
+                  title="Reset MicroPython VM"
+                >
+                  {busy === "reset" ? "Resetting…" : "Reset VM"}
+                </button>
+
+                <div style={{ height: "20px", width: "1px", background: "var(--border)" }} />
+
+                <button
+                  class={`btn${autorunActive && autorunName === selectedFile ? " primary" : ""}`}
+                  disabled={!canSetAutorun}
+                  onClick={handleSetAutorun}
+                  title="Set as autorun on boot"
+                >
+                  {busy === "autorun-enable" ? "Setting…" : "Set autorun"}
+                </button>
+
+                <button
+                  class="btn"
+                  disabled={!autorunActive || busy !== null}
+                  onClick={handleDisableAutorun}
+                  title="Disable autorun"
+                >
+                  {busy === "autorun-disable" ? "Disabling…" : "Disable autorun"}
+                </button>
+
+                <div style={{ height: "20px", width: "1px", background: "var(--border)" }} />
+
+                <button
+                  class="btn"
+                  style={{ color: "var(--rose)", borderColor: "rgba(239,68,68,0.3)" }}
+                  disabled={!canDelete}
+                  onClick={handleDelete}
+                  title="Delete file"
+                >
+                  {busy === "delete" ? "Deleting…" : "Delete"}
+                </button>
               </div>
-            )}
+
+              {error && (
+                <div style={{ marginTop: "6px", color: "var(--rose)", fontSize: "0.78rem" }}>
+                  {error}
+                </div>
+              )}
+            </div>
+
+            {/* CodeMirror editor */}
+            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              {selectedFile ? (
+                <CodeEditor
+                  key={editorKey}
+                  initialDoc={editorDoc}
+                  onDocChange={handleDocChange}
+                  editorViewRef={editorViewRef as any}
+                />
+              ) : (
+                <div
+                  class="glass-card"
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-muted)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Select a file or create a new one
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom pane: logs */}
+        <div class="glass-card" style={{ height: "180px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "0", padding: "10px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+            <span class="card-title">Script Logs</span>
+            <button
+              class="btn"
+              style={{ fontSize: "0.72rem", padding: "2px 8px" }}
+              onClick={() => setLogs("")}
+            >
+              Clear
+            </button>
+          </div>
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              fontFamily: "\"JetBrains Mono Variable\", \"JetBrains Mono\", monospace",
+              fontSize: "0.78rem",
+              lineHeight: "1.5",
+              color: "var(--text-dim)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}
+          >
+            {logs || <span style={{ color: "var(--text-muted)" }}>(no output yet)</span>}
+            <div ref={logsEndRef} />
           </div>
         </div>
       </div>
 
-      {/* Bottom pane: logs */}
-      <div class="glass-card" style={{ height: "180px", display: "flex", flexDirection: "column", gap: "0", padding: "10px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-          <span class="card-title">Script Logs</span>
-          <button
-            class="btn"
-            style={{ fontSize: "0.72rem", padding: "2px 8px" }}
-            onClick={() => setLogs("")}
-          >
-            Clear
-          </button>
-        </div>
-        <div
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            fontFamily: "\"JetBrains Mono Variable\", \"JetBrains Mono\", monospace",
-            fontSize: "0.78rem",
-            lineHeight: "1.5",
-            color: "var(--text-dim)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-          }}
-        >
-          {logs || <span style={{ color: "var(--text-muted)" }}>(no output yet)</span>}
-          <div ref={logsEndRef} />
+      {/* SCROLLABLE API DOCUMENTATION SECTION */}
+      <div class="glass-card" style={{ display: "flex", flexDirection: "column", padding: "16px", marginTop: "12px" }}>
+        <h3 class="card-title" style={{ marginBottom: "12px" }}>On-Device Python API</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "20px" }}>
+          
+          <div>
+            <h4 class="uppercase-tag" style={{ color: "var(--blue)", marginBottom: "8px" }}>Module: bugbuster</h4>
+            <div style={{ fontSize: "0.82rem", lineHeight: "1.4" }}>
+              <code style={{ color: "var(--text-muted)" }}>bugbuster.sleep(ms)</code><br/>
+              <p class="text-dim" style={{ marginBottom: "8px" }}>Always use this for delays (supports cancellation).</p>
+              
+              <code style={{ color: "var(--text-muted)" }}>ch = bugbuster.Channel(id)</code><br/>
+              <p class="text-dim" style={{ marginBottom: "4px" }}>id 0-3. Methods: <code>set_function(f)</code>, <code>set_voltage(v)</code>, <code>read_voltage()</code>, <code>set_do(val)</code>.</p>
+              
+              <code style={{ color: "var(--text-muted)" }}>i2c = bugbuster.I2C(sda_io, scl_io, ...)</code><br/>
+              <p class="text-dim" style={{ marginBottom: "4px" }}>IO terminals 1-12. Methods: <code>scan()</code>, <code>writeto(addr, b)</code>, <code>readfrom(addr, n)</code>.</p>
+              
+              <code style={{ color: "var(--text-muted)" }}>spi = bugbuster.SPI(sck_io, ...)</code><br/>
+              <p class="text-dim" style={{ marginBottom: "4px" }}>Methods: <code>transfer(buf)</code>.</p>
+              
+              <code style={{ color: "var(--text-muted)" }}>bugbuster.http_get(url, ...)</code><br/>
+              <code style={{ color: "var(--text-muted)" }}>bugbuster.http_post(url, body, ...)</code><br/>
+              <code style={{ color: "var(--text-muted)" }}>bugbuster.mqtt_publish(topic, payload, ...)</code>
+            </div>
+          </div>
+
+          <div>
+            <h4 class="uppercase-tag" style={{ color: "var(--blue)", marginBottom: "8px" }}>Frozen Helpers</h4>
+            <div style={{ fontSize: "0.82rem", lineHeight: "1.4" }}>
+              <span class="text-muted">import bb_helpers</span><br/>
+              <p class="text-dim" style={{ marginBottom: "8px" }}><code>settle(ms)</code>, <code>dac_ramp(ch, lo, hi, step, settle)</code>.</p>
+              
+              <span class="text-muted">import bb_logging</span><br/>
+              <p class="text-dim" style={{ marginBottom: "8px" }}><code>info(msg)</code>, <code>warn(msg)</code>, <code>error(msg)</code>.</p>
+              
+              <span class="text-muted">import bb_devices</span><br/>
+              <p class="text-dim" style={{ marginBottom: "4px" }}><code>TMP102(i2c)</code>, <code>BMP280(i2c)</code>, <code>MCP3008(spi)</code>.</p>
+            </div>
+          </div>
+
+          <div>
+            <h4 class="uppercase-tag" style={{ color: "var(--blue)", marginBottom: "8px" }}>Channel Functions</h4>
+            <div style={{ fontSize: "0.78rem", color: "var(--text-dim)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
+              <div>FUNC_HIGH_IMP (0)</div>
+              <div>FUNC_VOUT (1)</div>
+              <div>FUNC_IOUT (2)</div>
+              <div>FUNC_VIN (3)</div>
+              <div>FUNC_IIN_EXT_PWR (4)</div>
+              <div>FUNC_IIN_LOOP_PWR (5)</div>
+              <div>FUNC_RES_MEAS (6)</div>
+              <div>FUNC_DIN_LOGIC (7)</div>
+              <div>FUNC_DIN_LOOP (8)</div>
+            </div>
+          </div>
+
         </div>
       </div>
 

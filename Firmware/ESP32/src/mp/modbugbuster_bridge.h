@@ -17,6 +17,7 @@ bool bugbuster_mp_channel_set_do(uint8_t channel, bool value);
 // ── I2C binding (Phase 4) ────────────────────────────────────────────────────
 bool bugbuster_mp_i2c_setup(uint8_t sda_io, uint8_t scl_io, uint32_t freq_hz,
                              bool internal_pullups, float supply_v, float vlogic_v,
+                             bool allow_split_supplies,
                              char *err, size_t err_len);
 bool bugbuster_mp_i2c_scan(uint8_t start, uint8_t stop, bool skip_reserved,
                             uint16_t timeout_ms, uint8_t *out_addrs, size_t max,
@@ -32,6 +33,7 @@ bool bugbuster_mp_i2c_write_read(uint8_t addr, const uint8_t *wr, size_t wr_len,
 bool bugbuster_mp_spi_setup(uint8_t sck_io, uint8_t mosi_io, uint8_t miso_io,
                              uint8_t cs_io, uint32_t freq_hz, uint8_t mode,
                              float supply_v, float vlogic_v,
+                             bool allow_split_supplies,
                              char *err, size_t err_len);
 bool bugbuster_mp_spi_transfer(const uint8_t *tx, size_t tx_len,
                                 uint8_t *rx, size_t *inout_rx_len,

@@ -405,6 +405,7 @@ Classic examples (still valid):
 - **`05_i2c_register_read.py`** — read temperature sensor register
 - **`06_spi_flash_jedec_id.py`** — read JEDEC ID from SPI flash
 - **`07_cooperative_sleep.py`** — demonstrate graceful cancellation with `KeyboardInterrupt`
+- **`14_vfs_import.py`** — demonstrates importing user-uploaded modules from SPIFFS
 
 ---
 
@@ -484,7 +485,7 @@ This allows you to:
 
 ## Limitations
 
-1. **No VFS** — `MICROPY_VFS` is disabled. Scripts cannot `import` user modules from `/spiffs/`. Multi-file projects must inline everything into one script or use frozen modules (which only the firmware maintainer can add).
+1. **VFS enabled** — `MICROPY_VFS` is active. Scripts can `import` user modules from `/spiffs/scripts/`. Upload your `.py` files via the web UI or API, and they are immediately importable by other scripts.
 
 2. **No threading** — `MICROPY_PY_THREAD` is disabled. The `_thread` module is not available.
 
@@ -500,7 +501,7 @@ This allows you to:
 
 6. **HTTP routes require auth** — all `/api/scripts/*` endpoints need `X-BugBuster-Admin-Token` header (BBP/USB does not require auth — cable = trust).
 
-7. **Available modules** — only `bugbuster`, `bb_helpers`, `bb_devices`, `bb_logging`, and Python built-ins (`print`, `range`, `len`, `hex`, `bytes`, `int`, `float`, `list`, `dict`, `str`, exception types, etc.). No `time`, `os`, `random`, `socket`, or file I/O.
+7. **Available modules** — `bugbuster`, `bb_helpers`, `bb_devices`, `bb_logging`, and Python built-ins. VFS allows importing any user file from `/spiffs/scripts/`. No `time`, `os`, `random`, `socket` (use `bugbuster` equivalents).
 
 ---
 

@@ -56,4 +56,21 @@ void mp_hal_set_interrupt_char(int c);
 void *bb_native_code_commit(void *buf, size_t len, void *reloc);
 void  bb_native_code_free_all(void);
 
+// ── VFS POSIX support ────────────────────────────────────────────────────────
+#include <errno.h>
+#define MP_HAL_RETRY_SYSCALL(ret, syscall, raise) \
+    do { \
+        ret = syscall; \
+    } while (ret == -1 && errno == EINTR); \
+    if (ret == -1) { \
+        int err = errno; \
+        raise; \
+    }
+
+#include "poll.h"
+static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    (void)fds; (void)nfds; (void)timeout;
+    return 0;
+}
+
 #endif // MICROPY_INCLUDED_BUGBUSTER_MPHALPORT_H

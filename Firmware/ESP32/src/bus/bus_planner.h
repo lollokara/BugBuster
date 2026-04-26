@@ -36,6 +36,7 @@ extern "C" {
 bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
                             uint32_t freq_hz, bool internal_pullups,
                             float supply_v, float vlogic_v,
+                            bool allow_split_supplies,
                             char *err, size_t err_len);
 
 /**
@@ -62,6 +63,7 @@ bool bus_planner_apply_spi(uint8_t sck_io,
                             uint8_t cs_io_or_0,
                             uint32_t freq_hz, uint8_t mode,
                             float supply_v, float vlogic_v,
+                            bool allow_split_supplies,
                             char *err, size_t err_len);
 
 /**

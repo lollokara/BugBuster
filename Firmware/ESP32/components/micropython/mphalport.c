@@ -170,21 +170,21 @@ uintptr_t mp_hal_stdio_poll(uintptr_t poll_flags) {
 #if !MICROPY_VFS
 
 // mp_import_stat — filesystem stat for the import system.
-// No VFS in Phase 1: all paths report "does not exist".
+// Used when VFS is disabled: all paths report "does not exist".
 mp_import_stat_t mp_import_stat(const char *path) {
     (void)path;
     return MP_IMPORT_STAT_NO_EXIST;
 }
 
 // mp_lexer_new_from_file — called by builtinimport.c even with VFS disabled.
-// Raise OSError: no filesystem available in Phase 1.
+// Raise OSError: no filesystem available when VFS is off.
 mp_lexer_t *mp_lexer_new_from_file(qstr filename) {
     mp_raise_OSError(MP_ENOENT);
     return NULL; // unreachable
 }
 
 // mp_builtin_open / mp_builtin_open_obj — port must define when MICROPY_VFS=0.
-// Raise OSError: no filesystem in Phase 1.
+// Raise OSError: no filesystem available when VFS is off.
 mp_obj_t mp_builtin_open(size_t n_args, const mp_obj_t *args, mp_map_t *kwargs) {
     (void)n_args; (void)args; (void)kwargs;
     mp_raise_OSError(MP_ENOENT);

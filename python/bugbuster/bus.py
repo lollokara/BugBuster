@@ -290,6 +290,12 @@ class BugBusterBusManager:
         This performs the side effects described by :meth:`plan_i2c`: VLOGIC,
         VADJ, e-fuse, level-shifter OE, MUX state, then firmware I2C setup.
         """
+        if pullups == "internal":
+            import logging
+            logging.getLogger("bugbuster").warning(
+                "Internal pullups are weak (~45k). External pullups are highly recommended for I2C."
+            )
+
         plan = self.plan_i2c(
             sda=sda,
             scl=scl,

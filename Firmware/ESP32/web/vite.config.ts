@@ -38,7 +38,7 @@ function gzipEmitter(): Plugin {
         // resolve to window.__VITE_PRELOAD__ at runtime and cause a crash if
         // it is a function with .length > 0).
         if (raw.includes("__VITE_PRELOAD__")) {
-          raw = Buffer.from(raw.toString("utf-8").replace(/__VITE_PRELOAD__/g, "[]"), "utf-8");
+          raw = Buffer.from(raw.toString("utf-8").replace(/__VITE_PRELOAD__/g, "void 0"), "utf-8");
         }
         const source = raw;
         if (source.length < 1024) continue;
@@ -74,7 +74,7 @@ function preloadPolyfill(): Plugin {
     apply: "build",
     renderChunk(code) {
       if (code.includes("__VITE_PRELOAD__")) {
-        return { code: code.replace(/__VITE_PRELOAD__/g, "((f)=>f())"), map: null };
+        return { code: code.replace(/__VITE_PRELOAD__/g, "void 0"), map: null };
       }
       return null;
     },
