@@ -1889,7 +1889,12 @@ static esp_err_t handle_post_selftest_calibrate(httpd_req_t *req)
     cJSON *body = recv_json_body(req);
     if (!body) return send_error(req, 400, "Invalid JSON");
 
-    int ch = cJSON_GetObjectItem(body, "channel")->valueint;
+    cJSON *channel_item = cJSON_GetObjectItem(body, "channel");
+    if (!channel_item || !cJSON_IsNumber(channel_item)) {
+        cJSON_Delete(body);
+        return send_error(req, 400, "Missing numeric field: channel");
+    }
+    int ch = channel_item->valueint;
     cJSON_Delete(body);
 
     bool ok = selftest_start_auto_calibrate((uint8_t)ch);
