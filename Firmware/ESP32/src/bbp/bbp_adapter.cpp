@@ -9,6 +9,11 @@
 
 static const char *TAG = "bbp_adapter";
 
+// BBP is cable-gated (USB-only): any connected host is implicitly admin.
+// When a BBP-level auth handshake is added, replace this stub with a
+// per-session flag checked here.
+static inline bool bbp_session_is_admin(void) { return true; }
+
 int bbp_adapter_dispatch(uint8_t cmd_id,
                          const uint8_t *payload, size_t payload_len,
                          uint8_t *rsp_buf, size_t *rsp_len)
@@ -16,6 +21,11 @@ int bbp_adapter_dispatch(uint8_t cmd_id,
     const CmdDescriptor *desc = cmd_registry_lookup_opcode((uint16_t)cmd_id);
     if (!desc) {
         return -1;  // Not in registry — fall through to legacy switch
+    }
+
+    if ((desc->flags & CMD_FLAG_ADMIN_REQUIRED) && !bbp_session_is_admin()) {
+        ESP_LOGW(TAG, "cmd 0x%02X requires admin auth — rejected", cmd_id);
+        return cmd_error_to_bbp(CMD_ERR_AUTH);
     }
 
     size_t out_len = 0;
