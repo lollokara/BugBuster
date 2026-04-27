@@ -505,10 +505,17 @@ static void taskMicroPython(void *pvParam)
         if (s_mode == SCRIPTING_MODE_EPHEMERAL) {
             vm_do_deinit();
         } else {
-            // Check hard watermark immediately after eval
+            // Check watermarks immediately after eval
             gc_info_t info;
             gc_info(&info);
             size_t used = info.total - info.free;
+            // Soft watermark: collect to recover fragmented blocks (V2-A spec §4)
+            if (used * 100u >= (size_t)MP_HEAP_SIZE * MP_HEAP_SOFT_WATERMARK_PCT) {
+                ESP_LOGD(TAG, "Persistent VM: soft watermark after eval (%zu/%u), collecting",
+                         used, (unsigned)MP_HEAP_SIZE);
+                gc_collect();
+            }
+            // Hard watermark: reset VM to prevent OOM on next eval
             if (used * 100u >= (size_t)MP_HEAP_SIZE * MP_HEAP_HARD_WATERMARK_PCT) {
                 ESP_LOGW(TAG, "Persistent VM: hard watermark after eval (%zu/%u), resetting",
                          used, (unsigned)MP_HEAP_SIZE);
