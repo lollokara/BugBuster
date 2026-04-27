@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"ping -c 3 -W 1500 192.168.3.128 2>&1 | tail -4\\necho \\\"---\\\"\\nsleep 5\\ncurl -s --max-time 5 http://192.168.3.128/api/status -H \\\"X-BugBuster-Admin-Token: bef2a99ea77da09ded1d29e90d23b4c3aa...",
-  "error": "Exit code 28\n\n--- 192.168.3.128 ping statistics ---\n3 packets transmitted, 2 packets received, 33.3% packet loss\nround-trip min/avg/max/stddev = 68.734/164.856/260.979/96.123 ms\n---\n\nHTTP 000",
-  "timestamp": "2026-04-26T14:38:49.626Z",
-  "retry_count": 2
-}

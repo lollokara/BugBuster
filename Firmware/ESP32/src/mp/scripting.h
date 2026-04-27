@@ -72,6 +72,14 @@ void scripting_stop(void);
 size_t scripting_get_logs(char *out, size_t max);
 
 /**
+ * Copy log bytes written at or after absolute offset `since` without draining.
+ * `out_next` receives the next absolute offset to request. If `since` is older
+ * than the retained ring window, copying starts from the oldest retained byte.
+ * Thread-safe.
+ */
+size_t scripting_get_logs_since(char *out, size_t max, uint64_t since, uint64_t *out_next);
+
+/**
  * Push `len` bytes of script stdout into the log ring.
  * Called by mp_hal_stdout_tx_strn — also tees to stderr for IDF console.
  * Thread-safe.

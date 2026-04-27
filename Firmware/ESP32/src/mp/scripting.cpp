@@ -70,6 +70,7 @@ static SemaphoreHandle_t    s_status_mutex   = NULL;
 static char     s_log_ring[MP_LOG_RING_SIZE];
 static size_t   s_log_head = 0;   // write position
 static size_t   s_log_used = 0;   // bytes in ring
+static uint64_t s_log_total = 0;  // absolute bytes accepted into the ring
 static bool     s_log_truncated = false;
 
 // Stop flag — volatile, written by scripting_stop(), read by task/hooks
@@ -105,6 +106,7 @@ extern "C" bool  scripting_run_string(const char *src, size_t len, bool persist)
 extern "C" bool  scripting_run_file(const char *name, uint32_t *out_id);
 extern "C" void  scripting_stop(void);
 extern "C" size_t scripting_get_logs(char *out, size_t max);
+extern "C" size_t scripting_get_logs_since(char *out, size_t max, uint64_t since, uint64_t *out_next);
 extern "C" void  scripting_get_status(ScriptStatus *out);
 extern "C" void  scripting_reset_vm(void);
 
@@ -120,48 +122,17 @@ static void log_push_locked(const char *str, size_t len)
 {
     if (len == 0) return;
 
-    // How many bytes fit?
-    size_t free_space = MP_LOG_RING_SIZE - s_log_used;
-    if (free_space == 0) {
-        if (!s_log_truncated) {
-            s_log_truncated = true;
-            // We can't push anything — ring is full
-        }
-        return;
-    }
-
-    size_t to_write = len;
-    bool will_truncate = false;
-    static const char trunc_marker[] = "[truncated]\n";
-    static const size_t trunc_len = sizeof(trunc_marker) - 1;
-
-    if (to_write > free_space) {
-        // Write what fits, leave room for the truncation marker if possible
-        if (free_space > trunc_len) {
-            to_write = free_space - trunc_len;
-            will_truncate = true;
+    // Keep the newest output. Browser log polling is non-destructive, so this
+    // ring must overwrite old bytes instead of becoming permanently full.
+    for (size_t i = 0; i < len; i++) {
+        s_log_ring[s_log_head] = str[i];
+        s_log_head = (s_log_head + 1) % MP_LOG_RING_SIZE;
+        if (s_log_used < MP_LOG_RING_SIZE) {
+            s_log_used++;
         } else {
-            to_write = free_space;
+            s_log_truncated = true;
         }
-    }
-
-    // Write bytes into ring (linear, since we use head+used as linear index
-    // for simplicity — drain clears the ring so wrap is rare)
-    size_t write_pos = s_log_head;
-    for (size_t i = 0; i < to_write; i++) {
-        s_log_ring[(write_pos + i) % MP_LOG_RING_SIZE] = str[i];
-    }
-    s_log_head = (s_log_head + to_write) % MP_LOG_RING_SIZE;
-    s_log_used += to_write;
-
-    if (will_truncate && !s_log_truncated) {
-        s_log_truncated = true;
-        // Append the marker
-        for (size_t i = 0; i < trunc_len; i++) {
-            s_log_ring[(s_log_head + i) % MP_LOG_RING_SIZE] = trunc_marker[i];
-        }
-        s_log_head = (s_log_head + trunc_len) % MP_LOG_RING_SIZE;
-        s_log_used += trunc_len;
+        s_log_total++;
     }
 }
 
@@ -174,8 +145,9 @@ void scripting_log_push(const char *str, size_t len)
     // Tee to stderr for IDF console visibility
     fwrite(str, 1, len, stderr);
 
-    // V2-B disabled: would forward to WebSocket REPL when implemented.
-    // repl_ws_forward(str, len);
+    // Also feed the browser REPL terminal. repl_ws_forward() is non-blocking
+    // and becomes a no-op until a WebSocket session is authenticated.
+    repl_ws_forward(str, len);
 
     if (!s_log_mutex) return;
     if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -209,6 +181,36 @@ size_t scripting_get_logs(char *out, size_t max)
         s_log_truncated = false;
     }
 
+    xSemaphoreGive(s_log_mutex);
+    return to_copy;
+}
+
+size_t scripting_get_logs_since(char *out, size_t max, uint64_t since, uint64_t *out_next)
+{
+    if (!out || max == 0 || !s_log_mutex) {
+        if (out_next) *out_next = 0;
+        return 0;
+    }
+
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        if (out_next) *out_next = since;
+        return 0;
+    }
+
+    const uint64_t base = s_log_total - s_log_used;
+    uint64_t start = since < base ? base : since;
+    if (start > s_log_total) start = s_log_total;
+
+    uint64_t available = s_log_total - start;
+    size_t to_copy = available < max ? (size_t)available : max;
+    size_t tail = (s_log_head + MP_LOG_RING_SIZE - s_log_used) % MP_LOG_RING_SIZE;
+    size_t offset = (size_t)(start - base);
+
+    for (size_t i = 0; i < to_copy; i++) {
+        out[i] = s_log_ring[(tail + offset + i) % MP_LOG_RING_SIZE];
+    }
+
+    if (out_next) *out_next = start + to_copy;
     xSemaphoreGive(s_log_mutex);
     return to_copy;
 }
@@ -649,10 +651,11 @@ bool scripting_run_file(const char *name, uint32_t *out_id)
     }
     buf[file_len] = '\0';
 
-    ScriptCmd cmd;
+    ScriptCmd cmd = {};
     cmd.id      = s_next_id++;
     cmd.payload = (char *)buf;
     cmd.len     = file_len;
+    cmd.persist = false;
 
     if (out_id) *out_id = cmd.id;
 

@@ -11,8 +11,8 @@
 // =============================================================================
 
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { IDisposable } from "@xterm/xterm";
 import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { getCachedToken, PairingRequiredError } from "../../api/client";
 import { deviceMac } from "../../state/signals";
@@ -21,7 +21,7 @@ import { deviceMac } from "../../state/signals";
 // Connection status type
 // ---------------------------------------------------------------------------
 
-type ConnStatus = "disconnected" | "connecting" | "auth" | "connected" | "error";
+type ConnStatus = "disconnected" | "connecting" | "auth" | "connected" | "disconnecting" | "error";
 
 // ---------------------------------------------------------------------------
 // Build the WebSocket URL relative to the current origin.
@@ -40,8 +40,8 @@ function wsUrl(path: string): string {
 export function Repl() {
   const termRef = useRef<HTMLDivElement>(null);
   const termInstance = useRef<Terminal | null>(null);
-  const fitAddon = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const inputDisposable = useRef<IDisposable | null>(null);
   const [status, setStatus] = useState<ConnStatus>("disconnected");
   const [errorMsg, setErrorMsg] = useState<string>("");
 
@@ -68,29 +68,42 @@ export function Repl() {
       },
       fontFamily: '"JetBrains Mono Variable", "JetBrains Mono", "Fira Code", monospace',
       fontSize: 13,
+      lineHeight: 1.35,
       cursorBlink: true,
       scrollback: 2000,
+      convertEol: true,
+      cols: 96,
+      rows: 8,
     });
 
-    const fit = new FitAddon();
-    term.loadAddon(fit);
     term.open(termRef.current);
-    fit.fit();
 
     termInstance.current = term;
-    fitAddon.current = fit;
+
+    const resizeTerminal = () => {
+      const el = termRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const cols = Math.max(24, Math.floor(rect.width / 8));
+      const rows = Math.max(4, Math.floor(rect.height / 18));
+      try {
+        term.resize(cols, rows);
+        term.scrollToBottom();
+      } catch {
+        /* ignore during first layout */
+      }
+    };
+
+    requestAnimationFrame(resizeTerminal);
 
     // Resize observer: re-fit when the container dimensions change.
-    const ro = new ResizeObserver(() => {
-      try { fit.fit(); } catch { /* ignore during teardown */ }
-    });
+    const ro = new ResizeObserver(resizeTerminal);
     ro.observe(termRef.current);
 
     return () => {
       ro.disconnect();
       term.dispose();
       termInstance.current = null;
-      fitAddon.current = null;
     };
   }, []);
 
@@ -127,11 +140,16 @@ export function Repl() {
       if (termInstance.current) {
         termInstance.current.write(
           typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data),
+          () => {
+            termInstance.current?.scrollToBottom();
+          },
         );
       }
     };
 
     ws.onclose = (ev) => {
+      inputDisposable.current?.dispose();
+      inputDisposable.current = null;
       wsRef.current = null;
       const code = ev.code;
       if (code === 4001) {
@@ -155,21 +173,32 @@ export function Repl() {
     };
 
     // Pipe xterm input to WebSocket.
-    termInstance.current?.onData((data) => {
+    inputDisposable.current?.dispose();
+    inputDisposable.current = termInstance.current?.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
       }
-    });
+    }) ?? null;
   };
 
   const disconnect = () => {
-    wsRef.current?.close();
-    wsRef.current = null;
-    setStatus("disconnected");
+    const ws = wsRef.current;
+    if (!ws) {
+      setStatus("disconnected");
+      return;
+    }
+    setStatus("disconnecting");
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close(1000, "client disconnect");
+    }
+    requestAnimationFrame(() => termInstance.current?.scrollToBottom());
   };
 
   // Disconnect on unmount.
-  useEffect(() => () => { wsRef.current?.close(); }, []);
+  useEffect(() => () => {
+    inputDisposable.current?.dispose();
+    wsRef.current?.close(1000, "component unmount");
+  }, []);
 
   // -------------------------------------------------------------------------
   // Status indicator helpers
@@ -180,6 +209,7 @@ export function Repl() {
     connecting:   "var(--amber)",
     auth:         "var(--amber)",
     connected:    "var(--green)",
+    disconnecting: "var(--amber)",
     error:        "var(--rose)",
   };
 
@@ -188,6 +218,7 @@ export function Repl() {
     connecting:   "Connecting…",
     auth:         "Authenticating…",
     connected:    "Connected",
+    disconnecting: "Disconnecting...",
     error:        "Error",
   };
 
@@ -231,14 +262,14 @@ export function Repl() {
         <div style={{ marginLeft: "auto", display: "flex", gap: "8px" }}>
           <button
             class="btn primary"
-            disabled={status === "connecting" || status === "auth" || status === "connected"}
+            disabled={status === "connecting" || status === "auth" || status === "connected" || status === "disconnecting"}
             onClick={connect}
           >
             Connect
           </button>
           <button
             class="btn"
-            disabled={status === "disconnected" || status === "error"}
+            disabled={status === "disconnected" || status === "disconnecting" || status === "error"}
             onClick={disconnect}
           >
             Disconnect
@@ -248,14 +279,8 @@ export function Repl() {
 
       {/* xterm.js terminal */}
       <div
+        class="script-repl-terminal"
         ref={termRef}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          borderRadius: "var(--radius-sm)",
-          overflow: "hidden",
-          background: "#0d1117",
-        }}
       />
     </div>
   );

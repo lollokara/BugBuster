@@ -223,6 +223,18 @@ static void session_close(void)
     ESP_LOGI(TAG, "REPL session closed");
 }
 
+static void session_ctx_free(void *ctx)
+{
+    if (!ctx) return;
+
+    int fd = *((int *)ctx);
+    free(ctx);
+
+    if (s_repl_fd == fd) {
+        session_close();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket URI handler
 // ---------------------------------------------------------------------------
@@ -246,6 +258,15 @@ static esp_err_t handle_repl_ws(httpd_req_t *req)
         s_repl_fd        = fd;
         s_authenticated  = false;
         s_line_len       = 0;
+
+        int *session_fd = (int *)malloc(sizeof(int));
+        if (!session_fd) {
+            ESP_LOGE(TAG, "OOM for REPL session context");
+            session_close();
+            return ESP_ERR_NO_MEM;
+        }
+        *session_fd = fd;
+        httpd_sess_set_ctx(req->handle, fd, session_fd, session_ctx_free);
 
         // Ensure ring is clean.
         if (s_tx_mutex && xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -401,27 +422,20 @@ static esp_err_t handle_repl_ws(httpd_req_t *req)
 
 void repl_ws_register(httpd_handle_t server)
 {
-    ESP_LOGI(TAG, "[DBG-1] repl_ws_register entry server=%p", server);
     s_server = server;
-    ESP_LOGI(TAG, "[DBG-2] s_server set");
 
     // One-time init of tx synchronisation primitives.
     if (!s_tx_mutex) {
-        ESP_LOGI(TAG, "[DBG-3a] creating tx_mutex");
         s_tx_mutex = xSemaphoreCreateMutex();
-        ESP_LOGI(TAG, "[DBG-3b] tx_mutex=%p", s_tx_mutex);
     }
     if (!s_tx_sem) {
-        ESP_LOGI(TAG, "[DBG-4a] creating tx_sem (max=%u)", (unsigned)REPL_TX_RING_SIZE);
         s_tx_sem = xSemaphoreCreateCounting(REPL_TX_RING_SIZE, 0);
-        ESP_LOGI(TAG, "[DBG-4b] tx_sem=%p", s_tx_sem);
     }
 
     if (!s_tx_mutex || !s_tx_sem) {
-        ESP_LOGE(TAG, "[DBG-5] Failed to create REPL tx sync primitives");
+        ESP_LOGE(TAG, "Failed to create REPL tx sync primitives");
         return;
     }
-    ESP_LOGI(TAG, "[DBG-6] sync primitives ok");
 
     httpd_uri_t uri = {
         .uri                   = "/api/scripts/repl/ws",
@@ -432,10 +446,8 @@ void repl_ws_register(httpd_handle_t server)
         .handle_ws_control_frames = false,
         .supported_subprotocol = NULL,
     };
-    ESP_LOGI(TAG, "[DBG-7] uri struct built, about to register");
 
     esp_err_t err = httpd_register_uri_handler(server, &uri);
-    ESP_LOGI(TAG, "[DBG-8] register returned err=%d", (int)err);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register /api/scripts/repl/ws: %d", err);
     } else {

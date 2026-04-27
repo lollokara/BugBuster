@@ -1,103 +1,76 @@
-// =============================================================================
-// Scripts tab — MicroPython on-device scripting (V2-F).
-//
-// Endpoints consumed:
-//   GET  /api/scripts/files              — list files
-//   POST /api/scripts/files?name=X       — upload (raw body)
-//   GET  /api/scripts/files/get?name=X   — download (raw text)
-//   DELETE /api/scripts/files?name=X     — delete
-//   POST /api/scripts/eval?persist=t|f   — eval (raw body)
-//   POST /api/scripts/run-file?name=X    — run saved file
-//   POST /api/scripts/stop               — stop running script
-//   POST /api/scripts/reset              — reset MicroPython VM
-//   GET  /api/scripts/status             — VM status (polls 1 s)
-//   GET  /api/scripts/logs               — drain log ring (polls 500 ms)
-//   GET  /api/scripts/autorun/status     — autorun info
-//   POST /api/scripts/autorun/enable?name=X
-//   POST /api/scripts/autorun/disable
-//
-// V2-B: <Repl /> here when V2-B lands
-// =============================================================================
-
-import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { EditorView, lineNumbers, keymap } from "@codemirror/view";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import type { ComponentChildren } from "preact";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { EditorState, Prec } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { closeBrackets, autocompletion } from "@codemirror/autocomplete";
 import { python } from "@codemirror/lang-python";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { closeBrackets, autocompletion } from "@codemirror/autocomplete";
-import { bugbusterCompletions } from "./completions";
-import {
-  ADMIN_TOKEN_HEADER,
-  getCachedToken,
-  PairingRequiredError,
-} from "../../api/client";
+import { api, PairingRequiredError, type AutorunStatus, type ScriptStatus, type ScriptStorageStatus } from "../../api/client";
 import { deviceMac } from "../../state/signals";
+import { bugbusterCompletions } from "./completions";
+import { apiDocs, functionConstants, type ApiDocEntry } from "./apiDocs";
+import { Repl } from "./Repl";
 
-// ---------------------------------------------------------------------------
-// Auth helper — raw fetch with admin token attached.
-// ---------------------------------------------------------------------------
+const SCRIPT_UI_BUILD = "scripts-fix-20260427-1150";
 
-function authHeaders(mac: string | null): Record<string, string> {
-  const h: Record<string, string> = {};
-  if (mac) {
-    const tok = getCachedToken(mac);
-    if (!tok) {
-      window.dispatchEvent(new CustomEvent("bb:pairing-required"));
-      throw new PairingRequiredError();
-    }
-    h[ADMIN_TOKEN_HEADER] = tok;
-  }
-  return h;
-}
-
-async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const mac = deviceMac.value;
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init.headers as Record<string, string> | undefined),
-      ...authHeaders(mac),
-    },
-  });
-  if (res.status === 401) {
-    if (mac) {
-      const { clearCachedToken } = await import("../../api/client");
-      clearCachedToken(mac);
-    }
-    window.dispatchEvent(new CustomEvent("bb:pairing-required"));
-    throw new PairingRequiredError();
-  }
-  return res;
-}
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface ScriptStatus {
-  mode?: string;            // "ephemeral" | "persistent"
-  globalsBytes?: number;
-  watermarkSoftHit?: boolean;
-  autoResetCount?: number;
-  lastError?: string;
-  running?: boolean;
-  scriptId?: number;
-}
-
-interface AutorunStatus {
-  enabled?: boolean;
-  name?: string;
-}
-
-// ---------------------------------------------------------------------------
-// CodeMirror editor sub-component
-// ---------------------------------------------------------------------------
+type PanelId = "files" | "device" | "docs";
+type BottomPanel = "logs" | "repl";
 
 interface EditorProps {
   initialDoc: string;
   onDocChange: (doc: string) => void;
-  editorViewRef: React.MutableRefObject<EditorView | null>;
+  editorViewRef: { current: EditorView | null };
+}
+
+interface DevicePanelState {
+  storage: ScriptStorageStatus | null;
+  usbpd: any | null;
+  diagnostics: any | null;
+  selftest: any | null;
+  error: string | null;
+}
+
+const EMPTY_DEVICE_PANEL: DevicePanelState = {
+  storage: null,
+  usbpd: null,
+  diagnostics: null,
+  selftest: null,
+  error: null,
+};
+
+function ensureScriptName(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return trimmed.endsWith(".py") ? trimmed : `${trimmed}.py`;
+}
+
+function formatBytes(value: number | undefined): string {
+  if (value === undefined || Number.isNaN(value)) return "--";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function normalizeMode(mode: ScriptStatus["mode"]): string {
+  if (mode === "persistent" || mode === 1) return "Persistent";
+  if (mode === "ephemeral" || mode === 0) return "Ephemeral";
+  if (mode === undefined || mode === null) return "--";
+  return String(mode);
+}
+
+function statusText(status: ScriptStatus | null): string {
+  if (!status) return "Unknown";
+  return status.running ? "Running" : "Idle";
+}
+
+function getMacOrPair(): string {
+  const mac = deviceMac.value;
+  if (!mac) {
+    window.dispatchEvent(new CustomEvent("bb:pairing-required"));
+    throw new PairingRequiredError();
+  }
+  return mac;
 }
 
 function CodeEditor({ initialDoc, onDocChange, editorViewRef }: EditorProps) {
@@ -119,13 +92,27 @@ function CodeEditor({ initialDoc, onDocChange, editorViewRef }: EditorProps) {
           autocompletion(),
           Prec.highest(EditorState.languageData.of(() => [{ autocomplete: bugbusterCompletions }])),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
-              onDocChange(update.state.doc.toString());
-            }
+            if (update.docChanged) onDocChange(update.state.doc.toString());
           }),
           EditorView.theme({
-            "&": { height: "100%", fontSize: "13px" },
-            ".cm-scroller": { overflow: "auto" },
+            "&": {
+              height: "100%",
+              fontSize: "13px",
+              backgroundColor: "#0b1020",
+            },
+            ".cm-scroller": {
+              overflow: "auto",
+              fontFamily: "\"JetBrains Mono Variable\", \"JetBrains Mono\", ui-monospace, monospace",
+            },
+            ".cm-gutters": {
+              backgroundColor: "#070b16",
+              color: "#53607a",
+              borderRight: "1px solid rgba(56, 189, 248, 0.16)",
+            },
+            ".cm-activeLine": { backgroundColor: "rgba(34, 211, 238, 0.07)" },
+            ".cm-activeLineGutter": { backgroundColor: "rgba(34, 211, 238, 0.10)" },
+            ".cm-cursor": { borderLeftColor: "#22d3ee" },
+            ".cm-selectionBackground": { background: "rgba(34, 211, 238, 0.22) !important" },
           }),
         ],
       }),
@@ -133,704 +120,656 @@ function CodeEditor({ initialDoc, onDocChange, editorViewRef }: EditorProps) {
     });
 
     editorViewRef.current = view;
-
     return () => {
       view.destroy();
       editorViewRef.current = null;
     };
-    // initialDoc intentionally excluded — we update the view content externally
-    // via dispatch when the file changes rather than recreating the editor.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  return <div class="script-editor-surface" ref={containerRef} />;
+}
+
+function MiniMetric({ label, value, tone = "cyan" }: { label: string; value: string; tone?: "cyan" | "green" | "amber" | "rose" }) {
   return (
-    <div
-      ref={containerRef}
-      style={{
-        flex: 1,
-        minHeight: 0,
-        overflow: "hidden",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-sm)",
-      }}
-    />
+    <div class={`script-mini-metric ${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Status Badge helper
-// ---------------------------------------------------------------------------
-
-function StatusBadge({ status }: { status: ScriptStatus | null }) {
-  if (!status) return <span class="text-dim">…</span>;
-
-  const running = status.running;
-  const isPersistent = status.mode === "persistent";
-  const err = status.lastError;
-
+function ScriptStatusBar({ status, selectedFile, isDirty }: { status: ScriptStatus | null; selectedFile: string | null; isDirty: boolean }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-      {isPersistent && (
-        <span class="uppercase-tag" style={{ color: "var(--amber)", fontSize: "0.7rem" }}>
-          persistent vm
-        </span>
-      )}
-      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-        <div
-          style={{
-            width: "8px",
-            height: "8px",
-            borderRadius: "50%",
-            background: running ? "var(--green)" : "var(--text-muted)",
-            boxShadow: running ? "0 0 8px var(--green)" : "none",
+    <footer class="script-status-bar">
+      <span class={`script-run-dot ${status?.running ? "running" : ""}`} />
+      <span>{statusText(status)}</span>
+      <span>VM {normalizeMode(status?.mode)}</span>
+      <span>Runs {status?.totalRuns ?? 0}</span>
+      <span>Errors {status?.totalErrors ?? 0}</span>
+      <span class="script-status-file">{selectedFile ? `${selectedFile}${isDirty ? " *" : ""}` : "No file selected"}</span>
+    </footer>
+  );
+}
+
+function ActivityButton({ id, activePanel, icon, label, onClick }: {
+  id: PanelId;
+  activePanel: PanelId | null;
+  icon: string;
+  label: string;
+  onClick: (id: PanelId) => void;
+}) {
+  const active = activePanel === id;
+  return (
+    <button class={`script-activity-btn ${active ? "active" : ""}`} onClick={() => onClick(id)} title={label}>
+      <span>{icon}</span>
+      <small>{label}</small>
+    </button>
+  );
+}
+
+function FilesPanel(props: {
+  files: string[];
+  selectedFile: string | null;
+  isUnsaved: boolean;
+  isDirty: boolean;
+  newFileName: string;
+  busy: string | null;
+  setNewFileName: (value: string) => void;
+  onNew: () => void;
+  onRefresh: () => void;
+  onSelect: (name: string) => void;
+  onUpload: (file: File) => void;
+  onDownload: () => void;
+  onDelete: () => void;
+}) {
+  const uploadRef = useRef<HTMLInputElement>(null);
+  return (
+    <div class="script-side-content">
+      <div class="script-panel-head">
+        <div>
+          <span class="uppercase-tag">Explorer</span>
+          <h3>Scripts</h3>
+        </div>
+        <button class="script-icon-btn" onClick={props.onRefresh} title="Refresh files">refresh</button>
+      </div>
+
+      <div class="script-new-row">
+        <input
+          class="input"
+          placeholder="new-script.py"
+          value={props.newFileName}
+          onInput={(e) => props.setNewFileName((e.currentTarget as HTMLInputElement).value)}
+          onKeyDown={(e) => { if (e.key === "Enter") props.onNew(); }}
+        />
+        <button class="btn primary" onClick={props.onNew}>New</button>
+      </div>
+
+      <div class="script-file-actions">
+        <input
+          ref={uploadRef}
+          type="file"
+          accept=".py,text/x-python,text/plain"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = (e.currentTarget as HTMLInputElement).files?.[0];
+            if (file) props.onUpload(file);
+            (e.currentTarget as HTMLInputElement).value = "";
           }}
         />
-        <span style={{ fontSize: "0.78rem", fontWeight: 500, color: running ? "var(--text)" : "var(--text-dim)" }}>
-          {running ? "RUNNING" : "IDLE"}
-        </span>
+        <button class="btn" onClick={() => uploadRef.current?.click()} disabled={props.busy !== null}>Upload</button>
+        <button class="btn" onClick={props.onDownload} disabled={!props.selectedFile || props.isUnsaved || props.busy !== null}>Download</button>
+        <button class="btn danger" onClick={props.onDelete} disabled={!props.selectedFile || props.isUnsaved || props.busy !== null}>Delete</button>
       </div>
-      {err && (
-        <span class="text-rose" style={{ fontSize: "0.72rem", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={err}>
-          Error: {err}
-        </span>
+
+      <div class="script-file-list">
+        {props.files.length === 0 && <div class="script-empty">No scripts on device</div>}
+        {props.files.map((file) => {
+          const active = props.selectedFile === file && !props.isUnsaved;
+          return (
+            <button key={file} class={`script-file-row ${active ? "active" : ""}`} onClick={() => props.onSelect(file)}>
+              <span class="script-file-icon">PY</span>
+              <span title={file}>{file}</span>
+              {active && props.isDirty && <b>*</b>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DevicePanel({ vmStatus, device }: { vmStatus: ScriptStatus | null; device: DevicePanelState }) {
+  const storage = device.storage;
+  const usedPct = storage && storage.totalBytes > 0
+    ? Math.min(100, Math.round((storage.usedBytes / storage.totalBytes) * 100))
+    : 0;
+  const pd = device.usbpd ?? {};
+  const diagnostics = device.diagnostics ?? {};
+  const selftest = device.selftest ?? {};
+  const dieTemp = diagnostics.dieTemp ?? diagnostics.die_temp;
+
+  return (
+    <div class="script-side-content">
+      <div class="script-panel-head">
+        <div>
+          <span class="uppercase-tag">Device</span>
+          <h3>Status</h3>
+        </div>
+      </div>
+
+      {device.error && <div class="script-alert">{device.error}</div>}
+
+      <div class="script-metric-grid">
+        <MiniMetric label="VM" value={statusText(vmStatus)} tone={vmStatus?.running ? "green" : "cyan"} />
+        <MiniMetric label="Mode" value={normalizeMode(vmStatus?.mode)} />
+        <MiniMetric label="Runs" value={String(vmStatus?.totalRuns ?? 0)} />
+        <MiniMetric label="Errors" value={String(vmStatus?.totalErrors ?? 0)} tone={(vmStatus?.totalErrors ?? 0) > 0 ? "rose" : "green"} />
+      </div>
+
+      <section class="script-device-section">
+        <h4>Storage</h4>
+        <div class="script-storage-bar"><span style={{ width: `${usedPct}%` }} /></div>
+        <div class="kv-row"><span class="text-dim">Used</span><span class="mono">{formatBytes(storage?.usedBytes)} / {formatBytes(storage?.totalBytes)}</span></div>
+        <div class="kv-row"><span class="text-dim">Free</span><span class="mono">{formatBytes(storage?.freeBytes)}</span></div>
+        <div class="kv-row"><span class="text-dim">Scripts</span><span class="mono">{storage?.scriptCount ?? "--"} / {storage?.maxScripts ?? "--"}</span></div>
+      </section>
+
+      <section class="script-device-section">
+        <h4>Power</h4>
+        <div class="kv-row"><span class="text-dim">USB-PD</span><span class="mono">{pd.voltageV ?? pd.voltage ?? "--"} V</span></div>
+        <div class="kv-row"><span class="text-dim">Current</span><span class="mono">{pd.currentA ?? pd.current ?? "--"} A</span></div>
+        <div class="kv-row"><span class="text-dim">Power</span><span class="mono">{pd.powerW ?? "--"} W</span></div>
+      </section>
+
+      <section class="script-device-section">
+        <h4>Diagnostics</h4>
+        <div class="kv-row"><span class="text-dim">Die temp</span><span class="mono">{dieTemp === undefined ? "--" : `${Number(dieTemp).toFixed(1)} C`}</span></div>
+        <div class="kv-row"><span class="text-dim">Selftest worker</span><span class="mono">{selftest.workerEnabled ? "ON" : "OFF"}</span></div>
+        <div class="kv-row"><span class="text-dim">Supply monitor</span><span class="mono">{selftest.supplyMonitorActive ? "ACTIVE" : "IDLE"}</span></div>
+      </section>
+
+      {vmStatus?.lastError && (
+        <section class="script-device-section">
+          <h4>Last Script Error</h4>
+          <pre class="script-side-pre">{vmStatus.lastError}</pre>
+        </section>
       )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main Scripts component
-// ---------------------------------------------------------------------------
+function DocEntry({ entry }: { entry: ApiDocEntry }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <article class={`script-doc-entry ${open ? "open" : ""}`}>
+      <button onClick={() => setOpen(!open)}>
+        <span>{open ? "v" : ">"}</span>
+        <strong>{entry.title}</strong>
+      </button>
+      {open && (
+        <div class="script-doc-body">
+          <code>{entry.signature}</code>
+          <p>{entry.summary}</p>
+          {entry.args && (
+            <dl>
+              {entry.args.map((arg) => (
+                <div key={arg.name}>
+                  <dt>{arg.name}</dt>
+                  <dd>{arg.detail}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {entry.returns && <p><b>Returns:</b> {entry.returns}</p>}
+          {entry.raises && <p><b>Raises:</b> {entry.raises.join(" ")}</p>}
+          <pre>{entry.example}</pre>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function DocsPanel() {
+  const groups = Array.from(new Set(apiDocs.map((entry) => entry.group)));
+  return (
+    <div class="script-side-content">
+      <div class="script-panel-head">
+        <div>
+          <span class="uppercase-tag">Reference</span>
+          <h3>bugbuster API</h3>
+        </div>
+      </div>
+
+      {groups.map((group) => (
+        <section class="script-doc-group" key={group}>
+          <h4>{group}</h4>
+          {apiDocs.filter((entry) => entry.group === group).map((entry) => <DocEntry key={entry.id} entry={entry} />)}
+        </section>
+      ))}
+
+      <section class="script-doc-group">
+        <h4>Channel Constants</h4>
+        <div class="script-constant-list">
+          {functionConstants.map(([name, detail]) => (
+            <div key={name}>
+              <code>bugbuster.{name}</code>
+              <span>{detail}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Sidebar(props: {
+  activePanel: PanelId | null;
+  filesPanel: ComponentChildren;
+  devicePanel: ComponentChildren;
+  docsPanel: ComponentChildren;
+  onCollapse: () => void;
+}) {
+  if (!props.activePanel) return null;
+  return (
+    <aside class="script-sidebar">
+      <button class="script-collapse-btn" onClick={props.onCollapse} title="Collapse sidebar">x</button>
+      {props.activePanel === "files" && props.filesPanel}
+      {props.activePanel === "device" && props.devicePanel}
+      {props.activePanel === "docs" && props.docsPanel}
+    </aside>
+  );
+}
 
 export function Scripts() {
-  // File list
   const [files, setFiles] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  // "unsaved" means a new file not yet on the device
   const [isUnsaved, setIsUnsaved] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
-
-  // Editor state (tracked outside of CodeMirror for toolbar logic)
-  const editorViewRef = useRef<EditorView | null>(null);
   const [editorDoc, setEditorDoc] = useState("");
-  const [editorKey, setEditorKey] = useState(0); // bump to recreate CM instance
-
-  // Status / logs / autorun
+  const [editorKey, setEditorKey] = useState(0);
+  const [newFileName, setNewFileName] = useState("");
   const [vmStatus, setVmStatus] = useState<ScriptStatus | null>(null);
   const [autorunStatus, setAutorunStatus] = useState<AutorunStatus | null>(null);
-  const [logs, setLogs] = useState<string>("");
-  const logsEndRef = useRef<HTMLDivElement>(null);
-
-  // UI feedback
+  const [logs, setLogs] = useState("");
+  const [logError, setLogError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [persistEval, setPersistEval] = useState(false);
+  const [activePanel, setActivePanel] = useState<PanelId | null>("files");
+  const [bottomPanel, setBottomPanel] = useState<BottomPanel>("logs");
+  const [devicePanel, setDevicePanel] = useState<DevicePanelState>(EMPTY_DEVICE_PANEL);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const logsRef = useRef<HTMLPreElement>(null);
+  const logCursorRef = useRef(0);
 
-  // New-file name input
-  const [newFileName, setNewFileName] = useState("");
+  const currentSource = useCallback(() => editorViewRef.current?.state.doc.toString() ?? editorDoc, [editorDoc]);
 
-  // -------------------------------------------------------------------------
-  // API actions
-  // -------------------------------------------------------------------------
+  const drainLogs = useCallback(async () => {
+    const { text, next } = await api.scripts.logs(getMacOrPair(), logCursorRef.current);
+    logCursorRef.current = next;
+    setLogError(null);
+    if (text) setLogs((prev) => prev + text);
+    return text;
+  }, []);
+
+  const runScriptAction = useCallback(async <T,>(name: string, action: (mac: string) => Promise<T>) => {
+    setBusy(name);
+    setError(null);
+    try {
+      return await action(getMacOrPair());
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) setError(e instanceof Error ? e.message : String(e));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }, []);
 
   const fetchFiles = useCallback(async () => {
     try {
-      const res = await apiFetch("/api/scripts/files");
-      const data = await res.json() as { files: string[] };
-      setFiles(Array.isArray(data.files) ? data.files : []);
+      const data = await api.scripts.files(getMacOrPair());
+      setFiles(Array.isArray(data.files) ? data.files.sort() : []);
+    } catch (e) {
+      if (!(e instanceof PairingRequiredError)) console.warn("scripts: list failed", e);
+    }
+  }, []);
+
+  const fetchAutorun = useCallback(async () => {
+    try {
+      setAutorunStatus(await api.scripts.autorun(getMacOrPair()));
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  const refreshDevicePanel = useCallback(async () => {
+    try {
+      const mac = getMacOrPair();
+      const [storage, usbpd, diagnostics, selftest] = await Promise.allSettled([
+        api.scripts.storage(mac),
+        api.usbpd(),
+        api.diagnostics(),
+        api.selftest(),
+      ]);
+      setDevicePanel({
+        storage: storage.status === "fulfilled" ? storage.value : null,
+        usbpd: usbpd.status === "fulfilled" ? usbpd.value : null,
+        diagnostics: diagnostics.status === "fulfilled" ? diagnostics.value : null,
+        selftest: selftest.status === "fulfilled" ? selftest.value : null,
+        error: null,
+      });
     } catch (e) {
       if (!(e instanceof PairingRequiredError)) {
-        console.warn("scripts: list failed", e);
+        setDevicePanel((prev) => ({ ...prev, error: e instanceof Error ? e.message : String(e) }));
       }
     }
   }, []);
 
   useEffect(() => {
     fetchFiles();
-  }, [fetchFiles]);
+    fetchAutorun();
+    refreshDevicePanel();
+  }, [fetchFiles, fetchAutorun, refreshDevicePanel]);
 
-  // -------------------------------------------------------------------------
-  // Load a file into the editor
-  // -------------------------------------------------------------------------
-
-  const loadFile = useCallback(async (name: string) => {
-    setBusy("load");
-    setError(null);
-    try {
-      const res = await apiFetch(`/api/scripts/files/get?name=${encodeURIComponent(name)}`);
-      const text = await res.text();
-      setEditorDoc(text);
-      setEditorKey((k) => k + 1); // recreate CodeMirror with fresh doc
-      setSelectedFile(name);
-      setIsUnsaved(false);
-      setIsDirty(false);
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const mac = getMacOrPair();
+        const status = await api.scripts.status(mac);
+        if (alive) setVmStatus(status);
+      } catch {
+        /* pairing modal handles auth failures */
       }
-    } finally {
-      setBusy(null);
-    }
+      if (alive) window.setTimeout(tick, 1000);
+    };
+    tick();
+    return () => { alive = false; };
   }, []);
 
-  const handleFileSelect = (name: string) => {
-    if (isDirty && !window.confirm("You have unsaved changes. Discard them?")) return;
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const { text, next } = await api.scripts.logs(getMacOrPair(), logCursorRef.current);
+        if (alive) {
+          logCursorRef.current = next;
+          setLogError(null);
+          if (text) setLogs((prev) => prev + text);
+        }
+      } catch (e) {
+        if (alive && !(e instanceof PairingRequiredError)) {
+          setLogError(e instanceof Error ? e.message : String(e));
+        }
+      }
+      if (alive) window.setTimeout(tick, 500);
+    };
+    tick();
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      if (activePanel === "device") await refreshDevicePanel();
+      if (alive) window.setTimeout(tick, 2500);
+    };
+    tick();
+    return () => { alive = false; };
+  }, [activePanel, refreshDevicePanel]);
+
+  useEffect(() => {
+    if (bottomPanel !== "logs") return;
+    const node = logsRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [logs, bottomPanel]);
+
+  const loadFile = useCallback(async (name: string) => {
+    await runScriptAction("load", async (mac) => {
+      const text = await api.scripts.download(mac, name);
+      setSelectedFile(name);
+      setEditorDoc(text);
+      setEditorKey((key) => key + 1);
+      setIsUnsaved(false);
+      setIsDirty(false);
+    });
+  }, [runScriptAction]);
+
+  const selectFile = (name: string) => {
+    if (isDirty && !window.confirm("Discard unsaved editor changes?")) return;
     loadFile(name);
   };
 
-  const handleNewFile = () => {
-    let name = newFileName.trim();
+  const newFile = () => {
+    const name = ensureScriptName(newFileName);
     if (!name) return;
-    if (!name.endsWith(".py")) name += ".py";
-
     if (files.includes(name)) {
-      alert("File already exists");
+      setError("File already exists");
       return;
     }
-
+    if (isDirty && !window.confirm("Discard unsaved editor changes?")) return;
     setSelectedFile(name);
     setIsUnsaved(true);
     setIsDirty(false);
     setEditorDoc("");
-    setEditorKey((k) => k + 1);
+    setEditorKey((key) => key + 1);
     setNewFileName("");
     setError(null);
   };
 
-  // -------------------------------------------------------------------------
-  // Save
-  // -------------------------------------------------------------------------
-
-  const handleSave = async () => {
+  const saveFile = async () => {
     if (!selectedFile) return;
-    const code = editorViewRef.current?.state.doc.toString() ?? editorDoc;
-    setBusy("save");
-    setError(null);
-    try {
-      await apiFetch(`/api/scripts/files?name=${encodeURIComponent(selectedFile)}`, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: code,
-      });
+    const source = currentSource();
+    const result = await runScriptAction("save", (mac) => api.scripts.upload(mac, selectedFile, source));
+    if (result?.ok === false) setError(result.err ?? "Save failed");
+    if (result?.ok !== false) {
       setIsUnsaved(false);
       setIsDirty(false);
       await fetchFiles();
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      setBusy(null);
+      await refreshDevicePanel();
     }
   };
 
-  // -------------------------------------------------------------------------
-  // Delete
-  // -------------------------------------------------------------------------
+  const uploadFile = async (file: File) => {
+    const name = ensureScriptName(file.name);
+    if (!name) return;
+    const text = await file.text();
+    const result = await runScriptAction("upload", (mac) => api.scripts.upload(mac, name, text));
+    if (result?.ok === false) {
+      setError(result.err ?? "Upload failed");
+      return;
+    }
+    setSelectedFile(name);
+    setEditorDoc(text);
+    setEditorKey((key) => key + 1);
+    setIsUnsaved(false);
+    setIsDirty(false);
+    await fetchFiles();
+    await refreshDevicePanel();
+  };
 
-  const handleDelete = async () => {
+  const downloadFile = async () => {
+    if (!selectedFile || isUnsaved) return;
+    await runScriptAction("download", async (mac) => {
+      const text = await api.scripts.download(mac, selectedFile);
+      const blob = new Blob([text], { type: "text/x-python;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = selectedFile;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    });
+  };
+
+  const deleteFile = async () => {
     if (!selectedFile || isUnsaved) return;
     if (!window.confirm(`Delete ${selectedFile}?`)) return;
-
-    setBusy("delete");
-    try {
-      await apiFetch(`/api/scripts/files?name=${encodeURIComponent(selectedFile)}`, {
-        method: "DELETE",
-      });
-      setSelectedFile(null);
-      setEditorDoc("");
-      setEditorKey((k) => k + 1);
-      await fetchFiles();
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      setBusy(null);
+    const name = selectedFile;
+    const result = await runScriptAction("delete", (mac) => api.scripts.delete(mac, name));
+    if (result?.ok === false) {
+      setError(result.err ?? "Delete failed");
+      return;
     }
+    setSelectedFile(null);
+    setEditorDoc("");
+    setEditorKey((key) => key + 1);
+    setIsDirty(false);
+    setIsUnsaved(false);
+    await fetchFiles();
+    await refreshDevicePanel();
   };
 
-  // -------------------------------------------------------------------------
-  // Run (saved file)
-  // -------------------------------------------------------------------------
-
-  const handleRunFile = async () => {
+  const runFile = async () => {
     if (!selectedFile || isUnsaved || isDirty) return;
-    setBusy("run");
-    setError(null);
-    try {
-      const res = await apiFetch(`/api/scripts/run-file?name=${encodeURIComponent(selectedFile)}`, {
-        method: "POST",
-      });
-      const data = await res.json() as { ok?: boolean; id?: number };
-      if (!data.ok) setError("Run failed");
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      setBusy(null);
-    }
+    const result = await runScriptAction("run", (mac) => api.scripts.runFile(mac, selectedFile));
+    if (result?.ok === false) setError(result.err ?? "Run failed");
+    window.setTimeout(() => { drainLogs().catch(() => undefined); }, 150);
+    window.setTimeout(() => { drainLogs().catch(() => undefined); }, 600);
   };
 
-  // -------------------------------------------------------------------------
-  // Run (eval)
-  // -------------------------------------------------------------------------
-
-  const handleEval = async () => {
-    const code = editorViewRef.current?.state.doc.toString() ?? editorDoc;
-    setBusy("eval");
-    setError(null);
-    try {
-      const res = await apiFetch(`/api/scripts/eval?persist=${persistEval ? "true" : "false"}`, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: code,
-      });
-      const data = await res.json() as { ok?: boolean; id?: number };
-      if (!data.ok) setError("Eval failed");
-    } catch (e) {
-      if (!(e instanceof PairingRequiredError)) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      setBusy(null);
-    }
+  const evalEditor = async () => {
+    const result = await runScriptAction("eval", (mac) => api.scripts.eval(mac, currentSource(), persistEval));
+    if (result?.ok === false) setError(result.err ?? "Eval failed");
+    window.setTimeout(() => { drainLogs().catch(() => undefined); }, 150);
+    window.setTimeout(() => { drainLogs().catch(() => undefined); }, 600);
   };
 
-  // -------------------------------------------------------------------------
-  // Stop / Reset
-  // -------------------------------------------------------------------------
+  const stopScript = () => runScriptAction("stop", (mac) => api.scripts.stop(mac));
 
-  const handleStop = async () => {
-    setBusy("stop");
-    try {
-      await apiFetch("/api/scripts/stop", { method: "POST" });
-    } finally {
-      setBusy(null);
-    }
+  const resetVm = async () => {
+    if (!window.confirm("Reset the MicroPython VM? This clears persistent globals.")) return;
+    await runScriptAction("reset", (mac) => api.scripts.reset(mac));
   };
 
-  const handleReset = async () => {
-    if (!window.confirm("Reset the MicroPython VM? This clears all global state.")) return;
-    setBusy("reset");
-    try {
-      await apiFetch("/api/scripts/reset", { method: "POST" });
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  // -------------------------------------------------------------------------
-  // Autorun
-  // -------------------------------------------------------------------------
-
-  const handleSetAutorun = async () => {
+  const enableAutorun = async () => {
     if (!selectedFile || isUnsaved) return;
-    setBusy("autorun-enable");
-    try {
-      await apiFetch(`/api/scripts/autorun/enable?name=${encodeURIComponent(selectedFile)}`, {
-        method: "POST",
-      });
-      await fetchAutorun();
-    } finally {
-      setBusy(null);
-    }
+    const result = await runScriptAction("autorun", (mac) => api.scripts.enableAutorun(mac, selectedFile));
+    if (result?.ok === false) setError(result.err ?? "Autorun setup failed");
+    await fetchAutorun();
   };
 
-  const handleDisableAutorun = async () => {
-    setBusy("autorun-disable");
-    try {
-      await apiFetch("/api/scripts/autorun/disable", { method: "POST" });
-      await fetchAutorun();
-    } finally {
-      setBusy(null);
-    }
+  const disableAutorun = async () => {
+    const result = await runScriptAction("autorun-off", (mac) => api.scripts.disableAutorun(mac));
+    if (result?.ok === false) setError(result.err ?? "Autorun disable failed");
+    await fetchAutorun();
   };
 
-  const fetchAutorun = useCallback(async () => {
-    try {
-      const res = await apiFetch("/api/scripts/autorun/status");
-      const data = await res.json() as AutorunStatus;
-      setAutorunStatus(data);
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    fetchAutorun();
-  }, [fetchAutorun]);
-
-  // -------------------------------------------------------------------------
-  // Status polling (1 s)
-  // -------------------------------------------------------------------------
-
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      if (!alive) return;
-      try {
-        const res = await apiFetch("/api/scripts/status");
-        const data = await res.json() as ScriptStatus;
-        if (alive) setVmStatus(data);
-      } catch { /* ignore */ }
-      if (alive) setTimeout(tick, 1000);
-    };
-    tick();
-    return () => { alive = false; };
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Log polling (500 ms) — drain semantics: accumulate locally
-  // -------------------------------------------------------------------------
-
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      if (!alive) return;
-      try {
-        const res = await apiFetch("/api/scripts/logs");
-        const text = await res.text();
-        if (alive && text.length > 0) {
-          setLogs((prev) => prev + text);
-        }
-      } catch {
-        /* ignore */
-      }
-      if (alive) setTimeout(tick, 500);
-    };
-    tick();
-    return () => { alive = false; };
-  }, []);
-
-  // Auto-scroll logs
-  useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [logs]);
-
-  // -------------------------------------------------------------------------
-  // Track editor doc changes for dirty flag
-  // -------------------------------------------------------------------------
-
-  const handleDocChange = useCallback((doc: string) => {
-    setEditorDoc(doc);
-    setIsDirty(true);
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Derived state
-  // -------------------------------------------------------------------------
-
-  const canRunFile = !!selectedFile && !isUnsaved && !isDirty && busy === null;
   const canSave = !!selectedFile && busy === null;
-  const canDelete = !!selectedFile && !isUnsaved && busy === null;
-  const canSetAutorun = !!selectedFile && !isUnsaved && busy === null;
-  const autorunActive = !!autorunStatus?.enabled;
-  const autorunName = autorunStatus?.name ?? null;
-
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
+  const canRunFile = !!selectedFile && !isUnsaved && !isDirty && busy === null;
+  const autorunEnabled = !!autorunStatus?.enabled;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-
-      {/* FIXED HEADER AND EDITOR SECTION */}
-      <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "calc(100vh - 160px)", minHeight: "650px" }}>
-        {/* Header row: title + VM status */}
-        <div class="glass-card" style={{ padding: "10px 16px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <span class="card-title" style={{ marginBottom: 0 }}>MicroPython Scripts</span>
-              {autorunActive && (
-                <span class="uppercase-tag" style={{ color: "var(--green)", fontSize: "0.7rem" }}>
-                  autorun: {autorunName ?? "?"}
-                </span>
-              )}
-            </div>
-            <StatusBadge status={vmStatus} />
-          </div>
+    <div class="script-workbench">
+      <div class="script-titlebar">
+        <div>
+          <span class="uppercase-tag">On-Device Python</span>
+          <h2>MicroPython Workbench</h2>
         </div>
+        <div class="script-title-actions">
+          <MiniMetric label="State" value={statusText(vmStatus)} tone={vmStatus?.running ? "green" : "cyan"} />
+          <MiniMetric label="Storage" value={formatBytes(devicePanel.storage?.freeBytes)} />
+          <span class="script-build-pill">UI {SCRIPT_UI_BUILD}</span>
+          {autorunEnabled && <span class="script-autorun-pill">Autorun enabled</span>}
+        </div>
+      </div>
 
-        {/* Main editor area */}
-        <div style={{ display: "flex", gap: "12px", flex: 1, minHeight: 0 }}>
+      <div class="script-ide">
+        <nav class="script-activity">
+          <ActivityButton id="files" activePanel={activePanel} icon="EX" label="Files" onClick={(id) => setActivePanel(activePanel === id ? null : id)} />
+          <ActivityButton id="device" activePanel={activePanel} icon="DV" label="Device" onClick={(id) => setActivePanel(activePanel === id ? null : id)} />
+          <ActivityButton id="docs" activePanel={activePanel} icon="API" label="Docs" onClick={(id) => setActivePanel(activePanel === id ? null : id)} />
+        </nav>
 
-          {/* Left pane: file tree */}
-          <div class="glass-card" style={{ width: "180px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "6px", overflow: "hidden" }}>
-            <div class="card-title" style={{ marginBottom: "6px" }}>Files</div>
+        <Sidebar
+          activePanel={activePanel}
+          onCollapse={() => setActivePanel(null)}
+          filesPanel={
+            <FilesPanel
+              files={files}
+              selectedFile={selectedFile}
+              isUnsaved={isUnsaved}
+              isDirty={isDirty}
+              newFileName={newFileName}
+              busy={busy}
+              setNewFileName={setNewFileName}
+              onNew={newFile}
+              onRefresh={fetchFiles}
+              onSelect={selectFile}
+              onUpload={uploadFile}
+              onDownload={downloadFile}
+              onDelete={deleteFile}
+            />
+          }
+          devicePanel={<DevicePanel vmStatus={vmStatus} device={devicePanel} />}
+          docsPanel={<DocsPanel />}
+        />
 
-            {/* New file controls */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <input
-                class="input"
-                placeholder="new-file.py"
-                value={newFileName}
-                style={{ fontSize: "0.78rem", padding: "4px 8px" }}
-                onInput={(e) => setNewFileName((e.currentTarget as HTMLInputElement).value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleNewFile(); }}
+        <main class="script-main">
+          <div class="script-editor-header">
+            <div class="script-tab-strip">
+              <span class={`script-file-tab ${selectedFile ? "active" : ""}`}>
+                {selectedFile ? `${selectedFile}${isDirty ? " *" : ""}${isUnsaved ? " (new)" : ""}` : "Welcome"}
+              </span>
+            </div>
+            <div class="script-toolbar">
+              <button class="btn primary" disabled={!canSave} onClick={saveFile}>{busy === "save" ? "Saving..." : "Save"}</button>
+              <button class="btn" disabled={!canRunFile} onClick={runFile}>{busy === "run" ? "Running..." : "Run File"}</button>
+              <button class="btn" disabled={busy !== null} onClick={evalEditor}>{busy === "eval" ? "Evaluating..." : "Eval"}</button>
+              <label class="script-check">
+                <input type="checkbox" checked={persistEval} onChange={(e) => setPersistEval((e.currentTarget as HTMLInputElement).checked)} />
+                persist
+              </label>
+              <button class="btn" disabled={busy !== null} onClick={stopScript}>Stop</button>
+              <button class="btn" disabled={busy !== null} onClick={resetVm}>Reset VM</button>
+              <button class={`btn ${autorunEnabled ? "primary" : ""}`} disabled={!selectedFile || isUnsaved || busy !== null} onClick={enableAutorun}>Set Autorun</button>
+              <button class="btn" disabled={!autorunEnabled || busy !== null} onClick={disableAutorun}>Disable Autorun</button>
+            </div>
+          </div>
+
+          {error && <div class="script-error-strip">{error}</div>}
+
+          <section class="script-editor-pane">
+            {selectedFile ? (
+              <CodeEditor
+                key={editorKey}
+                initialDoc={editorDoc}
+                onDocChange={(doc) => {
+                  setEditorDoc(doc);
+                  setIsDirty(true);
+                }}
+                editorViewRef={editorViewRef}
               />
-              <button class="btn" style={{ fontSize: "0.78rem", padding: "4px 8px" }} onClick={handleNewFile}>
-                + New
-              </button>
-            </div>
-
-            <div style={{ width: "100%", height: "1px", background: "var(--border)", margin: "2px 0" }} />
-
-            {/* File list */}
-            <div style={{ overflowY: "auto", flex: 1 }}>
-              {files.length === 0 && (
-                <div class="text-dim" style={{ fontSize: "0.78rem", padding: "4px 0" }}>No files</div>
-              )}
-              {files.map((f) => (
-                <div
-                  key={f}
-                  onClick={() => handleFileSelect(f)}
-                  style={{
-                    padding: "5px 8px",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontSize: "0.82rem",
-                    fontFamily: "var(--mono, monospace)",
-                    background: selectedFile === f && !isUnsaved ? "rgba(59,130,246,0.12)" : "transparent",
-                    color: selectedFile === f && !isUnsaved ? "var(--blue)" : "var(--text-dim)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    transition: "background 0.15s",
-                  }}
-                >
-                  {f}
+            ) : (
+              <div class="script-welcome">
+                <div>
+                  <span class="uppercase-tag">Ready</span>
+                  <h3>Select or create a Python script</h3>
+                  <p>Use the Files panel to edit scripts stored on the ESP32 SPIFFS volume, or upload a local .py file.</p>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Right pane: toolbar + editor */}
-          <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, gap: "8px" }}>
-
-            {/* Toolbar */}
-            <div class="glass-card" style={{ padding: "8px 12px" }}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-
-                {/* File name display */}
-                {selectedFile && (
-                  <span class="mono" style={{ fontSize: "0.82rem", color: isDirty ? "var(--amber)" : "var(--text-dim)", marginRight: "4px" }}>
-                    {selectedFile}{isDirty ? " *" : ""}{isUnsaved ? " (new)" : ""}
-                  </span>
-                )}
-
-                <button
-                  class="btn primary"
-                  disabled={!canSave}
-                  onClick={handleSave}
-                  title="Save to device"
-                >
-                  {busy === "save" ? "Saving…" : "Save"}
-                </button>
-
-                <button
-                  class="btn"
-                  disabled={!canRunFile}
-                  onClick={handleRunFile}
-                  title="Run saved file"
-                >
-                  {busy === "run" ? "Running…" : "Run"}
-                </button>
-
-                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                  <button
-                    class="btn"
-                    disabled={busy !== null}
-                    onClick={handleEval}
-                    title="Eval editor contents"
-                  >
-                    {busy === "eval" ? "Eval…" : "Run (eval)"}
-                  </button>
-                  <label style={{ fontSize: "0.75rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: "3px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={persistEval}
-                      onChange={(e) => setPersistEval((e.currentTarget as HTMLInputElement).checked)}
-                    />
-                    persist
-                  </label>
-                </div>
-
-                <button
-                  class="btn"
-                  disabled={busy !== null}
-                  onClick={handleStop}
-                  title="Stop running script"
-                >
-                  {busy === "stop" ? "Stopping…" : "Stop"}
-                </button>
-
-                <button
-                  class="btn"
-                  disabled={busy !== null}
-                  onClick={handleReset}
-                  title="Reset MicroPython VM"
-                >
-                  {busy === "reset" ? "Resetting…" : "Reset VM"}
-                </button>
-
-                <div style={{ height: "20px", width: "1px", background: "var(--border)" }} />
-
-                <button
-                  class={`btn${autorunActive && autorunName === selectedFile ? " primary" : ""}`}
-                  disabled={!canSetAutorun}
-                  onClick={handleSetAutorun}
-                  title="Set as autorun on boot"
-                >
-                  {busy === "autorun-enable" ? "Setting…" : "Set autorun"}
-                </button>
-
-                <button
-                  class="btn"
-                  disabled={!autorunActive || busy !== null}
-                  onClick={handleDisableAutorun}
-                  title="Disable autorun"
-                >
-                  {busy === "autorun-disable" ? "Disabling…" : "Disable autorun"}
-                </button>
-
-                <div style={{ height: "20px", width: "1px", background: "var(--border)" }} />
-
-                <button
-                  class="btn"
-                  style={{ color: "var(--rose)", borderColor: "rgba(239,68,68,0.3)" }}
-                  disabled={!canDelete}
-                  onClick={handleDelete}
-                  title="Delete file"
-                >
-                  {busy === "delete" ? "Deleting…" : "Delete"}
-                </button>
               </div>
+            )}
+          </section>
 
-              {error && (
-                <div style={{ marginTop: "6px", color: "var(--rose)", fontSize: "0.78rem" }}>
-                  {error}
-                </div>
-              )}
+          <section class="script-bottom">
+            <div class="script-bottom-tabs">
+              <button class={bottomPanel === "logs" ? "active" : ""} onClick={() => setBottomPanel("logs")}>Logs</button>
+              <button class={bottomPanel === "repl" ? "active" : ""} onClick={() => setBottomPanel("repl")}>REPL</button>
+              {logError && <span class="script-log-error">Log poll failed: {logError}</span>}
+              <button class="script-clear-log" onClick={() => setLogs("")}>Clear logs</button>
             </div>
-
-            {/* CodeMirror editor */}
-            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              {selectedFile ? (
-                <CodeEditor
-                  key={editorKey}
-                  initialDoc={editorDoc}
-                  onDocChange={handleDocChange}
-                  editorViewRef={editorViewRef as any}
-                />
+            <div class="script-bottom-body">
+              {bottomPanel === "logs" ? (
+                <pre ref={logsRef} class="script-log-output">{logs || "(no output yet)"}</pre>
               ) : (
-                <div
-                  class="glass-card"
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "var(--text-muted)",
-                    fontSize: "0.85rem",
-                  }}
-                >
-                  Select a file or create a new one
-                </div>
+                <Repl />
               )}
             </div>
-          </div>
-        </div>
-
-        {/* Bottom pane: logs */}
-        <div class="glass-card" style={{ height: "180px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "0", padding: "10px 16px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-            <span class="card-title">Script Logs</span>
-            <button
-              class="btn"
-              style={{ fontSize: "0.72rem", padding: "2px 8px" }}
-              onClick={() => setLogs("")}
-            >
-              Clear
-            </button>
-          </div>
-          <div
-            style={{
-              flex: 1,
-              overflowY: "auto",
-              fontFamily: "\"JetBrains Mono Variable\", \"JetBrains Mono\", monospace",
-              fontSize: "0.78rem",
-              lineHeight: "1.5",
-              color: "var(--text-dim)",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-            }}
-          >
-            {logs || <span style={{ color: "var(--text-muted)" }}>(no output yet)</span>}
-            <div ref={logsEndRef} />
-          </div>
-        </div>
+          </section>
+        </main>
       </div>
 
-      {/* SCROLLABLE API DOCUMENTATION SECTION */}
-      <div class="glass-card" style={{ display: "flex", flexDirection: "column", padding: "16px", marginTop: "12px" }}>
-        <h3 class="card-title" style={{ marginBottom: "12px" }}>On-Device Python API</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "20px" }}>
-          
-          <div>
-            <h4 class="uppercase-tag" style={{ color: "var(--blue)", marginBottom: "8px" }}>Module: bugbuster</h4>
-            <div style={{ fontSize: "0.82rem", lineHeight: "1.4" }}>
-              <code style={{ color: "var(--text-muted)" }}>bugbuster.sleep(ms)</code><br/>
-              <p class="text-dim" style={{ marginBottom: "8px" }}>Always use this for delays (supports cancellation).</p>
-              
-              <code style={{ color: "var(--text-muted)" }}>ch = bugbuster.Channel(id)</code><br/>
-              <p class="text-dim" style={{ marginBottom: "4px" }}>id 0-3. Methods: <code>set_function(f)</code>, <code>set_voltage(v)</code>, <code>read_voltage()</code>, <code>set_do(val)</code>.</p>
-              
-              <code style={{ color: "var(--text-muted)" }}>i2c = bugbuster.I2C(sda_io, scl_io, ...)</code><br/>
-              <p class="text-dim" style={{ marginBottom: "4px" }}>IO terminals 1-12. Methods: <code>scan()</code>, <code>writeto(addr, b)</code>, <code>readfrom(addr, n)</code>.</p>
-              
-              <code style={{ color: "var(--text-muted)" }}>spi = bugbuster.SPI(sck_io, ...)</code><br/>
-              <p class="text-dim" style={{ marginBottom: "4px" }}>Methods: <code>transfer(buf)</code>.</p>
-              
-              <code style={{ color: "var(--text-muted)" }}>bugbuster.http_get(url, ...)</code><br/>
-              <code style={{ color: "var(--text-muted)" }}>bugbuster.http_post(url, body, ...)</code><br/>
-              <code style={{ color: "var(--text-muted)" }}>bugbuster.mqtt_publish(topic, payload, ...)</code>
-            </div>
-          </div>
-
-          <div>
-            <h4 class="uppercase-tag" style={{ color: "var(--blue)", marginBottom: "8px" }}>Frozen Helpers</h4>
-            <div style={{ fontSize: "0.82rem", lineHeight: "1.4" }}>
-              <span class="text-muted">import bb_helpers</span><br/>
-              <p class="text-dim" style={{ marginBottom: "8px" }}><code>settle(ms)</code>, <code>dac_ramp(ch, lo, hi, step, settle)</code>.</p>
-              
-              <span class="text-muted">import bb_logging</span><br/>
-              <p class="text-dim" style={{ marginBottom: "8px" }}><code>info(msg)</code>, <code>warn(msg)</code>, <code>error(msg)</code>.</p>
-              
-              <span class="text-muted">import bb_devices</span><br/>
-              <p class="text-dim" style={{ marginBottom: "4px" }}><code>TMP102(i2c)</code>, <code>BMP280(i2c)</code>, <code>MCP3008(spi)</code>.</p>
-            </div>
-          </div>
-
-          <div>
-            <h4 class="uppercase-tag" style={{ color: "var(--blue)", marginBottom: "8px" }}>Channel Functions</h4>
-            <div style={{ fontSize: "0.78rem", color: "var(--text-dim)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
-              <div>FUNC_HIGH_IMP (0)</div>
-              <div>FUNC_VOUT (1)</div>
-              <div>FUNC_IOUT (2)</div>
-              <div>FUNC_VIN (3)</div>
-              <div>FUNC_IIN_EXT_PWR (4)</div>
-              <div>FUNC_IIN_LOOP_PWR (5)</div>
-              <div>FUNC_RES_MEAS (6)</div>
-              <div>FUNC_DIN_LOGIC (7)</div>
-              <div>FUNC_DIN_LOOP (8)</div>
-            </div>
-          </div>
-
-        </div>
-      </div>
-
+      <ScriptStatusBar status={vmStatus} selectedFile={selectedFile} isDirty={isDirty} />
     </div>
   );
 }
