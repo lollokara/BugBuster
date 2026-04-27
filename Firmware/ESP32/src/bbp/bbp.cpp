@@ -6,6 +6,7 @@
 // =============================================================================
 
 #include "bbp.h"
+#include "bbp_codec.h"
 #include "autorun.h"
 #include "usb_cdc.h"
 #include "tasks.h"
@@ -150,82 +151,6 @@ uint16_t bbp_crc16(const uint8_t *data, size_t len)
 }
 
 // -----------------------------------------------------------------------------
-// Low-level helpers: encode values into buffer (little-endian)
-// -----------------------------------------------------------------------------
-
-static inline void put_u8(uint8_t *buf, size_t *pos, uint8_t v)
-{
-    buf[(*pos)++] = v;
-}
-
-static inline void put_u16(uint8_t *buf, size_t *pos, uint16_t v)
-{
-    buf[(*pos)++] = (uint8_t)(v & 0xFF);
-    buf[(*pos)++] = (uint8_t)(v >> 8);
-}
-
-static inline void put_u24(uint8_t *buf, size_t *pos, uint32_t v)
-{
-    buf[(*pos)++] = (uint8_t)(v & 0xFF);
-    buf[(*pos)++] = (uint8_t)((v >> 8) & 0xFF);
-    buf[(*pos)++] = (uint8_t)((v >> 16) & 0xFF);
-}
-
-static inline void put_u32(uint8_t *buf, size_t *pos, uint32_t v)
-{
-    buf[(*pos)++] = (uint8_t)(v & 0xFF);
-    buf[(*pos)++] = (uint8_t)((v >> 8) & 0xFF);
-    buf[(*pos)++] = (uint8_t)((v >> 16) & 0xFF);
-    buf[(*pos)++] = (uint8_t)((v >> 24) & 0xFF);
-}
-
-static inline void put_f32(uint8_t *buf, size_t *pos, float v)
-{
-    uint32_t bits;
-    memcpy(&bits, &v, 4);
-    put_u32(buf, pos, bits);
-}
-
-static inline void put_bool(uint8_t *buf, size_t *pos, bool v)
-{
-    buf[(*pos)++] = v ? 0x01 : 0x00;
-}
-
-// Read helpers
-static inline uint8_t get_u8(const uint8_t *buf, size_t *pos)
-{
-    return buf[(*pos)++];
-}
-
-static inline uint16_t get_u16(const uint8_t *buf, size_t *pos)
-{
-    uint16_t v = buf[*pos] | ((uint16_t)buf[*pos + 1] << 8);
-    *pos += 2;
-    return v;
-}
-
-static inline uint32_t get_u32(const uint8_t *buf, size_t *pos)
-{
-    uint32_t v = buf[*pos] | ((uint32_t)buf[*pos+1] << 8) |
-                 ((uint32_t)buf[*pos+2] << 16) | ((uint32_t)buf[*pos+3] << 24);
-    *pos += 4;
-    return v;
-}
-
-static inline float get_f32(const uint8_t *buf, size_t *pos)
-{
-    uint32_t bits = get_u32(buf, pos);
-    float v;
-    memcpy(&v, &bits, 4);
-    return v;
-}
-
-static inline bool get_bool(const uint8_t *buf, size_t *pos)
-{
-    return buf[(*pos)++] != 0;
-}
-
-// -----------------------------------------------------------------------------
 // Send a raw COBS-framed message over CDC #0
 // -----------------------------------------------------------------------------
 
@@ -248,9 +173,9 @@ static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
     }
 
     size_t pos = 0;
-    put_u8(s_msgBuf, &pos, msgType);
-    put_u16(s_msgBuf, &pos, seq);
-    put_u8(s_msgBuf, &pos, cmdId);
+    bbp_put_u8(s_msgBuf, &pos, msgType);
+    bbp_put_u16(s_msgBuf, &pos, seq);
+    bbp_put_u8(s_msgBuf, &pos, cmdId);
     if (payload && payloadLen > 0) {
         if (pos + payloadLen + 2 > BBP_MAX_PAYLOAD) {
             ESP_LOGW(TAG, "sendMsg: payload too large (%u + %u > %u)", (unsigned)pos, (unsigned)payloadLen, BBP_MAX_PAYLOAD);
@@ -261,7 +186,7 @@ static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
         pos += payloadLen;
     }
     uint16_t crc = bbp_crc16(s_msgBuf, pos);
-    put_u16(s_msgBuf, &pos, crc);
+    bbp_put_u16(s_msgBuf, &pos, crc);
     sendFrame(s_msgBuf, pos);
 
     if (s_txMutex) xSemaphoreGive(s_txMutex);
@@ -450,14 +375,14 @@ static void processAdcStream(void)
     uint8_t evtBuf[700];  // 7 + 50*4*3 = 607 max
     size_t pos = 0;
 
-    put_u8(evtBuf, &pos, mask);
-    put_u32(evtBuf, &pos, s_adcBatch[0].timestamp_us);
-    put_u16(evtBuf, &pos, count);
+    bbp_put_u8(evtBuf, &pos, mask);
+    bbp_put_u32(evtBuf, &pos, s_adcBatch[0].timestamp_us);
+    bbp_put_u16(evtBuf, &pos, count);
 
     for (uint16_t i = 0; i < count; i++) {
         for (uint8_t ch = 0; ch < 4; ch++) {
             if (mask & (1 << ch)) {
-                put_u24(evtBuf, &pos, s_adcBatch[i].raw[ch]);
+                bbp_put_u24(evtBuf, &pos, s_adcBatch[i].raw[ch]);
             }
         }
     }
@@ -496,15 +421,15 @@ static void processScopeStream(void)
 
         uint8_t evtBuf[64];
         size_t pos = 0;
-        put_u32(evtBuf, &pos, bucketSeq);
-        put_u32(evtBuf, &pos, b.timestamp_ms);
-        put_u16(evtBuf, &pos, b.count);
+        bbp_put_u32(evtBuf, &pos, bucketSeq);
+        bbp_put_u32(evtBuf, &pos, b.timestamp_ms);
+        bbp_put_u16(evtBuf, &pos, b.count);
 
         for (uint8_t ch = 0; ch < 4; ch++) {
             float avg = (b.count > 0) ? (b.vSum[ch] / b.count) : 0.0f;
-            put_f32(evtBuf, &pos, avg);
-            put_f32(evtBuf, &pos, b.vMin[ch]);
-            put_f32(evtBuf, &pos, b.vMax[ch]);
+            bbp_put_f32(evtBuf, &pos, avg);
+            bbp_put_f32(evtBuf, &pos, b.vMin[ch]);
+            bbp_put_f32(evtBuf, &pos, b.vMax[ch]);
         }
 
         sendEvent(BBP_EVT_SCOPE_DATA, evtBuf, pos);
