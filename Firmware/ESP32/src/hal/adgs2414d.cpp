@@ -446,7 +446,6 @@ void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES])
 
 void adgs_get_api_states(uint8_t out[ADGS_API_MAIN_DEVICES])
 {
-    memcpy(out, s_api_main_state, ADGS_API_MAIN_DEVICES);
     sync_api_main_from_physical();
     memcpy(out, s_api_main_state, ADGS_API_MAIN_DEVICES);
 }
