@@ -13,13 +13,10 @@
 #include "config.h"
 #include "quicksetup.h"
 #include "bbp_adapter.h"
-#include "esp_timer.h"
-#include "esp_wifi.h"
 #include "esp_mac.h"
 #include "esp_log.h"
 
 #include <string.h>
-#include <math.h>
 
 static const char *TAG = "bbp";
 
