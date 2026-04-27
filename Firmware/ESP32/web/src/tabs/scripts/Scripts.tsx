@@ -14,8 +14,8 @@ import { Repl } from "./Repl";
 
 const SCRIPT_UI_BUILD = "scripts-fix-20260427-1150";
 
-type PanelId = "files" | "device" | "docs";
-type BottomPanel = "logs" | "repl";
+type LeftPanelId = "files" | "device" | "docs";
+type RightPanelId = "logs" | "repl";
 
 interface EditorProps {
   initialDoc: string;
@@ -151,19 +151,35 @@ function ScriptStatusBar({ status, selectedFile, isDirty }: { status: ScriptStat
   );
 }
 
-function ActivityButton({ id, activePanel, icon, label, onClick }: {
-  id: PanelId;
-  activePanel: PanelId | null;
+function ActivityButton<T extends string>(props: {
+  id: T;
+  activePanel: T | null;
   icon: string;
   label: string;
-  onClick: (id: PanelId) => void;
+  onClick: (id: T) => void;
 }) {
-  const active = activePanel === id;
+  const active = props.activePanel === props.id;
   return (
-    <button class={`script-activity-btn ${active ? "active" : ""}`} onClick={() => onClick(id)} title={label}>
-      <span>{icon}</span>
-      <small>{label}</small>
+    <button class={`script-activity-btn ${active ? "active" : ""}`} onClick={() => props.onClick(props.id)} title={props.label}>
+      <span>{props.icon}</span>
+      <small>{props.label}</small>
     </button>
+  );
+}
+
+function Sidebar(props: {
+  side: "left" | "right";
+  activePanel: string | null;
+  children: ComponentChildren;
+  onCollapse: () => void;
+  gridClass?: string;
+}) {
+  if (!props.activePanel) return null;
+  return (
+    <aside class={`script-sidebar ${props.side} ${props.gridClass ?? ""}`}>
+      <button class="script-collapse-btn" onClick={props.onCollapse} title="Collapse sidebar">x</button>
+      {props.children}
+    </aside>
   );
 }
 
@@ -362,24 +378,6 @@ function DocsPanel() {
   );
 }
 
-function Sidebar(props: {
-  activePanel: PanelId | null;
-  filesPanel: ComponentChildren;
-  devicePanel: ComponentChildren;
-  docsPanel: ComponentChildren;
-  onCollapse: () => void;
-}) {
-  if (!props.activePanel) return null;
-  return (
-    <aside class="script-sidebar">
-      <button class="script-collapse-btn" onClick={props.onCollapse} title="Collapse sidebar">x</button>
-      {props.activePanel === "files" && props.filesPanel}
-      {props.activePanel === "device" && props.devicePanel}
-      {props.activePanel === "docs" && props.docsPanel}
-    </aside>
-  );
-}
-
 export function Scripts() {
   const [files, setFiles] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -395,8 +393,8 @@ export function Scripts() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [persistEval, setPersistEval] = useState(false);
-  const [activePanel, setActivePanel] = useState<PanelId | null>("files");
-  const [bottomPanel, setBottomPanel] = useState<BottomPanel>("logs");
+  const [activeLeftPanel, setActiveLeftPanel] = useState<LeftPanelId | null>("files");
+  const [activeRightPanel, setActiveRightPanel] = useState<RightPanelId | null>("logs");
   const [devicePanel, setDevicePanel] = useState<DevicePanelState>(EMPTY_DEVICE_PANEL);
   const editorViewRef = useRef<EditorView | null>(null);
   const logsRef = useRef<HTMLPreElement>(null);
@@ -511,18 +509,18 @@ export function Scripts() {
   useEffect(() => {
     let alive = true;
     const tick = async () => {
-      if (activePanel === "device") await refreshDevicePanel();
+      if (activeLeftPanel === "device") await refreshDevicePanel();
       if (alive) window.setTimeout(tick, 2500);
     };
     tick();
     return () => { alive = false; };
-  }, [activePanel, refreshDevicePanel]);
+  }, [activeLeftPanel, refreshDevicePanel]);
 
   useEffect(() => {
-    if (bottomPanel !== "logs") return;
+    if (activeRightPanel !== "logs") return;
     const node = logsRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [logs, bottomPanel]);
+  }, [logs, activeRightPanel]);
 
   const loadFile = useCallback(async (name: string) => {
     await runScriptAction("load", async (mac) => {
@@ -675,16 +673,19 @@ export function Scripts() {
       </div>
 
       <div class="script-ide">
-        <nav class="script-activity">
-          <ActivityButton id="files" activePanel={activePanel} icon="EX" label="Files" onClick={(id) => setActivePanel(activePanel === id ? null : id)} />
-          <ActivityButton id="device" activePanel={activePanel} icon="DV" label="Device" onClick={(id) => setActivePanel(activePanel === id ? null : id)} />
-          <ActivityButton id="docs" activePanel={activePanel} icon="API" label="Docs" onClick={(id) => setActivePanel(activePanel === id ? null : id)} />
+        <nav class="script-activity left col-1">
+          <ActivityButton id="files" activePanel={activeLeftPanel} icon="EX" label="Files" onClick={(id) => setActiveLeftPanel(activeLeftPanel === id ? null : id)} />
+          <ActivityButton id="device" activePanel={activeLeftPanel} icon="DV" label="Device" onClick={(id) => setActiveLeftPanel(activeLeftPanel === id ? null : id)} />
+          <ActivityButton id="docs" activePanel={activeLeftPanel} icon="API" label="Docs" onClick={(id) => setActiveLeftPanel(activeLeftPanel === id ? null : id)} />
         </nav>
 
         <Sidebar
-          activePanel={activePanel}
-          onCollapse={() => setActivePanel(null)}
-          filesPanel={
+          side="left"
+          activePanel={activeLeftPanel}
+          onCollapse={() => setActiveLeftPanel(null)}
+          gridClass="col-2"
+        >
+          {activeLeftPanel === "files" && (
             <FilesPanel
               files={files}
               selectedFile={selectedFile}
@@ -700,12 +701,12 @@ export function Scripts() {
               onDownload={downloadFile}
               onDelete={deleteFile}
             />
-          }
-          devicePanel={<DevicePanel vmStatus={vmStatus} device={devicePanel} />}
-          docsPanel={<DocsPanel />}
-        />
+          )}
+          {activeLeftPanel === "device" && <DevicePanel vmStatus={vmStatus} device={devicePanel} />}
+          {activeLeftPanel === "docs" && <DocsPanel />}
+        </Sidebar>
 
-        <main class="script-main">
+        <main class="script-main col-3">
           <div class="script-editor-header">
             <div class="script-tab-strip">
               <span class={`script-file-tab ${selectedFile ? "active" : ""}`}>
@@ -750,23 +751,37 @@ export function Scripts() {
               </div>
             )}
           </section>
-
-          <section class="script-bottom">
-            <div class="script-bottom-tabs">
-              <button class={bottomPanel === "logs" ? "active" : ""} onClick={() => setBottomPanel("logs")}>Logs</button>
-              <button class={bottomPanel === "repl" ? "active" : ""} onClick={() => setBottomPanel("repl")}>REPL</button>
-              {logError && <span class="script-log-error">Log poll failed: {logError}</span>}
-              <button class="script-clear-log" onClick={() => setLogs("")}>Clear logs</button>
-            </div>
-            <div class="script-bottom-body">
-              {bottomPanel === "logs" ? (
-                <pre ref={logsRef} class="script-log-output">{logs || "(no output yet)"}</pre>
-              ) : (
-                <Repl />
-              )}
-            </div>
-          </section>
         </main>
+
+        <Sidebar
+          side="right"
+          activePanel={activeRightPanel}
+          onCollapse={() => setActiveRightPanel(null)}
+          gridClass="col-4"
+        >
+          <div class="script-side-content output">
+            <div class="script-panel-head">
+              <div>
+                <span class="uppercase-tag">Output</span>
+                <h3>{activeRightPanel === "logs" ? "Logs" : "REPL"}</h3>
+              </div>
+              {logError && <span class="script-log-error" title={logError}>!</span>}
+              <button class="script-icon-btn" onClick={() => setLogs("")}>Clear</button>
+            </div>
+            {activeRightPanel === "logs" ? (
+              <pre ref={logsRef} class="script-log-output side">{logs || "(no output yet)"}</pre>
+            ) : (
+              <div class="script-side-repl">
+                <Repl />
+              </div>
+            )}
+          </div>
+        </Sidebar>
+
+        <nav class="script-activity right col-5">
+          <ActivityButton id="logs" activePanel={activeRightPanel} icon="LO" label="Logs" onClick={(id) => setActiveRightPanel(activeRightPanel === id ? null : id)} />
+          <ActivityButton id="repl" activePanel={activeRightPanel} icon="RP" label="REPL" onClick={(id) => setActiveRightPanel(activeRightPanel === id ? null : id)} />
+        </nav>
       </div>
 
       <ScriptStatusBar status={vmStatus} selectedFile={selectedFile} isDirty={isDirty} />

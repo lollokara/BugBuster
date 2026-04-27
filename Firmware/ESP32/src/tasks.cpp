@@ -535,6 +535,21 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
 
     s_device->configureAdc(channel, hwMux, hwRange, ADC_RATE_20SPS);
 
+    // ---- MUX auto-routing ---------------------------------------------------
+    // Map AD74416H channel index (0..3) to MUX device and Group A switch.
+    // Channel 0 (A) -> Device 0 (U10, IO 3)
+    // Channel 1 (B) -> Device 1 (U11, IO 6)
+    // Channel 2 (C) -> Device 2 (U16, IO 12)
+    // Channel 3 (D) -> Device 3 (U17, IO 9)
+    //
+    // Switch S3 (index 2) connects the AD74416H channel to the terminal.
+    {
+        uint8_t mux_dev = channel; 
+        bool close_analog = (func != CH_FUNC_HIGH_IMP);
+        
+        adgs_set_switch_safe(mux_dev, 2, close_analog); // S3 is index 2
+    }
+
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         g_deviceState.channels[channel].function = func;
         g_deviceState.channels[channel].adcRange = hwRange;
@@ -1363,6 +1378,34 @@ void initTasks(AD74416H& device)
 
     // Note: I2C devices (PCA9535, HUSB238, DS4424) are polled on-demand
     // by BBP/HTTP/CLI handlers — no background polling task needed.
+}
+
+void tasks_reset_hardware(void)
+{
+    if (!s_device) return;
+
+    ESP_LOGI("tasks", "Resetting hardware to safe state...");
+
+    // 1. Reset all AD74416H channels to HIGH_IMP
+    for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+        tasks_apply_channel_function(ch, CH_FUNC_HIGH_IMP);
+    }
+
+    // 2. Reset all ADGS2414D MUXes to open (handled by CH_FUNC_HIGH_IMP above for analog, 
+    //    but let's be thorough and call the global reset too).
+    adgs_reset_all();
+
+    // 3. Reset all ESP DIOs to safe input state
+    for (uint8_t i = 1; i <= 12; i++) {
+        dio_configure(i, DIO_MODE_DISABLED);
+    }
+
+    // 4. Reset HAT if connected
+    if (hat_detected()) {
+        hat_reset();
+    }
+
+    ESP_LOGI("tasks", "Hardware reset complete.");
 }
 
 bool sendCommand(const Command& cmd)

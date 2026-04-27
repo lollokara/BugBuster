@@ -13,6 +13,7 @@
 #include "script_storage.h"
 #include "config.h"
 #include "repl_ws.h"
+#include "tasks.h"
 
 // MicroPython core headers — must be wrapped in extern "C" because MP is
 // compiled as C, and its headers don't include their own extern "C" guards.
@@ -370,6 +371,7 @@ static void vm_do_deinit(void)
 {
     mp_deinit();
     bb_native_code_free_all();
+    tasks_reset_hardware();
     s_vm_initialized = false;
 }
 

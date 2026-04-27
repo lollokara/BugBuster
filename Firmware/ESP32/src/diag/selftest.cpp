@@ -423,19 +423,19 @@ bool selftest_is_supply_monitor_active(void)
 {
     return s_worker_enabled &&
            s_cal_result.status != CAL_STATUS_RUNNING &&
-           !adgs_u17_s2_active();
+           !adgs_u16_s3_active();
 }
 
 void selftest_monitor_step(void)
 {
     if (!s_worker_enabled) return;
-    // Don't run if calibration is active or U17 S2 is closed
+    // Don't run if calibration is active or U16 S3 is closed
     if (s_cal_result.status == CAL_STATUS_RUNNING) return;
     // If U23 is manually active (e.g. CLI Signal tab debug), do not touch it.
     // Monitor measurements route through U23 and would otherwise clear user state.
     if (adgs_selftest_active()) return;
 
-    if (adgs_u17_s2_active()) {
+    if (adgs_u16_s3_active()) {
         s_supply_volt.available = false;
         for (int i = 0; i < SELFTEST_RAIL_COUNT; i++)
             s_supply_volt.voltage[i] = -1.0f;
@@ -491,14 +491,14 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         return false;
     }
 
-    if (adgs_u17_s2_active()) {
-        ESP_LOGW(TAG, "U17 S2 active (IO 9 analog), attempting to open...");
-        // Ensure Channel D (terminal 10) is High-Z before opening the switch
-        tasks_apply_channel_function(3, CH_FUNC_HIGH_IMP);
-        adgs_set_switch_safe(U17_DEVICE_IDX, 1, false);
+    if (adgs_u16_s3_active()) {
+        ESP_LOGW(TAG, "U16 S3 active (IO 12 analog), attempting to open...");
+        // Ensure logical channel 2 (Physical 3, IO 12) is High-Z before opening the switch
+        tasks_apply_channel_function(2, CH_FUNC_HIGH_IMP);
+        adgs_set_switch_safe(U16_DEVICE_IDX, 2, false);
         
-        if (adgs_u17_s2_active()) {
-            ESP_LOGE(TAG, "Cannot calibrate: U17 S2 is closed and failed to open");
+        if (adgs_u16_s3_active()) {
+            ESP_LOGE(TAG, "Cannot calibrate: U16 S3 is closed and failed to open");
             return false;
         }
     }

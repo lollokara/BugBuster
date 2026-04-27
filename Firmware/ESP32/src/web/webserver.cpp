@@ -1839,8 +1839,12 @@ static esp_err_t handle_get_overview(httpd_req_t *req)
     {
         cJSON *rails = cJSON_AddArrayToObject(root, "rails");
         static const char *names[] = {"VADJ1", "VADJ2", "3V3_ADJ"};
+        bool worker_enabled = selftest_worker_enabled();
         for (uint8_t i = 0; i < 3; i++) {
-            float voltage = selftest_measure_supply(i);
+            float voltage = -1.0f;
+            if (worker_enabled) {
+                voltage = selftest_measure_supply(i);
+            }
             cJSON *obj = cJSON_CreateObject();
             cJSON_AddNumberToObject(obj, "rail", i);
             cJSON_AddStringToObject(obj, "name", names[i]);
