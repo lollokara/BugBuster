@@ -23,6 +23,7 @@ static const char* NVS_NAMESPACE = "wifi_cfg";
 static EventGroupHandle_t s_wifi_event_group = NULL;
 #define WIFI_CONNECTED_BIT BIT0
 
+static portMUX_TYPE s_wifi_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_sta_connected = false;
 static bool s_connecting    = false;   // true while wifi_connect() is in progress
 static TimerHandle_t s_reconnect_timer = NULL;
@@ -95,8 +96,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                 esp_wifi_connect();
             }
         } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            portENTER_CRITICAL(&s_wifi_state_mux);
             s_sta_connected = false;
             strncpy(s_sta_ip, "0.0.0.0", sizeof(s_sta_ip));
+            portEXIT_CRITICAL(&s_wifi_state_mux);
             // Don't auto-retry if wifi_connect() is driving the sequence
             if (!s_connecting && s_sta_ssid[0] && s_reconnect_timer) {
                 ESP_LOGI(TAG, "STA disconnected, retrying in 2s...");
@@ -115,8 +118,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*)event_data;
+        portENTER_CRITICAL(&s_wifi_state_mux);
         snprintf(s_sta_ip, sizeof(s_sta_ip), IPSTR, IP2STR(&event->ip_info.ip));
         s_sta_connected = true;
+        portEXIT_CRITICAL(&s_wifi_state_mux);
         ESP_LOGI(TAG, "STA connected, IP: %s", s_sta_ip);
         if (s_wifi_event_group) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -223,7 +228,9 @@ bool wifi_connect(const char* ssid, const char* pass)
     esp_wifi_set_config(WIFI_IF_STA, &sta_config);
     strncpy(s_sta_ssid, ssid, sizeof(s_sta_ssid) - 1);
 
+    portENTER_CRITICAL(&s_wifi_state_mux);
     s_sta_connected = false;
+    portEXIT_CRITICAL(&s_wifi_state_mux);
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
 
     esp_wifi_start();
@@ -302,8 +309,20 @@ bool wifi_connect(const char* ssid, const char* pass)
     return ok;
 }
 
-bool wifi_is_connected(void)      { return s_sta_connected; }
-const char* wifi_get_sta_ip(void)  { return s_sta_ip; }
+bool wifi_is_connected(void) {
+    portENTER_CRITICAL(&s_wifi_state_mux);
+    bool v = s_sta_connected;
+    portEXIT_CRITICAL(&s_wifi_state_mux);
+    return v;
+}
+
+const char* wifi_get_sta_ip(void) {
+    static char s_ip_copy[20];
+    portENTER_CRITICAL(&s_wifi_state_mux);
+    memcpy(s_ip_copy, s_sta_ip, sizeof(s_ip_copy));
+    portEXIT_CRITICAL(&s_wifi_state_mux);
+    return s_ip_copy;
+}
 const char* wifi_get_ap_ip(void)   { return s_ap_ip; }
 const char* wifi_get_ap_mac(void)  { return s_ap_mac; }
 const char* wifi_get_sta_ssid(void){ return s_sta_ssid; }
