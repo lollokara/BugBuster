@@ -25,6 +25,24 @@ static const char *TAG = "http_adapter";
 // Helpers shared with webserver.cpp (duplicated locally to keep adapter
 // self-contained — these are tiny one-liners)
 // ---------------------------------------------------------------------------
+
+// Apply the same localhost-only CORS policy as webserver.cpp set_cors_headers().
+// origin_buf must be a caller-frame buffer that outlives the subsequent
+// httpd_resp_send*() call (the IDF stores the pointer, not a copy).
+static void set_cors_headers_local(httpd_req_t *req, char *origin_buf, size_t origin_buf_size)
+{
+    origin_buf[0] = '\0';
+    if (httpd_req_get_hdr_value_str(req, "Origin", origin_buf, origin_buf_size) == ESP_OK) {
+        if (strncmp(origin_buf, "http://localhost", 16) == 0 ||
+            strncmp(origin_buf, "http://127.0.0.1", 16) == 0) {
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin_buf);
+            httpd_resp_set_hdr(req, "Vary", "Origin");
+        }
+    }
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+}
+
 static esp_err_t send_json_resp(httpd_req_t *req, cJSON *root)
 {
     char *str = cJSON_PrintUnformatted(root);
@@ -34,7 +52,8 @@ static esp_err_t send_json_resp(httpd_req_t *req, cJSON *root)
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char origin_buf[96];
+    set_cors_headers_local(req, origin_buf, sizeof(origin_buf));
     esp_err_t ret = httpd_resp_sendstr(req, str);
     free(str);
     return ret;
@@ -42,13 +61,14 @@ static esp_err_t send_json_resp(httpd_req_t *req, cJSON *root)
 
 static esp_err_t send_err_resp(httpd_req_t *req, int status, const char *msg)
 {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"error\":\"%s\"}", msg);
+    char body[128];
+    snprintf(body, sizeof(body), "{\"error\":\"%s\"}", msg);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char origin_buf[96];
+    set_cors_headers_local(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_status(req, status == 400 ? "400 Bad Request"
                                              : "500 Internal Server Error");
-    return httpd_resp_sendstr(req, buf);
+    return httpd_resp_sendstr(req, body);
 }
 
 static cJSON *recv_json(httpd_req_t *req)
