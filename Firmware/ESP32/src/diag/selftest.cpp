@@ -905,20 +905,12 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
 
     s_internal_supplies.valid = true;
 
-    // Check supplies against expected ranges
-#if BREADBOARD_MODE
-    s_internal_supplies.supplies_ok =
-        (s_internal_supplies.avdd_hi_v > 18.0f && s_internal_supplies.avdd_hi_v < 25.0f) &&
-        (s_internal_supplies.dvcc_v    > 4.5f  && s_internal_supplies.dvcc_v    < 5.5f)  &&
-        (s_internal_supplies.avcc_v    > 4.5f  && s_internal_supplies.avcc_v    < 5.5f)  &&
-        (s_internal_supplies.avss_v    < -13.0f && s_internal_supplies.avss_v   > -20.0f);
-#else
+    // Check supplies against expected ranges (PCB supply tolerances)
     s_internal_supplies.supplies_ok =
         (s_internal_supplies.avdd_hi_v > 13.5f && s_internal_supplies.avdd_hi_v < 16.5f) &&
         (s_internal_supplies.dvcc_v    > 3.0f  && s_internal_supplies.dvcc_v    < 3.6f)  &&
         (s_internal_supplies.avcc_v    > 4.5f  && s_internal_supplies.avcc_v    < 5.5f)  &&
         (s_internal_supplies.avss_v    < -13.5f && s_internal_supplies.avss_v   > -16.5f);
-#endif
 
     ESP_LOGI(TAG, "Internal supplies: AVDD_HI=%.1fV DVCC=%.2fV AVCC=%.2fV AVSS=%.1fV Temp=%.1fC %s",
              s_internal_supplies.avdd_hi_v, s_internal_supplies.dvcc_v,

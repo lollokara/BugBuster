@@ -15,20 +15,12 @@
 
 // -----------------------------------------------------------------------------
 // SPI Pin Definitions (AD74416H uses SYNC as active-low chip select)
-// Values below are the PCB schematic assignment. Breadboard hand-wiring used
-// GPIO8/9/10/11 — rebuild with -DBREADBOARD_MODE=1 for the old breadboard map.
+// PCB schematic assignments.
 // -----------------------------------------------------------------------------
-#if BREADBOARD_MODE
-#define PIN_SDO         GPIO_NUM_8    // MISO - Serial Data Out (from AD74416H)
-#define PIN_SDI         GPIO_NUM_9    // MOSI - Serial Data In  (to AD74416H)
-#define PIN_SYNC        GPIO_NUM_10   // CS   - Active low frame sync
-#define PIN_SCLK        GPIO_NUM_11   // SCLK - SPI clock
-#else
 #define PIN_SDO         GPIO_NUM_18   // MISO - PCB: AD74416H SDO
 #define PIN_SDI         GPIO_NUM_17   // MOSI - PCB: AD74416H SDI
 #define PIN_SYNC        GPIO_NUM_40   // CS   - PCB: AD74416H SYNC
 #define PIN_SCLK        GPIO_NUM_16   // SCLK - PCB: AD74416H SCLK
-#endif
 
 // -----------------------------------------------------------------------------
 // Control / Status Pin Definitions
@@ -36,37 +28,16 @@
 // The PCB pulls GPIO45 HIGH at boot so the strap reads 3.3V (correct for the
 // on-module flash). The firmware drives RESET from this GPIO after boot.
 // -----------------------------------------------------------------------------
-#if BREADBOARD_MODE
-#define PIN_RESET       GPIO_NUM_5    // Active low hardware reset
-#define PIN_ADC_RDY     GPIO_NUM_6    // Open-drain, active low - ADC conversion ready
-#define PIN_ALERT       GPIO_NUM_7    // Open-drain, active low - fault/alert output
-#else
 #define PIN_RESET       GPIO_NUM_45   // PCB: AD74416H RESET (ext. pull-HIGH at boot)
 #define PIN_ADC_RDY     GPIO_NUM_38   // PCB: AD74416H ADC_RDY
 #define PIN_ALERT       GPIO_NUM_39   // PCB: AD74416H ALERT
-#endif
-
-// -----------------------------------------------------------------------------
-// BREADBOARD_MODE: Set to 1 for breadboard testing, 0 for final PCB
-// Changes: I2C pins, MUX CS pin, device count, I2C speed, PCAL9535A init
-// Build override: pio run -e esp32s3 -- -DBREADBOARD_MODE=1
-// -----------------------------------------------------------------------------
-#ifndef BREADBOARD_MODE
-#define BREADBOARD_MODE  0
-#endif
 
 // -----------------------------------------------------------------------------
 // I2C Bus Pins (shared bus: DS4424, HUSB238, PCA9535)
 // -----------------------------------------------------------------------------
-#if BREADBOARD_MODE
-#define PIN_I2C_SDA     GPIO_NUM_1    // Breadboard: GPIO1
-#define PIN_I2C_SCL     GPIO_NUM_4    // Breadboard: GPIO4
-#define I2C_FREQ_HZ     100000        // 100 kHz (breadboard safe)
-#else
 #define PIN_I2C_SDA     GPIO_NUM_42   // PCB: ESP_SDA
 #define PIN_I2C_SCL     GPIO_NUM_41   // PCB: ESP_SCL
 #define I2C_FREQ_HZ     400000        // 400 kHz Fast Mode
-#endif
 #define I2C_PORT_NUM    I2C_NUM_0
 
 // I2C Device Addresses (7-bit)
@@ -75,27 +46,16 @@
 #define PCA9535_I2C_ADDR    0x23      // A2=0, A1=1, A0=1
 
 // PCA9535 Interrupt Pin
-#if BREADBOARD_MODE
-#define PIN_MUX_INT     GPIO_NUM_NC   // Not connected on breadboard (conflicts with I2C_SCL on GPIO4)
-#else
 #define PIN_MUX_INT     GPIO_NUM_3    // PCB: PCAL9535A INT output → ESP32 (GPIO4 now free for DIO IO1)
-#endif
 
 // -----------------------------------------------------------------------------
 // ADGS2414D Mux Switch Matrix
 // -----------------------------------------------------------------------------
-#if BREADBOARD_MODE
-#define PIN_MUX_CS          GPIO_NUM_12   // Breadboard: GPIO12
-#define ADGS_NUM_DEVICES    1             // Single device on breadboard
-#define ADGS_MAIN_DEVICES   1             // Main MUX devices only
-#define ADGS_HAS_SELFTEST   0             // No U23 on breadboard
-#else
 #define PIN_MUX_CS          GPIO_NUM_21   // PCB: SPI_CS_MUX (shared for all 5 devices)
 #define ADGS_NUM_DEVICES    5             // 4x main MUX + 1x self-test (U23) in daisy-chain
 #define ADGS_MAIN_DEVICES   4             // U10, U11, U16, U17
 #define ADGS_HAS_SELFTEST   1             // U23 available for self-test / calibration
 #define ADGS_SELFTEST_DEV   4             // U23 = device index 4 in daisy-chain
-#endif
 #define PIN_LSHIFT_OE       GPIO_NUM_14   // Level shifter OE (TXS0108E U13+U15)
 
 #define ADGS_NUM_SWITCHES   8

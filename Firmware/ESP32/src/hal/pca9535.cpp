@@ -181,9 +181,6 @@ bool pca9535_init(void)
     // Chip POR masks every interrupt (0x4A/0x4B = 0xFF) — on PCB we route INT → ESP32 GPIO4,
     // so we must explicitly clear mask bits for the signals we monitor.
     // Also latch the four e-fuse FLT inputs so transient trips are held until read.
-    // Gated on BREADBOARD_MODE == 0 as well: breadboard build must not touch these regs
-    // even if someone hand-swaps the part.
-#if !BREADBOARD_MODE
     if (s_is_pcal9535a) {
         // Input latch: enable only on FLT bits (P1.1, P1.3, P1.5, P1.7).
         // Leave PG bits unlatched — they're steady-state and latching would
@@ -210,7 +207,6 @@ bool pca9535_init(void)
         ESP_LOGI(TAG, "PCAL9535A: INT unmasked (mask0=0x%02X mask1=0x%02X), FLT inputs latched",
                  int_mask0, int_mask1);
     }
-#endif
 
     // Read initial inputs
     pca9535_update();

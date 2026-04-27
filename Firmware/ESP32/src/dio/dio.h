@@ -46,8 +46,7 @@ typedef struct {
 
 /**
  * @brief  Initialize the DIO module.
- *         Sets up the GPIO pin mapping for the current board mode
- *         (BREADBOARD_MODE vs PCB) but does NOT configure any pins
+ *         Sets up the GPIO pin mapping for the PCB but does NOT configure any pins
  *         as input/output — all start as DISABLED.
  */
 void dio_init(void);

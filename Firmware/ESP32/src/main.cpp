@@ -176,8 +176,8 @@ extern "C" void app_main(void)
     pin_mode_output(PIN_RESET);
     pin_write(PIN_RESET, 1);
     serial_println("[BugBuster] RESET pin HIGH");
-    serial_printf("[BugBuster] Build map: BREADBOARD_MODE=%d, SPI SDI=%d SDO=%d SCLK=%d CS_ADC=%d CS_MUX=%d\r\n",
-                  (int)BREADBOARD_MODE, (int)PIN_SDI, (int)PIN_SDO, (int)PIN_SCLK,
+    serial_printf("[BugBuster] Build map: SPI SDI=%d SDO=%d SCLK=%d CS_ADC=%d CS_MUX=%d\r\n",
+                  (int)PIN_SDI, (int)PIN_SDO, (int)PIN_SCLK,
                   (int)PIN_SYNC, (int)PIN_MUX_CS);
 
     // 3. ALERT and ADC_RDY pins
