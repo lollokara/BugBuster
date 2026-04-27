@@ -118,6 +118,8 @@ extern "C" int bugbuster_net_http_get(const char *url,
 
     if (s.oom) {
         free(s.body);
+        *body_out     = NULL;
+        *body_len_out = 0;
         return -2;   // body too large
     }
 
@@ -172,6 +174,8 @@ extern "C" int bugbuster_net_http_post(const char *url,
 
     if (s.oom) {
         free(s.body);
+        *body_out     = NULL;
+        *body_len_out = 0;
         return -2;
     }
 
