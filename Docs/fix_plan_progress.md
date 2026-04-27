@@ -333,6 +333,11 @@ From `Docs/scripting-plan-v2.md` § "Open follow-ups":
 - (2026-04-27) Wave 4A #11 landed: f3e11c5 — tasks.cpp: tasks_apply_gpio_config/output/dac_code/dac_voltage/dac_current return false and log on g_stateMutex timeout. tasks_apply_channel_function (void) deferred; changing its return type touches >3 files.
 - (2026-04-27) Wave 4A #12 landed: 47532c7 — scripting.cpp/h + autorun.cpp: add last_script_id to ScriptStatus; status_set_done captures current_script_id before zeroing it; autorun reads last_script_id.
 - **(2026-04-27) Wave 4A complete.** 11 fixes landed (10 commits + 1 no-op), 1 pre-shipped, build green after each commit.
+- (2026-04-27) Wave 4B #1 landed: 04280d9 — replace 2×5s blocking delay_ms in selftest_measure_internal_supplies with poll-for-source + 3.5s ADC settle (wait_diag_slot_ready).
+- (2026-04-27) Wave 4B #2 landed: 109a1c5 — add s_selftest_mutex (leaf lock) to serialize concurrent read_channel_d callers; prevents ch3 snapshot/restore race between boot_check and HTTP supply measurement.
+- (2026-04-27) Wave 4B #3 landed: 530a0e3 — add bus_planner_route_digital_input before dio_configure at all 3 bypass sites (webserver.cpp, cmd_dio.cpp, quicksetup.cpp); failure non-fatal.
+- (2026-04-27) Wave 4B #4 landed: b8e5d26 — tasks.cpp: restructure tasks_apply_gpio_config/output to take g_stateMutex before hardware mutation; hardware and state cache now updated atomically under the lock.
+- **(2026-04-27) Wave 4B complete.** 4 fixes landed as 4 atomic commits, build green after each.
 
 ---
 
