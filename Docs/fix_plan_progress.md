@@ -338,6 +338,13 @@ From `Docs/scripting-plan-v2.md` § "Open follow-ups":
 - (2026-04-27) Wave 4B #3 landed: 530a0e3 — add bus_planner_route_digital_input before dio_configure at all 3 bypass sites (webserver.cpp, cmd_dio.cpp, quicksetup.cpp); failure non-fatal.
 - (2026-04-27) Wave 4B #4 landed: b8e5d26 — tasks.cpp: restructure tasks_apply_gpio_config/output to take g_stateMutex before hardware mutation; hardware and state cache now updated atomically under the lock.
 - **(2026-04-27) Wave 4B complete.** 4 fixes landed as 4 atomic commits, build green after each.
+- (2026-04-27) Wave 4C #1 landed: fb29ca9 — adgs2414d.cpp: remove dead first memcpy in adgs_get_api_states (sync_api_main_from_physical overwrote it immediately).
+- (2026-04-27) Wave 4C #2 landed: 35b4f0e — husb238.cpp: remove duplicate voltage_from_selected_pdo; replace sole call site with decode_status_voltage(sel, true) (same mapping). Other 3 helpers have distinct HW-register encodings — untouched.
+- (2026-04-27) Wave 4C #3 landed: 4c560ca — bbp.cpp: delete 71-line local put_*/get_* codec block; add #include "bbp_codec.h"; rename 17 call sites to bbp_put_*/bbp_get_* prefix.
+- (2026-04-27) Wave 4C #4 SKIPPED — bbpDetectHandshake esp_log_level_set("*", ESP_LOG_NONE): intentional design. bbpExitBinaryMode CRITICAL comment (bbp.cpp:601-609) documents why logs stay suppressed (text on CDC#0 corrupts host still reading binary frames). s_cdcClaimed is sticky-until-reboot by design. Fix (a) contradicts the CRITICAL comment; fix (b) is already effectively implemented (only fires on magic sequence over CDC#0). Collateral damage (UART0 console loses IDF logs after BBP session) is the accepted trade-off.
+- (2026-04-27) Wave 4C sweep #1 landed: 30a6743 — bbp.cpp: remove write-only s_adcStreamDiv and s_adcDivCount (processAdcStream never reads them; rate estimate uses local div directly).
+- (2026-04-27) Wave 4C sweep #2 landed: d78f9c7 — bbp.cpp: remove unused #include esp_timer.h, esp_wifi.h, math.h (no symbols from these used after codec extraction).
+- **(2026-04-27) Wave 4C complete.** 5 changes landed (6 commits), 1 skipped with rationale. Build green after each commit.
 
 ---
 
