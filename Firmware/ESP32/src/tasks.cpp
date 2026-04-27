@@ -619,6 +619,9 @@ bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown)
         g_deviceState.dio[gpio].mode = (uint8_t)mode;
         g_deviceState.dio[gpio].pulldown = pulldown;
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_gpio_config: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
@@ -635,6 +638,9 @@ bool tasks_apply_gpio_output(uint8_t gpio, bool value)
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         g_deviceState.dio[gpio].outputVal = value;
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_gpio_output: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
@@ -654,6 +660,9 @@ bool tasks_apply_dac_code(uint8_t logical_channel, uint16_t code)
         g_deviceState.channels[logical_channel].dacValue =
             (code / 65536.0f) * VOUT_UNIPOLAR_SPAN_V;
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_dac_code: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
@@ -676,6 +685,9 @@ bool tasks_apply_dac_voltage(uint8_t logical_channel, float voltage, bool bipola
         g_deviceState.channels[logical_channel].dacCode =
             (uint16_t)(((voltage + off) / span) * 65536.0f);
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_dac_voltage: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
@@ -695,6 +707,9 @@ bool tasks_apply_dac_current(uint8_t logical_channel, float current_mA)
         g_deviceState.channels[logical_channel].dacCode =
             (uint16_t)((current_mA / IOUT_MAX_MA) * 65536.0f);
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_dac_current: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
