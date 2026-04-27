@@ -655,7 +655,9 @@ bool scripting_run_file(const char *name, uint32_t *out_id)
     cmd.id      = s_next_id++;
     cmd.payload = (char *)buf;
     cmd.len     = file_len;
-    cmd.persist = false;
+    // Propagate current persistence mode so file-runs from a PERSISTENT VM
+    // stay persistent (V2-A contract).  EPHEMERAL → persist=false (default).
+    cmd.persist = (s_mode == SCRIPTING_MODE_PERSISTENT);
 
     if (out_id) *out_id = cmd.id;
 
