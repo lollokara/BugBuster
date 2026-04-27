@@ -1365,7 +1365,7 @@ void initTasks(AD74416H& device)
     }
 
     // Start tasks pinned to Core 1
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskAdcPoll,
         "adcPoll",
         4096,
@@ -1373,9 +1373,11 @@ void initTasks(AD74416H& device)
         3,
         &g_adcTaskHandle,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task adcPoll — heap exhausted");
+    }
 
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskFaultMonitor,
         "faultMon",
         4096,
@@ -1383,9 +1385,11 @@ void initTasks(AD74416H& device)
         4,
         nullptr,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task faultMon — heap exhausted");
+    }
 
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskCommandProcessor,
         "cmdProc",
         8192,
@@ -1393,12 +1397,14 @@ void initTasks(AD74416H& device)
         2,
         nullptr,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task cmdProc — heap exhausted");
+    }
 
     // Waveform generator task (Core 1, with other SPI tasks)
     // Avoids competing with WiFi/network on Core 0 during tight DAC loops
     wavegenInitLut();
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskWavegen,
         "wavegen",
         4096,
@@ -1406,7 +1412,9 @@ void initTasks(AD74416H& device)
         3,
         &s_wavegenTask,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task wavegen — heap exhausted");
+    }
 
     // Note: I2C devices (PCA9535, HUSB238, DS4424) are polled on-demand
     // by BBP/HTTP/CLI handlers — no background polling task needed.
