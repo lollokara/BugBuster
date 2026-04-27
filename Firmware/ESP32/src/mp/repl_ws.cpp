@@ -28,6 +28,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
+#include "freertos/timers.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -45,6 +46,8 @@ static const char *TAG = "repl_ws";
 // WS close status codes (sent as big-endian uint16 in close payload).
 #define WS_CLOSE_AUTH_FAILED    4001u
 #define WS_CLOSE_SESSION_IN_USE 4002u
+// Seconds a connected-but-unauthenticated client may hold the REPL slot.
+#define REPL_AUTH_TIMEOUT_MS    10000u
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -75,12 +78,54 @@ static SemaphoreHandle_t s_tx_sem   = NULL; // counting semaphore; signals tx_ta
 // TX task handle (kept for deletion on session close).
 static TaskHandle_t s_tx_task_handle = NULL;
 
+// One-shot timer that fires REPL_AUTH_TIMEOUT_MS after session open.
+// If the client hasn't authenticated by then, session_close() is called.
+static TimerHandle_t s_auth_timer = NULL;
+
 // ---------------------------------------------------------------------------
 // Forward declarations
 // ---------------------------------------------------------------------------
 
 static void repl_tx_task(void *pvParam);
 static esp_err_t send_close_frame(httpd_handle_t hd, int fd, uint16_t code);
+static void session_close(void);
+
+// ---------------------------------------------------------------------------
+// Auth-timeout timer
+// ---------------------------------------------------------------------------
+
+// Timer callback: fires if the client hasn't authenticated within
+// REPL_AUTH_TIMEOUT_MS of connecting.  Runs in the FreeRTOS timer daemon task.
+static void auth_timeout_cb(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+    if (!s_authenticated && s_repl_fd >= 0) {
+        ESP_LOGW(TAG, "Auth timeout — closing unauthenticated REPL session fd=%d", s_repl_fd);
+        // Send close frame then tear down session state.
+        if (s_server) {
+            send_close_frame(s_server, s_repl_fd, WS_CLOSE_AUTH_FAILED);
+        }
+        session_close();
+    }
+}
+
+static void auth_timer_arm(void)
+{
+    if (!s_auth_timer) {
+        s_auth_timer = xTimerCreate("repl_auth", pdMS_TO_TICKS(REPL_AUTH_TIMEOUT_MS),
+                                    pdFALSE, NULL, auth_timeout_cb);
+    }
+    if (s_auth_timer) {
+        xTimerStart(s_auth_timer, 0);
+    }
+}
+
+static void auth_timer_disarm(void)
+{
+    if (s_auth_timer) {
+        xTimerStop(s_auth_timer, 0);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TX ring helpers (must be called with s_tx_mutex held)
@@ -205,6 +250,7 @@ static esp_err_t send_close_frame(httpd_handle_t hd, int fd, uint16_t code)
 
 static void session_close(void)
 {
+    auth_timer_disarm();
     s_repl_fd       = -1;
     s_authenticated = false;
     s_line_len      = 0;
@@ -286,6 +332,10 @@ static esp_err_t handle_repl_ws(httpd_req_t *req)
             }
         }
 
+        // Arm the auth-frame deadline: close the slot if the client hasn't
+        // authenticated within REPL_AUTH_TIMEOUT_MS.
+        auth_timer_arm();
+
         ESP_LOGI(TAG, "REPL session open fd=%d — awaiting auth frame", fd);
         return ESP_OK; // httpd completes the upgrade
     }
@@ -351,6 +401,7 @@ static esp_err_t handle_repl_ws(httpd_req_t *req)
         }
 
         s_authenticated = true;
+        auth_timer_disarm();
         ESP_LOGI(TAG, "REPL authenticated fd=%d", fd);
 
         // Send a welcome banner so xterm.js renders something immediately.
