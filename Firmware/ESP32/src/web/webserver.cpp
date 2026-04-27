@@ -54,13 +54,23 @@ static const char* TAG = "webserver";
 
 static httpd_handle_t s_server = NULL;
 
+#define BUGBUSTER_WEB_BUILD_MARKER "scripts-fix-20260427-1150"
+
+#ifndef BUGBUSTER_TRACE_URI_REGISTRATION
+#define BUGBUSTER_TRACE_URI_REGISTRATION 0
+#endif
+
 static esp_err_t register_uri_handler_checked(httpd_handle_t server, const httpd_uri_t *uri, int line)
 {
     const char *path = (uri && uri->uri) ? uri->uri : "<null>";
     int method = uri ? (int)uri->method : -1;
+#if BUGBUSTER_TRACE_URI_REGISTRATION
     serial_printf("[webserver] register line=%d method=%d uri=%s\r\n", line, method, path);
+#endif
     esp_err_t err = httpd_register_uri_handler(server, uri);
+#if BUGBUSTER_TRACE_URI_REGISTRATION
     serial_printf("[webserver] register result line=%d err=%d uri=%s\r\n", line, (int)err, path);
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "URI register failed line=%d method=%d uri=%s err=%s",
                  line, method, path, esp_err_to_name(err));
@@ -122,7 +132,13 @@ static void add_bool_alias(cJSON *obj, const char *camel, const char *snake, boo
 // Helper: CORS headers
 // -----------------------------------------------------------------------------
 
-static void set_cors_headers(httpd_req_t *req)
+// IMPORTANT: ESP-IDF httpd_resp_set_hdr() stores the *pointer* to the value,
+// not a copy. The value buffer must outlive the eventual httpd_resp_send*()
+// call. The Origin string therefore cannot live in this function's stack
+// frame — it must be owned by the caller's frame, which spans the send. The
+// caller passes in a `char origin_buf[96]` (use SET_CORS_HEADERS macro for
+// boilerplate) so the buffer outlives the headers it backs.
+static void set_cors_headers(httpd_req_t *req, char *origin_buf, size_t origin_buf_size)
 {
     // The on-device UI is always served same-origin from this same httpd, so
     // it does not need any Access-Control-Allow-Origin header to make
@@ -135,17 +151,24 @@ static void set_cors_headers(httpd_req_t *req)
     // request Origin only if it is a localhost loopback. Anything else is
     // intentionally rejected by the browser's same-origin policy because we
     // simply never advertise it as allowed.
-    char origin[96] = {0};
-    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK) {
-        if (strncmp(origin, "http://localhost", 16) == 0 ||
-            strncmp(origin, "http://127.0.0.1", 16) == 0) {
-            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin);
-            httpd_resp_set_hdr(req, "Vary", "Origin");
+    if (origin_buf && origin_buf_size > 0) {
+        origin_buf[0] = '\0';
+        if (httpd_req_get_hdr_value_str(req, "Origin", origin_buf, origin_buf_size) == ESP_OK) {
+            if (strncmp(origin_buf, "http://localhost", 16) == 0 ||
+                strncmp(origin_buf, "http://127.0.0.1", 16) == 0) {
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin_buf);
+                httpd_resp_set_hdr(req, "Vary", "Origin");
+            }
         }
     }
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, " ADMIN_TOKEN_HEADER);
 }
+
+// Callers must supply a stack buffer with lifetime spanning the
+// httpd_resp_send*() call:
+//     char origin_buf[96];
+//     set_cors_headers(req, origin_buf, sizeof(origin_buf));
 
 // -----------------------------------------------------------------------------
 // Helper: Check Admin Authentication
@@ -176,7 +199,8 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
         cJSON_Delete(root);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON encode failed");
     }
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
 
@@ -195,7 +219,8 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
 
 static esp_err_t send_raw_json(httpd_req_t *req, const char *body, int code = 200)
 {
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     if (code != 200) {
@@ -221,11 +246,13 @@ static esp_err_t send_error(httpd_req_t *req, int code, const char *msg)
 static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
 {
     if (error == HTTPD_404_NOT_FOUND) {
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
     }
     if (error == HTTPD_405_METHOD_NOT_ALLOWED) {
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
     }
 
@@ -381,13 +408,16 @@ static esp_err_t handle_root(httpd_req_t *req)
 {
     FILE *f = fopen("/spiffs/index.html", "r");
     if (!f) {
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
+    httpd_resp_set_hdr(req, "X-BugBuster-Web-Build", BUGBUSTER_WEB_BUILD_MARKER);
     char buf[512];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
@@ -440,26 +470,30 @@ static esp_err_t handle_static_asset(httpd_req_t *req)
     const char *prefix = "/assets/";
     size_t prefix_len = strlen(prefix);
     if (uri_len <= prefix_len || strncmp(uri, prefix, prefix_len) != 0) {
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_404(req);
     }
 
     // Reject path traversal.
     if (strstr(uri, "..") != NULL) {
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad path");
     }
 
     // Build /spiffs<uri> path (bounded).
     char fs_path[160];
     if (uri_len + sizeof("/spiffs") > sizeof(fs_path)) {
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Path too long");
     }
     int written = snprintf(fs_path, sizeof(fs_path), "/spiffs%.*s",
                            (int)uri_len, uri);
     if (written <= 0 || (size_t)written >= sizeof(fs_path)) {
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Path too long");
     }
 
@@ -487,11 +521,13 @@ static esp_err_t handle_static_asset(httpd_req_t *req)
     FILE *f = fopen(open_path, "rb");
     if (!f) {
         ESP_LOGW(TAG, "Asset not found: %s", open_path);
-        set_cors_headers(req);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_404(req);
     }
 
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, mime_from_path(fs_path));
     if (serve_gzipped) {
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
@@ -725,7 +761,8 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
     httpd_resp_set_hdr(req, "X-Accel-Buffering", "no");
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
 
     // Send a leading retry hint so the browser's auto-reconnect spaces out
     // a little if the device reboots. EventSource default is 3 s — bump to
@@ -2117,7 +2154,8 @@ static esp_err_t handle_uart_post_dispatch(httpd_req_t *req)
 // OPTIONS /api/* - CORS preflight
 static esp_err_t handle_options(httpd_req_t *req)
 {
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_status(req, "204");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
@@ -3182,6 +3220,7 @@ static esp_err_t handle_get_version(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "fwMinor", BBP_FW_VERSION_MINOR);
     cJSON_AddNumberToObject(root, "fwPatch", BBP_FW_VERSION_PATCH);
     cJSON_AddNumberToObject(root, "protoVersion", BBP_PROTO_VERSION);
+    cJSON_AddStringToObject(root, "webBuild", BUGBUSTER_WEB_BUILD_MARKER);
     if (running) {
         cJSON_AddStringToObject(root, "partition", running->label);
         cJSON_AddNumberToObject(root, "partitionSize", running->size);
@@ -3614,12 +3653,33 @@ static esp_err_t handle_get_scripts_logs(httpd_req_t *req)
     char *buf = (char*)malloc(MP_LOG_RING_SIZE + 1);
     if (!buf) return send_error(req, 500, "Out of memory");
 
-    size_t len = scripting_get_logs(buf, MP_LOG_RING_SIZE);
+    bool use_cursor = false;
+    uint64_t since = 0;
+    char query[64] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char since_val[24] = {0};
+        if (httpd_query_key_value(query, "since", since_val, sizeof(since_val)) == ESP_OK) {
+            use_cursor = true;
+            since = strtoull(since_val, NULL, 10);
+        }
+    }
+
+    uint64_t next = since;
+    size_t len = use_cursor
+        ? scripting_get_logs_since(buf, MP_LOG_RING_SIZE, since, &next)
+        : scripting_get_logs(buf, MP_LOG_RING_SIZE);
     buf[len] = '\0';
 
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    if (use_cursor) {
+        char next_hdr[24];
+        snprintf(next_hdr, sizeof(next_hdr), "%llu", (unsigned long long)next);
+        httpd_resp_set_hdr(req, "X-BugBuster-Log-Next", next_hdr);
+        httpd_resp_set_hdr(req, "Access-Control-Expose-Headers", "X-BugBuster-Log-Next");
+    }
     esp_err_t ret = httpd_resp_send(req, buf, (ssize_t)len);
     free(buf);
     return ret;
@@ -3739,6 +3799,31 @@ static esp_err_t handle_get_scripts_files(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/scripts/storage — SPIFFS/script storage telemetry
+static esp_err_t handle_get_scripts_storage(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    size_t total = 0;
+    size_t used = 0;
+    esp_err_t err = esp_spiffs_info(NULL, &total, &used);
+    if (err != ESP_OK) {
+        return send_error(req, 500, "SPIFFS info unavailable");
+    }
+
+    static char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
+    int count = script_storage_list(s_names, SCRIPT_LIST_MAX);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "totalBytes", (double)total);
+    cJSON_AddNumberToObject(root, "usedBytes", (double)used);
+    cJSON_AddNumberToObject(root, "freeBytes", (double)((total > used) ? (total - used) : 0));
+    cJSON_AddNumberToObject(root, "scriptCount", count);
+    cJSON_AddNumberToObject(root, "maxScriptBytes", SCRIPT_BODY_MAX);
+    cJSON_AddNumberToObject(root, "maxScripts", SCRIPT_LIST_MAX);
+    return send_json(req, root);
+}
+
 // GET /api/scripts/files/get  — download a script file
 // Query param: name=<filename>
 static esp_err_t handle_get_scripts_file(httpd_req_t *req)
@@ -3768,7 +3853,8 @@ static esp_err_t handle_get_scripts_file(httpd_req_t *req)
         return send_error(req, 404, err);
     }
 
-    set_cors_headers(req);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, "text/x-python; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     esp_err_t ret = httpd_resp_send(req, (const char *)buf, (ssize_t)file_len);
@@ -3905,17 +3991,23 @@ void initWebServer(void)
     quicksetup_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 128;  // V2-A push count to 77+4=81 over old 80 cap → silent overflow → boot crash
+    // Keep route capacity close to the real table size. The current explicit
+    // route count is 77 plus the REPL WebSocket and wildcard OPTIONS; 96 gives
+    // safe headroom without reserving another 32 unused handler slots from heap.
+    config.max_uri_handlers = 96;
     config.uri_match_fn     = httpd_uri_match_wildcard;
-    config.stack_size       = 12288;  // Increased for OTA buffer
+    // HTTPD task stack must fit in the largest remaining internal-RAM block
+    // after core firmware tasks are up. Upload/OTA handlers use heap buffers,
+    // not large stack buffers, so 8 KB is the safer boot-time tradeoff here.
+    config.stack_size       = 8192;
     // SSE handlers (e.g. /api/scope/stream) hold a worker socket open for
     // the lifetime of the browser tab. lru_purge_enable lets the httpd
     // evict the least-recently-used connection when a new one arrives, so
     // a forgotten tab can't permanently starve other clients.
     config.lru_purge_enable = true;
-    // Bump from the default 7 — leaves headroom for one persistent SSE +
-    // concurrent REST polls without deadlocking.
-    config.max_open_sockets = 10;
+    // Keep the default socket budget. Raising this reserves more HTTPD-side
+    // resources during a boot path that is already internal-heap constrained.
+    config.max_open_sockets = 7;
 
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {
@@ -4298,6 +4390,11 @@ void initWebServer(void)
         .uri = "/api/scripts/files", .method = HTTP_GET, .handler = handle_get_scripts_files, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_scripts_files_get);
+
+    httpd_uri_t uri_scripts_storage = {
+        .uri = "/api/scripts/storage", .method = HTTP_GET, .handler = handle_get_scripts_storage, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_scripts_storage);
 
     httpd_uri_t uri_scripts_file_get = {
         .uri = "/api/scripts/files/get", .method = HTTP_GET, .handler = handle_get_scripts_file, .user_ctx = NULL
