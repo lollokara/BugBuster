@@ -368,6 +368,7 @@ static int handler_script_autorun(const uint8_t *payload, size_t len,
 // ---------------------------------------------------------------------------
 
 static const ArgSpec s_script_eval_args[] = {
+    { "flags",   ARG_U8,   true,  0, 0xFF },  // bit0: persist; must be first — handler reads payload[0]
     { "src_len", ARG_U16,  true,  0, SCRIPT_MAX_SRC_LEN },
     { "src",     ARG_BLOB, false, 0, 0 },
 };
