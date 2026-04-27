@@ -345,6 +345,8 @@ From `Docs/scripting-plan-v2.md` § "Open follow-ups":
 - (2026-04-27) Wave 4C sweep #1 landed: 30a6743 — bbp.cpp: remove write-only s_adcStreamDiv and s_adcDivCount (processAdcStream never reads them; rate estimate uses local div directly).
 - (2026-04-27) Wave 4C sweep #2 landed: d78f9c7 — bbp.cpp: remove unused #include esp_timer.h, esp_wifi.h, math.h (no symbols from these used after codec extraction).
 - **(2026-04-27) Wave 4C complete.** 5 changes landed (6 commits), 1 skipped with rationale. Build green after each commit.
+- (2026-04-27) Cleanup #1 landed: 98f42c6 — chore(config): remove BREADBOARD_MODE; hardware is PCB-only. 8 files, 113 LOC deleted. config.h, status_led.cpp, selftest.cpp, pca9535.cpp, dio.cpp, dio.h, hat.h, main.cpp. PCB branches kept throughout. Build green: Flash 27.2%, RAM 36.9%.
+- (2026-04-27) Cleanup #2 landed: fd75896, 5cedf30, 507f340, 0cc6233 — serial_print* → term_* (BBP gate) migration across webserver.cpp (2 sites), cli_cmds_sys.cpp (~45 sites), cli_cmds_dev.cpp (~40 sites), main.cpp (4 post-mainLoopTask sites). tasks.cpp FATAL abort paths (2 sites) annotated as pre-BBP boot output and left as-is. Build green: Flash 27.2%, RAM 36.9%.
 
 ---
 
