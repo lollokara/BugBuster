@@ -9,6 +9,7 @@
 
 #include "cli_cmds_sys.h"
 #include "cli_shared.h"
+#include "cli_term.h"
 #include "serial_io.h"
 #include "tasks.h"
 #include "config.h"
@@ -68,11 +69,11 @@ static void coredump_print_summary(void)
 {
     esp_err_t check = esp_core_dump_image_check();
     if (check == ESP_ERR_NOT_FOUND) {
-        serial_println("[coredump] none stored");
+        term_println("[coredump] none stored");
         return;
     }
     if (check != ESP_OK) {
-        serial_printf("[coredump] stored image is invalid: %s\r\n", esp_err_to_name(check));
+        term_printf("[coredump] stored image is invalid: %s\r\n", esp_err_to_name(check));
         return;
     }
 
@@ -80,7 +81,7 @@ static void coredump_print_summary(void)
     size_t size = 0;
     esp_err_t err = esp_core_dump_image_get(&addr, &size);
     if (err == ESP_OK) {
-        serial_printf("[coredump] flash image: addr=0x%08x size=%u bytes\r\n",
+        term_printf("[coredump] flash image: addr=0x%08x size=%u bytes\r\n",
                       (unsigned)addr, (unsigned)size);
     }
 
@@ -88,29 +89,29 @@ static void coredump_print_summary(void)
     char reason[192] = {0};
     err = esp_core_dump_get_panic_reason(reason, sizeof(reason));
     if (err == ESP_OK && reason[0] != '\0') {
-        serial_printf("[coredump] panic: %s\r\n", reason);
+        term_printf("[coredump] panic: %s\r\n", reason);
     }
 
     esp_core_dump_summary_t summary = {};
     err = esp_core_dump_get_summary(&summary);
     if (err == ESP_OK) {
-        serial_printf("[coredump] task=%s tcb=0x%08x pc=0x%08x cause=%u vaddr=0x%08x\r\n",
+        term_printf("[coredump] task=%s tcb=0x%08x pc=0x%08x cause=%u vaddr=0x%08x\r\n",
                       summary.exc_task,
                       (unsigned)summary.exc_tcb,
                       (unsigned)summary.exc_pc,
                       (unsigned)summary.ex_info.exc_cause,
                       (unsigned)summary.ex_info.exc_vaddr);
-        serial_printf("[coredump] backtrace depth=%u corrupted=%u:",
+        term_printf("[coredump] backtrace depth=%u corrupted=%u:",
                       (unsigned)summary.exc_bt_info.depth,
                       (unsigned)summary.exc_bt_info.corrupted);
         uint32_t depth = summary.exc_bt_info.depth;
         if (depth > 16) depth = 16;
         for (uint32_t i = 0; i < depth; i++) {
-            serial_printf(" 0x%08x", (unsigned)summary.exc_bt_info.bt[i]);
+            term_printf(" 0x%08x", (unsigned)summary.exc_bt_info.bt[i]);
         }
-        serial_println("");
+        term_println("");
     } else {
-        serial_printf("[coredump] summary unavailable: %s\r\n", esp_err_to_name(err));
+        term_printf("[coredump] summary unavailable: %s\r\n", esp_err_to_name(err));
     }
 #endif
 }
@@ -119,7 +120,7 @@ static void coredump_dump_base64(void)
 {
     esp_err_t check = esp_core_dump_image_check();
     if (check != ESP_OK) {
-        serial_printf("[coredump] cannot dump: %s\r\n", esp_err_to_name(check));
+        term_printf("[coredump] cannot dump: %s\r\n", esp_err_to_name(check));
         return;
     }
 
@@ -127,14 +128,14 @@ static void coredump_dump_base64(void)
     size_t size = 0;
     esp_err_t err = esp_core_dump_image_get(&addr, &size);
     if (err != ESP_OK) {
-        serial_printf("[coredump] image_get failed: %s\r\n", esp_err_to_name(err));
+        term_printf("[coredump] image_get failed: %s\r\n", esp_err_to_name(err));
         return;
     }
 
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, "coredump");
     if (!part || addr < part->address || (addr + size) > (part->address + part->size)) {
-        serial_println("[coredump] coredump partition/address mismatch");
+        term_println("[coredump] coredump partition/address mismatch");
         return;
     }
 
@@ -143,13 +144,13 @@ static void coredump_dump_base64(void)
     size_t offset = addr - part->address;
     size_t remaining = size;
 
-    serial_printf("===== BUGBUSTER CORE DUMP START addr=0x%08x size=%u =====\r\n",
+    term_printf("===== BUGBUSTER CORE DUMP START addr=0x%08x size=%u =====\r\n",
                   (unsigned)addr, (unsigned)size);
     while (remaining > 0) {
         size_t chunk = remaining < sizeof(raw) ? remaining : sizeof(raw);
         err = esp_partition_read(part, offset, raw, chunk);
         if (err != ESP_OK) {
-            serial_printf("\r\n[coredump] read failed at offset 0x%08x: %s\r\n",
+            term_printf("\r\n[coredump] read failed at offset 0x%08x: %s\r\n",
                           (unsigned)offset, esp_err_to_name(err));
             break;
         }
@@ -157,17 +158,17 @@ static void coredump_dump_base64(void)
         size_t olen = 0;
         int b64 = mbedtls_base64_encode(enc, sizeof(enc), &olen, raw, chunk);
         if (b64 != 0) {
-            serial_printf("\r\n[coredump] base64 encode failed: %d\r\n", b64);
+            term_printf("\r\n[coredump] base64 encode failed: %d\r\n", b64);
             break;
         }
         enc[olen] = '\0';
-        serial_println((const char*)enc);
+        term_println((const char*)enc);
 
         offset += chunk;
         remaining -= chunk;
         vTaskDelay(pdMS_TO_TICKS(2));
     }
-    serial_println("===== BUGBUSTER CORE DUMP END =====");
+    term_println("===== BUGBUSTER CORE DUMP END =====");
 }
 
 extern "C" void coredump_diag_print_boot_report(void)
@@ -177,12 +178,12 @@ extern "C" void coredump_diag_print_boot_report(void)
         return;
     }
 
-    serial_println("");
-    serial_println("=== Saved ESP panic coredump detected ===");
+    term_println("");
+    term_println("=== Saved ESP panic coredump detected ===");
     coredump_print_summary();
-    serial_println("[coredump] Use `coredump dump` to print base64 ELF data.");
-    serial_println("[coredump] Use `coredump clear` after capture.");
-    serial_println("");
+    term_println("[coredump] Use `coredump dump` to print base64 ELF data.");
+    term_println("[coredump] Use `coredump clear` after capture.");
+    term_println("");
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +192,7 @@ extern "C" void coredump_diag_print_boot_report(void)
 
 extern "C" void cli_cmd_gpio(const char* args)
 {
-    if (!g_cli_dev) { serial_println("ERROR: Device not initialised"); return; }
+    if (!g_cli_dev) { term_println("ERROR: Device not initialised"); return; }
 
     // Skip leading whitespace
     while (*args == ' ') args++;
@@ -200,9 +201,9 @@ extern "C" void cli_cmd_gpio(const char* args)
     if (*args == '\0') {
         extern AD74416H_SPI spiDriver;
 
-        serial_println("\r\n--- GPIO Status (A-F) ---");
-        serial_println(" Pin | Mode     | Out | In | Pulldown | Reg Raw");
-        serial_println("-----|----------|-----|----|----------|--------");
+        term_println("\r\n--- GPIO Status (A-F) ---");
+        term_println(" Pin | Mode     | Out | In | Pulldown | Reg Raw");
+        term_println("-----|----------|-----|----|----------|--------");
 
         for (uint8_t g = 0; g < 6; g++) {
             GpioState gs;
@@ -217,7 +218,7 @@ extern "C" void cli_cmd_gpio(const char* args)
             uint16_t raw = 0;
             spiDriver.readRegister(AD74416H_REG_GPIO_CONFIG(g), &raw);
 
-            serial_printf("  %c  | %-8s |  %d  |  %d |    %s   | 0x%04X\r\n",
+            term_printf("  %c  | %-8s |  %d  |  %d |    %s   | 0x%04X\r\n",
                            'A' + g,
                            gpioModeName(gs.mode),
                            (int)gs.outputVal,
@@ -231,11 +232,11 @@ extern "C" void cli_cmd_gpio(const char* args)
     // Parse pin argument
     int pin = parseGpioPin(args);
     if (pin < 0) {
-        serial_println("Usage: gpio                  Show all GPIO status");
-        serial_println("       gpio <pin> mode <0-4> Set GPIO mode");
-        serial_println("       gpio <pin> set <0|1>  Set GPIO output");
-        serial_println("       gpio <pin> read       Read GPIO input");
-        serial_println("  Pin: 0-5 or A-F");
+        term_println("Usage: gpio                  Show all GPIO status");
+        term_println("       gpio <pin> mode <0-4> Set GPIO mode");
+        term_println("       gpio <pin> set <0|1>  Set GPIO output");
+        term_println("       gpio <pin> read       Read GPIO input");
+        term_println("  Pin: 0-5 or A-F");
         return;
     }
 
@@ -255,14 +256,14 @@ extern "C" void cli_cmd_gpio(const char* args)
     if (strcmp(subcmd, "mode") == 0) {
         unsigned int mode;
         if (sscanf(args, "%u", &mode) != 1 || mode > 4) {
-            serial_println("Usage: gpio <pin> mode <0-4>");
-            serial_println("  0=HIGH_IMP 1=OUTPUT 2=INPUT 3=DIN_OUT 4=DO_EXT");
+            term_println("Usage: gpio <pin> mode <0-4>");
+            term_println("  0=HIGH_IMP 1=OUTPUT 2=INPUT 3=DIN_OUT 4=DO_EXT");
             return;
         }
 
         bool pulldown = (mode != 1);  // default: pulldown off for OUTPUT, on for others
 
-        serial_printf("Setting GPIO_%c mode to %s (pulldown=%s)...\r\n",
+        term_printf("Setting GPIO_%c mode to %s (pulldown=%s)...\r\n",
                        'A' + pin, gpioModeName((uint8_t)mode), pulldown ? "on" : "off");
 
         Command cmd;
@@ -273,16 +274,16 @@ extern "C" void cli_cmd_gpio(const char* args)
         sendCommand(cmd);
 
         delay_ms(50);
-        serial_println("Done.");
+        term_println("Done.");
 
     } else if (strcmp(subcmd, "set") == 0) {
         unsigned int val;
         if (sscanf(args, "%u", &val) != 1 || val > 1) {
-            serial_println("Usage: gpio <pin> set <0|1>");
+            term_println("Usage: gpio <pin> set <0|1>");
             return;
         }
 
-        serial_printf("Setting GPIO_%c output = %s\r\n", 'A' + pin, val ? "HIGH" : "LOW");
+        term_printf("Setting GPIO_%c output = %s\r\n", 'A' + pin, val ? "HIGH" : "LOW");
 
         Command cmd;
         cmd.type = CMD_GPIO_SET;
@@ -291,16 +292,16 @@ extern "C" void cli_cmd_gpio(const char* args)
         sendCommand(cmd);
 
         delay_ms(20);
-        serial_println("Done.");
+        term_println("Done.");
 
     } else if (strcmp(subcmd, "read") == 0) {
         bool state = g_cli_dev->readGpioInput((uint8_t)pin);
-        serial_printf("GPIO_%c input: %s (%d)\r\n", 'A' + pin, state ? "HIGH" : "LOW", (int)state);
+        term_printf("GPIO_%c input: %s (%d)\r\n", 'A' + pin, state ? "HIGH" : "LOW", (int)state);
 
     } else {
-        serial_println("Usage: gpio <pin> mode <0-4>");
-        serial_println("       gpio <pin> set <0|1>");
-        serial_println("       gpio <pin> read");
+        term_println("Usage: gpio <pin> mode <0-4>");
+        term_println("       gpio <pin> set <0|1>");
+        term_println("       gpio <pin> read");
     }
 }
 
@@ -312,38 +313,38 @@ extern "C" void cli_cmd_wifi(const char* args)
 {
     // No args: show status
     if (!args || !*args) {
-        serial_println("\r\n--- WiFi Status ---");
-        serial_printf("  Mode:    AP+STA\r\n");
-        serial_printf("  AP SSID: %s\r\n", WIFI_SSID);
-        serial_printf("  AP IP:   %s\r\n", wifi_get_ap_ip());
-        serial_printf("  AP MAC:  %s\r\n", wifi_get_ap_mac());
+        term_println("\r\n--- WiFi Status ---");
+        term_printf("  Mode:    AP+STA\r\n");
+        term_printf("  AP SSID: %s\r\n", WIFI_SSID);
+        term_printf("  AP IP:   %s\r\n", wifi_get_ap_ip());
+        term_printf("  AP MAC:  %s\r\n", wifi_get_ap_mac());
 
         if (wifi_is_connected()) {
-            serial_printf("  STA:     CONNECTED\r\n");
-            serial_printf("  STA SSID:%s\r\n", wifi_get_sta_ssid());
-            serial_printf("  STA IP:  %s\r\n", wifi_get_sta_ip());
-            serial_printf("  STA RSSI:%d dBm\r\n", wifi_get_rssi());
+            term_printf("  STA:     CONNECTED\r\n");
+            term_printf("  STA SSID:%s\r\n", wifi_get_sta_ssid());
+            term_printf("  STA IP:  %s\r\n", wifi_get_sta_ip());
+            term_printf("  STA RSSI:%d dBm\r\n", wifi_get_rssi());
         } else {
-            serial_printf("  STA:     NOT CONNECTED\r\n");
+            term_printf("  STA:     NOT CONNECTED\r\n");
         }
         return;
     }
 
     // Subcommand: wifi scan
     if (strcmp(args, "scan") == 0) {
-        serial_println("Scanning...");
+        term_println("Scanning...");
         wifi_scan_result_t results[20];
         int count = wifi_scan(results, 20);
         if (count == 0) {
-            serial_println("  No networks found.");
+            term_println("  No networks found.");
         } else {
-            serial_printf("  Found %d networks:\r\n", count);
-            serial_println("  # | RSSI  | Auth    | SSID");
-            serial_println("  --+-------+---------+------------------------");
+            term_printf("  Found %d networks:\r\n", count);
+            term_println("  # | RSSI  | Auth    | SSID");
+            term_println("  --+-------+---------+------------------------");
             const char* auth_names[] = {"OPEN","WEP","WPA","WPA2","WPA/2","WPA2-E","WPA3","WPA2/3","WAPI","OWE"};
             for (int i = 0; i < count; i++) {
                 const char* auth = (results[i].auth < 10) ? auth_names[results[i].auth] : "???";
-                serial_printf("  %2d| %4d  | %-7s | %s\r\n", i + 1, results[i].rssi, auth, results[i].ssid);
+                term_printf("  %2d| %4d  | %-7s | %s\r\n", i + 1, results[i].rssi, auth, results[i].ssid);
             }
         }
         return;
@@ -354,18 +355,18 @@ extern "C" void cli_cmd_wifi(const char* args)
     char pass[64] = {};
     int n = sscanf(args, "%63s %63s", ssid, pass);
     if (n < 2) {
-        serial_println("Usage: wifi [scan | <ssid> <password>]");
+        term_println("Usage: wifi [scan | <ssid> <password>]");
         return;
     }
 
-    serial_printf("Connecting to '%s'...\r\n", ssid);
+    term_printf("Connecting to '%s'...\r\n", ssid);
     bool ok = wifi_connect(ssid, pass);
 
     if (ok) {
-        serial_printf("Connected! IP: %s  RSSI: %d dBm\r\n",
+        term_printf("Connected! IP: %s  RSSI: %d dBm\r\n",
                       wifi_get_sta_ip(), wifi_get_rssi());
     } else {
-        serial_println("Connection FAILED. Check SSID and password.");
+        term_println("Connection FAILED. Check SSID and password.");
     }
 }
 
@@ -378,8 +379,8 @@ extern "C" void cli_cmd_usbpd(const char* args)
     while (*args == ' ') args++;
 
     if (!husb238_present()) {
-        serial_println("\r\n--- HUSB238 USB PD ---");
-        serial_println("  HUSB238 NOT DETECTED");
+        term_println("\r\n--- HUSB238 USB PD ---");
+        term_println("  HUSB238 NOT DETECTED");
         return;
     }
 
@@ -387,13 +388,13 @@ extern "C" void cli_cmd_usbpd(const char* args)
     const Husb238State *st = husb238_get_state();
 
     if (*args == '\0' || strcmp(args, "status") == 0) {
-        serial_println("\r\n--- HUSB238 USB PD Status ---");
-        serial_printf("  Attached:    %s\r\n", st->attached ? "YES" : "NO");
-        serial_printf("  CC:          CC%d\r\n", st->cc_direction ? 2 : 1);
-        serial_printf("  Contract:    %.0fV / %.2fA = %.1fW\r\n",
+        term_println("\r\n--- HUSB238 USB PD Status ---");
+        term_printf("  Attached:    %s\r\n", st->attached ? "YES" : "NO");
+        term_printf("  CC:          CC%d\r\n", st->cc_direction ? 2 : 1);
+        term_printf("  Contract:    %.0fV / %.2fA = %.1fW\r\n",
             st->voltage_v, st->current_a, st->power_w);
-        serial_printf("  PD Response: 0x%02X\r\n", st->pd_response);
-        serial_println("\r\n  Source PDOs:");
+        term_printf("  PD Response: 0x%02X\r\n", st->pd_response);
+        term_println("\r\n  Source PDOs:");
 
         struct { const char* name; Husb238PdoInfo pdo; float v; } pdos[] = {
             {"5V",  st->pdo_5v,  5.0f},  {"9V",  st->pdo_9v,  9.0f},
@@ -402,23 +403,23 @@ extern "C" void cli_cmd_usbpd(const char* args)
         };
         for (int i = 0; i < 6; i++) {
             if (pdos[i].pdo.detected) {
-                serial_printf("    %s: %.2fA (%.1fW)\r\n",
+                term_printf("    %s: %.2fA (%.1fW)\r\n",
                     pdos[i].name, husb238_decode_current(pdos[i].pdo.max_current),
                     pdos[i].v * husb238_decode_current(pdos[i].pdo.max_current));
             } else {
-                serial_printf("    %s: not available\r\n", pdos[i].name);
+                term_printf("    %s: not available\r\n", pdos[i].name);
             }
         }
-        serial_printf("  Selected PDO: 0x%02X\r\n", st->selected_pdo);
+        term_printf("  Selected PDO: 0x%02X\r\n", st->selected_pdo);
         return;
     }
 
     if (strcmp(args, "caps") == 0) {
-        serial_println("Requesting source capabilities...");
+        term_println("Requesting source capabilities...");
         husb238_get_src_cap();
         delay_ms(500);
         husb238_update();
-        serial_println("Done. Run 'usbpd' to see updated status.");
+        term_println("Done. Run 'usbpd' to see updated status.");
         return;
     }
 
@@ -428,7 +429,7 @@ extern "C" void cli_cmd_usbpd(const char* args)
         while (*args == ' ') args++;
         unsigned int v;
         if (sscanf(args, "%u", &v) != 1) {
-            serial_println("Usage: usbpd select <5|9|12|15|18|20>");
+            term_println("Usage: usbpd select <5|9|12|15|18|20>");
             return;
         }
         Husb238Voltage voltage;
@@ -439,22 +440,22 @@ extern "C" void cli_cmd_usbpd(const char* args)
             case 15: voltage = HUSB238_V_15V; break;
             case 18: voltage = HUSB238_V_18V; break;
             case 20: voltage = HUSB238_V_20V; break;
-            default: serial_println("Invalid voltage"); return;
+            default: term_println("Invalid voltage"); return;
         }
-        serial_printf("Selecting %uV PDO...\r\n", v);
+        term_printf("Selecting %uV PDO...\r\n", v);
         husb238_select_pdo(voltage);
-        serial_println("Triggering negotiation...");
+        term_println("Triggering negotiation...");
         husb238_go_command(HUSB238_GO_SELECT_PDO);
         delay_ms(1000);
         husb238_update();
-        serial_printf("Contract now: %.0fV / %.2fA\r\n",
+        term_printf("Contract now: %.0fV / %.2fA\r\n",
             husb238_get_state()->voltage_v, husb238_get_state()->current_a);
         return;
     }
 
-    serial_println("Usage: usbpd              Show PD status");
-    serial_println("       usbpd caps         Request source capabilities");
-    serial_println("       usbpd select <V>   Select PDO (5/9/12/15/18/20V)");
+    term_println("Usage: usbpd              Show PD status");
+    term_println("       usbpd caps         Request source capabilities");
+    term_println("       usbpd select <V>   Select PDO (5/9/12/15/18/20V)");
 }
 
 // ---------------------------------------------------------------------------
@@ -466,8 +467,8 @@ extern "C" void cli_cmd_pca(const char* args)
     while (*args == ' ') args++;
 
     if (!pca9535_present()) {
-        serial_println("\r\n--- PCA9535 IO Expander ---");
-        serial_println("  PCA9535 NOT DETECTED");
+        term_println("\r\n--- PCA9535 IO Expander ---");
+        term_println("  PCA9535 NOT DETECTED");
         return;
     }
 
@@ -475,25 +476,25 @@ extern "C" void cli_cmd_pca(const char* args)
     const PCA9535State *st = pca9535_get_state();
 
     if (*args == '\0' || strcmp(args, "status") == 0) {
-        serial_println("\r\n--- PCA9535 IO Expander Status ---");
-        serial_printf("  Port0 In:  0x%02X  Out: 0x%02X\r\n", st->input0, st->output0);
-        serial_printf("  Port1 In:  0x%02X  Out: 0x%02X\r\n", st->input1, st->output1);
+        term_println("\r\n--- PCA9535 IO Expander Status ---");
+        term_printf("  Port0 In:  0x%02X  Out: 0x%02X\r\n", st->input0, st->output0);
+        term_printf("  Port1 In:  0x%02X  Out: 0x%02X\r\n", st->input1, st->output1);
 
-        serial_println("\r\n  Power Good:");
-        serial_printf("    LOGIC_PG:  %s\r\n", st->logic_pg ? "OK" : "FAIL");
-        serial_printf("    VADJ1_PG:  %s\r\n", st->vadj1_pg ? "OK" : "FAIL");
-        serial_printf("    VADJ2_PG:  %s\r\n", st->vadj2_pg ? "OK" : "FAIL");
+        term_println("\r\n  Power Good:");
+        term_printf("    LOGIC_PG:  %s\r\n", st->logic_pg ? "OK" : "FAIL");
+        term_printf("    VADJ1_PG:  %s\r\n", st->vadj1_pg ? "OK" : "FAIL");
+        term_printf("    VADJ2_PG:  %s\r\n", st->vadj2_pg ? "OK" : "FAIL");
 
-        serial_println("\r\n  Enables:");
-        serial_printf("    VADJ1_EN:   %s\r\n", st->vadj1_en ? "ON" : "off");
-        serial_printf("    VADJ2_EN:   %s\r\n", st->vadj2_en ? "ON" : "off");
-        serial_printf("    EN_15V_A:   %s\r\n", st->en_15v ? "ON" : "off");
-        serial_printf("    EN_MUX:     %s\r\n", st->en_mux ? "ON" : "off");
-        serial_printf("    EN_USB_HUB: %s\r\n", st->en_usb_hub ? "ON" : "off");
+        term_println("\r\n  Enables:");
+        term_printf("    VADJ1_EN:   %s\r\n", st->vadj1_en ? "ON" : "off");
+        term_printf("    VADJ2_EN:   %s\r\n", st->vadj2_en ? "ON" : "off");
+        term_printf("    EN_15V_A:   %s\r\n", st->en_15v ? "ON" : "off");
+        term_printf("    EN_MUX:     %s\r\n", st->en_mux ? "ON" : "off");
+        term_printf("    EN_USB_HUB: %s\r\n", st->en_usb_hub ? "ON" : "off");
 
-        serial_println("\r\n  E-Fuses:");
+        term_println("\r\n  E-Fuses:");
         for (int i = 0; i < 4; i++) {
-            serial_printf("    EFUSE_%d:  EN=%s  FLT=%s\r\n",
+            term_printf("    EFUSE_%d:  EN=%s  FLT=%s\r\n",
                 i + 1, st->efuse_en[i] ? "ON" : "off",
                 st->efuse_flt[i] ? "FAULT!" : "ok");
         }
@@ -514,21 +515,21 @@ extern "C" void cli_cmd_pca(const char* args)
     if (sscanf(args, "%15s %u", name, &val) == 2 && val <= 1) {
         for (int i = 0; i < 9; i++) {
             if (strcmp(name, ctrls[i].name) == 0) {
-                serial_printf("Setting %s = %s...\r\n",
+                term_printf("Setting %s = %s...\r\n",
                     pca9535_control_name(ctrls[i].ctrl), val ? "ON" : "OFF");
                 if (pca9535_set_control(ctrls[i].ctrl, val != 0)) {
-                    serial_println("  OK");
+                    term_println("  OK");
                 } else {
-                    serial_println("  FAILED");
+                    term_println("  FAILED");
                 }
                 return;
             }
         }
     }
 
-    serial_println("Usage: pca                  Show IO expander status");
-    serial_println("       pca <name> <0|1>     Set control output");
-    serial_println("  Names: vadj1, vadj2, 15v, mux, usb, efuse1-4");
+    term_println("Usage: pca                  Show IO expander status");
+    term_println("       pca <name> <0|1>     Set control output");
+    term_println("  Names: vadj1, vadj2, 15v, mux, usb, efuse1-4");
 }
 
 // ---------------------------------------------------------------------------
@@ -542,16 +543,16 @@ extern "C" void cli_cmd_supplies(const char* args)
     static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
 
     const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
-    serial_println("\r\n--- Supply Voltages (cached monitor) ---");
-    serial_printf("  available=%s  timestamp=%lu ms\r\n",
+    term_println("\r\n--- Supply Voltages (cached monitor) ---");
+    term_printf("  available=%s  timestamp=%lu ms\r\n",
                   sv->available ? "YES" : "NO",
                   (unsigned long)sv->timestamp_ms);
     for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
         float v = sv->voltage[i];
         if (v >= 0.0f) {
-            serial_printf("  %s: %.3f V\r\n", rail_names[i], v);
+            term_printf("  %s: %.3f V\r\n", rail_names[i], v);
         } else {
-            serial_printf("  %s: disabled\r\n", rail_names[i]);
+            term_printf("  %s: disabled\r\n", rail_names[i]);
         }
     }
 }
@@ -565,11 +566,11 @@ extern "C" void cli_cmd_selftest(const char* args)
     while (args && *args == ' ') args++;
 
     if (!args || !*args) {
-        serial_printf("Selftest worker: %s\r\n",
+        term_printf("Selftest worker: %s\r\n",
                       selftest_worker_enabled() ? "ON" : "off");
-        serial_printf("Supply monitor active: %s\r\n",
+        term_printf("Supply monitor active: %s\r\n",
                       selftest_is_supply_monitor_active() ? "YES" : "no");
-        serial_println("Usage: selftest worker [on|off]");
+        term_println("Usage: selftest worker [on|off]");
         return;
     }
 
@@ -578,9 +579,9 @@ extern "C" void cli_cmd_selftest(const char* args)
     int fields = sscanf(args, "%15s %15s", sub, value);
     if (fields >= 1 && strcmp(sub, "worker") == 0) {
         if (fields == 1) {
-            serial_printf("Selftest worker: %s\r\n",
+            term_printf("Selftest worker: %s\r\n",
                           selftest_worker_enabled() ? "ON" : "off");
-            serial_println("Usage: selftest worker [on|off]");
+            term_println("Usage: selftest worker [on|off]");
             return;
         }
 
@@ -590,19 +591,19 @@ extern "C" void cli_cmd_selftest(const char* args)
         } else if (strcmp(value, "off") == 0 || strcmp(value, "0") == 0) {
             enable = false;
         } else {
-            serial_println("Usage: selftest worker [on|off]");
+            term_println("Usage: selftest worker [on|off]");
             return;
         }
 
         if (selftest_set_worker_enabled(enable)) {
-            serial_printf("Selftest worker %s\r\n", enable ? "enabled" : "disabled");
+            term_printf("Selftest worker %s\r\n", enable ? "enabled" : "disabled");
         } else {
-            serial_println("Failed to persist selftest worker state");
+            term_println("Failed to persist selftest worker state");
         }
         return;
     }
 
-    serial_println("Usage: selftest worker [on|off]");
+    term_println("Usage: selftest worker [on|off]");
 }
 
 // ---------------------------------------------------------------------------
@@ -612,19 +613,19 @@ extern "C" void cli_cmd_selftest(const char* args)
 extern "C" void cli_cmd_i2c_scan(const char* args)
 {
     (void)args;
-    serial_println("\r\n--- I2C Bus Scan ---");
+    term_println("\r\n--- I2C Bus Scan ---");
     int found = 0;
     for (uint8_t addr = 0x08; addr < 0x78; addr++) {
         if (i2c_bus_probe(addr)) {
-            serial_printf("  0x%02X: ACK", addr);
-            if (addr == DS4424_I2C_ADDR) serial_print(" (DS4424 IDAC)");
-            if (addr == HUSB238_I2C_ADDR) serial_print(" (HUSB238 USB-PD)");
-            if (addr == PCA9535_I2C_ADDR) serial_print(" (PCA9535 IO Exp)");
-            serial_println("");
+            term_printf("  0x%02X: ACK", addr);
+            if (addr == DS4424_I2C_ADDR) term_print(" (DS4424 IDAC)");
+            if (addr == HUSB238_I2C_ADDR) term_print(" (HUSB238 USB-PD)");
+            if (addr == PCA9535_I2C_ADDR) term_print(" (PCA9535 IO Exp)");
+            term_println("");
             found++;
         }
     }
-    serial_printf("  %d device(s) found\r\n", found);
+    term_printf("  %d device(s) found\r\n", found);
 }
 
 // ---------------------------------------------------------------------------
@@ -640,21 +641,21 @@ extern "C" void cli_cmd_mux(const char* args)
         // Show current MUX state
         uint8_t states[ADGS_NUM_DEVICES];
         adgs_get_all_states(states);
-        serial_printf("MUX state (%d device%s, fault=%d):\r\n",
+        term_printf("MUX state (%d device%s, fault=%d):\r\n",
                       ADGS_MAIN_DEVICES, ADGS_MAIN_DEVICES > 1 ? "s" : "",
                       adgs_is_faulted());
         for (int d = 0; d < ADGS_MAIN_DEVICES; d++) {
-            serial_printf("  Dev %d: 0x%02X  [", d, states[d]);
+            term_printf("  Dev %d: 0x%02X  [", d, states[d]);
             for (int s = 0; s < 8; s++) {
-                serial_printf("S%d=%s", s + 1, (states[d] >> s) & 1 ? "ON" : "__");
-                if (s < 7) serial_print(" ");
+                term_printf("S%d=%s", s + 1, (states[d] >> s) & 1 ? "ON" : "__");
+                if (s < 7) term_print(" ");
             }
-            serial_println("]");
+            term_println("]");
         }
         // Show error flags (breadboard only)
         uint8_t err = adgs_read_error_flags();
         if (err) {
-            serial_printf("  ERR flags: 0x%02X (CRC=%d SCLK=%d RW=%d)\r\n",
+            term_printf("  ERR flags: 0x%02X (CRC=%d SCLK=%d RW=%d)\r\n",
                           err, !!(err & 0x04), !!(err & 0x02), !!(err & 0x01));
         }
         return;
@@ -664,18 +665,18 @@ extern "C" void cli_cmd_mux(const char* args)
     unsigned int dev = 0, sw = 0, state = 0;
     int n = sscanf(args, "%u %u %u", &dev, &sw, &state);
     if (n < 2) {
-        serial_printf("Usage: mux                  Show MUX state\r\n");
-        serial_printf("       mux <dev> <sw> <0|1> Set switch (dev=0-%d, sw=1-8)\r\n", ADGS_MAIN_DEVICES - 1);
-        serial_println("       mux <dev> <sw>       Toggle switch");
+        term_printf("Usage: mux                  Show MUX state\r\n");
+        term_printf("       mux <dev> <sw> <0|1> Set switch (dev=0-%d, sw=1-8)\r\n", ADGS_MAIN_DEVICES - 1);
+        term_println("       mux <dev> <sw>       Toggle switch");
         return;
     }
 
     if (dev >= (unsigned)ADGS_MAIN_DEVICES) {
-        serial_printf("Invalid device %u (max %d)\r\n", dev, ADGS_MAIN_DEVICES - 1);
+        term_printf("Invalid device %u (max %d)\r\n", dev, ADGS_MAIN_DEVICES - 1);
         return;
     }
     if (sw < 1 || sw > 8) {
-        serial_printf("Invalid switch %u (use 1-8)\r\n", sw);
+        term_printf("Invalid switch %u (use 1-8)\r\n", sw);
         return;
     }
 
@@ -687,10 +688,10 @@ extern "C" void cli_cmd_mux(const char* args)
         // Toggle
         closed = !((adgs_get_state(dev) >> sw_idx) & 1);
     }
-    serial_printf("MUX dev %u S%u -> %s ...\r\n", dev, sw, closed ? "CLOSE" : "OPEN");
+    term_printf("MUX dev %u S%u -> %s ...\r\n", dev, sw, closed ? "CLOSE" : "OPEN");
     adgs_set_switch_safe((uint8_t)dev, sw_idx, closed);
     uint8_t after = adgs_get_state(dev);
-    serial_printf("  Done. Dev %u state: 0x%02X (S%u=%s)\r\n",
+    term_printf("  Done. Dev %u state: 0x%02X (S%u=%s)\r\n",
                   dev, after, sw, (after >> sw_idx) & 1 ? "ON" : "OFF");
 }
 
@@ -698,16 +699,16 @@ extern "C" void cli_cmd_mux_reset(const char* args)
 {
     (void)args;
 #if ADGS_NUM_DEVICES > 1
-    serial_println("ADGS2414D software reset is unavailable in daisy-chain mode.");
-    serial_println("Datasheet note: exiting daisy-chain mode requires a hardware reset.");
-    serial_println("Opening all switches instead.");
+    term_println("ADGS2414D software reset is unavailable in daisy-chain mode.");
+    term_println("Datasheet note: exiting daisy-chain mode requires a hardware reset.");
+    term_println("Opening all switches instead.");
     adgs_reset_all();
 #else
-    serial_println("Resetting ADGS2414D (soft reset)...");
+    term_println("Resetting ADGS2414D (soft reset)...");
     adgs_soft_reset();
-    serial_println("  Done. Re-initializing address mode...");
+    term_println("  Done. Re-initializing address mode...");
     adgs_init();
-    serial_println("  Re-initialized.");
+    term_println("  Re-initialized.");
 #endif
 }
 
@@ -720,7 +721,7 @@ extern "C" void cli_cmd_cstest(const char* args)
 {
     (void)args;
     // Toggle MUX CS pin manually to verify GPIO works
-    serial_printf("Toggling MUX CS (GPIO%d) 5 times...\r\n", PIN_MUX_CS);
+    term_printf("Toggling MUX CS (GPIO%d) 5 times...\r\n", PIN_MUX_CS);
     gpio_reset_pin(PIN_MUX_CS);
     gpio_set_direction(PIN_MUX_CS, GPIO_MODE_OUTPUT);
     for (int i = 0; i < 5; i++) {
@@ -728,9 +729,9 @@ extern "C" void cli_cmd_cstest(const char* args)
         delay_ms(500);
         gpio_set_level(PIN_MUX_CS, 1);
         delay_ms(500);
-        serial_printf("  Toggle %d done\r\n", i+1);
+        term_printf("  Toggle %d done\r\n", i+1);
     }
-    serial_println("Done. Note: SPI device may need re-init after this.");
+    term_println("Done. Note: SPI device may need re-init after this.");
 }
 
 extern "C" void cli_cmd_muxtest(const char* args)
@@ -738,12 +739,12 @@ extern "C" void cli_cmd_muxtest(const char* args)
     unsigned int val = 0xFF;
     sscanf(args, "%x", &val);
 #if ADGS_NUM_DEVICES > 1
-    serial_println("ADGS2414D address-mode test is unavailable in daisy-chain builds.");
-    serial_println("Datasheet note: exiting daisy-chain mode requires a hardware reset.");
+    term_println("ADGS2414D address-mode test is unavailable in daisy-chain builds.");
+    term_println("Datasheet note: exiting daisy-chain mode requires a hardware reset.");
 #else
-    serial_printf("Testing ADGS2414D address mode, SW_DATA=0x%02X...\r\n", val);
+    term_printf("Testing ADGS2414D address mode, SW_DATA=0x%02X...\r\n", val);
     uint8_t rb = adgs_test_address_mode((uint8_t)val);
-    serial_printf("  Read back: 0x%02X %s\r\n", rb, (rb == (uint8_t)val) ? "[MATCH]" : "[MISMATCH]");
+    term_printf("  Read back: 0x%02X %s\r\n", rb, (rb == (uint8_t)val) ? "[MATCH]" : "[MISMATCH]");
 #endif
 }
 
@@ -753,27 +754,27 @@ extern "C" void cli_cmd_spiclock(const char* args)
     while (*args == ' ') args++;
 
     if (!*args) {
-        serial_printf("Current SPI clock: %lu Hz (%.1f MHz)\r\n",
+        term_printf("Current SPI clock: %lu Hz (%.1f MHz)\r\n",
             (unsigned long)spiDriver.getClockSpeed(), spiDriver.getClockSpeed() / 1e6f);
         return;
     }
 
     unsigned long hz = strtoul(args, NULL, 10);
     if (hz == 0) {
-        serial_println("Usage: spiclock <Hz>  e.g. spiclock 10000000");
+        term_println("Usage: spiclock <Hz>  e.g. spiclock 10000000");
         return;
     }
 
-    serial_printf("Setting SPI clock to %lu Hz...\r\n", hz);
+    term_printf("Setting SPI clock to %lu Hz...\r\n", hz);
     if (spiDriver.setClockSpeed((uint32_t)hz)) {
         // Verify
         spiDriver.writeRegister(0x76, 0xA5C3);
         uint16_t rb = 0;
         bool ok = spiDriver.readRegister(0x76, &rb);
         spiDriver.writeRegister(0x76, 0x0000);
-        serial_printf("  Verify: wrote 0xA5C3, read 0x%04X — %s\r\n", rb, (rb == 0xA5C3 && ok) ? "OK" : "FAIL");
+        term_printf("  Verify: wrote 0xA5C3, read 0x%04X — %s\r\n", rb, (rb == 0xA5C3 && ok) ? "OK" : "FAIL");
     } else {
-        serial_println("  FAILED (range: 100kHz - 20MHz)");
+        term_println("  FAILED (range: 100kHz - 20MHz)");
     }
 }
 
@@ -792,7 +793,7 @@ extern "C" void cli_cmd_token(const char* args)
 
     const char *tok = auth_get_admin_token();
     if (!tok || tok[0] == '\0') {
-        serial_println("[token] admin token not initialized (NVS error?)");
+        term_println("[token] admin token not initialized (NVS error?)");
         return;
     }
 
@@ -802,19 +803,19 @@ extern "C" void cli_cmd_token(const char* args)
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
-    serial_println("");
-    serial_println("=== BugBuster admin token (HTTP pairing) ===");
-    serial_printf("  MAC          : %02x:%02x:%02x:%02x:%02x:%02x\r\n",
+    term_println("");
+    term_println("=== BugBuster admin token (HTTP pairing) ===");
+    term_printf("  MAC          : %02x:%02x:%02x:%02x:%02x:%02x\r\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     if (haveFp) {
-        serial_printf("  Fingerprint  : #%s\r\n", fp);
+        term_printf("  Fingerprint  : #%s\r\n", fp);
     }
-    serial_println("");
-    serial_println("  Token (copy the next line into the browser PairingModal):");
-    serial_printf("  %s\r\n", tok);
-    serial_println("");
-    serial_println("  Keep this secret — anyone with this token can control the device.");
-    serial_println("");
+    term_println("");
+    term_println("  Token (copy the next line into the browser PairingModal):");
+    term_printf("  %s\r\n", tok);
+    term_println("");
+    term_println("  Keep this secret — anyone with this token can control the device.");
+    term_println("");
 }
 
 extern "C" void cli_cmd_rstinfo(const char* args)
@@ -841,11 +842,11 @@ extern "C" void cli_cmd_rstinfo(const char* args)
         case ESP_RST_CPU_LOCKUP:name = "CPU_LOCKUP"; break;
         default: break;
     }
-    serial_println("\r\n--- Reset Info ---");
-    serial_printf("  esp_reset_reason: %d (%s)\r\n", (int)rr, name);
+    term_println("\r\n--- Reset Info ---");
+    term_printf("  esp_reset_reason: %d (%s)\r\n", (int)rr, name);
     const SelftestCalTrace *tr = selftest_get_cal_trace();
     if (tr && tr->magic == 0xC411B007u) {
-        serial_printf("  cal_trace: stage=%u active=%u ch=%u point=%u code=%d measured=%ld mV\r\n",
+        term_printf("  cal_trace: stage=%u active=%u ch=%u point=%u code=%d measured=%ld mV\r\n",
                       (unsigned)tr->stage, (unsigned)tr->active, (unsigned)tr->channel,
                       (unsigned)tr->point, (int)tr->code, (long)tr->measured_mv);
     }
@@ -867,14 +868,14 @@ extern "C" void cli_cmd_coredump(const char* args)
     if (strcmp(args, "clear") == 0 || strcmp(args, "erase") == 0) {
         esp_err_t err = esp_core_dump_image_erase();
         if (err == ESP_OK) {
-            serial_println("[coredump] cleared");
+            term_println("[coredump] cleared");
         } else if (err == ESP_ERR_NOT_FOUND) {
-            serial_println("[coredump] none stored");
+            term_println("[coredump] none stored");
         } else {
-            serial_printf("[coredump] clear failed: %s\r\n", esp_err_to_name(err));
+            term_printf("[coredump] clear failed: %s\r\n", esp_err_to_name(err));
         }
         return;
     }
 
-    serial_println("Usage: coredump [info|dump|clear]");
+    term_println("Usage: coredump [info|dump|clear]");
 }
