@@ -17,6 +17,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "freertos/semphr.h"
 
 #include <string.h>
 #include <math.h>
@@ -36,6 +37,13 @@ static SelftestCalResult     s_cal_result_snapshot = {};
 static bool                  s_initialized  = false;
 static TaskHandle_t          s_cal_task     = NULL;
 static portMUX_TYPE          s_cal_lock = portMUX_INITIALIZER_UNLOCKED;
+// Serializes concurrent callers of read_channel_d (e.g. boot_check vs HTTP supply
+// measurement).  Prevents the snapshot/restore race in read_channel_d where the
+// mutex is dropped between snapshot and tasks_apply_channel_function.
+// NOTE: a non-selftest concurrent BBP/HTTP mutation of ch3 remains a narrow residual
+// race (tasks_apply_channel_function cannot be called under g_stateMutex); that
+// window is sev-3 acceptable per the audit.
+static SemaphoreHandle_t     s_selftest_mutex = NULL;
 static constexpr uint32_t    CAL_TRACE_MAGIC = 0xC411B007u;
 static RTC_DATA_ATTR SelftestCalTrace s_cal_trace_rtc = {};
 static bool                  s_worker_enabled = false;
@@ -83,6 +91,21 @@ static float read_channel_d(uint8_t adc_range)
 
     AD74416H *dev = tasks_get_device();
     if (!dev) return -1.0f;
+
+    // Serialize concurrent selftest callers to prevent snapshot/restore race.
+    // Without this, a concurrent boot_check and HTTP supply-measurement call
+    // can interleave their snapshot/apply sequences, causing the restore to
+    // write stale prev_func.
+    // NOTE: tasks_apply_channel_function acquires g_stateMutex internally, so
+    // s_selftest_mutex must be rank-independent (leaf lock, never held while
+    // attempting g_stateMutex). This is safe: we only take s_selftest_mutex
+    // here, and release before returning.
+    // Residual race: a non-selftest BBP/HTTP task mutating ch3 concurrently
+    // remains a narrow window (existing API behaviour, sev-3 acceptable).
+    if (s_selftest_mutex && xSemaphoreTake(s_selftest_mutex, pdMS_TO_TICKS(12000)) != pdTRUE) {
+        ESP_LOGW(TAG, "read_channel_d: s_selftest_mutex timeout — skipping measurement");
+        return -1.0f;
+    }
 
     // Snapshot Channel D config so self-test measurement does not clobber
     // the user's manual function/config selection.
@@ -133,6 +156,7 @@ static float read_channel_d(uint8_t adc_range)
         uint32_t raw = 0;
         if (!dev->readAdcResult(3, &raw)) {
             restore_channel_d();
+            if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
             return -1.0f;
         }
         samples[i] = dev->adcCodeToVoltage(raw, (AdcRange)adc_range);
@@ -153,6 +177,7 @@ static float read_channel_d(uint8_t adc_range)
     // Restore previous Channel D function/config.
     restore_channel_d();
 
+    if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
     return voltage;
 }
 
@@ -321,6 +346,10 @@ void selftest_init(void)
     memset(&s_boot_result, 0, sizeof(s_boot_result));
     memset(&s_supply_volt, 0, sizeof(s_supply_volt));
     memset(&s_cal_result, 0, sizeof(s_cal_result));
+
+    if (!s_selftest_mutex) {
+        s_selftest_mutex = xSemaphoreCreateMutex();
+    }
 
     clear_supply_monitor_cache();
     s_cal_result.status = CAL_STATUS_IDLE;
