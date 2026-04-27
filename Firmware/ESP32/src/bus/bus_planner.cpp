@@ -166,8 +166,30 @@ static void set_err(char *err, size_t err_len, const char *msg)
 }
 
 // Apply power routing: mirrors bus.py:_apply_route (lines 512–525).
-// Order: MUX power → level-shifter OE → VLOGIC → per-route VADJ+efuse → MUX.
-static bool apply_power_and_mux(const BusRouteEntry **routes, size_t count,
+//
+// Ordering rules enforced here (audit Wave-1 #7):
+//   1. MUX power            (PCA9535: MUX rail enable)
+//   2. Level-shifter OE     (GPIO)
+//   3. VLOGIC               (DS4424 ch0 → IDAC)
+//   4. Program MUX state    (ADGS over SPI; *before* route rails come up so
+//                            output IO never sees energised rails routed to
+//                            the wrong destination)
+//   5. Per-route VADJ + e-fuse (PCA9535 enables, DS4424 sets voltage)
+//
+// Lock-order rules enforced here (audit Wave-1 #3, see
+// Docs/scripting-threading-lock-order.md):
+//   The caller already holds s_planner_mutex (rank 4). adgs_set_api_all_safe()
+//   takes g_spi_bus_mutex (rank 2). Acquiring rank 2 while holding rank 4 is
+//   the inversion that the lock-order doc forbids ("Acquire low → high.
+//   Release in reverse."). We therefore drop the planner mutex right before
+//   the SPI call and re-take it afterwards. mux_states is computed up front
+//   so the unlocked window contains zero shared state mutation — only an
+//   external SPI write of pre-computed bytes.
+//
+// `mtx` is the planner mutex (already held); ownership is returned in the
+// same state as it was on entry, even on error paths.
+static bool apply_power_and_mux(SemaphoreHandle_t mtx,
+                                 const BusRouteEntry **routes, size_t count,
                                  float supply_v, float vlogic_v,
                                  char *err, size_t err_len)
 {
@@ -186,7 +208,27 @@ static bool apply_power_and_mux(const BusRouteEntry **routes, size_t count,
         return false;
     }
 
-    // 4. Per-route: supply VADJ + e-fuse
+    // 4. Compute and program MUX state. Compute first (pure data, no I/O,
+    //    safe under the planner mutex), then drop the planner mutex so the
+    //    SPI call below acquires g_spi_bus_mutex without inverting ranks.
+    uint8_t mux_states[ADGS_API_MAIN_DEVICES];
+    compute_mux_state(routes, count, mux_states);
+
+    if (mtx) xSemaphoreGive(mtx);
+    adgs_set_api_all_safe(mux_states);
+    if (mtx) {
+        // Re-take with portMAX_DELAY: the only blocker is another top-level
+        // bus_planner_apply_* call that grabbed the planner mutex during our
+        // SPI window. That caller cannot deadlock on us (we hold no other
+        // rank-≤4 lock here), so it will release when it finishes and we
+        // proceed. Returning the helper without re-acquiring would leave
+        // the caller's `xSemaphoreGive(mtx)` operating on an unheld mutex
+        // (UB), so failing to re-take is not an option.
+        xSemaphoreTake(mtx, portMAX_DELAY);
+    }
+
+    // 5. Per-route: supply VADJ + e-fuse. MUX is already programmed, so any
+    //    energised rail is routed only to the intended destination.
     //    Walk all routes; skip duplicate supply/efuse enables (safe to enable twice).
     for (size_t i = 0; i < count; i++) {
         const BusRouteEntry *r = routes[i];
@@ -207,11 +249,6 @@ static bool apply_power_and_mux(const BusRouteEntry **routes, size_t count,
             return false;
         }
     }
-
-    // 5. Set MUX state
-    uint8_t mux_states[ADGS_API_MAIN_DEVICES];
-    compute_mux_state(routes, count, mux_states);
-    adgs_set_api_all_safe(mux_states);
 
     return true;
 }
@@ -267,7 +304,7 @@ extern "C" bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
     bool ok = false;
 
     const BusRouteEntry *routes[2] = { sda_r, scl_r };
-    if (!apply_power_and_mux(routes, 2, supply_v, vlogic_v, err, err_len)) {
+    if (!apply_power_and_mux(mtx, routes, 2, supply_v, vlogic_v, err, err_len)) {
         goto done;
     }
 
@@ -379,7 +416,7 @@ extern "C" bool bus_planner_apply_spi(uint8_t sck_io,
 
     bool ok = false;
 
-    if (!apply_power_and_mux(routes, n_routes, supply_v, vlogic_v, err, err_len)) {
+    if (!apply_power_and_mux(mtx, routes, n_routes, supply_v, vlogic_v, err, err_len)) {
         goto done;
     }
 
@@ -422,7 +459,7 @@ extern "C" bool bus_planner_route_digital_input(uint8_t io_num,
 
     // Use 3.3 V for both supply and VLOGIC — safe read-only default
     const BusRouteEntry *routes[1] = { r };
-    bool ok = apply_power_and_mux(routes, 1, 3.3f, 3.3f, err, err_len);
+    bool ok = apply_power_and_mux(mtx, routes, 1, 3.3f, 3.3f, err, err_len);
 
     xSemaphoreGive(mtx);
     return ok;
