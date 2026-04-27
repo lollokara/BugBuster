@@ -44,6 +44,7 @@
 #include "autorun.h"
 #include "repl_ws.h"
 #include "serial_io.h"
+#include "cli/cli_term.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -66,11 +67,11 @@ static esp_err_t register_uri_handler_checked(httpd_handle_t server, const httpd
     const char *path = (uri && uri->uri) ? uri->uri : "<null>";
     int method = uri ? (int)uri->method : -1;
 #if BUGBUSTER_TRACE_URI_REGISTRATION
-    serial_printf("[webserver] register line=%d method=%d uri=%s\r\n", line, method, path);
+    term_printf("[webserver] register line=%d method=%d uri=%s\r\n", line, method, path);
 #endif
     esp_err_t err = httpd_register_uri_handler(server, uri);
 #if BUGBUSTER_TRACE_URI_REGISTRATION
-    serial_printf("[webserver] register result line=%d err=%d uri=%s\r\n", line, (int)err, path);
+    term_printf("[webserver] register result line=%d err=%d uri=%s\r\n", line, (int)err, path);
 #endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "URI register failed line=%d method=%d uri=%s err=%s",
