@@ -3108,6 +3108,7 @@ static esp_err_t handle_post_bus_spi_transfer(httpd_req_t *req)
 
 static esp_err_t handle_bus_post_dispatch(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
     if (strstr(req->uri, "/api/bus/i2c/setup")) return handle_post_bus_i2c_setup(req);
     if (strstr(req->uri, "/api/bus/i2c/scan")) return handle_post_bus_i2c_scan(req);
     if (strstr(req->uri, "/api/bus/i2c/write_read")) return handle_post_bus_i2c_write_read(req);
