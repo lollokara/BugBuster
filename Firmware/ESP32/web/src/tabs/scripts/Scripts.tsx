@@ -53,8 +53,8 @@ function formatBytes(value: number | undefined): string {
 }
 
 function normalizeMode(mode: ScriptStatus["mode"]): string {
-  if (mode === "persistent" || mode === 1) return "Persistent";
-  if (mode === "ephemeral" || mode === 0) return "Ephemeral";
+  if (mode === "PERSISTENT" || mode === "persistent") return "Persistent";
+  if (mode === "EPHEMERAL" || mode === "ephemeral") return "Ephemeral";
   if (mode === undefined || mode === null) return "--";
   return String(mode);
 }

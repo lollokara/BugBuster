@@ -63,7 +63,7 @@ export interface ScriptStatus {
   totalRuns?: number;
   totalErrors?: number;
   lastError?: string;
-  mode?: number | string;
+  mode?: string;
   globalsBytes?: number;
   globalsCount?: number;
   autoResetCount?: number;

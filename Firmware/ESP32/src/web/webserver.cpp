@@ -3705,8 +3705,9 @@ static esp_err_t handle_get_scripts_status(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "totalRuns", st.total_runs);
     cJSON_AddNumberToObject(root, "totalErrors", st.total_errors);
     cJSON_AddStringToObject(root, "lastError", st.last_error_msg);
-    // V2-A persistent-mode fields
-    cJSON_AddNumberToObject(root, "mode", (int)st.mode);
+    // V2-A persistent-mode fields — mode as string enum per V2 spec
+    cJSON_AddStringToObject(root, "mode",
+        st.mode == SCRIPTING_MODE_PERSISTENT ? "PERSISTENT" : "EPHEMERAL");
     cJSON_AddNumberToObject(root, "globalsBytes", st.globals_bytes_est);
     cJSON_AddNumberToObject(root, "globalsCount", st.globals_count);
     cJSON_AddNumberToObject(root, "autoResetCount", st.auto_reset_count);
