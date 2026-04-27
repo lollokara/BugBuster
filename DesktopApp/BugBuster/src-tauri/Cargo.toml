@@ -2,7 +2,7 @@
 name = "bugbuster"
 version = "0.6.0"
 description = "BugBuster desktop app — Tauri host for the BugBuster electronics debug platform: serial/USB transport to the ESP32-S3 + RP2040 HAT, logic analyzer streaming, AD74416H I/O control."
-authors = ["Lorenzo Caradonna <swipeappstudio@gmail.com>"]
+authors = ["lollokara"]
 license = "MIT"
 repository = "https://github.com/lollokara/BugBuster"
 homepage = "https://github.com/lollokara/BugBuster"
