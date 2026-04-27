@@ -169,7 +169,8 @@ extern "C" void app_main(void)
     serial_println("\n[BugBuster] Booting (ESP-IDF)...");
     esp_reset_reason_t rr = esp_reset_reason();
     serial_printf("[BugBuster] Reset reason: %d\r\n", (int)rr);
-    coredump_diag_print_boot_report();
+    // coredump_diag_print_boot_report() called later (step 17) after all
+    // peripherals are initialised so the log output reaches the right destination.
 
     // 2. RESET pin HIGH immediately
     pin_mode_output(PIN_RESET);
