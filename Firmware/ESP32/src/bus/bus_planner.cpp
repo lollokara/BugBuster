@@ -15,6 +15,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -268,6 +269,10 @@ extern "C" bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
         set_err(err, err_len, "supply > 5.0 V not allowed");
         return false;
     }
+    if (isnan(vlogic_v) || vlogic_v < 1.2f || vlogic_v > 3.6f) {
+        set_err(err, err_len, "vlogic_v out of range [1.2, 3.6] V");
+        return false;
+    }
     if (sda_io < 1 || sda_io > 12) {
         set_err(err, err_len, "sda_io out of range 1..12");
         return false;
@@ -332,6 +337,10 @@ extern "C" bool bus_planner_apply_spi(uint8_t sck_io,
     // ── Validate ────────────────────────────────────────────────────────────
     if (supply_v > 5.0f) {
         set_err(err, err_len, "supply > 5.0 V not allowed");
+        return false;
+    }
+    if (isnan(vlogic_v) || vlogic_v < 1.2f || vlogic_v > 3.6f) {
+        set_err(err, err_len, "vlogic_v out of range [1.2, 3.6] V");
         return false;
     }
     if (sck_io < 1 || sck_io > 12) {
