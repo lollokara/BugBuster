@@ -107,6 +107,7 @@ void scripting_vm_hook(void);
 typedef struct {
     bool     is_running;
     uint32_t current_script_id;
+    uint32_t last_script_id;    // ID of the last completed script (0 on cold boot)
     uint32_t total_runs;
     uint32_t total_errors;
     char     last_error_msg[64];

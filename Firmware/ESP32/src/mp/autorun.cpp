@@ -180,7 +180,7 @@ static bool run_autorun_script(void)
         scripting_get_status(&st);
     }
 
-    s_last_run_id = st.current_script_id;
+    s_last_run_id = st.last_script_id;
 
     bool ok = (st.total_errors == 0 &&
                (st.last_error_msg[0] == '\0'));

@@ -261,6 +261,7 @@ static void status_set_done(bool had_error, const char *err_msg)
 {
     if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         s_status.is_running = false;
+        s_status.last_script_id = s_status.current_script_id;  // capture before clear
         s_status.current_script_id = 0;
         s_status.total_runs++;
         if (had_error) {
