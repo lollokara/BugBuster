@@ -708,6 +708,12 @@ static int handler_get_admin_token(const uint8_t *payload, size_t len,
     (void)payload; (void)len;
     const char *token = auth_get_admin_token();
     size_t tlen = strlen(token);
+    // Clamp so the u8 length prefix doesn't truncate and the memcpy stays
+    // within the BBP_MAX_PAYLOAD (1024-byte) response buffer.
+    // pos=0 will hold the 1-byte prefix, so token bytes start at pos=1.
+    const size_t max_token = BBP_MAX_PAYLOAD - 1;  // 1 byte reserved for prefix
+    if (tlen > 0xFF) tlen = 0xFF;
+    if (tlen > max_token) tlen = max_token;
     size_t pos = 0;
     bbp_put_u8(resp, &pos, (uint8_t)tlen);
     memcpy(resp + pos, token, tlen);
