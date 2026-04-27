@@ -2,6 +2,7 @@ name: ESP32 Firmware
 
 "on":
   workflow_dispatch:
+  workflow_call:
   pull_request:
     paths:
       - ".github/workflows/esp32-firmware.yml"

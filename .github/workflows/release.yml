@@ -1,0 +1,146 @@
+name: Combined Release
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (without leading v), e.g. 1.0.0"
+        required: true
+  push:
+    tags:
+      - "release-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: combined-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rp2040:
+    name: Build RP2040
+    uses: ./.github/workflows/rp2040-firmware.yml
+    secrets: inherit
+
+  esp32:
+    name: Build ESP32
+    uses: ./.github/workflows/esp32-firmware.yml
+    secrets: inherit
+
+  desktop:
+    name: Build Desktop
+    uses: ./.github/workflows/desktop-release.yml
+    secrets: inherit
+
+  publish:
+    name: Publish combined release
+    needs: [rp2040, esp32, desktop]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.x"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/release-v* ]]; then
+            version="${GITHUB_REF_NAME#release-v}"
+            tag="$GITHUB_REF_NAME"
+          else
+            version="${{ inputs.version }}"
+            tag="release-v${version}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "rp2040=$(python Firmware/tools/firmware_version.py rp2040)" >> "$GITHUB_OUTPUT"
+          echo "esp32=$(python Firmware/tools/firmware_version.py esp32)"   >> "$GITHUB_OUTPUT"
+          echo "desktop=$(python DesktopApp/BugBuster/scripts/desktop_version.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Download RP2040 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rp2040-firmware-*
+          path: dist/rp2040
+          merge-multiple: true
+
+      - name: Download ESP32 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: esp32-firmware-*
+          path: dist/esp32
+          merge-multiple: true
+
+      - name: Download Desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bugbuster-desktop-*
+          path: dist/desktop
+          merge-multiple: true
+
+      - name: Stage release assets
+        id: stage
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          # RP2040 + ESP32: already named with version, copy as-is
+          cp dist/rp2040/* dist/release/ || true
+          cp dist/esp32/*  dist/release/ || true
+
+          # Desktop: bundles are nested under target/release/bundle/<format>/...
+          # Pull installable artifacts (skip raw .app dirs and intermediates).
+          desktop_ver="${{ steps.version.outputs.desktop }}"
+          shopt -s globstar nullglob
+          for f in dist/desktop/**/*.dmg \
+                   dist/desktop/**/*.AppImage \
+                   dist/desktop/**/*.deb \
+                   dist/desktop/**/*.rpm \
+                   dist/desktop/**/*.msi \
+                   dist/desktop/**/*-setup.exe \
+                   dist/desktop/**/*.app.tar.gz \
+                   dist/desktop/**/*.app.tar.gz.sig; do
+            [ -f "$f" ] || continue
+            cp "$f" "dist/release/"
+          done
+
+          ( cd dist/release && sha256sum ./* > SHA256SUMS.txt )
+          ls -la dist/release/
+
+      - name: Publish combined GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          rp2040="${{ steps.version.outputs.rp2040 }}"
+          esp32="${{ steps.version.outputs.esp32 }}"
+          desktop="${{ steps.version.outputs.desktop }}"
+
+          notes=$(cat <<EOF
+          BugBuster combined release **v${version}**.
+
+          Component versions in this bundle:
+
+          - **Desktop App**: v${desktop}
+          - **ESP32 Firmware**: v${esp32}
+          - **RP2040 HAT Firmware**: v${rp2040}
+
+          See \`SHA256SUMS.txt\` for asset checksums.
+          EOF
+          )
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/release/* --clobber
+          else
+            gh release create "$tag" dist/release/* \
+              --draft \
+              --title "BugBuster v${version}" \
+              --notes "$notes"
+          fi
