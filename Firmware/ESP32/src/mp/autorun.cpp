@@ -182,7 +182,7 @@ static bool run_autorun_script(void)
 
     s_last_run_id = st.current_script_id;
 
-    bool ok = (st.total_errors == 0 ||
+    bool ok = (st.total_errors == 0 &&
                (st.last_error_msg[0] == '\0'));
     s_last_run_ok = ok;
 
