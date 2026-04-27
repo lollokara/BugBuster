@@ -14,6 +14,7 @@
 #include "autorun.h"
 #include "usb_cdc.h"
 #include "serial_io.h"
+#include "cli/cli_term.h"
 #include "wifi_manager.h"
 #include "ad74416h_spi.h"
 #include "ad74416h.h"
@@ -376,8 +377,8 @@ extern "C" void app_main(void)
     // 15. CLI + BBP
     cliInit(device);
     bbpInit(&device, &spiDriver);
-    serial_println("[BugBuster] CLI ready. Type 'help'.");
-    serial_println("[BugBuster] BBP ready (binary protocol on CDC #0).");
+    serial_println("[BugBuster] CLI ready. Type 'help'.");    // pre-BBP boot output (mainLoopTask not yet running)
+    serial_println("[BugBuster] BBP ready (binary protocol on CDC #0).");  // pre-BBP boot output
 
     // 16. Main loop task (CLI/BBP + heartbeat)
     // Start this before HTTPD so web-server route/socket allocations cannot
@@ -387,11 +388,11 @@ extern "C" void app_main(void)
     BaseType_t mainLoopOk = xTaskCreatePinnedToCore(
         mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0);
     if (mainLoopOk != pdPASS || mainLoopHandle == nullptr) {
-        serial_println("[BugBuster] ERROR: mainLoopTask creation failed");
+        term_println("[BugBuster] ERROR: mainLoopTask creation failed");
         ESP_LOGE("main_task", "mainLoopTask creation failed (ret=%d handle=%p)",
                  (int)mainLoopOk, (void *)mainLoopHandle);
     } else {
-        serial_println("[BugBuster] Main loop task started");
+        term_println("[BugBuster] Main loop task started");
     }
     log_internal_heap("after mainLoopTask");
 
@@ -400,8 +401,8 @@ extern "C" void app_main(void)
     log_internal_heap("before webserver");
     initWebServer();
     log_internal_heap("after webserver");
-    serial_println("[BugBuster] Web server on port 80");
-    serial_println("[BugBuster] Boot complete.");
+    term_println("[BugBuster] Web server on port 80");
+    term_println("[BugBuster] Boot complete.");
 
     // 18. Autorun boot check — MUST run after mainLoopTask so that CLI/BBP
     //     activity can be detected during the grace window.
