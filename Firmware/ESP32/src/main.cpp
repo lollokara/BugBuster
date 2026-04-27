@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
+#include "esp_heap_caps.h"
 
 #include "config.h"
 #include "autorun.h"
@@ -45,11 +46,27 @@
 AD74416H_SPI spiDriver(PIN_SDO, PIN_SDI, PIN_SYNC, PIN_SCLK, AD74416H_DEV_ADDR);
 static AD74416H device(spiDriver, PIN_RESET);
 
+static void log_internal_heap(const char *phase)
+{
+    serial_printf("[BugBuster] Heap %s: internal_free=%u largest_internal=%u total_free=%u\r\n",
+                  phase,
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                  (unsigned)esp_get_free_heap_size());
+}
+
 // -----------------------------------------------------------------------------
 // PCA9535 fault event handler — called from ISR task context
 // -----------------------------------------------------------------------------
 static void pca_fault_handler(const PcaFaultEvent *event)
 {
+    // Defensive: g_stateMutex is created inside initTasks(); the PCA9535 ISR
+    // task is installed earlier in setup(). If a fault interrupt fires before
+    // initTasks() runs, xSemaphoreTake(NULL, ...) is undefined behaviour.
+    // The boot ordering has been moved (install ISR after initTasks), but
+    // keep this guard so any future re-shuffle cannot regress into UB.
+    if (g_stateMutex == NULL) return;
+
     // Update device state under mutex
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         // Copy current PCA state
@@ -238,8 +255,9 @@ extern "C" void app_main(void)
         }
         if (pca_ok) {
             serial_println("[BugBuster] PCA9535 IO Exp: OK (0x23)");
-            pca9535_install_isr();
-            pca9535_register_fault_callback(pca_fault_handler);
+            // ISR install + fault-handler registration deferred until after
+            // initTasks() creates g_stateMutex — see "PCA9535 fault ISR
+            // attach" block below. Wave-1 audit #8.
         } else {
             serial_println("[BugBuster] PCA9535 IO Exp: NOT FOUND (0x23)");
         }
@@ -309,6 +327,16 @@ extern "C" void app_main(void)
     initTasks(device);
     serial_println("[BugBuster] RTOS tasks started");
 
+    // 13.1. PCA9535 fault ISR attach — must run AFTER initTasks() because
+    //       pca_fault_handler grabs g_stateMutex, which is created inside
+    //       initTasks(). Previously the ISR was installed up at PCA init
+    //       (~750 ms earlier), opening a NULL-mutex window where any fault
+    //       interrupt would hit xSemaphoreTake(NULL, ...). Wave-1 audit #8.
+    if (pca9535_present()) {
+        pca9535_install_isr();
+        pca9535_register_fault_callback(pca_fault_handler);
+    }
+
     // 13b. Command registry — must be after initTasks (handlers use sendCommand)
     //      and before initWebServer (http_adapter_register needs the registry)
     cmd_registry_init();
@@ -344,27 +372,35 @@ extern "C" void app_main(void)
     uart_bridge_start();
     serial_println("[BugBuster] UART bridge started");
 
-    // 15. Web server
-    coredump_diag_print_boot_report();
-    initWebServer();
-    serial_println("[BugBuster] Web server on port 80");
-
-    // 16. CLI + BBP
+    // 15. CLI + BBP
     cliInit(device);
     bbpInit(&device, &spiDriver);
     serial_println("[BugBuster] CLI ready. Type 'help'.");
     serial_println("[BugBuster] BBP ready (binary protocol on CDC #0).");
-    serial_println("[BugBuster] Boot complete.");
 
-    // 17. Main loop task (CLI/BBP + heartbeat)
+    // 16. Main loop task (CLI/BBP + heartbeat)
+    // Start this before HTTPD so web-server route/socket allocations cannot
+    // starve the single CDC0 owner task during memory-tight boots.
     TaskHandle_t mainLoopHandle = nullptr;
+    log_internal_heap("before mainLoopTask");
     BaseType_t mainLoopOk = xTaskCreatePinnedToCore(
         mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0);
     if (mainLoopOk != pdPASS || mainLoopHandle == nullptr) {
         serial_println("[BugBuster] ERROR: mainLoopTask creation failed");
         ESP_LOGE("main_task", "mainLoopTask creation failed (ret=%d handle=%p)",
                  (int)mainLoopOk, (void *)mainLoopHandle);
+    } else {
+        serial_println("[BugBuster] Main loop task started");
     }
+    log_internal_heap("after mainLoopTask");
+
+    // 17. Web server
+    coredump_diag_print_boot_report();
+    log_internal_heap("before webserver");
+    initWebServer();
+    log_internal_heap("after webserver");
+    serial_println("[BugBuster] Web server on port 80");
+    serial_println("[BugBuster] Boot complete.");
 
     // 18. Autorun boot check — MUST run after mainLoopTask so that CLI/BBP
     //     activity can be detected during the grace window.
