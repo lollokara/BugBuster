@@ -55,8 +55,13 @@ void mp_hal_delay_us(mp_uint_t us) {
 
 void mp_hal_delay_ms(mp_uint_t ms) {
     // Delay tick-by-tick so we can check the stop flag cooperatively.
+    // Release the GIL around each vTaskDelay so other Python threads can run
+    // when MICROPY_PY_THREAD=1 is enabled (V2-G). With MICROPY_PY_THREAD=0
+    // (current), MP_THREAD_GIL_EXIT/ENTER are no-ops — no behaviour change.
     for (mp_uint_t i = 0; i < ms; i++) {
+        MP_THREAD_GIL_EXIT();
         vTaskDelay(1);
+        MP_THREAD_GIL_ENTER();
         // Only raise if an nlr_buf_t is on the stack (i.e. called from script context).
         // Without this guard, raising outside an nlr frame would crash the firmware.
         if (scripting_stop_requested() && MP_STATE_THREAD(nlr_top) != NULL) {
