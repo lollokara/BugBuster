@@ -29,6 +29,7 @@ struct BridgeState {
 };
 
 static BridgeState s_bridges[CDC_BRIDGE_COUNT] = {};
+static portMUX_TYPE s_bridge_mux[CDC_BRIDGE_COUNT];
 
 // ---------------------------------------------------------------------------
 // Excluded GPIO pins (in use or strapping)
@@ -260,13 +261,21 @@ static void bridge_task(void *pvParam)
     ESP_LOGI(TAG, "Bridge %d task started", id);
 
     for (;;) {
-        BridgeState &bs = s_bridges[id];
-        if (!bs.config.enabled || !bs.driver_installed) {
+        // Snapshot config fields under spinlock so uart_bridge_set_config
+        // cannot write a torn struct while we read it.
+        bool enabled;
+        bool driver_ok;
+        uart_port_t port;
+        portENTER_CRITICAL(&s_bridge_mux[id]);
+        enabled   = s_bridges[id].config.enabled;
+        driver_ok = s_bridges[id].driver_installed;
+        port      = (uart_port_t)s_bridges[id].config.uart_num;
+        portEXIT_CRITICAL(&s_bridge_mux[id]);
+
+        if (!enabled || !driver_ok) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-
-        uart_port_t port = (uart_port_t)bs.config.uart_num;
 
         // USB CDC -> UART TX
         uint32_t avail = usb_cdc_bridge_available(id);
@@ -294,6 +303,10 @@ static void bridge_task(void *pvParam)
 
 void uart_bridge_init(void)
 {
+    for (int i = 0; i < CDC_BRIDGE_COUNT; i++) {
+        s_bridge_mux[i] = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+    }
+
     // Ensure NVS is initialized
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -335,13 +348,18 @@ bool uart_bridge_set_config(int id, const UartBridgeConfig *cfg)
 {
     if (id < 0 || id >= CDC_BRIDGE_COUNT || !cfg) return false;
 
-    // Uninstall old UART if port changed
+    // Uninstall old UART driver before mutating config. bridge_task will see
+    // driver_installed=false and idle until reinstall completes.
     if (s_bridges[id].driver_installed) {
         uart_driver_delete((uart_port_t)s_bridges[id].config.uart_num);
         s_bridges[id].driver_installed = false;
     }
 
+    // Guard the config struct write so bridge_task never reads a torn struct.
+    portENTER_CRITICAL(&s_bridge_mux[id]);
     s_bridges[id].config = *cfg;
+    portEXIT_CRITICAL(&s_bridge_mux[id]);
+
     nvs_save_config(id, cfg);
     install_uart(id);
     return true;
