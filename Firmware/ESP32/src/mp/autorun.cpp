@@ -155,7 +155,7 @@ static bool run_autorun_script(void)
     }
     src_buf[n] = '\0';
 
-    bool enqueued = scripting_run_string(src_buf, n);
+    bool enqueued = scripting_run_string(src_buf, n, false);
     // scripting_run_string copies the payload internally; free our PSRAM buf.
     heap_caps_free(src_buf);
     if (!enqueued) {
@@ -180,9 +180,9 @@ static bool run_autorun_script(void)
         scripting_get_status(&st);
     }
 
-    s_last_run_id = st.current_script_id;
+    s_last_run_id = st.last_script_id;
 
-    bool ok = (st.total_errors == 0 ||
+    bool ok = (st.total_errors == 0 &&
                (st.last_error_msg[0] == '\0'));
     s_last_run_ok = ok;
 

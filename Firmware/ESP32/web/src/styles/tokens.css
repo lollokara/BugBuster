@@ -32,6 +32,13 @@
   --rose: #ef4444;
   --purple: #a855f7;
   --cyan: #06b6d4;
+  --neon-cyan: #22d3ee;
+  --neon-green: #39ff88;
+  --neon-pink: #ff3df2;
+  --neon-blue: #5aa7ff;
+  --vscode-panel: #0b1020;
+  --vscode-panel-2: #10182c;
+  --vscode-rail: #060912;
 
   /* Channel palette — matches DesktopApp/BugBuster/src/tauri_bridge.rs CH_COLORS */
   --ch-0: #3b82f6;

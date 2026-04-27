@@ -57,6 +57,43 @@ export interface SelftestSuppliesCached {
   rails: Array<{ rail: number; name: string; voltageV: number }>;
 }
 
+export interface ScriptStatus {
+  running?: boolean;
+  currentScriptId?: number;
+  totalRuns?: number;
+  totalErrors?: number;
+  lastError?: string;
+  mode?: string;
+  globalsBytes?: number;
+  globalsCount?: number;
+  autoResetCount?: number;
+  lastEvalAtMs?: number;
+  idleForMs?: number;
+  watermarkSoftHit?: boolean;
+}
+
+export interface ScriptStorageStatus {
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+  scriptCount: number;
+  maxScriptBytes: number;
+  maxScripts: number;
+}
+
+export interface AutorunStatus {
+  enabled?: boolean;
+  has_script?: boolean;
+  hasScript?: boolean;
+  io12_high?: boolean;
+  io12High?: boolean;
+  last_run_ok?: boolean;
+  lastRunOk?: boolean;
+  last_run_id?: number;
+  lastRunId?: number;
+  name?: string;
+}
+
 export interface SelftestStatus {
   boot?: {
     ran?: boolean;
@@ -262,6 +299,43 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+async function adminRawFetch(mac: string, path: string, init: RequestInit = {}): Promise<Response> {
+  const token = getCachedToken(mac);
+  if (!token) throw new PairingRequiredError();
+
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      [ADMIN_TOKEN_HEADER]: token,
+    },
+  });
+
+  if (res.status === 401) {
+    clearCachedToken(mac);
+    window.dispatchEvent(new CustomEvent("bb:pairing-required"));
+    throw new PairingRequiredError();
+  }
+
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const j = await res.json();
+      if (j && typeof j.error === "string") msg = j.error;
+    } catch {
+      try {
+        const text = await res.text();
+        if (text) msg = text;
+      } catch {
+        /* ignore parse error */
+      }
+    }
+    throw new HttpError(res.status, res.statusText, msg);
+  }
+
+  return res;
 }
 
 /* ---- Typed endpoints ---- */
@@ -559,6 +633,72 @@ export const api = {
       mac,
       admin: true,
     }),
+
+  scripts: {
+    files: (mac: string) =>
+      request<{ files: string[] }>("/api/scripts/files", { mac, admin: true }),
+    storage: (mac: string) =>
+      request<ScriptStorageStatus>("/api/scripts/storage", { mac, admin: true }),
+    download: async (mac: string, name: string) => {
+      const res = await adminRawFetch(mac, `/api/scripts/files/get?name=${encodeURIComponent(name)}`);
+      return res.text();
+    },
+    upload: async (mac: string, name: string, source: string) => {
+      const res = await adminRawFetch(mac, `/api/scripts/files?name=${encodeURIComponent(name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+        body: source,
+      });
+      return (await res.json()) as { ok?: boolean; err?: string };
+    },
+    delete: (mac: string, name: string) =>
+      request<{ ok?: boolean; err?: string }>(`/api/scripts/files?name=${encodeURIComponent(name)}`, {
+        method: "DELETE",
+        mac,
+        admin: true,
+      }),
+    runFile: (mac: string, name: string) =>
+      request<{ ok?: boolean; id?: number; err?: string }>(`/api/scripts/run-file?name=${encodeURIComponent(name)}`, {
+        method: "POST",
+        mac,
+        admin: true,
+      }),
+    eval: async (mac: string, source: string, persist: boolean) => {
+      const res = await adminRawFetch(mac, `/api/scripts/eval?persist=${persist ? "true" : "false"}`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+        body: source,
+      });
+      return (await res.json()) as { ok?: boolean; id?: number; err?: string };
+    },
+    stop: (mac: string) =>
+      request<{ ok?: boolean }>("/api/scripts/stop", { method: "POST", mac, admin: true }),
+    reset: (mac: string) =>
+      request<{ ok?: boolean }>("/api/scripts/reset", { method: "POST", mac, admin: true }),
+    status: (mac: string) =>
+      request<ScriptStatus>("/api/scripts/status", { mac, admin: true }),
+    logs: async (mac: string, since?: number) => {
+      const path = since === undefined ? "/api/scripts/logs" : `/api/scripts/logs?since=${since}`;
+      const res = await adminRawFetch(mac, path);
+      const text = await res.text();
+      const next = Number(res.headers.get("X-BugBuster-Log-Next") ?? "0");
+      return { text, next: Number.isFinite(next) ? next : since ?? 0 };
+    },
+    autorun: (mac: string) =>
+      request<AutorunStatus>("/api/scripts/autorun/status", { mac, admin: true }),
+    enableAutorun: (mac: string, name: string) =>
+      request<{ ok?: boolean; err?: string }>(`/api/scripts/autorun/enable?name=${encodeURIComponent(name)}`, {
+        method: "POST",
+        mac,
+        admin: true,
+      }),
+    disableAutorun: (mac: string) =>
+      request<{ ok?: boolean; err?: string }>("/api/scripts/autorun/disable", {
+        method: "POST",
+        mac,
+        admin: true,
+      }),
+  },
   quicksetupList: () => request<QuickSetupList>("/api/quicksetup"),
   quicksetupGet: (slot: number) => request<QuickSetupPayload>(`/api/quicksetup/${slot}`),
   quicksetupSave: (mac: string, slot: number) =>

@@ -97,6 +97,11 @@ class SimulatedDevice:
         self.script_total_errors = 0
         self.script_last_error   = ""
         self.script_log_ring     = ""
+        # V2-A persistent-mode state
+        self.script_mode              = 0    # 0=EPHEMERAL, 1=PERSISTENT
+        self.script_globals_bytes     = 0
+        self.script_auto_reset_count  = 0
+        self.script_last_eval_at_ms   = 0
 
         # Autorun state (Phase 6b)
         self.autorun_enabled     = False

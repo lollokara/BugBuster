@@ -299,13 +299,23 @@ static int current_token_index(void)
 static void replace_token_with(int tok_start, const char* replacement, bool add_space)
 {
     int tail_len = s_len - s_cursor;
+    if (tail_len < 0) tail_len = 0;
     char newline[CLI_EDIT_BUF_SIZE];
     int written = snprintf(newline, sizeof(newline), "%.*s%s%s",
                            tok_start, s_buf, replacement, add_space ? " " : "");
     if (written < 0) return;
-    if ((size_t)(written + tail_len) >= sizeof(newline)) {
-        tail_len = (int)sizeof(newline) - written - 1;
+    // snprintf returns the would-have-written length when the prefix is
+    // truncated. Clamp `written` to the actual cursor inside `newline`
+    // (sizeof - 1) so &newline[written] never points past the buffer.
+    if ((size_t)written >= sizeof(newline)) {
+        written = (int)sizeof(newline) - 1;
     }
+    // Tail must fit in the remaining space (and stay non-negative). The
+    // previous formulation could compute a negative tail_len that, cast to
+    // size_t for memcpy, became a multi-GB stack overrun.
+    int max_tail = (int)sizeof(newline) - written - 1;
+    if (max_tail < 0) max_tail = 0;
+    if (tail_len > max_tail) tail_len = max_tail;
     memcpy(&newline[written], &s_buf[s_cursor], (size_t)tail_len);
     newline[written + tail_len] = '\0';
 

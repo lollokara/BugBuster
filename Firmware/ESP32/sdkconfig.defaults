@@ -23,6 +23,11 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
 
+# app_main initializes WiFi, hardware, MicroPython, and the large HTTP route
+# table before handing off to long-lived tasks. Keep enough stack headroom for
+# ESP-IDF route registration and diagnostic coredump reporting during boot.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
@@ -56,3 +61,13 @@ CONFIG_ESP32S3_DATA_CACHE_64KB=y
 # httpd reserves 3 sockets internally; 10 + 3 = 13, so 16 gives comfortable headroom.
 # Default LWIP_MAX_SOCKETS=7 is too small for SSE streaming + concurrent REST polls.
 CONFIG_LWIP_MAX_SOCKETS=16
+
+# WebSocket support in esp_http_server (required for /api/scripts/repl/ws)
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# Diagnostic crash capture: store panic core dumps in the flash coredump partition.
+# This avoids relying on TinyUSB CDC surviving long enough to print Guru Meditation logs.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=32

@@ -32,23 +32,26 @@ static const char *TAG = "cmd_script";
 #define SCRIPT_LOG_CHUNK    1020
 
 // ---------------------------------------------------------------------------
-// SCRIPT_EVAL  payload: u16 len, char[len] src
+// SCRIPT_EVAL  payload: u8 flags, u16 src_len, char[src_len] src
+//              flags bit0: persist (1 = persistent mode)
 //              resp:    u8 enqueued, u32 script_id
 // ---------------------------------------------------------------------------
 static int handler_script_eval(const uint8_t *payload, size_t len,
                                uint8_t *resp, size_t *resp_len)
 {
-    if (len < 2) return -CMD_ERR_BAD_ARG;
+    if (len < 3) return -CMD_ERR_BAD_ARG;
 
     size_t rpos = 0;
+    uint8_t  flags   = payload[rpos++];
+    bool     persist = (flags & 0x01) != 0;
     uint16_t src_len = bbp_get_u16(payload, &rpos);
 
     if (src_len > SCRIPT_MAX_SRC_LEN) return -CMD_ERR_BAD_ARG;
-    if (len < (size_t)(2 + src_len))  return -CMD_ERR_BAD_ARG;
+    if (len < (size_t)(3 + src_len))  return -CMD_ERR_BAD_ARG;
 
     const char *src = (const char *)(payload + rpos);
 
-    bool ok = scripting_run_string(src, src_len);
+    bool ok = scripting_run_string(src, src_len, persist);
 
     uint32_t script_id = 0;
     if (ok) {
@@ -334,6 +337,29 @@ static int handler_script_autorun(const uint8_t *payload, size_t len,
         return (int)pos;
     }
 
+    if (sub == 4) {
+        // RESET_VM — request persistent VM teardown
+        scripting_reset_vm();
+        size_t pos = 0;
+        bbp_put_u8(resp, &pos, 1);  // ok
+        *resp_len = pos;
+        return (int)pos;
+    }
+
+    if (sub == 5) {
+        // STATUS_PERSISTED — return persistent-mode fields
+        ScriptStatus st;
+        scripting_get_status(&st);
+        size_t pos = 0;
+        bbp_put_u8(resp,  &pos, (uint8_t)st.mode);
+        bbp_put_u32(resp, &pos, st.globals_bytes_est);
+        bbp_put_u32(resp, &pos, st.auto_reset_count);
+        bbp_put_u32(resp, &pos, st.last_eval_at_ms);
+        bbp_put_u32(resp, &pos, st.idle_for_ms);
+        *resp_len = pos;
+        return (int)pos;
+    }
+
     return -CMD_ERR_BAD_ARG;
 }
 
@@ -342,6 +368,7 @@ static int handler_script_autorun(const uint8_t *payload, size_t len,
 // ---------------------------------------------------------------------------
 
 static const ArgSpec s_script_eval_args[] = {
+    { "flags",   ARG_U8,   true,  0, 0xFF },  // bit0: persist; must be first — handler reads payload[0]
     { "src_len", ARG_U16,  true,  0, SCRIPT_MAX_SRC_LEN },
     { "src",     ARG_BLOB, false, 0, 0 },
 };
@@ -401,7 +428,7 @@ static const ArgSpec s_script_delete_rsp[] = {
 };
 
 static const ArgSpec s_script_autorun_args[] = {
-    { "sub",      ARG_U8,   true, 0, 3 },
+    { "sub",      ARG_U8,   true, 0, 5 },
     { "payload",  ARG_BLOB, false, 0, 0 },
 };
 static const ArgSpec s_script_autorun_rsp[] = {

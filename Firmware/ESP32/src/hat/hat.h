@@ -18,35 +18,19 @@
 //   EXP_EXT_1..4        - 4 configurable I/O lines routed through HAT
 //                         Each can be independently assigned to a function
 //
-// PCB mode only — not available in breadboard mode.
 // =============================================================================
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "config.h"      // For BREADBOARD_MODE
+#include "config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // -----------------------------------------------------------------------------
-// Pin Definitions (PCB mode only)
+// Pin Definitions
 // -----------------------------------------------------------------------------
-#if BREADBOARD_MODE
-// Breadboard test: UART0 on GPIO43/44 (still free in breadboard mode)
-// No ADC detect — always try UART ping
-// No shared IRQ pin in breadboard test, but we still wire the dedicated
-// LA-done input so RP2040 can signal capture completion without polling.
-#define HAT_NO_DETECT       1             // Skip ADC, probe via UART
-#define PIN_HAT_DETECT      GPIO_NUM_NC
-#define PIN_HAT_TX          GPIO_NUM_43   // UART TX to RP2040 GPIO2
-#define PIN_HAT_RX          GPIO_NUM_44   // UART RX from RP2040 GPIO3
-#define PIN_HAT_IRQ         GPIO_NUM_NC
-// Dedicated LA-done interrupt input from RP2040 GPIO28 (BB_LA_DONE_PIN).
-// Active-low pulse (~2 µs) every time the LA transitions to LA_STATE_DONE.
-// Push-pull on the RP2040 side; internal pull-up enabled on the ESP32 side.
-#define PIN_HAT_LA_DONE_IRQ GPIO_NUM_18
-#else
 #define HAT_NO_DETECT       0
 #define PIN_HAT_DETECT      GPIO_NUM_47   // ADC input for HAT identification
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to HAT
@@ -56,7 +40,6 @@ extern "C" {
 // the AD74416H, and the RP2040 LA-done pulse is delivered via PIN_HAT_IRQ
 // (shared with other HAT interrupts). hat.cpp guards (pin >= 0), so NC is safe.
 #define PIN_HAT_LA_DONE_IRQ GPIO_NUM_NC
-#endif
 
 #define HAT_UART_NUM        UART_NUM_0
 #define HAT_UART_BAUD       921600

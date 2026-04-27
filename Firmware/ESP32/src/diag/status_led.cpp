@@ -17,11 +17,7 @@
 
 static const char *TAG = "led";
 
-#if BREADBOARD_MODE
-#define LED_GPIO    GPIO_NUM_13  // Breadboard: WS2812B on GPIO13
-#else
 #define LED_GPIO    GPIO_NUM_0   // PCB: LED_DIN (WS2812B chain on GPIO0)
-#endif
 
 // WS2812B timing (in RMT ticks at 10 MHz = 100 ns per tick)
 #define T0H     3   // 300 ns

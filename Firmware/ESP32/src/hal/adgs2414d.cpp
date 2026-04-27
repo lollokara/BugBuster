@@ -370,9 +370,9 @@ void adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
     if (!s_mux_initialized) return;
 
 #if ADGS_HAS_SELFTEST
-    // Interlock: if caller tries to set U17 S2 while U23 is active, block it
-    if ((states[U17_DEVICE_IDX] & U17_S2_MASK) && adgs_selftest_active()) {
-        ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S2 while U23 self-test is active!");
+    // Interlock: if caller tries to set U16 S3 while U23 is active, block it
+    if ((states[U16_DEVICE_IDX] & U16_S3_MASK) && adgs_selftest_active()) {
+        ESP_LOGE(TAG, "INTERLOCK: Cannot close U16 S3 while U23 self-test is active!");
         return;
     }
 #endif
@@ -400,9 +400,9 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
     if (!s_mux_initialized) return;
 
 #if ADGS_HAS_SELFTEST
-    // Interlock: block U17 S2 close if U23 is active
-    if (device == U17_DEVICE_IDX && sw == 1 && closed && adgs_selftest_active()) {
-        ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S2 while U23 self-test is active!");
+    // Interlock: block U16 S3 close if U23 is active
+    if (device == U16_DEVICE_IDX && sw == 2 && closed && adgs_selftest_active()) {
+        ESP_LOGE(TAG, "INTERLOCK: Cannot close U16 S3 while U23 self-test is active!");
         return;
     }
 #endif
@@ -446,7 +446,6 @@ void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES])
 
 void adgs_get_api_states(uint8_t out[ADGS_API_MAIN_DEVICES])
 {
-    memcpy(out, s_api_main_state, ADGS_API_MAIN_DEVICES);
     sync_api_main_from_physical();
     memcpy(out, s_api_main_state, ADGS_API_MAIN_DEVICES);
 }
@@ -608,9 +607,9 @@ bool adgs_set_selftest(uint8_t sw_byte)
 {
     if (!s_mux_initialized) return false;
 
-    // Safety interlock: U17 S2 must be open before ANY U23 switch can close
-    if (sw_byte != 0 && adgs_u17_s2_active()) {
-        ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U17 S2 (IO9 analog) is closed!");
+    // Safety interlock: U16 S3 must be open before ANY U23 switch can close
+    if (sw_byte != 0 && adgs_u16_s3_active()) {
+        ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U16 S3 (IO 12 analog) is closed!");
         return false;
     }
 
@@ -639,9 +638,9 @@ uint8_t adgs_get_selftest(void)
     return s_mux_state[ADGS_SELFTEST_DEV];
 }
 
-bool adgs_u17_s2_active(void)
+bool adgs_u16_s3_active(void)
 {
-    return (s_mux_state[U17_DEVICE_IDX] & U17_S2_MASK) != 0;
+    return (s_mux_state[U16_DEVICE_IDX] & U16_S3_MASK) != 0;
 }
 
 bool adgs_selftest_active(void)

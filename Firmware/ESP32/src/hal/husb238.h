@@ -27,14 +27,14 @@ extern "C" {
 #define HUSB238_REG_SRC_PDO      0x08  // Selected source PDO
 #define HUSB238_REG_GO_COMMAND   0x09  // Trigger re-negotiation
 
-// PD_STATUS0 bit fields
+// PD_STATUS1 bit fields
 #define HUSB238_CC_DIR_MASK      0x80  // CC direction: 0=CC1, 1=CC2
 #define HUSB238_ATTACH_MASK      0x40  // Attached: 1=attached
 #define HUSB238_CC_STATUS_MASK   0x30  // CC status (00=no conn, 01=sink)
 #define HUSB238_PD_STATUS_MASK   0x0E  // Current PD response
 #define HUSB238_5V_CONTRACT      0x01  // 5V contract indicator
 
-// PD_STATUS1 bit fields
+// PD_STATUS0 bit fields
 #define HUSB238_VOLTAGE_MASK     0xF0  // Negotiated voltage
 #define HUSB238_CURRENT_MASK     0x0F  // Negotiated current
 

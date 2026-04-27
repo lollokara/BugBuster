@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"python3 << 'EOF' 2>&1\\nimport serial, time, re\\ns = serial.Serial('/dev/cu.usbmodem1234561', 115200, timeout=0.3)\\ns.dtr = True; s.rts = True; time.sleep(0.3)\\ns.dtr = False; time.sleep(0....",
+  "error": "Exit code 1\n=== Sending 'help' + 'status' + 'reset' ===\nTraceback (most recent call last):\n  File \"/opt/homebrew/lib/python3.14/site-packages/serial/serialposix.py\", line 621, in write\n    n = os.write(self.fd, d)\nOSError: [Errno 6] Device not configured\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"<stdin>\", line 11, in <module>\n  File \"/opt/homebrew/lib/python3.14/site-packages/serial/serialposix.py\", line 655, in write\n    rai...",
+  "timestamp": "2026-04-26T14:23:02.336Z",
+  "retry_count": 1
+}

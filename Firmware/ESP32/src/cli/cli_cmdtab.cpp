@@ -59,6 +59,8 @@ const CliCommand g_cliCommands[] = {
       "reset",              "Hardware reset (pulse RESET pin)", NULL },
     { "rstinfo",  NULL,     cli_cmd_rstinfo,       CAT_GENERAL,
       "rstinfo",            "Show last ESP reset reason code", NULL },
+    { "coredump", "cdump",   cli_cmd_coredump,      CAT_GENERAL,
+      "coredump [info|dump|clear]", "Show, dump, or clear saved ESP panic coredump", NULL },
     { "silicon",  NULL,     cli_cmd_silicon,       CAT_GENERAL,
       "silicon",            "Read silicon revision and ID", NULL },
     { "regs",     NULL,     cli_cmd_regs,          CAT_GENERAL,

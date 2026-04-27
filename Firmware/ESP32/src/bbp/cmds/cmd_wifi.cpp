@@ -19,6 +19,7 @@
 #include "esp_wifi.h"
 #include "esp_log.h"
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "cmd_wifi";
 
@@ -135,7 +136,9 @@ static int handler_wifi_scan(const uint8_t *payload, size_t len,
 {
     (void)payload; (void)len;
 
-    wifi_scan_result_t results[20];
+    wifi_scan_result_t *results = (wifi_scan_result_t *)malloc(20 * sizeof(wifi_scan_result_t));
+    if (!results) return -CMD_ERR_BUSY;
+
     int count = wifi_scan(results, 20);
 
     size_t pos = 0;
@@ -149,6 +152,7 @@ static int handler_wifi_scan(const uint8_t *payload, size_t len,
         resp[pos++] = (uint8_t)(int8_t)results[i].rssi;
         bbp_put_u8(resp, &pos, (uint8_t)results[i].auth);
     }
+    free(results);
     *resp_len = pos;
     return (int)pos;
 }

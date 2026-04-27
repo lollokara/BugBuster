@@ -3,6 +3,7 @@
 
 #include "py/mpconfig.h"
 #include "py/runtime.h"
+#include "py/persistentcode.h"  // mp_native_relocate (V2-D)
 #include "py/mpstate.h"
 #include "py/gc.h"
 #include "py/lexer.h"
@@ -11,6 +12,7 @@
 #include "py/mperrno.h"
 #include "shared/readline/readline.h"
 #include "mphalport.h"
+#include "../../src/net/serial_io.h"
 
 // Forward declarations for scripting.cpp functions.
 // Plain C forward-declare — no extern "C" wrapper needed in a .c file.
@@ -25,6 +27,8 @@ extern bool scripting_stop_requested(void);
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_rom_sys.h"
+#include "esp_heap_caps.h"
+#include "esp_attr.h"  // IRAM_ATTR — kept for V2-D re-attempt (currently #if 0)
 
 // Spinlock for atomic sections (declared extern in mphalport.h)
 portMUX_TYPE mp_atomic_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -51,8 +55,13 @@ void mp_hal_delay_us(mp_uint_t us) {
 
 void mp_hal_delay_ms(mp_uint_t ms) {
     // Delay tick-by-tick so we can check the stop flag cooperatively.
+    // Release the GIL around each vTaskDelay so other Python threads can run
+    // when MICROPY_PY_THREAD=1 is enabled (V2-G). With MICROPY_PY_THREAD=0
+    // (current), MP_THREAD_GIL_EXIT/ENTER are no-ops — no behaviour change.
     for (mp_uint_t i = 0; i < ms; i++) {
+        MP_THREAD_GIL_EXIT();
         vTaskDelay(1);
+        MP_THREAD_GIL_ENTER();
         // Only raise if an nlr_buf_t is on the stack (i.e. called from script context).
         // Without this guard, raising outside an nlr frame would crash the firmware.
         if (scripting_stop_requested() && MP_STATE_THREAD(nlr_top) != NULL) {
@@ -60,6 +69,41 @@ void mp_hal_delay_ms(mp_uint_t ms) {
         }
     }
 }
+// ── V2-D: native code exec pool — DEFERRED TO V3 ─────────────────────────────
+// LX7 emitter at MP v1.24.1 crashes the device on first @native call regardless
+// of: heap_caps_malloc(MALLOC_CAP_EXEC), static IRAM pool, mp_native_relocate(),
+// Cache_Invalidate_ICache_All(), CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n. Symptom:
+// totalRuns stays at 0, USB CDC re-enumerates → device reset before any log.
+// Re-attempt requires JTAG fault PC capture or MP v1.25+ bump. See plan.
+#if 0
+#define BB_NATIVE_POOL_BYTES   (16 * 1024)
+static IRAM_ATTR uint8_t s_bb_native_pool[BB_NATIVE_POOL_BYTES] __attribute__((aligned(4)));
+static size_t s_bb_native_used = 0;
+
+void *bb_native_code_commit(void *buf, size_t len, void *reloc) {
+    (void)reloc;
+    size_t need = (len + 3u) & ~3u;
+    if (s_bb_native_used + need > BB_NATIVE_POOL_BYTES) {
+        mp_raise_msg(&mp_type_MemoryError,
+                     MP_ERROR_TEXT("native: IRAM pool exhausted (16KB)"));
+    }
+    void *exec_buf = (void *)(s_bb_native_pool + s_bb_native_used);
+    memcpy(exec_buf, buf, len);
+    if (reloc) {
+        mp_native_relocate(reloc, exec_buf, (uintptr_t)exec_buf);
+    }
+    Cache_Invalidate_ICache_All();
+    s_bb_native_used += need;
+    return exec_buf;
+}
+#endif // V2-D deferred
+
+// Stub kept callable so scripting.cpp's vm_do_deinit() doesn't need #ifdefs.
+// When V2-D is re-enabled, replace with the real free-all body above.
+void bb_native_code_free_all(void) {
+    /* no-op while V2-D is deferred */
+}
+
 #endif // NO_QSTR
 
 // ── stdout (return mp_uint_t to match py/mphal.h declaration) ────────────────
@@ -71,14 +115,28 @@ mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
 
 // ── stdin ─────────────────────────────────────────────────────────────────────
 int mp_hal_stdin_rx_chr(void) {
-    // Phase 1: no interactive input source (no REPL)
-    return 0;
+    // MicroPython shares CDC #0 with the BugBuster CLI. Read one byte from the
+    // same CDC stream instead of faking EOF, so any interactive console path
+    // layered on top of stdin can actually receive keystrokes.
+    while (!serial_available()) {
+        vTaskDelay(1);
+    }
+    return serial_read();
 }
 
 // ── Interrupt character ───────────────────────────────────────────────────────
+// Provided by shared/runtime/interrupt_char.c when MICROPY_KBD_EXCEPTION is
+// enabled (which it is at our ROM_LEVEL_EXTRA_FEATURES config). Without this
+// guard both translation units exported a strong `mp_hal_set_interrupt_char`,
+// and the linker silently picked whichever the archive scan reached first —
+// landing the trivial port stub here instead of the real implementation that
+// also writes mp_interrupt_char. Result: setting a Python interrupt character
+// (Ctrl-C, raw-paste protocol) was a no-op. Wave-1 audit #5.
+#if !MICROPY_KBD_EXCEPTION
 void mp_hal_set_interrupt_char(int c) {
     (void)c;
 }
+#endif
 
 // ── Phase 1 port stubs ────────────────────────────────────────────────────────
 // These symbols are required by MicroPython core even with VFS/REPL disabled.
@@ -126,21 +184,21 @@ uintptr_t mp_hal_stdio_poll(uintptr_t poll_flags) {
 #if !MICROPY_VFS
 
 // mp_import_stat — filesystem stat for the import system.
-// No VFS in Phase 1: all paths report "does not exist".
+// Used when VFS is disabled: all paths report "does not exist".
 mp_import_stat_t mp_import_stat(const char *path) {
     (void)path;
     return MP_IMPORT_STAT_NO_EXIST;
 }
 
 // mp_lexer_new_from_file — called by builtinimport.c even with VFS disabled.
-// Raise OSError: no filesystem available in Phase 1.
+// Raise OSError: no filesystem available when VFS is off.
 mp_lexer_t *mp_lexer_new_from_file(qstr filename) {
     mp_raise_OSError(MP_ENOENT);
     return NULL; // unreachable
 }
 
 // mp_builtin_open / mp_builtin_open_obj — port must define when MICROPY_VFS=0.
-// Raise OSError: no filesystem in Phase 1.
+// Raise OSError: no filesystem available when VFS is off.
 mp_obj_t mp_builtin_open(size_t n_args, const mp_obj_t *args, mp_map_t *kwargs) {
     (void)n_args; (void)args; (void)kwargs;
     mp_raise_OSError(MP_ENOENT);

@@ -18,6 +18,7 @@ fn probe_bbp(port_name: &str) -> Option<(u8, u8, u8, u8)> {
         .timeout(Duration::from_millis(200))
         .open()
         .ok()?;
+    let mut binary_mode_claimed = false;
 
     // Drain any pending data
     let mut drain = [0u8; 512];
@@ -31,6 +32,7 @@ fn probe_bbp(port_name: &str) -> Option<(u8, u8, u8, u8)> {
     // Send handshake magic
     port.write_all(&bbp::MAGIC).ok()?;
     port.flush().ok()?;
+    binary_mode_claimed = true;
 
     // Read response, scanning for magic pattern
     let mut buf = Vec::with_capacity(64);
@@ -67,6 +69,15 @@ fn probe_bbp(port_name: &str) -> Option<(u8, u8, u8, u8)> {
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(_) => break,
         }
+    }
+
+    if binary_mode_claimed {
+        // Failed probes can still leave the device in BBP mode if the magic
+        // was accepted but the response was not fully parsed. Explicitly
+        // disconnect so the CLI resumes accepting plain text input.
+        let disconnect_frame = bbp::Message::build_frame(1, bbp::CMD_DISCONNECT, &[]);
+        let _ = port.write_all(&disconnect_frame);
+        let _ = port.flush();
     }
     None
 }

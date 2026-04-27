@@ -15,6 +15,7 @@
 
 #include "config.h"
 #include "usb_cdc.h"
+#include "bus/bus_planner.h"
 
 static const char *TAG = "uart_bridge";
 
@@ -29,6 +30,7 @@ struct BridgeState {
 };
 
 static BridgeState s_bridges[CDC_BRIDGE_COUNT] = {};
+static portMUX_TYPE s_bridge_mux[CDC_BRIDGE_COUNT];
 
 // ---------------------------------------------------------------------------
 // Excluded GPIO pins (in use or strapping)
@@ -66,6 +68,15 @@ static bool is_uart_io_gpio(int pin)
         if (UART_IO_GPIO_MAP[i] == pin) return true;
     }
     return false;
+}
+
+// Returns IO terminal number (1..12) for a given ESP32 GPIO, or 0 if not found.
+static uint8_t gpio_to_io_terminal(int gpio)
+{
+    for (int i = 0; UART_IO_GPIO_MAP[i] >= 0; i++) {
+        if (UART_IO_GPIO_MAP[i] == gpio) return (uint8_t)(i + 1);
+    }
+    return 0;
 }
 
 static bool is_pin_excluded_for_bridge(int pin, int self_bridge_id)
@@ -237,6 +248,33 @@ static bool install_uart(int id)
     }
 
     uart_param_config(port, &uart_cfg);
+
+    // Route TX and RX pins through bus_planner so the MUX reservation is
+    // recorded and the level-shifter / VADJ power is enabled for those IO
+    // terminals. This prevents silent GPIO-matrix overwrites when I2C/SPI was
+    // previously routed to the same terminals.
+    // Failure is non-fatal: the UART bridge predates the planner and must keep
+    // working even if the planner is unavailable.
+    {
+        char bp_err[64];
+        uint8_t tx_io = gpio_to_io_terminal(cfg.tx_pin);
+        uint8_t rx_io = gpio_to_io_terminal(cfg.rx_pin);
+        if (tx_io == 0) {
+            ESP_LOGW(TAG, "Bridge %d: TX GPIO%d not in IO terminal map, skipping planner",
+                     id, cfg.tx_pin);
+        } else if (!bus_planner_route_digital_input(tx_io, bp_err, sizeof(bp_err))) {
+            ESP_LOGW(TAG, "Bridge %d: bus_planner TX IO%u failed: %s (proceeding)",
+                     id, tx_io, bp_err);
+        }
+        if (rx_io == 0) {
+            ESP_LOGW(TAG, "Bridge %d: RX GPIO%d not in IO terminal map, skipping planner",
+                     id, cfg.rx_pin);
+        } else if (!bus_planner_route_digital_input(rx_io, bp_err, sizeof(bp_err))) {
+            ESP_LOGW(TAG, "Bridge %d: bus_planner RX IO%u failed: %s (proceeding)",
+                     id, rx_io, bp_err);
+        }
+    }
+
     uart_set_pin(port, cfg.tx_pin, cfg.rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
     bs.driver_installed = true;
@@ -260,13 +298,21 @@ static void bridge_task(void *pvParam)
     ESP_LOGI(TAG, "Bridge %d task started", id);
 
     for (;;) {
-        BridgeState &bs = s_bridges[id];
-        if (!bs.config.enabled || !bs.driver_installed) {
+        // Snapshot config fields under spinlock so uart_bridge_set_config
+        // cannot write a torn struct while we read it.
+        bool enabled;
+        bool driver_ok;
+        uart_port_t port;
+        portENTER_CRITICAL(&s_bridge_mux[id]);
+        enabled   = s_bridges[id].config.enabled;
+        driver_ok = s_bridges[id].driver_installed;
+        port      = (uart_port_t)s_bridges[id].config.uart_num;
+        portEXIT_CRITICAL(&s_bridge_mux[id]);
+
+        if (!enabled || !driver_ok) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-
-        uart_port_t port = (uart_port_t)bs.config.uart_num;
 
         // USB CDC -> UART TX
         uint32_t avail = usb_cdc_bridge_available(id);
@@ -294,6 +340,10 @@ static void bridge_task(void *pvParam)
 
 void uart_bridge_init(void)
 {
+    for (int i = 0; i < CDC_BRIDGE_COUNT; i++) {
+        s_bridge_mux[i] = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+    }
+
     // Ensure NVS is initialized
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -335,13 +385,18 @@ bool uart_bridge_set_config(int id, const UartBridgeConfig *cfg)
 {
     if (id < 0 || id >= CDC_BRIDGE_COUNT || !cfg) return false;
 
-    // Uninstall old UART if port changed
+    // Uninstall old UART driver before mutating config. bridge_task will see
+    // driver_installed=false and idle until reinstall completes.
     if (s_bridges[id].driver_installed) {
         uart_driver_delete((uart_port_t)s_bridges[id].config.uart_num);
         s_bridges[id].driver_installed = false;
     }
 
+    // Guard the config struct write so bridge_task never reads a torn struct.
+    portENTER_CRITICAL(&s_bridge_mux[id]);
     s_bridges[id].config = *cfg;
+    portEXIT_CRITICAL(&s_bridge_mux[id]);
+
     nvs_save_config(id, cfg);
     install_uart(id);
     return true;

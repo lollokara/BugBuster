@@ -1,19 +1,29 @@
 # BugBuster On-Device MicroPython Examples
 
-This folder contains runnable MicroPython examples for the BugBuster on-device scripting engine. Each example is a standalone script that executes on the device itself (not on the host), using only the `bugbuster` module and Python built-ins.
+This folder contains runnable MicroPython examples for the BugBuster on-device scripting engine. Each example is a standalone script that executes on the device itself (not on the host), using the `bugbuster` module, frozen helper modules, and Python built-ins.
 
 ## Overview
 
-BugBuster runs **MicroPython 1.24.1** bytecode (no native compilation) in a hermetic FreeRTOS task with 1 MB PSRAM heap. Each script execution:
-- Initializes the MicroPython interpreter
-- Runs your code with full access to hardware (analog channels, I2C, SPI)
-- Raises `KeyboardInterrupt` at the next `bugbuster.sleep()` call when you call `script_stop`
-- De-initializes the interpreter (no persistent globals across runs)
+BugBuster runs **MicroPython 1.24.1** bytecode (no native compilation) in a hermetic FreeRTOS task with 1 MB PSRAM heap. Scripts execute under two modes:
 
-Scripts can be:
-- **Evaluated inline** via HTTP/USB (`eval` transport)
-- **Uploaded to SPIFFS** and run by name (`run-file` transport)
-- **Set as autorun** to run at every boot (with three safety gates)
+- **Ephemeral mode** (default) — interpreter initializes, runs your code, tears down. No state persists across calls. Lightweight; use for one-off tasks.
+- **Persistent mode** (`persist=true`) — interpreter stays alive between calls. Globals and imports survive across `script_eval` calls. Auto-resets on heap watermark (≥80 % soft, ≥95 % hard) or idle timeout (10 minutes default). Use for multi-step workflows.
+
+All scripts have full access to hardware (analog channels, I2C, SPI, network, logging). Cancellation via `script_stop` injects `KeyboardInterrupt` at the next `bugbuster.sleep()` call, allowing graceful shutdown.
+
+---
+
+## Running scripts: 5 ways
+
+1. **Inline eval (ephemeral)** — `curl -X POST /api/scripts/eval` with code in the body. Simplest for testing snippets. See "Quick Start" below.
+
+2. **Persistent session** — `POST /api/scripts/eval?persist=true` keeps the VM alive. Call `POST /api/scripts/reset` to tear it down. Use the host-side `with bb.script_session()` context manager (Python) for ergonomic multi-statement workflows.
+
+3. **Upload + run by name** — `POST /api/scripts/files?name=...` uploads a script to SPIFFS; `POST /api/scripts/run-file?name=...` executes it by name. Max 32 KB source. Persistent across device reboots (stored on disk).
+
+4. **Autorun at boot** — Enable a stored script to run automatically at boot via `POST /api/scripts/autorun/enable?name=...`. Guarded by three safety gates: sentinel file, 5-second grace window, and IO12 HIGH. See "Files and Autorun" section and the script management guide (`Docs/MicroPython Examples/script-management.md`).
+
+5. **WebSocket REPL** — `GET /api/scripts/repl/ws` opens an interactive terminal. Supports command history, syntax highlighting, and persistent session state. See `repl.md` for protocol details.
 
 ---
 
@@ -27,7 +37,7 @@ Use curl or the Python client to send code directly:
 # Get admin token over USB
 TOKEN=$(python -c "from bugbuster import connect_usb; b=connect_usb('/dev/cu.usbmodem...'); print(b.get_admin_token())")
 
-# Send a script
+# Send a script (ephemeral)
 curl -X POST http://device.local/api/scripts/eval \
   -H "X-BugBuster-Admin-Token: $TOKEN" \
   --data-binary 'print("hello from bugbuster")'
@@ -46,7 +56,23 @@ import time; time.sleep(0.1)
 print(bb.script_logs())
 ```
 
-### Option 2: Upload and run by name
+### Option 2: Persistent session (multi-statement)
+
+Keep the VM alive across calls:
+
+```python
+from bugbuster import connect_usb
+bb = connect_usb('/dev/cu.usbmodem...')
+
+with bb.script_session() as s:
+    s.eval("x = 5")
+    s.eval("y = 10")
+    logs = s.eval("print(x + y)")
+    print(logs)  # "15"
+    print("Globals:", s.status().globalsCount, "bytes:", s.status().globalsBytes)
+```
+
+### Option 3: Upload and run by name
 
 Use HTTP to upload a script file, then run it:
 
@@ -67,7 +93,7 @@ curl http://device.local/api/scripts/files -H "X-BugBuster-Admin-Token: $TOKEN"
 curl http://device.local/api/scripts/logs -H "X-BugBuster-Admin-Token: $TOKEN"
 ```
 
-### Option 3: Autorun (boot-time execution)
+### Option 4: Autorun (boot-time execution)
 
 Enable a stored script to run automatically at every boot (with safety gates):
 
@@ -88,6 +114,16 @@ curl http://device.local/api/scripts/autorun/status \
 # To disable (keeps the script file)
 curl -X POST http://device.local/api/scripts/autorun/disable \
   -H "X-BugBuster-Admin-Token: $TOKEN"
+```
+
+### Option 5: WebSocket REPL
+
+Open an interactive terminal via WebSocket:
+
+```bash
+# See repl.md for full protocol and auth details
+wscat -c 'ws://device.local/api/scripts/repl/ws'
+# Type auth token on first frame, then enter Python commands interactively
 ```
 
 ---
@@ -187,30 +223,189 @@ rx = spi.transfer(b'\x9F\x00\x00\x00')                       # bytes
 
 **Limits:** Single transfer ≤ 512 bytes.
 
+### Frozen Modules
+
+Three helper modules are pre-compiled and importable without VFS:
+
+#### `bb_helpers`
+
+```python
+import bb_helpers
+
+# Settle time (alias for bugbuster.sleep)
+bb_helpers.settle(100)
+
+# Ramp DAC output with automatic readback
+results = bb_helpers.dac_ramp(channel=0, lo=0.0, hi=5.0, step=1.0, settle_ms=50)
+for v, readback in results:
+    print('set=%.2f  read=%.5f' % (v, readback))
+```
+
+#### `bb_devices`
+
+```python
+import bb_devices
+import bugbuster
+
+# TMP102 temperature sensor
+i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=400000, pullups='external')
+sensor = bb_devices.TMP102(i2c, addr=0x48)
+print('Temp: %.2f C' % sensor.read_celsius())
+
+# BMP280 pressure/temperature (raw ADC values)
+bmp = bb_devices.BMP280(i2c, addr=0x76)
+t_raw, p_raw = bmp.read()
+print('Temp raw: %d  Pressure raw: %d' % (t_raw, p_raw))
+
+# MCP3008 SPI 8-channel ADC
+spi = bugbuster.SPI(sck_io=4, mosi_io=5, miso_io=6, cs_io=7, freq=1_000_000)
+adc = bb_devices.MCP3008(spi)
+raw = adc.read(channel=0)
+volts = raw * 3.3 / 1023.0
+print('CH0: %.3f V' % volts)
+```
+
+#### `bb_logging`
+
+```python
+import bb_logging
+
+bb_logging.info('Starting measurement')
+bb_logging.warn('Voltage above threshold')
+bb_logging.error('Sensor not responding')
+# Output: [     12345] INFO  Starting measurement
+```
+
+### Network (HTTP + MQTT)
+
+Network bindings are exposed on the `bugbuster` module (not on a `Channel` instance):
+
+```python
+# HTTP GET with TLS (Mozilla CA bundle built-in)
+try:
+    response = bugbuster.http_get('https://api.example.com/status', 
+                                   timeout_ms=10000)
+    print('Status:', response.status)
+    print('Body:', response.body)
+except OSError as e:
+    print('Request failed:', e)
+
+# HTTP POST
+response = bugbuster.http_post('https://api.example.com/log', 
+                                body=b'{"temp": 25.3}',
+                                headers={'Content-Type': 'application/json'},
+                                timeout_ms=5000)
+
+# MQTT publish
+bugbuster.mqtt_publish(topic='sensors/temp', payload=b'25.3',
+                        host='mqtt.example.com', port=1883,
+                        username='user', password='pass')
+```
+
+**Signatures:**
+- `bugbuster.http_get(url, headers=None, timeout_ms=10000)` — returns attrtuple `(status, body)` where `status` is int, `body` is bytes
+- `bugbuster.http_post(url, body=b"", headers=None, timeout_ms=10000)` — same return
+- `bugbuster.mqtt_publish(topic, payload, host, port=1883, username=None, password=None)` — void; raises `OSError` on failure
+
+**TLS:** all HTTPS calls use `esp_crt_bundle_attach` with the Mozilla CA certificate bundle; no manual certificate handling needed.
+
+**Cancellation:** timeout is the only cancellation mechanism. `KeyboardInterrupt` is raised after `http_get()` / `http_post()` / `mqtt_publish()` return if `script_stop` was called during the operation.
+
+### Web UI
+
+The device's web UI includes a dedicated **Scripts tab** (`Firmware/ESP32/web/src/tabs/scripts/`) that provides:
+- CodeMirror editor with syntax highlighting
+- File browser for uploaded scripts
+- Log viewer with real-time output
+- Script execution controls
+- Embedded WebSocket REPL
+- Autorun status and controls
+
+Access via `http://device.local/` after connecting to the device.
+
+### Host-side Helpers (Python)
+
+The `python/bugbuster/script.py` module provides ergonomic wrappers for the host:
+
+#### Context manager for persistent sessions
+
+```python
+from bugbuster import connect_usb
+bb = connect_usb('/dev/cu.usbmodem...')
+
+with bb.script_session() as s:
+    s.eval("x = 5")
+    s.eval("y = 10")
+    result = s.eval("print(x + y)")
+    print(result)  # "15"
+    status = s.status()  # ScriptStatusResult with mode, globalsBytes, etc.
+```
+
+#### Decorator for running functions on-device
+
+```python
+from bugbuster import connect_usb
+from bugbuster.script import on_device
+
+bb = connect_usb('/dev/cu.usbmodem...')
+
+@on_device
+def read_sensor():
+    import bb_devices, bugbuster
+    i2c = bugbuster.I2C(sda_io=2, scl_io=3)
+    sensor = bb_devices.TMP102(i2c)
+    temp = sensor.read_celsius()
+    print(repr(temp))  # Return via print(repr(...))
+
+temp = read_sensor()  # Decorator parses the last log line via ast.literal_eval
+print('Device returned:', temp, type(temp))
+```
+
+The decorator captures the function source via `inspect.getsource()` and sends it as an eval. The function must be defined in a real source file (not REPL or lambda). Return values are communicated by the device function printing `repr(value)` as the last statement; the decorator parses the last log line to reconstruct the Python object on the host.
+
+#### Command-line interface
+
+```bash
+# Run a script file with optional persistent mode
+python -m bugbuster.script run path/to/script.py [--persist]
+
+# Tail logs from the device (real-time)
+python -m bugbuster.script logs [--tail]
+
+# Set autorun
+python -m bugbuster.script autorun-set script_name
+
+# Disable autorun
+python -m bugbuster.script autorun-disable
+
+# Reset the persistent VM
+python -m bugbuster.script reset
+
+# Show script engine status
+python -m bugbuster.script status
+
+# All commands accept --host IP and --token TOKEN (or --usb /dev/...)
+python -m bugbuster.script status --usb /dev/cu.usbmodem...
+```
+
 ---
 
-## Channel Example Walkthrough
+## V2 Example Walkthrough
 
-See **`02_channel_voltage_sweep.py`**. It sets channel 0 to `FUNC_VOUT` and sweeps 0 to 5 V in 1 V steps, reading back the ADC each time. Each step sleeps 100 ms (cooperative) so you can interrupt with `script_stop`.
+See the examples folder for V2-specific scripts:
 
-The readback should track within ±50 mV of the DAC setting. If you don't have the bench hardware, you'll see near-zero ADC reads (expected).
+- **`10_persistent_session.py`** — demonstrates persistent mode globals and multi-statement workflows
+- **`11_frozen_helpers.py`** — uses `bb_helpers.dac_ramp()` and `bb_devices.TMP102()`
+- **`12_network_post.py`** — HTTP POST to a remote endpoint with HTTPS
+- **`13_on_device_decorator.py`** — shows the host-side `@on_device` decorator usage pattern
 
----
-
-## I2C / SPI Example Walkthrough
-
-**I2C examples:**
-- **`04_i2c_scan.py`** — scan IO2/IO3 for devices (prints addresses in hex)
-- **`05_i2c_register_read.py`** — read two bytes from address 0x48 (temperature sensor pattern)
-
-**SPI example:**
-- **`06_spi_flash_jedec_id.py`** — read JEDEC manufacturer ID from SPI flash; decodes well-known vendor bytes
-
-All three demonstrate:
-1. IO terminal numbers (not raw GPIO)
-2. Error handling with try/except
-3. Bus routing happening automatically in firmware
-4. Cooperative sleep for cancellation
+Classic examples (still valid):
+- **`02_channel_voltage_sweep.py`** — sweep 0–5 V on channel 0 with ADC readback
+- **`04_i2c_scan.py`** — scan IO2/IO3 for I2C devices
+- **`05_i2c_register_read.py`** — read temperature sensor register
+- **`06_spi_flash_jedec_id.py`** — read JEDEC ID from SPI flash
+- **`07_cooperative_sleep.py`** — demonstrate graceful cancellation with `KeyboardInterrupt`
+- **`14_vfs_import.py`** — demonstrates importing user-uploaded modules from SPIFFS
 
 ---
 
@@ -240,6 +435,31 @@ To run a script automatically at every boot, **all three gates must pass:**
 
 ---
 
+## Persistent Mode Status
+
+When using persistent mode, call `script_status()` to inspect the VM state:
+
+```python
+from bugbuster import connect_usb
+bb = connect_usb('/dev/cu.usbmodem...')
+
+with bb.script_session() as s:
+    s.eval("x = [1, 2, 3]")
+    status = s.status()
+    print('Mode:', status.mode)              # 'persistent'
+    print('Globals count:', status.globalsCount)
+    print('Globals bytes:', status.globalsBytes)
+    print('Soft watermark hit:', status.watermarkSoftHit)
+    print('Idle for (ms):', status.idleForMs)
+```
+
+The VM auto-resets when:
+- Heap soft watermark (≥ 80 %) is crossed
+- Heap hard watermark (≥ 95 %) is crossed
+- Idle timeout (default 10 minutes) expires
+
+---
+
 ## Cooperative Cancellation
 
 When you call `POST /api/scripts/stop` (or `bb.script_stop()` in Python), the device sets a flag. At the **next** `bugbuster.sleep()` call, the VM injects a `KeyboardInterrupt` that you can catch:
@@ -265,11 +485,11 @@ This allows you to:
 
 ## Limitations
 
-1. **No `import` from SPIFFS** — `MICROPY_VFS` is disabled (deferred to V2). Scripts cannot `import` user modules from `/spiffs/`. Multi-file projects must inline everything into one script.
+1. **VFS enabled** — `MICROPY_VFS` is active. Scripts can `import` user modules from `/spiffs/scripts/`. Upload your `.py` files via the web UI or API, and they are immediately importable by other scripts.
 
-2. **No persistent globals** — each eval/run hermetically initializes and tears down the interpreter. Globals do not survive across `script_eval` calls. Persistent state is V2-A.
+2. **No threading** — `MICROPY_PY_THREAD` is disabled. The `_thread` module is not available.
 
-3. **No REPL on-device** — scripts only (V1). Interactive REPL is V2-B.
+3. **No native emitter** — `@micropython.native` and `@viper` decorators will crash the device (deferred to V3). Use pure Python.
 
 4. **Size limits:**
    - Script source ≤ 32 KB
@@ -281,7 +501,7 @@ This allows you to:
 
 6. **HTTP routes require auth** — all `/api/scripts/*` endpoints need `X-BugBuster-Admin-Token` header (BBP/USB does not require auth — cable = trust).
 
-7. **Available modules** — only `bugbuster` and Python built-ins (`print`, `range`, `len`, `hex`, `bytes`, `int`, `float`, `list`, `dict`, `str`, exception types, etc.). No `time`, `os`, `random`, `_thread`, `socket`, network, or file I/O.
+7. **Available modules** — `bugbuster`, `bb_helpers`, `bb_devices`, `bb_logging`, and Python built-ins. VFS allows importing any user file from `/spiffs/scripts/`. No `time`, `os`, `random`, `socket` (use `bugbuster` equivalents).
 
 ---
 
@@ -315,28 +535,41 @@ This allows you to:
 
 **Solution:** call `POST /api/scripts/stop` first, wait a moment, then re-submit.
 
+### "Soft/hard watermark hit" auto-reset in persistent mode
+
+**Cause:** your script allocated too much state. Globals and imports are consuming heap.
+
+**Solution:** clear large variables with `del`, reset the VM with `script_reset()`, or split the task into multiple smaller evals.
+
 ---
 
 ## Where to Look in the Source
 
 | Component | File | Purpose |
 |---|---|---|
-| Module globals & constants | `Firmware/ESP32/src/modbugbuster.c` | `bugbuster.FUNC_*`, `sleep`, type registration |
-| Channel binding | `Firmware/ESP32/src/modbugbuster_channel.c` | `Channel` class, voltage/function/digital methods |
-| I2C binding | `Firmware/ESP32/src/modbugbuster_i2c.c` | `I2C` class, scan/read/write methods |
-| SPI binding | `Firmware/ESP32/src/modbugbuster_spi.c` | `SPI` class, transfer method |
-| VM lifecycle | `Firmware/ESP32/src/scripting.cpp` | `mp_init`, `mp_deinit`, stop flag, log ring |
-| Bus routing | `Firmware/ESP32/src/bus_planner.cpp` | MUX, level-shifter, e-fuse, VADJ (transparent to scripts) |
-| Storage layer | `Firmware/ESP32/src/script_storage.cpp` | `/spiffs/scripts/` file I/O for upload/list/delete |
-| Autorun engine | `Firmware/ESP32/src/autorun.cpp` | three-gate logic, IO12 sensing, OTA marking |
-| HTTP routes | `Firmware/ESP32/src/webserver.cpp:3600+` | `/api/scripts/*` endpoint implementations |
-| CLI commands | `Firmware/ESP32/src/cmds/cmd_script.cpp` | BBP handlers for script operations |
+| Module globals & constants | `Firmware/ESP32/src/mp/modbugbuster.c` | `bugbuster.FUNC_*`, `sleep`, type registration |
+| Channel binding | `Firmware/ESP32/src/mp/modbugbuster_channel.c` | `Channel` class, voltage/function/digital methods |
+| I2C binding | `Firmware/ESP32/src/mp/modbugbuster_i2c.c` | `I2C` class, scan/read/write methods |
+| SPI binding | `Firmware/ESP32/src/mp/modbugbuster_spi.c` | `SPI` class, transfer method |
+| Network HTTP/MQTT | `Firmware/ESP32/src/mp/modbugbuster_net.c` | `http_get`, `http_post`, `mqtt_publish` |
+| VM lifecycle & persistence | `Firmware/ESP32/src/mp/scripting.cpp` | `mp_init`, `mp_deinit`, stop flag, persistent mode, watermark, auto-reset |
+| Persistent VM header | `Firmware/ESP32/src/mp/scripting.h` | status struct definitions |
+| WebSocket REPL | `Firmware/ESP32/src/mp/repl_ws.cpp` | `/api/scripts/repl/ws` endpoint, auth, single-session lock |
+| Network bridge | `Firmware/ESP32/src/mp/net_bridge.cpp` | HTTP/MQTT transport layer |
+| Bus routing | `Firmware/ESP32/src/bus/bus_planner.cpp` | MUX, level-shifter, e-fuse, VADJ (transparent to scripts) |
+| Storage layer | `Firmware/ESP32/src/mp/script_storage.cpp` | `/spiffs/scripts/` file I/O for upload/list/delete |
+| Autorun engine | `Firmware/ESP32/src/mp/autorun.cpp` | three-gate logic, IO12 sensing, OTA marking |
+| HTTP routes | `Firmware/ESP32/src/bbp/cmds/cmd_script.cpp` | `/api/scripts/*` endpoint implementations |
+| Web tab (UI) | `Firmware/ESP32/web/src/tabs/scripts/` | CodeMirror editor, file browser, log viewer, REPL |
+| Frozen modules | `python/firmware_modules/` | `bb_helpers.py`, `bb_devices.py`, `bb_logging.py` |
+| Host-side helpers | `python/bugbuster/script.py` | `ScriptSession`, `@on_device`, CLI entry point |
 
 ---
 
 ## Further Reading
 
-- **`Docs/scripting-plan.md`** — full v1 + v2 + v3 roadmap (persistent state, REPL, sandboxing, fleet)
-- **`Docs/scripting-progress.md`** — current implementation status and bench notes
+- **`Docs/scripting-plan-v2.md`** — full V2 feature roadmap and implementation notes
+- **`Docs/MicroPython Examples/repl.md`** — WebSocket REPL protocol and usage
+- **`Docs/MicroPython Examples/script-management.md`** — detailed autorun, script storage, and persistence management guide
 - **`Firmware/BugBusterProtocol.md` § 6.23** — wire-format details for script opcodes
 - **`python/bugbuster/client.py`** — Python API for remote script execution (USB/HTTP)

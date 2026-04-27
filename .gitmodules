@@ -10,3 +10,4 @@
 [submodule "Firmware/ESP32/components/micropython/micropython"]
 	path = Firmware/ESP32/components/micropython/micropython
 	url = https://github.com/micropython/micropython.git
+	ignore = untracked

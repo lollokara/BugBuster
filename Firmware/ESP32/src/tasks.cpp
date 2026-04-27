@@ -216,9 +216,10 @@ static void taskAdcPoll(void* /*pvParameters*/)
             // Write results back under mutex + accumulate into scope bucket
             uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                    g_deviceState.channels[ch].adcRawCode = raw[ch];
-                    g_deviceState.channels[ch].adcValue   = eng[ch];
+                for (uint8_t physical_ch = 0; physical_ch < AD74416H_NUM_CHANNELS; physical_ch++) {
+                    uint8_t logical_ch = (physical_ch == 2) ? 3 : (physical_ch == 3 ? 2 : physical_ch);
+                    g_deviceState.channels[logical_ch].adcRawCode = raw[physical_ch];
+                    g_deviceState.channels[logical_ch].adcValue   = eng[physical_ch];
                 }
 
                 ScopeBuffer& sb = g_deviceState.scope;
@@ -393,13 +394,14 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 g_deviceState.liveStatus        = liveStatus;
                 g_deviceState.spiOk             = spiHealthy;
 
-                for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                    g_deviceState.channels[ch].channelAlertStatus = chanAlert[ch];
-                    g_deviceState.channels[ch].dinState =
-                        (dinComp >> ch) & 0x01;
-                    if (func[ch] == CH_FUNC_DIN_LOGIC ||
-                        func[ch] == CH_FUNC_DIN_LOOP) {
-                        g_deviceState.channels[ch].dinCounter = dinCounter[ch];
+                for (uint8_t physical_ch = 0; physical_ch < AD74416H_NUM_CHANNELS; physical_ch++) {
+                    uint8_t logical_ch = (physical_ch == 2) ? 3 : (physical_ch == 3 ? 2 : physical_ch);
+                    g_deviceState.channels[logical_ch].channelAlertStatus = chanAlert[physical_ch];
+                    g_deviceState.channels[logical_ch].dinState =
+                        (dinComp >> physical_ch) & 0x01;
+                    if (func[physical_ch] == CH_FUNC_DIN_LOGIC ||
+                        func[physical_ch] == CH_FUNC_DIN_LOOP) {
+                        g_deviceState.channels[logical_ch].dinCounter = dinCounter[physical_ch];
                     }
                 }
 
@@ -466,12 +468,29 @@ static void taskFaultMonitor(void* /*pvParameters*/)
 // the wavegen would win the scheduler race and start driving DAC values before
 // the channel function has been applied — corrupting the ADC state.
 // -----------------------------------------------------------------------------
-void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
+void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
 {
-    if (!s_device) return;
+    if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return;
 
-    if (!s_device->setChannelFunction(channel, func)) {
-        ESP_LOGE("tasks", "Failed to set channel %u function %u", channel, (unsigned)func);
+    // ---- Digital Remapping (C <-> D) ----------------------------------------
+    // Remap logical indices to physical hardware indices to match physical 
+    // connector order vs ADC internal channel layout.
+    // Logical 0 (A) -> Phys 0, MUX 0 (IO 3)
+    // Logical 1 (B) -> Phys 1, MUX 1 (IO 6)
+    // Logical 2 (C) -> Phys 3, MUX 2 (IO 12, Block 4)
+    // Logical 3 (D) -> Phys 2, MUX 3 (IO 9,  Block 3)
+    uint8_t physical_ch = logical_channel;
+    uint8_t mux_dev = logical_channel;
+    if (logical_channel == 2) {
+        physical_ch = 3;
+        mux_dev = 2;
+    } else if (logical_channel == 3) {
+        physical_ch = 2;
+        mux_dev = 3;
+    }
+
+    if (!s_device->setChannelFunction(physical_ch, func)) {
+        ESP_LOGE("tasks", "Failed to set physical channel %u function %u", physical_ch, (unsigned)func);
         return;
     }
 
@@ -481,8 +500,8 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
     // node or range for our board-level signal path.
     uint16_t adcCfgReg = 0;
     extern AD74416H_SPI spiDriver;
-    if (!spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(channel), &adcCfgReg)) {
-        ESP_LOGE("tasks", "Failed to read back ADC_CONFIG for channel %u", channel);
+    if (!spiDriver.readRegister(AD74416H_REG_ADC_CONFIG(physical_ch), &adcCfgReg)) {
+        ESP_LOGE("tasks", "Failed to read back ADC_CONFIG for physical channel %u", physical_ch);
         return;
     }
 
@@ -516,10 +535,10 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
     // LF->AGND as required by the AD74416H datasheet's 2-wire example.
     if (func == CH_FUNC_RES_MEAS) {
         if (!spiDriver.writeRegister(
-            AD74416H_REG_RTD_CONFIG(channel),
+            AD74416H_REG_RTD_CONFIG(physical_ch),
             RTD_CONFIG_RTD_MODE_SEL_MASK | RTD_CONFIG_RTD_CURRENT_MASK
         )) {
-            ESP_LOGE("tasks", "Failed to write RTD_CONFIG for channel %u", channel);
+            ESP_LOGE("tasks", "Failed to write RTD_CONFIG for physical channel %u", physical_ch);
             return;
         }
         hwMux = ADC_MUX_LF_TO_AGND;
@@ -527,26 +546,39 @@ void tasks_apply_channel_function(uint8_t channel, ChannelFunction func)
 
     // Leaving RES_MEAS: stop excitation current.
     if (func == CH_FUNC_HIGH_IMP) {
-        if (!spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(channel), 0x0000)) {
-            ESP_LOGE("tasks", "Failed to clear RTD_CONFIG for channel %u", channel);
+        if (!spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(physical_ch), 0x0000)) {
+            ESP_LOGE("tasks", "Failed to clear RTD_CONFIG for physical channel %u", physical_ch);
             return;
         }
     }
 
-    s_device->configureAdc(channel, hwMux, hwRange, ADC_RATE_20SPS);
+    s_device->configureAdc(physical_ch, hwMux, hwRange, ADC_RATE_20SPS);
+
+    // ---- MUX auto-routing ---------------------------------------------------
+    // Map AD74416H physical channel index to MUX device and Group A switch.
+    // Phys 0 (A) -> Device 0 (U10, IO 3)
+    // Phys 1 (B) -> Device 1 (U11, IO 6)
+    // Phys 3 (C) -> Device 2 (U16, IO 12)
+    // Phys 2 (D) -> Device 3 (U17, IO 9)
+    //
+    // Switch S3 (index 2) connects the AD74416H channel to the terminal.
+    {
+        bool close_analog = (func != CH_FUNC_HIGH_IMP);
+        adgs_set_switch_safe(mux_dev, 2, close_analog); // S3 is index 2
+    }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.channels[channel].function = func;
-        g_deviceState.channels[channel].adcRange = hwRange;
-        g_deviceState.channels[channel].adcMux   = hwMux;
-        g_deviceState.channels[channel].adcRate  = ADC_RATE_20SPS;
-        g_deviceState.channels[channel].rtdExcitationUa =
+        g_deviceState.channels[logical_channel].function = func;
+        g_deviceState.channels[logical_channel].adcRange = hwRange;
+        g_deviceState.channels[logical_channel].adcMux   = hwMux;
+        g_deviceState.channels[logical_channel].adcRate  = ADC_RATE_20SPS;
+        g_deviceState.channels[logical_channel].rtdExcitationUa =
             (func == CH_FUNC_RES_MEAS) ? 1000u : 0u;
         if (func == CH_FUNC_HIGH_IMP) {
-            g_deviceState.channels[channel].dacCode    = 0;
-            g_deviceState.channels[channel].dacValue   = 0.0f;
-            g_deviceState.channels[channel].adcRawCode = 0;
-            g_deviceState.channels[channel].adcValue   = 0.0f;
+            g_deviceState.channels[logical_channel].dacCode    = 0;
+            g_deviceState.channels[logical_channel].dacValue   = 0.0f;
+            g_deviceState.channels[logical_channel].adcRawCode = 0;
+            g_deviceState.channels[logical_channel].adcValue   = 0.0f;
         }
         xSemaphoreGive(g_stateMutex);
     }
@@ -580,14 +612,18 @@ bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown)
     else if (mode == GPIO_SEL_INPUT) dioMode = DIO_MODE_INPUT;
     // Note: DIN_OUT and DO_EXT not supported by ESP32, fallback to DISABLED or as requested by user
 
+    // Take g_stateMutex BEFORE the hardware call so hardware mutation and state
+    // cache update are atomic under the lock. dio_configure_ext does not acquire
+    // g_stateMutex (it only touches dio-local s_io[]), so no deadlock risk.
     // IO numbering in dio is 1-12
-    dio_configure_ext(gpio + 1, dioMode, pulldown);
-
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.dio[gpio].mode = (uint8_t)mode;
-        g_deviceState.dio[gpio].pulldown = pulldown;
-        xSemaphoreGive(g_stateMutex);
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE("tasks", "tasks_apply_gpio_config: g_stateMutex timeout — skipping");
+        return false;
     }
+    dio_configure_ext(gpio + 1, dioMode, pulldown);
+    g_deviceState.dio[gpio].mode = (uint8_t)mode;
+    g_deviceState.dio[gpio].pulldown = pulldown;
+    xSemaphoreGive(g_stateMutex);
 
     return true;
 }
@@ -598,84 +634,95 @@ bool tasks_apply_gpio_output(uint8_t gpio, bool value)
         return false;
     }
 
-    dio_write(gpio + 1, value);
-
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.dio[gpio].outputVal = value;
-        xSemaphoreGive(g_stateMutex);
+    // Take g_stateMutex BEFORE the hardware call so hardware mutation and state
+    // cache update are atomic under the lock. dio_write does not acquire
+    // g_stateMutex (it only touches dio-local s_io[]), so no deadlock risk.
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE("tasks", "tasks_apply_gpio_output: g_stateMutex timeout — skipping");
+        return false;
     }
+    dio_write(gpio + 1, value);
+    g_deviceState.dio[gpio].outputVal = value;
+    xSemaphoreGive(g_stateMutex);
 
     return true;
 }
 
-bool tasks_apply_dac_code(uint8_t channel, uint16_t code)
+bool tasks_apply_dac_code(uint8_t logical_channel, uint16_t code)
 {
-    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
-        return false;
-    }
-    if (!s_device->setDacCode(channel, code)) {
+    if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
+    uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
+
+    if (!s_device->setDacCode(physical_ch, code)) {
         return false;
     }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.channels[channel].dacCode = code;
-        g_deviceState.channels[channel].dacValue =
+        g_deviceState.channels[logical_channel].dacCode = code;
+        g_deviceState.channels[logical_channel].dacValue =
             (code / 65536.0f) * VOUT_UNIPOLAR_SPAN_V;
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_dac_code: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
 }
 
-bool tasks_apply_dac_voltage(uint8_t channel, float voltage, bool bipolar)
+bool tasks_apply_dac_voltage(uint8_t logical_channel, float voltage, bool bipolar)
 {
-    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
-        return false;
-    }
+    if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
+    uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
 
-    s_device->setVoutRange(channel, bipolar);
-    if (!s_device->setDacVoltage(channel, voltage, bipolar)) {
+    s_device->setVoutRange(physical_ch, bipolar);
+    if (!s_device->setDacVoltage(physical_ch, voltage, bipolar)) {
         return false;
     }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.channels[channel].dacValue = voltage;
+        g_deviceState.channels[logical_channel].dacValue = voltage;
         float span = bipolar ? VOUT_BIPOLAR_SPAN_V : VOUT_UNIPOLAR_SPAN_V;
         float off  = bipolar ? VOUT_BIPOLAR_OFFSET_V : 0.0f;
-        g_deviceState.channels[channel].dacCode =
+        g_deviceState.channels[logical_channel].dacCode =
             (uint16_t)(((voltage + off) / span) * 65536.0f);
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_dac_voltage: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
 }
 
-bool tasks_apply_dac_current(uint8_t channel, float current_mA)
+bool tasks_apply_dac_current(uint8_t logical_channel, float current_mA)
 {
-    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
-        return false;
-    }
-    if (!s_device->setDacCurrent(channel, current_mA)) {
+    if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
+    uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
+
+    if (!s_device->setDacCurrent(physical_ch, current_mA)) {
         return false;
     }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.channels[channel].dacValue = current_mA;
-        g_deviceState.channels[channel].dacCode =
+        g_deviceState.channels[logical_channel].dacValue = current_mA;
+        g_deviceState.channels[logical_channel].dacCode =
             (uint16_t)((current_mA / IOUT_MAX_MA) * 65536.0f);
         xSemaphoreGive(g_stateMutex);
+    } else {
+        ESP_LOGE("tasks", "tasks_apply_dac_current: g_stateMutex timeout — state cache stale");
+        return false;
     }
 
     return true;
 }
 
-bool tasks_apply_vout_range(uint8_t channel, bool bipolar)
+bool tasks_apply_vout_range(uint8_t logical_channel, bool bipolar)
 {
-    if (!s_device || channel >= AD74416H_NUM_CHANNELS) {
-        return false;
-    }
+    if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
+    uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
 
-    s_device->setVoutRange(channel, bipolar);
+    s_device->setVoutRange(physical_ch, bipolar);
     return true;
 }
 
@@ -1204,8 +1251,10 @@ static void taskWavegen(void* /*pvParameters*/)
         int64_t nextSampleTime = esp_timer_get_time();
 
         while (true) {
-            // Check if still active
-            bool stillActive = false;
+            // Check if still active. Default true so a transient mutex timeout
+            // (e.g. fault-monitor SPI health-check) does not silently exit
+            // the waveform loop and freeze the DAC at the last value.
+            bool stillActive = true;
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
                 stillActive = g_deviceState.wavegen.active;
                 xSemaphoreGive(g_stateMutex);
@@ -1285,8 +1334,10 @@ void initTasks(AD74416H& device)
 {
     s_device = &device;
 
-    // Initialise state to safe defaults
-    memset(&g_deviceState, 0, sizeof(g_deviceState));
+    // Initialise channel/diag defaults. Do NOT memset the whole struct —
+    // i2cOk/muxOk/spiOk are set by main.cpp BEFORE initTasks() runs and
+    // a memset here would silently clobber them, leaving status badges
+    // and LEDs reporting permanent failure even when hardware is fine.
     for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
         g_deviceState.channels[ch].function = CH_FUNC_HIGH_IMP;
         g_deviceState.channels[ch].adcRange = ADC_RNG_0_12V;
@@ -1304,19 +1355,19 @@ void initTasks(AD74416H& device)
     // than the bare configASSERT halt that hides the cause.
     g_stateMutex = xSemaphoreCreateMutex();
     if (!g_stateMutex) {
-        serial_println("[BugBuster] FATAL: g_stateMutex creation failed (out of heap?)");
+        serial_println("[BugBuster] FATAL: g_stateMutex creation failed (out of heap?)");  // pre-BBP boot output
         abort();
     }
 
     // Create command queue (16 deep)
     g_cmdQueue = xQueueCreate(16, sizeof(Command));
     if (!g_cmdQueue) {
-        serial_println("[BugBuster] FATAL: g_cmdQueue creation failed (out of heap?)");
+        serial_println("[BugBuster] FATAL: g_cmdQueue creation failed (out of heap?)");  // pre-BBP boot output
         abort();
     }
 
     // Start tasks pinned to Core 1
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskAdcPoll,
         "adcPoll",
         4096,
@@ -1324,9 +1375,11 @@ void initTasks(AD74416H& device)
         3,
         &g_adcTaskHandle,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task adcPoll — heap exhausted");
+    }
 
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskFaultMonitor,
         "faultMon",
         4096,
@@ -1334,9 +1387,11 @@ void initTasks(AD74416H& device)
         4,
         nullptr,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task faultMon — heap exhausted");
+    }
 
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskCommandProcessor,
         "cmdProc",
         8192,
@@ -1344,12 +1399,14 @@ void initTasks(AD74416H& device)
         2,
         nullptr,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task cmdProc — heap exhausted");
+    }
 
     // Waveform generator task (Core 1, with other SPI tasks)
     // Avoids competing with WiFi/network on Core 0 during tight DAC loops
     wavegenInitLut();
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         taskWavegen,
         "wavegen",
         4096,
@@ -1357,10 +1414,40 @@ void initTasks(AD74416H& device)
         3,
         &s_wavegenTask,
         1
-    );
+    ) != pdPASS) {
+        ESP_LOGE("tasks", "Failed to create task wavegen — heap exhausted");
+    }
 
     // Note: I2C devices (PCA9535, HUSB238, DS4424) are polled on-demand
     // by BBP/HTTP/CLI handlers — no background polling task needed.
+}
+
+void tasks_reset_hardware(void)
+{
+    if (!s_device) return;
+
+    ESP_LOGI("tasks", "Resetting hardware to safe state...");
+
+    // 1. Reset all AD74416H channels to HIGH_IMP
+    for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+        tasks_apply_channel_function(ch, CH_FUNC_HIGH_IMP);
+    }
+
+    // 2. Reset all ADGS2414D MUXes to open (handled by CH_FUNC_HIGH_IMP above for analog, 
+    //    but let's be thorough and call the global reset too).
+    adgs_reset_all();
+
+    // 3. Reset all ESP DIOs to safe input state
+    for (uint8_t i = 1; i <= 12; i++) {
+        dio_configure(i, DIO_MODE_DISABLED);
+    }
+
+    // 4. Reset HAT if connected
+    if (hat_detected()) {
+        hat_reset();
+    }
+
+    ESP_LOGI("tasks", "Hardware reset complete.");
 }
 
 bool sendCommand(const Command& cmd)

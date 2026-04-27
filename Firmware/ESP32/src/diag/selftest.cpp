@@ -17,6 +17,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "freertos/semphr.h"
 
 #include <string.h>
 #include <math.h>
@@ -36,6 +37,13 @@ static SelftestCalResult     s_cal_result_snapshot = {};
 static bool                  s_initialized  = false;
 static TaskHandle_t          s_cal_task     = NULL;
 static portMUX_TYPE          s_cal_lock = portMUX_INITIALIZER_UNLOCKED;
+// Serializes concurrent callers of read_channel_d (e.g. boot_check vs HTTP supply
+// measurement).  Prevents the snapshot/restore race in read_channel_d where the
+// mutex is dropped between snapshot and tasks_apply_channel_function.
+// NOTE: a non-selftest concurrent BBP/HTTP mutation of ch3 remains a narrow residual
+// race (tasks_apply_channel_function cannot be called under g_stateMutex); that
+// window is sev-3 acceptable per the audit.
+static SemaphoreHandle_t     s_selftest_mutex = NULL;
 static constexpr uint32_t    CAL_TRACE_MAGIC = 0xC411B007u;
 static RTC_DATA_ATTR SelftestCalTrace s_cal_trace_rtc = {};
 static bool                  s_worker_enabled = false;
@@ -83,6 +91,21 @@ static float read_channel_d(uint8_t adc_range)
 
     AD74416H *dev = tasks_get_device();
     if (!dev) return -1.0f;
+
+    // Serialize concurrent selftest callers to prevent snapshot/restore race.
+    // Without this, a concurrent boot_check and HTTP supply-measurement call
+    // can interleave their snapshot/apply sequences, causing the restore to
+    // write stale prev_func.
+    // NOTE: tasks_apply_channel_function acquires g_stateMutex internally, so
+    // s_selftest_mutex must be rank-independent (leaf lock, never held while
+    // attempting g_stateMutex). This is safe: we only take s_selftest_mutex
+    // here, and release before returning.
+    // Residual race: a non-selftest BBP/HTTP task mutating ch3 concurrently
+    // remains a narrow window (existing API behaviour, sev-3 acceptable).
+    if (s_selftest_mutex && xSemaphoreTake(s_selftest_mutex, pdMS_TO_TICKS(12000)) != pdTRUE) {
+        ESP_LOGW(TAG, "read_channel_d: s_selftest_mutex timeout — skipping measurement");
+        return -1.0f;
+    }
 
     // Snapshot Channel D config so self-test measurement does not clobber
     // the user's manual function/config selection.
@@ -133,6 +156,7 @@ static float read_channel_d(uint8_t adc_range)
         uint32_t raw = 0;
         if (!dev->readAdcResult(3, &raw)) {
             restore_channel_d();
+            if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
             return -1.0f;
         }
         samples[i] = dev->adcCodeToVoltage(raw, (AdcRange)adc_range);
@@ -153,6 +177,7 @@ static float read_channel_d(uint8_t adc_range)
     // Restore previous Channel D function/config.
     restore_channel_d();
 
+    if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
     return voltage;
 }
 
@@ -322,6 +347,10 @@ void selftest_init(void)
     memset(&s_supply_volt, 0, sizeof(s_supply_volt));
     memset(&s_cal_result, 0, sizeof(s_cal_result));
 
+    if (!s_selftest_mutex) {
+        s_selftest_mutex = xSemaphoreCreateMutex();
+    }
+
     clear_supply_monitor_cache();
     s_cal_result.status = CAL_STATUS_IDLE;
     s_cal_result.last_measured_v = -1.0f;
@@ -423,19 +452,19 @@ bool selftest_is_supply_monitor_active(void)
 {
     return s_worker_enabled &&
            s_cal_result.status != CAL_STATUS_RUNNING &&
-           !adgs_u17_s2_active();
+           !adgs_u16_s3_active();
 }
 
 void selftest_monitor_step(void)
 {
     if (!s_worker_enabled) return;
-    // Don't run if calibration is active or U17 S2 is closed
+    // Don't run if calibration is active or U16 S3 is closed
     if (s_cal_result.status == CAL_STATUS_RUNNING) return;
     // If U23 is manually active (e.g. CLI Signal tab debug), do not touch it.
     // Monitor measurements route through U23 and would otherwise clear user state.
     if (adgs_selftest_active()) return;
 
-    if (adgs_u17_s2_active()) {
+    if (adgs_u16_s3_active()) {
         s_supply_volt.available = false;
         for (int i = 0; i < SELFTEST_RAIL_COUNT; i++)
             s_supply_volt.voltage[i] = -1.0f;
@@ -491,14 +520,14 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         return false;
     }
 
-    if (adgs_u17_s2_active()) {
-        ESP_LOGW(TAG, "U17 S2 active (IO 9 analog), attempting to open...");
-        // Ensure Channel D (terminal 10) is High-Z before opening the switch
-        tasks_apply_channel_function(3, CH_FUNC_HIGH_IMP);
-        adgs_set_switch_safe(U17_DEVICE_IDX, 1, false);
+    if (adgs_u16_s3_active()) {
+        ESP_LOGW(TAG, "U16 S3 active (IO 12 analog), attempting to open...");
+        // Ensure logical channel 2 (Physical 3, IO 12) is High-Z before opening the switch
+        tasks_apply_channel_function(2, CH_FUNC_HIGH_IMP);
+        adgs_set_switch_safe(U16_DEVICE_IDX, 2, false);
         
-        if (adgs_u17_s2_active()) {
-            ESP_LOGE(TAG, "Cannot calibrate: U17 S2 is closed and failed to open");
+        if (adgs_u16_s3_active()) {
+            ESP_LOGE(TAG, "Cannot calibrate: U16 S3 is closed and failed to open");
             return false;
         }
     }
@@ -783,6 +812,41 @@ static void send_diag_config(uint8_t slot, uint8_t source)
     xQueueSend(g_cmdQueue, &cmd, pdMS_TO_TICKS(100));
 }
 
+// Helper: wait until g_deviceState.diag[slot].source reflects the requested source
+// (i.e. cmdProc has dequeued and processed the CMD_DIAG_CONFIG), then wait a fixed
+// ADC settle period (skipReads=2 at ~1s/cycle → ~3.5s total needed after command lands).
+// Replaces unconditional delay_ms(5000): limits stall to actual queue-drain time + 3.5s
+// instead of always 5s regardless.
+//
+// Max total wait: poll_timeout_ms (6000) + ADC_SETTLE_MS (3500) = 9.5s worst case.
+// Typical: cmd lands in <200ms → ~3.7s total.
+static void wait_diag_slot_ready(uint8_t slot, uint8_t expected_source)
+{
+    static constexpr int POLL_STEP_MS    = 100;
+    static constexpr int POLL_TIMEOUT_MS = 6000;
+    static constexpr int ADC_SETTLE_MS   = 3500;  // skipReads=2 × ~1s + margin
+
+    int elapsed = 0;
+    while (elapsed < POLL_TIMEOUT_MS) {
+        bool matched = false;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            matched = (slot < 4) && (g_deviceState.diag[slot].source == expected_source);
+            xSemaphoreGive(g_stateMutex);
+        }
+        if (matched) break;
+        delay_ms(POLL_STEP_MS);
+        elapsed += POLL_STEP_MS;
+    }
+    if (elapsed >= POLL_TIMEOUT_MS) {
+        ESP_LOGW(TAG, "wait_diag_slot_ready: slot %u did not reflect src %u after %dms",
+                 slot, expected_source, POLL_TIMEOUT_MS);
+    }
+
+    // Additional fixed wait for ADC conversion to complete a fresh read on the
+    // new source (skipReads=2, poll period ~1s per the fault-monitor task).
+    delay_ms(ADC_SETTLE_MS);
+}
+
 
 const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
 {
@@ -809,11 +873,12 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
     send_diag_config(2, DIAG_SRC_DVCC);
     send_diag_config(3, DIAG_SRC_AVSS);
 
-    // Wait for commands to be processed + ADC to restart + skipReads to expire
-    // + at least one fresh diagnostic read.
-    // skipReads=2, diag poll every ~1s → need ~3.5s minimum after commands are processed.
-    ESP_LOGI(TAG, "Waiting for fresh diagnostic data (5s)...");
-    delay_ms(5000);
+    // Poll until cmdProc has processed all 4 CMD_DIAG_CONFIG commands (reflected in
+    // g_deviceState.diag[].source), then wait a fixed ADC settle period.
+    // Slot 3 (AVSS) is the last command sent; when it reflects, all 4 are done.
+    // skipReads=2, diag poll every ~1s → need ~3.5s after command lands.
+    ESP_LOGI(TAG, "Waiting for diagnostic slot reconfiguration + fresh ADC data...");
+    wait_diag_slot_ready(3, DIAG_SRC_AVSS);
 
     // Read cached values from g_deviceState (populated by the fault monitor task)
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -830,7 +895,7 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
     // Phase 2: Measure AVCC using slot 1
     ESP_LOGI(TAG, "Switching slot 1 to AVCC...");
     send_diag_config(1, DIAG_SRC_AVCC);
-    delay_ms(5000);  // same wait for fresh data
+    wait_diag_slot_ready(1, DIAG_SRC_AVCC);
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         s_internal_supplies.avcc_v = g_deviceState.diag[1].value;
@@ -840,20 +905,12 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
 
     s_internal_supplies.valid = true;
 
-    // Check supplies against expected ranges
-#if BREADBOARD_MODE
-    s_internal_supplies.supplies_ok =
-        (s_internal_supplies.avdd_hi_v > 18.0f && s_internal_supplies.avdd_hi_v < 25.0f) &&
-        (s_internal_supplies.dvcc_v    > 4.5f  && s_internal_supplies.dvcc_v    < 5.5f)  &&
-        (s_internal_supplies.avcc_v    > 4.5f  && s_internal_supplies.avcc_v    < 5.5f)  &&
-        (s_internal_supplies.avss_v    < -13.0f && s_internal_supplies.avss_v   > -20.0f);
-#else
+    // Check supplies against expected ranges (PCB supply tolerances)
     s_internal_supplies.supplies_ok =
         (s_internal_supplies.avdd_hi_v > 13.5f && s_internal_supplies.avdd_hi_v < 16.5f) &&
         (s_internal_supplies.dvcc_v    > 3.0f  && s_internal_supplies.dvcc_v    < 3.6f)  &&
         (s_internal_supplies.avcc_v    > 4.5f  && s_internal_supplies.avcc_v    < 5.5f)  &&
         (s_internal_supplies.avss_v    < -13.5f && s_internal_supplies.avss_v   > -16.5f);
-#endif
 
     ESP_LOGI(TAG, "Internal supplies: AVDD_HI=%.1fV DVCC=%.2fV AVCC=%.2fV AVSS=%.1fV Temp=%.1fC %s",
              s_internal_supplies.avdd_hi_v, s_internal_supplies.dvcc_v,

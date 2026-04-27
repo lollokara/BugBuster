@@ -181,9 +181,6 @@ bool pca9535_init(void)
     // Chip POR masks every interrupt (0x4A/0x4B = 0xFF) — on PCB we route INT → ESP32 GPIO4,
     // so we must explicitly clear mask bits for the signals we monitor.
     // Also latch the four e-fuse FLT inputs so transient trips are held until read.
-    // Gated on BREADBOARD_MODE == 0 as well: breadboard build must not touch these regs
-    // even if someone hand-swaps the part.
-#if !BREADBOARD_MODE
     if (s_is_pcal9535a) {
         // Input latch: enable only on FLT bits (P1.1, P1.3, P1.5, P1.7).
         // Leave PG bits unlatched — they're steady-state and latching would
@@ -210,7 +207,6 @@ bool pca9535_init(void)
         ESP_LOGI(TAG, "PCAL9535A: INT unmasked (mask0=0x%02X mask1=0x%02X), FLT inputs latched",
                  int_mask0, int_mask1);
     }
-#endif
 
     // Read initial inputs
     pca9535_update();
@@ -409,31 +405,49 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
         }
     }
 
-    // Check Port 1 e-fuse fault changes (odd bits: 1, 3, 5, 7)
+    // Check Port 1 e-fuse fault changes (odd bits: 1, 3, 5, 7).
+    //
+    // PCB silkscreen cross: physical pins labelled EFUSE3/4 are swapped on
+    // current hardware. The write path at pca9535_set_control() already
+    // routes logical EFUSE3 through PCA9535_EFUSE_EN_4 and vice-versa, and
+    // pca9535_update_state() already remaps efuse_en[] from physical port
+    // bits into logical indices. Mirror the same translation here when
+    // reporting fault events, deciding whether the channel is enabled, and
+    // selecting which control to auto-disable — otherwise a logical-EFUSE3
+    // trip would surface as channel 4 and auto-disable the wrong rail.
+    static const uint8_t physical_to_logical[4] = {
+        0,  // physical P1 → logical EFUSE1
+        1,  // physical P2 → logical EFUSE2
+        3,  // physical P3 (FLT_3 / EN_3) → logical EFUSE4 (PCB cross)
+        2,  // physical P4 (FLT_4 / EN_4) → logical EFUSE3 (PCB cross)
+    };
+
     uint8_t flt_changed = (old_input1 ^ new_input1) & PCA9535_PORT1_INPUT_MASK;
     if (flt_changed) {
         for (int i = 0; i < 4; i++) {
             uint8_t flt_mask = (uint8_t)(PCA9535_EFUSE_FLT_1 << (i * 2));
             if (flt_changed & flt_mask) {
                 bool faulted = (new_input1 & flt_mask) == 0;  // active low
-                if (!s_state.efuse_en[i]) {
+                uint8_t logical = physical_to_logical[i];
+                if (!s_state.efuse_en[logical]) {
                     // Ignore fault transitions while the corresponding e-fuse is disabled.
                     // Some boards briefly assert FLT during output-enable transitions.
                     continue;
                 }
                 PcaFaultEvent evt = {
                     .type = faulted ? PCA_FAULT_EFUSE_TRIP : PCA_FAULT_EFUSE_CLEAR,
-                    .channel = (uint8_t)i,
+                    .channel = logical,
                     .timestamp_ms = now,
                 };
                 if (s_fault_cfg.log_events) {
-                    ESP_LOGW(TAG, "EFUSE_%d %s", i + 1, faulted ? "FAULT — tripped!" : "CLEARED");
+                    ESP_LOGW(TAG, "EFUSE_%d %s", logical + 1, faulted ? "FAULT — tripped!" : "CLEARED");
                 }
 
-                // Auto-disable faulted e-fuse
+                // Auto-disable faulted e-fuse (logical channel: control enum
+                // already routes through the silkscreen cross).
                 if (faulted && s_fault_cfg.auto_disable_efuse) {
-                    ESP_LOGW(TAG, "Auto-disabling EFUSE_%d", i + 1);
-                    pca9535_set_control((PcaControl)(PCA_CTRL_EFUSE1_EN + i), false);
+                    ESP_LOGW(TAG, "Auto-disabling EFUSE_%d", logical + 1);
+                    pca9535_set_control((PcaControl)(PCA_CTRL_EFUSE1_EN + logical), false);
                 }
 
                 if (s_fault_cb) s_fault_cb(&evt);

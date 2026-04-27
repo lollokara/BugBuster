@@ -48,10 +48,11 @@ extern "C" bool bugbuster_mp_channel_set_do(uint8_t channel, bool value)
 extern "C" bool bugbuster_mp_i2c_setup(uint8_t sda_io, uint8_t scl_io,
                                         uint32_t freq_hz, bool internal_pullups,
                                         float supply_v, float vlogic_v,
+                                        bool allow_split_supplies,
                                         char *err, size_t err_len)
 {
     return bus_planner_apply_i2c(sda_io, scl_io, freq_hz, internal_pullups,
-                                  supply_v, vlogic_v, err, err_len);
+                                  supply_v, vlogic_v, allow_split_supplies, err, err_len);
 }
 
 extern "C" bool bugbuster_mp_i2c_scan(uint8_t start, uint8_t stop,
@@ -89,11 +90,12 @@ extern "C" bool bugbuster_mp_spi_setup(uint8_t sck_io, uint8_t mosi_io,
                                         uint8_t miso_io, uint8_t cs_io,
                                         uint32_t freq_hz, uint8_t mode,
                                         float supply_v, float vlogic_v,
+                                        bool allow_split_supplies,
                                         char *err, size_t err_len)
 {
     return bus_planner_apply_spi(sck_io, mosi_io, miso_io, cs_io,
                                   freq_hz, mode, supply_v, vlogic_v,
-                                  err, err_len);
+                                  allow_split_supplies, err, err_len);
 }
 
 extern "C" bool bugbuster_mp_spi_transfer(const uint8_t *tx, size_t tx_len,

@@ -11,6 +11,12 @@
 #include "tusb_console.h"
 
 static const char *TAG = "usb_cdc";
+static const size_t s_cli_rx_buf_size = 1024;
+static uint8_t s_cli_rx_buf[1024];
+static size_t s_cli_rx_head = 0;
+static size_t s_cli_rx_tail = 0;
+static size_t s_cli_rx_count = 0;
+static portMUX_TYPE s_cli_rx_lock = portMUX_INITIALIZER_UNLOCKED;
 
 // Cached line coding from host for each bridge port
 static usb_cdc_line_coding_t s_bridge_coding[CDC_BRIDGE_COUNT] = {};
@@ -22,9 +28,37 @@ static bool s_bridge_dtr[CDC_BRIDGE_COUNT] = {};
 
 static void cdc_rx_callback(int itf, cdcacm_event_t *event)
 {
-    // Data available - nothing to do here, polled by serial_available / bridge_read
+    // Drain CDC0 into a local ring buffer so CLI / BBP / stdin can consume
+    // bytes without depending on TinyUSB polling order.
     (void)itf;
     (void)event;
+
+    uint8_t chunk[64];
+    for (;;) {
+        size_t rx_size = 0;
+        esp_err_t ret = tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, chunk, sizeof(chunk), &rx_size);
+        if (ret != ESP_OK || rx_size == 0) {
+            break;
+        }
+        bool ring_full = false;
+        portENTER_CRITICAL(&s_cli_rx_lock);
+        for (size_t i = 0; i < rx_size; i++) {
+            if (s_cli_rx_count == s_cli_rx_buf_size) {
+                ring_full = true;
+                break;
+            }
+            s_cli_rx_buf[s_cli_rx_head] = chunk[i];
+            s_cli_rx_head = (s_cli_rx_head + 1) % s_cli_rx_buf_size;
+            s_cli_rx_count++;
+        }
+        portEXIT_CRITICAL(&s_cli_rx_lock);
+
+        // If the ring filled up, stop draining for now. The next CLI tick or
+        // stdin read will consume space and let the callback continue.
+        if (ring_full || rx_size < sizeof(chunk)) {
+            break;
+        }
+    }
 }
 
 static void cdc_line_state_callback(int itf, cdcacm_event_t *event)
@@ -126,14 +160,29 @@ bool usb_cdc_cli_connected(void)
 
 uint32_t usb_cdc_cli_available(void)
 {
-    return tud_cdc_n_available(0);
+    portENTER_CRITICAL(&s_cli_rx_lock);
+    uint32_t avail = (uint32_t)s_cli_rx_count;
+    portEXIT_CRITICAL(&s_cli_rx_lock);
+    return avail;
 }
 
 uint32_t usb_cdc_cli_read(uint8_t *buf, size_t len)
 {
-    size_t rx_size = 0;
-    esp_err_t ret = tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, buf, len, &rx_size);
-    return (ret == ESP_OK) ? rx_size : 0;
+    if (!buf || len == 0) {
+        return 0;
+    }
+
+    size_t copied = 0;
+
+    portENTER_CRITICAL(&s_cli_rx_lock);
+    while (copied < len && s_cli_rx_count > 0) {
+        buf[copied++] = s_cli_rx_buf[s_cli_rx_tail];
+        s_cli_rx_tail = (s_cli_rx_tail + 1) % s_cli_rx_buf_size;
+        s_cli_rx_count--;
+    }
+    portEXIT_CRITICAL(&s_cli_rx_lock);
+
+    return (uint32_t)copied;
 }
 
 uint32_t usb_cdc_cli_write(const uint8_t *buf, size_t len)

@@ -13,38 +13,14 @@ static const char *TAG = "dio";
 
 // -----------------------------------------------------------------------------
 // GPIO pin mapping tables (index 0 = IO 1, index 11 = IO 12)
-// -----------------------------------------------------------------------------
-
-#if BREADBOARD_MODE
-
-// Breadboard mode: map to unused ESP32-S3 GPIOs that don't conflict with
-// SPI (8-11), I2C (1,4), ADC control (5-7), MUX CS (12), OE (14), USB (19,20).
-//
-// IO_Block 1: IO 1=GPIO15, IO 2=GPIO3,  IO 3=GPIO2
-// IO_Block 2: IO 4=GPIO36, IO 5=GPIO35, IO 6=GPIO21
-// IO_Block 3: IO 7=GPIO39, IO 8=GPIO38, IO 9=GPIO37
-// IO_Block 4: IO10=GPIO48, IO11=GPIO47, IO12=GPIO40
-// NOTE: GPIO13 reserved for WS2812B LEDs in breadboard mode
-
-static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
-    15,   3,   2,     // IO_Block 1: IO 1, 2, 3
-    36,  35,  21,     // IO_Block 2: IO 4, 5, 6
-    39,  38,  37,     // IO_Block 3: IO 7, 8, 9
-    48,  47,  40,     // IO_Block 4: IO 10, 11, 12
-};
-
-#else  // PCB mode
-
-// PCB mode: GPIOs from the shipped schematic. Each listed GPIO is routed to
-// one side of an ADGS2414D analog switch; the other side goes to the physical
-// terminal-block pin. AD74416H SPI/control and PCA9535 INT were moved off
-// these GPIOs on the PCB, so the breadboard-era "WARNING" about shared pins
-// no longer applies.
+// PCB schematic assignments. Each GPIO is routed to one side of an ADGS2414D
+// analog switch; the other side goes to the physical terminal-block pin.
 //
 // IO_Block 1 (U10): IO 1=GPIO4,  IO 2=GPIO2,  IO 3=GPIO1   (IO3 is analog-capable)
 // IO_Block 2 (U11): IO 4=GPIO7,  IO 5=GPIO6,  IO 6=GPIO5   (IO6 is analog-capable)
 // IO_Block 3 (U17): IO 7=GPIO8,  IO 8=GPIO9,  IO 9=GPIO10  (IO9 is analog-capable)
 // IO_Block 4 (U16): IO10=GPIO11, IO11=GPIO12, IO12=GPIO13  (IO12 is analog-capable)
+// -----------------------------------------------------------------------------
 
 static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
      4,   2,   1,     // IO_Block 1: IO 1, 2, 3
@@ -52,8 +28,6 @@ static const int8_t DIO_PIN_MAP[DIO_NUM_IOS] = {
      8,   9,  10,     // IO_Block 3: IO 7, 8, 9
     11,  12,  13,     // IO_Block 4: IO 10, 11, 12
 };
-
-#endif
 
 // Runtime state for each IO
 static DioState s_io[DIO_NUM_IOS];
@@ -83,8 +57,7 @@ void dio_init(void)
         s_io[i].input_level  = false;
         s_io[i].pulldown     = false;
     }
-    ESP_LOGI(TAG, "DIO initialized (%d IOs, %s mode)",
-             DIO_NUM_IOS, BREADBOARD_MODE ? "breadboard" : "PCB");
+    ESP_LOGI(TAG, "DIO initialized (%d IOs, PCB mode)", DIO_NUM_IOS);
 }
 
 bool dio_configure(uint8_t io, uint8_t mode)

@@ -271,6 +271,14 @@ void initTasks(AD74416H& device);
 bool sendCommand(const Command& cmd);
 
 /**
+ * @brief Reset the entire board signal path to a safe state.
+ *
+ * Sets all analog channels to HIGH_IMP, opens all MUX switches,
+ * disables all digital IOs, and resets the HAT connection.
+ */
+void tasks_reset_hardware(void);
+
+/**
  * @brief Apply a channel function change synchronously, bypassing the command
  *        queue.  Sets CH_FUNC_SETUP, reads back hardware ADC defaults, applies
  *        any range overrides (IIN, RTD), reconfigures the ADC, restarts the

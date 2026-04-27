@@ -194,10 +194,10 @@ bool adgs_set_selftest(uint8_t sw_byte);
 uint8_t adgs_get_selftest(void);
 
 /**
- * @brief Check if U17 S2 is currently closed (IO 9 analog mode).
+ * @brief Check if U16 S3 is currently closed (IO 12 analog mode).
  *        When true, U23 must NOT close any switches.
  */
-bool adgs_u17_s2_active(void);
+bool adgs_u16_s3_active(void);
 
 /**
  * @brief Check if U23 has any switches closed (self-test active).

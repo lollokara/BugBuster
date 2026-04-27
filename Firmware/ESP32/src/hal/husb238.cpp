@@ -14,20 +14,6 @@ static const char *TAG = "husb238";
 static Husb238State s_state = {};
 static uint8_t s_requested_pdo = 0;
 
-// Canonical PDO index used by BBP/UI: 1..6 => 5/9/12/15/18/20.
-static Husb238Voltage voltage_from_selected_pdo(uint8_t sel)
-{
-    switch (sel & 0x0F) {
-        case 1: return HUSB238_V_5V;
-        case 2: return HUSB238_V_9V;
-        case 3: return HUSB238_V_12V;
-        case 4: return HUSB238_V_15V;
-        case 5: return HUSB238_V_18V;
-        case 6: return HUSB238_V_20V;
-        default: return HUSB238_V_UNATTACHED;
-    }
-}
-
 // HUSB238 SRC_PDO selection nibble in bits [7:4]:
 // 1=5V, 2=9V, 3=12V, 8=15V, 9=18V, 10=20V (Adafruit reference driver).
 static uint8_t pdo_sel_nibble_from_voltage(Husb238Voltage voltage)
@@ -221,7 +207,7 @@ bool husb238_update(void)
     // Some adapters/controllers report selected PDO readback inconsistently.
     // Keep selected_pdo stable for UI/debug using requested value when available.
     uint8_t effective_sel = s_requested_pdo ? s_requested_pdo : s_state.selected_pdo;
-    Husb238Voltage selected_v = voltage_from_selected_pdo(effective_sel);
+    Husb238Voltage selected_v = decode_status_voltage(effective_sel, true);
     if (s_state.attached && selected_v != HUSB238_V_UNATTACHED) {
         // Only fall back to selected PDO when status decode is unavailable.
         // Do not override a valid status code; that can hide real negotiation failures.

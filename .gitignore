@@ -57,3 +57,6 @@ AGENTS.md
 /DesktopApp/BugBuster/src-tauri/.omc
 /Firmware/ESP32/managed_components
 /Firmware/ESP32/.omc
+/Firmware/ESP32/src/mp/.omc
+/Firmware/ESP32/src/mp/.omc
+/Firmware/ESP32/src/mp/.omc

@@ -49,4 +49,28 @@ __attribute__((always_inline)) static inline mp_uint_t mp_hal_ticks_cpu_impl(voi
 // Declared outside NO_QSTR guard: uses no IDF types, needed by py/modmicropython.c
 void mp_hal_set_interrupt_char(int c);
 
+// V2-D: native exec pool — declared outside NO_QSTR (uses only void*/size_t).
+// bb_native_code_commit: allocates EXEC SRAM, copies buf, tracks for free_all.
+// bb_native_code_free_all: frees all tracked exec allocations (call after mp_deinit).
+#include <stddef.h>
+void *bb_native_code_commit(void *buf, size_t len, void *reloc);
+void  bb_native_code_free_all(void);
+
+// ── VFS POSIX support ────────────────────────────────────────────────────────
+#include <errno.h>
+#define MP_HAL_RETRY_SYSCALL(ret, syscall, raise) \
+    do { \
+        ret = syscall; \
+    } while (ret == -1 && errno == EINTR); \
+    if (ret == -1) { \
+        int err = errno; \
+        raise; \
+    }
+
+#include "poll.h"
+static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    (void)fds; (void)nfds; (void)timeout;
+    return 0;
+}
+
 #endif // MICROPY_INCLUDED_BUGBUSTER_MPHALPORT_H

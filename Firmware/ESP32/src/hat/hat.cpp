@@ -190,9 +190,24 @@ static uint8_t hat_recv_frame(uint8_t *payload, uint8_t *payload_len, uint32_t t
     return cmd;
 }
 
+// ---------------------------------------------------------------------------
+// Unsolicited-event buffering for hat_command / hat_command_internal
+// ---------------------------------------------------------------------------
+
+#define HAT_MAX_PENDING_EVENTS 4
+
+typedef struct {
+    uint8_t type;                        // BBP_EVT_LA_DONE or BBP_EVT_LA_LOG
+    uint8_t payload[HAT_FRAME_MAX_LEN];
+    uint8_t len;
+} HatPendingEvent;
+
 // Send command and wait for response. Returns response CMD, fills rsp_payload.
+// Unsolicited LA events encountered during the wait are stored in pending_events[]
+// instead of being dispatched immediately (s_hat_mutex is still held at this point).
 static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                                    uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+                                    uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len,
+                                    HatPendingEvent *pending_events, int *pending_count)
 {
     s_last_error = 0;
     ESP_LOGI(TAG, "TX cmd=0x%02X len=%d t=%" PRIu64 "us", cmd, payload_len, esp_timer_get_time());
@@ -227,7 +242,17 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
             if (la_state == 3) {  // LA_STATE_DONE
                 ESP_LOGI(TAG, "LA capture done (unsolicited notification during wait)");
                 if (bbpIsActive()) {
-                    bbpSendEvent(BBP_EVT_LA_DONE, local_payload, local_len);
+                    // Buffer the event — dispatching under s_hat_mutex risks deadlock
+                    // (bbpSendEvent may acquire g_stateMutex rank-3). Will be sent
+                    // after mutex release in hat_command.
+                    if (*pending_count < HAT_MAX_PENDING_EVENTS) {
+                        HatPendingEvent *ev = &pending_events[(*pending_count)++];
+                        ev->type = BBP_EVT_LA_DONE;
+                        ev->len  = local_len;
+                        memcpy(ev->payload, local_payload, local_len);
+                    } else {
+                        ESP_LOGW(TAG, "pending LA event buffer full — BBP_EVT_LA_DONE dropped");
+                    }
                 }
             }
             continue;
@@ -237,7 +262,15 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
         if (rsp == HAT_RSP_LA_LOG) {
             ESP_LOGD(TAG, "LA log during cmd 0x%02X (len=%d)", cmd, local_len);
             if (bbpIsActive() && local_len > 0) {
-                bbpSendEvent(BBP_EVT_LA_LOG, local_payload, local_len);
+                // Buffer the event — same deadlock risk as LA_DONE above.
+                if (*pending_count < HAT_MAX_PENDING_EVENTS) {
+                    HatPendingEvent *ev = &pending_events[(*pending_count)++];
+                    ev->type = BBP_EVT_LA_LOG;
+                    ev->len  = local_len;
+                    memcpy(ev->payload, local_payload, local_len);
+                } else {
+                    ESP_LOGW(TAG, "pending LA event buffer full — BBP_EVT_LA_LOG dropped");
+                }
             }
             continue;
         }
@@ -271,13 +304,22 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
         return 0;
     }
 
-    uint8_t rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
+    // Buffer for unsolicited LA events received while s_hat_mutex is held.
+    // hat_command_internal accumulates events here instead of calling bbpSendEvent
+    // directly to avoid a potential deadlock (bbpSendEvent may acquire g_stateMutex
+    // rank-3 while s_hat_mutex is still held and unranked).
+    HatPendingEvent pending_events[HAT_MAX_PENDING_EVENTS];
+    int pending_count = 0;
+
+    uint8_t rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len,
+                                       pending_events, &pending_count);
 
     // One retry with a connection reset if the first attempt failed (timeout or junk)
     if (rsp == 0) {
         ESP_LOGD(TAG, "HAT command 0x%02X first attempt failed, retrying after reset...", cmd);
         hat_reset_connection();
-        rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
+        rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len,
+                                   pending_events, &pending_count);
         if (rsp != 0) {
             s_state.connected = true; // Connection recovered
             ESP_LOGI(TAG, "HAT connection recovered during command 0x%02X", cmd);
@@ -289,6 +331,16 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     }
 
     if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
+
+    // Dispatch buffered unsolicited LA events outside s_hat_mutex to avoid
+    // potential deadlock (bbpSendEvent may acquire g_stateMutex rank-3).
+    // TODO: bench-test LA_DONE / LA_LOG delivery latency against real HAT PCB
+    // once available — the buffering adds ~0 ms but the sequencing change
+    // (events arrive after command response) should be verified under load.
+    for (int i = 0; i < pending_count; i++) {
+        bbpSendEvent(pending_events[i].type, pending_events[i].payload, pending_events[i].len);
+    }
+
     return rsp;
 }
 
