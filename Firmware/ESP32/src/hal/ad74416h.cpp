@@ -246,6 +246,15 @@ void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagM
 {
     // Per datasheet: channels/diagnostics cannot be modified while continuous
     // sequence is in progress. Must stop first, wait for ADC_BUSY=0, then restart.
+    //
+    // Hold g_spi_bus_mutex across the full RMW sequence so no other SPI caller
+    // (e.g. ADGS transfer) can interleave between the read and write phases.
+    extern SemaphoreHandle_t g_spi_bus_mutex;
+    static constexpr TickType_t BUS_TIMEOUT = pdMS_TO_TICKS(500);
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        return;
+    }
 
     // Step 1: Stop current sequence (CONV_SEQ = 0b00 = idle/power-up)
     uint16_t current = 0;
@@ -276,6 +285,8 @@ void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagM
     if (diagMask & 0x08) ctrl |= ADC_CONV_CTRL_DIAG_EN3_MASK;
 
     _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
+
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
 }
 
 void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
@@ -288,6 +299,15 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
         ADC_CONV_CTRL_CONV_C_EN_MASK,
         ADC_CONV_CTRL_CONV_D_EN_MASK,
     };
+
+    // Hold g_spi_bus_mutex across the full RMW so no interleaving caller can
+    // see an intermediate REG_ADC_CONV_CTRL state.
+    extern SemaphoreHandle_t g_spi_bus_mutex;
+    static constexpr TickType_t BUS_TIMEOUT = pdMS_TO_TICKS(500);
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        return;
+    }
 
     // Per datasheet: channels cannot be modified while continuous sequence is
     // in progress. Stop the sequence, modify, then restart.
@@ -317,6 +337,8 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
     ctrl = (ctrl & ~ADC_CONV_CTRL_CONV_SEQ_MASK)
          | ((uint16_t)ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT);
     _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
+
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +398,15 @@ void AD74416H::clearAdcDataReady()
     // Re-write the current CONV_SEQ value to clear ADC_DATA_RDY.
     // Only restart if continuous mode is already active; avoids
     // accidentally starting conversions when the ADC is idle.
+    //
+    // Hold g_spi_bus_mutex across the RMW to prevent interleaving.
+    extern SemaphoreHandle_t g_spi_bus_mutex;
+    static constexpr TickType_t BUS_TIMEOUT = pdMS_TO_TICKS(500);
+    if (g_spi_bus_mutex == NULL ||
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+        return;
+    }
+
     uint16_t ctrl = 0;
     _spi.readRegister(REG_ADC_CONV_CTRL, &ctrl);
     uint16_t conv_seq = (ctrl & ADC_CONV_CTRL_CONV_SEQ_MASK) >> ADC_CONV_CTRL_CONV_SEQ_SHIFT;
@@ -385,6 +416,8 @@ void AD74416H::clearAdcDataReady()
                             (uint16_t)(ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT));
     }
     // If ADC is idle or single-shot, reading ADC_RESULT also clears the flag.
+
+    xSemaphoreGiveRecursive(g_spi_bus_mutex);
 }
 
 // ---------------------------------------------------------------------------
