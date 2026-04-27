@@ -612,17 +612,18 @@ bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown)
     else if (mode == GPIO_SEL_INPUT) dioMode = DIO_MODE_INPUT;
     // Note: DIN_OUT and DO_EXT not supported by ESP32, fallback to DISABLED or as requested by user
 
+    // Take g_stateMutex BEFORE the hardware call so hardware mutation and state
+    // cache update are atomic under the lock. dio_configure_ext does not acquire
+    // g_stateMutex (it only touches dio-local s_io[]), so no deadlock risk.
     // IO numbering in dio is 1-12
-    dio_configure_ext(gpio + 1, dioMode, pulldown);
-
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.dio[gpio].mode = (uint8_t)mode;
-        g_deviceState.dio[gpio].pulldown = pulldown;
-        xSemaphoreGive(g_stateMutex);
-    } else {
-        ESP_LOGE("tasks", "tasks_apply_gpio_config: g_stateMutex timeout — state cache stale");
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE("tasks", "tasks_apply_gpio_config: g_stateMutex timeout — skipping");
         return false;
     }
+    dio_configure_ext(gpio + 1, dioMode, pulldown);
+    g_deviceState.dio[gpio].mode = (uint8_t)mode;
+    g_deviceState.dio[gpio].pulldown = pulldown;
+    xSemaphoreGive(g_stateMutex);
 
     return true;
 }
@@ -633,15 +634,16 @@ bool tasks_apply_gpio_output(uint8_t gpio, bool value)
         return false;
     }
 
-    dio_write(gpio + 1, value);
-
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.dio[gpio].outputVal = value;
-        xSemaphoreGive(g_stateMutex);
-    } else {
-        ESP_LOGE("tasks", "tasks_apply_gpio_output: g_stateMutex timeout — state cache stale");
+    // Take g_stateMutex BEFORE the hardware call so hardware mutation and state
+    // cache update are atomic under the lock. dio_write does not acquire
+    // g_stateMutex (it only touches dio-local s_io[]), so no deadlock risk.
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE("tasks", "tasks_apply_gpio_output: g_stateMutex timeout — skipping");
         return false;
     }
+    dio_write(gpio + 1, value);
+    g_deviceState.dio[gpio].outputVal = value;
+    xSemaphoreGive(g_stateMutex);
 
     return true;
 }
