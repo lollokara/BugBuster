@@ -46,8 +46,6 @@ static const uint8_t s_magic[BBP_MAGIC_LEN] = {
 
 // ADC stream state
 static uint8_t  s_adcStreamMask = 0;    // 0 = inactive
-static uint8_t  s_adcStreamDiv  = 1;
-static uint8_t  s_adcDivCount   = 0;    // Divider counter
 
 // Scope stream state
 static bool     s_scopeStreamActive = false;
@@ -626,10 +624,8 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out)
     // Reset ring buffer
     s_adcBuf.head  = 0;
     s_adcBuf.tail  = 0;
-    s_adcDivCount  = 0;
 
     s_adcStreamMask = mask;
-    s_adcStreamDiv  = div;
 
     // Estimate effective sample rate from fastest active channel
     uint16_t effectiveRate = 20; // default SPS
