@@ -281,7 +281,8 @@ static void sendError(uint16_t seq, uint8_t cmdId, uint8_t errCode)
 
 static void sendEvent(uint8_t evtId, const uint8_t *payload, size_t payloadLen)
 {
-    sendMsg(BBP_MSG_EVT, s_evtSeq++, evtId, payload, payloadLen);
+    uint16_t seq = (uint16_t)__atomic_fetch_add(&s_evtSeq, 1, __ATOMIC_RELAXED);
+    sendMsg(BBP_MSG_EVT, seq, evtId, payload, payloadLen);
 }
 
 // Public wrapper for sending events from other modules
