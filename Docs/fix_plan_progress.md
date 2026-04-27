@@ -307,6 +307,32 @@ From `Docs/scripting-plan-v2.md` § "Open follow-ups":
 - (2026-04-27) Wave 2 #7 landed: 4dd5c15 — http_adapter: replace Access-Control-Allow-Origin: * with localhost-only conditional-origin logic in both send_json_resp and send_err_resp.
 - (2026-04-27) Wave 2 #8 landed: 0835989 — scripting_run_file: cmd.persist now propagated from s_mode so PERSISTENT VM file-runs stay persistent (V2-A contract fix).
 - **(2026-04-27) Wave 2 complete.** All 8 sev-4 auth/integrity findings landed as 8 atomic commits, each with build-green verification. Wave 3 not started — awaiting explicit approval.
+- (2026-04-27) Wave 3 #W3-9 landed: ca94c8a — husb238.h PD_STATUS0/STATUS1 section comment labels swapped to match actual register usage in husb238.cpp (doc-only, no macro value change).
+- (2026-04-27) Wave 3 #W3-1 landed: ac471b0 — net_bridge.cpp: null *body_out/*body_len_out before returning -2 on OOM path in both http_get and http_post to prevent double-free in caller.
+- (2026-04-27) Wave 3 #W3-3 landed: 888077b — mphalport.c: wrap vTaskDelay(1) with MP_THREAD_GIL_EXIT/ENTER in mp_hal_delay_ms; no-op with MICROPY_PY_THREAD=0, enables V2-G GIL release on thread flip.
+- (2026-04-27) Wave 3 #W3-4 landed: b8ec71b — usb_cdc.cpp: remove racy tinyusb_cdcacm_read fallback from usb_cdc_cli_read; return 0 when ring empty, callers retry.
+- (2026-04-27) Wave 3 #W3-5 landed: a97ea0c — uart_bridge.cpp: add s_bridge_mux[] spinlocks; guard config struct write in set_config and snapshot fields in bridge_task to eliminate set_config/bridge_task data race.
+- (2026-04-27) Wave 3 #W3-7 landed: d8ebb7f — wifi_manager.cpp: add s_wifi_state_mux spinlock; protect all writes/reads of s_sta_connected and s_sta_ip; wifi_get_sta_ip copies into static buffer under lock to prevent torn string reads.
+- (2026-04-27) Wave 3 #W3-8 landed: c440430 — ad74416h.cpp: hold g_spi_bus_mutex (recursive) across full RMW in startAdcConversion, enableAdcChannel, and clearAdcDataReady to prevent SPI interleaving between read and write phases.
+- **(2026-04-27) Wave 3 complete.** All 7 sev-4 concurrency findings landed as 7 atomic commits, each with build-green verification.
+- (2026-04-27) Wave 3 #W3-2 closed (no fix): scripting.cpp:386 mp_stack_set_top — `volatile int stack_dummy` is already the first local in taskMicroPython; missed prologue bytes hold no MP object pointers so GC cannot miss live roots. Theoretical correctness issue only; no code change warranted.
+- (2026-04-27) Wave 3 #W3-6 DEFERRED — uart_bridge.cpp:240 bypasses bus_planner (uart_set_pin without MUX coordination). Architectural: requires user decision on whether uart_bridge should call bus_planner_apply_digital or receive a pre-validated pin list. Not safe to implement without design input.
+- (2026-04-27) Wave 3 #W3-10 DEFERRED — hat.cpp:229-240 bbpSendEvent called under s_hat_mutex (via hat_command→hat_command_internal chain). Fix requires either (a) ranking s_hat_mutex as rank 5 leaf (implies bbpSendEvent must never acquire ranks 1-4 — needs verification) OR (b) buffering unsolicited events inside hat_command_internal and sending them after mutex release. User must decide approach before this is safe to implement.
+- (2026-04-27) Wave 3 #W3-6 landed: 160bf38 — uart_bridge.cpp: call bus_planner_route_digital_input for TX and RX IO terminals before uart_set_pin in install_uart; failure is non-fatal (log warning, proceed).
+- (2026-04-27) Wave 3 #W3-10 landed: 8295d9b — hat.cpp: buffer unsolicited BBP_EVT_LA_DONE/LA_LOG events in HatPendingEvent[] inside hat_command_internal; dispatch after xSemaphoreGive(s_hat_mutex) in hat_command to eliminate deadlock substrate (bbpSendEvent under s_hat_mutex).
+- (2026-04-27) Wave 4A #1 landed: fe5b08b — autorun.cpp: success predicate changed from || to && (total_errors==0 && last_error_msg[0]=='\0').
+- (2026-04-27) Wave 4A #2 SKIPPED — repl_ws_forward already uncommented and active at scripting.cpp:151; V2-B fix already shipped in a prior session.
+- (2026-04-27) Wave 4A #3 landed: 535da76 — scripting.cpp: call gc_collect() after eval when soft GC watermark (80%) hit in persistent mode (V2-A spec §4).
+- (2026-04-27) Wave 4A #4 landed: fcac792 — scripting.cpp: replace s_next_id++ with __atomic_fetch_add in both scripting_run_string and scripting_run_file.
+- (2026-04-27) Wave 4A #5 landed: bdcd8bc — repl_ws.cpp: remove racy bare read of s_tx_used outside s_tx_mutex in repl_tx_task drain loop; use drain return value to control iteration.
+- (2026-04-27) Wave 4A #6 landed: d9b61b6 — bbp.cpp: replace s_evtSeq++ with __atomic_fetch_add in sendEvent() to prevent duplicate sequence numbers from concurrent senders.
+- (2026-04-27) Wave 4A #7 landed: b44468f — main.cpp: remove early duplicate coredump_diag_print_boot_report() call (line 172); keep the later call at step 17 after all peripherals are initialised.
+- (2026-04-27) Wave 4A #8 landed: 285e653 — tasks.cpp: check xTaskCreatePinnedToCore return for adcPoll, faultMon, cmdProc, wavegen; log ESP_LOGE on failure and continue.
+- (2026-04-27) Wave 4A #9 landed: 3d0a0e7 — tasks.cpp: taskWavegen stillActive initialised true so a transient 5ms mutex timeout does not exit the waveform loop mid-cycle.
+- (2026-04-27) Wave 4A #10 landed: 1453ee4 — bus_planner.cpp: add isnan/range check for vlogic_v [1.2, 3.6] V in both bus_planner_apply_i2c and bus_planner_apply_spi before apply_power_and_mux.
+- (2026-04-27) Wave 4A #11 landed: f3e11c5 — tasks.cpp: tasks_apply_gpio_config/output/dac_code/dac_voltage/dac_current return false and log on g_stateMutex timeout. tasks_apply_channel_function (void) deferred; changing its return type touches >3 files.
+- (2026-04-27) Wave 4A #12 landed: 47532c7 — scripting.cpp/h + autorun.cpp: add last_script_id to ScriptStatus; status_set_done captures current_script_id before zeroing it; autorun reads last_script_id.
+- **(2026-04-27) Wave 4A complete.** 11 fixes landed (10 commits + 1 no-op), 1 pre-shipped, build green after each commit.
 
 ---
 
