@@ -15,6 +15,7 @@
 
 #include "config.h"
 #include "usb_cdc.h"
+#include "bus/bus_planner.h"
 
 static const char *TAG = "uart_bridge";
 
@@ -67,6 +68,15 @@ static bool is_uart_io_gpio(int pin)
         if (UART_IO_GPIO_MAP[i] == pin) return true;
     }
     return false;
+}
+
+// Returns IO terminal number (1..12) for a given ESP32 GPIO, or 0 if not found.
+static uint8_t gpio_to_io_terminal(int gpio)
+{
+    for (int i = 0; UART_IO_GPIO_MAP[i] >= 0; i++) {
+        if (UART_IO_GPIO_MAP[i] == gpio) return (uint8_t)(i + 1);
+    }
+    return 0;
 }
 
 static bool is_pin_excluded_for_bridge(int pin, int self_bridge_id)
@@ -238,6 +248,33 @@ static bool install_uart(int id)
     }
 
     uart_param_config(port, &uart_cfg);
+
+    // Route TX and RX pins through bus_planner so the MUX reservation is
+    // recorded and the level-shifter / VADJ power is enabled for those IO
+    // terminals. This prevents silent GPIO-matrix overwrites when I2C/SPI was
+    // previously routed to the same terminals.
+    // Failure is non-fatal: the UART bridge predates the planner and must keep
+    // working even if the planner is unavailable.
+    {
+        char bp_err[64];
+        uint8_t tx_io = gpio_to_io_terminal(cfg.tx_pin);
+        uint8_t rx_io = gpio_to_io_terminal(cfg.rx_pin);
+        if (tx_io == 0) {
+            ESP_LOGW(TAG, "Bridge %d: TX GPIO%d not in IO terminal map, skipping planner",
+                     id, cfg.tx_pin);
+        } else if (!bus_planner_route_digital_input(tx_io, bp_err, sizeof(bp_err))) {
+            ESP_LOGW(TAG, "Bridge %d: bus_planner TX IO%u failed: %s (proceeding)",
+                     id, tx_io, bp_err);
+        }
+        if (rx_io == 0) {
+            ESP_LOGW(TAG, "Bridge %d: RX GPIO%d not in IO terminal map, skipping planner",
+                     id, cfg.rx_pin);
+        } else if (!bus_planner_route_digital_input(rx_io, bp_err, sizeof(bp_err))) {
+            ESP_LOGW(TAG, "Bridge %d: bus_planner RX IO%u failed: %s (proceeding)",
+                     id, rx_io, bp_err);
+        }
+    }
+
     uart_set_pin(port, cfg.tx_pin, cfg.rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
     bs.driver_installed = true;
