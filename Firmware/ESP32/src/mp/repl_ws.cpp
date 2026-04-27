@@ -196,7 +196,9 @@ static void repl_tx_task(void *pvParam)
         if (fd < 0) break; // session closed — exit
 
         // Drain the ring in chunks.
-        while (s_tx_used > 0 && fd >= 0) {
+        // s_tx_used must only be read under s_tx_mutex; use the drain return
+        // value to decide whether to keep looping rather than a bare read.
+        while (fd >= 0) {
             size_t n = 0;
             if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 n = tx_ring_drain_locked(tx_buf, sizeof(tx_buf));
