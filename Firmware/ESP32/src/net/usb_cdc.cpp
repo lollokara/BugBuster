@@ -182,12 +182,6 @@ uint32_t usb_cdc_cli_read(uint8_t *buf, size_t len)
     }
     portEXIT_CRITICAL(&s_cli_rx_lock);
 
-    if (copied == 0) {
-        size_t rx_size = 0;
-        esp_err_t ret = tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, buf, len, &rx_size);
-        if (ret == ESP_OK) return (uint32_t)rx_size;
-    }
-
     return (uint32_t)copied;
 }
 
