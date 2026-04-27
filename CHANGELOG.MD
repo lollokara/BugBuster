@@ -1,5 +1,145 @@
 # CHANGELOG
 
+## [BugBuster v1.0.0 — ESP 3.1.0 / HAT bb-hat-2.1 / Desktop 0.6.0] — 2026-04-27
+
+First **combined release** — a single GitHub release (`release-v1.0.0`)
+bundles the Desktop installers, ESP32-S3 firmware images and RP2040 HAT
+firmware artifacts, alongside a top-level `SHA256SUMS.txt`.
+
+### Added
+
+#### Release engineering
+- New **Combined Release** CI workflow (`.github/workflows/release.yml`):
+  pushing a `release-v*` tag (or running it via `workflow_dispatch`) builds
+  RP2040 + ESP32 + Desktop in parallel via `workflow_call` and assembles a
+  single draft GitHub Release with every artifact attached.
+- The three component workflows gain a `workflow_call` trigger so they can
+  be invoked as reusable workflows. Per-component tag releases
+  (`hat-fw-v*`, `esp-fw-v*`, `desktop-v*`) still work independently.
+- Desktop crates now declare `description`, `authors`, `license`,
+  `repository` and `homepage`, plus a `[package.metadata] release-date`.
+
+#### On-device MicroPython scripting
+- Vendored `micropython` submodule (forked at `lollokara/micropython`,
+  branch `bugbuster`, single-patch on `extmod/vfs_posix_file.c` so ESP
+  `sys.stdout` / `sys.stderr` route through the BugBuster HAL ring even
+  when SPIFFS imports promote stdio to POSIX-VFS file objects).
+- MicroPython VFS enabled with BugBuster shims; example scripts and
+  scripting documentation included.
+- Scripting REST surface: `/api/scripts/*` with mode reported as a
+  string enum, `last_run_id` correctly carried across `status_set_done`
+  resets, autorun success predicate fixed (`&&` not `||`).
+- WebSocket REPL session protected by a 10 s auth-frame deadline.
+- GIL released around `vTaskDelay` in `mp_hal_delay_ms` (V2-G prep).
+- Soft-GC watermark now triggers `gc_collect()` after eval.
+- Atomic increment for `s_next_id` in `scripting_run_string`/`run_file`
+  and for `s_evtSeq` in BBP — no more duplicate IDs / sequence numbers.
+
+#### BBP / firmware refactor
+- BBP split into **adapters and command modules** (`bbp_adapter_dispatch`
+  + `bbp_codec.h` shared codec helpers — local helpers in `bbp.cpp`
+  removed).
+- Admin authentication enforcement: `CMD_FLAG_ADMIN_REQUIRED` now
+  honoured in `bbp_adapter_dispatch`, `handle_bus_post_dispatch` gates
+  bus POSTs, `handler_get_admin_token` bounds its memcpy.
+- ScriptEval `ArgSpec` table now declares the missing `flags` field.
+
+#### Hardware / HAL
+- **HAT PCB final revision shipped.**
+- Final IO mapping for the 12-IO ESP32 surface; PCB-only hardware path
+  (`BREADBOARD_MODE` removed — see Removed).
+- I²C and SPI wrappers exposed in both Python client and device.
+- Dual-HVPAK / MUX / EFUSE refinements; PCA9535 fault-response path
+  applies the EFUSE3/4 silkscreen swap.
+- HUSB238: corrected `PD_STATUS0` / `STATUS1` section comment labels.
+
+#### Networking / web
+- ESP32 web assets refreshed; new MCP4725 example asset shipped.
+- Localhost-only CORS policy in `http_adapter` (replaces wildcard).
+- CORS `Access-Control-Allow-Origin` lifetime now spans the response.
+- HTTP `OOM` path on body deserialization nulls `body_out`/`body_len_out`
+  to prevent double-free.
+
+### Changed
+
+- All BBP-gated `serial_print*` call sites in `cli.cpp`, `tasks.cpp`,
+  `web` and `main.cpp` now route through `term_*` so post-BBP-init
+  output respects the BBP framing gate (no more raw bytes on the wire
+  after the protocol comes up). Pre-BBP sites are explicitly annotated.
+- ESP32 firmware bumped 3.0.0 → **3.1.0**; RP2040 HAT bumped
+  bb-hat-2.0 → **bb-hat-2.1**; Desktop bumped 0.5.0 → **0.6.0**.
+
+### Removed
+
+- **`BREADBOARD_MODE` config flag** — hardware is PCB-only now; the
+  breadboard build path was unused.
+- Dead `s_adcStreamDiv` / `s_adcDivCount` write-only ADC divider state
+  in `bbp.cpp`.
+- Unused includes in `bbp.cpp` (`esp_timer.h`, `esp_wifi.h`, `math.h`).
+- Duplicate `voltage_from_selected_pdo` in `husb238.cpp`.
+- Dead first `memcpy` in `adgs_get_api_states`.
+- Duplicate `coredump_diag_print_boot_report` at early boot.
+- Duplicate `mp_hal_set_interrupt_char` strong definition in micropython
+  port.
+
+### Fixed (concurrency / ordering — Wave 4A / 4B / 4C)
+
+- **Mutex / lock-rank discipline**: `g_stateMutex` now held before
+  hardware mutation in `gpio_config` / `gpio_output`; `tasks_apply_*`
+  return `false` and log on `g_stateMutex` timeout instead of silently
+  proceeding; `g_spi_bus_mutex` held across the full RMW in
+  `startAdcConversion` / `enableAdcChannel` / `clearAdcDataReady`;
+  `bus_planner` MUX-program / VADJ ordering swapped to unwind a
+  lock-rank inversion.
+- **Selftest serialization**: `s_selftest_mutex` now serializes
+  `read_channel_d` callers; the two 5 s blocking delays in
+  `selftest_measure_internal_supplies` removed.
+- **Task creation**: `xTaskCreatePinnedToCore` return is now checked
+  for `adcPoll` / `faultMon` / `cmdProc` / `wavegen`.
+- **WaveGen**: `taskWavegen.stillActive` initialised `true` so the task
+  survives `g_stateMutex` timeout.
+- **Network state**: `s_sta_connected` / `s_sta_ip` guarded by spinlock
+  in `wifi_manager`; `uart_bridge` config struct guarded by per-bridge
+  spinlock; racy `tinyusb_cdcacm_read` fallback removed from
+  `usb_cdc_cli_read`.
+- **HAT LA event delivery**: unsolicited LA events now buffered in
+  `hat_command_internal` and dispatched after the mutex is released.
+- **DIO bus-planner ordering**: `bus_planner_route_digital_input` now
+  called before `dio_configure` at all bypass sites.
+- **PCA9535 fault ISR** install deferred until `g_stateMutex` exists
+  during boot.
+
+### Fixed (correctness / safety)
+
+- **Stack smash** in `cli/edit`: `snprintf` truncation and tail length
+  now clamped.
+- **`vlogic_v` bounds check** [1.2, 3.6] V added in
+  `bus_planner_apply_i2c` / `apply_spi`.
+- **Web selftest**: cJSON channel deref guarded in calibrate handler.
+- **UART bridge**: `bus_planner` now called before pin assignment in
+  `install_uart`.
+- **Scripting persistence mode** propagated correctly in
+  `scripting_run_file`.
+
+### Build / repo hygiene
+
+- Submodule config: `Firmware/ESP32/components/micropython/micropython`
+  ignores untracked files (so a build that drops `__pycache__` etc.
+  doesn't dirty the parent working tree).
+- 3.4 GB of stale `.omx/team` session state removed from the working
+  copy (not history-rewritten — strictly local cleanup).
+
+### Known issues
+
+- LA bench proof for 1 MHz / 4-ch capture (T-LA-01, T-LA-02) and the
+  physical LA-done IRQ wire from RP2040 GPIO8 to ESP32 still pending
+  hardware validation sessions.
+- `gh release` for the combined workflow currently produces a **draft**
+  release — promote it to public manually after validating the
+  installers.
+
+---
+
 ## [ESP 3.0.0 / HAT bb-hat-2.0 / Desktop 0.5.0] — 2026-04-16
 
 Three-component coordinated release. Protocol spec bumped to v3.0.0 / BBP wire

@@ -59,9 +59,13 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "rp2040=$(python Firmware/tools/firmware_version.py rp2040)" >> "$GITHUB_OUTPUT"
-          echo "esp32=$(python Firmware/tools/firmware_version.py esp32)"   >> "$GITHUB_OUTPUT"
-          echo "desktop=$(python DesktopApp/BugBuster/scripts/desktop_version.py)" >> "$GITHUB_OUTPUT"
+          rp2040_v=$(python Firmware/tools/firmware_version.py rp2040)
+          esp32_v=$(python Firmware/tools/firmware_version.py esp32)
+          desktop_v=$(python DesktopApp/BugBuster/scripts/desktop_version.py --check)
+          echo "rp2040=$rp2040_v"   >> "$GITHUB_OUTPUT"
+          echo "esp32=$esp32_v"     >> "$GITHUB_OUTPUT"
+          echo "desktop=$desktop_v" >> "$GITHUB_OUTPUT"
+          echo "Resolved component versions: rp2040=$rp2040_v esp32=$esp32_v desktop=$desktop_v"
 
       - name: Download RP2040 artifacts
         uses: actions/download-artifact@v4
@@ -89,25 +93,45 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/release
-          # RP2040 + ESP32: already named with version, copy as-is
+
+          echo "::group::Downloaded RP2040 tree"
+          find dist/rp2040 -type f -printf '%s\t%p\n' | sort -n || true
+          echo "::endgroup::"
+          echo "::group::Downloaded ESP32 tree"
+          find dist/esp32 -type f -printf '%s\t%p\n' | sort -n || true
+          echo "::endgroup::"
+          echo "::group::Downloaded Desktop tree"
+          find dist/desktop -type f -printf '%s\t%p\n' | sort -n || true
+          echo "::endgroup::"
+
+          # RP2040 + ESP32: already named with version, copy as-is.
           cp dist/rp2040/* dist/release/ || true
           cp dist/esp32/*  dist/release/ || true
 
-          # Desktop: bundles are nested under target/release/bundle/<format>/...
-          # Pull installable artifacts (skip raw .app dirs and intermediates).
-          desktop_ver="${{ steps.version.outputs.desktop }}"
+          # Desktop: tauri bundles are nested under
+          # DesktopApp/BugBuster/src-tauri/target/release/bundle/<format>/...
+          # Pull installable artifacts (skip raw .app dirs / intermediates).
           shopt -s globstar nullglob
-          for f in dist/desktop/**/*.dmg \
-                   dist/desktop/**/*.AppImage \
-                   dist/desktop/**/*.deb \
-                   dist/desktop/**/*.rpm \
-                   dist/desktop/**/*.msi \
-                   dist/desktop/**/*-setup.exe \
-                   dist/desktop/**/*.app.tar.gz \
-                   dist/desktop/**/*.app.tar.gz.sig; do
+          desktop_files=(
+            dist/desktop/**/*.dmg
+            dist/desktop/**/*.AppImage
+            dist/desktop/**/*.deb
+            dist/desktop/**/*.rpm
+            dist/desktop/**/*.msi
+            dist/desktop/**/*-setup.exe
+            dist/desktop/**/*.app.tar.gz
+            dist/desktop/**/*.app.tar.gz.sig
+          )
+          desktop_count=0
+          for f in "${desktop_files[@]}"; do
             [ -f "$f" ] || continue
             cp "$f" "dist/release/"
+            desktop_count=$((desktop_count + 1))
           done
+          echo "Staged $desktop_count desktop bundle file(s)."
+          if [ "$desktop_count" -eq 0 ]; then
+            echo "::warning title=No desktop bundles::Combined release will not contain Desktop installers — check the Desktop build job logs."
+          fi
 
           ( cd dist/release && sha256sum ./* > SHA256SUMS.txt )
           ls -la dist/release/
