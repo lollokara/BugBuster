@@ -605,7 +605,7 @@ bool scripting_run_string(const char *src, size_t len, bool persist)
     payload[len] = '\0';
 
     ScriptCmd cmd;
-    cmd.id      = s_next_id++;
+    cmd.id      = __atomic_fetch_add(&s_next_id, 1, __ATOMIC_RELAXED);
     cmd.payload = payload;
     cmd.len     = len;
     cmd.persist = persist;
@@ -654,7 +654,7 @@ bool scripting_run_file(const char *name, uint32_t *out_id)
     buf[file_len] = '\0';
 
     ScriptCmd cmd = {};
-    cmd.id      = s_next_id++;
+    cmd.id      = __atomic_fetch_add(&s_next_id, 1, __ATOMIC_RELAXED);
     cmd.payload = (char *)buf;
     cmd.len     = file_len;
     // Propagate current persistence mode so file-runs from a PERSISTENT VM
