@@ -783,6 +783,41 @@ static void send_diag_config(uint8_t slot, uint8_t source)
     xQueueSend(g_cmdQueue, &cmd, pdMS_TO_TICKS(100));
 }
 
+// Helper: wait until g_deviceState.diag[slot].source reflects the requested source
+// (i.e. cmdProc has dequeued and processed the CMD_DIAG_CONFIG), then wait a fixed
+// ADC settle period (skipReads=2 at ~1s/cycle → ~3.5s total needed after command lands).
+// Replaces unconditional delay_ms(5000): limits stall to actual queue-drain time + 3.5s
+// instead of always 5s regardless.
+//
+// Max total wait: poll_timeout_ms (6000) + ADC_SETTLE_MS (3500) = 9.5s worst case.
+// Typical: cmd lands in <200ms → ~3.7s total.
+static void wait_diag_slot_ready(uint8_t slot, uint8_t expected_source)
+{
+    static constexpr int POLL_STEP_MS    = 100;
+    static constexpr int POLL_TIMEOUT_MS = 6000;
+    static constexpr int ADC_SETTLE_MS   = 3500;  // skipReads=2 × ~1s + margin
+
+    int elapsed = 0;
+    while (elapsed < POLL_TIMEOUT_MS) {
+        bool matched = false;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            matched = (slot < 4) && (g_deviceState.diag[slot].source == expected_source);
+            xSemaphoreGive(g_stateMutex);
+        }
+        if (matched) break;
+        delay_ms(POLL_STEP_MS);
+        elapsed += POLL_STEP_MS;
+    }
+    if (elapsed >= POLL_TIMEOUT_MS) {
+        ESP_LOGW(TAG, "wait_diag_slot_ready: slot %u did not reflect src %u after %dms",
+                 slot, expected_source, POLL_TIMEOUT_MS);
+    }
+
+    // Additional fixed wait for ADC conversion to complete a fresh read on the
+    // new source (skipReads=2, poll period ~1s per the fault-monitor task).
+    delay_ms(ADC_SETTLE_MS);
+}
+
 
 const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
 {
@@ -809,11 +844,12 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
     send_diag_config(2, DIAG_SRC_DVCC);
     send_diag_config(3, DIAG_SRC_AVSS);
 
-    // Wait for commands to be processed + ADC to restart + skipReads to expire
-    // + at least one fresh diagnostic read.
-    // skipReads=2, diag poll every ~1s → need ~3.5s minimum after commands are processed.
-    ESP_LOGI(TAG, "Waiting for fresh diagnostic data (5s)...");
-    delay_ms(5000);
+    // Poll until cmdProc has processed all 4 CMD_DIAG_CONFIG commands (reflected in
+    // g_deviceState.diag[].source), then wait a fixed ADC settle period.
+    // Slot 3 (AVSS) is the last command sent; when it reflects, all 4 are done.
+    // skipReads=2, diag poll every ~1s → need ~3.5s after command lands.
+    ESP_LOGI(TAG, "Waiting for diagnostic slot reconfiguration + fresh ADC data...");
+    wait_diag_slot_ready(3, DIAG_SRC_AVSS);
 
     // Read cached values from g_deviceState (populated by the fault monitor task)
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -830,7 +866,7 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
     // Phase 2: Measure AVCC using slot 1
     ESP_LOGI(TAG, "Switching slot 1 to AVCC...");
     send_diag_config(1, DIAG_SRC_AVCC);
-    delay_ms(5000);  // same wait for fresh data
+    wait_diag_slot_ready(1, DIAG_SRC_AVCC);
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         s_internal_supplies.avcc_v = g_deviceState.diag[1].value;
