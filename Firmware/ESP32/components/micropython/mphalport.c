@@ -120,9 +120,18 @@ int mp_hal_stdin_rx_chr(void) {
 }
 
 // ── Interrupt character ───────────────────────────────────────────────────────
+// Provided by shared/runtime/interrupt_char.c when MICROPY_KBD_EXCEPTION is
+// enabled (which it is at our ROM_LEVEL_EXTRA_FEATURES config). Without this
+// guard both translation units exported a strong `mp_hal_set_interrupt_char`,
+// and the linker silently picked whichever the archive scan reached first —
+// landing the trivial port stub here instead of the real implementation that
+// also writes mp_interrupt_char. Result: setting a Python interrupt character
+// (Ctrl-C, raw-paste protocol) was a no-op. Wave-1 audit #5.
+#if !MICROPY_KBD_EXCEPTION
 void mp_hal_set_interrupt_char(int c) {
     (void)c;
 }
+#endif
 
 // ── Phase 1 port stubs ────────────────────────────────────────────────────────
 // These symbols are required by MicroPython core even with VFS/REPL disabled.
