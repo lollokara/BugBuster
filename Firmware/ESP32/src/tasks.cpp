@@ -1355,14 +1355,14 @@ void initTasks(AD74416H& device)
     // than the bare configASSERT halt that hides the cause.
     g_stateMutex = xSemaphoreCreateMutex();
     if (!g_stateMutex) {
-        serial_println("[BugBuster] FATAL: g_stateMutex creation failed (out of heap?)");
+        serial_println("[BugBuster] FATAL: g_stateMutex creation failed (out of heap?)");  // pre-BBP boot output
         abort();
     }
 
     // Create command queue (16 deep)
     g_cmdQueue = xQueueCreate(16, sizeof(Command));
     if (!g_cmdQueue) {
-        serial_println("[BugBuster] FATAL: g_cmdQueue creation failed (out of heap?)");
+        serial_println("[BugBuster] FATAL: g_cmdQueue creation failed (out of heap?)");  // pre-BBP boot output
         abort();
     }
 
