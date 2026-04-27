@@ -30,6 +30,7 @@
 #include "hat.h"
 #include "adgs2414d.h"
 #include "dio.h"
+#include "bus_planner.h"
 #include "selftest.h"
 #include "bbp.h"
 #include "auth.h"
@@ -1628,6 +1629,17 @@ static esp_err_t handle_post_dio_config(httpd_req_t *req)
     VALIDATE_JSON_FIELD(body, "mode", Number, "Missing field 'mode'");
     int mode = cJSON_GetObjectItem(body, "mode")->valueint;
     cJSON_Delete(body);
+
+    // Route the IO terminal through the MUX before configuring the GPIO.
+    // Non-fatal: log a warning and proceed so the GPIO config still applies.
+    // Without this, the MUX switch is never closed and the signal never
+    // reaches the physical IO connector (sev-3 DIO-bypass-bus_planner audit finding).
+    {
+        char bp_err[64];
+        if (!bus_planner_route_digital_input((uint8_t)io, bp_err, sizeof(bp_err))) {
+            ESP_LOGW(TAG, "handle_post_dio_config: bus_planner io=%d: %s", io, bp_err);
+        }
+    }
 
     if (!dio_configure((uint8_t)io, (uint8_t)mode)) {
         return send_error(req, 400, "Invalid IO or mode");

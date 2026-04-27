@@ -10,6 +10,10 @@
 #include "bbp_codec.h"
 #include "bbp.h"
 #include "dio.h"
+#include "bus_planner.h"
+#include "esp_log.h"
+
+static const char *TAG_DIO = "cmd_dio";
 
 // ---------------------------------------------------------------------------
 // DIO_GET_ALL  payload: (none)
@@ -52,6 +56,14 @@ static int handler_dio_config(const uint8_t *payload, size_t len,
     size_t rpos = 0;
     uint8_t io   = bbp_get_u8(payload, &rpos);
     uint8_t mode = bbp_get_u8(payload, &rpos);
+
+    // Route IO terminal through MUX before configuring GPIO (non-fatal, log warning).
+    {
+        char bp_err[64];
+        if (!bus_planner_route_digital_input(io, bp_err, sizeof(bp_err))) {
+            ESP_LOGW(TAG_DIO, "handler_dio_config: bus_planner io=%u: %s", io, bp_err);
+        }
+    }
 
     if (!dio_configure(io, mode)) return -CMD_ERR_OUT_OF_RANGE;
 

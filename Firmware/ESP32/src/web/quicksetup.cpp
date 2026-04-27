@@ -8,6 +8,7 @@
 #include "adgs2414d.h"
 #include "config.h"
 #include "dio.h"
+#include "bus_planner.h"
 #include "ds4424.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -461,6 +462,13 @@ QuickSetupStatus quicksetup_apply(uint8_t slot, QuickSetupApplyReport *report)
             mode = DIO_MODE_DISABLED;
         }
         bool value = json_bool(io, "value", false);
+        // Route IO terminal through MUX before configuring GPIO (non-fatal, log warning).
+        {
+            char bp_err[64];
+            if (!bus_planner_route_digital_input(i + 1, bp_err, sizeof(bp_err))) {
+                ESP_LOGW("quicksetup", "bus_planner io=%u: %s", (unsigned)(i + 1), bp_err);
+            }
+        }
         if (!dio_configure_ext(i + 1, (uint8_t)mode, false)) {
             char name[QUICKSETUP_FAILED_NAME_MAX];
             snprintf(name, sizeof(name), "gpio%u", (unsigned)(i + 1));
