@@ -11,6 +11,7 @@
 #include "pca9535.h"
 #include "hat.h"
 #include "adgs2414d.h"   // PCB mode uses adgs_get_selftest / adgs_set_selftest (ADGS_HAS_SELFTEST=1)
+#include "diag/selftest.h" // selftest_is_supply_monitor_active for ADC poll suppression
 #include "serial_io.h"   // serial_println for fatal init diagnostics
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -162,7 +163,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 if (func[ch] != CH_FUNC_HIGH_IMP &&
                     func[ch] != CH_FUNC_DIN_LOGIC &&
                     func[ch] != CH_FUNC_DIN_LOOP) {
-                    s_device->readAdcResult(ch, &raw[ch]);
+                    s_device->readAdcResult(tasks_logical_to_physical(ch), &raw[ch]);
                     eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch], excUa[ch]);
                 } else {
                     raw[ch] = 0;
@@ -214,12 +215,14 @@ static void taskAdcPoll(void* /*pvParameters*/)
             }
 
             // Write results back under mutex + accumulate into scope bucket
+            // raw[ch] and eng[ch] are already indexed by logical channel — the read loop
+            // used tasks_logical_to_physical(ch) to read from the correct physical register
+            // into raw[ch].  No second remapping needed here.
             uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                for (uint8_t physical_ch = 0; physical_ch < AD74416H_NUM_CHANNELS; physical_ch++) {
-                    uint8_t logical_ch = (physical_ch == 2) ? 3 : (physical_ch == 3 ? 2 : physical_ch);
-                    g_deviceState.channels[logical_ch].adcRawCode = raw[physical_ch];
-                    g_deviceState.channels[logical_ch].adcValue   = eng[physical_ch];
+                for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+                    g_deviceState.channels[ch].adcRawCode = raw[ch];
+                    g_deviceState.channels[ch].adcValue   = eng[ch];
                 }
 
                 ScopeBuffer& sb = g_deviceState.scope;
@@ -295,7 +298,7 @@ static void taskFaultMonitor(void* /*pvParameters*/)
             s_device->readSupplyAlertStatus(&supplyAlertStatus);
             uint16_t chanAlert[AD74416H_NUM_CHANNELS] = {0};
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                s_device->readChannelAlertStatus(ch, &chanAlert[ch]);
+                s_device->readChannelAlertStatus(tasks_logical_to_physical(ch), &chanAlert[ch]);
             }
 
             // --- Read DIN comparator outputs ---
@@ -318,7 +321,7 @@ static void taskFaultMonitor(void* /*pvParameters*/)
 
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                 if (func[ch] == CH_FUNC_DIN_LOGIC || func[ch] == CH_FUNC_DIN_LOOP) {
-                    s_device->readDinCounter(ch, &dinCounter[ch]);
+                    s_device->readDinCounter(tasks_logical_to_physical(ch), &dinCounter[ch]);
                 }
             }
 
@@ -394,14 +397,16 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                 g_deviceState.liveStatus        = liveStatus;
                 g_deviceState.spiOk             = spiHealthy;
 
-                for (uint8_t physical_ch = 0; physical_ch < AD74416H_NUM_CHANNELS; physical_ch++) {
-                    uint8_t logical_ch = (physical_ch == 2) ? 3 : (physical_ch == 3 ? 2 : physical_ch);
-                    g_deviceState.channels[logical_ch].channelAlertStatus = chanAlert[physical_ch];
-                    g_deviceState.channels[logical_ch].dinState =
-                        (dinComp >> physical_ch) & 0x01;
-                    if (func[physical_ch] == CH_FUNC_DIN_LOGIC ||
-                        func[physical_ch] == CH_FUNC_DIN_LOOP) {
-                        g_deviceState.channels[logical_ch].dinCounter = dinCounter[physical_ch];
+                // chanAlert[] and dinCounter[] are already indexed by logical channel
+                // (the read loops above used tasks_logical_to_physical(ch) when calling SPI).
+                // dinComp is a bitfield indexed by physical channel — translate via remap.
+                for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+                    g_deviceState.channels[ch].channelAlertStatus = chanAlert[ch];
+                    g_deviceState.channels[ch].dinState =
+                        (dinComp >> tasks_logical_to_physical(ch)) & 0x01;
+                    if (func[ch] == CH_FUNC_DIN_LOGIC ||
+                        func[ch] == CH_FUNC_DIN_LOOP) {
+                        g_deviceState.channels[ch].dinCounter = dinCounter[ch];
                     }
                 }
 
@@ -455,6 +460,13 @@ static void taskFaultMonitor(void* /*pvParameters*/)
         iteration++;
         vTaskDelay(pdMS_TO_TICKS(200));
     }
+}
+
+// -----------------------------------------------------------------------------
+uint8_t tasks_logical_to_physical(uint8_t logical) {
+    if (logical == 2) return 3;
+    if (logical == 3) return 2;
+    return logical;
 }
 
 // -----------------------------------------------------------------------------
@@ -590,7 +602,7 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
             for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
                 ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
                 if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP)
-                    chMask |= (1u << c);
+                    chMask |= (1u << tasks_logical_to_physical(c));
             }
             xSemaphoreGive(g_stateMutex);
         }
@@ -751,7 +763,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_DAC_CODE: {
-                s_device->setDacCode(cmd.channel, cmd.dacCode);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->setDacCode(physical_ch, cmd.dacCode);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].dacCode = cmd.dacCode;
                     // Approximate engineering value (unipolar 0..12V as default)
@@ -766,9 +779,10 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             case CMD_SET_DAC_VOLTAGE: {
                 bool bipolar = cmd.dacVoltage.bipolar;
                 float voltage = cmd.dacVoltage.voltage;
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
                 // Set hardware VOUT_RANGE to match bipolar setting, then write DAC
-                s_device->setVoutRange(cmd.channel, bipolar);
-                s_device->setDacVoltage(cmd.channel, voltage, bipolar);
+                s_device->setVoutRange(physical_ch, bipolar);
+                s_device->setDacVoltage(physical_ch, voltage, bipolar);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].dacValue = voltage;
                     float span = bipolar ? VOUT_BIPOLAR_SPAN_V : VOUT_UNIPOLAR_SPAN_V;
@@ -782,7 +796,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_DAC_CURRENT: {
-                s_device->setDacCurrent(cmd.channel, cmd.floatVal);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->setDacCurrent(physical_ch, cmd.floatVal);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].dacValue = cmd.floatVal;
                     g_deviceState.channels[cmd.channel].dacCode =
@@ -806,13 +821,14 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 s_device->startAdcConversion(false, 0, 0);
                 delay_ms(5);
 
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
                 // Write the config (ADC is idle, poll task is yielded)
-                s_device->configureAdc(cmd.channel,
+                s_device->configureAdc(physical_ch,
                                        cmd.adcCfg.mux,
                                        cmd.adcCfg.range,
                                        cmd.adcCfg.rate);
 
-                // Update cached state
+                // Update cached state (logical index — UI side)
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].adcMux   = cmd.adcCfg.mux;
                     g_deviceState.channels[cmd.channel].adcRange = cmd.adcCfg.range;
@@ -833,7 +849,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                             if (f != CH_FUNC_HIGH_IMP &&
                                 f != CH_FUNC_DIN_LOGIC &&
                                 f != CH_FUNC_DIN_LOOP)
-                                chMask |= (1 << c);
+                                chMask |= (1u << tasks_logical_to_physical(c));
                         }
                         xSemaphoreGive(g_stateMutex);
                     }
@@ -849,7 +865,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_DIN_CONFIG: {
-                s_device->configureDin(cmd.channel,
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->configureDin(physical_ch,
                                        cmd.dinCfg.thresh,
                                        cmd.dinCfg.threshMode,
                                        cmd.dinCfg.debounce,
@@ -863,7 +880,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_DO_CONFIG: {
-                s_device->configureDoExt(cmd.channel,
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->configureDoExt(physical_ch,
                                          cmd.doCfg.mode,
                                          cmd.doCfg.srcSelGpio,
                                          cmd.doCfg.t1,
@@ -873,7 +891,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_DO_SET: {
-                s_device->setDoData(cmd.channel, cmd.boolVal);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->setDoData(physical_ch, cmd.boolVal);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].doState = cmd.boolVal;
                     xSemaphoreGive(g_stateMutex);
@@ -897,7 +916,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_CLEAR_CHANNEL_ALERT: {
-                s_device->clearChannelAlert(cmd.channel);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->clearChannelAlert(physical_ch);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].channelAlertStatus = 0;
                     xSemaphoreGive(g_stateMutex);
@@ -917,7 +937,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_CH_ALERT_MASK: {
-                s_device->setChannelAlertMask(cmd.channel, cmd.maskVal);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->setChannelAlertMask(physical_ch, cmd.maskVal);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].channelAlertMask = cmd.maskVal;
                     xSemaphoreGive(g_stateMutex);
@@ -937,13 +958,15 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_VOUT_RANGE: {
-                s_device->setVoutRange(cmd.channel, cmd.boolVal);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->setVoutRange(physical_ch, cmd.boolVal);
                 break;
             }
 
             // -----------------------------------------------------------------
             case CMD_SET_CURRENT_LIMIT: {
-                s_device->setCurrentLimit(cmd.channel, cmd.boolVal);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->setCurrentLimit(physical_ch, cmd.boolVal);
                 break;
             }
 
@@ -961,7 +984,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                             if (f != CH_FUNC_HIGH_IMP &&
                                 f != CH_FUNC_DIN_LOGIC &&
                                 f != CH_FUNC_DIN_LOOP)
-                                chMask |= (1 << c);
+                                chMask |= (1u << tasks_logical_to_physical(c));
                         }
                         xSemaphoreGive(g_stateMutex);
                     }
@@ -985,7 +1008,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_AVDD_SELECT: {
-                s_device->setAvddSelect(cmd.channel, cmd.avddSel);
+                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
+                s_device->setAvddSelect(physical_ch, cmd.avddSel);
                 break;
             }
 
@@ -1073,7 +1097,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                         g_deviceState.channels[3].adcMux   = ADC_MUX_LF_TO_AGND;
                         for (uint8_t c = 0; c < 4; c++) {
                             if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
-                                chMask |= (1 << c);
+                                chMask |= (1u << tasks_logical_to_physical(c));
                         }
                         xSemaphoreGive(g_stateMutex);
                     }

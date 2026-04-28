@@ -175,12 +175,17 @@ void adc_leds_tick(void)
             xSemaphoreGive(g_stateMutex);
         }
 
-        if (!adc_active) {
-            s_channel_state = LED_STATE_UNINIT;
-        } else if (any_channel_fault) {
-            s_channel_state = LED_STATE_FAULT;
-        } else {
-            s_channel_state = LED_STATE_OK;
+        // Suppress state update while self-test is active: channel-alert bits
+        // can fire transiently during function transitions and would paint the
+        // LED red for one 200 ms tick before clearing.
+        if (!selftest_is_busy()) {
+            if (!adc_active) {
+                s_channel_state = LED_STATE_UNINIT;
+            } else if (any_channel_fault) {
+                s_channel_state = LED_STATE_FAULT;
+            } else {
+                s_channel_state = LED_STATE_OK;
+            }
         }
     }
 
@@ -233,7 +238,12 @@ void adc_leds_tick(void)
         bool supply_fault = (supplyAlertStatus != 0) ||
                             ((alertStatus & supply_comm_mask) != 0);
 
-        s_supply_state = supply_fault ? LED_STATE_FAULT : LED_STATE_OK;
+        // Suppress state update while self-test is active: SUPPLY_ERR and
+        // other transient bits can fire briefly during U23 switch transitions
+        // and would paint the supply LED red for one 200 ms tick.
+        if (!selftest_is_busy()) {
+            s_supply_state = supply_fault ? LED_STATE_FAULT : LED_STATE_OK;
+        }
     }
 
     apply_all();

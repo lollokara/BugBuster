@@ -63,10 +63,12 @@ export function SupplySliderCard({
     if (Number.isFinite(currentTarget)) setValue(clamp(currentTarget, min, max));
   }, [currentTarget, min, max]);
 
-  const preview = useMemo(() => {
-    if (!idacChannelStatus?.calibrated || !idacChannelStatus?.polyValid) return NaN;
+  const previewState = useMemo<{ kind: "ok"; v: number } | { kind: "uncal" } | { kind: "no-poly" }>(() => {
+    if (!idacChannelStatus?.calibrated) return { kind: "uncal" };
+    if (!idacChannelStatus?.polyValid) return { kind: "no-poly" };
     const code = estimateCode(idacChannelStatus, value);
-    return evalPoly(idacChannelStatus?.calPoly, code);
+    const v = evalPoly(idacChannelStatus?.calPoly, code);
+    return Number.isFinite(v) ? { kind: "ok", v } : { kind: "no-poly" };
   }, [idacChannelStatus, value]);
 
   const apply = async () => {
@@ -150,9 +152,15 @@ export function SupplySliderCard({
         />
       </div>
       <div class="kv-row">
-        <span class="uppercase-tag">Preview</span>
-        <span class={Number.isFinite(preview) ? "mono" : "text-warn"}>
-          {Number.isFinite(preview) ? `${preview.toFixed(3)} V` : "Not calibrated"}
+        <span class="uppercase-tag">
+          {previewState.kind === "no-poly" ? "Target" : "Preview"}
+        </span>
+        <span class={previewState.kind === "uncal" ? "text-warn" : "mono"}>
+          {previewState.kind === "ok"
+            ? `${previewState.v.toFixed(3)} V`
+            : previewState.kind === "no-poly"
+              ? `${value.toFixed(3)} V`
+              : "Not calibrated"}
         </span>
       </div>
       <button class="btn primary" disabled={!mac || busy !== null} onClick={apply}>

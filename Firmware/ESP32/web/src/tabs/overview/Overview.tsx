@@ -110,7 +110,10 @@ export function Overview() {
           const next: Record<number, number> = {};
           for (const r of snap.rails) {
             const v = Number(r?.voltage ?? NaN);
-            if (Number.isFinite(v)) next[r.rail] = v;
+            // Firmware uses -1 as "not measured" sentinel (e.g. supply monitor off).
+            // Write NaN so BigValue renders "—" instead of "-1.000V", and so a
+            // monitor-off transition mid-session clears any stale positive reading.
+            next[r.rail] = Number.isFinite(v) && v >= 0 ? v : NaN;
           }
           setRails((prev) => ({ ...prev, ...next }));
         }
@@ -231,7 +234,7 @@ export function Overview() {
                   <select
                     class="input"
                     value={String(Number.isFinite(funcCode) ? funcCode : 0)}
-                    disabled={!mac || busyChannel === i || (i === 3 && supplyMonitorActive.value)}
+                    disabled={!mac || busyChannel === i || (i === 2 && supplyMonitorActive.value)}
                     onChange={(e) =>
                       setFunction(i, parseInt((e.currentTarget as HTMLSelectElement).value, 10))
                     }
@@ -250,7 +253,7 @@ export function Overview() {
               </GlassCard>
             );
             return (
-              <ChDOverlay key={i} active={i === 3 && supplyMonitorActive.value}>
+              <ChDOverlay key={i} active={i === 2 && supplyMonitorActive.value}>
                 {card}
               </ChDOverlay>
             );
@@ -288,7 +291,7 @@ export function Overview() {
             max={5}
             color="var(--blue)"
             mac={mac}
-            invertSlider={true}
+            invertSlider={false}
           />
           <SupplySliderCard
             title="VADJ1"
@@ -301,7 +304,7 @@ export function Overview() {
             max={15}
             color="var(--green)"
             mac={mac}
-            invertSlider={true}
+            invertSlider={false}
           />
           <SupplySliderCard
             title="VADJ2"
@@ -314,7 +317,7 @@ export function Overview() {
             max={15}
             color="var(--amber)"
             mac={mac}
-            invertSlider={true}
+            invertSlider={false}
           />
         </div>
       </section>

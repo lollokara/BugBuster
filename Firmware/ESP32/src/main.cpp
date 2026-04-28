@@ -26,6 +26,7 @@
 #include "adgs2414d.h"
 #include "dio.h"
 #include "selftest.h"
+#include "diag/clkgen.h"
 #include "status_led.h"
 #include "i2c_bus.h"
 #include "ds4424.h"
@@ -40,6 +41,7 @@
 #include "scripting.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "diag/hub_recovery.h"
 
 // -----------------------------------------------------------------------------
 // Global objects
@@ -111,6 +113,9 @@ static void mainLoopTask(void* pvParam)
     uint32_t lastSelftestPoll = 0;
 
     for (;;) {
+        // USB hub enumeration recovery watchdog (no-op once mounted or budget exhausted)
+        hub_recovery_tick();
+
         // cliProcess() handles both CLI and BBP modes:
         // - In CLI mode: processes text commands, scans for BBP handshake
         // - In BBP mode: calls bbpProcess() for binary protocol
@@ -196,10 +201,10 @@ extern "C" void app_main(void)
     }
     serial_printf("[BugBuster] AP IP: %s\r\n", wifi_get_ap_ip());
 
-    // 5. SPIFFS
+    // 5. SPIFFS — web partition
     esp_vfs_spiffs_conf_t spiffs_conf = {
         .base_path = "/spiffs",
-        .partition_label = NULL,
+        .partition_label = "spiffs",
         .max_files = 5,
         .format_if_mount_failed = true,
     };
@@ -207,6 +212,19 @@ extern "C" void app_main(void)
         serial_println("[BugBuster] SPIFFS mounted OK");
     } else {
         serial_println("[BugBuster] ERROR: SPIFFS mount failed");
+    }
+
+    // 5b. SPIFFS — scripts partition
+    esp_vfs_spiffs_conf_t scripts_conf = {
+        .base_path        = "/scripts",
+        .partition_label  = "scripts",
+        .max_files        = 5,
+        .format_if_mount_failed = true,
+    };
+    if (esp_vfs_spiffs_register(&scripts_conf) == ESP_OK) {
+        serial_println("[BugBuster] /scripts partition mounted");
+    } else {
+        serial_println("[BugBuster] WARN: /scripts partition mount failed");
     }
 
     // 6. Create shared SPI bus mutex BEFORE any SPI device init.
@@ -320,7 +338,11 @@ extern "C" void app_main(void)
     dio_init();
     serial_println("[BugBuster] Digital IO initialized");
 
-    // 12b. Self-test / calibration module
+    // 12b. Bench clock generator (CLI-only, no peripheral enabled at boot)
+    clkgen_init();
+    serial_println("[BugBuster] clkgen initialized");
+
+    // 12c. Self-test / calibration module
     selftest_init();
     serial_println("[BugBuster] Self-test module initialized");
 
@@ -338,6 +360,12 @@ extern "C" void app_main(void)
         pca9535_install_isr();
         pca9535_register_fault_callback(pca_fault_handler);
     }
+
+    // 13.2. USB hub recovery watchdog — armed after both USB CDC (step 1) and
+    //       PCA9535 (step 7) are initialised. Uses RTC NOINIT storage with a
+    //       magic word so the retry counter survives brownout/soft resets but
+    //       clears on true power-on reset.
+    hub_recovery_init();
 
     // 13b. Command registry — must be after initTasks (handlers use sendCommand)
     //      and before initWebServer (http_adapter_register needs the registry)

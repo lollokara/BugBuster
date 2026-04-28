@@ -1,7 +1,7 @@
 // =============================================================================
 // script_storage.cpp — POSIX-based SPIFFS script file storage.
 //
-// SPIFFS flat namespace: literal paths /spiffs/scripts/<name>
+// SPIFFS flat namespace: literal paths /scripts/<name> (dedicated scripts partition)
 // No rename() support on SPIFFS — writes go directly to the final path.
 // =============================================================================
 
@@ -15,8 +15,8 @@
 #include <ctype.h>
 #include <unistd.h>
 
-// Base directory for all scripts on SPIFFS.
-#define SCRIPTS_BASE "/spiffs/scripts"
+// Base directory for all scripts on the dedicated scripts SPIFFS partition.
+#define SCRIPTS_BASE "/scripts"
 
 // ---------------------------------------------------------------------------
 // script_storage_validate_name

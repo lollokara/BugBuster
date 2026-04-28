@@ -253,6 +253,11 @@ extern QueueHandle_t g_cmdQueue;
 /** @brief Get the AD74416H device pointer (for self-test / direct ADC access). */
 AD74416H* tasks_get_device(void);
 
+/** @brief Translate a logical channel index (0-3) to the physical AD74416H channel index.
+ *         Logical 2 (UI "C") maps to physical 3 (HW D); logical 3 (UI "D") maps to physical 2 (HW C).
+ */
+uint8_t tasks_logical_to_physical(uint8_t logical);
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------

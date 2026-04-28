@@ -45,6 +45,8 @@ void cli_cmd_idac(const char* args);
 void cli_cmd_idac_cal(const char* args);
 void cli_cmds_dev_tick(void);
 
+void cli_cmd_clkout(const char* args);
+
 #ifdef __cplusplus
 }
 #endif

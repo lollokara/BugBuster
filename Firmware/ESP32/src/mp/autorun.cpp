@@ -128,8 +128,8 @@ static bool read_io12_high(void)
  *  Returns true if completed without error. */
 static bool run_autorun_script(void)
 {
-    // Read the file directly (script_storage_read prefixes /spiffs/scripts/
-    // and rejects leading-dot names; autorun.py lives at a fixed raw path)
+    // Read the file directly (script_storage_read prefixes /scripts/
+    // and rejects leading-dot names; autorun.py lives at a fixed raw path on /spiffs)
     FILE *f = fopen(AUTORUN_SCRIPT_PATH, "r");
     if (!f) {
         ESP_LOGE(TAG, "Cannot open " AUTORUN_SCRIPT_PATH);
@@ -269,7 +269,7 @@ bool autorun_set_enabled(const char *script_name, char *err, size_t err_len)
         return false;
     }
 
-    // Read source from /spiffs/scripts/<script_name> — PSRAM, not BSS, to
+    // Read source from /scripts/<script_name> (via script_storage_read) — PSRAM, not BSS, to
     // avoid wasting 32 KB DRAM permanently on a setup-time scratch buffer.
     uint8_t *body = (uint8_t *)heap_caps_malloc(SCRIPT_BODY_MAX,
                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

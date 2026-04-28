@@ -83,13 +83,39 @@ static constexpr float CAL_STABLE_MAX_DEV_MV = 50.0f;
 // Configure AD74416H Channel D as voltage input and read it.
 // Returns the ADC reading in volts, or -1 on error.
 // Caller must have set U23 switches BEFORE calling this.
-static float read_channel_d(uint8_t adc_range)
+//
+// This function does NOT call tasks_apply_channel_function to avoid the MUX
+// side effect (closing U16 S3) while U23 switches are closed. Instead it
+// goes through the AD74416H driver directly for the VIN transition and the
+// HIGH_IMP cleanup. The caller is responsible for opening U23 switches BEFORE
+// restoring the user's function with tasks_apply_channel_function.
+//
+// Output parameters (all required, set even on failure so caller can restore):
+//   out_prev_func      — snapshot of channels[3].function before measurement
+//   out_prev_mux       — snapshot of channels[3].adcMux
+//   out_prev_range     — snapshot of channels[3].adcRange
+//   out_prev_rate      — snapshot of channels[3].adcRate
+//   out_have_prev_cfg  — true if the snapshot was successfully acquired
+static float read_channel_d(uint8_t adc_range,
+                             ChannelFunction *out_prev_func,
+                             AdcConvMux      *out_prev_mux,
+                             AdcRange        *out_prev_range,
+                             AdcRate         *out_prev_rate,
+                             bool            *out_have_prev_cfg)
 {
     // We directly access the device through the tasks module extern.
     // Channel D = channel index 3.
     // The ADC config is set, we wait for a fresh conversion, then read.
 
     AD74416H *dev = tasks_get_device();
+
+    // Initialise out-params to safe defaults before any early return.
+    *out_prev_func      = CH_FUNC_HIGH_IMP;
+    *out_prev_mux       = ADC_MUX_LF_TO_AGND;
+    *out_prev_range     = ADC_RNG_0_12V;
+    *out_prev_rate      = ADC_RATE_20SPS;
+    *out_have_prev_cfg  = false;
+
     if (!dev) return -1.0f;
 
     // Serialize concurrent selftest callers to prevent snapshot/restore race.
@@ -107,45 +133,50 @@ static float read_channel_d(uint8_t adc_range)
         return -1.0f;
     }
 
-    // Snapshot Channel D config so self-test measurement does not clobber
-    // the user's manual function/config selection.
-    ChannelFunction prev_func = CH_FUNC_HIGH_IMP;
-    AdcConvMux prev_mux = ADC_MUX_LF_TO_AGND;
-    AdcRange prev_range = ADC_RNG_0_12V;
-    AdcRate prev_rate = ADC_RATE_20SPS;
-    bool have_prev_cfg = false;
+    // Snapshot logical channel 2 (Physical 3, HW D) config so self-test measurement
+    // does not clobber the user's manual function/config selection.
+    // With the logical→physical remap, logical 2 (UI "C") maps to physical 3 (HW D),
+    // which is the channel U23 routes supply rails to.
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-        prev_func = (ChannelFunction)g_deviceState.channels[3].function;
-        prev_mux = g_deviceState.channels[3].adcMux;
-        prev_range = g_deviceState.channels[3].adcRange;
-        prev_rate = g_deviceState.channels[3].adcRate;
-        have_prev_cfg = true;
+        *out_prev_func     = (ChannelFunction)g_deviceState.channels[2].function;
+        *out_prev_mux      = g_deviceState.channels[2].adcMux;
+        *out_prev_range    = g_deviceState.channels[2].adcRange;
+        *out_prev_rate     = g_deviceState.channels[2].adcRate;
+        *out_have_prev_cfg = true;
         xSemaphoreGive(g_stateMutex);
     }
 
-    auto restore_channel_d = [&]() {
-        tasks_apply_channel_function(3, prev_func);
-        if (have_prev_cfg &&
-            prev_func != CH_FUNC_HIGH_IMP &&
-            prev_func != CH_FUNC_DIN_LOGIC &&
-            prev_func != CH_FUNC_DIN_LOOP) {
-            dev->configureAdc(3, prev_mux, prev_range, prev_rate);
-            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-                g_deviceState.channels[3].adcMux = prev_mux;
-                g_deviceState.channels[3].adcRange = prev_range;
-                g_deviceState.channels[3].adcRate = prev_rate;
-                xSemaphoreGive(g_stateMutex);
-            }
-        }
-    };
-
-    // Configure Ch D as VIN with the requested range and ensure conversion
-    // sequence includes channel D (tasks_apply_channel_function rebuilds chMask).
-    tasks_apply_channel_function(3, CH_FUNC_VIN);
+    // Configure HW Channel D (physical index 3) as VIN directly via the driver,
+    // bypassing tasks_apply_channel_function to avoid its MUX side effect
+    // (auto-closing U16 S3 → IO12 terminal) while U23 switches are closed.
+    // Mirror into logical channels[2] (→ physical 3) so the chMask loop below
+    // sets CONV_D_EN (bit 3) and ADC_RESULT_3 gets updated.
+    dev->setChannelFunction(3, CH_FUNC_VIN);
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        g_deviceState.channels[2].function = CH_FUNC_VIN;
+        xSemaphoreGive(g_stateMutex);
+    }
     dev->configureAdc(3,
                       ADC_MUX_LF_TO_AGND,
                       (AdcRange)adc_range,
                       ADC_RATE_200SPS_H);
+
+    // Rebuild ADC conversion mask using physical channel indices so HW D's
+    // CONV_D_EN bit is set during the measurement window. Without this,
+    // ADC_RESULT_3 never updates and readAdcResult returns stale 0V.
+    {
+        uint8_t chMask = 0;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            for (uint8_t logical = 0; logical < 4; logical++) {
+                ChannelFunction f = (ChannelFunction)g_deviceState.channels[logical].function;
+                if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP) {
+                    chMask |= (1u << tasks_logical_to_physical(logical));
+                }
+            }
+            xSemaphoreGive(g_stateMutex);
+        }
+        dev->startAdcConversion(true, chMask, 0x0F);
+    }
 
     // DCDC output + divider node settle time before sampling.
     delay_ms(200);
@@ -155,7 +186,13 @@ static float read_channel_d(uint8_t adc_range)
     for (int i = 0; i < 5; i++) {
         uint32_t raw = 0;
         if (!dev->readAdcResult(3, &raw)) {
-            restore_channel_d();
+            // Force HW D to HIGH_IMP before releasing mutex — do not leave it
+            // in VIN mode with the U23 path still closed.
+            dev->setChannelFunction(3, CH_FUNC_HIGH_IMP);
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                g_deviceState.channels[2].function = CH_FUNC_HIGH_IMP;
+                xSemaphoreGive(g_stateMutex);
+            }
             if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
             return -1.0f;
         }
@@ -174,8 +211,14 @@ static float read_channel_d(uint8_t adc_range)
     }
     float voltage = samples[2];
 
-    // Restore previous Channel D function/config.
-    restore_channel_d();
+    // Force HW D back to HIGH_IMP via direct SPI before the caller opens U23.
+    // This ensures no driving function is active on HW D when the caller then
+    // calls tasks_apply_channel_function (which may close U16 S3 again).
+    dev->setChannelFunction(3, CH_FUNC_HIGH_IMP);
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        g_deviceState.channels[2].function = CH_FUNC_HIGH_IMP;
+        xSemaphoreGive(g_stateMutex);
+    }
 
     if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
     return voltage;
@@ -205,12 +248,45 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
         return -1.0f;
     }
 
-    delay_ms(10);  // allow MUX and signal to settle
+    delay_ms(100);  // allow MUX, divider, and ADC front-end to settle
 
-    float v = read_channel_d(adc_range);
+    // Snapshot of the user's previous Channel D configuration, captured inside
+    // read_channel_d under s_selftest_mutex.  Used to restore after U23 cleanup.
+    ChannelFunction prev_func     = CH_FUNC_HIGH_IMP;
+    AdcConvMux      prev_mux      = ADC_MUX_LF_TO_AGND;
+    AdcRange        prev_range    = ADC_RNG_0_12V;
+    AdcRate         prev_rate     = ADC_RATE_20SPS;
+    bool            have_prev_cfg = false;
 
-    // Always clean up — open all U23 switches
+    // read_channel_d transitions HW D to VIN (direct SPI, no MUX side effect),
+    // samples the ADC, then forces HW D back to HIGH_IMP before returning.
+    // U23 switches are still closed at this point.
+    float v = read_channel_d(adc_range,
+                             &prev_func, &prev_mux, &prev_range, &prev_rate,
+                             &have_prev_cfg);
+
+    // Open U23 switches FIRST — now safe to restore arbitrary user function
+    // because the supply path to HW D is broken.
     adgs_set_selftest(0x00);
+
+    // Restore the user's previous logical channel 2 (Physical 3, HW D) function.
+    // This is safe now that U23 is open: if prev_func requires closing U16 S3
+    // (IO12 analog path), there is no longer a supply-rail path on HW D to
+    // cause contention.
+    AD74416H *dev = tasks_get_device();
+    tasks_apply_channel_function(2, prev_func);
+    if (dev && have_prev_cfg &&
+        prev_func != CH_FUNC_HIGH_IMP &&
+        prev_func != CH_FUNC_DIN_LOGIC &&
+        prev_func != CH_FUNC_DIN_LOOP) {
+        dev->configureAdc(3, prev_mux, prev_range, prev_rate);
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            g_deviceState.channels[2].adcMux   = prev_mux;
+            g_deviceState.channels[2].adcRange  = prev_range;
+            g_deviceState.channels[2].adcRate   = prev_rate;
+            xSemaphoreGive(g_stateMutex);
+        }
+    }
 
     return v;
 }
@@ -375,25 +451,38 @@ const SelftestBootResult* selftest_boot_check(void)
     s_boot_result.ran = true;
     s_boot_result.passed = true;
 
-    // Measure VADJ1
-    s_boot_result.vadj1_v = selftest_measure_supply(SELFTEST_RAIL_VADJ1);
-    if (s_boot_result.vadj1_v < 0) {
-        ESP_LOGW(TAG, "  VADJ1: measurement failed");
-        s_boot_result.passed = false;
+    const PCA9535State *pca = pca9535_get_state();
+
+    // Measure VADJ1 — only if the rail is enabled; measuring a disabled supply
+    // faults the ADC. A disabled rail is not a test failure.
+    if (pca && pca->present && pca->vadj1_en) {
+        s_boot_result.vadj1_v = selftest_measure_supply(SELFTEST_RAIL_VADJ1);
+        if (s_boot_result.vadj1_v < 0) {
+            ESP_LOGW(TAG, "  VADJ1: measurement failed");
+            s_boot_result.passed = false;
+        } else {
+            ESP_LOGI(TAG, "  VADJ1: %.3f V", s_boot_result.vadj1_v);
+        }
     } else {
-        ESP_LOGI(TAG, "  VADJ1: %.3f V", s_boot_result.vadj1_v);
+        s_boot_result.vadj1_v = -1.0f;
+        ESP_LOGI(TAG, "  VADJ1: rail disabled — skipping");
     }
 
-    // Measure VADJ2
-    s_boot_result.vadj2_v = selftest_measure_supply(SELFTEST_RAIL_VADJ2);
-    if (s_boot_result.vadj2_v < 0) {
-        ESP_LOGW(TAG, "  VADJ2: measurement failed");
-        s_boot_result.passed = false;
+    // Measure VADJ2 — same guard as VADJ1.
+    if (pca && pca->present && pca->vadj2_en) {
+        s_boot_result.vadj2_v = selftest_measure_supply(SELFTEST_RAIL_VADJ2);
+        if (s_boot_result.vadj2_v < 0) {
+            ESP_LOGW(TAG, "  VADJ2: measurement failed");
+            s_boot_result.passed = false;
+        } else {
+            ESP_LOGI(TAG, "  VADJ2: %.3f V", s_boot_result.vadj2_v);
+        }
     } else {
-        ESP_LOGI(TAG, "  VADJ2: %.3f V", s_boot_result.vadj2_v);
+        s_boot_result.vadj2_v = -1.0f;
+        ESP_LOGI(TAG, "  VADJ2: rail disabled — skipping");
     }
 
-    // Measure 3V3_ADJ (VLOGIC)
+    // Measure 3V3_ADJ (VLOGIC) — always-on rail, always measure.
     s_boot_result.vlogic_v = selftest_measure_supply(SELFTEST_RAIL_3V3_ADJ);
     if (s_boot_result.vlogic_v < 0) {
         ESP_LOGW(TAG, "  VLOGIC: measurement failed");

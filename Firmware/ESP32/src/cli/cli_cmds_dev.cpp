@@ -17,6 +17,7 @@
 #include "config.h"
 #include "ds4424.h"
 #include "selftest.h"
+#include "diag/clkgen.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -735,6 +736,7 @@ extern "C" void cli_cmd_reset(const char* args)
     (void)args;
     if (!g_cli_dev) { term_println("ERROR: Device not initialised"); return; }
 
+    clkgen_stop();
     term_println("Performing hardware reset...");
     g_cli_dev->hardwareReset();
     delay_ms(POWER_UP_DELAY_MS);
@@ -1033,4 +1035,95 @@ extern "C" void cli_cmd_idac_cal(const char* args)
     s_cal_live_report = true;
     s_cal_last_points = 0xFF;
     s_cal_last_print_ms = 0;
+}
+
+// ---------------------------------------------------------------------------
+// clkout — bench clock generator on any of the 12 IOs
+// ---------------------------------------------------------------------------
+
+extern "C" void cli_cmd_clkout(const char* args)
+{
+    while (args && *args == ' ') args++;
+
+    if (!args || !*args) {
+        term_println("Usage: clkout <io> <src> <hz> | off | status");
+        term_println("  src: ledc (<=40MHz) | mcpwm (<=80MHz)");
+        term_println("  Bench tool: signal integrity through MUX+TXS0108E degrades above ~20-30MHz.");
+        return;
+    }
+
+    // "off"
+    if (strcmp(args, "off") == 0) {
+        clkgen_stop();
+        term_println("clkout: stopped");
+        return;
+    }
+
+    // "status"
+    if (strcmp(args, "status") == 0) {
+        bool   active   = false;
+        uint8_t  io     = 0;
+        int      gpio   = 0;
+        ClkSrc   src    = CLKSRC_LEDC;
+        uint32_t req    = 0;
+        uint32_t actual = 0;
+        clkgen_status(&active, &io, &gpio, &src, &req, &actual);
+        if (!active) {
+            term_println("clkout: inactive");
+        } else {
+            term_printf("clkout: active  IO%u  GPIO%d  src=%s  req=%lu  actual=%lu\r\n",
+                        (unsigned)io, gpio,
+                        (src == CLKSRC_LEDC) ? "ledc" : "mcpwm",
+                        (unsigned long)req, (unsigned long)actual);
+        }
+        return;
+    }
+
+    // "<io> <src> <hz>"
+    unsigned int io_arg = 0;
+    char src_str[16]    = {0};
+    unsigned long hz_arg = 0;
+    int n = sscanf(args, "%u %15s %lu", &io_arg, src_str, &hz_arg);
+    if (n != 3) {
+        term_println("Usage: clkout <io> <src> <hz> | off | status");
+        return;
+    }
+
+    // Lowercase src_str for case-insensitive match.
+    for (int i = 0; src_str[i]; i++) {
+        if (src_str[i] >= 'A' && src_str[i] <= 'Z') src_str[i] += 32;
+    }
+
+    ClkSrc src;
+    if (strcmp(src_str, "ledc") == 0) {
+        src = CLKSRC_LEDC;
+    } else if (strcmp(src_str, "mcpwm") == 0) {
+        src = CLKSRC_MCPWM;
+    } else {
+        term_printf("ERROR: unknown src '%s' (use ledc or mcpwm)\r\n", src_str);
+        return;
+    }
+
+    char err[128] = {0};
+    if (!clkgen_start((uint8_t)io_arg, src, (uint32_t)hz_arg, err, sizeof(err))) {
+        term_printf("ERROR: %s\r\n", err);
+        return;
+    }
+
+    bool     active   = false;
+    uint8_t  io_out   = 0;
+    int      gpio_out = 0;
+    ClkSrc   src_out  = CLKSRC_LEDC;
+    uint32_t req_out  = 0;
+    uint32_t act_out  = 0;
+    clkgen_status(&active, &io_out, &gpio_out, &src_out, &req_out, &act_out);
+
+    term_printf("clkout: IO%u GPIO%d %s req=%lu actual=%lu\r\n",
+                (unsigned)io_out, gpio_out,
+                (src_out == CLKSRC_LEDC) ? "ledc" : "mcpwm",
+                (unsigned long)req_out, (unsigned long)act_out);
+
+    if (hz_arg > 25000000) {
+        term_println("WARN: signal integrity through TXS0108E above ~25 MHz is not guaranteed; scope the terminal directly.");
+    }
 }

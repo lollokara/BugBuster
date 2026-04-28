@@ -16,6 +16,7 @@
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
+#include "esp_task_wdt.h"
 
 #include "tasks.h"
 #include "config.h"
@@ -1849,13 +1850,31 @@ static esp_err_t handle_get_overview(httpd_req_t *req)
     // ---- Supplies: rails 0..2 measured voltages. Mirrors the wire format
     // of /api/selftest/supply/{rail} so the UI can fall back to the legacy
     // 3-call path for older firmware. ----
+    // Only measure a rail when its enable bit is set — measuring a disabled
+    // supply faults the ADC. Rail 2 (3V3_ADJ) is always-on and measured
+    // unconditionally. Returns -1.0 for disabled/skipped rails; the web tier
+    // maps <0 → NaN so stale readings are cleared.
     {
         cJSON *rails = cJSON_AddArrayToObject(root, "rails");
         static const char *names[] = {"VADJ1", "VADJ2", "3V3_ADJ"};
         bool worker_enabled = selftest_worker_enabled();
+        const PCA9535State *pca = pca9535_get_state();
         for (uint8_t i = 0; i < 3; i++) {
             float voltage = -1.0f;
-            if (worker_enabled) {
+            // Determine if this rail is eligible for measurement.
+            bool rail_on = false;
+            if (i == 2) {
+                // 3V3_ADJ is always-on.
+                rail_on = true;
+            } else if (!pca || !pca->present) {
+                // PCA not present — cannot check enable bits; skip to avoid fault.
+                rail_on = false;
+            } else if (i == 0) {
+                rail_on = pca->vadj1_en;
+            } else {
+                rail_on = pca->vadj2_en;
+            }
+            if (worker_enabled && rail_on) {
                 voltage = selftest_measure_supply(i);
             }
             cJSON *obj = cJSON_CreateObject();
@@ -3381,12 +3400,19 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
              req->content_len, part->label, (unsigned long)part->size);
 
     // Must unmount before writing to the raw partition
-    esp_vfs_spiffs_unregister(NULL);
+    esp_vfs_spiffs_unregister("spiffs");
 
-    esp_err_t err = esp_partition_erase_range(part, 0, part->size);
+    // Erase sector-by-sector with WDT resets to avoid a watchdog reset during
+    // the long blocking erase (4MB = ~1024 sectors × ~30ms = ~30s without resets).
+    esp_err_t err = ESP_OK;
+    for (size_t off = 0; off < part->size; off += 4096u) {
+        err = esp_partition_erase_range(part, off, 4096u);
+        if (err != ESP_OK) break;
+        esp_task_wdt_reset();
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPIFFS erase failed: %s", esp_err_to_name(err));
-        esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = NULL,
+        esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = "spiffs",
                                        .max_files = 5, .format_if_mount_failed = false };
         esp_vfs_spiffs_register(&conf);
         return send_error(req, 500, esp_err_to_name(err));
@@ -3394,7 +3420,7 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
 
     char *buf = (char*)malloc(4096);
     if (!buf) {
-        esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = NULL,
+        esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = "spiffs",
                                        .max_files = 5, .format_if_mount_failed = false };
         esp_vfs_spiffs_register(&conf);
         return send_error(req, 500, "Out of memory");
@@ -3438,7 +3464,7 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
     free(buf);
 
     // Remount regardless of outcome so the device stays usable
-    esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = NULL,
+    esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs", .partition_label = "spiffs",
                                    .max_files = 5, .format_if_mount_failed = false };
     err = esp_vfs_spiffs_register(&conf);
     if (err != ESP_OK) {
@@ -3830,7 +3856,7 @@ static esp_err_t handle_get_scripts_storage(httpd_req_t *req)
 
     size_t total = 0;
     size_t used = 0;
-    esp_err_t err = esp_spiffs_info(NULL, &total, &used);
+    esp_err_t err = esp_spiffs_info("scripts", &total, &used);
     if (err != ESP_OK) {
         return send_error(req, 500, "SPIFFS info unavailable");
     }

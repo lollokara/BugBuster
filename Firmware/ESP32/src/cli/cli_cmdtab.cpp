@@ -173,6 +173,9 @@ const CliCommand g_cliCommands[] = {
       "token",              "Show admin token for HTTP pairing", NULL, NULL },
 
     // ---- Diagnostic / low-level ----
+    { "clkout",   NULL,     cli_cmd_clkout,        CAT_DIAG,
+      "clkout <io> <src> <hz>|off|status",
+      "Bench clock on IO 1-12 (src=ledc|mcpwm). LEDC<=40MHz, MCPWM<=80MHz; level shifter ~25MHz limit.", NULL },
     { "spiclock", NULL,     cli_cmd_spiclock,      CAT_DIAG,
       "spiclock [<Hz>]",
       "Get / set SPI clock frequency (100kHz .. 20MHz)", NULL },
