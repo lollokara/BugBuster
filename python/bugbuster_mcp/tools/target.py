@@ -86,8 +86,8 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def enter_bootloader(
-        boot_io:        int   = 2,
-        tx_io:          int   = 1,
+        boot_io:        int   = 1,
+        tx_io:          int   = 2,
         rx_io:          int   = 3,
         baudrate:       int   = 115200,
         supply_voltage: float = 5.0,
@@ -98,13 +98,17 @@ def register(mcp) -> None:
         Enter the ESP32-C6 (or any ROM UART bootloader) download mode.
 
         Sequence:
-        1. Assert BOOT low on boot_io (GPIO0 / BOOT pin = active-low entry).
-        2. Power-cycle eFuse to reset the target while BOOT is held low.
+        1. Assert BOOT low on boot_io (GPIO9 on ESP32-C6 = active-low entry).
+        2. Full power cycle the target rail while BOOT is held low.
         3. Configure the UART bridge: tx_io → target RX, rx_io → target TX.
-        4. Release BOOT high so subsequent normal resets boot normally.
 
         The UART bridge is left enabled. esptool should be pointed at
         USB CDC #1 (/dev/cu.usbmodemXXXXX63) after this call.
+
+        Default wiring (ESP32-C6 on BugBuster IO1-3):
+        - boot_io=1  : IO1 → ESP32-C6 GPIO9 (BOOT, active-low)
+        - tx_io=2    : IO2 → ESP32-C6 RX  (BugBuster drives)
+        - rx_io=3    : IO3 ← ESP32-C6 TX  (BugBuster listens)
 
         Parameters:
         - boot_io:        BugBuster IO driving the target BOOT/GPIO0 pin. Default 2.
@@ -177,8 +181,12 @@ def register(mcp) -> None:
         _mux_set_io(rx_io,   drive=False)  # UART RX in  ← target TX
         _mux_set_io(boot_io, drive=True)   # BOOT still held low
 
-        # 4 — Now power up: VADJ first, wait to settle, then eFuse.
+        # 4 — Full power cycle: turn everything off first, then bring up cleanly.
+        #     This ensures the target resets even if it was already powered.
         bb.power_set(efuse_ctrl, on=False)
+        bb.power_set(vadj_ctrl,  on=False)
+        time.sleep(0.2)   # let target fully discharge
+
         bb.power_set(vadj_ctrl, on=True)
         bb.idac_set_voltage(idac_ch, supply_voltage)
         time.sleep(settle_ms / 1000.0)
