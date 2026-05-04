@@ -1820,7 +1820,25 @@ class BugBuster:
                 …
             ]
         """
-        self._require_usb("get_uart_config")
+        if not self._usb:
+            resp = self._http_get("/uart/config")
+            bridges = resp.get("bridges", [])
+            return [
+                {
+                    "bridge_id": b.get("id", 0),
+                    "uart_num":  b.get("uartNum", 0),
+                    "tx_pin":    b.get("txPin", -1),
+                    "rx_pin":    b.get("rxPin", -1),
+                    "baudrate":  b.get("baudrate", 115200),
+                    "data_bits": b.get("dataBits", 8),
+                    "parity":    b.get("parity", 0),
+                    "stop_bits": b.get("stopBits", 0),
+                    "enabled":   bool(b.get("enabled", False)),
+                    "connected": bool(b.get("connected", False)),
+                }
+                for b in bridges
+            ]
+
         resp   = self._usb_cmd(CmdId.GET_UART_CONFIG)
         count  = resp[0]
         result = []
@@ -1889,7 +1907,19 @@ class BugBuster:
         enabled : bool
             Activate the bridge immediately (default False).
         """
-        self._require_usb("set_uart_config")
+        if not self._usb:
+            self._http_post(f"/uart/{bridge_id}/config", {
+                "uartNum":  uart_num,
+                "txPin":    tx_pin,
+                "rxPin":    rx_pin,
+                "baudrate":  baudrate,
+                "dataBits": data_bits,
+                "parity":   parity,
+                "stopBits": stop_bits,
+                "enabled":  enabled,
+            })
+            return
+
         payload = struct.pack(
             '<BBBBIBBBB',
             bridge_id, uart_num, tx_pin, rx_pin,
@@ -1904,7 +1934,10 @@ class BugBuster:
         Pins currently in use by other functions (SPI, I2C, USB, etc.) are
         excluded.
         """
-        self._require_usb("get_uart_pins")
+        if not self._usb:
+            resp = self._http_get("/uart/pins")
+            return list(resp.get("available", []))
+
         resp  = self._usb_cmd(CmdId.GET_UART_PINS)
         count = resp[0]
         return list(resp[1:1 + count])
