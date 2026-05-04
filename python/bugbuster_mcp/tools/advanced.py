@@ -8,6 +8,7 @@ damage connected devices or put the BugBuster in an inconsistent state.
 """
 
 from __future__ import annotations
+from typing import Optional, List
 from .. import session
 
 
@@ -20,7 +21,7 @@ def register(mcp) -> None:
         device:               int  = 0,
         switch:               int  = 0,
         closed:               bool = False,
-        states:               list = None,
+        states:               Optional[List[int]] = None,
     ) -> dict:
         """
         Direct control of the ADGS2414D analog MUX switch matrix.
