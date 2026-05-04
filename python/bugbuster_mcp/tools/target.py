@@ -121,9 +121,7 @@ def register(mcp) -> None:
         from bugbuster.hal import PortMode
 
         bb  = session.get_client()
-        hal = bb.hal
-        if not hal._init:
-            hal.begin(vlogic=3.3)
+        hal = session.get_hal()
 
         efuse_ctrl = PowerControl.EFUSE1 if rail == 1 else PowerControl.EFUSE2
         vadj_ctrl  = PowerControl.VADJ1  if rail == 1 else PowerControl.VADJ2
@@ -206,9 +204,7 @@ def register(mcp) -> None:
         from bugbuster.hal import PortMode
 
         bb  = session.get_client()
-        hal = bb.hal
-        if not hal._init:
-            hal.begin(vlogic=3.3)
+        hal = session.get_hal()
 
         efuse_ctrl = PowerControl.EFUSE1 if rail == 1 else PowerControl.EFUSE2
 
