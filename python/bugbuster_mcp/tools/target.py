@@ -129,35 +129,13 @@ def register(mcp) -> None:
         vadj_ctrl  = PowerControl.VADJ1  if rail == 1 else PowerControl.VADJ2
         idac_ch    = 1                   if rail == 1 else 2
 
-        # 1 — Ensure VADJ is up
-        bb.power_set(efuse_ctrl, on=False)
-        bb.power_set(vadj_ctrl, on=True)
-        bb.idac_set_voltage(idac_ch, supply_voltage)
-        time.sleep(settle_ms / 1000.0)
-        bb.power_set(efuse_ctrl, on=True)
-        time.sleep(0.2)
-
-        # 2 — Assert BOOT low
-        hal.configure(boot_io, PortMode.DIGITAL_OUT)
-        hal.write_digital(boot_io, False)
-        time.sleep(0.1)
-
-        # 3 — Power-cycle target via eFuse while BOOT is held low
-        bb.power_set(efuse_ctrl, on=False)
-        time.sleep(0.3)
-        bb.power_set(efuse_ctrl, on=True)
-        time.sleep(0.5)
-
-        # 4 — Configure UART bridge using physical IO routing
+        # 1 — Configure UART bridge first (pure register writes, target unpowered)
         _ROUTING = {1: 4, 2: 2, 3: 1, 4: 7, 5: 6, 6: 5,
                     7: 8, 8: 9, 9: 10, 10: 11, 11: 12, 12: 13}
         tx_gpio = _ROUTING.get(tx_io)
         rx_gpio = _ROUTING.get(rx_io)
         if tx_gpio is None or rx_gpio is None:
             raise ValueError(f"Unsupported IO numbers: tx_io={tx_io}, rx_io={rx_io}")
-
-        hal.configure(tx_io, PortMode.DIGITAL_OUT)
-        hal.configure(rx_io, PortMode.DIGITAL_IN)
 
         bb.set_uart_config(
             bridge_id=0, uart_num=1,
@@ -167,7 +145,23 @@ def register(mcp) -> None:
             enabled=True,
         )
 
-        # 5 — Release BOOT high (target will boot normally on next reset)
+        # 2 — Pre-configure BOOT pin LOW before any power reaches the target
+        hal.configure(boot_io, PortMode.DIGITAL_OUT)
+        hal.write_digital(boot_io, False)
+
+        # 3 — Configure TX/RX IO directions (MUX routing, no power yet)
+        hal.configure(tx_io, PortMode.DIGITAL_OUT)
+        hal.configure(rx_io, PortMode.DIGITAL_IN)
+
+        # 4 — Now power up: VADJ first, wait to settle, then eFuse
+        bb.power_set(efuse_ctrl, on=False)
+        bb.power_set(vadj_ctrl, on=True)
+        bb.idac_set_voltage(idac_ch, supply_voltage)
+        time.sleep(settle_ms / 1000.0)
+        bb.power_set(efuse_ctrl, on=True)
+
+        # 5 — Hold briefly then release BOOT high
+        time.sleep(0.3)
         hal.write_digital(boot_io, True)
 
         # Check faults
