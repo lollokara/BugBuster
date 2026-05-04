@@ -24,6 +24,7 @@ Install the server in Claude Code:
 
 import argparse
 import logging
+import os
 
 
 def main() -> None:
@@ -59,6 +60,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--admin-token",
+        default=os.environ.get("BUGBUSTER_ADMIN_TOKEN"),
+        help=(
+            "Admin token for BugBuster HTTP mutating endpoints. "
+            "May also be supplied via BUGBUSTER_ADMIN_TOKEN. Required for HTTP writes."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="WARNING",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -81,7 +90,13 @@ def main() -> None:
 
     # Configure the session before starting the server
     from .session import configure
-    configure(transport=args.transport, port=args.port, host=args.host, vlogic=args.vlogic)
+    configure(
+        transport=args.transport,
+        port=args.port,
+        host=args.host,
+        vlogic=args.vlogic,
+        admin_token=args.admin_token,
+    )
 
     # Run the MCP server (stdio transport — standard for Claude Code integration)
     from .server import mcp

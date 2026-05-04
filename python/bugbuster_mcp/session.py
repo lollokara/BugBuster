@@ -20,6 +20,7 @@ _transport: str = "usb"
 _port:      Optional[str] = None
 _host:      str = "192.168.4.1"
 _vlogic:    float = 3.3   # Fixed at startup — not changeable by AI tools
+_admin_token: Optional[str] = None
 
 _bb   = None   # bugbuster.BugBuster instance
 _hal  = None   # bugbuster.BugBusterHAL instance
@@ -28,10 +29,11 @@ _init = False  # True after hal.begin() has been called
 _active_board: Optional[str] = None  # Path or name of the active board profile
 
 def configure(
-    transport: str,
-    port:      Optional[str] = None,
-    host:      str   = "192.168.4.1",
-    vlogic:    float = 3.3,
+    transport:    str,
+    port:         Optional[str] = None,
+    host:         str   = "192.168.4.1",
+    vlogic:       float = 3.3,
+    admin_token:  Optional[str] = None,
 ) -> None:
     """
     Set connection parameters.  Must be called before any tool uses
@@ -39,13 +41,14 @@ def configure(
 
     vlogic is fixed here and cannot be changed by AI tools at runtime.
     """
-    global _transport, _port, _host, _vlogic
-    _transport = transport
-    _port      = port
-    _host      = host
-    _vlogic    = vlogic
-    log.info("Session configured: transport=%s port=%s host=%s vlogic=%.1fV",
-             transport, port, host, vlogic)
+    global _transport, _port, _host, _vlogic, _admin_token
+    _transport   = transport
+    _port        = port
+    _host        = host
+    _vlogic      = vlogic
+    _admin_token = admin_token
+    log.info("Session configured: transport=%s port=%s host=%s vlogic=%.1fV admin_token=%s",
+             transport, port, host, vlogic, "set" if admin_token else "unset")
 
 
 def get_vlogic() -> float:
@@ -155,6 +158,6 @@ def _create_client():
     elif _transport == "http":
         from bugbuster import connect_http
         log.info("Connecting via HTTP: %s", _host)
-        return connect_http(_host)
+        return connect_http(_host, admin_token=_admin_token)
     else:
         raise RuntimeError(f"Unknown transport: {_transport!r}. Use 'usb' or 'http'.")

@@ -3570,9 +3570,10 @@ def connect_usb(
 
 
 def connect_http(
-    host:    str,
-    port:    int   = 80,
-    timeout: float = 5.0,
+    host:        str,
+    port:        int   = 80,
+    timeout:     float = 5.0,
+    admin_token: Optional[str] = None,
 ) -> BugBuster:
     """
     Create and connect a :class:`BugBuster` over the HTTP REST API.
@@ -3586,7 +3587,7 @@ def connect_http(
             status = bb.get_status()
             print(status["die_temp_c"])
     """
-    t = HTTPTransport(host, port, timeout)
+    t = HTTPTransport(host, port, timeout, admin_token=admin_token)
     bb = BugBuster(t)
     bb.connect()
     return bb
