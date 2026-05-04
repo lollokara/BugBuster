@@ -156,12 +156,14 @@ def register(mcp) -> None:
             bb.mux_set_all(hal._mux_state)
 
         # 1 — Assert BOOT low BEFORE any power reaches the target.
-        #     Drive the BOOT IO low through the MUX (VLOGIC-powered, no VADJ needed).
+        #     bus_planner_route_digital_input is called inside dio_configure and
+        #     clobbers the MUX, so we re-assert the correct state immediately after.
         _mux_set_io(boot_io, drive=True)
-        bb.dio_configure(boot_io, 2)   # mode 2 = OUTPUT
-        bb.dio_write(boot_io, False)   # drive low → ESP32 BOOT pin = 0
+        bb.dio_configure(boot_io, 2)        # mode 2 = OUTPUT (clobbers MUX)
+        _mux_set_io(boot_io, drive=True)    # restore
+        bb.dio_write(boot_io, False)        # drive low → ESP32 BOOT pin = 0
 
-        # 2 — Configure UART bridge (pure UART register + GPIO matrix writes).
+        # 2 — Configure UART bridge (also clobbers MUX via bus_planner).
         bb.set_uart_config(
             bridge_id=0, uart_num=1,
             tx_pin=tx_gpio, rx_pin=rx_gpio,
@@ -170,8 +172,7 @@ def register(mcp) -> None:
             enabled=True,
         )
 
-        # 3 — Firmware's bus_planner clobbers the TX MUX switch (sets both TX and RX
-        #     as digital inputs). Re-assert correct MUX state for all three IOs.
+        # 3 — Re-assert correct MUX state for all three IOs (firmware clobbered it).
         _mux_set_io(tx_io,   drive=True)   # UART TX out → target RX
         _mux_set_io(rx_io,   drive=False)  # UART RX in  ← target TX
         _mux_set_io(boot_io, drive=True)   # BOOT still held low
