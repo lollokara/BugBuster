@@ -9,6 +9,7 @@ damage connected devices or put the BugBuster in an inconsistent state.
 
 from __future__ import annotations
 from typing import Optional, List
+from pydantic import Field
 from .. import session
 
 
@@ -21,7 +22,7 @@ def register(mcp) -> None:
         device:               int  = 0,
         switch:               int  = 0,
         closed:               bool = False,
-        states:               Optional[List[int]] = None,
+        states:               List[int] = Field(default_factory=list),
     ) -> dict:
         """
         Direct control of the ADGS2414D analog MUX switch matrix.
