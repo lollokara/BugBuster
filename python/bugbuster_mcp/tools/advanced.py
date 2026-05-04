@@ -8,8 +8,7 @@ damage connected devices or put the BugBuster in an inconsistent state.
 """
 
 from __future__ import annotations
-from typing import Optional, List
-from pydantic import Field
+from typing import Optional
 from .. import session
 
 
@@ -22,7 +21,7 @@ def register(mcp) -> None:
         device:               int  = 0,
         switch:               int  = 0,
         closed:               bool = False,
-        states:               List[int] = Field(default_factory=list),
+        states_csv:           str  = "",
     ) -> dict:
         """
         Direct control of the ADGS2414D analog MUX switch matrix.
@@ -45,7 +44,7 @@ def register(mcp) -> None:
         - device: ADGS2414D device index (0-4) for set_switch.
         - switch: Switch index within device (0-7) for set_switch.
         - closed: True = switch closed (connected), False = open (disconnected).
-        - states: List of 4 integers (one per main device) for set_all action.
+        - states_csv: Comma-separated list of 4 integers for set_all action, e.g. "0,0,0,0".
 
         Returns: action, states (for get), success.
         """
@@ -70,8 +69,12 @@ def register(mcp) -> None:
             bb.mux_set_switch(device=device, switch=switch, closed=closed)
             return {"action": "set_switch", "device": device, "switch": switch, "closed": closed, "success": True}
         elif action_lower == "set_all":
-            if not states or len(states) != 4:
-                raise ValueError("set_all requires states=[s0, s1, s2, s3] (4 integers).")
+            try:
+                states = [int(part.strip(), 0) for part in states_csv.split(",") if part.strip()]
+            except ValueError as exc:
+                raise ValueError("set_all requires states_csv as comma-separated integers, e.g. '0,0,0,0'.") from exc
+            if len(states) != 4:
+                raise ValueError("set_all requires states_csv with exactly 4 integers, e.g. '0,0,0,0'.")
             bb.mux_set_all(states)
             return {"action": "set_all", "states": states, "success": True}
         else:
