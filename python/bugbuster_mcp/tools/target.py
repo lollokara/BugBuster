@@ -132,9 +132,8 @@ def register(mcp) -> None:
                     7: 8, 8: 9, 9: 10, 10: 11, 11: 12, 12: 13}
         tx_gpio = _ROUTING.get(tx_io)
         rx_gpio = _ROUTING.get(rx_io)
-        boot_gpio = _ROUTING.get(boot_io)
-        if tx_gpio is None or rx_gpio is None or boot_gpio is None:
-            raise ValueError(f"Unsupported IO numbers: tx_io={tx_io}, rx_io={rx_io}, boot_io={boot_io}")
+        if tx_gpio is None or rx_gpio is None:
+            raise ValueError(f"Unsupported IO numbers: tx_io={tx_io}, rx_io={rx_io}")
 
         # MUX switch masks (from hal.py _SW_* constants)
         _SW_A_HIGH = 0x01   # Group A (position 1) — analog-capable IOs (3,6,9,12)
@@ -157,9 +156,10 @@ def register(mcp) -> None:
             bb.mux_set_all(hal._mux_state)
 
         # 1 — Assert BOOT low BEFORE any power reaches the target.
-        #     Drive the BOOT GPIO low through the MUX (VLOGIC-powered, no VADJ needed).
+        #     Drive the BOOT IO low through the MUX (VLOGIC-powered, no VADJ needed).
         _mux_set_io(boot_io, drive=True)
-        bb.set_gpio_value(boot_gpio, False)   # drive GPIO low through level-shifter
+        bb.dio_configure(boot_io, 2)   # mode 2 = OUTPUT
+        bb.dio_write(boot_io, False)   # drive low → ESP32 BOOT pin = 0
 
         # 2 — Configure UART bridge (pure UART register + GPIO matrix writes).
         bb.set_uart_config(
