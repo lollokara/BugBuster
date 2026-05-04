@@ -1,5 +1,12 @@
 # Name,   Type, SubType, Offset,    Size,     Flags
 # BugBuster partition table — 16 MB flash, A/B OTA + web SPIFFS + scripts SPIFFS
+# NOTE: ESP-IDF requires offset-ordered rows. Two partitions share subtype=spiffs
+# (web UI + MicroPython scripts), so PlatformIO's `pio run -t uploadfs` picks the
+# wrong one (it uses the last subtype=spiffs match → `scripts` at 0xc10000).
+# Workaround: do NOT use `pio run -t uploadfs`. Use esptool directly:
+#   esptool.py --chip esp32s3 --port <PORT> write_flash 0x810000 \
+#              .pio/build/esp32s3/spiffs.bin
+# Both partitions still mount at runtime via partition_label lookup in main.cpp.
 nvs,      data, nvs,     0x9000,    0x5000,
 otadata,  data, ota,     0xe000,    0x2000,
 app0,     app,  ota_0,   0x10000,   0x400000,

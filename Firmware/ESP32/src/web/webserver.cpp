@@ -3423,8 +3423,11 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
         return send_error(req, 401, "Admin token required");
     }
 
+    // Look up by label (not NULL) — there are TWO subtype=spiffs partitions
+    // (`spiffs` web UI and `scripts` MicroPython). NULL would return whichever
+    // appears first in partitions.csv and silently target the wrong one.
     const esp_partition_t *part = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
     if (!part) {
         return send_error(req, 500, "SPIFFS partition not found");
     }

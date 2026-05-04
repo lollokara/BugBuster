@@ -1,10 +1,13 @@
 README.md
+pyproject.toml
 setup.py
 bugbuster/__init__.py
+bugbuster/bus.py
 bugbuster/client.py
 bugbuster/constants.py
 bugbuster/hal.py
 bugbuster/protocol.py
+bugbuster/script.py
 bugbuster.egg-info/PKG-INFO
 bugbuster.egg-info/SOURCES.txt
 bugbuster.egg-info/dependency_links.txt
@@ -27,9 +30,11 @@ bugbuster_mcp/resources/state.py
 bugbuster_mcp/tools/__init__.py
 bugbuster_mcp/tools/advanced.py
 bugbuster_mcp/tools/analog.py
+bugbuster_mcp/tools/bus.py
 bugbuster_mcp/tools/debug.py
 bugbuster_mcp/tools/digital.py
 bugbuster_mcp/tools/discovery.py
 bugbuster_mcp/tools/io_config.py
 bugbuster_mcp/tools/power.py
+bugbuster_mcp/tools/scripting.py
 bugbuster_mcp/tools/waveform.py
