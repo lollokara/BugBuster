@@ -249,7 +249,11 @@ static bool install_uart(int id)
     // Setting the GPIO matrix first disconnects the defaults before install.
     uart_set_pin(port, cfg.tx_pin, cfg.rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-    esp_err_t ret = uart_driver_install(port, 2048, 2048, 0, NULL, 0);
+    // Install with low interrupt priority so UART RX interrupts never preempt
+    // the TinyUSB ISR. Without this, high-throughput UART RX (e.g. ESP32-C6
+    // ROM bootloader at 115200 bps) starves the USB stack on CPU0.
+    esp_err_t ret = uart_driver_install(port, 2048, 2048, 0, NULL,
+                                        ESP_INTR_FLAG_LOWMED);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Bridge %d: uart_driver_install(%d) failed: %s", id, cfg.uart_num, esp_err_to_name(ret));
         return false;
@@ -368,6 +372,12 @@ void uart_bridge_init(void)
             ESP_LOGI(TAG, "Bridge %d: loaded from NVS", id);
         }
 
+        // Always start disabled at boot — the UART driver install can corrupt
+        // in-flight SPI transactions if it runs before the AD74416H is ready.
+        // The bridge is re-enabled by uart_bridge_set_config() after the system
+        // is fully initialised (triggered by the host MCP tool).
+        s_bridges[id].config.enabled = false;
+
         install_uart(id);
     }
 }
@@ -377,6 +387,7 @@ void uart_bridge_start(void)
     for (int id = 0; id < CDC_BRIDGE_COUNT; id++) {
         char name[16];
         snprintf(name, sizeof(name), "uartBr%d", id);
+        // Pin to CPU0 (same as TinyUSB) — keep co-located for shared spinlocks.
         xTaskCreatePinnedToCore(bridge_task, name, 4096,
                                 (void *)(intptr_t)id, 2, &s_bridges[id].task_handle, 0);
     }

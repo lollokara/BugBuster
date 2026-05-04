@@ -797,7 +797,7 @@ CONFIG_SPI_SLAVE_ISR_IN_IRAM=y
 #
 # ESP-Driver:USB Serial/JTAG Configuration
 #
-CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
+# CONFIG_USJ_ENABLE_USB_SERIAL_JTAG is not set
 # end of ESP-Driver:USB Serial/JTAG Configuration
 
 #
