@@ -143,6 +143,12 @@ def register(mcp) -> None:
             enabled=True,
         )
 
+        # The firmware's bus_planner incorrectly routes both TX and RX as
+        # digital inputs, clobbering the TX MUX direction. Re-assert the
+        # correct directions explicitly after set_uart_config.
+        hal.configure(tx_io, PortMode.DIGITAL_OUT)
+        hal.configure(rx_io, PortMode.DIGITAL_IN)
+
         # 2 — Pre-configure BOOT pin LOW before any power reaches the target
         hal.configure(boot_io, PortMode.DIGITAL_OUT)
         hal.write_digital(boot_io, False)
