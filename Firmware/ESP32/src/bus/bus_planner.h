@@ -80,6 +80,21 @@ bool bus_planner_apply_spi(uint8_t sck_io,
  */
 bool bus_planner_route_digital_input(uint8_t io_num, char *err, size_t err_len);
 
+/**
+ * @brief Set the MUX switch for one IO terminal WITHOUT touching power rails.
+ *
+ * Programs only the ADGS2414D switch for the given IO in digital-high-drive
+ * mode.  Power (VADJ, e-fuse) is left unchanged — caller is responsible for
+ * ensuring the supply is already on.  Used by the UART bridge so it can
+ * route TX and RX pins without inadvertently enabling eFuse/VADJ.
+ *
+ * @param io_num  IO terminal 1..12
+ * @param err     Error message buffer (may be NULL)
+ * @param err_len Size of error buffer
+ * @return true on success; false with err filled on failure
+ */
+bool bus_planner_route_mux_only(uint8_t io_num, char *err, size_t err_len);
+
 #ifdef __cplusplus
 }
 #endif

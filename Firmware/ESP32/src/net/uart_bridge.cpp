@@ -241,6 +241,14 @@ static bool install_uart(int id)
     uart_cfg.source_clk = UART_SCLK_DEFAULT;
 
     uart_port_t port = (uart_port_t)cfg.uart_num;
+
+    // Pre-route the GPIO matrix to the desired pins BEFORE uart_driver_install.
+    // uart_driver_install briefly activates the UART peripheral's default pins
+    // (UART1: GPIO17=SPI_MOSI, GPIO18=SPI_MISO on this board) via periph_module_enable.
+    // That corrupts in-flight SPI transactions to the AD74416H and stalls USB.
+    // Setting the GPIO matrix first disconnects the defaults before install.
+    uart_set_pin(port, cfg.tx_pin, cfg.rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
     esp_err_t ret = uart_driver_install(port, 2048, 2048, 0, NULL, 0);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Bridge %d: uart_driver_install(%d) failed: %s", id, cfg.uart_num, esp_err_to_name(ret));
