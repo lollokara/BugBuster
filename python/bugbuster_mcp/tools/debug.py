@@ -5,6 +5,7 @@ Tools: setup_serial_bridge, setup_swd, uart_config
 """
 
 from __future__ import annotations
+from typing import Optional
 from .. import session
 from ..safety import require_valid_io, require_hat, check_faults_post
 
@@ -140,9 +141,12 @@ def register(mcp) -> None:
     def uart_config(
         bridge_id: int  = 0,
         baudrate:  Optional[int]  = None,
+        tx_pin:    Optional[int]  = None,
+        rx_pin:    Optional[int]  = None,
         data_bits: Optional[int]  = None,
         parity:    Optional[str]  = None,
         stop_bits: Optional[int]  = None,
+        enabled:   Optional[bool] = None,
     ) -> dict:
         """
         Read or update UART bridge configuration.
@@ -153,16 +157,19 @@ def register(mcp) -> None:
         Parameters:
         - bridge_id: Bridge index (0 or 1, default 0).
         - baudrate: New baud rate (optional, leave None to keep current).
+        - tx_pin: ESP32 GPIO pin for bridge TX (optional).
+        - rx_pin: ESP32 GPIO pin for bridge RX (optional).
         - data_bits: Data bits — 5, 6, 7, or 8 (optional).
         - parity: Parity — "none", "even", "odd" (optional).
         - stop_bits: Stop bits — 1 or 2 (optional).
+        - enabled: Enable/disable the bridge (optional).
 
         Returns: bridge_id, current_config, updated (bool).
         """
         bb = session.get_client()
         current = bb.get_uart_config()
 
-        if not (baudrate or data_bits or parity or stop_bits):
+        if not any(v is not None for v in (baudrate, tx_pin, rx_pin, data_bits, parity, stop_bits, enabled)):
             return {
                 "bridge_id":    bridge_id,
                 "config":       current,
@@ -173,8 +180,11 @@ def register(mcp) -> None:
         cfg = current[bridge_id] if isinstance(current, list) and bridge_id < len(current) else {}
 
         new_baudrate  = baudrate   if baudrate   else cfg.get("baudrate", 115200)
+        new_tx_pin    = tx_pin     if tx_pin is not None else cfg.get("tx_pin", 1)
+        new_rx_pin    = rx_pin     if rx_pin is not None else cfg.get("rx_pin", 2)
         new_data_bits = data_bits  if data_bits  else cfg.get("data_bits", 8)
         new_stop_bits = stop_bits  if stop_bits  else cfg.get("stop_bits", 1)
+        new_enabled   = enabled    if enabled is not None else cfg.get("enabled", False)
 
         _PARITY_MAP = {"none": 0, "even": 1, "odd": 2}
         if parity:
@@ -188,10 +198,13 @@ def register(mcp) -> None:
         bb.set_uart_config(
             bridge_id=bridge_id,
             uart_num=bridge_id + 1,
+            tx_pin=new_tx_pin,
+            rx_pin=new_rx_pin,
             baudrate=new_baudrate,
             data_bits=new_data_bits,
             parity=new_parity,
             stop_bits=new_stop_bits,
+            enabled=new_enabled,
         )
 
         return {

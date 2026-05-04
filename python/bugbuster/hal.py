@@ -794,7 +794,10 @@ class BugBusterHAL:
             self._bb.power_set(rt.supply, on=True)
             self._bb.idac_set_voltage(rt.supply_idac, self._supply_v)
             self._supplies_on.add(rt.supply)
-            time.sleep(0.1)
+            # Let the adjustable rail settle before enabling the protected IO block.
+            # Some targets, including ESP32 dev boards with input capacitance,
+            # can trip the eFuse if the rail and eFuse are enabled back-to-back.
+            time.sleep(0.5)
         if rt.efuse not in self._efuses_on:
             self._bb.power_set(rt.efuse, on=True)
             self._efuses_on.add(rt.efuse)
