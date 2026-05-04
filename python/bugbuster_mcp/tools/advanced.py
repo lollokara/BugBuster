@@ -14,8 +14,10 @@ from .. import session
 
 def register(mcp) -> None:
 
-    @mcp.tool()
-    def mux_control(
+    # Disabled from MCP tool registration because some OpenAI MCP hosts cache/reject
+    # historical array schemas for this dangerous low-level tool. Keep the
+    # implementation as a private helper until the host schema bridge is fixed.
+    def _mux_control_impl(
         action:               str,
         i_understand_the_risk: bool = False,
         device:               int  = 0,
