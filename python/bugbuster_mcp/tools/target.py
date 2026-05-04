@@ -158,9 +158,9 @@ def register(mcp) -> None:
         time.sleep(settle_ms / 1000.0)
         bb.power_set(efuse_ctrl, on=True)
 
-        # 5 — Hold briefly then release BOOT high
-        time.sleep(0.3)
-        hal.write_digital(boot_io, True)
+        # 5 — Leave BOOT low; esptool will connect while it's held low.
+        # Call release_bootloader() after flashing to reboot into the app.
+        # (Do NOT release here.)
 
         # Check faults
         warnings = []
@@ -180,7 +180,7 @@ def register(mcp) -> None:
                 "note": "Serial bridge active on USB CDC #1 (second virtual COM port).",
             },
             "boot_io":  boot_io,
-            "boot_pin": "HIGH (released)",
+            "boot_pin": "LOW (held — call release_bootloader after flashing)",
             "warnings": warnings,
         }
 
