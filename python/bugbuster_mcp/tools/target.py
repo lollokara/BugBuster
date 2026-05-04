@@ -118,7 +118,7 @@ def register(mcp) -> None:
         Returns: success, uart_bridge, boot_io, warnings.
         """
         from bugbuster.constants import PowerControl
-        from bugbuster.hal import PortMode
+        from bugbuster.hal import DEFAULT_ROUTING
 
         bb  = session.get_client()
         hal = session.get_hal()
@@ -127,14 +127,41 @@ def register(mcp) -> None:
         vadj_ctrl  = PowerControl.VADJ1  if rail == 1 else PowerControl.VADJ2
         idac_ch    = 1                   if rail == 1 else 2
 
-        # 1 — Configure UART bridge first (pure register writes, target unpowered)
+        # IO -> GPIO mapping (firmware UART_IO_GPIO_MAP)
         _ROUTING = {1: 4, 2: 2, 3: 1, 4: 7, 5: 6, 6: 5,
                     7: 8, 8: 9, 9: 10, 10: 11, 11: 12, 12: 13}
         tx_gpio = _ROUTING.get(tx_io)
         rx_gpio = _ROUTING.get(rx_io)
-        if tx_gpio is None or rx_gpio is None:
-            raise ValueError(f"Unsupported IO numbers: tx_io={tx_io}, rx_io={rx_io}")
+        boot_gpio = _ROUTING.get(boot_io)
+        if tx_gpio is None or rx_gpio is None or boot_gpio is None:
+            raise ValueError(f"Unsupported IO numbers: tx_io={tx_io}, rx_io={rx_io}, boot_io={boot_io}")
 
+        # MUX switch masks (from hal.py _SW_* constants)
+        _SW_A_HIGH = 0x01   # Group A (position 1) — analog-capable IOs (3,6,9,12)
+        _SW_B_HIGH = 0x10   # Group B (position 2)
+        _SW_C_HIGH = 0x40   # Group C (position 3)
+        _GROUP_MASK = {1: 0x0F, 2: 0x30, 3: 0xC0}
+        _DRIVE_MASK = {1: _SW_A_HIGH, 2: _SW_B_HIGH, 3: _SW_C_HIGH}
+
+        def _mux_set_io(io_num, drive):
+            """Set MUX for one IO without touching power rails.
+            drive=True  → connect ESP GPIO to terminal (TX / BOOT out)
+            drive=False → same switch for input (RX) — same bit, different GPIO dir
+            Both TX and RX use the same MUX switch (ESP_HIGH); direction is set by
+            the ESP GPIO matrix via uart_set_pin / set_gpio_value."""
+            rt = DEFAULT_ROUTING[io_num]
+            mask = _DRIVE_MASK[rt.position] if drive else _DRIVE_MASK[rt.position]
+            cur = hal._mux_state[rt.mux_device]
+            cur = (cur & ~_GROUP_MASK[rt.position]) | mask
+            hal._mux_state[rt.mux_device] = cur
+            bb.mux_set_all(hal._mux_state)
+
+        # 1 — Assert BOOT low BEFORE any power reaches the target.
+        #     Drive the BOOT GPIO low through the MUX (VLOGIC-powered, no VADJ needed).
+        _mux_set_io(boot_io, drive=True)
+        bb.set_gpio_value(boot_gpio, False)   # drive GPIO low through level-shifter
+
+        # 2 — Configure UART bridge (pure UART register + GPIO matrix writes).
         bb.set_uart_config(
             bridge_id=0, uart_num=1,
             tx_pin=tx_gpio, rx_pin=rx_gpio,
@@ -143,21 +170,13 @@ def register(mcp) -> None:
             enabled=True,
         )
 
-        # The firmware's bus_planner incorrectly routes both TX and RX as
-        # digital inputs, clobbering the TX MUX direction. Re-assert the
-        # correct directions explicitly after set_uart_config.
-        hal.configure(tx_io, PortMode.DIGITAL_OUT)
-        hal.configure(rx_io, PortMode.DIGITAL_IN)
+        # 3 — Firmware's bus_planner clobbers the TX MUX switch (sets both TX and RX
+        #     as digital inputs). Re-assert correct MUX state for all three IOs.
+        _mux_set_io(tx_io,   drive=True)   # UART TX out → target RX
+        _mux_set_io(rx_io,   drive=False)  # UART RX in  ← target TX
+        _mux_set_io(boot_io, drive=True)   # BOOT still held low
 
-        # 2 — Pre-configure BOOT pin LOW before any power reaches the target
-        hal.configure(boot_io, PortMode.DIGITAL_OUT)
-        hal.write_digital(boot_io, False)
-
-        # 3 — Configure TX/RX IO directions (MUX routing, no power yet)
-        hal.configure(tx_io, PortMode.DIGITAL_OUT)
-        hal.configure(rx_io, PortMode.DIGITAL_IN)
-
-        # 4 — Now power up: VADJ first, wait to settle, then eFuse
+        # 4 — Now power up: VADJ first, wait to settle, then eFuse.
         bb.power_set(efuse_ctrl, on=False)
         bb.power_set(vadj_ctrl, on=True)
         bb.idac_set_voltage(idac_ch, supply_voltage)
