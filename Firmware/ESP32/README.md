@@ -69,3 +69,30 @@ idf.py flash
 3. **WiFi password hardcoded** — Default AP password "bugbuster123" in config.h
 4. **No HTTPS** — HTTP traffic is unencrypted (acceptable for local network)
 5. **ADC stream uses lock-free SPSC** — Uses atomic load/store for proper memory ordering
+
+## MicroPython Scripting
+
+BugBuster embeds a MicroPython interpreter accessible over USB (BBP commands `0xF5–0xFD`) and HTTP
+(admin-auth endpoints `/api/scripts/eval`, `/api/scripts/logs`, `/api/scripts/status`,
+`/api/scripts/stop`, `/api/scripts/storage`).  Scripts run in one of two modes: **ephemeral**
+(VM torn down after each eval) or **persistent** (VM lives across evals, retaining globals).
+The built-in `bugbuster` module exposes `Channel`, `I2C`, and `SPI` helpers so scripts can
+drive hardware directly without a USB tether.  See [`Docs/MicroPython Examples/`](../Docs/MicroPython%20Examples/)
+for annotated examples.
+
+## Board Profiles
+
+BugBuster supports NVS-backed **board profiles** that record the hardware variant, terminal
+labeling, and safe operating limits for the connected device under test.  The active profile
+is read and written via `GET /POST /api/board` and affects channel defaults, calibration
+scope, and UI labeling.  See [`Docs/board_profiles.md`](../Docs/board_profiles.md) for the
+profile schema and built-in profile list.
+
+## External Bus
+
+BugBuster exposes an **external I2C** bus (`I2C_NUM_1`, BBP commands `0xB8–0xBC`) and an
+**external SPI** bus (`SPI3_HOST`, BBP commands `0xBD–0xBE`) for talking to arbitrary
+off-board peripherals without custom firmware.  Long-running transfers can be offloaded as
+**deferred jobs** (`0x75 EXT_JOB_SUBMIT` / `0x76 EXT_JOB_GET`) that run in the background
+and are polled for completion.  See [`Docs/ExternalBus.md`](../Docs/ExternalBus.md) for
+wiring, timing limits, and Python examples.

@@ -22,18 +22,32 @@ pushed tag and asserts the helper returns the same string.
 
 ## Files to edit per component
 
-### RP2040 (two files — keep them synchronised)
+### RP2040 (single file — automated)
 
-1. **`Firmware/RP2040/CMakeLists.txt`** — `PROBE_VERSION "bb-hat-X.Y"`.
-   This is the **canonical** source that CI reads and that ends up in the
-   USB product string / debugprobe version report.
-2. **`Firmware/RP2040/src/bb_main.c`** — `BB_HAT_FW_MAJOR` / `BB_HAT_FW_MINOR`.
-   What the RP2040 reports to the ESP32 over the HAT UART `GET_INFO` response.
-   Two integers, no patch field.
+1. **`Firmware/RP2040/CMakeLists.txt`** — `set(PROBE_VERSION "bb-hat-X.Y")`.
+   This is the **only** file you need to edit. It is the canonical source that:
+   - CI reads and validates against the pushed tag.
+   - Gets written into the generated `version.h` (USB product string / debugprobe).
+   - Is parsed by CMake to inject `BB_HAT_FW_MAJOR` / `BB_HAT_FW_MINOR` as
+     compile definitions, so `bb_main.c` picks them up automatically via
+     `#ifndef` fallback guards — no manual edit required in that file.
 
-CI only checks (1). A stale (2) means `hat_get_status()` reports a wrong
-firmware string, which is still a regression even if CI is happy. Always
-update both.
+`Firmware/RP2040/src/bb_main.c` retains `#ifndef BB_HAT_FW_MAJOR/MINOR`
+fallback guards for IDE / out-of-CMake builds. Do **not** add bare
+(non-guarded) `#define` lines there — `firmware_version.py rp2040` will
+detect and reject a mismatch.
+
+Run to verify before tagging:
+```bash
+python3 Firmware/tools/firmware_version.py rp2040 --expect X.Y
+```
+
+### Combined release (all three components)
+
+A `release-v*` tag triggers `.github/workflows/release.yml`, which orchestrates
+the three component CI workflows in parallel and publishes a single GitHub Release
+bundling all Desktop installers, ESP32 firmware images, RP2040 UF2 artifacts, and
+a top-level `SHA256SUMS.txt`.
 
 ### ESP32 (single file)
 
@@ -89,16 +103,16 @@ across three files:
 | `python/bugbuster/protocol.py` | `BBP_PROTO_VERSION` |
 | `DesktopApp/BugBuster/src-tauri/src/bbp.rs` | `PROTO_VERSION` |
 
-There is **no CI gate** for this constant — a mismatch is silent and manifests
-as confusing stream / handshake failures. Always grep all three when changing
-the protocol version:
+A CI gate enforces sync on every push and PR
+(`.github/workflows/proto-version-check.yml`). Run the same check locally
+before bumping the version:
 
 ```bash
-grep -n "PROTO_VERSION" \
-  Firmware/ESP32/src/bbp.h \
-  python/bugbuster/protocol.py \
-  DesktopApp/BugBuster/src-tauri/src/bbp.rs
+python Firmware/tools/check_proto_version.py --verbose
 ```
+
+If the check fails, update all three files to the same integer, then re-run
+to confirm before pushing.
 
 Current value: **`4`** (introduced 2026-04 with 14-byte handshake + MAC).
 
@@ -124,13 +138,16 @@ binaries have been distributed.
 
 ---
 
-## Why two RP2040 files exist
+## RP2040 version — single source of truth (resolved 2026-05-04)
 
-The `PROBE_VERSION` string in `CMakeLists.txt` was inherited from the upstream
-debugprobe project — it ends up in the USB descriptor as part of the product
-string and is what host tools see. The `BB_HAT_FW_MAJOR/MINOR` constants in
-`bb_main.c` are BugBuster-specific and live in the HAT UART `GET_INFO`
-response. They were added separately and never unified. Future cleanup:
-define `BB_HAT_FW_MAJOR` / `BB_HAT_FW_MINOR` in a shared header (e.g.
-`bb_version.h`) generated from CMakeLists, so a single CMake change updates
-both. Low-priority TODO.
+Previously, `PROBE_VERSION` in `CMakeLists.txt` and the `BB_HAT_FW_MAJOR/MINOR`
+literals in `bb_main.c` had to be kept in sync manually. This is now automated:
+
+- `CMakeLists.txt` parses `PROBE_VERSION "bb-hat-X.Y"` with CMake
+  `string(REGEX MATCH ...)` and injects `BB_HAT_FW_MAJOR=X` / `BB_HAT_FW_MINOR=Y`
+  as compile definitions via `target_compile_definitions`.
+- `bb_main.c` uses `#ifndef` guards as fallback values for non-CMake builds.
+- `firmware_version.py rp2040` detects any stale bare `#define` in `bb_main.c`
+  that disagrees with CMakeLists and exits non-zero with a clear error message.
+
+**To bump the version:** edit only `PROBE_VERSION` in `CMakeLists.txt`.

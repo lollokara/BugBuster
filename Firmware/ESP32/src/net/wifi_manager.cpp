@@ -16,9 +16,14 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "esp_task_wdt.h"
 
 static const char* TAG = "wifi";
 static const char* NVS_NAMESPACE = "wifi_cfg";
+
+// Module-level cached AP password (loaded from NVS at boot; updated by wifi_set_ap_password).
+// Using the compile-time default until NVS overrides it.
+static char s_ap_pass[65] = WIFI_PASSWORD;
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
 #define WIFI_CONNECTED_BIT BIT0
@@ -84,6 +89,52 @@ static bool nvs_load_sta_credentials(char* ssid, size_t ssid_sz,
     return ok;
 }
 
+static bool nvs_save_ap_password(const char* pass)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open(%s) failed saving ap_pass: %s", NVS_NAMESPACE, esp_err_to_name(err));
+        return false;
+    }
+    esp_err_t set_err = nvs_set_str(h, "ap_pass", pass);
+    if (set_err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_str(ap_pass) failed: %s", esp_err_to_name(set_err));
+        nvs_close(h);
+        return false;
+    }
+    esp_err_t commit_err = nvs_commit(h);
+    nvs_close(h);
+    if (commit_err == ESP_OK) {
+        ESP_LOGI(TAG, "AP password saved to NVS");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "nvs_commit failed for ap_pass: %s", esp_err_to_name(commit_err));
+        return false;
+    }
+}
+
+static void nvs_load_ap_password(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return;
+
+    char buf[65] = {};
+    size_t len = sizeof(buf);
+    esp_err_t err = nvs_get_str(h, "ap_pass", buf, &len);
+    nvs_close(h);
+
+    if (err == ESP_OK && len >= 9) {  // len includes null terminator; 9 = 8 chars + '\0'
+        strncpy(s_ap_pass, buf, sizeof(s_ap_pass) - 1);
+        s_ap_pass[sizeof(s_ap_pass) - 1] = '\0';
+        ESP_LOGI(TAG, "Loaded AP password from NVS");
+    } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "No AP password in NVS, using default");
+    } else {
+        ESP_LOGW(TAG, "AP password in NVS invalid (len=%zu err=%s), using default", len, esp_err_to_name(err));
+    }
+}
+
 // ---- Event handler ----
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -139,6 +190,12 @@ void wifi_init(const char* ap_ssid, const char* ap_pass,
         nvs_flash_init();
     }
 
+    // Seed the cached AP password from the caller arg (compile-time default),
+    // then override with NVS value if one was previously saved.
+    strncpy(s_ap_pass, ap_pass, sizeof(s_ap_pass) - 1);
+    s_ap_pass[sizeof(s_ap_pass) - 1] = '\0';
+    nvs_load_ap_password();
+
     s_wifi_event_group = xEventGroupCreate();
     s_reconnect_timer = xTimerCreate("wifi_rc", pdMS_TO_TICKS(2000), pdFALSE, NULL, reconnect_timer_cb);
 
@@ -158,10 +215,10 @@ void wifi_init(const char* ap_ssid, const char* ap_pass,
 
     esp_wifi_set_mode(WIFI_MODE_APSTA);
 
-    // AP config
+    // AP config — use the cached password (NVS-overridden or compile-time default)
     wifi_config_t ap_config = {};
     strncpy((char*)ap_config.ap.ssid, ap_ssid, sizeof(ap_config.ap.ssid) - 1);
-    strncpy((char*)ap_config.ap.password, ap_pass, sizeof(ap_config.ap.password) - 1);
+    strncpy((char*)ap_config.ap.password, s_ap_pass, sizeof(ap_config.ap.password) - 1);
     ap_config.ap.ssid_len       = strlen(ap_ssid);
     ap_config.ap.channel        = 1;
     ap_config.ap.max_connection = 4;
@@ -265,11 +322,12 @@ bool wifi_connect(const char* ssid, const char* pass)
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_wifi_set_mode(WIFI_MODE_APSTA);
 
-    // Re-apply AP config
+    // Re-apply AP config — use s_ap_pass so any NVS-saved or runtime-changed
+    // password is preserved across STA connect/reconnect cycles.
     {
         wifi_config_t ap_config = {};
         strncpy((char*)ap_config.ap.ssid, WIFI_SSID, sizeof(ap_config.ap.ssid) - 1);
-        strncpy((char*)ap_config.ap.password, WIFI_PASSWORD, sizeof(ap_config.ap.password) - 1);
+        strncpy((char*)ap_config.ap.password, s_ap_pass, sizeof(ap_config.ap.password) - 1);
         ap_config.ap.ssid_len       = strlen(WIFI_SSID);
         ap_config.ap.max_connection = 4;
         ap_config.ap.authmode       = WIFI_AUTH_WPA2_PSK;
@@ -333,12 +391,53 @@ int wifi_get_rssi(void) {
     return 0;
 }
 
+bool wifi_set_ap_password(const char* new_pass, bool* persisted_out)
+{
+    if (persisted_out) *persisted_out = false;
+    if (!new_pass) return false;
+    size_t plen = strlen(new_pass);
+    // WPA2-PSK requires 8–63 printable ASCII characters
+    if (plen < 8 || plen > 63) {
+        ESP_LOGE(TAG, "wifi_set_ap_password: invalid length %zu (must be 8-63)", plen);
+        return false;
+    }
+
+    // Update cached value
+    strncpy(s_ap_pass, new_pass, sizeof(s_ap_pass) - 1);
+    s_ap_pass[sizeof(s_ap_pass) - 1] = '\0';
+
+    // Persist to NVS
+    bool persisted = nvs_save_ap_password(s_ap_pass);
+    if (persisted_out) *persisted_out = persisted;
+
+    // Apply live — this disconnects current AP clients but avoids a reboot.
+    wifi_config_t ap_config = {};
+    esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &ap_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_get_config failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    strncpy((char*)ap_config.ap.password, s_ap_pass, sizeof(ap_config.ap.password) - 1);
+    ap_config.ap.password[sizeof(ap_config.ap.password) - 1] = '\0';
+    err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    ESP_LOGI(TAG, "AP password applied live (persisted=%s)", persisted ? "yes" : "no");
+    return true;
+}
+
 int wifi_scan(wifi_scan_result_t* results, int max_results)
 {
     wifi_scan_config_t scan_cfg = {};
     scan_cfg.show_hidden = false;
 
+    // Feed the task watchdog before the blocking scan (can take >2 s).
+    if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
     esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);  // blocking
+    // Feed again immediately after the scan completes.
+    if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Scan failed: %s", esp_err_to_name(err));
         return 0;
@@ -374,6 +473,7 @@ int wifi_scan(wifi_scan_result_t* results, int max_results)
         results[i].ssid[32] = '\0';
         results[i].rssi = records[i].rssi;
         results[i].auth = (int)records[i].authmode;
+        if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
     }
 
     free(records);

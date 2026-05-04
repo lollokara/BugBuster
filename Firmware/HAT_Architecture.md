@@ -436,6 +436,19 @@ are used for SWD. This enables:
 | 0xD6 | HAT_LA_STATUS | 0x34 | Logic Analyzer |
 | 0xD7 | HAT_LA_READ_DATA | 0x35 | Logic Analyzer |
 | 0xD8 | HAT_LA_STOP | 0x36 | Logic Analyzer |
+| 0xD9 | HAT_LA_STOP (alt) | 0x36 | Logic Analyzer |
+| 0xDA | HAT_LA_TRIGGER | — | Logic Analyzer |
+| 0xDB | HAT_GET_HVPAK_CAPS | — | HVPAK Advanced — read capability profile (supported presets, LUT count, bridge/PWM/analog flags) |
+| 0xDC | HAT_GET_HVPAK_LUT | — | HVPAK Advanced — read LUT truth-table for a given LUT index |
+| 0xDD | HAT_SET_HVPAK_LUT | — | HVPAK Advanced — write LUT truth-table for a given LUT index |
+| 0xDE | HAT_GET_HVPAK_BRIDGE | — | HVPAK Advanced — read bridge output-mode / OCP / predriver config |
+| 0xDF | HAT_SET_HVPAK_BRIDGE | — | HVPAK Advanced — write bridge output-mode / OCP / predriver config |
+| 0xE5 | HAT_GET_HVPAK_ANALOG | — | HVPAK Advanced — read analog/Vref/comparator configuration |
+| 0xE6 | HAT_SET_HVPAK_ANALOG | — | HVPAK Advanced — write analog/Vref/comparator configuration |
+| 0xE7 | HAT_GET_HVPAK_PWM | — | HVPAK Advanced — read PWM period, duty, clock-source config |
+| 0xE8 | HAT_SET_HVPAK_PWM | — | HVPAK Advanced — write PWM period, duty, clock-source config |
+| 0xE9 | HAT_HVPAK_REG_READ | — | HVPAK Advanced — guarded raw register read (unsafe addresses blocked) |
+| 0xEA | HAT_HVPAK_REG_WRITE_MASKED | — | HVPAK Advanced — guarded raw masked register write (unsafe addresses blocked) |
 
 ---
 

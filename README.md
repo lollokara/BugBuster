@@ -134,6 +134,36 @@ flowchart TB
   HOST -->|"USB CDC — target UART bridge"| RP
 ```
 
+### Host stack
+
+```mermaid
+flowchart LR
+  subgraph Host["Host machine"]
+    Desktop["Desktop app\n(Tauri + Leptos)"]
+    MCP["MCP server\n(bugbuster_mcp)"]
+    PyLib["Python lib\n(bugbuster)"]
+  end
+
+  subgraph ESP["ESP32-S3"]
+    BBP["BBP v4\nUSB CDC #0"]
+    HTTP["HTTP REST\nWiFi / USB"]
+  end
+
+  subgraph HAT["RP2040 HAT"]
+    UART["HAT UART\n0xAA framing"]
+  end
+
+  Desktop -->|"BBP v4 / COBS+CRC-16"| BBP
+  MCP     -->|"BBP v4 / COBS+CRC-16"| BBP
+  PyLib   -->|"BBP v4 / COBS+CRC-16"| BBP
+
+  Desktop -->|"JSON REST"| HTTP
+  PyLib   -->|"JSON REST"| HTTP
+
+  BBP  --> UART
+  HTTP --> UART
+```
+
 **Two independent USB paths** when the HAT is attached:
 
 - **ESP32 USB CDC** — control plane (BBP v4 binary protocol over COBS + CRC-16).
@@ -222,7 +252,7 @@ cmake -DPICO_BOARD=bugbuster_hat .. && make -j
 # hold BOOTSEL, then: cp bugbuster_hat.uf2 /Volumes/RPI-RP2
 ```
 
-Current versions: ESP `3.0.0`, HAT `bb-hat-2.0`, Desktop `0.5.0`.
+Current versions: ESP `3.1.0`, HAT `bb-hat-2.1`, Desktop `0.6.0`.
 Release workflow + version-sync checklist:
 [`Docs/ReleaseChecklist.md`](Docs/ReleaseChecklist.md) — to be added.
 

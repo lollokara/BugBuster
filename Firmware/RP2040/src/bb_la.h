@@ -65,6 +65,11 @@ typedef struct {
     uint8_t  stream_stop_reason;
     uint32_t stream_overrun_count;
     uint32_t stream_short_write_count;
+    // Ring-buffer overflow flag: set when the DMA producer would overwrite
+    // a buffer slot still held by the USB consumer (ring full).  Cleared on
+    // the next bb_la_arm() call.  Propagated as the final byte of the
+    // HAT_RSP_LA_STATUS response for backward-compatible length extension.
+    uint8_t  ring_overflow;
 } LaStatus;
 
 /**

@@ -129,3 +129,32 @@ def register(mcp) -> None:
         """
         bb = session.get_client()
         return bb.wifi_get_status()
+
+    @mcp.tool()
+    def wifi_set_ap_password(password: str) -> dict:
+        """
+        Set the BugBuster SoftAP password.
+
+        Persists the new password to NVS and applies it live — no reboot
+        required. Current AP clients will be disconnected immediately when
+        the password changes.
+
+        Parameters:
+        - password: New WPA2-PSK password. Must be 8–63 characters.
+
+        Returns: success, message.
+        """
+        if len(password) < 8 or len(password) > 63:
+            raise ValueError(
+                f"AP password must be 8-63 characters (WPA2 requirement), got {len(password)}"
+            )
+        bb = session.get_client()
+        ok = bb.wifi_set_ap_password(password)
+        return {
+            "success": ok,
+            "message": (
+                "AP password updated and applied live. Reconnect using the new password."
+                if ok else
+                "Failed to set AP password. Check firmware logs."
+            ),
+        }

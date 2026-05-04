@@ -175,15 +175,17 @@ In Claude Code, run `/mcp` to reload MCP servers, or restart Claude Code. The `b
 
 ---
 
-## Available tools (28 total)
+## Available tools (41 total)
 
-### Discovery & status
+### Discovery & board
 | Tool | Description |
 |------|-------------|
 | `device_status` | Full device snapshot (channels, power, HAT, faults). Call first to orient. |
 | `device_info` | Silicon ID, firmware version, transport type. |
 | `check_faults` | Active hardware faults with remediation hints. |
 | `selftest` | Internal self-test: supply voltages, e-fuse currents, boot status. |
+| `list_boards` | List available board profiles by name. |
+| `set_board` | Activate a board profile; subsequent tool calls consult it for safety limits. |
 
 ### IO configuration
 | Tool | Description |
@@ -224,7 +226,7 @@ In Claude Code, run `/mcp` to reload MCP servers, or restart Claude Code. The `b
 |------|-------------|
 | `setup_serial_bridge` | Route UART bridge to two IOs (TX/RX) at a specified baud rate. |
 | `setup_swd` | Configure SWD debug probe for ARM Cortex-M targets (HAT required). |
-| `uart_config` | Read or update UART bridge settings. |
+| `uart_config` | Read or update UART bridge settings (baud, data bits, parity, stop bits). |
 
 ### Power management
 | Tool | Description |
@@ -233,6 +235,25 @@ In Claude Code, run `/mcp` to reload MCP servers, or restart Claude Code. The `b
 | `usb_pd_select` | Request a USB PD voltage: 5/9/12/15/18/20 V. |
 | `power_control` | Enable/disable power rails or e-fuses manually. |
 | `wifi_status` | Read WiFi connection status, SSID, IP address. |
+| `wifi_set_ap_password` | Set the SoftAP password (persisted to NVS, applied live; 8–63 chars). |
+
+### Bus (I2C / SPI)
+| Tool | Description |
+|------|-------------|
+| `plan_i2c_bus` | Dry-run: preview the full route for an external I2C bus (no hardware changes). |
+| `plan_spi_bus` | Dry-run: preview the full route for an external SPI bus (no hardware changes). |
+| `scan_i2c_bus` | Configure and scan an external I2C bus; returns detected addresses. |
+| `spi_transfer` | Configure an external SPI bus and run one bounded full-duplex transfer. |
+| `spi_jedec_id` | Configure SPI and read JEDEC ID (0x9F command) — quick flash/peripheral smoke test. |
+| `defer_i2c_read` | Queue an I2C read on the already-configured bus (deferred worker). |
+| `defer_i2c_write_read` | Queue an I2C write/read transaction on the already-configured bus. |
+| `defer_spi_transfer` | Queue an SPI transfer on the already-configured bus (deferred worker). |
+| `get_deferred_bus_result` | Poll a queued deferred I2C/SPI operation by job ID. |
+
+### Scripting
+| Tool | Description |
+|------|-------------|
+| `run_device_script` | Evaluate a Python script on the embedded MicroPython engine (ESP32 on-device). |
 
 ### Advanced (low-level)
 | Tool | Description |
@@ -245,7 +266,7 @@ In Claude Code, run `/mcp` to reload MCP servers, or restart Claude Code. The `b
 
 ## Resources
 
-Resources provide read-only state that the AI can query for context:
+Resources provide read-only state that the AI can query for context (6 total):
 
 | URI | Description |
 |-----|-------------|
@@ -254,6 +275,7 @@ Resources provide read-only state that the AI can query for context:
 | `bugbuster://faults` | Active faults with remediation hints |
 | `bugbuster://hat` | HAT detection, pin config, logic analyzer state |
 | `bugbuster://capabilities` | Static limits: IO modes, voltage ranges, feature availability |
+| `bugbuster://board` | Active board profile JSON (null if none set) |
 
 ---
 

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "bugbuster"
+version = "0.1.0"
+description = "Python control library for the BugBuster AD74416H industrial I/O device"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pyserial>=3.5",
+    "requests>=2.28",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=1.0",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+bugbuster-mcp = "bugbuster_mcp.__main__:main"

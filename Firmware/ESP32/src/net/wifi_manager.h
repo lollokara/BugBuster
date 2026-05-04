@@ -59,6 +59,18 @@ typedef struct {
  */
 int wifi_scan(wifi_scan_result_t* results, int max_results);
 
+/**
+ * @brief Set the SoftAP password, persist to NVS, and apply live.
+ * @param new_pass      New WPA2 password (8–63 characters).
+ * @param persisted_out Optional; if non-NULL, set to true when NVS write succeeded.
+ * @return true if the password was validated and applied live; false on validation
+ *         failure or if esp_wifi_set_config() failed.
+ * @note A true return with *persisted_out == false means the password is active
+ *       for this session but will revert after reboot (NVS write error).
+ * @note Changing the password disconnects current AP clients immediately.
+ */
+bool wifi_set_ap_password(const char* new_pass, bool* persisted_out);
+
 #ifdef __cplusplus
 }
 #endif

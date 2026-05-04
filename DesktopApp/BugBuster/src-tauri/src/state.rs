@@ -297,6 +297,7 @@ pub struct ConnectionStatus {
     pub mode: ConnectionMode,
     pub port_or_url: String,
     pub device_info: Option<DeviceInfo>,
+    #[serde(skip_serializing)]
     pub admin_token: Option<String>,
     pub la_selector: Option<DeviceSelector>,
 }

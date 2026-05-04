@@ -3,10 +3,6 @@ name: Desktop Release
 "on":
   workflow_dispatch:
   workflow_call:
-  pull_request:
-    paths:
-      - ".github/workflows/desktop-release.yml"
-      - "DesktopApp/BugBuster/**"
   push:
     branches:
       - main

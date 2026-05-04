@@ -85,11 +85,26 @@ pico_generate_pio_header(bugbuster_hat ${DEBUGPROBE_DIR}/src/autobaud.pio)
 pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_la.pio)
 pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_la_trigger.pio)
 
-# Version header
+# Version — single source of truth.
+# PROBE_VERSION format: "bb-hat-MAJOR.MINOR"
+# CMake extracts MAJOR/MINOR and injects them as compile definitions so that
+# bb_main.c (BB_HAT_FW_MAJOR/MINOR) no longer needs manual edits on release.
+set(PROBE_VERSION "bb-hat-2.1")
+string(REGEX MATCH "bb-hat-([0-9]+)\\.([0-9]+)" _ver_match "${PROBE_VERSION}")
+if(NOT _ver_match)
+    message(FATAL_ERROR "PROBE_VERSION '${PROBE_VERSION}' does not match expected format 'bb-hat-MAJOR.MINOR'")
+endif()
+set(BB_HAT_FW_MAJOR_VAL "${CMAKE_MATCH_1}")
+set(BB_HAT_FW_MINOR_VAL "${CMAKE_MATCH_2}")
+
 set(VERSION_DIR ${CMAKE_BINARY_DIR}/generated/probe)
 file(MAKE_DIRECTORY ${VERSION_DIR})
-file(WRITE ${VERSION_DIR}/version.h "#ifndef _PROBE_VERSION_H\n#define _PROBE_VERSION_H\n#define PROBE_VERSION \"bb-hat-2.1\"\n#endif\n")
+file(WRITE ${VERSION_DIR}/version.h "#ifndef _PROBE_VERSION_H\n#define _PROBE_VERSION_H\n#define PROBE_VERSION \"${PROBE_VERSION}\"\n#endif\n")
 target_include_directories(bugbuster_hat PRIVATE ${CMAKE_BINARY_DIR}/generated)
+target_compile_definitions(bugbuster_hat PRIVATE
+    BB_HAT_FW_MAJOR=${BB_HAT_FW_MAJOR_VAL}
+    BB_HAT_FW_MINOR=${BB_HAT_FW_MINOR_VAL}
+)
 
 target_link_libraries(bugbuster_hat PRIVATE
     pico_multicore

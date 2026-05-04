@@ -2,7 +2,7 @@
 
 Tauri v2 + Leptos 0.7 desktop application for controlling the BugBuster hardware.
 
-**Current version:** `0.5.0` (validated across `Cargo.toml`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` by `scripts/desktop_version.py --check`).
+**Current version:** `0.6.0` — 2026-04-27 (validated across `Cargo.toml`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` by `scripts/desktop_version.py --check`).
 
 ## Stack
 
@@ -32,16 +32,16 @@ Release flow:
 
 ```bash
 # 1. Sync the desktop version in all release files
-python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.5.0
+python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.6.0
 
 # 2. Commit the version bump
 git add DesktopApp/BugBuster/Cargo.toml \
         DesktopApp/BugBuster/src-tauri/Cargo.toml \
         DesktopApp/BugBuster/src-tauri/tauri.conf.json
-git commit -m "desktop: release 0.5.0"
+git commit -m "desktop: release 0.6.0"
 
 # 3. Push a release tag
-git tag desktop-v0.5.0
+git tag desktop-v0.6.0
 git push origin main --tags
 ```
 

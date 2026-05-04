@@ -438,6 +438,9 @@ bool bb_la_arm(void)
     if (s_la.trigger.type != LA_TRIG_NONE && s_la.trigger.channel >= s_la.config.channels) {
         return false;
     }
+    // Clear overflow flag from any previous streaming session so that
+    // HAT_RSP_LA_STATUS.ring_overflow starts clean for the new capture.
+    s_la.stream_overrun = false;
 
     if (!load_pio_program(s_la.config.channels, s_la.trigger.type != LA_TRIG_NONE)) {
         s_la.state = LA_STATE_ERROR;
@@ -586,6 +589,7 @@ void bb_la_get_status(LaStatus *status)
     status->stream_stop_reason = s_la.stream_stop_reason;
     status->stream_overrun_count = s_la.stream_overrun_count;
     status->stream_short_write_count = s_la.stream_short_write_count;
+    status->ring_overflow = s_la.stream_overrun ? 1u : 0u;
 
     if (s_la.state == LA_STATE_CAPTURING || s_la.state == LA_STATE_DONE) {
         if (s_la.rle_mode) {

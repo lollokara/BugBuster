@@ -3246,6 +3246,43 @@ static esp_err_t handle_get_wifi_scan(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// POST /api/wifi/ap_password  body: {"password":"..."}  (admin auth required)
+static esp_err_t handle_post_wifi_ap_password(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *j_pass = cJSON_GetObjectItem(body, "password");
+    if (!j_pass || !cJSON_IsString(j_pass)) {
+        cJSON_Delete(body);
+        return send_error(req, 400, "Missing password");
+    }
+    const char *pass = j_pass->valuestring;
+    size_t plen = strlen(pass);
+    if (plen < 8 || plen > 63) {
+        cJSON_Delete(body);
+        return send_error(req, 400, "Password must be 8-63 characters (WPA2 requirement)");
+    }
+
+    bool persisted = false;
+    bool ok = wifi_set_ap_password(pass, &persisted);
+    cJSON_Delete(body);
+
+    if (!ok) return send_error(req, 500, "Failed to set AP password");
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddBoolToObject(root, "persisted", persisted);
+    cJSON_AddStringToObject(root, "message", persisted
+        ? "AP password updated and applied live"
+        : "AP password applied live but NVS write failed; will revert after reboot");
+    return send_json(req, root);
+}
+
 // GET /api/device/version
 static esp_err_t handle_get_version(httpd_req_t *req)
 {
@@ -4364,6 +4401,11 @@ void initWebServer(void)
         .uri = "/api/wifi/scan", .method = HTTP_GET, .handler = handle_get_wifi_scan, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_wifi_scan);
+
+    httpd_uri_t uri_wifi_ap_password = {
+        .uri = "/api/wifi/ap_password", .method = HTTP_POST, .handler = handle_post_wifi_ap_password, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_wifi_ap_password);
 
     // ----- OTA / Version routes -----
 

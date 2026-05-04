@@ -3,35 +3,58 @@
 Test framework for the BugBuster industrial I/O board.  Covers the Python API,
 the HTTP REST endpoints, and &mdash; via both &mdash; the ESP32 and RP2040 firmware.
 
-The suite has three layers:
+The suite has five layers:
 
 | Layer | Dir | Needs hardware? | What it validates |
 |---|---|---|---|
 | **Unit** | `tests/unit/` | no | Pure-Python logic: parsers, HAL routing, HAT guards, rail-lock enforcement, auth flow |
-| **Simulator** | `tests/simulator/` + `tests/mock/` | no | End-to-end USB + HTTP transport round-trips against `SimulatedDevice` (102 BBP handlers, `/api/*` surface) |
+| **Simulator** | `tests/simulator/` | no | End-to-end BBP + HTTP round-trips against `SimulatedDevice` (102 BBP handlers, `/api/*` surface) |
+| **Mock** | `tests/mock/` | no | `SimulatedDevice`, `SimulatedUSBTransport`, `SimulatedHTTPTransport` — shared fixtures used by the simulator and device layers |
+| **Synthetic** | `tests/synthetic/` | no | Regression tests for LA USB bulk/streaming protocol, generated stimuli, timing edge-cases |
 | **Device** | `tests/device/` | yes (or `--sim`) | The same tests, driven against real hardware over USB / HTTP, or against the simulator with `--sim` |
 
-Current posture: **174 unit + 246 sim/device passing**, 64 skipped (HAT / SWD / LA
-hardware-only).
+Current posture: **249 tests** (unit + sim/device passing), 64 skipped (HAT / SWD / LA hardware-only).
 
-## Setup (macOS)
+## Setup
 
 ```bash
-# 1. Install Python via Homebrew (if not already)
-brew install python3
-
-# 2. Create a virtual environment inside the repo
-python3 -m venv .venv
+# From repo root — works on macOS and Linux
+bash tests/setup.sh
 source .venv/bin/activate
-
-# 3. Install test dependencies
-pip install -r tests/requirements-test.txt
-
-# 4. Install the BugBuster Python library in editable mode
-pip install -e python/
 ```
 
-> **Why a venv?** macOS ships a system Python that is managed by the OS. Installing packages into it directly (even with `--break-system-packages`) can interfere with system tools. A virtual environment keeps everything isolated and reproducible.
+`setup.sh` auto-detects Python 3.11+, creates `.venv/`, installs the `bugbuster`
+library in editable mode (with the `mcp` extra), installs test dependencies, and
+optionally builds the ESP32 web bundle if `pnpm` is available.
+
+Manual steps (if you prefer):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e 'python/[mcp]'          # zsh: quotes prevent glob expansion
+pip install -r tests/requirements-test.txt
+```
+
+> **Why a venv?** macOS ships a system Python managed by the OS. A virtual
+> environment keeps everything isolated and reproducible.
+
+## Environment variables
+
+| Variable | Purpose | Example |
+|---|---|---|
+| `BUGBUSTER_PORT` | Serial port for USB transport | `/dev/cu.usbmodem1234` |
+| `BUGBUSTER_HTTP_HOST` | Host/IP for HTTP transport | `192.168.4.1` |
+| `BUGBUSTER_ADMIN_TOKEN` | Admin token for destructive HTTP endpoints | `abc123` |
+
+These are read by both `run_tests.py` and the notebooks. Set them in your shell
+or `.env` file before running tests:
+
+```bash
+export BUGBUSTER_PORT=/dev/cu.usbmodem1234
+export BUGBUSTER_HTTP_HOST=192.168.4.1
+export BUGBUSTER_ADMIN_TOKEN=abc123
+```
 
 ## Running tests
 
@@ -96,15 +119,19 @@ pytest tests/ --device-http=192.168.4.1 -k "not usb_only" -v
 pytest tests/device/test_02_channels.py --device-usb=/dev/cu.usbmodem1234 -v
 ```
 
-### Hardware-free (simulator)
+### Hardware-free (simulator + synthetic)
 
-All unit tests and the full `device/` suite can run without a board by routing
-through `tests/mock/SimulatedDevice` and `tests/mock/http_routes.py`:
+All unit tests and the full `device/` suite can run without a board. The
+`mock/` layer provides `SimulatedDevice`, `SimulatedUSBTransport`, and
+`SimulatedHTTPTransport` used as shared fixtures. The `synthetic/` layer runs
+LA streaming regression tests with generated stimuli (no hardware needed).
 
 ```bash
 # From repo root
-PYTHONPATH=python:tests pytest tests/unit tests/simulator -q
-PYTHONPATH=python:tests pytest tests/device --sim -q
+PYTHONPATH=python:tests pytest tests/unit -q                    # pure-Python unit tests
+PYTHONPATH=python:tests pytest tests/simulator -q               # BBP + HTTP sim round-trips
+PYTHONPATH=python:tests pytest tests/synthetic -q               # LA USB synthetic/regression
+PYTHONPATH=python:tests pytest tests/device --sim -q            # device suite via simulator
 ```
 
 The simulator implements every BBP CmdId handler (see

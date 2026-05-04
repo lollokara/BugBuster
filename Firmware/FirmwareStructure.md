@@ -8,8 +8,14 @@ Firmware/
 │   ├── sdkconfig.defaults            # IDF SDK defaults
 │   ├── sdkconfig.esp32s3             # ESP32-S3 specific configuration
 │   ├── README.md                     # ESP32 firmware documentation
-│   ├── data/
-│   │   └── index.html                # Web UI (modern dark-themed dashboard)
+│   ├── web/                          # Vite/Preact web UI build output (served from SPIFFS)
+│   │   ├── index.html                # Entry point built by `cd web && npm run build`
+│   │   └── ...                       # Bundled JS/CSS assets
+│   ├── components/
+│   │   └── micropython/              # MicroPython IDF component (frozen modules: bb_helpers, bb_devices, bb_logging; quicksetup; bus/ext_bus)
+│   │       ├── manifest.py           # Freeze list — points to python/firmware_modules/
+│   │       ├── mpconfigport.h        # Port configuration
+│   │       └── micropython/          # Upstream MicroPython submodule
 │   └── src/
 │       ├── main.cpp                  # Entry point & init sequence
 │       ├── config.h                  # Pin definitions & constants
@@ -196,7 +202,7 @@ Per-channel setup with:
 #### **GET Endpoints** (Read-only, fast)
 | Endpoint | Purpose | Response |
 |----------|---------|----------|
-| `GET /` | Serve index.html | HTML dashboard |
+| `GET /` | Serve `web/index.html` from SPIFFS | HTML dashboard (Vite/Preact build) |
 | `GET /api/status` | Full device state snapshot | All channels, faults, GPIO, diag |
 | `GET /api/channel/?/adc` | Channel ADC raw + value | adcRaw, adcValue, range, rate, mux |
 | `GET /api/channel/?/dac/readback` | DAC active code readback | activeCode |

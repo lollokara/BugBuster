@@ -427,11 +427,12 @@ class CmdId(IntEnum):
     HAT_LA_STREAM_START  = 0xEE
 
     # Misc hardware
-    SET_LSHIFT_OE    = 0xE0
-    WIFI_GET_STATUS  = 0xE1
-    WIFI_CONNECT     = 0xE2
-    SET_SPI_CLOCK    = 0xE3
-    WIFI_SCAN        = 0xE4
+    SET_LSHIFT_OE         = 0xE0
+    WIFI_GET_STATUS       = 0xE1
+    WIFI_CONNECT          = 0xE2
+    SET_SPI_CLOCK         = 0xE3
+    WIFI_SCAN             = 0xE4
+    WIFI_SET_AP_PASSWORD  = 0xEF  # Set SoftAP password (persist NVS, apply live)
 
     # Quick Setup slots (NVS-backed snapshot store, 4 slots: 0..3)
     QS_LIST          = 0xF0  # list slots (returns occupied bitmap + per-slot summary hash)

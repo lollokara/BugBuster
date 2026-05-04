@@ -818,6 +818,24 @@ Expected supply ranges:
 | AVCC | 4.5–5.5 V | 4.5–5.5 V |
 | AVSS | -20 to -13 V | -16.5 to -13.5 V |
 
+#### 0x0B SELFTEST_WORKER
+Enable, disable, or query the background supply-monitor worker that periodically
+re-measures all supply rails via U23 and posts events if a rail drifts out of range.
+
+**Request payload:**
+```
+0       action          u8      0=query, 1=enable, 2=disable
+```
+
+**Response payload:**
+```
+0       enabled         u8      1 if worker is currently running
+1       interval_ms     u32     Polling interval in milliseconds
+5       last_ok         u8      1 if last measurement passed all range checks
+```
+
+HTTP equivalent: `GET/POST /api/selftest/worker`
+
 ---
 
 ### 6.6b Digital IO (ESP32 GPIO)
@@ -1057,6 +1075,151 @@ Graceful exit from binary mode. Device returns to CLI.
 **ADC Mux codes:** See FirmwareStructure.md Section 2.
 **GPIO Mode codes:** 0=HIGH_IMP, 1=OUTPUT, 2=INPUT, 3=DIN_OUT, 4=DO_EXT
 **Diagnostic Source codes:** See FirmwareStructure.md Section 12.
+
+### 6.10b Deferred External Bus Jobs
+
+For long-running I2C/SPI transfers that would block the command dispatcher, BugBuster
+provides a **job queue**: submit the operation with `EXT_JOB_SUBMIT` and poll with
+`EXT_JOB_GET` until it completes.
+
+#### 0x75 EXT_JOB_SUBMIT
+Queue a deferred external I2C or SPI operation.  Returns a job ID immediately.
+
+**Request payload:**
+```
+0       bus             u8      0 = I2C (I2C_NUM_1), 1 = SPI (SPI3_HOST)
+1       op              u8      I2C: 0=write, 1=read, 2=write_read  SPI: 0=transfer
+2       addr            u8      I2C device address (ignored for SPI)
+3       write_len       u8      Bytes to write (0–28)
+4       read_len        u8      Bytes to read back (0–28)
+5..N    write_data      u8[]    Write payload (write_len bytes)
+```
+
+**Response payload:**
+```
+0       job_id          u32     Assigned job ID (0 = queue full, error)
+4       ok              u8      1 = job queued, 0 = rejected
+```
+
+#### 0x76 EXT_JOB_GET
+Poll a previously submitted job for completion and retrieve its result.
+
+**Request payload:**
+```
+0       job_id          u32     Job ID from EXT_JOB_SUBMIT
+```
+
+**Response payload:**
+```
+0       status          u8      0=pending, 1=done_ok, 2=done_error, 3=not_found
+1       read_len        u8      Number of bytes returned (0 if pending/error)
+2..N    read_data       u8[]    Read payload (read_len bytes)
+```
+
+---
+
+### 6.10c External Bus (I2C / SPI)
+
+Direct (non-deferred) access to the external I2C bus (`I2C_NUM_1`) and external SPI bus
+(`SPI3_HOST`).  See [`Docs/ExternalBus.md`](../Docs/ExternalBus.md) for wiring and limits.
+
+#### 0xB8 EXT_I2C_SETUP
+Configure external I2C bus pins and frequency.
+
+**Request payload:**
+```
+0       sda_gpio        u8      SDA pin
+1       scl_gpio        u8      SCL pin
+2       freq_khz        u16     Clock frequency in kHz (default 100)
+```
+
+**Response payload:** `ok(u8)`
+
+#### 0xB9 EXT_I2C_SCAN
+Scan the external I2C bus and return a list of responsive device addresses.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       count           u8      Number of devices found
+1..N    addrs           u8[]    7-bit addresses of responding devices
+```
+
+#### 0xBA EXT_I2C_WRITE
+Write bytes to an external I2C device.
+
+**Request payload:**
+```
+0       addr            u8      7-bit device address
+1       len             u8      Number of bytes (1–30)
+2..N    data            u8[]    Payload
+```
+
+**Response payload:** `ok(u8)`, `nak(u8)` (1 if device NACKed)
+
+#### 0xBB EXT_I2C_READ
+Read bytes from an external I2C device.
+
+**Request payload:**
+```
+0       addr            u8      7-bit device address
+1       len             u8      Number of bytes to read (1–30)
+```
+
+**Response payload:**
+```
+0       ok              u8
+1       len             u8      Actual bytes read
+2..N    data            u8[]
+```
+
+#### 0xBC EXT_I2C_WRITE_READ
+Register-style write then repeated-start read (combined transaction).
+
+**Request payload:**
+```
+0       addr            u8      7-bit device address
+1       write_len       u8      Register/command bytes (1–14)
+2       read_len        u8      Bytes to read back (1–14)
+3..N    write_data      u8[]
+```
+
+**Response payload:** `ok(u8)`, `read_len(u8)`, `data(u8[])`
+
+#### 0xBD EXT_SPI_SETUP
+Configure external SPI bus pins and frequency.
+
+**Request payload:**
+```
+0       mosi_gpio       u8
+1       miso_gpio       u8
+2       sck_gpio        u8
+3       cs_gpio         u8
+4       freq_khz        u32     Clock in kHz
+8       mode            u8      SPI mode 0–3
+```
+
+**Response payload:** `ok(u8)`
+
+#### 0xBE EXT_SPI_TRANSFER
+Full-duplex SPI transfer (MOSI bytes in, MISO bytes out).
+
+**Request payload:**
+```
+0       cs_assert       u8      1 = assert CS before transfer, 0 = manual CS
+1       len             u8      Transfer length (1–28)
+2..N    tx_data         u8[]    Bytes to transmit
+```
+
+**Response payload:**
+```
+0       ok              u8
+1       len             u8
+2..N    rx_data         u8[]    Received bytes
+```
+
+---
 
 ### 6.11 DS4424 IDAC (I2C, addr 0x20)
 
@@ -1955,6 +2118,28 @@ Results are sorted by signal strength (strongest first), deduplicated by SSID.
 }
 ```
 
+#### 0xEF WIFI_SET_AP_PASSWORD
+Set the SoftAP WPA2-PSK password. The new password is persisted to NVS and applied live via `esp_wifi_set_config()` — no reboot required. Current AP clients are disconnected immediately when the password takes effect.
+
+**Request payload:**
+```
+Offset  Field           Type    Description
+0       pass_len        u8      Length of password (8-63)
+1       pass            bytes   New WPA2-PSK password (UTF-8, not null-terminated)
+```
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       status          u8      0x00 = applied and persisted to NVS
+                                0x01 = applied live but NVS write failed (reverts after reboot)
+                                0x02 = failed (validation error or esp_wifi_set_config failure)
+```
+
+Returns `ERR_INVALID_PARAM` if `pass_len` is outside the 8–63 character range.
+
+**Web API equivalent:** `POST /api/wifi/ap_password` with body `{"password":"..."}` and header `X-BugBuster-Admin-Token: <token>`. Returns `{"success":true,"persisted":true,"message":"AP password updated and applied live"}` on full success, or `{"success":true,"persisted":false,"message":"AP password applied live but NVS write failed; will revert after reboot"}` when the live apply succeeded but NVS persistence failed.
+
 ### 6.18 Level Shifter Control
 
 #### 0xE0 SET_LSHIFT_OE
@@ -2356,6 +2541,78 @@ HTTP equivalents (all require admin token):
 
 ---
 
+### 6.24 QuickSetup (Preset Slots)
+
+QuickSetup slots store a complete snapshot of the device configuration (channel
+functions, DAC targets, MUX routing, IDAC voltages, HAT state) that can be
+recalled in one command.  Each slot is identified by a short ASCII name and
+stored in NVS.  See [`Docs/QuickSetup.md`](../Docs/QuickSetup.md) for the
+slot schema and Python API.
+
+#### 0xF0 QS_LIST
+List all saved QuickSetup slots.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       count           u8      Number of slots (0–16)
+Per slot (variable stride):
++0      name_len        u8      Length of slot name
++1..N   name            char[]  ASCII slot name
+```
+
+#### 0xF1 QS_GET
+Retrieve a saved QuickSetup slot as JSON.
+
+**Request payload:**
+```
+0       name_len        u8
+1..N    name            char[]  Slot name
+```
+
+**Response payload:**
+```
+0       ok              u8      1 = found, 0 = not found
+1       json_len        u16     Length of JSON payload
+3..N    json            char[]  UTF-8 JSON slot body
+```
+
+#### 0xF2 QS_SAVE
+Snapshot current device state into a named slot (creates or overwrites).
+
+**Request payload:**
+```
+0       name_len        u8
+1..N    name            char[]  Slot name (max 32 chars)
+```
+
+**Response payload:** `ok(u8)`, `err_len(u8)`, `err(char[])`
+
+#### 0xF3 QS_APPLY
+Apply a saved slot — restores all captured settings in the correct sequence.
+
+**Request payload:**
+```
+0       name_len        u8
+1..N    name            char[]  Slot name
+```
+
+**Response payload:** `ok(u8)`, `err_len(u8)`, `err(char[])`
+
+#### 0xF4 QS_DELETE
+Delete a named slot from NVS.
+
+**Request payload:**
+```
+0       name_len        u8
+1..N    name            char[]  Slot name
+```
+
+**Response payload:** `ok(u8)` (1 = deleted, 0 = not found — idempotent)
+
+---
+
 ## 7. Streaming Protocol
 
 The primary advantage of BBP over HTTP: continuous, push-based data delivery
@@ -2723,6 +2980,7 @@ Host                                    Device
 | 1.6 | 2026-03-30 | Added SET_LSHIFT_OE (0xE0), SET_SPI_CLOCK (0xE3) sections; OTA update endpoint (POST /api/ota/upload); device version endpoint (GET /api/device/version); A/B OTA partition table with rollback |
 | 1.7 | 2026-03-31 | Added SET_RTD_CONFIG (0x1D) command for RTD excitation current selection (125/250 µA); GET_STATUS per-channel payload extended by 2 bytes (rtd_excitation_ua u16, stride 26→28, total 147→155 bytes); adc_value for RES_MEAS now returned in Ohms (R = V_adc / I_exc) |
 | 1.8 | 2026-04-01 | Added GET /api/debug and POST /api/mux/switch REST endpoints |
+| 1.9 | 2026-05-04 | Added WIFI_SET_AP_PASSWORD (0xEF): configurable SoftAP password persisted to NVS, applied live; POST /api/wifi/ap_password HTTP endpoint (admin-auth); added esp_task_wdt_reset() feeds around blocking wifi_scan (before scan_start, after scan_start returns, inside per-AP copy loop) |
 
 ---
 
@@ -2767,6 +3025,8 @@ Host                                    Device
 | 0x71 | REGISTER_READ | H->D | addr | CLI `rreg` |
 | 0x72 | REGISTER_WRITE | H->D | addr, val | CLI `wreg` |
 | 0x74 | GET_ADMIN_TOKEN | H->D | -- | (new, USB only) |
+| 0x75 | EXT_JOB_SUBMIT | H->D | bus, op, addr, data | Queue deferred I2C/SPI job |
+| 0x76 | EXT_JOB_GET | H->D | job_id | Poll deferred job result |
 | 0x90 | MUX_SET_ALL | H->D | 4 states | `POST /api/mux/all` |
 | 0x91 | MUX_GET_ALL | H->D | -- | `GET /api/mux` |
 | 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | `POST /api/mux/switch` |
@@ -2782,6 +3042,13 @@ Host                                    Device
 | 0xB2 | PCA_SET_PORT | H->D | port, val | (new) |
 | 0xB3 | PCA_SET_FAULT_CFG | H->D | auto_dis, log | `POST /api/ioexp/fault_config` |
 | 0xB4 | PCA_GET_FAULT_LOG | H->D | -- | `GET /api/ioexp/faults` |
+| 0xB8 | EXT_I2C_SETUP | H->D | sda, scl, freq_khz | Configure external I2C bus |
+| 0xB9 | EXT_I2C_SCAN | H->D | -- | Scan external I2C bus |
+| 0xBA | EXT_I2C_WRITE | H->D | addr, data | Write to external I2C device |
+| 0xBB | EXT_I2C_READ | H->D | addr, len | Read from external I2C device |
+| 0xBC | EXT_I2C_WRITE_READ | H->D | addr, write, read | Combined write+read |
+| 0xBD | EXT_SPI_SETUP | H->D | pins, freq, mode | Configure external SPI bus |
+| 0xBE | EXT_SPI_TRANSFER | H->D | cs, data | Full-duplex SPI transfer |
 | 0xC5 | HAT_GET_STATUS | H->D | -- | `GET /api/hat` |
 | 0xC6 | HAT_SET_PIN | H->D | pin, func | `POST /api/hat/config` |
 | 0xC7 | HAT_SET_ALL_PINS | H->D | 4× func | `POST /api/hat/config` |
@@ -2798,6 +3065,17 @@ Host                                    Device
 | 0xD8 | HAT_LA_READ | H->D | offset, len | LA: read data chunk |
 | 0xD9 | HAT_LA_STOP | H->D | -- | LA: stop capture |
 | 0xDA | HAT_LA_TRIGGER | H->D | type, channel | LA: set trigger |
+| 0xDB | HAT_GET_HVPAK_CAPS | H->D | -- | HVPAK: capability profile |
+| 0xDC | HAT_GET_HVPAK_LUT | H->D | index | HVPAK: get LUT truth table |
+| 0xDD | HAT_SET_HVPAK_LUT | H->D | index, table | HVPAK: set LUT truth table |
+| 0xDE | HAT_GET_HVPAK_BRIDGE | H->D | -- | HVPAK: get bridge config |
+| 0xDF | HAT_SET_HVPAK_BRIDGE | H->D | bridge | HVPAK: set bridge config |
+| 0xE5 | HAT_GET_HVPAK_ANALOG | H->D | -- | HVPAK: get analog config |
+| 0xE6 | HAT_SET_HVPAK_ANALOG | H->D | analog | HVPAK: set analog config |
+| 0xE7 | HAT_GET_HVPAK_PWM | H->D | -- | HVPAK: get PWM config |
+| 0xE8 | HAT_SET_HVPAK_PWM | H->D | pwm | HVPAK: set PWM config |
+| 0xE9 | HAT_HVPAK_REG_READ | H->D | addr | HVPAK: raw register read |
+| 0xEA | HAT_HVPAK_REG_WRITE_MASKED | H->D | addr, mask, val | HVPAK: raw masked register write |
 | 0xEB | HAT_LA_LOG_ENABLE | H->D | enable | LA: log relay control |
 | 0xED | HAT_LA_USB_RESET | H->D | -- | LA: reset USB endpoint |
 | 0xEE | HAT_LA_STREAM_START | H->D | -- | LA: start USB stream |
@@ -2811,6 +3089,7 @@ Host                                    Device
 | 0xE2 | WIFI_CONNECT | H->D | ssid, pass | `POST /api/wifi/connect` |
 | 0xE3 | SET_SPI_CLOCK | H->D | hz (u32) | (new) |
 | 0xE4 | WIFI_SCAN | H->D | -- | `GET /api/wifi/scan` |
+| 0xEF | WIFI_SET_AP_PASSWORD | H->D | pass_len, pass | `POST /api/wifi/ap_password` |
 | 0xFE | PING | H->D | token | (new) |
 | 0xFF | DISCONNECT | H->D | -- | (new) |
 

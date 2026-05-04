@@ -1,0 +1,32 @@
+name: BBP Protocol Version Check
+
+on:
+  push:
+    paths:
+      - 'Firmware/ESP32/src/bbp/bbp.h'
+      - 'python/bugbuster/protocol.py'
+      - 'DesktopApp/BugBuster/src-tauri/src/bbp.rs'
+      - 'Firmware/tools/check_proto_version.py'
+      - '.github/workflows/proto-version-check.yml'
+  pull_request:
+    paths:
+      - 'Firmware/ESP32/src/bbp/bbp.h'
+      - 'python/bugbuster/protocol.py'
+      - 'DesktopApp/BugBuster/src-tauri/src/bbp.rs'
+      - 'Firmware/tools/check_proto_version.py'
+      - '.github/workflows/proto-version-check.yml'
+
+jobs:
+  proto-version:
+    name: Check BBP_PROTO_VERSION sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify BBP_PROTO_VERSION matches across all three files
+        run: python Firmware/tools/check_proto_version.py --verbose

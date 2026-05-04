@@ -21,7 +21,7 @@ src/
 ├── bb_power.c/h           — Connector power enable/disable, ADC current sense, fault detection
 ├── bb_hvpak.c/h           — HVPAK I2C backend (identity, preset voltage, LUT/bridge/analog/PWM, guarded raw register access)
 ├── bb_pins.c/h            — EXP_EXT pin routing (SWDIO/SWCLK/GPIO/TRACE)
-├── bb_swd.c/h             — SWD status queries (target detect is STUB)
+├── bb_swd.c/h             — SWD status queries + target detect (line-reset + DPIDR read; bench validation pending)
 ├── bb_la.c/h              — Logic analyzer engine: PIO 1 capture, DMA with IRQ completion
 ├── bb_la.pio              — PIO capture programs (1ch, 2ch, 4ch)
 ├── bb_la_trigger.pio      — PIO trigger programs (rising, falling, high, low)
@@ -91,10 +91,10 @@ make -j$(nproc)
    If the image does not implement that contract, `SET_IO_VOLTAGE` fails closed and
    reports HVPAK metadata/error codes up to the host.
 2. **Advanced HVPAK backend is capability-gated** — LUT, bridge, analog, PWM, and raw-register requests are validated against the detected part (`SLG47104` vs `SLG47115-E`).
-3. **SWD target detection always returns false** — `bb_swd_detect_target()` is not yet hooked into debugprobe's low-level SWD API.
+3. **SWD target detection implemented, bench validation pending** — `bb_swd_detect_target()` sends a SWD line-reset + JTAG-to-SWD switch sequence and reads DPIDR via `probe_write_bits`/`probe_read_bits` from debugprobe. ACK check and DPIDR capture are in place. Result has not yet been validated against real hardware.
 4. **Power fault pin polarity assumed active-low** — Needs confirmation from HAT schematic.
 5. **ADC current sense has no calibration** — Readings may be 5-10% off without offset/gain compensation.
-6. **GPIO8 IRQ signaling** — Now implemented (power fault + LA done events trigger a 2ms low pulse).
+6. **GPIO8 IRQ signaling** — Firmware-wired: power fault and LA-done events trigger a 2 ms active-low pulse on GPIO8. Bench validation against real hardware is pending.
 
 ## Logic Analyzer
 

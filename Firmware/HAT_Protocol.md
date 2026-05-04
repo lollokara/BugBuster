@@ -550,6 +550,38 @@ BugBuster may pulse GPIO15 LOW briefly (1 ms) to wake a sleeping HAT before send
 - The LEN field allows payloads up to 32 bytes; if larger payloads are needed,
   define a multi-frame transfer protocol using a new command
 
+### 5.4 HVPAK Backend Commands (0x14–0x1F)
+
+These commands are handled by the RP2040 HVPAK driver (`bb_hvpak.c`) and carry
+fine-grained access to the Renesas GreenPAK (SLG47104 / SLG47115-E) mailbox.
+The RP2040 is the capability authority: it validates every request against the
+detected part profile before forwarding to the I2C mailbox.
+
+| Cmd | Name | Payload (request) | Response |
+|-----|------|-------------------|----------|
+| 0x14 | HVPAK_GET_INFO | — | `part_id(u8)`, `identity(u8)`, `ready(u8)`, `last_error(u8)`, `factory_virgin(u8)` |
+| 0x15 | HVPAK_SET_VOLTAGE | `voltage_mv(u16)` | `ok(u8)`, `actual_mv(u16)` |
+| 0x16 | HVPAK_GET_VOLTAGE | — | `voltage_mv(u16)`, `preset_index(u8)` |
+| 0x17 | HVPAK_GET_CAPS | — | `flags(u32)` — bitmask of `CAP_LUT2/3/4`, `CAP_BRIDGE`, `CAP_PWM0/1`, `CAP_ANALOG`, `CAP_ACMP1`, `CAP_REG_RW` |
+| 0x18 | HVPAK_GET_LUT | `lut_index(u8)` | `truth_table(u16)` — 4-input LUT entry for specified index |
+| 0x19 | HVPAK_SET_LUT | `lut_index(u8)`, `truth_table(u16)` | `ok(u8)` |
+| 0x1A | HVPAK_GET_BRIDGE | — | bridge config struct: `output_mode[2](u8)`, `ocp_retry[2](u8)`, `predriver(u8)`, `full_bridge(u8)`, `control_sel(u8)`, `uvlo(u8)` |
+| 0x1B | HVPAK_SET_BRIDGE | bridge config struct (same layout as GET) | `ok(u8)` |
+| 0x1C | HVPAK_GET_ANALOG | — | analog config: `vref_mode(u8)`, `vref_power(u8)`, `acmp0_gain(u8)`, `acmp0_vref(u8)`, `cs_vref(u8)`, `cs_gain(u8)`, `cs_enable(u8)` |
+| 0x1D | HVPAK_SET_ANALOG | analog config struct (same layout as GET) | `ok(u8)` |
+| 0x1E | HVPAK_GET_PWM | `pwm_index(u8)` | `period_source(u8)`, `duty_source(u8)`, `deadband(u8)` |
+| 0x1F | HVPAK_SET_PWM | `pwm_index(u8)`, PWM config struct | `ok(u8)` |
+
+**Notes:**
+- All responses include a trailing `error(u8)` byte; `0x00` = success.
+- Unsafe registers (identity `0x48`, command `0x4C`, service `0xF5/0xF6`) are
+  blocked and return `HVPAK_UNSAFE_REGISTER` error.
+- `factory_virgin` in `HVPAK_GET_INFO` is set when the mailbox identity is absent
+  and service registers `F5`, `FD`, `FE` all read `0x00` — indicates an
+  unprovisioned GreenPAK that needs programming.
+
+---
+
 ### 10.4 HVPAK Mailbox Contract
 
 The unreleased HVPAK voltage-control path now assumes a programmed GreenPAK

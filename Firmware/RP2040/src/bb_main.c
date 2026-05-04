@@ -35,9 +35,16 @@
 extern TaskHandle_t tud_taskhandle;
 #endif
 
-// Firmware version
-#define BB_HAT_FW_MAJOR  2
-#define BB_HAT_FW_MINOR  1
+// Firmware version — injected by CMakeLists.txt as compile definitions.
+// The #ifndef guards serve as a fallback for any build system that does not
+// set these via -D flags (e.g. IDE or standalone compilation).
+// To bump the version, edit PROBE_VERSION in CMakeLists.txt only.
+#ifndef BB_HAT_FW_MAJOR
+#define BB_HAT_FW_MAJOR  0  /* 0 = sentinel: CMake -D flags were not provided */
+#endif
+#ifndef BB_HAT_FW_MINOR
+#define BB_HAT_FW_MINOR  0  /* 0 = sentinel: CMake -D flags were not provided */
+#endif
 
 static HatFrameParser s_parser;
 
@@ -712,7 +719,10 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_LA_GET_STATUS: {
         LaStatus st;
         bb_la_get_status(&st);
-        uint8_t rsp[28];
+        // Buffer is 29 bytes: 28 existing + 1 ring_overflow byte appended at
+        // the end for backward-compatible length extension.  Older parsers that
+        // only read the first 28 bytes are unaffected.
+        uint8_t rsp[29];
         size_t p = 0;
         rsp[p++] = (uint8_t)st.state;
         rsp[p++] = st.channels;
@@ -728,6 +738,10 @@ static void dispatch_command(const HatFrame *frame)
         rsp[p++] = bb_la_usb_rearm_pending() ? 1 : 0;
         rsp[p++] = bb_la_usb_rearm_request_count();
         rsp[p++] = bb_la_usb_rearm_complete_count();
+        // Ring overflow flag: set when DMA producer overtook USB consumer.
+        // Appended last so the response remains parseable by older host code
+        // that only reads the first 28 bytes.  Cleared on next ARM (0x32).
+        rsp[p++] = st.ring_overflow;
         send_response(HAT_RSP_LA_STATUS, rsp, (uint8_t)p);
         break;
     }

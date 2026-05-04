@@ -6,7 +6,6 @@
 // =============================================================================
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -294,7 +293,7 @@ impl ConnectionManager {
             ));
         }
 
-        let token = admin_token.unwrap();
+        let token = admin_token.ok_or_else(|| anyhow::anyhow!("admin token missing after pairing check"))?;
         transport.set_admin_token(&token)?;
         // Inject AppHandle so background scope-polling task can emit
         // `scope-data` events (Bug 2).
@@ -632,19 +631,71 @@ impl ConnectionManager {
         status.device_info.clone()
     }
 
-    /// Load tokens from persistent storage.
+    /// Load tokens from persistent storage (OS keychain, with one-time migration
+    /// from the legacy plaintext tokens.json if it exists).
     pub fn load_tokens(&self, app: &AppHandle) {
+        // --- Migration: import from legacy tokens.json then delete it ---
+        // Hold the mutex for the entire migration block to prevent races with
+        // concurrent get_token / save_token calls (M2).
         if let Ok(app_dir) = app.path().app_data_dir() {
             let path = app_dir.join("tokens.json");
-            if let Ok(content) = std::fs::read_to_string(path) {
-                if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
-                    if let Ok(mut tokens) = self.tokens.lock() {
-                        *tokens = map;
-                        log::info!("Loaded {} admin tokens from storage", tokens.len());
+            if path.exists() {
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => {
+                        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
+                            if let Ok(mut tokens) = self.tokens.lock() {
+                                let mut failed: HashMap<String, String> = HashMap::new();
+                                for (mac, token) in &map {
+                                    let entry = keyring::Entry::new("bugbuster", mac);
+                                    match entry {
+                                        Ok(e) => {
+                                            if let Err(e) = e.set_password(token) {
+                                                log::warn!("Keychain migration failed for {}: {}", mac, e);
+                                                failed.insert(mac.clone(), token.clone());
+                                            }
+                                        }
+                                        Err(e) => {
+                                            log::warn!("Keychain entry creation failed for {}: {}", mac, e);
+                                            failed.insert(mac.clone(), token.clone());
+                                        }
+                                    }
+                                }
+                                // Load all entries into in-memory cache.
+                                *tokens = map;
+                                // Rewrite tokens.json to contain only the entries that failed
+                                // to migrate (so the next launch retries them). If all
+                                // succeeded, delete the file to eliminate dual-storage plaintext.
+                                if failed.is_empty() {
+                                    if let Err(e) = std::fs::remove_file(&path) {
+                                        log::warn!("Could not remove legacy tokens.json: {}", e);
+                                    } else {
+                                        log::info!("Migrated all token(s) from plaintext to OS keychain; deleted tokens.json");
+                                    }
+                                } else {
+                                    match serde_json::to_string(&failed) {
+                                        Ok(json) => {
+                                            if let Err(e) = std::fs::write(&path, json) {
+                                                log::warn!("Could not rewrite tokens.json with failed entries: {}", e);
+                                            } else {
+                                                log::warn!("{} token(s) failed keychain migration; tokens.json updated to retry on next launch", failed.len());
+                                            }
+                                        }
+                                        Err(e) => log::warn!("Could not serialise failed migration entries: {}", e),
+                                    }
+                                }
+                            }
+                            return;
+                        }
                     }
+                    Err(e) => log::warn!("Could not read legacy tokens.json: {}", e),
                 }
             }
         }
+
+        // --- Normal load: read each known key from the OS keychain ---
+        // We don't have an enumeration API for keyring, so we load lazily
+        // via get_token() on first use. Nothing to do here on a fresh install.
+        log::info!("Admin tokens will be loaded from OS keychain on first use");
     }
 
     /// Normalise a MAC address for use as a pairing-store key.
@@ -656,57 +707,77 @@ impl ConnectionManager {
         mac.to_ascii_lowercase()
     }
 
-    /// Save a token to persistent storage.
-    pub fn save_token(&self, mac: String, token: String, app: &AppHandle) {
+    /// Save a token to persistent storage (OS keychain).
+    /// Falls back to in-memory only if the keychain is unavailable — does NOT
+    /// write plaintext to disk in that case.
+    pub fn save_token(&self, mac: String, token: String, _app: &AppHandle) {
         let mac = Self::normalize_mac(&mac);
-        let mut map_clone = HashMap::new();
-        if let Ok(mut tokens) = self.tokens.lock() {
-            tokens.insert(mac, token);
-            map_clone = tokens.clone();
+
+        // Persist to OS keychain.
+        match keyring::Entry::new("bugbuster", &mac) {
+            Ok(entry) => {
+                if let Err(e) = entry.set_password(&token) {
+                    log::warn!(
+                        "OS keychain unavailable for {}: {} — token stored in-memory only",
+                        mac, e
+                    );
+                } else {
+                    log::info!("Admin token for {} saved to OS keychain", mac);
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Could not create keychain entry for {}: {} — token stored in-memory only",
+                    mac, e
+                );
+            }
         }
 
-        if let Ok(app_dir) = app.path().app_data_dir() {
-            let _ = std::fs::create_dir_all(&app_dir);
-            let path = app_dir.join("tokens.json");
-
-            let mut opts = OpenOptions::new();
-            opts.create(true).write(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-
-            let file_result = opts.open(&path);
-
-            if let Ok(file) = file_result {
-                if let Ok(content) = serde_json::to_string(&map_clone) {
-                    use std::io::Write;
-                    let mut writer = std::io::BufWriter::new(file);
-                    if let Err(e) = writer.write_all(content.as_bytes()) {
-                        log::error!("Failed to write admin tokens: {}", e);
-                    } else {
-                        log::info!("Admin tokens persisted securely to storage");
-                    }
-                }
-            } else if let Err(e) = file_result {
-                log::error!("Failed to open admin tokens file for writing: {}", e);
-            }
+        // Always update in-memory cache regardless of keychain outcome.
+        if let Ok(mut tokens) = self.tokens.lock() {
+            tokens.insert(mac, token);
         }
     }
 
     /// Get a stored token for a device MAC.
+    ///
+    /// Checks the in-memory cache first (populated by save_token and migration),
+    /// then falls back to the OS keychain for tokens from previous sessions.
     pub fn get_token(&self, mac: &str) -> Option<String> {
         let key = Self::normalize_mac(mac);
-        let tokens = self.tokens.lock().ok()?;
-        // Direct hit on the normalised key first, then fall back to a
-        // case-insensitive scan to rescue tokens saved before this fix.
-        if let Some(t) = tokens.get(&key) {
-            return Some(t.clone());
+
+        // Check in-memory cache first.
+        if let Ok(tokens) = self.tokens.lock() {
+            if let Some(t) = tokens.get(&key) {
+                return Some(t.clone());
+            }
+            // Case-insensitive fallback for tokens saved before normalisation fix.
+            if let Some((_, v)) = tokens.iter().find(|(k, _)| k.to_ascii_lowercase() == key) {
+                return Some(v.clone());
+            }
         }
-        tokens
-            .iter()
-            .find(|(k, _)| k.to_ascii_lowercase() == key)
-            .map(|(_, v)| v.clone())
+
+        // Fall back to OS keychain (covers tokens from a previous app session
+        // that weren't pre-loaded because we no longer enumerate on startup).
+        match keyring::Entry::new("bugbuster", &key) {
+            Ok(entry) => match entry.get_password() {
+                Ok(token) => {
+                    // Populate in-memory cache so subsequent calls don't hit the keychain.
+                    if let Ok(mut tokens) = self.tokens.lock() {
+                        tokens.insert(key, token.clone());
+                    }
+                    Some(token)
+                }
+                Err(keyring::Error::NoEntry) => None,
+                Err(e) => {
+                    log::warn!("OS keychain read failed for {}: {}", mac, e);
+                    None
+                }
+            },
+            Err(e) => {
+                log::warn!("Could not open keychain entry for {}: {}", mac, e);
+                None
+            }
+        }
     }
 }

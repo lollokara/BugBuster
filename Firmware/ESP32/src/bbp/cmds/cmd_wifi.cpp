@@ -158,6 +158,34 @@ static int handler_wifi_scan(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// WIFI_SET_AP_PASSWORD  payload: u8 pass_len, pass bytes (8-63 chars)
+// resp: bool ok
+// ---------------------------------------------------------------------------
+static int handler_wifi_set_ap_password(const uint8_t *payload, size_t len,
+                                        uint8_t *resp, size_t *resp_len)
+{
+    if (len < 2) return -CMD_ERR_BAD_ARG;
+
+    size_t rpos = 0;
+    uint8_t pass_len = bbp_get_u8(payload, &rpos);
+    // WPA2-PSK: 8-63 characters
+    if (pass_len < 8 || pass_len > 63 || rpos + pass_len > len)
+        return -CMD_ERR_BAD_ARG;
+
+    char pass[64] = {};
+    memcpy(pass, payload + rpos, pass_len);
+    pass[pass_len] = '\0';
+
+    bool persisted = false;
+    bool ok = wifi_set_ap_password(pass, &persisted);
+    // Status byte: 0x00 = applied+persisted, 0x01 = applied but not persisted, 0x02 = failed
+    size_t pos = 0;
+    resp[pos++] = ok ? (persisted ? 0x00 : 0x01) : 0x02;
+    *resp_len = pos;
+    return (int)pos;
+}
+
+// ---------------------------------------------------------------------------
 // QS_LIST  payload: (none)
 // resp: u8 bitmap, then QUICKSETUP_SLOT_COUNT u8 summary_hashes
 // Wire format matches legacy handleQuickSetupList (bbp.cpp:2504-2523).
@@ -279,12 +307,14 @@ static const ArgSpec s_qs_delete_rsp[] = {
 // Descriptor table
 // ---------------------------------------------------------------------------
 static const CmdDescriptor s_wifi_cmds[] = {
-    { BBP_CMD_WIFI_GET_STATUS, "wifi_get_status",
-      NULL,            0, NULL,             0, handler_wifi_get_status, CMD_FLAG_READS_STATE },
-    { BBP_CMD_WIFI_CONNECT,    "wifi_connect",
-      NULL,            0, NULL,             0, handler_wifi_connect,    0                   },
-    { BBP_CMD_WIFI_SCAN,       "wifi_scan",
-      NULL,            0, NULL,             0, handler_wifi_scan,       0                   },
+    { BBP_CMD_WIFI_GET_STATUS,      "wifi_get_status",
+      NULL,            0, NULL,             0, handler_wifi_get_status,      CMD_FLAG_READS_STATE },
+    { BBP_CMD_WIFI_CONNECT,         "wifi_connect",
+      NULL,            0, NULL,             0, handler_wifi_connect,         0                   },
+    { BBP_CMD_WIFI_SCAN,            "wifi_scan",
+      NULL,            0, NULL,             0, handler_wifi_scan,            0                   },
+    { BBP_CMD_WIFI_SET_AP_PASSWORD, "wifi_set_ap_password",
+      NULL,            0, NULL,             0, handler_wifi_set_ap_password, 0                   },
     { BBP_CMD_QS_LIST,         "qs_list",
       NULL,            0, NULL,             0, handler_qs_list,         CMD_FLAG_READS_STATE },
     { BBP_CMD_QS_GET,          "qs_get",

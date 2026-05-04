@@ -1,5 +1,126 @@
 # CHANGELOG
 
+## [Unreleased — post-v1.0.0 docs sweep + bug-fix pass] — 2026-05-04
+
+Cross-repo documentation refresh and tracked-backlog clearance. No public
+API or wire-protocol breakage; one new BBP opcode (`0xEF`) and one new
+HTTP endpoint (`POST /api/wifi/ap_password`) added in a backward-compatible
+way. All 326 unit tests pass; ESP32 PIO build and Desktop wasm/host
+`cargo check` are green. Hardware bench validation pending for RP2040 LA
+ring-overflow path, ESP32 AP-password live change, and SWD detect.
+
+### Added
+
+#### Documentation
+- New `Docs/QuickSetup.md` — user guide for the 4-slot NVS-backed preset
+  system (HTTP CRUD, BBP `0xF0..0xF4`, desktop tile UI, 1000-byte limit).
+- New `Docs/MicroPython-Troubleshooting.md` — 10-entry FAQ covering eval
+  queue, heap watermark, REPL close code 4002, persistence vs ephemeral,
+  `vfs_posix` stdout routing, log cursor (`?since=`), upload + autorun.
+- New `Docs/bugs-improvements-2026-05-04.md` — backlog snapshot from the
+  sweep (now resolved or rescoped).
+- New host-stack Mermaid diagram in root `README.md` (Desktop + MCP +
+  Python lib ↔ ESP32 BBP v4 ↔ RP2040 HAT).
+- `Firmware/ESP32/README.md` gained MicroPython Scripting, Board Profiles,
+  and External Bus subsections; `README_CALIBRATION.md` notes board-profile
+  scoping and on-device script access.
+- `Firmware/HAT_Architecture.md` §6 BBP table extended with HVPAK advanced
+  range `0xDB–0xDF` / `0xE5–0xEA`. `Firmware/HAT_Protocol.md` gained
+  §5.4 covering HVPAK backend commands `0x14–0x1F`.
+- `Firmware/BugBusterProtocol.md` Appendix A: HVPAK advanced `0xDB–0xEA`,
+  ext-bus `0x75/0x76` and `0xB8–0xBE`, QuickSetup `0xF0–0xF4`,
+  `WIFI_SET_AP_PASSWORD 0xEF`.
+- `Firmware/FirmwareStructure.md` updated for Vite/Preact `web/` build,
+  MicroPython component, `bus/ext_bus`, `quicksetup` modules.
+
+#### CI / tooling
+- New `Firmware/tools/check_proto_version.py` plus
+  `.github/workflows/proto-version-check.yml` — gates `BBP_PROTO_VERSION`
+  sync across `Firmware/ESP32/src/bbp/bbp.h`, `python/bugbuster/protocol.py`
+  and `DesktopApp/BugBuster/src-tauri/src/bbp.rs` on every push/PR.
+- `Firmware/tools/firmware_version.py` extended to handle the new RP2040
+  single-source CMake form and cross-check the legacy `bb_main.c` `#ifndef`
+  fallback.
+- `python/pyproject.toml` (new): PEP 517 metadata, classifiers,
+  `requires-python = ">=3.11"`, `bugbuster-mcp` console-script entry.
+
+#### ESP32 firmware
+- New BBP command `BBP_CMD_WIFI_SET_AP_PASSWORD = 0xEF` and HTTP endpoint
+  `POST /api/wifi/ap_password` (admin-token gated). Password persists in
+  NVS, falls back to the firmware default if absent or invalid.
+- Python lib (`BugBuster.wifi_set_ap_password`) and MCP tool
+  (`wifi_set_ap_password`) wired to the new opcode (USB + HTTP).
+- `wifi_manager.cpp` now calls `esp_task_wdt_reset()` around the blocking
+  `esp_wifi_scan_start()` and inside the per-AP copy loop.
+
+#### RP2040 firmware
+- Single source of truth for the HAT firmware version: `PROBE_VERSION` in
+  `Firmware/RP2040/CMakeLists.txt` is parsed at configure-time and
+  injected as `BB_HAT_FW_MAJOR/MINOR` via `target_compile_definitions`.
+  `bb_main.c` retains `#ifndef` guards as a standalone-IDE-build fallback.
+- LA status response now exposes `ring_overflow` as a backward-compatible
+  trailing byte (response grew from 28 to 29 bytes); flag clears on next
+  `HAT_LA_ARM`.
+
+#### Desktop
+- `din` and `dout` tabs registered in `src/app.rs` TABS array and content
+  router; underlying Tauri commands were already wired.
+- HTTP admin tokens migrated to the OS keychain via the `keyring`
+  crate (macOS Keychain / Windows DPAPI / Linux Secret Service). One-time
+  migration imports any existing `tokens.json` and deletes the plaintext
+  file on success; in-memory fallback only on keyring failure (no
+  silent plaintext rewrite).
+
+#### Python library
+- `client.py` raises `ProtocolError` (with command name) on short
+  responses for `PING`, `GET_DEVICE_INFO`, `GET_ADC_VALUE`, `SCRIPT_LOGS`,
+  and on missing `states` key in the `MUX_GET_ALL` HTTP path. Helper
+  `_require_resp_len()` introduced.
+
+#### Tests / notebooks
+- 5 Jupyter notebooks rewritten to target the current architecture
+  (`bugbuster.BugBuster`/`BugBusterHAL`, BBP v4, current PIO/CMake/cargo
+  flows): `setup_environment`, `esp32s3_flash_manager`,
+  `rp2040_firmware_build`, `desktop_app_launcher`, `test_dashboard`.
+- `tests/README.md` documents the 5-layer architecture
+  (unit/simulator/mock/synthetic/device), markers, env vars, and
+  cross-platform setup. `tests/run_tests.py` and `tests/setup.sh` refreshed.
+
+### Changed
+- Versions in root `README.md`, `DesktopApp/BugBuster/README.md`,
+  `tests/README.md` brought in line with the v1.0.0 release (ESP `3.1.0`,
+  HAT `bb-hat-2.1`, Desktop `0.6.0`; test count `249`).
+- `CLAUDE.md` replaced empty template with a pointer to `AGENTS.md` and
+  `.mex/ROUTER.md`.
+- `Docs/ReleaseChecklist.md`: combined-release subsection added; manual
+  PROTO_VERSION grep replaced with a pointer to the new CI gate; RP2040
+  two-file warning replaced with the single-source rule.
+- `Docs/ExternalBus.md` pending-items list reformatted as `## Roadmap`
+  with explicit status labels.
+- MCP tool inventory in `python/bugbuster_mcp/README.md` updated to 41
+  tools (was advertised as 28; actual count had drifted to 40 before
+  the WiFi AP-password tool added the 41st).
+- `Docs/fix_plan_progress.md` gained `## 2026-04-27` date headers.
+
+### Moved
+- `Docs/knowledge.md` → `.mex/context/knowledge-deep-dive.md` (149 KB
+  engineering deep-dive moved out of user-facing `Docs/`).
+
+### Fixed
+- `Firmware/RP2040/README.md` no longer contradicts itself on the SWD
+  detect / LA-done IRQ status; both states described accurately. The
+  SWD target-detect implementation in `bb_swd.c` (line-reset + DPIDR
+  read) was already present — the previous "STUB" note was stale.
+- `wifi_connect()` no longer re-applies the firmware default when an
+  NVS-backed AP password is in use (was a `WIFI_PASSWORD` literal trap).
+
+### Notes (bench-pending)
+- RP2040 LA ring-overflow flag end-to-end propagation under sustained
+  DMA pressure.
+- ESP32 AP-password change applied live (vs requiring an AP restart).
+- RP2040 SWD detect: turnaround bit-position and parity drain need
+  hardware confirmation.
+
 ## [BugBuster v1.0.0 — ESP 3.1.0 / HAT bb-hat-2.1 / Desktop 0.6.0] — 2026-04-27
 
 First **combined release** — a single GitHub release (`release-v1.0.0`)

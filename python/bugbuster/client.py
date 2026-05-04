@@ -34,8 +34,17 @@ from .constants import (
     GpioMode, WaveformType, OutputMode, RtdCurrent,
     VoutRange, CurrentLimit, PowerControl,
 )
+from .protocol import ProtocolError
 
 log = logging.getLogger(__name__)
+
+
+def _require_resp_len(resp: bytes, min_len: int, cmd_name: str) -> None:
+    """Raise ProtocolError if *resp* is shorter than *min_len* bytes."""
+    if len(resp) < min_len:
+        raise ProtocolError(
+            f"{cmd_name}: response too short — got {len(resp)} bytes, expected >= {min_len}"
+        )
 
 # Type alias for either transport
 _Transport = Union[USBTransport, HTTPTransport]
@@ -488,6 +497,7 @@ class BugBuster:
         self._require_usb("ping")
         payload = struct.pack('<I', token & 0xFFFFFFFF)
         resp    = self._usb_cmd(CmdId.PING, payload)
+        _require_resp_len(resp, 8, "PING")
         tok, uptime = struct.unpack_from('<II', resp)
         return PingResult(token=tok, uptime_ms=uptime)
 
@@ -624,6 +634,7 @@ class BugBuster:
         """
         self._require_usb("script_logs")
         resp = self._usb_cmd(CmdId.SCRIPT_LOGS)
+        _require_resp_len(resp, 2, "SCRIPT_LOGS")
         count, = struct.unpack_from('<H', resp, 0)
         return resp[2:2 + count].decode("utf-8", errors="replace")
 
@@ -900,6 +911,7 @@ class BugBuster:
         """Read silicon identification (revision + ID words)."""
         if self._usb:
             resp = self._usb_cmd(CmdId.GET_DEVICE_INFO)
+            _require_resp_len(resp, 6, "GET_DEVICE_INFO")
             spi_ok, rev = struct.unpack_from('<BB', resp)
             id0, id1    = struct.unpack_from('<HH', resp, 2)
             return DeviceInfo(bool(spi_ok), rev, id0, id1)
@@ -1086,6 +1098,7 @@ class BugBuster:
         """
         if self._usb:
             resp   = self._usb_cmd(CmdId.GET_ADC_VALUE, struct.pack('<B', channel))
+            _require_resp_len(resp, 11, "GET_ADC_VALUE")
             raw    = int.from_bytes(resp[1:4], 'little')
             value, = struct.unpack_from('<f', resp, 4)
             rng, rate, mux = struct.unpack_from('<BBB', resp, 8)
@@ -1909,7 +1922,10 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.MUX_GET_ALL)
             return list(resp[:4])
         else:
-            return list(self._http_get("/mux")["states"])
+            resp = self._http_get("/mux")
+            if "states" not in resp:
+                raise ProtocolError("MUX_GET_ALL: response missing 'states' field")
+            return list(resp["states"])
 
     def mux_set_all(self, states: list[int]) -> None:
         """
@@ -2657,7 +2673,7 @@ class BugBuster:
             import platform
             if platform.system() != "Darwin":
                 try: pass # dev.set_configuration() # Optional based on env
-                except: pass
+                except (usb.core.USBError, OSError) as e: log.debug("USB teardown ignored: %r", e)
             
             # Flush existing claims
             try: usb.util.claim_interface(dev, LA_INTERFACE)
@@ -2726,9 +2742,9 @@ class BugBuster:
 
         finally:
             try: dev.write(EP_OUT, bytes([0x00]), timeout=2000)
-            except: pass
+            except (usb.core.USBError, OSError) as e: log.debug("USB teardown ignored: %r", e)
             try: usb.util.release_interface(dev, LA_INTERFACE)
-            except: pass
+            except (usb.core.USBError, OSError) as e: log.debug("USB teardown ignored: %r", e)
             
         status = self.hat_la_get_status()
         channels = status.get("channels", 4)
@@ -3327,6 +3343,28 @@ class BugBuster:
         else:
             raw = self._http_get("/wifi/scan")
             return raw.get("networks", raw) if isinstance(raw, dict) else raw
+
+    def wifi_set_ap_password(self, password: str) -> bool:
+        """
+        Set the SoftAP password. Persists to NVS and applies live (no reboot needed).
+        Password must be 8–63 characters (WPA2-PSK requirement).
+        Returns ``True`` on success, ``False`` on failure.
+        """
+        if len(password) < 8 or len(password) > 63:
+            raise ValueError(
+                f"AP password must be 8-63 characters (WPA2 requirement), got {len(password)}"
+            )
+        if self._usb:
+            pass_b = password.encode()
+            payload = struct.pack('<B', len(pass_b)) + pass_b
+            resp = self._usb_cmd(CmdId.WIFI_SET_AP_PASSWORD, payload)
+            _require_resp_len(resp, 1, "WIFI_SET_AP_PASSWORD")
+            return bool(resp[0])
+        else:
+            result = self._http_post("/wifi/ap_password", {"password": password})
+            if isinstance(result, dict):
+                return bool(result.get("success", False))
+            return bool(result)
 
     # ------------------------------------------------------------------
     # ── Raw register access  (USB only, debug/testing) ───────────────

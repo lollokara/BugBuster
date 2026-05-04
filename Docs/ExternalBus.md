@@ -23,13 +23,13 @@ Implemented:
 - ESP32 direct HTTP endpoints under `/api/bus/*`
 - ESP32 USB deferred job queue for timing-tolerant host workflows
 
-Pending:
+## Roadmap
 
-- Real-device bench validation across representative I2C/SPI targets
-- Desktop and web UI
-- USB BBP bus-status command and durable session lease model
-- Optional HTTP deferred-job endpoints
-- Simulator/device-test coverage for the new BBP opcodes
+- [ ] Bench verification on real I2C/SPI targets — pending
+- [ ] Desktop and web UI — not started
+- [ ] USB BBP bus-status command and durable session lease model — not started
+- [ ] Optional HTTP deferred-job endpoints — not started
+- [ ] Simulator/device-test coverage for the new BBP opcodes — not started
 
 ---
 

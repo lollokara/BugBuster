@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ESP32_BBP = ROOT / "Firmware" / "ESP32" / "src" / "bbp" / "bbp.h"
 RP2040_CMAKE = ROOT / "Firmware" / "RP2040" / "CMakeLists.txt"
+RP2040_MAIN = ROOT / "Firmware" / "RP2040" / "src" / "bb_main.c"
 
 
 def read_text(path: Path) -> str:
@@ -35,11 +36,38 @@ def esp32_version() -> str:
 
 
 def rp2040_version() -> str:
-    text = read_text(RP2040_CMAKE)
-    match = re.search(r'PROBE_VERSION\s+\\"bb-hat-([^"]+)\\"', text)
+    cmake_text = read_text(RP2040_CMAKE)
+    # Match: set(PROBE_VERSION "bb-hat-X.Y")
+    match = re.search(r'set\s*\(\s*PROBE_VERSION\s+"bb-hat-([0-9]+)\.([0-9]+)"\s*\)', cmake_text)
     if match is None:
-        raise RuntimeError(f'Could not read PROBE_VERSION from {RP2040_CMAKE}')
-    return match.group(1)
+        # Legacy fallback: file(WRITE ...) embedded the version string
+        match = re.search(r'PROBE_VERSION\s+\\"bb-hat-([^"]+)\\"', cmake_text)
+        if match is None:
+            raise RuntimeError(f'Could not read PROBE_VERSION from {RP2040_CMAKE}')
+        return match.group(1)
+    cmake_major, cmake_minor = match.group(1), match.group(2)
+    version = f"{cmake_major}.{cmake_minor}"
+
+    # Cross-check: if bb_main.c still has literal (non-#ifndef-guarded) defines,
+    # verify they agree with CMakeLists.  Guarded defines ("#ifndef BB_HAT_FW_MAJOR")
+    # are the expected post-automation form and need no check.
+    main_text = read_text(RP2040_MAIN)
+    for name, cmake_val in (("BB_HAT_FW_MAJOR", cmake_major), ("BB_HAT_FW_MINOR", cmake_minor)):
+        # Detect a bare (non-guarded) literal #define line
+        bare_match = re.search(
+            rf'(?m)^#define\s+{name}\s+([0-9]+)\s*$', main_text
+        )
+        if bare_match is not None:
+            # Bare define found — confirm it matches CMakeLists
+            if bare_match.group(1) != cmake_val:
+                raise RuntimeError(
+                    f"{RP2040_MAIN}: {name} is {bare_match.group(1)!r} "
+                    f"but CMakeLists.txt says {cmake_val!r}. "
+                    f"Edit PROBE_VERSION in CMakeLists.txt only and remove "
+                    f"the bare #define from bb_main.c (use #ifndef guard instead)."
+                )
+
+    return version
 
 
 def main() -> int:

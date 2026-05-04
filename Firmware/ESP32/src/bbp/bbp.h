@@ -192,9 +192,10 @@ extern "C" {
 #define BBP_CMD_SET_LSHIFT_OE   0xE0  // Set level shifter output enable
 
 // WiFi Management
-#define BBP_CMD_WIFI_GET_STATUS  0xE1  // Get WiFi status
-#define BBP_CMD_WIFI_CONNECT     0xE2  // Connect to WiFi network
-#define BBP_CMD_WIFI_SCAN        0xE4  // Scan for WiFi networks
+#define BBP_CMD_WIFI_GET_STATUS       0xE1  // Get WiFi status
+#define BBP_CMD_WIFI_CONNECT          0xE2  // Connect to WiFi network
+#define BBP_CMD_WIFI_SCAN             0xE4  // Scan for WiFi networks
+#define BBP_CMD_WIFI_SET_AP_PASSWORD  0xEF  // Set SoftAP password (persist to NVS, apply live)
 #define BBP_CMD_HAT_GET_HVPAK_ANALOG 0xE5 // Get analog config
 #define BBP_CMD_HAT_SET_HVPAK_ANALOG 0xE6 // Set analog config
 #define BBP_CMD_HAT_GET_HVPAK_PWM    0xE7 // Get PWM config
