@@ -259,6 +259,15 @@ static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
     if (error == HTTPD_405_METHOD_NOT_ALLOWED) {
         char origin_buf[96];
         set_cors_headers(req, origin_buf, sizeof(origin_buf));
+        // CORS preflight: any OPTIONS to /api/* lands here because we deliberately
+        // don't register a wildcard OPTIONS handler (it would shadow the WS upgrade
+        // GET on /api/ws/stream and produce a 405 of its own for non-browser
+        // clients). Synthesize the 204 preflight response from this err handler.
+        if (req->method == HTTP_OPTIONS && strncmp(req->uri, "/api/", 5) == 0) {
+            httpd_resp_set_status(req, "204 No Content");
+            httpd_resp_send(req, NULL, 0);
+            return ESP_OK;
+        }
         return httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method not allowed");
     }
 
@@ -2193,16 +2202,6 @@ static esp_err_t handle_uart_post_dispatch(httpd_req_t *req)
 
     if (strcmp(p, "config") == 0) return handle_post_uart_config(req);
     return send_error(req, 404, "Unknown UART POST endpoint");
-}
-
-// OPTIONS /api/* - CORS preflight
-static esp_err_t handle_options(httpd_req_t *req)
-{
-    char origin_buf[96];
-    set_cors_headers(req, origin_buf, sizeof(origin_buf));
-    httpd_resp_set_status(req, "204");
-    httpd_resp_send(req, NULL, 0);
-    return ESP_OK;
 }
 
 // =============================================================================
@@ -4306,6 +4305,18 @@ void initWebServer(void)
     httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, handle_http_error);
     httpd_register_err_handler(s_server, HTTPD_405_METHOD_NOT_ALLOWED, handle_http_error);
 
+    // ----- WebSocket routes (registered FIRST, before the ~76 REST routes) -----
+    // Each WS register() creates a FreeRTOS mutex + counting semaphore from the
+    // internal heap. Registering the bulk REST routes first consumes ~7 KB of
+    // internal heap (~100 B per httpd_register_uri_handler() call), leaving
+    // free=43/largest=20 by the time WS register runs — at which point the
+    // sync-primitive creation fails and the URI is never registered, producing
+    // 404 on /api/ws/stream and /api/scripts/repl/ws (observed 2026-05-07).
+    // Front-loading WS registration uses the fresh ~7 KB internal pool that
+    // exists immediately after httpd_start.
+    repl_ws_register(s_server);
+    ws_stream_register(s_server);
+
     // ----- GET routes -----
 
     httpd_uri_t uri_root = {
@@ -4746,21 +4757,14 @@ void initWebServer(void)
     httpd_register_uri_handler(s_server, &uri_autorun_disable);
 
     // ----- OPTIONS (CORS preflight) -----
-
-    httpd_uri_t uri_options = {
-        .uri = "/api/*", .method = HTTP_OPTIONS, .handler = handle_options, .user_ctx = NULL
-    };
-    httpd_register_uri_handler(s_server, &uri_options);
-
-    // ----- WebSocket routes (MUST be registered LAST) -----
-    // ESP-IDF httpd's URI lookup is LIFO: most-recently-registered handler is
-    // matched first. The `/api/*` OPTIONS wildcard above would otherwise
-    // intercept the WS upgrade GET requests (URI matches the wildcard, but
-    // method is GET vs OPTIONS → 405). Registering the specific WS routes
-    // after the wildcard puts them at the head of the lookup chain so they
-    // win the URI/method match before the wildcard sees the request.
-    repl_ws_register(s_server);
-    ws_stream_register(s_server);
+    // No wildcard `/api/*` OPTIONS handler is registered. A wildcard handler
+    // would shadow the WS upgrade GET on `/api/ws/stream` for clients whose
+    // request doesn't match the websocket-handshake fast path (curl, python
+    // `websockets`, ...), producing a spurious 405. Instead, OPTIONS preflight
+    // for /api/* is synthesized from the HTTPD_405_METHOD_NOT_ALLOWED error
+    // handler in `handle_http_error` (returns 204 + CORS headers).
+    // WS routes are registered FIRST (right after httpd_start) — see the
+    // comment up there for the internal-heap exhaustion reason.
 
     ESP_LOGI(TAG, "All URI handlers registered");
 

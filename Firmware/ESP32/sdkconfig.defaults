@@ -59,6 +59,14 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # internal-first, and raise RESERVE so the internal pool keeps a floor for
 # FreeRTOS task TCBs/stacks and DMA buffers. Verified safe: every explicit
 # heap_caps_malloc in src/ already pins to MALLOC_CAP_SPIRAM.
+#
+# Confirmed load-bearing 2026-05-07 (second pass): bumping ALWAYSINTERNAL
+# back to the IDF default 16384 reproduces the httpd-start failure
+# (internal_free=4467 / largest=2304 before webserver). The runtime
+# alloc-noise log lines (mdns_send / i2c_master_start / esp_partition_mmap
+# NO_MEM) are the price we pay; they're cosmetic — those subsystems still
+# function — and chasing them by raising ALWAYSINTERNAL breaks the web
+# server, which is not an acceptable trade.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
 
