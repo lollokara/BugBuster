@@ -37,6 +37,9 @@
 #include "auth.h"
 #include "board_profile.h"
 #include "wifi_manager.h"
+#include "mdns_responder.h"
+#include "ws_stream.h"
+#include "mbedtls/sha256.h"
 #include "quicksetup.h"
 #include "ext_bus.h"
 #include "http_adapter.h"
@@ -2440,7 +2443,16 @@ static esp_err_t handle_post_ioexp_control(httpd_req_t *req)
     else { cJSON_Delete(body); return send_error(req, 400, "Unknown control name"); }
     cJSON_Delete(body);
 
-    if (!pca9535_set_control(ctrl, on)) return send_error(req, 500, "I2C write failed");
+    bool ok;
+    if (ctrl >= PCA_CTRL_EFUSE1_EN && ctrl <= PCA_CTRL_EFUSE4_EN) {
+        // Explicit user-action gate for EFUSE channels — records soft-start
+        // blackout timestamp so check_changes() ignores the ramp-up FLT.
+        uint8_t logical = (uint8_t)(ctrl - PCA_CTRL_EFUSE1_EN);
+        ok = pca9535_user_arm_efuse(logical, on);
+    } else {
+        ok = pca9535_set_control(ctrl, on);
+    }
+    if (!ok) return send_error(req, 500, "I2C write failed");
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "control", pca9535_control_name(ctrl));
@@ -3283,6 +3295,48 @@ static esp_err_t handle_post_wifi_ap_password(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/wifi/hostname  → {"hostname":"bugbuster-a1b2c3"}
+static esp_err_t handle_get_wifi_hostname(httpd_req_t *req)
+{
+    char hn[MDNS_HOSTNAME_MAX] = {};
+    mdns_responder_get_hostname(hn, sizeof(hn));
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "hostname", hn);
+    return send_json(req, root);
+}
+
+// POST /api/wifi/hostname  body: {"hostname":"benchA"}  (admin auth required)
+// Pass empty string or omit field to revert to the auto-derived default.
+static esp_err_t handle_post_wifi_hostname(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *j_hn = cJSON_GetObjectItem(body, "hostname");
+    const char *hn = (j_hn && cJSON_IsString(j_hn)) ? j_hn->valuestring : "";
+
+    bool ok = mdns_responder_set_hostname(hn);
+    cJSON_Delete(body);
+
+    if (!ok) {
+        return send_error(req, 400,
+            "Hostname must be 1-31 chars, lowercase letters/digits/'-', "
+            "and must not begin or end with '-'");
+    }
+
+    char applied[MDNS_HOSTNAME_MAX] = {};
+    mdns_responder_get_hostname(applied, sizeof(applied));
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddStringToObject(root, "hostname", applied);
+    return send_json(req, root);
+}
+
 // GET /api/device/version
 static esp_err_t handle_get_version(httpd_req_t *req)
 {
@@ -3311,7 +3365,30 @@ static esp_err_t handle_get_version(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// Parse a 64-char hex SHA-256 from a query string. Returns true and fills
+// @p out (32 bytes) when present and well-formed; false when absent.
+static bool parse_sha256_query(httpd_req_t *req, uint8_t out[32], bool *out_present)
+{
+    *out_present = false;
+    char qbuf[160] = {};
+    if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) != ESP_OK) return true;
+    char hex[80] = {};
+    if (httpd_query_key_value(qbuf, "sha256", hex, sizeof(hex)) != ESP_OK) return true;
+    size_t n = strlen(hex);
+    if (n != 64) return false;
+    for (int i = 0; i < 32; i++) {
+        unsigned int byte;
+        if (sscanf(hex + i*2, "%2x", &byte) != 1) return false;
+        out[i] = (uint8_t)byte;
+    }
+    *out_present = true;
+    return true;
+}
+
 // POST /api/ota/upload — OTA firmware update (binary body = firmware.bin)
+//   Optional ?sha256=<64-hex>  — when present, SHA-256 of the body is computed
+//   on the fly and compared before set_boot_partition; mismatch aborts the
+//   write and returns 400 without changing the boot target.
 static esp_err_t handle_ota_upload(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) {
@@ -3324,14 +3401,20 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
         return send_error(req, 400, "Invalid firmware size (max 2MB)");
     }
 
+    uint8_t expected_sha[32] = {};
+    bool expect_sha = false;
+    if (!parse_sha256_query(req, expected_sha, &expect_sha)) {
+        return send_error(req, 400, "sha256 query must be 64 lowercase hex chars");
+    }
+
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
     if (!update_partition) {
         return send_error(req, 500, "No OTA partition available");
     }
 
-    ESP_LOGI(TAG, "Writing to partition '%s' at 0x%lx, size %lu",
+    ESP_LOGI(TAG, "Writing to partition '%s' at 0x%lx, size %lu (sha256=%s)",
              update_partition->label, (unsigned long)update_partition->address,
-             (unsigned long)update_partition->size);
+             (unsigned long)update_partition->size, expect_sha ? "yes" : "no");
 
     esp_ota_handle_t ota_handle;
     esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
@@ -3340,9 +3423,16 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
         return send_error(req, 500, esp_err_to_name(err));
     }
 
+    mbedtls_sha256_context sha_ctx;
+    if (expect_sha) {
+        mbedtls_sha256_init(&sha_ctx);
+        mbedtls_sha256_starts(&sha_ctx, 0 /* SHA-256, not 224 */);
+    }
+
     // Stream firmware data in chunks
     char *buf = (char*)malloc(4096);
     if (!buf) {
+        if (expect_sha) mbedtls_sha256_free(&sha_ctx);
         esp_ota_abort(ota_handle);
         return send_error(req, 500, "Out of memory");
     }
@@ -3367,6 +3457,9 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
             failed = true;
             break;
         }
+        if (expect_sha) {
+            mbedtls_sha256_update(&sha_ctx, (const unsigned char*)buf, received);
+        }
 
         remaining -= received;
         total_written += received;
@@ -3382,8 +3475,21 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
     free(buf);
 
     if (failed) {
+        if (expect_sha) mbedtls_sha256_free(&sha_ctx);
         esp_ota_abort(ota_handle);
         return send_error(req, 500, "OTA write failed");
+    }
+
+    if (expect_sha) {
+        uint8_t actual[32] = {};
+        mbedtls_sha256_finish(&sha_ctx, actual);
+        mbedtls_sha256_free(&sha_ctx);
+        if (memcmp(actual, expected_sha, 32) != 0) {
+            ESP_LOGW(TAG, "OTA SHA-256 mismatch — aborting before set_boot_partition");
+            esp_ota_abort(ota_handle);
+            return send_error(req, 400, "SHA-256 mismatch — image discarded, boot target unchanged");
+        }
+        ESP_LOGI(TAG, "OTA SHA-256 verified (%d bytes)", total_written);
     }
 
     err = esp_ota_end(ota_handle);
@@ -3405,12 +3511,95 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "success", true);
     cJSON_AddNumberToObject(root, "bytesWritten", total_written);
     cJSON_AddStringToObject(root, "partition", update_partition->label);
+    cJSON_AddBoolToObject(root, "sha256Verified", expect_sha);
     esp_err_t ret = send_json(req, root);
 
     // Reboot after a short delay to let the HTTP response flush
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
 
+    return ret;
+}
+
+// Helper: stringify esp_ota_img_states_t for JSON.
+static const char* ota_state_str(esp_ota_img_states_t s)
+{
+    switch (s) {
+        case ESP_OTA_IMG_NEW:            return "NEW";
+        case ESP_OTA_IMG_PENDING_VERIFY: return "PENDING_VERIFY";
+        case ESP_OTA_IMG_VALID:          return "VALID";
+        case ESP_OTA_IMG_INVALID:        return "INVALID";
+        case ESP_OTA_IMG_ABORTED:        return "ABORTED";
+        case ESP_OTA_IMG_UNDEFINED:      return "UNDEFINED";
+        default:                         return "UNKNOWN";
+    }
+}
+
+// GET /api/ota/info — running/next partition + ota_state + rollback availability
+static esp_err_t handle_get_ota_info(httpd_req_t *req)
+{
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *next    = esp_ota_get_next_update_partition(NULL);
+    const esp_partition_t *invalid = esp_ota_get_last_invalid_partition();
+
+    cJSON *root = cJSON_CreateObject();
+
+    if (running) {
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "label", running->label);
+        cJSON_AddNumberToObject(r, "address", running->address);
+        cJSON_AddNumberToObject(r, "size", running->size);
+        esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
+        if (esp_ota_get_state_partition(running, &st) == ESP_OK) {
+            cJSON_AddStringToObject(r, "state", ota_state_str(st));
+        }
+        cJSON_AddItemToObject(root, "running", r);
+    }
+    if (next) {
+        cJSON *n = cJSON_CreateObject();
+        cJSON_AddStringToObject(n, "label", next->label);
+        cJSON_AddNumberToObject(n, "address", next->address);
+        cJSON_AddNumberToObject(n, "size", next->size);
+        cJSON_AddItemToObject(root, "next", n);
+    }
+    if (invalid) {
+        cJSON *inv = cJSON_CreateObject();
+        cJSON_AddStringToObject(inv, "label", invalid->label);
+        cJSON_AddItemToObject(root, "lastInvalid", inv);
+    }
+
+    cJSON_AddBoolToObject(root, "canRollback", esp_ota_check_rollback_is_possible());
+    cJSON_AddNumberToObject(root, "fwMajor", BBP_FW_VERSION_MAJOR);
+    cJSON_AddNumberToObject(root, "fwMinor", BBP_FW_VERSION_MINOR);
+    cJSON_AddNumberToObject(root, "fwPatch", BBP_FW_VERSION_PATCH);
+    return send_json(req, root);
+}
+
+// POST /api/ota/rollback — admin-gated; marks running app invalid + reboots to
+// the previously-valid partition. Returns 409 if no rollback target exists
+// (e.g. only one OTA slot has ever been written) — caller should check
+// /api/ota/info `canRollback` first to give a clean UX.
+static esp_err_t handle_post_ota_rollback(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+    if (!esp_ota_check_rollback_is_possible()) {
+        return send_error(req, 409, "No rollback target available");
+    }
+
+    ESP_LOGW(TAG, "OTA rollback requested — rebooting to previous slot");
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddStringToObject(root, "message", "Rolling back; device rebooting");
+    esp_err_t ret = send_json(req, root);
+
+    // Let the response flush before invalidating + rebooting.
+    vTaskDelay(pdMS_TO_TICKS(500));
+    // Returns ESP_FAIL only if rollback isn't possible — already checked above.
+    esp_ota_mark_app_invalid_rollback_and_reboot();
+    // Should not reach here.
     return ret;
 }
 
@@ -4086,10 +4275,18 @@ void initWebServer(void)
     // safe headroom without reserving another 32 unused handler slots from heap.
     config.max_uri_handlers = 96;
     config.uri_match_fn     = httpd_uri_match_wildcard;
-    // HTTPD task stack must fit in the largest remaining internal-RAM block
-    // after core firmware tasks are up. Upload/OTA handlers use heap buffers,
-    // not large stack buffers, so 8 KB is the safer boot-time tradeoff here.
-    config.stack_size       = 8192;
+    // HTTPD task stack must stay in internal RAM, not PSRAM. Any handler
+    // that touches flash (OTA partition reads, SPIFFS, NVS) goes through
+    // spi_flash_disable_interrupts_caches_and_other_cpu(), which asserts
+    // the calling task's stack is reachable with the flash cache disabled.
+    // PSRAM stacks fail that assert and the httpd worker panics on the
+    // first OTA request (observed 2026-05-07: coredump assert failed:
+    // esp_task_stack_is_sane_cache_disabled, task=httpd).
+    //
+    // 4 KB fits the largest contiguous internal block we have at httpd
+    // init time (~7 KB observed) with headroom; handlers heap-allocate
+    // their working buffers so stack-frame depth stays modest.
+    config.stack_size       = 4096;
     // SSE handlers (e.g. /api/scope/stream) hold a worker socket open for
     // the lifetime of the browser tab. lru_purge_enable lets the httpd
     // evict the least-recently-used connection when a new one arrives, so
@@ -4410,6 +4607,16 @@ void initWebServer(void)
     };
     httpd_register_uri_handler(s_server, &uri_wifi_ap_password);
 
+    httpd_uri_t uri_wifi_hostname_get = {
+        .uri = "/api/wifi/hostname", .method = HTTP_GET, .handler = handle_get_wifi_hostname, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_wifi_hostname_get);
+
+    httpd_uri_t uri_wifi_hostname_post = {
+        .uri = "/api/wifi/hostname", .method = HTTP_POST, .handler = handle_post_wifi_hostname, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_wifi_hostname_post);
+
     // ----- OTA / Version routes -----
 
     httpd_uri_t uri_version = {
@@ -4426,6 +4633,16 @@ void initWebServer(void)
         .uri = "/api/ota/uploadfs", .method = HTTP_POST, .handler = handle_uploadfs, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_uploadfs);
+
+    httpd_uri_t uri_ota_info = {
+        .uri = "/api/ota/info", .method = HTTP_GET, .handler = handle_get_ota_info, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ota_info);
+
+    httpd_uri_t uri_ota_rollback = {
+        .uri = "/api/ota/rollback", .method = HTTP_POST, .handler = handle_post_ota_rollback, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ota_rollback);
 
     // ----- Board profile + pairing -----
 
@@ -4511,8 +4728,6 @@ void initWebServer(void)
     };
     httpd_register_uri_handler(s_server, &uri_scripts_reset);
 
-    repl_ws_register(s_server);
-
     // ----- Autorun routes -----
 
     httpd_uri_t uri_autorun_status = {
@@ -4536,6 +4751,16 @@ void initWebServer(void)
         .uri = "/api/*", .method = HTTP_OPTIONS, .handler = handle_options, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_options);
+
+    // ----- WebSocket routes (MUST be registered LAST) -----
+    // ESP-IDF httpd's URI lookup is LIFO: most-recently-registered handler is
+    // matched first. The `/api/*` OPTIONS wildcard above would otherwise
+    // intercept the WS upgrade GET requests (URI matches the wildcard, but
+    // method is GET vs OPTIONS → 405). Registering the specific WS routes
+    // after the wildcard puts them at the head of the lookup chain so they
+    // win the URI/method match before the wildcard sees the request.
+    repl_ws_register(s_server);
+    ws_stream_register(s_server);
 
     ESP_LOGI(TAG, "All URI handlers registered");
 

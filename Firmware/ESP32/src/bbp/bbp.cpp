@@ -13,6 +13,7 @@
 #include "config.h"
 #include "quicksetup.h"
 #include "bbp_adapter.h"
+#include "ws_stream.h"
 #include "esp_mac.h"
 #include "esp_log.h"
 
@@ -383,6 +384,8 @@ static void processAdcStream(void)
     }
 
     sendEvent(BBP_EVT_ADC_DATA, evtBuf, pos);
+    // Fork to the WiFi WebSocket stream — no-op when no client is subscribed.
+    ws_stream_forward(WS_STREAM_ADC, evtBuf, pos);
 }
 
 // -----------------------------------------------------------------------------
@@ -428,6 +431,9 @@ static void processScopeStream(void)
         }
 
         sendEvent(BBP_EVT_SCOPE_DATA, evtBuf, pos);
+        // Fork the same payload to the WiFi WebSocket stream (no-op when no
+        // client is subscribed). HTTP/WS clients see identical data to BBP.
+        ws_stream_forward(WS_STREAM_SCOPE, evtBuf, pos);
     }
 
     s_scopeLastSeq = currentSeq;

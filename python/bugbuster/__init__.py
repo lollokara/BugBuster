@@ -87,11 +87,25 @@ from .constants import (
 from .transport import USBTransport, HTTPTransport
 from .hal import BugBusterHAL, PortMode
 from .bus import BugBusterBusManager, BusPlanError, BusRouteEntry, BusRoutePlan
+from .discovery import DiscoveredDevice, discover, discover_mdns, resolve_local
+from .ota import OTAClient, OTAError, OTAInfo, PartitionInfo
 
 __all__ = [
     # Factory functions
     "connect_usb",
     "connect_http",
+
+    # Discovery
+    "discover",
+    "discover_mdns",
+    "resolve_local",
+    "DiscoveredDevice",
+
+    # OTA
+    "OTAClient",
+    "OTAError",
+    "OTAInfo",
+    "PartitionInfo",
 
     # Main client
     "BugBuster",

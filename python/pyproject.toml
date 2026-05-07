@@ -28,6 +28,10 @@ mcp = [
     "mcp>=1.0",
     "pydantic>=2.0",
 ]
+network = [
+    "zeroconf>=0.131",
+    "websockets>=12",
+]
 
 [project.scripts]
 bugbuster-mcp = "bugbuster_mcp.__main__:main"

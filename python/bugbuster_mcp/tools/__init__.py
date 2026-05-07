@@ -18,6 +18,7 @@ def register_all(mcp) -> None:
     from .advanced   import register as reg_advanced
     from .scripting  import register as reg_scripting
     from .target     import register as reg_target
+    from .ota        import register as reg_ota
 
     reg_discovery(mcp)
     reg_io_config(mcp)
@@ -30,3 +31,4 @@ def register_all(mcp) -> None:
     reg_advanced(mcp)
     reg_scripting(mcp)
     reg_target(mcp)
+    reg_ota(mcp)

@@ -230,3 +230,47 @@ def register(mcp) -> None:
             return f"Board profile set to '{name}' ({desc}).  Use bugbuster://board resource for details."
         else:
             return f"Error: Failed to load board profile '{name}'."
+
+    @mcp.tool()
+    def discover_devices(timeout_s: float = 2.0) -> dict:
+        """
+        Browse the LAN for BugBuster boards using mDNS / Bonjour.
+
+        The firmware advertises itself on _bugbuster._tcp once it joins WiFi.
+        This tool returns every device that answers within `timeout_s`. Useful
+        when the operator hasn't told you a specific IP — pick a device, then
+        pass `host=<ip>` to ota_get_info / pairing tools.
+
+        Parameters:
+        - timeout_s: how long to wait for responses (1-5 s typical).
+
+        Returns: list of devices with hostname, ip, port, firmware version,
+        mac, BBP protocol version, model. Requires the `zeroconf` extra
+        (`pip install "bugbuster[network]"`).
+        """
+        try:
+            from bugbuster.discovery import discover_mdns
+        except ImportError as e:
+            return {
+                "error": str(e),
+                "hint": 'pip install "bugbuster[network]"',
+                "devices": [],
+            }
+        devs = discover_mdns(timeout=float(timeout_s))
+        return {
+            "count": len(devs),
+            "devices": [
+                {
+                    "hostname": d.hostname,
+                    "fqdn": d.fqdn,
+                    "ip": d.ip,
+                    "port": d.port,
+                    "firmware": d.firmware,
+                    "mac": d.mac,
+                    "proto": d.proto,
+                    "model": d.model,
+                    "http_base": d.http_base,
+                }
+                for d in devs
+            ],
+        }

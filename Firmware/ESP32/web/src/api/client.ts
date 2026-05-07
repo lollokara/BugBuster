@@ -855,4 +855,116 @@ export const api = {
       mac,
       admin: true,
     }),
+
+  /* ---- OTA ---- */
+  ota: {
+    info: () => request<OtaInfo>("/api/ota/info"),
+    rollback: (mac: string) =>
+      request<{ success: boolean; message?: string }>("/api/ota/rollback", {
+        method: "POST",
+        mac,
+        admin: true,
+      }),
+    /** Upload firmware.bin. The browser hashes the file (SHA-256), passes it
+     *  via the ?sha256= query param, and the device verifies it before
+     *  switching the boot partition. The XHR is used (not fetch) so we get
+     *  reliable upload-progress events; fetch() upload streaming is still
+     *  patchy across browsers. */
+    uploadFirmware: (
+      mac: string,
+      file: Blob,
+      onProgress?: (sent: number, total: number) => void,
+    ) => uploadOtaImage(mac, "/api/ota/upload", file, true, onProgress),
+    uploadSpiffs: (
+      mac: string,
+      file: Blob,
+      onProgress?: (sent: number, total: number) => void,
+    ) => uploadOtaImage(mac, "/api/ota/uploadfs", file, false, onProgress),
+  },
 };
+
+export interface OtaPartition {
+  label: string;
+  address: number;
+  size: number;
+  state?: string;
+}
+export interface OtaInfo {
+  running?: OtaPartition;
+  next?: OtaPartition;
+  lastInvalid?: OtaPartition;
+  canRollback: boolean;
+  fwMajor: number;
+  fwMinor: number;
+  fwPatch: number;
+}
+
+export interface OtaUploadResult {
+  success: boolean;
+  bytesWritten?: number;
+  partition?: string;
+  sha256Verified?: boolean;
+}
+
+async function sha256Hex(file: Blob): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function uploadOtaImage(
+  mac: string,
+  path: string,
+  file: Blob,
+  withSha: boolean,
+  onProgress?: (sent: number, total: number) => void,
+): Promise<OtaUploadResult> {
+  const token = getCachedToken(mac);
+  if (!token) throw new PairingRequiredError();
+
+  const url = withSha
+    ? `${path}?sha256=${await sha256Hex(file)}`
+    : path;
+
+  return await new Promise<OtaUploadResult>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader(ADMIN_TOKEN_HEADER, token);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.responseType = "text";
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded, e.total);
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        clearCachedToken(mac);
+        window.dispatchEvent(new CustomEvent("bb:pairing-required"));
+        reject(new PairingRequiredError());
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        let msg = `${xhr.status} ${xhr.statusText}`;
+        try {
+          const j = JSON.parse(xhr.responseText);
+          if (j && typeof j.error === "string") msg = j.error;
+        } catch {
+          if (xhr.responseText) msg = xhr.responseText;
+        }
+        reject(new HttpError(xhr.status, xhr.statusText, msg));
+        return;
+      }
+      try {
+        resolve(JSON.parse(xhr.responseText) as OtaUploadResult);
+      } catch {
+        resolve({ success: true });
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload network error"));
+    xhr.onabort = () => reject(new Error("Upload aborted"));
+    xhr.send(file);
+  });
+}

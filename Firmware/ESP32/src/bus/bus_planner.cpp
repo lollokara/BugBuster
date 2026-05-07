@@ -244,8 +244,15 @@ static bool apply_power_and_mux(SemaphoreHandle_t mtx,
             set_err(err, err_len, "ds4424: VADJ voltage set failed");
             return false;
         }
-        // Enable e-fuse
-        if (!pca9535_set_control((PcaControl)r->efuse_ctrl, true)) {
+        // Enable e-fuse via the user-arm gate so the soft-start FLT blackout
+        // is honoured. bus_planner_apply_* is itself triggered by an explicit
+        // Python BugBuster.bus.* call, so this counts as user action.
+        uint8_t efuse_logical = (uint8_t)((PcaControl)r->efuse_ctrl - PCA_CTRL_EFUSE1_EN);
+        if (efuse_logical > 3) {
+            set_err(err, err_len, "pca9535: invalid efuse control");
+            return false;
+        }
+        if (!pca9535_user_arm_efuse(efuse_logical, true)) {
             set_err(err, err_len, "pca9535: efuse enable failed");
             return false;
         }

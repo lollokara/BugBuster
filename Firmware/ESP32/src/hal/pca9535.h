@@ -102,8 +102,11 @@ typedef void (*pca9535_fault_cb_t)(const PcaFaultEvent *event);
 
 // Fault behavior configuration
 typedef struct {
-    bool auto_disable_efuse;    // If true, auto-disable faulted e-fuse (default: true)
-    bool log_events;            // If true, log all fault events to console (default: true)
+    bool auto_disable_efuse;          // If true, auto-disable faulted e-fuse (default: true)
+    bool log_events;                  // If true, log all fault events to console (default: true)
+    uint32_t efuse_enable_blackout_ms; // Ignore EFUSE FLT for this many ms after enable (default: 100).
+                                       // The fault input is latched in hardware, so a real short still
+                                       // trips after the window expires on the next poll.
 } PcaFaultConfig;
 
 // Named control IDs for high-level API
@@ -185,8 +188,25 @@ bool pca9535_update(void);
  * @param ctrl  Control ID
  * @param on    true = enable, false = disable
  * @return true on success
+ *
+ * NOTE: As of the boot-safety hardening, this function REJECTS
+ * PCA_CTRL_EFUSE1..4_EN — those must go through pca9535_user_arm_efuse(),
+ * which is the single audited gate for explicit-user-action EFUSE enables.
  */
 bool pca9535_set_control(PcaControl ctrl, bool on);
+
+/**
+ * @brief Explicit user-action gate for an EFUSE channel enable.
+ *        This is the only call path that may turn an EFUSE on. It records the
+ *        enable timestamp so check_changes() can ignore the soft-start FLT
+ *        transient (per PcaFaultConfig::efuse_enable_blackout_ms). The FLT
+ *        input is latched in hardware, so a real short still trips after the
+ *        window expires.
+ * @param logical_ch  0..3 (logical EFUSE1..4 — the silkscreen-cross is handled here)
+ * @param on          true = enable, false = disable
+ * @return true on success
+ */
+bool pca9535_user_arm_efuse(uint8_t logical_ch, bool on);
 
 /**
  * @brief Get a named status input.

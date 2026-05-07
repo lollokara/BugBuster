@@ -1,3 +1,4 @@
 dependencies:
   espressif/esp_tinyusb: "^1"
+  espressif/mdns: "^1.2"
   idf: "^5.0"

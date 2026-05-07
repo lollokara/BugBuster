@@ -22,9 +22,19 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
                            uint8_t old_input1, uint8_t new_input1);
 
 static pca9535_fault_cb_t s_fault_cb = NULL;
-static PcaFaultConfig s_fault_cfg = { .auto_disable_efuse = true, .log_events = true };
+static PcaFaultConfig s_fault_cfg = {
+    .auto_disable_efuse = true,
+    .log_events = true,
+    .efuse_enable_blackout_ms = 100,
+};
 static bool s_change_detect_armed = false;  // Skip first update (no valid previous state)
 static bool s_is_pcal9535a = false;         // True if PCAL9535A detected (enhanced regs respond)
+
+// Per-logical-channel timestamp of the last 0->1 enable transition. Used by
+// check_changes() to suppress the soft-start FLT transient that EFUSE
+// regulators emit while their output rail ramps up. Cleared to 0 on disable
+// so a stale stamp cannot mask the next enable's real fault.
+static uint32_t s_efuse_enable_ts_ms[4] = { 0, 0, 0, 0 };
 
 static bool read_reg(uint8_t reg, uint8_t *val)
 {
@@ -251,6 +261,43 @@ bool pca9535_update(void)
     return ok;
 }
 
+// Internal: drive an EFUSE bit by logical channel index. Stamps/clears the
+// per-channel enable timestamp so the FLT blackout in check_changes() works.
+// Only pca9535_user_arm_efuse() may call this — pca9535_set_control()
+// explicitly rejects EFUSE controls so we keep a single audited gate.
+static bool set_efuse_bit_internal(uint8_t logical_ch, bool on)
+{
+    if (!s_state.present) return false;
+    if (logical_ch > 3) return false;
+
+    // Logical -> physical bit (silkscreen-cross on physical P3/P4).
+    static const uint8_t logical_to_bit[4] = { 0, 2, 6, 4 };
+    uint8_t bit = logical_to_bit[logical_ch];
+
+    // Stamp BEFORE the I2C write so a fault arriving in the same millisecond
+    // as the bit change is still considered inside the blackout window.
+    if (on) {
+        s_efuse_enable_ts_ms[logical_ch] = millis_now();
+    } else {
+        s_efuse_enable_ts_ms[logical_ch] = 0;
+    }
+
+    bool ok = pca9535_set_bit(1, bit, on);
+    if (!ok && on) {
+        // Roll back the stamp on failure so we don't mask a later trip from a
+        // channel that never actually came up.
+        s_efuse_enable_ts_ms[logical_ch] = 0;
+    }
+    return ok;
+}
+
+bool pca9535_user_arm_efuse(uint8_t logical_ch, bool on)
+{
+    if (logical_ch > 3) return false;
+    ESP_LOGI(TAG, "User-arm EFUSE_%d %s", logical_ch + 1, on ? "ON" : "OFF");
+    return set_efuse_bit_internal(logical_ch, on);
+}
+
 bool pca9535_set_control(PcaControl ctrl, bool on)
 {
     if (!s_state.present) return false;
@@ -268,13 +315,15 @@ bool pca9535_set_control(PcaControl ctrl, bool on)
         case PCA_CTRL_USB_HUB_EN:
             return pca9535_set_bit(0, 7, on);
         case PCA_CTRL_EFUSE1_EN:
-            return pca9535_set_bit(1, 0, on);
         case PCA_CTRL_EFUSE2_EN:
-            return pca9535_set_bit(1, 2, on);
         case PCA_CTRL_EFUSE3_EN:
-            return pca9535_set_bit(1, 6, on);  // PCB cross: logical EFUSE3 drives physical P3 (bit 6 = EFUSE_EN_4 pin)
         case PCA_CTRL_EFUSE4_EN:
-            return pca9535_set_bit(1, 4, on);  // PCB cross: logical EFUSE4 drives physical P4 (bit 4 = EFUSE_EN_3 pin)
+            // EFUSE channels must go through the user-action gate so that the
+            // soft-start FLT blackout is recorded. Reject here and log loudly
+            // so any caller that bypassed the gate is easy to find.
+            ESP_LOGE(TAG, "pca9535_set_control rejected for EFUSE_%d — use pca9535_user_arm_efuse()",
+                     (int)(ctrl - PCA_CTRL_EFUSE1_EN) + 1);
+            return false;
         default:
             return false;
     }
@@ -434,6 +483,25 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
                     // Some boards briefly assert FLT during output-enable transitions.
                     continue;
                 }
+                // Soft-start blackout: TPS1641 / similar eFuses assert FLT
+                // during their own ramp-up when the load is light or the
+                // output rail has not yet reached the regulation point.
+                // Suppress the trip path during this window — the FLT input
+                // is hardware-latched, so a real persistent short still trips
+                // on the next poll once the window expires.
+                if (faulted && s_fault_cfg.efuse_enable_blackout_ms > 0) {
+                    uint32_t stamp = s_efuse_enable_ts_ms[logical];
+                    if (stamp != 0) {
+                        uint32_t dt = now - stamp;
+                        if (dt < s_fault_cfg.efuse_enable_blackout_ms) {
+                            ESP_LOGI(TAG, "EFUSE_%d FLT suppressed (within %u ms blackout, dt=%u)",
+                                     logical + 1,
+                                     (unsigned)s_fault_cfg.efuse_enable_blackout_ms,
+                                     (unsigned)dt);
+                            continue;
+                        }
+                    }
+                }
                 PcaFaultEvent evt = {
                     .type = faulted ? PCA_FAULT_EFUSE_TRIP : PCA_FAULT_EFUSE_CLEAR,
                     .channel = logical,
@@ -443,11 +511,12 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
                     ESP_LOGW(TAG, "EFUSE_%d %s", logical + 1, faulted ? "FAULT — tripped!" : "CLEARED");
                 }
 
-                // Auto-disable faulted e-fuse (logical channel: control enum
-                // already routes through the silkscreen cross).
+                // Auto-disable faulted e-fuse. Use the internal helper so the
+                // enable-timestamp is cleared and any future user re-arm gets
+                // its own blackout window.
                 if (faulted && s_fault_cfg.auto_disable_efuse) {
                     ESP_LOGW(TAG, "Auto-disabling EFUSE_%d", logical + 1);
-                    pca9535_set_control((PcaControl)(PCA_CTRL_EFUSE1_EN + logical), false);
+                    set_efuse_bit_internal(logical, false);
                 }
 
                 if (s_fault_cb) s_fault_cb(&evt);

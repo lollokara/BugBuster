@@ -437,16 +437,13 @@ QuickSetupStatus quicksetup_apply(uint8_t slot, QuickSetupApplyReport *report)
     if (!pca9535_set_control(PCA_CTRL_USB_HUB_EN, json_bool(pca, "usbHub", false))) add_failed(report, "pca_usb");
 
     cJSON *efuse = pca ? json_arr(pca, "efuse") : NULL;
-    const PcaControl efuse_ctrls[4] = {
-        PCA_CTRL_EFUSE1_EN,
-        PCA_CTRL_EFUSE2_EN,
-        PCA_CTRL_EFUSE3_EN,
-        PCA_CTRL_EFUSE4_EN,
-    };
     for (uint8_t i = 0; i < 4; i++) {
         cJSON *item = efuse ? cJSON_GetArrayItem(efuse, i) : NULL;
         bool on = item ? cJSON_IsTrue(item) : false;
-        if (!pca9535_set_control(efuse_ctrls[i], on)) {
+        // Quicksetup apply is itself an explicit user action (HTTP/BBP/CLI),
+        // so route EFUSE enables through the user-arm gate to record the
+        // soft-start blackout timestamp.
+        if (!pca9535_user_arm_efuse(i, on)) {
             char name[QUICKSETUP_FAILED_NAME_MAX];
             snprintf(name, sizeof(name), "efuse%u", (unsigned)(i + 1));
             add_failed(report, name);

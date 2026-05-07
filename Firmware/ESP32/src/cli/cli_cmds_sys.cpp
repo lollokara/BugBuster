@@ -517,11 +517,14 @@ extern "C" void cli_cmd_pca(const char* args)
             if (strcmp(name, ctrls[i].name) == 0) {
                 term_printf("Setting %s = %s...\r\n",
                     pca9535_control_name(ctrls[i].ctrl), val ? "ON" : "OFF");
-                if (pca9535_set_control(ctrls[i].ctrl, val != 0)) {
-                    term_println("  OK");
+                bool ok;
+                if (ctrls[i].ctrl >= PCA_CTRL_EFUSE1_EN && ctrls[i].ctrl <= PCA_CTRL_EFUSE4_EN) {
+                    uint8_t logical = (uint8_t)(ctrls[i].ctrl - PCA_CTRL_EFUSE1_EN);
+                    ok = pca9535_user_arm_efuse(logical, val != 0);
                 } else {
-                    term_println("  FAILED");
+                    ok = pca9535_set_control(ctrls[i].ctrl, val != 0);
                 }
+                term_println(ok ? "  OK" : "  FAILED");
                 return;
             }
         }

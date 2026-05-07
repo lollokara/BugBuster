@@ -6,6 +6,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"  // xTaskCreatePinnedToCoreWithCaps
 #include "esp_log.h"
 #include "esp_spiffs.h"
 #include "esp_heap_caps.h"
@@ -16,6 +17,7 @@
 #include "serial_io.h"
 #include "cli/cli_term.h"
 #include "wifi_manager.h"
+#include "mdns_responder.h"
 #include "ad74416h_spi.h"
 #include "ad74416h.h"
 #include "tasks.h"
@@ -200,6 +202,15 @@ extern "C" void app_main(void)
         serial_println("[BugBuster] No STA connection (AP-only mode)");
     }
     serial_printf("[BugBuster] AP IP: %s\r\n", wifi_get_ap_ip());
+
+    // 4b. mDNS — zero-config discovery on the LAN
+    if (mdns_responder_init()) {
+        char hn[MDNS_HOSTNAME_MAX] = {};
+        mdns_responder_get_hostname(hn, sizeof(hn));
+        serial_printf("[BugBuster] mDNS: %s.local\r\n", hn);
+    } else {
+        serial_println("[BugBuster] WARN: mDNS init failed");
+    }
 
     // 5. SPIFFS — web partition
     esp_vfs_spiffs_conf_t spiffs_conf = {
@@ -411,16 +422,24 @@ extern "C" void app_main(void)
     // 16. Main loop task (CLI/BBP + heartbeat)
     // Start this before HTTPD so web-server route/socket allocations cannot
     // starve the single CDC0 owner task during memory-tight boots.
+    //
+    // Allocate the 4 KB task stack from PSRAM via xTaskCreatePinnedToCoreWithCaps
+    // — mainLoopTask only runs CLI parsing + BBP processing on CDC0, no ISRs
+    // and no DMA buffers, so the slight PSRAM-vs-SRAM latency is irrelevant.
+    // This bypasses the internal-heap exhaustion that produced
+    // `mainLoopTask creation failed (ret=-1)` on tight-boot configs (observed
+    // 2026-05-07: free=4863 / largest=3328 was below the 4 KB stack threshold).
     TaskHandle_t mainLoopHandle = nullptr;
     log_internal_heap("before mainLoopTask");
-    BaseType_t mainLoopOk = xTaskCreatePinnedToCore(
-        mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0);
+    BaseType_t mainLoopOk = xTaskCreatePinnedToCoreWithCaps(
+        mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (mainLoopOk != pdPASS || mainLoopHandle == nullptr) {
         term_println("[BugBuster] ERROR: mainLoopTask creation failed");
         ESP_LOGE("main_task", "mainLoopTask creation failed (ret=%d handle=%p)",
                  (int)mainLoopOk, (void *)mainLoopHandle);
     } else {
-        term_println("[BugBuster] Main loop task started");
+        term_println("[BugBuster] Main loop task started (stack in PSRAM)");
     }
     log_internal_heap("after mainLoopTask");
 

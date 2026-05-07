@@ -1202,13 +1202,9 @@ static void cb_apply_vlogic(float v, void*) {
 
 static void cb_toggle_efuse(bool yes, void* user) {
     if (!yes) return;
-    int idx = (int)(intptr_t)user;  // 0-based
-    static const PcaControl kEfuseCtrl[4] = {
-        PCA_CTRL_EFUSE1_EN, PCA_CTRL_EFUSE2_EN,
-        PCA_CTRL_EFUSE3_EN, PCA_CTRL_EFUSE4_EN
-    };
+    int idx = (int)(intptr_t)user;  // 0-based logical channel
     bool new_state = !s_snap.efuseEn[idx];
-    bool ok = pca9535_set_control(kEfuseCtrl[idx], new_state);
+    bool ok = pca9535_user_arm_efuse((uint8_t)idx, new_state);
     char msg[64];
     snprintf(msg, sizeof(msg), "E-Fuse %d -> %s %s",
              idx + 1, new_state ? "ON" : "OFF", ok ? "" : "(FAILED)");

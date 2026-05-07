@@ -70,6 +70,65 @@ idf.py flash
 4. **No HTTPS** — HTTP traffic is unencrypted (acceptable for local network)
 5. **ADC stream uses lock-free SPSC** — Uses atomic load/store for proper memory ordering
 
+## mDNS / Discovery
+
+Once the board joins a WiFi network, the firmware advertises itself via mDNS
+so hosts can find it without typing an IP. Two services are published on
+port 80:
+
+- `_http._tcp` — generic HTTP for Bonjour browsers and curl
+- `_bugbuster._tcp` — same data, but lets BugBuster-aware tooling filter
+  cleanly when the LAN has other HTTP devices.
+
+Both records carry the same TXT keys: `version`, `mac`, `proto`, `model`.
+
+Default hostname: `bugbuster-<last3macbytes>.local` (e.g.
+`bugbuster-a1b2c3.local`). Override and persist via:
+
+```bash
+curl -X POST -H "X-BugBuster-Admin-Token: $TOKEN" \
+     -d '{"hostname":"benchA"}' http://<ip>/api/wifi/hostname
+```
+
+POSTing `{"hostname":""}` reverts to the auto-derived default. Validation
+allows lowercase letters, digits, and `-`; max 31 chars; no leading/trailing `-`.
+
+Discover from Python:
+
+```python
+import bugbuster as bb
+for d in bb.discover(timeout=2.0):
+    print(d.hostname, d.ip, d.firmware, d.mac)
+```
+
+## OTA Updates (WiFi)
+
+Flash a new image without unplugging USB:
+
+```bash
+curl -H "X-BugBuster-Admin-Token: $TOKEN" \
+     --data-binary @.pio/build/esp32s3/firmware.bin \
+     "http://<ip>/api/ota/upload?sha256=$(shasum -a 256 firmware.bin | awk '{print $1}')"
+```
+
+The optional `sha256=<hex>` query is verified by the firmware before the
+boot partition is switched — a corrupted upload is discarded with the boot
+target unchanged. The same flow is exposed via the on-device web UI's
+"Firmware Update (OTA)" card on the System tab and via Python:
+
+```python
+from bugbuster.transport import HTTPTransport
+from bugbuster.ota import OTAClient
+ota = OTAClient(HTTPTransport("bugbuster-a1b2c3.local", admin_token=tok))
+ota.upload_firmware("firmware.bin", on_progress=lambda d, t: print(f"{d}/{t}"))
+ota.rollback()  # only when ota.get_info().can_rollback
+```
+
+Other endpoints:
+- `GET  /api/ota/info` — running/next slot, ota_state, `canRollback`
+- `POST /api/ota/uploadfs` — same flow for the SPIFFS web-UI partition
+- `POST /api/ota/rollback` — manual rollback (admin-gated; 409 when no target)
+
 ## MicroPython Scripting
 
 BugBuster embeds a MicroPython interpreter accessible over USB (BBP commands `0xF5–0xFD`) and HTTP

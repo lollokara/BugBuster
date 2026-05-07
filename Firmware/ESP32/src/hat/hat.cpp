@@ -9,6 +9,7 @@
 #include "hat.h"
 #include "config.h"
 #include "bbp.h"
+#include "ws_stream.h"
 #include "esp_log.h"
 #include "esp_adc/adc_oneshot.h"
 #include "driver/gpio.h"
@@ -1122,6 +1123,8 @@ void hat_poll(void)
         if (bbpIsActive()) {
             bbpSendEvent(BBP_EVT_LA_LOG, rsp, rsp_len);
         }
+        // Mirror to WiFi WS subscribers (independent of BBP activity).
+        ws_stream_forward(WS_STREAM_LA_META, rsp, rsp_len);
         return;
     }
 
@@ -1136,6 +1139,8 @@ void hat_poll(void)
                 // Payload: [state, channels, samples_captured(u32), total_samples(u32), rate(u32)]
                 bbpSendEvent(BBP_EVT_LA_DONE, rsp, rsp_len);
             }
+            // Mirror to WS subscribers too — same payload format.
+            ws_stream_forward(WS_STREAM_LA_META, rsp, rsp_len);
         }
     }
 }

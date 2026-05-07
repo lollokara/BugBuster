@@ -5,6 +5,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { Led } from "../../components/Led";
+import { OtaCard } from "./OtaCard";
 import {
   api,
   PairingRequiredError,
@@ -1060,6 +1061,7 @@ export function System() {
       <WifiCard />
       <FaultsCard />
       <SelftestServiceCard />
+      <OtaCard />
       <DebugCard />
       <DesktopOnlyCard />
     </div>

@@ -723,7 +723,7 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
         for (int i = 0; i < 4; i++) {
             efuse_was_on[i] = pca_before->efuse_en[i];
             if (efuse_was_on[i]) {
-                pca9535_set_control((PcaControl)(PCA_CTRL_EFUSE1_EN + i), false);
+                pca9535_user_arm_efuse((uint8_t)i, false);
             }
         }
     }
@@ -849,7 +849,9 @@ restore:
     if (pca_before && pca_before->present) {
         for (int i = 0; i < 4; i++) {
             if (efuse_was_on[i]) {
-                pca9535_set_control((PcaControl)(PCA_CTRL_EFUSE1_EN + i), true);
+                // Re-arm via user-action gate; the soft-start blackout will
+                // naturally suppress any FLT transient on rail wake-up.
+                pca9535_user_arm_efuse((uint8_t)i, true);
             }
         }
     }
