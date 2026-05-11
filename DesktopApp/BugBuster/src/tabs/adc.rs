@@ -4,6 +4,9 @@ use serde::Serialize;
 use crate::tauri_bridge::{self, *};
 use crate::components::channel_sparkline::ChannelSparkline;
 
+/// IO ownership slots claimed by the ADC tab (CH0..CH3 → indices 12..15).
+pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+
 const SPARK_CAP: usize = 120;
 
 #[component]

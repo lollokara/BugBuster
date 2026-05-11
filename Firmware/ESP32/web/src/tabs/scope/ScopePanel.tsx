@@ -19,6 +19,8 @@ import {
   api,
   PairingRequiredError,
 } from "../../api/client";
+import { useIoLease } from "../../api/io_lease";
+import { IoOwnerBanner } from "../../components/IoOwnerBanner";
 import { deviceMac } from "../../state/signals";
 import {
   WAVEGEN_MODE_OPTIONS,
@@ -146,6 +148,7 @@ function ChannelRailCard({ index }: { index: number }) {
 }
 
 export function ScopePanel() {
+  const lease = useIoLease([12, 13, 14, 15], "scope-tab");
   const running = scopeRunning.value;
   const mode = scopePlotMode.value;
   const tb = scopeTimeBase.value;
@@ -207,6 +210,7 @@ export function ScopePanel() {
 
   return (
     <div class="scope-layout">
+      <IoOwnerBanner lease={lease} slots={[12, 13, 14, 15]} />
       <aside class="scope-rail">
         {[0, 1, 2, 3].map((i) => <ChannelRailCard index={i} key={i} />)}
       </aside>

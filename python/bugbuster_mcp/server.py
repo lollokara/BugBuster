@@ -5,7 +5,7 @@ BugBuster MCP Server
 An MCP (Model Context Protocol) server that exposes the BugBuster hardware
 debugging platform to AI models (Claude, etc.).
 
-55 tools organized in 12 groups:
+59 tools organized in 13 groups:
   • Discovery & status   — device_status, device_info, check_faults, selftest,
                            list_boards, set_board, discover_devices
   • IO configuration     — configure_io, set_supply_voltage, reset_device
@@ -26,6 +26,7 @@ debugging platform to AI models (Claude, etc.).
   • OTA                  — ota_get_info, ota_upload_firmware, ota_upload_spiffs,
                            ota_rollback
   • Scripting            — script_eval
+  • IO Ownership         — io_claim, io_release, io_owner_status, io_force_release
 
 Resources:  bugbuster://status  bugbuster://power  bugbuster://faults
             bugbuster://hat     bugbuster://capabilities  bugbuster://board

@@ -361,6 +361,12 @@ class CmdId(IntEnum):
     IDAC_CAL_CLEAR    = 0xA5
     IDAC_CAL_SAVE     = 0xA6
 
+    # IO Ownership (BBP v5+)
+    IO_CLAIM          = 0xA7
+    IO_RELEASE        = 0xA8
+    IO_OWNER_STATUS   = 0xA9
+    IO_FORCE_RELEASE  = 0xAA
+
     # PCA9535 I/O expander
     PCA_GET_STATUS     = 0xB0
     PCA_SET_CONTROL    = 0xB1
@@ -478,3 +484,29 @@ class ErrorCode(IntEnum):
     HVPAK_UNSUPPORTED_CAP  = 0x0E
     HVPAK_INVALID_INDEX    = 0x0F
     HVPAK_UNSAFE_REGISTER  = 0x10
+    # ERR_TIMEOUT            = 0x11  (firmware/Tauri only — not surfaced in Python)
+    IO_OWNERSHIP_REQUIRED  = 0x12
+
+
+# ---------------------------------------------------------------------------
+# IO Ownership (BBP v5+)
+# ---------------------------------------------------------------------------
+
+class IoOwnerKind(IntEnum):
+    """Owner kind codes for the 16-slot IO ownership table."""
+    NONE     = 0  # Slot is free
+    USB      = 1  # BBP over CDC0
+    HTTP     = 2  # /api/* HTTP route
+    SCRIPT   = 3  # On-device MicroPython VM
+    CLI      = 4  # On-device serial CLI
+    INTERNAL = 5  # Selftest / boot / autocal — pre-empts all user owners
+
+
+class IoClaimStatus(IntEnum):
+    """Per-slot status bytes returned by IO_CLAIM / IO_RELEASE responses."""
+    OK                = 0x00
+    HELD_BY_OTHER     = 0x01  # Slot owned by a different session
+    NOT_OWNED         = 0x02  # Release attempted but caller does not own slot
+    INVALID_SLOT      = 0x03  # Slot index >= 16
+    LEASE_EXPIRED     = 0x04  # Diagnostic only, never returned by claim
+    ADMIN_REQUIRED    = 0x05  # Force-release attempted without admin token

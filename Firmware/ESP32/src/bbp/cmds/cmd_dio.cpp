@@ -12,6 +12,8 @@
 #include "dio.h"
 #include "bus_planner.h"
 #include "esp_log.h"
+#include "io_owner.h"
+#include "esp_timer.h"
 
 static const char *TAG_DIO = "cmd_dio";
 
@@ -57,6 +59,14 @@ static int handler_dio_config(const uint8_t *payload, size_t len,
     uint8_t io   = bbp_get_u8(payload, &rpos);
     uint8_t mode = bbp_get_u8(payload, &rpos);
 
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_io(io),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
+
     // Route IO terminal through MUX before configuring GPIO (non-fatal, log warning).
     {
         char bp_err[64];
@@ -87,6 +97,14 @@ static int handler_dio_write(const uint8_t *payload, size_t len,
     size_t rpos = 0;
     uint8_t io = bbp_get_u8(payload, &rpos);
     bool level = bbp_get_bool(payload, &rpos);
+
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_io(io),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
 
     if (!dio_write(io, level)) return -CMD_ERR_OUT_OF_RANGE;
 

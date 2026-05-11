@@ -141,6 +141,83 @@ impl DeviceState {
 }
 
 // -----------------------------------------------------------------------------
+// IO Ownership
+// -----------------------------------------------------------------------------
+
+/// Per-slot ownership record returned by `io_owner_status`.
+///
+/// `token_fp32` is the raw low-32-bit fingerprint stored in firmware.  It is
+/// re-hashed (FNV-1a of the 4 LE bytes) before serialisation so the webview
+/// never sees even a partial token fingerprint.  The resulting `display_hash`
+/// is a stable, opaque u32 suitable for owner-identity display only.
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerSlot {
+    pub slot: u8,
+    pub kind: u8,
+    pub session_id: u8,
+    /// Display-only hash derived from the firmware token fingerprint.
+    /// The raw fingerprint is never exposed to the webview.
+    pub display_hash: u32,
+    pub lease_until_ms: u32,
+}
+
+impl OwnerSlot {
+    /// Construct from the raw wire fields, hashing `token_fp32` before storing.
+    pub fn from_wire(
+        slot: u8,
+        kind: u8,
+        session_id: u8,
+        token_fp32: u32,
+        lease_until_ms: u32,
+    ) -> Self {
+        // FNV-1a over the 4 LE bytes of the fingerprint — prevents any part of
+        // the admin-token fingerprint from being forwarded to the webview.
+        let bytes = token_fp32.to_le_bytes();
+        let mut hash: u32 = 0x811c_9dc5;
+        for b in bytes {
+            hash ^= b as u32;
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+        Self {
+            slot,
+            kind,
+            session_id,
+            display_hash: hash,
+            lease_until_ms,
+        }
+    }
+}
+
+/// Payload emitted as the Tauri `"io-owner-reject"` event.
+///
+/// Parsed from the 3-byte `BBP_EVT_IO_OWNER_REJECT` wire payload:
+/// `rejected_cmd(u8), slot(u8), current_owner_kind(u8)`.
+#[derive(Debug, Clone, Serialize)]
+pub struct IoOwnerRejectEvent {
+    /// The BBP command ID that was rejected (e.g. CMD_IO_CLAIM = 0xA7).
+    pub rejected_cmd: u8,
+    /// Slot index (0-15) that was held by another owner.
+    pub slot: u8,
+    /// Owner kind of the current holder (IO_OWNER_* constant from firmware).
+    pub current_owner_kind: u8,
+}
+
+impl IoOwnerRejectEvent {
+    /// Parse from a 3-byte BBP event payload.
+    /// Returns `None` if the payload is shorter than 3 bytes.
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        if payload.len() < 3 {
+            return None;
+        }
+        Some(Self {
+            rejected_cmd: payload[0],
+            slot: payload[1],
+            current_owner_kind: payload[2],
+        })
+    }
+}
+
+// -----------------------------------------------------------------------------
 // I2C Device States (DS4424 / HUSB238 / PCA9535)
 // -----------------------------------------------------------------------------
 

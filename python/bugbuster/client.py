@@ -21,6 +21,7 @@ functions at the bottom of this file::
 import struct
 import logging
 import warnings
+from contextlib import contextmanager
 from typing import Callable, Optional, Union
 
 import serial  # pyserial — needed for SerialException in drain-loop guard
@@ -35,6 +36,7 @@ from .constants import (
     CmdId, ChannelFunction, AdcRange, AdcRate, AdcMux,
     GpioMode, WaveformType, OutputMode, RtdCurrent,
     VoutRange, CurrentLimit, PowerControl,
+    IoOwnerKind, IoClaimStatus,
 )
 from .protocol import ProtocolError
 
@@ -293,6 +295,9 @@ class BugBuster:
         # Unit-testable pre-send hook: set to a callable to inject failures.
         # Cleared automatically after each fire (one-shot).
         self._usb_pre_send_hook = None
+        # IO ownership tracking: set of slot indices currently claimed via
+        # io_claim() context manager (None = no active context).
+        self._io_claimed_slots: Optional[set] = None
 
     def get_admin_token(self) -> str:
         """
@@ -978,11 +983,13 @@ class BugBuster:
 
             bb.set_channel_function(0, ChannelFunction.VOUT)
         """
-        if self._usb:
-            payload = struct.pack('<BB', channel, int(function))
-            self._usb_cmd(CmdId.SET_CHANNEL_FUNC, payload)
-        else:
-            self._http_post(f"/channel/{channel}/function", {"function": int(function)})
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BB', channel, int(function))
+                self._usb_cmd(CmdId.SET_CHANNEL_FUNC, payload)
+            else:
+                self._http_post(f"/channel/{channel}/function", {"function": int(function)})
+        self._auto_claim_wrap([channel + 12], _body)
 
     def set_dac_voltage(
         self,
@@ -998,14 +1005,16 @@ class BugBuster:
 
         The channel must already be in :attr:`ChannelFunction.VOUT` mode.
         """
-        if self._usb:
-            payload = struct.pack('<BfB', channel, float(voltage), int(bipolar))
-            self._usb_cmd(CmdId.SET_DAC_VOLTAGE, payload)
-        else:
-            self._http_post(
-                f"/channel/{channel}/dac",
-                {"voltage": float(voltage), "bipolar": bipolar},
-            )
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BfB', channel, float(voltage), int(bipolar))
+                self._usb_cmd(CmdId.SET_DAC_VOLTAGE, payload)
+            else:
+                self._http_post(
+                    f"/channel/{channel}/dac",
+                    {"voltage": float(voltage), "bipolar": bipolar},
+                )
+        self._auto_claim_wrap([channel + 12], _body)
 
     def set_dac_current(self, channel: int, current_ma: float) -> None:
         """
@@ -1015,22 +1024,26 @@ class BugBuster:
 
         The channel must already be in :attr:`ChannelFunction.IOUT` mode.
         """
-        if self._usb:
-            payload = struct.pack('<Bf', channel, float(current_ma))
-            self._usb_cmd(CmdId.SET_DAC_CURRENT, payload)
-        else:
-            self._http_post(f"/channel/{channel}/dac", {"current_mA": float(current_ma)})
+        def _body():
+            if self._usb:
+                payload = struct.pack('<Bf', channel, float(current_ma))
+                self._usb_cmd(CmdId.SET_DAC_CURRENT, payload)
+            else:
+                self._http_post(f"/channel/{channel}/dac", {"current_mA": float(current_ma)})
+        self._auto_claim_wrap([channel + 12], _body)
 
     def set_dac_code(self, channel: int, code: int) -> None:
         """
         Write a raw 16-bit DAC code directly (0–65535).
         Useful for precise calibration — normally prefer :meth:`set_dac_voltage`.
         """
-        if self._usb:
-            payload = struct.pack('<BH', channel, code & 0xFFFF)
-            self._usb_cmd(CmdId.SET_DAC_CODE, payload)
-        else:
-            self._http_post(f"/channel/{channel}/dac", {"code": code & 0xFFFF})
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BH', channel, code & 0xFFFF)
+                self._usb_cmd(CmdId.SET_DAC_CODE, payload)
+            else:
+                self._http_post(f"/channel/{channel}/dac", {"code": code & 0xFFFF})
+        self._auto_claim_wrap([channel + 12], _body)
 
     def get_dac_readback(self, channel: int) -> int:
         """Return the currently active 16-bit DAC code from hardware readback."""
@@ -1060,11 +1073,13 @@ class BugBuster:
             bb.set_dac_voltage(0, -5.0, bipolar=True)
         """
         bipolar = (range_ == VoutRange.BIPOLAR)
-        if self._usb:
-            payload = struct.pack('<BB', channel, int(bipolar))
-            self._usb_cmd(CmdId.SET_VOUT_RANGE, payload)
-        else:
-            self._http_post(f"/channel/{channel}/vout/range", {"bipolar": bipolar})
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BB', channel, int(bipolar))
+                self._usb_cmd(CmdId.SET_VOUT_RANGE, payload)
+            else:
+                self._http_post(f"/channel/{channel}/vout/range", {"bipolar": bipolar})
+        self._auto_claim_wrap([channel + 12], _body)
 
     def set_current_limit(self, channel: int, limit: CurrentLimit) -> None:
         """
@@ -1083,11 +1098,13 @@ class BugBuster:
 
             bb.set_current_limit(1, CurrentLimit.MA_8)   # protect a sensitive load
         """
-        if self._usb:
-            payload = struct.pack('<BB', channel, int(limit))
-            self._usb_cmd(CmdId.SET_CURRENT_LIMIT, payload)
-        else:
-            self._http_post(f"/channel/{channel}/ilimit", {"limit_8mA": bool(limit)})
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BB', channel, int(limit))
+                self._usb_cmd(CmdId.SET_CURRENT_LIMIT, payload)
+            else:
+                self._http_post(f"/channel/{channel}/ilimit", {"limit_8mA": bool(limit)})
+        self._auto_claim_wrap([channel + 12], _body)
 
     # ------------------------------------------------------------------
     # ── Channel — ADC ───────────────────────────────────────────────────
@@ -1139,14 +1156,16 @@ class BugBuster:
 
             bb.set_adc_config(1, rate=AdcRate.SPS_9600)
         """
-        if self._usb:
-            payload = struct.pack('<BBBB', channel, int(mux), int(range_), int(rate))
-            self._usb_cmd(CmdId.SET_ADC_CONFIG, payload)
-        else:
-            self._http_post(
-                f"/channel/{channel}/adc/config",
-                {"mux": int(mux), "range": int(range_), "rate": int(rate)},
-            )
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BBBB', channel, int(mux), int(range_), int(rate))
+                self._usb_cmd(CmdId.SET_ADC_CONFIG, payload)
+            else:
+                self._http_post(
+                    f"/channel/{channel}/adc/config",
+                    {"mux": int(mux), "range": int(range_), "rate": int(rate)},
+                )
+        self._auto_claim_wrap([channel + 12], _body)
 
     # ------------------------------------------------------------------
     # ── Channel — RTD ───────────────────────────────────────────────────
@@ -1163,11 +1182,13 @@ class BugBuster:
         Use :attr:`RtdCurrent.MA_1` (default) for most RTDs.
         Use :attr:`RtdCurrent.UA_500` for high-resistance sensors.
         """
-        if self._usb:
-            payload = struct.pack('<BB', channel, int(current))
-            self._usb_cmd(CmdId.SET_RTD_CONFIG, payload)
-        else:
-            self._http_post(f"/channel/{channel}/rtd/config", {"current": int(current)})
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BB', channel, int(current))
+                self._usb_cmd(CmdId.SET_RTD_CONFIG, payload)
+            else:
+                self._http_post(f"/channel/{channel}/rtd/config", {"current": int(current)})
+        self._auto_claim_wrap([channel + 12], _body)
 
     # ------------------------------------------------------------------
     # ── Diagnostics ─────────────────────────────────────────────────
@@ -1204,11 +1225,13 @@ class BugBuster:
         Drive a channel's digital output high (``True``) or low (``False``).
         Channel must be in :attr:`ChannelFunction.DIN_LOGIC` or a DO mode.
         """
-        if self._usb:
-            payload = struct.pack('<BB', channel, int(on))
-            self._usb_cmd(CmdId.SET_DO_STATE, payload)
-        else:
-            self._http_post(f"/channel/{channel}/do/set", {"on": on})
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BB', channel, int(on))
+                self._usb_cmd(CmdId.SET_DO_STATE, payload)
+            else:
+                self._http_post(f"/channel/{channel}/do/set", {"on": on})
+        self._auto_claim_wrap([channel + 12], _body)
 
     def set_din_config(
         self,
@@ -1240,23 +1263,25 @@ class BugBuster:
             raise ValueError(f"debounce must be 0–31, got {debounce}")
         if not (0 <= sink <= 31):
             raise ValueError(f"sink must be 0–31, got {sink}")
-        if self._usb:
-            payload = struct.pack(
-                '<BBBBBBBB',
-                channel, threshold, int(thresh_mode), debounce,
-                sink, int(sink_range), int(oc_detect), int(sc_detect),
-            )
-            self._usb_cmd(CmdId.SET_DIN_CONFIG, payload)
-        else:
-            self._http_post(f"/channel/{channel}/din/config", {
-                "thresh":      threshold,
-                "thresh_mode": thresh_mode,
-                "debounce":    debounce,
-                "sink":        sink,
-                "sink_range":  sink_range,
-                "oc_det":      oc_detect,
-                "sc_det":      sc_detect,
-            })
+        def _body():
+            if self._usb:
+                payload = struct.pack(
+                    '<BBBBBBBB',
+                    channel, threshold, int(thresh_mode), debounce,
+                    sink, int(sink_range), int(oc_detect), int(sc_detect),
+                )
+                self._usb_cmd(CmdId.SET_DIN_CONFIG, payload)
+            else:
+                self._http_post(f"/channel/{channel}/din/config", {
+                    "thresh":      threshold,
+                    "thresh_mode": thresh_mode,
+                    "debounce":    debounce,
+                    "sink":        sink,
+                    "sink_range":  sink_range,
+                    "oc_det":      oc_detect,
+                    "sc_det":      sc_detect,
+                })
+        self._auto_claim_wrap([channel + 12], _body)
 
     # ------------------------------------------------------------------
     # ── GPIO (AD74416H GPIO pins A–F, indices 0–5) ───────────────────
@@ -1370,10 +1395,12 @@ class BugBuster:
             bb.dio_configure(2, 2)   # IO 2 → output
             bb.dio_configure(5, 1)   # IO 5 → input
         """
-        if self._usb:
-            self._usb_cmd(CmdId.DIO_CONFIG, struct.pack('<BB', io, mode))
-        else:
-            self._http_post(f"/dio/{io}/config", {"mode": mode})
+        def _body():
+            if self._usb:
+                self._usb_cmd(CmdId.DIO_CONFIG, struct.pack('<BB', io, mode))
+            else:
+                self._http_post(f"/dio/{io}/config", {"mode": mode})
+        self._auto_claim_wrap([io - 1], _body)
 
     def dio_write(self, io: int, value: bool) -> None:
         """
@@ -1382,10 +1409,12 @@ class BugBuster:
         *io* must be configured as output (mode=2) first.
         *value* — ``True`` for HIGH, ``False`` for LOW.
         """
-        if self._usb:
-            self._usb_cmd(CmdId.DIO_WRITE, struct.pack('<BB', io, int(value)))
-        else:
-            self._http_post(f"/dio/{io}/set", {"value": value})
+        def _body():
+            if self._usb:
+                self._usb_cmd(CmdId.DIO_WRITE, struct.pack('<BB', io, int(value)))
+            else:
+                self._http_post(f"/dio/{io}/set", {"value": value})
+        self._auto_claim_wrap([io - 1], _body)
 
     def dio_read(self, io: int) -> dict:
         """
@@ -3438,6 +3467,140 @@ class BugBuster:
             self._usb_cmd(CmdId.SET_LSHIFT_OE, struct.pack('<B', int(on)))
         else:
             self._http_post("/lshift/oe", {"on": on})
+
+    # ------------------------------------------------------------------
+    # ── IO Ownership (BBP v5+) ─────────────────────────────────────────
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fnv1a32(s: str) -> int:
+        """FNV-1a 32-bit hash of a UTF-8 string, used as purpose_tag on the wire."""
+        h = 0x811C9DC5
+        for b in s.encode("utf-8"):
+            h ^= b
+            h = (h * 0x01000193) & 0xFFFFFFFF
+        return h
+
+    def _io_claim_raw(self, slots: list[int], lease_ms: int, purpose: str) -> None:
+        """Send IO_CLAIM command for the given slot indices."""
+        if not self._usb:
+            return  # HTTP transport: ownership enforced server-side only
+        n = len(slots)
+        purpose_tag = self._fnv1a32(purpose)
+        payload = struct.pack('<B', n) + bytes(slots) + struct.pack('<II', lease_ms, purpose_tag)
+        self._usb_cmd(CmdId.IO_CLAIM, payload)
+
+    def _io_release_raw(self, slots: list[int]) -> None:
+        """Send IO_RELEASE command for the given slot indices (or all if empty)."""
+        if not self._usb:
+            return  # HTTP transport: ownership enforced server-side only
+        n = len(slots)
+        payload = struct.pack('<B', n) + bytes(slots)
+        self._usb_cmd(CmdId.IO_RELEASE, payload)
+
+    @contextmanager
+    def io_claim(self, slots: list[int], *, lease_ms: int = 0, purpose: str = ""):
+        """
+        Context manager that claims the given IO slot indices for this session
+        and releases them on exit (normal or exceptional).
+
+        Slot indices: IO1..IO12 → 0..11, CH0..CH3 → 12..15.
+
+        Example::
+
+            with bb.io_claim([12, 13], purpose="analog_sweep"):
+                bb.set_dac_voltage(0, 3.3)
+                bb.set_dac_voltage(1, 1.8)
+        """
+        self._io_claim_raw(slots, lease_ms, purpose)
+        prev = self._io_claimed_slots
+        self._io_claimed_slots = set(slots)
+        try:
+            yield
+        finally:
+            self._io_claimed_slots = prev
+            self._io_release_raw(slots)
+
+    def _auto_claim_wrap(self, slots: list[int], fn, *args, **kwargs):
+        """
+        If not inside an io_claim() context, auto-claim *slots* with a 5 s
+        lease, call *fn*, then immediately release.  If already inside a
+        context that covers *slots*, just call *fn*.
+
+        This costs 3 frames in the common single-call case (claim → mutate →
+        release).  Correctness is preferred over throughput here.
+        # TODO: batch claim+write into one frame in v6
+        """
+        if self._io_claimed_slots is not None and set(slots).issubset(self._io_claimed_slots):
+            return fn(*args, **kwargs)
+        if self._usb:
+            self._io_claim_raw(slots, 5000, "")
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                self._io_release_raw(slots)
+        else:
+            return fn(*args, **kwargs)
+
+    def io_release(self, slots: list[int] = None) -> None:
+        """
+        Explicitly release IO slot ownership.
+
+        *slots* — list of slot indices to release (0–15).  Pass ``None`` or
+        an empty list to release all slots currently owned by this session.
+        """
+        self._io_release_raw(slots if slots else [])
+
+    def io_owner_status(self) -> list[dict]:
+        """
+        Read the 16-slot IO ownership table from the device.
+
+        Returns a list of 16 dicts::
+
+            [
+                {
+                    "slot":          0,
+                    "kind":          1,   # IoOwnerKind value
+                    "session_id":    0,
+                    "token_fp32":    0,
+                    "lease_until_ms":0,
+                },
+                …
+            ]
+
+        USB only; raises ``NotImplementedError`` over HTTP.
+        """
+        self._require_usb("io_owner_status")
+        resp = self._usb_cmd(CmdId.IO_OWNER_STATUS)
+        _require_resp_len(resp, 160, "IO_OWNER_STATUS")
+        result = []
+        for i in range(16):
+            off = i * 10
+            kind, session_id = struct.unpack_from('<BB', resp, off)
+            token_fp32,      = struct.unpack_from('<I',  resp, off + 2)
+            lease_until_ms,  = struct.unpack_from('<I',  resp, off + 6)
+            result.append({
+                "slot":          i,
+                "kind":          kind,
+                "session_id":    session_id,
+                "token_fp32":    token_fp32,
+                "lease_until_ms": lease_until_ms,
+            })
+        return result
+
+    def io_force_release(self, slot: int, admin_token: str) -> None:
+        """
+        Forcibly release the owner of a single IO slot (admin-only).
+
+        *slot* — slot index 0–15, or 255 to release all slots.
+        *admin_token* — hardware-derived admin token string.
+
+        USB only; raises ``NotImplementedError`` over HTTP.
+        """
+        self._require_usb("io_force_release")
+        tok_bytes = admin_token.encode("ascii")
+        payload = struct.pack('<BB', slot & 0xFF, len(tok_bytes)) + tok_bytes
+        self._usb_cmd(CmdId.IO_FORCE_RELEASE, payload)
 
 
 # ---------------------------------------------------------------------------

@@ -11,10 +11,22 @@
 #include "esp_log.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "freertos/portmacro.h"
 
 #include <string.h>
 
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+// Tracks the single "active" switch per main device (0xFF = none).
+// Only main devices (0..ADGS_MAIN_DEVICES-1) are tracked; ADGS_SELFTEST_DEV is exempt.
+static uint8_t s_active_sw[ADGS_MAIN_DEVICES];  // initialised to 0xFF in adgs_init()
+#define ADGS_NO_ACTIVE_SW 0xFF
+#endif
+
 static const char *TAG = "adgs2414d";
+
+// Cross-core spinlock protecting s_mux_state[] and s_active_sw[].
+// Held only during logical-state read/modify; released before SPI write.
+static portMUX_TYPE s_adgs_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Cached switch states for all devices
 static uint8_t s_mux_state[ADGS_NUM_DEVICES] = {};
@@ -283,7 +295,12 @@ static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
 #else
     adgs_address_mode_write(ADGS_REG_SW_DATA, 0x00);
 #endif
+    portENTER_CRITICAL(&s_adgs_mux);
     memset(s_mux_state, 0, sizeof(s_mux_state));
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+    memset(s_active_sw, ADGS_NO_ACTIVE_SW, sizeof(s_active_sw));
+#endif
+    portEXIT_CRITICAL(&s_adgs_mux);
 }
 
 // Get the group mask for a switch index
@@ -339,6 +356,10 @@ bool adgs_init(void)
     s_mux_faulted = false;
     s_readback_available = true;
     s_readback_checked = false;
+
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+    memset(s_active_sw, ADGS_NO_ACTIVE_SW, sizeof(s_active_sw));
+#endif
 
 #if ADGS_NUM_DEVICES > 1
     // Enter daisy-chain mode for multi-device setup
@@ -409,34 +430,79 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 
     uint8_t group_mask = get_group_mask(sw);
     uint8_t new_state;
+    uint8_t write_snap[ADGS_NUM_DEVICES];
 
     if (closed) {
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+        // Mutual exclusion: at most one switch closed per non-selftest device.
+        // Auto-open the previous active switch before closing a new one.
+        portENTER_CRITICAL(&s_adgs_mux);
+        bool need_preopen = (device < ADGS_MAIN_DEVICES &&
+                             s_active_sw[device] != ADGS_NO_ACTIVE_SW &&
+                             s_active_sw[device] != sw);
+        uint8_t prev_sw = s_active_sw[device];
+        if (need_preopen) {
+            s_mux_state[device] &= ~(1u << prev_sw);
+            memcpy(write_snap, s_mux_state, sizeof(s_mux_state));
+        }
+        portEXIT_CRITICAL(&s_adgs_mux);
+
+        if (need_preopen) {
+            ESP_LOGD(TAG, "ADGS dev=%d auto-opened switch %d before closing %d",
+                     device, prev_sw, sw);
+            adgs_write_states(write_snap);
+            delay_ms(ADGS_DEAD_TIME_MS);
+        }
+#endif
         // Closing a switch: break-before-make — first open all switches in the
         // same group to prevent momentary shorts, then close the requested one.
+        portENTER_CRITICAL(&s_adgs_mux);
         uint8_t temp_state[ADGS_NUM_DEVICES];
         memcpy(temp_state, s_mux_state, ADGS_NUM_DEVICES);
         temp_state[device] &= ~group_mask;  // Open the entire group
-        adgs_write_states(temp_state);
+        memcpy(write_snap, temp_state, sizeof(write_snap));
+        portEXIT_CRITICAL(&s_adgs_mux);
+
+        adgs_write_states(write_snap);
 
         // Wait dead time before closing
         delay_ms(ADGS_DEAD_TIME_MS);
 
-        // Close the requested switch
-        new_state = (s_mux_state[device] & ~group_mask) | (1 << sw);
+        // Compute and commit the close state
+        portENTER_CRITICAL(&s_adgs_mux);
+        new_state = (s_mux_state[device] & ~group_mask) | (1u << sw);
+        s_mux_state[device] = new_state;
+        memcpy(write_snap, s_mux_state, sizeof(s_mux_state));
+        portEXIT_CRITICAL(&s_adgs_mux);
     } else {
         // Opening a switch: no dead time needed
-        new_state = s_mux_state[device] & ~(1 << sw);
+        portENTER_CRITICAL(&s_adgs_mux);
+        new_state = s_mux_state[device] & ~(1u << sw);
+        s_mux_state[device] = new_state;
+        memcpy(write_snap, s_mux_state, sizeof(s_mux_state));
+        portEXIT_CRITICAL(&s_adgs_mux);
     }
 
-    s_mux_state[device] = new_state;
-    adgs_write_states(s_mux_state);
+    adgs_write_states(write_snap);
+
+    portENTER_CRITICAL(&s_adgs_mux);
     sync_api_main_from_physical();
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+    // Update active-switch tracker for non-selftest devices
+    if (device < ADGS_MAIN_DEVICES) {
+        s_active_sw[device] = closed ? sw : ADGS_NO_ACTIVE_SW;
+    }
+#endif
+    portEXIT_CRITICAL(&s_adgs_mux);
 }
 
 uint8_t adgs_get_state(uint8_t device)
 {
     if (device >= ADGS_NUM_DEVICES) return 0;
-    return s_mux_state[device];
+    portENTER_CRITICAL(&s_adgs_mux);
+    uint8_t state = s_mux_state[device];
+    portEXIT_CRITICAL(&s_adgs_mux);
+    return state;
 }
 
 void adgs_get_all_states(uint8_t out[ADGS_NUM_DEVICES])

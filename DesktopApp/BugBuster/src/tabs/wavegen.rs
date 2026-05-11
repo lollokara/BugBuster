@@ -5,6 +5,9 @@ use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
 use crate::tauri_bridge::*;
 
+/// IO ownership slots claimed by the WaveGen tab (CH0..CH3 → indices 12..15).
+pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+
 /// Decode channel_alert bits (per ad74416h.h:294-300) for UI display.
 const CHANNEL_ALERT_BITS: &[(u16, &str)] = &[
     (0x0001, "DIN_SC"),

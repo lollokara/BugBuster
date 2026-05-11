@@ -1,5 +1,75 @@
 # CHANGELOG
 
+## [Unreleased — IO ownership v5] — 2026-05-12
+
+Single-owner IO table covering all 16 controllable resources (IO1..IO12 +
+CH0..CH3). Every write path — USB BBP, HTTP REST, MicroPython, ESP32 web UI,
+Desktop Tauri, Python lib, MCP server — now defers to a firmware-resident
+ownership table before mutating IO state. See `Docs/IoOwnership.md` for the
+full specification.
+
+### Added
+
+#### Protocol
+- `PROTO_VERSION` bumped **4 → 5** across all three canonical files
+  (`Firmware/ESP32/src/bbp/bbp.h`, `python/bugbuster/protocol.py`,
+  `DesktopApp/BugBuster/src-tauri/src/bbp.rs`) in lockstep (CI gate extended
+  to assert v5).
+- 4 new BBP commands: `CMD_IO_CLAIM 0xA7`, `CMD_IO_RELEASE 0xA8`,
+  `CMD_IO_OWNER_STATUS 0xA9`, `CMD_IO_FORCE_RELEASE 0xAA`.
+- New error code `IO_OWNERSHIP_REQUIRED 0x12` returned to v5 callers that
+  attempt a write without claiming the slot first.
+
+#### Firmware
+- New module `Firmware/ESP32/src/io_owner.{h,cpp}`: 16-slot ownership table,
+  portMUX spinlock, `io_owner_acquire / release / check / get / tick /
+  force_release` API. `io_owner_tick()` called from main loop to expire
+  stale leases.
+- `Firmware/ESP32/src/bbp/cmds/cmd_io_owner.cpp`: handler for the 4 new BBP
+  commands.
+- Write-path guard (`io_owner_check`) installed at every IO-mutating BBP
+  command handler (`cmd_channel`, `cmd_dac`, `cmd_adc`, `cmd_dio`, `cmd_pca`,
+  `cmd_ext_bus`) and at the 9 mutating HTTP routes in `webserver.cpp`.
+- New HTTP endpoints: `GET/POST/DELETE /api/io/owner` and admin
+  `POST /api/io/owner/force`.
+- `EVT_IO_PREEMPTED` unsolicited BBP event emitted when `IO_OWNER_INTERNAL`
+  (selftest / autocal) displaces a user owner; prior ownership restored on
+  completion if the original session is still alive.
+
+#### Python library
+- `BugBuster.io_claim(slots, *, lease_ms, purpose)` context manager;
+  auto-wrap path for single-shot calls (claim + release per call).
+- `BugBuster.io_owner_status()` returns the full 16-slot table.
+
+#### MCP server
+- 4 new IO-ownership tools: `io_claim`, `io_release`, `io_owner_status`,
+  `io_force_release`. Total MCP tool count: **59**.
+- All existing IO-mutating tools accept optional `lease_handle` parameter;
+  auto-claim when absent preserves legacy single-shot ergonomics.
+
+#### Desktop + ESP32 web UI
+- Each tab acquires its slot footprint on mount and releases on unmount via
+  a 5 s lease renewed on a 2 s timer (guarantees free within seconds of a
+  crash).
+- `IO_HELD_BY_OTHER` response surfaces a banner with current owner kind and a
+  "Force take (admin)" button.
+- New `Firmware/ESP32/web/src/api/io_lease.ts` helper wraps the
+  claim/renew/release loop for the ESP32 web UI.
+
+#### MicroPython
+- `bugbuster.claim(slots, purpose="", lease_ms=0)` context manager
+  (`__enter__` / `__exit__`); `IO_OWNER_SCRIPT` identity filled in
+  automatically from MP task context.
+
+### Backward compatibility
+- v4 BBP clients: every IO-mutating write receives an implicit 30 s
+  auto-claim + release; `IO_OWNERSHIP_REQUIRED` is never returned to v4
+  callers.
+- HTTP clients that never call `POST /api/io/owner`: same implicit 30 s
+  auto-claim per request, keyed on admin-token fingerprint.
+
+---
+
 ## [Unreleased — whole-repo audit] — 2026-05-11
 
 Read-only audit across 10 surfaces of the repo (RP2040 fw, ESP32 fw core,

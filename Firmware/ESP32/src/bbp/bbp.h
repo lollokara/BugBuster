@@ -23,7 +23,7 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       4
+#define BBP_PROTO_VERSION       5
 
 #define BBP_FW_VERSION_MAJOR    3
 #define BBP_FW_VERSION_MINOR    1
@@ -137,6 +137,12 @@ extern "C" {
 #define BBP_CMD_IDAC_CAL_CLEAR      0xA5  // Clear calibration for a channel
 #define BBP_CMD_IDAC_CAL_SAVE       0xA6  // Save calibration to NVS
 
+// IO Ownership (must follow IDAC block at 0xA0-0xA6; free range 0xA7-0xAA)
+#define BBP_CMD_IO_CLAIM            0xA7  // Claim one or more IO/CH slots
+#define BBP_CMD_IO_RELEASE          0xA8  // Release previously claimed slots
+#define BBP_CMD_IO_OWNER_STATUS     0xA9  // Query ownership table (all 16 slots)
+#define BBP_CMD_IO_FORCE_RELEASE    0xAA  // Admin: force-release any slot
+
 // PCA9535 GPIO Expander
 #define BBP_CMD_PCA_GET_STATUS      0xB0  // Get all PCA9535 state
 #define BBP_CMD_PCA_SET_CONTROL     0xB1  // Set named control output
@@ -248,6 +254,8 @@ extern "C" {
 #define BBP_EVT_DIN             0x83
 #define BBP_EVT_PCA_FAULT       0x84    // PCA9535 fault event (e-fuse trip, PG change)
 #define BBP_EVT_LA_DONE         0x85    // Logic analyzer capture complete
+#define BBP_EVT_IO_PREEMPTED    0x86    // IO slot preempted by selftest/internal
+#define BBP_EVT_IO_OWNER_REJECT 0x87    // IO claim rejected: (cmd_id u8, slot u8, owner_kind u8)
 #define BBP_EVT_LA_LOG          0xEC    // RP2040 log message relay
 
 // -----------------------------------------------------------------------------
@@ -271,6 +279,8 @@ extern "C" {
 #define BBP_ERR_HVPAK_INVALID_INDEX    0x0F
 #define BBP_ERR_HVPAK_UNSAFE_REGISTER  0x10
 #define BBP_ERR_TIMEOUT                0x11
+#define BBP_ERR_IO_OWNERSHIP_REQUIRED  0x12  // IO slot owned by another session
+#define BBP_ERR_ADGS_ROUTE_REJECTED    0x13  // MUX mutual-exclusion rejected route
 
 // -----------------------------------------------------------------------------
 // ADC Stream Ring Buffer (lock-free, single-producer single-consumer)
@@ -367,6 +377,14 @@ void bbpExitBinaryMode(void);
 // ASCII-producing code paths to avoid writing text to CDC #0 which would
 // corrupt a reconnecting binary session.
 bool bbpCdcClaimed(void);
+
+/**
+ * @brief Called by usb_cdc when CDC #0 DTR rises (new host connection).
+ *        Increments s_bbp_usb_session so that the next BBP frame carries a
+ *        fresh session_id, preventing stale ownership from a prior host
+ *        connection from blocking the new one.
+ */
+void bbpCdcNewConnection(void);
 
 /**
  * @brief Push an ADC sample into the stream ring buffer.

@@ -4,6 +4,9 @@ use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;
 
+/// IO ownership slots claimed by the DOUT tab (IO1..IO12 → indices 0..11).
+pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
 const DO_MODE_OPTIONS: &[(u8, &str)] = &[
     (0, "High-Z"), (1, "Push-Pull"), (2, "Open Drain"), (3, "Push-Pull HART"),
 ];

@@ -1077,6 +1077,125 @@ pub async fn la_delete_range(start: u64, end: u64) -> Option<LaCaptureInfo> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
+// -----------------------------------------------------------------------------
+// IO Ownership types & helpers
+// -----------------------------------------------------------------------------
+
+/// Mirror of one entry in the firmware io_owner_t table returned by io_owner_status.
+/// 16 entries total: indices 0..11 = IO1..IO12, 12..15 = CH0..CH3.
+/// Wire format per slot: kind(u8) + session_id(u8) + token_fp32(u32 LE) + lease_until_ms(u32 LE)
+/// = 10 bytes × 16 slots = 160 bytes total.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerSlot {
+    pub kind: u8,            // io_owner_kind_t: 0=NONE,1=USB,2=HTTP,3=SCRIPT,4=CLI,5=INTERNAL
+    pub session_id: u8,
+    pub token_fp32: u32,
+    pub lease_until_ms: u32, // low 32 bits of monotonic lease deadline (ms)
+}
+
+impl OwnerSlot {
+    pub fn is_owned(&self) -> bool {
+        self.kind != 0
+    }
+
+    pub fn kind_name(&self) -> &'static str {
+        match self.kind {
+            1 => "USB",
+            2 => "HTTP",
+            3 => "Script",
+            4 => "CLI",
+            5 => "Internal",
+            _ => "None",
+        }
+    }
+}
+
+/// Claim IO slots. Returns true on IO_OK, false on IO_HELD_BY_OTHER or error.
+/// `slots`: slot indices (0..11 = IO1..IO12, 12..15 = CH0..CH3).
+/// `lease_ms`: lease duration in ms (0 = infinite, must release explicitly).
+/// `purpose`: human-readable label for status display.
+pub async fn io_claim(slots: &[u8], lease_ms: u32, purpose: &str) -> bool {
+    #[derive(Serialize)]
+    struct Args {
+        slots: Vec<u8>,
+        #[serde(rename = "leaseMs")]
+        lease_ms: u32,
+        purpose: String,
+    }
+    let args = match serde_wasm_bindgen::to_value(&Args {
+        slots: slots.to_vec(),
+        lease_ms,
+        purpose: purpose.to_string(),
+    }) {
+        Ok(v) => v,
+        Err(e) => {
+            web_sys::console::warn_1(&format!("[io_claim] serialize error: {:?}", e).into());
+            return false;
+        }
+    };
+    match try_invoke("io_claim", args).await {
+        Some(val) => {
+            // Backend returns status byte 0x00 = IO_OK
+            serde_wasm_bindgen::from_value::<u8>(val)
+                .map(|s| s == 0)
+                .unwrap_or(false)
+        }
+        None => false,
+    }
+}
+
+/// Release IO slots previously claimed.
+/// `slots`: slot indices to release (empty = release all owned by this session).
+pub async fn io_release(slots: &[u8]) {
+    #[derive(Serialize)]
+    struct Args {
+        slots: Vec<u8>,
+    }
+    let args = match serde_wasm_bindgen::to_value(&Args { slots: slots.to_vec() }) {
+        Ok(v) => v,
+        Err(e) => {
+            web_sys::console::warn_1(&format!("[io_release] serialize error: {:?}", e).into());
+            return;
+        }
+    };
+    let _ = try_invoke("io_release", args).await;
+}
+
+/// Query the full 16-slot ownership table. Returns None on error.
+pub async fn io_owner_status() -> Option<Vec<OwnerSlot>> {
+    let result = try_invoke("io_owner_status", wasm_bindgen::JsValue::NULL).await?;
+    let slots: Vec<OwnerSlot> = serde_wasm_bindgen::from_value(result).ok()?;
+    assert_eq!(
+        slots.len(),
+        16,
+        "[io_owner_status] expected 16 slots from backend, got {}",
+        slots.len()
+    );
+    Some(slots)
+}
+
+/// Force-release a slot (admin path). `slot`: index 0..15, or 0xFF for all.
+pub async fn io_force_release(slot: u8) -> bool {
+    #[derive(Serialize)]
+    struct Args {
+        slot: u8,
+    }
+    let args = match serde_wasm_bindgen::to_value(&Args { slot }) {
+        Ok(v) => v,
+        Err(e) => {
+            web_sys::console::warn_1(&format!("[io_force_release] serialize error: {:?}", e).into());
+            return false;
+        }
+    };
+    match try_invoke("io_force_release", args).await {
+        Some(val) => serde_wasm_bindgen::from_value::<u8>(val)
+            .map(|s| s == 0)
+            .unwrap_or(false),
+        None => false,
+    }
+}
+
 /// Single stream cycle: stop → configure → arm → poll → read (USB bulk or UART fallback)
 pub async fn la_stream_cycle(
     channels: u8,

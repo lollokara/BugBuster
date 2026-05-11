@@ -5,7 +5,7 @@
 // Uses tokio::sync::Mutex for the transport since we need to hold it across await.
 // =============================================================================
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -41,6 +41,10 @@ pub struct ConnectionManager {
     // for the channel's adc/function fields right after a user-initiated write
     // (Bug 3). Keyed by channel index 0..3.
     recent_writes: Arc<StdMutex<[Option<Instant>; 4]>>,
+    // IO slots the frontend has claimed and wants kept alive.
+    // The keep-alive timer (2 s) re-issues CMD_IO_CLAIM for the union of these
+    // slots. Cleared on disconnect so the device frees them automatically.
+    pub active_slots: Arc<StdMutex<HashSet<u8>>>,
 }
 
 impl ConnectionManager {
@@ -52,6 +56,7 @@ impl ConnectionManager {
             poll_shutdown: Arc::new(AtomicBool::new(false)),
             tokens: Arc::new(StdMutex::new(HashMap::new())),
             recent_writes: Arc::new(StdMutex::new([None; 4])),
+            active_slots: Arc::new(StdMutex::new(HashSet::new())),
         }
     }
 
@@ -240,6 +245,16 @@ impl ConnectionManager {
                             bbp::EVT_LA_DONE => {
                                 let _ = app_handle.emit("la-done", &msg.payload);
                             }
+                            bbp::EVT_IO_OWNER_REJECT => {
+                                if let Some(evt) = crate::state::IoOwnerRejectEvent::from_payload(&msg.payload) {
+                                    let _ = app_handle.emit("io-owner-reject", &evt);
+                                } else {
+                                    log::warn!(
+                                        "EVT_IO_OWNER_REJECT: payload too short ({} bytes)",
+                                        msg.payload.len()
+                                    );
+                                }
+                            }
                             bbp::EVT_DISCONNECT => {
                                 log::warn!("USB reader reported disconnection");
                                 let _ = app_handle.emit("device-disconnected", &serde_json::json!({"reason": "serial_error", "stream_running": false}));
@@ -387,6 +402,13 @@ impl ConnectionManager {
             *status = ConnectionStatus::default();
         }
 
+        // Release IO ownership tracking — device will expire the leases on its
+        // own (30 s), but clearing here means a quick reconnect won't try to
+        // renew slots from the old session.
+        if let Ok(mut slots) = self.active_slots.lock() {
+            slots.clear();
+        }
+
         // Clean up LA state if it exists
         if let Some(la) = app.try_state::<crate::la_commands::LaState>() {
             log::info!("Cleaning up LA USB connection due to main disconnect");
@@ -501,6 +523,59 @@ impl ConnectionManager {
         let device_state = self.device_state.clone();
         let connection_status = self.connection_status.clone();
         let recent_writes = self.recent_writes.clone();
+        let active_slots = self.active_slots.clone();
+
+        // ── IO keep-alive timer ───────────────────────────────────────────────
+        // Every 2 s, re-issue CMD_IO_CLAIM for the union of slots the frontend
+        // has registered via `io_claim`. Lease is renewed to 30 s on each tick.
+        // If `active_slots` is empty the tick is a no-op (no wire traffic).
+        // The task exits when the shutdown flag is set (same flag as the poll loop).
+        {
+            let shutdown_ka = shutdown.clone();
+            let transport_ka = transport.clone();
+            let active_slots_ka = active_slots.clone();
+            let app_ka = app.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if shutdown_ka.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let slots: Vec<u8> = active_slots_ka
+                        .lock()
+                        .map(|s| s.iter().copied().collect())
+                        .unwrap_or_default();
+                    if slots.is_empty() {
+                        continue;
+                    }
+                    // Build CMD_IO_CLAIM payload:
+                    // n_slots(u8), slots(u8[n]), lease_ms(u32 LE), purpose_tag(u32 LE)
+                    let mut payload = Vec::with_capacity(1 + slots.len() + 8);
+                    payload.push(slots.len() as u8);
+                    payload.extend_from_slice(&slots);
+                    payload.extend_from_slice(&30_000_u32.to_le_bytes()); // 30 s lease
+                    payload.extend_from_slice(&0_u32.to_le_bytes());      // purpose_tag = 0 for renewal
+                    let t = transport_ka.lock().await;
+                    if let Some(tr) = t.as_ref() {
+                        if tr.is_connected() {
+                            if let Err(e) = tr.send_command(bbp::CMD_IO_CLAIM, &payload).await {
+                                // Keep-alive failed — the lease may have been lost (e.g.
+                                // firmware force-released the slot or IO_HELD_BY_OTHER).
+                                // Emit the same "io-owner-reject" event so the UI can
+                                // show the "IO held by another owner" banner without polling.
+                                log::warn!("IO keep-alive renewal failed: {}", e);
+                                let evt = crate::state::IoOwnerRejectEvent {
+                                    rejected_cmd: bbp::CMD_IO_CLAIM,
+                                    slot: slots.first().copied().unwrap_or(0xFF),
+                                    current_owner_kind: 0xFF, // unknown — no payload on keep-alive error
+                                };
+                                let _ = app_ka.emit("io-owner-reject", &evt);
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         tokio::spawn(async move {
             // Determine poll interval based on transport type

@@ -18,6 +18,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/semphr.h"
+#include "io_owner.h"
+#include "bbp.h"
 
 #include <string.h>
 #include <math.h>
@@ -227,8 +229,58 @@ static float read_channel_d(uint8_t adc_range,
 // Perform a single measurement through U23.
 // Opens all U23 switches, sets the requested switches, reads ADC, cleans up.
 // Returns voltage in volts, or -1 on error.
+// Slot index for logical channel 2 (physical channel D used by selftest)
+#define SELFTEST_CH_SLOT  14u   // io_owner_slot_for_ch(2) = 2 + 12
+
+// Claim CH slot 14 on behalf of selftest; returns previous owner (for restore).
+// Also emits EVT_IO_PREEMPTED if displacing a real external owner.
+static io_owner_slot_t selftest_claim_ch_slot(void)
+{
+    io_owner_slot_t prev = io_owner_get(SELFTEST_CH_SLOT);
+
+    if (prev.kind != IO_OWNER_NONE && prev.kind != IO_OWNER_INTERNAL) {
+        // Emit preemption event so the host knows its slot was taken
+        uint8_t evt[2] = { SELFTEST_CH_SLOT, (uint8_t)IO_OWNER_INTERNAL };
+        bbpSendEvent(BBP_EVT_IO_PREEMPTED, evt, sizeof(evt));
+        ESP_LOGW("selftest", "Preempting CH slot %d (was owned by kind=%d sid=%d)",
+                 SELFTEST_CH_SLOT, (int)prev.kind, (int)prev.session_id);
+    }
+
+    io_owner_force_release(SELFTEST_CH_SLOT);
+    uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+    io_owner_acquire(SELFTEST_CH_SLOT, IO_OWNER_INTERNAL, 0xFF, 0, 0, now_ms);
+    return prev;
+}
+
+// Restore previous owner after selftest is done with the slot.
+static void selftest_restore_ch_slot(const io_owner_slot_t *prev)
+{
+    io_owner_force_release(SELFTEST_CH_SLOT);
+    if (prev->kind != IO_OWNER_NONE && prev->kind != IO_OWNER_INTERNAL) {
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        // Compute remaining lease; skip restore if already expired.
+        uint32_t remaining_ms = 0;
+        if (prev->lease_until_ms == 0) {
+            // Original was infinite — restore as infinite
+            remaining_ms = 0;
+        } else if (prev->lease_until_ms <= now_ms) {
+            // Lease already expired during selftest — do not restore
+            return;
+        } else {
+            uint64_t diff = prev->lease_until_ms - now_ms;
+            remaining_ms = (diff > 0xFFFFFFFFu) ? 0xFFFFFFFFu : (uint32_t)diff;
+        }
+        io_owner_acquire(SELFTEST_CH_SLOT, prev->kind,
+                         prev->session_id, prev->token_fp32,
+                         remaining_ms, now_ms);
+    }
+}
+
 static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
 {
+    // Claim CH slot 14 (logical ch 2 = selftest channel D), displacing if needed
+    io_owner_slot_t prev_owner = selftest_claim_ch_slot();
+
     // Pre-discharge: tie Ch D to the shared rail alone (no source) so the
     // ~10 nF on the Ch D input bleeds through R106 (1 MΩ) to GND. τ ≈ 10 ms;
     // wait 50 ms (~5τ) so the cap is near zero before the real source closes.
@@ -287,6 +339,9 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
             xSemaphoreGive(g_stateMutex);
         }
     }
+
+    // Restore previous IO owner for CH slot 14 (selftest finished with channel D)
+    selftest_restore_ch_slot(&prev_owner);
 
     return v;
 }

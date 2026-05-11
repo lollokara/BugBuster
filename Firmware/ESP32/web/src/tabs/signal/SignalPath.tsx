@@ -11,6 +11,8 @@
 import { useEffect, useRef } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { api, PairingRequiredError } from "../../api/client";
+import { useIoLease } from "../../api/io_lease";
+import { IoOwnerBanner } from "../../components/IoOwnerBanner";
 import {
   deviceStatus,
   deviceMac,
@@ -119,6 +121,7 @@ function psuBar(
 /* ---------- Component ---------- */
 
 export function SignalPath() {
+  const lease = useIoLease([12, 13, 14, 15], "signal-tab");
   const mux = useSignal<[number, number, number, number]>([0, 0, 0, 0]);
   const psu = useSignal<[boolean, boolean]>([false, false]);
   const ef = useSignal<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
@@ -382,6 +385,7 @@ export function SignalPath() {
 
   return (
     <div class="signal-layout">
+      <IoOwnerBanner lease={lease} slots={[12, 13, 14, 15]} />
       <div class="signal-toolbar">
         <span class="uppercase-tag">Signal Path</span>
         <div class="signal-preset-pills">

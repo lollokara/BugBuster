@@ -20,6 +20,7 @@ typedef enum {
     CMD_ERR_INVALID_STATE = 8,  // operation not valid in current state
     CMD_ERR_TIMEOUT      = 9,   // operation timed out
     CMD_ERR_FRAME_TOO_LARGE = 10, // response payload would exceed BBP_MAX_PAYLOAD
+    CMD_ERR_IO_OWNERSHIP    = 11, // IO slot owned by another session
 } CmdError;
 
 /**
@@ -39,6 +40,7 @@ static inline const char *cmd_error_str(CmdError e)
         case CMD_ERR_INVALID_STATE:   return "invalid state";
         case CMD_ERR_TIMEOUT:         return "timeout";
         case CMD_ERR_FRAME_TOO_LARGE: return "frame too large";
+        case CMD_ERR_IO_OWNERSHIP:    return "IO slot owned by another session";
         default:                      return "unknown error";
     }
 }
@@ -61,6 +63,7 @@ static inline int cmd_error_to_bbp(CmdError e)
         case CMD_ERR_INVALID_STATE:   return 0x07; // BBP_ERR_INVALID_STATE
         case CMD_ERR_TIMEOUT:         return 0x11; // BBP_ERR_TIMEOUT
         case CMD_ERR_FRAME_TOO_LARGE: return 0x09; // BBP_ERR_FRAME_TOO_LARGE
+        case CMD_ERR_IO_OWNERSHIP:    return 0x12; // BBP_ERR_IO_OWNERSHIP_REQUIRED
         default:                      return 0x03;
     }
 }

@@ -18,6 +18,7 @@ from ..safety import (
     require_analog_io, require_io_mode,
     require_la_ready, validate_la_config, check_faults_post,
 )
+from .io_owner import _verify_lease_covers
 from ..config import (
     MAX_SNAPSHOT_DURATION_S, DEFAULT_SNAPSHOT_DURATION_S,
     SNAPSHOT_POLL_INTERVAL_S, MAX_SNAPSHOT_SAMPLES,
@@ -467,9 +468,10 @@ def _timing_diagram(ch_data: list, n_channels: int, n_points: int) -> str:
 # ---------------------------------------------------------------------------
 
 def capture_adc_snapshot_start(
-    io:         int,
-    duration_s: float = DEFAULT_SNAPSHOT_DURATION_S,
-    n_samples:  int   = 0,
+    io:           int,
+    duration_s:   float       = DEFAULT_SNAPSHOT_DURATION_S,
+    n_samples:    int         = 0,
+    lease_handle: str | None  = None,
 ) -> dict:
     """
     Start an ADC snapshot capture in the background and return a job handle.
@@ -478,9 +480,14 @@ def capture_adc_snapshot_start(
     capture_adc_snapshot_status, then retrieve results with
     capture_adc_snapshot_result.
 
-    Parameters: same as capture_adc_snapshot.
+    Parameters: same as capture_adc_snapshot, plus:
+    - lease_handle: Optional handle from io_claim. If provided, runs inside
+      the existing lease; otherwise the lib auto-wraps for this call.
+
     Returns: job_id, status ("pending").
     """
+    if lease_handle is not None:
+        _verify_lease_covers(lease_handle, list(range(12, 16)))
     job_id = _new_job()
     _run_job(job_id, capture_adc_snapshot, io, duration_s, n_samples)
     return {"job_id": job_id, "status": "pending"}
@@ -514,11 +521,12 @@ def capture_adc_snapshot_result(job_id: str) -> dict:
 
 
 def capture_logic_analyzer_start(
-    channels:     int = LA_DEFAULT_CHANNELS,
-    rate_hz:      int = LA_DEFAULT_RATE_HZ,
-    depth:        int = LA_DEFAULT_DEPTH,
-    trigger_type: str = "none",
-    trigger_ch:   int = 0,
+    channels:     int        = LA_DEFAULT_CHANNELS,
+    rate_hz:      int        = LA_DEFAULT_RATE_HZ,
+    depth:        int        = LA_DEFAULT_DEPTH,
+    trigger_type: str        = "none",
+    trigger_ch:   int        = 0,
+    lease_handle: str | None = None,
 ) -> dict:
     """
     Start a logic analyzer capture in the background and return a job handle.
@@ -527,9 +535,14 @@ def capture_logic_analyzer_start(
     Poll with capture_logic_analyzer_status, then retrieve results with
     capture_logic_analyzer_result.
 
-    Parameters: same as capture_logic_analyzer.
+    Parameters: same as capture_logic_analyzer, plus:
+    - lease_handle: Optional handle from io_claim. If provided, runs inside
+      the existing lease; otherwise the lib auto-wraps for this call.
+
     Returns: job_id, status ("pending").
     """
+    if lease_handle is not None:
+        _verify_lease_covers(lease_handle, list(range(0, 12)))
     job_id = _new_job()
     _run_job(job_id, capture_logic_analyzer, channels, rate_hz, depth, trigger_type, trigger_ch)
     return {"job_id": job_id, "status": "pending"}

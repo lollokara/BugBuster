@@ -10,6 +10,10 @@ from ..safety import (
     require_analog_io, validate_dac_voltage, validate_dac_current,
     require_io_mode, check_faults_post,
 )
+from .io_owner import _verify_lease_covers
+
+# Analog IOs 3,6,9,12 map to slots 12,13,14,15
+_ANALOG_IO_TO_SLOT = {3: 12, 6: 13, 9: 14, 12: 15}
 
 
 def register(mcp) -> None:
@@ -101,9 +105,10 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def write_voltage(
-        io:      int,
-        voltage: float,
-        bipolar: bool = False,
+        io:           int,
+        voltage:      float,
+        bipolar:      bool = False,
+        lease_handle: str | None = None,
     ) -> dict:
         """
         Set a DAC voltage output on an ANALOG_OUT IO port.
@@ -117,10 +122,14 @@ def register(mcp) -> None:
             Unipolar mode (default): 0.0 to 12.0 V.
             Bipolar mode: -12.0 to +12.0 V.
         - bipolar: Set True if the IO was configured with bipolar=True.
+        - lease_handle: Optional handle from io_claim. If provided, runs inside
+          the existing lease; otherwise the lib auto-wraps for this call.
 
         Returns: io, voltage_v, success, warnings.
         """
         require_analog_io(io, "write_voltage")
+        if lease_handle is not None:
+            _verify_lease_covers(lease_handle, [_ANALOG_IO_TO_SLOT[io]])
         validate_dac_voltage(voltage, bipolar=bipolar)
         hal = session.get_hal()
         from bugbuster.hal import PortMode
@@ -138,9 +147,10 @@ def register(mcp) -> None:
     def write_current(
         io:               int,
         current_ma:       float,
-        allow_full_range: bool  = False,
-        bipolar:          bool  = False,
-        voltage:          float = 0.0,
+        allow_full_range: bool        = False,
+        bipolar:          bool        = False,
+        voltage:          float       = 0.0,
+        lease_handle:     str | None  = None,
     ) -> dict:
         """
         Set a current source output on a CURRENT_OUT IO port.
@@ -157,10 +167,14 @@ def register(mcp) -> None:
         - allow_full_range: Set True to allow up to 25 mA (full 4-20 mA range).
         - bipolar: True if the IO was configured with bipolar=True.
         - voltage: Compliance voltage in volts (used for bipolar guard check only).
+        - lease_handle: Optional handle from io_claim. If provided, runs inside
+          the existing lease; otherwise the lib auto-wraps for this call.
 
         Returns: io, current_ma, success, warnings.
         """
         require_analog_io(io, "write_current")
+        if lease_handle is not None:
+            _verify_lease_covers(lease_handle, [_ANALOG_IO_TO_SLOT[io]])
         validate_dac_current(current_ma, allow_full_range=allow_full_range)
         if bipolar and voltage > 10.0:
             raise ValueError(

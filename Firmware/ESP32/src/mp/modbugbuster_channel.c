@@ -51,6 +51,12 @@ static mp_obj_t bugbuster_channel_make_new(const mp_obj_type_t *type,
     return MP_OBJ_FROM_PTR(self);
 }
 
+// Channel owner-table slot: CH0..CH3 map to ownership slots 12..15 (plan §1).
+static inline uint8_t channel_owner_slot(uint8_t ch) { return (uint8_t)(12u + ch); }
+
+// FNV-1a("ch-auto") precomputed — avoids string hashing on the hot path.
+#define PURPOSE_TAG_CH_AUTO  0x5f5b0d96u
+
 static mp_obj_t bugbuster_channel_set_function(mp_obj_t self_in, mp_obj_t func_in)
 {
     bugbuster_channel_obj_t *self = (bugbuster_channel_obj_t *)MP_OBJ_TO_PTR(self_in);
@@ -58,6 +64,9 @@ static mp_obj_t bugbuster_channel_set_function(mp_obj_t self_in, mp_obj_t func_i
     if (!bugbuster_is_valid_channel_function(func)) {
         mp_raise_ValueError(MP_ERROR_TEXT("invalid channel function"));
     }
+    // Auto-wrap: one-shot 5 s claim when outside an explicit bugbuster.claim() context.
+    int arc = bugbuster_mp_auto_claim(channel_owner_slot(self->channel), PURPOSE_TAG_CH_AUTO);
+    if (arc != 0) { mp_raise_OSError(17); }   // IO_HELD_BY_OTHER -> EEXIST
     if (!bugbuster_mp_channel_set_function(self->channel, (int)func)) {
         mp_raise_OSError(MP_EIO);
     }
@@ -71,6 +80,8 @@ static mp_obj_t bugbuster_channel_set_voltage(size_t n_args, const mp_obj_t *arg
     mp_float_t voltage = mp_obj_get_float(args[1]);
     bool bipolar = (n_args >= 3) ? mp_obj_is_true(args[2]) : false;
 
+    int arc = bugbuster_mp_auto_claim(channel_owner_slot(self->channel), PURPOSE_TAG_CH_AUTO);
+    if (arc != 0) { mp_raise_OSError(17); }
     if (!bugbuster_mp_channel_set_voltage(self->channel, (float)voltage, bipolar)) {
         mp_raise_OSError(MP_EIO);
     }
@@ -94,6 +105,8 @@ static mp_obj_t bugbuster_channel_set_do(mp_obj_t self_in, mp_obj_t value_in)
 {
     bugbuster_channel_obj_t *self = (bugbuster_channel_obj_t *)MP_OBJ_TO_PTR(self_in);
 
+    int arc = bugbuster_mp_auto_claim(channel_owner_slot(self->channel), PURPOSE_TAG_CH_AUTO);
+    if (arc != 0) { mp_raise_OSError(17); }
     if (!bugbuster_mp_channel_set_do(self->channel, mp_obj_is_true(value_in))) {
         mp_raise_OSError(MP_EBUSY);
     }

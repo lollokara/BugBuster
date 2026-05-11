@@ -5,6 +5,23 @@ use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
 use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, hv_io::*, faults::*, gpio::*, din::*, dout::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*, hat::*, la::*};
+use crate::components::io_blocked_banner::IoBlockedBanner;
+
+/// Map a tab id to its IO slot footprint. Returns an empty slice if the tab does not claim IOs.
+fn tab_slots(tab_id: &str) -> &'static [u8] {
+    match tab_id {
+        "adc"         => crate::tabs::adc::SLOTS,
+        "vdac"        => crate::tabs::vdac::SLOTS,
+        "gpio"        => crate::tabs::gpio::SLOTS,
+        "din"         => crate::tabs::din::SLOTS,
+        "dout"        => crate::tabs::dout::SLOTS,
+        "scope"       => crate::tabs::scope::SLOTS,
+        "wavegen"     => crate::tabs::wavegen::SLOTS,
+        "sigpath"     => crate::tabs::signal_path::SLOTS,
+        "calibration" => crate::tabs::calibration::SLOTS,
+        _             => &[],
+    }
+}
 
 const TABS: &[(&str, &str)] = &[
     ("overview", "Overview"),
@@ -51,6 +68,48 @@ pub fn App() -> impl IntoView {
 
     // Hoist wavegen UI state (Bug Issue 5 — state loss on tab switch).
     provide_context(crate::tabs::wavegen::WavegenUiState::new());
+
+    // IO ownership: None = no conflict, Some(slots) = blocked by another interface.
+    let (io_blocked, set_io_blocked) = signal(Option::<Vec<u8>>::None);
+    // Owner kind code of the blocking interface (0 = unknown). Updated by both
+    // the tab-switch claim path and the io-owner-reject event.
+    let (io_blocked_kind, set_io_blocked_kind) = signal(0u8);
+
+    // Effect: on tab change, release old slots and claim new slots.
+    // Uses a StoredValue to track the previous tab so we can release it.
+    let prev_tab: StoredValue<String> = StoredValue::new(String::new());
+    Effect::new(move |_| {
+        let new_tab = active_tab.get();
+        let old_tab = prev_tab.get_value();
+        prev_tab.set_value(new_tab.clone());
+
+        let old_slots = tab_slots(&old_tab).to_vec();
+        let new_slots = tab_slots(&new_tab).to_vec();
+        let tab_label = new_tab.clone();
+
+        spawn_local(async move {
+            // Release slots from the old tab.
+            if !old_slots.is_empty() {
+                io_release(&old_slots).await;
+            }
+            // Claim slots for the new tab.
+            if !new_slots.is_empty() {
+                let ok = io_claim(&new_slots, 5000, &tab_label).await;
+                if ok {
+                    set_io_blocked_kind.set(0);
+                    set_io_blocked.set(None);
+                } else {
+                    web_sys::console::warn_1(
+                        &format!("[app] io_claim blocked for tab '{}'", tab_label).into(),
+                    );
+                    set_io_blocked.set(Some(new_slots));
+                }
+            } else {
+                set_io_blocked_kind.set(0);
+                set_io_blocked.set(None);
+            }
+        });
+    });
 
     // Toast notification system
     let (toasts, set_toasts) = signal(Vec::<(String, String, f64)>::new()); // (msg, kind, timestamp)
@@ -221,6 +280,42 @@ pub fn App() -> impl IntoView {
         closure.forget();
     });
 
+    // Listen for BBP_EVT_IO_OWNER_REJECT forwarded by the Tauri backend.
+    // Payload: { rejected_cmd: u8, slot: u8, current_owner_kind: u8 }
+    // On receipt: immediately show the IO-blocked banner for the rejected slot
+    // without waiting for the next tab-mount claim attempt.
+    spawn_local(async move {
+        let closure = Closure::new(move |event: JsValue| {
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event) {
+                let slot = evt.payload.get("slot")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u8)
+                    .unwrap_or(0xFF);
+                let kind = evt.payload.get("current_owner_kind")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u8)
+                    .unwrap_or(0);
+                set_io_blocked_kind.set(kind);
+                // Surface the slot immediately in the banner.
+                set_io_blocked.update(|blocked| {
+                    if slot != 0xFF {
+                        match blocked {
+                            Some(ref mut slots) => {
+                                if !slots.contains(&slot) {
+                                    slots.push(slot);
+                                }
+                            }
+                            None => *blocked = Some(vec![slot]),
+                        }
+                    }
+                });
+            }
+        });
+        listen("io-owner-reject", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
+        closure.forget();
+    });
+
     // Auto-scan
     spawn_local(async move {
         let result = invoke("discover_devices", JsValue::NULL).await;
@@ -352,6 +447,22 @@ pub fn App() -> impl IntoView {
                         }
                     }).collect::<Vec<_>>()}
                 </nav>
+
+                // IO blocked banner — shown when the active tab's slots are held by another interface.
+                {move || {
+                    if let Some(slots) = io_blocked.get() {
+                        let on_claimed = Callback::new(move |_| {
+                            set_io_blocked_kind.set(0);
+                            set_io_blocked.set(None);
+                        });
+                        let kind = io_blocked_kind.get();
+                        view! {
+                            <IoBlockedBanner slots=slots owner_kind=kind on_claimed=on_claimed />
+                        }.into_any()
+                    } else {
+                        view! { <></> }.into_any()
+                    }
+                }}
 
                 // Tab content
                 <div class="tab-container">

@@ -142,6 +142,11 @@ pub fn run() {
             commands::pick_profile_save_path,
             commands::set_pin_drive_strength,
             commands::set_efuse_config,
+            // IO Ownership
+            commands::io_claim,
+            commands::io_release,
+            commands::io_owner_status,
+            commands::io_force_release,
             // Logic Analyzer
             la_commands::la_check_usb,
             la_commands::la_connect_usb,

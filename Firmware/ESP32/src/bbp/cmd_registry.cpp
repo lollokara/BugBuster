@@ -27,6 +27,8 @@ extern "C" void register_cmds_misc(void);
 // Slice 5 subsystems
 extern "C" void register_cmds_streaming(void);
 extern "C" void register_cmds_script(void);
+// IO Ownership
+extern "C" void register_cmds_io_owner(void);
 
 // ---------------------------------------------------------------------------
 // Internal flat table (grows at init time)
@@ -76,6 +78,8 @@ void cmd_registry_init(void)
     // Slice 5 subsystems
     register_cmds_streaming();
     register_cmds_script();
+    // IO Ownership
+    register_cmds_io_owner();
 
     // Sort by opcode for O(log n) lookup
     qsort(s_registry, s_registry_len, sizeof(CmdDescriptor), cmp_opcode);

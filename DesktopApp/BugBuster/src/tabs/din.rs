@@ -4,6 +4,9 @@ use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;
 
+/// IO ownership slots claimed by the DIN tab (IO1..IO12 → indices 0..11).
+pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
 const DEBOUNCE_OPTIONS: &[(u8, &str)] = &[
     (0, "None"), (1, "1ms"), (2, "2ms"), (3, "4ms"),
     (4, "8ms"), (5, "16ms"), (6, "32ms"), (7, "64ms"),

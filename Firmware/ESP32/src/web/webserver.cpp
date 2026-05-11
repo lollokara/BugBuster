@@ -43,6 +43,7 @@
 #include "quicksetup.h"
 #include "ext_bus.h"
 #include "http_adapter.h"
+#include "io_owner.h"
 #include "scripting.h"
 #include "script_storage.h"
 #include "autorun.h"
@@ -1565,6 +1566,25 @@ static esp_err_t handle_channel_post_dispatch(httpd_req_t *req)
     const char *suffix = channel_suffix(req->uri);
     if (!suffix) return send_error(req, 400, "Invalid channel URL");
 
+    // IO ownership guard for mutating channel endpoints
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+    {
+        // Extract channel number from URI: /api/channel/N/...
+        const char *p = strstr(req->uri, "/api/channel/");
+        if (p) {
+            int ch = atoi(p + 13);
+            if (ch >= 0 && ch < 4) {
+                uint32_t fp = io_owner_compute_token_fp(auth_get_admin_token());
+                io_owner_t caller = { IO_OWNER_HTTP, (uint8_t)(fp & 0xFF), fp };
+                uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+                int rc = io_owner_guard_or_auto(io_owner_slot_for_ch((uint8_t)ch),
+                                                caller.kind, caller.session_id, caller.token_fp32, now_ms);
+                if (rc != 0) return send_error(req, 409, "IO slot owned by another session");
+            }
+        }
+    }
+#endif
+
     if (strcmp(suffix, "function") == 0)      return handle_post_channel_function(req);
     if (strcmp(suffix, "dac") == 0)           return handle_post_dac(req);
     if (strcmp(suffix, "adc/config") == 0)    return handle_post_adc_config(req);
@@ -1725,6 +1745,22 @@ static esp_err_t handle_dio_post_dispatch(httpd_req_t *req)
 
     const char *p = strstr(req->uri, "/api/dio/");
     if (!p) return send_error(req, 400, "Invalid DIO URI");
+
+    // IO ownership guard for mutating DIO endpoints
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+    {
+        int io = atoi(p + 9);
+        if (io >= 1 && io <= 12) {
+            uint32_t fp = io_owner_compute_token_fp(auth_get_admin_token());
+            io_owner_t caller = { IO_OWNER_HTTP, (uint8_t)(fp & 0xFF), fp };
+            uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+            int rc = io_owner_guard_or_auto(io_owner_slot_for_io((uint8_t)io),
+                                            caller.kind, caller.session_id, caller.token_fp32, now_ms);
+            if (rc != 0) return send_error(req, 409, "IO slot owned by another session");
+        }
+    }
+#endif
+
     // Find the action after /api/dio/N/
     p += 9; // skip "/api/dio/"
     while (*p >= '0' && *p <= '9') p++; // skip IO number
@@ -1734,6 +1770,142 @@ static esp_err_t handle_dio_post_dispatch(httpd_req_t *req)
     if (strcmp(p, "set") == 0)    return handle_post_dio_set(req);
 
     return send_error(req, 404, "Unknown DIO POST endpoint");
+}
+
+// =============================================================================
+// IO Ownership endpoints
+// =============================================================================
+
+// GET /api/io/owner — return all 16 slot states
+static esp_err_t handle_get_io_owner(httpd_req_t *req)
+{
+    io_owner_slot_t slots[IO_OWNER_NUM_SLOTS];
+    io_owner_get_all(slots);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr  = cJSON_AddArrayToObject(root, "slots");
+    for (int i = 0; i < IO_OWNER_NUM_SLOTS; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "slot",     i);
+        cJSON_AddNumberToObject(obj, "kind",     (int)slots[i].kind);
+        cJSON_AddNumberToObject(obj, "session",  slots[i].session_id);
+        cJSON_AddNumberToObject(obj, "lease_until_ms", (double)(uint32_t)slots[i].lease_until_ms);
+        cJSON_AddBoolToObject(obj, "free", slots[i].kind == IO_OWNER_NONE);
+        cJSON_AddItemToArray(arr, obj);
+    }
+    return send_json(req, root);
+}
+
+// POST /api/io/owner  body: {"slot":N, "kind":K, "session":S, "lease_ms":L}
+static esp_err_t handle_post_io_owner(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *jslot  = cJSON_GetObjectItem(body, "slot");
+    cJSON *jkind  = cJSON_GetObjectItem(body, "kind");
+    cJSON *jsess  = cJSON_GetObjectItem(body, "session");
+    cJSON *jlease = cJSON_GetObjectItem(body, "lease_ms");
+    if (!cJSON_IsNumber(jslot) || !cJSON_IsNumber(jkind)) {
+        cJSON_Delete(body);
+        return send_error(req, 400, "Missing slot or kind");
+    }
+    int slot     = jslot->valueint;
+    int kind     = jkind->valueint;
+    int session  = jsess  ? jsess->valueint  : 0;
+    int lease_ms = jlease ? jlease->valueint : 0;
+    cJSON_Delete(body);
+
+    if (slot < 0 || slot >= IO_OWNER_NUM_SLOTS) return send_error(req, 400, "slot out of range");
+
+    uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+    bool ok = io_owner_acquire((uint8_t)slot, (io_owner_kind_t)kind,
+                               (uint8_t)session, 0, (uint32_t)lease_ms, now_ms);
+    if (!ok) return send_error(req, 409, "IO slot owned by another session");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddNumberToObject(resp, "slot", slot);
+    return send_json(req, resp);
+}
+
+// DELETE /api/io/owner  body: {"slot":N, "session":S}
+static esp_err_t handle_delete_io_owner(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *jslot = cJSON_GetObjectItem(body, "slot");
+    cJSON *jsess = cJSON_GetObjectItem(body, "session");
+    if (!cJSON_IsNumber(jslot)) { cJSON_Delete(body); return send_error(req, 400, "Missing slot"); }
+    int slot    = jslot->valueint;
+    int session = jsess ? jsess->valueint : 0;
+    cJSON_Delete(body);
+
+    if (slot < 0 || slot >= IO_OWNER_NUM_SLOTS) return send_error(req, 400, "slot out of range");
+
+    bool released = io_owner_release((uint8_t)slot, (uint8_t)session);
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", released);
+    cJSON_AddNumberToObject(resp, "slot", slot);
+    return send_json(req, resp);
+}
+
+// POST /api/io/owner/force  body: {"slot":N}
+static esp_err_t handle_post_io_owner_force(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *jslot = cJSON_GetObjectItem(body, "slot");
+    if (!cJSON_IsNumber(jslot)) { cJSON_Delete(body); return send_error(req, 400, "Missing slot"); }
+    int slot = jslot->valueint;
+    cJSON_Delete(body);
+
+    if (slot < 0 || slot >= IO_OWNER_NUM_SLOTS) return send_error(req, 400, "slot out of range");
+
+    io_owner_force_release((uint8_t)slot);
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddNumberToObject(resp, "slot", slot);
+    return send_json(req, resp);
+}
+
+// =============================================================================
+// ADGS routes endpoint
+// =============================================================================
+
+// GET /api/adgs/routes — return cached switch state for all main devices
+static esp_err_t handle_get_adgs_routes(httpd_req_t *req)
+{
+    uint8_t states[ADGS_API_MAIN_DEVICES];
+    adgs_get_api_states(states);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr  = cJSON_AddArrayToObject(root, "devices");
+    for (int d = 0; d < ADGS_API_MAIN_DEVICES; d++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "device",     d);
+        cJSON_AddNumberToObject(obj, "switchMask", states[d]);
+        // List closed switches
+        cJSON *sw_arr = cJSON_AddArrayToObject(obj, "closedSwitches");
+        for (int s = 0; s < 8; s++) {
+            if (states[d] & (1u << s)) {
+                cJSON_AddItemToArray(sw_arr, cJSON_CreateNumber(s));
+            }
+        }
+        cJSON_AddItemToArray(arr, obj);
+    }
+#if ADGS_HAS_SELFTEST
+    cJSON_AddNumberToObject(root, "selftestMask", adgs_get_selftest());
+#endif
+    return send_json(req, root);
 }
 
 // =============================================================================
@@ -4753,6 +4925,35 @@ void initWebServer(void)
         .uri = "/api/scripts/reset", .method = HTTP_POST, .handler = handle_post_scripts_reset, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_scripts_reset);
+
+    // ----- IO Ownership routes -----
+
+    httpd_uri_t uri_io_owner_get = {
+        .uri = "/api/io/owner", .method = HTTP_GET, .handler = handle_get_io_owner, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_io_owner_get);
+
+    httpd_uri_t uri_io_owner_post = {
+        .uri = "/api/io/owner", .method = HTTP_POST, .handler = handle_post_io_owner, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_io_owner_post);
+
+    httpd_uri_t uri_io_owner_delete = {
+        .uri = "/api/io/owner", .method = HTTP_DELETE, .handler = handle_delete_io_owner, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_io_owner_delete);
+
+    httpd_uri_t uri_io_owner_force = {
+        .uri = "/api/io/owner/force", .method = HTTP_POST, .handler = handle_post_io_owner_force, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_io_owner_force);
+
+    // ----- ADGS routes endpoint -----
+
+    httpd_uri_t uri_adgs_routes = {
+        .uri = "/api/adgs/routes", .method = HTTP_GET, .handler = handle_get_adgs_routes, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_adgs_routes);
 
     // ----- Autorun routes -----
 

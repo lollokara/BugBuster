@@ -6,7 +6,9 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
 import { ChDOverlay } from "../../components/ChDOverlay";
+import { IoOwnerBanner } from "../../components/IoOwnerBanner";
 import { api, PairingRequiredError } from "../../api/client";
+import { useIoLease } from "../../api/io_lease";
 import {
   deviceStatus,
   deviceMac,
@@ -452,9 +454,11 @@ function DiagnosticsCard() {
 
 export function Analog() {
   useEffect(() => startSelftestStatusPolling(), []);
+  const lease = useIoLease([12, 13, 14, 15], "analog-tab");
 
   return (
     <div class="tab-stack">
+      <IoOwnerBanner lease={lease} slots={[12, 13, 14, 15]} />
       <AdcCard />
       <VdacCard />
       <IdacCard />

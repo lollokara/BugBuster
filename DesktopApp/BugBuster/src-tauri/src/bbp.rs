@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-pub const PROTO_VERSION: u8 = 4;
+pub const PROTO_VERSION: u8 = 5;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
 pub const HANDSHAKE_RSP_LEN: usize = 14;
@@ -112,6 +112,12 @@ pub const CMD_IDAC_CALIBRATE: u8 = 0xA3;
 pub const CMD_IDAC_CAL_ADD_POINT: u8 = 0xA4;
 pub const CMD_IDAC_CAL_CLEAR: u8 = 0xA5;
 pub const CMD_IDAC_CAL_SAVE: u8 = 0xA6;
+
+// IO Ownership
+pub const CMD_IO_CLAIM: u8 = 0xA7;
+pub const CMD_IO_RELEASE: u8 = 0xA8;
+pub const CMD_IO_OWNER_STATUS: u8 = 0xA9;
+pub const CMD_IO_FORCE_RELEASE: u8 = 0xAA;
 
 // PCA9535 GPIO Expander
 pub const CMD_PCA_GET_STATUS: u8 = 0xB0;
@@ -218,6 +224,8 @@ pub const EVT_ALERT: u8 = 0x82;
 pub const EVT_DIN: u8 = 0x83;
 pub const EVT_PCA_FAULT: u8 = 0x84;
 pub const EVT_LA_DONE: u8 = 0x85;
+pub const EVT_IO_PREEMPTED: u8 = 0x86; // IO slot preempted by selftest/internal (mirrors firmware BBP_EVT_IO_PREEMPTED)
+pub const EVT_IO_OWNER_REJECT: u8 = 0x87; // IO claim rejected because slot held by another owner
 pub const EVT_LA_LOG: u8 = 0xEC; // RP2040 log message relay
 pub const EVT_DISCONNECT: u8 = 0xFE; // Synthetic: USB reader thread detected serial error
 
@@ -242,6 +250,7 @@ pub const ERR_HVPAK_UNSUPPORTED_CAP: u8 = 0x0E;
 pub const ERR_HVPAK_INVALID_INDEX: u8 = 0x0F;
 pub const ERR_HVPAK_UNSAFE_REGISTER: u8 = 0x10;
 pub const ERR_TIMEOUT: u8 = 0x11;
+pub const ERR_IO_OWNERSHIP_REQUIRED: u8 = 0x12;
 
 // -----------------------------------------------------------------------------
 // COBS Codec
@@ -711,10 +720,10 @@ mod tests {
     #[test]
     fn test_handshake_parse() {
         let data = [
-            0xBB, 0x42, 0x55, 0x47, 0x04, 0x01, 0x02, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+            0xBB, 0x42, 0x55, 0x47, 0x05, 0x01, 0x02, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
         ];
         let info = HandshakeInfo::parse(&data).unwrap();
-        assert_eq!(info.proto_version, 4);
+        assert_eq!(info.proto_version, 5);
         assert_eq!(info.fw_major, 1);
         assert_eq!(info.fw_minor, 2);
         assert_eq!(info.fw_patch, 0);

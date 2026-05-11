@@ -12,6 +12,9 @@ enum CalState {
     Failed,
 }
 
+/// IO ownership slots claimed by the Calibration tab (CH0..CH3 → indices 12..15).
+pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+
 const CAL_TOTAL_POINTS: u32 = 100;
 
 #[allow(clippy::too_many_arguments)]

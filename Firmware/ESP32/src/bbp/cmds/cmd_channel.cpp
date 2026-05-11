@@ -10,6 +10,8 @@
 #include "bbp_codec.h"
 #include "bbp.h"
 #include "tasks.h"
+#include "io_owner.h"
+#include "esp_timer.h"
 
 // ---------------------------------------------------------------------------
 // Shared channel-function validator (one source of truth).
@@ -51,6 +53,14 @@ static int handler_set_ch_func(const uint8_t *payload, size_t len,
     if (ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
     if (!is_valid_channel_function(func)) return -CMD_ERR_OUT_OF_RANGE;
 
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
+
     tasks_apply_channel_function(ch, (ChannelFunction)func);
 
     size_t pos = 0;
@@ -73,6 +83,14 @@ static int handler_set_vout_range(const uint8_t *payload, size_t len,
     uint8_t ch      = bbp_get_u8(payload, &rpos);
     bool    bipolar = bbp_get_bool(payload, &rpos);
     if (ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
+
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
 
     Command cmd = {};
     cmd.type    = CMD_SET_VOUT_RANGE;
@@ -109,6 +127,14 @@ static int handler_set_din_config(const uint8_t *payload, size_t len,
     bool    scDet      = bbp_get_bool(payload, &rpos);
     if (ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
 
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
+
     Command cmd = {};
     cmd.type              = CMD_DIN_CONFIG;
     cmd.channel           = ch;
@@ -141,6 +167,14 @@ static int handler_set_rtd_config(const uint8_t *payload, size_t len,
     uint8_t current = bbp_get_u8(payload, &rpos);
     if (ch >= 4)     return -CMD_ERR_OUT_OF_RANGE;
     if (current > 1) return -CMD_ERR_OUT_OF_RANGE;
+
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
 
     Command cmd = {};
     cmd.type           = CMD_SET_RTD_CONFIG;

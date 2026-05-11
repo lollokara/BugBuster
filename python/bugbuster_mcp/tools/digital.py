@@ -7,6 +7,7 @@ Tools: read_digital, write_digital
 from __future__ import annotations
 from .. import session
 from ..safety import require_valid_io, require_io_mode, check_faults_post
+from .io_owner import _verify_lease_covers
 
 
 def register(mcp) -> None:
@@ -42,7 +43,7 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
-    def write_digital(io: int, state: bool) -> dict:
+    def write_digital(io: int, state: bool, lease_handle: str | None = None) -> dict:
         """
         Set the logic level on a DIGITAL_OUT or DIGITAL_OUT_LOW IO port.
 
@@ -53,10 +54,14 @@ def register(mcp) -> None:
         Parameters:
         - io: IO number 1-12.
         - state: True = drive HIGH (VLOGIC), False = drive LOW (GND).
+        - lease_handle: Optional handle from io_claim. If provided, runs inside
+          the existing lease; otherwise the lib auto-wraps for this call.
 
         Returns: io, state, success, warnings.
         """
         require_valid_io(io)
+        if lease_handle is not None:
+            _verify_lease_covers(lease_handle, [io - 1])
         hal = session.get_hal()
         from bugbuster.hal import PortMode
         require_io_mode(

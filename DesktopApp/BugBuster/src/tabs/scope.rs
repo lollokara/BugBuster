@@ -6,6 +6,9 @@ use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
 use crate::tauri_bridge::*;
 
+/// IO ownership slots claimed by the Scope tab (CH0..CH3 → indices 12..15).
+pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+
 const COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const MATH_COLOR: &str = "#ec4899";
 const MAX_POINTS: usize = 100_000;

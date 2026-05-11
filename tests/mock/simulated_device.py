@@ -14,7 +14,7 @@ from bugbuster.constants import ErrorCode
 class SimulatedDevice:
     """Simulated BugBuster device state machine."""
 
-    PROTO_VERSION = 4  # must match BBP_PROTO_VERSION in protocol.py
+    PROTO_VERSION = 5  # must match BBP_PROTO_VERSION in protocol.py
 
     def __init__(self):
         self.fw_version = (1, 0, 0)
@@ -116,6 +116,13 @@ class SimulatedDevice:
         # MUX state: 4 bytes (one per ADGS2414D), bit n = switch n
         self.mux_states = [0, 0, 0, 0]
 
+        # ADGS mutual-exclusion model (FIX 6):
+        # One switch closed per non-selftest ADGS device at a time.
+        # adgs_active[i] = switch index currently closed on device i, or None.
+        # Device index 3 (U23 selftest) is exempt — multiple switches may be closed.
+        # Exposed as device.adgs_active for test assertions.
+        self.adgs_active = [None, None, None, None]  # type: list[int | None]
+
         # Alert / supply state
         self.alert_status = 0
         self.alert_mask = 0xFFFF
@@ -125,6 +132,26 @@ class SimulatedDevice:
         self.die_temp_c = 25.0
         self.spi_ok = True
         self.admin_token = "BB-ADMIN-DEBUG"
+
+        # IO Ownership table: 16 slots (IO1..IO12 = 0..11, CH0..CH3 = 12..15)
+        # Each entry: {"kind": int, "session_id": int, "token_fp32": int,
+        #              "lease_until_ms": int, "purpose_tag": int}
+        self.io_owner_table = [
+            {"kind": 0, "session_id": 0, "token_fp32": 0, "lease_until_ms": 0, "purpose_tag": 0}
+            for _ in range(16)
+        ]
+        # Monotonic "now" for lease expiry — advanced by tick(now_ms)
+        self._now_ms: int = 0
+        # USB session ID: bumped once per simulated connect(), not per frame.
+        # All BBP frames within one simulated USB session share the same session_id,
+        # matching the firmware behavior where session_id is set at USB enumeration.
+        self._usb_session_id: int = 1
+        self._usb_session_id_counter: int = 1  # monotonic, never reset
+
+        # Event channel (FIX 5): pending events queued by emit_event().
+        # Consumed by _drain_events() in tests or delivered to the transport's
+        # _fire_event() when a transport is attached.
+        self._pending_events: list = []
 
         # Handler registry: cmd_id (int) -> callable(payload: bytes) -> bytes
         self._handlers: dict = {}
@@ -137,6 +164,45 @@ class SimulatedDevice:
         self._stream_thread = None
 
         self._register_all_handlers()
+
+    # ------------------------------------------------------------------
+    # USB session lifecycle (FIX 4)
+    # ------------------------------------------------------------------
+
+    def connect(self) -> None:
+        """Simulate a new USB connection — bumps _usb_session_id once per connect."""
+        self._usb_session_id_counter += 1
+        self._usb_session_id = self._usb_session_id_counter
+
+    def reset(self) -> None:
+        """Simulate device reset — equivalent to a new connect."""
+        self.connect()
+
+    # ------------------------------------------------------------------
+    # Event channel (FIX 5)
+    # ------------------------------------------------------------------
+
+    def emit_event(self, evt_id: int, payload: bytes) -> None:
+        """
+        Queue an event for consumption by tests or transport delivery.
+
+        Events are stored as (evt_id, payload) tuples in _pending_events.
+        If a transport is attached it is also notified via _fire_event().
+        """
+        self._pending_events.append((evt_id, payload))
+        if self._transport is not None and hasattr(self._transport, "_fire_event"):
+            self._transport._fire_event(evt_id, payload)
+
+    def _drain_events(self) -> list:
+        """
+        Return and clear all pending events.
+
+        Each item is a (evt_id: int, payload: bytes) tuple.  Tests call this
+        to verify that expected events were emitted.
+        """
+        events = list(self._pending_events)
+        self._pending_events.clear()
+        return events
 
     # ------------------------------------------------------------------
     # Handler registry
@@ -172,6 +238,17 @@ class SimulatedDevice:
         if self._stream_thread and self._stream_thread.is_alive():
             self._stream_thread.join(timeout=2.0)
         self._stream_stop.clear()
+
+    def tick(self, now_ms: int) -> None:
+        """Advance simulated time and expire stale leases."""
+        self._now_ms = now_ms
+        for slot in self.io_owner_table:
+            if slot["lease_until_ms"] > 0 and now_ms > slot["lease_until_ms"]:
+                slot["kind"] = 0
+                slot["session_id"] = 0
+                slot["token_fp32"] = 0
+                slot["lease_until_ms"] = 0
+                slot["purpose_tag"] = 0
 
     # ------------------------------------------------------------------
     # Handler auto-registration
@@ -241,5 +318,11 @@ class SimulatedDevice:
         try:
             from tests.mock.handlers import scripts
             scripts.register(self)
+        except ImportError:
+            pass
+
+        try:
+            from tests.mock.handlers import io_owner
+            io_owner.register(self)
         except ImportError:
             pass

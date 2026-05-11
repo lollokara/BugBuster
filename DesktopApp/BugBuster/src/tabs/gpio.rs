@@ -2,6 +2,9 @@ use leptos::prelude::*;
 use serde::Serialize;
 use crate::tauri_bridge::*;
 
+/// IO ownership slots claimed by the GPIO tab (IO1..IO12 → indices 0..11).
+pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
 #[component]
 pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     view! {

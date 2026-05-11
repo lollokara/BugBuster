@@ -27,7 +27,8 @@ Implemented:
 
 - [ ] Bench verification on real I2C/SPI targets — pending
 - [ ] Desktop and web UI — not started
-- [ ] USB BBP bus-status command and durable session lease model — not started
+- [ ] USB BBP bus-status command — not started
+- [x] Durable session lease model — delivered; see `Docs/IoOwnership.md`
 - [ ] Optional HTTP deferred-job endpoints — not started
 - [ ] Simulator/device-test coverage for the new BBP opcodes — not started
 

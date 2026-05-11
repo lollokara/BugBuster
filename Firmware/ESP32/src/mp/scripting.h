@@ -133,6 +133,19 @@ void scripting_get_status(ScriptStatus *out);
  */
 void scripting_reset_vm(void);
 
+// ---------------------------------------------------------------------------
+// IO-ownership session identity (IO_OWNER_SCRIPT caller ID)
+// ---------------------------------------------------------------------------
+
+/**
+ * Monotonic session counter, incremented once per vm_do_init() call.
+ * Used by MicroPython IO-ownership bindings to fill io_owner_t.session_id.
+ * Wraps at 255 (uint8_t), which is intentional — only distinguishes
+ * back-to-back sessions, not long-term identity.
+ * Thread-safe (atomic read, written only from taskMicroPython).
+ */
+uint8_t scripting_get_mp_session(void);
+
 #ifdef __cplusplus
 }
 #endif

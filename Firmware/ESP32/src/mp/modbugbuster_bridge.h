@@ -43,6 +43,25 @@ bool bugbuster_mp_spi_transfer(const uint8_t *tx, size_t tx_len,
 // (declarations live in net_bridge.h; this comment marks the boundary so
 //  future phases know where to add analogous bridge groups.)
 
+// ── IO-ownership binding (PR-5) — implemented in modbugbuster_bridge.cpp ────
+// claim_result: 0=OK, 1=held-by-other, 2=not-owned, 3=invalid-slot, <0=error
+int  bugbuster_mp_io_acquire(const uint8_t *slots, size_t n_slots,
+                              uint32_t lease_ms, uint32_t purpose_tag);
+int  bugbuster_mp_io_release(const uint8_t *slots, size_t n_slots);
+
+// Fills out[i] for i in 0..15.  Each row is:
+//   { kind(u8), session_id(u8), token_fp32(u32), lease_until_lo32(u32), purpose_tag(u32) }
+// Returns false only if the ownership table is unavailable.
+bool bugbuster_mp_io_status(uint8_t *kind_out, uint8_t *session_out,
+                             uint32_t *token_out, uint32_t *lease_lo_out,
+                             uint32_t *purpose_out, size_t n);
+
+// ── Auto-wrap helpers (modbugbuster_owner.c) — for Channel bindings ─────────
+// Returns true if the caller is already inside a bugbuster.claim() context.
+bool bugbuster_mp_in_claim_context(void);
+// One-shot 5 s auto-claim for backward-compat. Returns io_claim_result_t int.
+int  bugbuster_mp_auto_claim(uint8_t channel_slot, uint32_t purpose_tag);
+
 #ifdef __cplusplus
 }
 #endif

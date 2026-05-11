@@ -11,6 +11,7 @@ from ..safety import (
     require_valid_io, require_analog_io,
     validate_vadj_voltage,
 )
+from .io_owner import _verify_lease_covers
 
 log = logging.getLogger(__name__)
 
@@ -34,9 +35,10 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def configure_io(
-        io:      int,
-        mode:    str,
-        bipolar: bool = False,
+        io:           int,
+        mode:         str,
+        bipolar:      bool = False,
+        lease_handle: str | None = None,
     ) -> dict:
         """
         Configure a physical IO port (1-12) to the specified operating mode.
@@ -58,9 +60,14 @@ def register(mcp) -> None:
             HART            — HART modem overlay (4-20 mA with HART). IOs 3,6,9,12 only.
             HAT             — Route IO to HAT expansion connector. IOs 3,6,9,12 only.
         - bipolar: Enable ±12 V range for ANALOG_IN/ANALOG_OUT (default: 0-12 V only).
+        - lease_handle: Optional handle from io_claim. If provided, the call runs
+          inside the existing lease. If absent, the Python lib auto-wraps with a
+          one-shot 5 s lease (same as legacy single-shot behavior).
 
         Returns: io, mode, success, warnings.
         """
+        if lease_handle is not None:
+            _verify_lease_covers(lease_handle, [io - 1])
         require_valid_io(io)
         mode_upper = mode.upper()
         if mode_upper not in _PORT_MODE_NAMES:
@@ -99,9 +106,10 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def set_supply_voltage(
-        rail:    int,
-        voltage: float,
-        confirm: bool = False,
+        rail:         int,
+        voltage:      float,
+        confirm:      bool = False,
+        lease_handle: str | None = None,
     ) -> dict:
         """
         Set the adjustable DC supply voltage for an IO group.
@@ -116,8 +124,16 @@ def register(mcp) -> None:
         Note: VLOGIC (the logic level for digital IOs) is fixed at server
         startup via --vlogic and cannot be changed at runtime.
 
+        - lease_handle: Optional handle from io_claim. If provided, runs inside
+          the existing lease; otherwise the lib auto-wraps for this call.
+
         Returns: rail, voltage, success.
         """
+        if lease_handle is not None:
+            # rail 1 powers IO1-6 (slots 0-5), rail 2 powers IO7-12 (slots 6-11)
+            rail_slots = list(range(0, 6)) if rail == 1 else list(range(6, 12)) if rail == 2 else []
+            if rail_slots:
+                _verify_lease_covers(lease_handle, rail_slots)
         if rail == 0:
             raise ValueError(
                 "VLOGIC cannot be changed by AI tools. "

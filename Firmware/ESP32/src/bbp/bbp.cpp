@@ -7,6 +7,7 @@
 
 #include "bbp.h"
 #include "bbp_codec.h"
+#include "io_owner.h"
 #include "autorun.h"
 #include "usb_cdc.h"
 #include "tasks.h"
@@ -35,6 +36,12 @@ static bool     s_active = false;       // Binary mode active
 // from corrupting the stream after a transient binary-mode exit.
 static bool     s_cdcClaimed = false;
 static uint16_t s_evtSeq = 0;          // Event sequence counter
+
+// Rolling USB session counter. Bumped each time CDC #0 DTR rises (new host
+// connection). Never 0 — wraps from 255 to 1. Used as session_id in the BBP
+// caller context so that IO ownership claims from a prior host connection are
+// automatically invalidated when a new host connects.
+static uint8_t  s_bbp_usb_session = 1;
 
 // Handshake detection state
 static uint8_t  s_magic_idx = 0;
@@ -312,12 +319,29 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
     s_lastFrameMs = millis_now();
     autorun_note_inbound();
 
+    // Set BBP caller context so registry handlers can discover the session.
+    // BBP on USB CDC is single-threaded on the main loop, so the file-static
+    // is safe without additional locking.
+    io_owner_t bbp_caller = { IO_OWNER_USB, s_bbp_usb_session, 0 };
+    io_owner_set_current_bbp_caller(&bbp_caller);
+
     // Registry adapter: intercepts all 120 registered opcodes.
     int arc = bbp_adapter_dispatch(cmdId, payload, payloadLen, s_rspBuf, &rsp_len);
+
+    io_owner_clear_current_bbp_caller();
+
     if (arc == 0) {
         sendResponse(seq, cmdId, s_rspBuf, rsp_len);
         return;
     } else if (arc > 0) {
+        // If IO ownership rejection, emit BBP_EVT_IO_OWNER_REJECT before the error.
+        if ((uint8_t)arc == BBP_ERR_IO_OWNERSHIP_REQUIRED) {
+            uint8_t rej_slot = 0;
+            io_owner_kind_t rej_kind = IO_OWNER_NONE;
+            io_owner_get_last_rejection(&rej_slot, &rej_kind);
+            uint8_t evt[3] = { cmdId, rej_slot, (uint8_t)rej_kind };
+            bbpSendEvent(BBP_EVT_IO_OWNER_REJECT, evt, sizeof(evt));
+        }
         sendError(seq, cmdId, (uint8_t)arc);
         return;
     }
@@ -481,6 +505,15 @@ bool bbpIsActive(void)
 bool bbpCdcClaimed(void)
 {
     return s_cdcClaimed;
+}
+
+void bbpCdcNewConnection(void)
+{
+    // Bump session counter so stale ownership from a prior host is invalidated.
+    // Never allow 0 — wrap from 255 to 1.
+    s_bbp_usb_session++;
+    if (s_bbp_usb_session == 0) s_bbp_usb_session = 1;
+    ESP_LOGI(TAG, "CDC #0 new connection — USB session id now %d", (int)s_bbp_usb_session);
 }
 
 bool bbpDetectHandshake(uint8_t byte)

@@ -73,7 +73,11 @@ static void cdc_line_state_callback(int itf, cdcacm_event_t *event)
         // exiting binary mode mid-session causes stream corruption when a
         // new handshake races with queued log/prompt text. A fresh handshake
         // will reset state cleanly if the host really did disconnect.
-        (void)dtr;
+        // Rising DTR signals a new host connection — bump USB session counter
+        // so stale IO ownership from a prior host is invalidated.
+        if (dtr) {
+            bbpCdcNewConnection();
+        }
     } else {
         // Track DTR for bridge ports
         int bridge_id = itf - 1;

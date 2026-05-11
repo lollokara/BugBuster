@@ -11,6 +11,8 @@
 #include "bbp.h"
 #include "tasks.h"
 #include "state_lock.h"
+#include "io_owner.h"
+#include "esp_timer.h"
 
 // ---------------------------------------------------------------------------
 // GET_ADC_VALUE  payload: u8 ch
@@ -57,6 +59,14 @@ static int handler_set_adc_config(const uint8_t *payload, size_t len,
     uint8_t range = bbp_get_u8(payload, &rpos);
     uint8_t rate  = bbp_get_u8(payload, &rpos);
     if (ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
+
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
 
     Command cmd = {};
     cmd.type          = CMD_ADC_CONFIG;

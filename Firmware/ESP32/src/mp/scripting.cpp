@@ -84,6 +84,11 @@ static uint32_t     s_next_id = 1;
 // Scripting enabled flag (false if PSRAM alloc failed)
 static bool s_enabled = false;
 
+// IO-ownership session counter — incremented once per vm_do_init() so the
+// io_owner bindings can fill io_owner_t.session_id without caring about the
+// underlying script ID.  Written only from taskMicroPython; read atomically.
+static volatile uint8_t s_mp_session = 0;
+
 // V2-A persistent-mode state (owned exclusively by taskMicroPython)
 static ScriptingMode     s_mode           = SCRIPTING_MODE_EPHEMERAL;
 static bool              s_vm_initialized = false;  // true while VM is alive across evals
@@ -358,6 +363,10 @@ void scripting_get_status(ScriptStatus *out)
 
 static void vm_do_init(void)
 {
+    // Bump session counter before mp_init so any binding called during module
+    // init sees the new session_id.  Wraps at 255 intentionally.
+    s_mp_session = (uint8_t)(s_mp_session + 1u);
+
     gc_init(s_gc_heap, (char *)s_gc_heap + MP_HEAP_SIZE);
     mp_init();
 
@@ -644,6 +653,15 @@ bool scripting_run_string(const char *src, size_t len, bool persist)
 void scripting_reset_vm(void)
 {
     s_reset_requested = true;
+}
+
+// ---------------------------------------------------------------------------
+// scripting_get_mp_session — read-only accessor for the session counter
+// ---------------------------------------------------------------------------
+
+uint8_t scripting_get_mp_session(void)
+{
+    return s_mp_session;
 }
 
 // ---------------------------------------------------------------------------

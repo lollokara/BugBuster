@@ -37,6 +37,21 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * Thrown by `request()` when the firmware returns HTTP 409 (IO_OWNERSHIP_REQUIRED).
+ * The firmware encodes the blocking slot and current owner kind in the JSON body:
+ *   { slot: number, current_owner_kind: number }
+ */
+export class IoOwnerRejectError extends Error {
+  constructor(
+    public readonly slot: number,
+    public readonly currentOwnerKind: number,
+  ) {
+    super(`IO ownership conflict: slot ${slot} held by kind ${currentOwnerKind}`);
+    this.name = "IoOwnerRejectError";
+  }
+}
+
 export interface DeviceInfo {
   siliconRev: number;
   siliconId0: string;
@@ -289,6 +304,20 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     if (mac) clearCachedToken(mac);
     window.dispatchEvent(new CustomEvent("bb:pairing-required"));
     throw new PairingRequiredError();
+  }
+
+  if (res.status === 409) {
+    // IO_OWNERSHIP_REQUIRED — firmware encodes blocking slot and owner kind.
+    let slot = 0xFF;
+    let currentOwnerKind = 0;
+    try {
+      const j = await res.json();
+      if (j && typeof j.slot === "number") slot = j.slot;
+      if (j && typeof j.current_owner_kind === "number") currentOwnerKind = j.current_owner_kind;
+    } catch {
+      /* ignore parse error */
+    }
+    throw new IoOwnerRejectError(slot, currentOwnerKind);
   }
 
   if (!res.ok) {

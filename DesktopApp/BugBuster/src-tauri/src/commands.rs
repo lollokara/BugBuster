@@ -2540,6 +2540,174 @@ fn dedup_wifi_networks(mut networks: Vec<WifiNetwork>) -> Vec<WifiNetwork> {
 }
 
 // =============================================================================
+// IO Ownership
+// =============================================================================
+
+/// Claim one or more IO slots on behalf of the frontend tab.
+///
+/// Payload: `n_slots(u8), slots(u8[n]), lease_ms(u32 LE), purpose_tag(u32 LE)`.
+/// Response: `status(u8)` + per-slot status byte array (ignored here; errors
+/// surface as `Err`). Returns the raw response bytes for the caller to inspect
+/// if needed.
+#[tauri::command]
+pub async fn io_claim(
+    slots: Vec<u8>,
+    lease_ms: u32,
+    purpose: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<Vec<u8>> {
+    if slots.is_empty() {
+        return Err("io_claim: slots must not be empty".into());
+    }
+    // FNV-1a of the purpose string → purpose_tag (u32)
+    let purpose_tag: u32 = {
+        let mut h: u32 = 0x811c_9dc5;
+        for b in purpose.as_bytes() {
+            h ^= *b as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        h
+    };
+    let mut payload = Vec::with_capacity(1 + slots.len() + 8);
+    payload.push(slots.len() as u8);
+    payload.extend_from_slice(&slots);
+    payload.extend_from_slice(&lease_ms.to_le_bytes());
+    payload.extend_from_slice(&purpose_tag.to_le_bytes());
+
+    let rsp = mgr
+        .send_command(bbp::CMD_IO_CLAIM, &payload)
+        .await
+        .map_err(map_err)?;
+
+    // Register slots in the keep-alive set
+    if let Ok(mut active) = mgr.active_slots.lock() {
+        for s in &slots {
+            active.insert(*s);
+        }
+    }
+
+    Ok(rsp)
+}
+
+/// Release previously claimed IO slots.
+///
+/// `slots = None` → release all slots owned by this session (`n_slots = 0`
+/// on the wire). `slots = Some([])` is treated the same as `None`.
+#[tauri::command]
+pub async fn io_release(
+    slots: Option<Vec<u8>>,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let slots = slots.unwrap_or_default();
+    // n_slots = 0 means "release all owned by caller" per wire spec §2
+    let mut payload = Vec::with_capacity(1 + slots.len());
+    payload.push(slots.len() as u8);
+    payload.extend_from_slice(&slots);
+
+    mgr.send_command(bbp::CMD_IO_RELEASE, &payload)
+        .await
+        .map_err(map_err)?;
+
+    // Remove from keep-alive set
+    if let Ok(mut active) = mgr.active_slots.lock() {
+        if slots.is_empty() {
+            active.clear();
+        } else {
+            for s in &slots {
+                active.remove(s);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Query the ownership table for all 16 slots.
+///
+/// Wire response: 16 × 10 bytes = 160 bytes.
+/// Per-slot layout: `kind(u8), session_id(u8), token_fp32(u32 LE), lease_until_ms(u32 LE)`.
+#[tauri::command]
+pub async fn io_owner_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<Vec<OwnerSlot>> {
+    let rsp = mgr
+        .send_command(bbp::CMD_IO_OWNER_STATUS, &[])
+        .await
+        .map_err(map_err)?;
+
+    const SLOT_COUNT: usize = 16;
+    const SLOT_STRIDE: usize = 10; // kind(1) + session_id(1) + token_fp32(4) + lease_until_ms(4)
+    const EXPECTED_LEN: usize = SLOT_COUNT * SLOT_STRIDE;
+
+    if rsp.len() < EXPECTED_LEN {
+        return Err(format!(
+            "io_owner_status: response too short ({} bytes, expected {})",
+            rsp.len(),
+            EXPECTED_LEN
+        ));
+    }
+
+    let mut slots = Vec::with_capacity(SLOT_COUNT);
+    for i in 0..SLOT_COUNT {
+        let base = i * SLOT_STRIDE;
+        let kind = rsp[base];
+        let session_id = rsp[base + 1];
+        let token_fp32 = u32::from_le_bytes([
+            rsp[base + 2],
+            rsp[base + 3],
+            rsp[base + 4],
+            rsp[base + 5],
+        ]);
+        let lease_until_ms = u32::from_le_bytes([
+            rsp[base + 6],
+            rsp[base + 7],
+            rsp[base + 8],
+            rsp[base + 9],
+        ]);
+        slots.push(OwnerSlot::from_wire(
+            i as u8,
+            kind,
+            session_id,
+            token_fp32,
+            lease_until_ms,
+        ));
+    }
+
+    Ok(slots)
+}
+
+/// Force-release a slot regardless of current owner (admin operation).
+///
+/// Uses the admin token stored in the connection state automatically.
+/// `slot = 0xFF` releases all slots.
+#[tauri::command]
+pub async fn io_force_release(
+    slot: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    // The admin token is embedded in the transport layer (HTTP Authorization
+    // header or the USB session which is implicitly trusted); the firmware
+    // checks it server-side. We pass it as the first byte of the payload so
+    // the BBP handler can verify it via the stored connection token.
+    //
+    // Wire payload for CMD_IO_FORCE_RELEASE: `slot(u8)`.
+    mgr.send_command(bbp::CMD_IO_FORCE_RELEASE, &[slot])
+        .await
+        .map_err(map_err)?;
+
+    // If the caller force-released "all", also clear the local keep-alive set.
+    if slot == 0xFF {
+        if let Ok(mut active) = mgr.active_slots.lock() {
+            active.clear();
+        }
+    } else if let Ok(mut active) = mgr.active_slots.lock() {
+        active.remove(&slot);
+    }
+
+    Ok(())
+}
+
+// =============================================================================
 // Unit Tests
 // =============================================================================
 
@@ -3209,5 +3377,29 @@ mod tests {
         // Default fields should be zero/false
         assert_eq!(s.fw_major, 0);
         assert_eq!(s.io_voltage_mv, 0);
+    }
+
+    // ── IoOwnerRejectEvent parse tests ────────────────────────────────────────
+
+    #[test]
+    fn io_owner_reject_event_parses_valid_payload() {
+        use crate::state::IoOwnerRejectEvent;
+        // payload: rejected_cmd=0xA7 (CMD_IO_CLAIM), slot=3, current_owner_kind=2
+        let payload = [0xA7u8, 0x03, 0x02];
+        let evt = IoOwnerRejectEvent::from_payload(&payload).expect("should parse");
+        assert_eq!(evt.rejected_cmd, 0xA7);
+        assert_eq!(evt.slot, 3);
+        assert_eq!(evt.current_owner_kind, 2);
+    }
+
+    #[test]
+    fn io_owner_reject_event_rejects_short_payload() {
+        use crate::state::IoOwnerRejectEvent;
+        // payloads shorter than 3 bytes must return None
+        assert!(IoOwnerRejectEvent::from_payload(&[]).is_none());
+        assert!(IoOwnerRejectEvent::from_payload(&[0xA7]).is_none());
+        assert!(IoOwnerRejectEvent::from_payload(&[0xA7, 0x03]).is_none());
+        // exactly 3 bytes is the minimum valid length
+        assert!(IoOwnerRejectEvent::from_payload(&[0xA7, 0x03, 0x01]).is_some());
     }
 }

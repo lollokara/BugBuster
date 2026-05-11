@@ -159,13 +159,14 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
         except (ValueError, TypeError):
             return {"error": "invalid value"}
 
-    # Channel alert mask
-    if method == "POST" and path.startswith("/faults/channel/") and path.endswith("/mask"):
+    # Channel alert mask — matches firmware route `POST /api/faults/mask/<ch>`.
+    # Must be checked BEFORE the global `POST /faults/mask` so the channel
+    # variant wins on `/faults/mask/0` etc.
+    if method == "POST" and path.startswith("/faults/mask/"):
         if "mask" not in body:
             return {"error": "missing field: mask", "code": 400}
-        parts = path.split("/")
         try:
-            ch_idx = int(parts[3])
+            ch_idx = int(path[len("/faults/mask/"):])
             if 0 <= ch_idx < len(device.channels):
                 device.channels[ch_idx]["channel_alert_mask"] = int(body.get("mask", 0xFFFF)) & 0xFFFF
             return {"ok": True}

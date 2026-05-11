@@ -10,6 +10,8 @@
 #include "bbp_codec.h"
 #include "bbp.h"
 #include "tasks.h"
+#include "io_owner.h"
+#include "esp_timer.h"
 
 // ---------------------------------------------------------------------------
 // SET_DAC_CODE  payload: u8 ch, u16 code  → resp: u8 ch, u16 code
@@ -22,6 +24,14 @@ static int handler_set_dac_code(const uint8_t *payload, size_t len,
     uint8_t  ch   = bbp_get_u8(payload, &rpos);
     uint16_t code = bbp_get_u16(payload, &rpos);
     if (ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
+
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
 
     Command cmd = {};
     cmd.type    = CMD_SET_DAC_CODE;
@@ -49,6 +59,14 @@ static int handler_set_dac_voltage(const uint8_t *payload, size_t len,
     bool    bipolar = bbp_get_bool(payload, &rpos);
     if (ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
 
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
+
     Command cmd = {};
     cmd.type              = CMD_SET_DAC_VOLTAGE;
     cmd.channel           = ch;
@@ -75,6 +93,14 @@ static int handler_set_dac_current(const uint8_t *payload, size_t len,
     uint8_t ch         = bbp_get_u8(payload, &rpos);
     float   current_mA = bbp_get_f32(payload, &rpos);
     if (ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
+
+    {
+        io_owner_t caller = io_owner_get_current_bbp_caller();
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        int rc = io_owner_guard_or_auto(io_owner_slot_for_ch(ch),
+                                        caller.kind, caller.session_id, caller.token_fp32, now_ms);
+        if (rc != 0) return rc;
+    }
 
     Command cmd = {};
     cmd.type     = CMD_SET_DAC_CURRENT;

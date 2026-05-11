@@ -11,6 +11,7 @@ from bugbuster.bus import BugBusterBusManager
 
 from .. import session
 from ..safety import require_valid_io, validate_vadj_voltage
+from .io_owner import _verify_lease_covers
 
 
 def _planner() -> BugBusterBusManager:
@@ -131,6 +132,7 @@ def register(mcp) -> None:
         stop_addr: int = 0x77,
         allow_split_supplies: bool = False,
         confirm: bool = False,
+        lease_handle: str | None = None,
     ) -> dict:
         """
         Configure a routed external I2C bus and scan for attached devices.
@@ -150,11 +152,15 @@ def register(mcp) -> None:
         - stop_addr: Last 7-bit address to probe, default 0x77.
         - allow_split_supplies: Normally false; reject pins spanning VADJ1/VADJ2.
         - confirm: Must be true for supply voltages above the safe threshold.
+        - lease_handle: Optional handle from io_claim. If provided, runs inside
+          the existing lease; otherwise the lib auto-wraps for this call.
 
         Returns: detected addresses and the applied route plan.
         """
         require_valid_io(sda_io)
         require_valid_io(scl_io)
+        if lease_handle is not None:
+            _verify_lease_covers(lease_handle, [sda_io - 1, scl_io - 1])
         validate_vadj_voltage(supply_voltage, confirm=confirm)
 
         bb = session.get_client()
@@ -185,6 +191,7 @@ def register(mcp) -> None:
         mode: int = 0,
         allow_split_supplies: bool = False,
         confirm: bool = False,
+        lease_handle: str | None = None,
     ) -> dict:
         """
         Configure a routed external SPI bus and run one bounded full-duplex transfer.
@@ -205,6 +212,8 @@ def register(mcp) -> None:
         - mode: SPI mode 0-3.
         - allow_split_supplies: Normally false; reject pins spanning VADJ1/VADJ2.
         - confirm: Must be true for supply voltages above the safe threshold.
+        - lease_handle: Optional handle from io_claim. If provided, runs inside
+          the existing lease; otherwise the lib auto-wraps for this call.
 
         Returns: received bytes and the applied route plan.
         """
@@ -212,6 +221,9 @@ def register(mcp) -> None:
         for io in (mosi_io, miso_io, cs_io):
             if io is not None:
                 require_valid_io(io)
+        if lease_handle is not None:
+            bus_slots = [sck_io - 1] + [io - 1 for io in (mosi_io, miso_io, cs_io) if io is not None]
+            _verify_lease_covers(lease_handle, bus_slots)
         validate_vadj_voltage(supply_voltage, confirm=confirm)
         if not data or len(data) > 512 or any((not isinstance(b, int)) or b < 0 or b > 255 for b in data):
             raise ValueError("data must be 1-512 byte values in range 0-255")

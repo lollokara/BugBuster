@@ -44,6 +44,8 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "diag/hub_recovery.h"
+#include "io_owner.h"
+#include "esp_timer.h"
 
 // -----------------------------------------------------------------------------
 // Global objects
@@ -141,6 +143,9 @@ static void mainLoopTask(void* pvParam)
 
         // HAT background polling for unsolicited messages (e.g. LA done)
         hat_poll();
+
+        // IO ownership lease tick — expire timed leases
+        io_owner_tick((uint64_t)(esp_timer_get_time() / 1000LL));
 
         // (The legacy 30-second "[Heartbeat]" message was removed during the
         // CLI rebuild: it corrupted in-progress line edits. Liveness is now
@@ -384,6 +389,8 @@ extern "C" void app_main(void)
 
     // 13b. Command registry — must be after initTasks (handlers use sendCommand)
     //      and before initWebServer (http_adapter_register needs the registry)
+    io_owner_init();
+    serial_println("[BugBuster] IO ownership table initialized");
     cmd_registry_init();
     serial_println("[BugBuster] Command registry initialized");
 

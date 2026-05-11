@@ -5,7 +5,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { Led } from "../../components/Led";
+import { IoOwnerBanner } from "../../components/IoOwnerBanner";
 import { api, PairingRequiredError } from "../../api/client";
+import { useIoLease } from "../../api/io_lease";
 import { deviceMac, deviceStatus } from "../../state/signals";
 import {
   DIN_DEBOUNCE_OPTIONS,
@@ -332,8 +334,11 @@ function IoExpCard() {
 }
 
 export function Digital() {
+  const lease = useIoLease([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], "digital-tab");
+
   return (
     <div class="tab-stack">
+      <IoOwnerBanner lease={lease} slots={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]} />
       <DinDoutCard />
       <GpioCard />
       <IoExpCard />

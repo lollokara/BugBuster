@@ -5,6 +5,9 @@ use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
 use crate::tauri_bridge::*;
 
+/// IO ownership slots claimed by the Signal Path tab (CH0..CH3 → indices 12..15).
+pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+
 // PCA9535 control IDs (must match firmware PcaControl enum)
 const PCA_VADJ1_EN: u8 = 0;
 const PCA_VADJ2_EN: u8 = 1;
