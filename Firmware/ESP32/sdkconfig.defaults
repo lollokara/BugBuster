@@ -67,8 +67,16 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # NO_MEM) are the price we pay; they're cosmetic — those subsystems still
 # function — and chasing them by raising ALWAYSINTERNAL breaks the web
 # server, which is not an acceptable trade.
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
+
+# mDNS small allocations (e.g. 176 B RX buffers) spill to PSRAM when the
+# internal pool is exhausted post-webserver. Internal-only mDNS produced
+# `mdns_send: Cannot allocate memory` / `mdns_networking: Cannot allocate
+# memory (receive(176))` noise after httpd init drained internal heap.
+# httpd's task stack stays internal via httpd_config_t.task_caps; WiFi/DMA
+# allocations stay internal via explicit MALLOC_CAP_DMA|INTERNAL flags.
+# CONFIG_MDNS_MEMORY_ALLOC_INTERNAL is not set
 
 # Cache: bump with octal PSRAM (default 16 KB/32 KB is too small for external RAM workloads)
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y

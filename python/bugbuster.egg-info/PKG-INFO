@@ -17,4 +17,7 @@ Requires-Dist: requests>=2.28
 Provides-Extra: mcp
 Requires-Dist: mcp>=1.0; extra == "mcp"
 Requires-Dist: pydantic>=2.0; extra == "mcp"
+Provides-Extra: network
+Requires-Dist: zeroconf>=0.131; extra == "network"
+Requires-Dist: websockets>=12; extra == "network"
 Dynamic: requires-python

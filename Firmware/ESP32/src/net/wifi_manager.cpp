@@ -9,7 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
-#include "freertos/timers.h"
+#include "freertos/idf_additions.h"  // xTaskCreateWithCaps
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -26,22 +26,36 @@ static const char* NVS_NAMESPACE = "wifi_cfg";
 static char s_ap_pass[65] = WIFI_PASSWORD;
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
-#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_CONNECTED_BIT     BIT0
+#define WIFI_RECONNECT_REQ_BIT BIT1
 
 static portMUX_TYPE s_wifi_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_sta_connected = false;
 static bool s_connecting    = false;   // true while wifi_connect() is in progress
-static TimerHandle_t s_reconnect_timer = NULL;
 static char s_sta_ip[20]    = "0.0.0.0";
 static char s_ap_ip[20]     = "192.168.4.1";
 static char s_ap_mac[20]    = "";
 static char s_sta_ssid[64]  = "";
 
-static void reconnect_timer_cb(TimerHandle_t xTimer)
+// Reconnect runs on a dedicated worker, NOT on the FreeRTOS Timer Service task.
+// `esp_wifi_connect()` on WPA3-SAE pushes elliptic-curve crypto frames onto the
+// caller's stack, overflowing Tmr Svc's 2 KB stack and panicking with "stack
+// overflow in task Tmr Svc" (observed coredump 2026-05-07, pc=0x4037cec2).
+// Worker waits on WIFI_RECONNECT_REQ_BIT, sleeps 2 s, then attempts connect.
+static void wifi_reconnect_task(void* arg)
 {
-    if (!s_connecting && s_sta_ssid[0]) {
-        ESP_LOGI(TAG, "Reconnect timer fired, attempting connection...");
-        esp_wifi_connect();
+    for (;;) {
+        EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+                                               WIFI_RECONNECT_REQ_BIT,
+                                               pdTRUE,        // clear on exit
+                                               pdFALSE,       // wait for any
+                                               portMAX_DELAY);
+        if ((bits & WIFI_RECONNECT_REQ_BIT) == 0) continue;
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (!s_connecting && s_sta_ssid[0]) {
+            ESP_LOGI(TAG, "Reconnect worker: attempting connection...");
+            esp_wifi_connect();
+        }
     }
 }
 
@@ -152,9 +166,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             strncpy(s_sta_ip, "0.0.0.0", sizeof(s_sta_ip));
             portEXIT_CRITICAL(&s_wifi_state_mux);
             // Don't auto-retry if wifi_connect() is driving the sequence
-            if (!s_connecting && s_sta_ssid[0] && s_reconnect_timer) {
+            if (!s_connecting && s_sta_ssid[0] && s_wifi_event_group) {
                 ESP_LOGI(TAG, "STA disconnected, retrying in 2s...");
-                xTimerStart(s_reconnect_timer, 0);  // non-blocking, fires after 2s
+                // Defer to wifi_reconnect_task — sleeping 2 s here would block
+                // the event task; previously we used a FreeRTOS timer, but its
+                // 2 KB Tmr Svc stack overflows during WPA3-SAE crypto.
+                xEventGroupSetBits(s_wifi_event_group, WIFI_RECONNECT_REQ_BIT);
             }
         } else if (event_id == WIFI_EVENT_AP_START) {
             esp_netif_ip_info_t ip_info;
@@ -197,7 +214,16 @@ void wifi_init(const char* ap_ssid, const char* ap_pass,
     nvs_load_ap_password();
 
     s_wifi_event_group = xEventGroupCreate();
-    s_reconnect_timer = xTimerCreate("wifi_rc", pdMS_TO_TICKS(2000), pdFALSE, NULL, reconnect_timer_cb);
+    // Reconnect worker — 4 KB stack accommodates WPA3-SAE EC frames inside
+    // esp_wifi_connect() that overflow the 2 KB FreeRTOS Tmr Svc stack.
+    // Allocate the stack in PSRAM (xTaskCreateWithCaps) so we don't consume
+    // the ~7 KB internal-heap budget that httpd_start needs for its own task
+    // stack — putting this 4 KB stack in internal RAM drops the largest
+    // contiguous internal block below 4 KB and breaks httpd boot.
+    // The worker only runs after wifi disconnects (no flash-cache-disabled
+    // path touches it), so PSRAM stack is safe.
+    xTaskCreateWithCaps(wifi_reconnect_task, "wifi_rc", 4096, NULL,
+                        tskIDLE_PRIORITY + 5, NULL, MALLOC_CAP_SPIRAM);
 
     // Network interface
     esp_netif_init();

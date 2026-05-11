@@ -5,7 +5,9 @@ bugbuster/__init__.py
 bugbuster/bus.py
 bugbuster/client.py
 bugbuster/constants.py
+bugbuster/discovery.py
 bugbuster/hal.py
+bugbuster/ota.py
 bugbuster/protocol.py
 bugbuster/script.py
 bugbuster.egg-info/PKG-INFO
@@ -35,6 +37,8 @@ bugbuster_mcp/tools/debug.py
 bugbuster_mcp/tools/digital.py
 bugbuster_mcp/tools/discovery.py
 bugbuster_mcp/tools/io_config.py
+bugbuster_mcp/tools/ota.py
 bugbuster_mcp/tools/power.py
 bugbuster_mcp/tools/scripting.py
+bugbuster_mcp/tools/target.py
 bugbuster_mcp/tools/waveform.py
