@@ -1,5 +1,89 @@
 # CHANGELOG
 
+## [Unreleased — target flashing, OTA, WiFi reconnect] — 2026-05-11
+
+Post-v1.0.0 follow-up focused on getting target-device flashing working
+end-to-end from the MCP/notebook side, plus ESP32 OTA hardening and a
+WiFi reconnect path that survives WPA3-SAE. No BBP wire-protocol changes;
+one new HTTP endpoint family (`/api/uart_bridge/*` config) and several
+new MCP tools added in a backward-compatible way.
+
+### Added
+
+#### ESP32 firmware
+- WiFi reconnect now runs on a dedicated worker task created with
+  `xTaskCreateWithCaps` and a PSRAM stack, replacing the FreeRTOS
+  Timer Service callback path that was overflowing the timer stack
+  during WPA3-SAE association. Event-group bits and includes adjusted
+  accordingly.
+- `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0` in `sdkconfig.defaults` /
+  `sdkconfig.esp32s3` so mDNS and other components can spill into PSRAM
+  instead of starving internal heap.
+- OTA: bootloader-style autodiscovery of the active partition slot and
+  SHA-256 verification of the staged image before commit.
+- SPIFFS partition is now selected by label rather than fixed offset,
+  matching the documented upload workflow.
+
+#### MCP / Python lib (target-device control)
+- New MCP tools: `target_power_up`, `enter_bootloader`,
+  `release_bootloader` for ESP32-target-on-DUT flashing flows.
+- `BugBuster.uart_bridge_*` HTTP config endpoints and matching MCP
+  schema, allowing pin map (`tx_io`, `rx_io`, `boot_io`) and baud to be
+  set without a USB session.
+- HTTP admin-token auth wired through the MCP server (same token
+  scheme as the rest of the HTTP API).
+- `python` package gained a `network` extra (`zeroconf`, `websockets`)
+  for the new notebook autodiscovery flow.
+
+#### Desktop
+- App-launcher tab with per-target tiles; tiles surface live logs and
+  expose start/stop button actions (Tauri commands wired through to the
+  desktop runtime).
+- Notebook integration: desktop-app commands can now be invoked live
+  from a notebook session against a running desktop instance.
+
+#### Notebooks
+- ESP32 notebook gained device autodiscovery (zeroconf-based) and an
+  end-to-end OTA workflow that drives the new
+  autodiscovery + SHA-256 verification path.
+
+### Fixed
+
+#### ESP32 / target flashing
+- `enter_bootloader` sequencing: BOOT held low **before** VADJ is
+  applied, MUX writes go through the direct register path
+  (`dio_configure`/`dio_write` for the BOOT pin), and the MUX is
+  re-asserted after every firmware call because `bus_planner` clobbers
+  it on each entry. BOOT is now held low until `esptool` actually
+  connects, then released.
+- Default pin mapping corrected (`tx_io=2`, `rx_io=3`, `boot_io=1`) and
+  VADJ is power-cycled at the start of the sequence.
+- Workaround for the firmware TX MUX bug: IO directions are re-asserted
+  after `set_uart_config` because the UART driver was clearing them.
+- `uart_bridge` no longer stalls USB: GPIO matrix is pre-routed before
+  `uart_driver_install` (was causing SPI corruption when the driver
+  re-claimed pins after install).
+- Target tools use `session.get_hal()` instead of the stale `bb.hal`
+  global, so power/MUX state stays coherent across calls.
+- Small-task allocation regression fixed (heap-caps path).
+
+#### MCP schemas
+- `mux_control` schema rewritten to be OpenAI-compatible (no array
+  schemas, no nested unions); tool re-enabled after temporary disable.
+
+### Changed
+- ESP32 UART bridge power sequencing tightened (VADJ off → pin
+  pre-route → VADJ on → driver install) to match the bootloader entry
+  path.
+- Desktop launcher tiles now stream backend logs into the tile panel
+  instead of only the global log view.
+
+### Notes (bench-pending)
+- WiFi reconnect task: validated against the WPA3-SAE overflow; long-soak
+  reconnect-storm behaviour still to be measured.
+- OTA SHA-256 verification path: golden-image flow confirmed; failure
+  injection (truncated/tampered image) pending.
+
 ## [Unreleased — post-v1.0.0 docs sweep + bug-fix pass] — 2026-05-04
 
 Cross-repo documentation refresh and tracked-backlog clearance. No public
