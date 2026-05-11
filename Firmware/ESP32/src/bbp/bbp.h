@@ -311,6 +311,9 @@ uint16_t bbp_crc16(const uint8_t *data, size_t len);
  * @param device  Pointer to the AD74416H HAL instance
  * @param spi     Pointer to the SPI driver (for raw register access)
  */
+// Call bbpPreInit() once at the very start of app_main(), before any task that
+// can call bbpSendEvent() is spawned.  bbpInit() is idempotent on the mutex.
+void bbpPreInit(void);
 void bbpInit(AD74416H *device, AD74416H_SPI *spi);
 
 /** @brief Check if BBP binary mode is currently active. */

@@ -229,9 +229,26 @@ impl LaUsbConnection {
             .as_ref()
             .ok_or_else(|| anyhow!("LA USB not connected"))?;
 
+        // 30-second timeout matching the stream variant's pattern (which uses 5 s).
+        // A stuck firmware DMA would otherwise hold the USB mutex indefinitely,
+        // blocking reconnect attempts until the app is restarted (M18).
+        let rt = tokio::runtime::Handle::current();
+
         // 16KB buffer to accommodate large vendor bulk transfers efficiently.
         // The firmware uses a 2432-word (9728-byte) packet size for streaming.
-        let header_completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(16384)));
+        let timeout_result = rt.block_on(tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            iface.bulk_in(LA_EP_IN, RequestBuffer::new(16384)),
+        ));
+        let header_completion = match timeout_result {
+            Ok(c) => c,
+            Err(_) => {
+                self.stream_buffer.clear();
+                return Err(anyhow!(
+                    "USB capture read timed out (30 s) — device may be stuck; stream buffer cleared"
+                ));
+            }
+        };
         let header_result = header_completion
             .into_result()
             .map_err(|e| anyhow!("USB bulk read header failed: {}", e))?;
@@ -255,7 +272,21 @@ impl LaUsbConnection {
         }
 
         while data.len() < total_len {
-            let completion = block_on(iface.bulk_in(LA_EP_IN, RequestBuffer::new(16384)));
+            let chunk_result = rt.block_on(tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                iface.bulk_in(LA_EP_IN, RequestBuffer::new(16384)),
+            ));
+            let completion = match chunk_result {
+                Ok(c) => c,
+                Err(_) => {
+                    self.stream_buffer.clear();
+                    return Err(anyhow!(
+                        "USB capture read timed out (30 s) at offset {}/{} — stream buffer cleared",
+                        data.len(),
+                        total_len
+                    ));
+                }
+            };
             let result = completion
                 .into_result()
                 .map_err(|e| anyhow!("USB bulk read failed at offset {}: {}", data.len(), e))?;

@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## [Unreleased — whole-repo audit] — 2026-05-11
+
+Read-only audit across 10 surfaces of the repo (RP2040 fw, ESP32 fw core,
+ESP32 web UI, desktop Leptos, desktop Tauri/Rust, Python lib, MCP server,
+tests + simulator, docs, CI/scripts). No code changes; the consolidated
+worklist lives in `Docs/bugs-improvements-2026-05-11.md`.
+
+Totals: **18 HIGH · 26 MEDIUM · 16 LOW + 6 doc defects = 60 findings**.
+
+Highlights to schedule next:
+- RP2040: rearm-counter double-increment + cross-core sync mismatch in
+  `bb_la_usb.c`; DMA-IRQ-during-rearm race in `bb_la.c` (H01–H03).
+- ESP32: `s_txMutex` race before `bbp_init()` runs (H04); `IDAC` channel
+  bounds inconsistent between SET_VOLTAGE and GET_STATUS (H05); WiFi
+  password persist NVS error not propagated (H06).
+- Web UI: operator-precedence bug in App.tsx polling-failure log (H07);
+  slider state clobbered by `/api/overview` poll (H08).
+- Desktop FE: `Vec` vs fixed-array drift between Leptos and Tauri serde
+  structs (H09); 3 unwrap-on-cleanup panics (H10).
+- Desktop BE: WiFi-payload `.unwrap()` panic over HTTP (H11);
+  silent-zero `unwrap_or(0)` on optional status fields (H12).
+- Python: 3 `resp[0]`-without-length-guard sites (H13–H15).
+- Tests: simulator missing `WIFI_SET_AP_PASSWORD` (0xEF) handler (H16);
+  completeness test asserts only handler existence (H17).
+- CI: floating-tag third-party actions on the desktop release path (H18).
+- Docs: stale version badge in `README.md`; `ReleaseChecklist.md`
+  `--expect` values lag canon; "28 tools" repeated three times in README
+  (real count 41 / actual MCP server 45).
+
+Non-negotiables in `AGENTS.md` re-verified during the audit (USB descriptor
+patch, TinyUSB single-thread rule, BBP `PROTO_VERSION` lockstep across three
+files, RP2040 two-file version, desktop three-file version) — all still hold.
+
 ## [Unreleased — target flashing, OTA, WiFi reconnect] — 2026-05-11
 
 Post-v1.0.0 follow-up focused on getting target-device flashing working

@@ -174,7 +174,13 @@ static volatile bool s_streaming_session = false;
 // (write_available returns 0), give up after this many send_pending() calls
 // to prevent USB task starvation of other FreeRTOS tasks.
 static volatile uint32_t s_deferred_stop_retries = 0;
-#define DEFERRED_STOP_MAX_RETRIES  10000u  // ~1s at USB task rate
+// M02: reduced from 10000 to 100 so a stuck IN endpoint is detected within
+// ~10 ms at USB task rate rather than ~1 s, keeping inter-session latency low.
+#define DEFERRED_STOP_MAX_RETRIES  100u
+
+// M02: counts emergency-path PKT_STOP firings (endpoint stuck beyond retry cap).
+// Monotonically increasing; useful for observability and stress-test assertions.
+static volatile uint32_t s_emergency_stop_count = 0;
 
 // Set when vendor-bulk STOP uses soft HW stop; consumed by send_pending()
 // after PKT_STOP emission to call bb_la_stop() for full cleanup.
@@ -243,7 +249,7 @@ static void rp2040_sie_endpoint_reset(uint8_t ep_addr) {
 
 void bb_la_usb_soft_reset(void) {
     s_streaming_session = false;
-    uint32_t status = save_and_disable_interrupts();
+    uint32_t lock_saved = spin_lock_blocking(bb_la_get_dma_lock());
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
     s_bulk_data.ring_buf = NULL;
@@ -261,14 +267,11 @@ void bb_la_usb_soft_reset(void) {
     // Only do direct SIE register writes; the full TinyUSB cleanup
     // (fifo_clear + rx_reprime) happens via s_need_endpoint_rearm on Core 0.
     rp2040_sie_endpoint_reset(0x87); // IN only — safe direct register write
-    if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
-    s_need_endpoint_rearm = true;    // defer TinyUSB cleanup to Core 0
-
-    // Bump both counters together — no DCD abort needed, so
-    // request and complete stay in sync.
+    // Single atomic bump — request and complete stay in sync (no DCD abort).
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
     s_rearm_complete_count = s_rearm_request_count;
-    restore_interrupts(status);
+    s_need_endpoint_rearm = true;    // defer TinyUSB cleanup to Core 0
+    spin_unlock(bb_la_get_dma_lock(), lock_saved);
     // Wake the USB task so it picks up any pending control markers
     // (e.g., the PKT_STOP queued by HAT_CMD_LA_STOP after this call).
 #ifdef DEBUGPROBE_INTEGRATION
@@ -277,7 +280,7 @@ void bb_la_usb_soft_reset(void) {
 }
 
 void bb_la_usb_abort_bulk(void) {
-    taskENTER_CRITICAL();
+    uint32_t lock_saved = spin_lock_blocking(bb_la_get_dma_lock());
     s_streaming_session = false;
     s_bulk_data.active = false;
     s_bulk_data.buf = NULL;
@@ -289,7 +292,7 @@ void bb_la_usb_abort_bulk(void) {
     s_pending_hw_cleanup = false;
     s_deferred_stop = false;      // cancel any stale deferred stop
     if (s_rearm_request_count < UINT8_MAX) s_rearm_request_count++;
-    taskEXIT_CRITICAL();
+    spin_unlock(bb_la_get_dma_lock(), lock_saved);
     // Signal the USB task to re-arm the endpoint (tud_vendor_n_write_clear must
     // run from tud_task context — send_pending() will pick this up).
     if (tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
@@ -335,14 +338,14 @@ bool bb_la_usb_send_stream_marker(uint8_t packet_type, uint8_t info) {
 }
 
 void bb_la_usb_register_readout(const uint8_t *buf, uint32_t total_bytes) {
-    taskENTER_CRITICAL();
+    uint32_t lock_saved = spin_lock_blocking(bb_la_get_dma_lock());
     s_bulk_data.buf = buf;
     s_bulk_data.total_len = total_bytes;
     s_bulk_data.sent_len = 0;
     s_bulk_data.is_live = false;
     s_bulk_data.header_sent = false;
     s_bulk_data.active = true;
-    taskEXIT_CRITICAL();
+    spin_unlock(bb_la_get_dma_lock(), lock_saved);
 #ifdef DEBUGPROBE_INTEGRATION
     if (tud_taskhandle) xTaskNotify(tud_taskhandle, 0, eNoAction);
 #endif
@@ -362,7 +365,10 @@ void bb_la_usb_send_pending(void) {
 
     // Re-arm endpoints if abort_bulk() was called from any task context.
     // Two-step: hardware SIE reset (AVAIL=0) then TinyUSB software state clear.
+    // H03: hold the DMA spinlock across the full rearm sequence so a DMA IRQ
+    // cannot fire and mutate s_stream_ring while the endpoint is being reset.
     if (s_need_endpoint_rearm) {
+        uint32_t rearm_lock_saved = spin_lock_blocking(bb_la_get_dma_lock());
 
         s_need_endpoint_rearm = false;
 
@@ -398,6 +404,7 @@ void bb_la_usb_send_pending(void) {
         tud_vendor_n_rx_reprime(BB_LA_VENDOR_ITF);  // re-prime cleanly
 
         s_rearm_complete_count = s_rearm_request_count;
+        spin_unlock(bb_la_get_dma_lock(), rearm_lock_saved);
     }
 
     // 1. Drain control markers (highest priority)
@@ -412,10 +419,10 @@ void bb_la_usb_send_pending(void) {
         tud_vendor_n_write(BB_LA_VENDOR_ITF, pkt, 4);
         tail = (tail + 4) % BULK_CTRL_BUF_SIZE;
         s_deferred_stop_retries = 0;  // DATA MOVING
-        
-        uint32_t status = save_and_disable_interrupts();
+
+        uint32_t lock_saved = spin_lock_blocking(bb_la_get_dma_lock());
         s_bulk_ctrl_tail = tail;
-        restore_interrupts(status);
+        spin_unlock(bb_la_get_dma_lock(), lock_saved);
     }
 
     // 2. If no control markers, check for data
@@ -430,13 +437,18 @@ void bb_la_usb_send_pending(void) {
                 uint32_t stream_len;
                 // bb_la_stream_get_buffer now pulls from the 4-buffer ring
                 if (bb_la_stream_get_buffer(&stream_buf, &stream_len)) {
+                    // Save ring slot reference BEFORE compression so it is
+                    // always set on both the compressed and raw-fallback paths.
+                    // M01: prevents a second DMA buffer from arriving and the
+                    // ring_buf reference being lost if we exit the compressed
+                    // branch before the assignment below.
+                    s_bulk_data.ring_buf = stream_buf;
                     // Attempt segment-level RLE compression.
                     // INVARIANT: s_rle_scratch is written only here, when
                     // s_bulk_data.active == false.  send_pending() is non-reentrant
                     // (Core 0 / USB task only — see bb_main_integrated.c).
                     uint32_t comp_len = bb_la_stream_rle_compress(
                         stream_buf, stream_len, s_rle_scratch, stream_len);
-                    s_bulk_data.ring_buf = stream_buf;  // save for raw-fallback release
                     if (comp_len > 0) {
                         // Compressed: release ring slot immediately, send scratch.
                         bb_la_stream_buffer_sent(stream_buf);
@@ -555,7 +567,10 @@ void bb_la_usb_send_pending(void) {
             // 0x11 cascade on the next BBP session).
             s_deferred_stop = false;
             s_bulk_data.active = false; // Abort data drain
-            {
+            s_emergency_stop_count++;   // M02: observability counter
+            // M02: only attempt the write if the endpoint is still mounted;
+            // if it dropped mid-session the write would be a no-op anyway.
+            if (tud_vendor_n_mounted(BB_LA_VENDOR_ITF)) {
                 uint8_t stop_pkt[4] = {
                     LA_USB_STREAM_PKT_STOP, s_live_seq, 0, s_deferred_stop_info
                 };

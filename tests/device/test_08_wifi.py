@@ -1,7 +1,8 @@
 """
 test_08_wifi.py — WiFi management tests.
 
-Covers: STA/AP status, scan results, field validation.
+Covers: STA/AP status, scan results, field validation,
+        AP password set (3-way persist semantics on --sim path).
 These tests verify the WiFi management API works correctly without
 attempting to connect to a network (which would require credentials).
 """
@@ -128,3 +129,76 @@ def test_wifi_status_consistent(device):
         f"AP SSID changed between calls: {ap_ssid_1!r} vs {ap_ssid_2!r}"
     )
     assert_no_faults(device)
+
+
+# ---------------------------------------------------------------------------
+# WIFI_SET_AP_PASSWORD — 3-way status semantics (--sim path only)
+# ---------------------------------------------------------------------------
+
+def _get_sim_device(usb_device):
+    """Extract the underlying SimulatedDevice from the transport, or None."""
+    try:
+        return usb_device._transport._device  # noqa: SLF001
+    except AttributeError:
+        return None
+
+
+def test_wifi_set_ap_password_persisted(usb_device):
+    """
+    wifi_set_ap_password() returns True when the simulator returns 0x01 (persisted OK).
+    """
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Simulator-only test — requires --sim")
+
+    sim.wifi_ap_password_persist_result = 0x01
+    result = usb_device.wifi_set_ap_password("correct-horse-battery-staple")
+    assert result is True, f"Expected True (persisted), got {result!r}"
+
+
+def test_wifi_set_ap_password_nvs_skip(usb_device, monkeypatch):
+    """
+    wifi_set_ap_password() returns False when the simulator returns 0x00 (NVS skip).
+    Status 0x00 means the password matched NVS and no write was needed.
+    """
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Simulator-only test — requires --sim")
+
+    sim.wifi_ap_password_persist_result = 0x00
+    result = usb_device.wifi_set_ap_password("correct-horse-battery-staple")
+    # 0x00 is falsy — client.py returns bool(resp[0]) which is False
+    assert result is False, f"Expected False (NVS skip / no-op), got {result!r}"
+
+
+def test_wifi_set_ap_password_persist_failed(usb_device):
+    """
+    wifi_set_ap_password() returns True (non-zero byte) when the simulator
+    returns 0x02 (persist failed).  The client converts any non-zero byte to True;
+    callers that need the exact code must inspect the raw response.
+    Status 0x02 is distinct from 0x00 (NVS skip) — the write was attempted but failed.
+    """
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Simulator-only test — requires --sim")
+
+    sim.wifi_ap_password_persist_result = 0x02
+    result = usb_device.wifi_set_ap_password("correct-horse-battery-staple")
+    # 0x02 is truthy — bool(0x02) == True
+    assert result is True, f"Expected True (persist-failed byte 0x02 is truthy), got {result!r}"
+
+
+def test_wifi_set_ap_password_roundtrip(usb_device):
+    """
+    After calling wifi_set_ap_password(), the simulator stores the password on the device.
+    """
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Simulator-only test — requires --sim")
+
+    sim.wifi_ap_password_persist_result = 0x01
+    password = "my-secret-pass"
+    usb_device.wifi_set_ap_password(password)
+    assert sim.wifi_ap_password == password, (
+        f"Simulator did not store password: expected {password!r}, got {sim.wifi_ap_password!r}"
+    )

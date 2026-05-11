@@ -48,9 +48,12 @@ def rp2040_version() -> str:
     cmake_major, cmake_minor = match.group(1), match.group(2)
     version = f"{cmake_major}.{cmake_minor}"
 
-    # Cross-check: if bb_main.c still has literal (non-#ifndef-guarded) defines,
-    # verify they agree with CMakeLists.  Guarded defines ("#ifndef BB_HAT_FW_MAJOR")
-    # are the expected post-automation form and need no check.
+    # Cross-check bb_main.c defines against CMakeLists.txt PROBE_VERSION.
+    # Two forms are handled:
+    #   1. Bare #define (non-guarded): must agree with CMake value.
+    #   2. #ifndef-guarded block (#ifndef BB_HAT_FW_MAJOR / #define BB_HAT_FW_MAJOR <N>):
+    #      the guarded value is a sentinel (0 = not injected by CMake); if a non-zero
+    #      sentinel is present it must still agree with CMakeLists.txt.
     main_text = read_text(RP2040_MAIN)
     for name, cmake_val in (("BB_HAT_FW_MAJOR", cmake_major), ("BB_HAT_FW_MINOR", cmake_minor)):
         # Detect a bare (non-guarded) literal #define line
@@ -66,6 +69,20 @@ def rp2040_version() -> str:
                     f"Edit PROBE_VERSION in CMakeLists.txt only and remove "
                     f"the bare #define from bb_main.c (use #ifndef guard instead)."
                 )
+        else:
+            # Check for #ifndef-guarded block: #ifndef <NAME>\n#define <NAME> <N>
+            guarded_match = re.search(
+                rf'(?m)^#ifndef\s+{name}\s*\n#define\s+{name}\s+([0-9]+)', main_text
+            )
+            if guarded_match is not None:
+                guarded_val = guarded_match.group(1)
+                # Sentinel value 0 means CMake injection is expected at build time — skip.
+                if guarded_val != "0" and guarded_val != cmake_val:
+                    raise RuntimeError(
+                        f"{RP2040_MAIN}: #ifndef-guarded {name} default is {guarded_val!r} "
+                        f"but CMakeLists.txt PROBE_VERSION says {cmake_val!r}. "
+                        f"Update the guarded default or PROBE_VERSION so they agree."
+                    )
 
     return version
 

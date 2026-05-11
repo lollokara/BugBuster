@@ -199,7 +199,7 @@ export function SignalPath() {
   useEffect(() => {
     const st = deviceStatus.value;
     if (st && typeof st.lshiftEnabled === "boolean") oe.value = st.lshiftEnabled;
-  });
+  }, [deviceStatus.value]);
 
   /* ---- Canvas size observer ---- */
   useEffect(() => {

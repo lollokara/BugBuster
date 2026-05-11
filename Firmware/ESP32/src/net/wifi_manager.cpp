@@ -61,29 +61,37 @@ static void wifi_reconnect_task(void* arg)
 
 // ---- NVS helpers ----
 
-static void nvs_save_sta_credentials(const char* ssid, const char* pass)
+// H06: returns true only when all NVS writes and commit succeed.
+// Bails before commit if either set fails so partial data is never committed.
+static bool nvs_save_sta_credentials(const char* ssid, const char* pass)
 {
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_open(%s) failed: %s", NVS_NAMESPACE, esp_err_to_name(err));
-        return;
+        return false;
     }
     esp_err_t set_err = nvs_set_str(h, "sta_ssid", ssid);
     if (set_err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_set_str(sta_ssid) failed: %s", esp_err_to_name(set_err));
+        nvs_close(h);
+        return false;
     }
     set_err = nvs_set_str(h, "sta_pass", pass);
     if (set_err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_set_str(sta_pass) failed: %s", esp_err_to_name(set_err));
+        nvs_close(h);
+        return false;
     }
     esp_err_t commit_err = nvs_commit(h);
     nvs_close(h);
     if (commit_err == ESP_OK) {
         ESP_LOGI(TAG, "STA credentials saved to NVS");
+        return true;
     } else {
         ESP_LOGE(TAG, "nvs_commit failed for STA credentials: %s",
                  esp_err_to_name(commit_err));
+        return false;
     }
 }
 
@@ -384,9 +392,10 @@ bool wifi_connect(const char* ssid, const char* pass)
 
     bool ok = connected;
     if (ok) {
-        // Save credentials to NVS on success
-        nvs_save_sta_credentials(ssid, pass ? pass : "");
-        ESP_LOGI(TAG, "Connected to '%s' — credentials saved", ssid);
+        // Save credentials to NVS on success; log if persist fails (H06)
+        bool persisted = nvs_save_sta_credentials(ssid, pass ? pass : "");
+        ESP_LOGI(TAG, "Connected to '%s' — credentials %s", ssid,
+                 persisted ? "saved" : "save FAILED (NVS error)");
     } else {
         ESP_LOGW(TAG, "Failed to connect to '%s'", ssid);
     }

@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "hardware/sync.h"
 
 // Trigger types
 typedef enum {
@@ -164,3 +165,9 @@ bool bb_la_get_capture_buffer(const uint8_t **buf_out, uint32_t *len_out);
  *        failed to accept the whole DMA half.
  */
 void bb_la_stream_note_short_write(void);
+
+/**
+ * @brief Return the DMA spinlock used to protect cross-core ring state.
+ * Used by bb_la_usb.c to hold the same lock across endpoint rearm operations.
+ */
+spin_lock_t *bb_la_get_dma_lock(void);

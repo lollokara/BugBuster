@@ -95,6 +95,11 @@ static uint32_t          s_auto_reset_count = 0;    // watermark/idle auto-reset
 #define MP_HEAP_SOFT_WATERMARK_PCT  80u
 #define MP_HEAP_HARD_WATERMARK_PCT  95u
 
+// M05: MP_IDLE_CHECK_MS must be > 0 or xQueueReceive is called with timeout=0,
+// which means the task never yields when the queue is continuously saturated,
+// starving lower-priority tasks and potentially tripping the WDT.
+static_assert(MP_IDLE_CHECK_MS > 0, "MP_IDLE_CHECK_MS must be > 0 to ensure task yields");
+
 // ---------------------------------------------------------------------------
 // Forward declarations for C linkage (called from C translation units)
 // ---------------------------------------------------------------------------
@@ -536,6 +541,12 @@ static void taskMicroPython(void *pvParam)
         }
 
         status_set_done(had_error, err_msg);
+
+        // M05: yield at least one tick between back-to-back evals so lower-
+        // priority tasks (idle, WDT feed) get CPU time even when the queue is
+        // continuously saturated.  xQueueReceive with a non-zero timeout already
+        // yields when the queue is empty; this covers the always-full case.
+        vTaskDelay(1);
     }
 }
 

@@ -22,6 +22,11 @@ struct PendingCommand {
 
 pub struct UsbTransport {
     connected: Arc<AtomicBool>,
+    /// Set to `true` after any `port.write_all` failure. Once set, further
+    /// `send_command` calls fail fast with a clear error rather than silently
+    /// sending a desynchronised frame. Reset to `false` only on explicit
+    /// `connect` (i.e. construction of a new `UsbTransport`).
+    write_failed: Arc<AtomicBool>,
     seq_counter: AtomicU16,
     port_name: String,
     handshake_info: Option<HandshakeInfo>,
@@ -190,6 +195,7 @@ impl UsbTransport {
 
         Ok(Self {
             connected,
+            write_failed: Arc::new(AtomicBool::new(false)),
             seq_counter: AtomicU16::new(1),
             port_name: port_name.to_string(),
             handshake_info: Some(handshake_info),
@@ -249,6 +255,12 @@ impl Transport for UsbTransport {
             return Err(anyhow!("Not connected"));
         }
 
+        if self.write_failed.load(Ordering::Relaxed) {
+            return Err(anyhow!(
+                "Write failure previously detected on this transport — reconnect required"
+            ));
+        }
+
         let seq = self.next_seq();
         let frame = Message::build_frame(seq, cmd_id, payload);
 
@@ -269,8 +281,10 @@ impl Transport for UsbTransport {
                 .lock()
                 .map_err(|_| anyhow!("Writer lock poisoned"))?;
             if let Some(ref mut port) = *writer_lock {
-                port.write_all(&frame)?;
-                port.flush()?;
+                if let Err(e) = port.write_all(&frame).and_then(|_| port.flush()) {
+                    self.write_failed.store(true, Ordering::Relaxed);
+                    return Err(anyhow!("Serial write failed (write_failed latched): {}", e));
+                }
             } else {
                 return Err(anyhow!("Port closed"));
             }
@@ -312,8 +326,7 @@ impl Transport for UsbTransport {
 
     async fn get_status(&self) -> Result<DeviceState> {
         let payload = self.send_command(bbp::CMD_GET_STATUS, &[]).await?;
-        let state = DeviceState::from_status_payload(&payload)
-            .ok_or_else(|| anyhow!("Failed to parse status response"))?;
+        let state = DeviceState::from_status_payload(&payload)?;
 
         Ok(state)
     }

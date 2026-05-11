@@ -45,6 +45,15 @@ extern TaskHandle_t tud_taskhandle;
 #ifndef BB_HAT_FW_MINOR
 #define BB_HAT_FW_MINOR  0  /* 0 = sentinel: CMake -D flags were not provided */
 #endif
+// L02: opt-in loud failure for builds that omit the CMake -D version flags.
+// Define BB_HAT_REQUIRE_VERSION to turn the silent 0.0 sentinel into a hard
+// build error.  The normal CMake / CI build does NOT define this macro, so
+// the 0.0 fallback continues to work there without change.
+#ifdef BB_HAT_REQUIRE_VERSION
+#  if BB_HAT_FW_MAJOR == 0 && BB_HAT_FW_MINOR == 0
+#    error "BB_HAT_FW_MAJOR/MINOR not set — rebuild via CMake (sets -DBB_HAT_FW_MAJOR=<N> -DBB_HAT_FW_MINOR=<N>) or remove BB_HAT_REQUIRE_VERSION"
+#  endif
+#endif
 
 static HatFrameParser s_parser;
 
@@ -506,6 +515,7 @@ static void handle_set_hvpak_pwm(const uint8_t *payload, uint8_t len)
     memset(&cfg, 0, sizeof(cfg));
     cfg.index = payload[0];
     cfg.initial_value = payload[1];
+    cfg.current_value = payload[2];  // M03: was silently dropped (memset left it 0)
     cfg.resolution_7bit = payload[3] != 0;
     cfg.out_plus_inverted = payload[4] != 0;
     cfg.out_minus_inverted = payload[5] != 0;

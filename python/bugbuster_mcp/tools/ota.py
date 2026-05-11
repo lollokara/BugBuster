@@ -32,8 +32,8 @@ def _make_ota(host: Optional[str], admin_token: Optional[str]) -> OTAClient:
         )
     if not t:
         raise ValueError(
-            "ota tools need admin_token (the 64-hex pairing token from USB GET_ADMIN_TOKEN). "
-            "Pass it explicitly or start the MCP server with --admin-token <token>."
+            "OTA requires admin authentication. "
+            "Pass admin_token explicitly or start the MCP server with an admin token configured."
         )
     return OTAClient(HTTPTransport(h, admin_token=t))
 

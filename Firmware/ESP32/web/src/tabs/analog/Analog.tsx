@@ -2,7 +2,7 @@
 // Analog tab — desktop-parity control surface (ADC / VDAC / IDAC / IIN / DIAG)
 // =============================================================================
 
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
 import { ChDOverlay } from "../../components/ChDOverlay";
@@ -143,6 +143,9 @@ function VdacCard() {
   const mac = deviceMac.value;
   const [pendingCode, setPendingCode] = useState<Record<number, number>>({});
   const [pendingVoltage, setPendingVoltage] = useState<Record<number, number>>({});
+  // Track last user-edit timestamp per channel to suppress poll-driven UI
+  // updates (from /api/overview or status poll) within 5 s of interaction.
+  const lastEditMs = useRef<Record<number, number>>({});
   const [bipolar, setBipolar] = useState<Record<number, boolean>>({});
 
   const setCode = async (ch: number) => {
@@ -182,8 +185,10 @@ function VdacCard() {
       <div class="analog-grid">
         {[0, 1, 2, 3].map((i) => {
           const c = readChannel(status, i);
-          const code = pendingCode[i] ?? (Number.isFinite(c.dacCode) ? c.dacCode : 0);
-          const voltage = pendingVoltage[i] ?? (Number.isFinite(c.dacValue) ? c.dacValue : 0);
+          // Suppress poll-driven updates within 5 s of the last user edit.
+          const recentlyEdited = (Date.now() - (lastEditMs.current[i] ?? 0)) < 5000;
+          const code = pendingCode[i] ?? (recentlyEdited ? (pendingCode[i] ?? 0) : (Number.isFinite(c.dacCode) ? c.dacCode : 0));
+          const voltage = pendingVoltage[i] ?? (recentlyEdited ? (pendingVoltage[i] ?? 0) : (Number.isFinite(c.dacValue) ? c.dacValue : 0));
           const isBipolar = !!bipolar[i];
           return (
             <ChDOverlay key={i} active={i === 2 && supplyMonitorActive.value}>
@@ -202,7 +207,10 @@ function VdacCard() {
                   min={0}
                   max={65535}
                   value={String(code)}
-                  onInput={(e) => setPendingCode((p) => ({ ...p, [i]: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) }))}
+                  onInput={(e) => {
+                    lastEditMs.current[i] = Date.now();
+                    setPendingCode((p) => ({ ...p, [i]: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) }));
+                  }}
                 />
               </div>
               <button class="btn" disabled={!mac} onClick={() => setCode(i)}>
@@ -215,7 +223,10 @@ function VdacCard() {
                   type="number"
                   step="0.001"
                   value={String(voltage)}
-                  onInput={(e) => setPendingVoltage((p) => ({ ...p, [i]: parseFloat((e.currentTarget as HTMLInputElement).value || "0") }))}
+                  onInput={(e) => {
+                    lastEditMs.current[i] = Date.now();
+                    setPendingVoltage((p) => ({ ...p, [i]: parseFloat((e.currentTarget as HTMLInputElement).value || "0") }));
+                  }}
                 />
               </div>
               <button class="btn" disabled={!mac} onClick={() => setVoltage(i)}>

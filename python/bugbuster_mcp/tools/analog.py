@@ -138,7 +138,9 @@ def register(mcp) -> None:
     def write_current(
         io:               int,
         current_ma:       float,
-        allow_full_range: bool = False,
+        allow_full_range: bool  = False,
+        bipolar:          bool  = False,
+        voltage:          float = 0.0,
     ) -> dict:
         """
         Set a current source output on a CURRENT_OUT IO port.
@@ -147,16 +149,24 @@ def register(mcp) -> None:
         Drives a 4-20 mA current loop using the AD74416H current output mode.
 
         Safety: Defaults to 8 mA maximum. Use allow_full_range=True for up to 25 mA.
+        In bipolar mode the compliance voltage must not exceed 10 V.
 
         Parameters:
-        - io: IO number — must be 1, 4, 7, or 10.
+        - io: IO number — must be 3, 6, 9, or 12.
         - current_ma: Output current in milliamps (0.0 to 8.0 mA by default).
         - allow_full_range: Set True to allow up to 25 mA (full 4-20 mA range).
+        - bipolar: True if the IO was configured with bipolar=True.
+        - voltage: Compliance voltage in volts (used for bipolar guard check only).
 
         Returns: io, current_ma, success, warnings.
         """
         require_analog_io(io, "write_current")
         validate_dac_current(current_ma, allow_full_range=allow_full_range)
+        if bipolar and voltage > 10.0:
+            raise ValueError(
+                f"Bipolar current mode with compliance voltage {voltage:.2f} V "
+                "exceeds the 10 V device limit. Reduce voltage or disable bipolar mode."
+            )
         hal = session.get_hal()
         from bugbuster.hal import PortMode
         require_io_mode(hal, io, PortMode.CURRENT_OUT, "write_current")

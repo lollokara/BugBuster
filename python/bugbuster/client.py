@@ -23,7 +23,9 @@ import logging
 import warnings
 from typing import Callable, Optional, Union
 
-from .transport.usb  import USBTransport
+import serial  # pyserial — needed for SerialException in drain-loop guard
+
+from .transport.usb  import USBTransport, DeviceError
 from .transport.http import HTTPTransport
 
 
@@ -302,6 +304,7 @@ class BugBuster:
         
         self._require_usb("get_admin_token")
         resp = self._usb_cmd(CmdId.GET_ADMIN_TOKEN)
+        _require_resp_len(resp, 2, "GET_ADMIN_TOKEN")
         length = resp[0]
         token = resp[1:1+length].decode('ascii')
         self._admin_token = token
@@ -410,7 +413,8 @@ class BugBuster:
                     try:
                         if not _port.read(256):
                             break
-                    except Exception:
+                    except (OSError, serial.SerialException) as _drain_exc:
+                        log.debug("Drain read error (ignored): %s", _drain_exc)
                         break
             # Single retry
             try:
@@ -433,6 +437,10 @@ class BugBuster:
 
     @staticmethod
     def _parse_hvpak_bridge(resp: bytes) -> dict:
+        if len(resp) < 9:
+            raise ProtocolError(
+                f"HVPAK_BRIDGE: response too short — got {len(resp)} bytes, expected >= 9"
+            )
         return {
             "output_mode": [resp[0], resp[2]],
             "ocp_retry": [resp[1], resp[3]],
@@ -2177,7 +2185,7 @@ class BugBuster:
         if self._hat_present_cache is None:
             try:
                 status = self.hat_get_status()
-            except Exception as exc:  # noqa: BLE001
+            except (TimeoutError, ProtocolError, DeviceError) as exc:
                 raise HatNotPresentError(
                     "Could not query HAT status to verify HAT presence: "
                     f"{exc!s}. The Logic Analyzer and SWD functions are "
@@ -2579,12 +2587,14 @@ class BugBuster:
         self._require_usb("hat_hvpak_reg_read")
         self._require_hat_present()
         resp = self._usb_cmd(CmdId.HAT_HVPAK_REG_READ, struct.pack('<B', addr))
+        _require_resp_len(resp, 2, "HAT_HVPAK_REG_READ")
         return {"addr": resp[0], "value": resp[1]}
 
     def hat_hvpak_reg_write_masked(self, addr: int, mask: int, value: int) -> dict:
         self._require_usb("hat_hvpak_reg_write_masked")
         self._require_hat_present()
         resp = self._usb_cmd(CmdId.HAT_HVPAK_REG_WRITE_MASKED, struct.pack('<BBB', addr, mask, value))
+        _require_resp_len(resp, 4, "HAT_HVPAK_REG_WRITE_MASKED")
         return {"addr": resp[0], "mask": resp[1], "value": resp[2], "actual": resp[3]}
 
     # ------------------------------------------------------------------

@@ -2,6 +2,7 @@
 // state.rs - Shared device state types (mirrors firmware DeviceState)
 // =============================================================================
 
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -54,39 +55,62 @@ pub struct DeviceState {
 
 impl DeviceState {
     /// Parse a GET_STATUS response payload into DeviceState.
-    pub fn from_status_payload(payload: &[u8]) -> Option<Self> {
+    ///
+    /// Returns `Err` if mandatory fields are missing (payload too short or
+    /// otherwise malformed).  Optional trailing fields (`channel_alert_mask`,
+    /// `rtd_excitation_ua`, diag/mux/gpio) silently default to zero when absent
+    /// — those are firmware-version-gated extensions.
+    pub fn from_status_payload(payload: &[u8]) -> Result<Self> {
         use crate::bbp::PayloadReader;
         let mut r = PayloadReader::new(payload);
 
+        macro_rules! req {
+            ($expr:expr, $field:literal) => {
+                $expr.ok_or_else(|| {
+                    log::warn!(
+                        "Malformed GET_STATUS payload ({} bytes): short at field '{}' — \
+                         firmware version mismatch?",
+                        payload.len(),
+                        $field
+                    );
+                    anyhow!(
+                        "Malformed GET_STATUS payload: short at field '{}' ({} bytes total)",
+                        $field,
+                        payload.len()
+                    )
+                })?
+            };
+        }
+
         let mut state = DeviceState::default();
-        state.spi_ok = r.get_bool()?;
-        state.die_temperature = r.get_f32()?;
-        state.alert_status = r.get_u16()?;
-        state.alert_mask = r.get_u16()?;
-        state.supply_alert_status = r.get_u16()?;
-        state.supply_alert_mask = r.get_u16()?;
-        state.live_status = r.get_u16()?;
+        state.spi_ok = req!(r.get_bool(), "spi_ok");
+        state.die_temperature = req!(r.get_f32(), "die_temperature");
+        state.alert_status = req!(r.get_u16(), "alert_status");
+        state.alert_mask = req!(r.get_u16(), "alert_mask");
+        state.supply_alert_status = req!(r.get_u16(), "supply_alert_status");
+        state.supply_alert_mask = req!(r.get_u16(), "supply_alert_mask");
+        state.live_status = req!(r.get_u16(), "live_status");
 
         for ch in 0..4 {
-            let _id = r.get_u8()?; // channel_id
-            state.channels[ch].function = r.get_u8()?;
-            state.channels[ch].adc_raw = r.get_u24()?;
-            state.channels[ch].adc_value = r.get_f32()?;
-            state.channels[ch].adc_range = r.get_u8()?;
-            state.channels[ch].adc_rate = r.get_u8()?;
-            state.channels[ch].adc_mux = r.get_u8()?;
-            state.channels[ch].dac_code = r.get_u16()?;
-            state.channels[ch].dac_value = r.get_f32()?;
-            state.channels[ch].din_state = r.get_bool()?;
-            state.channels[ch].din_counter = r.get_u32()?;
-            state.channels[ch].do_state = r.get_bool()?;
-            state.channels[ch].channel_alert = r.get_u16()?;
+            let _id = req!(r.get_u8(), "channel_id");
+            state.channels[ch].function = req!(r.get_u8(), "channel.function");
+            state.channels[ch].adc_raw = req!(r.get_u24(), "channel.adc_raw");
+            state.channels[ch].adc_value = req!(r.get_f32(), "channel.adc_value");
+            state.channels[ch].adc_range = req!(r.get_u8(), "channel.adc_range");
+            state.channels[ch].adc_rate = req!(r.get_u8(), "channel.adc_rate");
+            state.channels[ch].adc_mux = req!(r.get_u8(), "channel.adc_mux");
+            state.channels[ch].dac_code = req!(r.get_u16(), "channel.dac_code");
+            state.channels[ch].dac_value = req!(r.get_f32(), "channel.dac_value");
+            state.channels[ch].din_state = req!(r.get_bool(), "channel.din_state");
+            state.channels[ch].din_counter = req!(r.get_u32(), "channel.din_counter");
+            state.channels[ch].do_state = req!(r.get_bool(), "channel.do_state");
+            state.channels[ch].channel_alert = req!(r.get_u16(), "channel.channel_alert");
+            // Optional firmware-extension fields — default to 0 if absent.
             state.channels[ch].channel_alert_mask = r.get_u16().unwrap_or(0);
             state.channels[ch].rtd_excitation_ua = r.get_u16().unwrap_or(0);
         }
 
         // Per diagnostic slot (4x, stride = 7 bytes)
-        // Note: state.rs has DiagState defined as source(u8) + raw(u16) + value(f32) = 7 bytes
         for d in 0..4 {
             if let Some(source) = r.get_u8() {
                 state.diag[d].source = source;
@@ -95,8 +119,7 @@ impl DeviceState {
             }
         }
 
-        // MUX switch states (4 bytes) - Note: firmware spec 1.5 doesn't list this in 0x01 rsp
-        // but the code uses it. I'll read it safely.
+        // MUX switch states (4 bytes)
         for m in 0..4 {
             if let Some(v) = r.get_u8() {
                 state.mux_states[m] = v;
@@ -113,7 +136,7 @@ impl DeviceState {
             }
         }
 
-        Some(state)
+        Ok(state)
     }
 }
 

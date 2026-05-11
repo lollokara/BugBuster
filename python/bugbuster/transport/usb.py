@@ -340,8 +340,8 @@ class USBTransport:
                 log.debug("Serial transient: %s", exc)
                 __import__('time').sleep(0.01)
                 continue
-            except Exception as exc:
-                log.error("Serial read error: %s", exc)
+            except (OSError, serial.SerialException) as exc:
+                log.error("Serial read error: %s", exc, exc_info=True)
                 break
 
             if not chunk:

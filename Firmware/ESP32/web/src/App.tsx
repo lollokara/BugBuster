@@ -100,8 +100,8 @@ export function App() {
         // Other errors warn at most once per backoff stage transition.
         const stage = Math.min(consecutiveFailures, BACKOFF_STAGES.length);
         if (
-          !(e instanceof PairingRequiredError) &&
-          consecutiveFailures === 1 || consecutiveFailures === stage
+          (!(e instanceof PairingRequiredError)) &&
+          (consecutiveFailures === 1 || consecutiveFailures === stage)
         ) {
           console.warn(
             `status poll failed (#${consecutiveFailures}, next retry in ${nextDelay()} ms)`,

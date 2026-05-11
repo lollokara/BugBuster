@@ -5,6 +5,7 @@ Covers: ping, firmware version, device info, status, reset, faults.
 Tests run over both USB and HTTP transports (parametrized via the 'device' fixture).
 """
 
+import secrets
 import time
 import pytest
 from bugbuster import ChannelFunction
@@ -19,16 +20,20 @@ pytestmark = [pytest.mark.timeout(10)]
 
 def test_ping(usb_device):
     """
-    Ping the device and verify it responds within 500 ms.
-    Also verifies the echoed token matches and uptime is non-negative.
+    Ping the device with a random token and verify it echoes back the same token.
+    Uses secrets.randbits(32) so hardware and simulator cannot both pass by returning
+    a hardcoded value — the echo must be genuinely derived from the sent token.
     USB only — HTTP transport has no ping endpoint.
     """
+    token = secrets.randbits(32)
     start = time.monotonic()
-    result = usb_device.ping()
+    result = usb_device.ping(token)
     elapsed_ms = (time.monotonic() - start) * 1000.0
 
     assert elapsed_ms < 500.0, f"Ping latency {elapsed_ms:.1f} ms exceeds 500 ms limit"
-    assert result.token == 0xDEADBEEF, f"Token mismatch: {result.token:#010x}"
+    assert result.token == token, (
+        f"Token echo mismatch: sent {token:#010x}, got {result.token:#010x}"
+    )
     assert result.uptime_ms >= 0, f"uptime_ms must be non-negative, got {result.uptime_ms}"
     assert_no_faults(usb_device)
 

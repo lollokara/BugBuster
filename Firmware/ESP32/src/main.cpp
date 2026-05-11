@@ -156,6 +156,10 @@ static void mainLoopTask(void* pvParam)
 // -----------------------------------------------------------------------------
 extern "C" void app_main(void)
 {
+    // H04: create the BBP TX mutex before any task that can call bbpSendEvent()
+    // is spawned (hat_init, uart_bridge, alert task all run before bbpInit).
+    bbpPreInit();
+
     // 0. Status LEDs — init early so we can show boot animation
     status_led_init();
     auth_init();

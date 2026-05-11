@@ -273,12 +273,17 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     headers[ADMIN_TOKEN_HEADER] = token;
   }
 
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
+    });
+  } catch (err) {
+    throw new HttpError(0, "Network Error", err instanceof Error ? err.message : "fetch failed");
+  }
 
   if (res.status === 401) {
     if (mac) clearCachedToken(mac);

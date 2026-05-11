@@ -76,10 +76,13 @@ pub fn App() -> impl IntoView {
                 let set_t = set_toasts;
                 spawn_local(async move {
                     let promise = js_sys::Promise::new(&mut |resolve, _| {
-                        web_sys::window().unwrap()
-                            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, dismiss_ms as i32).unwrap();
+                        if let Some(w) = web_sys::window() {
+                            w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, dismiss_ms as i32).ok();
+                        } else {
+                            web_sys::console::warn_1(&"toast dismiss: window unavailable".into());
+                        }
                     });
-                    wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
+                    wasm_bindgen_futures::JsFuture::from(promise).await.ok();
                     set_t.update(|t| {
                         t.retain(|(_, _, ts)| js_sys::Date::now() - ts < dismiss_ms as f64);
                     });
@@ -89,6 +92,7 @@ pub fn App() -> impl IntoView {
         if let Some(window) = web_sys::window() {
             window.add_event_listener_with_callback("bb-toast", closure.as_ref().unchecked_ref()).ok();
         }
+        // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
     });
 
@@ -119,6 +123,7 @@ pub fn App() -> impl IntoView {
             }
         });
         listen("device-state", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
     });
 
@@ -130,6 +135,7 @@ pub fn App() -> impl IntoView {
             }
         });
         listen("connection-status", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
     });
 
@@ -157,6 +163,7 @@ pub fn App() -> impl IntoView {
             }
         });
         listen("version-mismatch", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
     });
 
@@ -179,6 +186,7 @@ pub fn App() -> impl IntoView {
             }
         });
         listen("pairing-required", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
     });
 
@@ -209,6 +217,7 @@ pub fn App() -> impl IntoView {
             }
         });
         listen("pca-fault", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
     });
 
@@ -403,11 +412,26 @@ fn ParticleBackground() -> impl IntoView {
 
         let Some(el) = canvas_ref.get() else { return };
         let canvas: HtmlCanvasElement = el;
-        let ctx: CanvasRenderingContext2d = canvas
-            .get_context("2d").unwrap().unwrap()
-            .dyn_into().unwrap();
+        let ctx: CanvasRenderingContext2d = match canvas
+            .get_context("2d")
+            .ok()
+            .flatten()
+            .and_then(|o| o.dyn_into().ok())
+        {
+            Some(c) => c,
+            None => {
+                web_sys::console::warn_1(&"ParticleBackground: failed to get 2D canvas context".into());
+                return;
+            }
+        };
 
-        let window = web_sys::window().unwrap();
+        let window = match web_sys::window() {
+            Some(w) => w,
+            None => {
+                web_sys::console::warn_1(&"ParticleBackground: window unavailable".into());
+                return;
+            }
+        };
 
         // Particle state
         const NUM: usize = 80;
@@ -517,8 +541,11 @@ fn do_connect(device_id: String) {
 
 async fn slp(ms: u32) {
     let p = js_sys::Promise::new(&mut |r, _| {
-        web_sys::window().unwrap()
-            .set_timeout_with_callback_and_timeout_and_arguments_0(&r, ms as i32).unwrap();
+        if let Some(w) = web_sys::window() {
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(&r, ms as i32).ok();
+        } else {
+            web_sys::console::warn_1(&"slp: window unavailable, timeout will not fire".into());
+        }
     });
-    wasm_bindgen_futures::JsFuture::from(p).await.unwrap();
+    wasm_bindgen_futures::JsFuture::from(p).await.ok();
 }

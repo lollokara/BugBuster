@@ -11,8 +11,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
-  <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2028%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
-  <img src="https://img.shields.io/badge/firmware-ESP%203.0.0%20%C2%B7%20HAT%202.0-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Firmware"/>
+  <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2041%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
+  <img src="https://img.shields.io/badge/firmware-ESP%203.1.0%20%C2%B7%20HAT%20bb--hat--2.1-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Firmware"/>
   <img src="https://img.shields.io/badge/desktop-Tauri%20v2%20%C2%B7%20Leptos%200.7-0d1117?style=flat-square&labelColor=161b22&color=f4a261" alt="Desktop"/>
   <img src="https://img.shields.io/badge/protocol-BBP%20v4-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
   <img src="https://img.shields.io/badge/python-3.10%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
@@ -28,7 +28,7 @@
 
 > BugBuster is an open-source hardware platform that bridges the gap between AI models and the physical world. Through a **Model Context Protocol (MCP) server**, AI assistants like Claude can autonomously measure voltages, drive outputs, capture waveforms, analyze digital signals, and debug embedded targets &mdash; using a single USB-C connection to a purpose-built PCB.
 >
-> One board. 28 AI-callable tools. A full electronics bench in your AI's hands.
+> One board. 41 AI-callable tools. A full electronics bench in your AI's hands.
 
 <br/>
 
@@ -217,7 +217,7 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-`/mcp` in Claude Code to reload. 28 tools appear.
+`/mcp` in Claude Code to reload. 41 tools appear.
 
 </details>
 
@@ -254,7 +254,7 @@ cmake -DPICO_BOARD=bugbuster_hat .. && make -j
 
 Current versions: ESP `3.1.0`, HAT `bb-hat-2.1`, Desktop `0.6.0`.
 Release workflow + version-sync checklist:
-[`Docs/ReleaseChecklist.md`](Docs/ReleaseChecklist.md) — to be added.
+[`Docs/ReleaseChecklist.md`](Docs/ReleaseChecklist.md).
 
 </details>
 
@@ -321,7 +321,7 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 
 | Topic | Where to read |
 |---|---|
-| **MCP tools & prompts** (28 tools, 4 prompts, 6 resources) | [`python/bugbuster_mcp/README.md`](python/bugbuster_mcp/README.md) |
+| **MCP tools & prompts** (41 tools, 4 prompts, 6 resources) | [`python/bugbuster_mcp/README.md`](python/bugbuster_mcp/README.md) |
 | **Python library** (low-level client + HAL, transports, examples) | [`python/README.md`](python/README.md) |
 | **Desktop app** (21 tabs, screenshots, build & release) | [`DesktopApp/BugBuster/README.md`](DesktopApp/BugBuster/README.md) |
 | **ESP32-S3 firmware** (FreeRTOS tasks, BBP, HTTP) | [`Firmware/ESP32/README.md`](Firmware/ESP32/README.md) |
@@ -355,7 +355,7 @@ BugBuster/
 │
 ├── python/
 │   ├── bugbuster/               Control library (USB + HTTP, 100+ methods)
-│   ├── bugbuster_mcp/           MCP server (28 tools, 4 prompts, 6 resources)
+│   ├── bugbuster_mcp/           MCP server (41 tools, 4 prompts, 6 resources)
 │   └── examples/                Annotated example scripts
 │
 ├── tests/                       pytest — unit, simulator, hardware-in-the-loop

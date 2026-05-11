@@ -5,20 +5,30 @@ BugBuster MCP Server
 An MCP (Model Context Protocol) server that exposes the BugBuster hardware
 debugging platform to AI models (Claude, etc.).
 
-28 tools organized in 9 groups:
-  • Discovery & status   — device_status, device_info, check_faults, selftest
+55 tools organized in 12 groups:
+  • Discovery & status   — device_status, device_info, check_faults, selftest,
+                           list_boards, set_board, discover_devices
   • IO configuration     — configure_io, set_supply_voltage, reset_device
   • Analog measurement   — read_voltage, read_current, read_resistance
   • Analog output        — write_voltage, write_current
   • Digital IO           — read_digital, write_digital
   • Waveform & capture   — start_waveform, stop_waveform,
-                           capture_adc_snapshot, capture_logic_analyzer
+                           capture_adc_snapshot, capture_logic_analyzer,
+                           capture_adc_snapshot_start/status/result,
+                           capture_logic_analyzer_start/status/result
   • UART & debug         — setup_serial_bridge, setup_swd, uart_config
-  • Power management     — usb_pd_status, usb_pd_select, power_control, wifi_status
+  • Power management     — usb_pd_status, usb_pd_select, power_control, wifi_status,
+                           wifi_set_ap_password
   • Advanced (low-level) — mux_control, register_access, idac_control
+  • External bus         — i2c_scan, i2c_write, i2c_read, i2c_write_read,
+                           spi_transfer, bus_job_submit, bus_job_status,
+                           bus_job_result, spi_jedec_id
+  • OTA                  — ota_get_info, ota_upload_firmware, ota_upload_spiffs,
+                           ota_rollback
+  • Scripting            — script_eval
 
 Resources:  bugbuster://status  bugbuster://power  bugbuster://faults
-            bugbuster://hat     bugbuster://capabilities
+            bugbuster://hat     bugbuster://capabilities  bugbuster://board
 
 Prompts:    debug_unknown_device  measure_signal  program_target  power_cycle_test
 """

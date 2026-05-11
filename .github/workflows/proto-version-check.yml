@@ -21,7 +21,7 @@ jobs:
     name: Check BBP_PROTO_VERSION sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - name: Set up Python
         uses: actions/setup-python@v6.2.0

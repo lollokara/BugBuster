@@ -96,6 +96,8 @@ static volatile uint32_t s_dma_irq_count = 0;
 // Hardware spinlock to protect DMA restart cross-core
 static spin_lock_t *s_dma_lock = NULL;
 
+spin_lock_t *bb_la_get_dma_lock(void) { return s_dma_lock; }
+
 // -----------------------------------------------------------------------------
 // PIO Program Loading
 // -----------------------------------------------------------------------------

@@ -136,9 +136,15 @@ export function ScopeCanvas() {
           // does not exist (older firmware), error fires immediately and
           // repeatedly. After three quick errors, give up and poll.
           consecutiveErrors += 1;
-          if (consecutiveErrors >= 3 && !usingFallback) {
+          if (consecutiveErrors >= 3) {
             es?.close();
             es = null;
+            // Always clear any stale fallback timer before (re-)starting
+            // to guarantee at most one polling channel.
+            if (pollFallbackTimer !== null) {
+              window.clearTimeout(pollFallbackTimer);
+              pollFallbackTimer = null;
+            }
             startFallbackPolling();
           }
         };

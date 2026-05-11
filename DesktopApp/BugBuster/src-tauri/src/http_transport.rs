@@ -1300,14 +1300,20 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload"));
                 }
                 let mut r = bbp::PayloadReader::new(payload);
-                let ssid_len = r.get_u8().unwrap() as usize;
+                let ssid_len = r
+                    .get_u8()
+                    .ok_or_else(|| anyhow!("Malformed payload for CMD_WIFI_CONNECT (ssid_len)"))?
+                    as usize;
                 if r.remaining() < ssid_len + 1 {
                     return Err(anyhow!("Invalid payload"));
                 }
                 let ssid =
                     String::from_utf8_lossy(&payload[r.pos()..r.pos() + ssid_len]).to_string();
                 r.skip(ssid_len);
-                let pass_len = r.get_u8().unwrap() as usize;
+                let pass_len = r
+                    .get_u8()
+                    .ok_or_else(|| anyhow!("Malformed payload for CMD_WIFI_CONNECT (pass_len)"))?
+                    as usize;
                 let pass = if pass_len > 0 && r.remaining() >= pass_len {
                     String::from_utf8_lossy(&payload[r.pos()..r.pos() + pass_len]).to_string()
                 } else {

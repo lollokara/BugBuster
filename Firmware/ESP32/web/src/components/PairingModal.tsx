@@ -14,11 +14,32 @@ import { pairingInfo, pairingRequired, deviceMac } from "../state/signals";
 
 const TOKEN_RE = /^[0-9a-f]{64}$/i;
 
+interface ConfirmDialogProps {
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function ConfirmDialog({ message, onConfirm, onCancel }: ConfirmDialogProps) {
+  return (
+    <div class="modal-backdrop" role="dialog" aria-modal="true">
+      <div class="modal">
+        <p style={{ marginBottom: "16px" }}>{message}</p>
+        <div class="modal-actions">
+          <button type="button" class="btn" onClick={onCancel}>Cancel</button>
+          <button type="button" class="btn primary" onClick={onConfirm}>Continue</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PairingModal() {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRotate, setConfirmRotate] = useState(false);
 
   const info = pairingInfo.value;
   const mac = deviceMac.value ?? info?.macAddress ?? "—";
@@ -59,21 +80,17 @@ export function PairingModal() {
     }
   };
 
-  const onRotate = async () => {
+  const onRotate = () => {
     setError(null);
     if (!mac || mac === "—") {
       setError("Device MAC unknown — cannot rotate.");
       return;
     }
-    if (
-      !window.confirm(
-        "Rotating will generate a fresh admin token on the device. " +
-          "Any previously paired client must re-pair using the new token. " +
-          "Continue?",
-      )
-    ) {
-      return;
-    }
+    setConfirmRotate(true);
+  };
+
+  const doRotate = async () => {
+    setConfirmRotate(false);
     setRotating(true);
     try {
       const resp = await api.pairingRotate(mac);
@@ -230,6 +247,17 @@ export function PairingModal() {
           </div>
         </form>
       </div>
+      {confirmRotate && (
+        <ConfirmDialog
+          message={
+            "Rotating will generate a fresh admin token on the device. " +
+            "Any previously paired client must re-pair using the new token. " +
+            "Continue?"
+          }
+          onConfirm={doRotate}
+          onCancel={() => setConfirmRotate(false)}
+        />
+      )}
     </div>
   );
 }

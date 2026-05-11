@@ -122,8 +122,10 @@ def register(mcp) -> None:
         # PCA9535 fault event log
         try:
             out["fault_log"] = bb.power_get_fault_log()
-        except Exception:
+        except Exception as e:
+            log.warning("Fault log fetch failed: %s", e)
             out["fault_log"] = []
+            out["faults"].append(f"Could not fetch fault log (degraded state): {e}")
 
         if not out["has_faults"]:
             out["faults"].append("No active faults.")

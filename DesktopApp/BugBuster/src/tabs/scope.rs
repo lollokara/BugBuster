@@ -363,6 +363,7 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
             }
         });
         listen("scope-data", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
     });
 

@@ -15,8 +15,14 @@ extern "C" {
 }
 
 /// Safe invoke that returns None instead of panicking on error.
-/// Ok(()) commands resolve with JS null — we distinguish that from real errors
-/// by having .catch return a sentinel {__err:true} instead of null.
+///
+/// Internally distinguishes two failure modes:
+///   - JS-level error (invoke rejected): `.catch` returns sentinel `{__err:true}` → mapped to `None`
+///   - `Ok(null)` (void commands): returns `Some(JsValue::NULL)`
+///
+/// Callers that need to tell apart "command failed" from "command returned nothing"
+/// should check `val == JsValue::NULL` on the `Some` branch.  For fire-and-forget
+/// commands, discarding `None` is correct.
 pub async fn try_invoke(cmd: &str, args: JsValue) -> Option<JsValue> {
     let promise = js_sys::Function::new_with_args(
         "cmd, args",
@@ -89,7 +95,7 @@ pub struct ChannelState {
     pub rtd_excitation_ua: u16, // RTD excitation current in µA (500 or 1000; 0 when not RES_MEAS)
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceState {
     pub spi_ok: bool,
     pub die_temperature: f32,
@@ -98,11 +104,28 @@ pub struct DeviceState {
     pub supply_alert_status: u16,
     pub supply_alert_mask: u16,
     pub live_status: u16,
-    pub channels: Vec<ChannelState>,
-    pub diag: Vec<DiagState>,
-    pub gpio: Vec<GpioState>,
-    #[serde(default)]
-    pub mux_states: Vec<u8>,
+    pub channels: [ChannelState; 4],
+    pub diag: [DiagState; 4],
+    pub gpio: [GpioState; 12],
+    pub mux_states: [u8; 4],
+}
+
+impl Default for DeviceState {
+    fn default() -> Self {
+        Self {
+            spi_ok: false,
+            die_temperature: 0.0,
+            alert_status: 0,
+            alert_mask: 0,
+            supply_alert_status: 0,
+            supply_alert_mask: 0,
+            live_status: 0,
+            channels: std::array::from_fn(|_| ChannelState::default()),
+            diag: std::array::from_fn(|_| DiagState::default()),
+            gpio: std::array::from_fn(|_| GpioState::default()),
+            mux_states: [0u8; 4],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

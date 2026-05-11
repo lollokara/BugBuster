@@ -551,10 +551,18 @@ bool ds4424_cal_save(void)
         }
     }
 
+    // L04: retry commit once on failure so a transient NVS-full condition
+    // (e.g. another namespace being erased concurrently) doesn't silently
+    // leave blobs written but not committed.  The retry is a best-effort;
+    // if it also fails, all_ok stays false and the caller sees the error.
     err = nvs_commit(h);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "NVS commit failed: %s", esp_err_to_name(err));
-        all_ok = false;
+        ESP_LOGW(TAG, "NVS commit failed (%s), retrying once", esp_err_to_name(err));
+        err = nvs_commit(h);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "NVS commit retry also failed: %s", esp_err_to_name(err));
+            all_ok = false;
+        }
     }
 
     nvs_close(h);

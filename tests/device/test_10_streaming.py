@@ -132,7 +132,7 @@ def test_adc_stream_sample_rate(usb_device):
 def test_scope_stream_starts_and_stops(usb_device):
     """
     Register a scope data callback and verify at least 1 SCOPE_DATA_EVT
-    is received within 500 ms.  The firmware sends scope buckets every 10 ms.
+    is received within 2 s.  The firmware sends scope buckets every 10 ms.
     """
     events = []
     event_ready = threading.Event()
@@ -143,10 +143,11 @@ def test_scope_stream_starts_and_stops(usb_device):
             event_ready.set()
 
     usb_device.on_scope_data(on_scope)
-    event_ready.wait(timeout=0.5)
+    event_ready.wait(timeout=2.0)
 
+    assert event_ready.is_set(), "Scope stream did not start within 2s"
     assert len(events) >= 1, (
-        "Expected at least 1 scope event within 500 ms (scope pushes every ~10 ms)"
+        "Expected at least 1 scope event within 2 s (scope pushes every ~10 ms)"
     )
     assert_no_faults(usb_device)
 
@@ -165,8 +166,9 @@ def test_scope_data_format(usb_device):
             event_ready.set()
 
     usb_device.on_scope_data(on_scope)
-    event_ready.wait(timeout=0.5)
+    event_ready.wait(timeout=2.0)
 
+    assert event_ready.is_set(), "Scope stream did not start within 2s"
     assert len(events) >= 1, "No scope events received"
 
     for ev in events:

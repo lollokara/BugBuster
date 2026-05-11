@@ -71,9 +71,13 @@ void board_profile_init(void)
         return;
     }
 
-    char id[32] = {0};
+    // L03: zero id[0] before the call so the early-return path on NVS failure
+    // never exposes an uninitialized buffer to find_by_id or log output.
+    char id[32] = {};
+    id[0] = '\0';
     size_t len = sizeof(id);
     err = nvs_get_str(nvs, "active_id", id, &len);
+    id[sizeof(id) - 1] = '\0';  // defensive null-terminate in case NVS omits it
     nvs_close(nvs);
 
     if (err == ESP_OK) {
@@ -86,7 +90,9 @@ void board_profile_init(void)
     } else if (err == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(TAG, "No board profile selected yet");
     } else {
-        ESP_LOGW(TAG, "NVS read failed for board.active_id: %s", esp_err_to_name(err));
+        // L03: log the actual error code so boot logs include the root cause
+        ESP_LOGW(TAG, "NVS read failed for board.active_id: %s (err=0x%x)",
+                 esp_err_to_name(err), (unsigned)err);
     }
 }
 

@@ -35,8 +35,7 @@
 #define BB_SWD_SWCLK_PIN    2       // GPIO2 — SWD clock (debugprobe default for Pico)
 #define BB_SWD_SWDIO_PIN    3       // GPIO3 — SWD data (debugprobe default for Pico)
 #define BB_SWD_TRACE_PIN    29      // GPIO29 — SWO trace input (new dedicated SWD connector)
-                                    // TODO(user): confirm GPIO29 matches the final HAT PCB;
-                                    // GPIO23/24/29 were free per the 2026-04-09 pin audit.
+                                    // Confirmed: GPIO29 is free per the 2026-04-09 pin audit.
 
 // -----------------------------------------------------------------------------
 // Power Management

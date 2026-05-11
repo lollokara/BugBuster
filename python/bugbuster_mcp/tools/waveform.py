@@ -2,12 +2,17 @@
 BugBuster MCP — Waveform generation and signal capture tools.
 
 Tools: start_waveform, stop_waveform, capture_adc_snapshot, capture_logic_analyzer
+       capture_adc_snapshot_start, capture_adc_snapshot_status, capture_adc_snapshot_result
+       capture_logic_analyzer_start, capture_logic_analyzer_status, capture_logic_analyzer_result
 """
 
 from __future__ import annotations
 import time
 import math
+import uuid
 import logging
+import threading
+from typing import Any
 from .. import session
 from ..safety import (
     require_analog_io, require_io_mode,
@@ -25,12 +30,78 @@ log = logging.getLogger(__name__)
 
 _WAVEFORM_TYPES = {"sine": 0, "square": 1, "triangle": 2, "sawtooth": 3}
 
+# ---------------------------------------------------------------------------
+# In-process job store for async capture tools (M24)
+# Keyed by job_id string.  Each entry: {"status": "pending"|"running"|"done"|"error",
+#                                        "result": dict|None, "error": str|None}
+# ---------------------------------------------------------------------------
+_jobs: dict[str, dict[str, Any]] = {}
+_jobs_lock = threading.Lock()
+
+
+def _new_job() -> str:
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "pending", "result": None, "error": None}
+    return job_id
+
+
+def _run_job(job_id: str, fn, *args, **kwargs) -> None:
+    """Execute fn in a daemon thread, storing result or error in _jobs."""
+    def _worker():
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "running"
+        try:
+            result = fn(*args, **kwargs)
+            with _jobs_lock:
+                _jobs[job_id]["status"] = "done"
+                _jobs[job_id]["result"] = result
+        except Exception as exc:
+            with _jobs_lock:
+                _jobs[job_id]["status"] = "error"
+                _jobs[job_id]["error"] = str(exc)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+
+def _job_status(job_id: str) -> dict:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise ValueError(f"Unknown job_id {job_id!r}. Job may have expired or never started.")
+    return {"job_id": job_id, "status": job["status"]}
+
+
+def _job_result(job_id: str) -> dict:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise ValueError(f"Unknown job_id {job_id!r}.")
+    if job["status"] == "error":
+        raise RuntimeError(f"Capture job failed: {job['error']}")
+    if job["status"] != "done":
+        raise RuntimeError(
+            f"Job {job_id!r} is not finished yet (status={job['status']!r}). "
+            "Poll with *_status first."
+        )
+    # Clean up consumed job
+    with _jobs_lock:
+        _jobs.pop(job_id, None)
+    return job["result"]
+
 
 def register(mcp) -> None:
     mcp.tool()(start_waveform)
     mcp.tool()(stop_waveform)
     mcp.tool()(capture_adc_snapshot)
     mcp.tool()(capture_logic_analyzer)
+    mcp.tool()(capture_adc_snapshot_start)
+    mcp.tool()(capture_adc_snapshot_status)
+    mcp.tool()(capture_adc_snapshot_result)
+    mcp.tool()(capture_logic_analyzer_start)
+    mcp.tool()(capture_logic_analyzer_status)
+    mcp.tool()(capture_logic_analyzer_result)
 
 
 def start_waveform(
@@ -386,3 +457,106 @@ def _timing_diagram(ch_data: list, n_channels: int, n_points: int) -> str:
                 row.append("_")
         lines.append(f"CH{chi}: {''.join(row)}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Async (job-id) variants — M24
+# These return immediately; poll with *_status, then fetch with *_result.
+# The blocking single-shot tools above are thin wrappers that call these
+# internally and wait, so existing callers are unaffected.
+# ---------------------------------------------------------------------------
+
+def capture_adc_snapshot_start(
+    io:         int,
+    duration_s: float = DEFAULT_SNAPSHOT_DURATION_S,
+    n_samples:  int   = 0,
+) -> dict:
+    """
+    Start an ADC snapshot capture in the background and return a job handle.
+
+    The MCP event loop is freed immediately. Poll with
+    capture_adc_snapshot_status, then retrieve results with
+    capture_adc_snapshot_result.
+
+    Parameters: same as capture_adc_snapshot.
+    Returns: job_id, status ("pending").
+    """
+    job_id = _new_job()
+    _run_job(job_id, capture_adc_snapshot, io, duration_s, n_samples)
+    return {"job_id": job_id, "status": "pending"}
+
+
+def capture_adc_snapshot_status(job_id: str) -> dict:
+    """
+    Poll the status of a background ADC snapshot job.
+
+    Parameters:
+    - job_id: The handle returned by capture_adc_snapshot_start.
+
+    Returns: job_id, status ("pending" | "running" | "done" | "error").
+    """
+    return _job_status(job_id)
+
+
+def capture_adc_snapshot_result(job_id: str) -> dict:
+    """
+    Retrieve the result of a completed ADC snapshot job.
+
+    Only call this when capture_adc_snapshot_status returns status="done".
+    Raises RuntimeError if the job is not finished or failed.
+
+    Parameters:
+    - job_id: The handle returned by capture_adc_snapshot_start.
+
+    Returns: same dict as capture_adc_snapshot (io, n_samples, min_v, …).
+    """
+    return _job_result(job_id)
+
+
+def capture_logic_analyzer_start(
+    channels:     int = LA_DEFAULT_CHANNELS,
+    rate_hz:      int = LA_DEFAULT_RATE_HZ,
+    depth:        int = LA_DEFAULT_DEPTH,
+    trigger_type: str = "none",
+    trigger_ch:   int = 0,
+) -> dict:
+    """
+    Start a logic analyzer capture in the background and return a job handle.
+
+    The MCP event loop is freed immediately (captures can take up to 30 s).
+    Poll with capture_logic_analyzer_status, then retrieve results with
+    capture_logic_analyzer_result.
+
+    Parameters: same as capture_logic_analyzer.
+    Returns: job_id, status ("pending").
+    """
+    job_id = _new_job()
+    _run_job(job_id, capture_logic_analyzer, channels, rate_hz, depth, trigger_type, trigger_ch)
+    return {"job_id": job_id, "status": "pending"}
+
+
+def capture_logic_analyzer_status(job_id: str) -> dict:
+    """
+    Poll the status of a background logic analyzer capture job.
+
+    Parameters:
+    - job_id: The handle returned by capture_logic_analyzer_start.
+
+    Returns: job_id, status ("pending" | "running" | "done" | "error").
+    """
+    return _job_status(job_id)
+
+
+def capture_logic_analyzer_result(job_id: str) -> dict:
+    """
+    Retrieve the result of a completed logic analyzer capture job.
+
+    Only call this when capture_logic_analyzer_status returns status="done".
+    Raises RuntimeError if the job is not finished or failed.
+
+    Parameters:
+    - job_id: The handle returned by capture_logic_analyzer_start.
+
+    Returns: same dict as capture_logic_analyzer (channels, rate_hz, …).
+    """
+    return _job_result(job_id)

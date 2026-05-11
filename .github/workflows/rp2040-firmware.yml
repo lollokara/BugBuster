@@ -60,8 +60,9 @@ jobs:
           picotool_root="${RUNNER_TEMP}/picotool"
           if [ ! -d "${picotool_root}/picotool-src/.git" ]; then
             rm -rf "${picotool_root}"
-            git clone --depth 1 https://github.com/raspberrypi/picotool.git "${picotool_root}/picotool-src"
+            git clone --depth 1 --branch 2.2.0 https://github.com/raspberrypi/picotool.git "${picotool_root}/picotool-src"
           fi
+          (cd "${picotool_root}/picotool-src" && git verify-commit HEAD || echo "warning: picotool HEAD not signed")
 
       - name: Read firmware version
         id: version

@@ -5,8 +5,29 @@ BugBuster MCP — Prompt templates for common hardware debugging workflows.
 from __future__ import annotations
 from mcp.types import PromptMessage, TextContent
 
+# Resources that the workflow prompts depend on being available.
+_REQUIRED_RESOURCE_URIS = [
+    "bugbuster://board",
+    "bugbuster://hat",
+    "bugbuster://status",
+    "bugbuster://faults",
+]
+
+
+def _validate_resources(mcp) -> None:
+    """Raise at register() time if a required resource URI is not registered."""
+    registered = set(mcp._resource_manager._resources.keys())
+    missing = [uri for uri in _REQUIRED_RESOURCE_URIS if uri not in registered]
+    if missing:
+        raise RuntimeError(
+            "Prompt workflows reference resources that are not registered: "
+            + ", ".join(missing)
+            + ". Register those resources before calling register_prompts()."
+        )
+
 
 def register(mcp) -> None:
+    _validate_resources(mcp)
 
     @mcp.prompt()
     def debug_unknown_device() -> list[PromptMessage]:

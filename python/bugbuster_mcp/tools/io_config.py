@@ -85,8 +85,9 @@ def register(mcp) -> None:
         try:
             from ..safety import check_faults_post
             warnings = check_faults_post(session.get_client())
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Fault check failed after configure_io: %s", e)
+            warnings.append(f"Could not check faults after configure: {e}")
 
         return {
             "io":       io,
@@ -131,8 +132,9 @@ def register(mcp) -> None:
             try:
                 from ..safety import check_faults_post
                 warnings = check_faults_post(session.get_client())
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Fault check failed after set_supply_voltage: %s", e)
+                warnings.append(f"Could not check faults after voltage change: {e}")
             return {
                 "rail":     f"VADJ{rail}",
                 "voltage":  voltage,

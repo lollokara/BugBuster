@@ -3,7 +3,8 @@ Miscellaneous handlers for SimulatedDevice.
 
 Handles: REGISTER_READ, REGISTER_WRITE, SET_WATCHDOG, SET_LSHIFT_OE,
          SET_SPI_CLOCK, USBPD_GET_STATUS, USBPD_SELECT_PDO, USBPD_GO,
-         WIFI_GET_STATUS, WIFI_CONNECT, WIFI_SCAN, START_WAVEGEN, STOP_WAVEGEN.
+         WIFI_GET_STATUS, WIFI_CONNECT, WIFI_SCAN, WIFI_SET_AP_PASSWORD,
+         START_WAVEGEN, STOP_WAVEGEN.
 """
 
 import struct
@@ -19,10 +20,11 @@ def register(device) -> None:
     device.register_handler(CmdId.USBPD_GET_STATUS, _usbpd_get_status(device))
     device.register_handler(CmdId.USBPD_SELECT_PDO, _usbpd_select_pdo(device))
     device.register_handler(CmdId.USBPD_GO,         _usbpd_go(device))
-    device.register_handler(CmdId.WIFI_GET_STATUS,  _wifi_get_status(device))
-    device.register_handler(CmdId.WIFI_CONNECT,     _wifi_connect(device))
-    device.register_handler(CmdId.WIFI_SCAN,        _wifi_scan(device))
-    device.register_handler(CmdId.START_WAVEGEN,    _start_wavegen(device))
+    device.register_handler(CmdId.WIFI_GET_STATUS,       _wifi_get_status(device))
+    device.register_handler(CmdId.WIFI_CONNECT,          _wifi_connect(device))
+    device.register_handler(CmdId.WIFI_SCAN,             _wifi_scan(device))
+    device.register_handler(CmdId.WIFI_SET_AP_PASSWORD,  _wifi_set_ap_password(device))
+    device.register_handler(CmdId.START_WAVEGEN,         _start_wavegen(device))
     device.register_handler(CmdId.STOP_WAVEGEN,     _stop_wavegen(device))
 
 
@@ -186,6 +188,28 @@ def _wifi_connect(device):
 def _wifi_scan(device):
     def handler(payload: bytes) -> bytes:
         return struct.pack('<B', 0)   # count = 0
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# WIFI_SET_AP_PASSWORD (0xEF)
+# client sends: struct.pack('<B', len(pass_b)) + pass_b
+# firmware returns: status byte
+#   0x00 = no change needed (NVS skip)
+#   0x01 = persisted OK
+#   0x02 = persist failed
+# ---------------------------------------------------------------------------
+
+def _wifi_set_ap_password(device):
+    def handler(payload: bytes) -> bytes:
+        if not payload:
+            raise ValueError("Empty payload")
+        length = payload[0]
+        password = payload[1:1 + length].decode('utf-8', errors='replace')
+        device.wifi_ap_password = password
+        # Return the persist result configured on the device (default: 0x01 = persisted OK)
+        result = getattr(device, 'wifi_ap_password_persist_result', 0x01)
+        return struct.pack('<B', result)
     return handler
 
 

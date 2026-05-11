@@ -154,7 +154,10 @@ impl ConnectionManager {
             let mut status = self
                 .connection_status
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
+                .unwrap_or_else(|e| {
+                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                e.into_inner()
+            });
             status.mode = ConnectionMode::Usb;
             status.port_or_url = port_name.to_string();
             status.device_info = device_info;
@@ -165,7 +168,10 @@ impl ConnectionManager {
         let status = self
             .connection_status
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                e.into_inner()
+            })
             .clone();
         let _ = app.emit("connection-status", &status);
 
@@ -273,6 +279,24 @@ impl ConnectionManager {
             .unwrap_or_default();
         let (mut transport, mac) = HttpTransport::connect(base_url, &candidate_tokens).await?;
 
+        // M19: If the device did not report a MAC address (legacy firmware), emit a
+        // non-blocking Tauri event so the UI can prompt the user to update firmware.
+        // Connection is NOT blocked — read-only HTTP still works with the sentinel key.
+        if mac.starts_with("legacy:") {
+            log::warn!(
+                "Device at {} is missing 'macAddress' in /api/device/info — \
+                 firmware update required for proper MAC-keyed pairing",
+                base_url
+            );
+            let _ = app.emit(
+                "firmware-update-required",
+                &serde_json::json!({
+                    "url": base_url,
+                    "reason": "macAddress missing from /api/device/info — update to ESP firmware >= 3.0.0",
+                }),
+            );
+        }
+
         // 2. Check for Pairing (Admin Token)
         let admin_token = self.get_token(&mac);
         if admin_token.is_none() {
@@ -311,7 +335,10 @@ impl ConnectionManager {
             let mut status = self
                 .connection_status
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
+                .unwrap_or_else(|e| {
+                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                e.into_inner()
+            });
             status.mode = ConnectionMode::Http;
             status.port_or_url = base_url.to_string();
             status.device_info = Some(device_info);
@@ -322,7 +349,10 @@ impl ConnectionManager {
         let status = self
             .connection_status
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                e.into_inner()
+            })
             .clone();
         let _ = app.emit("connection-status", &status);
 
@@ -350,7 +380,10 @@ impl ConnectionManager {
             let mut status = self
                 .connection_status
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
+                .unwrap_or_else(|e| {
+                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                e.into_inner()
+            });
             *status = ConnectionStatus::default();
         }
 
@@ -441,7 +474,10 @@ impl ConnectionManager {
     pub fn get_device_state(&self) -> DeviceState {
         self.device_state
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                e.into_inner()
+            })
             .clone()
     }
 
@@ -449,7 +485,10 @@ impl ConnectionManager {
     pub fn get_connection_status(&self) -> ConnectionStatus {
         self.connection_status
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                e.into_inner()
+            })
             .clone()
     }
 
@@ -643,25 +682,34 @@ impl ConnectionManager {
                 match std::fs::read_to_string(&path) {
                     Ok(content) => {
                         if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
-                            if let Ok(mut tokens) = self.tokens.lock() {
-                                let mut failed: HashMap<String, String> = HashMap::new();
-                                for (mac, token) in &map {
-                                    let entry = keyring::Entry::new("bugbuster", mac);
-                                    match entry {
-                                        Ok(e) => {
-                                            if let Err(e) = e.set_password(token) {
-                                                log::warn!("Keychain migration failed for {}: {}", mac, e);
-                                                failed.insert(mac.clone(), token.clone());
-                                            }
-                                        }
-                                        Err(e) => {
-                                            log::warn!("Keychain entry creation failed for {}: {}", mac, e);
+                            // Pre-migrate all entries into a local map before acquiring the
+                            // cache mutex, so concurrent get_token / save_token callers never
+                            // see a partially-populated cache (M17).
+                            let mut local_cache: HashMap<String, String> = map.clone();
+                            let mut failed: HashMap<String, String> = HashMap::new();
+                            for (mac, token) in &map {
+                                let entry = keyring::Entry::new("bugbuster", mac);
+                                match entry {
+                                    Ok(e) => {
+                                        if let Err(e) = e.set_password(token) {
+                                            log::warn!("Keychain migration failed for {}: {}", mac, e);
                                             failed.insert(mac.clone(), token.clone());
                                         }
                                     }
+                                    Err(e) => {
+                                        log::warn!("Keychain entry creation failed for {}: {}", mac, e);
+                                        failed.insert(mac.clone(), token.clone());
+                                    }
                                 }
-                                // Load all entries into in-memory cache.
-                                *tokens = map;
+                            }
+                            // Remove entries that failed keychain write from the local cache so
+                            // the next get_token falls through to keychain retry.
+                            for mac in failed.keys() {
+                                local_cache.remove(mac);
+                            }
+                            if let Ok(mut tokens) = self.tokens.lock() {
+                                // Atomic swap: callers now see the full pre-loaded cache.
+                                *tokens = local_cache;
                                 // Rewrite tokens.json to contain only the entries that failed
                                 // to migrate (so the next launch retries them). If all
                                 // succeeded, delete the file to eliminate dual-storage plaintext.

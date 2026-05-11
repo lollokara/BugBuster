@@ -61,7 +61,7 @@ jobs:
             pkg-config
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b  # stable as of 2026-05
         with:
           targets: wasm32-unknown-unknown
 
@@ -71,7 +71,7 @@ jobs:
           python-version: "3.x"
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae  # v2
         with:
           workspaces: |
             DesktopApp/BugBuster -> target
@@ -93,7 +93,7 @@ jobs:
           python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect "$expected_version"
 
       - name: Build and (on tag) publish desktop bundles
-        uses: tauri-apps/tauri-action@v0.6.2
+        uses: tauri-apps/tauri-action@1ddc7b49b13c3038297360482fcb3e058764d7c9  # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NO_COLOR: "false"

@@ -79,8 +79,13 @@ def pytest_configure(config):
         sim = config.getoption("--sim", default=False)
         usb = config.getoption("--device-usb", default=None)
         http = config.getoption("--device-http", default=None)
+        hat = config.getoption("--hat", default=False)
         if sim and (usb or http):
             pytest.exit("ERROR: --sim is mutually exclusive with --device-usb / --device-http")
+        if sim and hat:
+            raise pytest.UsageError("--sim and --hat are mutually exclusive")
+    except pytest.UsageError:
+        raise
     except ValueError:
         pass  # options not registered yet during collection
 

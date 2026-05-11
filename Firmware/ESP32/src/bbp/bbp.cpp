@@ -444,6 +444,16 @@ static void processScopeStream(void)
 // Public API
 // -----------------------------------------------------------------------------
 
+// Create the TX mutex before any task that can call sendEvent/sendResponse is
+// spawned.  bbpInit() calls this too (idempotent), but waiting until bbpInit()
+// is too late if hat_init/uart_bridge/alert tasks are already running.
+void bbpPreInit(void)
+{
+    if (!s_txMutex) {
+        s_txMutex = xSemaphoreCreateMutex();
+    }
+}
+
 void bbpInit(AD74416H *device, AD74416H_SPI *spi)
 {
     s_dev = device;

@@ -59,6 +59,10 @@ extern AD74416H_SPI spiDriver;
 static const char* TAG = "webserver";
 
 static httpd_handle_t s_server = NULL;
+// M06: guard s_server read/write — concurrent webserver_start() calls (e.g.
+// recovery path + manual trigger) can race on this handle.  portMUX_TYPE
+// matches the pattern used elsewhere in this codebase (see board_profile.cpp).
+static portMUX_TYPE s_server_mux = portMUX_INITIALIZER_UNLOCKED;
 
 #define BUGBUSTER_WEB_BUILD_MARKER "scripts-fix-20260427-1150"
 
@@ -4261,7 +4265,12 @@ static esp_err_t handle_post_scripts_run_file(httpd_req_t *req)
 
 void initWebServer(void)
 {
-    if (s_server) {
+    // M06: check-then-act on s_server under the mux to prevent a second
+    // concurrent caller from entering httpd_start and corrupting the handle.
+    taskENTER_CRITICAL(&s_server_mux);
+    bool already_running = (s_server != NULL);
+    taskEXIT_CRITICAL(&s_server_mux);
+    if (already_running) {
         ESP_LOGW(TAG, "Web server already running");
         return;
     }
@@ -4295,11 +4304,17 @@ void initWebServer(void)
     // resources during a boot path that is already internal-heap constrained.
     config.max_open_sockets = 7;
 
-    esp_err_t ret = httpd_start(&s_server, &config);
+    // M06: start into a local, then publish under the mux so concurrent readers
+    // always see either NULL or a fully-started handle, never a partial write.
+    httpd_handle_t new_server = NULL;
+    esp_err_t ret = httpd_start(&new_server, &config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTP server: %s", esp_err_to_name(ret));
         return;
     }
+    taskENTER_CRITICAL(&s_server_mux);
+    s_server = new_server;
+    taskEXIT_CRITICAL(&s_server_mux);
 
     ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);
     httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, handle_http_error);
@@ -4774,9 +4789,16 @@ void initWebServer(void)
 
 void stopWebServer(void)
 {
-    if (s_server) {
-        httpd_stop(s_server);
+    // M06: snapshot handle under mux, stop outside, then clear under mux.
+    taskENTER_CRITICAL(&s_server_mux);
+    httpd_handle_t h = s_server;
+    taskEXIT_CRITICAL(&s_server_mux);
+
+    if (h) {
+        httpd_stop(h);
+        taskENTER_CRITICAL(&s_server_mux);
         s_server = NULL;
+        taskEXIT_CRITICAL(&s_server_mux);
         ESP_LOGI(TAG, "HTTP server stopped");
     }
 }

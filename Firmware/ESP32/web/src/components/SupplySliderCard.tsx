@@ -56,12 +56,14 @@ export function SupplySliderCard({
 }: SupplySliderCardProps) {
   const currentTarget = Number(idacChannelStatus?.targetV ?? idacChannelStatus?.target ?? min);
   const [value, setValue] = useState(Number.isFinite(currentTarget) ? currentTarget : min);
+  const [isDirty, setIsDirty] = useState(false);
   const [busy, setBusy] = useState<"apply" | "enable" | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
+  // Only sync server state when the user is not actively editing the slider.
   useEffect(() => {
-    if (Number.isFinite(currentTarget)) setValue(clamp(currentTarget, min, max));
-  }, [currentTarget, min, max]);
+    if (!isDirty && Number.isFinite(currentTarget)) setValue(clamp(currentTarget, min, max));
+  }, [currentTarget, min, max, isDirty]);
 
   const previewState = useMemo<{ kind: "ok"; v: number } | { kind: "uncal" } | { kind: "no-poly" }>(() => {
     if (!idacChannelStatus?.calibrated) return { kind: "uncal" };
@@ -78,6 +80,7 @@ export function SupplySliderCard({
     try {
       await api.idacSetVoltage(mac, idacChannel, value);
       setStatus("Applied");
+      setIsDirty(false);
     } catch (e) {
       if (!(e instanceof PairingRequiredError)) {
         setStatus(e instanceof Error ? e.message : String(e));
@@ -109,6 +112,7 @@ export function SupplySliderCard({
     if (!Number.isFinite(raw)) return;
     const mapped = invertSlider ? min + max - raw : raw;
     setValue(clamp(mapped, min, max));
+    setIsDirty(true);
   };
 
   return (
@@ -148,7 +152,7 @@ export function SupplySliderCard({
           step="0.001"
           value={value.toFixed(3)}
           style={{ maxWidth: "96px" }}
-          onInput={(e) => setValue(clamp(parseFloat((e.currentTarget as HTMLInputElement).value || "0"), min, max))}
+          onInput={(e) => { setValue(clamp(parseFloat((e.currentTarget as HTMLInputElement).value || "0"), min, max)); setIsDirty(true); }}
         />
       </div>
       <div class="kv-row">

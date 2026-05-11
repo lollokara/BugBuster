@@ -20,6 +20,11 @@
 
 static const char *TAG = "cmd_idac";
 
+// M04: single source of truth for ADC channel count used in IDAC_CALIBRATE.
+// Both the runtime bounds-check (adc_ch >= IDAC_ADC_CHANNELS) and the ArgSpec
+// max (IDAC_ADC_CHANNELS - 1) reference this define so they cannot drift apart.
+#define IDAC_ADC_CHANNELS 4
+
 // ---------------------------------------------------------------------------
 // IDAC_GET_STATUS  payload: (none)
 // resp: bool present, then for each channel (DS4424_NUM_CHANNELS):
@@ -37,7 +42,11 @@ static int handler_idac_get_status(const uint8_t *payload, size_t len,
     size_t pos = 0;
     bbp_put_bool(resp, &pos, st->present);
 
-    for (uint8_t ch = 0; ch < DS4424_NUM_CHANNELS; ch++) {
+    // H05: iterate only over writable channels (0-2).  Channel 3 (IDAC3) is
+    // "Not connected" per ds4424.h and its config/state are never initialized;
+    // emitting 44 bytes of garbage for ch3 was the original bug.
+    // DS4424_CAL_CHANNELS == 3 (defined in ds4424.cpp) matches this bound.
+    for (uint8_t ch = 0; ch < 3; ch++) {
         // Per-channel footprint same as legacy: 44 bytes max
         if (pos + 44 > BBP_MAX_PAYLOAD) break;
         bbp_put_u8(resp, &pos, ch);
@@ -143,8 +152,8 @@ static int handler_idac_calibrate(const uint8_t *payload, size_t len,
     uint8_t  step    = bbp_get_u8(payload, &rpos);
     uint16_t settle  = bbp_get_u16(payload, &rpos);
     uint8_t  adc_ch  = bbp_get_u8(payload, &rpos);
-    if (ch >= 3)     return -CMD_ERR_OUT_OF_RANGE;
-    if (adc_ch >= 4) return -CMD_ERR_OUT_OF_RANGE;
+    if (ch >= 3)                    return -CMD_ERR_OUT_OF_RANGE;
+    if (adc_ch >= IDAC_ADC_CHANNELS) return -CMD_ERR_OUT_OF_RANGE;  // M04
 
     // Verify ADC channel is in VIN mode (matching legacy bbp.cpp:1398-1408)
     ChannelFunction func = CH_FUNC_HIGH_IMP;
@@ -262,7 +271,7 @@ static const ArgSpec s_idac_calibrate_args[] = {
     { "idac_ch",  ARG_U8,  true, 0, 255 },
     { "step",     ARG_U8,  true, 0, 255 },
     { "settle_ms", ARG_U16, true, 0, 60000 },
-    { "adc_ch",   ARG_U8,  true, 0, 3 },
+    { "adc_ch",   ARG_U8,  true, 0, IDAC_ADC_CHANNELS - 1 },  // M04
 };
 static const ArgSpec s_idac_calibrate_rsp[] = {
     { "channel", ARG_U8, true, 0, 0 },

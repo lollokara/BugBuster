@@ -34,9 +34,12 @@ Quick start::
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+log = logging.getLogger(__name__)
 
 import requests
 
@@ -220,8 +223,8 @@ class OTAClient:
                     if on_progress:
                         try:
                             on_progress(sent, size)
-                        except Exception:  # callback errors must not abort upload
-                            pass
+                        except Exception as e:  # callback errors must not abort upload
+                            log.warning("Progress callback raised: %s", e)
 
         headers = {
             ADMIN_TOKEN_HEADER: self._token,

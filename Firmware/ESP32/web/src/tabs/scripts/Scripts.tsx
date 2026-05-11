@@ -496,8 +496,12 @@ export function Scripts() {
           if (text) setLogs((prev) => prev + text);
         }
       } catch (e) {
-        if (alive && !(e instanceof PairingRequiredError)) {
-          setLogError(e instanceof Error ? e.message : String(e));
+        if (alive) {
+          if (e instanceof PairingRequiredError) {
+            setLogError("Pairing lost — re-pair to resume log streaming.");
+          } else {
+            setLogError(e instanceof Error ? e.message : String(e));
+          }
         }
       }
       if (alive) window.setTimeout(tick, 500);
