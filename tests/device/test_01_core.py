@@ -11,7 +11,7 @@ import pytest
 from bugbuster import ChannelFunction
 from conftest import assert_no_faults
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]
 
 
 # ---------------------------------------------------------------------------

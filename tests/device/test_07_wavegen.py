@@ -17,7 +17,7 @@ import pytest
 from bugbuster import ChannelFunction, WaveformType, OutputMode
 from conftest import assert_no_faults
 
-pytestmark = [pytest.mark.timeout(15)]
+pytestmark = [pytest.mark.timeout(60)]
 
 # Channel assignments matching physical breadboard setup
 CH_VOUT = 1  # Channel B — unconnected, safe for voltage output

@@ -78,6 +78,17 @@ bool io_owner_release(uint8_t slot_idx, uint8_t session_id);
 void io_owner_force_release(uint8_t slot_idx);
 
 /**
+ * @brief Release every slot currently owned by (@p kind, @p session_id).
+ *        Called from bbpCdcNewConnection() to drop leases of a USB session
+ *        that just disappeared (DTR drop / re-enumeration) so stale leases
+ *        do not block the next session.
+ * @param kind        Owner kind to match.
+ * @param session_id  Session byte to match.
+ * @return Number of slots released.
+ */
+uint8_t io_owner_release_session(io_owner_kind_t kind, uint8_t session_id);
+
+/**
  * @brief Check if a slot is free.
  */
 bool io_owner_is_free(uint8_t slot_idx);

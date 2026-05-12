@@ -430,11 +430,21 @@ QuickSetupStatus quicksetup_apply(uint8_t slot, QuickSetupApplyReport *report)
     }
 
     cJSON *pca = doc ? json_obj(doc, "pca") : NULL;
-    if (!pca9535_set_control(PCA_CTRL_VADJ1_EN, json_bool(pca, "vadj1", false))) add_failed(report, "pca_vadj1");
-    if (!pca9535_set_control(PCA_CTRL_VADJ2_EN, json_bool(pca, "vadj2", false))) add_failed(report, "pca_vadj2");
-    if (!pca9535_set_bit(0, 0, json_bool(pca, "logic", false))) add_failed(report, "pca_logic");
-    if (!pca9535_set_control(PCA_CTRL_15V_EN, json_bool(pca, "v15", false))) add_failed(report, "pca_15v");
-    if (!pca9535_set_control(PCA_CTRL_USB_HUB_EN, json_bool(pca, "usbHub", false))) add_failed(report, "pca_usb");
+    // For each rail/enable: if the quicksetup payload omits the field, fall
+    // back to the CURRENT live state rather than `false`. The old default
+    // silently disabled EN_15V_A (and other rails) on every incomplete
+    // payload — see Docs/bugs-improvements-2026-05-12.md Lane E1.
+    const PCA9535State *pca_state = pca9535_get_state();
+    bool cur_vadj1  = pca_state ? pca_state->vadj1_en   : false;
+    bool cur_vadj2  = pca_state ? pca_state->vadj2_en   : false;
+    bool cur_logic  = pca_state ? ((pca_state->output0 & PCA9535_LOGIC_EN) != 0) : false;
+    bool cur_v15    = pca_state ? pca_state->en_15v     : false;
+    bool cur_usbhub = pca_state ? pca_state->en_usb_hub : false;
+    if (!pca9535_set_control(PCA_CTRL_VADJ1_EN,   json_bool(pca, "vadj1",  cur_vadj1)))  add_failed(report, "pca_vadj1");
+    if (!pca9535_set_control(PCA_CTRL_VADJ2_EN,   json_bool(pca, "vadj2",  cur_vadj2)))  add_failed(report, "pca_vadj2");
+    if (!pca9535_set_bit(0, 0,                    json_bool(pca, "logic",  cur_logic)))  add_failed(report, "pca_logic");
+    if (!pca9535_set_control(PCA_CTRL_15V_EN,     json_bool(pca, "v15",    cur_v15)))    add_failed(report, "pca_15v");
+    if (!pca9535_set_control(PCA_CTRL_USB_HUB_EN, json_bool(pca, "usbHub", cur_usbhub))) add_failed(report, "pca_usb");
 
     cJSON *efuse = pca ? json_arr(pca, "efuse") : NULL;
     for (uint8_t i = 0; i < 4; i++) {

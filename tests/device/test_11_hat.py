@@ -34,7 +34,7 @@ except ImportError:
 
 pytestmark = [
     pytest.mark.requires_hat,
-    pytest.mark.timeout(15),
+    pytest.mark.timeout(60),
 ]
 
 

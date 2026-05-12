@@ -434,23 +434,26 @@ extern "C" void app_main(void)
     // Start this before HTTPD so web-server route/socket allocations cannot
     // starve the single CDC0 owner task during memory-tight boots.
     //
-    // Allocate the 4 KB task stack from PSRAM via xTaskCreatePinnedToCoreWithCaps
-    // — mainLoopTask only runs CLI parsing + BBP processing on CDC0, no ISRs
-    // and no DMA buffers, so the slight PSRAM-vs-SRAM latency is irrelevant.
-    // This bypasses the internal-heap exhaustion that produced
-    // `mainLoopTask creation failed (ret=-1)` on tight-boot configs (observed
-    // 2026-05-07: free=4863 / largest=3328 was below the 4 KB stack threshold).
+    // Phase 2 Lane C (2026-05-12): stack MUST be in INTERNAL RAM. BBP
+    // handlers call into NVS (ds4424_cal_save, uart_bridge_set_config),
+    // which triggers SPI flash erase. The kernel disables flash cache
+    // during erase, and asserts that every running task's stack is in
+    // cache-safe memory. A PSRAM stack panics with:
+    //   "spi_flash_disable_interrupts_caches_and_other_cpu cache_utils.c:159
+    //    (esp_task_stack_is_sane_cache_disabled())"
+    // which we hit empirically on test_idac_cal_save / test_set_uart_config.
+    // The prior PSRAM allocation was chosen to bypass internal-heap
+    // exhaustion observed 2026-05-07; the trade-off was wrong.
     TaskHandle_t mainLoopHandle = nullptr;
     log_internal_heap("before mainLoopTask");
-    BaseType_t mainLoopOk = xTaskCreatePinnedToCoreWithCaps(
-        mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    BaseType_t mainLoopOk = xTaskCreatePinnedToCore(
+        mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0);
     if (mainLoopOk != pdPASS || mainLoopHandle == nullptr) {
         term_println("[BugBuster] ERROR: mainLoopTask creation failed");
         ESP_LOGE("main_task", "mainLoopTask creation failed (ret=%d handle=%p)",
                  (int)mainLoopOk, (void *)mainLoopHandle);
     } else {
-        term_println("[BugBuster] Main loop task started (stack in PSRAM)");
+        term_println("[BugBuster] Main loop task started (stack in INTERNAL RAM)");
     }
     log_internal_heap("after mainLoopTask");
 

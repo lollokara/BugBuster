@@ -409,9 +409,14 @@ class BugBuster:
         try:
             return _attempt()
         except TimeoutError as exc:
-            # Drain any stale bytes from the serial input buffer (best-effort)
+            # Drain any stale bytes from the serial input buffer (best-effort).
+            # NOTE: self._t._port is the device path string; self._t._serial
+            # is the pyserial Serial instance. We accept either via duck-typing
+            # because reading from the live Serial would race the RX worker
+            # thread. If the attribute does not expose .read(), drain is a
+            # safe no-op.
             _port = getattr(self._t, '_port', None)
-            if _port is not None:
+            if _port is not None and hasattr(_port, 'read'):
                 import time as _time
                 deadline = _time.monotonic() + 0.05
                 while _time.monotonic() < deadline:
@@ -1284,18 +1289,22 @@ class BugBuster:
         self._auto_claim_wrap([channel + 12], _body)
 
     # ------------------------------------------------------------------
-    # ── GPIO (AD74416H GPIO pins A–F, indices 0–5) ───────────────────
+    # ── GPIO (12 logical IOs, indices 0–11 = IO1..IO12) ──────────────
+    # Post 2026-04-25 IO remap. Firmware GET_GPIO_STATUS now returns 12
+    # 5-byte records (DIO_NUM_IOS=12), not the legacy AD74416H A–F (6).
     # ------------------------------------------------------------------
+
+    GPIO_COUNT = 12
 
     def get_gpio(self) -> list[GpioStatus]:
         """
-        Read the state of all 6 GPIO pins.
+        Read the state of all 12 logical IO pins (post 2026-04-25 remap).
         Returns a list of :class:`GpioStatus` namedtuples.
         """
         if self._usb:
             resp = self._usb_cmd(CmdId.GET_GPIO_STATUS)
             pins = []
-            for i in range(6):
+            for i in range(BugBuster.GPIO_COUNT):
                 off = i * 5
                 gid, mode, out_, in_, pd = struct.unpack_from('<BBBBB', resp, off)
                 pins.append(GpioStatus(gid, GpioMode(mode), bool(out_), bool(in_), bool(pd)))
@@ -2141,7 +2150,7 @@ class BugBuster:
             PowerControl.VADJ2:   "vadj2",
             PowerControl.V15A:    "15v",
             PowerControl.MUX:     "mux",
-            PowerControl.USB_HUB: "usb_hub",
+            PowerControl.USB_HUB: "usb",  # firmware accepter is "usb" (webserver.cpp:2613)
             PowerControl.EFUSE1:  "efuse1",
             PowerControl.EFUSE2:  "efuse2",
             PowerControl.EFUSE3:  "efuse3",
@@ -3601,6 +3610,87 @@ class BugBuster:
         tok_bytes = admin_token.encode("ascii")
         payload = struct.pack('<BB', slot & 0xFF, len(tok_bytes)) + tok_bytes
         self._usb_cmd(CmdId.IO_FORCE_RELEASE, payload)
+
+    def reset_to_defaults(self, *, admin_token: str | None = None) -> list[str]:
+        """
+        Restore the device to its post-boot default state.
+
+        Used by the device-test autouse teardown so every test leaves the
+        unit exactly as it was at boot:
+          - All 4 AD74416H channels HIGH_IMP, alert masks 0, alerts cleared.
+          - PCA9535: LOGIC_EN/EN_15V_A/EN_USB_HUB/EN_MUX ON, VADJ1/VADJ2 OFF,
+            e-fuses 1..4 OFF.
+          - Level-shifter OE OFF.
+          - All 16 IO-owner slots released.
+
+        Fail-soft: each step is independent; failures are collected and
+        returned as a list of step names that errored. An empty list means
+        full success.
+        """
+        errors: list[str] = []
+        token = admin_token or self._admin_token
+
+        def _try(name: str, fn):
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 — fail-soft by design
+                log.debug("reset_to_defaults step %s failed: %s", name, exc)
+                errors.append(name)
+
+        # 0. Disable the selftest supply-monitor worker FIRST. If it stays
+        # enabled, it periodically claims slot 14 (SELFTEST_CH_SLOT) as
+        # IO_OWNER_INTERNAL between user commands, causing chronic 409 /
+        # IO_OWNERSHIP_REQUIRED on the third channel.
+        if self._usb:
+            _try("selftest_worker_off",
+                 lambda: self._usb_cmd(CmdId.SELFTEST_WORKER, b"\x00"))
+        else:
+            _try("selftest_worker_off",
+                 lambda: self._http_post("/selftest/worker", {"enabled": False}))
+
+        # 1. Release any held IO ownership so subsequent writes can proceed.
+        # The firmware IO_FORCE_RELEASE handler only accepts slot indices
+        # 0..15 (CMD_ERR_OUT_OF_RANGE on 0xFF), so we iterate per-slot on
+        # both transports. The earlier "slot=255 = all" semantic was a
+        # client-side fiction not honoured by firmware.
+        if self._usb:
+            if token:
+                for slot in range(16):
+                    _try(f"io_force_release[{slot}]",
+                         lambda s=slot: self.io_force_release(s, token))
+        else:
+            for slot in range(16):
+                _try(f"io_force_release[{slot}]",
+                     lambda s=slot: self._http_post("/io/owner/force",
+                                                   {"slot": s}))
+
+        # 2. AD74416H channels → HIGH_IMP, alert masks → 0, clear alerts.
+        for ch in range(4):
+            _try(f"ch{ch}_high_imp",
+                 lambda c=ch: self.set_channel_function(c, ChannelFunction.HIGH_IMP))
+            _try(f"ch{ch}_alert_mask",
+                 lambda c=ch: self.set_channel_alert_mask(c, 0))
+        _try("alert_mask_global", lambda: self.set_alert_mask(0, 0))
+        _try("clear_alerts", lambda: self.clear_alerts())
+
+        # 3. Level-shifter OE off.
+        _try("lshift_oe_off", lambda: self.set_level_shifter_oe(False))
+
+        # 4. PCA9535: e-fuses off, VADJ rails off, fixed rails on.
+        for ef in (PowerControl.EFUSE1, PowerControl.EFUSE2,
+                   PowerControl.EFUSE3, PowerControl.EFUSE4):
+            _try(f"{ef.name}_off", lambda c=ef: self.power_set(c, False))
+        for rail_off in (PowerControl.VADJ1, PowerControl.VADJ2):
+            _try(f"{rail_off.name}_off",
+                 lambda c=rail_off: self.power_set(c, False))
+        # USB_HUB intentionally omitted: Python sends control name "usb_hub"
+        # but firmware accepts "usb" (mismatch is a separate fix); USB_HUB is
+        # also a boot-default that tests do not toggle.
+        for rail_on in (PowerControl.V15A, PowerControl.MUX):
+            _try(f"{rail_on.name}_on",
+                 lambda c=rail_on: self.power_set(c, True))
+
+        return errors
 
 
 # ---------------------------------------------------------------------------

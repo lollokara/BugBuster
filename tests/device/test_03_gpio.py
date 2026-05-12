@@ -1,8 +1,11 @@
 """
-test_03_gpio.py — AD74416H GPIO pin tests (pins A–F, indices 0–5).
+test_03_gpio.py — Logical GPIO/IO pin tests (IO1..IO12, indices 0–11).
+
+Post 2026-04-25 logical-IO remap: the GPIO endpoint exposes the 12-IO
+abstraction (DIO_NUM_IOS=12), not the 6 AD74416H A–F hardware GPIOs.
 
 Tests GPIO read-back, output high/low, input mode, high-impedance mode,
-and cycling through all 6 pins in OUTPUT mode.
+and cycling through all 12 pins in OUTPUT mode.
 """
 
 import time
@@ -10,7 +13,7 @@ import pytest
 from bugbuster import GpioMode
 from conftest import assert_no_faults
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]  # includes pre/post device reset overhead
 
 
 # ---------------------------------------------------------------------------
@@ -32,13 +35,14 @@ def _restore_gpio(device, *pins, mode=GpioMode.HIGH_IMP):
 
 def test_gpio_get_all(device):
     """
-    Call get_gpio() and verify it returns a list of exactly 6 GpioStatus namedtuples.
+    Call get_gpio() and verify it returns a list of exactly 12 GpioStatus
+    namedtuples (post 2026-04-25 logical-IO remap).
     Each entry must have id, mode, output, input, pulldown fields.
     """
     pins = device.get_gpio()
 
     assert isinstance(pins, list), f"get_gpio() must return a list, got {type(pins)}"
-    assert len(pins) == 6, f"Expected 6 GPIO pins, got {len(pins)}"
+    assert len(pins) == 12, f"Expected 12 GPIO pins, got {len(pins)}"
 
     for i, pin in enumerate(pins):
         assert hasattr(pin, "id"), f"pins[{i}] missing 'id'"
@@ -200,7 +204,7 @@ def test_gpio_multiple_simultaneous(device):
     time.sleep(0.05)
 
     pins = device.get_gpio()
-    assert len(pins) == 6, f"Expected 6 pins after mixed config, got {len(pins)}"
+    assert len(pins) == 12, f"Expected 12 pins after mixed config, got {len(pins)}"
 
     _restore_gpio(device, 0, 1, 2, 3)
     assert_no_faults(device)

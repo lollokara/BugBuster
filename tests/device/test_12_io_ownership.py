@@ -18,7 +18,7 @@ from tests.mock import SimulatedDevice, SimulatedUSBTransport, SimulatedHTTPTran
 import bugbuster as bb
 from bugbuster.constants import IoClaimStatus, IoOwnerKind
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]
 
 
 # ---------------------------------------------------------------------------

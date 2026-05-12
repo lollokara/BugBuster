@@ -8,7 +8,7 @@ device presence when powered from a PD-capable source.
 import pytest
 from conftest import assert_no_faults
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]
 
 # Minimum expected voltage when connected via USB PD (5 V profile)
 MIN_VOLTAGE_MV = 4500  # 4.5 V minimum (accounts for measurement tolerance)

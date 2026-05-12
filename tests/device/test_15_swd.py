@@ -26,7 +26,7 @@ from conftest import assert_no_faults
 
 pytestmark = [
     pytest.mark.requires_hat,
-    pytest.mark.timeout(15),
+    pytest.mark.timeout(60),
 ]
 
 

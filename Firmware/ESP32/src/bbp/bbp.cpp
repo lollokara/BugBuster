@@ -509,11 +509,13 @@ bool bbpCdcClaimed(void)
 
 void bbpCdcNewConnection(void)
 {
-    // Bump session counter so stale ownership from a prior host is invalidated.
-    // Never allow 0 — wrap from 255 to 1.
-    s_bbp_usb_session++;
-    if (s_bbp_usb_session == 0) s_bbp_usb_session = 1;
-    ESP_LOGI(TAG, "CDC #0 new connection — USB session id now %d", (int)s_bbp_usb_session);
+    // INTENTIONALLY a no-op for session/slot management. DTR rises are
+    // unreliable on macOS (they glitch mid-session) — bumping the BBP
+    // session here would invalidate in-flight IO ownership for the
+    // active host on every glitch. The real new-host signal is a fresh
+    // handshake-magic detection, which is handled in bbpDetectHandshake.
+    // We keep this hook so the call site stays valid; future per-DTR
+    // diagnostics can hang off it without breaking ownership.
 }
 
 bool bbpDetectHandshake(uint8_t byte)
@@ -522,6 +524,21 @@ bool bbpDetectHandshake(uint8_t byte)
         s_magic_idx++;
         if (s_magic_idx == BBP_MAGIC_LEN) {
             s_magic_idx = 0;
+
+            // Re-handshake detection: if BBP was already active before
+            // this magic arrived, a different host (or the same host that
+            // crashed/reopened) is reconnecting. Release the prior session's
+            // IO slots and bump s_bbp_usb_session so the new host sees a
+            // clean ownership table. We do this BEFORE sending the response
+            // so the response reflects the new session.
+            bool re_handshake = s_cdcClaimed;
+            if (re_handshake) {
+                uint8_t prev_session = s_bbp_usb_session;
+                uint8_t released = io_owner_release_session(IO_OWNER_USB, prev_session);
+                s_bbp_usb_session++;
+                if (s_bbp_usb_session == 0) s_bbp_usb_session = 1;
+                (void)released;  // logging suppressed in binary mode
+            }
 
             // Send handshake response
             uint8_t rsp[BBP_HANDSHAKE_RSP_LEN] = {
@@ -600,10 +617,14 @@ void bbpProcess(void)
         for (uint32_t i = 0; i < n; i++) {
             uint8_t byte = rxChunk[i];
 
-            // Detect re-handshake: if a new host connects and sends the magic
-            // while we're still in binary mode (e.g., DTR didn't drop), reset
-            // and re-enter binary mode cleanly.
-            if (bbpDetectHandshake(byte)) {
+            // Detect re-handshake ONLY when the COBS framer is idle (between
+            // frames). Otherwise, payload bytes that happen to contain the
+            // magic sequence (0xA0 0xA1 0xA2 0xA3) would trigger a spurious
+            // re-handshake, releasing the active session's IO claims and
+            // bumping s_bbp_usb_session — which manifests as systemic
+            // IO_OWNERSHIP_REQUIRED on the next mutating command.
+            // Phase 2 Lane A1 (2026-05-12).
+            if (s_rxLen == 0 && bbpDetectHandshake(byte)) {
                 ESP_LOGW(TAG, "Re-handshake detected in binary mode — resetting");
                 return;  // bbpDetectHandshake already set s_active, sent response
             }

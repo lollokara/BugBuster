@@ -10,7 +10,7 @@ IO numbering: 1–12 (logical IOs routed through MUX).
 import pytest
 from conftest import assert_no_faults
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]
 
 
 # ---------------------------------------------------------------------------

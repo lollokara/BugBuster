@@ -113,6 +113,21 @@ void io_owner_force_release(uint8_t slot_idx)
     portEXIT_CRITICAL(&s_mux);
 }
 
+uint8_t io_owner_release_session(io_owner_kind_t kind, uint8_t session_id)
+{
+    if (kind == IO_OWNER_NONE) return 0;
+    uint8_t released = 0;
+    portENTER_CRITICAL(&s_mux);
+    for (uint8_t i = 0; i < IO_OWNER_NUM_SLOTS; i++) {
+        if (s_slots[i].kind == kind && s_slots[i].session_id == session_id) {
+            memset(&s_slots[i], 0, sizeof(s_slots[i]));
+            released++;
+        }
+    }
+    portEXIT_CRITICAL(&s_mux);
+    return released;
+}
+
 bool io_owner_is_free(uint8_t slot_idx)
 {
     if (slot_idx >= IO_OWNER_NUM_SLOTS) return false;

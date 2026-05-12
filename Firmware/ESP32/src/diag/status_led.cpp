@@ -230,6 +230,13 @@ void status_led_update(void)
 {
     if (!s_rmt_channel) return;
 
+    // Re-sync the fault-blink flag from the LIVE PCA9535 e-fuse FLT state
+    // on every tick. The event-driven setter at main.cpp::handle_pca_fault
+    // only fires on PCA INT edges; if a FLT clears via a code path that
+    // does not produce an event (e.g. test teardown disabling a faulted
+    // e-fuse via pca9535_user_arm_efuse), the blink would stay stuck.
+    status_led_set_fault_blink(pca9535_any_fault_active());
+
     // ── LED 0: ESP / Connection ──────────────────────────────────────
     bool connected = bbpIsActive();
     if (connected) {

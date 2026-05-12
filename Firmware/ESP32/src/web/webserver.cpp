@@ -257,6 +257,7 @@ static esp_err_t send_error(httpd_req_t *req, int code, const char *msg)
 static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
 {
     if (error == HTTPD_404_NOT_FOUND) {
+        ESP_LOGW(TAG, "404 for %s", req->uri);
         char origin_buf[96];
         set_cors_headers(req, origin_buf, sizeof(origin_buf));
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
@@ -424,10 +425,11 @@ static const char* gpioModeName(uint8_t mode) {
 // =============================================================================
 
 // GET /
-static esp_err_t handle_root(httpd_req_t *req)
+static esp_err_t send_index_html(httpd_req_t *req)
 {
     FILE *f = fopen("/spiffs/index.html", "r");
     if (!f) {
+        ESP_LOGW(TAG, "index.html missing from /spiffs; upload the web UI filesystem image");
         char origin_buf[96];
         set_cors_headers(req, origin_buf, sizeof(origin_buf));
         httpd_resp_send_404(req);
@@ -446,6 +448,55 @@ static esp_err_t handle_root(httpd_req_t *req)
     httpd_resp_send_chunk(req, NULL, 0);  // end chunked response
     fclose(f);
     return ESP_OK;
+}
+
+static esp_err_t handle_root(httpd_req_t *req)
+{
+    return send_index_html(req);
+}
+
+// GET /* — browser shell fallback.
+//
+// Keep API and asset misses strict, but serve the Vite app shell for
+// /index.html and extensionless browser routes so bookmarks/manual URLs do not
+// fall through to ESP-IDF's opaque 404 handler.
+static esp_err_t handle_browser_fallback(httpd_req_t *req)
+{
+    const char *uri = req->uri;
+    const char *q = strchr(uri, '?');
+    size_t uri_len = q ? (size_t)(q - uri) : strlen(uri);
+
+    if (strncmp(uri, "/api/", 5) == 0 || strncmp(uri, "/assets/", 8) == 0) {
+        ESP_LOGW(TAG, "404 for %.*s", (int)uri_len, uri);
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
+        return httpd_resp_send_404(req);
+    }
+
+    if (uri_len == strlen("/favicon.ico") &&
+        strncmp(uri, "/favicon.ico", uri_len) == 0) {
+        httpd_resp_set_status(req, "204 No Content");
+        return httpd_resp_send(req, NULL, 0);
+    }
+
+    bool is_index = (uri_len == strlen("/index.html") &&
+                     strncmp(uri, "/index.html", uri_len) == 0);
+    bool has_extension = false;
+    for (size_t i = 0; i < uri_len; i++) {
+        if (uri[i] == '.') {
+            has_extension = true;
+            break;
+        }
+    }
+
+    if (is_index || !has_extension) {
+        return send_index_html(req);
+    }
+
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
+    ESP_LOGW(TAG, "404 for %.*s", (int)uri_len, uri);
+    return httpd_resp_send_404(req);
 }
 
 // Map filename extension → MIME type for static asset serving.
@@ -3796,8 +3847,10 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
         return send_error(req, 500, "SPIFFS partition not found");
     }
 
-    if (req->content_len <= 0 || (size_t)req->content_len > part->size) {
-        return send_error(req, 400, "Invalid SPIFFS image size");
+    if (req->content_len <= 0 || (size_t)req->content_len != part->size) {
+        ESP_LOGW(TAG, "Rejecting SPIFFS image size %d for partition '%s' (%lu bytes)",
+                 req->content_len, part->label, (unsigned long)part->size);
+        return send_error(req, 400, "SPIFFS image size must match partition size");
     }
 
     ESP_LOGI(TAG, "SPIFFS upload started: %d bytes -> partition '%s' (%lu bytes)",
@@ -4451,8 +4504,9 @@ void initWebServer(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     // Keep route capacity close to the real table size. The current explicit
-    // route count is 77 plus the REPL WebSocket and wildcard OPTIONS; 96 gives
-    // safe headroom without reserving another 32 unused handler slots from heap.
+    // route count is 87 plus two WebSocket routes and four registry routes; 96
+    // gives safe headroom without reserving another 32 unused handler slots
+    // from heap.
     config.max_uri_handlers = 96;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     // HTTPD task stack must stay in internal RAM, not PSRAM. Any handler
@@ -4982,10 +5036,17 @@ void initWebServer(void)
     // WS routes are registered FIRST (right after httpd_start) — see the
     // comment up there for the internal-heap exhaustion reason.
 
-    ESP_LOGI(TAG, "All URI handlers registered");
-
     // Registry-backed adapter routes (Slice 2: DAC commands)
     http_adapter_register(s_server);
+
+    // Register last so concrete API/static routes win, while browser-only
+    // paths such as /index.html or a copied SPA URL still load the app shell.
+    httpd_uri_t uri_browser_fallback = {
+        .uri = "/*", .method = HTTP_GET, .handler = handle_browser_fallback, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_browser_fallback);
+
+    ESP_LOGI(TAG, "All URI handlers registered");
 }
 
 void stopWebServer(void)

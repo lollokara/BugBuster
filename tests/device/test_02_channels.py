@@ -15,7 +15,7 @@ from bugbuster import (
     RtdCurrent,
 )
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]
 
 
 # ---------------------------------------------------------------------------

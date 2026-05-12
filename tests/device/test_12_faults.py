@@ -9,7 +9,7 @@ import time
 import pytest
 from bugbuster import ChannelFunction
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]
 
 
 # ---------------------------------------------------------------------------

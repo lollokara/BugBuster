@@ -11,7 +11,7 @@ from conftest import assert_no_faults
 
 pytestmark = [
     pytest.mark.usb_only,
-    pytest.mark.timeout(10),
+    pytest.mark.timeout(60),  # includes pre/post device reset overhead
 ]
 
 

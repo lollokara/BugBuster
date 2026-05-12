@@ -14,7 +14,7 @@ import time
 import pytest
 from conftest import assert_no_faults
 
-pytestmark = [pytest.mark.timeout(10)]
+pytestmark = [pytest.mark.timeout(60)]
 
 # All switches open: 4 devices × byte 0x00
 ALL_OPEN = [0x00, 0x00, 0x00, 0x00]

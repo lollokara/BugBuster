@@ -268,11 +268,27 @@ def _make_http_device(config):
 # Parametrized device fixture (USB + HTTP)
 # ---------------------------------------------------------------------------
 
+def _reset_inplace(dev, label):
+    """Call dev.reset_to_defaults() on an already-open connection. Fail-soft."""
+    if dev is None or getattr(dev, "_t", None) is None:
+        return
+    try:
+        errors = dev.reset_to_defaults()
+        if errors:
+            print(f"[conftest] {label} reset_to_defaults failed steps: {errors}")
+    except Exception as exc:  # noqa: BLE001 — fail-soft
+        print(f"[conftest] {label} reset_to_defaults raised: {exc}")
+
+
 @pytest.fixture(params=["usb", "http"])
 def device(request):
     """
     Parametrized fixture yielding a connected BugBuster over USB or HTTP.
     Automatically skips if the CLI argument for that transport is not provided.
+
+    Resets the device to defaults BEFORE the test (using the existing
+    connection, no CDC0 contention) and again AFTER the test to leave the
+    bench clean for the next case. Skips reset if no_reset marker is set.
     """
     transport = request.param
     if transport == "usb":
@@ -280,7 +296,14 @@ def device(request):
     else:
         dev = _make_http_device(request.config)
 
+    skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
+    if not skip_reset:
+        _reset_inplace(dev, "pre-yield")
+
     yield dev
+
+    if not skip_reset:
+        _reset_inplace(dev, "post-yield")
 
     try:
         dev.disconnect()
@@ -296,7 +319,12 @@ def device(request):
 def usb_device(request):
     """USB-only BugBuster fixture.  Skips if --device-usb not given."""
     dev = _make_usb_device(request.config)
+    skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
+    if not skip_reset:
+        _reset_inplace(dev, "pre-yield(usb)")
     yield dev
+    if not skip_reset:
+        _reset_inplace(dev, "post-yield(usb)")
     try:
         dev.disconnect()
     except Exception:
@@ -311,7 +339,12 @@ def usb_device(request):
 def http_device(request):
     """HTTP-only BugBuster fixture.  Skips if --device-http not given."""
     dev = _make_http_device(request.config)
+    skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
+    if not skip_reset:
+        _reset_inplace(dev, "pre-yield(http)")
     yield dev
+    if not skip_reset:
+        _reset_inplace(dev, "post-yield(http)")
     try:
         dev.disconnect()
     except Exception:
@@ -359,40 +392,64 @@ def device_info(request):
 
 
 # ---------------------------------------------------------------------------
-# Session-scoped autouse fixture — restore safe state after all tests
+# Per-test device-reset fixture — leave the device exactly as we found it.
+#
+# Every `device` / `usb_device` / `http_device` test depends (via its
+# transport fixture) on `_reset_device_state`. After each test, the fixture
+# opens a short-lived connection and calls `BugBuster.reset_to_defaults()` so
+# the next test starts from a known state (channels HIGH_IMP, alert masks 0,
+# alerts cleared, e-fuses off, VADJ off, +15V/USB_HUB/MUX on, IO-owner table
+# released, level-shifter OE off).
+#
+# Tests that intentionally probe an "out of default" boot state can opt out
+# with `@pytest.mark.no_reset`.
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session", autouse=True)
-def reset_after_test(request):
-    """
-    Session-scoped autouse fixture.
-    After the entire test session, puts all 4 channels to HIGH_IMP
-    to leave the device in a safe state.
-    """
-    yield  # run all tests first
+def _open_reset_connection(config):
+    """Open a short-lived connection used solely for reset_to_defaults()."""
+    if config.getoption("--sim", default=False):
+        return None  # simulator does not need physical reset
+    port = config.getoption("--device-usb", default=None)
+    host = config.getoption("--device-http", default=None)
+    if port:
+        dev = bb.connect_usb(port)
+        return dev
+    if host:
+        dev = bb.connect_http(host)
+        token = _resolve_admin_token(config)
+        if token:
+            dev._admin_token = token  # noqa: SLF001
+        return dev
+    return None
 
-    port = request.config.getoption("--device-usb")
-    host = request.config.getoption("--device-http")
 
+def _perform_device_reset(config):
+    """Best-effort reset of the device to boot defaults."""
     dev = None
     try:
-        if port:
-            dev = bb.connect_usb(port)
-        elif host:
-            dev = bb.connect_http(host)
-        else:
+        dev = _open_reset_connection(config)
+        if dev is None:
             return
-
-        for ch in range(4):
-            try:
-                dev.set_channel_function(ch, ChannelFunction.HIGH_IMP)
-            except Exception:
-                pass
-    except Exception:
-        pass
+        errors = dev.reset_to_defaults()
+        if errors:
+            print(f"[conftest] reset_to_defaults reported failed steps: {errors}")
+    except Exception as exc:  # noqa: BLE001 — fail-soft
+        print(f"[conftest] reset_to_defaults raised: {exc}")
     finally:
         if dev:
             try:
                 dev.disconnect()
             except Exception:
                 pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reset_device_session_bookends(request):
+    """
+    Session-scoped autouse fixture. Resets the device once at session start
+    so an inherited dirty state does not poison the first test, and once at
+    session end so the bench is left clean for the operator.
+    """
+    _perform_device_reset(request.config)
+    yield
+    _perform_device_reset(request.config)

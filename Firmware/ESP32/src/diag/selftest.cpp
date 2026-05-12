@@ -232,24 +232,33 @@ static float read_channel_d(uint8_t adc_range,
 // Slot index for logical channel 2 (physical channel D used by selftest)
 #define SELFTEST_CH_SLOT  14u   // io_owner_slot_for_ch(2) = 2 + 12
 
-// Claim CH slot 14 on behalf of selftest; returns previous owner (for restore).
-// Also emits EVT_IO_PREEMPTED if displacing a real external owner.
-static io_owner_slot_t selftest_claim_ch_slot(void)
+// Claim CH slot 14 on behalf of selftest.
+//
+// Phase 2 Lane A2 (2026-05-12): if an external client (USB/HTTP/SCRIPT/CLI)
+// already owns the slot, the selftest YIELDS — it does not preempt. This
+// prevents the internal supply monitor / U23 reads from invalidating an
+// active test's claim. Selftest skips the measurement this tick; periodic
+// callers will retry on the next 2 s heartbeat.
+//
+// @param prev_out  Filled with the prior owner record on success (for the
+//                  restore step). Untouched on bail.
+// @return true if the slot was claimed for INTERNAL use; false if the slot
+//         is held by an external client and the caller must skip.
+static bool selftest_claim_ch_slot(io_owner_slot_t *prev_out)
 {
     io_owner_slot_t prev = io_owner_get(SELFTEST_CH_SLOT);
 
     if (prev.kind != IO_OWNER_NONE && prev.kind != IO_OWNER_INTERNAL) {
-        // Emit preemption event so the host knows its slot was taken
-        uint8_t evt[2] = { SELFTEST_CH_SLOT, (uint8_t)IO_OWNER_INTERNAL };
-        bbpSendEvent(BBP_EVT_IO_PREEMPTED, evt, sizeof(evt));
-        ESP_LOGW("selftest", "Preempting CH slot %d (was owned by kind=%d sid=%d)",
+        ESP_LOGD("selftest", "CH slot %d held by client kind=%d sid=%d; selftest yielding",
                  SELFTEST_CH_SLOT, (int)prev.kind, (int)prev.session_id);
+        return false;
     }
 
     io_owner_force_release(SELFTEST_CH_SLOT);
     uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
     io_owner_acquire(SELFTEST_CH_SLOT, IO_OWNER_INTERNAL, 0xFF, 0, 0, now_ms);
-    return prev;
+    if (prev_out) *prev_out = prev;
+    return true;
 }
 
 // Restore previous owner after selftest is done with the slot.
@@ -278,8 +287,13 @@ static void selftest_restore_ch_slot(const io_owner_slot_t *prev)
 
 static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
 {
-    // Claim CH slot 14 (logical ch 2 = selftest channel D), displacing if needed
-    io_owner_slot_t prev_owner = selftest_claim_ch_slot();
+    // Claim CH slot 14 (logical ch 2 = selftest channel D).
+    // Phase 2 Lane A2: yield to active client claims — return early so the
+    // user's IO_OWNERSHIP is preserved across the heartbeat tick.
+    io_owner_slot_t prev_owner = {};
+    if (!selftest_claim_ch_slot(&prev_owner)) {
+        return -1.0f;  // slot held by client; caller treats -1 as "unavailable"
+    }
 
     // Pre-discharge: tie Ch D to the shared rail alone (no source) so the
     // ~10 nF on the Ch D input bleeds through R106 (1 MΩ) to GND. τ ≈ 10 ms;
@@ -289,6 +303,10 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     // op-amp output on the next measurement path.
     if (!adgs_set_selftest(U23_SW_ADC_CH_D)) {
         ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S2 active?)");
+        // Phase 2 Lane A2 (2026-05-12): restore prior owner before bailing,
+        // else slot 14 stays held by IO_OWNER_INTERNAL forever and every
+        // subsequent client claim 409s.
+        selftest_restore_ch_slot(&prev_owner);
         return -1.0f;
     }
     delay_ms(50);
@@ -297,6 +315,7 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     uint8_t sw_byte = U23_SW_ADC_CH_D | source_sw;
     if (!adgs_set_selftest(sw_byte)) {
         ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S2 active?)");
+        selftest_restore_ch_slot(&prev_owner);
         return -1.0f;
     }
 
@@ -913,6 +932,17 @@ restore:
     if (rail_toggled) {
         pca9535_set_control(rail_ctrl, false);
     }
+
+    // Phase 2 Lane E (2026-05-12): reset cal.status to IDLE after the worker
+    // has finished its restore. The terminal SUCCESS/FAILED outcome was
+    // already reported in the BBP response payload of the corresponding
+    // `selftest_auto_calibrate` call; the stored state should return to
+    // IDLE so subsequent status polls do not observe stale terminal/running
+    // state across tests. Preserves `points_collected` and `error_mv` for
+    // post-mortem inspection.
+    taskENTER_CRITICAL(&s_cal_lock);
+    s_cal_result.status = CAL_STATUS_IDLE;
+    taskEXIT_CRITICAL(&s_cal_lock);
 }
 
 const SelftestCalResult* selftest_get_cal_result(void)
