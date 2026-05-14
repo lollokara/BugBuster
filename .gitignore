@@ -28,6 +28,7 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+.venv-*/
 **/.venv/
 
 # Test outputs & reports
@@ -44,6 +45,7 @@ tests/report.html
 # Jupyter
 .ipynb_checkpoints/
 /Firmware/RP2040/build
+/Firmware/RP2040/build-local-*/
 /DesktopApp/BugBuster/tests/e2e/node_modules
 /.omc
 .mex/context/stack.md
