@@ -10,7 +10,8 @@ Provides:
 
 import pytest
 import bugbuster as bb
-from bugbuster import ChannelFunction
+from bugbuster import ChannelFunction, GpioMode, PowerControl
+from bugbuster.constants import CmdId
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,12 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "destructive" in item.keywords:
                 item.add_marker(skip_destructive)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    setattr(item, f"rep_{call.when}", outcome.get_result())
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +272,388 @@ def _make_http_device(config):
 
 
 # ---------------------------------------------------------------------------
+# Per-test touched-resource cleanup
+# ---------------------------------------------------------------------------
+
+_CHANNEL_MUTATORS = {
+    "set_channel_function",
+    "set_dac_voltage",
+    "set_dac_current",
+    "set_dac_code",
+    "set_vout_range",
+    "set_current_limit",
+    "set_adc_config",
+    "set_rtd_config",
+    "set_digital_output",
+    "set_din_config",
+}
+
+_GPIO_MUTATORS = {"set_gpio_config", "set_gpio_value"}
+_DIO_MUTATORS = {"dio_configure", "dio_write"}
+_MUX_MUTATORS = {"mux_set_all", "mux_set_switch"}
+_POWER_MUTATORS = {"power_set"}
+_IDAC_MUTATORS = {"idac_set_voltage", "idac_set_code", "idac_cal_save"}
+_ALERT_MUTATORS = {"clear_alerts", "set_channel_alert_mask", "set_alert_mask"}
+_SELFTEST_MUTATORS = {
+    "selftest_measure_supply",
+    "selftest_auto_calibrate",
+    "selftest_internal_supplies",
+}
+_STREAM_MUTATORS = {"start_adc_stream", "stop_adc_stream"}
+_WAVEGEN_MUTATORS = {"start_waveform", "stop_waveform"}
+_UART_MUTATORS = {"set_uart_config"}
+_WATCHDOG_MUTATORS = {"set_watchdog"}
+_LSHIFT_MUTATORS = {"set_level_shifter_oe"}
+_IO_OWNER_MUTATORS = {"io_claim", "io_release", "io_force_release"}
+_RESET_MUTATORS = {"reset"}
+
+_KNOWN_MUTATORS = (
+    _CHANNEL_MUTATORS
+    | _GPIO_MUTATORS
+    | _DIO_MUTATORS
+    | _MUX_MUTATORS
+    | _POWER_MUTATORS
+    | _IDAC_MUTATORS
+    | _ALERT_MUTATORS
+    | _SELFTEST_MUTATORS
+    | _STREAM_MUTATORS
+    | _WAVEGEN_MUTATORS
+    | _UART_MUTATORS
+    | _WATCHDOG_MUTATORS
+    | _LSHIFT_MUTATORS
+    | _IO_OWNER_MUTATORS
+    | _RESET_MUTATORS
+)
+
+_MUTATING_PREFIXES = (
+    "set_",
+    "start_",
+    "stop_",
+    "clear_",
+    "io_",
+    "power_",
+    "mux_",
+    "idac_",
+    "selftest_",
+    "wifi_",
+    "hat_",
+    "dio_",
+)
+
+_HAL_MUTATORS = {
+    "begin",
+    "shutdown",
+    "configure",
+    "write_voltage",
+    "write_current",
+    "write_digital",
+    "write_hart_current",
+    "set_voltage",
+    "set_vlogic",
+    "set_serial",
+}
+
+
+class _MutationTracker:
+    def __init__(self):
+        self.channels: set[int] = set()
+        self.gpios: set[int] = set()
+        self.dios: set[int] = set()
+        self.slots: set[int] = set()
+        self.power_controls: set[PowerControl] = set()
+        self.idac_channels: set[int] = set()
+        self.mux = False
+        self.alert_global = False
+        self.alert_channels: set[int] = set()
+        self.selftest = False
+        self.stream = False
+        self.wavegen = False
+        self.uart = False
+        self.watchdog = False
+        self.lshift = False
+        self.unknown = False
+        self.full_reset = False
+
+    @property
+    def touched(self) -> bool:
+        return any((
+            self.channels,
+            self.gpios,
+            self.dios,
+            self.slots,
+            self.power_controls,
+            self.idac_channels,
+            self.mux,
+            self.alert_global,
+            self.alert_channels,
+            self.selftest,
+            self.stream,
+            self.wavegen,
+            self.uart,
+            self.watchdog,
+            self.lshift,
+            self.unknown,
+            self.full_reset,
+        ))
+
+    def record(self, name: str, args: tuple, kwargs: dict) -> None:
+        if name in _CHANNEL_MUTATORS:
+            self._add_channel(args, kwargs)
+        elif name in _GPIO_MUTATORS:
+            self._add_gpio(args, kwargs)
+        elif name in _DIO_MUTATORS:
+            self._add_dio(args, kwargs)
+        elif name in _MUX_MUTATORS:
+            self.mux = True
+        elif name in _POWER_MUTATORS:
+            self._add_power(args, kwargs)
+        elif name in _IDAC_MUTATORS:
+            self._add_idac(args, kwargs)
+        elif name in _ALERT_MUTATORS:
+            self._add_alert(name, args, kwargs)
+        elif name in _SELFTEST_MUTATORS:
+            self.selftest = True
+            self.slots.add(14)
+        elif name in _STREAM_MUTATORS:
+            self.stream = True
+        elif name in _WAVEGEN_MUTATORS:
+            self.wavegen = True
+            self._add_channel(args, kwargs)
+        elif name in _UART_MUTATORS:
+            self.uart = True
+        elif name in _WATCHDOG_MUTATORS:
+            self.watchdog = True
+        elif name in _LSHIFT_MUTATORS:
+            self.lshift = True
+        elif name in _IO_OWNER_MUTATORS:
+            self._add_io_owner(args, kwargs)
+        elif name in _RESET_MUTATORS:
+            self.channels.update(range(4))
+            self.slots.update(range(12, 16))
+            self.alert_global = True
+        elif name.startswith(_MUTATING_PREFIXES):
+            self.unknown = True
+
+    def record_hal(self, name: str, args: tuple, kwargs: dict) -> None:
+        if name in _HAL_MUTATORS:
+            # HAL methods fan out through multiple private helpers. Treat them
+            # as unknown unless a future tracker wraps each HAL path directly.
+            self.unknown = True
+
+    def _add_channel(self, args: tuple, kwargs: dict) -> None:
+        value = args[0] if args else kwargs.get("channel")
+        if isinstance(value, int):
+            self.channels.add(value)
+            self.slots.add(value + 12)
+
+    def _add_gpio(self, args: tuple, kwargs: dict) -> None:
+        value = args[0] if args else kwargs.get("gpio")
+        if isinstance(value, int):
+            self.gpios.add(value)
+
+    def _add_dio(self, args: tuple, kwargs: dict) -> None:
+        value = args[0] if args else kwargs.get("io")
+        if isinstance(value, int):
+            self.dios.add(value)
+            self.slots.add(value - 1)
+
+    def _add_power(self, args: tuple, kwargs: dict) -> None:
+        value = args[0] if args else kwargs.get("control")
+        if value is not None:
+            try:
+                self.power_controls.add(PowerControl(value))
+            except ValueError:
+                self.unknown = True
+
+    def _add_idac(self, args: tuple, kwargs: dict) -> None:
+        value = args[0] if args else kwargs.get("channel")
+        if isinstance(value, int):
+            self.idac_channels.add(value)
+        else:
+            self.unknown = True
+
+    def _add_alert(self, name: str, args: tuple, kwargs: dict) -> None:
+        if name == "set_alert_mask":
+            self.alert_global = True
+            return
+        value = None
+        if args:
+            value = args[0]
+        if "channel" in kwargs:
+            value = kwargs["channel"]
+        if value is None:
+            self.alert_global = True
+        elif isinstance(value, int):
+            self.alert_channels.add(value)
+        else:
+            self.unknown = True
+
+    def _add_io_owner(self, args: tuple, kwargs: dict) -> None:
+        value = args[0] if args else kwargs.get("slots")
+        if value is None:
+            self.slots.update(range(16))
+        elif isinstance(value, int):
+            self.slots.add(value)
+        else:
+            try:
+                self.slots.update(int(slot) for slot in value)
+            except (TypeError, ValueError):
+                self.unknown = True
+
+
+class _HalTrackingProxy:
+    def __init__(self, hal, tracker: _MutationTracker):
+        self._hal = hal
+        self._tracker = tracker
+
+    def __getattr__(self, name):
+        attr = getattr(self._hal, name)
+        if not callable(attr):
+            return attr
+
+        def _wrapped(*args, **kwargs):
+            self._tracker.record_hal(name, args, kwargs)
+            return attr(*args, **kwargs)
+
+        return _wrapped
+
+
+class _BugBusterTrackingProxy:
+    def __init__(self, dev, tracker: _MutationTracker):
+        self._dev = dev
+        self._tracker = tracker
+        self._hal_proxy = None
+
+    @property
+    def hal(self):
+        if self._hal_proxy is None:
+            self._hal_proxy = _HalTrackingProxy(self._dev.hal, self._tracker)
+        return self._hal_proxy
+
+    def __getattr__(self, name):
+        attr = getattr(self._dev, name)
+        if not callable(attr):
+            return attr
+
+        def _wrapped(*args, **kwargs):
+            self._tracker.record(name, args, kwargs)
+            return attr(*args, **kwargs)
+
+        return _wrapped
+
+
+def _force_release_slot(dev, slot: int) -> None:
+    token = getattr(dev, "_admin_token", None)
+    if getattr(dev, "_usb", False):
+        if not token:
+            try:
+                token = dev.get_admin_token()
+            except Exception:
+                token = None
+        if token:
+            dev.io_force_release(slot, token)
+    else:
+        dev._http_post("/io/owner/force", {"slot": slot})  # noqa: SLF001
+
+
+def _cleanup_touched_resources(dev, tracker: _MutationTracker, label: str) -> list[str]:
+    errors: list[str] = []
+
+    def _try(name: str, fn):
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 — cleanup is fail-soft
+            print(f"[conftest] {label} cleanup step {name} failed: {exc}")
+            errors.append(name)
+
+    if tracker.stream:
+        _try("stop_adc_stream", dev.stop_adc_stream)
+    if tracker.wavegen:
+        _try("stop_waveform", dev.stop_waveform)
+
+    if tracker.selftest:
+        if getattr(dev, "_usb", False):
+            _try("selftest_worker_off", lambda: dev._usb_cmd(CmdId.SELFTEST_WORKER, b"\x00"))  # noqa: SLF001
+        else:
+            _try("selftest_worker_off", lambda: dev._http_post("/selftest/worker", {"enabled": False}))  # noqa: SLF001
+
+    for slot in sorted(slot for slot in tracker.slots if 0 <= slot < 16):
+        _try(f"io_force_release[{slot}]", lambda s=slot: _force_release_slot(dev, s))
+
+    if tracker.mux:
+        _try("mux_all_open", lambda: dev.mux_set_all([0, 0, 0, 0]))
+
+    for ch in sorted(ch for ch in tracker.channels if 0 <= ch < 4):
+        _try(f"ch{ch}_high_imp", lambda c=ch: dev.set_channel_function(c, ChannelFunction.HIGH_IMP))
+        _try(f"ch{ch}_alert_mask", lambda c=ch: dev.set_channel_alert_mask(c, 0))
+        _try(f"clear_alerts[{ch}]", lambda c=ch: dev.clear_alerts(c))
+
+    for gpio in sorted(g for g in tracker.gpios if 0 <= g < 12):
+        _try(f"gpio{gpio}_high_imp", lambda g=gpio: dev.set_gpio_config(g, GpioMode.HIGH_IMP))
+
+    for io in sorted(i for i in tracker.dios if 1 <= i <= 12):
+        _try(f"dio{io}_disabled", lambda i=io: dev.dio_configure(i, 0))
+
+    if tracker.alert_global:
+        _try("alert_mask_global", lambda: dev.set_alert_mask(0, 0))
+        _try("clear_alerts", dev.clear_alerts)
+    for ch in sorted(ch for ch in tracker.alert_channels if 0 <= ch < 4):
+        _try(f"ch{ch}_alert_mask", lambda c=ch: dev.set_channel_alert_mask(c, 0))
+        _try(f"clear_alerts[{ch}]", lambda c=ch: dev.clear_alerts(c))
+
+    for ch in sorted(c for c in tracker.idac_channels if 0 <= c <= 3):
+        _try(f"idac{ch}_code_zero", lambda c=ch: dev.idac_set_code(c, 0))
+
+    for ctrl in sorted(tracker.power_controls, key=int):
+        if ctrl in (PowerControl.EFUSE1, PowerControl.EFUSE2, PowerControl.EFUSE3, PowerControl.EFUSE4,
+                    PowerControl.VADJ1, PowerControl.VADJ2):
+            _try(f"{ctrl.name}_off", lambda c=ctrl: dev.power_set(c, False))
+        elif ctrl in (PowerControl.V15A, PowerControl.MUX, PowerControl.USB_HUB):
+            _try(f"{ctrl.name}_on", lambda c=ctrl: dev.power_set(c, True))
+
+    if tracker.lshift:
+        _try("lshift_oe_off", lambda: dev.set_level_shifter_oe(False))
+    if tracker.watchdog:
+        _try("watchdog_off", lambda: dev.set_watchdog(False, 0))
+    if tracker.uart:
+        _try("uart_bridge_off", lambda: dev.set_uart_config(enabled=False))
+
+    for slot in sorted(slot for slot in tracker.slots if 0 <= slot < 16):
+        _try(f"io_force_release_final[{slot}]", lambda s=slot: _force_release_slot(dev, s))
+
+    return errors
+
+
+def _test_failed(request) -> bool:
+    report = getattr(request.node, "rep_call", None)
+    return bool(report and report.failed)
+
+
+def _needs_full_reset(request, tracker: _MutationTracker) -> bool:
+    return (
+        tracker.full_reset
+        or tracker.unknown
+        or "full_reset" in request.keywords
+        or "destructive" in request.keywords
+        or _test_failed(request)
+    )
+
+
+def _cleanup_after_test(dev, tracker: _MutationTracker, request, label: str) -> None:
+    if not tracker.touched and not _needs_full_reset(request, tracker):
+        return
+    if _needs_full_reset(request, tracker):
+        reason = "unknown mutation" if tracker.unknown else "marker/failure"
+        print(f"[conftest] {label} using full reset fallback ({reason})")
+        _reset_inplace(dev, label)
+        return
+    errors = _cleanup_touched_resources(dev, tracker, label)
+    if errors:
+        print(f"[conftest] {label} targeted cleanup failed; running full reset fallback")
+        _reset_inplace(dev, f"{label}-fallback")
+
+
+# ---------------------------------------------------------------------------
 # Parametrized device fixture (USB + HTTP)
 # ---------------------------------------------------------------------------
 
@@ -273,7 +662,13 @@ def _reset_inplace(dev, label):
     if dev is None or getattr(dev, "_t", None) is None:
         return
     try:
-        errors = dev.reset_to_defaults()
+        token = getattr(dev, "_admin_token", None)
+        if getattr(dev, "_usb", False) and not token:
+            try:
+                token = dev.get_admin_token()
+            except Exception:
+                token = None
+        errors = dev.reset_to_defaults(admin_token=token)
         if errors:
             print(f"[conftest] {label} reset_to_defaults failed steps: {errors}")
     except Exception as exc:  # noqa: BLE001 — fail-soft
@@ -286,9 +681,9 @@ def device(request):
     Parametrized fixture yielding a connected BugBuster over USB or HTTP.
     Automatically skips if the CLI argument for that transport is not provided.
 
-    Resets the device to defaults BEFORE the test (using the existing
-    connection, no CDC0 contention) and again AFTER the test to leave the
-    bench clean for the next case. Skips reset if no_reset marker is set.
+    Tracks hardware mutations during the test and cleans up only touched
+    resources after yield. Broad reset is reserved for session bookends,
+    explicit full_reset/destructive tests, failures, or unknown mutations.
     """
     transport = request.param
     if transport == "usb":
@@ -297,13 +692,13 @@ def device(request):
         dev = _make_http_device(request.config)
 
     skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
-    if not skip_reset:
-        _reset_inplace(dev, "pre-yield")
+    tracker = _MutationTracker()
+    yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
 
-    yield dev
+    yield yielded
 
     if not skip_reset:
-        _reset_inplace(dev, "post-yield")
+        _cleanup_after_test(dev, tracker, request, "post-yield")
 
     try:
         dev.disconnect()
@@ -320,11 +715,11 @@ def usb_device(request):
     """USB-only BugBuster fixture.  Skips if --device-usb not given."""
     dev = _make_usb_device(request.config)
     skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
+    tracker = _MutationTracker()
+    yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
+    yield yielded
     if not skip_reset:
-        _reset_inplace(dev, "pre-yield(usb)")
-    yield dev
-    if not skip_reset:
-        _reset_inplace(dev, "post-yield(usb)")
+        _cleanup_after_test(dev, tracker, request, "post-yield(usb)")
     try:
         dev.disconnect()
     except Exception:
@@ -340,11 +735,11 @@ def http_device(request):
     """HTTP-only BugBuster fixture.  Skips if --device-http not given."""
     dev = _make_http_device(request.config)
     skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
+    tracker = _MutationTracker()
+    yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
+    yield yielded
     if not skip_reset:
-        _reset_inplace(dev, "pre-yield(http)")
-    yield dev
-    if not skip_reset:
-        _reset_inplace(dev, "post-yield(http)")
+        _cleanup_after_test(dev, tracker, request, "post-yield(http)")
     try:
         dev.disconnect()
     except Exception:
@@ -413,6 +808,9 @@ def _open_reset_connection(config):
     host = config.getoption("--device-http", default=None)
     if port:
         dev = bb.connect_usb(port)
+        token = _resolve_admin_token(config)
+        if token:
+            dev._admin_token = token  # noqa: SLF001
         return dev
     if host:
         dev = bb.connect_http(host)
