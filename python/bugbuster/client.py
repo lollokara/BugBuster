@@ -1333,7 +1333,7 @@ class BugBuster:
         """
         Configure a GPIO pin mode.
 
-        *gpio* — pin index 0–5 (A=0, B=1, … F=5).
+        *gpio* — logical IO index 0–11 (IO1..IO12).
         *mode* — see :class:`GpioMode`.
         """
         if self._usb:
@@ -3621,6 +3621,7 @@ class BugBuster:
           - PCA9535: LOGIC_EN/EN_15V_A/EN_USB_HUB/EN_MUX ON, VADJ1/VADJ2 OFF,
             e-fuses 1..4 OFF.
           - Level-shifter OE OFF.
+          - All MUX switches open.
           - All 16 IO-owner slots released.
 
         Fail-soft: each step is independent; failures are collected and
@@ -3629,6 +3630,11 @@ class BugBuster:
         """
         errors: list[str] = []
         token = admin_token or self._admin_token
+        if self._usb and not token:
+            try:
+                token = self.get_admin_token()
+            except Exception as exc:  # noqa: BLE001 — reset stays fail-soft
+                log.debug("reset_to_defaults admin token lookup failed: %s", exc)
 
         def _try(name: str, fn):
             try:
@@ -3673,7 +3679,7 @@ class BugBuster:
         _try("alert_mask_global", lambda: self.set_alert_mask(0, 0))
         _try("clear_alerts", lambda: self.clear_alerts())
 
-        # 3. Level-shifter OE off.
+        # 3. Disable level-shifter OE before changing matrix/power state.
         _try("lshift_oe_off", lambda: self.set_level_shifter_oe(False))
 
         # 4. PCA9535: e-fuses off, VADJ rails off, fixed rails on.
@@ -3683,12 +3689,25 @@ class BugBuster:
         for rail_off in (PowerControl.VADJ1, PowerControl.VADJ2):
             _try(f"{rail_off.name}_off",
                  lambda c=rail_off: self.power_set(c, False))
-        # USB_HUB intentionally omitted: Python sends control name "usb_hub"
-        # but firmware accepts "usb" (mismatch is a separate fix); USB_HUB is
-        # also a boot-default that tests do not toggle.
-        for rail_on in (PowerControl.V15A, PowerControl.MUX):
+        for rail_on in (PowerControl.V15A, PowerControl.MUX, PowerControl.USB_HUB):
             _try(f"{rail_on.name}_on",
                  lambda c=rail_on: self.power_set(c, True))
+
+        # 5. Open all MUX switches after EN_MUX is known-on.
+        _try("mux_all_open", lambda: self.mux_set_all([0, 0, 0, 0]))
+
+        # 6. Mutating cleanup commands above may auto-claim IO slots. Force
+        # release again at the end so reset never leaves fresh cleanup claims.
+        if self._usb:
+            if token:
+                for slot in range(16):
+                    _try(f"io_force_release_final[{slot}]",
+                         lambda s=slot: self.io_force_release(s, token))
+        else:
+            for slot in range(16):
+                _try(f"io_force_release_final[{slot}]",
+                     lambda s=slot: self._http_post("/io/owner/force",
+                                                   {"slot": s}))
 
         return errors
 

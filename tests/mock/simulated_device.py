@@ -54,8 +54,8 @@ class SimulatedDevice:
             for i in range(4)
         ]
 
-        # GPIO state: 6 GPIOs
-        self.gpio = [{"id": i, "mode": 0, "output": False, "input": False, "pulldown": False} for i in range(6)]
+        # Logical GPIO/IO state: 12 IOs (IO1..IO12, ids 0..11)
+        self.gpio = [{"id": i, "mode": 0, "output": False, "input": False, "pulldown": False} for i in range(12)]
 
         # Power / PCA9535 state
         self.pca_control = {}

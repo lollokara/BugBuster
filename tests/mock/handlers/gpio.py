@@ -2,7 +2,7 @@
 GPIO + DIO handlers for SimulatedDevice.
 
 Commands handled:
-  GET_GPIO_STATUS (0x40) — read all 6 GPIO pins
+  GET_GPIO_STATUS (0x40) — read all 12 logical GPIO/IO pins
   SET_GPIO_CONFIG (0x41) — configure pin mode / pulldown
   SET_GPIO_VALUE  (0x42) — set output value
   DIO_GET_ALL     (0x43) — read all 12 digital IOs
@@ -41,7 +41,7 @@ def register(device) -> None:
 
 # ---------------------------------------------------------------------------
 # GET_GPIO_STATUS (0x40)
-# client.py: 6 pins × 5 bytes each: struct.unpack_from('<BBBBB', resp, off)
+# client.py: 12 pins × 5 bytes each: struct.unpack_from('<BBBBB', resp, off)
 #   → (gid, mode, out_, in_, pd)
 # ---------------------------------------------------------------------------
 

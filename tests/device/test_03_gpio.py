@@ -137,10 +137,10 @@ def test_gpio_set_high_imp(device):
 
 def test_gpio_all_pins_output_mode(device):
     """
-    Cycle through all 6 GPIO pins (0–5), configure each as OUTPUT,
+    Cycle through all 12 logical GPIO pins (0–11), configure each as OUTPUT,
     toggle high then low, and restore to HIGH_IMP.
     """
-    for pin_idx in range(6):
+    for pin_idx in range(12):
         device.set_gpio_config(pin_idx, GpioMode.OUTPUT)
         device.set_gpio_value(pin_idx, True)
         time.sleep(0.01)
