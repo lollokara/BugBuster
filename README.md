@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/license-MIT-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
   <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2041%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
   <img src="https://img.shields.io/badge/firmware-ESP%203.1.0%20%C2%B7%20HAT%20bb--hat--2.1-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Firmware"/>
@@ -369,4 +369,9 @@ BugBuster/
 
 ## License
 
-MIT &mdash; see [LICENSE](LICENSE).
+AGPL-3.0 &mdash; see [LICENSE](LICENSE).
+
+BugBuster is free to use, modify, and self-host. If you distribute a
+modified version, or run a modified version as a network service, you must
+release the corresponding source under the same license. For closed-source
+or commercial-OEM use, contact the maintainer for an alternative license.
