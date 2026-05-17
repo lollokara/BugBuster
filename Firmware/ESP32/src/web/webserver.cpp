@@ -1919,9 +1919,15 @@ static esp_err_t handle_post_io_owner_force(httpd_req_t *req)
     int slot = jslot->valueint;
     cJSON_Delete(body);
 
-    if (slot < 0 || slot >= IO_OWNER_NUM_SLOTS) return send_error(req, 400, "slot out of range");
-
-    io_owner_force_release((uint8_t)slot);
+    if (slot == 255) {
+        // 255 (0xFF) = release all slots
+        for (uint8_t i = 0; i < IO_OWNER_NUM_SLOTS; i++) {
+            io_owner_force_release(i);
+        }
+    } else {
+        if (slot < 0 || slot >= IO_OWNER_NUM_SLOTS) return send_error(req, 400, "slot out of range");
+        io_owner_force_release((uint8_t)slot);
+    }
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);
     cJSON_AddNumberToObject(resp, "slot", slot);

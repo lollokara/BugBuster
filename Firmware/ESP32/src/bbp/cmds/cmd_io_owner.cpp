@@ -132,10 +132,17 @@ static int handler_io_force_release(const uint8_t *payload, size_t len,
     size_t rpos = 0;
     uint8_t slot_idx = bbp_get_u8(payload, &rpos);
 
-    if (slot_idx >= IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
-
-    io_owner_force_release(slot_idx);
-    ESP_LOGI(TAG, "Force-released slot %d via BBP", slot_idx);
+    if (slot_idx == 0xFF) {
+        // 0xFF = release all slots
+        for (uint8_t i = 0; i < IO_OWNER_NUM_SLOTS; i++) {
+            io_owner_force_release(i);
+        }
+        ESP_LOGI(TAG, "Force-released all %d slots via BBP (0xFF)", IO_OWNER_NUM_SLOTS);
+    } else {
+        if (slot_idx >= IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
+        io_owner_force_release(slot_idx);
+        ESP_LOGI(TAG, "Force-released slot %d via BBP", slot_idx);
+    }
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, slot_idx);
@@ -167,7 +174,7 @@ static const ArgSpec s_io_release_rsp[] = {
 };
 
 static const ArgSpec s_io_force_args[] = {
-    { "slot_idx", ARG_U8, true, 0, 15 },
+    { "slot_idx", ARG_U8, true, 0, 255 },
 };
 static const ArgSpec s_io_force_rsp[] = {
     { "slot_idx", ARG_U8, true, 0, 0 },

@@ -353,6 +353,27 @@ pub async fn fetch_selftest_worker_set(enabled: bool) -> Option<bool> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupplyRail {
+    pub rail: u8,
+    pub name: String,
+    pub voltage_v: f32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelftestSuppliesCached {
+    pub available: bool,
+    pub timestamp_ms: u32,
+    pub rails: Vec<SupplyRail>,
+}
+
+pub async fn fetch_selftest_supplies_cached() -> Option<SelftestSuppliesCached> {
+    let result = try_invoke("selftest_supplies_cached", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
 // -----------------------------------------------------------------------------
 // Quick Setups
 // -----------------------------------------------------------------------------
@@ -1136,10 +1157,15 @@ pub async fn io_claim(slots: &[u8], lease_ms: u32, purpose: &str) -> bool {
     };
     match try_invoke("io_claim", args).await {
         Some(val) => {
-            // Backend returns status byte 0x00 = IO_OK
-            serde_wasm_bindgen::from_value::<u8>(val)
-                .map(|s| s == 0)
-                .unwrap_or(false)
+            // Backend returns the raw BBP response: n_slots(u8) + status[n](u8).
+            // Claim succeeded only if every per-slot status byte is 0 (CMD_OK).
+            match serde_wasm_bindgen::from_value::<Vec<u8>>(val) {
+                Ok(bytes) if bytes.len() >= 2 => {
+                    let n = bytes[0] as usize;
+                    bytes.len() >= 1 + n && bytes[1..1 + n].iter().all(|&s| s == 0)
+                }
+                _ => false,
+            }
         }
         None => false,
     }
@@ -1188,12 +1214,9 @@ pub async fn io_force_release(slot: u8) -> bool {
             return false;
         }
     };
-    match try_invoke("io_force_release", args).await {
-        Some(val) => serde_wasm_bindgen::from_value::<u8>(val)
-            .map(|s| s == 0)
-            .unwrap_or(false),
-        None => false,
-    }
+    // Backend returns CmdResult<()>; try_invoke returns Some(JsValue::Null) on Ok
+    // and None on Err. Treat any Some as success.
+    try_invoke("io_force_release", args).await.is_some()
 }
 
 /// Single stream cycle: stop → configure → arm → poll → read (USB bulk or UART fallback)

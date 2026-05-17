@@ -89,6 +89,18 @@ void io_owner_force_release(uint8_t slot_idx);
 uint8_t io_owner_release_session(io_owner_kind_t kind, uint8_t session_id);
 
 /**
+ * @brief Release all slots whose kind is not @p preserved_kind and not
+ *        IO_OWNER_NONE. Called on USB re-handshake to evict stale
+ *        HTTP/SCRIPT/CLI entries that the new host cannot reclaim by
+ *        session_id. IO_OWNER_INTERNAL slots (selftest, calibration) are
+ *        also preserved so live holds are not nuked.
+ * @param preserved_kind  Kind to keep (pass IO_OWNER_INTERNAL to preserve
+ *                        firmware-internal holds).
+ * @return Number of slots released.
+ */
+uint8_t io_owner_release_all_except(io_owner_kind_t preserved_kind);
+
+/**
  * @brief Check if a slot is free.
  */
 bool io_owner_is_free(uint8_t slot_idx);

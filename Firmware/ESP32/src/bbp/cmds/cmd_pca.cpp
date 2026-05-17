@@ -68,7 +68,19 @@ static int handler_pca_set_control(const uint8_t *payload, size_t len,
     bool on      = bbp_get_bool(payload, &rpos);
     if (ctrl >= PCA_CTRL_COUNT) return -CMD_ERR_OUT_OF_RANGE;
 
-    if (!pca9535_set_control((PcaControl)ctrl, on)) return -CMD_ERR_HARDWARE;
+    // EFUSE enables must go through the user-action gate (soft-start FLT blackout).
+    // pca9535_set_control() explicitly rejects EFUSE controls; the BBP path used
+    // to forward them anyway and surface CMD_ERR_HARDWARE with no log (BBP mode
+    // suppresses ESP_LOG to keep the binary stream clean), making it impossible
+    // to diagnose from the host side.
+    bool ok;
+    if (ctrl >= PCA_CTRL_EFUSE1_EN && ctrl <= PCA_CTRL_EFUSE4_EN) {
+        uint8_t logical_ch = (uint8_t)(ctrl - PCA_CTRL_EFUSE1_EN);
+        ok = pca9535_user_arm_efuse(logical_ch, on);
+    } else {
+        ok = pca9535_set_control((PcaControl)ctrl, on);
+    }
+    if (!ok) return -CMD_ERR_HARDWARE;
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, ctrl);

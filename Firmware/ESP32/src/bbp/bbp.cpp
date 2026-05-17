@@ -538,6 +538,10 @@ bool bbpDetectHandshake(uint8_t byte)
                 s_bbp_usb_session++;
                 if (s_bbp_usb_session == 0) s_bbp_usb_session = 1;
                 (void)released;  // logging suppressed in binary mode
+                // Evict stale HTTP/SCRIPT/CLI entries that the new USB host
+                // cannot reclaim by session_id. IO_OWNER_INTERNAL slots
+                // (selftest, calibration) are preserved so live holds are not nuked.
+                io_owner_release_all_except(IO_OWNER_INTERNAL);
             }
 
             // Send handshake response

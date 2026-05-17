@@ -10,6 +10,7 @@ const SUPPLY_NAMES: [&str; 3] = ["VLOGIC", "V_ADJ1", "V_ADJ2"];
 #[component]
 pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (selftest, set_selftest) = signal(SelftestStatus::default());
+    let (supplies, set_supplies) = signal(SelftestSuppliesCached::default());
     let (idac, set_idac) = signal(IdacState::default());
     let (ioexp, set_ioexp) = signal(IoExpState::default());
     let (quicksetup_supported, set_quicksetup_supported) = signal(None::<bool>);
@@ -48,6 +49,13 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     if !worker_pending.get_untracked() {
                         set_selftest.update(|s| s.worker_enabled = enabled);
                     }
+                }
+                if selftest.get_untracked().worker_enabled {
+                    if let Some(sup) = fetch_selftest_supplies_cached().await {
+                        set_supplies.set(sup);
+                    }
+                } else {
+                    set_supplies.set(SelftestSuppliesCached::default());
                 }
                 if let Some(st) = fetch_idac_status().await {
                     set_idac.set(st);
@@ -109,6 +117,33 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             {move || if selftest.get().supply_monitor_active { "Active" } else if selftest.get().worker_enabled { "Enabled" } else { "Off" }}
                         </span>
                     </div>
+                    {move || {
+                        let st = selftest.get();
+                        let sup = supplies.get();
+                        if st.worker_enabled && !sup.rails.is_empty() {
+                            let chips = sup.rails.iter().map(|r| {
+                                let label = r.name.clone();
+                                let val = if r.voltage_v < 0.0 {
+                                    "\u{2014}".to_string()
+                                } else {
+                                    format!("{:.2} V", r.voltage_v)
+                                };
+                                view! {
+                                    <span style="display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-dim)">
+                                        <span class="summary-label">{label}": "</span>
+                                        <span class="summary-value">{val}</span>
+                                    </span>
+                                }
+                            }).collect::<Vec<_>>();
+                            view! {
+                                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+                                    {chips}
+                                </div>
+                            }.into_any()
+                        } else {
+                            ().into_any()
+                        }
+                    }}
                 </div>
                 <button class="reset-btn" on:click=reset>
                     <span class="reset-icon">"↻"</span>
@@ -139,11 +174,11 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         };
                         let pct = if range_max > 0.0 { (ch.adc_value.abs() as f64 / range_max * 100.0).min(100.0) } else { 0.0 };
                         let color = CH_COLORS[i];
-                        let ch_d_reserved = monitor_active && i == 3;
+                        let ch_reserved = monitor_active && i == 2;
 
                         view! {
                             <div class="card channel-card" class:ch-active=is_active style="position: relative; overflow: hidden">
-                                <div style=move || if ch_d_reserved { "opacity: 0.35; pointer-events: none" } else { "" }>
+                                <div style=move || if ch_reserved { "opacity: 0.35; pointer-events: none" } else { "" }>
                                     <div class="card-header">
                                         <div class="ch-badge" style=format!("background: {}22; color: {}; border: 1px solid {}44", color, color, color)>
                                             {format!("CH {}", CH_NAMES[i])}
@@ -166,7 +201,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             <label>"Function"</label>
                                             <select class="dropdown"
                                                 prop:value=ch.function.to_string()
-                                                disabled=ch_d_reserved
+                                                disabled=ch_reserved
                                                 on:change=move |e| {
                                                     let func: u8 = event_target_value(&e).parse().unwrap_or(0);
                                                     #[derive(Serialize)]
@@ -183,7 +218,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         </div>
                                     </div>
                                 </div>
-                                {if ch_d_reserved {
+                                {if ch_reserved {
                                     view! { <DiagnosticOverlay /> }.into_any()
                                 } else {
                                     let _: () = view! { <></> };
@@ -473,7 +508,7 @@ fn SectionTitle(title: &'static str) -> impl IntoView {
 fn DiagnosticOverlay() -> impl IntoView {
     view! {
         <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 14px; background: rgba(8,12,24,0.72); border: 1px solid rgba(245,158,11,0.26); color: #f59e0b; font-weight: 800; font-size: 12px; letter-spacing: 0.4px; z-index: 2">
-            "CH-D Used for internal diagnostic"
+            "CH-C Used for internal diagnostic"
         </div>
     }
 }

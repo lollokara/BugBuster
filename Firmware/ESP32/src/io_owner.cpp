@@ -128,6 +128,22 @@ uint8_t io_owner_release_session(io_owner_kind_t kind, uint8_t session_id)
     return released;
 }
 
+uint8_t io_owner_release_all_except(io_owner_kind_t preserved_kind)
+{
+    uint8_t released = 0;
+    portENTER_CRITICAL(&s_mux);
+    for (uint8_t i = 0; i < IO_OWNER_NUM_SLOTS; i++) {
+        if (s_slots[i].kind != IO_OWNER_NONE &&
+            s_slots[i].kind != preserved_kind &&
+            s_slots[i].kind != IO_OWNER_INTERNAL) {
+            memset(&s_slots[i], 0, sizeof(s_slots[i]));
+            released++;
+        }
+    }
+    portEXIT_CRITICAL(&s_mux);
+    return released;
+}
+
 bool io_owner_is_free(uint8_t slot_idx)
 {
     if (slot_idx >= IO_OWNER_NUM_SLOTS) return false;

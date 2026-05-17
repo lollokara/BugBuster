@@ -265,7 +265,13 @@ static bool selftest_claim_ch_slot(io_owner_slot_t *prev_out)
 static void selftest_restore_ch_slot(const io_owner_slot_t *prev)
 {
     io_owner_force_release(SELFTEST_CH_SLOT);
-    if (prev->kind != IO_OWNER_NONE && prev->kind != IO_OWNER_INTERNAL) {
+    // Restore any prior owner (including IO_OWNER_INTERNAL — e.g. an active
+    // auto-calibration sweep that pre-claimed the slot for its entire run).
+    // Previously this excluded INTERNAL, which caused per-measurement restore
+    // to drop the slot to FREE; the desktop's keep-alive then reclaimed it as
+    // IO_OWNER_USB before the next measurement and the next measure_via_u23
+    // call yielded -1.0f, stalling auto-cal forever.
+    if (prev->kind != IO_OWNER_NONE) {
         uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
         // Compute remaining lease; skip restore if already expired.
         uint32_t remaining_ms = 0;
@@ -658,14 +664,29 @@ void selftest_monitor_step(void)
         should_sample = true;
     }
 
-    if (should_sample) {
+    // Pause sampling when an external client owns SELFTEST_CH_SLOT (slot 14 =
+    // logical CH-C). The supply monitor and the user's tab can't share the
+    // U23 path; instead of yielding -1.0f every tick (which would clobber the
+    // cache and render "—" in the UI), we keep the last good cache and just
+    // bump the timestamp so the host knows the monitor is alive but paused.
+    io_owner_slot_t s14 = io_owner_get(SELFTEST_CH_SLOT);
+    bool slot14_held_externally =
+        (s14.kind != IO_OWNER_NONE && s14.kind != IO_OWNER_INTERNAL);
+
+    if (slot14_held_externally) {
+        // Don't touch s_supply_volt.voltage[] — keep last good values.
+        s_supply_volt.timestamp_ms = now_ms;
+        s_supply_volt.available = true;
+    } else if (should_sample) {
         float v = selftest_measure_supply((uint8_t)s_monitor_idx);
         s_supply_volt.voltage[s_monitor_idx] = v;
+        s_supply_volt.timestamp_ms = now_ms;
+        s_supply_volt.available = true;
     } else {
         s_supply_volt.voltage[s_monitor_idx] = -1.0f;
+        s_supply_volt.timestamp_ms = now_ms;
+        s_supply_volt.available = true;
     }
-    s_supply_volt.timestamp_ms = now_ms;
-    s_supply_volt.available = true;
 
     // Advance to next rail, wrapping around
     s_monitor_idx = (s_monitor_idx + 1) % MONITOR_TOTAL_CHANNELS;
@@ -740,6 +761,18 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
     ESP_LOGI(TAG, "Starting auto-calibration worker for IDAC channel %d", idac_channel);
     cal_trace_update(2, idac_channel, 0, 0, -1.0f, true);
 
+    // Preempt SELFTEST_CH_SLOT (slot 14 = logical CH-C) for the duration of
+    // the auto-cal. The user triggered cal explicitly, which implies releasing
+    // any tab-level claim on CH-C — without this, measure_via_u23() yields on
+    // every sample because the Calibration tab itself holds slot 14, and the
+    // sweep stalls at -1.0 V indefinitely.
+    {
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+        io_owner_force_release(SELFTEST_CH_SLOT);
+        io_owner_acquire(SELFTEST_CH_SLOT, IO_OWNER_INTERNAL,
+                         0xFF, 0, 0 /* infinite */, now_ms);
+    }
+
     // Determine target rail for this calibration channel
     uint8_t rail;
     if (idac_channel == 0)      rail = SELFTEST_RAIL_3V3_ADJ;  // VLOGIC
@@ -761,6 +794,7 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
             s_cal_result.status = CAL_STATUS_FAILED;
             taskEXIT_CRITICAL(&s_cal_lock);
             cal_trace_update(7, idac_channel, 0, 0, -1.0f, false);
+            io_owner_force_release(SELFTEST_CH_SLOT);  // release pre-claimed INTERNAL lease
             return;
         }
 
@@ -780,6 +814,7 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
                 s_cal_result.status = CAL_STATUS_FAILED;
                 taskEXIT_CRITICAL(&s_cal_lock);
                 cal_trace_update(7, idac_channel, 0, 0, -1.0f, false);
+                io_owner_force_release(SELFTEST_CH_SLOT);  // release pre-claimed INTERNAL lease
                 return;
             }
             rail_toggled = true;
@@ -933,16 +968,20 @@ restore:
         pca9535_set_control(rail_ctrl, false);
     }
 
-    // Phase 2 Lane E (2026-05-12): reset cal.status to IDLE after the worker
-    // has finished its restore. The terminal SUCCESS/FAILED outcome was
-    // already reported in the BBP response payload of the corresponding
-    // `selftest_auto_calibrate` call; the stored state should return to
-    // IDLE so subsequent status polls do not observe stale terminal/running
-    // state across tests. Preserves `points_collected` and `error_mv` for
-    // post-mortem inspection.
-    taskENTER_CRITICAL(&s_cal_lock);
-    s_cal_result.status = CAL_STATUS_IDLE;
-    taskEXIT_CRITICAL(&s_cal_lock);
+    // Leave the terminal SUCCESS/FAILED state in place — the desktop polls
+    // selftest_status every 400 ms and triggers the "Complete" UI transition
+    // on status == SUCCESS. Previously we reset to IDLE here, but the SUCCESS
+    // window between line 947 and this point was often shorter than one poll
+    // tick (especially when the sweep stopped early at the rail threshold),
+    // so the UI never saw it and stayed "Auto-Calibrating" forever. The next
+    // `selftest_start_auto_calibrate` call sets status back to RUNNING, so
+    // the terminal state is naturally cleared on the next attempt.
+    // `points_collected` and `error_mv` remain available for inspection.
+
+    // Release the INTERNAL lease on SELFTEST_CH_SLOT taken at the top of this
+    // function. The next external io_claim from the desktop / Python / HTTP
+    // will succeed; if no one else claims, the slot stays free.
+    io_owner_force_release(SELFTEST_CH_SLOT);
 }
 
 const SelftestCalResult* selftest_get_cal_result(void)

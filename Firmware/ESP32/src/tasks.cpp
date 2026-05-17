@@ -1134,7 +1134,15 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             }
 
             case CMD_PCA_SET_CONTROL: {
-                pca9535_set_control((PcaControl)cmd.pcaCtrl.ctrl, cmd.pcaCtrl.on);
+                // EFUSE enables must go through the user-action gate, not the
+                // generic set_control path (which categorically rejects them).
+                uint8_t ctrl = cmd.pcaCtrl.ctrl;
+                if (ctrl >= PCA_CTRL_EFUSE1_EN && ctrl <= PCA_CTRL_EFUSE4_EN) {
+                    pca9535_user_arm_efuse((uint8_t)(ctrl - PCA_CTRL_EFUSE1_EN),
+                                            cmd.pcaCtrl.on);
+                } else {
+                    pca9535_set_control((PcaControl)ctrl, cmd.pcaCtrl.on);
+                }
                 break;
             }
 

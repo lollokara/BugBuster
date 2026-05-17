@@ -534,7 +534,6 @@ impl ConnectionManager {
             let shutdown_ka = shutdown.clone();
             let transport_ka = transport.clone();
             let active_slots_ka = active_slots.clone();
-            let app_ka = app.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -559,17 +558,7 @@ impl ConnectionManager {
                     if let Some(tr) = t.as_ref() {
                         if tr.is_connected() {
                             if let Err(e) = tr.send_command(bbp::CMD_IO_CLAIM, &payload).await {
-                                // Keep-alive failed — the lease may have been lost (e.g.
-                                // firmware force-released the slot or IO_HELD_BY_OTHER).
-                                // Emit the same "io-owner-reject" event so the UI can
-                                // show the "IO held by another owner" banner without polling.
                                 log::warn!("IO keep-alive renewal failed: {}", e);
-                                let evt = crate::state::IoOwnerRejectEvent {
-                                    rejected_cmd: bbp::CMD_IO_CLAIM,
-                                    slot: slots.first().copied().unwrap_or(0xFF),
-                                    current_owner_kind: 0xFF, // unknown — no payload on keep-alive error
-                                };
-                                let _ = app_ka.emit("io-owner-reject", &evt);
                             }
                         }
                     }
