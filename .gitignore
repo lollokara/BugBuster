@@ -22,6 +22,7 @@ Firmware/esp32_ad74416h/firmware_ota.bin
 # Rust / Tauri build artifacts
 DesktopApp/BugBuster/target/
 DesktopApp/BugBuster/dist/
+DesktopApp/BugBuster/notebook-run-logs/
 
 # Python
 __pycache__/
