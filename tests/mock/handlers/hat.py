@@ -88,6 +88,28 @@ def _ensure_hat_state(device) -> None:
                 for i in range(4)
             ],
         }
+    if not hasattr(device, "hat_la_route"):
+        device.hat_la_route = 0
+    if not hasattr(device, "hat_led_states"):
+        device.hat_led_states = [[0, 0, 0, 0] for _ in range(8)]
+    if not hasattr(device, "hat_rails"):
+        device.hat_rails = [
+            {"rail_id": 0, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0},
+            {"rail_id": 1, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0},
+            {"rail_id": 2, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0},
+        ]
+    if not hasattr(device, "hat_cal_state"):
+        device.hat_cal_state = 0
+    if not hasattr(device, "hat_cal_progress"):
+        device.hat_cal_progress = 0
+    if not hasattr(device, "hat_cal_rail_id"):
+        device.hat_cal_rail_id = 0
+    if not hasattr(device, "hat_cal_last_error"):
+        device.hat_cal_last_error = 0
+    if not hasattr(device, "hat_io_bank"):
+        device.hat_io_bank = {"dirs": 0, "ups": 0, "dns": 0}
+    if not hasattr(device, "hat_level_shift"):
+        device.hat_level_shift = {"oe": False, "dir": False}
 
 
 def register(device) -> None:
@@ -132,6 +154,18 @@ def register(device) -> None:
     device.register_handler(CmdId.HAT_SET_HVPAK_PWM,         _hat_set_hvpak_pwm(device))
     device.register_handler(CmdId.HAT_HVPAK_REG_READ,        _hat_hvpak_reg_read(device))
     device.register_handler(CmdId.HAT_HVPAK_REG_WRITE_MASKED, _hat_hvpak_reg_write_masked(device))
+
+    # HAT v2 command handlers
+    device.register_handler(CmdId.HAT_GET_CAPS,        _hat_get_caps(device))
+    device.register_handler(CmdId.HAT_GET_RAIL_STATUS, _hat_get_rail_status(device))
+    device.register_handler(CmdId.HAT_SET_RAIL_ENABLE, _hat_set_rail_enable(device))
+    device.register_handler(CmdId.HAT_SET_LED_STATE,   _hat_set_led_state(device))
+    device.register_handler(CmdId.HAT_LA_SET_ROUTE,    _hat_la_set_route(device))
+    device.register_handler(CmdId.HAT_CALIBRATE_START,  _hat_calibrate_start(device))
+    device.register_handler(CmdId.HAT_CALIBRATE_STATUS, _hat_calibrate_status(device))
+    device.register_handler(CmdId.HAT_CALIBRATE_IMPORT, _hat_calibrate_import(device))
+    device.register_handler(CmdId.HAT_SET_IO_BANK,      _hat_set_io_bank(device))
+    device.register_handler(CmdId.HAT_SET_LEVEL_SHIFT,  _hat_set_level_shift(device))
 
 
 # ---------------------------------------------------------------------------
@@ -624,3 +658,151 @@ def _hat_hvpak_reg_write_masked(device):
             raise DeviceError(ErrorCode.HVPAK_UNSAFE_REGISTER, 0)
         return struct.pack('<BBBB', addr, mask, value, value & mask)
     return handler
+
+
+def _hat_get_caps(device):
+    def handler(payload: bytes) -> bytes:
+        flags = 0x37  # RAILS|LEDS|LA_LOW_SPEED|SHIFTED_IO|HVPAK_UNSUPPORTED
+        return struct.pack('<BIBBBBBBb',
+            2,       # hw_revision
+            flags,   # capability flags
+            3,       # rail_count
+            8,       # led_count
+            8,       # shifted_io_count
+            2,       # la_route_count
+            2,       # fw_major
+            1,       # fw_minor
+            0,       # hvpak_present
+        )
+    return handler
+
+
+def _hat_get_rail_status(device):
+    def handler(payload: bytes) -> bytes:
+        rails = device.hat_rails
+        result = struct.pack('B', len(rails))
+        for i, rail in enumerate(rails):
+            result += struct.pack('<BBHHB',
+                i,
+                1 if rail['enabled'] else 0,
+                rail['voltage_mv'],
+                rail['current_ma'],
+                rail['status'],
+            )
+        return result
+    return handler
+
+
+def _hat_set_rail_enable(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 2:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        rail_id = payload[0]
+        enable = payload[1] != 0
+        if rail_id >= len(device.hat_rails):
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.hat_rails[rail_id]['enabled'] = enable
+        # Mock some dummy readbacks
+        if enable:
+            if rail_id == 0:  # 3V3_ADJ
+                device.hat_rails[rail_id]['voltage_mv'] = 3300
+                device.hat_rails[rail_id]['current_ma'] = 150
+            elif rail_id == 1:  # VADJ3
+                device.hat_rails[rail_id]['voltage_mv'] = 3300
+                device.hat_rails[rail_id]['current_ma'] = 100
+            elif rail_id == 2:  # VADJ4
+                device.hat_rails[rail_id]['voltage_mv'] = 5000
+                device.hat_rails[rail_id]['current_ma'] = 200
+        else:
+            device.hat_rails[rail_id]['voltage_mv'] = 0
+            device.hat_rails[rail_id]['current_ma'] = 0
+        return _hat_get_rail_status(device)(b"")
+    return handler
+
+
+def _hat_set_led_state(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 2:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        led_id = payload[0]
+        if led_id >= 8:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        if len(payload) >= 5:
+            device.hat_led_states[led_id] = [payload[1], payload[2], payload[3], payload[4]]
+        else:
+            device.hat_led_states[led_id] = [0, 0, 0, payload[1]]
+        return b''
+
+
+def _hat_la_set_route(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 1:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        route = payload[0]
+        if route == 1:  # High-speed is unsupported on simulator/reverts with error
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.hat_la_route = route
+        return struct.pack('<B', route)
+    return handler
+
+
+def _hat_calibrate_start(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 1:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        rail_id = payload[0]
+        if rail_id >= 3:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.hat_cal_state = 2  # success/done
+        device.hat_cal_progress = 100
+        device.hat_cal_rail_id = rail_id
+        device.hat_cal_last_error = 0
+        return struct.pack('<B', device.hat_cal_state)
+    return handler
+
+
+def _hat_calibrate_status(device):
+    def handler(payload: bytes) -> bytes:
+        return struct.pack('<BBBB',
+            device.hat_cal_state,
+            device.hat_cal_progress,
+            device.hat_cal_rail_id,
+            device.hat_cal_last_error
+        )
+    return handler
+
+
+def _hat_calibrate_import(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 2:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        rail_id = payload[0]
+        count = payload[1]
+        if len(payload) != 2 + count * 5:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        return b''
+    return handler
+
+
+def _hat_set_io_bank(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 3:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.hat_io_bank["dirs"] = payload[0]
+        device.hat_io_bank["ups"] = payload[1]
+        device.hat_io_bank["dns"] = payload[2]
+        return b''
+    return handler
+
+
+def _hat_set_level_shift(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 2:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        oe = payload[0] != 0
+        dir = payload[1] != 0
+        device.hat_level_shift["oe"] = oe
+        device.hat_level_shift["dir"] = dir
+        return struct.pack('<BB', 1 if oe else 0, 1 if dir else 0)
+    return handler
+

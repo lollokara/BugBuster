@@ -1250,6 +1250,247 @@ pub async fn hat_setup_swd(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn hat_calibrate_start(
+    rail_id: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<u8> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(rail_id);
+    let rsp = mgr.send_command(bbp::CMD_HAT_CALIBRATE_START, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    Ok(rsp.first().copied().unwrap_or(0))
+}
+
+#[tauri::command]
+pub async fn hat_calibrate_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<serde_json::Value> {
+    let rsp = mgr.send_command(bbp::CMD_HAT_CALIBRATE_STATUS, &[])
+        .await
+        .map_err(map_err)?;
+    if rsp.len() < 4 {
+        return Err("Invalid status response from HAT".into());
+    }
+    Ok(serde_json::json!({
+        "state": rsp[0],
+        "progress": rsp[1],
+        "railId": rsp[2],
+        "lastError": rsp[3],
+    }))
+}
+
+#[tauri::command]
+pub async fn hat_calibrate_import(
+    rail_id: u8,
+    points: Vec<serde_json::Value>,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(rail_id);
+    pw.put_u8(points.len() as u8);
+    for pt in points {
+        let code = pt.get("dacCode").and_then(|v| v.as_i64()).unwrap_or(0) as i8;
+        let volt = pt.get("measuredV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        pw.put_u8(code as u8);
+        pw.put_f32(volt);
+    }
+    mgr.send_command(bbp::CMD_HAT_CALIBRATE_IMPORT, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_set_io_bank(
+    dirs: u8,
+    ups: u8,
+    dns: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(dirs);
+    pw.put_u8(ups);
+    pw.put_u8(dns);
+    mgr.send_command(bbp::CMD_HAT_SET_IO_BANK, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_set_level_shift(
+    oe: bool,
+    dir: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<serde_json::Value> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_bool(oe);
+    pw.put_bool(dir);
+    let rsp = mgr.send_command(bbp::CMD_HAT_SET_LEVEL_SHIFT, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    if rsp.len() < 2 {
+        return Err("Invalid level shift response from HAT".into());
+    }
+    Ok(serde_json::json!({
+        "oe": rsp[0] != 0,
+        "dir": rsp[1] != 0,
+    }))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatCaps {
+    pub hw_revision: u8,
+    pub flags: u32,
+    pub rail_count: u8,
+    pub led_count: u8,
+    pub shifted_io_count: u8,
+    pub la_route_count: u8,
+    pub fw_major: u8,
+    pub fw_minor: u8,
+    pub hvpak_present: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatRailStatus {
+    pub rail_id: u8,
+    pub enabled: bool,
+    pub voltage_mv: u16,
+    pub current_ma: u16,
+    pub status: u8,
+}
+
+#[tauri::command]
+pub async fn hat_get_caps(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<HatCaps> {
+    let rsp = mgr.send_command(bbp::CMD_HAT_GET_CAPS, &[])
+        .await
+        .map_err(map_err)?;
+    if rsp.len() < 12 {
+        return Err("Invalid caps response from HAT".into());
+    }
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let hw_revision = r.get_u8().unwrap_or(0);
+    let flags = r.get_u32().unwrap_or(0);
+    let rail_count = r.get_u8().unwrap_or(0);
+    let led_count = r.get_u8().unwrap_or(0);
+    let shifted_io_count = r.get_u8().unwrap_or(0);
+    let la_route_count = r.get_u8().unwrap_or(0);
+    let fw_major = r.get_u8().unwrap_or(0);
+    let fw_minor = r.get_u8().unwrap_or(0);
+    let hvpak_present = r.get_bool().unwrap_or(false);
+    Ok(HatCaps {
+        hw_revision,
+        flags,
+        rail_count,
+        led_count,
+        shifted_io_count,
+        la_route_count,
+        fw_major,
+        fw_minor,
+        hvpak_present,
+    })
+}
+
+#[tauri::command]
+pub async fn hat_get_rail_status(
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<Vec<HatRailStatus>> {
+    let rsp = mgr.send_command(bbp::CMD_HAT_GET_RAIL_STATUS, &[])
+        .await
+        .map_err(map_err)?;
+    if rsp.is_empty() {
+        return Err("Empty response from HAT".into());
+    }
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let count = r.get_u8().unwrap_or(0);
+    let mut rails = Vec::new();
+    for _ in 0..count {
+        let rail_id = r.get_u8().unwrap_or(0);
+        let enabled = r.get_bool().unwrap_or(false);
+        let voltage_mv = r.get_u16().unwrap_or(0);
+        let current_ma = r.get_u16().unwrap_or(0);
+        let status = r.get_u8().unwrap_or(0);
+        rails.push(HatRailStatus {
+            rail_id,
+            enabled,
+            voltage_mv,
+            current_ma,
+            status,
+        });
+    }
+    Ok(rails)
+}
+
+#[tauri::command]
+pub async fn hat_set_rail_enable(
+    rail_id: u8,
+    enable: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<Vec<HatRailStatus>> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(rail_id);
+    pw.put_bool(enable);
+    let rsp = mgr.send_command(bbp::CMD_HAT_SET_RAIL_ENABLE, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    if rsp.is_empty() {
+        return Err("Empty response from HAT".into());
+    }
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let count = r.get_u8().unwrap_or(0);
+    let mut rails = Vec::new();
+    for _ in 0..count {
+        let rail_id = r.get_u8().unwrap_or(0);
+        let enabled = r.get_bool().unwrap_or(false);
+        let voltage_mv = r.get_u16().unwrap_or(0);
+        let current_ma = r.get_u16().unwrap_or(0);
+        let status = r.get_u8().unwrap_or(0);
+        rails.push(HatRailStatus {
+            rail_id,
+            enabled,
+            voltage_mv,
+            current_ma,
+            status,
+        });
+    }
+    Ok(rails)
+}
+
+#[tauri::command]
+pub async fn hat_la_set_route(
+    route: u8,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<u8> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(route);
+    let rsp = mgr.send_command(bbp::CMD_HAT_LA_SET_ROUTE, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    if rsp.is_empty() {
+        return Err("Empty response from HAT".into());
+    }
+    Ok(rsp[0])
+}
+
+#[tauri::command]
+pub async fn hat_la_log_enable(
+    enable: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(if enable { 1 } else { 0 });
+    mgr.send_command(bbp::CMD_HAT_LA_LOG_ENABLE, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    Ok(())
+}
+
 // -----------------------------------------------------------------------------
 // HUSB238 USB PD
 // -----------------------------------------------------------------------------

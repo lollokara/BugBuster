@@ -24,7 +24,7 @@ static inline void ws2812_program_init(PIO pio, uint sm, uint offset, uint pin, 
     sm_config_set_sideset_pins(&c, pin);
     sm_config_set_out_shift(&c, false, true, rgbw ? 32 : 24); // MSB first, autopull
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
-    float div = clock_get_hz(clk_sys) / (freq * (T1 + T2 + T3));
+    float div = clock_get_hz(clk_sys) / (freq * (ws2812_T1 + ws2812_T2 + ws2812_T3));
     sm_config_set_clkdiv(&c, div);
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);

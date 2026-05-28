@@ -2741,6 +2741,107 @@ class BugBuster:
         else:
             raise NotImplementedError("LA control is USB-only")
 
+    def hat_la_set_route(self, route_id: int) -> bool:
+        """Select LA capture route: 0=low-speed (GPIO2-5), 1=high-speed (Conn1)."""
+        self._require_hat_present()
+        if self._usb:
+            payload = struct.pack('<B', route_id & 0xFF)
+            self._usb_cmd(CmdId.HAT_LA_SET_ROUTE, payload)
+            return True
+        else:
+            resp = self._http_post("/hat/la/route", {"route": route_id})
+            return resp.get("ok", False)
+
+    def hat_calibrate_start(self, rail_id: int) -> int:
+        """Start HAT auto-calibration on a specific rail. Returns starting state."""
+        self._require_hat_present()
+        if self._usb:
+            payload = struct.pack('<B', rail_id)
+            resp = self._usb_cmd(CmdId.HAT_CALIBRATE_START, payload)
+            _require_resp_len(resp, 1, "HAT_CALIBRATE_START")
+            return resp[0]
+        else:
+            resp = self._http_post("/hat/v2/calibrate/start", {"railId": rail_id})
+            return resp.get("status", 0)
+
+    def hat_calibrate_status(self) -> dict:
+        """Get the status of the current HAT calibration sweep."""
+        self._require_hat_present()
+        if self._usb:
+            resp = self._usb_cmd(CmdId.HAT_CALIBRATE_STATUS)
+            _require_resp_len(resp, 4, "HAT_CALIBRATE_STATUS")
+            return {
+                "state": resp[0],
+                "progress": resp[1],
+                "rail_id": resp[2],
+                "last_error": resp[3],
+            }
+        else:
+            resp = self._http_get("/hat/v2/calibrate/status")
+            return {
+                "state": resp.get("state", 0),
+                "progress": resp.get("progress", 0),
+                "rail_id": resp.get("railId", 0),
+                "last_error": resp.get("lastError", 0),
+            }
+
+    def hat_calibrate_import(self, rail_id: int, points: list[dict]) -> bool:
+        """Import calibration data to the HAT."""
+        self._require_hat_present()
+        if len(points) > 6:
+            raise ValueError("Maximum 6 calibration points can be imported at once due to frame size limits.")
+
+        if self._usb:
+            payload = bytearray([rail_id, len(points)])
+            for pt in points:
+                payload += struct.pack('<b', pt["dac_code"])
+                payload += struct.pack('<f', pt["measured_v"])
+            self._usb_cmd(CmdId.HAT_CALIBRATE_IMPORT, bytes(payload))
+            return True
+        else:
+            pts_http = [{"dacCode": pt["dac_code"], "measuredV": pt["measured_v"]} for pt in points]
+            resp = self._http_post("/hat/v2/calibrate/import", {
+                "railId": rail_id,
+                "points": pts_http
+            })
+            return resp.get("ok", False)
+
+    def hat_set_io_bank(self, dirs: int, ups: int, dns: int) -> bool:
+        """Configure directions and pullups/pulldowns for the shifted IO bank."""
+        self._require_hat_present()
+        if self._usb:
+            payload = struct.pack('<BBB', dirs & 0xFF, ups & 0xFF, dns & 0xFF)
+            self._usb_cmd(CmdId.HAT_SET_IO_BANK, payload)
+            return True
+        else:
+            resp = self._http_post("/hat/v2/io_bank", {
+                "dirs": dirs,
+                "ups": ups,
+                "dns": dns
+            })
+            return resp.get("ok", False)
+
+    def hat_set_level_shift(self, oe: bool, dir: bool) -> dict:
+        """Override output enable (oe) and direction (dir) of level shifters."""
+        self._require_hat_present()
+        if self._usb:
+            payload = struct.pack('<BB', int(oe), int(dir))
+            resp = self._usb_cmd(CmdId.HAT_SET_LEVEL_SHIFT, payload)
+            _require_resp_len(resp, 2, "HAT_SET_LEVEL_SHIFT")
+            return {
+                "oe": bool(resp[0]),
+                "dir": bool(resp[1])
+            }
+        else:
+            resp = self._http_post("/hat/v2/level_shift", {
+                "oe": oe,
+                "dir": dir
+            })
+            return {
+                "oe": resp.get("oe", False),
+                "dir": resp.get("dir", False)
+            }
+
     def hat_la_set_trigger(self, trigger_type=0, channel: int = 0) -> bool:
         """
         Set the trigger condition.

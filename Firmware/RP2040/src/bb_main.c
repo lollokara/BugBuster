@@ -244,59 +244,39 @@ static void handle_set_io_voltage(const uint8_t *payload, uint8_t len)
     if (len < 2) { send_error(HAT_ERR_FRAME); return; }
     uint16_t mv = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
 
-    if (!bb_hvpak_set_voltage(mv)) {
-        switch (bb_hvpak_get_last_error()) {
-            case BB_HVPAK_ERR_NO_DEVICE:
-                send_error(HAT_ERR_HVPAK_NO_DEVICE);
-                break;
-            case BB_HVPAK_ERR_I2C_TIMEOUT:
-                send_error(HAT_ERR_HVPAK_TIMEOUT);
-                break;
-            case BB_HVPAK_ERR_UNKNOWN_IDENTITY:
-                send_error(HAT_ERR_HVPAK_UNKNOWN_IDENTITY);
-                break;
-            case BB_HVPAK_ERR_UNSUPPORTED_VOLTAGE:
-                send_error(HAT_ERR_HVPAK_UNSUPPORTED_VOLT);
-                break;
-            case BB_HVPAK_ERR_WRITE_FAILED:
-                send_error(HAT_ERR_HVPAK_WRITE_FAILED);
-                break;
-            default:
-                send_error(HAT_ERR_INVALID_FUNC);
-                break;
-        }
+    if (!bb_hat_v2_set_io_voltage(mv)) {
+        send_error(HAT_ERR_INVALID_FUNC);
         return;
     }
 
-    uint16_t requested_mv = bb_hvpak_get_requested_voltage();
-    uint16_t applied_mv = bb_hvpak_get_voltage();
+    uint16_t applied = bb_hat_v2_get_io_voltage();
     uint8_t rsp[7] = {
-        (uint8_t)(requested_mv & 0xFF),
-        (uint8_t)(requested_mv >> 8),
-        (uint8_t)(applied_mv & 0xFF),
-        (uint8_t)(applied_mv >> 8),
-        (uint8_t)bb_hvpak_get_part(),
-        (uint8_t)(bb_hvpak_is_ready() ? 1 : 0),
-        bb_hvpak_get_last_error(),
+        (uint8_t)(mv & 0xFF),
+        (uint8_t)(mv >> 8),
+        (uint8_t)(applied & 0xFF),
+        (uint8_t)(applied >> 8),
+        0, // part
+        1, // ready
+        0  // last error
     };
     send_ok(rsp, sizeof(rsp));
 }
 
 static void handle_get_io_voltage(void)
 {
-    uint16_t requested_mv = bb_hvpak_get_requested_voltage();
-    uint16_t applied_mv = bb_hvpak_get_voltage();
+    uint16_t mv = bb_hat_v2_get_io_voltage();
     uint8_t rsp[7] = {
-        (uint8_t)(requested_mv & 0xFF),
-        (uint8_t)(requested_mv >> 8),
-        (uint8_t)(applied_mv & 0xFF),
-        (uint8_t)(applied_mv >> 8),
-        (uint8_t)bb_hvpak_get_part(),
-        (uint8_t)(bb_hvpak_is_ready() ? 1 : 0),
-        bb_hvpak_get_last_error(),
+        (uint8_t)(mv & 0xFF),
+        (uint8_t)(mv >> 8),
+        (uint8_t)(mv & 0xFF),
+        (uint8_t)(mv >> 8),
+        0, // part
+        1, // ready
+        0  // error
     };
     send_ok(rsp, sizeof(rsp));
 }
+
 
 static void send_hvpak_error_from_state(void)
 {
@@ -885,6 +865,22 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_SET_LED_STATE:
         handle_set_led_state(frame->payload, frame->payload_len);
         break;
+    case HAT_CMD_CALIBRATE_START:
+        handle_calibrate_start(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_CALIBRATE_STATUS:
+        handle_calibrate_status();
+        break;
+    case HAT_CMD_CALIBRATE_IMPORT:
+        handle_calibrate_import(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_SET_IO_BANK:
+        handle_set_io_bank(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_SET_LEVEL_SHIFT:
+        handle_set_level_shift(frame->payload, frame->payload_len);
+        break;
+
 
     default:
         send_error(HAT_ERR_INVALID_CMD);

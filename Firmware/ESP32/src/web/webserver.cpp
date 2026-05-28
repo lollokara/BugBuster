@@ -2772,6 +2772,10 @@ static esp_err_t handle_get_hat(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "fwMinor", hs->fw_version_minor);
     cJSON_AddBoolToObject(root, "configConfirmed", hs->config_confirmed);
     cJSON_AddBoolToObject(root, "config_confirmed", hs->config_confirmed);
+    cJSON_AddBoolToObject(root, "dapConnected", hs->dap_connected);
+    cJSON_AddBoolToObject(root, "targetDetected", hs->target_detected);
+    cJSON_AddNumberToObject(root, "targetDpidr", hs->target_dpidr);
+    cJSON_AddNumberToObject(root, "laRoute", hs->la_route);
 
     cJSON *pins = cJSON_AddArrayToObject(root, "pinConfig");
     cJSON *pin_config = cJSON_AddArrayToObject(root, "pin_config");
@@ -3041,6 +3045,214 @@ static esp_err_t handle_post_hat_v2_la_route(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
     cJSON_AddNumberToObject(root, "route", hs->la_route);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/calibrate/start
+static esp_err_t handle_post_hat_v2_calibrate_start(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "railId", Number, "Field 'railId' must be a number");
+    uint8_t rail_id = (uint8_t)cJSON_GetObjectItem(doc, "railId")->valueint;
+    cJSON_Delete(doc);
+
+    if (rail_id >= HAT_RAIL_COUNT) {
+        return send_error(req, 400, "railId out of range (0-2)");
+    }
+
+    uint8_t status = 0;
+    if (!hat_calibrate_start(rail_id, &status)) {
+        return send_error(req, 503, "HAT calibration start failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "status", status);
+    return send_json(req, root);
+}
+
+// GET /api/hat/v2/calibrate/status
+static esp_err_t handle_get_hat_v2_calibrate_status(httpd_req_t *req)
+{
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    uint8_t state = 0, progress = 0, rail_id = 0, last_error = 0;
+    if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error)) {
+        return send_error(req, 503, "HAT not responding");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "state", state);
+    cJSON_AddNumberToObject(root, "progress", progress);
+    cJSON_AddNumberToObject(root, "railId", rail_id);
+    cJSON_AddNumberToObject(root, "lastError", last_error);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/calibrate/import
+static esp_err_t handle_post_hat_v2_calibrate_import(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "railId", Number, "Field 'railId' must be a number");
+    VALIDATE_JSON_FIELD(doc, "points", Array, "Field 'points' must be an array");
+
+    uint8_t rail_id = (uint8_t)cJSON_GetObjectItem(doc, "railId")->valueint;
+    cJSON *points = cJSON_GetObjectItem(doc, "points");
+    int count = cJSON_GetArraySize(points);
+
+    if (rail_id >= HAT_RAIL_COUNT) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "railId out of range (0-2)");
+    }
+    if (count < 0 || count > 6) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "points count must be between 0 and 6");
+    }
+
+    uint8_t points_data[30] = {};
+    size_t pos = 0;
+    for (int i = 0; i < count; i++) {
+        cJSON *pt = cJSON_GetArrayItem(points, i);
+        if (!pt || !cJSON_IsObject(pt)) {
+            cJSON_Delete(doc);
+            return send_error(req, 400, "point elements must be objects");
+        }
+        cJSON *dac_item = cJSON_GetObjectItem(pt, "dacCode");
+        cJSON *v_item = cJSON_GetObjectItem(pt, "measuredV");
+        if (!dac_item || !cJSON_IsNumber(dac_item) || !v_item || !cJSON_IsNumber(v_item)) {
+            cJSON_Delete(doc);
+            return send_error(req, 400, "point must contain dacCode and measuredV");
+        }
+        points_data[pos++] = (uint8_t)(int8_t)dac_item->valueint;
+        float measured_v = (float)v_item->valuedouble;
+        memcpy(&points_data[pos], &measured_v, 4);
+        pos += 4;
+    }
+    cJSON_Delete(doc);
+
+    if (!hat_calibrate_import(rail_id, (uint8_t)count, points_data, pos)) {
+        return send_error(req, 503, "HAT calibration import failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/io_bank
+static esp_err_t handle_post_hat_v2_io_bank(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "dirs", Number, "Field 'dirs' must be a number");
+    VALIDATE_JSON_FIELD(doc, "ups", Number, "Field 'ups' must be a number");
+    VALIDATE_JSON_FIELD(doc, "dns", Number, "Field 'dns' must be a number");
+
+    uint8_t dirs = (uint8_t)cJSON_GetObjectItem(doc, "dirs")->valueint;
+    uint8_t ups = (uint8_t)cJSON_GetObjectItem(doc, "ups")->valueint;
+    uint8_t dns = (uint8_t)cJSON_GetObjectItem(doc, "dns")->valueint;
+    cJSON_Delete(doc);
+
+    if (!hat_set_io_bank(dirs, ups, dns)) {
+        return send_error(req, 503, "HAT IO bank command failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/level_shift
+static esp_err_t handle_post_hat_v2_level_shift(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "oe", Bool, "Field 'oe' must be a boolean");
+    VALIDATE_JSON_FIELD(doc, "dir", Bool, "Field 'dir' must be a boolean");
+
+    bool oe = cJSON_IsTrue(cJSON_GetObjectItem(doc, "oe"));
+    bool dir = cJSON_IsTrue(cJSON_GetObjectItem(doc, "dir"));
+    cJSON_Delete(doc);
+
+    bool oe_out = false, dir_out = false;
+    if (!hat_set_level_shift(oe, dir, &oe_out, &dir_out)) {
+        return send_error(req, 503, "HAT level shift command failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "oe", oe_out);
+    cJSON_AddBoolToObject(root, "dir", dir_out);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/io_voltage
+static esp_err_t handle_post_hat_v2_io_voltage(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "voltageMv", Number, "Field 'voltageMv' must be a number");
+    uint16_t mv = (uint16_t)cJSON_GetObjectItem(doc, "voltageMv")->valueint;
+    cJSON_Delete(doc);
+
+    if (!hat_set_io_voltage(mv)) {
+        return send_error(req, 503, "HAT I/O voltage command failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "voltageMv", hat_get_state()->io_voltage_mv);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/swd/setup
+static esp_err_t handle_post_hat_v2_swd_setup(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "targetVoltageMv", Number, "Field 'targetVoltageMv' must be a number");
+    VALIDATE_JSON_FIELD(doc, "connector", Number, "Field 'connector' must be a number");
+
+    uint16_t target_mv = (uint16_t)cJSON_GetObjectItem(doc, "targetVoltageMv")->valueint;
+    uint8_t connector = (uint8_t)cJSON_GetObjectItem(doc, "connector")->valueint;
+    cJSON_Delete(doc);
+
+    if (connector > 1) {
+        return send_error(req, 400, "connector must be 0 (A) or 1 (B)");
+    }
+
+    if (!hat_setup_swd(target_mv, (HatConnector)connector)) {
+        return send_error(req, 503, "HAT SWD setup command failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
     return send_json(req, root);
 }
 
@@ -4662,7 +4874,7 @@ void initWebServer(void)
     // route count is 87 plus two WebSocket routes and four registry routes; 96
     // gives safe headroom without reserving another 32 unused handler slots
     // from heap.
-    config.max_uri_handlers = 96;
+    config.max_uri_handlers = 106;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     // HTTPD task stack must stay in internal RAM, not PSRAM. Any handler
     // that touches flash (OTA partition reads, SPIFFS, NVS) goes through
@@ -4970,6 +5182,41 @@ void initWebServer(void)
         .uri = "/api/hat/v2/la/route", .method = HTTP_POST, .handler = handle_post_hat_v2_la_route, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_v2_la_route);
+
+    httpd_uri_t uri_hat_v2_calibrate_start = {
+        .uri = "/api/hat/v2/calibrate/start", .method = HTTP_POST, .handler = handle_post_hat_v2_calibrate_start, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_calibrate_start);
+
+    httpd_uri_t uri_hat_v2_calibrate_status = {
+        .uri = "/api/hat/v2/calibrate/status", .method = HTTP_GET, .handler = handle_get_hat_v2_calibrate_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_calibrate_status);
+
+    httpd_uri_t uri_hat_v2_calibrate_import = {
+        .uri = "/api/hat/v2/calibrate/import", .method = HTTP_POST, .handler = handle_post_hat_v2_calibrate_import, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_calibrate_import);
+
+    httpd_uri_t uri_hat_v2_io_bank = {
+        .uri = "/api/hat/v2/io_bank", .method = HTTP_POST, .handler = handle_post_hat_v2_io_bank, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_io_bank);
+
+    httpd_uri_t uri_hat_v2_level_shift = {
+        .uri = "/api/hat/v2/level_shift", .method = HTTP_POST, .handler = handle_post_hat_v2_level_shift, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_level_shift);
+
+    httpd_uri_t uri_hat_v2_io_voltage = {
+        .uri = "/api/hat/v2/io_voltage", .method = HTTP_POST, .handler = handle_post_hat_v2_io_voltage, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_io_voltage);
+
+    httpd_uri_t uri_hat_v2_swd_setup = {
+        .uri = "/api/hat/v2/swd/setup", .method = HTTP_POST, .handler = handle_post_hat_v2_swd_setup, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_swd_setup);
 
     httpd_uri_t uri_hat_post = {
         .uri = "/api/hat/*", .method = HTTP_POST, .handler = handle_hat_post_dispatch, .user_ctx = NULL

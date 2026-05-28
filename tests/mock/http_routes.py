@@ -419,6 +419,124 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     if key == ("POST", "/hat/setup_swd"):
         return {"ok": True}
 
+    # HAT v2 capabilities
+    if key == ("GET", "/hat/v2/caps"):
+        flags = 0x37  # RAILS|LEDS|LA_LOW_SPEED|SHIFTED_IO|HVPAK_UNSUPPORTED
+        return {
+            "hwRevision": 2,
+            "flags": flags,
+            "railCount": 3,
+            "ledCount": 8,
+            "shiftedIoCount": 8,
+            "laRouteCount": 2,
+            "fwMajor": 2,
+            "fwMinor": 1,
+            "hvpakPresent": False,
+        }
+
+    # HAT v2 rails status
+    if key == ("GET", "/hat/v2/rails"):
+        return {
+            "railCount": len(device.hat_rails),
+            "rails": [
+                {
+                    "railId": r["rail_id"],
+                    "enabled": r["enabled"],
+                    "voltageMv": r["voltage_mv"],
+                    "currentMa": r["current_ma"],
+                    "status": r["status"]
+                }
+                for r in device.hat_rails
+            ]
+        }
+
+    # HAT v2 rail enable
+    if key == ("POST", "/hat/v2/rail/enable"):
+        rail_id = int(body.get("railId", 0))
+        enable = bool(body.get("enable", False))
+        if 0 <= rail_id < len(device.hat_rails):
+            device.hat_rails[rail_id]["enabled"] = enable
+            if enable:
+                if rail_id == 0:
+                    device.hat_rails[rail_id]["voltage_mv"] = 3300
+                    device.hat_rails[rail_id]["current_ma"] = 150
+                elif rail_id == 1:
+                    device.hat_rails[rail_id]["voltage_mv"] = 3300
+                    device.hat_rails[rail_id]["current_ma"] = 100
+                elif rail_id == 2:
+                    device.hat_rails[rail_id]["voltage_mv"] = 5000
+                    device.hat_rails[rail_id]["current_ma"] = 200
+            else:
+                device.hat_rails[rail_id]["voltage_mv"] = 0
+                device.hat_rails[rail_id]["current_ma"] = 0
+        r = device.hat_rails[rail_id]
+        return {
+            "ok": True,
+            "railId": r["rail_id"],
+            "enabled": r["enabled"],
+            "voltageMv": r["voltage_mv"],
+            "currentMa": r["current_ma"],
+            "status": r["status"]
+        }
+
+    # HAT v2 set LED state
+    if key == ("POST", "/hat/v2/led"):
+        led_id = int(body.get("ledId", 0))
+        color_code = int(body.get("colorCode", 0))
+        if 0 <= led_id < 8:
+            device.hat_led_states[led_id] = [0, 0, 0, color_code]
+        return {"ok": True}
+
+    # HAT v2 set LA route
+    if key == ("POST", "/hat/v2/la/route"):
+        route = int(body.get("route", 0))
+        if route == 1:
+            return {"error": "unsupported route", "code": 400}
+        device.hat_la_route = route
+        return {"ok": True, "route": route}
+
+    # HAT v2 calibration start
+    if key == ("POST", "/hat/v2/calibrate/start"):
+        rail_id = int(body.get("railId", 0))
+        device.hat_cal_state = 2
+        device.hat_cal_progress = 100
+        device.hat_cal_rail_id = rail_id
+        device.hat_cal_last_error = 0
+        return {"ok": True, "status": device.hat_cal_state}
+
+    # HAT v2 calibration status
+    if key == ("GET", "/hat/v2/calibrate/status"):
+        return {
+            "state": device.hat_cal_state,
+            "progress": device.hat_cal_progress,
+            "railId": device.hat_cal_rail_id,
+            "lastError": device.hat_cal_last_error
+        }
+
+    # HAT v2 calibration import
+    if key == ("POST", "/hat/v2/calibrate/import"):
+        return {"ok": True}
+
+    # HAT v2 set IO bank
+    if key == ("POST", "/hat/v2/io_bank"):
+        device.hat_io_bank["dirs"] = int(body.get("dirs", 0))
+        device.hat_io_bank["ups"] = int(body.get("ups", 0))
+        device.hat_io_bank["dns"] = int(body.get("dns", 0))
+        return {"ok": True}
+
+    # HAT v2 set level shift
+    if key == ("POST", "/hat/v2/level_shift"):
+        oe = bool(body.get("oe", False))
+        dir = bool(body.get("dir", False))
+        device.hat_level_shift["oe"] = oe
+        device.hat_level_shift["dir"] = dir
+        return {
+            "ok": True,
+            "oe": oe,
+            "dir": dir
+        }
+
+
     # IDAC status — GET /idac
     if key == ("GET", "/idac"):
         idac = getattr(device, 'idac', [])

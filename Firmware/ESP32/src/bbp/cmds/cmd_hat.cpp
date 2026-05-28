@@ -404,6 +404,98 @@ static int handler_hat_la_set_route(const uint8_t *payload, size_t len,
     return (int)pos;
 }
 
+static int handler_hat_calibrate_start(const uint8_t *payload, size_t len,
+                                       uint8_t *resp, size_t *resp_len)
+{
+    if (len < 1) return -CMD_ERR_BAD_ARG;
+    size_t rpos = 0;
+    uint8_t rail_id = bbp_get_u8(payload, &rpos);
+
+    uint8_t status = 0;
+    if (!hat_calibrate_start(rail_id, &status)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    size_t wpos = 0;
+    bbp_put_u8(resp, &wpos, status);
+    *resp_len = wpos;
+    return (int)wpos;
+}
+
+static int handler_hat_calibrate_status(const uint8_t *payload, size_t len,
+                                        uint8_t *resp, size_t *resp_len)
+{
+    uint8_t state = 0, progress = 0, rail_id = 0, last_error = 0;
+    if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    size_t wpos = 0;
+    bbp_put_u8(resp, &wpos, state);
+    bbp_put_u8(resp, &wpos, progress);
+    bbp_put_u8(resp, &wpos, rail_id);
+    bbp_put_u8(resp, &wpos, last_error);
+    *resp_len = wpos;
+    return (int)wpos;
+}
+
+static int handler_hat_calibrate_import(const uint8_t *payload, size_t len,
+                                        uint8_t *resp, size_t *resp_len)
+{
+    if (len < 2) return -CMD_ERR_BAD_ARG;
+    size_t rpos = 0;
+    uint8_t rail_id = bbp_get_u8(payload, &rpos);
+    uint8_t count = bbp_get_u8(payload, &rpos);
+
+    size_t data_len = len - 2;
+    if (data_len != count * 5) return -CMD_ERR_BAD_ARG;
+
+    if (!hat_calibrate_import(rail_id, count, &payload[2], data_len)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    *resp_len = 0;
+    return 0;
+}
+
+static int handler_hat_set_io_bank(const uint8_t *payload, size_t len,
+                                   uint8_t *resp, size_t *resp_len)
+{
+    if (len < 3) return -CMD_ERR_BAD_ARG;
+    size_t rpos = 0;
+    uint8_t dirs = bbp_get_u8(payload, &rpos);
+    uint8_t ups = bbp_get_u8(payload, &rpos);
+    uint8_t dns = bbp_get_u8(payload, &rpos);
+
+    if (!hat_set_io_bank(dirs, ups, dns)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    *resp_len = 0;
+    return 0;
+}
+
+static int handler_hat_set_level_shift(const uint8_t *payload, size_t len,
+                                       uint8_t *resp, size_t *resp_len)
+{
+    if (len < 2) return -CMD_ERR_BAD_ARG;
+    size_t rpos = 0;
+    bool oe = bbp_get_bool(payload, &rpos);
+    bool dir = bbp_get_bool(payload, &rpos);
+
+    bool oe_out = false;
+    bool dir_out = false;
+    if (!hat_set_level_shift(oe, dir, &oe_out, &dir_out)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    size_t wpos = 0;
+    bbp_put_bool(resp, &wpos, oe_out);
+    bbp_put_bool(resp, &wpos, dir_out);
+    *resp_len = wpos;
+    return (int)wpos;
+}
+
 // ---------------------------------------------------------------------------
 // HAT_SETUP_SWD  payload: u16 voltage_mv, u8 conn(0-1)
 // resp: bool ok, u16 voltage_mv, u8 conn
@@ -753,6 +845,32 @@ static const ArgSpec s_hat_la_log_enable_args[] = {
     { "enable", ARG_U8, true, 0, 1 },
 };
 
+static const ArgSpec s_hat_calibrate_start_args[] = {
+    { "rail", ARG_U8, true, 0, HAT_RAIL_COUNT - 1 },
+};
+static const ArgSpec s_hat_calibrate_start_rsp[] = {
+    { "status", ARG_U8, true, 0, 0 },
+};
+static const ArgSpec s_hat_calibrate_status_rsp[] = {
+    { "state",      ARG_U8, true, 0, 0 },
+    { "progress",   ARG_U8, true, 0, 0 },
+    { "rail_id",    ARG_U8, true, 0, 0 },
+    { "last_error", ARG_U8, true, 0, 0 },
+};
+static const ArgSpec s_hat_set_io_bank_args[] = {
+    { "dirs", ARG_U8, true, 0, 255 },
+    { "ups",  ARG_U8, true, 0, 255 },
+    { "dns",  ARG_U8, true, 0, 255 },
+};
+static const ArgSpec s_hat_set_level_shift_args[] = {
+    { "oe",  ARG_U8, true, 0, 1 },
+    { "dir", ARG_U8, true, 0, 1 },
+};
+static const ArgSpec s_hat_set_level_shift_rsp[] = {
+    { "oe",  ARG_BOOL, true, 0, 0 },
+    { "dir", ARG_BOOL, true, 0, 0 },
+};
+
 // ---------------------------------------------------------------------------
 // Descriptor table
 // ---------------------------------------------------------------------------
@@ -829,6 +947,16 @@ static const CmdDescriptor s_hat_cmds[] = {
       NULL,                    0, NULL,                   0, handler_hat_la_usb_reset,          0                   },
     { BBP_CMD_HAT_LA_STREAM_START,       "hat_la_stream_start",
       NULL,                    0, NULL,                   0, handler_hat_la_stream_start,       CMD_FLAG_STREAMING  },
+    { BBP_CMD_HAT_CALIBRATE_START,       "hat_calibrate_start",
+      s_hat_calibrate_start_args, 1, s_hat_calibrate_start_rsp, 1, handler_hat_calibrate_start, 0                   },
+    { BBP_CMD_HAT_CALIBRATE_STATUS,      "hat_calibrate_status",
+      NULL,                    0, s_hat_calibrate_status_rsp, 4, handler_hat_calibrate_status, CMD_FLAG_READS_STATE },
+    { BBP_CMD_HAT_CALIBRATE_IMPORT,      "hat_calibrate_import",
+      NULL,                    0, NULL,                   0, handler_hat_calibrate_import,      0                   },
+    { BBP_CMD_HAT_SET_IO_BANK,           "hat_set_io_bank",
+      s_hat_set_io_bank_args,  3, NULL,                   0, handler_hat_set_io_bank,           0                   },
+    { BBP_CMD_HAT_SET_LEVEL_SHIFT,       "hat_set_level_shift",
+      s_hat_set_level_shift_args, 2, s_hat_set_level_shift_rsp, 2, handler_hat_set_level_shift, 0                   },
 };
 
 extern "C" void register_cmds_hat(void)

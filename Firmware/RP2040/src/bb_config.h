@@ -202,6 +202,11 @@
 #define HAT_CMD_GET_RAIL_STATUS 0x40
 #define HAT_CMD_SET_RAIL_ENABLE 0x41
 #define HAT_CMD_SET_LED_STATE   0x42
+#define HAT_CMD_CALIBRATE_START 0x43
+#define HAT_CMD_CALIBRATE_STATUS 0x44
+#define HAT_CMD_CALIBRATE_IMPORT 0x45
+#define HAT_CMD_SET_IO_BANK     0x46
+#define HAT_CMD_SET_LEVEL_SHIFT 0x47
 
 // Responses
 #define HAT_RSP_OK              0x80
@@ -214,6 +219,8 @@
 #define HAT_RSP_CAPS            0x87
 #define HAT_RSP_RAIL_STATUS     0x88
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
+#define HAT_RSP_CALIBRATE_STATUS 0x8A
+
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01

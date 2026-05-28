@@ -779,7 +779,145 @@ pub fn send_hat_setup_swd(target_voltage_mv: u16, connector: u8) {
     invoke_with_feedback("hat_setup_swd", args, &label);
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatCalibrateStatus {
+    pub state: u8,
+    pub progress: u8,
+    pub rail_id: u8,
+    pub last_error: u8,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatCalibratePoint {
+    pub dac_code: i8,
+    pub measured_v: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatLevelShiftStatus {
+    pub oe: bool,
+    pub dir: bool,
+}
+
+pub async fn hat_calibrate_start(rail_id: u8) -> Option<u8> {
+    #[derive(Serialize)]
+    struct Args {
+        rail_id: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { rail_id }).unwrap();
+    let result = try_invoke("hat_calibrate_start", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn hat_calibrate_status() -> Option<HatCalibrateStatus> {
+    let result = try_invoke("hat_calibrate_status", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn hat_calibrate_import(rail_id: u8, points: Vec<HatCalibratePoint>) -> Option<()> {
+    #[derive(Serialize)]
+    struct Args {
+        rail_id: u8,
+        points: Vec<HatCalibratePoint>,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { rail_id, points }).unwrap();
+    try_invoke("hat_calibrate_import", args).await?;
+    Some(())
+}
+
+pub async fn hat_set_io_bank(dirs: u8, ups: u8, dns: u8) -> Option<()> {
+    #[derive(Serialize)]
+    struct Args {
+        dirs: u8,
+        ups: u8,
+        dns: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { dirs, ups, dns }).unwrap();
+    try_invoke("hat_set_io_bank", args).await?;
+    Some(())
+}
+
+pub async fn hat_set_level_shift(oe: bool, dir: bool) -> Option<HatLevelShiftStatus> {
+    #[derive(Serialize)]
+    struct Args {
+        oe: bool,
+        dir: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { oe, dir }).unwrap();
+    let result = try_invoke("hat_set_level_shift", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatCaps {
+    pub hw_revision: u8,
+    pub flags: u32,
+    pub rail_count: u8,
+    pub led_count: u8,
+    pub shifted_io_count: u8,
+    pub la_route_count: u8,
+    pub fw_major: u8,
+    pub fw_minor: u8,
+    pub hvpak_present: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatRailStatus {
+    pub rail_id: u8,
+    pub enabled: bool,
+    pub voltage_mv: u16,
+    pub current_ma: u16,
+    pub status: u8,
+}
+
+pub async fn hat_get_caps() -> Option<HatCaps> {
+    let result = try_invoke("hat_get_caps", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn hat_get_rail_status() -> Option<Vec<HatRailStatus>> {
+    let result = try_invoke("hat_get_rail_status", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn hat_set_rail_enable(rail_id: u8, enable: bool) -> Option<Vec<HatRailStatus>> {
+    #[derive(Serialize)]
+    struct Args {
+        rail_id: u8,
+        enable: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { rail_id, enable }).unwrap();
+    let result = try_invoke("hat_set_rail_enable", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn hat_la_set_route(route: u8) -> Option<u8> {
+    #[derive(Serialize)]
+    struct Args {
+        route: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { route }).unwrap();
+    let result = try_invoke("hat_la_set_route", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn hat_la_log_enable(enable: bool) -> Option<()> {
+    #[derive(Serialize)]
+    struct Args {
+        enable: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { enable }).unwrap();
+    try_invoke("hat_la_log_enable", args).await?;
+    Some(())
+}
+
 // -----------------------------------------------------------------------------
+// Logic Analyzer types & helpers
 // Logic Analyzer types & helpers
 // -----------------------------------------------------------------------------
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

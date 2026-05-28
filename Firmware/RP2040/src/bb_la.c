@@ -167,7 +167,10 @@ static void init_capture_sm(bool waits_for_trigger)
         break;
     }
 
-    sm_config_set_in_pins(&c, BB_LA_CH0_PIN);
+    extern uint8_t bb_hat_v2_get_la_route(void);
+    uint in_base_pin = (bb_hat_v2_get_la_route() == HAT_LA_ROUTE_HIGH_SPEED) ? 10 : BB_LA_CH0_PIN;
+
+    sm_config_set_in_pins(&c, in_base_pin);
     sm_config_set_in_shift(&c, false, true, 32);
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
 
@@ -177,9 +180,9 @@ static void init_capture_sm(bool waits_for_trigger)
     sm_config_set_clkdiv(&c, div);
 
     for (uint i = 0; i < s_la.config.channels; i++) {
-        pio_gpio_init(LA_PIO, BB_LA_CH0_PIN + i);
+        pio_gpio_init(LA_PIO, in_base_pin + i);
     }
-    pio_sm_set_consecutive_pindirs(LA_PIO, LA_SM, BB_LA_CH0_PIN, s_la.config.channels, false);
+    pio_sm_set_consecutive_pindirs(LA_PIO, LA_SM, in_base_pin, s_la.config.channels, false);
     pio_sm_init(LA_PIO, LA_SM, s_la.pio_offset, &c);
 }
 
@@ -366,6 +369,7 @@ void bb_la_init(void)
     s_la.state = LA_STATE_IDLE;
     reset_stream_diagnostics();
 
+
     for (uint i = 0; i < BB_LA_NUM_CHANNELS; i++) {
         gpio_init(BB_LA_CH0_PIN + i);
         gpio_pull_down(BB_LA_CH0_PIN + i);
@@ -388,6 +392,10 @@ bool bb_la_configure(const LaConfig *config)
         bb_la_stop();
     }
     if (s_la.state != LA_STATE_IDLE && s_la.state != LA_STATE_ERROR) return false;
+    extern uint8_t bb_hat_v2_get_la_route(void);
+    if (bb_hat_v2_get_la_route() == HAT_LA_ROUTE_HIGH_SPEED) {
+        if (config->channels > 3) return false;
+    }
     if (config->channels != 1 && config->channels != 2 && config->channels != 4) return false;
     if (config->sample_rate_hz == 0 || config->depth_samples == 0) return false;
 
@@ -441,6 +449,13 @@ static void trigger_irq_handler(void)
 bool bb_la_arm(void)
 {
     if (s_la.state != LA_STATE_IDLE) return false;
+
+    // Level shifter interlock for high-speed Conn1 route
+    extern uint8_t bb_hat_v2_get_la_route(void);
+    if (bb_hat_v2_get_la_route() == HAT_LA_ROUTE_HIGH_SPEED) {
+        gpio_put(BB_LEVEL_SHIFT_OE_PIN, 1);
+        gpio_put(BB_LEVEL_SHIFT_DIR_PIN, 0); // direction input
+    }
     if (s_la.trigger.type != LA_TRIG_NONE && s_la.trigger.channel >= s_la.config.channels) {
         return false;
     }
@@ -510,7 +525,9 @@ bool bb_la_arm(void)
         s_la.trigger_loaded = true;
         s_la.loaded_trig = trig_prog;
 
-        uint trigger_pin = BB_LA_CH0_PIN + s_la.trigger.channel;
+        extern uint8_t bb_hat_v2_get_la_route(void);
+        uint in_base_pin = (bb_hat_v2_get_la_route() == HAT_LA_ROUTE_HIGH_SPEED) ? 10 : BB_LA_CH0_PIN;
+        uint trigger_pin = in_base_pin + s_la.trigger.channel;
         la_trigger_program_init(LA_PIO, LA_TRIGGER_SM, s_la.trigger_offset, trigger_pin);
 
         static bool s_pio_irq_installed = false;
@@ -540,6 +557,14 @@ void bb_la_stop(void)
     halt_capture_runtime();
     unload_capture_program();
     unload_trigger_program();
+
+    // Restore level shifter default/safe states
+    extern uint8_t bb_hat_v2_get_la_route(void);
+    if (bb_hat_v2_get_la_route() == HAT_LA_ROUTE_HIGH_SPEED) {
+        gpio_put(BB_LEVEL_SHIFT_OE_PIN, 0);
+        gpio_put(BB_LEVEL_SHIFT_DIR_PIN, 0);
+    }
+
     s_la.state = LA_STATE_IDLE;
 }
 

@@ -178,6 +178,11 @@ extern "C" {
 #define BBP_CMD_HAT_GET_RAIL_STATUS 0xC4
 #define BBP_CMD_HAT_SET_RAIL_ENABLE 0xD2
 #define BBP_CMD_HAT_SET_LED_STATE   0xD3
+#define BBP_CMD_HAT_CALIBRATE_START  0xAB
+#define BBP_CMD_HAT_CALIBRATE_STATUS 0xAC
+#define BBP_CMD_HAT_CALIBRATE_IMPORT 0xAD
+#define BBP_CMD_HAT_SET_IO_BANK      0xAE
+#define BBP_CMD_HAT_SET_LEVEL_SHIFT  0xAF
 #define BBP_CMD_HAT_GET_HVPAK_INFO  0xCE  // Get HVPAK identity/status summary
 // HAT — Logic Analyzer
 #define BBP_CMD_HAT_LA_CONFIG       0xCF  // Configure LA capture

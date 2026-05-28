@@ -640,6 +640,72 @@ export const api = {
       mac,
       admin: true,
     }),
+  hatV2Caps: () => request<any>("/api/hat/v2/caps"),
+  hatV2Rails: () => request<any>("/api/hat/v2/rails"),
+  hatV2SetRailEnable: (mac: string, railId: number, enable: boolean) =>
+    request<any>("/api/hat/v2/rail/enable", {
+      method: "POST",
+      body: { railId, enable },
+      mac,
+      admin: true,
+    }),
+  hatV2SetLed: (mac: string, ledId: number, colorCode: number) =>
+    request<any>("/api/hat/v2/led", {
+      method: "POST",
+      body: { ledId, colorCode },
+      mac,
+      admin: true,
+    }),
+  hatV2SetLaRoute: (mac: string, route: number) =>
+    request<any>("/api/hat/v2/la/route", {
+      method: "POST",
+      body: { route },
+      mac,
+      admin: true,
+    }),
+  hatV2CalibrateStart: (mac: string, railId: number) =>
+    request<any>("/api/hat/v2/calibrate/start", {
+      method: "POST",
+      body: { railId },
+      mac,
+      admin: true,
+    }),
+  hatV2CalibrateStatus: () => request<any>("/api/hat/v2/calibrate/status"),
+  hatV2CalibrateImport: (mac: string, railId: number, points: Array<{ dacCode: number; measuredV: number }>) =>
+    request<any>("/api/hat/v2/calibrate/import", {
+      method: "POST",
+      body: { railId, points },
+      mac,
+      admin: true,
+    }),
+  hatV2SetIoBank: (mac: string, dirs: number, ups: number, dns: number) =>
+    request<any>("/api/hat/v2/io_bank", {
+      method: "POST",
+      body: { dirs, ups, dns },
+      mac,
+      admin: true,
+    }),
+  hatV2SetLevelShift: (mac: string, oe: boolean, dir: boolean) =>
+    request<any>("/api/hat/v2/level_shift", {
+      method: "POST",
+      body: { oe, dir },
+      mac,
+      admin: true,
+    }),
+  hatV2SetIoVoltage: (mac: string, voltageMv: number) =>
+    request<any>("/api/hat/v2/io_voltage", {
+      method: "POST",
+      body: { voltageMv },
+      mac,
+      admin: true,
+    }),
+  hatV2SetupSwd: (mac: string, targetVoltageMv: number, connector: number) =>
+    request<any>("/api/hat/v2/swd/setup", {
+      method: "POST",
+      body: { targetVoltageMv, connector },
+      mac,
+      admin: true,
+    }),
   diagnostics: () => request<any>("/api/diagnostics"),
   diagnosticsSetConfig: (mac: string, slot: number, source: number) =>
     request<any>("/api/diagnostics/config", {

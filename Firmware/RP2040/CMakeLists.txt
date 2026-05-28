@@ -56,6 +56,7 @@ add_executable(bugbuster_hat
     src/bb_la.c
     src/bb_la_rle.c
     src/bb_la_usb.c
+    src/bb_hat_v2.c
 )
 
 target_include_directories(bugbuster_hat PRIVATE
@@ -84,6 +85,7 @@ pico_generate_pio_header(bugbuster_hat ${DEBUGPROBE_DIR}/src/autobaud.pio)
 # PIO programs — BugBuster LA (PIO 1)
 pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_la.pio)
 pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_la_trigger.pio)
+pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_ws2812.pio)
 
 # Version — single source of truth.
 # PROBE_VERSION format: "bb-hat-MAJOR.MINOR"

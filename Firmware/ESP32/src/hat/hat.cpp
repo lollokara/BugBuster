@@ -1,7 +1,7 @@
 // =============================================================================
 // hat.cpp - HAT Expansion Board Driver
 //
-// Handles detection (GPIO47 ADC), UART communication (GPIO43/44, 921600 8N1),
+// Handles detection (GPIO47 binary strap), UART communication (GPIO43/44, 921600 8N1),
 // and EXP_EXT_1-4 pin configuration for attached HAT boards.
 // PCB mode only.
 // =============================================================================
@@ -11,7 +11,6 @@
 #include "bbp.h"
 #include "ws_stream.h"
 #include "esp_log.h"
-#include "esp_adc/adc_oneshot.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
@@ -24,12 +23,12 @@
 static const char *TAG = "hat";
 
 // HAT support enabled in both breadboard and PCB modes.
-// In breadboard mode: no ADC detect (assume HAT present), no IRQ.
-// In PCB mode: full ADC detection + IRQ support.
+// In breadboard mode: no detect strap (assume HAT present), no IRQ.
+// In PCB mode: binary detect strap + IRQ support.
 
 static HatState s_state = {};
 #if !HAT_NO_DETECT
-static adc_oneshot_unit_handle_t s_adc_handle = NULL;
+static bool s_detect_pin_ready = false;
 #endif
 static bool s_initialized = false;
 static uint8_t s_last_error = 0;
@@ -348,36 +347,14 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
 }
 
 // -----------------------------------------------------------------------------
-// ADC Detection
+// Detect Pin
 // -----------------------------------------------------------------------------
 
 #if !HAT_NO_DETECT
-static float hat_read_detect_voltage(void)
+static int hat_read_detect_level(void)
 {
-    if (!s_adc_handle) return -1.0f;
-
-    int raw = 0;
-    esp_err_t err = adc_oneshot_read(s_adc_handle, ADC_CHANNEL_6, &raw);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "ADC read failed: %s", esp_err_to_name(err));
-        return -1.0f;
-    }
-
-    // ESP32-S3 ADC: 12-bit, 0-3.3V (with default attenuation)
-    // GPIO47 = ADC1_CH6 on ESP32-S3
-    float voltage = (float)raw / 4095.0f * 3.3f;
-    return voltage;
-}
-
-static HatType voltage_to_hat_type(float v)
-{
-    if (v < 0.0f) return HAT_TYPE_UNKNOWN;
-    if (v > 2.5f) return HAT_TYPE_NONE;           // Pull-up only: no HAT (~3.3V)
-    if (v > 1.2f && v < 2.1f) return HAT_TYPE_SWD_GPIO;  // 10k/10k divider (~1.65V)
-    // Future HAT types would have additional voltage bands here:
-    // if (v > 0.8f && v < 1.2f) return HAT_TYPE_ANALOG;   // 4.7k pull-down (~1.06V)
-    // if (v > 2.1f && v < 2.5f) return HAT_TYPE_PROTOCOL;  // 22k pull-down (~2.27V)
-    return HAT_TYPE_UNKNOWN;
+    if (!s_detect_pin_ready) return -1;
+    return gpio_get_level(PIN_HAT_DETECT);
 }
 #endif
 
@@ -393,22 +370,23 @@ bool hat_init(void)
         s_hat_mutex = xSemaphoreCreateMutex();
     }
 
-    // Initialize ADC for detect pin (if available)
+    // Initialize detect pin as a binary strap:
+    // HIGH = no HAT, LOW = HAT present.
 #if !HAT_NO_DETECT
     {
-        adc_oneshot_unit_init_cfg_t adc_cfg = {
-            .unit_id = ADC_UNIT_1,
+        gpio_config_t detect_cfg = {
+            .pin_bit_mask = (1ULL << PIN_HAT_DETECT),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
         };
-        esp_err_t err = adc_oneshot_new_unit(&adc_cfg, &s_adc_handle);
+        esp_err_t err = gpio_config(&detect_cfg);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "ADC unit init failed: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "Detect pin init failed: %s", esp_err_to_name(err));
             // Continue without detect — will try UART ping instead
         } else {
-            adc_oneshot_chan_cfg_t chan_cfg = {
-                .atten = ADC_ATTEN_DB_12,
-                .bitwidth = ADC_BITWIDTH_12,
-            };
-            adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_6, &chan_cfg);
+            s_detect_pin_ready = true;
         }
     }
 #else
@@ -542,29 +520,17 @@ HatType hat_detect(void)
     s_state.detected = true;            // Will be confirmed/denied by hat_connect()
     return s_state.type;
 #else
-    // Average multiple ADC readings for stability
-    float sum = 0.0f;
-    int valid = 0;
-    for (int i = 0; i < 8; i++) {
-        float v = hat_read_detect_voltage();
-        if (v >= 0.0f) {
-            sum += v;
-            valid++;
-        }
-        delay_ms(2);
-    }
-
-    if (valid == 0) {
+    int level = hat_read_detect_level();
+    if (level < 0) {
         s_state.detected = false;
         s_state.type = HAT_TYPE_UNKNOWN;
         s_state.detect_voltage = -1.0f;
         return HAT_TYPE_UNKNOWN;
     }
 
-    float avg_v = sum / (float)valid;
-    s_state.detect_voltage = avg_v;
-    s_state.type = voltage_to_hat_type(avg_v);
-    s_state.detected = (s_state.type != HAT_TYPE_NONE && s_state.type != HAT_TYPE_UNKNOWN);
+    s_state.detect_voltage = level ? 3.3f : 0.0f;
+    s_state.type = level ? HAT_TYPE_NONE : HAT_TYPE_SWD_GPIO;
+    s_state.detected = (level == 0);
 
     return s_state.type;
 #endif  // HAT_NO_DETECT
@@ -738,7 +704,7 @@ const char* hat_type_name(HatType type)
 {
     switch (type) {
         case HAT_TYPE_NONE:      return "None";
-        case HAT_TYPE_SWD_GPIO:  return "SWD/GPIO";
+        case HAT_TYPE_SWD_GPIO:  return "HAT";
         case HAT_TYPE_UNKNOWN:   return "Unknown";
         default:                 return "Unknown";
     }
@@ -1002,6 +968,82 @@ bool hat_la_set_route(uint8_t route)
                               rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_OK && rsp_len >= 1) {
         s_state.la_route = rsp[0];
+        return true;
+    }
+    return false;
+}
+
+bool hat_calibrate_start(uint8_t rail_id, uint8_t *status_out)
+{
+    if (!s_state.connected) return false;
+    uint8_t payload[1] = { rail_id };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_CALIBRATE_START, payload, sizeof(payload),
+                              rsp, &rsp_len, 500, sizeof(rsp));
+    if (cmd == HAT_RSP_OK && rsp_len >= 1) {
+        if (status_out) *status_out = rsp[0];
+        return true;
+    }
+    return false;
+}
+
+bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id, uint8_t *last_error)
+{
+    if (!s_state.connected) return false;
+    uint8_t rsp[8] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_CALIBRATE_STATUS, NULL, 0,
+                              rsp, &rsp_len, 500, sizeof(rsp));
+    if (cmd == HAT_RSP_CALIBRATE_STATUS && rsp_len >= 4) {
+        if (state)       *state       = rsp[0];
+        if (progress)    *progress    = rsp[1];
+        if (rail_id)     *rail_id     = rsp[2];
+        if (last_error)  *last_error  = rsp[3];
+        return true;
+    }
+    return false;
+}
+
+bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_data, size_t data_len)
+{
+    if (!s_state.connected) return false;
+    if (2 + data_len > 32) return false;
+    uint8_t payload[32] = {};
+    payload[0] = rail_id;
+    payload[1] = count;
+    if (data_len > 0 && points_data) {
+        memcpy(&payload[2], points_data, data_len);
+    }
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_CALIBRATE_IMPORT, payload, 2 + data_len,
+                              rsp, &rsp_len, 500, sizeof(rsp));
+    return cmd == HAT_RSP_OK;
+}
+
+bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns)
+{
+    if (!s_state.connected) return false;
+    uint8_t payload[3] = { dirs, ups, dns };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_SET_IO_BANK, payload, sizeof(payload),
+                              rsp, &rsp_len, 300, sizeof(rsp));
+    return cmd == HAT_RSP_OK;
+}
+
+bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out)
+{
+    if (!s_state.connected) return false;
+    uint8_t payload[2] = { (uint8_t)(oe ? 1 : 0), (uint8_t)(dir ? 1 : 0) };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_SET_LEVEL_SHIFT, payload, sizeof(payload),
+                              rsp, &rsp_len, 300, sizeof(rsp));
+    if (cmd == HAT_RSP_OK && rsp_len >= 2) {
+        if (oe_out)  *oe_out  = rsp[0] != 0;
+        if (dir_out) *dir_out = rsp[1] != 0;
         return true;
     }
     return false;

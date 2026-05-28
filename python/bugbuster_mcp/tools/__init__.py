@@ -20,6 +20,7 @@ def register_all(mcp) -> None:
     from .target     import register as reg_target
     from .ota        import register as reg_ota
     from .io_owner   import register as reg_io_owner
+    from .hat        import register as reg_hat
 
     reg_discovery(mcp)
     reg_io_config(mcp)
@@ -34,3 +35,4 @@ def register_all(mcp) -> None:
     reg_target(mcp)
     reg_ota(mcp)
     reg_io_owner(mcp)
+    reg_hat(mcp)

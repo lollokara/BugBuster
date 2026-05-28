@@ -1071,6 +1071,14 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
         return &s_internal_supplies;
     }
 
+    // Hold s_selftest_mutex for the entire sequence so selftest_monitor_step()
+    // cannot reconfigure diagnostic slots mid-measurement (causes 0.0 reads).
+    if (!s_selftest_mutex || xSemaphoreTake(s_selftest_mutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        ESP_LOGW(TAG, "selftest_measure_internal_supplies: mutex timeout");
+        s_internal_supplies.valid = false;
+        return &s_internal_supplies;
+    }
+
     // Save current diagnostic slot configuration
     uint8_t saved_sources[4] = {};
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -1138,6 +1146,7 @@ const SelftestInternalSupplies* selftest_measure_internal_supplies(void)
         send_diag_config(i, saved_sources[i]);
     }
 
+    xSemaphoreGive(s_selftest_mutex);
     return &s_internal_supplies;
 }
 

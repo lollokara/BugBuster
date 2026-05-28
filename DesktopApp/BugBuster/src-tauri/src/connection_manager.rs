@@ -245,6 +245,11 @@ impl ConnectionManager {
                             bbp::EVT_LA_DONE => {
                                 let _ = app_handle.emit("la-done", &msg.payload);
                             }
+                            bbp::EVT_LA_LOG => {
+                                if let Ok(text) = std::str::from_utf8(&msg.payload) {
+                                    let _ = app_handle.emit("hat-log", text.trim_end());
+                                }
+                            }
                             bbp::EVT_IO_OWNER_REJECT => {
                                 if let Some(evt) = crate::state::IoOwnerRejectEvent::from_payload(&msg.payload) {
                                     let _ = app_handle.emit("io-owner-reject", &evt);

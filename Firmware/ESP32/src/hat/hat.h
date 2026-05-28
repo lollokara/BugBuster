@@ -7,9 +7,9 @@
 // connected via the HAT header on the BugBuster PCB.
 //
 // Physical interface:
-//   GPIO47 (ADC)        - HAT detect: voltage divider identifies HAT type
-//                         BugBuster: 10kΩ pull-up to 3.3V
-//                         HAT board: pull-down resistor (value identifies type)
+//   GPIO47              - HAT detect: binary strap
+//                         HIGH = no HAT
+//                         LOW  = HAT present
 //   GPIO43 (TXD0)       - UART TX to HAT (BugBuster is master)
 //   GPIO44 (RXD0)       - UART RX from HAT
 //   GPIO15 (open-drain) - Shared interrupt line (bidirectional)
@@ -32,7 +32,7 @@ extern "C" {
 // Pin Definitions
 // -----------------------------------------------------------------------------
 #define HAT_NO_DETECT       0
-#define PIN_HAT_DETECT      GPIO_NUM_47   // ADC input for HAT identification
+#define PIN_HAT_DETECT      GPIO_NUM_47   // Digital detect strap: HIGH=no HAT, LOW=HAT
 #define PIN_HAT_TX          GPIO_NUM_43   // UART TX to HAT
 #define PIN_HAT_RX          GPIO_NUM_44   // UART RX from HAT
 #define PIN_HAT_IRQ         GPIO_NUM_15   // Shared open-drain interrupt (also carries LA-done signal on PCB)
@@ -47,15 +47,14 @@ extern "C" {
 #define HAT_DEFAULT_IO_VOLTAGE_MV 3300
 
 // -----------------------------------------------------------------------------
-// HAT Detection — Voltage Thresholds
+// HAT Detection — Binary strap
 // -----------------------------------------------------------------------------
-// No HAT:     pull-up only → ~3.3V  (ADC > 2.5V)
-// SWD/GPIO:   10k down → ~1.65V    (ADC 1.2V–2.1V)
-// Future HATs: different pull-down → different voltage bands
+// High level: no HAT
+// Low level:  HAT present
 
 typedef enum {
-    HAT_TYPE_NONE = 0,      // No HAT detected (~3.3V)
-    HAT_TYPE_SWD_GPIO,      // SWD/GPIO HAT: 10kΩ pull-down (~1.65V)
+    HAT_TYPE_NONE = 0,      // No HAT detected (GPIO47 high)
+    HAT_TYPE_SWD_GPIO,      // HAT detected (GPIO47 low)
     // Future HAT types:
     // HAT_TYPE_ANALOG,     // e.g. 4.7kΩ pull-down (~1.06V)
     // HAT_TYPE_PROTOCOL,   // e.g. 22kΩ pull-down (~2.27V)
@@ -149,6 +148,11 @@ typedef enum {
 #define HAT_CMD_GET_RAIL_STATUS 0x40
 #define HAT_CMD_SET_RAIL_ENABLE 0x41
 #define HAT_CMD_SET_LED_STATE   0x42
+#define HAT_CMD_CALIBRATE_START  0x43
+#define HAT_CMD_CALIBRATE_STATUS 0x44
+#define HAT_CMD_CALIBRATE_IMPORT 0x45
+#define HAT_CMD_SET_IO_BANK      0x46
+#define HAT_CMD_SET_LEVEL_SHIFT  0x47
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -161,6 +165,7 @@ typedef enum {
 #define HAT_RSP_CAPS            0x87
 #define HAT_RSP_RAIL_STATUS     0x88
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
+#define HAT_RSP_CALIBRATE_STATUS 0x8A
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
@@ -368,6 +373,12 @@ bool hat_get_rail_status(HatRailStatus rails[HAT_RAIL_COUNT], uint8_t *rail_coun
 bool hat_set_rail_enable(uint8_t rail_id, bool enable);
 bool hat_set_led_state(uint8_t led_index, uint8_t color_code);
 bool hat_la_set_route(uint8_t route);
+
+bool hat_calibrate_start(uint8_t rail_id, uint8_t *status_out);
+bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id, uint8_t *last_error);
+bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_data, size_t data_len);
+bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns);
+bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out);
 
 /**
  * @brief Send an advanced HVPAK command to the RP2040 HAT and return the raw
