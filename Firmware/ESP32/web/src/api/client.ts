@@ -706,6 +706,14 @@ export const api = {
       mac,
       admin: true,
     }),
+  hatV2LaLogEnable: (mac: string, enable: boolean) =>
+    request<any>("/api/hat/v2/la/log/enable", {
+      method: "POST",
+      body: { enable },
+      mac,
+      admin: true,
+    }),
+  hatV2LaLogPoll: () => request<any>("/api/hat/v2/la/log"),
   diagnostics: () => request<any>("/api/diagnostics"),
   diagnosticsSetConfig: (mac: string, slot: number, source: number) =>
     request<any>("/api/diagnostics/config", {

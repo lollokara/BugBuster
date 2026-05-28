@@ -6,64 +6,56 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsValue;
 use crate::tauri_bridge::*;
-use crate::components::controls::Dropdown;
 
-const IO_VOLTAGE_OPTIONS: &[(&str, &str)] = &[
-    ("1200", "1.2V"),
-    ("1800", "1.8V"),
-    ("2500", "2.5V"),
-    ("3300", "3.3V"),
-    ("5000", "5.0V"),
-];
+// ── Local helpers ─────────────────────────────────────────────────────────────
 
-fn status_dot(active: bool, color: &str) -> String {
-    format!("width: 10px; height: 10px; border-radius: 50%; display: inline-block; {}",
-        if active { format!("background: {}; box-shadow: 0 0 6px {}", color, color) }
-        else { "background: var(--text-dim)".into() })
+#[component]
+fn HatPill(label: &'static str, ok: bool, value: String) -> impl IntoView {
+    view! {
+        <span style="display: inline-flex; align-items: center; gap: 5px; font-size: 10px">
+            <span style="color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em">{label}</span>
+            <span style=if ok { "color: #10b981" } else { "color: var(--text-dim)" }>{value}</span>
+        </span>
+    }
 }
+
+// ── Main tab ──────────────────────────────────────────────────────────────────
 
 #[component]
 pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
-    let (hat, set_hat) = signal(HatStatus::default());
+    let (hat, set_hat)   = signal(HatStatus::default());
     let (rails, set_rails) = signal(Vec::<HatRailStatus>::new());
     let (caps, set_caps) = signal(None::<HatCaps>);
     let (la_route, set_la_route_sig) = signal(0u8);
 
-    // Shifted IO Bank States
     let (io_dirs, set_io_dirs) = signal(0u8);
-    let (io_ups, set_io_ups) = signal(0u8);
-    let (io_dns, set_io_dns) = signal(0u8);
+    let (io_ups,  set_io_ups)  = signal(0u8);
+    let (io_dns,  set_io_dns)  = signal(0u8);
 
-    // Level Shifter States
     let (ls_oe, set_ls_oe) = signal(false);
     let (ls_dir, set_ls_dir) = signal(false);
 
-    // Calibration States
-    let (cal_active, set_cal_active) = signal(false);
+    let (cal_active,   set_cal_active)   = signal(false);
     let (cal_progress, set_cal_progress) = signal(0u8);
-    let (cal_rail_id, set_cal_rail_id) = signal(1u8); // 1 = VADJ3, 2 = VADJ4
-    let (_cal_state_val, set_cal_state_val) = signal(0u8); // 0=idle, 1=running, 2=done, 3=failed
+    let (cal_rail_id,  set_cal_rail_id)  = signal(1u8);
+    let (_cal_state_val, set_cal_state_val) = signal(0u8);
     let (_cal_last_error, set_cal_last_error) = signal(0u8);
     let cal_poll_handle = RwSignal::new(None::<leptos::prelude::IntervalHandle>);
 
-    // HAT Log States
     let (log_enabled, set_log_enabled) = signal(false);
     let log_lines: RwSignal<VecDeque<String>> = RwSignal::new(VecDeque::new());
 
-    // Set up the "hat-log" Tauri event listener once
+    // ── hat-log Tauri event listener ─────────────────────────────────────────
     Effect::new(move |_| {
         let log_lines = log_lines;
         spawn_local(async move {
             let closure = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
                 if let Some(payload) = js_sys::Reflect::get(&event, &JsValue::from_str("payload"))
-                    .ok()
-                    .and_then(|v| v.as_string())
+                    .ok().and_then(|v| v.as_string())
                 {
                     log_lines.update(|lines| {
                         lines.push_back(payload);
-                        if lines.len() > 200 {
-                            lines.pop_front();
-                        }
+                        if lines.len() > 200 { lines.pop_front(); }
                     });
                 }
             });
@@ -72,78 +64,48 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     });
 
-    // Fetch initial status and capabilities
-    let set_hat_clone = set_hat;
-    let set_caps_clone = set_caps;
-    let set_rails_clone = set_rails;
+    // ── Initial fetch ─────────────────────────────────────────────────────────
     Effect::new(move |_| {
         let _ = state.get();
         spawn_local(async move {
-            if let Some(st) = fetch_hat_status().await {
-                set_hat_clone.set(st);
-            }
-            if let Some(cp) = hat_get_caps().await {
-                set_caps_clone.set(Some(cp));
-            }
-            if let Some(rl) = hat_get_rail_status().await {
-                set_rails_clone.set(rl);
-            }
+            if let Some(st) = fetch_hat_status().await    { set_hat.set(st); }
+            if let Some(cp) = hat_get_caps().await        { set_caps.set(Some(cp)); }
+            if let Some(rl) = hat_get_rail_status().await { set_rails.set(rl); }
         });
     });
 
-    // Periodic status polling (every 1s)
-    let set_hat_poll = set_hat;
-    let set_rails_poll = set_rails;
+    // ── 1 s status poll ───────────────────────────────────────────────────────
     Effect::new(move |_| {
-        let handle = leptos::prelude::set_interval_with_handle(
-            move || {
-                spawn_local(async move {
-                    if let Some(st) = fetch_hat_status().await {
-                        set_hat_poll.set(st);
-                    }
-                    if let Some(rl) = hat_get_rail_status().await {
-                        set_rails_poll.set(rl);
-                    }
-                });
-            },
-            Duration::from_secs(1),
-        ).ok();
-        
-        on_cleanup(move || {
-            if let Some(h) = handle {
-                h.clear();
-            }
-        });
+        let handle = leptos::prelude::set_interval_with_handle(move || {
+            spawn_local(async move {
+                if let Some(st) = fetch_hat_status().await    { set_hat.set(st); }
+                if let Some(rl) = hat_get_rail_status().await { set_rails.set(rl); }
+            });
+        }, Duration::from_secs(1)).ok();
+        on_cleanup(move || { if let Some(h) = handle { h.clear(); } });
     });
 
-    // Calibration Polling Effect
+    // ── Calibration poll (400 ms, only while running) ─────────────────────────
     Effect::new(move |_| {
-        let running = cal_active.get();
-        if running {
+        if cal_active.get() {
             if cal_poll_handle.get_untracked().is_none() {
-                let handle = leptos::prelude::set_interval_with_handle(
-                    move || {
-                        if !cal_active.get_untracked() {
-                            return;
-                        }
-                        spawn_local(async move {
-                            if let Some(status) = hat_calibrate_status().await {
-                                set_cal_progress.set(status.progress);
-                                set_cal_state_val.set(status.state);
-                                set_cal_last_error.set(status.last_error);
-
-                                if status.state == 2 {
-                                    set_cal_active.set(false);
-                                    show_toast("Calibration completed successfully!", "ok");
-                                } else if status.state == 3 {
-                                    set_cal_active.set(false);
-                                    show_toast("Calibration failed!", "err");
-                                }
+                let handle = leptos::prelude::set_interval_with_handle(move || {
+                    if !cal_active.get_untracked() { return; }
+                    spawn_local(async move {
+                        if let Some(s) = hat_calibrate_status().await {
+                            set_cal_progress.set(s.progress);
+                            set_cal_state_val.set(s.state);
+                            set_cal_last_error.set(s.last_error);
+                            if s.state == 2 {
+                                set_cal_active.set(false);
+                                show_toast("Calibration completed successfully!", "ok");
+                            } else if s.state == 3 {
+                                set_cal_active.set(false);
+                                show_toast("Calibration failed!", "err");
                             }
-                        });
-                    },
-                    Duration::from_millis(400),
-                ).ok();
+                        }
+                    });
+                }, Duration::from_millis(400)).ok();
                 cal_poll_handle.set(handle);
             }
         } else if let Some(h) = cal_poll_handle.get_untracked() {
@@ -152,8 +114,10 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
     });
 
-    let io_volt_options: Vec<(String, String)> = IO_VOLTAGE_OPTIONS
-        .iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
+    // ── Helpers to read individual rail fields without re-running stable DOM ──
+    let rail_en  = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.enabled).unwrap_or(false);
+    let rail_mv  = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.voltage_mv).unwrap_or(0);
+    let rail_ma  = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.current_ma).unwrap_or(0);
 
     view! {
         <div class="tab-content">
@@ -161,562 +125,520 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 "HAT Expansion Board v2 — Advanced rail control, shifted I/O bank config, and high-speed routing."
             </div>
 
+            // ── Summary Banner — re-renders only when hat/caps change ──────────
             {move || {
                 let st = hat.get();
-                let cp_opt = caps.get();
-                let rail_list = rails.get();
-
-                // ── Status Bar ──
-                let status_card = view! {
-                    <div class="card" style="margin-bottom: 16px">
-                        <div class="card-header">
-                            <span>"HAT Status"</span>
-                            <div style="display: flex; gap: 8px">
-                                <button class="btn btn-sm" style="font-size: 10px; padding: 2px 8px"
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            if let Some(s) = fetch_hat_status().await { set_hat.set(s); }
-                                            if let Some(rl) = hat_get_rail_status().await { set_rails.set(rl); }
-                                        });
-                                    }
-                                >"Refresh"</button>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px">
-                                <div style="text-align: center; padding: 6px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 3px">"Detected"</div>
-                                    <div style=status_dot(st.detected, "#10b981")></div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 3px">"UART"</div>
-                                    <div style=status_dot(st.connected, "#3b82f6")></div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 3px">"DAP"</div>
-                                    <div style=status_dot(st.dap_connected, "#8b5cf6")></div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 3px">"Target"</div>
-                                    <div style=status_dot(st.target_detected, "#f59e0b")></div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 3px">"Revision"</div>
-                                    <div style="font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace">
-                                        {if let Some(ref c) = cp_opt { format!("v{}", c.hw_revision) } else { "-".into() }}
-                                    </div>
-                                </div>
-                                <div style="text-align: center; padding: 6px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 3px">"Firmware"</div>
-                                    <div style="font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace">
-                                        {format!("v{}.{}", st.fw_major, st.fw_minor)}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                };
-
-                if !st.detected {
-                    return view! {
-                        {status_card}
-                        <div class="card">
-                            <div class="card-body" style="text-align: center; padding: 32px; color: var(--text-dim)">
-                                <div style="font-size: 24px; margin-bottom: 8px">"No HAT Detected"</div>
-                                <div style="font-size: 12px">"Connect a HAT board to the expansion header and click Refresh."</div>
-                            </div>
-                        </div>
-                    }.into_any();
-                }
-
-                // Capabilities list
-                let caps_view = if let Some(ref cp) = cp_opt {
-                    let mut badges = Vec::new();
-                    if cp.flags & 1 != 0 { badges.push(view! { <span class="badge" style="background: #10b98120; color: #10b981; border: 1px solid #10b98140; margin-right: 4px; font-size: 9px; padding: 2px 6px; border-radius: 4px">"Rails Control"</span> }); }
-                    if cp.flags & 2 != 0 { badges.push(view! { <span class="badge" style="background: #3b82f620; color: #3b82f6; border: 1px solid #3b82f640; margin-right: 4px; font-size: 9px; padding: 2px 6px; border-radius: 4px">"RGB Status LEDs"</span> }); }
-                    if cp.flags & 4 != 0 { badges.push(view! { <span class="badge" style="background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf640; margin-right: 4px; font-size: 9px; padding: 2px 6px; border-radius: 4px">"LA Route Low-Speed"</span> }); }
-                    if cp.flags & 8 != 0 { badges.push(view! { <span class="badge" style="background: #a855f720; color: #a855f7; border: 1px solid #a855f740; margin-right: 4px; font-size: 9px; padding: 2px 6px; border-radius: 4px">"LA Route High-Speed"</span> }); }
-                    if cp.flags & 16 != 0 { badges.push(view! { <span class="badge" style="background: #ec489920; color: #ec4899; border: 1px solid #ec489940; margin-right: 4px; font-size: 9px; padding: 2px 6px; border-radius: 4px">"Shifted I/O Bank"</span> }); }
-                    view! {
-                        <div style="margin-bottom: 12px">
-                            <span style="font-size: 10px; color: var(--text-dim); margin-right: 8px">"Capabilities:"</span>
-                            {badges}
-                        </div>
-                    }.into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                };
-
-                // Power rails rows mapping
-                let rail_v3 = rail_list.iter().find(|r| r.rail_id == 1); // VADJ3
-                let rail_v4 = rail_list.iter().find(|r| r.rail_id == 2); // VADJ4
-                let rail_adj = rail_list.iter().find(|r| r.rail_id == 0); // 3V3_ADJ
-
-                let v3_en = rail_v3.map(|r| r.enabled).unwrap_or(false);
-                let v4_en = rail_v4.map(|r| r.enabled).unwrap_or(false);
-                let adj_en = rail_adj.map(|r| r.enabled).unwrap_or(false);
-
-                let v3_mv = rail_v3.map(|r| r.voltage_mv).unwrap_or(0);
-                let v4_mv = rail_v4.map(|r| r.voltage_mv).unwrap_or(0);
-
-                let v3_ma = rail_v3.map(|r| r.current_ma).unwrap_or(0);
-                let v4_ma = rail_v4.map(|r| r.current_ma).unwrap_or(0);
-
-                let is_cal_running = cal_active.get();
-                let cal_prog_val = cal_progress.get();
-
-                let io_opts = io_volt_options.clone();
-
+                let cp = caps.get();
+                let fw  = format!("v{}.{}", st.fw_major, st.fw_minor);
+                let rev = cp.as_ref().map(|c| format!("v{}", c.hw_revision)).unwrap_or("—".into());
                 view! {
-                    {status_card}
-                    {caps_view}
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px">
-                        
-                        // ── Power Rails Card ──
-                        <div class="card">
-                            <div class="card-header"><span>"Power Rails"</span></div>
-                            <div class="card-body">
-                                
-                                // 3V3_ADJ Rail
-                                <div style="margin-bottom: 12px; padding: 10px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
-                                        <span style="font-size: 12px; font-weight: 700; color: #10b981">"3V3_ADJ Rail (Level Shifter Power)"</span>
-                                        <button
-                                            class="btn btn-sm"
-                                            style=format!("font-size: 10px; padding: 2px 10px; {}",
-                                                if adj_en { "background: #10b98130; color: #10b981; border: 1px solid #10b98150" }
-                                                else { "" })
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    if let Some(r) = hat_set_rail_enable(0, !adj_en).await {
-                                                        set_rails.set(r);
-                                                    }
-                                                });
-                                            }
-                                        >{if adj_en { "ON" } else { "OFF" }}</button>
-                                    </div>
-                                    <div style="font-size: 10px; color: var(--text-dim)">
-                                        "Required for level shifter Outputs Enable (OE). Hard interlocked."
-                                    </div>
-                                </div>
-
-                                // VADJ3 Rail
-                                <div style="margin-bottom: 12px; padding: 10px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
-                                        <span style="font-size: 12px; font-weight: 700; color: #06b6d4">"VADJ3 Rail (Adjustable 0–36V)"</span>
-                                        <button
-                                            class="btn btn-sm"
-                                            style=format!("font-size: 10px; padding: 2px 10px; {}",
-                                                if v3_en { "background: #10b98130; color: #10b981; border: 1px solid #10b98150" }
-                                                else { "" })
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    if let Some(r) = hat_set_rail_enable(1, !v3_en).await {
-                                                        set_rails.set(r);
-                                                    }
-                                                });
-                                            }
-                                        >{if v3_en { "ON" } else { "OFF" }}</button>
-                                    </div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; align-items: center">
-                                        <div>
-                                            <div style="font-size: 9px; color: var(--text-dim)">"Target"</div>
-                                            <Dropdown
-                                                value=Signal::derive(move || st.io_voltage_mv.to_string())
-                                                on_change=Callback::new(move |val: String| {
-                                                    if let Ok(mv) = val.parse::<u16>() {
-                                                        send_hat_set_io_voltage(mv);
-                                                    }
-                                                })
-                                                options=io_opts.clone()
-                                            />
-                                        </div>
-                                        <div>
-                                            <div style="font-size: 9px; color: var(--text-dim)">"Voltage"</div>
-                                            <span style="font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace">
-                                                {format!("{:.3} V", v3_mv as f32 / 1000.0)}
-                                            </span>
-                                        </div>
-                                        <div>
-                                            <div style="font-size: 9px; color: var(--text-dim)">"Current"</div>
-                                            <span style="font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace">
-                                                {format!("{} mA", v3_ma)}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                // VADJ4 Rail
-                                <div style="padding: 10px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
-                                        <span style="font-size: 12px; font-weight: 700; color: #ff4d6a">"VADJ4 Rail (Adjustable 0–36V)"</span>
-                                        <button
-                                            class="btn btn-sm"
-                                            style=format!("font-size: 10px; padding: 2px 10px; {}",
-                                                if v4_en { "background: #10b98130; color: #10b981; border: 1px solid #10b98150" }
-                                                else { "" })
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    if let Some(r) = hat_set_rail_enable(2, !v4_en).await {
-                                                        set_rails.set(r);
-                                                    }
-                                                });
-                                            }
-                                        >{if v4_en { "ON" } else { "OFF" }}</button>
-                                    </div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
-                                        <div>
-                                            <div style="font-size: 9px; color: var(--text-dim)">"Voltage"</div>
-                                            <span style="font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace">
-                                                {format!("{:.3} V", v4_mv as f32 / 1000.0)}
-                                            </span>
-                                        </div>
-                                        <div>
-                                            <div style="font-size: 9px; color: var(--text-dim)">"Current"</div>
-                                            <span style="font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace">
-                                                {format!("{} mA", v4_ma)}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                            </div>
+                    <div class="summary-banner" style="justify-content: space-between; padding: 8px 12px; margin-bottom: 14px">
+                        <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+                            <HatPill label="Detected" ok=st.detected    value={if st.detected      { "Yes".into() } else { "No".into() }} />
+                            <HatPill label="UART"     ok=st.connected   value={if st.connected     { "OK".into()  } else { "—".into()  }} />
+                            <HatPill label="DAP"      ok=st.dap_connected value={if st.dap_connected { "OK".into() } else { "—".into() }} />
+                            <HatPill label="Target"   ok=st.target_detected value={if st.target_detected { "OK".into() } else { "—".into() }} />
+                            <HatPill label="Rev"  ok=true value=rev />
+                            <HatPill label="FW"   ok=true value=fw />
                         </div>
-
-                        // ── Logic Analyzer Route & SWD Card ──
-                        <div class="card">
-                            <div class="card-header"><span>"Routing & SWD"</span></div>
-                            <div class="card-body">
-                                
-                                // Route selection
-                                <div style="padding: 10px; border-radius: 6px; background: var(--bg-secondary); margin-bottom: 12px">
-                                    <span style="font-size: 12px; font-weight: 700; display: block; margin-bottom: 6px">"LA Route Selector"</span>
-                                    <div style="display: flex; gap: 8px">
-                                        <button
-                                            class="btn"
-                                            style=format!("font-size: 10px; padding: 4px 12px; flex: 1; {}",
-                                                if la_route.get() == 0 { "background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f650" } else { "" })
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    if let Some(r) = hat_la_set_route(0).await {
-                                                        set_la_route_sig.set(r);
-                                                        show_toast("Route set to Low-Speed (Conn2)", "ok");
-                                                    }
-                                                });
-                                            }
-                                        >"Low-Speed Route (Conn2)"</button>
-                                        <button
-                                            class="btn"
-                                            style=format!("font-size: 10px; padding: 4px 12px; flex: 1; {}",
-                                                if la_route.get() == 1 { "background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f650" } else { "" })
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    if let Some(r) = hat_la_set_route(1).await {
-                                                        set_la_route_sig.set(r);
-                                                        show_toast("Route set to High-Speed (Conn1)", "ok");
-                                                    }
-                                                });
-                                            }
-                                        >"High-Speed Route (Conn1)"</button>
-                                    </div>
-                                    <div style="font-size: 9px; color: var(--text-dim); margin-top: 6px">
-                                        {move || if la_route.get() == 0 {
-                                            "Low-speed capture routes EXP_EXT pins (up to 4 channels @ 1MHz max)."
-                                        } else {
-                                            "High-speed route routes through low-skew buffered Conn1 connector (max 3 channels)."
-                                        }}
-                                    </div>
-                                </div>
-
-                                // SWD setup
-                                <div style="padding: 10px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <span style="font-size: 12px; font-weight: 700; display: block; margin-bottom: 6px">"SWD Target Setup (Dedicated Header)"</span>
-                                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
-                                        <div style=status_dot(st.target_detected, "#f59e0b")></div>
-                                        <span style="font-size: 11px">
-                                            {if st.target_detected {
-                                                format!("Target: DPIDR 0x{:08X}", st.target_dpidr)
-                                            } else {
-                                                "No target detected".into()
-                                            }}
-                                        </span>
-                                    </div>
-                                    <div style="display: flex; gap: 6px">
-                                        <button class="btn" style="font-size: 10px; padding: 4px 12px; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
-                                            on:click=move |_| { send_hat_setup_swd(3300, 0); }
-                                        >"Setup SWD 3.3V"</button>
-                                        <button class="btn" style="font-size: 10px; padding: 4px 12px; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
-                                            on:click=move |_| { send_hat_setup_swd(1800, 0); }
-                                        >"Setup SWD 1.8V"</button>
-                                    </div>
-                                </div>
-
-                            </div>
-                        </div>
-
+                        <button class="btn btn-sm" style="font-size: 10px; padding: 2px 10px"
+                            on:click=move |_| {
+                                spawn_local(async move {
+                                    if let Some(s) = fetch_hat_status().await    { set_hat.set(s); }
+                                    if let Some(rl) = hat_get_rail_status().await { set_rails.set(rl); }
+                                });
+                            }
+                        >"Refresh"</button>
                     </div>
+                }
+            }}
 
-                    <div style="display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; margin-bottom: 16px">
-
-                        // ── Shifted I/O Bank Card ──
-                        <div class="card">
-                            <div class="card-header">
-                                <span>"Shifted I/O Bank Configuration (GPIO 10-15, 20-21)"</span>
-                            </div>
-                            <div class="card-body">
-                                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px">
-                                    {(0..8u8).map(|i| {
-                                        let is_out = Signal::derive(move || (io_dirs.get() & (1 << i)) != 0);
-                                        let is_up = Signal::derive(move || (io_ups.get() & (1 << i)) != 0);
-                                        let is_dn = Signal::derive(move || (io_dns.get() & (1 << i)) != 0);
-                                        view! {
-                                            <div style="padding: 8px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-color, #333)">
-                                                <div style="font-size: 10px; font-weight: 700; color: #3b82f6; margin-bottom: 4px">
-                                                    {format!("SH_IO_{}", i + 1)}
-                                                </div>
-                                                <div style="display: flex; gap: 4px; margin-bottom: 4px">
-                                                    <button
-                                                        class="btn btn-sm"
-                                                        style=format!("padding: 1px 4px; font-size: 9px; flex: 1; {}", if !is_out.get() { "background: #3b82f640; color:#3b82f6" } else { "" })
-                                                        on:click=move |_| {
-                                                            set_io_dirs.update(|d| *d &= !(1 << i));
-                                                        }
-                                                    >"IN"</button>
-                                                    <button
-                                                        class="btn btn-sm"
-                                                        style=format!("padding: 1px 4px; font-size: 9px; flex: 1; {}", if is_out.get() { "background: #3b82f640; color:#3b82f6" } else { "" })
-                                                        on:click=move |_| {
-                                                            set_io_dirs.update(|d| *d |= 1 << i);
-                                                        }
-                                                    >"OUT"</button>
-                                                </div>
-                                                <div style="display: flex; flex-direction: column; gap: 2px">
-                                                    <label style="font-size: 9px; display: flex; align-items: center; gap: 3px; cursor: pointer">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked=is_up.get()
-                                                            prop:checked=is_up.get()
-                                                            on:change=move |ev| {
-                                                                let chk = ev.target().unwrap()
-                                                                    .unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                                                if chk {
-                                                                    set_io_ups.update(|u| *u |= 1 << i);
-                                                                    set_io_dns.update(|d| *d &= !(1 << i));
-                                                                } else {
-                                                                    set_io_ups.update(|u| *u &= !(1 << i));
-                                                                }
-                                                            }
-                                                        />
-                                                        "Pull-Up"
-                                                    </label>
-                                                    <label style="font-size: 9px; display: flex; align-items: center; gap: 3px; cursor: pointer">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked=is_dn.get()
-                                                            prop:checked=is_dn.get()
-                                                            on:change=move |ev| {
-                                                                let chk = ev.target().unwrap()
-                                                                    .unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                                                if chk {
-                                                                    set_io_dns.update(|d| *d |= 1 << i);
-                                                                    set_io_ups.update(|u| *u &= !(1 << i));
-                                                                } else {
-                                                                    set_io_dns.update(|d| *d &= !(1 << i));
-                                                                }
-                                                            }
-                                                        />
-                                                        "Pull-Down"
-                                                    </label>
-                                                </div>
-                                            </div>
-                                        }
-                                    }).collect::<Vec<_>>()}
-                                </div>
-                                <button class="btn btn-primary" style="width: 100%; font-size: 11px; padding: 6px"
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            let d = io_dirs.get_untracked();
-                                            let u = io_ups.get_untracked();
-                                            let dn = io_dns.get_untracked();
-                                            if hat_set_io_bank(d, u, dn).await.is_some() {
-                                                show_toast("I/O bank configuration applied!", "ok");
-                                            }
-                                        });
-                                    }
-                                >"Apply I/O Bank Config"</button>
-                            </div>
-                        </div>
-
-                        // ── Level Shifter Overrides Card ──
-                        <div class="card">
-                            <div class="card-header">
-                                <span>"Level Shifter Overrides"</span>
-                            </div>
-                            <div class="card-body">
-                                <div style="margin-bottom: 12px; padding: 8px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
-                                        <span style="font-size: 11px; font-weight: 700">"Outputs Enable (OE)"</span>
-                                        <button
-                                            class="btn btn-sm"
-                                            style=format!("font-size: 10px; padding: 2px 10px; {}",
-                                                if ls_oe.get() { "background: #ef444430; color: #ef4444; border: 1px solid #ef444450" }
-                                                else { "" })
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    let next = !ls_oe.get_untracked();
-                                                    let dir = ls_dir.get_untracked();
-                                                    if let Some(status) = hat_set_level_shift(next, dir).await {
-                                                        set_ls_oe.set(status.oe);
-                                                        set_ls_dir.set(status.dir);
-                                                        if status.oe {
-                                                            show_toast("Outputs Enabled!", "ok");
-                                                        } else {
-                                                            show_toast("Outputs Tri-stated!", "ok");
-                                                        }
-                                                    }
-                                                });
-                                            }
-                                        >{if ls_oe.get() { "ACTIVE" } else { "TRI-STATE" }}</button>
-                                    </div>
-                                    <div style="font-size: 9px; color: var(--text-dim)">
-                                        "Warning: Safety interlock. OE requires the 3V3_ADJ rail to be enabled first."
-                                    </div>
-                                </div>
-
-                                <div style="padding: 8px; border-radius: 6px; background: var(--bg-secondary)">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
-                                        <span style="font-size: 11px; font-weight: 700">"Direction (DIR)"</span>
-                                        <button
-                                            class="btn btn-sm"
-                                            style="font-size: 10px; padding: 2px 10px"
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    let oe = ls_oe.get_untracked();
-                                                    let next = !ls_dir.get_untracked();
-                                                    if let Some(status) = hat_set_level_shift(oe, next).await {
-                                                        set_ls_oe.set(status.oe);
-                                                        set_ls_dir.set(status.dir);
-                                                    }
-                                                });
-                                            }
-                                        >{if ls_dir.get() { "A → B (Output)" } else { "B → A (Input)" }}</button>
-                                    </div>
-                                    <div style="font-size: 9px; color: var(--text-dim)">
-                                        "A → B sets EXP_EXT to drive target. B → A sets EXP_EXT as inputs."
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                    </div>
-
-                    // ── Calibration Card ──
-                    <div class="card" style="margin-bottom: 16px">
-                        <div class="card-header">
-                            <span>"DS4424 Auto-Calibration Sweep"</span>
-                        </div>
+            // ── "No HAT" warning — only shown when not detected ───────────────
+            {move || if !hat.get().detected {
+                view! {
+                    <div class="card">
+                        <div class="card-header"><span class="channel-func">"HAT v2"</span></div>
                         <div class="card-body">
-                            {move || {
-                                if is_cal_running {
-                                    view! {
-                                        <div style="padding: 12px; text-align: center">
-                                            <div style="font-size: 12px; font-weight: 700; color: #3b82f6; margin-bottom: 6px">
-                                                {format!("Calibrating Rail {} ...", if cal_rail_id.get() == 1 { "VADJ3" } else { "VADJ4" })}
-                                            </div>
-                                            <div style="width: 100%; height: 8px; background: var(--bg-secondary); border-radius: 4px; overflow: hidden; margin-bottom: 8px">
-                                                <div style=format!("width: {}%; height: 100%; background: #3b82f6; transition: width 0.3s ease", cal_prog_val) / >
-                                            </div>
-                                            <div style="font-size: 10px; color: var(--text-dim)">
-                                                {format!("Progress: {}% complete", cal_prog_val)}
-                                            </div>
-                                        </div>
-                                    }.into_any()
-                                } else {
-                                    view! {
-                                        <div style="display: flex; gap: 12px; align-items: center">
-                                            <span style="font-size: 11px; color: var(--text-dim)">"Select rail to calibrate:"</span>
-                                            <select
-                                                style="background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text); border-radius: 4px; padding: 4px; font-size: 11px"
-                                                on:change=move |ev| {
-                                                    let val = event_target_value(&ev);
-                                                    if let Ok(id) = val.parse::<u8>() {
-                                                        set_cal_rail_id.set(id);
-                                                    }
-                                                }
-                                            >
-                                                <option value="1">"VADJ3 (0–36V, 18V midpoint)"</option>
-                                                <option value="2">"VADJ4 (0–36V, 18V midpoint)"</option>
-                                            </select>
-                                            <button
-                                                class="btn btn-primary"
-                                                style="font-size: 11px; padding: 4px 16px"
+                            <div class="mode-warning">
+                                <span class="mode-warning-icon">"!"</span>
+                                <span>"No HAT detected. Connect a HAT board to the expansion header and click Refresh."</span>
+                            </div>
+                        </div>
+                    </div>
+                }.into_any()
+            } else {
+                ().into_any()
+            }}
+
+            // ── All detail cards — mounted once when HAT first detected ────────
+            // They use fine-grained signal reads internally, so stable DOM is
+            // never torn down by the 1 s poll.
+            <Show when=move || hat.get().detected>
+
+                // Capabilities badges
+                {move || {
+                    if let Some(cp) = caps.get() {
+                        let defs: &[(u32, &str, &str)] = &[
+                            (1,  "#10b981", "Rails Control"),
+                            (2,  "#3b82f6", "RGB LEDs"),
+                            (4,  "#8b5cf6", "LA Low-Speed"),
+                            (8,  "#a855f7", "LA High-Speed"),
+                            (16, "#ec4899", "Shifted I/O"),
+                        ];
+                        let badges = defs.iter().filter(|(f,_,_)| cp.flags & f != 0).map(|(_, col, name)| {
+                            let col = *col; let name = *name;
+                            view! {
+                                <span style=format!("background: {col}20; color: {col}; border: 1px solid {col}40; font-size: 9px; padding: 2px 7px; border-radius: 4px")>{name}</span>
+                            }
+                        }).collect::<Vec<_>>();
+                        view! {
+                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px">
+                                <span style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em">"Capabilities"</span>
+                                {badges}
+                            </div>
+                        }.into_any()
+                    } else { ().into_any() }
+                }}
+
+                // ── Row 1: Power Rails + Routing/SWD/Level-Shifter ────────────
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px">
+
+                    // Power Rails card
+                    <div class="card">
+                        <div class="card-header"><span>"Power Rails"</span></div>
+                        <div class="card-body" style="display: flex; flex-direction: column; gap: 12px">
+
+                            // 3V3_ADJ — no voltage/current meters, just a toggle
+                            <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px">
+                                    <span style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.05em">"3V3_ADJ"</span>
+                                    <div style="display: flex; align-items: center; gap: 6px">
+                                        <label class="toggle-wrap">
+                                            <div class="toggle" class:active=move || rail_en(0)
                                                 on:click=move |_| {
+                                                    let cur = rail_en(0);
                                                     spawn_local(async move {
-                                                        let id = cal_rail_id.get_untracked();
-                                                        if let Some(status_code) = hat_calibrate_start(id).await {
-                                                            if status_code == 0 {
-                                                                set_cal_active.set(true);
-                                                                set_cal_progress.set(0);
-                                                                show_toast("Calibration sweep started!", "ok");
-                                                            } else {
-                                                                show_toast(&format!("Failed to start calibration: Error code {}", status_code), "err");
-                                                            }
+                                                        if let Some(r) = hat_set_rail_enable(0, !cur).await {
+                                                            set_rails.set(r);
+                                                        } else {
+                                                            show_toast("Failed to toggle 3V3_ADJ rail", "err");
                                                         }
                                                     });
                                                 }
-                                            >"Start Calibration Sweep"</button>
+                                            ><div class="toggle-thumb"></div></div>
+                                        </label>
+                                        <span style="font-size: 10px; color: var(--text-dim)">
+                                            {move || if rail_en(0) { "Enabled" } else { "Disabled" }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div style="font-size: 9px; color: var(--text-dim)">"Level-shifter power. OE requires this rail."</div>
+                            </div>
+
+                            // VADJ3
+                            <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
+                                    <span style="display:flex; align-items:baseline; gap:5px">
+                                        <span style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.05em">"VADJ3"</span>
+                                        <span style="font-size: 9px; color: var(--text-dim)">"(0–36 V)"</span>
+                                    </span>
+                                    <div style="display: flex; align-items: center; gap: 6px">
+                                        <label class="toggle-wrap">
+                                            <div class="toggle" class:active=move || rail_en(1)
+                                                on:click=move |_| {
+                                                    let cur = rail_en(1);
+                                                    spawn_local(async move {
+                                                        if let Some(r) = hat_set_rail_enable(1, !cur).await {
+                                                            set_rails.set(r);
+                                                        } else {
+                                                            show_toast("Failed to toggle VADJ3 rail", "err");
+                                                        }
+                                                    });
+                                                }
+                                            ><div class="toggle-thumb"></div></div>
+                                        </label>
+                                        <span style="font-size: 10px; color: var(--text-dim)">
+                                            {move || if rail_en(1) { "Enabled" } else { "Disabled" }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+                                    <div style="text-align: center; padding: 12px; border-radius: 8px; background: #06b6d410">
+                                        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Voltage"</div>
+                                        <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #06b6d4">
+                                            {move || format!("{:.3} V", rail_mv(1) as f32 / 1000.0)}
                                         </div>
-                                    }.into_any()
-                                }
-                            }}
+                                    </div>
+                                    <div style="text-align: center; padding: 12px; border-radius: 8px; background: #06b6d410">
+                                        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Current"</div>
+                                        <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #06b6d4">
+                                            {move || format!("{} mA", rail_ma(1))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            // VADJ4
+                            <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
+                                    <span style="display:flex; align-items:baseline; gap:5px">
+                                        <span style="font-size: 11px; font-weight: 700; color: #ff4d6a; text-transform: uppercase; letter-spacing: 0.05em">"VADJ4"</span>
+                                        <span style="font-size: 9px; color: var(--text-dim)">"(0–36 V)"</span>
+                                    </span>
+                                    <div style="display: flex; align-items: center; gap: 6px">
+                                        <label class="toggle-wrap">
+                                            <div class="toggle" class:active=move || rail_en(2)
+                                                on:click=move |_| {
+                                                    let cur = rail_en(2);
+                                                    spawn_local(async move {
+                                                        if let Some(r) = hat_set_rail_enable(2, !cur).await {
+                                                            set_rails.set(r);
+                                                        } else {
+                                                            show_toast("Failed to toggle VADJ4 rail", "err");
+                                                        }
+                                                    });
+                                                }
+                                            ><div class="toggle-thumb"></div></div>
+                                        </label>
+                                        <span style="font-size: 10px; color: var(--text-dim)">
+                                            {move || if rail_en(2) { "Enabled" } else { "Disabled" }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+                                    <div style="text-align: center; padding: 12px; border-radius: 8px; background: #ff4d6a10">
+                                        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Voltage"</div>
+                                        <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #ff4d6a">
+                                            {move || format!("{:.3} V", rail_mv(2) as f32 / 1000.0)}
+                                        </div>
+                                    </div>
+                                    <div style="text-align: center; padding: 12px; border-radius: 8px; background: #ff4d6a10">
+                                        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Current"</div>
+                                        <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #ff4d6a">
+                                            {move || format!("{} mA", rail_ma(2))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
                         </div>
                     </div>
 
-                    // ── HAT Logs Card ──
-                    <div class="card" style="margin-bottom: 16px">
-                        <div class="card-header">
-                            <span>"HAT Debug Logs"</span>
+                    // Routing & SWD & Level Shifter
+                    <div class="card">
+                        <div class="card-header"><span>"Routing & SWD"</span></div>
+                        <div class="card-body" style="display: flex; flex-direction: column; gap: 12px">
+
+                            // LA Route selector
+                            <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px">"LA Route"</div>
+                                <div style="display: flex; gap: 8px">
+                                    <button class="btn"
+                                        style=move || format!("font-size: 10px; padding: 4px 10px; flex: 1{}",
+                                            if la_route.get() == 0 { "; background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f650" } else { "" })
+                                        on:click=move |_| {
+                                            spawn_local(async move {
+                                                if let Some(r) = hat_la_set_route(0).await {
+                                                    set_la_route_sig.set(r);
+                                                    show_toast("Route → Low-Speed (Conn2)", "ok");
+                                                }
+                                            });
+                                        }
+                                    >"Low-Speed (Conn2)"</button>
+                                    <button class="btn"
+                                        style=move || format!("font-size: 10px; padding: 4px 10px; flex: 1{}",
+                                            if la_route.get() == 1 { "; background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f650" } else { "" })
+                                        on:click=move |_| {
+                                            spawn_local(async move {
+                                                if let Some(r) = hat_la_set_route(1).await {
+                                                    set_la_route_sig.set(r);
+                                                    show_toast("Route → High-Speed (Conn1)", "ok");
+                                                }
+                                            });
+                                        }
+                                    >"High-Speed (Conn1)"</button>
+                                </div>
+                                <div style="font-size: 9px; color: var(--text-dim); margin-top: 6px">
+                                    {move || if la_route.get() == 0 {
+                                        "EXP_EXT pins — up to 4 ch @ 1 MHz max."
+                                    } else {
+                                        "Low-skew buffered Conn1 — up to 3 ch."
+                                    }}
+                                </div>
+                            </div>
+
+                            // SWD target
+                            <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px">"SWD Target"</div>
+                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
+                                    {move || {
+                                        let st = hat.get();
+                                        let dot_style = if st.target_detected {
+                                            "width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#f59e0b;box-shadow:0 0 6px #f59e0b"
+                                        } else {
+                                            "width:9px;height:9px;border-radius:50%;flex-shrink:0;background:var(--text-dim)"
+                                        };
+                                        let label = if st.target_detected {
+                                            format!("DPIDR 0x{:08X}", st.target_dpidr)
+                                        } else {
+                                            "No target".into()
+                                        };
+                                        view! {
+                                            <div style=dot_style></div>
+                                            <span style="font-size: 11px; font-family: 'JetBrains Mono', monospace">{label}</span>
+                                        }
+                                    }}
+                                </div>
+                                <div style="display: flex; gap: 6px">
+                                    <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
+                                        on:click=move |_| { send_hat_setup_swd(3300, 0); }
+                                    >"Setup 3.3 V"</button>
+                                    <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
+                                        on:click=move |_| { send_hat_setup_swd(1800, 0); }
+                                    >"Setup 1.8 V"</button>
+                                </div>
+                            </div>
+
+                            // Level Shifter
+                            <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
+                                <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px">"Level Shifter"</div>
+
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
+                                    <div>
+                                        <div style="font-size: 11px; font-weight: 600">"Outputs Enable (OE)"</div>
+                                        <div style="font-size: 9px; color: var(--text-dim)">"Requires 3V3_ADJ."</div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 6px">
+                                        <label class="toggle-wrap">
+                                            <div class="toggle" class:active=move || ls_oe.get()
+                                                on:click=move |_| {
+                                                    spawn_local(async move {
+                                                        let next = !ls_oe.get_untracked();
+                                                        let dir  = ls_dir.get_untracked();
+                                                        if let Some(s) = hat_set_level_shift(next, dir).await {
+                                                            set_ls_oe.set(s.oe);
+                                                            set_ls_dir.set(s.dir);
+                                                            show_toast(if s.oe { "Outputs enabled" } else { "Outputs tri-stated" }, "ok");
+                                                        }
+                                                    });
+                                                }
+                                            ><div class="toggle-thumb"></div></div>
+                                        </label>
+                                        <span style="font-size: 10px; color: var(--text-dim)">
+                                            {move || if ls_oe.get() { "Active" } else { "Tri-State" }}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div style="display: flex; justify-content: space-between; align-items: center">
+                                    <div>
+                                        <div style="font-size: 11px; font-weight: 600">"Direction (DIR)"</div>
+                                        <div style="font-size: 9px; color: var(--text-dim)">"A→B drives; B→A listens."</div>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 6px">
+                                        <label class="toggle-wrap">
+                                            <div class="toggle" class:active=move || ls_dir.get()
+                                                on:click=move |_| {
+                                                    spawn_local(async move {
+                                                        let oe   = ls_oe.get_untracked();
+                                                        let next = !ls_dir.get_untracked();
+                                                        if let Some(s) = hat_set_level_shift(oe, next).await {
+                                                            set_ls_oe.set(s.oe);
+                                                            set_ls_dir.set(s.dir);
+                                                        }
+                                                    });
+                                                }
+                                            ><div class="toggle-thumb"></div></div>
+                                        </label>
+                                        <span style="font-size: 10px; color: var(--text-dim)">
+                                            {move || if ls_dir.get() { "A→B" } else { "B→A" }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
                         </div>
-                        <div class="card-body">
-                            <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px">
-                                <span style="font-size: 11px; color: var(--text-dim)">"RP2040 log relay:"</span>
-                                <button
-                                    class="btn btn-sm"
-                                    style=move || format!("font-size: 10px; padding: 2px 10px; {}",
-                                        if log_enabled.get() { "background: #10b98130; color: #10b981; border: 1px solid #10b98150" }
-                                        else { "" })
+                    </div>
+                </div>
+
+                // ── Shifted I/O Bank ──────────────────────────────────────────
+                <div class="card" style="margin-bottom: 16px">
+                    <div class="card-header">
+                        <span>"Shifted I/O Bank"</span>
+                        <span style="font-size: 10px; color: var(--text-dim)">"GPIO 10–15, 20–21"</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px">
+                            {(0..8u8).map(|i| {
+                                let is_out = Signal::derive(move || (io_dirs.get() & (1 << i)) != 0);
+                                let is_up  = Signal::derive(move || (io_ups.get()  & (1 << i)) != 0);
+                                let is_dn  = Signal::derive(move || (io_dns.get()  & (1 << i)) != 0);
+                                view! {
+                                    <div style="padding: 8px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-color, #333)">
+                                        <div style="font-size: 10px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px">
+                                            {format!("SH_IO_{}", i + 1)}
+                                        </div>
+                                        <div style="display: flex; gap: 3px; margin-bottom: 5px">
+                                            <button class="btn btn-sm"
+                                                style=move || format!("padding: 1px 4px; font-size: 9px; flex: 1{}",
+                                                    if !is_out.get() { "; background: #3b82f640; color:#3b82f6" } else { "" })
+                                                on:click=move |_| { set_io_dirs.update(|d| *d &= !(1 << i)); }
+                                            >"IN"</button>
+                                            <button class="btn btn-sm"
+                                                style=move || format!("padding: 1px 4px; font-size: 9px; flex: 1{}",
+                                                    if is_out.get() { "; background: #3b82f640; color:#3b82f6" } else { "" })
+                                                on:click=move |_| { set_io_dirs.update(|d| *d |= 1 << i); }
+                                            >"OUT"</button>
+                                        </div>
+                                        <div style="display: flex; flex-direction: column; gap: 2px">
+                                            <label style="font-size: 9px; display: flex; align-items: center; gap: 3px; cursor: pointer">
+                                                <input type="checkbox" prop:checked=move || is_up.get()
+                                                    on:change=move |ev| {
+                                                        let chk = ev.target().unwrap()
+                                                            .unchecked_into::<web_sys::HtmlInputElement>().checked();
+                                                        if chk {
+                                                            set_io_ups.update(|u| *u |= 1 << i);
+                                                            set_io_dns.update(|d| *d &= !(1 << i));
+                                                        } else {
+                                                            set_io_ups.update(|u| *u &= !(1 << i));
+                                                        }
+                                                    }
+                                                />
+                                                "Pull-Up"
+                                            </label>
+                                            <label style="font-size: 9px; display: flex; align-items: center; gap: 3px; cursor: pointer">
+                                                <input type="checkbox" prop:checked=move || is_dn.get()
+                                                    on:change=move |ev| {
+                                                        let chk = ev.target().unwrap()
+                                                            .unchecked_into::<web_sys::HtmlInputElement>().checked();
+                                                        if chk {
+                                                            set_io_dns.update(|d| *d |= 1 << i);
+                                                            set_io_ups.update(|u| *u &= !(1 << i));
+                                                        } else {
+                                                            set_io_dns.update(|d| *d &= !(1 << i));
+                                                        }
+                                                    }
+                                                />
+                                                "Pull-Down"
+                                            </label>
+                                        </div>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                        <button class="btn btn-primary" style="width: 100%; font-size: 11px; padding: 6px"
+                            on:click=move |_| {
+                                spawn_local(async move {
+                                    let d  = io_dirs.get_untracked();
+                                    let u  = io_ups.get_untracked();
+                                    let dn = io_dns.get_untracked();
+                                    if hat_set_io_bank(d, u, dn).await.is_some() {
+                                        show_toast("I/O bank configuration applied!", "ok");
+                                    }
+                                });
+                            }
+                        >"Apply I/O Bank Config"</button>
+                    </div>
+                </div>
+
+                // ── DS4424 Calibration ────────────────────────────────────────
+                // NOTE: This card is outside the 1 s poll reactive block so the
+                // <select> is never destroyed while the user has it open.
+                <div class="card" style="margin-bottom: 16px">
+                    <div class="card-header"><span>"DS4424 Calibration Sweep"</span></div>
+                    <div class="card-body">
+                        {move || if cal_active.get() {
+                            let prog = cal_progress.get();
+                            let name = if cal_rail_id.get() == 1 { "VADJ3" } else { "VADJ4" };
+                            view! {
+                                <div style="padding: 12px 0; text-align: center">
+                                    <div style="font-size: 12px; font-weight: 700; color: #3b82f6; margin-bottom: 8px">
+                                        {format!("Calibrating {} …", name)}
+                                    </div>
+                                    <div style="width: 100%; height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; margin-bottom: 6px">
+                                        <div style=format!("width: {}%; height: 100%; background: #3b82f6; transition: width 0.3s ease", prog)></div>
+                                    </div>
+                                    <div style="font-size: 10px; color: var(--text-dim)">{format!("{}% complete", prog)}</div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+                                    <span style="font-size: 11px; color: var(--text-dim)">"Rail:"</span>
+                                    <select
+                                        style="background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text); border-radius: 4px; padding: 4px 8px; font-size: 11px"
+                                        on:change=move |ev| {
+                                            let val = event_target_value(&ev);
+                                            if let Ok(id) = val.parse::<u8>() { set_cal_rail_id.set(id); }
+                                        }
+                                    >
+                                        <option value="1">"VADJ3 (0–36 V)"</option>
+                                        <option value="2">"VADJ4 (0–36 V)"</option>
+                                    </select>
+                                    <button class="btn btn-primary" style="font-size: 11px; padding: 4px 16px"
+                                        on:click=move |_| {
+                                            spawn_local(async move {
+                                                let id = cal_rail_id.get_untracked();
+                                                if let Some(code) = hat_calibrate_start(id).await {
+                                                    if code == 0 {
+                                                        set_cal_active.set(true);
+                                                        set_cal_progress.set(0);
+                                                        show_toast("Calibration sweep started!", "ok");
+                                                    } else {
+                                                        show_toast(&format!("Calibration failed to start (code {})", code), "err");
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    >"Start Sweep"</button>
+                                </div>
+                            }.into_any()
+                        }}
+                    </div>
+                </div>
+
+                // ── RP2040 Debug Logs ─────────────────────────────────────────
+                <div class="card">
+                    <div class="card-header">
+                        <span>"RP2040 Debug Logs"</span>
+                        <div style="display: flex; align-items: center; gap: 8px">
+                            <label class="toggle-wrap">
+                                <div class="toggle" class:active=move || log_enabled.get()
                                     on:click=move |_| {
                                         let new_val = !log_enabled.get_untracked();
-                                        set_log_enabled.set(new_val);
                                         spawn_local(async move {
-                                            hat_la_log_enable(new_val).await;
+                                            if hat_la_log_enable(new_val).await.is_some() {
+                                                set_log_enabled.set(new_val);
+                                            } else {
+                                                show_toast("Failed to toggle log relay", "err");
+                                            }
                                         });
                                     }
-                                >
-                                    {move || if log_enabled.get() { "Enabled" } else { "Disabled" }}
-                                </button>
-                                <button
-                                    class="btn btn-sm"
-                                    style="font-size: 10px; padding: 2px 10px"
-                                    on:click=move |_| { log_lines.update(|l| l.clear()); }
-                                >"Clear"</button>
-                            </div>
-                            <pre style="font-size: 10px; font-family: 'JetBrains Mono', monospace; background: var(--bg-secondary); border-radius: 4px; padding: 8px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; color: var(--text-dim)">
-                                {move || {
-                                    let lines = log_lines.get();
-                                    if lines.is_empty() {
-                                        "(no log output — enable log relay above)".to_string()
-                                    } else {
-                                        lines.iter().cloned().collect::<Vec<_>>().join("\n")
-                                    }
-                                }}
-                            </pre>
+                                ><div class="toggle-thumb"></div></div>
+                            </label>
+                            <span style="font-size: 10px; color: var(--text-dim)">
+                                {move || if log_enabled.get() { "Streaming" } else { "Off" }}
+                            </span>
+                            <button class="btn btn-sm" style="font-size: 10px; padding: 2px 8px"
+                                on:click=move |_| { log_lines.update(|l| l.clear()); }
+                            >"Clear"</button>
                         </div>
                     </div>
+                    <div class="card-body" style="padding-top: 0">
+                        <pre style="font-size: 10px; font-family: 'JetBrains Mono', monospace; background: var(--bg-secondary); border-radius: 6px; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; color: var(--text-dim); margin: 0">
+                            {move || {
+                                let lines = log_lines.get();
+                                if lines.is_empty() {
+                                    "(no log output — enable relay above)".to_string()
+                                } else {
+                                    lines.iter().cloned().collect::<Vec<_>>().join("\n")
+                                }
+                            }}
+                        </pre>
+                    </div>
+                </div>
 
-                }.into_any()
-            }}
+            </Show>
         </div>
     }
 }

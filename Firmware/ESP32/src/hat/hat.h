@@ -284,6 +284,33 @@ typedef struct {
 } HatState;
 
 // -----------------------------------------------------------------------------
+// RP2040 Debug Log Ring Buffer
+// Stores the last HAT_LOG_RING_SIZE lines received as HAT_RSP_LA_LOG events.
+// Thread-safe via s_log_mutex (dedicated mutex, separate from s_hat_mutex).
+// -----------------------------------------------------------------------------
+#define HAT_LOG_RING_SIZE  64
+#define HAT_LOG_LINE_MAX   128
+
+typedef struct {
+    char    lines[HAT_LOG_RING_SIZE][HAT_LOG_LINE_MAX];
+    uint8_t head;   // next write index (circular)
+    uint8_t count;  // number of valid entries (0..HAT_LOG_RING_SIZE)
+} HatLogRing;
+
+/**
+ * @brief Push one log line into the ring buffer (called from hat.cpp on HAT_RSP_LA_LOG).
+ *        Trims to HAT_LOG_LINE_MAX-1 characters. Thread-safe via internal mutex.
+ */
+void hat_log_ring_push(const char *line);
+
+/**
+ * @brief Drain all available log lines as a JSON array string into out_buf.
+ *        Clears the ring after draining. Thread-safe via internal mutex.
+ * @return Number of bytes written to out_buf (not including NUL), or -1 on overflow.
+ */
+int hat_log_ring_drain(char *out_buf, size_t buf_sz);
+
+// -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
 

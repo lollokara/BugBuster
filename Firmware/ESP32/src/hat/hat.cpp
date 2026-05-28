@@ -33,6 +33,8 @@ static bool s_detect_pin_ready = false;
 static bool s_initialized = false;
 static uint8_t s_last_error = 0;
 static SemaphoreHandle_t s_hat_mutex = NULL;
+static SemaphoreHandle_t s_log_mutex = NULL;
+static HatLogRing *s_log_ring = nullptr;
 
 static volatile bool s_la_done_pending = false;
 #if PIN_HAT_LA_DONE_IRQ >= 0
@@ -274,6 +276,14 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
                     ESP_LOGW(TAG, "pending LA event buffer full — BBP_EVT_LA_LOG dropped");
                 }
             }
+            // Push to HTTP polling ring (non-blocking, separate mutex — no deadlock risk)
+            if (local_len > 0) {
+                char log_line[HAT_LOG_LINE_MAX];
+                uint8_t copy_len = local_len < (HAT_LOG_LINE_MAX - 1) ? local_len : (HAT_LOG_LINE_MAX - 1);
+                memcpy(log_line, local_payload, copy_len);
+                log_line[copy_len] = '\0';
+                hat_log_ring_push(log_line);
+            }
             continue;
         }
 
@@ -368,6 +378,12 @@ bool hat_init(void)
 
     if (s_hat_mutex == NULL) {
         s_hat_mutex = xSemaphoreCreateMutex();
+    }
+    if (s_log_mutex == NULL) {
+        s_log_mutex = xSemaphoreCreateMutex();
+    }
+    if (s_log_ring == nullptr) {
+        s_log_ring = (HatLogRing *)heap_caps_calloc(1, sizeof(HatLogRing), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
 
     // Initialize detect pin as a binary strap:
@@ -907,6 +923,16 @@ bool hat_set_rail_enable(uint8_t rail_id, bool enable)
             s_state.rail[st.rail_id] = st;
         }
     }
+
+    // Update connector LEDs to reflect new supply state:
+    //   LED 3 = Conn1 (VADJ3, rail_id=1): Blue=active, Off=inactive
+    //   LED 8 = SWD   (VADJ4, rail_id=2): Blue=active, Off=inactive
+    if (rail_id == 1) {
+        hat_set_led_state(3, s_state.rail[1].enabled ? 3 : 0);
+    } else if (rail_id == 2) {
+        hat_set_led_state(8, s_state.rail[2].enabled ? 3 : 0);
+    }
+
     return true;
 }
 
@@ -1305,6 +1331,14 @@ void hat_poll(void)
         }
         // Mirror to WiFi WS subscribers (independent of BBP activity).
         ws_stream_forward(WS_STREAM_LA_META, rsp, rsp_len);
+        // Push to HTTP polling ring buffer (always).
+        {
+            char log_line[HAT_LOG_LINE_MAX];
+            uint8_t copy_len = rsp_len < (HAT_LOG_LINE_MAX - 1) ? rsp_len : (HAT_LOG_LINE_MAX - 1);
+            memcpy(log_line, rsp, copy_len);
+            log_line[copy_len] = '\0';
+            hat_log_ring_push(log_line);
+        }
         return;
     }
 
@@ -1341,6 +1375,65 @@ bool hat_la_done_consume(void)
     if (!s_la_done_pending) return false;
     s_la_done_pending = false;
     return true;
+}
+
+// =============================================================================
+// RP2040 Debug Log Ring Buffer
+// =============================================================================
+
+void hat_log_ring_push(const char *line)
+{
+    if (!line || !s_log_mutex || !s_log_ring) return;
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        char *slot = s_log_ring->lines[s_log_ring->head];
+        strncpy(slot, line, HAT_LOG_LINE_MAX - 1);
+        slot[HAT_LOG_LINE_MAX - 1] = '\0';
+        s_log_ring->head = (s_log_ring->head + 1) % HAT_LOG_RING_SIZE;
+        if (s_log_ring->count < HAT_LOG_RING_SIZE) s_log_ring->count++;
+        xSemaphoreGive(s_log_mutex);
+    }
+}
+
+int hat_log_ring_drain(char *out_buf, size_t buf_sz)
+{
+    if (!out_buf || buf_sz < 4) return -1;
+    if (!s_log_mutex || !s_log_ring || xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        snprintf(out_buf, buf_sz, "[]");
+        return 2;
+    }
+
+    // Reconstruct in order: oldest first
+    int n = s_log_ring->count;
+    int start = ((int)s_log_ring->head - n + HAT_LOG_RING_SIZE) % HAT_LOG_RING_SIZE;
+
+    int pos = 0;
+    out_buf[pos++] = '[';
+    for (int i = 0; i < n; i++) {
+        int idx = (start + i) % HAT_LOG_RING_SIZE;
+        const char *ln = s_log_ring->lines[idx];
+        if (pos + (int)strlen(ln) + 5 >= (int)buf_sz) break;
+        if (i > 0) out_buf[pos++] = ',';
+        out_buf[pos++] = '"';
+        for (const char *c = ln; *c; c++) {
+            if (*c == '"' || *c == '\\') {
+                if (pos + 3 >= (int)buf_sz) goto done;
+                out_buf[pos++] = '\\';
+            }
+            if (pos + 2 >= (int)buf_sz) goto done;
+            out_buf[pos++] = *c;
+        }
+        out_buf[pos++] = '"';
+    }
+done:
+    // Clear ring
+    s_log_ring->head = 0;
+    s_log_ring->count = 0;
+    xSemaphoreGive(s_log_mutex);
+
+    if (pos + 2 >= (int)buf_sz) return -1;
+    out_buf[pos++] = ']';
+    out_buf[pos] = '\0';
+    return pos;
 }
 
 // end of hat.cpp

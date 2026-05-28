@@ -94,7 +94,17 @@ static void ws2812_update(void)
     for (int i = 0; i < BB_WS2812_COUNT; i++) {
         ws2812_put_pixel(s_ws2812_buffer[i]);
     }
-    sleep_us(280); // Reset delay
+    // pio_sm_put_blocking() returns once the FIFO accepts the word, NOT when
+    // the PIO finishes transmitting it.  With an 8-entry joined TX FIFO and
+    // 8 pixels, up to ~210µs of bits may still be in flight when we return.
+    // Drain the FIFO first so the PIO is down to its last pixel, then
+    // wait 350µs (≈30µs last-pixel tail + 300µs WS2812B reset threshold).
+    // busy_wait_us_32 is a pure spin loop — no WFE, safe inside FreeRTOS tasks.
+    if (s_ws2812_sm >= 0) {
+        while (!pio_sm_is_tx_fifo_empty(s_ws2812_pio, (uint)s_ws2812_sm))
+            tight_loop_contents();
+    }
+    busy_wait_us_32(350);
 }
 
 static void ws2812_set_pixel(uint8_t index, uint8_t r, uint8_t g, uint8_t b)
@@ -106,23 +116,28 @@ static void ws2812_set_pixel(uint8_t index, uint8_t r, uint8_t g, uint8_t b)
 
 static void ws2812_init(void)
 {
+    // Idempotent: if SM2 was already claimed and initialized by a previous
+    // call, do not re-claim or re-add the program.  Without this guard a
+    // second call would see pio_sm_is_claimed()==true and set s_ws2812_sm=-1,
+    // permanently disabling the driver for the lifetime of this boot.
+    if (s_ws2812_sm >= 0) return;
+
     // PIO0 is owned by debugprobe (SWD/SWCLK). PIO1 SM0 and SM1 are reserved
     // for the LA capture and trigger programs. SM2 is guaranteed free.
     // Bypass pio_claim_unused_sm to avoid depending on LA's claim state.
     s_ws2812_pio = pio1;
     if (pio_sm_is_claimed(pio1, 2)) {
-        s_ws2812_sm = -1;
-        return;
+        // SM2 claimed by something else — driver stays disabled.
+        return; // s_ws2812_sm remains -1
     }
-    s_ws2812_sm = 2;
     pio_sm_claim(pio1, 2);
     if (!pio_can_add_program(pio1, &ws2812_program)) {
         pio_sm_unclaim(pio1, 2);
-        s_ws2812_sm = -1;
-        return;
+        return; // s_ws2812_sm remains -1
     }
     uint offset = pio_add_program(pio1, &ws2812_program);
     ws2812_program_init(pio1, 2, offset, BB_WS2812_PIN, 800000.0f, false);
+    s_ws2812_sm = 2; // mark as live only after full init succeeds
 }
 
 // -----------------------------------------------------------------------------
@@ -483,6 +498,34 @@ static void cal_task_func(void *param)
 // -----------------------------------------------------------------------------
 // Color Code mapping helper
 // -----------------------------------------------------------------------------
+static void ws2812_set_pixel_brightness(uint8_t index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness)
+{
+    uint8_t br = (uint16_t)r * brightness / 255;
+    uint8_t bg = (uint16_t)g * brightness / 255;
+    uint8_t bb = (uint16_t)b * brightness / 255;
+    ws2812_set_pixel(index, br, bg, bb);
+}
+
+static void ws2812_fade_single(uint8_t index, uint8_t r, uint8_t g, uint8_t b, uint16_t duration_ms)
+{
+    const int steps = 25;
+    int step_delay = (duration_ms / 2) / steps;
+    if (step_delay < 10) step_delay = 10;
+
+    // Fade in
+    for (int i = 0; i <= steps; i++) {
+        ws2812_set_pixel_brightness(index, r, g, b, (i * 255) / steps);
+        ws2812_update();
+        vTaskDelay(pdMS_TO_TICKS(step_delay));
+    }
+    // Fade out
+    for (int i = steps; i >= 0; i--) {
+        ws2812_set_pixel_brightness(index, r, g, b, (i * 255) / steps);
+        ws2812_update();
+        vTaskDelay(pdMS_TO_TICKS(step_delay));
+    }
+}
+
 static void get_rgb_from_color_code(uint8_t color_code, uint8_t *r, uint8_t *g, uint8_t *b)
 {
     switch (color_code) {
@@ -510,26 +553,30 @@ void bb_hat_v2_init(void)
     ds4424_init();
     flash_load();
 
-    // Boot animation: Green sweep 1->8
+    // Boot animation: Green sweep 1->8 (10x slower with smooth fades).
     for (int i = 0; i < BB_WS2812_COUNT; i++) {
-        ws2812_set_pixel(i, 0, 255, 0);
-        ws2812_update();
-        sleep_ms(50);
-        ws2812_set_pixel(i, 0, 0, 0);
-        ws2812_update();
+        ws2812_fade_single(i, 0, 255, 0, 500);
     }
 
     // Pulse all green
-    for (int i = 0; i < BB_WS2812_COUNT; i++) {
-        ws2812_set_pixel(i, 0, 255, 0);
+    const int pulse_steps = 40;
+    for (int s = 0; s <= pulse_steps; s++) {
+        uint8_t br = (s * 255) / pulse_steps;
+        for (int i = 0; i < BB_WS2812_COUNT; i++) {
+            ws2812_set_pixel_brightness(i, 0, 255, 0, br);
+        }
+        ws2812_update();
+        vTaskDelay(pdMS_TO_TICKS(15));
     }
-    ws2812_update();
-    sleep_ms(200);
-
-    for (int i = 0; i < BB_WS2812_COUNT; i++) {
-        ws2812_set_pixel(i, 0, 0, 0);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    for (int s = pulse_steps; s >= 0; s--) {
+        uint8_t br = (s * 255) / pulse_steps;
+        for (int i = 0; i < BB_WS2812_COUNT; i++) {
+            ws2812_set_pixel_brightness(i, 0, 255, 0, br);
+        }
+        ws2812_update();
+        vTaskDelay(pdMS_TO_TICKS(15));
     }
-    ws2812_update();
 
     // Set LED 1 health OK (Green)
     ws2812_set_pixel(0, 0, 255, 0);

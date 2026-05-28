@@ -3256,6 +3256,55 @@ static esp_err_t handle_post_hat_v2_swd_setup(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// POST /api/hat/v2/la/log/enable   body: {"enable": true/false}
+static esp_err_t handle_post_hat_v2_la_log_enable(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+    VALIDATE_JSON_FIELD(doc, "enable", Bool, "Field 'enable' must be boolean");
+
+    bool enable = cJSON_IsTrue(cJSON_GetObjectItem(doc, "enable"));
+    cJSON_Delete(doc);
+
+    if (!hat_la_log_enable(enable)) {
+        return send_error(req, 503, "HAT log relay command failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
+// GET /api/hat/v2/la/log  — drain buffered RP2040 log lines
+static esp_err_t handle_get_hat_v2_la_log(httpd_req_t *req)
+{
+    // Allocate a 16 KB drain buffer (enough for 64 lines x 128 chars + JSON overhead)
+    const size_t BUF_SZ = 16 * 1024;
+    char *buf = (char *)heap_caps_malloc(BUF_SZ, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return send_error(req, 500, "Out of memory");
+
+    int len = hat_log_ring_drain(buf, BUF_SZ);
+    if (len < 0) {
+        free(buf);
+        return send_error(req, 500, "Buffer overflow");
+    }
+
+    // Build response: {"lines": [...]}
+    char *resp = (char *)heap_caps_malloc(BUF_SZ + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!resp) { free(buf); return send_error(req, 500, "Out of memory"); }
+    int resp_len = snprintf(resp, BUF_SZ + 32, "{\"lines\":%s}", buf);
+    free(buf);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    esp_err_t err = httpd_resp_send(req, resp, resp_len);
+    free(resp);
+    return err;
+}
+
 // GET /api/debug - Combined debug status of all I2C devices
 static esp_err_t handle_get_debug(httpd_req_t *req)
 {
@@ -5217,6 +5266,16 @@ void initWebServer(void)
         .uri = "/api/hat/v2/swd/setup", .method = HTTP_POST, .handler = handle_post_hat_v2_swd_setup, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_v2_swd_setup);
+
+    httpd_uri_t uri_hat_v2_la_log_enable = {
+        .uri = "/api/hat/v2/la/log/enable", .method = HTTP_POST, .handler = handle_post_hat_v2_la_log_enable, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_la_log_enable);
+
+    httpd_uri_t uri_hat_v2_la_log = {
+        .uri = "/api/hat/v2/la/log", .method = HTTP_GET, .handler = handle_get_hat_v2_la_log, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_la_log);
 
     httpd_uri_t uri_hat_post = {
         .uri = "/api/hat/*", .method = HTTP_POST, .handler = handle_hat_post_dispatch, .user_ctx = NULL

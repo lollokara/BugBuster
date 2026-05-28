@@ -7,11 +7,11 @@
 
 .wrap_target
 bitloop:
-    out x, 1       side 0 [T3 - 1] ; shift MSB, drive low for T3
-    jmp !x do_zero side 1 [T1 - 1] ; drive high for T1, branch on bit
-    jmp bitloop    side 1 [T2 - 1] ; bit=1: stay high for T2
+    out x, 1       side 0 [T3 - 1] ; Side-set pin low for T3 cycles. Stalls here with side 0.
+    jmp !x do_zero side 1 [T1 - 1] ; Side-set pin high for T1 cycles
+    jmp bitloop    side 1 [T2 - 1] ; Side-set pin high for T2 cycles
 do_zero:
-    nop            side 0 [T2 - 1] ; bit=0: drive low for T2
+    nop            side 0 [T2 - 1] ; Side-set pin low for T2 cycles
 .wrap
 
 % c-sdk {

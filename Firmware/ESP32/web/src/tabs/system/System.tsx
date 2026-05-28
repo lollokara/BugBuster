@@ -188,14 +188,6 @@ function BoardCard() {
   );
 }
 
-const IO_VOLTAGE_OPTIONS = [
-  { value: 1200, label: "1.2V" },
-  { value: 1800, label: "1.8V" },
-  { value: 2500, label: "2.5V" },
-  { value: 3300, label: "3.3V" },
-  { value: 5000, label: "5.0V" }
-];
-
 function HatCard() {
   const mac = deviceMac.value;
   const hat = useInterval(() => api.hat(), 2000) as any;
@@ -221,6 +213,10 @@ function HatCard() {
   const [busy, setBusy] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
 
+  const [localRails, setLocalRails] = useState<any[] | null>(null);
+  const [laLogEnabled, setLaLogEnabled] = useState<boolean>(false);
+  const [laLogLines, setLaLogLines] = useState<string[]>([]);
+
   // Shifted IO Bank States
   const [ioDirs, setIoDirs] = useState<number>(0);
   const [ioUps, setIoUps] = useState<number>(0);
@@ -237,6 +233,34 @@ function HatCard() {
   const [calActive, setCalActive] = useState<boolean>(false);
   const [calProgress, setCalProgress] = useState<number>(0);
   const [calRailId, setCalRailId] = useState<number>(1); // 1 = VADJ3, 2 = VADJ4
+
+  useEffect(() => {
+    if (rails?.rails) setLocalRails(null);
+  }, [rails]);
+
+  useEffect(() => {
+    if (!laLogEnabled) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.hatV2LaLogPoll();
+        if (res?.lines && res.lines.length > 0) {
+          setLaLogLines(prev => {
+            const combined = [...prev, ...res.lines];
+            return combined.length > 200 ? combined.slice(combined.length - 200) : combined;
+          });
+        }
+      } catch(e) {}
+    }, 500);
+    return () => clearInterval(interval);
+  }, [laLogEnabled]);
+
+  const applyRailUpdate = (res: any) => {
+    const base = localRails ?? railList;
+    const updated = base.map((r: any) =>
+      r.railId === res.railId ? { ...r, enabled: res.enabled, voltageMv: res.voltageMv, currentMa: res.currentMa } : r
+    );
+    setLocalRails(updated);
+  };
 
   useEffect(() => {
     if (!calActive) return;
@@ -269,7 +293,9 @@ function HatCard() {
       await api.hatDetect(mac!);
       setStatusText("Detection requested");
     } catch (e) {
-      if (!(e instanceof PairingRequiredError)) console.warn("hatDetect failed", e);
+      if (!(e instanceof PairingRequiredError)) {
+        setStatusText(e instanceof Error ? e.message : "Command failed");
+      }
     } finally {
       setBusy(null);
     }
@@ -283,7 +309,9 @@ function HatCard() {
       await api.hatReset(mac!);
       setStatusText("HAT Reset requested");
     } catch (e) {
-      if (!(e instanceof PairingRequiredError)) console.warn("hatReset failed", e);
+      if (!(e instanceof PairingRequiredError)) {
+        setStatusText(e instanceof Error ? e.message : "Command failed");
+      }
     } finally {
       setBusy(null);
     }
@@ -320,7 +348,7 @@ function HatCard() {
   
   const resolvedRoute = laRouteSig !== null ? laRouteSig : (hat?.laRoute ?? 0);
 
-  const railList = rails?.rails || [];
+  const railList = localRails ?? (rails?.rails || []);
   const railV3 = railList.find((r: any) => r.railId === 1); // VADJ3
   const railV4 = railList.find((r: any) => r.railId === 2); // VADJ4
   const railAdj = railList.find((r: any) => r.railId === 0); // 3V3_ADJ
@@ -407,8 +435,11 @@ function HatCard() {
                     onClick={async () => {
                       setBusy("rail0");
                       try {
-                        await api.hatV2SetRailEnable(mac!, 0, !adjEn);
-                      } catch(e) {}
+                        const res = await api.hatV2SetRailEnable(mac!, 0, !adjEn);
+                        if (res?.ok) applyRailUpdate(res);
+                      } catch(e) {
+                        setStatusText(e instanceof Error ? e.message : "Rail command failed");
+                      }
                       setBusy(null);
                     }}
                   >
@@ -423,42 +454,25 @@ function HatCard() {
               {/* VADJ3 Rail */}
               <div style={{ marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#06b6d4" }}>VADJ3 Rail (1.2V-5.0V)</span>
+                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#06b6d4" }}>VADJ3 Rail (0–36V)</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: v3En ? "rgba(16,185,129,0.15)" : "var(--glass)", color: v3En ? "#10b981" : "var(--text)", borderColor: v3En ? "#10b98150" : "var(--border-bright)" }}
                     onClick={async () => {
                       setBusy("rail1");
                       try {
-                        await api.hatV2SetRailEnable(mac!, 1, !v3En);
-                      } catch(e) {}
+                        const res = await api.hatV2SetRailEnable(mac!, 1, !v3En);
+                        if (res?.ok) applyRailUpdate(res);
+                      } catch(e) {
+                        setStatusText(e instanceof Error ? e.message : "Rail command failed");
+                      }
                       setBusy(null);
                     }}
                   >
                     {v3En ? "ON" : "OFF"}
                   </button>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontSize: "8px", color: "var(--text-dim)" }}>Target</div>
-                    <select
-                      class="input"
-                      style={{ padding: "2px 4px", fontSize: "10px", height: "22px", minWidth: "50px" }}
-                      value={hat?.io_voltage_mv || 3300}
-                      onChange={async (e) => {
-                        const val = parseInt(e.currentTarget.value, 10);
-                        setBusy("voltage");
-                        try {
-                          await api.hatV2SetIoVoltage(mac!, val);
-                        } catch(e) {}
-                        setBusy(null);
-                      }}
-                    >
-                      {IO_VOLTAGE_OPTIONS.map(opt => (
-                        <option value={opt.value}>{opt.label}</option>
-                      ))}
-                    </select>
-                  </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", alignItems: "center" }}>
                   <div>
                     <div style={{ fontSize: "8px", color: "var(--text-dim)" }}>Voltage</div>
                     <span class="mono" style={{ fontSize: "11px", fontWeight: "600" }}>
@@ -484,8 +498,11 @@ function HatCard() {
                     onClick={async () => {
                       setBusy("rail2");
                       try {
-                        await api.hatV2SetRailEnable(mac!, 2, !v4En);
-                      } catch(e) {}
+                        const res = await api.hatV2SetRailEnable(mac!, 2, !v4En);
+                        if (res?.ok) applyRailUpdate(res);
+                      } catch(e) {
+                        setStatusText(e instanceof Error ? e.message : "Rail command failed");
+                      }
                       setBusy(null);
                     }}
                   >
@@ -533,7 +550,11 @@ function HatCard() {
                       try {
                         const res = await api.hatV2SetLaRoute(mac!, 0);
                         if (res && res.ok) setLaRouteSig(0);
-                      } catch(e) {}
+                      } catch(e) {
+                        if (!(e instanceof PairingRequiredError)) {
+                          setStatusText(e instanceof Error ? e.message : "Command failed");
+                        }
+                      }
                     }}
                   >
                     Low-Speed (Conn2)
@@ -545,7 +566,11 @@ function HatCard() {
                       try {
                         const res = await api.hatV2SetLaRoute(mac!, 1);
                         if (res && res.ok) setLaRouteSig(1);
-                      } catch(e) {}
+                      } catch(e) {
+                        if (!(e instanceof PairingRequiredError)) {
+                          setStatusText(e instanceof Error ? e.message : "Command failed");
+                        }
+                      }
                     }}
                   >
                     High-Speed (Conn1)
@@ -574,7 +599,11 @@ function HatCard() {
                       try {
                         await api.hatV2SetupSwd(mac!, 3300, 0);
                         setStatusText("SWD target setup at 3.3V requested");
-                      } catch(e) {}
+                      } catch(e) {
+                        if (!(e instanceof PairingRequiredError)) {
+                          setStatusText(e instanceof Error ? e.message : "Command failed");
+                        }
+                      }
                       setBusy(null);
                     }}
                   >
@@ -588,7 +617,11 @@ function HatCard() {
                       try {
                         await api.hatV2SetupSwd(mac!, 1800, 0);
                         setStatusText("SWD target setup at 1.8V requested");
-                      } catch(e) {}
+                      } catch(e) {
+                        if (!(e instanceof PairingRequiredError)) {
+                          setStatusText(e instanceof Error ? e.message : "Command failed");
+                        }
+                      }
                       setBusy(null);
                     }}
                   >
@@ -598,6 +631,46 @@ function HatCard() {
               </div>
 
             </div>
+          </div>
+
+          {/* LA Debug Logs section */}
+          <div style={{ background: "rgba(6,10,20,0.25)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px", marginTop: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+              <div class="card-title" style={{ fontSize: "10px" }}>RP2040 Debug Logs</div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  class="btn"
+                  style={{ fontSize: "10px", padding: "2px 10px",
+                    background: laLogEnabled ? "rgba(16,185,129,0.15)" : "var(--glass)",
+                    color: laLogEnabled ? "#10b981" : "var(--text)",
+                    borderColor: laLogEnabled ? "#10b98150" : "var(--border-bright)" }}
+                  onClick={async () => {
+                    const newVal = !laLogEnabled;
+                    setBusy("lalog");
+                    try {
+                      await api.hatV2LaLogEnable(mac!, newVal);
+                      setLaLogEnabled(newVal);
+                    } catch(e) {
+                      setStatusText(e instanceof Error ? e.message : "Failed to toggle log relay");
+                    }
+                    setBusy(null);
+                  }}
+                  disabled={busy === "lalog"}
+                >
+                  {laLogEnabled ? "Enabled" : "Disabled"}
+                </button>
+                <button
+                  class="btn"
+                  style={{ fontSize: "10px", padding: "2px 10px" }}
+                  onClick={() => setLaLogLines([])}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <pre style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", background: "var(--bg2)", borderRadius: "4px", padding: "8px", maxHeight: "180px", overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all", color: "var(--text-dim)", margin: 0 }}>
+              {laLogLines.length === 0 ? "(no log output — enable relay above)" : laLogLines.join("\n")}
+            </pre>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: "16px", marginBottom: "16px" }}>
@@ -677,7 +750,11 @@ function HatCard() {
                   try {
                     await api.hatV2SetIoBank(mac!, ioDirs, ioUps, ioDns);
                     setStatusText("I/O bank configuration applied!");
-                  } catch(e) {}
+                  } catch(e) {
+                    if (!(e instanceof PairingRequiredError)) {
+                      setStatusText(e instanceof Error ? e.message : "Command failed");
+                    }
+                  }
                   setBusy(null);
                 }}
                 disabled={busy !== null}
@@ -706,7 +783,11 @@ function HatCard() {
                           setLsDir(res.dir);
                           setStatusText(res.oe ? "Outputs Enabled!" : "Outputs Tri-stated!");
                         }
-                      } catch(e) {}
+                      } catch(e) {
+                        if (!(e instanceof PairingRequiredError)) {
+                          setStatusText(e instanceof Error ? e.message : "Command failed");
+                        }
+                      }
                       setBusy(null);
                     }}
                   >
@@ -733,7 +814,11 @@ function HatCard() {
                           setLsOe(res.oe);
                           setLsDir(res.dir);
                         }
-                      } catch(e) {}
+                      } catch(e) {
+                        if (!(e instanceof PairingRequiredError)) {
+                          setStatusText(e instanceof Error ? e.message : "Command failed");
+                        }
+                      }
                       setBusy(null);
                     }}
                   >
