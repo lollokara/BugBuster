@@ -1,0 +1,191 @@
+--- a/Firmware/RP2040/src/bb_main.c
++++ b/Firmware/RP2040/src/bb_main.c
+@@ -23,7 +23,6 @@
+ #include "bb_la.h"
+ #include "bb_la_usb.h"
+ #include "tusb.h"
+-#include "bb_hat_v2.h"
+ 
+ #ifdef DEBUGPROBE_INTEGRATION
+ extern TaskHandle_t tud_taskhandle;
+@@ -53,8 +52,8 @@
+ 
+ // Log relay: when enabled, bb_la_log() messages are sent via HAT UART to host
+ static volatile bool s_la_log_enabled = false;
+-
+-// -----------------------------------------------------------------------------
++static uint8_t s_led_state[BB_WS2812_COUNT] = {0};
++static uint8_t s_la_route = HAT_LA_ROUTE_LOW_SPEED;
+ // IRQ pin assertion (open-drain, active low, ~1ms pulse)
+ // Signals the ESP32 that an asynchronous event occurred.
+ // -----------------------------------------------------------------------------
+@@ -108,12 +107,12 @@
+ // Send a response frame over UART
+ // -----------------------------------------------------------------------------
+ 
+-void send_response(uint8_t rsp_cmd, const uint8_t *payload, uint8_t len)
++static void send_response(uint8_t rsp_cmd, const uint8_t *payload, uint8_t len)
+ {
+     uint8_t frame[36];
+     size_t frame_len = hat_build_frame(frame, rsp_cmd, payload, len);
+     uart_write_blocking(BB_UART, frame, frame_len);
+ }
+ 
+-void send_ok(const uint8_t *payload, uint8_t len)
++static void send_ok(const uint8_t *payload, uint8_t len)
+ {
+     send_response(HAT_RSP_OK, payload, len);
+ }
+@@ -174,48 +173,144 @@
+     bb_pins_reset();
+     bb_power_set(0, false);
+     bb_power_set(1, false);
+     bb_power_set_3v3_adj(false);
+-    bb_hat_v2_handle_reset();
+-    send_ok(NULL, 0);
+-}
+-
+-uint16_t clamp_u16_from_float(float v)
+-{
+-    if (v <= 0.0f) return 0;
+-    if (v >= 65535.0f) return 65535;
+-    return (uint16_t)(v + 0.5f);
+-}
+-
+-void append_rail_status(uint8_t *rsp, size_t *p, uint8_t rail_id,
+-                               bool enabled, uint16_t mv, uint16_t ma,
+-                               uint8_t status)
+-{
+-    rsp[(*p)++] = rail_id;
+-    rsp[(*p)++] = enabled ? 1 : 0;
+-    memcpy(&rsp[*p], &mv, sizeof(mv)); *p += sizeof(mv);
+-    memcpy(&rsp[*p], &ma, sizeof(ma)); *p += sizeof(ma);
+-    rsp[(*p)++] = status;
+-}
+-
++    memset(s_led_state, 0, sizeof(s_led_state));
++    s_la_route = HAT_LA_ROUTE_LOW_SPEED;
++    send_ok(NULL, 0);
++}
++
++static void handle_get_caps(void)
++{
++    uint32_t flags = HAT_CAP_RAILS |
++                     HAT_CAP_LEDS |
++                     HAT_CAP_LA_LOW_SPEED |
++                     HAT_CAP_SHIFTED_IO |
++                     HAT_CAP_HVPAK_UNSUPPORTED;
++    uint8_t rsp[12];
++    size_t p = 0;
++
++    rsp[p++] = 2; // HAT hardware capability revision
++    memcpy(&rsp[p], &flags, sizeof(flags)); p += sizeof(flags);
++    rsp[p++] = HAT_RAIL_COUNT;
++    rsp[p++] = BB_WS2812_COUNT;
++    rsp[p++] = BB_NUM_HS_IO_PINS;
++    rsp[p++] = (1u << HAT_LA_ROUTE_LOW_SPEED);
++    rsp[p++] = BB_HAT_FW_MAJOR;
++    rsp[p++] = BB_HAT_FW_MINOR;
++    rsp[p++] = BB_HVPAK_PRESENT ? 1 : 0;
++
++    send_response(HAT_RSP_CAPS, rsp, (uint8_t)p);
++}
++
++static uint16_t clamp_u16_from_float(float v)
++{
++    if (v <= 0.0f) return 0;
++    if (v >= 65535.0f) return 65535;
++    return (uint16_t)(v + 0.5f);
++}
++
++static void append_rail_status(uint8_t *rsp, size_t *p, uint8_t rail_id,
++                               bool enabled, uint16_t mv, uint16_t ma,
++                               uint8_t status)
++{
++    rsp[(*p)++] = rail_id;
++    rsp[(*p)++] = enabled ? 1 : 0;
++    memcpy(&rsp[*p], &mv, sizeof(mv)); *p += sizeof(mv);
++    memcpy(&rsp[*p], &ma, sizeof(ma)); *p += sizeof(ma);
++    rsp[(*p)++] = status;
++}
++
++static void handle_get_rail_status(void)
++{
++    bb_power_update();
++
++    ConnectorStatus vadj3, vadj4;
++    bb_power_get_status(&vadj3, &vadj4);
++
++    uint8_t rsp[1 + HAT_RAIL_COUNT * 7];
++    size_t p = 0;
++    rsp[p++] = HAT_RAIL_COUNT;
++    append_rail_status(rsp, &p, HAT_RAIL_3V3_ADJ,
++                       bb_power_get_3v3_adj_enabled(), 0, 0, 0);
++    append_rail_status(rsp, &p, HAT_RAIL_VADJ3, vadj3.enabled,
++                       clamp_u16_from_float(vadj3.voltage_mv),
++                       clamp_u16_from_float(vadj3.current_ma),
++                       vadj3.fault ? HAT_ERR_POWER_FAULT : 0);
++    append_rail_status(rsp, &p, HAT_RAIL_VADJ4, vadj4.enabled,
++                       clamp_u16_from_float(vadj4.voltage_mv),
++                       clamp_u16_from_float(vadj4.current_ma),
++                       vadj4.fault ? HAT_ERR_POWER_FAULT : 0);
++
++    send_response(HAT_RSP_RAIL_STATUS, rsp, (uint8_t)p);
++}
++
++static void handle_set_rail_enable(const uint8_t *payload, uint8_t len)
++{
++    if (len < 2) { send_error(HAT_ERR_FRAME); return; }
++
++    uint8_t rail = payload[0];
++    bool enable = payload[1] != 0;
++
++    switch (rail) {
++    case HAT_RAIL_3V3_ADJ:
++        bb_power_set_3v3_adj(enable);
++        break;
++    case HAT_RAIL_VADJ3:
++        bb_power_set(0, enable);
++        break;
++    case HAT_RAIL_VADJ4:
++        bb_power_set(1, enable);
++        break;
++    default:
++        send_error(HAT_ERR_INVALID_PIN);
++        return;
++    }
++
++    handle_get_rail_status();
++}
++
++static void handle_set_led_state(const uint8_t *payload, uint8_t len)
++{
++    if (len < 2) { send_error(HAT_ERR_FRAME); return; }
++
++    uint8_t led = payload[0];
++    uint8_t color = payload[1];
++    if (led < 1 || led > BB_WS2812_COUNT) {
++        send_error(HAT_ERR_INVALID_PIN);
++        return;
++    }
++
++    s_led_state[led - 1] = color;
++    uint8_t rsp[2] = { led, color };
++    send_ok(rsp, sizeof(rsp));
++}
++
++static void handle_la_set_route(const uint8_t *payload, uint8_t len)
++{
++    if (len < 1) { send_error(HAT_ERR_FRAME); return; }
++    if (payload[0] == HAT_LA_ROUTE_LOW_SPEED) {
++        s_la_route = HAT_LA_ROUTE_LOW_SPEED;
++        send_ok(&s_la_route, 1);
++        return;
++    }
++    if (payload[0] == HAT_LA_ROUTE_HIGH_SPEED) {
++        send_error(HAT_ERR_UNSUPPORTED);
++        return;
++    }
++    send_error(HAT_ERR_INVALID_FUNC);
++}
+ 

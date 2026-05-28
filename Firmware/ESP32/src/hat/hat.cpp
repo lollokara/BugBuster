@@ -35,9 +35,10 @@ static bool s_initialized = false;
 static uint8_t s_last_error = 0;
 static SemaphoreHandle_t s_hat_mutex = NULL;
 
-// Dedicated LA-done IRQ (RP2040 GPIO28 → ESP32 PIN_HAT_LA_DONE_IRQ).
-// Set from the GPIO ISR on falling edge, consumed by hat_la_done_consume().
 static volatile bool s_la_done_pending = false;
+#if PIN_HAT_LA_DONE_IRQ >= 0
+// Dedicated LA-done IRQ, if a board revision routes one separately from HAT INT.
+// Set from the GPIO ISR on falling edge, consumed by hat_la_done_consume().
 // Tracks whether we've registered the global GPIO ISR service so we don't
 // call gpio_install_isr_service() more than once.
 static bool s_gpio_isr_service_installed = false;
@@ -47,6 +48,7 @@ static void IRAM_ATTR hat_la_done_isr(void *arg)
     (void)arg;
     s_la_done_pending = true;
 }
+#endif
 
 // -----------------------------------------------------------------------------
 // CRC-8 (polynomial 0x07, same as AD74416H SPI CRC)
@@ -459,7 +461,8 @@ bool hat_init(void)
     // Configure the dedicated LA-done IRQ input from the RP2040 (active low,
     // falling-edge interrupt). Uses the internal pull-up since the RP2040
     // side drives push-pull only during the brief done pulse.
-    if ((int)PIN_HAT_LA_DONE_IRQ >= 0) {
+#if PIN_HAT_LA_DONE_IRQ >= 0
+    {
         gpio_config_t la_done_cfg = {
             .pin_bit_mask = (1ULL << PIN_HAT_LA_DONE_IRQ),
             .mode = GPIO_MODE_INPUT,
@@ -495,6 +498,7 @@ bool hat_init(void)
             }
         }
     }
+#endif
 
     s_initialized = true;
     ESP_LOGI(TAG, "HAT subsystem initialized (UART%d: GPIO%d TX, GPIO%d RX, %d baud)",
@@ -593,6 +597,11 @@ bool hat_connect(void)
 
     // Query current pin config
     hat_get_pin_config(s_state.pin_config);
+    hat_get_caps(&s_state.caps);
+    {
+        uint8_t rail_count = 0;
+        hat_get_rail_status(s_state.rail, &rail_count);
+    }
 
     return true;
 }
@@ -835,6 +844,118 @@ bool hat_get_power_status(void)
     return false;
 }
 
+bool hat_get_caps(HatCaps *caps)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t rsp[16] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_GET_CAPS, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
+    if (cmd != HAT_RSP_CAPS || rsp_len < 12) {
+        return false;
+    }
+
+    HatCaps parsed = {};
+    size_t p = 0;
+    parsed.hw_revision = rsp[p++];
+    memcpy(&parsed.flags, &rsp[p], sizeof(parsed.flags)); p += sizeof(parsed.flags);
+    parsed.rail_count = rsp[p++];
+    parsed.led_count = rsp[p++];
+    parsed.shifted_io_count = rsp[p++];
+    parsed.la_routes = rsp[p++];
+    parsed.fw_major = rsp[p++];
+    parsed.fw_minor = rsp[p++];
+    parsed.hvpak_present = rsp[p++] != 0;
+
+    s_state.caps = parsed;
+    s_state.caps_valid = true;
+    if (caps) *caps = parsed;
+    return true;
+}
+
+bool hat_get_rail_status(HatRailStatus rails[HAT_RAIL_COUNT], uint8_t *rail_count)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t rsp[32] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_GET_RAIL_STATUS, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
+    if (cmd != HAT_RSP_RAIL_STATUS || rsp_len < 1) {
+        return false;
+    }
+
+    uint8_t count = rsp[0];
+    size_t p = 1;
+    uint8_t parsed_count = 0;
+
+    for (uint8_t i = 0; i < count && i < HAT_RAIL_COUNT; i++) {
+        if (p + 7 > rsp_len) break;
+        HatRailStatus st = {};
+        st.rail_id = rsp[p++];
+        st.enabled = rsp[p++] != 0;
+        memcpy(&st.voltage_mv, &rsp[p], sizeof(st.voltage_mv)); p += sizeof(st.voltage_mv);
+        memcpy(&st.current_ma, &rsp[p], sizeof(st.current_ma)); p += sizeof(st.current_ma);
+        st.status = rsp[p++];
+
+        if (st.rail_id < HAT_RAIL_COUNT) {
+            s_state.rail[st.rail_id] = st;
+        }
+        if (rails && parsed_count < HAT_RAIL_COUNT) {
+            rails[parsed_count] = st;
+        }
+        parsed_count++;
+    }
+
+    if (rail_count) *rail_count = parsed_count;
+    return parsed_count > 0;
+}
+
+bool hat_set_rail_enable(uint8_t rail_id, bool enable)
+{
+    if (!s_state.connected) return false;
+    if (rail_id >= HAT_RAIL_COUNT) return false;
+
+    uint8_t payload[2] = { rail_id, (uint8_t)(enable ? 1 : 0) };
+    uint8_t rsp[32] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_SET_RAIL_ENABLE, payload, sizeof(payload),
+                              rsp, &rsp_len, 300, sizeof(rsp));
+    if (cmd != HAT_RSP_RAIL_STATUS || rsp_len < 1) {
+        return false;
+    }
+
+    uint8_t count = rsp[0];
+    size_t p = 1;
+    for (uint8_t i = 0; i < count && i < HAT_RAIL_COUNT; i++) {
+        if (p + 7 > rsp_len) break;
+        HatRailStatus st = {};
+        st.rail_id = rsp[p++];
+        st.enabled = rsp[p++] != 0;
+        memcpy(&st.voltage_mv, &rsp[p], sizeof(st.voltage_mv)); p += sizeof(st.voltage_mv);
+        memcpy(&st.current_ma, &rsp[p], sizeof(st.current_ma)); p += sizeof(st.current_ma);
+        st.status = rsp[p++];
+        if (st.rail_id < HAT_RAIL_COUNT) {
+            s_state.rail[st.rail_id] = st;
+        }
+    }
+    return true;
+}
+
+bool hat_set_led_state(uint8_t led_index, uint8_t color_code)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t payload[2] = { led_index, color_code };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+
+    return hat_command(HAT_CMD_SET_LED_STATE, payload, sizeof(payload),
+                       rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
+}
+
 bool hat_set_io_voltage(uint16_t mv)
 {
     if (!s_state.connected) return false;
@@ -864,6 +985,23 @@ bool hat_set_io_voltage(uint16_t mv)
             s_state.hvpak_last_error = rsp[6];
         }
         ESP_LOGI(TAG, "I/O voltage set to %u mV (actual %u mV)", mv, actual_mv);
+        return true;
+    }
+    return false;
+}
+
+bool hat_la_set_route(uint8_t route)
+{
+    if (!s_state.connected) return false;
+
+    uint8_t payload[1] = { route };
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_LA_SET_ROUTE, payload, sizeof(payload),
+                              rsp, &rsp_len, 200, sizeof(rsp));
+    if (cmd == HAT_RSP_OK && rsp_len >= 1) {
+        s_state.la_route = rsp[0];
         return true;
     }
     return false;

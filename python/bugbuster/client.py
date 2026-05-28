@@ -2437,6 +2437,90 @@ class BugBuster:
                 "Use a USB connection instead."
             )
 
+    def hat_get_caps(self) -> dict:
+        """Get HAT v2 capability metadata."""
+        self._require_hat_present()
+        if not self._usb:
+            raise NotImplementedError(
+                "hat_get_caps() is not available over HTTP yet. Use a USB connection instead."
+            )
+
+        resp = self._usb_cmd(CmdId.HAT_GET_CAPS)
+        _require_resp_len(resp, 12, "HAT_GET_CAPS")
+        off = 0
+        hw_revision = resp[off]; off += 1
+        flags = struct.unpack_from('<I', resp, off)[0]; off += 4
+        rail_count = resp[off]; off += 1
+        led_count = resp[off]; off += 1
+        shifted_io_count = resp[off]; off += 1
+        la_routes = resp[off]; off += 1
+        fw_major = resp[off]; off += 1
+        fw_minor = resp[off]; off += 1
+        hvpak_present = bool(resp[off]); off += 1
+        return {
+            "hw_revision": hw_revision,
+            "flags": flags,
+            "rail_count": rail_count,
+            "led_count": led_count,
+            "shifted_io_count": shifted_io_count,
+            "la_routes": la_routes,
+            "fw_version": f"{fw_major}.{fw_minor}",
+            "hvpak_present": hvpak_present,
+        }
+
+    def hat_get_rail_status(self) -> dict:
+        """Get HAT v2 rail status for 3V3_ADJ, VADJ3, and VADJ4."""
+        self._require_hat_present()
+        if not self._usb:
+            raise NotImplementedError(
+                "hat_get_rail_status() is not available over HTTP yet. Use a USB connection instead."
+            )
+
+        resp = self._usb_cmd(CmdId.HAT_GET_RAIL_STATUS)
+        _require_resp_len(resp, 1, "HAT_GET_RAIL_STATUS")
+        off = 0
+        count = resp[off]; off += 1
+        rails = []
+        for _ in range(count):
+            _require_resp_len(resp[off:], 7, "HAT_GET_RAIL_STATUS rail")
+            rail_id = resp[off]; off += 1
+            enabled = bool(resp[off]); off += 1
+            voltage_mv = struct.unpack_from('<H', resp, off)[0]; off += 2
+            current_ma = struct.unpack_from('<H', resp, off)[0]; off += 2
+            status = resp[off]; off += 1
+            rails.append({
+                "rail_id": rail_id,
+                "enabled": enabled,
+                "voltage_mv": voltage_mv,
+                "current_ma": current_ma,
+                "status": status,
+            })
+        return {"count": count, "rails": rails}
+
+    def hat_set_rail_enable(self, rail_id: int, enable: bool) -> dict:
+        """Enable or disable a HAT v2 rail, then return refreshed rail status."""
+        self._require_hat_present()
+        if not self._usb:
+            raise NotImplementedError(
+                "hat_set_rail_enable() is not available over HTTP yet. Use a USB connection instead."
+            )
+
+        payload = struct.pack('<BB', rail_id & 0xFF, int(enable))
+        self._usb_cmd(CmdId.HAT_SET_RAIL_ENABLE, payload)
+        return self.hat_get_rail_status()
+
+    def hat_set_led_state(self, led_index: int, color_code: int) -> bool:
+        """Set a HAT status LED state. LED indexes are 1..8."""
+        self._require_hat_present()
+        if not self._usb:
+            raise NotImplementedError(
+                "hat_set_led_state() is not available over HTTP yet. Use a USB connection instead."
+            )
+
+        payload = struct.pack('<BB', led_index & 0xFF, color_code & 0xFF)
+        self._usb_cmd(CmdId.HAT_SET_LED_STATE, payload)
+        return True
+
     def hat_set_io_voltage(self, voltage_mv: int) -> bool:
         """
         Set the HVPAK I/O level translation voltage.

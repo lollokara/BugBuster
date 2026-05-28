@@ -59,6 +59,7 @@ static int hat_err_to_cmd_err(uint8_t hat_err)
         case HAT_ERR_HVPAK_INVALID_INDEX:    return -CMD_ERR_OUT_OF_RANGE;
         case HAT_ERR_HVPAK_UNSAFE_REG:       return -CMD_ERR_OUT_OF_RANGE;
         case HAT_ERR_HVPAK_INVALID_ARG:      return -CMD_ERR_BAD_ARG;
+        case HAT_ERR_UNSUPPORTED:            return -CMD_ERR_INVALID_STATE;
         case HAT_ERR_BUSY:                   return -CMD_ERR_BUSY;
         default:                             return -CMD_ERR_BAD_ARG;
     }
@@ -301,6 +302,104 @@ static int handler_hat_set_io_voltage(const uint8_t *payload, size_t len,
     bbp_put_u8(resp, &pos, hat_get_state()->hvpak_part);
     bbp_put_bool(resp, &pos, hat_get_state()->hvpak_ready);
     bbp_put_u8(resp, &pos, hat_get_state()->hvpak_last_error);
+    *resp_len = pos;
+    return (int)pos;
+}
+
+static int handler_hat_get_caps(const uint8_t *payload, size_t len,
+                                uint8_t *resp, size_t *resp_len)
+{
+    (void)payload; (void)len;
+
+    HatCaps caps = {};
+    if (!hat_get_caps(&caps)) return -CMD_ERR_TIMEOUT;
+
+    size_t pos = 0;
+    bbp_put_u8(resp, &pos, caps.hw_revision);
+    bbp_put_u32(resp, &pos, caps.flags);
+    bbp_put_u8(resp, &pos, caps.rail_count);
+    bbp_put_u8(resp, &pos, caps.led_count);
+    bbp_put_u8(resp, &pos, caps.shifted_io_count);
+    bbp_put_u8(resp, &pos, caps.la_routes);
+    bbp_put_u8(resp, &pos, caps.fw_major);
+    bbp_put_u8(resp, &pos, caps.fw_minor);
+    bbp_put_bool(resp, &pos, caps.hvpak_present);
+    *resp_len = pos;
+    return (int)pos;
+}
+
+static int handler_hat_get_rail_status(const uint8_t *payload, size_t len,
+                                       uint8_t *resp, size_t *resp_len)
+{
+    (void)payload; (void)len;
+
+    HatRailStatus rails[HAT_RAIL_COUNT] = {};
+    uint8_t count = 0;
+    if (!hat_get_rail_status(rails, &count)) return -CMD_ERR_TIMEOUT;
+
+    size_t pos = 0;
+    bbp_put_u8(resp, &pos, count);
+    for (uint8_t i = 0; i < count && i < HAT_RAIL_COUNT; i++) {
+        bbp_put_u8(resp, &pos, rails[i].rail_id);
+        bbp_put_bool(resp, &pos, rails[i].enabled);
+        bbp_put_u16(resp, &pos, rails[i].voltage_mv);
+        bbp_put_u16(resp, &pos, rails[i].current_ma);
+        bbp_put_u8(resp, &pos, rails[i].status);
+    }
+    *resp_len = pos;
+    return (int)pos;
+}
+
+static int handler_hat_set_rail_enable(const uint8_t *payload, size_t len,
+                                       uint8_t *resp, size_t *resp_len)
+{
+    if (len < 2) return -CMD_ERR_BAD_ARG;
+
+    size_t rpos = 0;
+    uint8_t rail = bbp_get_u8(payload, &rpos);
+    bool enable = bbp_get_bool(payload, &rpos);
+
+    if (!hat_set_rail_enable(rail, enable)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    return handler_hat_get_rail_status(NULL, 0, resp, resp_len);
+}
+
+static int handler_hat_set_led_state(const uint8_t *payload, size_t len,
+                                     uint8_t *resp, size_t *resp_len)
+{
+    if (len < 2) return -CMD_ERR_BAD_ARG;
+
+    size_t rpos = 0;
+    uint8_t led = bbp_get_u8(payload, &rpos);
+    uint8_t color = bbp_get_u8(payload, &rpos);
+
+    if (!hat_set_led_state(led, color)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    size_t pos = 0;
+    bbp_put_u8(resp, &pos, led);
+    bbp_put_u8(resp, &pos, color);
+    *resp_len = pos;
+    return (int)pos;
+}
+
+static int handler_hat_la_set_route(const uint8_t *payload, size_t len,
+                                    uint8_t *resp, size_t *resp_len)
+{
+    if (len < 1) return -CMD_ERR_BAD_ARG;
+
+    size_t rpos = 0;
+    uint8_t route = bbp_get_u8(payload, &rpos);
+
+    if (!hat_la_set_route(route)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    size_t pos = 0;
+    bbp_put_u8(resp, &pos, hat_get_state()->la_route);
     *resp_len = pos;
     return (int)pos;
 }
@@ -601,6 +700,24 @@ static const ArgSpec s_hat_set_io_voltage_args[] = {
     { "mv", ARG_U16, true, 0, 5000 },
 };
 
+static const ArgSpec s_hat_set_rail_enable_args[] = {
+    { "rail",   ARG_U8, true, 0, HAT_RAIL_COUNT - 1 },
+    { "enable", ARG_U8, true, 0, 1 },
+};
+
+static const ArgSpec s_hat_set_led_state_args[] = {
+    { "led",   ARG_U8, true, 1, 8 },
+    { "color", ARG_U8, true, 0, 255 },
+};
+
+static const ArgSpec s_hat_la_set_route_args[] = {
+    { "route", ARG_U8, true, 0, HAT_LA_ROUTE_HIGH_SPEED },
+};
+
+static const ArgSpec s_hat_la_set_route_rsp[] = {
+    { "route", ARG_U8, true, 0, 0 },
+};
+
 static const ArgSpec s_hat_setup_swd_args[] = {
     { "voltage_mv", ARG_U16, true, 0, 5000 },
     { "conn",       ARG_U8,  true, 0, 1 },
@@ -656,6 +773,14 @@ static const CmdDescriptor s_hat_cmds[] = {
       NULL,                    0, NULL,                   0, handler_hat_get_power,             CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_SET_IO_VOLTAGE,        "hat_set_io_voltage",
       s_hat_set_io_voltage_args, 1, NULL,                0, handler_hat_set_io_voltage,        0                   },
+    { BBP_CMD_HAT_GET_CAPS,              "hat_get_caps",
+      NULL,                    0, NULL,                   0, handler_hat_get_caps,              CMD_FLAG_READS_STATE },
+    { BBP_CMD_HAT_GET_RAIL_STATUS,       "hat_get_rail_status",
+      NULL,                    0, NULL,                   0, handler_hat_get_rail_status,       CMD_FLAG_READS_STATE },
+    { BBP_CMD_HAT_SET_RAIL_ENABLE,       "hat_set_rail_enable",
+      s_hat_set_rail_enable_args, 2, NULL,                0, handler_hat_set_rail_enable,       0                   },
+    { BBP_CMD_HAT_SET_LED_STATE,         "hat_set_led_state",
+      s_hat_set_led_state_args, 2, NULL,                  0, handler_hat_set_led_state,         0                   },
     { BBP_CMD_HAT_SETUP_SWD,             "hat_setup_swd",
       s_hat_setup_swd_args,    2, s_hat_setup_swd_rsp,   3, handler_hat_setup_swd,             0                   },
     { BBP_CMD_HAT_GET_HVPAK_INFO,        "hat_get_hvpak_info",
@@ -670,6 +795,8 @@ static const CmdDescriptor s_hat_cmds[] = {
       NULL,                    0, NULL,                   0, handler_hat_la_status,             CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_LA_READ,               "hat_la_read",
       s_hat_la_read_args,      2, NULL,                   0, handler_hat_la_read,               CMD_FLAG_READS_STATE },
+    { BBP_CMD_HAT_LA_SET_ROUTE,          "hat_la_set_route",
+      s_hat_la_set_route_args, 1, s_hat_la_set_route_rsp, 1, handler_hat_la_set_route,          0                   },
     { BBP_CMD_HAT_LA_STOP,               "hat_la_stop",
       NULL,                    0, NULL,                   0, handler_hat_la_stop,               0                   },
     { BBP_CMD_HAT_LA_TRIGGER,            "hat_la_trigger",

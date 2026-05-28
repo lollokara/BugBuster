@@ -413,10 +413,15 @@ class CmdId(IntEnum):
     USBPD_GET_STATUS = 0xC0
     USBPD_SELECT_PDO = 0xC1
     USBPD_GO         = 0xC2
+    HAT_GET_CAPS        = 0xC3
+    HAT_GET_RAIL_STATUS = 0xC4
 
     # Waveform generator
     START_WAVEGEN    = 0xD0
     STOP_WAVEGEN     = 0xD1
+    HAT_SET_RAIL_ENABLE = 0xD2
+    HAT_SET_LED_STATE   = 0xD3
+    HAT_LA_SET_ROUTE    = 0xD4
 
     # HVPAK advanced backend
     HAT_GET_HVPAK_ANALOG = 0xE5

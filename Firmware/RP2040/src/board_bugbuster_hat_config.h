@@ -6,25 +6,25 @@
 // Defines SWD pin assignments matching the HAT PCB layout
 // =============================================================================
 
-// SWD pins — match bb_config.h definitions
-// These override the default debugprobe pin assignments
-// Breadboard test: SWD pins moved to avoid UART conflict on GPIO2/3
+// SWD pins — match bb_config.h definitions.
 #define PROBE_PIN_SWCLK     18
-#define PROBE_PIN_SWDIO     19
-#define PROBE_PIN_SWDI      19
+#define PROBE_PIN_SWDIO     16
+#define PROBE_PIN_SWDI      16
 
-// Reset pin — directly connected to target nRST (active low, optional)
-#define PROBE_PIN_RESET     22
+// No target reset pin is routed on the current HAT PCB. GPIO22 is the
+// high-speed level-shifter DIR pin, so it must not be claimed by debugprobe.
 
 // UART bridge pins (debugprobe CDC UART, NOT the BugBuster command bus)
-// This UART bridges to the target's serial port via connector
+// The current PCB assigns GPIO16/GPIO17 to SWDIO/TRACE, so the debugprobe CDC
+// UART bridge is disabled in bb_main_integrated.c. These definitions remain so
+// the vendored cdc_uart.c/autobaud.c sources still compile.
+#define BB_DEBUGPROBE_CDC_UART_ENABLED 0
 #define PROBE_UART_TX       16
 #define PROBE_UART_RX       17
 #define PROBE_UART_INTERFACE uart1
-// uart1 avoids conflict with uart0 (used by BugBuster command bus on GPIO0/1).
+#define PROBE_UART_BAUDRATE 115200
 
-// LED pins
-#define PROBE_PIN_LED       25      // Onboard LED (activity)
+// No discrete debugprobe LED is available; GPIO25 is VADJ4 enable.
 
 // USB PID/VID — use debugprobe defaults or customize
 // #define PROBE_USB_VID  0x2E8A

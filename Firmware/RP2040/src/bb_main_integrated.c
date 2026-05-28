@@ -48,7 +48,7 @@ static TaskHandle_t bb_taskhandle;
 static int was_configured;
 
 // =============================================================================
-// debugprobe tasks (copied from debugprobe main.c — unchanged)
+// debugprobe tasks
 // =============================================================================
 
 void dev_mon(void *ptr)
@@ -166,7 +166,9 @@ int main(void)
     bi_decl_config();
     board_init();
     usb_serial_init();
+#if BB_DEBUGPROBE_CDC_UART_ENABLED
     cdc_uart_init();
+#endif
     tusb_init();
     // stdio_uart_init() disabled — UART0 reserved for BugBuster command bus
     // Debug printf goes to USB CDC or nowhere
@@ -242,10 +244,12 @@ void tud_suspend_cb(bool remote_wakeup_en)
 {
     probe_info("Suspended\n");
     if (was_configured) {
+#if BB_DEBUGPROBE_CDC_UART_ENABLED
         vTaskSuspend(uart_taskhandle);
-        vTaskSuspend(dap_taskhandle);
         if (autobaud_running) autobaud_wait_stop();
         vTaskSuspend(autobaud_taskhandle);
+#endif
+        vTaskSuspend(dap_taskhandle);
     }
 }
 
@@ -253,9 +257,11 @@ void tud_resume_cb(void)
 {
     probe_info("Resumed\n");
     if (was_configured) {
+#if BB_DEBUGPROBE_CDC_UART_ENABLED
         vTaskResume(uart_taskhandle);
-        vTaskResume(dap_taskhandle);
         vTaskResume(autobaud_taskhandle);
+#endif
+        vTaskResume(dap_taskhandle);
     }
 }
 
@@ -266,13 +272,15 @@ void tud_unmount_cb(void)
     // Without this, s_streaming_session stays true and the BBP poll loop is
     // blocked indefinitely → all hat_la_configure() calls time out → 0x11.
     bb_la_usb_abort_bulk();
+#if BB_DEBUGPROBE_CDC_UART_ENABLED
     vTaskSuspend(uart_taskhandle);
-    vTaskSuspend(dap_taskhandle);
     vTaskDelete(uart_taskhandle);
-    vTaskDelete(dap_taskhandle);
     if (autobaud_running) autobaud_wait_stop();
     vTaskSuspend(autobaud_taskhandle);
     vTaskDelete(autobaud_taskhandle);
+#endif
+    vTaskSuspend(dap_taskhandle);
+    vTaskDelete(dap_taskhandle);
     was_configured = 0;
 }
 
@@ -280,13 +288,17 @@ void tud_mount_cb(void)
 {
     probe_info("Connected, Configured\n");
     if (!was_configured) {
+#if BB_DEBUGPROBE_CDC_UART_ENABLED
         xTaskCreate(cdc_thread, "UART", configMINIMAL_STACK_SIZE, NULL, UART_TASK_PRIO, &uart_taskhandle);
-        xTaskCreate(dap_thread, "DAP", configMINIMAL_STACK_SIZE, NULL, DAP_TASK_PRIO, &dap_taskhandle);
         xTaskCreate(autobaud_thread, "ABR", configMINIMAL_STACK_SIZE, NULL, AUTOBAUD_TASK_PRIO, &autobaud_taskhandle);
+#endif
+        xTaskCreate(dap_thread, "DAP", configMINIMAL_STACK_SIZE, NULL, DAP_TASK_PRIO, &dap_taskhandle);
 #if(configNUMBER_OF_CORES > 1)
+#if BB_DEBUGPROBE_CDC_UART_ENABLED
         vTaskCoreAffinitySet(autobaud_taskhandle, (1 << 1));
-        vTaskCoreAffinitySet(dap_taskhandle, (1 << 1));
         vTaskCoreAffinitySet(uart_taskhandle, (1 << 0));
+#endif
+        vTaskCoreAffinitySet(dap_taskhandle, (1 << 1));
 #endif
         was_configured = 1;
     }

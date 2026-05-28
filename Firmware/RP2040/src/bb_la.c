@@ -350,9 +350,11 @@ static bool setup_dma(void)
 
 static void la_signal_done_pulse(void)
 {
+#if BB_LA_DONE_PIN >= 0
     gpio_put(BB_LA_DONE_PIN, 0);
     sleep_us(2);
     gpio_put(BB_LA_DONE_PIN, 1);
+#endif
 }
 
 void bb_la_init(void)
@@ -368,9 +370,11 @@ void bb_la_init(void)
         gpio_init(BB_LA_CH0_PIN + i);
         gpio_pull_down(BB_LA_CH0_PIN + i);
     }
+#if BB_LA_DONE_PIN >= 0
     gpio_init(BB_LA_DONE_PIN);
     gpio_set_dir(BB_LA_DONE_PIN, GPIO_OUT);
     gpio_put(BB_LA_DONE_PIN, 1);
+#endif
 }
 
 bool bb_la_configure(const LaConfig *config)

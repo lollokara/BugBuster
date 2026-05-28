@@ -137,6 +137,8 @@ pub const CMD_EXT_SPI_TRANSFER: u8 = 0xBE;
 
 // HAT Expansion Board
 pub const CMD_HAT_GET_STATUS: u8 = 0xC5;
+pub const CMD_HAT_GET_CAPS: u8 = 0xC3;
+pub const CMD_HAT_GET_RAIL_STATUS: u8 = 0xC4;
 pub const CMD_HAT_SET_PIN: u8 = 0xC6;
 pub const CMD_HAT_SET_ALL_PINS: u8 = 0xC7;
 pub const CMD_HAT_RESET: u8 = 0xC8;
@@ -148,6 +150,9 @@ pub const CMD_HAT_SETUP_SWD: u8 = 0xCD;
 pub const CMD_HAT_GET_HVPAK_INFO: u8 = 0xCE;
 // HAT Logic Analyzer
 pub const CMD_HAT_LA_CONFIG: u8 = 0xCF;
+pub const CMD_HAT_SET_RAIL_ENABLE: u8 = 0xD2;
+pub const CMD_HAT_SET_LED_STATE: u8 = 0xD3;
+pub const CMD_HAT_LA_SET_ROUTE: u8 = 0xD4;
 pub const CMD_HAT_LA_ARM: u8 = 0xD5;
 pub const CMD_HAT_LA_FORCE: u8 = 0xD6;
 pub const CMD_HAT_LA_STATUS: u8 = 0xD7;

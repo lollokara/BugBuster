@@ -39,7 +39,7 @@ extern "C" {
 // On the PCB the dedicated LA-done wire is retired: GPIO18 is now SPI SDO for
 // the AD74416H, and the RP2040 LA-done pulse is delivered via PIN_HAT_IRQ
 // (shared with other HAT interrupts). hat.cpp guards (pin >= 0), so NC is safe.
-#define PIN_HAT_LA_DONE_IRQ GPIO_NUM_NC
+#define PIN_HAT_LA_DONE_IRQ (-1)
 
 #define HAT_UART_NUM        UART_NUM_0
 #define HAT_UART_BAUD       921600
@@ -107,6 +107,7 @@ typedef enum {
 #define HAT_CMD_SET_PIN_CONFIG  0x03
 #define HAT_CMD_GET_PIN_CONFIG  0x04
 #define HAT_CMD_RESET           0x05
+#define HAT_CMD_GET_CAPS        0x06
 
 // Commands: Power Management (0x10–0x1F)
 #define HAT_CMD_SET_POWER       0x10  // Enable/disable connector power
@@ -142,6 +143,12 @@ typedef enum {
 #define HAT_CMD_LA_STREAM_START 0x37  // Start streaming over vendor bulk EP
 #define HAT_CMD_LA_LOG_ENABLE   0x39  // Enable/disable log relay to host
 #define HAT_CMD_LA_USB_RESET    0x3A  // Reinitialize vendor bulk endpoint
+#define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
+
+// Commands: HAT v2 Supplies / LEDs (0x40-0x4F)
+#define HAT_CMD_GET_RAIL_STATUS 0x40
+#define HAT_CMD_SET_RAIL_ENABLE 0x41
+#define HAT_CMD_SET_LED_STATE   0x42
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -151,6 +158,8 @@ typedef enum {
 #define HAT_RSP_DAP_STATUS      0x84
 #define HAT_RSP_LA_STATUS       0x85
 #define HAT_RSP_LA_DATA         0x86
+#define HAT_RSP_CAPS            0x87
+#define HAT_RSP_RAIL_STATUS     0x88
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 
 // Error codes
@@ -171,6 +180,25 @@ typedef enum {
 #define HAT_ERR_HVPAK_UNSUPPORTED_CAP  0x0F
 #define HAT_ERR_HVPAK_INVALID_ARG      0x10
 #define HAT_ERR_HVPAK_UNSAFE_REG       0x11
+#define HAT_ERR_UNSUPPORTED            0x12
+
+// HAT v2 capability flags
+#define HAT_CAP_RAILS             (1u << 0)
+#define HAT_CAP_LEDS              (1u << 1)
+#define HAT_CAP_LA_LOW_SPEED      (1u << 2)
+#define HAT_CAP_LA_HIGH_SPEED     (1u << 3)
+#define HAT_CAP_SHIFTED_IO        (1u << 4)
+#define HAT_CAP_HVPAK_UNSUPPORTED (1u << 5)
+
+// HAT v2 rail IDs
+#define HAT_RAIL_3V3_ADJ        0
+#define HAT_RAIL_VADJ3          1
+#define HAT_RAIL_VADJ4          2
+#define HAT_RAIL_COUNT          3
+
+// HAT v2 LA route IDs
+#define HAT_LA_ROUTE_LOW_SPEED  0
+#define HAT_LA_ROUTE_HIGH_SPEED 1
 
 // -----------------------------------------------------------------------------
 // Connector / Power Types
@@ -192,6 +220,26 @@ typedef struct {
     float    current_ma;        // Measured current (if shunt present)
     bool     fault;             // Overcurrent fault detected
 } HatConnectorStatus;
+
+typedef struct {
+    uint8_t  hw_revision;
+    uint32_t flags;
+    uint8_t  rail_count;
+    uint8_t  led_count;
+    uint8_t  shifted_io_count;
+    uint8_t  la_routes;
+    uint8_t  fw_major;
+    uint8_t  fw_minor;
+    bool     hvpak_present;
+} HatCaps;
+
+typedef struct {
+    uint8_t  rail_id;
+    bool     enabled;
+    uint16_t voltage_mv;
+    uint16_t current_ma;
+    uint8_t  status;
+} HatRailStatus;
 
 // -----------------------------------------------------------------------------
 // HAT State
@@ -216,6 +264,10 @@ typedef struct {
     uint8_t      hvpak_part;                        // See HatHvpakPart
     bool         hvpak_ready;                       // true when identity is resolved
     uint8_t      hvpak_last_error;                  // Last RP2040-side HVPAK error
+    HatCaps      caps;
+    bool         caps_valid;
+    HatRailStatus rail[HAT_RAIL_COUNT];
+    uint8_t      la_route;
 
     // SWD management
     bool         dap_connected;                     // USB CMSIS-DAP host connected
@@ -310,6 +362,12 @@ bool hat_get_power_status(void);
  * @return true if HAT acknowledged
  */
 bool hat_set_io_voltage(uint16_t mv);
+
+bool hat_get_caps(HatCaps *caps);
+bool hat_get_rail_status(HatRailStatus rails[HAT_RAIL_COUNT], uint8_t *rail_count);
+bool hat_set_rail_enable(uint8_t rail_id, bool enable);
+bool hat_set_led_state(uint8_t led_index, uint8_t color_code);
+bool hat_la_set_route(uint8_t route);
 
 /**
  * @brief Send an advanced HVPAK command to the RP2040 HAT and return the raw

@@ -2895,6 +2895,155 @@ static esp_err_t handle_hat_post_dispatch(httpd_req_t *req)
     return send_error(req, 404, "Unknown HAT endpoint");
 }
 
+// =============================================================================
+// HAT v2 route handlers
+// =============================================================================
+
+// GET /api/hat/v2/caps
+static esp_err_t handle_get_hat_v2_caps(httpd_req_t *req)
+{
+    if (!hat_detected()) {
+        return send_error(req, 404, "HAT not detected");
+    }
+
+    const HatState *hs = hat_get_state();
+    if (!hs->caps_valid) {
+        // Try to refresh caps from the HAT
+        HatCaps caps = {};
+        if (!hat_get_caps(&caps)) {
+            return send_error(req, 503, "HAT not responding");
+        }
+    }
+
+    const HatCaps *caps = &hs->caps;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "hwRevision", caps->hw_revision);
+    cJSON_AddNumberToObject(root, "flags", caps->flags);
+    cJSON_AddNumberToObject(root, "railCount", caps->rail_count);
+    cJSON_AddNumberToObject(root, "ledCount", caps->led_count);
+    cJSON_AddNumberToObject(root, "shiftedIoCount", caps->shifted_io_count);
+    cJSON_AddNumberToObject(root, "laRouteCount", caps->la_routes);
+    cJSON_AddNumberToObject(root, "fwMajor", caps->fw_major);
+    cJSON_AddNumberToObject(root, "fwMinor", caps->fw_minor);
+    cJSON_AddBoolToObject(root, "hvpakPresent", caps->hvpak_present);
+    return send_json(req, root);
+}
+
+// GET /api/hat/v2/rails
+static esp_err_t handle_get_hat_v2_rails(httpd_req_t *req)
+{
+    if (!hat_detected()) {
+        return send_error(req, 404, "HAT not detected");
+    }
+
+    HatRailStatus rails[HAT_RAIL_COUNT] = {};
+    uint8_t rail_count = 0;
+    if (!hat_get_rail_status(rails, &rail_count)) {
+        return send_error(req, 503, "HAT not responding");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "railCount", rail_count);
+    cJSON *arr = cJSON_AddArrayToObject(root, "rails");
+    for (uint8_t i = 0; i < rail_count && i < HAT_RAIL_COUNT; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "railId", rails[i].rail_id);
+        cJSON_AddBoolToObject(obj, "enabled", rails[i].enabled);
+        cJSON_AddNumberToObject(obj, "voltageMv", rails[i].voltage_mv);
+        cJSON_AddNumberToObject(obj, "currentMa", rails[i].current_ma);
+        cJSON_AddNumberToObject(obj, "status", rails[i].status);
+        cJSON_AddItemToArray(arr, obj);
+    }
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/rail/enable
+static esp_err_t handle_post_hat_v2_rail_enable(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "railId", Number, "Field 'railId' must be a number");
+    VALIDATE_JSON_FIELD(doc, "enable", Bool, "Field 'enable' must be a boolean");
+
+    uint8_t rail_id = (uint8_t)cJSON_GetObjectItem(doc, "railId")->valueint;
+    bool enable = cJSON_IsTrue(cJSON_GetObjectItem(doc, "enable"));
+    cJSON_Delete(doc);
+
+    if (rail_id >= HAT_RAIL_COUNT) {
+        return send_error(req, 400, "railId out of range (0-2)");
+    }
+
+    if (!hat_set_rail_enable(rail_id, enable)) {
+        return send_error(req, 503, "HAT rail command failed");
+    }
+
+    // Return updated rail status
+    const HatState *hs = hat_get_state();
+    const HatRailStatus *rs = &hs->rail[rail_id];
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "railId", rs->rail_id);
+    cJSON_AddBoolToObject(root, "enabled", rs->enabled);
+    cJSON_AddNumberToObject(root, "voltageMv", rs->voltage_mv);
+    cJSON_AddNumberToObject(root, "currentMa", rs->current_ma);
+    cJSON_AddNumberToObject(root, "status", rs->status);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/led
+static esp_err_t handle_post_hat_v2_led(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "ledId", Number, "Field 'ledId' must be a number");
+    VALIDATE_JSON_FIELD(doc, "colorCode", Number, "Field 'colorCode' must be a number");
+
+    uint8_t led_id = (uint8_t)cJSON_GetObjectItem(doc, "ledId")->valueint;
+    uint8_t color_code = (uint8_t)cJSON_GetObjectItem(doc, "colorCode")->valueint;
+    cJSON_Delete(doc);
+
+    if (!hat_set_led_state(led_id, color_code)) {
+        return send_error(req, 503, "HAT LED command failed");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return send_json(req, root);
+}
+
+// POST /api/hat/v2/la/route
+static esp_err_t handle_post_hat_v2_la_route(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "route", Number, "Field 'route' must be a number");
+
+    uint8_t route = (uint8_t)cJSON_GetObjectItem(doc, "route")->valueint;
+    cJSON_Delete(doc);
+
+    if (!hat_la_set_route(route)) {
+        return send_error(req, 503, "HAT LA route command failed");
+    }
+
+    const HatState *hs = hat_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "route", hs->la_route);
+    return send_json(req, root);
+}
+
 // GET /api/debug - Combined debug status of all I2C devices
 static esp_err_t handle_get_debug(httpd_req_t *req)
 {
@@ -4794,6 +4943,33 @@ void initWebServer(void)
         .uri = "/api/hat/la/status", .method = HTTP_GET, .handler = handle_get_hat_la_status, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_la_status_get);
+
+    // ----- HAT v2 routes (registered before the /api/hat/* wildcard) -----
+
+    httpd_uri_t uri_hat_v2_caps = {
+        .uri = "/api/hat/v2/caps", .method = HTTP_GET, .handler = handle_get_hat_v2_caps, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_caps);
+
+    httpd_uri_t uri_hat_v2_rails = {
+        .uri = "/api/hat/v2/rails", .method = HTTP_GET, .handler = handle_get_hat_v2_rails, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_rails);
+
+    httpd_uri_t uri_hat_v2_rail_enable = {
+        .uri = "/api/hat/v2/rail/enable", .method = HTTP_POST, .handler = handle_post_hat_v2_rail_enable, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_rail_enable);
+
+    httpd_uri_t uri_hat_v2_led = {
+        .uri = "/api/hat/v2/led", .method = HTTP_POST, .handler = handle_post_hat_v2_led, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_led);
+
+    httpd_uri_t uri_hat_v2_la_route = {
+        .uri = "/api/hat/v2/la/route", .method = HTTP_POST, .handler = handle_post_hat_v2_la_route, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_la_route);
 
     httpd_uri_t uri_hat_post = {
         .uri = "/api/hat/*", .method = HTTP_POST, .handler = handle_hat_post_dispatch, .user_ctx = NULL

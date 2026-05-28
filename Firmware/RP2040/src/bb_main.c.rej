@@ -1,0 +1,34 @@
+@@ -23,6 +23,7 @@
+ #include "bb_la.h"
+ #include "bb_la_usb.h"
+ #include "tusb.h"
++#include "bb_hat_v2.h"
+ 
+ #ifdef DEBUGPROBE_INTEGRATION
+ extern TaskHandle_t tud_taskhandle;
+@@ -52,8 +53,8 @@
+ 
+ // Log relay: when enabled, bb_la_log() messages are sent via HAT UART to host
+ static volatile bool s_la_log_enabled = false;
+-static uint8_t s_led_state[BB_WS2812_COUNT] = {0};
+-static uint8_t s_la_route = HAT_LA_ROUTE_LOW_SPEED;
++
++// -----------------------------------------------------------------------------
+ // IRQ pin assertion (open-drain, active low, ~1ms pulse)
+ // Signals the ESP32 that an asynchronous event occurred.
+ // -----------------------------------------------------------------------------
+@@ -107,12 +108,12 @@
+ // Send a response frame over UART
+ // -----------------------------------------------------------------------------
+ 
+-static void send_response(uint8_t rsp_cmd, const uint8_t *payload, uint8_t len)
++void send_response(uint8_t rsp_cmd, const uint8_t *payload, uint8_t len)
+ {
+     uint8_t frame[36];
+     size_t frame_len = hat_build_frame(frame, rsp_cmd, payload, len);
+     uart_write_blocking(BB_UART, frame, frame_len);
+ }
+ 
+-static void send_ok(const uint8_t *payload, uint8_t len)
++void send_ok(const uint8_t *payload, uint8_t len)
+ {

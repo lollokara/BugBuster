@@ -4,7 +4,7 @@
 // bb_config.h — BugBuster HAT board pin definitions and constants
 //
 // Pin assignments for the BugBuster HAT expansion board (RP2040-based).
-// These are PRELIMINARY — finalize with actual HAT PCB layout.
+// PCB reference: Docs/HAT_RP2040_PCB_Reference.md
 // =============================================================================
 
 #include "hardware/uart.h"
@@ -14,7 +14,6 @@
 // UART0 — BugBuster command bus (slave)
 // -----------------------------------------------------------------------------
 // UART0 for BugBuster command bus (stdio_uart disabled in bb_main_integrated.c)
-// UART1 is used by debugprobe CDC UART bridge (GPIO4/5)
 #define BB_UART             uart0
 #define BB_UART_BAUD        921600
 #define BB_UART_TX_PIN      0       // GPIO0 → ESP32 RX (GPIO44)
@@ -26,39 +25,55 @@
 // These must match the debugprobe board config
 // -----------------------------------------------------------------------------
 // SWD pins — managed by debugprobe (PIO 0), defined here for reference.
-// The 3-pin dedicated SWD connector (new PCB, 2026-04-09) exposes:
+// The 5-pin dedicated SWD connector exposes:
+//   VADJ4  — target reference/supply
 //   SWDIO  — bidirectional data
 //   SWCLK  — clock from probe to target
 //   TRACE  — SWO single-wire trace input
-// Physical pins are finalized on the HAT board; the override is in
-// board_bugbuster_hat_config.h (SWCLK/SWDIO) and here (TRACE).
-#define BB_SWD_SWCLK_PIN    2       // GPIO2 — SWD clock (debugprobe default for Pico)
-#define BB_SWD_SWDIO_PIN    3       // GPIO3 — SWD data (debugprobe default for Pico)
-#define BB_SWD_TRACE_PIN    29      // GPIO29 — SWO trace input (new dedicated SWD connector)
-                                    // Confirmed: GPIO29 is free per the 2026-04-09 pin audit.
+//   GND
+#define BB_SWD_SWDIO_PIN    16      // GPIO16 — SWD data
+#define BB_SWD_TRACE_PIN    17      // GPIO17 — SWO trace input
+#define BB_SWD_SWCLK_PIN    18      // GPIO18 — SWD clock
 
 // -----------------------------------------------------------------------------
 // Power Management
 // -----------------------------------------------------------------------------
-#define BB_EN_A_PIN         4       // GPIO4 — Connector A power enable
-#define BB_EN_B_PIN         5       // GPIO5 — Connector B power enable
-#define BB_FAULT_A_PIN      20      // GPIO20 — Connector A overcurrent (input, active low)
-#define BB_FAULT_B_PIN      21      // GPIO21 — Connector B overcurrent (input, active low)
-#define BB_CURRENT_A_ADC    26      // GPIO26 (ADC0) — Connector A current sense
-#define BB_CURRENT_B_ADC    27      // GPIO27 (ADC1) — Connector B current sense
+#define BB_VADJ3_EN_PIN         23      // GPIO23 — VADJ3 enable
+#define BB_3V3_ADJ_EN_PIN       24      // GPIO24 — adjustable 3V3 logic enable
+#define BB_VADJ4_EN_PIN         25      // GPIO25 — VADJ4 enable
 
-// Current sense: V_shunt = I * R_shunt, ADC reads V_shunt
-// Typical R_shunt = 0.1 Ohm, so 100mA = 10mV, 1A = 100mV
-#define BB_CURRENT_SHUNT_MOHM   100     // Shunt resistance in milliohms
+// Legacy two-connector API mapping retained until the HAT protocol grows named
+// VADJ rails: connector 0 = VADJ3, connector 1 = VADJ4.
+#define BB_EN_A_PIN             BB_VADJ3_EN_PIN
+#define BB_EN_B_PIN             BB_VADJ4_EN_PIN
+
+#define BB_CURRENT_A_ADC        26      // GPIO26 (ADC0) — VADJ3 LTM8083 ISMON
+#define BB_CURRENT_B_ADC        27      // GPIO27 (ADC1) — VADJ4 LTM8083 ISMON
+#define BB_VADJ3_SENSE_ADC      28      // GPIO28 (ADC2) — VADJ3 110k/10k divider
+#define BB_VADJ4_SENSE_ADC      29      // GPIO29 (ADC3) — VADJ4 110k/10k divider
+
+// LTM8083 ISMON: VISMON = 10 * (I * RCS) + 250mV, RCS = 50mOhm.
+#define BB_CURRENT_SHUNT_MOHM   50
 #define BB_CURRENT_ADC_VREF     3300    // ADC reference in mV (3.3V)
+#define BB_LTM8083_ISMON_OFFSET_MV 250
+#define BB_LTM8083_ISMON_GAIN   10
+
+// Sense divider: 110k top, 10k bottom => Vrail = Vadc * 12.
+#define BB_VADJ_SENSE_RTOP_OHM  110000
+#define BB_VADJ_SENSE_RBOT_OHM  10000
+
+// High-speed level shifter shared by IO10..15 and IO20/21.
+#define BB_LEVEL_SHIFT_OE_PIN   19      // GPIO19 — output enable
+#define BB_LEVEL_SHIFT_DIR_PIN  22      // GPIO22 — shared direction
 
 // -----------------------------------------------------------------------------
-// HVPAK — Renesas level translator (I2C control)
+// HAT I2C — DS4424 adjustable rail trim
 // -----------------------------------------------------------------------------
 #define BB_HVPAK_I2C        i2c1
 #define BB_HVPAK_SDA_PIN    6       // GPIO6
 #define BB_HVPAK_SCL_PIN    7       // GPIO7
 #define BB_HVPAK_I2C_FREQ   400000  // 400 kHz
+#define BB_HVPAK_PRESENT    0       // GreenPAK/HVPAK is not populated on this PCB
 #define BB_HVPAK_I2C_ADDR   0x48    // Documented HVPAK mailbox address
 #define BB_HVPAK_I2C_TIMEOUT_US 5000
 #define BB_HVPAK_IDENTITY_REG 0x48  // Read-only identity byte (virtual output mailbox)
@@ -89,39 +104,47 @@
 #define BB_IRQ_PIN          8       // GPIO8 — Open-drain, active low
 
 // -----------------------------------------------------------------------------
-// LA-done IRQ — dedicated capture-complete signal to ESP32
+// LA-done IRQ — not available as a dedicated pin on this PCB
 // -----------------------------------------------------------------------------
-// Pulsed low for ~2 µs by bb_la.c whenever the LA transitions to LA_STATE_DONE,
-// so the ESP32 can stop polling hat_la_get_status() over the UART bridge.
-// Wired to ESP32-S3 GPIO18 (PIN_HAT_LA_DONE_IRQ in Firmware/ESP32/src/hat.h).
-// Push-pull output on this side (only the RP2040 drives this line); idle high.
-#define BB_LA_DONE_PIN      28      // GPIO28 — active-low LA-done pulse to ESP32
+// GPIO8 is the shared open-drain HAT INT line. bb_la.c must not drive the old
+// push-pull LA_DONE pulse because GPIO28/GPIO29 are now analog rail senses.
+#define BB_LA_DONE_PIN      (-1)
 
 // -----------------------------------------------------------------------------
-// EXP_EXT — Expansion I/O lines (routed through HVPAK level translation)
+// EXP_EXT — Expansion I/O lines routed through the high-speed level shifter
 // -----------------------------------------------------------------------------
-#define BB_EXT1_PIN         10      // GPIO10 — EXP_EXT_1
-#define BB_EXT2_PIN         11      // GPIO11 — EXP_EXT_2
-#define BB_EXT3_PIN         12      // GPIO12 — EXP_EXT_3
-#define BB_EXT4_PIN         13      // GPIO13 — EXP_EXT_4
+#define BB_EXT1_PIN         10      // GPIO10 — Conn1 pin 2
+#define BB_EXT2_PIN         12      // GPIO12 — Conn1 pin 3
+#define BB_EXT3_PIN         11      // GPIO11 — Conn1 pin 4
+#define BB_EXT4_PIN         21      // GPIO21 — Conn2 pin 1
 #define BB_NUM_EXT_PINS     4
 
+#define BB_HS_IO0_PIN       10
+#define BB_HS_IO1_PIN       11
+#define BB_HS_IO2_PIN       12
+#define BB_HS_IO3_PIN       13
+#define BB_HS_IO4_PIN       14
+#define BB_HS_IO5_PIN       15
+#define BB_HS_IO6_PIN       20
+#define BB_HS_IO7_PIN       21
+#define BB_NUM_HS_IO_PINS   8
+
 // -----------------------------------------------------------------------------
-// Logic Analyzer — PIO 1 capture inputs (Phase 3)
-// These can overlap with EXT pins if LA captures the same signals
+// Logic Analyzer — PIO 1 low-speed capture inputs routed to ESP32 EXT muxes
 // -----------------------------------------------------------------------------
-#define BB_LA_CH0_PIN       14      // GPIO14 — LA channel 0
-#define BB_LA_CH1_PIN       15      // GPIO15 — LA channel 1
-#define BB_LA_CH2_PIN       16      // GPIO16 — LA channel 2
-#define BB_LA_CH3_PIN       17      // GPIO17 — LA channel 3
+#define BB_LA_CH0_PIN       2       // GPIO2 — LA channel 0
+#define BB_LA_CH1_PIN       3       // GPIO3 — LA channel 1
+#define BB_LA_CH2_PIN       4       // GPIO4 — LA channel 2
+#define BB_LA_CH3_PIN       5       // GPIO5 — LA channel 3
 #define BB_LA_NUM_CHANNELS  4
 #define BB_LA_BUFFER_SIZE   (76 * 1024)   // 76KB SRAM capture buffer (reduced for RAM fit)
 
 // -----------------------------------------------------------------------------
 // LEDs
 // -----------------------------------------------------------------------------
-#define BB_LED_STATUS_PIN   9       // GPIO9 — Status LED
-#define BB_LED_ACTIVITY_PIN 25      // GPIO25 — RP2040 onboard LED (if present)
+#define BB_WS2812_PIN       9       // GPIO9 — 8x WS2812B status LEDs
+#define BB_WS2812_COUNT     8
+#define BB_LED_STATUS_PIN   BB_WS2812_PIN
 
 // -----------------------------------------------------------------------------
 // HAT Protocol Constants (shared with ESP32 side)
@@ -136,6 +159,7 @@
 #define HAT_CMD_SET_PIN_CONFIG  0x03
 #define HAT_CMD_GET_PIN_CONFIG  0x04
 #define HAT_CMD_RESET           0x05
+#define HAT_CMD_GET_CAPS        0x06
 
 // Power commands
 #define HAT_CMD_SET_POWER       0x10
@@ -172,6 +196,12 @@
 #define HAT_CMD_LA_USB_SEND     0x38  // Send capture buffer via USB bulk
 #define HAT_CMD_LA_LOG_ENABLE   0x39  // Enable/disable log relay to host
 #define HAT_CMD_LA_USB_RESET    0x3A  // Reinitialize vendor bulk endpoint
+#define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
+
+// HAT v2 supplies, LEDs, and shifted IO controls
+#define HAT_CMD_GET_RAIL_STATUS 0x40
+#define HAT_CMD_SET_RAIL_ENABLE 0x41
+#define HAT_CMD_SET_LED_STATE   0x42
 
 // Responses
 #define HAT_RSP_OK              0x80
@@ -181,6 +211,8 @@
 #define HAT_RSP_DAP_STATUS      0x84
 #define HAT_RSP_LA_STATUS       0x85
 #define HAT_RSP_LA_DATA         0x86
+#define HAT_RSP_CAPS            0x87
+#define HAT_RSP_RAIL_STATUS     0x88
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 
 // Error codes
@@ -192,10 +224,29 @@
 #define HAT_ERR_FRAME           0x06
 #define HAT_ERR_NOT_CONNECTED   0x07
 #define HAT_ERR_POWER_FAULT     0x08
+#define HAT_ERR_UNSUPPORTED     0x12
 
 // HAT type codes
 #define HAT_TYPE_NONE           0x00
 #define HAT_TYPE_SWD_GPIO       0x01
+
+// HAT v2 capability flags
+#define HAT_CAP_RAILS             (1u << 0)
+#define HAT_CAP_LEDS              (1u << 1)
+#define HAT_CAP_LA_LOW_SPEED      (1u << 2)
+#define HAT_CAP_LA_HIGH_SPEED     (1u << 3)
+#define HAT_CAP_SHIFTED_IO        (1u << 4)
+#define HAT_CAP_HVPAK_UNSUPPORTED (1u << 5)
+
+// HAT v2 rail IDs
+#define HAT_RAIL_3V3_ADJ        0
+#define HAT_RAIL_VADJ3          1
+#define HAT_RAIL_VADJ4          2
+#define HAT_RAIL_COUNT          3
+
+// HAT v2 LA route IDs
+#define HAT_LA_ROUTE_LOW_SPEED  0
+#define HAT_LA_ROUTE_HIGH_SPEED 1
 
 // Pin function codes
 #define HAT_FUNC_DISCONNECTED   0x00

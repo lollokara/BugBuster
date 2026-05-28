@@ -174,6 +174,10 @@ extern "C" {
 #define BBP_CMD_HAT_GET_POWER       0xCB  // Get power status (both connectors)
 #define BBP_CMD_HAT_SET_IO_VOLTAGE  0xCC  // Set HVPAK I/O voltage (mV)
 #define BBP_CMD_HAT_SETUP_SWD       0xCD  // One-call SWD quick-setup
+#define BBP_CMD_HAT_GET_CAPS        0xC3
+#define BBP_CMD_HAT_GET_RAIL_STATUS 0xC4
+#define BBP_CMD_HAT_SET_RAIL_ENABLE 0xD2
+#define BBP_CMD_HAT_SET_LED_STATE   0xD3
 #define BBP_CMD_HAT_GET_HVPAK_INFO  0xCE  // Get HVPAK identity/status summary
 // HAT — Logic Analyzer
 #define BBP_CMD_HAT_LA_CONFIG       0xCF  // Configure LA capture
@@ -181,6 +185,7 @@ extern "C" {
 #define BBP_CMD_HAT_LA_FORCE        0xD6  // Force trigger
 #define BBP_CMD_HAT_LA_STATUS       0xD7  // Get capture status
 #define BBP_CMD_HAT_LA_READ         0xD8  // Read captured data chunk
+#define BBP_CMD_HAT_LA_SET_ROUTE    0xD4
 #define BBP_CMD_HAT_LA_STOP         0xD9  // Stop capture
 #define BBP_CMD_HAT_LA_TRIGGER      0xDA  // Set trigger condition
 #define BBP_CMD_HAT_GET_HVPAK_CAPS   0xDB // Get HVPAK capability profile

@@ -13,6 +13,12 @@
 #include <stddef.h>
 #include <string.h>
 
+#if !BB_HVPAK_PRESENT
+#define BB_HVPAK_MAYBE_UNUSED __attribute__((unused))
+#else
+#define BB_HVPAK_MAYBE_UNUSED
+#endif
+
 typedef enum {
     BB_HVPAK_PRESET_1200 = 0,
     BB_HVPAK_PRESET_1800,
@@ -157,7 +163,7 @@ static const HvpakLutEntry k_slg47115e_lut4[] = {
 #define HVPAK_FIELD_INIT(bitv, widv) ((HvpakField){ .lsb = (bitv), .width = (widv) })
 #define HVPAK_ONEBIT_FIELD(bitv) HVPAK_FIELD_INIT((bitv), 1)
 
-static const HvpakDescriptor k_descriptors[] = {
+static const HvpakDescriptor BB_HVPAK_MAYBE_UNUSED k_descriptors[] = {
     {
         .part = BB_HVPAK_PART_SLG47104,
         .name = "SLG47104",
@@ -312,6 +318,7 @@ static void hvpak_set_error(BbHvpakError error)
     s_state.last_error = error;
 }
 
+#if BB_HVPAK_PRESENT
 static const HvpakDescriptor *hvpak_find_descriptor(uint8_t identity)
 {
     for (size_t i = 0; i < sizeof(k_descriptors) / sizeof(k_descriptors[0]); i++) {
@@ -341,6 +348,7 @@ static bool hvpak_probe_service_window(uint8_t *f5, uint8_t *fd, uint8_t *fe)
     if (fe) *fe = v_fe;
     return true;
 }
+#endif
 
 static bool hvpak_require_ready(void)
 {
@@ -561,12 +569,6 @@ static bool hvpak_is_runtime_safe_write_addr(uint8_t addr)
 
 void bb_hvpak_init(void)
 {
-    i2c_init(BB_HVPAK_I2C, BB_HVPAK_I2C_FREQ);
-    gpio_set_function(BB_HVPAK_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(BB_HVPAK_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(BB_HVPAK_SDA_PIN);
-    gpio_pull_up(BB_HVPAK_SCL_PIN);
-
     s_state.initialized = true;
     s_state.detected = false;
     s_state.factory_virgin = false;
@@ -578,13 +580,38 @@ void bb_hvpak_init(void)
     s_state.desc = NULL;
     s_state.requested_mv = BB_HVPAK_DEFAULT_MV;
     s_state.applied_mv = BB_HVPAK_DEFAULT_MV;
+
+#if !BB_HVPAK_PRESENT
+    hvpak_set_error(BB_HVPAK_ERR_NO_DEVICE);
+    return;
+#else
+    i2c_init(BB_HVPAK_I2C, BB_HVPAK_I2C_FREQ);
+    gpio_set_function(BB_HVPAK_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(BB_HVPAK_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(BB_HVPAK_SDA_PIN);
+    gpio_pull_up(BB_HVPAK_SCL_PIN);
+
     hvpak_set_error(BB_HVPAK_ERR_NONE);
 
     (void)bb_hvpak_detect();
+#endif
 }
 
 bool bb_hvpak_detect(void)
 {
+#if !BB_HVPAK_PRESENT
+    if (!s_state.initialized) {
+        hvpak_set_error(BB_HVPAK_ERR_NOT_INITIALIZED);
+        return false;
+    }
+
+    s_state.detected = false;
+    s_state.factory_virgin = false;
+    s_state.part = BB_HVPAK_PART_UNKNOWN;
+    s_state.desc = NULL;
+    hvpak_set_error(BB_HVPAK_ERR_NO_DEVICE);
+    return false;
+#else
     uint8_t identity = 0;
     int rc;
 
@@ -635,6 +662,7 @@ bool bb_hvpak_detect(void)
     s_state.part = s_state.desc->part;
     hvpak_set_error(BB_HVPAK_ERR_NONE);
     return true;
+#endif
 }
 
 bool bb_hvpak_set_voltage(uint16_t mv)
