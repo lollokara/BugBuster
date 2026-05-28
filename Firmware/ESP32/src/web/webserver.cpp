@@ -4318,6 +4318,15 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
         }
 
         int actual_write = (received + 3) & ~3;
+        // Clamp to partition boundary on the last chunk
+        if ((size_t)(offset + actual_write) > part->size) {
+            actual_write = (int)(part->size - offset);
+        }
+        if (actual_write <= 0) {
+            ESP_LOGE(TAG, "SPIFFS upload exceeds partition size at offset %d", offset);
+            failed = true;
+            break;
+        }
         err = esp_partition_write(part, offset, buf, actual_write);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "SPIFFS write failed at offset %d: %s", offset, esp_err_to_name(err));
@@ -4326,7 +4335,7 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
         }
 
         remaining -= received;
-        offset    += received;
+        offset    += actual_write;  // advance by what was written to flash, not by received
 
         if (offset % (64 * 1024) < 4096) {
             ESP_LOGI(TAG, "SPIFFS upload: %d / %d bytes (%d%%)",
@@ -4923,7 +4932,7 @@ void initWebServer(void)
     // route count is 87 plus two WebSocket routes and four registry routes; 96
     // gives safe headroom without reserving another 32 unused handler slots
     // from heap.
-    config.max_uri_handlers = 106;
+    config.max_uri_handlers = 112;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     // HTTPD task stack must stay in internal RAM, not PSRAM. Any handler
     // that touches flash (OTA partition reads, SPIFFS, NVS) goes through
