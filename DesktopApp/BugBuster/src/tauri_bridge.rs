@@ -786,6 +786,11 @@ pub struct HatCalibrateStatus {
     pub progress: u8,
     pub rail_id: u8,
     pub last_error: u8,
+    pub persist_state: u8,
+    pub stage: u8,
+    pub point: u8,
+    pub code: i8,
+    pub measured_mv: i32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -893,6 +898,17 @@ pub async fn hat_set_rail_enable(rail_id: u8, enable: bool) -> Option<Vec<HatRai
     }
     let args = serde_wasm_bindgen::to_value(&Args { rail_id, enable }).unwrap();
     let result = try_invoke("hat_set_rail_enable", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn hat_set_rail_voltage(rail_id: u8, voltage_mv: u16) -> Option<Vec<HatRailStatus>> {
+    #[derive(Serialize)]
+    struct Args {
+        rail_id: u8,
+        voltage_mv: u16,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { rail_id, voltage_mv }).unwrap();
+    let result = try_invoke("hat_set_rail_voltage", args).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 

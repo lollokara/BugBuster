@@ -153,6 +153,7 @@ typedef enum {
 #define HAT_CMD_CALIBRATE_IMPORT 0x45
 #define HAT_CMD_SET_IO_BANK      0x46
 #define HAT_CMD_SET_LEVEL_SHIFT  0x47
+#define HAT_CMD_SET_RAIL_VOLTAGE 0x48
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -281,6 +282,10 @@ typedef struct {
 
     // Timing
     uint32_t     last_ping_ms;                      // Last successful ping timestamp
+    uint32_t     last_ok_ms;                        // Last valid UART frame timestamp
+    uint32_t     last_timeout_ms;                   // Last command timeout timestamp
+    uint8_t      consecutive_timeouts;              // Consecutive command timeouts
+    bool         degraded;                          // Detected/connected but UART recently timed out
 } HatState;
 
 // -----------------------------------------------------------------------------
@@ -399,13 +404,18 @@ bool hat_get_caps(HatCaps *caps);
 bool hat_get_rail_status(HatRailStatus rails[HAT_RAIL_COUNT], uint8_t *rail_count);
 bool hat_set_rail_enable(uint8_t rail_id, bool enable);
 bool hat_set_led_state(uint8_t led_index, uint8_t color_code);
+void hat_update_leds(void);
 bool hat_la_set_route(uint8_t route);
 
 bool hat_calibrate_start(uint8_t rail_id, uint8_t *status_out);
-bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id, uint8_t *last_error);
+bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
+                          uint8_t *last_error, uint8_t *persist_state,
+                          uint8_t *stage, uint8_t *point, int8_t *code,
+                          int32_t *measured_mv);
 bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_data, size_t data_len);
 bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns);
 bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out);
+bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv);
 
 /**
  * @brief Send an advanced HVPAK command to the RP2040 HAT and return the raw

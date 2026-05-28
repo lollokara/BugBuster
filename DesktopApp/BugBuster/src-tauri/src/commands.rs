@@ -1236,6 +1236,41 @@ pub async fn hat_set_io_voltage(
 }
 
 #[tauri::command]
+pub async fn hat_set_rail_voltage(
+    rail_id: u8,
+    voltage_mv: u16,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<Vec<HatRailStatus>> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_u8(rail_id);
+    pw.put_u16(voltage_mv);
+    let rsp = mgr.send_command(bbp::CMD_HAT_SET_RAIL_VOLTAGE, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    if rsp.is_empty() {
+        return Err("Empty response from HAT".into());
+    }
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let count = r.get_u8().unwrap_or(0);
+    let mut rails = Vec::new();
+    for _ in 0..count {
+        let rail_id = r.get_u8().unwrap_or(0);
+        let enabled = r.get_bool().unwrap_or(false);
+        let voltage_mv = r.get_u16().unwrap_or(0);
+        let current_ma = r.get_u16().unwrap_or(0);
+        let status = r.get_u8().unwrap_or(0);
+        rails.push(HatRailStatus {
+            rail_id,
+            enabled,
+            voltage_mv,
+            current_ma,
+            status,
+        });
+    }
+    Ok(rails)
+}
+
+#[tauri::command]
 pub async fn hat_setup_swd(
     target_voltage_mv: u16,
     connector: u8,
@@ -1270,7 +1305,7 @@ pub async fn hat_calibrate_status(
     let rsp = mgr.send_command(bbp::CMD_HAT_CALIBRATE_STATUS, &[])
         .await
         .map_err(map_err)?;
-    if rsp.len() < 4 {
+    if rsp.len() < 12 {
         return Err("Invalid status response from HAT".into());
     }
     Ok(serde_json::json!({
@@ -1278,6 +1313,11 @@ pub async fn hat_calibrate_status(
         "progress": rsp[1],
         "railId": rsp[2],
         "lastError": rsp[3],
+        "persistState": rsp[4],
+        "stage": rsp[5],
+        "point": rsp[6],
+        "code": (rsp[7] as i8),
+        "measuredMv": i32::from_le_bytes([rsp[8], rsp[9], rsp[10], rsp[11]]),
     }))
 }
 

@@ -21,8 +21,8 @@ void handle_calibrate_status(void);
 void handle_calibrate_import(const uint8_t *payload, uint8_t len);
 void handle_set_io_bank(const uint8_t *payload, uint8_t len);
 void handle_set_level_shift(const uint8_t *payload, uint8_t len);
+void handle_set_rail_voltage(const uint8_t *payload, uint8_t len);
 
 bool bb_hat_v2_set_io_voltage(uint16_t mv);
 uint16_t bb_hat_v2_get_io_voltage(void);
-
-
+bool bb_hat_v2_set_rail_voltage(uint8_t rail_id, uint16_t mv);

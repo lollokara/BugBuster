@@ -125,6 +125,7 @@ pub fn run() {
             commands::hat_calibrate_import,
             commands::hat_set_io_bank,
             commands::hat_set_level_shift,
+            commands::hat_set_rail_voltage,
             commands::hat_get_caps,
             commands::hat_get_rail_status,
             commands::hat_set_rail_enable,

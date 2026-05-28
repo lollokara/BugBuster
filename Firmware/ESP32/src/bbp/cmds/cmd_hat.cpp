@@ -366,6 +366,22 @@ static int handler_hat_set_rail_enable(const uint8_t *payload, size_t len,
     return handler_hat_get_rail_status(NULL, 0, resp, resp_len);
 }
 
+static int handler_hat_set_rail_voltage(const uint8_t *payload, size_t len,
+                                        uint8_t *resp, size_t *resp_len)
+{
+    if (len < 3) return -CMD_ERR_BAD_ARG;
+
+    size_t rpos = 0;
+    uint8_t rail = bbp_get_u8(payload, &rpos);
+    uint16_t mv = bbp_get_u16(payload, &rpos);
+
+    if (!hat_set_rail_voltage(rail, mv)) {
+        return hat_err_to_cmd_err(hat_get_last_error());
+    }
+
+    return handler_hat_get_rail_status(NULL, 0, resp, resp_len);
+}
+
 static int handler_hat_set_led_state(const uint8_t *payload, size_t len,
                                      uint8_t *resp, size_t *resp_len)
 {
@@ -426,7 +442,11 @@ static int handler_hat_calibrate_status(const uint8_t *payload, size_t len,
                                         uint8_t *resp, size_t *resp_len)
 {
     uint8_t state = 0, progress = 0, rail_id = 0, last_error = 0;
-    if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error)) {
+    uint8_t persist_state = 0, stage = 0, point = 0;
+    int8_t code = 0;
+    int32_t measured_mv = -1;
+    if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error,
+                              &persist_state, &stage, &point, &code, &measured_mv)) {
         return hat_err_to_cmd_err(hat_get_last_error());
     }
 
@@ -435,6 +455,11 @@ static int handler_hat_calibrate_status(const uint8_t *payload, size_t len,
     bbp_put_u8(resp, &wpos, progress);
     bbp_put_u8(resp, &wpos, rail_id);
     bbp_put_u8(resp, &wpos, last_error);
+    bbp_put_u8(resp, &wpos, persist_state);
+    bbp_put_u8(resp, &wpos, stage);
+    bbp_put_u8(resp, &wpos, point);
+    bbp_put_u8(resp, &wpos, (uint8_t)code);
+    bbp_put_u32(resp, &wpos, (uint32_t)measured_mv);
     *resp_len = wpos;
     return (int)wpos;
 }
@@ -796,6 +821,10 @@ static const ArgSpec s_hat_set_rail_enable_args[] = {
     { "rail",   ARG_U8, true, 0, HAT_RAIL_COUNT - 1 },
     { "enable", ARG_U8, true, 0, 1 },
 };
+static const ArgSpec s_hat_set_rail_voltage_args[] = {
+    { "rail", ARG_U8,  true, 0, HAT_RAIL_COUNT - 1 },
+    { "mv",   ARG_U16, true, 0, 36000 },
+};
 
 static const ArgSpec s_hat_set_led_state_args[] = {
     { "led",   ARG_U8, true, 1, 8 },
@@ -856,6 +885,11 @@ static const ArgSpec s_hat_calibrate_status_rsp[] = {
     { "progress",   ARG_U8, true, 0, 0 },
     { "rail_id",    ARG_U8, true, 0, 0 },
     { "last_error", ARG_U8, true, 0, 0 },
+    { "persist_state", ARG_U8, true, 0, 0 },
+    { "stage",         ARG_U8, true, 0, 0 },
+    { "point",         ARG_U8, true, 0, 0 },
+    { "code",          ARG_U8, true, 0, 0 },
+    { "measured_mv",   ARG_U32, true, 0, 0 },
 };
 static const ArgSpec s_hat_set_io_bank_args[] = {
     { "dirs", ARG_U8, true, 0, 255 },
@@ -895,6 +929,8 @@ static const CmdDescriptor s_hat_cmds[] = {
       NULL,                    0, NULL,                   0, handler_hat_get_caps,              CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_GET_RAIL_STATUS,       "hat_get_rail_status",
       NULL,                    0, NULL,                   0, handler_hat_get_rail_status,       CMD_FLAG_READS_STATE },
+    { BBP_CMD_HAT_SET_RAIL_VOLTAGE,      "hat_set_rail_voltage",
+      s_hat_set_rail_voltage_args, 2, NULL,                0, handler_hat_set_rail_voltage,      0                   },
     { BBP_CMD_HAT_SET_RAIL_ENABLE,       "hat_set_rail_enable",
       s_hat_set_rail_enable_args, 2, NULL,                0, handler_hat_set_rail_enable,       0                   },
     { BBP_CMD_HAT_SET_LED_STATE,         "hat_set_led_state",
@@ -950,7 +986,7 @@ static const CmdDescriptor s_hat_cmds[] = {
     { BBP_CMD_HAT_CALIBRATE_START,       "hat_calibrate_start",
       s_hat_calibrate_start_args, 1, s_hat_calibrate_start_rsp, 1, handler_hat_calibrate_start, 0                   },
     { BBP_CMD_HAT_CALIBRATE_STATUS,      "hat_calibrate_status",
-      NULL,                    0, s_hat_calibrate_status_rsp, 4, handler_hat_calibrate_status, CMD_FLAG_READS_STATE },
+      NULL,                    0, s_hat_calibrate_status_rsp, 9, handler_hat_calibrate_status, CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_CALIBRATE_IMPORT,      "hat_calibrate_import",
       NULL,                    0, NULL,                   0, handler_hat_calibrate_import,      0                   },
     { BBP_CMD_HAT_SET_IO_BANK,           "hat_set_io_bank",

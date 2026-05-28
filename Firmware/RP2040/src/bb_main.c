@@ -19,6 +19,7 @@
 #ifdef DEBUGPROBE_INTEGRATION
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 #endif
 
 #include "bb_config.h"
@@ -64,6 +65,10 @@ static LaState s_prev_la_state = LA_STATE_IDLE;
 
 // Log relay: when enabled, bb_la_log() messages are sent via HAT UART to host
 static volatile bool s_la_log_enabled = false;
+
+#ifdef DEBUGPROBE_INTEGRATION
+static SemaphoreHandle_t s_uart_tx_mutex = NULL;
+#endif
 
 // -----------------------------------------------------------------------------
 // IRQ pin assertion (open-drain, active low, ~1ms pulse)
@@ -113,6 +118,13 @@ void send_response(uint8_t rsp_cmd, const uint8_t *payload, uint8_t len)
 {
     uint8_t frame[36];
     size_t frame_len = hat_build_frame(frame, rsp_cmd, payload, len);
+#ifdef DEBUGPROBE_INTEGRATION
+    if (s_uart_tx_mutex && xSemaphoreTake(s_uart_tx_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        uart_write_blocking(BB_UART, frame, frame_len);
+        xSemaphoreGive(s_uart_tx_mutex);
+        return;
+    }
+#endif
     uart_write_blocking(BB_UART, frame, frame_len);
 }
 
@@ -880,6 +892,9 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_SET_LEVEL_SHIFT:
         handle_set_level_shift(frame->payload, frame->payload_len);
         break;
+    case HAT_CMD_SET_RAIL_VOLTAGE:
+        handle_set_rail_voltage(frame->payload, frame->payload_len);
+        break;
 
 
     default:
@@ -946,6 +961,10 @@ void bb_cmd_task(void *params)
     gpio_set_function(BB_UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(BB_UART_RX_PIN, GPIO_FUNC_UART);
     uart_set_fifo_enabled(BB_UART, true);
+
+#ifdef DEBUGPROBE_INTEGRATION
+    s_uart_tx_mutex = xSemaphoreCreateMutex();
+#endif
 
     // Initialize subsystems
     bb_power_init();

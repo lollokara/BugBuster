@@ -2764,6 +2764,11 @@ static esp_err_t handle_get_hat(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "detected", hs->detected);
     cJSON_AddBoolToObject(root, "connected", hs->connected);
+    cJSON_AddBoolToObject(root, "degraded", hs->degraded);
+    cJSON_AddBoolToObject(root, "responsive", hs->connected && !hs->degraded);
+    cJSON_AddNumberToObject(root, "consecutiveTimeouts", hs->consecutive_timeouts);
+    cJSON_AddNumberToObject(root, "lastOkMs", hs->last_ok_ms);
+    cJSON_AddNumberToObject(root, "lastTimeoutMs", hs->last_timeout_ms);
     cJSON_AddNumberToObject(root, "type", hs->type);
     cJSON_AddStringToObject(root, "typeName", hat_type_name(hs->type));
     cJSON_AddNumberToObject(root, "detectVoltage", hs->detect_voltage);
@@ -2998,6 +3003,41 @@ static esp_err_t handle_post_hat_v2_rail_enable(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// POST /api/hat/v2/rail/voltage
+static esp_err_t handle_post_hat_v2_rail_voltage(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "railId", Number, "Field 'railId' must be a number");
+    VALIDATE_JSON_FIELD(doc, "voltageMv", Number, "Field 'voltageMv' must be a number");
+
+    uint8_t rail_id = (uint8_t)cJSON_GetObjectItem(doc, "railId")->valueint;
+    uint16_t mv = (uint16_t)cJSON_GetObjectItem(doc, "voltageMv")->valueint;
+    cJSON_Delete(doc);
+
+    if (rail_id < HAT_RAIL_VADJ3 || rail_id > HAT_RAIL_VADJ4) {
+        return send_error(req, 400, "railId out of range (1-2)");
+    }
+
+    if (!hat_set_rail_voltage(rail_id, mv)) {
+        return send_error(req, 503, "HAT rail voltage command failed");
+    }
+
+    const HatState *hs = hat_get_state();
+    const HatRailStatus *rs = &hs->rail[rail_id];
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "railId", rs->rail_id);
+    cJSON_AddNumberToObject(root, "voltageMv", rs->voltage_mv);
+    cJSON_AddNumberToObject(root, "currentMa", rs->current_ma);
+    cJSON_AddNumberToObject(root, "status", rs->status);
+    return send_json(req, root);
+}
+
 // POST /api/hat/v2/led
 static esp_err_t handle_post_hat_v2_led(httpd_req_t *req)
 {
@@ -3082,7 +3122,11 @@ static esp_err_t handle_get_hat_v2_calibrate_status(httpd_req_t *req)
     if (!hat_detected()) return send_error(req, 404, "HAT not detected");
 
     uint8_t state = 0, progress = 0, rail_id = 0, last_error = 0;
-    if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error)) {
+    uint8_t persist_state = 0, stage = 0, point = 0;
+    int8_t code = 0;
+    int32_t measured_mv = -1;
+    if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error,
+                              &persist_state, &stage, &point, &code, &measured_mv)) {
         return send_error(req, 503, "HAT not responding");
     }
 
@@ -3091,6 +3135,11 @@ static esp_err_t handle_get_hat_v2_calibrate_status(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "progress", progress);
     cJSON_AddNumberToObject(root, "railId", rail_id);
     cJSON_AddNumberToObject(root, "lastError", last_error);
+    cJSON_AddNumberToObject(root, "persistState", persist_state);
+    cJSON_AddNumberToObject(root, "stage", stage);
+    cJSON_AddNumberToObject(root, "point", point);
+    cJSON_AddNumberToObject(root, "code", code);
+    cJSON_AddNumberToObject(root, "measuredMv", measured_mv);
     return send_json(req, root);
 }
 
@@ -4300,16 +4349,17 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
     }
 
     int remaining = req->content_len;
-    int offset    = 0;
-    bool failed   = false;
+    int offset = 0;
+    int buf_fill = 0;
+    bool failed = false;
 
     while (remaining > 0) {
-        int to_read = (remaining > 4096) ? 4096 : remaining;
-        // Pad last chunk to 4-byte boundary (flash write requirement)
-        int to_write = (to_read + 3) & ~3;
-        if (to_write > to_read) memset(buf + to_read, 0xFF, to_write - to_read);
+        int to_read = 4096 - buf_fill;
+        if (to_read > remaining) {
+            to_read = remaining;
+        }
 
-        int received = httpd_req_recv(req, buf, to_read);
+        int received = httpd_req_recv(req, buf + buf_fill, to_read);
         if (received <= 0) {
             if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             ESP_LOGE(TAG, "SPIFFS recv error at offset %d", offset);
@@ -4317,29 +4367,38 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
             break;
         }
 
-        int actual_write = (received + 3) & ~3;
-        // Clamp to partition boundary on the last chunk
-        if ((size_t)(offset + actual_write) > part->size) {
-            actual_write = (int)(part->size - offset);
-        }
-        if (actual_write <= 0) {
-            ESP_LOGE(TAG, "SPIFFS upload exceeds partition size at offset %d", offset);
-            failed = true;
-            break;
-        }
-        err = esp_partition_write(part, offset, buf, actual_write);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "SPIFFS write failed at offset %d: %s", offset, esp_err_to_name(err));
-            failed = true;
-            break;
-        }
-
+        buf_fill += received;
         remaining -= received;
-        offset    += actual_write;  // advance by what was written to flash, not by received
 
-        if (offset % (64 * 1024) < 4096) {
-            ESP_LOGI(TAG, "SPIFFS upload: %d / %d bytes (%d%%)",
-                     offset, req->content_len, offset * 100 / req->content_len);
+        if (buf_fill == 4096 || remaining == 0) {
+            int actual_write = buf_fill;
+            if (remaining == 0) {
+                actual_write = (buf_fill + 3) & ~3;
+                if (actual_write > buf_fill) {
+                    memset(buf + buf_fill, 0xFF, actual_write - buf_fill);
+                }
+            }
+
+            if ((size_t)(offset + actual_write) > part->size) {
+                ESP_LOGE(TAG, "SPIFFS upload exceeds partition size at offset %d", offset);
+                failed = true;
+                break;
+            }
+
+            err = esp_partition_write(part, offset, buf, actual_write);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "SPIFFS write failed at offset %d: %s", offset, esp_err_to_name(err));
+                failed = true;
+                break;
+            }
+
+            offset += actual_write;
+            buf_fill = 0;
+
+            if (offset % (64 * 1024) == 0 || remaining == 0) {
+                ESP_LOGI(TAG, "SPIFFS upload: %d / %d bytes (%d%%)",
+                         offset, req->content_len, offset * 100 / req->content_len);
+            }
         }
     }
 
@@ -4351,17 +4410,29 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
     err = esp_vfs_spiffs_register(&conf);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "SPIFFS remount failed: %s", esp_err_to_name(err));
+        if (!failed) {
+            failed = true;
+        }
     }
 
     if (failed) {
-        return send_error(req, 500, "SPIFFS write failed");
+        return send_error(req, 500, "SPIFFS write or remount failed");
     }
 
     ESP_LOGI(TAG, "SPIFFS upload complete: %d bytes", offset);
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "success", true);
-    cJSON_AddNumberToObject(root, "bytesWritten", offset);
-    return send_json(req, root);
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    char body[96];
+    int body_len = snprintf(body, sizeof(body), "{\"success\":true,\"bytesWritten\":%d}", offset);
+    if (body_len < 0 || body_len >= (int)sizeof(body)) {
+        return send_error(req, 500, "SPIFFS response encode failed");
+    }
+    err = httpd_resp_send(req, body, body_len);
+    ESP_LOGI(TAG, "SPIFFS upload response sent: %s", esp_err_to_name(err));
+    return err;
 }
 
 // =============================================================================
@@ -5230,6 +5301,11 @@ void initWebServer(void)
         .uri = "/api/hat/v2/rail/enable", .method = HTTP_POST, .handler = handle_post_hat_v2_rail_enable, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_v2_rail_enable);
+
+    httpd_uri_t uri_hat_v2_rail_voltage = {
+        .uri = "/api/hat/v2/rail/voltage", .method = HTTP_POST, .handler = handle_post_hat_v2_rail_voltage, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_v2_rail_voltage);
 
     httpd_uri_t uri_hat_v2_led = {
         .uri = "/api/hat/v2/led", .method = HTTP_POST, .handler = handle_post_hat_v2_led, .user_ctx = NULL

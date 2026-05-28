@@ -5,6 +5,7 @@
 // =============================================================================
 
 #include "dio.h"
+#include "hat.h"
 #include "config.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -114,6 +115,8 @@ bool dio_configure_ext(uint8_t io, uint8_t mode, bool pulldown)
              mode == DIO_MODE_INPUT ? "INPUT" :
              mode == DIO_MODE_OUTPUT ? "OUTPUT" : "DISABLED",
              pulldown ? "YES" : "NO");
+    
+    hat_update_leds();
     return true;
 }
 

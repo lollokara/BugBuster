@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-pub const PROTO_VERSION: u8 = 5;
+pub const PROTO_VERSION: u8 = 6;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
 pub const HANDSHAKE_RSP_LEN: usize = 14;
@@ -139,6 +139,7 @@ pub const CMD_EXT_SPI_TRANSFER: u8 = 0xBE;
 pub const CMD_HAT_GET_STATUS: u8 = 0xC5;
 pub const CMD_HAT_GET_CAPS: u8 = 0xC3;
 pub const CMD_HAT_GET_RAIL_STATUS: u8 = 0xC4;
+pub const CMD_HAT_SET_RAIL_VOLTAGE: u8 = 0xB5;
 pub const CMD_HAT_SET_PIN: u8 = 0xC6;
 pub const CMD_HAT_SET_ALL_PINS: u8 = 0xC7;
 pub const CMD_HAT_RESET: u8 = 0xC8;

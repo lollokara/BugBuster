@@ -12,20 +12,25 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/clocks.h"
+#include "pico/error.h"
+#include "pico/flash.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
+#include "bb_la_usb.h"
 #include "bb_ws2812.pio.h"
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
+#include <stddef.h>
 
 // DS4424 Registers & Constants
 #define DS4424_REG_OUT0     0xF8
 #define DS4424_REG_OUT1     0xF9
 #define DS4424_REG_OUT2     0xFA
 #define DS4424_I2C_ADDR     0x10
-#define DS4424_CAL_MAX_POINTS 100
+#define DS4424_CAL_MAX_POINTS 130
 
 // Calibration Point definition
 typedef struct {
@@ -41,8 +46,12 @@ typedef struct {
 } DS4424CalData;
 
 // Flash Persistence layout
-#define FLASH_CAL_OFFSET   (2048 * 1024 - 4096)
-#define CAL_MAGIC          0xCA1B0002
+#define FLASH_CAL_LEGACY_OFFSET   (2048 * 1024 - 4096)
+#define FLASH_CAL_SLOT_A_OFFSET   (2048 * 1024 - 8192)
+#define FLASH_CAL_SLOT_B_OFFSET   (2048 * 1024 - 4096)
+#define CAL_MAGIC                 0xCA1B0002
+#define CAL_JOURNAL_MAGIC         0xCA1B0003
+#define CAL_JOURNAL_VERSION       3
 
 typedef struct {
     uint32_t magic;
@@ -52,10 +61,28 @@ typedef struct {
     DS4424CalData cal[3];
 } FlashCalSector;
 
+typedef struct {
+    uint32_t magic;
+    uint32_t crc;
+    uint32_t sequence;
+    uint16_t payload_len;
+    uint8_t version;
+    uint8_t reserved;
+    FlashCalSector payload;
+} FlashCalJournalSector;
+
+typedef enum {
+    HAT_PERSIST_CLEAN = 0,
+    HAT_PERSIST_PENDING = 1,
+    HAT_PERSIST_SAVING = 2,
+    HAT_PERSIST_FAILED = 3,
+} HatPersistState;
+
 // Helper function prototypes from bb_main.c
 extern void send_response(uint8_t rsp_cmd, const uint8_t *payload, uint8_t len);
 extern void send_ok(const uint8_t *payload, uint8_t len);
 extern void send_error(uint8_t error_code);
+extern void bb_la_log(const char *fmt, ...);
 extern uint16_t clamp_u16_from_float(float v);
 extern void append_rail_status(uint8_t *rsp, size_t *p, uint8_t rail_id,
                                bool enabled, uint16_t mv, uint16_t ma,
@@ -71,12 +98,24 @@ static uint8_t s_la_route = HAT_LA_ROUTE_LOW_SPEED;
 static bool s_ds4424_present = false;
 static FlashCalSector s_flash_cal = {0};
 static uint16_t s_io_voltage_mv = 3300;
+static SemaphoreHandle_t s_persist_mutex = NULL;
+static TaskHandle_t s_persist_task_handle = NULL;
+static FlashCalSector s_persist_snapshot = {0};
+static volatile HatPersistState s_persist_state = HAT_PERSIST_CLEAN;
+static volatile bool s_persist_pending = false;
+static uint32_t s_persist_request_id = 0;
+static uint32_t s_flash_sequence = 0;
+static uint8_t s_flash_write_buf[FLASH_SECTOR_SIZE];
 
 // Calibration Background Task State
 static volatile uint8_t s_cal_state = 0; // 0=idle, 1=running, 2=success, 3=failed
 static volatile uint8_t s_cal_progress = 0;
 static volatile uint8_t s_cal_rail_id = 0;
 static volatile uint8_t s_cal_last_error = 0;
+static volatile uint8_t s_cal_stage = 0;
+static volatile uint8_t s_cal_point = 0;
+static volatile int8_t  s_cal_code = 0;
+static volatile int32_t s_cal_measured_mv = -1;
 static TaskHandle_t s_cal_task_handle = NULL;
 
 // -----------------------------------------------------------------------------
@@ -159,33 +198,190 @@ static uint32_t calculate_crc(const uint8_t *data, size_t len)
     return ~crc;
 }
 
-static void flash_save(void)
+static void flash_prepare_payload(FlashCalSector *sector)
 {
-    s_flash_cal.magic = CAL_MAGIC;
-    s_flash_cal.version = 2;
-    uint8_t *p = (uint8_t *)&s_flash_cal.version;
+    sector->magic = CAL_MAGIC;
+    sector->version = 2;
+    uint8_t *p = (uint8_t *)&sector->version;
     size_t len = sizeof(FlashCalSector) - offsetof(FlashCalSector, version);
-    s_flash_cal.crc = calculate_crc(p, len);
+    sector->crc = calculate_crc(p, len);
+}
 
-    uint32_t ints = save_and_disable_interrupts();
-    flash_range_erase(FLASH_CAL_OFFSET, FLASH_SECTOR_SIZE);
-    flash_range_program(FLASH_CAL_OFFSET, (const uint8_t *)&s_flash_cal, sizeof(FlashCalSector));
-    restore_interrupts(ints);
+static bool flash_payload_valid(const FlashCalSector *sector)
+{
+    if (sector->magic != CAL_MAGIC) return false;
+    const uint8_t *p = (const uint8_t *)&sector->version;
+    size_t len = sizeof(FlashCalSector) - offsetof(FlashCalSector, version);
+    return calculate_crc(p, len) == sector->crc;
+}
+
+static bool flash_journal_valid(const FlashCalJournalSector *slot)
+{
+    if (slot->magic != CAL_JOURNAL_MAGIC) return false;
+    if (slot->version != CAL_JOURNAL_VERSION) return false;
+    if (slot->payload_len != sizeof(FlashCalSector)) return false;
+
+    const uint8_t *p = (const uint8_t *)&slot->sequence;
+    size_t len = offsetof(FlashCalJournalSector, payload) - offsetof(FlashCalJournalSector, sequence);
+    len += slot->payload_len;
+    if (calculate_crc(p, len) != slot->crc) return false;
+
+    return flash_payload_valid(&slot->payload);
+}
+
+typedef struct {
+    uint32_t offset;
+    const uint8_t *data;
+} FlashWriteOp;
+
+static void flash_write_callback(void *param)
+{
+    FlashWriteOp *op = (FlashWriteOp *)param;
+    flash_range_erase(op->offset, FLASH_SECTOR_SIZE);
+    flash_range_program(op->offset, op->data, FLASH_SECTOR_SIZE);
+}
+
+static void persist_task_func(void *param)
+{
+    (void)param;
+
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
+
+        if (!s_persist_pending) {
+            continue;
+        }
+
+        if (bb_la_usb_is_streaming() || bb_la_usb_has_pending_data()) {
+            s_persist_state = HAT_PERSIST_PENDING;
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        FlashCalSector snapshot;
+        uint32_t request_id = 0;
+        if (s_persist_mutex && xSemaphoreTake(s_persist_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            memcpy(&snapshot, &s_persist_snapshot, sizeof(snapshot));
+            request_id = s_persist_request_id;
+            xSemaphoreGive(s_persist_mutex);
+        } else {
+            s_persist_state = HAT_PERSIST_FAILED;
+            continue;
+        }
+
+        s_persist_state = HAT_PERSIST_SAVING;
+        uint32_t sequence = s_flash_sequence + 1;
+        uint32_t offset = (sequence & 1u) ? FLASH_CAL_SLOT_A_OFFSET : FLASH_CAL_SLOT_B_OFFSET;
+
+        FlashCalJournalSector record;
+        memset(&record, 0xFF, sizeof(record));
+        record.magic = CAL_JOURNAL_MAGIC;
+        record.sequence = sequence;
+        record.payload_len = sizeof(FlashCalSector);
+        record.version = CAL_JOURNAL_VERSION;
+        record.reserved = 0xFF;
+        memcpy(&record.payload, &snapshot, sizeof(snapshot));
+
+        const uint8_t *crc_start = (const uint8_t *)&record.sequence;
+        size_t crc_len = offsetof(FlashCalJournalSector, payload) - offsetof(FlashCalJournalSector, sequence);
+        crc_len += record.payload_len;
+        record.crc = calculate_crc(crc_start, crc_len);
+
+        memset(s_flash_write_buf, 0xFF, sizeof(s_flash_write_buf));
+        memcpy(s_flash_write_buf, &record, sizeof(record));
+
+        FlashWriteOp op = {
+            .offset = offset,
+            .data = s_flash_write_buf,
+        };
+
+        int rc = flash_safe_execute(flash_write_callback, &op, 1000);
+        if (rc == PICO_OK) {
+            s_flash_sequence = sequence;
+            bool more_pending = false;
+            if (s_persist_mutex && xSemaphoreTake(s_persist_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                more_pending = s_persist_pending && s_persist_request_id != request_id;
+                if (!more_pending) {
+                    s_persist_pending = false;
+                }
+                xSemaphoreGive(s_persist_mutex);
+            }
+            s_persist_state = more_pending ? HAT_PERSIST_PENDING : HAT_PERSIST_CLEAN;
+            bb_la_log("[CAL] flash save complete seq=%lu slot=%c\n",
+                      (unsigned long)sequence, (offset == FLASH_CAL_SLOT_A_OFFSET) ? 'A' : 'B');
+            if (more_pending) {
+                xTaskNotifyGive(s_persist_task_handle);
+            }
+        } else {
+            bool more_pending = false;
+            if (s_persist_mutex && xSemaphoreTake(s_persist_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                more_pending = s_persist_pending && s_persist_request_id != request_id;
+                if (!more_pending) {
+                    s_persist_pending = false;
+                }
+                xSemaphoreGive(s_persist_mutex);
+            }
+            s_persist_state = more_pending ? HAT_PERSIST_PENDING : HAT_PERSIST_FAILED;
+            bb_la_log("[CAL] flash save failed rc=%d\n", rc);
+            if (more_pending) {
+                xTaskNotifyGive(s_persist_task_handle);
+            }
+        }
+    }
+}
+
+static bool flash_save(void)
+{
+    flash_prepare_payload(&s_flash_cal);
+
+    if (!s_persist_mutex || !s_persist_task_handle) {
+        s_persist_state = HAT_PERSIST_FAILED;
+        return false;
+    }
+
+    if (xSemaphoreTake(s_persist_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        s_persist_state = HAT_PERSIST_FAILED;
+        return false;
+    }
+    memcpy(&s_persist_snapshot, &s_flash_cal, sizeof(s_persist_snapshot));
+    s_persist_request_id++;
+    s_persist_pending = true;
+    s_persist_state = HAT_PERSIST_PENDING;
+    xSemaphoreGive(s_persist_mutex);
+
+    xTaskNotifyGive(s_persist_task_handle);
+    return true;
 }
 
 static void flash_load(void)
 {
-    const FlashCalSector *flash_ptr = (const FlashCalSector *)(XIP_BASE + FLASH_CAL_OFFSET);
-    if (flash_ptr->magic == CAL_MAGIC) {
-        uint8_t *p = (uint8_t *)&flash_ptr->version;
-        size_t len = sizeof(FlashCalSector) - offsetof(FlashCalSector, version);
-        uint32_t crc = calculate_crc(p, len);
-        if (crc == flash_ptr->crc) {
-            memcpy(&s_flash_cal, flash_ptr, sizeof(FlashCalSector));
-            return;
+    const FlashCalJournalSector *slot_a =
+        (const FlashCalJournalSector *)(XIP_BASE + FLASH_CAL_SLOT_A_OFFSET);
+    const FlashCalJournalSector *slot_b =
+        (const FlashCalJournalSector *)(XIP_BASE + FLASH_CAL_SLOT_B_OFFSET);
+
+    bool a_valid = flash_journal_valid(slot_a);
+    bool b_valid = flash_journal_valid(slot_b);
+
+    if (a_valid || b_valid) {
+        const FlashCalJournalSector *chosen = slot_a;
+        if (b_valid && (!a_valid || slot_b->sequence > slot_a->sequence)) {
+            chosen = slot_b;
         }
+        memcpy(&s_flash_cal, &chosen->payload, sizeof(s_flash_cal));
+        s_flash_sequence = chosen->sequence;
+        return;
     }
-    memset(&s_flash_cal, 0, sizeof(FlashCalSector));
+
+    const FlashCalSector *legacy = (const FlashCalSector *)(XIP_BASE + FLASH_CAL_LEGACY_OFFSET);
+    if (flash_payload_valid(legacy)) {
+        memcpy(&s_flash_cal, legacy, sizeof(s_flash_cal));
+        s_flash_sequence = 0;
+        return;
+    }
+
+    memset(&s_flash_cal, 0, sizeof(s_flash_cal));
+    s_flash_sequence = 0;
 }
 
 static int ds4424_write_raw(uint8_t reg, uint8_t value)
@@ -296,6 +492,11 @@ static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
 {
     DS4424CalData *cal = &s_flash_cal.cal[ch];
     if (cal->valid && cal->count >= 2) {
+        bb_la_log("[DEBUG] volts_to_code ch=%d volts=%.3f count=%d\n", ch, volts, (int)cal->count);
+        for (int i = 0; i < (int)cal->count; i++) {
+            bb_la_log("  [%d]: dac=%d, v=%.3f\n", i, cal->points[i].dac_code, cal->points[i].measured_v);
+        }
+
         for (int i = 0; i < (int)cal->count - 1; i++) {
             float v0 = cal->points[i].measured_v;
             float v1 = cal->points[i+1].measured_v;
@@ -309,6 +510,7 @@ static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
                 int code_i = (code_f >= 0) ? (int)floorf(code_f) : (int)ceilf(code_f);
                 if (code_i > 127) code_i = 127;
                 if (code_i < -127) code_i = -127;
+                bb_la_log("  -> matched between: code=%d (v0=%.3f, v1=%.3f, c0=%d, c1=%d)\n", code_i, v0, v1, c0, c1);
                 return (int8_t)code_i;
             }
         }
@@ -321,10 +523,11 @@ static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
                 best_idx = i;
             }
         }
+        bb_la_log("  -> matched nearest: best_idx=%d code=%d err=%.3f\n", best_idx, cal->points[best_idx].dac_code, best_err);
         return cal->points[best_idx].dac_code;
     }
 
-    float midpoint = (ch == 0) ? 3.3f : 5.0f;
+    float midpoint = (ch == 0) ? 3.3f : 18.0f;
     float r_int = 249.0f;
     float ifs = 50.0f;
     float step_v = (ifs * 1e-6f * r_int * 1000.0f) / 127.0f;
@@ -374,6 +577,46 @@ static uint16_t adc_read_oversampled(uint channel)
     return (uint16_t)(sum / 16);
 }
 
+static float measure_supply_stable_for_cal(uint adc_ch)
+{
+    float samples[5] = {0};
+    int sample_idx = 0;
+    int samples_collected = 0;
+
+    for (int step = 0; step < 100; step++) {
+        uint16_t adc_val = adc_read_oversampled(adc_ch);
+        float v = (float)adc_val * 3.3f / 4095.0f * 12.0f;
+
+        s_cal_measured_mv = (int32_t)(v * 1000.0f);
+
+        samples[sample_idx] = v;
+        sample_idx = (sample_idx + 1) % 5;
+        if (samples_collected < 5) {
+            samples_collected++;
+        }
+
+        if (samples_collected >= 5 && step >= 5) {
+            float min_v = samples[0];
+            float max_v = samples[0];
+            for (int i = 1; i < 5; i++) {
+                if (samples[i] < min_v) min_v = samples[i];
+                if (samples[i] > max_v) max_v = samples[i];
+            }
+            float dev = max_v - min_v;
+            if (dev < 0.030f) {
+                float sum = 0.0f;
+                for (int i = 0; i < 5; i++) sum += samples[i];
+                return sum / 5.0f;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+
+    float sum = 0.0f;
+    for (int i = 0; i < 5; i++) sum += samples[i];
+    return sum / 5.0f;
+}
+
 // -----------------------------------------------------------------------------
 // Auto-Calibration Sweep Task
 // -----------------------------------------------------------------------------
@@ -383,16 +626,24 @@ static void cal_task_func(void *param)
     s_cal_rail_id = rail_id;
     s_cal_progress = 0;
     s_cal_last_error = 0;
+    s_cal_stage = 1;
+    s_cal_point = 0;
+    s_cal_code = 0;
+    s_cal_measured_mv = -1;
 
     uint8_t dac_ch = (rail_id == HAT_RAIL_VADJ3) ? 1 : 2;
     uint8_t adc_ch = (rail_id == HAT_RAIL_VADJ3) ? 2 : 3;
     uint8_t en_pin = (rail_id == HAT_RAIL_VADJ3) ? BB_VADJ3_EN_PIN : BB_VADJ4_EN_PIN;
+    const char *rail_name = (rail_id == HAT_RAIL_VADJ3) ? "VADJ3" : "VADJ4";
+
+    bb_la_log("[CAL] start %s\n", rail_name);
 
     // Refuse calibration with active shifted outputs — could damage a connected DUT
     if (gpio_get(BB_LEVEL_SHIFT_OE_PIN)) {
         s_cal_state = 3;
         s_cal_last_error = 3;
         s_cal_task_handle = NULL;
+        bb_la_log("[CAL] refused %s: level shifter OE active\n", rail_name);
         vTaskDelete(NULL);
         return;
     }
@@ -406,32 +657,53 @@ static void cal_task_func(void *param)
 
     // Settle first at code 0
     ds4424_set_code(dac_ch, 0);
-    vTaskDelay(pdMS_TO_TICKS(200));
-    uint16_t adc_val = adc_read_oversampled(adc_ch);
-    float v0 = (float)adc_val * 3.3f / 4095.0f * 12.0f;
+    s_cal_stage = 3;
+    float v0 = measure_supply_stable_for_cal(adc_ch);
     cal->points[0].dac_code = 0;
     cal->points[0].measured_v = v0;
     cal->count = 1;
+    s_cal_progress = 1;
+    s_cal_point = 0;
+    s_cal_code = 0;
+    s_cal_measured_mv = (int32_t)(v0 * 1000.0f);
+    s_cal_stage = 4;
+    bb_la_log("[CAL] %s code=0 measured=%dmV\n", rail_name, (int)(v0 * 1000.0f));
 
     float max_volt = 35.0f;
     // Sweep sink direction (raising voltage)
-    for (int code = -8; code >= -127; code -= 8) {
+    for (int code = -2; code >= -127; code -= 2) {
         int8_t code_i8 = (int8_t)code;
+        s_cal_stage = 2;
+        s_cal_point = cal->count;
+        s_cal_code = code_i8;
+        s_cal_measured_mv = -1;
         if (!ds4424_set_code(dac_ch, code_i8)) {
             s_cal_state = 3;
             s_cal_last_error = 1;
             s_cal_task_handle = NULL;
+            bb_la_log("[CAL] failed %s: DS4424 write code=%d\n", rail_name, code_i8);
             vTaskDelete(NULL);
             return;
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
-        adc_val = adc_read_oversampled(adc_ch);
-        float v = (float)adc_val * 3.3f / 4095.0f * 12.0f;
+        s_cal_stage = 3;
+        float v = measure_supply_stable_for_cal(adc_ch);
 
-        cal->points[cal->count].dac_code = code_i8;
-        cal->points[cal->count].measured_v = v;
-        cal->count++;
-        s_cal_progress = (uint8_t)(cal->count * 100 / 33);
+        if (cal->count < DS4424_CAL_MAX_POINTS) {
+            cal->points[cal->count].dac_code = code_i8;
+            cal->points[cal->count].measured_v = v;
+            cal->count++;
+        } else {
+            bb_la_log("[CAL] warning %s: points array full\n", rail_name);
+            break;
+        }
+        s_cal_progress = (uint8_t)((cal->count * 100) / 128);
+        if (s_cal_progress > 99) s_cal_progress = 99;
+        s_cal_stage = 4;
+        s_cal_point = cal->count - 1;
+        s_cal_code = code_i8;
+        s_cal_measured_mv = (int32_t)(v * 1000.0f);
+        bb_la_log("[CAL] %s progress=%u%% code=%d measured=%dmV\n",
+                  rail_name, s_cal_progress, code_i8, (int)(v * 1000.0f));
 
         if (v >= max_volt) {
             break;
@@ -444,23 +716,39 @@ static void cal_task_func(void *param)
 
     // Sweep source direction (lowering voltage)
     float min_volt = 0.5f;
-    for (int code = 8; code <= 127; code += 8) {
+    for (int code = 2; code <= 127; code += 2) {
         int8_t code_i8 = (int8_t)code;
+        s_cal_stage = 2;
+        s_cal_point = cal->count;
+        s_cal_code = code_i8;
+        s_cal_measured_mv = -1;
         if (!ds4424_set_code(dac_ch, code_i8)) {
             s_cal_state = 3;
             s_cal_last_error = 1;
             s_cal_task_handle = NULL;
+            bb_la_log("[CAL] failed %s: DS4424 write code=%d\n", rail_name, code_i8);
             vTaskDelete(NULL);
             return;
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
-        adc_val = adc_read_oversampled(adc_ch);
-        float v = (float)adc_val * 3.3f / 4095.0f * 12.0f;
+        s_cal_stage = 3;
+        float v = measure_supply_stable_for_cal(adc_ch);
 
-        cal->points[cal->count].dac_code = code_i8;
-        cal->points[cal->count].measured_v = v;
-        cal->count++;
-        s_cal_progress = (uint8_t)(cal->count * 100 / 33);
+        if (cal->count < DS4424_CAL_MAX_POINTS) {
+            cal->points[cal->count].dac_code = code_i8;
+            cal->points[cal->count].measured_v = v;
+            cal->count++;
+        } else {
+            bb_la_log("[CAL] warning %s: points array full\n", rail_name);
+            break;
+        }
+        s_cal_progress = (uint8_t)((cal->count * 100) / 128);
+        if (s_cal_progress > 99) s_cal_progress = 99;
+        s_cal_stage = 4;
+        s_cal_point = cal->count - 1;
+        s_cal_code = code_i8;
+        s_cal_measured_mv = (int32_t)(v * 1000.0f);
+        bb_la_log("[CAL] %s progress=%u%% code=%d measured=%dmV\n",
+                  rail_name, s_cal_progress, code_i8, (int)(v * 1000.0f));
 
         if (v <= min_volt) {
             break;
@@ -483,12 +771,17 @@ static void cal_task_func(void *param)
     cal->valid = (cal->count >= 2);
 
     if (cal->valid) {
-        flash_save();
+        bool queued = flash_save();
         s_cal_state = 2;
         s_cal_progress = 100;
+        s_cal_stage = 5;
+        bb_la_log("[CAL] done %s: %u points, persistence=%s\n",
+                  rail_name, cal->count, queued ? "queued" : "queue-failed");
     } else {
         s_cal_state = 3;
         s_cal_last_error = 2;
+        s_cal_stage = 8;
+        bb_la_log("[CAL] failed %s: insufficient points\n", rail_name);
     }
 
     s_cal_task_handle = NULL;
@@ -552,6 +845,17 @@ void bb_hat_v2_init(void)
     ws2812_init();
     ds4424_init();
     flash_load();
+    if (s_persist_mutex == NULL) {
+        s_persist_mutex = xSemaphoreCreateMutex();
+    }
+    if (s_persist_task_handle == NULL) {
+        BaseType_t ok = xTaskCreate(persist_task_func, "cal_save", 2048, NULL, 1, &s_persist_task_handle);
+        if (ok != pdPASS) {
+            s_persist_task_handle = NULL;
+            s_persist_state = HAT_PERSIST_FAILED;
+            bb_la_log("[CAL] flash save worker create failed\n");
+        }
+    }
 
     // Boot animation: Green sweep 1->8 (10x slower with smooth fades).
     for (int i = 0; i < BB_WS2812_COUNT; i++) {
@@ -588,6 +892,14 @@ void bb_hat_v2_handle_reset(void)
     memset(s_led_states, 0, sizeof(s_led_states));
     s_la_route = HAT_LA_ROUTE_LOW_SPEED;
     s_io_voltage_mv = 3300;
+    s_cal_state = 0;
+    s_cal_progress = 0;
+    s_cal_rail_id = 0;
+    s_cal_last_error = 0;
+    s_cal_stage = 0;
+    s_cal_point = 0;
+    s_cal_code = 0;
+    s_cal_measured_mv = -1;
 
     // Turn off all rails & logic shifters
     gpio_put(BB_LEVEL_SHIFT_OE_PIN, 0);
@@ -768,19 +1080,32 @@ void handle_calibrate_start(const uint8_t *payload, uint8_t len)
     }
 
     s_cal_state = 1;
-    xTaskCreate(cal_task_func, "cal_task", 1024, (void*)(uintptr_t)rail_id, 1, &s_cal_task_handle);
-
     uint8_t status = s_cal_state;
     send_ok(&status, 1);
+
+    if (xTaskCreate(cal_task_func, "cal_task", 1536, (void*)(uintptr_t)rail_id, 1, &s_cal_task_handle) != pdPASS) {
+        s_cal_state = 3;
+        s_cal_last_error = HAT_ERR_BUSY;
+        s_cal_task_handle = NULL;
+        bb_la_log("[CAL] failed rail=%u: task create failed\n", rail_id);
+    }
 }
 
 void handle_calibrate_status(void)
 {
-    uint8_t rsp[4];
+    uint8_t rsp[12];
+    int32_t measured_mv = s_cal_measured_mv;
+    int8_t code = s_cal_code;
+    uint8_t stage = s_cal_stage;
     rsp[0] = s_cal_state;
     rsp[1] = s_cal_progress;
     rsp[2] = s_cal_rail_id;
     rsp[3] = s_cal_last_error;
+    rsp[4] = (uint8_t)s_persist_state;
+    rsp[5] = stage;
+    rsp[6] = s_cal_point;
+    rsp[7] = (uint8_t)code;
+    memcpy(&rsp[8], &measured_mv, sizeof(measured_mv));
     send_response(HAT_RSP_CALIBRATE_STATUS, rsp, sizeof(rsp));
 }
 
@@ -805,8 +1130,10 @@ void handle_calibrate_import(const uint8_t *payload, uint8_t len)
     cal->count = count;
     cal->valid = (count >= 2);
 
-    flash_save();
     send_ok(NULL, 0);
+    bool queued = flash_save();
+    bb_la_log("[CAL] import rail=%u points=%u persistence=%s\n",
+              rail_id, count, queued ? "queued" : "queue-failed");
 }
 
 void handle_set_io_bank(const uint8_t *payload, uint8_t len)
@@ -848,6 +1175,20 @@ void handle_set_level_shift(const uint8_t *payload, uint8_t len)
     send_ok(rsp, sizeof(rsp));
 }
 
+void handle_set_rail_voltage(const uint8_t *payload, uint8_t len)
+{
+    if (len < 3) { send_error(HAT_ERR_FRAME); return; }
+    uint8_t rail_id = payload[0];
+    uint16_t mv = (uint16_t)payload[1] | ((uint16_t)payload[2] << 8);
+
+    if (!bb_hat_v2_set_rail_voltage(rail_id, mv)) {
+        send_error(HAT_ERR_INVALID_FUNC);
+        return;
+    }
+
+    handle_get_rail_status();
+}
+
 bool bb_hat_v2_set_io_voltage(uint16_t mv)
 {
     if (!s_ds4424_present) return false;
@@ -860,8 +1201,18 @@ bool bb_hat_v2_set_io_voltage(uint16_t mv)
     return false;
 }
 
+bool bb_hat_v2_set_rail_voltage(uint8_t rail_id, uint16_t mv)
+{
+    if (!s_ds4424_present) return false;
+    if (rail_id != HAT_RAIL_VADJ3 && rail_id != HAT_RAIL_VADJ4) return false;
+
+    uint8_t dac_ch = (rail_id == HAT_RAIL_VADJ3) ? 1 : 2;
+    float volts = (float)mv / 1000.0f;
+    int8_t code = ds4424_voltage_to_code(dac_ch, volts);
+    return ds4424_set_code(dac_ch, code);
+}
+
 uint16_t bb_hat_v2_get_io_voltage(void)
 {
     return s_io_voltage_mv;
 }
-

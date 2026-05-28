@@ -2,7 +2,7 @@
 // System tab — board profile, HAT, USB-PD, UART, WiFi, faults, IOExp, debug.
 // =============================================================================
 
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { Led } from "../../components/Led";
 import { OtaCard } from "./OtaCard";
@@ -38,12 +38,16 @@ import {
 
 function useInterval<T>(fn: () => Promise<T>, ms: number) {
   const [value, setValue] = useState<T | null>(null);
+  const fnRef = useRef(fn);
+  useEffect(() => {
+    fnRef.current = fn;
+  }, [fn]);
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       if (!alive) return;
       try {
-        const r = await fn();
+        const r = await fnRef.current();
         if (alive) setValue(r);
       } catch {
         /* ignore */
@@ -228,15 +232,29 @@ function HatCard() {
 
   // LA Route State
   const [laRouteSig, setLaRouteSig] = useState<number | null>(null);
+  const [hatSeen, setHatSeen] = useState<boolean>(false);
 
   // Calibration States
   const [calActive, setCalActive] = useState<boolean>(false);
   const [calProgress, setCalProgress] = useState<number>(0);
   const [calRailId, setCalRailId] = useState<number>(1); // 1 = VADJ3, 2 = VADJ4
+  const [calStage, setCalStage] = useState<number>(0);
+  const [calPoint, setCalPoint] = useState<number>(0);
+  const [calCode, setCalCode] = useState<number>(0);
+  const [calMeasuredMv, setCalMeasuredMv] = useState<number>(-1);
+  const [calPersistState, setCalPersistState] = useState<number>(0);
+  const [vadj3TargetMv, setVadj3TargetMv] = useState<number>(3300);
+  const [vadj4TargetMv, setVadj4TargetMv] = useState<number>(3300);
 
   useEffect(() => {
     if (rails?.rails) setLocalRails(null);
   }, [rails]);
+
+  useEffect(() => {
+    const present = hat?.detected ?? hat?.present;
+    if (present === true) setHatSeen(true);
+    if (present === false) setHatSeen(false);
+  }, [hat]);
 
   useEffect(() => {
     if (!laLogEnabled) return;
@@ -255,11 +273,66 @@ function HatCard() {
   }, [laLogEnabled]);
 
   const applyRailUpdate = (res: any) => {
+    if (!res || res.railId == null) return;
     const base = localRails ?? railList;
-    const updated = base.map((r: any) =>
-      r.railId === res.railId ? { ...r, enabled: res.enabled, voltageMv: res.voltageMv, currentMa: res.currentMa } : r
+    let matched = false;
+    const update = {
+      railId: res.railId,
+      enabled: !!res.enabled,
+      voltageMv: res.voltageMv ?? res.voltage_mv ?? 0,
+      currentMa: res.currentMa ?? res.current_ma ?? 0,
+      status: res.status ?? 0,
+    };
+    const updated = base.map((r: any) => {
+      if (r.railId !== res.railId) return r;
+      matched = true;
+      return { ...r, ...update };
+    });
+    setLocalRails(matched ? updated : [...updated, update]);
+  };
+
+  const patchRailEnabled = (railId: number, enabled: boolean) => {
+    const base = localRails ?? railList;
+    let matched = false;
+    const updated = base.map((r: any) => {
+      if (r.railId !== railId) return r;
+      matched = true;
+      return { ...r, enabled };
+    });
+    setLocalRails(
+      matched
+        ? updated
+        : [...updated, { railId, enabled, voltageMv: 0, currentMa: 0, status: 0 }]
     );
-    setLocalRails(updated);
+  };
+
+  const toggleRail = async (railId: number, enabled: boolean, busyKey: string) => {
+    const previous = localRails;
+    setBusy(busyKey);
+    patchRailEnabled(railId, enabled);
+    try {
+      const res = await api.hatV2SetRailEnable(mac!, railId, enabled);
+      if (res?.ok) applyRailUpdate(res);
+    } catch(e) {
+      setLocalRails(previous);
+      setStatusText(e instanceof Error ? e.message : "Rail command failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setRailVoltage = async (railId: number, voltageMv: number, busyKey: string) => {
+    const previous = localRails;
+    setBusy(busyKey);
+    try {
+      const res = await api.hatV2SetRailVoltage(mac!, railId, voltageMv);
+      if (res?.ok) applyRailUpdate(res);
+    } catch(e) {
+      setLocalRails(previous);
+      setStatusText(e instanceof Error ? e.message : "Rail command failed");
+    } finally {
+      setBusy(null);
+    }
   };
 
   useEffect(() => {
@@ -269,6 +342,11 @@ function HatCard() {
         const res = await api.hatV2CalibrateStatus();
         if (res) {
           setCalProgress(res.progress);
+          setCalStage(res.stage ?? 0);
+          setCalPoint(res.point ?? 0);
+          setCalCode(res.code ?? 0);
+          setCalMeasuredMv(res.measuredMv ?? -1);
+          setCalPersistState(res.persistState ?? 0);
           if (res.state === 2) {
             setCalActive(false);
             setStatusText("Calibration completed successfully!");
@@ -298,6 +376,18 @@ function HatCard() {
       }
     } finally {
       setBusy(null);
+    }
+  };
+
+  const calStageLabel = (stage: number) => {
+    switch (stage) {
+      case 1: return "prepare";
+      case 2: return "step";
+      case 3: return "settle";
+      case 4: return "measure";
+      case 5: return "done";
+      case 8: return "error";
+      default: return "idle";
     }
   };
 
@@ -339,8 +429,11 @@ function HatCard() {
     }
   };
 
-  const detected = !!(hat?.detected ?? hat?.present);
+  const presentValue = hat?.detected ?? hat?.present;
+  const detected = presentValue === true || (presentValue == null && hatSeen);
+  const explicitlyAbsent = presentValue === false;
   const connected = !!hat?.connected;
+  const degraded = !!hat?.degraded;
   const dapConnected = !!hat?.dapConnected;
   const targetDetected = !!hat?.targetDetected;
   const targetDpidr = hat?.targetDpidr || 0;
@@ -372,7 +465,7 @@ function HatCard() {
         </div>
         <div style={{ textAlign: "center", padding: "6px", borderRadius: "6px", background: "var(--bg2)" }}>
           <div style={{ fontSize: "9px", color: "var(--text-dim)", marginBottom: "3px" }}>UART</div>
-          <div style={{ width: 10, height: 10, borderRadius: "50%", display: "inline-block", background: connected ? "#3b82f6" : "var(--text-muted)", boxShadow: connected ? "0 0 6px #3b82f6" : "none" }} />
+          <div style={{ width: 10, height: 10, borderRadius: "50%", display: "inline-block", background: connected && !degraded ? "#3b82f6" : degraded ? "#f59e0b" : "var(--text-muted)", boxShadow: connected && !degraded ? "0 0 6px #3b82f6" : degraded ? "0 0 6px #f59e0b" : "none" }} />
         </div>
         <div style={{ textAlign: "center", padding: "6px", borderRadius: "6px", background: "var(--bg2)" }}>
           <div style={{ fontSize: "9px", color: "var(--text-dim)", marginBottom: "3px" }}>DAP</div>
@@ -392,7 +485,7 @@ function HatCard() {
         </div>
       </div>
 
-      {!detected ? (
+      {explicitlyAbsent ? (
         <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-dim)" }}>
           <div style={{ fontSize: "20px", marginBottom: "8px" }}>No HAT Expansion Board Detected</div>
           <div style={{ fontSize: "12px", marginBottom: "16px" }}>Connect a HAT board to the expansion header.</div>
@@ -433,14 +526,7 @@ function HatCard() {
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: adjEn ? "rgba(16,185,129,0.15)" : "var(--glass)", color: adjEn ? "#10b981" : "var(--text)", borderColor: adjEn ? "#10b98150" : "var(--border-bright)" }}
                     onClick={async () => {
-                      setBusy("rail0");
-                      try {
-                        const res = await api.hatV2SetRailEnable(mac!, 0, !adjEn);
-                        if (res?.ok) applyRailUpdate(res);
-                      } catch(e) {
-                        setStatusText(e instanceof Error ? e.message : "Rail command failed");
-                      }
-                      setBusy(null);
+                      await toggleRail(0, !adjEn, "rail0");
                     }}
                   >
                     {adjEn ? "ON" : "OFF"}
@@ -459,14 +545,7 @@ function HatCard() {
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: v3En ? "rgba(16,185,129,0.15)" : "var(--glass)", color: v3En ? "#10b981" : "var(--text)", borderColor: v3En ? "#10b98150" : "var(--border-bright)" }}
                     onClick={async () => {
-                      setBusy("rail1");
-                      try {
-                        const res = await api.hatV2SetRailEnable(mac!, 1, !v3En);
-                        if (res?.ok) applyRailUpdate(res);
-                      } catch(e) {
-                        setStatusText(e instanceof Error ? e.message : "Rail command failed");
-                      }
-                      setBusy(null);
+                      await toggleRail(1, !v3En, "rail1");
                     }}
                   >
                     {v3En ? "ON" : "OFF"}
@@ -486,24 +565,38 @@ function HatCard() {
                     </span>
                   </div>
                 </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px", alignItems: "center", marginTop: "8px" }}>
+                  <input
+                    type="range"
+                    min="0"
+                    max="36000"
+                    step="100"
+                    value={vadj3TargetMv}
+                    onInput={(e) => setVadj3TargetMv(Number((e.currentTarget as HTMLInputElement).value) || 0)}
+                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span class="mono" style={{ fontSize: "10px", color: "var(--text-dim)", minWidth: "72px", textAlign: "right" }}>
+                      {(vadj3TargetMv / 1000.0).toFixed(2)} V
+                    </span>
+                    <button class="btn" style={{ fontSize: "10px", padding: "4px 10px" }}
+                      onClick={() => setRailVoltage(1, vadj3TargetMv, "vadj3-voltage")}
+                      disabled={busy === "vadj3-voltage"}
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* VADJ4 Rail */}
               <div style={{ padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#ff4d6a" }}>VADJ4 Rail (5.0V)</span>
+                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#ff4d6a" }}>VADJ4 Rail (0–36V)</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: v4En ? "rgba(16,185,129,0.15)" : "var(--glass)", color: v4En ? "#10b981" : "var(--text)", borderColor: v4En ? "#10b98150" : "var(--border-bright)" }}
                     onClick={async () => {
-                      setBusy("rail2");
-                      try {
-                        const res = await api.hatV2SetRailEnable(mac!, 2, !v4En);
-                        if (res?.ok) applyRailUpdate(res);
-                      } catch(e) {
-                        setStatusText(e instanceof Error ? e.message : "Rail command failed");
-                      }
-                      setBusy(null);
+                      await toggleRail(2, !v4En, "rail2");
                     }}
                   >
                     {v4En ? "ON" : "OFF"}
@@ -521,6 +614,27 @@ function HatCard() {
                     <span class="mono" style={{ fontSize: "11px", fontWeight: "600" }}>
                       {v4Ma} mA
                     </span>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px", alignItems: "center", marginTop: "8px" }}>
+                  <input
+                    type="range"
+                    min="0"
+                    max="36000"
+                    step="100"
+                    value={vadj4TargetMv}
+                    onInput={(e) => setVadj4TargetMv(Number((e.currentTarget as HTMLInputElement).value) || 0)}
+                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span class="mono" style={{ fontSize: "10px", color: "var(--text-dim)", minWidth: "72px", textAlign: "right" }}>
+                      {(vadj4TargetMv / 1000.0).toFixed(2)} V
+                    </span>
+                    <button class="btn" style={{ fontSize: "10px", padding: "4px 10px" }}
+                      onClick={() => setRailVoltage(2, vadj4TargetMv, "vadj4-voltage")}
+                      disabled={busy === "vadj4-voltage"}
+                    >
+                      Confirm
+                    </button>
                   </div>
                 </div>
               </div>
@@ -844,8 +958,13 @@ function HatCard() {
                 <div style={{ width: "100%", height: "8px", background: "var(--bg2)", borderRadius: "4px", overflow: "hidden", marginBottom: "6px" }}>
                   <div style={{ width: `${calProgress}%`, height: "100%", background: "#3b82f6", transition: "width 0.3s ease" }} />
                 </div>
-                <div style={{ fontSize: "9px", color: "var(--text-dim)" }}>
-                  Progress: {calProgress}% complete
+                <div style={{ fontSize: "9px", color: "var(--text-dim)", display: "flex", gap: "10px", justifyContent: "center", flexWrap: "wrap" }}>
+                  <span>Progress: {calProgress}% complete</span>
+                  <span>Stage: {calStageLabel(calStage)}</span>
+                  <span>Code: {calCode}</span>
+                  <span>{calMeasuredMv >= 0 ? `Measured: ${(calMeasuredMv / 1000.0).toFixed(3)} V` : "Measured: —"}</span>
+                  <span>Point: {calPoint}</span>
+                  <span>Persist: {calPersistState}</span>
                 </div>
               </div>
             ) : (
@@ -857,8 +976,8 @@ function HatCard() {
                   value={calRailId}
                   onChange={(e) => setCalRailId(parseInt(e.currentTarget.value, 10))}
                 >
-                  <option value={1}>VADJ3 (midpoint 3.3V)</option>
-                  <option value={2}>VADJ4 (midpoint 5.0V)</option>
+                  <option value={1}>VADJ3 (0–36V, midpoint 18V)</option>
+                  <option value={2}>VADJ4 (0–36V, midpoint 18V)</option>
                 </select>
                 <button
                   class="btn primary"
@@ -1450,7 +1569,6 @@ function FaultsCard() {
 function SelftestServiceCard() {
   const mac = deviceMac.value;
   const summary = useInterval(() => api.selftest(), 3000) as any;
-  const supplies = useInterval(() => api.selftestSupplies(), 5000) as any;
   const suppliesCached = useInterval(() => api.selftestSuppliesCached(), 2000) as SelftestSuppliesCached | null;
   const [railValues, setRailValues] = useState<Record<number, number>>({});
   const [calChannel, setCalChannel] = useState(0);
@@ -1577,7 +1695,7 @@ function SelftestServiceCard() {
 
       <details>
         <summary class="uppercase-tag">Internal Supplies</summary>
-        <pre class="debug-dump mono">{JSON.stringify(supplies, null, 2)}</pre>
+        <pre class="debug-dump mono">{JSON.stringify(suppliesCached, null, 2)}</pre>
       </details>
 
       <div class="analog-row" style={{ marginTop: "8px" }}>

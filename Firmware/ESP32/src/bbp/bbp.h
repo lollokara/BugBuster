@@ -23,7 +23,7 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       5
+#define BBP_PROTO_VERSION       6
 
 #define BBP_FW_VERSION_MAJOR    3
 #define BBP_FW_VERSION_MINOR    1
@@ -176,6 +176,7 @@ extern "C" {
 #define BBP_CMD_HAT_SETUP_SWD       0xCD  // One-call SWD quick-setup
 #define BBP_CMD_HAT_GET_CAPS        0xC3
 #define BBP_CMD_HAT_GET_RAIL_STATUS 0xC4
+#define BBP_CMD_HAT_SET_RAIL_VOLTAGE 0xB5
 #define BBP_CMD_HAT_SET_RAIL_ENABLE 0xD2
 #define BBP_CMD_HAT_SET_LED_STATE   0xD3
 #define BBP_CMD_HAT_CALIBRATE_START  0xAB

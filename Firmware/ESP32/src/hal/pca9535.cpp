@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "pca9535.h"
+#include "hat.h"
 #include "i2c_bus.h"
 #include "config.h"
 #include "selftest.h"
@@ -287,6 +288,10 @@ static bool set_efuse_bit_internal(uint8_t logical_ch, bool on)
         // Roll back the stamp on failure so we don't mask a later trip from a
         // channel that never actually came up.
         s_efuse_enable_ts_ms[logical_ch] = 0;
+    }
+
+    if (ok) {
+        hat_update_leds();
     }
     return ok;
 }

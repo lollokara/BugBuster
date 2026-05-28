@@ -649,6 +649,13 @@ export const api = {
       mac,
       admin: true,
     }),
+  hatV2SetRailVoltage: (mac: string, railId: number, voltageMv: number) =>
+    request<any>("/api/hat/v2/rail/voltage", {
+      method: "POST",
+      body: { railId, voltageMv },
+      mac,
+      admin: true,
+    }),
   hatV2SetLed: (mac: string, ledId: number, colorCode: number) =>
     request<any>("/api/hat/v2/led", {
       method: "POST",

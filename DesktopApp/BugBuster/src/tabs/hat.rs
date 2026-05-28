@@ -40,6 +40,13 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (cal_rail_id,  set_cal_rail_id)  = signal(1u8);
     let (_cal_state_val, set_cal_state_val) = signal(0u8);
     let (_cal_last_error, set_cal_last_error) = signal(0u8);
+    let (cal_stage, set_cal_stage) = signal(0u8);
+    let (cal_point, set_cal_point) = signal(0u8);
+    let (cal_code, set_cal_code) = signal(0i8);
+    let (cal_measured_mv, set_cal_measured_mv) = signal(-1i32);
+    let (cal_persist_state, set_cal_persist_state) = signal(0u8);
+    let (vadj3_target_mv, set_vadj3_target_mv) = signal(3300u16);
+    let (vadj4_target_mv, set_vadj4_target_mv) = signal(3300u16);
     let cal_poll_handle = RwSignal::new(None::<leptos::prelude::IntervalHandle>);
 
     let (log_enabled, set_log_enabled) = signal(false);
@@ -96,6 +103,11 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             set_cal_progress.set(s.progress);
                             set_cal_state_val.set(s.state);
                             set_cal_last_error.set(s.last_error);
+                            set_cal_persist_state.set(s.persist_state);
+                            set_cal_stage.set(s.stage);
+                            set_cal_point.set(s.point);
+                            set_cal_code.set(s.code);
+                            set_cal_measured_mv.set(s.measured_mv);
                             if s.state == 2 {
                                 set_cal_active.set(false);
                                 show_toast("Calibration completed successfully!", "ok");
@@ -276,6 +288,36 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         </div>
                                     </div>
                                 </div>
+                                <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center">
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="36000"
+                                        step="100"
+                                        prop:value=move || vadj3_target_mv.get().to_string()
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev).parse::<u16>().unwrap_or(0);
+                                            set_vadj3_target_mv.set(v);
+                                        }
+                                    />
+                                    <div style="display: flex; gap: 8px; align-items: center">
+                                        <span style="font-size: 10px; color: var(--text-dim); min-width: 72px; text-align: right">
+                                            {move || format!("{:.2} V", vadj3_target_mv.get() as f32 / 1000.0)}
+                                        </span>
+                                        <button class="btn btn-primary" style="font-size: 10px; padding: 4px 10px"
+                                            on:click=move |_| {
+                                                let mv = vadj3_target_mv.get_untracked();
+                                                spawn_local(async move {
+                                                    if let Some(r) = hat_set_rail_voltage(1, mv).await {
+                                                        set_rails.set(r);
+                                                    } else {
+                                                        show_toast("Failed to set VADJ3 voltage", "err");
+                                                    }
+                                                });
+                                            }
+                                        >"Confirm"</button>
+                                    </div>
+                                </div>
                             </div>
 
                             // VADJ4
@@ -317,6 +359,36 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #ff4d6a">
                                             {move || format!("{} mA", rail_ma(2))}
                                         </div>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center">
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="36000"
+                                        step="100"
+                                        prop:value=move || vadj4_target_mv.get().to_string()
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev).parse::<u16>().unwrap_or(0);
+                                            set_vadj4_target_mv.set(v);
+                                        }
+                                    />
+                                    <div style="display: flex; gap: 8px; align-items: center">
+                                        <span style="font-size: 10px; color: var(--text-dim); min-width: 72px; text-align: right">
+                                            {move || format!("{:.2} V", vadj4_target_mv.get() as f32 / 1000.0)}
+                                        </span>
+                                        <button class="btn btn-primary" style="font-size: 10px; padding: 4px 10px"
+                                            on:click=move |_| {
+                                                let mv = vadj4_target_mv.get_untracked();
+                                                spawn_local(async move {
+                                                    if let Some(r) = hat_set_rail_voltage(2, mv).await {
+                                                        set_rails.set(r);
+                                                    } else {
+                                                        show_toast("Failed to set VADJ4 voltage", "err");
+                                                    }
+                                                });
+                                            }
+                                        >"Confirm"</button>
                                     </div>
                                 </div>
                             </div>
@@ -550,6 +622,16 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         {move || if cal_active.get() {
                             let prog = cal_progress.get();
                             let name = if cal_rail_id.get() == 1 { "VADJ3" } else { "VADJ4" };
+                            let stage = match cal_stage.get() {
+                                1 => "prepare",
+                                2 => "step",
+                                3 => "settle",
+                                4 => "measure",
+                                5 => "done",
+                                8 => "error",
+                                _ => "idle",
+                            };
+                            let measured = cal_measured_mv.get();
                             view! {
                                 <div style="padding: 12px 0; text-align: center">
                                     <div style="font-size: 12px; font-weight: 700; color: #3b82f6; margin-bottom: 8px">
@@ -558,7 +640,13 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="width: 100%; height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; margin-bottom: 6px">
                                         <div style=format!("width: {}%; height: 100%; background: #3b82f6; transition: width 0.3s ease", prog)></div>
                                     </div>
-                                    <div style="font-size: 10px; color: var(--text-dim)">{format!("{}% complete", prog)}</div>
+                                    <div style="font-size: 10px; color: var(--text-dim); display: flex; gap: 10px; justify-content: center; flex-wrap: wrap">
+                                        <span>{format!("{}% complete", prog)}</span>
+                                        <span>{format!("stage: {}", stage)}</span>
+                                        <span>{format!("code: {}", cal_code.get())}</span>
+                                        <span>{if measured >= 0 { format!("measured: {:.3} V", measured as f32 / 1000.0) } else { "measured: —".into() }}</span>
+                                        <span>{format!("point: {}", cal_point.get())}</span>
+                                    </div>
                                 </div>
                             }.into_any()
                         } else {

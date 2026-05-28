@@ -207,6 +207,7 @@
 #define HAT_CMD_CALIBRATE_IMPORT 0x45
 #define HAT_CMD_SET_IO_BANK     0x46
 #define HAT_CMD_SET_LEVEL_SHIFT 0x47
+#define HAT_CMD_SET_RAIL_VOLTAGE 0x48
 
 // Responses
 #define HAT_RSP_OK              0x80

@@ -7,8 +7,11 @@
 // =============================================================================
 
 #include "hat.h"
+#include "pca9535.h"
+#include "dio.h"
 #include "config.h"
 #include "bbp.h"
+#include "ds4424.h"
 #include "ws_stream.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -27,6 +30,7 @@ static const char *TAG = "hat";
 // In PCB mode: binary detect strap + IRQ support.
 
 static HatState s_state = {};
+static uint8_t s_last_sent_color[9] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 #if !HAT_NO_DETECT
 static bool s_detect_pin_ready = false;
 #endif
@@ -50,6 +54,29 @@ static void IRAM_ATTR hat_la_done_isr(void *arg)
     s_la_done_pending = true;
 }
 #endif
+
+static uint32_t hat_now_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+static void hat_note_uart_success(void)
+{
+    uint32_t now = hat_now_ms();
+    s_state.last_ok_ms = now;
+    s_state.last_ping_ms = now;
+    s_state.consecutive_timeouts = 0;
+    s_state.degraded = false;
+}
+
+static void hat_note_uart_timeout(void)
+{
+    s_state.last_timeout_ms = hat_now_ms();
+    if (s_state.consecutive_timeouts < UINT8_MAX) {
+        s_state.consecutive_timeouts++;
+    }
+    s_state.degraded = s_state.detected && s_state.connected;
+}
 
 // -----------------------------------------------------------------------------
 // CRC-8 (polynomial 0x07, same as AD74416H SPI CRC)
@@ -77,12 +104,15 @@ void hat_uart_flush(void)
     uart_flush_input(HAT_UART_NUM);
 }
 
-// Reset the connection status and flush the UART.
-// Useful when a command times out repeatedly.
+// Flush stale UART bytes after a command failure.
+//
+// Do NOT clear s_state.connected here: a single timeout should not turn into a
+// sticky offline state that makes every later HAT API call short-circuit before
+// it even tries UART again. We want later commands to keep probing so the first
+// real failure remains observable.
 static void hat_reset_connection(void)
 {
     ESP_LOGW(TAG, "Resetting HAT connection (UART flush)");
-    s_state.connected = false;
     hat_uart_flush();
 }
 
@@ -339,7 +369,13 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     }
 
     if (rsp == 0) {
-        ESP_LOGW(TAG, "HAT command 0x%02X failed or timed out after retry", cmd);
+        hat_note_uart_timeout();
+        ESP_LOGW(TAG,
+                 "HAT command 0x%02X failed or timed out after retry; "
+                 "keeping HAT marked connected so later commands can retry",
+                 cmd);
+    } else {
+        hat_note_uart_success();
     }
 
     if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
@@ -371,6 +407,54 @@ static int hat_read_detect_level(void)
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
+
+static uint8_t hat_serialize_cal_subset(const DS4424CalData *cal, uint8_t *out, size_t out_len)
+{
+    if (!cal || !cal->valid || cal->count < 2 || !out) return 0;
+
+    const uint8_t max_points = (uint8_t)(out_len / 5);
+    if (max_points < 2) return 0;
+
+    uint8_t count = cal->count < max_points ? cal->count : max_points;
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t idx = i;
+        if (cal->count > count && count > 1) {
+            idx = (uint8_t)(((uint16_t)i * (uint16_t)(cal->count - 1) + (uint16_t)(count - 1) / 2) /
+                            (uint16_t)(count - 1));
+        }
+        out[i * 5] = (uint8_t)cal->points[idx].dac_code;
+        memcpy(&out[i * 5 + 1], &cal->points[idx].measured_v, sizeof(float));
+    }
+    return count;
+}
+
+static bool hat_seed_3v3_adj_from_esp_cal(void)
+{
+    if (!s_state.connected) return false;
+    if (s_state.rail[HAT_RAIL_3V3_ADJ].status != 0) return true;
+
+    const DS4424State *idac = ds4424_get_state();
+    if (!idac || !idac->present) return false;
+
+    const DS4424CalData *cal = &idac->cal[0];
+    uint8_t points[30] = {};
+    uint8_t count = hat_serialize_cal_subset(cal, points, sizeof(points));
+    if (count < 2) {
+        ESP_LOGW(TAG, "HAT 3V3_ADJ calibration missing and ESP DS4424 ch0 calibration is unavailable");
+        return false;
+    }
+
+    if (!hat_calibrate_import(HAT_RAIL_3V3_ADJ, count, points, (size_t)count * 5)) {
+        ESP_LOGW(TAG, "Failed to seed HAT 3V3_ADJ calibration from ESP DS4424 ch0");
+        return false;
+    }
+
+    uint8_t rail_count = 0;
+    hat_get_rail_status(s_state.rail, &rail_count);
+    ESP_LOGI(TAG, "Seeded HAT 3V3_ADJ calibration from ESP DS4424 ch0 (%u/%u points)",
+             count, cal->count);
+    return true;
+}
 
 bool hat_init(void)
 {
@@ -556,6 +640,8 @@ bool hat_connect(void)
 {
     if (!s_initialized || !s_state.detected) return false;
 
+    memset(s_last_sent_color, 0xFF, sizeof(s_last_sent_color));
+
     // Send PING command
     uint8_t rsp[8] = {};
     uint8_t rsp_len = 0;
@@ -563,11 +649,12 @@ bool hat_connect(void)
 
     if (cmd != HAT_RSP_OK) {
         s_state.connected = false;
+        s_state.degraded = false;
         return false;
     }
 
     s_state.connected = true;
-    s_state.last_ping_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    hat_note_uart_success();
 
     // Query HAT info
     cmd = hat_command(HAT_CMD_GET_INFO, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
@@ -582,8 +669,13 @@ bool hat_connect(void)
     hat_get_caps(&s_state.caps);
     {
         uint8_t rail_count = 0;
-        hat_get_rail_status(s_state.rail, &rail_count);
+        if (hat_get_rail_status(s_state.rail, &rail_count) &&
+            s_state.rail[HAT_RAIL_3V3_ADJ].status == 0) {
+            hat_seed_3v3_adj_from_esp_cal();
+        }
     }
+
+    hat_update_leds();
 
     return true;
 }
@@ -619,6 +711,7 @@ bool hat_set_pin(uint8_t ext_pin, HatPinFunction func)
         s_state.pin_config[ext_pin] = func;
         s_state.config_confirmed = true;
         ESP_LOGI(TAG, "EXP_EXT_%d → %s (confirmed)", ext_pin + 1, hat_func_name(func));
+        hat_update_leds();
         return true;
     }
 
@@ -654,6 +747,7 @@ bool hat_set_all_pins(const HatPinFunction config[HAT_NUM_EXT_PINS])
         }
         s_state.config_confirmed = true;
         ESP_LOGI(TAG, "All EXP_EXT pins configured (confirmed)");
+        hat_update_leds();
         return true;
     }
 
@@ -694,6 +788,7 @@ bool hat_reset(void)
         }
         s_state.config_confirmed = true;
         ESP_LOGI(TAG, "HAT reset (all pins disconnected)");
+        hat_update_leds();
         return true;
     }
 
@@ -924,14 +1019,7 @@ bool hat_set_rail_enable(uint8_t rail_id, bool enable)
         }
     }
 
-    // Update connector LEDs to reflect new supply state:
-    //   LED 3 = Conn1 (VADJ3, rail_id=1): Blue=active, Off=inactive
-    //   LED 8 = SWD   (VADJ4, rail_id=2): Blue=active, Off=inactive
-    if (rail_id == 1) {
-        hat_set_led_state(3, s_state.rail[1].enabled ? 3 : 0);
-    } else if (rail_id == 2) {
-        hat_set_led_state(8, s_state.rail[2].enabled ? 3 : 0);
-    }
+    hat_update_leds();
 
     return true;
 }
@@ -940,12 +1028,104 @@ bool hat_set_led_state(uint8_t led_index, uint8_t color_code)
 {
     if (!s_state.connected) return false;
 
+    if (led_index < 9 && s_last_sent_color[led_index] == color_code) {
+        return true;
+    }
+
     uint8_t payload[2] = { led_index, color_code };
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
 
-    return hat_command(HAT_CMD_SET_LED_STATE, payload, sizeof(payload),
-                       rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
+    bool ok = hat_command(HAT_CMD_SET_LED_STATE, payload, sizeof(payload),
+                          rsp, &rsp_len, 200, sizeof(rsp)) == HAT_RSP_OK;
+    if (ok && led_index < 9) {
+        s_last_sent_color[led_index] = color_code;
+    }
+    return ok;
+}
+
+void hat_update_leds(void)
+{
+    if (!s_state.connected) return;
+
+    // 1. LED 2: Conn2 status (low-speed shifted IO)
+    // Green = IOs mapped/configured, Off = no IO active.
+    // Mapped/configured if any is not HAT_FUNC_DISCONNECTED and route is low-speed.
+    bool ext_io_active = false;
+    if (s_state.la_route == HAT_LA_ROUTE_LOW_SPEED) {
+        for (int i = 0; i < 4; i++) {
+            if (s_state.pin_config[i] != HAT_FUNC_DISCONNECTED) {
+                ext_io_active = true;
+                break;
+            }
+        }
+    }
+    uint8_t led2_color = ext_io_active ? 2 : 0;
+    hat_set_led_state(2, led2_color);
+
+    // 2. LED 3: Conn1 status (high-speed level shifter)
+    // Keyed to VADJ3 supply & high-speed route.
+    // Green = configured & supply active; Blue = supply active, no IO configured;
+    // Purple (6) = IO active, no supply; Off = unconfigured.
+    // Configured if la_route == HAT_LA_ROUTE_HIGH_SPEED.
+    bool conn1_io_active = (s_state.la_route == HAT_LA_ROUTE_HIGH_SPEED);
+    bool conn1_supply_active = s_state.rail[HAT_RAIL_VADJ3].enabled;
+    uint8_t led3_color = 0;
+    if (conn1_supply_active && conn1_io_active) {
+        led3_color = 2; // Green
+    } else if (conn1_supply_active && !conn1_io_active) {
+        led3_color = 3; // Blue
+    } else if (!conn1_supply_active && conn1_io_active) {
+        led3_color = 6; // Purple
+    } else {
+        led3_color = 0; // Off
+    }
+    hat_set_led_state(3, led3_color);
+
+    // 3. LEDs 4–7: Mainboard IOBLOCKs 1–4
+    // Same status schema as LED 3, keyed to EFUSE1..4 (logical 0..3) and IOs 1..12:
+    // Block 1 (LED 4): EFUSE1 + IO1–IO3.
+    // Block 2 (LED 5): EFUSE2 + IO4–IO6.
+    // Block 3 (LED 7): EFUSE3 + IO7–IO9 (with silkscreen swap: logical index 2 -> LED 7).
+    // Block 4 (LED 6): EFUSE4 + IO10–IO12 (with silkscreen swap: logical index 3 -> LED 6).
+    const DioState *dio = dio_get_all();
+    const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
+
+    static const uint8_t logical_to_led[4] = { 4, 5, 7, 6 };
+    for (int j = 0; j < 4; j++) {
+        bool supply_active = pca ? pca->efuse_en[j] : false;
+        bool io_active = (dio[3 * j].mode != DIO_MODE_DISABLED) ||
+                         (dio[3 * j + 1].mode != DIO_MODE_DISABLED) ||
+                         (dio[3 * j + 2].mode != DIO_MODE_DISABLED);
+        uint8_t block_color = 0;
+        if (supply_active && io_active) {
+            block_color = 2; // Green
+        } else if (supply_active && !io_active) {
+            block_color = 3; // Blue
+        } else if (!supply_active && io_active) {
+            block_color = 6; // Purple
+        } else {
+            block_color = 0; // Off
+        }
+        hat_set_led_state(logical_to_led[j], block_color);
+    }
+
+    // 4. LED 8: SWD Connector
+    // Same status schema as LED 3, keyed to VADJ4 (rail 2) and SWD route/configuration
+    // (active when dap_connected or target_detected is true).
+    bool swd_io_active = s_state.dap_connected || s_state.target_detected;
+    bool swd_supply_active = s_state.rail[HAT_RAIL_VADJ4].enabled;
+    uint8_t led8_color = 0;
+    if (swd_supply_active && swd_io_active) {
+        led8_color = 2; // Green
+    } else if (swd_supply_active && !swd_io_active) {
+        led8_color = 3; // Blue
+    } else if (!swd_supply_active && swd_io_active) {
+        led8_color = 6; // Purple
+    } else {
+        led8_color = 0; // Off
+    }
+    hat_set_led_state(8, led8_color);
 }
 
 bool hat_set_io_voltage(uint16_t mv)
@@ -994,6 +1174,7 @@ bool hat_la_set_route(uint8_t route)
                               rsp, &rsp_len, 200, sizeof(rsp));
     if (cmd == HAT_RSP_OK && rsp_len >= 1) {
         s_state.la_route = rsp[0];
+        hat_update_leds();
         return true;
     }
     return false;
@@ -1014,18 +1195,60 @@ bool hat_calibrate_start(uint8_t rail_id, uint8_t *status_out)
     return false;
 }
 
-bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id, uint8_t *last_error)
+bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
+                          uint8_t *last_error, uint8_t *persist_state,
+                          uint8_t *stage, uint8_t *point, int8_t *code,
+                          int32_t *measured_mv)
 {
     if (!s_state.connected) return false;
-    uint8_t rsp[8] = {};
+    uint8_t rsp[16] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_CALIBRATE_STATUS, NULL, 0,
                               rsp, &rsp_len, 500, sizeof(rsp));
-    if (cmd == HAT_RSP_CALIBRATE_STATUS && rsp_len >= 4) {
+    if (cmd == HAT_RSP_CALIBRATE_STATUS && rsp_len >= 12) {
         if (state)       *state       = rsp[0];
         if (progress)    *progress    = rsp[1];
         if (rail_id)     *rail_id     = rsp[2];
         if (last_error)  *last_error  = rsp[3];
+        if (persist_state) *persist_state = rsp[4];
+        if (stage)       *stage       = rsp[5];
+        if (point)       *point       = rsp[6];
+        if (code)        *code        = (int8_t)rsp[7];
+        if (measured_mv) memcpy(measured_mv, &rsp[8], sizeof(int32_t));
+        return true;
+    }
+    return false;
+}
+
+bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv)
+{
+    if (!s_state.connected) return false;
+    if (rail_id != HAT_RAIL_VADJ3 && rail_id != HAT_RAIL_VADJ4) {
+        ESP_LOGW(TAG, "Rail voltage set rejected for rail %u", rail_id);
+        return false;
+    }
+
+    uint8_t payload[3] = { rail_id, (uint8_t)(mv & 0xFF), (uint8_t)(mv >> 8) };
+    uint8_t rsp[8] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_SET_RAIL_VOLTAGE, payload, sizeof(payload),
+                              rsp, &rsp_len, 300, sizeof(rsp));
+    if (cmd == HAT_RSP_RAIL_STATUS && rsp_len >= 1) {
+        uint8_t count = rsp[0];
+        size_t p = 1;
+        for (uint8_t i = 0; i < count && i < HAT_RAIL_COUNT; i++) {
+            if (p + 7 > rsp_len) break;
+            HatRailStatus st = {};
+            st.rail_id = rsp[p++];
+            st.enabled = rsp[p++] != 0;
+            memcpy(&st.voltage_mv, &rsp[p], sizeof(st.voltage_mv)); p += sizeof(st.voltage_mv);
+            memcpy(&st.current_ma, &rsp[p], sizeof(st.current_ma)); p += sizeof(st.current_ma);
+            st.status = rsp[p++];
+            if (st.rail_id < HAT_RAIL_COUNT) {
+                s_state.rail[st.rail_id] = st;
+            }
+        }
         return true;
     }
     return false;
@@ -1138,6 +1361,7 @@ bool hat_get_dap_status(void)
         s_state.target_detected = rsp[1] != 0;
         memcpy(&s_state.target_dpidr, &rsp[2], 4);
         // swd_clock_khz at bytes 6-7 (u16 LE) — stored for display but not in HatState currently
+        hat_update_leds();
         return true;
     }
     return false;

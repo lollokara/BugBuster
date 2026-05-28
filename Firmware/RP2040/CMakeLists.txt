@@ -72,6 +72,7 @@ target_compile_definitions(bugbuster_hat PRIVATE
     DEBUG_ON_PICO=1
     DEBUGPROBE_INTEGRATION=1
     BB_HAT_FIRMWARE=1
+    PICO_FLASH_ASSERT_ON_UNSAFE=0
 )
 
 target_compile_options(bugbuster_hat PRIVATE -Wall)
@@ -110,6 +111,7 @@ target_compile_definitions(bugbuster_hat PRIVATE
 
 target_link_libraries(bugbuster_hat PRIVATE
     pico_multicore
+    pico_flash
     pico_stdlib
     pico_unique_id
     tinyusb_device
