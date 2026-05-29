@@ -1,0 +1,252 @@
+/* =============================================================================
+   primitives.css — cards, buttons, inputs, pills, LEDs, text helpers, layout
+   ============================================================================= */
+
+/* ---- Cards ---- */
+.glass-card {
+  background: linear-gradient(180deg, var(--glass-bright) 0%, var(--glass) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  position: relative;
+}
+.glass-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.02) 0%, transparent 60%);
+}
+.glass-card:hover {
+  border-color: var(--border-bright);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.35), 0 0 1px rgba(59, 130, 246, 0.1);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(100, 140, 200, 0.08);
+}
+
+.card-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+}
+
+.card-header .card-actions { display: flex; gap: 6px; }
+
+/* ---- Big value ---- */
+.big-value {
+  font-size: 2.4rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: -1px;
+  color: var(--text);
+  line-height: 1.2;
+}
+.big-value .unit {
+  font-size: 1rem;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* ---- Bar gauge ---- */
+.bar-gauge {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(100, 140, 200, 0.08);
+  overflow: hidden;
+  position: relative;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+  background: var(--blue);
+}
+
+/* ---- LED indicator ---- */
+.led {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 0 0 1px rgba(100, 140, 200, 0.2);
+}
+.led.on  { background: var(--green); box-shadow: 0 0 10px var(--green); }
+.led.warn { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+.led.err { background: var(--rose);  box-shadow: 0 0 10px var(--rose); }
+
+.led-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.led-label { font-size: 0.78rem; color: var(--text-dim); }
+
+/* ---- Pill toggle / segmented control ---- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border-bright);
+  background: var(--glass);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.pill:hover { color: var(--text); border-color: rgba(59, 130, 246, 0.4); }
+.pill.active {
+  color: var(--blue);
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.2);
+}
+
+.segmented {
+  display: inline-flex;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.segmented button {
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.segmented button.active {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--blue);
+}
+
+/* ---- Sparkline ---- */
+.sparkline {
+  width: 100%;
+  height: 60px;
+  display: block;
+  background: rgba(6, 10, 20, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* ---- Input / button ---- */
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-bright);
+  background: rgba(6, 10, 20, 0.4);
+  color: var(--text);
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", monospace;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-bright);
+  background: var(--glass);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.btn:hover { border-color: rgba(59, 130, 246, 0.5); }
+.btn.primary {
+  background: linear-gradient(135deg, var(--blue), #2563eb);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.btn.primary:hover { box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4); }
+.btn.danger {
+  color: #ff8aa0;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* ---- Channel swatch ---- */
+.ch-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* ---- Text helpers ---- */
+.text-dim   { color: var(--text-dim); }
+.text-muted { color: var(--text-muted); }
+.text-ok    { color: var(--green); }
+.text-warn  { color: var(--amber); }
+.text-err   { color: var(--rose); }
+.uppercase-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+}
+
+/* ---- Layout helpers ---- */
+.tab-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.kv-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+.kv-row > *:last-child { margin-left: auto; }
+
+.kv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.kv-table th {
+  text-align: left;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.kv-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(100, 140, 200, 0.05);
+}

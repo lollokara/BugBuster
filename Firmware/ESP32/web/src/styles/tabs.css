@@ -1,0 +1,309 @@
+/* =============================================================================
+   tabs.css — per-tab layout styles (overview, scope, analog, digital,
+              signal path, system, script workbench)
+   ============================================================================= */
+
+/* ---- Overview tab ---- */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-areas:
+    "channels pairing"
+    "rails rails";
+  gap: 16px;
+}
+.overview-channels {
+  grid-area: channels;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.overview-pairing { grid-area: pairing; }
+.overview-rails {
+  grid-area: rails;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.ch-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* ---- Scope layout ---- */
+.scope-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+.scope-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.scope-rail-card {
+  background: linear-gradient(180deg, var(--glass-bright), var(--glass));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.scope-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scope-rail-letter {
+  font-weight: 700;
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", monospace;
+  font-size: 1rem;
+}
+.scope-rail-enable { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; font-size: 0.78rem; }
+.scope-rail-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 6px 0;
+  font-variant-numeric: tabular-nums;
+}
+.scope-rail-value .unit { font-size: 0.8rem; color: var(--text-dim); }
+.scope-rail-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 8px;
+  font-size: 0.78rem;
+}
+.scope-rail-stats > div { display: flex; justify-content: space-between; }
+.scope-rail-offset {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.78rem;
+}
+.scope-rail-offset input[type="range"] { flex: 1; }
+.scope-rail-invert {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 0.78rem;
+  margin-top: 6px;
+}
+
+.scope-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+.scope-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scope-timebase { display: inline-flex; gap: 4px; }
+.scope-trigger { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+
+.scope-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 420px;
+  background: #0a0f1e;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: crosshair;
+}
+.scope-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.scope-wavegen {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ---- Analog tab ---- */
+.analog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.analog-item {
+  background: rgba(6, 10, 20, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.analog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 0.8rem;
+}
+.analog-row input[type="range"] { flex: 1; }
+
+/* ---- Digital tab ---- */
+.dio-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.dio-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.dio-grid-compact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 6px;
+}
+.dio-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(6, 10, 20, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+}
+.dio-cell select { padding: 2px 6px; font-size: 0.7rem; }
+
+/* ---- Signal path ---- */
+.mux-svg {
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  background: rgba(6, 10, 20, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: block;
+  margin: 0 auto;
+}
+
+.signal-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.signal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.signal-preset-pills {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.signal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 0.76rem;
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", monospace;
+  color: var(--text-dim);
+}
+
+.signal-leg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.signal-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: clamp(400px, 55vh, 720px);
+  max-width: 100%;
+  overflow: hidden;
+  background: #070d1a;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.signal-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.signal-too-small {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  pointer-events: none;
+  text-align: center;
+  padding: 0 16px;
+}
+
+/* Pill "on" state for signal toolbar toggles */
+.signal-toolbar .pill.active {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.2);
+}
+
+/* ---- System tab ---- */
+.wifi-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.wifi-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.wifi-list li:hover { background: rgba(59, 130, 246, 0.06); }
+
+.fault-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.fault-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.debug-dump {
+  max-height: 360px;
+  overflow: auto;
+  font-size: 0.74rem;
+  background: rgba(6, 10, 20, 0.5);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: pre;
+}

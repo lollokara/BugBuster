@@ -1,0 +1,205 @@
+/* =============================================================================
+   shell.css — app shell, header, tab bar, content area, modal, pairing
+   ============================================================================= */
+
+/* ---- App shell ---- */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at top, rgba(59, 130, 246, 0.05), transparent 55%),
+    radial-gradient(ellipse at bottom, rgba(168, 85, 247, 0.03), transparent 55%),
+    var(--bg0);
+}
+
+/* ---- Header ---- */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: linear-gradient(180deg, rgba(12, 18, 34, 0.96) 0%, rgba(8, 12, 24, 0.94) 100%);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 20px rgba(0, 0, 0, 0.4);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo-text {
+  font-size: 1.2rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--blue), var(--cyan), var(--purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.subtitle {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.8rem;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.status-dot.ok {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2s infinite;
+}
+.status-dot.err { background: var(--rose); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ---- Tab bar ---- */
+.tab-bar {
+  position: sticky;
+  top: 44px;
+  z-index: 190;
+  display: flex;
+  gap: 2px;
+  padding: 4px 20px;
+  background: rgba(8, 12, 24, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab-item {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.tab-item:hover { color: var(--text-dim); background: rgba(59, 130, 246, 0.06); }
+.tab-item.active {
+  color: var(--blue);
+  background: rgba(59, 130, 246, 0.1);
+  border-bottom: 2px solid var(--blue);
+  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.15);
+}
+
+/* ---- Content ---- */
+.content {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  animation: fadeIn 0.25s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Modal / dialog ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 10, 20, 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s;
+}
+.modal {
+  background: linear-gradient(180deg, var(--glass-bright), var(--glass));
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 520px;
+  width: calc(100vw - 32px);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+}
+.modal h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ---- Pairing modal extras ---- */
+.pair-meta {
+  background: rgba(6, 10, 20, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+.pair-meta-row {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  align-items: center;
+}
+.pair-meta-row > *:last-child { margin-left: auto; }
+
+.pair-howto {
+  background: rgba(6, 10, 20, 0.35);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--blue);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+.pair-howto ol {
+  padding-left: 18px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pair-howto li::marker { color: var(--blue); font-weight: 700; }
+.pair-cmd {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--blue);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
