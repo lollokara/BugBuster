@@ -841,6 +841,17 @@ void bb_hat_v2_init(void)
     memset(s_led_states, 0, sizeof(s_led_states));
     s_la_route = HAT_LA_ROUTE_LOW_SPEED;
 
+    // Initialise level-shifter control pins as outputs, safe-default off.
+    // Must happen before any gpio_put() on these pins — RP2040 gpio_put()
+    // on a non-output pin is silently ignored.
+    gpio_init(BB_LEVEL_SHIFT_OE_PIN);
+    gpio_put(BB_LEVEL_SHIFT_OE_PIN, 0);   // tri-state until 3V3_ADJ is up
+    gpio_set_dir(BB_LEVEL_SHIFT_OE_PIN, GPIO_OUT);
+
+    gpio_init(BB_LEVEL_SHIFT_DIR_PIN);
+    gpio_put(BB_LEVEL_SHIFT_DIR_PIN, 0);  // B→A (inputs) as safe default
+    gpio_set_dir(BB_LEVEL_SHIFT_DIR_PIN, GPIO_OUT);
+
     ws2812_init();
     ds4424_init();
     flash_load();
