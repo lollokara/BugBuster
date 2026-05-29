@@ -3,6 +3,8 @@
 // =============================================================================
 
 import { useEffect } from "preact/hooks";
+import { SystemHero } from "./SystemHero";
+import { SystemSection } from "./SystemSection";
 import { BoardCard } from "./BoardCard";
 import { OtaCard } from "./OtaCard";
 import { HatCard } from "./HatCard";
@@ -22,18 +24,34 @@ export function System() {
 
   return (
     <div class="tab-stack">
-      <BoardCard />
-      <HatCard />
-      <UsbPdCard />
-      <UartCard />
-      <IoExpControlCard />
-      <WifiCard />
-      <FaultsCard />
-      <SelftestServiceCard />
-      <OtaCard />
-      <IoOwnershipCard />
-      <DebugCard />
-      <DesktopOnlyCard />
+      <SystemHero />
+
+      <SystemSection title="Device">
+        <BoardCard />
+        <OtaCard />
+      </SystemSection>
+
+      <SystemSection title="Connectivity">
+        <WifiCard />
+        <UartCard />
+      </SystemSection>
+
+      <SystemSection title="Power & Protection">
+        <UsbPdCard />
+        <IoExpControlCard />
+      </SystemSection>
+
+      <SystemSection title="HAT Expansion">
+        <HatCard />
+      </SystemSection>
+
+      <SystemSection title="Diagnostics & Service">
+        <FaultsCard />
+        <SelftestServiceCard />
+        <IoOwnershipCard />
+        <DebugCard />
+        <DesktopOnlyCard />
+      </SystemSection>
     </div>
   );
 }
