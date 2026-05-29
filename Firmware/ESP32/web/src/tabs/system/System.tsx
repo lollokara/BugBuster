@@ -2,10 +2,12 @@
 // System tab — board profile, HAT, USB-PD, UART, WiFi, faults, IOExp, debug.
 // =============================================================================
 
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
+import { usePoll as useInterval } from "../../hooks/usePoll";
 import { GlassCard } from "../../components/GlassCard";
 import { Led } from "../../components/Led";
 import { OtaCard } from "./OtaCard";
+import { ioLabelForGpio, maskToHex, parseMask } from "./systemUtils";
 import {
   api,
   PairingRequiredError,
@@ -35,57 +37,6 @@ import {
   setSelftestStatus,
   startSelftestStatusPolling,
 } from "../../state/signals";
-
-function useInterval<T>(fn: () => Promise<T>, ms: number) {
-  const [value, setValue] = useState<T | null>(null);
-  const fnRef = useRef(fn);
-  useEffect(() => {
-    fnRef.current = fn;
-  }, [fn]);
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      if (!alive) return;
-      try {
-        const r = await fnRef.current();
-        if (alive) setValue(r);
-      } catch {
-        /* ignore */
-      }
-      if (alive) setTimeout(tick, ms);
-    };
-    tick();
-    return () => {
-      alive = false;
-    };
-  }, []);
-  return value;
-}
-
-function parseMask(value: string): number {
-  const v = value.trim().toLowerCase();
-  if (!v) return 0;
-  const n = v.startsWith("0x") ? parseInt(v.slice(2), 16) : parseInt(v, 10);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(0xffff, n));
-}
-
-function maskToHex(mask: number | undefined): string {
-  const safe = Number.isFinite(mask) ? (mask as number) : 0;
-  return `0x${(safe & 0xffff).toString(16).toUpperCase().padStart(4, "0")}`;
-}
-
-const UART_IO_MAP: ReadonlyArray<readonly [number, number]> = [
-  [1, 4], [2, 2], [3, 1],
-  [4, 7], [5, 6], [6, 5],
-  [7, 8], [8, 9], [9, 10],
-  [10, 11], [11, 12], [12, 13],
-];
-
-function ioLabelForGpio(gpio: number): string {
-  const entry = UART_IO_MAP.find(([, g]) => g === gpio);
-  return entry ? `IO${entry[0]} (GPIO${entry[1]})` : `GPIO${gpio}`;
-}
 
 function BoardCard() {
   const [selected, setSelected] = useState<string | null>(null);
