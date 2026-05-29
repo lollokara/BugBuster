@@ -45,6 +45,7 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (cal_code, set_cal_code) = signal(0i8);
     let (cal_measured_mv, set_cal_measured_mv) = signal(-1i32);
     let (cal_persist_state, set_cal_persist_state) = signal(0u8);
+    let (v3v3_target_mv, set_v3v3_target_mv) = signal(3300u16);
     let (vadj3_target_mv, set_vadj3_target_mv) = signal(3300u16);
     let (vadj4_target_mv, set_vadj4_target_mv) = signal(3300u16);
     let cal_poll_handle = RwSignal::new(None::<leptos::prelude::IntervalHandle>);
@@ -220,10 +221,13 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         <div class="card-header"><span>"Power Rails"</span></div>
                         <div class="card-body" style="display: flex; flex-direction: column; gap: 12px">
 
-                            // 3V3_ADJ — no voltage/current meters, just a toggle
+                            // 3V3_ADJ
                             <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px">
-                                    <span style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.05em">"3V3_ADJ"</span>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
+                                    <span style="display:flex; align-items:baseline; gap:5px">
+                                        <span style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.05em">"3V3_ADJ"</span>
+                                        <span style="font-size: 9px; color: var(--text-dim)">"(1.7–5.0 V)"</span>
+                                    </span>
                                     <div style="display: flex; align-items: center; gap: 6px">
                                         <label class="toggle-wrap">
                                             <div class="toggle" class:active=move || rail_en(0)
@@ -244,7 +248,55 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         </span>
                                     </div>
                                 </div>
-                                <div style="font-size: 9px; color: var(--text-dim)">"Level-shifter power. OE requires this rail."</div>
+
+                                <div style="display: flex; justify-content: center; padding: 6px; margin-bottom: 8px; border-radius: 6px; background: #10b98110">
+                                    <div style="text-align: center">
+                                        <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 2px">
+                                            {move || if rail_en(0) { "Current Target" } else { "Preview Target" }}
+                                        </div>
+                                        <div style="font-size: 18px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #10b981">
+                                            {move || {
+                                                if rail_en(0) {
+                                                    format!("{:.3} V", rail_mv(0) as f32 / 1000.0)
+                                                } else {
+                                                    format!("{:.2} V (Preview)", v3v3_target_mv.get() as f32 / 1000.0)
+                                                }
+                                            }}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center">
+                                    <input
+                                        type="range"
+                                        min="1700"
+                                        max="5000"
+                                        step="100"
+                                        prop:value=move || v3v3_target_mv.get().to_string()
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev).parse::<u16>().unwrap_or(3300);
+                                            set_v3v3_target_mv.set(v);
+                                        }
+                                    />
+                                    <div style="display: flex; gap: 8px; align-items: center">
+                                        <span style="font-size: 10px; color: var(--text-dim); min-width: 50px; text-align: right">
+                                            {move || format!("{:.2} V", v3v3_target_mv.get() as f32 / 1000.0)}
+                                        </span>
+                                        <button class="btn btn-primary" style="font-size: 10px; padding: 4px 10px"
+                                            on:click=move |_| {
+                                                let mv = v3v3_target_mv.get_untracked();
+                                                spawn_local(async move {
+                                                    if let Some(r) = hat_set_rail_voltage(0, mv).await {
+                                                        set_rails.set(r);
+                                                    } else {
+                                                        show_toast("Failed to set 3V3_ADJ voltage", "err");
+                                                    }
+                                                });
+                                            }
+                                        >"Confirm"</button>
+                                    </div>
+                                </div>
+                                <div style="font-size: 9px; color: var(--text-dim); margin-top: 6px">"Level-shifter power. OE requires this rail."</div>
                             </div>
 
                             // VADJ3
@@ -278,7 +330,13 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="text-align: center; padding: 12px; border-radius: 8px; background: #06b6d410">
                                         <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Voltage"</div>
                                         <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #06b6d4">
-                                            {move || format!("{:.3} V", rail_mv(1) as f32 / 1000.0)}
+                                            {move || {
+                                                if rail_en(1) {
+                                                    format!("{:.3} V", rail_mv(1) as f32 / 1000.0)
+                                                } else {
+                                                    format!("{:.2} V (Preview)", vadj3_target_mv.get() as f32 / 1000.0)
+                                                }
+                                            }}
                                         </div>
                                     </div>
                                     <div style="text-align: center; padding: 12px; border-radius: 8px; background: #06b6d410">
@@ -351,7 +409,13 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="text-align: center; padding: 12px; border-radius: 8px; background: #ff4d6a10">
                                         <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Voltage"</div>
                                         <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #ff4d6a">
-                                            {move || format!("{:.3} V", rail_mv(2) as f32 / 1000.0)}
+                                            {move || {
+                                                if rail_en(2) {
+                                                    format!("{:.3} V", rail_mv(2) as f32 / 1000.0)
+                                                } else {
+                                                    format!("{:.2} V (Preview)", vadj4_target_mv.get() as f32 / 1000.0)
+                                                }
+                                            }}
                                         </div>
                                     </div>
                                     <div style="text-align: center; padding: 12px; border-radius: 8px; background: #ff4d6a10">

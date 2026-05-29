@@ -431,7 +431,6 @@ static uint8_t hat_serialize_cal_subset(const DS4424CalData *cal, uint8_t *out, 
 static bool hat_seed_3v3_adj_from_esp_cal(void)
 {
     if (!s_state.connected) return false;
-    if (s_state.rail[HAT_RAIL_3V3_ADJ].status != 0) return true;
 
     const DS4424State *idac = ds4424_get_state();
     if (!idac || !idac->present) return false;
@@ -669,8 +668,7 @@ bool hat_connect(void)
     hat_get_caps(&s_state.caps);
     {
         uint8_t rail_count = 0;
-        if (hat_get_rail_status(s_state.rail, &rail_count) &&
-            s_state.rail[HAT_RAIL_3V3_ADJ].status == 0) {
+        if (hat_get_rail_status(s_state.rail, &rail_count)) {
             hat_seed_3v3_adj_from_esp_cal();
         }
     }
@@ -1223,6 +1221,11 @@ bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
 bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv)
 {
     if (!s_state.connected) return false;
+    if (rail_id == HAT_RAIL_3V3_ADJ) {
+        if (!hat_set_io_voltage(mv)) return false;
+        s_state.rail[HAT_RAIL_3V3_ADJ].voltage_mv = s_state.io_voltage_mv;
+        return true;
+    }
     if (rail_id != HAT_RAIL_VADJ3 && rail_id != HAT_RAIL_VADJ4) {
         ESP_LOGW(TAG, "Rail voltage set rejected for rail %u", rail_id);
         return false;

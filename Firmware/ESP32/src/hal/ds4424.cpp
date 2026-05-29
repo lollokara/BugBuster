@@ -225,6 +225,44 @@ static bool read_dac(uint8_t ch, int8_t *code)
     return true;
 }
 
+static void save_voltage_to_nvs(uint8_t ch, float volts)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("ds4424_volt", NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        char key[16];
+        snprintf(key, sizeof(key), "volt_ch%d", ch);
+        int32_t mv = (int32_t)roundf(volts * 1000.0f);
+        nvs_set_i32(h, key, mv);
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGI(TAG, "Saved IDAC%d voltage %d mV (%.3fV) to NVS", ch, (int)mv, volts);
+    }
+}
+
+static void ds4424_load_voltages(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("ds4424_volt", NVS_READONLY, &h);
+    if (err == ESP_OK) {
+        for (uint8_t ch = 0; ch < 3; ch++) {
+            char key[16];
+            snprintf(key, sizeof(key), "volt_ch%d", ch);
+            int32_t mv = 0;
+            if (nvs_get_i32(h, key, &mv) == ESP_OK) {
+                float volts = (float)mv / 1000.0f;
+                const DS4424ChanConfig *c = &s_state.config[ch];
+                if (volts >= c->v_min && volts <= c->v_max) {
+                    int8_t code = ds4424_voltage_to_code(ch, volts);
+                    write_dac(ch, code);
+                    ESP_LOGI(TAG, "Restored IDAC%d voltage %.3fV from NVS (code %d)", ch, volts, code);
+                }
+            }
+        }
+        nvs_close(h);
+    }
+}
+
 bool ds4424_init(void)
 {
     memset(&s_state, 0, sizeof(s_state));
@@ -280,6 +318,9 @@ bool ds4424_init(void)
     // Load saved calibration data from NVS
     ds4424_cal_load();
 
+    // Restore last saved voltages from NVS
+    ds4424_load_voltages();
+
     return true;
 }
 
@@ -301,7 +342,11 @@ bool ds4424_set_code(uint8_t ch, int8_t code)
     // Clamp the only out-of-range int8_t case that can still occur.
     if (code < -127) code = -127;
 
-    return write_dac(ch, code);
+    bool ok = write_dac(ch, code);
+    if (ok && ch < 3) {
+        save_voltage_to_nvs(ch, s_state.state[ch].target_v);
+    }
+    return ok;
 }
 
 int8_t ds4424_get_code(uint8_t ch)
@@ -422,7 +467,11 @@ bool ds4424_set_voltage(uint8_t ch, float volts)
                  ch, computed_v, c->v_min, c->v_max);
     }
 
-    return write_dac(ch, code);
+    bool ok = write_dac(ch, code);
+    if (ok) {
+        save_voltage_to_nvs(ch, volts);
+    }
+    return ok;
 }
 
 void ds4424_cal_add_point(uint8_t ch, int8_t dac_code, float measured_v)

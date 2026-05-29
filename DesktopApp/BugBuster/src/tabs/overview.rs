@@ -320,7 +320,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 </div>
                                 <div class="card-body">
                                     <div style=format!("text-align: center; font-size: 26px; font-weight: 800; color: {}; font-family: 'JetBrains Mono', monospace", color)>
-                                        {display_v.map(|v| format!("{:.3} V", v)).unwrap_or_else(|| "--- V".to_string())}
+                                        {display_v.map(|v| if enabled { format!("{:.3} V", v) } else { format!("{:.3} V (Preview)", v) }).unwrap_or_else(|| "--- V".to_string())}
                                     </div>
                                     <input type="range" class="slider slider-colored"
                                         style=format!("--slider-color: {}; width: 100%", color)

@@ -245,6 +245,7 @@ function HatCard() {
   const [calPersistState, setCalPersistState] = useState<number>(0);
   const [vadj3TargetMv, setVadj3TargetMv] = useState<number>(3300);
   const [vadj4TargetMv, setVadj4TargetMv] = useState<number>(3300);
+  const [v3v3TargetMv, setV3v3TargetMv] = useState<number>(3300);
 
   useEffect(() => {
     if (rails?.rails) setLocalRails(null);
@@ -452,6 +453,7 @@ function HatCard() {
 
   const v3Mv = railV3?.voltageMv || 0;
   const v4Mv = railV4?.voltageMv || 0;
+  const adjMv = railAdj?.voltageMv || 0;
 
   const v3Ma = railV3?.currentMa || 0;
   const v4Ma = railV4?.currentMa || 0;
@@ -520,8 +522,8 @@ function HatCard() {
               
               {/* 3V3_ADJ Rail */}
               <div style={{ marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#10b981" }}>3V3_ADJ Rail</span>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#10b981" }}>3V3_ADJ Rail (1.7–5.0V)</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: adjEn ? "rgba(16,185,129,0.15)" : "var(--glass)", color: adjEn ? "#10b981" : "var(--text)", borderColor: adjEn ? "#10b98150" : "var(--border-bright)" }}
@@ -532,7 +534,40 @@ function HatCard() {
                     {adjEn ? "ON" : "OFF"}
                   </button>
                 </div>
-                <div style={{ fontSize: "9px", color: "var(--text-dim)" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "6px", alignItems: "start", marginBottom: "8px" }}>
+                  <div>
+                    <div style={{ fontSize: "8px", color: "var(--text-dim)" }}>
+                      {adjEn ? "Voltage" : "Preview Voltage"}
+                    </div>
+                    <span class="mono" style={{ fontSize: "11px", fontWeight: "600", color: "#10b981" }}>
+                      {adjEn 
+                        ? `${(adjMv / 1000.0).toFixed(3)} V` 
+                        : `${(v3v3TargetMv / 1000.0).toFixed(2)} V (Preview)`}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="range"
+                    min="1700"
+                    max="5000"
+                    step="100"
+                    value={v3v3TargetMv}
+                    onInput={(e) => setV3v3TargetMv(Number((e.currentTarget as HTMLInputElement).value) || 0)}
+                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span class="mono" style={{ fontSize: "10px", color: "var(--text-dim)", minWidth: "50px", textAlign: "right" }}>
+                      {(v3v3TargetMv / 1000.0).toFixed(2)} V
+                    </span>
+                    <button class="btn" style={{ fontSize: "10px", padding: "4px 10px" }}
+                      onClick={() => setRailVoltage(0, v3v3TargetMv, "v3v3-voltage")}
+                      disabled={busy === "v3v3-voltage"}
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                </div>
+                <div style={{ fontSize: "9px", color: "var(--text-dim)", marginTop: "6px" }}>
                   Required for level shifter Outputs Enable (OE). Hard interlocked.
                 </div>
               </div>
@@ -553,9 +588,13 @@ function HatCard() {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", alignItems: "center" }}>
                   <div>
-                    <div style={{ fontSize: "8px", color: "var(--text-dim)" }}>Voltage</div>
+                    <div style={{ fontSize: "8px", color: "var(--text-dim)" }}>
+                      {v3En ? "Voltage" : "Preview Voltage"}
+                    </div>
                     <span class="mono" style={{ fontSize: "11px", fontWeight: "600" }}>
-                      {(v3Mv / 1000.0).toFixed(3)} V
+                      {v3En 
+                        ? `${(v3Mv / 1000.0).toFixed(3)} V` 
+                        : `${(vadj3TargetMv / 1000.0).toFixed(2)} V (Preview)`}
                     </span>
                   </div>
                   <div>
@@ -604,9 +643,13 @@ function HatCard() {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                   <div>
-                    <div style={{ fontSize: "8px", color: "var(--text-dim)" }}>Voltage</div>
+                    <div style={{ fontSize: "8px", color: "var(--text-dim)" }}>
+                      {v4En ? "Voltage" : "Preview Voltage"}
+                    </div>
                     <span class="mono" style={{ fontSize: "11px", fontWeight: "600" }}>
-                      {(v4Mv / 1000.0).toFixed(3)} V
+                      {v4En 
+                        ? `${(v4Mv / 1000.0).toFixed(3)} V` 
+                        : `${(vadj4TargetMv / 1000.0).toFixed(2)} V (Preview)`}
                     </span>
                   </div>
                   <div>

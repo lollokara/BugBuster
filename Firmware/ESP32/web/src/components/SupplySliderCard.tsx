@@ -128,7 +128,11 @@ export function SupplySliderCard({
         </button>
       }
     >
-      <BigValue value={measuredVoltage} unit="V" precision={3} />
+      <BigValue
+        value={enabled ? measuredVoltage : value}
+        unit={enabled ? "V" : "V (Preview)"}
+        precision={3}
+      />
       <BarGauge
         value={Number.isFinite(measuredVoltage) ? measuredVoltage : value}
         min={min}

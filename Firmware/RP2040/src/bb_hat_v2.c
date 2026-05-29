@@ -30,7 +30,7 @@
 #define DS4424_REG_OUT1     0xF9
 #define DS4424_REG_OUT2     0xFA
 #define DS4424_I2C_ADDR     0x10
-#define DS4424_CAL_MAX_POINTS 169
+#define DS4424_CAL_MAX_POINTS 168
 
 // Calibration Point definition
 typedef struct {
@@ -59,6 +59,7 @@ typedef struct {
     uint8_t version;
     uint8_t padding[3];
     DS4424CalData cal[3];
+    uint16_t default_voltage_mv[3]; // [0] = 3V3_ADJ, [1] = VADJ3, [2] = VADJ4
 } FlashCalSector;
 
 typedef struct {
@@ -453,7 +454,7 @@ static bool ds4424_set_code(uint8_t ch, int8_t code)
     return false;
 }
 
-static float ds4424_code_to_voltage(uint8_t ch, int8_t code)
+static float __attribute__((unused)) ds4424_code_to_voltage(uint8_t ch, int8_t code)
 {
     if (ch >= 3) return 0.0f;
     // ch 0 = 3V3_ADJ (TPS/LDO midpoint 3.3V)
@@ -470,30 +471,6 @@ static float ds4424_code_to_voltage(uint8_t ch, int8_t code)
     } else {
         return midpoint - dv;
     }
-}
-
-static float ds4424_get_calibrated_voltage(uint8_t ch, int8_t code)
-{
-    DS4424CalData *cal = &s_flash_cal.cal[ch];
-    if (cal->valid && cal->count >= 2) {
-        if (code <= cal->points[0].dac_code) {
-            return cal->points[0].measured_v;
-        }
-        if (code >= cal->points[cal->count - 1].dac_code) {
-            return cal->points[cal->count - 1].measured_v;
-        }
-        for (int i = 0; i < (int)cal->count - 1; i++) {
-            int8_t c0 = cal->points[i].dac_code;
-            int8_t c1 = cal->points[i+1].dac_code;
-            if ((code >= c0 && code <= c1) || (code >= c1 && code <= c0)) {
-                if (c1 != c0) {
-                    float t = (float)(code - c0) / (float)(c1 - c0);
-                    return cal->points[i].measured_v + t * (cal->points[i+1].measured_v - cal->points[i].measured_v);
-                }
-            }
-        }
-    }
-    return ds4424_code_to_voltage(ch, code);
 }
 
 static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
@@ -867,6 +844,34 @@ void bb_hat_v2_init(void)
     ws2812_init();
     ds4424_init();
     flash_load();
+
+    if (s_ds4424_present) {
+        // Restore 3V3_ADJ (rail 0)
+        uint16_t v0 = s_flash_cal.default_voltage_mv[0];
+        if (v0 >= 1700 && v0 <= 5000) {
+            s_io_voltage_mv = v0;
+        } else {
+            s_io_voltage_mv = 3300; // safe default
+        }
+        float volts0 = (float)s_io_voltage_mv / 1000.0f;
+        int8_t code0 = ds4424_voltage_to_code(0, volts0);
+        ds4424_set_code(0, code0);
+
+        // Restore VADJ3 (rail 1)
+        uint16_t v3 = s_flash_cal.default_voltage_mv[1];
+        if (v3 > 36000) v3 = 3300; // fallback to 3.3V if unitialized/invalid
+        float volts3 = (float)v3 / 1000.0f;
+        int8_t code3 = ds4424_voltage_to_code(1, volts3);
+        ds4424_set_code(1, code3);
+
+        // Restore VADJ4 (rail 2)
+        uint16_t v4 = s_flash_cal.default_voltage_mv[2];
+        if (v4 > 36000) v4 = 3300; // fallback to 3.3V if unitialized/invalid
+        float volts4 = (float)v4 / 1000.0f;
+        int8_t code4 = ds4424_voltage_to_code(2, volts4);
+        ds4424_set_code(2, code4);
+    }
+
     if (s_persist_mutex == NULL) {
         s_persist_mutex = xSemaphoreCreateMutex();
     }
@@ -980,10 +985,16 @@ void handle_get_rail_status(void)
     float vismon3 = adc0 * 3.3f / 4095.0f * 1000.0f;
     float vismon4 = adc1 * 3.3f / 4095.0f * 1000.0f;
 
-    float i3 = (vismon3 - 250.0f) / 0.5f;
-    float i4 = (vismon4 - 250.0f) / 0.5f;
-    if (i3 < 0.0f) i3 = 0.0f;
-    if (i4 < 0.0f) i4 = 0.0f;
+    float i3 = 0.0f;
+    float i4 = 0.0f;
+    if (bb_power_get_enabled(0)) {
+        i3 = (vismon3 - 250.0f) / 0.5f;
+        if (i3 < 0.0f) i3 = 0.0f;
+    }
+    if (bb_power_get_enabled(1)) {
+        i4 = (vismon4 - 250.0f) / 0.5f;
+        if (i4 < 0.0f) i4 = 0.0f;
+    }
 
     uint8_t rsp[1 + HAT_RAIL_COUNT * 7];
     size_t p = 0;
@@ -1017,12 +1028,31 @@ void handle_set_rail_enable(const uint8_t *payload, uint8_t len)
 
     switch (rail) {
     case HAT_RAIL_3V3_ADJ:
+        if (enable && s_ds4424_present) {
+            float volts0 = (float)s_io_voltage_mv / 1000.0f;
+            int8_t code0 = ds4424_voltage_to_code(0, volts0);
+            ds4424_set_code(0, code0);
+        }
         bb_power_set_3v3_adj(enable);
         break;
     case HAT_RAIL_VADJ3:
+        if (enable && s_ds4424_present) {
+            uint16_t v3 = s_flash_cal.default_voltage_mv[1];
+            if (v3 > 36000) v3 = 3300;
+            float volts3 = (float)v3 / 1000.0f;
+            int8_t code3 = ds4424_voltage_to_code(1, volts3);
+            ds4424_set_code(1, code3);
+        }
         bb_power_set(0, enable);
         break;
     case HAT_RAIL_VADJ4:
+        if (enable && s_ds4424_present) {
+            uint16_t v4 = s_flash_cal.default_voltage_mv[2];
+            if (v4 > 36000) v4 = 3300;
+            float volts4 = (float)v4 / 1000.0f;
+            int8_t code4 = ds4424_voltage_to_code(2, volts4);
+            ds4424_set_code(2, code4);
+        }
         bb_power_set(1, enable);
         break;
     default:
@@ -1251,14 +1281,24 @@ bool bb_hat_v2_set_rail_voltage(uint8_t rail_id, uint16_t mv)
 {
     if (!s_ds4424_present) return false;
     if (rail_id == HAT_RAIL_3V3_ADJ) {
-        return bb_hat_v2_set_io_voltage(mv);
+        bool ok = bb_hat_v2_set_io_voltage(mv);
+        if (ok) {
+            s_flash_cal.default_voltage_mv[0] = mv;
+            flash_save();
+        }
+        return ok;
     }
     if (rail_id != HAT_RAIL_VADJ3 && rail_id != HAT_RAIL_VADJ4) return false;
 
     uint8_t dac_ch = (rail_id == HAT_RAIL_VADJ3) ? 1 : 2;
     float volts = (float)mv / 1000.0f;
     int8_t code = ds4424_voltage_to_code(dac_ch, volts);
-    return ds4424_set_code(dac_ch, code);
+    bool ok = ds4424_set_code(dac_ch, code);
+    if (ok) {
+        s_flash_cal.default_voltage_mv[rail_id] = mv;
+        flash_save();
+    }
+    return ok;
 }
 
 uint16_t bb_hat_v2_get_io_voltage(void)

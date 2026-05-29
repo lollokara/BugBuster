@@ -5,6 +5,7 @@
 #include "pca9535.h"
 #include "hat.h"
 #include "i2c_bus.h"
+#include "ds4424.h"
 #include "config.h"
 #include "selftest.h"
 #include "esp_log.h"
@@ -309,13 +310,43 @@ bool pca9535_set_control(PcaControl ctrl, bool on)
 
     switch (ctrl) {
         case PCA_CTRL_VADJ1_EN:
+            if (on) {
+                const DS4424State *ds = ds4424_get_state();
+                if (ds && ds->present) {
+                    float volts = ds->state[1].target_v;
+                    if (volts < ds->config[1].v_min || volts > ds->config[1].v_max) {
+                        volts = ds->config[1].midpoint_v;
+                    }
+                    ds4424_set_voltage(1, volts);
+                }
+            }
             return pca9535_set_bit(0, 2, on);
         case PCA_CTRL_VADJ2_EN:
+            if (on) {
+                const DS4424State *ds = ds4424_get_state();
+                if (ds && ds->present) {
+                    float volts = ds->state[2].target_v;
+                    if (volts < ds->config[2].v_min || volts > ds->config[2].v_max) {
+                        volts = ds->config[2].midpoint_v;
+                    }
+                    ds4424_set_voltage(2, volts);
+                }
+            }
             return pca9535_set_bit(0, 3, on);
         case PCA_CTRL_15V_EN:
             return pca9535_set_bit(0, 5, on);
         case PCA_CTRL_MUX_EN:
             // Legacy slot reused as LOGIC_EN control on current hardware.
+            if (on) {
+                const DS4424State *ds = ds4424_get_state();
+                if (ds && ds->present) {
+                    float volts = ds->state[0].target_v;
+                    if (volts < ds->config[0].v_min || volts > ds->config[0].v_max) {
+                        volts = ds->config[0].midpoint_v;
+                    }
+                    ds4424_set_voltage(0, volts);
+                }
+            }
             return pca9535_set_bit(0, 0, on);
         case PCA_CTRL_USB_HUB_EN:
             return pca9535_set_bit(0, 7, on);

@@ -1,6 +1,5 @@
 README.md
 pyproject.toml
-setup.py
 bugbuster/__init__.py
 bugbuster/bus.py
 bugbuster/client.py
@@ -36,7 +35,9 @@ bugbuster_mcp/tools/bus.py
 bugbuster_mcp/tools/debug.py
 bugbuster_mcp/tools/digital.py
 bugbuster_mcp/tools/discovery.py
+bugbuster_mcp/tools/hat.py
 bugbuster_mcp/tools/io_config.py
+bugbuster_mcp/tools/io_owner.py
 bugbuster_mcp/tools/ota.py
 bugbuster_mcp/tools/power.py
 bugbuster_mcp/tools/scripting.py
