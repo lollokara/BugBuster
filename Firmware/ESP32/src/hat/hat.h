@@ -413,7 +413,7 @@ bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
                           uint8_t *stage, uint8_t *point, int8_t *code,
                           int32_t *measured_mv);
 bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_data, size_t data_len);
-bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns);
+bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals);
 bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out);
 bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv);
 

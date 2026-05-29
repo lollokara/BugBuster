@@ -2822,18 +2822,26 @@ class BugBuster:
             })
             return resp.get("ok", False)
 
-    def hat_set_io_bank(self, dirs: int, ups: int, dns: int) -> bool:
-        """Configure directions and pullups/pulldowns for the shifted IO bank."""
+    def hat_set_io_bank(self, dirs: int, ups: int, dns: int, vals: int = 0) -> bool:
+        """Configure directions, pullups/pulldowns, and output values for the shifted IO bank.
+
+        Args:
+            dirs: Bitmask - 1 = output, 0 = input (bit 0 = GPIO10 … bit 7 = GPIO21).
+            ups:  Bitmask - 1 = pull-up enabled.
+            dns:  Bitmask - 1 = pull-down enabled.
+            vals: Bitmask - output latch value for pins set as output (default 0 = LOW).
+        """
         self._require_hat_present()
         if self._usb:
-            payload = struct.pack('<BBB', dirs & 0xFF, ups & 0xFF, dns & 0xFF)
+            payload = struct.pack('<BBBB', dirs & 0xFF, ups & 0xFF, dns & 0xFF, vals & 0xFF)
             self._usb_cmd(CmdId.HAT_SET_IO_BANK, payload)
             return True
         else:
             resp = self._http_post("/hat/v2/io_bank", {
                 "dirs": dirs,
-                "ups": ups,
-                "dns": dns
+                "ups":  ups,
+                "dns":  dns,
+                "vals": vals,
             })
             return resp.get("ok", False)
 

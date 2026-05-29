@@ -213,7 +213,20 @@ def test_hat_set_io_bank():
     result = client.hat_set_io_bank(0x55, 0xAA, 0x00)
     usb_mock.send_command.assert_any_call(
         CmdId.HAT_SET_IO_BANK,
-        struct.pack('<BBB', 0x55, 0xAA, 0x00)
+        struct.pack('<BBBB', 0x55, 0xAA, 0x00, 0x00)  # vals defaults to 0
+    )
+    assert result is True
+
+def test_hat_set_io_bank_with_vals():
+    usb_mock = _make_usb_transport({
+        CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
+        CmdId.HAT_SET_IO_BANK: b""
+    })
+    client = BugBuster(usb_mock)
+    result = client.hat_set_io_bank(0xFF, 0x00, 0x00, vals=0xA5)
+    usb_mock.send_command.assert_any_call(
+        CmdId.HAT_SET_IO_BANK,
+        struct.pack('<BBBB', 0xFF, 0x00, 0x00, 0xA5)
     )
     assert result is True
 

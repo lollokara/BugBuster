@@ -3212,11 +3212,15 @@ static esp_err_t handle_post_hat_v2_io_bank(httpd_req_t *req)
     VALIDATE_JSON_FIELD(doc, "dns", Number, "Field 'dns' must be a number");
 
     uint8_t dirs = (uint8_t)cJSON_GetObjectItem(doc, "dirs")->valueint;
-    uint8_t ups = (uint8_t)cJSON_GetObjectItem(doc, "ups")->valueint;
-    uint8_t dns = (uint8_t)cJSON_GetObjectItem(doc, "dns")->valueint;
+    uint8_t ups  = (uint8_t)cJSON_GetObjectItem(doc, "ups")->valueint;
+    uint8_t dns  = (uint8_t)cJSON_GetObjectItem(doc, "dns")->valueint;
+    // Optional: output values for pins configured as output (bitmask, default 0).
+    cJSON *vals_item = cJSON_GetObjectItem(doc, "vals");
+    uint8_t vals = (vals_item && cJSON_IsNumber(vals_item))
+                   ? (uint8_t)vals_item->valueint : 0;
     cJSON_Delete(doc);
 
-    if (!hat_set_io_bank(dirs, ups, dns)) {
+    if (!hat_set_io_bank(dirs, ups, dns, vals)) {
         return send_error(req, 503, "HAT IO bank command failed");
     }
 

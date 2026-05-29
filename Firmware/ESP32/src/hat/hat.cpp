@@ -1299,10 +1299,10 @@ bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_
     return cmd == HAT_RSP_OK;
 }
 
-bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns)
+bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals)
 {
     if (!s_state.connected) return false;
-    uint8_t payload[3] = { dirs, ups, dns };
+    uint8_t payload[4] = { dirs, ups, dns, vals };
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_SET_IO_BANK, payload, sizeof(payload),

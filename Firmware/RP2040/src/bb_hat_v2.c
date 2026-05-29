@@ -1227,14 +1227,18 @@ void handle_set_io_bank(const uint8_t *payload, uint8_t len)
 {
     if (len < 3) { send_error(HAT_ERR_FRAME); return; }
     uint8_t dirs = payload[0];
-    uint8_t ups = payload[1];
-    uint8_t dns = payload[2];
+    uint8_t ups  = payload[1];
+    uint8_t dns  = payload[2];
+    // Optional 4th byte: output values for pins set as output (default 0).
+    uint8_t vals = (len >= 4) ? payload[3] : 0;
 
     const uint8_t pins[8] = { 10, 11, 12, 13, 14, 15, 20, 21 };
     for (int i = 0; i < 8; i++) {
         uint pin = pins[i];
         gpio_init(pin);
         if (dirs & (1 << i)) {
+            // Pre-load output latch before enabling output to avoid glitch.
+            gpio_put(pin, (vals & (1 << i)) ? 1 : 0);
             gpio_set_dir(pin, GPIO_OUT);
         } else {
             gpio_set_dir(pin, GPIO_IN);

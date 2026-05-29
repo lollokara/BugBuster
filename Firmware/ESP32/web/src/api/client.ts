@@ -370,10 +370,10 @@ export const api = {
       mac,
       admin: true,
     }),
-  hatV2SetIoBank: (mac: string, dirs: number, ups: number, dns: number) =>
+  hatV2SetIoBank: (mac: string, dirs: number, ups: number, dns: number, vals: number) =>
     request<any>("/api/hat/v2/io_bank", {
       method: "POST",
-      body: { dirs, ups, dns },
+      body: { dirs, ups, dns, vals },
       mac,
       admin: true,
     }),

@@ -41,6 +41,7 @@ export function HatCard() {
   const [ioDirs, setIoDirs] = useState<number>(0);
   const [ioUps, setIoUps] = useState<number>(0);
   const [ioDns, setIoDns] = useState<number>(0);
+  const [ioVals, setIoVals] = useState<number>(0);
 
   // Level Shifter States
   const [lsOe, setLsOe] = useState<boolean>(false);
@@ -657,6 +658,7 @@ export function HatCard() {
                   const isOut = (ioDirs & (1 << i)) !== 0;
                   const isUp = (ioUps & (1 << i)) !== 0;
                   const isDn = (ioDns & (1 << i)) !== 0;
+                  const isHigh = (ioVals & (1 << i)) !== 0;
                   return (
                     <div key={i} style={{ padding: "6px", borderRadius: "6px", background: "var(--bg2)", border: "1px solid var(--border)" }}>
                       <div style={{ fontSize: "9px", fontWeight: "700", color: "#3b82f6", marginBottom: "3px" }}>SH_IO_{i + 1}</div>
@@ -676,6 +678,25 @@ export function HatCard() {
                           OUT
                         </button>
                       </div>
+                      {/* Output value toggle — only relevant when pin is OUT */}
+                      {isOut && (
+                        <div style={{ display: "flex", gap: "2px", marginBottom: "4px" }}>
+                          <button
+                            class="btn"
+                            style={{ padding: "1px 2px", fontSize: "8px", flex: 1, background: !isHigh ? "rgba(239,68,68,0.2)" : "var(--glass)", color: !isHigh ? "#ef4444" : "var(--text-dim)", border: "none" }}
+                            onClick={() => setIoVals(v => v & ~(1 << i))}
+                          >
+                            LOW
+                          </button>
+                          <button
+                            class="btn"
+                            style={{ padding: "1px 2px", fontSize: "8px", flex: 1, background: isHigh ? "rgba(34,197,94,0.2)" : "var(--glass)", color: isHigh ? "#22c55e" : "var(--text-dim)", border: "none" }}
+                            onClick={() => setIoVals(v => v | (1 << i))}
+                          >
+                            HIGH
+                          </button>
+                        </div>
+                      )}
                       <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                         <label style={{ fontSize: "8px", display: "flex", alignItems: "center", gap: "2px", cursor: "pointer" }}>
                           <input
@@ -721,7 +742,7 @@ export function HatCard() {
                 onClick={async () => {
                   setBusy("io_bank");
                   try {
-                    await api.hatV2SetIoBank(mac!, ioDirs, ioUps, ioDns);
+                    await api.hatV2SetIoBank(mac!, ioDirs, ioUps, ioDns, ioVals);
                     setStatusText("I/O bank configuration applied!");
                   } catch(e) {
                     if (!(e instanceof PairingRequiredError)) {

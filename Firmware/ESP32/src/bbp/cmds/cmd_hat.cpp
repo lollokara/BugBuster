@@ -491,8 +491,9 @@ static int handler_hat_set_io_bank(const uint8_t *payload, size_t len,
     uint8_t dirs = bbp_get_u8(payload, &rpos);
     uint8_t ups = bbp_get_u8(payload, &rpos);
     uint8_t dns = bbp_get_u8(payload, &rpos);
+    uint8_t vals = (len >= 4) ? bbp_get_u8(payload, &rpos) : 0;
 
-    if (!hat_set_io_bank(dirs, ups, dns)) {
+    if (!hat_set_io_bank(dirs, ups, dns, vals)) {
         return hat_err_to_cmd_err(hat_get_last_error());
     }
 
@@ -892,9 +893,10 @@ static const ArgSpec s_hat_calibrate_status_rsp[] = {
     { "measured_mv",   ARG_U32, true, 0, 0 },
 };
 static const ArgSpec s_hat_set_io_bank_args[] = {
-    { "dirs", ARG_U8, true, 0, 255 },
-    { "ups",  ARG_U8, true, 0, 255 },
-    { "dns",  ARG_U8, true, 0, 255 },
+    { "dirs", ARG_U8, true,  0, 255 },
+    { "ups",  ARG_U8, true,  0, 255 },
+    { "dns",  ARG_U8, true,  0, 255 },
+    { "vals", ARG_U8, false, 0, 255 },  // optional: output values (bitmask)
 };
 static const ArgSpec s_hat_set_level_shift_args[] = {
     { "oe",  ARG_U8, true, 0, 1 },
@@ -990,7 +992,7 @@ static const CmdDescriptor s_hat_cmds[] = {
     { BBP_CMD_HAT_CALIBRATE_IMPORT,      "hat_calibrate_import",
       NULL,                    0, NULL,                   0, handler_hat_calibrate_import,      0                   },
     { BBP_CMD_HAT_SET_IO_BANK,           "hat_set_io_bank",
-      s_hat_set_io_bank_args,  3, NULL,                   0, handler_hat_set_io_bank,           0                   },
+      s_hat_set_io_bank_args,  4, NULL,                   0, handler_hat_set_io_bank,           0                   },
     { BBP_CMD_HAT_SET_LEVEL_SHIFT,       "hat_set_level_shift",
       s_hat_set_level_shift_args, 2, s_hat_set_level_shift_rsp, 2, handler_hat_set_level_shift, 0                   },
 };
