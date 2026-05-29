@@ -27,9 +27,9 @@ export { IoOwnerRejectError } from "./client";
 export type OwnerSlot = {
   slot: number;
   kind: number;
-  session_id: number;
-  token_fp32: number;
+  session: number;       // firmware key is "session" (not session_id)
   lease_until_ms: number;
+  free?: boolean;
 };
 
 /** Numeric owner-kind codes (mirror io_owner_kind_t in io_owner.h). */
@@ -162,7 +162,10 @@ export async function ioRelease(slots: number[] | null): Promise<void> {
 export async function ioOwnerStatus(): Promise<OwnerSlot[]> {
   const res = await authedFetch("/api/io/owner");
   if (!res.ok) throw new Error(`ioOwnerStatus failed: ${res.status}`);
-  return (await res.json()) as OwnerSlot[];
+  const body = await res.json();
+  // Firmware returns { "slots": [...] } — normalise to bare array.
+  const arr: OwnerSlot[] = Array.isArray(body) ? body : (Array.isArray(body?.slots) ? body.slots : []);
+  return arr;
 }
 
 /**
