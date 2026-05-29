@@ -30,7 +30,7 @@
 #define DS4424_REG_OUT1     0xF9
 #define DS4424_REG_OUT2     0xFA
 #define DS4424_I2C_ADDR     0x10
-#define DS4424_CAL_MAX_POINTS 130
+#define DS4424_CAL_MAX_POINTS 169
 
 // Calibration Point definition
 typedef struct {
@@ -105,7 +105,18 @@ static volatile HatPersistState s_persist_state = HAT_PERSIST_CLEAN;
 static volatile bool s_persist_pending = false;
 static uint32_t s_persist_request_id = 0;
 static uint32_t s_flash_sequence = 0;
-static uint8_t s_flash_write_buf[FLASH_SECTOR_SIZE];
+// The journal sector must fit in one flash sector.  Verified here at compile
+// time so any future struct growth is caught immediately.
+_Static_assert(sizeof(FlashCalJournalSector) <= FLASH_SECTOR_SIZE,
+               "FlashCalJournalSector exceeds FLASH_SECTOR_SIZE — reduce DS4424_CAL_MAX_POINTS");
+
+// Write buffer must hold the journal record.  Size it explicitly so GCC
+// -Warray-bounds does not emit a false positive when sizeof(record) > 4096
+// (which cannot happen given the assert above, but the compiler doesn't know).
+#define FLASH_WRITE_BUF_SIZE  \
+    ((sizeof(FlashCalJournalSector) > FLASH_SECTOR_SIZE) \
+        ? sizeof(FlashCalJournalSector) : FLASH_SECTOR_SIZE)
+static uint8_t s_flash_write_buf[FLASH_WRITE_BUF_SIZE];
 
 // Calibration Background Task State
 static volatile uint8_t s_cal_state = 0; // 0=idle, 1=running, 2=success, 3=failed
@@ -258,10 +269,10 @@ static void persist_task_func(void *param)
             continue;
         }
 
-        FlashCalSector snapshot;
+        static FlashCalSector s_write_snapshot;
         uint32_t request_id = 0;
         if (s_persist_mutex && xSemaphoreTake(s_persist_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            memcpy(&snapshot, &s_persist_snapshot, sizeof(snapshot));
+            memcpy(&s_write_snapshot, &s_persist_snapshot, sizeof(s_write_snapshot));
             request_id = s_persist_request_id;
             xSemaphoreGive(s_persist_mutex);
         } else {
@@ -273,22 +284,19 @@ static void persist_task_func(void *param)
         uint32_t sequence = s_flash_sequence + 1;
         uint32_t offset = (sequence & 1u) ? FLASH_CAL_SLOT_A_OFFSET : FLASH_CAL_SLOT_B_OFFSET;
 
-        FlashCalJournalSector record;
-        memset(&record, 0xFF, sizeof(record));
-        record.magic = CAL_JOURNAL_MAGIC;
-        record.sequence = sequence;
-        record.payload_len = sizeof(FlashCalSector);
-        record.version = CAL_JOURNAL_VERSION;
-        record.reserved = 0xFF;
-        memcpy(&record.payload, &snapshot, sizeof(snapshot));
-
-        const uint8_t *crc_start = (const uint8_t *)&record.sequence;
-        size_t crc_len = offsetof(FlashCalJournalSector, payload) - offsetof(FlashCalJournalSector, sequence);
-        crc_len += record.payload_len;
-        record.crc = calculate_crc(crc_start, crc_len);
-
+        FlashCalJournalSector *record = (FlashCalJournalSector *)s_flash_write_buf;
         memset(s_flash_write_buf, 0xFF, sizeof(s_flash_write_buf));
-        memcpy(s_flash_write_buf, &record, sizeof(record));
+        record->magic = CAL_JOURNAL_MAGIC;
+        record->sequence = sequence;
+        record->payload_len = sizeof(FlashCalSector);
+        record->version = CAL_JOURNAL_VERSION;
+        record->reserved = 0xFF;
+        memcpy(&record->payload, &s_write_snapshot, sizeof(s_write_snapshot));
+
+        const uint8_t *crc_start = (const uint8_t *)&record->sequence;
+        size_t crc_len = offsetof(FlashCalJournalSector, payload) - offsetof(FlashCalJournalSector, sequence);
+        crc_len += record->payload_len;
+        record->crc = calculate_crc(crc_start, crc_len);
 
         FlashWriteOp op = {
             .offset = offset,
@@ -492,38 +500,51 @@ static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
 {
     DS4424CalData *cal = &s_flash_cal.cal[ch];
     if (cal->valid && cal->count >= 2) {
-        bb_la_log("[DEBUG] volts_to_code ch=%d volts=%.3f count=%d\n", ch, volts, (int)cal->count);
+        // Compact single-line summary to avoid log truncation
+        bb_la_log("[DEBUG] vtc ch=%d tgt=%.3f cnt=%d lo=%.3f(c%d) hi=%.3f(c%d)\n",
+                  ch, volts, (int)cal->count,
+                  cal->points[cal->count - 1].measured_v, cal->points[cal->count - 1].dac_code,
+                  cal->points[0].measured_v, cal->points[0].dac_code);
+
+        // Search for the two calibration points whose measured voltages best
+        // bracket the target on the voltage axis.  The table is sorted by
+        // dac_code, NOT by voltage, so adjacent dac_code entries can have
+        // non-monotonic voltages near the sink/source sweep join (~18 V).
+        // Scanning by voltage avoids picking the wrong bracket.
+        int best_lo = -1;   // index of highest measured_v <= volts
+        int best_hi = -1;   // index of lowest  measured_v >= volts
+        float best_lo_v = -1e9f;
+        float best_hi_v =  1e9f;
+
         for (int i = 0; i < (int)cal->count; i++) {
-            bb_la_log("  [%d]: dac=%d, v=%.3f\n", i, cal->points[i].dac_code, cal->points[i].measured_v);
+            float v = cal->points[i].measured_v;
+            if (v <= volts && v > best_lo_v) { best_lo_v = v; best_lo = i; }
+            if (v >= volts && v < best_hi_v) { best_hi_v = v; best_hi = i; }
         }
 
-        for (int i = 0; i < (int)cal->count - 1; i++) {
-            float v0 = cal->points[i].measured_v;
-            float v1 = cal->points[i+1].measured_v;
-            int8_t c0 = cal->points[i].dac_code;
-            int8_t c1 = cal->points[i+1].dac_code;
-
-            bool between = (v0 <= volts && volts <= v1) || (v1 <= volts && volts <= v0);
-            if (between && v0 != v1) {
-                float t = (volts - v0) / (v1 - v0);
-                float code_f = (float)c0 + t * (float)(c1 - c0);
-                int code_i = (code_f >= 0) ? (int)floorf(code_f) : (int)ceilf(code_f);
-                if (code_i > 127) code_i = 127;
-                if (code_i < -127) code_i = -127;
-                bb_la_log("  -> matched between: code=%d (v0=%.3f, v1=%.3f, c0=%d, c1=%d)\n", code_i, v0, v1, c0, c1);
-                return (int8_t)code_i;
-            }
+        if (best_lo >= 0 && best_hi >= 0 && best_lo_v != best_hi_v) {
+            int8_t c0 = cal->points[best_lo].dac_code;
+            int8_t c1 = cal->points[best_hi].dac_code;
+            float t = (volts - best_lo_v) / (best_hi_v - best_lo_v);
+            float code_f = (float)c0 + t * (float)(c1 - c0);
+            int code_i = (int)roundf(code_f);
+            if (code_i >  127) code_i =  127;
+            if (code_i < -127) code_i = -127;
+            bb_la_log("[DEBUG] vtc->interp lo=%.3f(c%d) hi=%.3f(c%d) t=%.3f code=%d\n",
+                      best_lo_v, c0, best_hi_v, c1, t, code_i);
+            return (int8_t)code_i;
         }
+
+        // Target is outside the calibrated range — clamp to nearest endpoint
         int best_idx = 0;
         float best_err = fabsf(cal->points[0].measured_v - volts);
         for (int i = 1; i < (int)cal->count; i++) {
             float err = fabsf(cal->points[i].measured_v - volts);
-            if (err < best_err) {
-                best_err = err;
-                best_idx = i;
-            }
+            if (err < best_err) { best_err = err; best_idx = i; }
         }
-        bb_la_log("  -> matched nearest: best_idx=%d code=%d err=%.3f\n", best_idx, cal->points[best_idx].dac_code, best_err);
+        bb_la_log("[DEBUG] vtc->nearest idx=%d code=%d v=%.3f err=%.3f\n",
+                  best_idx, cal->points[best_idx].dac_code,
+                  cal->points[best_idx].measured_v, best_err);
         return cal->points[best_idx].dac_code;
     }
 
@@ -534,8 +555,9 @@ static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
     float dv = volts - midpoint;
     float code_f = -dv / step_v;
     int code_i = (int)roundf(code_f);
-    if (code_i > 127) code_i = 127;
+    if (code_i >  127) code_i =  127;
     if (code_i < -127) code_i = -127;
+    bb_la_log("[DEBUG] vtc->theory ch=%d tgt=%.3f code=%d\n", ch, volts, code_i);
     return (int8_t)code_i;
 }
 
@@ -671,7 +693,7 @@ static void cal_task_func(void *param)
 
     float max_volt = 35.0f;
     // Sweep sink direction (raising voltage)
-    for (int code = -2; code >= -127; code -= 2) {
+    for (int code = -1; code >= -127; code -= 1) {
         int8_t code_i8 = (int8_t)code;
         s_cal_stage = 2;
         s_cal_point = cal->count;
@@ -968,7 +990,8 @@ void handle_get_rail_status(void)
     rsp[p++] = HAT_RAIL_COUNT;
 
     append_rail_status(rsp, &p, HAT_RAIL_3V3_ADJ,
-                       bb_power_get_3v3_adj_enabled(), 0, 0,
+                       bb_power_get_3v3_adj_enabled(),
+                       bb_hat_v2_get_io_voltage(), 0,
                        s_flash_cal.cal[0].valid ? 1 : 0);
 
     append_rail_status(rsp, &p, HAT_RAIL_VADJ3,
@@ -1119,8 +1142,31 @@ void handle_calibrate_import(const uint8_t *payload, uint8_t len)
     if (len < 2 + count * 5) { send_error(HAT_ERR_FRAME); return; }
 
     DS4424CalData *cal = &s_flash_cal.cal[rail_id];
-    memset(cal, 0, sizeof(DS4424CalData));
 
+    // Check if the calibration matches what is already saved to avoid flash wear
+    bool different = false;
+    if (!cal->valid || cal->count != count) {
+        different = true;
+    } else {
+        size_t pos = 2;
+        for (int i = 0; i < count; i++) {
+            int8_t code = (int8_t)payload[pos++];
+            float val;
+            memcpy(&val, &payload[pos], 4);
+            pos += 4;
+            if (cal->points[i].dac_code != code || cal->points[i].measured_v != val) {
+                different = true;
+                break;
+            }
+        }
+    }
+
+    if (!different) {
+        send_ok(NULL, 0);
+        return;
+    }
+
+    memset(cal, 0, sizeof(DS4424CalData));
     size_t pos = 2;
     for (int i = 0; i < count; i++) {
         cal->points[i].dac_code = (int8_t)payload[pos++];
@@ -1204,6 +1250,9 @@ bool bb_hat_v2_set_io_voltage(uint16_t mv)
 bool bb_hat_v2_set_rail_voltage(uint8_t rail_id, uint16_t mv)
 {
     if (!s_ds4424_present) return false;
+    if (rail_id == HAT_RAIL_3V3_ADJ) {
+        return bb_hat_v2_set_io_voltage(mv);
+    }
     if (rail_id != HAT_RAIL_VADJ3 && rail_id != HAT_RAIL_VADJ4) return false;
 
     uint8_t dac_ch = (rail_id == HAT_RAIL_VADJ3) ? 1 : 2;

@@ -28,12 +28,14 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // Alive flag — flips false on tab unmount so the 2 s status poll terminates.
-    let alive: RwSignal<bool> = RwSignal::new(true);
-    on_cleanup(move || alive.set(false));
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
 
+    let alive_poll = alive.clone();
     spawn_local(async move {
         loop {
-            if !alive.get_untracked() { break; }
+            if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) { break; }
             // Skip fetches when disconnected to avoid spamming failed BBP commands.
             let snap = state.get_untracked();
             if snap.spi_ok || !snap.channels.is_empty() {

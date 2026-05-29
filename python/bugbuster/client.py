@@ -2509,6 +2509,22 @@ class BugBuster:
         self._usb_cmd(CmdId.HAT_SET_RAIL_ENABLE, payload)
         return self.hat_get_rail_status()
 
+    def hat_set_rail_voltage(self, rail_id: int, voltage_mv: int) -> dict:
+        """Set HAT v2 adjustable rail voltage (VADJ3=1, VADJ4=2), then return refreshed rail status.
+
+        :param rail_id: HAT rail ID — 1 for VADJ3, 2 for VADJ4.
+        :param voltage_mv: Target voltage in millivolts (e.g. 27100 for 27.1 V).
+        """
+        self._require_hat_present()
+        if not self._usb:
+            raise NotImplementedError(
+                "hat_set_rail_voltage() is not available over HTTP yet. Use a USB connection instead."
+            )
+
+        payload = struct.pack('<BH', rail_id & 0xFF, int(voltage_mv) & 0xFFFF)
+        self._usb_cmd(CmdId.HAT_SET_RAIL_VOLTAGE, payload)
+        return self.hat_get_rail_status()
+
     def hat_set_led_state(self, led_index: int, color_code: int) -> bool:
         """Set a HAT status LED state. LED indexes are 1..8."""
         self._require_hat_present()

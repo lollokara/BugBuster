@@ -427,6 +427,7 @@ class CmdId(IntEnum):
     HAT_CALIBRATE_IMPORT = 0xAD
     HAT_SET_IO_BANK      = 0xAE
     HAT_SET_LEVEL_SHIFT  = 0xAF
+    HAT_SET_RAIL_VOLTAGE = 0xB5
 
     # HVPAK advanced backend
     HAT_GET_HVPAK_ANALOG = 0xE5

@@ -91,8 +91,9 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Without this, the 25 Hz canvas redraw and 500 ms PCA poll keep running
     // forever after the user navigates away (one of the major contributors to
     // the "100 % CPU in idle" complaint).
-    let alive: RwSignal<bool> = RwSignal::new(true);
-    on_cleanup(move || alive.set(false));
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
 
     // Sync MUX state from device-state event
     Effect::new(move || {
@@ -103,11 +104,12 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // Poll PCA9535 status to sync PSU and E-Fuse UI with hardware
+    let alive_poll = alive.clone();
     spawn_local(async move {
         let mut fail_count = 0u32;
         loop {
             slp(500).await;
-            if !alive.get_untracked() { break; }
+            if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) { break; }
             let result = invoke("pca_get_status", wasm_bindgen::JsValue::NULL).await;
             if let Ok(st) = serde_wasm_bindgen::from_value::<IoExpState>(result) {
                 fail_count = 0;
@@ -190,10 +192,11 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         set_mux.set(s);
     };
 
+    let alive_draw = alive.clone();
     spawn_local(async move {
         loop {
             slp(40).await;
-            if !alive.get_untracked() { break; }
+            if !alive_draw.load(std::sync::atomic::Ordering::Relaxed) { break; }
             let Some(cv) = cr.get() else { continue };
             let cv: HtmlCanvasElement = cv;
             let dp = web_sys::window().unwrap().device_pixel_ratio();

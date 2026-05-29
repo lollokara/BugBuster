@@ -752,6 +752,7 @@ pub fn send_hat_set_power(connector: u8, enable: bool) {
 
 pub fn send_hat_set_io_voltage(voltage_mv: u16) {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         voltage_mv: u16,
     }
@@ -762,6 +763,7 @@ pub fn send_hat_set_io_voltage(voltage_mv: u16) {
 
 pub fn send_hat_setup_swd(target_voltage_mv: u16, connector: u8) {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         target_voltage_mv: u16,
         connector: u8,
@@ -809,6 +811,7 @@ pub struct HatLevelShiftStatus {
 
 pub async fn hat_calibrate_start(rail_id: u8) -> Option<u8> {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         rail_id: u8,
     }
@@ -824,6 +827,7 @@ pub async fn hat_calibrate_status() -> Option<HatCalibrateStatus> {
 
 pub async fn hat_calibrate_import(rail_id: u8, points: Vec<HatCalibratePoint>) -> Option<()> {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         rail_id: u8,
         points: Vec<HatCalibratePoint>,
@@ -892,6 +896,7 @@ pub async fn hat_get_rail_status() -> Option<Vec<HatRailStatus>> {
 
 pub async fn hat_set_rail_enable(rail_id: u8, enable: bool) -> Option<Vec<HatRailStatus>> {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         rail_id: u8,
         enable: bool,
@@ -903,6 +908,7 @@ pub async fn hat_set_rail_enable(rail_id: u8, enable: bool) -> Option<Vec<HatRai
 
 pub async fn hat_set_rail_voltage(rail_id: u8, voltage_mv: u16) -> Option<Vec<HatRailStatus>> {
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct Args {
         rail_id: u8,
         voltage_mv: u16,
