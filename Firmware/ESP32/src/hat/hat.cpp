@@ -581,8 +581,33 @@ bool hat_init(void)
     ESP_LOGI(TAG, "HAT subsystem initialized (UART%d: GPIO%d TX, GPIO%d RX, %d baud)",
              HAT_UART_NUM, PIN_HAT_TX, PIN_HAT_RX, HAT_UART_BAUD);
 
-    // Initial detection
+    // Initial detection — with retry to handle the race where the ESP32 boots
+    // faster than the RP2040 HAT. The RP2040 takes ~1.5 s to complete its own
+    // boot animation before it drives the detect GPIO low. We poll up to
+    // HAT_BOOT_RETRY_COUNT times with HAT_BOOT_RETRY_DELAY_MS between attempts.
+    // If the detect GPIO is active on the first try we skip straight through.
+#ifndef HAT_BOOT_RETRY_COUNT
+#define HAT_BOOT_RETRY_COUNT   8
+#endif
+#ifndef HAT_BOOT_RETRY_DELAY_MS
+#define HAT_BOOT_RETRY_DELAY_MS  250
+#endif
+
     hat_detect();
+
+    if (!s_state.detected) {
+        ESP_LOGI(TAG, "HAT not detected yet (%.2fV) — waiting for RP2040 boot (up to %d ms)...",
+                 s_state.detect_voltage,
+                 HAT_BOOT_RETRY_COUNT * HAT_BOOT_RETRY_DELAY_MS);
+        for (int attempt = 1; attempt <= HAT_BOOT_RETRY_COUNT && !s_state.detected; attempt++) {
+            vTaskDelay(pdMS_TO_TICKS(HAT_BOOT_RETRY_DELAY_MS));
+            hat_detect();
+            if (s_state.detected) {
+                ESP_LOGI(TAG, "HAT detected on retry %d/%d (%.2fV)",
+                         attempt, HAT_BOOT_RETRY_COUNT, s_state.detect_voltage);
+            }
+        }
+    }
 
     if (s_state.detected) {
         ESP_LOGI(TAG, "HAT detected: %s (%.2fV)", hat_type_name(s_state.type), s_state.detect_voltage);
@@ -593,7 +618,7 @@ bool hat_init(void)
             ESP_LOGW(TAG, "HAT detected but UART connection failed");
         }
     } else {
-        ESP_LOGI(TAG, "No HAT detected (%.2fV)", s_state.detect_voltage);
+        ESP_LOGI(TAG, "No HAT detected after retries (%.2fV)", s_state.detect_voltage);
     }
 
     return true;

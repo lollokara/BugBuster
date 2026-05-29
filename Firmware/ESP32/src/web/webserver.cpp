@@ -3019,8 +3019,8 @@ static esp_err_t handle_post_hat_v2_rail_voltage(httpd_req_t *req)
     uint16_t mv = (uint16_t)cJSON_GetObjectItem(doc, "voltageMv")->valueint;
     cJSON_Delete(doc);
 
-    if (rail_id < HAT_RAIL_VADJ3 || rail_id > HAT_RAIL_VADJ4) {
-        return send_error(req, 400, "railId out of range (1-2)");
+    if (rail_id > HAT_RAIL_VADJ4) {
+        return send_error(req, 400, "railId out of range (0-2)");
     }
 
     if (!hat_set_rail_voltage(rail_id, mv)) {
