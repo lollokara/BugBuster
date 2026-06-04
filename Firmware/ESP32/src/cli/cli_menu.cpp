@@ -52,6 +52,7 @@
 #include "pca9535.h"
 #include "adgs2414d.h"
 #include "hat.h"
+#include "dio/dio.h"
 #include "selftest.h"
 #include "ds4424.h"
 #include "wifi_manager.h"
@@ -134,13 +135,14 @@ typedef enum {
     TAB_CH3,
     TAB_POWER,
     TAB_SIGNAL,
+    TAB_IO,       // IO1-IO12 terminal control
     TAB_HAT,
     TAB_SETTINGS,
     NUM_TABS
 } MenuTab;
 
 static const char* kTabNames[NUM_TABS] = {
-    "Overview", "CH0", "CH1", "CH2", "CH3", "Power", "Signal", "HAT", "Settings"
+    "Overview", "CH0", "CH1", "CH2", "CH3", "Power", "Signal", "IO", "HAT", "Settings"
 };
 
 // Channel tab field rows
@@ -168,6 +170,8 @@ typedef enum {
     SET_FIELD_CAL_SAVE,
     SET_FIELD_CAL_LOAD,
     SET_FIELD_CAL_CLEAR,
+    SET_FIELD_CAL_VLOGIC,
+    SET_FIELD_RESET_DEVICE,
     NUM_SET_FIELDS
 } SettingsField;
 
@@ -203,11 +207,36 @@ typedef enum {
     HAT_FIELD_IO_VOLT,
     HAT_FIELD_DETECT,
     HAT_FIELD_RESET,
+    HAT_FIELD_RAIL0_EN,   // 3V3_ADJ enable toggle
+    HAT_FIELD_RAIL1_EN,   // VADJ3 enable toggle
+    HAT_FIELD_RAIL2_EN,   // VADJ4 enable toggle
+    HAT_FIELD_RAIL1_V,    // VADJ3 voltage slider
+    HAT_FIELD_RAIL2_V,    // VADJ4 voltage slider
+    HAT_FIELD_LED0,       // LED 0 color picker
+    HAT_FIELD_LA_ROUTE,   // LA route picker
     NUM_HAT_FIELDS
 } HatTabField;
 
+// IO tab rows
+typedef enum {
+    IO_FIELD_IO1 = 0,
+    IO_FIELD_IO2,
+    IO_FIELD_IO3,
+    IO_FIELD_IO4,
+    IO_FIELD_IO5,
+    IO_FIELD_IO6,
+    IO_FIELD_IO7,
+    IO_FIELD_IO8,
+    IO_FIELD_IO9,
+    IO_FIELD_IO10,
+    IO_FIELD_IO11,
+    IO_FIELD_IO12,
+    NUM_IO_FIELDS
+} IoTabField;
+
 static MenuTab s_tab = TAB_OVERVIEW;
 static uint8_t s_field = 0;
+static int8_t  s_tab_scroll[NUM_TABS] = {0};
 
 // ---------------------------------------------------------------------------
 // Snapshot (model)
@@ -271,6 +300,14 @@ struct MenuSnapshot {
     char      ipStr[16];
     int8_t    rssi;
     char      ssid[33];
+    // IO terminals
+    DioState  dioSnap[12];
+    // HAT v2 rails
+    HatRailStatus hatRails[HAT_RAIL_COUNT];
+    uint8_t   hatRailCount;
+    // LA status
+    HatLaStatus laStatus;
+    bool        laStatusValid;
 };
 
 static MenuSnapshot s_snap;
@@ -759,6 +796,19 @@ static void take_snapshot_slow(void) {
         }
     }
 
+    // HAT v2 rails
+    if (hat_detected()) {
+        uint8_t cnt = 0;
+        hat_get_rail_status(s_snap.hatRails, &cnt);
+        s_snap.hatRailCount = cnt;
+    }
+    // LA status
+    if (s_snap.hatConnected) {
+        s_snap.laStatusValid = hat_la_get_status(&s_snap.laStatus);
+    } else {
+        s_snap.laStatusValid = false;
+    }
+
     // Board profile (own NVS-backed cache, no mutex needed)
     const BoardProfile* bp = board_profile_get_active();
     if (bp) {
@@ -798,10 +848,16 @@ static bool take_snapshot(void) {
         s_snap.diag[d].source = g_deviceState.diag[d].source;
         s_snap.diag[d].value  = g_deviceState.diag[d].value;
     }
-    // IDAC voltages (cached values updated by poll task; safe to read)
-    s_snap.vlogic = g_deviceState.idac.state[0].target_v;
-    s_snap.vadj1  = g_deviceState.idac.state[1].target_v;
-    s_snap.vadj2  = g_deviceState.idac.state[2].target_v;
+    // IDAC voltages: prefer actual_v (last ADC measurement) over target_v (set-point).
+    // selftest_get_supply_voltages() is called outside the mutex below to override
+    // with live measured values when the supply monitor has run.
+    auto snap_idac_v = [](const DS4424ChanState& s) -> float {
+        if (s.actual_v > 0.0f) return s.actual_v;
+        return s.target_v;
+    };
+    s_snap.vlogic = snap_idac_v(g_deviceState.idac.state[0]);
+    s_snap.vadj1  = snap_idac_v(g_deviceState.idac.state[1]);
+    s_snap.vadj2  = snap_idac_v(g_deviceState.idac.state[2]);
     // USB-PD
     s_snap.pdVoltage  = g_deviceState.usbpd.voltage_v;
     s_snap.pdCurrent  = g_deviceState.usbpd.current_a;
@@ -823,6 +879,24 @@ static bool take_snapshot(void) {
     // Signal tab: full MUX state (includes self-test device)
     adgs_get_all_states(s_snap.muxState);
     xSemaphoreGive(g_stateMutex);
+
+    // DIO snapshot (has its own internal lock — call outside state mutex)
+    {
+        const DioState* all = dio_get_all();
+        if (all) {
+            memcpy(s_snap.dioSnap, all, sizeof(DioState) * 12);
+        }
+    }
+
+    // Override IDAC voltages with live selftest measurements when available
+    {
+        const SelftestSupplyVoltages* sv = selftest_get_supply_voltages();
+        if (sv) {
+            if (sv->voltage[SELFTEST_RAIL_VADJ1]   >= 0.0f) s_snap.vadj1  = sv->voltage[SELFTEST_RAIL_VADJ1];
+            if (sv->voltage[SELFTEST_RAIL_VADJ2]   >= 0.0f) s_snap.vadj2  = sv->voltage[SELFTEST_RAIL_VADJ2];
+            if (sv->voltage[SELFTEST_RAIL_3V3_ADJ] >= 0.0f) s_snap.vlogic = sv->voltage[SELFTEST_RAIL_3V3_ADJ];
+        }
+    }
 
     s_snap.valid = true;
     return true;
@@ -1298,6 +1372,94 @@ static void cb_hat_reset(bool yes, void*) {
                ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
 }
 
+// HAT v2 picker tables
+static const PickerItem kLaRouteItems[] = {
+    { HAT_LA_ROUTE_LOW_SPEED,  "Low-speed  (RP2040 GPIO, up to ~1 MHz)" },
+    { HAT_LA_ROUTE_HIGH_SPEED, "High-speed (direct connector)" },
+};
+static const uint8_t kLaRouteItemCount = 2;
+
+static const PickerItem kLedColorItems[] = {
+    { 0, "Off" },
+    { 1, "Green" },
+    { 2, "Red" },
+    { 3, "Blue" },
+    { 4, "White" },
+    { 5, "Cyan" },
+    { 6, "Magenta" },
+    { 7, "Yellow" },
+};
+static const uint8_t kLedColorItemCount = 8;
+
+// IO mode picker table
+static const PickerItem kDioModeItems[] = {
+    { DIO_MODE_DISABLED, "DISABLED  (high-impedance)" },
+    { DIO_MODE_INPUT,    "INPUT     (read digital level)" },
+    { DIO_MODE_OUTPUT,   "OUTPUT    (drive digital level)" },
+};
+static const uint8_t kDioModeItemCount = 3;
+
+// HAT v2 rail callbacks
+static void cb_hat_rail_en(bool yes, void* user) {
+    if (!yes) return;
+    int rail_id = (int)(intptr_t)user;
+    bool new_state = !s_snap.hatRails[rail_id].enabled;
+    bool ok = hat_set_rail_enable((uint8_t)rail_id, new_state);
+    char msg[64];
+    static const char* kRailNames[3] = { "3V3_ADJ", "VADJ3", "VADJ4" };
+    snprintf(msg, sizeof(msg), "%s -> %s %s",
+             kRailNames[rail_id], new_state ? "ON" : "OFF", ok ? "" : "(FAILED)");
+    show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
+}
+
+static void cb_hat_rail_v(float v, void* user) {
+    int rail_id = (int)(intptr_t)user;
+    uint16_t mv = (uint16_t)(v * 1000.0f + 0.5f);
+    bool ok = hat_set_rail_voltage((uint8_t)rail_id, mv);
+    char msg[64];
+    static const char* kRailNames[3] = { "3V3_ADJ", "VADJ3", "VADJ4" };
+    snprintf(msg, sizeof(msg), "%s -> %u mV %s", kRailNames[rail_id], mv, ok ? "" : "(FAILED)");
+    show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
+}
+
+static void cb_hat_led_color(int32_t color, void*) {
+    bool ok = hat_set_led_state(0, (uint8_t)color);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "LED0 -> %s %s",
+             (color < (int32_t)kLedColorItemCount) ? kLedColorItems[color].label : "?",
+             ok ? "" : "(FAILED)");
+    show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
+}
+
+static void cb_hat_la_route(int32_t route, void*) {
+    bool ok = hat_la_set_route((uint8_t)route);
+    show_toast(ok ? "LA route set" : "LA route FAILED",
+               ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
+}
+
+// IO callbacks
+static void cb_io_set_mode(int32_t mode, void* user) {
+    int io = (int)(intptr_t)user;  // 1-based
+    bool ok = dio_configure((uint8_t)io, (uint8_t)mode);
+    char msg[48];
+    const char* mode_str = (mode == DIO_MODE_INPUT) ? "INPUT"
+                         : (mode == DIO_MODE_OUTPUT) ? "OUTPUT" : "DISABLED";
+    snprintf(msg, sizeof(msg), "IO%d -> %s %s", io, mode_str, ok ? "" : "(FAILED)");
+    show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
+}
+
+static void cb_io_toggle_output(bool yes, void* user) {
+    if (!yes) return;
+    int io = (int)(intptr_t)user;  // 1-based
+    int idx = io - 1;
+    bool new_level = !s_snap.dioSnap[idx].output_level;
+    bool ok = dio_write((uint8_t)io, new_level);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "IO%d -> %s %s", io, new_level ? "HIGH" : "LOW",
+             ok ? "" : "(FAILED)");
+    show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
+}
+
 // Calibration progress modal tick callback ----------------------------------
 
 static void cal_progress_tick(ModalFrame* f, void*) {
@@ -1370,6 +1532,13 @@ static void cb_cal_clear(bool yes, void*) {
     if (!yes) return;
     for (uint8_t ch = 0; ch < 3; ch++) ds4424_cal_clear(ch);
     show_toast("Cal data cleared for all channels", TERM_FG_B_GREEN);
+}
+
+static void cb_reset_device(bool yes, void*) {
+    if (!yes) return;
+    show_toast("Rebooting...", TERM_FG_B_RED, 1000);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    esp_restart();
 }
 
 // ===========================================================================
@@ -1547,6 +1716,18 @@ static void activate_settings_field(SettingsField field) {
         case SET_FIELD_CAL_CLEAR:
             open_confirm("Clear ALL calibration data (ch 0-2)?", cb_cal_clear, nullptr);
             break;
+        case SET_FIELD_CAL_VLOGIC:
+            if (selftest_start_auto_calibrate(0)) {
+                static char cal_title_vl[40];
+                snprintf(cal_title_vl, sizeof(cal_title_vl), "Calibrating VLOGIC...");
+                open_progress(cal_title_vl, cal_progress_tick, nullptr);
+            } else {
+                show_toast("Cal start FAILED (busy or interlock)", TERM_FG_B_RED);
+            }
+            break;
+        case SET_FIELD_RESET_DEVICE:
+            open_confirm("Reboot ESP32 now?", cb_reset_device, nullptr);
+            break;
         default: break;
     }
 }
@@ -1678,7 +1859,87 @@ static void activate_hat_field(HatTabField field) {
         case HAT_FIELD_RESET:
             open_confirm("Reset HAT to defaults?", cb_hat_reset, nullptr);
             break;
+        case HAT_FIELD_RAIL0_EN:
+        case HAT_FIELD_RAIL1_EN:
+        case HAT_FIELD_RAIL2_EN: {
+            int rail_id = (int)field - (int)HAT_FIELD_RAIL0_EN;
+            if (!s_snap.hatDetected || !s_snap.hatConnected) {
+                show_toast("HAT not connected", TERM_FG_B_RED, 1500);
+                break;
+            }
+            static const char* kRailNames[3] = { "3V3_ADJ", "VADJ3", "VADJ4" };
+            static char rail_pmt[64];
+            snprintf(rail_pmt, sizeof(rail_pmt), "Toggle %s (%s -> %s)?",
+                     kRailNames[rail_id],
+                     s_snap.hatRails[rail_id].enabled ? "ON" : "OFF",
+                     s_snap.hatRails[rail_id].enabled ? "OFF" : "ON");
+            open_confirm(rail_pmt, cb_hat_rail_en, (void*)(intptr_t)rail_id);
+            break;
+        }
+        case HAT_FIELD_RAIL1_V:
+        case HAT_FIELD_RAIL2_V: {
+            int rail_id = (int)field - (int)HAT_FIELD_RAIL1_V + 1;  // rail 1 or 2
+            if (!s_snap.hatDetected || !s_snap.hatConnected) {
+                show_toast("HAT not connected", TERM_FG_B_RED, 1500);
+                break;
+            }
+            static const char* kRailNames2[2] = { "VADJ3", "VADJ4" };
+            float cur_v = s_snap.hatRails[rail_id].voltage_mv / 1000.0f;
+            if (cur_v < 1.0f) cur_v = 3.3f;  // supply off → sensible default
+            static char rail_title[32];
+            snprintf(rail_title, sizeof(rail_title), "%s Voltage", kRailNames2[rail_id - 1]);
+            open_slider(rail_title, "V", 1.5f, 35.0f, 0.1f, cur_v,
+                        cb_hat_rail_v, (void*)(intptr_t)rail_id);
+            break;
+        }
+        case HAT_FIELD_LED0: {
+            if (!s_snap.hatDetected || !s_snap.hatConnected) {
+                show_toast("HAT not connected", TERM_FG_B_RED, 1500);
+                break;
+            }
+            open_picker("LED 0 Color", kLedColorItems, kLedColorItemCount, 0,
+                        cb_hat_led_color, nullptr);
+            break;
+        }
+        case HAT_FIELD_LA_ROUTE: {
+            if (!s_snap.hatDetected || !s_snap.hatConnected) {
+                show_toast("HAT not connected", TERM_FG_B_RED, 1500);
+                break;
+            }
+            const HatState* hs2 = hat_get_state();
+            uint8_t cur_route = hs2 ? hs2->la_route : 0;
+            uint8_t sel = (cur_route == HAT_LA_ROUTE_HIGH_SPEED) ? 1 : 0;
+            open_picker("LA Route", kLaRouteItems, kLaRouteItemCount, sel,
+                        cb_hat_la_route, nullptr);
+            break;
+        }
         default: break;
+    }
+}
+
+static void activate_io_field(int field) {
+    int io = field + 1;  // 1-based
+    int idx = field;
+    const DioState& ds = s_snap.dioSnap[idx];
+
+    if (ds.mode == DIO_MODE_OUTPUT) {
+        // In output mode: toggle immediately on Enter, confirm first
+        static char io_prompt[48];
+        snprintf(io_prompt, sizeof(io_prompt),
+                 "Toggle IO%d output (%s -> %s)?", io,
+                 ds.output_level ? "HIGH" : "LOW",
+                 ds.output_level ? "LOW" : "HIGH");
+        open_confirm(io_prompt, cb_io_toggle_output, (void*)(intptr_t)io);
+    } else {
+        // Otherwise: open mode picker
+        uint8_t sel = 0;
+        for (uint8_t i = 0; i < kDioModeItemCount; i++) {
+            if (kDioModeItems[i].value == (int32_t)ds.mode) { sel = i; break; }
+        }
+        static char io_title[32];
+        snprintf(io_title, sizeof(io_title), "IO%d Mode", io);
+        open_picker(io_title, kDioModeItems, kDioModeItemCount, sel,
+                    cb_io_set_mode, (void*)(intptr_t)io);
     }
 }
 
@@ -2283,7 +2544,13 @@ static void render_settings_tab(void) {
         snprintf(items[SET_FIELD_CAL_CLEAR].value, sizeof(items[0].value),
                  "Clear cal data for ch 0-2");
         items[SET_FIELD_CAL_CLEAR].label = "Cal Clear";
+        snprintf(items[SET_FIELD_CAL_VLOGIC].value, sizeof(items[0].value),
+                 "%s", busy ? "BUSY" : "Start VLOGIC auto-calibration");
+        items[SET_FIELD_CAL_VLOGIC].label = "Cal VLOGIC";
     }
+    snprintf(items[SET_FIELD_RESET_DEVICE].value, sizeof(items[0].value),
+             "Reboot device now");
+    items[SET_FIELD_RESET_DEVICE].label = "Reset Device";
     items[SET_FIELD_CLEAR_FAULTS].label = "Faults";
 
     snprintf(items[SET_FIELD_USBPD].value,
@@ -2514,13 +2781,149 @@ static void render_hat_tab(void) {
              "Reset all pins to disconnected");
     items[HAT_FIELD_RESET].label = "Reset HAT";
 
+    // Rail enables
+    static const char* kRailNames[3] = { "3V3_ADJ", "VADJ3", "VADJ4" };
+    for (int r = 0; r < 3; r++) {
+        int fi = HAT_FIELD_RAIL0_EN + r;
+        if (s_snap.hatDetected && r < (int)s_snap.hatRailCount) {
+            const HatRailStatus& rs = s_snap.hatRails[r];
+            snprintf(items[fi].value, sizeof(items[0].value),
+                     "%s  %u mV  %u mA  st:0x%02X",
+                     rs.enabled ? "ON " : "OFF",
+                     rs.voltage_mv, rs.current_ma, rs.status);
+        } else {
+            snprintf(items[fi].value, sizeof(items[0].value), "(HAT not connected)");
+        }
+        items[fi].label = kRailNames[r];
+    }
+
+    // Rail voltages (VADJ3, VADJ4 only)
+    for (int r = 1; r <= 2; r++) {
+        int fi = HAT_FIELD_RAIL1_V + (r - 1);
+        if (s_snap.hatDetected && r < (int)s_snap.hatRailCount) {
+            snprintf(items[fi].value, sizeof(items[0].value),
+                     "%.3f V  (opens slider)",
+                     s_snap.hatRails[r].voltage_mv / 1000.0f);
+        } else {
+            snprintf(items[fi].value, sizeof(items[0].value), "(HAT not connected)");
+        }
+        static const char* kVNames[2] = { "VADJ3 Voltage", "VADJ4 Voltage" };
+        items[fi].label = kVNames[r - 1];
+    }
+
+    // LED0
+    snprintf(items[HAT_FIELD_LED0].value, sizeof(items[0].value),
+             "Opens color picker");
+    items[HAT_FIELD_LED0].label = "LED0 Color";
+
+    // LA Route
+    {
+        const HatState* hs2 = hat_get_state();
+        uint8_t route = hs2 ? hs2->la_route : 0;
+        snprintf(items[HAT_FIELD_LA_ROUTE].value, sizeof(items[0].value),
+                 "%s", route == HAT_LA_ROUTE_HIGH_SPEED ? "High-speed" : "Low-speed");
+    }
+    items[HAT_FIELD_LA_ROUTE].label = "LA Route";
+
+    int top_content_row = row;  // capture before loop for scroll floor
+    int content_bottom = s_rows - 3;
+    int scroll = s_tab_scroll[TAB_HAT];
+
     for (int i = 0; i < NUM_HAT_FIELDS; i++) {
+        int draw_row = top_content_row + (i - scroll);
+        if (draw_row < top_content_row) continue;
+        if (draw_row >= content_bottom) break;
         bool selected = (s_field == i);
         uint8_t fg   = selected ? TERM_FG_B_YELLOW : TERM_FG_DEFAULT;
         uint8_t attr = selected ? ATTR_BOLD : 0;
         const char* arrow = selected ? "> " : "  ";
-        draw_textf(row + i, lc, fg, attr,
+        draw_textf(draw_row, lc, fg, attr,
                    "%s%-14s  %s", arrow, items[i].label, items[i].value);
+    }
+
+    // LA read-only status block
+    row = top_content_row + NUM_HAT_FIELDS + 2;
+    if (s_snap.hatConnected && s_snap.laStatusValid && row < s_rows - 6) {
+        draw_hline(row, lc, panel_cols - 4, '-', TERM_FG_B_BLACK, 0);
+        draw_text(row, lc, " Logic Analyzer ", TERM_FG_B_CYAN, 0);
+        row++;
+        const HatLaStatus& la = s_snap.laStatus;
+        draw_textf(row, lc, TERM_FG_DEFAULT, 0,
+                   "State: %-10s  CH:%u  Rate:%7lu Hz  Cap:%lu/%lu",
+                   hat_la_state_name(la.state),
+                   la.channels,
+                   (unsigned long)la.actual_rate_hz,
+                   (unsigned long)la.samples_captured,
+                   (unsigned long)la.total_samples);
+        row++;
+        draw_textf(row, lc, TERM_FG_B_BLACK, 0,
+                   "USB: %s %s  overruns:%lu  short-writes:%lu  rearms:%u/%u",
+                   la.usb_connected ? "connected" : "disconnected",
+                   la.usb_mounted   ? "mounted"   : "unmounted",
+                   (unsigned long)la.stream_overrun_count,
+                   (unsigned long)la.stream_short_write_count,
+                   la.usb_rearm_request_count,
+                   la.usb_rearm_complete_count);
+    }
+}
+
+// --- IO tab -----------------------------------------------------------------
+
+static void render_io_tab(void) {
+    int panel_row  = 4;
+    int panel_col  = 1;
+    int panel_rows = s_rows - 4 - panel_row;
+    int panel_cols = s_cols - 2;
+    if (panel_rows < 4) panel_rows = 4;
+    draw_panel(panel_row, panel_col, panel_rows, panel_cols,
+               "IO", (uint8_t)TERM_FG_B_BLACK, 0);
+
+    int row = panel_row + 1;
+    int lc  = panel_col + 2;
+    int content_bottom = s_rows - 3;
+
+    int scroll = s_tab_scroll[TAB_IO];
+
+    draw_textf(row, lc, TERM_FG_B_BLACK, 0,
+               "  IO   Mode      OUT  IN   GPIO");
+    row++;
+
+    for (int i = 0; i < NUM_IO_FIELDS; i++) {
+        int draw_row = row + (i - scroll);
+        if (draw_row < row) continue;
+        if (draw_row >= content_bottom) break;
+
+        const DioState& ds = s_snap.dioSnap[i];
+        bool selected = (s_field == i);
+        uint8_t attr  = selected ? ATTR_BOLD : 0;
+
+        uint8_t fg;
+        if (ds.mode == DIO_MODE_OUTPUT) {
+            fg = ds.output_level ? (uint8_t)TERM_FG_B_GREEN : (uint8_t)TERM_FG_B_YELLOW;
+        } else if (ds.mode == DIO_MODE_INPUT) {
+            fg = (uint8_t)TERM_FG_B_CYAN;
+        } else {
+            fg = (uint8_t)TERM_FG_B_BLACK;
+        }
+
+        const char* mode_str = (ds.mode == DIO_MODE_OUTPUT) ? "OUTPUT "
+                             : (ds.mode == DIO_MODE_INPUT)  ? "INPUT  "
+                             :                                 "DISABL ";
+        const char* arrow = selected ? "> " : "  ";
+
+        char gpio_str[8];
+        if (ds.gpio_num >= 0) {
+            snprintf(gpio_str, sizeof(gpio_str), "G%02d", ds.gpio_num);
+        } else {
+            snprintf(gpio_str, sizeof(gpio_str), "---");
+        }
+
+        draw_textf(draw_row, lc, fg, attr,
+                   "%s IO%-2d  [%s]  %s    %s    %s",
+                   arrow, i + 1, mode_str,
+                   ds.mode == DIO_MODE_OUTPUT ? (ds.output_level ? "1" : "0") : "-",
+                   ds.mode != DIO_MODE_DISABLED ? (ds.input_level ? "1" : "0") : "-",
+                   gpio_str);
     }
 }
 
@@ -2926,10 +3329,12 @@ static void on_arrow(char dir) {
             } else if (dir == 'D') {
                 // Left: prev tab
                 if (s_tab > 0) s_tab = (MenuTab)((int)s_tab - 1);
+                s_tab_scroll[s_tab] = 0;
                 s_field = 0;
             } else if (dir == 'C') {
                 // Right: next tab
                 if ((int)s_tab + 1 < NUM_TABS) s_tab = (MenuTab)((int)s_tab + 1);
+                s_tab_scroll[s_tab] = 0;
                 s_field = 0;
             }
         } else {
@@ -2953,6 +3358,7 @@ static void on_arrow(char dir) {
                 if (sw == 0) {
                     // Edge: prev tab
                     if (s_tab > 0) s_tab = (MenuTab)((int)s_tab - 1);
+                    s_tab_scroll[s_tab] = 0;
                     s_field = 0;
                     s_force_redraw = true;
                     return;
@@ -2964,6 +3370,7 @@ static void on_arrow(char dir) {
                 if (last_col && last_dev) {
                     // Edge: next tab
                     if ((int)s_tab + 1 < NUM_TABS) s_tab = (MenuTab)((int)s_tab + 1);
+                    s_tab_scroll[s_tab] = 0;
                     s_field = 0;
                     s_force_redraw = true;
                     return;
@@ -2986,19 +3393,34 @@ static void on_arrow(char dir) {
 
     if (dir == 'A') {            // Up — previous field
         if (s_field > 0) s_field--;
+        {
+            int content_rows = s_rows - 4 - 3 - 2;
+            if (content_rows < 1) content_rows = 1;
+            if ((int)s_field < (int)s_tab_scroll[s_tab])
+                s_tab_scroll[s_tab] = (int8_t)s_field;
+        }
     } else if (dir == 'B') {     // Down — next field
         uint8_t max = 0;
         if (s_tab >= TAB_CH0 && s_tab <= TAB_CH3) max = NUM_CH_FIELDS;
         else if (s_tab == TAB_POWER)               max = NUM_PWR_FIELDS;
         else if (s_tab == TAB_SIGNAL)              max = NUM_SIGNAL_FIELDS;
+        else if (s_tab == TAB_IO)                  max = NUM_IO_FIELDS;
         else if (s_tab == TAB_HAT)                 max = NUM_HAT_FIELDS;
         else if (s_tab == TAB_SETTINGS)            max = NUM_SET_FIELDS;
         if (max > 0 && s_field + 1 < max) s_field++;
+        {
+            int content_rows = s_rows - 4 - 3 - 2;
+            if (content_rows < 1) content_rows = 1;
+            if ((int)s_field >= (int)s_tab_scroll[s_tab] + content_rows)
+                s_tab_scroll[s_tab] = (int8_t)(s_field - content_rows + 1);
+        }
     } else if (dir == 'C') {     // Right — next tab
         if ((int)s_tab + 1 < NUM_TABS) s_tab = (MenuTab)((int)s_tab + 1);
+        s_tab_scroll[s_tab] = 0;
         s_field = 0;
     } else if (dir == 'D') {     // Left — prev tab
         if (s_tab > 0) s_tab = (MenuTab)((int)s_tab - 1);
+        s_tab_scroll[s_tab] = 0;
         s_field = 0;
     }
     s_force_redraw = true;
@@ -3015,6 +3437,8 @@ static void on_enter(void) {
         activate_power_field((PowerField)s_field);
     } else if (s_tab == TAB_SIGNAL) {
         activate_signal_field((int)s_field);
+    } else if (s_tab == TAB_IO) {
+        activate_io_field((int)s_field);
     } else if (s_tab == TAB_HAT) {
         activate_hat_field((HatTabField)s_field);
     } else if (s_tab == TAB_SETTINGS) {
@@ -3258,6 +3682,8 @@ static void render_full(void) {
         render_power_tab();
     } else if (s_tab == TAB_SIGNAL) {
         render_signal_tab();
+    } else if (s_tab == TAB_IO) {
+        render_io_tab();
     } else if (s_tab == TAB_HAT) {
         render_hat_tab();
     } else if (s_tab == TAB_SETTINGS) {
