@@ -244,7 +244,7 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
                                     HatPendingEvent *pending_events, int *pending_count)
 {
     s_last_error = 0;
-    ESP_LOGI(TAG, "TX cmd=0x%02X len=%d t=%" PRIu64 "us", cmd, payload_len, esp_timer_get_time());
+    ESP_LOGD(TAG, "TX cmd=0x%02X len=%d t=%" PRIu64 "us", cmd, payload_len, esp_timer_get_time());
 
     // Flush any stale data before sending
     uart_flush_input(HAT_UART_NUM);
@@ -330,7 +330,7 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
         }
         if (rsp_len) *rsp_len = local_len;
 
-        ESP_LOGI(TAG, "RX rsp=0x%02X len=%d cmd=0x%02X t=%" PRIu64 "us", rsp, local_len, cmd, esp_timer_get_time());
+        ESP_LOGD(TAG, "RX rsp=0x%02X len=%d cmd=0x%02X t=%" PRIu64 "us", rsp, local_len, cmd, esp_timer_get_time());
         final_rsp = rsp;
         break;
     }
@@ -364,7 +364,7 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                                    pending_events, &pending_count);
         if (rsp != 0) {
             s_state.connected = true; // Connection recovered
-            ESP_LOGI(TAG, "HAT connection recovered during command 0x%02X", cmd);
+            ESP_LOGD(TAG, "HAT connection recovered during command 0x%02X", cmd);
         }
     }
 
