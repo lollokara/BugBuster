@@ -11,11 +11,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
-  <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2041%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
+  <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2059%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
   <img src="https://img.shields.io/badge/firmware-ESP%203.1.0%20%C2%B7%20HAT%20bb--hat--2.1-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Firmware"/>
   <img src="https://img.shields.io/badge/desktop-Tauri%20v2%20%C2%B7%20Leptos%200.7-0d1117?style=flat-square&labelColor=161b22&color=f4a261" alt="Desktop"/>
-  <img src="https://img.shields.io/badge/protocol-BBP%20v4-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
-  <img src="https://img.shields.io/badge/python-3.10%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
+  <img src="https://img.shields.io/badge/protocol-BBP%20v6-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
+  <img src="https://img.shields.io/badge/python-3.11%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
 </p>
 
 <br/>
@@ -28,7 +28,7 @@
 
 > BugBuster is an open-source hardware platform that bridges the gap between AI models and the physical world. Through a **Model Context Protocol (MCP) server**, AI assistants like Claude can autonomously measure voltages, drive outputs, capture waveforms, analyze digital signals, and debug embedded targets &mdash; using a single USB-C connection to a purpose-built PCB.
 >
-> One board. 41 AI-callable tools. A full electronics bench in your AI's hands.
+> One board. 59 AI-callable tools. A full electronics bench in your AI's hands.
 
 <br/>
 
@@ -90,8 +90,11 @@ More scenarios: [`Docs/Scenarios.md`](Docs/Scenarios.md).
 | **Route** | 32-switch MUX | 4 × ADGS2414D octal SPST, break-before-make |
 | **Power** | Adjustable supplies | 3–15 V VADJ1/2, USB-PD 5–20 V, 4 e-fuses |
 | **Scope** | ADC streaming | Real-time display, BBSC + CSV export |
-| **Logic Analyzer**† | 1/2/4 ch @ 1–125 MHz | PIO capture, RLE, hardware triggers, **dedicated RP2040 USB vendor-bulk endpoint** |
-| **SWD Probe**† | CMSIS-DAP v2 | OpenOCD / pyOCD / probe-rs / VS Code |
+| **Logic Analyzer**† | 4 ch @ up to 1 MHz (USB stream); up to 125 MHz 1-ch offline | PIO capture, RLE, hardware triggers, dual route (low-speed MUX / high-speed level-shifted), **dedicated RP2040 USB vendor-bulk endpoint** |
+| **SWD Probe**† | CMSIS-DAP v2 | OpenOCD / pyOCD / probe-rs / VS Code — dedicated 5-pin connector (VADJ4 · SWCLK · SWDIO · TRACE · GND) |
+| **HAT Power Rails**† | VADJ3 + VADJ4 (adjustable 0V-36V) + 3V3\_ADJ | DS4424-tuned LTM8083 rails, per-rail current monitoring (50 mΩ shunt), auto-calibration |
+| **HAT IO Bank**† | 8 level-shifted IOs | GPIO10–15 + GPIO20–21, direction-controlled, Conn1 + Conn2 headers |
+| **HAT Status LEDs**† | 8× WS2812B | Per-connector status indicators, boot animation |
 | **UART Bridge** | Transparent passthrough | Configurable baud + pins |
 
 </td></tr>
@@ -125,7 +128,7 @@ flowchart TB
     RP --- PIO1
   end
 
-  HOST -->|"USB CDC #0 — BBP v4<br/>control plane (MCP / desktop)"| ESP32
+  HOST -->|"USB CDC #0 — BBP v6<br/>control plane (MCP / desktop)"| ESP32
   HOST -->|"WiFi HTTP REST<br/>(token-paired)"| ESP32
   ESP32 -->|"HAT UART 921600 8N1<br/>(HAT_Protocol.md)"| RP
 
@@ -145,7 +148,7 @@ flowchart LR
   end
 
   subgraph ESP["ESP32-S3"]
-    BBP["BBP v4\nUSB CDC #0"]
+    BBP["BBP v6\nUSB CDC #0"]
     HTTP["HTTP REST\nWiFi / USB"]
   end
 
@@ -153,9 +156,9 @@ flowchart LR
     UART["HAT UART\n0xAA framing"]
   end
 
-  Desktop -->|"BBP v4 / COBS+CRC-16"| BBP
-  MCP     -->|"BBP v4 / COBS+CRC-16"| BBP
-  PyLib   -->|"BBP v4 / COBS+CRC-16"| BBP
+  Desktop -->|"BBP v6 / COBS+CRC-16"| BBP
+  MCP     -->|"BBP v6 / COBS+CRC-16"| BBP
+  PyLib   -->|"BBP v6 / COBS+CRC-16"| BBP
 
   Desktop -->|"JSON REST"| HTTP
   PyLib   -->|"JSON REST"| HTTP
@@ -166,7 +169,7 @@ flowchart LR
 
 **Two independent USB paths** when the HAT is attached:
 
-- **ESP32 USB CDC** — control plane (BBP v4 binary protocol over COBS + CRC-16).
+- **ESP32 USB CDC** — control plane (BBP v6 binary protocol over COBS + CRC-16).
   MCP server, desktop app, and Python library all speak this.
 - **RP2040 USB vendor bulk** — Logic Analyzer data plane. The ESP32 is **not**
   in the LA data path; this decouples capture throughput from the BBP control
@@ -178,7 +181,7 @@ flowchart LR
 
 | Transport | Protocol | Latency | Who talks it | Best for |
 |---|---|---|---|---|
-| ESP32 USB CDC #0 | BBP v4 (COBS + CRC-16) | < 1 ms | MCP · desktop · Python | Full control + streaming control plane |
+| ESP32 USB CDC #0 | BBP v6 (COBS + CRC-16) | < 1 ms | MCP · desktop · Python | Full control + streaming control plane |
 | ESP32 HTTP REST | JSON over WiFi | ~10 ms | desktop · Python · browser UI | Remote access, OTA |
 | RP2040 USB vendor bulk | 4-byte framed packets | < 1 ms | desktop · Python (libusb) | LA streaming / readout, ~1 MB/s |
 | RP2040 USB CMSIS-DAP v2 | standard DAP | < 1 ms | OpenOCD / pyOCD / probe-rs | SWD debug (zero proxy) |
@@ -217,7 +220,7 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-`/mcp` in Claude Code to reload. 41 tools appear.
+`/mcp` in Claude Code to reload. 59 tools appear.
 
 </details>
 
@@ -321,12 +324,12 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 
 | Topic | Where to read |
 |---|---|
-| **MCP tools & prompts** (41 tools, 4 prompts, 6 resources) | [`python/bugbuster_mcp/README.md`](python/bugbuster_mcp/README.md) |
+| **MCP tools & prompts** (59 tools, 4 prompts, 6 resources) | [`python/bugbuster_mcp/README.md`](python/bugbuster_mcp/README.md) |
 | **Python library** (low-level client + HAL, transports, examples) | [`python/README.md`](python/README.md) |
 | **Desktop app** (21 tabs, screenshots, build & release) | [`DesktopApp/BugBuster/README.md`](DesktopApp/BugBuster/README.md) |
 | **ESP32-S3 firmware** (FreeRTOS tasks, BBP, HTTP) | [`Firmware/ESP32/README.md`](Firmware/ESP32/README.md) |
 | **RP2040 HAT firmware** (debugprobe fork, LA, SWD, HVPAK) | [`Firmware/RP2040/README.md`](Firmware/RP2040/README.md) |
-| **BBP v4 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
+| **BBP v6 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
 | **HAT UART protocol** (ESP32 ↔ RP2040, 921600 8N1) | [`Firmware/HAT_Protocol.md`](Firmware/HAT_Protocol.md) |
 | **HAT architecture** (RP2040, debugprobe, HVPAK, connectors) | [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) |
 | **External I2C/SPI bus engine** (routed IOs, Python/MCP usage, BBP/HTTP endpoints) | [`Docs/ExternalBus.md`](Docs/ExternalBus.md) |
@@ -346,7 +349,7 @@ BugBuster/
 ├── Firmware/
 │   ├── ESP32/                   ESP-IDF firmware (PlatformIO) — main controller
 │   ├── RP2040/                  HAT firmware (Pico SDK + debugprobe fork)
-│   ├── BugBusterProtocol.md     BBP v4 wire format (USB CDC + HTTP REST)
+│   ├── BugBusterProtocol.md     BBP v6 wire format (USB CDC + HTTP REST)
 │   ├── HAT_Protocol.md          ESP32 ↔ RP2040 UART framing
 │   ├── HAT_Architecture.md      HAT board architecture reference
 │   └── FirmwareStructure.md     Cross-firmware reference
@@ -355,7 +358,7 @@ BugBuster/
 │
 ├── python/
 │   ├── bugbuster/               Control library (USB + HTTP, 100+ methods)
-│   ├── bugbuster_mcp/           MCP server (41 tools, 4 prompts, 6 resources)
+│   ├── bugbuster_mcp/           MCP server (59 tools, 4 prompts, 6 resources)
 │   └── examples/                Annotated example scripts
 │
 ├── tests/                       pytest — unit, simulator, hardware-in-the-loop
@@ -364,6 +367,12 @@ BugBuster/
 ├── PCB Material/                Altium schematics + layout
 └── Scripts/                     One-off test and automation scripts
 ```
+
+<br/>
+
+## Acknowledgements
+
+The HAT PCBs were provided by [JLCPCB](https://jlcpcb.com) for free to support the open-source community.
 
 <br/>
 
