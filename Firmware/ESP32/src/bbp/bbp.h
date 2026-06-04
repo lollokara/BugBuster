@@ -445,8 +445,8 @@ void bbpNotifyDspTask(uint8_t buf_idx);
  * @brief Serialise an AdcDspWindow and emit BBP_EVT_ADC_DSP + WS forward.
  *        Called from the DSP task after adc_dsp_process().
  */
-struct AdcDspWindow;
-void bbpSendDspWindow(const struct AdcDspWindow *w);
+#include "adc_dsp.h"
+void bbpSendDspWindow(const AdcDspWindow *w);
 
 /** @brief Check if scope streaming is active. */
 bool bbpScopeStreamActive(void);

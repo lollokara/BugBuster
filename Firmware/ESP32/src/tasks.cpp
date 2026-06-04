@@ -584,7 +584,8 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     //   C -> U17/device 3/IO9/GPIO10
     //   D -> U16/device 2/IO12/GPIO13
     // Only physical_ch above carries the AD74416H C/D register swap.
-    // Switch S3 (index 2) connects the AD74416H channel to the terminal.
+    // Switch S3 (index 2, bit 2 = 0x04 = U17_S3_MASK in config.h) connects
+    // the AD74416H channel to the terminal for all analog/current/RTD/HART modes.
     {
         bool close_analog = (func != CH_FUNC_HIGH_IMP);
         adgs_set_switch_safe(mux_dev, 2, close_analog); // S3 is index 2

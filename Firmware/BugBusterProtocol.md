@@ -1,7 +1,7 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 3.2.0
-**BBP Protocol Version:** 7
+**Version:** 3.3.0
+**BBP Protocol Version:** 8
 **Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
 **Status:** Active
@@ -2526,7 +2526,7 @@ Returns firmware version, build metadata, and OTA partition information.
   "fwMajor": 1,
   "fwMinor": 0,
   "fwPatch": 0,
-  "protoVersion": 7,
+  "protoVersion": 8,
   "partition": "app0",
   "partitionSize": 1703936,
   "nextPartition": "app1",
@@ -3131,7 +3131,81 @@ session. Supplements the `ERR_IO_OWNERSHIP_REQUIRED` error code with slot contex
 2       owner_kind      u8      Kind of the current slot owner
 ```
 
-### 7.9 LA Log Event
+### 7.9 ADC DSP Stream
+
+On-device DSP pipeline: samples at full ADC hardware rate (up to 9.6 kSPS), accumulates
+256-sample windows, applies a Hann-windowed 256-point FFT, detects voltage spikes, and
+pushes compressed summary events. ~8.6× smaller than raw streaming (~89 bytes/window vs
+768 bytes raw at 8 FFT peaks + 3 spikes). Over WiFi, events are forwarded via the
+`/api/ws/stream` WebSocket as stream type `0x03` (`adc-dsp`).
+
+#### 0x64 START_ADC_DSP_STREAM
+
+**Request payload (9 bytes):**
+```
+Offset  Field               Type    Description
+0       channel             u8      ADC channel to stream (0–3)
+1       rate_code           u8      AdcRate enum value (e.g. 13 = 9.6 kSPS)
+2       window_samples      u16     Window size — must be 256 (v1 only)
+4       spike_threshold     f32     V above mean to classify as a spike
+8       n_fft_peaks         u8      0 = skip FFT; 1–16 = dominant bins to report
+```
+
+**Response payload (11 bytes):**
+```
+0       channel             u8
+1       rate_code           u8
+2       window_samples      u16
+4       spike_threshold     f32
+8       n_fft_peaks         u8
+9       effective_rate_hz   u16     Actual ADC rate after hardware constraints
+```
+
+Once started the device pushes `BBP_EVT_ADC_DSP` (0x88) events continuously until stopped.
+
+#### 0x65 STOP_ADC_DSP_STREAM
+
+**Request payload:** (empty)
+**Response payload:** (empty)
+
+#### 0x88 BBP_EVT_ADC_DSP (Event)
+
+Unsolicited compressed DSP summary pushed once per 256-sample window (~37/sec at 9.6 kSPS).
+
+**Event payload:**
+```
+Offset  Field               Type    Description
+0       channel             u8      ADC channel
+1       window_start_us     u32     Timestamp of first sample in window (µs, wrapping)
+5       n_samples           u16     Samples in this window (always 256 in v1)
+7       min_v               f32     Minimum voltage in window
+11      max_v               f32     Maximum voltage in window
+15      mean_v              f32     Mean voltage in window
+19      rms_v               f32     RMS voltage in window
+23      n_fft_peaks         u8      Number of FFT peak entries (0–16)
+
+Per FFT peak (5 bytes each, repeated n_fft_peaks times):
+  +0    bin_index           u8      FFT bin index (0–127); frequency = bin × Fs/256
+  +1    magnitude           f32     Normalised magnitude (2/N × |X[k]|)
+
+After FFT peaks:
+  +0    n_spikes            u8      Number of spike entries (0–16)
+
+Per spike (8 bytes each, repeated n_spikes times):
+  +0    offset_us           u32     Offset from window_start_us
+  +4    value               f32     Sample voltage at spike
+```
+
+**Minimum payload size:** 25 bytes (0 peaks, 0 spikes)
+**Typical size:** 89 bytes (8 FFT peaks + 3 spikes)
+
+**HTTP/WiFi delivery:**
+- Subscribe via WebSocket `{"subscribe": ["adc-dsp"]}` on `/api/ws/stream`
+- Binary frames: `[opcode:1][stream_id=0x03:1][payload_len:2 LE][payload...]`
+- Trigger streaming: `POST /api/adc/dsp/start` with body `{channel, rate, windowSamples, spikeThreshold, nFftPeaks}`
+- Stop: `POST /api/adc/dsp/stop`
+
+### 7.10 LA Log Event
 
 #### 0xEC LA_LOG (Event)
 Unsolicited log message from RP2040 HAT.
@@ -3278,7 +3352,7 @@ Host                                    Device
   │                                       │
   │──── 0xBB 0x42 0x55 0x47 ────────────>│  (magic bytes)
   │                                       │
-  │<──── 0xBB 0x42 0x55 0x47 0x07 ───────│  (ACK, proto v7, fw version)
+  │<──── 0xBB 0x42 0x55 0x47 0x08 ───────│  (ACK, proto v8, fw version)
   │         0x03 0x02 0x00                │
   │                                       │  (device enters binary mode)
   │                                       │
@@ -3349,6 +3423,7 @@ Host                                    Device
 | 2.0 | 2026-05-10 | HAT capability system: HAT_GET_CAPS (0xC3) returning HatCaps struct; HAT_GET_RAIL_STATUS (0xC4) returning live rail snapshots; HAT_SET_RAIL_VOLTAGE (0xB5), HAT_SET_RAIL_ENABLE (0xD2) for VADJ3/VADJ4 power management; HAT_SET_LED_STATE (0xD3) for manual WS2812B control. BBP proto bumped to 5 |
 | 2.1 | 2026-05-15 | HAT calibration subsystem: HAT_CALIBRATE_START (0xAB), HAT_CALIBRATE_STATUS (0xAC, 30-byte response with transactional candidate table fields), HAT_CALIBRATE_IMPORT (0xAD) for DS4424 IDAC curve fitting; HAT shifted IO bank: HAT_SET_IO_BANK (0xAE), HAT_SET_LEVEL_SHIFT (0xAF). BBP proto bumped to 6 |
 | 2.2 | 2026-06-04 | IO Ownership system: IO_CLAIM (0xA7), IO_RELEASE (0xA8), IO_OWNER_STATUS (0xA9), IO_FORCE_RELEASE (0xAA) — 16-slot lease table with kind/session/token/expiry; EVT_IO_PREEMPTED (0x86), EVT_IO_OWNER_REJECT (0x87) events; ERR_IO_OWNERSHIP_REQUIRED (0x12), ERR_ADGS_ROUTE_REJECTED (0x13) error codes; HAT_LA_SET_ROUTE (0xD4) with ADGS MUX mutual-exclusion enforcement; ADC_LEDS_SET_MODE (0x47) for manual LED control; SELFTEST_EFUSE_CURRENTS (0x07) replaced by SELFTEST_SUPPLY_VOLTAGES_CACHED returning 3-rail voltage cache; HAT detection updated to binary GPIO47 mode (bb-hat-3.0); UART baud corrected to 921600. BBP proto bumped to 7 (firmware 3.2.0 / Desktop 0.7.0) |
+| 3.3 | 2026-06-04 | ADC DSP streaming: START_ADC_DSP_STREAM (0x64), STOP_ADC_DSP_STREAM (0x65), BBP_EVT_ADC_DSP (0x88) — on-device Hann-windowed 256-point FFT + spike detection + running stats; FreeRTOS DSP task on Core 0 with ping-pong double buffers; WiFi delivery via WebSocket stream type 0x03 ("adc-dsp") on /api/ws/stream; HTTP control via POST /api/adc/dsp/start|stop; Python API start_adc_dsp_stream() / stop_adc_dsp_stream() transport-agnostic. BBP proto bumped to 8 (firmware 3.3.0) |
 
 ---
 

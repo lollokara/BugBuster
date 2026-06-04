@@ -1148,6 +1148,60 @@ static esp_err_t handle_post_adc_config(httpd_req_t *req)
     return send_json(req, resp);
 }
 
+// POST /api/adc/dsp/start  — body: {channel, rate, windowSamples, spikeThreshold, nFftPeaks}
+static esp_err_t handle_post_adc_dsp_start(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    cJSON *ch_item    = cJSON_GetObjectItem(doc, "channel");
+    cJSON *rate_item  = cJSON_GetObjectItem(doc, "rate");
+    if (!cJSON_IsNumber(ch_item) || !cJSON_IsNumber(rate_item)) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Missing required fields: channel, rate");
+    }
+
+    uint8_t  channel         = (uint8_t)ch_item->valueint;
+    uint8_t  rate_code       = (uint8_t)rate_item->valueint;
+    uint16_t window_samples  = 256;
+    float    spike_threshold = 0.1f;
+    uint8_t  n_fft_peaks     = 8;
+
+    cJSON *ws_item  = cJSON_GetObjectItem(doc, "windowSamples");
+    cJSON *st_item  = cJSON_GetObjectItem(doc, "spikeThreshold");
+    cJSON *nfp_item = cJSON_GetObjectItem(doc, "nFftPeaks");
+    if (cJSON_IsNumber(ws_item))  window_samples  = (uint16_t)ws_item->valueint;
+    if (cJSON_IsNumber(st_item))  spike_threshold = (float)st_item->valuedouble;
+    if (cJSON_IsNumber(nfp_item)) n_fft_peaks     = (uint8_t)nfp_item->valueint;
+
+    cJSON_Delete(doc);
+
+    if (channel > 3) return send_error(req, 400, "channel must be 0-3");
+
+    if (bbpAdcDspActive()) bbpStopAdcDspStream();
+
+    uint16_t effective_rate = 0;
+    bbpStartAdcDspStream(channel, rate_code, window_samples, spike_threshold, n_fft_peaks, &effective_rate);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddNumberToObject(resp, "channel", channel);
+    cJSON_AddNumberToObject(resp, "effectiveRateHz", effective_rate);
+    return send_json(req, resp);
+}
+
+// POST /api/adc/dsp/stop
+static esp_err_t handle_post_adc_dsp_stop(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    bbpStopAdcDspStream();
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    return send_json(req, resp);
+}
+
 // POST /api/channel/?/din/config
 static esp_err_t handle_post_din_config(httpd_req_t *req)
 {
@@ -5611,6 +5665,18 @@ void initWebServer(void)
         .uri = "/api/scripts/autorun/disable", .method = HTTP_POST, .handler = handle_post_autorun_disable, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_autorun_disable);
+
+    // ----- ADC DSP streaming routes -----
+
+    httpd_uri_t uri_adc_dsp_start = {
+        .uri = "/api/adc/dsp/start", .method = HTTP_POST, .handler = handle_post_adc_dsp_start, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_adc_dsp_start);
+
+    httpd_uri_t uri_adc_dsp_stop = {
+        .uri = "/api/adc/dsp/stop", .method = HTTP_POST, .handler = handle_post_adc_dsp_stop, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_adc_dsp_stop);
 
     // ----- OPTIONS (CORS preflight) -----
     // No wildcard `/api/*` OPTIONS handler is registered. A wildcard handler

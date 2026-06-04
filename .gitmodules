@@ -12,3 +12,6 @@
 	url = https://github.com/lollokara/micropython.git
 	branch = bugbuster
 	ignore = untracked
+[submodule "Firmware/ESP32/components/esp-dsp"]
+	path = Firmware/ESP32/components/esp-dsp
+	url = https://github.com/espressif/esp-dsp.git

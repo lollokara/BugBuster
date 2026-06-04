@@ -620,9 +620,15 @@ bool selftest_set_worker_enabled(bool enabled)
 
 bool selftest_is_supply_monitor_active(void)
 {
+    // Also pause when logical D (slot 15) is held externally: read_channel_d()
+    // calls startAdcConversion() which stops+restarts ADC for ALL channels,
+    // disrupting concurrent taskAdcPoll reads of logical D (physical register 2).
+    io_owner_slot_t s15 = io_owner_get(15u);
+    bool slot15_held = (s15.kind != IO_OWNER_NONE && s15.kind != IO_OWNER_INTERNAL);
     return s_worker_enabled &&
            s_cal_result.status != CAL_STATUS_RUNNING &&
-           !adgs_u17_s3_active();
+           !adgs_u17_s3_active() &&
+           !slot15_held;
 }
 
 void selftest_monitor_step(void)
@@ -666,15 +672,26 @@ void selftest_monitor_step(void)
     }
 
     // Pause sampling when an external client owns SELFTEST_CH_SLOT (slot 14 =
-    // logical CH-C). The supply monitor and the user's tab can't share the
-    // U23 path; instead of yielding -1.0f every tick (which would clobber the
-    // cache and render "—" in the UI), we keep the last good cache and just
-    // bump the timestamp so the host knows the monitor is alive but paused.
+    // logical CH-C) or slot 15 (logical CH-D).
+    //
+    // Slot 14 (logical C): the supply monitor and the user's tab can't share
+    // the U23 path. Keep last good cache and bump timestamp so the host knows
+    // the monitor is alive but paused.
+    //
+    // Slot 15 (logical D): read_channel_d() calls dev->startAdcConversion()
+    // which stops and restarts ADC conversion for ALL channels. While it runs,
+    // taskAdcPoll reads zero for logical D (physical register 2). Yielding here
+    // when any external client holds logical D (e.g. MeasureCurrent.py) prevents
+    // the ADC disruption for the duration of that client's claim.
     io_owner_slot_t s14 = io_owner_get(SELFTEST_CH_SLOT);
     bool slot14_held_externally =
         (s14.kind != IO_OWNER_NONE && s14.kind != IO_OWNER_INTERNAL);
 
-    if (slot14_held_externally) {
+    io_owner_slot_t s15 = io_owner_get(15u);  // logical D = channel index 3 = slot 15
+    bool slot15_held_externally =
+        (s15.kind != IO_OWNER_NONE && s15.kind != IO_OWNER_INTERNAL);
+
+    if (slot14_held_externally || slot15_held_externally) {
         // Don't touch s_supply_volt.voltage[] — keep last good values.
         s_supply_volt.timestamp_ms = now_ms;
         s_supply_volt.available = true;

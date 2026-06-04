@@ -65,3 +65,4 @@ AGENTS.md
 /Firmware/ESP32/src/mp/.omc
 /Firmware/ESP32/web/.omc
 /Firmware/ESP32/web/.omc
+/Scripts/logs

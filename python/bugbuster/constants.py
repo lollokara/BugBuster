@@ -5,6 +5,8 @@ GPIO modes, waveform types, power controls, and all binary command IDs.
 
 from enum import IntEnum
 
+# Must match #define BBP_PROTO_VERSION in Firmware/ESP32/src/bbp/bbp.h
+BBP_PROTO_VERSION = 8
 
 # ---------------------------------------------------------------------------
 # Channel functions (AD74416H CH_FUNC_SETUP register codes)
