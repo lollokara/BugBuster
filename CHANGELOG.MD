@@ -1,16 +1,33 @@
 # CHANGELOG
 
-## [Unreleased — IO ownership v5] — 2026-05-12
+## [1.1.0] — 2026-06-04
 
-Single-owner IO table covering all 16 controllable resources (IO1..IO12 +
-CH0..CH3). Every write path — USB BBP, HTTP REST, MicroPython, ESP32 web UI,
-Desktop Tauri, Python lib, MCP server — now defers to a firmware-resident
-ownership table before mutating IO state. See `Docs/IoOwnership.md` for the
-full specification.
+### HAT & Protocol (v2.0 / `bb-hat-3.0`)
+- **Protocol v2.0**: Major update to the HAT control plane.
+- **Extended Calibration**: RP2040 firmware now supports deep telemetry (min/max/gap metrics) and DS4424 validation flags for 1.8V–36V adjustable rails.
+- **Hardware Profile**: Updated to `bb-hat-3.0` with improved signal routing (CH0-CH3 direct PIO) and rail labels.
+- **Error Handling**: Added `HAT_ERR_CAL_INVALID` to block supply enablement without valid calibration.
 
-### Added
+### Desktop App (v0.7.0)
+- **Multi-platform Bundles**: CI/CD now produces DMG (macOS), AppImage/DEB/RPM (Linux), and MSI (Windows) installers.
+- **Tauri v2**: Migrated to Tauri 2.0 with improved workspace build integration.
+- **Live Power UI**: Corrected VADJ3/4 slider ranges (1.5V–35.0V) and added live measured voltage telemetry in the Power tab.
+- **UI Redraws**: Improved reactivity; components now redraw immediately after hardware control changes.
 
-#### Protocol
+### Firmware (ESP32-S3)
+- **IO Ownership v5**: Comprehensive 16-slot ownership table (IO1..IO12 + CH0..CH3) enforcing access control across all transports (USB, HTTP, SCRIPT, UI).
+- **Reduced Log Noise**: Downgraded per-frame HAT TX/RX info logs to DEBUG level to stop flooding the serial console.
+- **Bug Fixes**: Fixed PCA9535 state refresh in power management and corrected initial VADJ slider defaults.
+
+### CI/CD & Infrastructure
+- **Combined Release**: New workflow automates the creation of a unified draft release containing Desktop, ESP32, and RP2040 artifacts.
+- **Checksums**: Automatically generates `SHA256SUMS.txt` for all release assets.
+- **Workflow Reliability**: Fixed artifact pathing in Rust workspaces and updated `tauri-apps/tauri-action` to current stable versions.
+
+---
+
+## [1.0.0] — 2026-04-20
+
 - `PROTO_VERSION` bumped **4 → 5** across all three canonical files
   (`Firmware/ESP32/src/bbp/bbp.h`, `python/bugbuster/protocol.py`,
   `DesktopApp/BugBuster/src-tauri/src/bbp.rs`) in lockstep (CI gate extended
