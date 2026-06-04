@@ -14,7 +14,7 @@ from bugbuster.constants import ErrorCode
 class SimulatedDevice:
     """Simulated BugBuster device state machine."""
 
-    PROTO_VERSION = 5  # must match BBP_PROTO_VERSION in protocol.py
+    PROTO_VERSION = 7  # must match BBP_PROTO_VERSION in protocol.py
 
     def __init__(self):
         self.fw_version = (1, 0, 0)

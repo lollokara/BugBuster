@@ -60,6 +60,7 @@ static int hat_err_to_cmd_err(uint8_t hat_err)
         case HAT_ERR_HVPAK_UNSAFE_REG:       return -CMD_ERR_OUT_OF_RANGE;
         case HAT_ERR_HVPAK_INVALID_ARG:      return -CMD_ERR_BAD_ARG;
         case HAT_ERR_UNSUPPORTED:            return -CMD_ERR_INVALID_STATE;
+        case HAT_ERR_CAL_INVALID:            return -CMD_ERR_INVALID_STATE;
         case HAT_ERR_BUSY:                   return -CMD_ERR_BUSY;
         default:                             return -CMD_ERR_BAD_ARG;
     }
@@ -445,8 +446,12 @@ static int handler_hat_calibrate_status(const uint8_t *payload, size_t len,
     uint8_t persist_state = 0, stage = 0, point = 0;
     int8_t code = 0;
     int32_t measured_mv = -1;
+    int32_t min_mv = -1, max_mv = -1, max_gap_mv = -1, max_error_mv = -1;
+    uint16_t validation_flags = 0;
     if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error,
-                              &persist_state, &stage, &point, &code, &measured_mv)) {
+                              &persist_state, &stage, &point, &code, &measured_mv,
+                              &min_mv, &max_mv, &max_gap_mv, &max_error_mv,
+                              &validation_flags)) {
         return hat_err_to_cmd_err(hat_get_last_error());
     }
 
@@ -460,6 +465,11 @@ static int handler_hat_calibrate_status(const uint8_t *payload, size_t len,
     bbp_put_u8(resp, &wpos, point);
     bbp_put_u8(resp, &wpos, (uint8_t)code);
     bbp_put_u32(resp, &wpos, (uint32_t)measured_mv);
+    bbp_put_u32(resp, &wpos, (uint32_t)min_mv);
+    bbp_put_u32(resp, &wpos, (uint32_t)max_mv);
+    bbp_put_u32(resp, &wpos, (uint32_t)max_gap_mv);
+    bbp_put_u32(resp, &wpos, (uint32_t)max_error_mv);
+    bbp_put_u16(resp, &wpos, validation_flags);
     *resp_len = wpos;
     return (int)wpos;
 }
@@ -891,6 +901,11 @@ static const ArgSpec s_hat_calibrate_status_rsp[] = {
     { "point",         ARG_U8, true, 0, 0 },
     { "code",          ARG_U8, true, 0, 0 },
     { "measured_mv",   ARG_U32, true, 0, 0 },
+    { "min_mv",        ARG_U32, true, 0, 0 },
+    { "max_mv",        ARG_U32, true, 0, 0 },
+    { "max_gap_mv",    ARG_U32, true, 0, 0 },
+    { "max_error_mv",  ARG_U32, true, 0, 0 },
+    { "validation_flags", ARG_U16, true, 0, 0 },
 };
 static const ArgSpec s_hat_set_io_bank_args[] = {
     { "dirs", ARG_U8, true,  0, 255 },
@@ -988,7 +1003,7 @@ static const CmdDescriptor s_hat_cmds[] = {
     { BBP_CMD_HAT_CALIBRATE_START,       "hat_calibrate_start",
       s_hat_calibrate_start_args, 1, s_hat_calibrate_start_rsp, 1, handler_hat_calibrate_start, 0                   },
     { BBP_CMD_HAT_CALIBRATE_STATUS,      "hat_calibrate_status",
-      NULL,                    0, s_hat_calibrate_status_rsp, 9, handler_hat_calibrate_status, CMD_FLAG_READS_STATE },
+      NULL,                    0, s_hat_calibrate_status_rsp, 14, handler_hat_calibrate_status, CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_CALIBRATE_IMPORT,      "hat_calibrate_import",
       NULL,                    0, NULL,                   0, handler_hat_calibrate_import,      0                   },
     { BBP_CMD_HAT_SET_IO_BANK,           "hat_set_io_bank",

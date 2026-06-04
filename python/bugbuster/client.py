@@ -2786,12 +2786,29 @@ class BugBuster:
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_CALIBRATE_STATUS)
             _require_resp_len(resp, 4, "HAT_CALIBRATE_STATUS")
-            return {
+            status = {
                 "state": resp[0],
                 "progress": resp[1],
                 "rail_id": resp[2],
                 "last_error": resp[3],
             }
+            if len(resp) >= 12:
+                status.update({
+                    "persist_state": resp[4],
+                    "stage": resp[5],
+                    "point": resp[6],
+                    "code": struct.unpack_from('<b', resp, 7)[0],
+                    "measured_mv": struct.unpack_from('<i', resp, 8)[0],
+                })
+            if len(resp) >= 30:
+                status.update({
+                    "min_mv": struct.unpack_from('<i', resp, 12)[0],
+                    "max_mv": struct.unpack_from('<i', resp, 16)[0],
+                    "max_gap_mv": struct.unpack_from('<i', resp, 20)[0],
+                    "max_error_mv": struct.unpack_from('<i', resp, 24)[0],
+                    "validation_flags": struct.unpack_from('<H', resp, 28)[0],
+                })
+            return status
         else:
             resp = self._http_get("/hat/v2/calibrate/status")
             return {
@@ -2799,6 +2816,16 @@ class BugBuster:
                 "progress": resp.get("progress", 0),
                 "rail_id": resp.get("railId", 0),
                 "last_error": resp.get("lastError", 0),
+                "persist_state": resp.get("persistState", 0),
+                "stage": resp.get("stage", 0),
+                "point": resp.get("point", 0),
+                "code": resp.get("code", 0),
+                "measured_mv": resp.get("measuredMv", -1),
+                "min_mv": resp.get("minMv", -1),
+                "max_mv": resp.get("maxMv", -1),
+                "max_gap_mv": resp.get("maxGapMv", -1),
+                "max_error_mv": resp.get("maxErrorMv", -1),
+                "validation_flags": resp.get("validationFlags", 0),
             }
 
     def hat_calibrate_import(self, rail_id: int, points: list[dict]) -> bool:

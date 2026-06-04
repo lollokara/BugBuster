@@ -510,7 +510,17 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             "state": device.hat_cal_state,
             "progress": device.hat_cal_progress,
             "railId": device.hat_cal_rail_id,
-            "lastError": device.hat_cal_last_error
+            "lastError": device.hat_cal_last_error,
+            "persistState": getattr(device, "hat_cal_persist_state", 0),
+            "stage": getattr(device, "hat_cal_stage", 5),
+            "point": getattr(device, "hat_cal_point", 128),
+            "code": getattr(device, "hat_cal_code", 0),
+            "measuredMv": getattr(device, "hat_cal_measured_mv", 3300),
+            "minMv": getattr(device, "hat_cal_min_mv", 0),
+            "maxMv": getattr(device, "hat_cal_max_mv", 36000),
+            "maxGapMv": getattr(device, "hat_cal_max_gap_mv", 500),
+            "maxErrorMv": getattr(device, "hat_cal_max_error_mv", 0),
+            "validationFlags": getattr(device, "hat_cal_validation_flags", 0),
         }
 
     # HAT v2 calibration import

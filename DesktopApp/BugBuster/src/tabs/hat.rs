@@ -304,7 +304,7 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
                                     <span style="display:flex; align-items:baseline; gap:5px">
                                         <span style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.05em">"VADJ3"</span>
-                                        <span style="font-size: 9px; color: var(--text-dim)">"(0–36 V)"</span>
+                                        <span style="font-size: 9px; color: var(--text-dim)">"(1.8–36 V)"</span>
                                     </span>
                                     <div style="display: flex; align-items: center; gap: 6px">
                                         <label class="toggle-wrap">
@@ -383,7 +383,7 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
                                     <span style="display:flex; align-items:baseline; gap:5px">
                                         <span style="font-size: 11px; font-weight: 700; color: #ff4d6a; text-transform: uppercase; letter-spacing: 0.05em">"VADJ4"</span>
-                                        <span style="font-size: 9px; color: var(--text-dim)">"(0–36 V)"</span>
+                                        <span style="font-size: 9px; color: var(--text-dim)">"(1.8–36 V)"</span>
                                     </span>
                                     <div style="display: flex; align-items: center; gap: 6px">
                                         <label class="toggle-wrap">
@@ -724,8 +724,8 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             if let Ok(id) = val.parse::<u8>() { set_cal_rail_id.set(id); }
                                         }
                                     >
-                                        <option value="1">"VADJ3 (0–36 V)"</option>
-                                        <option value="2">"VADJ4 (0–36 V)"</option>
+                                        <option value="1">"VADJ3 (1.8–36 V)"</option>
+                                        <option value="2">"VADJ4 (1.8–36 V)"</option>
                                     </select>
                                     <button class="btn btn-primary" style="font-size: 11px; padding: 4px 16px"
                                         on:click=move |_| {

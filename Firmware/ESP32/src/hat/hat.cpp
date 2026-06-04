@@ -1198,10 +1198,12 @@ bool hat_calibrate_start(uint8_t rail_id, uint8_t *status_out)
 bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
                           uint8_t *last_error, uint8_t *persist_state,
                           uint8_t *stage, uint8_t *point, int8_t *code,
-                          int32_t *measured_mv)
+                          int32_t *measured_mv, int32_t *min_mv,
+                          int32_t *max_mv, int32_t *max_gap_mv,
+                          int32_t *max_error_mv, uint16_t *validation_flags)
 {
     if (!s_state.connected) return false;
-    uint8_t rsp[16] = {};
+    uint8_t rsp[32] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_CALIBRATE_STATUS, NULL, 0,
                               rsp, &rsp_len, 500, sizeof(rsp));
@@ -1215,6 +1217,31 @@ bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
         if (point)       *point       = rsp[6];
         if (code)        *code        = (int8_t)rsp[7];
         if (measured_mv) memcpy(measured_mv, &rsp[8], sizeof(int32_t));
+        if (min_mv) {
+            int32_t v = -1;
+            if (rsp_len >= 16) memcpy(&v, &rsp[12], sizeof(v));
+            *min_mv = v;
+        }
+        if (max_mv) {
+            int32_t v = -1;
+            if (rsp_len >= 20) memcpy(&v, &rsp[16], sizeof(v));
+            *max_mv = v;
+        }
+        if (max_gap_mv) {
+            int32_t v = -1;
+            if (rsp_len >= 24) memcpy(&v, &rsp[20], sizeof(v));
+            *max_gap_mv = v;
+        }
+        if (max_error_mv) {
+            int32_t v = -1;
+            if (rsp_len >= 28) memcpy(&v, &rsp[24], sizeof(v));
+            *max_error_mv = v;
+        }
+        if (validation_flags) {
+            uint16_t v = 0;
+            if (rsp_len >= 30) memcpy(&v, &rsp[28], sizeof(v));
+            *validation_flags = v;
+        }
         return true;
     }
     return false;

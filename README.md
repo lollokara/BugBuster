@@ -12,9 +12,9 @@
   <img src="https://img.shields.io/badge/license-AGPL--3.0-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
   <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2059%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
-  <img src="https://img.shields.io/badge/firmware-ESP%203.1.0%20%C2%B7%20HAT%20bb--hat--2.1-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Firmware"/>
+  <img src="https://img.shields.io/badge/firmware-ESP%203.2.0%20%C2%B7%20HAT%20bb--hat--3.0-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Firmware"/>
   <img src="https://img.shields.io/badge/desktop-Tauri%20v2%20%C2%B7%20Leptos%200.7-0d1117?style=flat-square&labelColor=161b22&color=f4a261" alt="Desktop"/>
-  <img src="https://img.shields.io/badge/protocol-BBP%20v6-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
+  <img src="https://img.shields.io/badge/protocol-BBP%20v7-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
   <img src="https://img.shields.io/badge/python-3.11%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
 </p>
 
@@ -128,7 +128,7 @@ flowchart TB
     RP --- PIO1
   end
 
-  HOST -->|"USB CDC #0 — BBP v6<br/>control plane (MCP / desktop)"| ESP32
+  HOST -->|"USB CDC #0 — BBP v7<br/>control plane (MCP / desktop)"| ESP32
   HOST -->|"WiFi HTTP REST<br/>(token-paired)"| ESP32
   ESP32 -->|"HAT UART 921600 8N1<br/>(HAT_Protocol.md)"| RP
 
@@ -148,7 +148,7 @@ flowchart LR
   end
 
   subgraph ESP["ESP32-S3"]
-    BBP["BBP v6\nUSB CDC #0"]
+    BBP["BBP v7\nUSB CDC #0"]
     HTTP["HTTP REST\nWiFi / USB"]
   end
 
@@ -156,9 +156,9 @@ flowchart LR
     UART["HAT UART\n0xAA framing"]
   end
 
-  Desktop -->|"BBP v6 / COBS+CRC-16"| BBP
-  MCP     -->|"BBP v6 / COBS+CRC-16"| BBP
-  PyLib   -->|"BBP v6 / COBS+CRC-16"| BBP
+  Desktop -->|"BBP v7 / COBS+CRC-16"| BBP
+  MCP     -->|"BBP v7 / COBS+CRC-16"| BBP
+  PyLib   -->|"BBP v7 / COBS+CRC-16"| BBP
 
   Desktop -->|"JSON REST"| HTTP
   PyLib   -->|"JSON REST"| HTTP
@@ -169,7 +169,7 @@ flowchart LR
 
 **Two independent USB paths** when the HAT is attached:
 
-- **ESP32 USB CDC** — control plane (BBP v6 binary protocol over COBS + CRC-16).
+- **ESP32 USB CDC** — control plane (BBP v7 binary protocol over COBS + CRC-16).
   MCP server, desktop app, and Python library all speak this.
 - **RP2040 USB vendor bulk** — Logic Analyzer data plane. The ESP32 is **not**
   in the LA data path; this decouples capture throughput from the BBP control
@@ -181,7 +181,7 @@ flowchart LR
 
 | Transport | Protocol | Latency | Who talks it | Best for |
 |---|---|---|---|---|
-| ESP32 USB CDC #0 | BBP v6 (COBS + CRC-16) | < 1 ms | MCP · desktop · Python | Full control + streaming control plane |
+| ESP32 USB CDC #0 | BBP v7 (COBS + CRC-16) | < 1 ms | MCP · desktop · Python | Full control + streaming control plane |
 | ESP32 HTTP REST | JSON over WiFi | ~10 ms | desktop · Python · browser UI | Remote access, OTA |
 | RP2040 USB vendor bulk | 4-byte framed packets | < 1 ms | desktop · Python (libusb) | LA streaming / readout, ~1 MB/s |
 | RP2040 USB CMSIS-DAP v2 | standard DAP | < 1 ms | OpenOCD / pyOCD / probe-rs | SWD debug (zero proxy) |
@@ -255,7 +255,7 @@ cmake -DPICO_BOARD=bugbuster_hat .. && make -j
 # hold BOOTSEL, then: cp bugbuster_hat.uf2 /Volumes/RPI-RP2
 ```
 
-Current versions: ESP `3.1.0`, HAT `bb-hat-2.1`, Desktop `0.6.0`.
+Current versions: ESP `3.2.0`, HAT `bb-hat-3.0`, Desktop `0.7.0`.
 Release workflow + version-sync checklist:
 [`Docs/ReleaseChecklist.md`](Docs/ReleaseChecklist.md).
 
@@ -329,7 +329,7 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 | **Desktop app** (21 tabs, screenshots, build & release) | [`DesktopApp/BugBuster/README.md`](DesktopApp/BugBuster/README.md) |
 | **ESP32-S3 firmware** (FreeRTOS tasks, BBP, HTTP) | [`Firmware/ESP32/README.md`](Firmware/ESP32/README.md) |
 | **RP2040 HAT firmware** (debugprobe fork, LA, SWD, HVPAK) | [`Firmware/RP2040/README.md`](Firmware/RP2040/README.md) |
-| **BBP v6 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
+| **BBP v7 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
 | **HAT UART protocol** (ESP32 ↔ RP2040, 921600 8N1) | [`Firmware/HAT_Protocol.md`](Firmware/HAT_Protocol.md) |
 | **HAT architecture** (RP2040, debugprobe, HVPAK, connectors) | [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) |
 | **External I2C/SPI bus engine** (routed IOs, Python/MCP usage, BBP/HTTP endpoints) | [`Docs/ExternalBus.md`](Docs/ExternalBus.md) |
@@ -349,7 +349,7 @@ BugBuster/
 ├── Firmware/
 │   ├── ESP32/                   ESP-IDF firmware (PlatformIO) — main controller
 │   ├── RP2040/                  HAT firmware (Pico SDK + debugprobe fork)
-│   ├── BugBusterProtocol.md     BBP v6 wire format (USB CDC + HTTP REST)
+│   ├── BugBusterProtocol.md     BBP v7 wire format (USB CDC + HTTP REST)
 │   ├── HAT_Protocol.md          ESP32 ↔ RP2040 UART framing
 │   ├── HAT_Architecture.md      HAT board architecture reference
 │   └── FirmwareStructure.md     Cross-firmware reference

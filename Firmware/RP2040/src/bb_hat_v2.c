@@ -31,6 +31,20 @@
 #define DS4424_REG_OUT2     0xFA
 #define DS4424_I2C_ADDR     0x10
 #define DS4424_CAL_MAX_POINTS 168
+#define DS4424_CAL_MIN_POINTS 96
+#define DS4424_CAL_MIN_TARGET_V 1.8f
+#define DS4424_CAL_MAX_TARGET_V 36.0f
+#define DS4424_CAL_MAX_GAP_V 1.0f
+#define DS4424_CAL_ENDPOINT_TOL_V 0.25f
+#define DS4424_CAL_EDGE_SETPOINT_TOL_V 0.20f
+#define DS4424_CAL_MIN_TREND_V 0.010f
+
+#define CAL_FLAG_LOW_COVERAGE   (1u << 0)
+#define CAL_FLAG_HIGH_COVERAGE  (1u << 1)
+#define CAL_FLAG_GAP_TOO_LARGE  (1u << 2)
+#define CAL_FLAG_NON_MONOTONIC  (1u << 3)
+#define CAL_FLAG_TOO_FEW_POINTS (1u << 4)
+#define CAL_FLAG_INVALID_POINT  (1u << 5)
 
 // Calibration Point definition
 typedef struct {
@@ -51,7 +65,9 @@ typedef struct {
 #define FLASH_CAL_SLOT_B_OFFSET   (2048 * 1024 - 4096)
 #define CAL_MAGIC                 0xCA1B0002
 #define CAL_JOURNAL_MAGIC         0xCA1B0003
-#define CAL_JOURNAL_VERSION       3
+#define CAL_JOURNAL_VERSION       4
+#define DS4424_CAL_ZERO_CURRENT_MV 250
+#define DS4424_CAL_POST_TARGET_MV  12000
 
 typedef struct {
     uint32_t magic;
@@ -60,6 +76,7 @@ typedef struct {
     uint8_t padding[3];
     DS4424CalData cal[3];
     uint16_t default_voltage_mv[3]; // [0] = 3V3_ADJ, [1] = VADJ3, [2] = VADJ4
+    uint16_t current_zero_mv[3];    // ISMON no-load baseline; [1] = VADJ3, [2] = VADJ4
 } FlashCalSector;
 
 typedef struct {
@@ -128,7 +145,14 @@ static volatile uint8_t s_cal_stage = 0;
 static volatile uint8_t s_cal_point = 0;
 static volatile int8_t  s_cal_code = 0;
 static volatile int32_t s_cal_measured_mv = -1;
+static volatile int32_t s_cal_min_mv = -1;
+static volatile int32_t s_cal_max_mv = -1;
+static volatile int32_t s_cal_max_gap_mv = -1;
+static volatile int32_t s_cal_max_error_mv = -1;
+static volatile uint16_t s_cal_validation_flags = 0;
 static TaskHandle_t s_cal_task_handle = NULL;
+static DS4424CalData s_cal_candidate = {0};
+static DS4424CalPoint s_cal_voltage_sort[DS4424_CAL_MAX_POINTS];
 
 // -----------------------------------------------------------------------------
 // WS2812B Driver
@@ -213,7 +237,7 @@ static uint32_t calculate_crc(const uint8_t *data, size_t len)
 static void flash_prepare_payload(FlashCalSector *sector)
 {
     sector->magic = CAL_MAGIC;
-    sector->version = 2;
+    sector->version = 3;
     uint8_t *p = (uint8_t *)&sector->version;
     size_t len = sizeof(FlashCalSector) - offsetof(FlashCalSector, version);
     sector->crc = calculate_crc(p, len);
@@ -458,7 +482,7 @@ static float __attribute__((unused)) ds4424_code_to_voltage(uint8_t ch, int8_t c
 {
     if (ch >= 3) return 0.0f;
     // ch 0 = 3V3_ADJ (TPS/LDO midpoint 3.3V)
-    // ch 1/2 = VADJ3/VADJ4 (LTM8083 midpoint 18V, range 0–36V)
+    // ch 1/2 = VADJ3/VADJ4 (LTM8083 midpoint 18V, validated setpoint range 1.8–36V)
     float midpoint = (ch == 0) ? 3.3f : 18.0f;
     float r_int = 249.0f;
     float ifs = 50.0f;
@@ -473,59 +497,67 @@ static float __attribute__((unused)) ds4424_code_to_voltage(uint8_t ch, int8_t c
     }
 }
 
-static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
+static bool ds4424_cal_lookup_code(const DS4424CalData *cal, float volts, int8_t *code_out)
 {
-    DS4424CalData *cal = &s_flash_cal.cal[ch];
-    if (cal->valid && cal->count >= 2) {
-        // Compact single-line summary to avoid log truncation
-        bb_la_log("[DEBUG] vtc ch=%d tgt=%.3f cnt=%d lo=%.3f(c%d) hi=%.3f(c%d)\n",
-                  ch, volts, (int)cal->count,
-                  cal->points[cal->count - 1].measured_v, cal->points[cal->count - 1].dac_code,
-                  cal->points[0].measured_v, cal->points[0].dac_code);
-
-        // Search for the two calibration points whose measured voltages best
-        // bracket the target on the voltage axis.  The table is sorted by
-        // dac_code, NOT by voltage, so adjacent dac_code entries can have
-        // non-monotonic voltages near the sink/source sweep join (~18 V).
-        // Scanning by voltage avoids picking the wrong bracket.
-        int best_lo = -1;   // index of highest measured_v <= volts
-        int best_hi = -1;   // index of lowest  measured_v >= volts
-        float best_lo_v = -1e9f;
-        float best_hi_v =  1e9f;
-
-        for (int i = 0; i < (int)cal->count; i++) {
-            float v = cal->points[i].measured_v;
-            if (v <= volts && v > best_lo_v) { best_lo_v = v; best_lo = i; }
-            if (v >= volts && v < best_hi_v) { best_hi_v = v; best_hi = i; }
-        }
-
-        if (best_lo >= 0 && best_hi >= 0 && best_lo_v != best_hi_v) {
-            int8_t c0 = cal->points[best_lo].dac_code;
-            int8_t c1 = cal->points[best_hi].dac_code;
-            float t = (volts - best_lo_v) / (best_hi_v - best_lo_v);
-            float code_f = (float)c0 + t * (float)(c1 - c0);
-            int code_i = (int)roundf(code_f);
-            if (code_i >  127) code_i =  127;
-            if (code_i < -127) code_i = -127;
-            bb_la_log("[DEBUG] vtc->interp lo=%.3f(c%d) hi=%.3f(c%d) t=%.3f code=%d\n",
-                      best_lo_v, c0, best_hi_v, c1, t, code_i);
-            return (int8_t)code_i;
-        }
-
-        // Target is outside the calibrated range — clamp to nearest endpoint
-        int best_idx = 0;
-        float best_err = fabsf(cal->points[0].measured_v - volts);
-        for (int i = 1; i < (int)cal->count; i++) {
-            float err = fabsf(cal->points[i].measured_v - volts);
-            if (err < best_err) { best_err = err; best_idx = i; }
-        }
-        bb_la_log("[DEBUG] vtc->nearest idx=%d code=%d v=%.3f err=%.3f\n",
-                  best_idx, cal->points[best_idx].dac_code,
-                  cal->points[best_idx].measured_v, best_err);
-        return cal->points[best_idx].dac_code;
+    if (!cal || !code_out || !cal->valid || cal->count < 2) {
+        return false;
     }
 
-    float midpoint = (ch == 0) ? 3.3f : 18.0f;
+    int best_lo = -1;
+    int best_hi = -1;
+    float best_lo_v = -1e9f;
+    float best_hi_v =  1e9f;
+
+    for (int i = 0; i < (int)cal->count; i++) {
+        float v = cal->points[i].measured_v;
+        if (v <= volts && v > best_lo_v) { best_lo_v = v; best_lo = i; }
+        if (v >= volts && v < best_hi_v) { best_hi_v = v; best_hi = i; }
+    }
+
+    if (best_lo < 0) {
+        if (best_hi >= 0 && best_hi_v - volts <= DS4424_CAL_EDGE_SETPOINT_TOL_V) {
+            *code_out = cal->points[best_hi].dac_code;
+            return true;
+        }
+        return false;
+    }
+    if (best_hi < 0) {
+        if (best_lo >= 0 && volts - best_lo_v <= DS4424_CAL_EDGE_SETPOINT_TOL_V) {
+            *code_out = cal->points[best_lo].dac_code;
+            return true;
+        }
+        return false;
+    }
+    if (best_lo_v == best_hi_v) {
+        *code_out = cal->points[best_lo].dac_code;
+        return true;
+    }
+
+    int8_t c0 = cal->points[best_lo].dac_code;
+    int8_t c1 = cal->points[best_hi].dac_code;
+    float t = (volts - best_lo_v) / (best_hi_v - best_lo_v);
+    float code_f = (float)c0 + t * (float)(c1 - c0);
+    int code_i = (int)roundf(code_f);
+    if (code_i >  127) code_i =  127;
+    if (code_i < -127) code_i = -127;
+    *code_out = (int8_t)code_i;
+    return true;
+}
+
+static bool ds4424_voltage_to_code(uint8_t ch, float volts, int8_t *code_out)
+{
+    if (ch >= 3 || !code_out) return false;
+
+    DS4424CalData *cal = &s_flash_cal.cal[ch];
+    if (cal->valid && cal->count >= 2) {
+        return ds4424_cal_lookup_code(cal, volts, code_out);
+    }
+
+    if (ch != 0) {
+        return false;
+    }
+
+    float midpoint = 3.3f;
     float r_int = 249.0f;
     float ifs = 50.0f;
     float step_v = (ifs * 1e-6f * r_int * 1000.0f) / 127.0f;
@@ -534,8 +566,8 @@ static int8_t ds4424_voltage_to_code(uint8_t ch, float volts)
     int code_i = (int)roundf(code_f);
     if (code_i >  127) code_i =  127;
     if (code_i < -127) code_i = -127;
-    bb_la_log("[DEBUG] vtc->theory ch=%d tgt=%.3f code=%d\n", ch, volts, code_i);
-    return (int8_t)code_i;
+    *code_out = (int8_t)code_i;
+    return true;
 }
 
 static void ds4424_init(void)
@@ -616,6 +648,119 @@ static float measure_supply_stable_for_cal(uint adc_ch)
     return sum / 5.0f;
 }
 
+static uint16_t measure_current_zero_mv(uint adc_ch)
+{
+    vTaskDelay(pdMS_TO_TICKS(500));
+    uint32_t sum = 0;
+    for (int i = 0; i < 16; i++) {
+        sum += adc_read_oversampled(adc_ch);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    uint16_t raw_avg = (uint16_t)(sum / 16);
+    float vismon_mv = (float)raw_avg * 3.3f / 4095.0f * 1000.0f;
+    if (vismon_mv < 0.0f) vismon_mv = 0.0f;
+    if (vismon_mv > 3300.0f) vismon_mv = 3300.0f;
+    return (uint16_t)roundf(vismon_mv);
+}
+
+static uint16_t current_zero_mv_for_rail(uint8_t rail_id)
+{
+    if (rail_id < 3) {
+        uint16_t zero_mv = s_flash_cal.current_zero_mv[rail_id];
+        if (zero_mv >= 100 && zero_mv <= 500) {
+            return zero_mv;
+        }
+    }
+    return DS4424_CAL_ZERO_CURRENT_MV;
+}
+
+static int compare_cal_point_by_code(const void *a, const void *b)
+{
+    const DS4424CalPoint *pa = (const DS4424CalPoint *)a;
+    const DS4424CalPoint *pb = (const DS4424CalPoint *)b;
+    return (int)pa->dac_code - (int)pb->dac_code;
+}
+
+static int compare_cal_point_by_voltage(const void *a, const void *b)
+{
+    const DS4424CalPoint *pa = (const DS4424CalPoint *)a;
+    const DS4424CalPoint *pb = (const DS4424CalPoint *)b;
+    if (pa->measured_v < pb->measured_v) return -1;
+    if (pa->measured_v > pb->measured_v) return 1;
+    return 0;
+}
+
+static bool cal_add_point(DS4424CalData *cal, int8_t code, float measured_v)
+{
+    if (!cal || cal->count >= DS4424_CAL_MAX_POINTS || !isfinite(measured_v)) {
+        return false;
+    }
+    cal->points[cal->count].dac_code = code;
+    cal->points[cal->count].measured_v = measured_v;
+    cal->count++;
+    return true;
+}
+
+static bool validate_calibration(DS4424CalData *cal)
+{
+    uint16_t flags = 0;
+    float min_v = 1e9f;
+    float max_v = -1e9f;
+    float max_gap_v = 0.0f;
+
+    if (!cal || cal->count < DS4424_CAL_MIN_POINTS) {
+        flags |= CAL_FLAG_TOO_FEW_POINTS;
+    }
+
+    if (cal && cal->count > 0) {
+        qsort(cal->points, cal->count, sizeof(cal->points[0]), compare_cal_point_by_code);
+        for (int i = 0; i < (int)cal->count; i++) {
+            float v = cal->points[i].measured_v;
+            if (!isfinite(v) || v < -0.5f || v > 40.0f) {
+                flags |= CAL_FLAG_INVALID_POINT;
+            }
+            if (v < min_v) min_v = v;
+            if (v > max_v) max_v = v;
+            if (i > 0) {
+                if (cal->points[i].dac_code == cal->points[i - 1].dac_code) {
+                    flags |= CAL_FLAG_INVALID_POINT;
+                }
+                if (cal->points[i].measured_v > cal->points[i - 1].measured_v + DS4424_CAL_MIN_TREND_V) {
+                    flags |= CAL_FLAG_NON_MONOTONIC;
+                }
+            }
+        }
+
+        memcpy(s_cal_voltage_sort, cal->points, cal->count * sizeof(s_cal_voltage_sort[0]));
+        qsort(s_cal_voltage_sort, cal->count, sizeof(s_cal_voltage_sort[0]), compare_cal_point_by_voltage);
+        for (int i = 1; i < (int)cal->count; i++) {
+            float gap = s_cal_voltage_sort[i].measured_v - s_cal_voltage_sort[i - 1].measured_v;
+            if (gap > max_gap_v) max_gap_v = gap;
+        }
+    }
+
+    if (min_v > DS4424_CAL_MIN_TARGET_V + DS4424_CAL_EDGE_SETPOINT_TOL_V) {
+        flags |= CAL_FLAG_LOW_COVERAGE;
+    }
+    if (max_v < DS4424_CAL_MAX_TARGET_V - DS4424_CAL_ENDPOINT_TOL_V) {
+        flags |= CAL_FLAG_HIGH_COVERAGE;
+    }
+    if (max_gap_v > DS4424_CAL_MAX_GAP_V) {
+        flags |= CAL_FLAG_GAP_TOO_LARGE;
+    }
+
+    s_cal_min_mv = isfinite(min_v) ? (int32_t)roundf(min_v * 1000.0f) : -1;
+    s_cal_max_mv = isfinite(max_v) ? (int32_t)roundf(max_v * 1000.0f) : -1;
+    s_cal_max_gap_mv = (int32_t)roundf(max_gap_v * 1000.0f);
+    s_cal_max_error_mv = 0;
+    s_cal_validation_flags = flags;
+
+    if (cal) {
+        cal->valid = (flags == 0);
+    }
+    return flags == 0;
+}
+
 // -----------------------------------------------------------------------------
 // Auto-Calibration Sweep Task
 // -----------------------------------------------------------------------------
@@ -629,6 +774,11 @@ static void cal_task_func(void *param)
     s_cal_point = 0;
     s_cal_code = 0;
     s_cal_measured_mv = -1;
+    s_cal_min_mv = -1;
+    s_cal_max_mv = -1;
+    s_cal_max_gap_mv = -1;
+    s_cal_max_error_mv = -1;
+    s_cal_validation_flags = 0;
 
     uint8_t dac_ch = (rail_id == HAT_RAIL_VADJ3) ? 1 : 2;
     uint8_t adc_ch = (rail_id == HAT_RAIL_VADJ3) ? 2 : 3;
@@ -651,16 +801,14 @@ static void cal_task_func(void *param)
     gpio_put(en_pin, 1);
     vTaskDelay(pdMS_TO_TICKS(500)); // wait for rail to settle before sweep
 
-    DS4424CalData *cal = &s_flash_cal.cal[rail_id];
-    memset(cal, 0, sizeof(DS4424CalData));
+    memset(&s_cal_candidate, 0, sizeof(s_cal_candidate));
+    DS4424CalData *cal = &s_cal_candidate;
 
     // Settle first at code 0
     ds4424_set_code(dac_ch, 0);
     s_cal_stage = 3;
     float v0 = measure_supply_stable_for_cal(adc_ch);
-    cal->points[0].dac_code = 0;
-    cal->points[0].measured_v = v0;
-    cal->count = 1;
+    cal_add_point(cal, 0, v0);
     s_cal_progress = 1;
     s_cal_point = 0;
     s_cal_code = 0;
@@ -668,9 +816,10 @@ static void cal_task_func(void *param)
     s_cal_stage = 4;
     bb_la_log("[CAL] %s code=0 measured=%dmV\n", rail_name, (int)(v0 * 1000.0f));
 
-    float max_volt = 35.0f;
-    // Sweep sink direction (raising voltage)
-    for (int code = -1; code >= -127; code -= 1) {
+    // Sweep source direction first (lowering voltage).  The old routine could
+    // spend most of the fixed point budget on the high side before sampling the
+    // low end, producing a "valid" table that could not reach 1.8 V.
+    for (int code = 1; code <= 127; code += 2) {
         int8_t code_i8 = (int8_t)code;
         s_cal_stage = 2;
         s_cal_point = cal->count;
@@ -687,15 +836,11 @@ static void cal_task_func(void *param)
         s_cal_stage = 3;
         float v = measure_supply_stable_for_cal(adc_ch);
 
-        if (cal->count < DS4424_CAL_MAX_POINTS) {
-            cal->points[cal->count].dac_code = code_i8;
-            cal->points[cal->count].measured_v = v;
-            cal->count++;
-        } else {
+        if (!cal_add_point(cal, code_i8, v)) {
             bb_la_log("[CAL] warning %s: points array full\n", rail_name);
             break;
         }
-        s_cal_progress = (uint8_t)((cal->count * 100) / 128);
+        s_cal_progress = (uint8_t)((cal->count * 100) / 129);
         if (s_cal_progress > 99) s_cal_progress = 99;
         s_cal_stage = 4;
         s_cal_point = cal->count - 1;
@@ -703,19 +848,14 @@ static void cal_task_func(void *param)
         s_cal_measured_mv = (int32_t)(v * 1000.0f);
         bb_la_log("[CAL] %s progress=%u%% code=%d measured=%dmV\n",
                   rail_name, s_cal_progress, code_i8, (int)(v * 1000.0f));
-
-        if (v >= max_volt) {
-            break;
-        }
     }
 
     // Settle back to 0
     ds4424_set_code(dac_ch, 0);
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(500));
 
-    // Sweep source direction (lowering voltage)
-    float min_volt = 0.5f;
-    for (int code = 2; code <= 127; code += 2) {
+    // Sweep sink direction (raising voltage)
+    for (int code = -1; code >= -127; code -= 2) {
         int8_t code_i8 = (int8_t)code;
         s_cal_stage = 2;
         s_cal_point = cal->count;
@@ -732,15 +872,11 @@ static void cal_task_func(void *param)
         s_cal_stage = 3;
         float v = measure_supply_stable_for_cal(adc_ch);
 
-        if (cal->count < DS4424_CAL_MAX_POINTS) {
-            cal->points[cal->count].dac_code = code_i8;
-            cal->points[cal->count].measured_v = v;
-            cal->count++;
-        } else {
+        if (!cal_add_point(cal, code_i8, v)) {
             bb_la_log("[CAL] warning %s: points array full\n", rail_name);
             break;
         }
-        s_cal_progress = (uint8_t)((cal->count * 100) / 128);
+        s_cal_progress = (uint8_t)((cal->count * 100) / 129);
         if (s_cal_progress > 99) s_cal_progress = 99;
         s_cal_stage = 4;
         s_cal_point = cal->count - 1;
@@ -748,39 +884,44 @@ static void cal_task_func(void *param)
         s_cal_measured_mv = (int32_t)(v * 1000.0f);
         bb_la_log("[CAL] %s progress=%u%% code=%d measured=%dmV\n",
                   rail_name, s_cal_progress, code_i8, (int)(v * 1000.0f));
-
-        if (v <= min_volt) {
-            break;
-        }
     }
 
-    // Sort by dac_code
-    for (int i = 0; i < cal->count - 1; i++) {
-        for (int j = 0; j < cal->count - i - 1; j++) {
-            if (cal->points[j].dac_code > cal->points[j+1].dac_code) {
-                DS4424CalPoint temp = cal->points[j];
-                cal->points[j] = cal->points[j+1];
-                cal->points[j+1] = temp;
-            }
+    if (validate_calibration(cal)) {
+        int8_t post_code = 0;
+        uint8_t current_adc_ch = (rail_id == HAT_RAIL_VADJ3) ? 0 : 1;
+        uint16_t zero_mv = DS4424_CAL_ZERO_CURRENT_MV;
+        bool post_set = ds4424_cal_lookup_code(cal, (float)DS4424_CAL_POST_TARGET_MV / 1000.0f, &post_code) &&
+                        ds4424_set_code(dac_ch, post_code);
+        if (post_set) {
+            gpio_put(en_pin, 1);
+            zero_mv = measure_current_zero_mv(current_adc_ch);
+        } else {
+            ds4424_set_code(dac_ch, 0);
+            gpio_put(en_pin, was_enabled ? 1 : 0);
         }
-    }
 
-    ds4424_set_code(dac_ch, 0);
-    gpio_put(en_pin, was_enabled ? 1 : 0);
-    cal->valid = (cal->count >= 2);
-
-    if (cal->valid) {
+        memcpy(&s_flash_cal.cal[rail_id], cal, sizeof(*cal));
+        if (post_set) {
+            s_flash_cal.default_voltage_mv[rail_id] = DS4424_CAL_POST_TARGET_MV;
+            s_flash_cal.current_zero_mv[rail_id] = zero_mv;
+        }
         bool queued = flash_save();
         s_cal_state = 2;
         s_cal_progress = 100;
         s_cal_stage = 5;
-        bb_la_log("[CAL] done %s: %u points, persistence=%s\n",
-                  rail_name, cal->count, queued ? "queued" : "queue-failed");
+        bb_la_log("[CAL] done %s: %u points, range=%ld..%ldmV max_gap=%ldmV zero=%umV post=%s persistence=%s\n",
+                  rail_name, cal->count, (long)s_cal_min_mv, (long)s_cal_max_mv,
+                  (long)s_cal_max_gap_mv, (unsigned)zero_mv, post_set ? "12V" : "restore",
+                  queued ? "queued" : "queue-failed");
     } else {
+        ds4424_set_code(dac_ch, 0);
+        gpio_put(en_pin, was_enabled ? 1 : 0);
         s_cal_state = 3;
-        s_cal_last_error = 2;
+        s_cal_last_error = HAT_ERR_CAL_INVALID;
         s_cal_stage = 8;
-        bb_la_log("[CAL] failed %s: insufficient points\n", rail_name);
+        bb_la_log("[CAL] failed %s: flags=0x%04x points=%u range=%ld..%ldmV max_gap=%ldmV\n",
+                  rail_name, (unsigned)s_cal_validation_flags, cal->count,
+                  (long)s_cal_min_mv, (long)s_cal_max_mv, (long)s_cal_max_gap_mv);
     }
 
     s_cal_task_handle = NULL;
@@ -855,6 +996,14 @@ void bb_hat_v2_init(void)
     ws2812_init();
     ds4424_init();
     flash_load();
+    for (uint8_t rail = HAT_RAIL_VADJ3; rail <= HAT_RAIL_VADJ4; rail++) {
+        DS4424CalData *cal = &s_flash_cal.cal[rail];
+        if (cal->valid && !validate_calibration(cal)) {
+            bb_la_log("[CAL] invalid saved rail=%u flags=0x%04x; marking unusable\n",
+                      rail, (unsigned)s_cal_validation_flags);
+            cal->valid = false;
+        }
+    }
 
     if (s_ds4424_present) {
         // Restore 3V3_ADJ (rail 0)
@@ -865,22 +1014,28 @@ void bb_hat_v2_init(void)
             s_io_voltage_mv = 3300; // safe default
         }
         float volts0 = (float)s_io_voltage_mv / 1000.0f;
-        int8_t code0 = ds4424_voltage_to_code(0, volts0);
-        ds4424_set_code(0, code0);
+        int8_t code0 = 0;
+        if (ds4424_voltage_to_code(0, volts0, &code0)) {
+            ds4424_set_code(0, code0);
+        }
 
         // Restore VADJ3 (rail 1)
         uint16_t v3 = s_flash_cal.default_voltage_mv[1];
         if (v3 > 36000) v3 = 3300; // fallback to 3.3V if unitialized/invalid
         float volts3 = (float)v3 / 1000.0f;
-        int8_t code3 = ds4424_voltage_to_code(1, volts3);
-        ds4424_set_code(1, code3);
+        int8_t code3 = 0;
+        if (ds4424_voltage_to_code(1, volts3, &code3)) {
+            ds4424_set_code(1, code3);
+        }
 
         // Restore VADJ4 (rail 2)
         uint16_t v4 = s_flash_cal.default_voltage_mv[2];
         if (v4 > 36000) v4 = 3300; // fallback to 3.3V if unitialized/invalid
         float volts4 = (float)v4 / 1000.0f;
-        int8_t code4 = ds4424_voltage_to_code(2, volts4);
-        ds4424_set_code(2, code4);
+        int8_t code4 = 0;
+        if (ds4424_voltage_to_code(2, volts4, &code4)) {
+            ds4424_set_code(2, code4);
+        }
     }
 
     if (s_persist_mutex == NULL) {
@@ -938,6 +1093,11 @@ void bb_hat_v2_handle_reset(void)
     s_cal_point = 0;
     s_cal_code = 0;
     s_cal_measured_mv = -1;
+    s_cal_min_mv = -1;
+    s_cal_max_mv = -1;
+    s_cal_max_gap_mv = -1;
+    s_cal_max_error_mv = -1;
+    s_cal_validation_flags = 0;
 
     // Turn off all rails & logic shifters
     gpio_put(BB_LEVEL_SHIFT_OE_PIN, 0);
@@ -999,11 +1159,11 @@ void handle_get_rail_status(void)
     float i3 = 0.0f;
     float i4 = 0.0f;
     if (bb_power_get_enabled(0)) {
-        i3 = (vismon3 - 250.0f) / 0.5f;
+        i3 = (vismon3 - (float)current_zero_mv_for_rail(HAT_RAIL_VADJ3)) / 0.5f;
         if (i3 < 0.0f) i3 = 0.0f;
     }
     if (bb_power_get_enabled(1)) {
-        i4 = (vismon4 - 250.0f) / 0.5f;
+        i4 = (vismon4 - (float)current_zero_mv_for_rail(HAT_RAIL_VADJ4)) / 0.5f;
         if (i4 < 0.0f) i4 = 0.0f;
     }
 
@@ -1041,8 +1201,10 @@ void handle_set_rail_enable(const uint8_t *payload, uint8_t len)
     case HAT_RAIL_3V3_ADJ:
         if (enable && s_ds4424_present) {
             float volts0 = (float)s_io_voltage_mv / 1000.0f;
-            int8_t code0 = ds4424_voltage_to_code(0, volts0);
-            ds4424_set_code(0, code0);
+            int8_t code0 = 0;
+            if (ds4424_voltage_to_code(0, volts0, &code0)) {
+                ds4424_set_code(0, code0);
+            }
         }
         bb_power_set_3v3_adj(enable);
         break;
@@ -1051,8 +1213,12 @@ void handle_set_rail_enable(const uint8_t *payload, uint8_t len)
             uint16_t v3 = s_flash_cal.default_voltage_mv[1];
             if (v3 > 36000) v3 = 3300;
             float volts3 = (float)v3 / 1000.0f;
-            int8_t code3 = ds4424_voltage_to_code(1, volts3);
-            ds4424_set_code(1, code3);
+            int8_t code3 = 0;
+            if (!ds4424_voltage_to_code(1, volts3, &code3) || !ds4424_set_code(1, code3)) {
+                s_cal_last_error = HAT_ERR_CAL_INVALID;
+                send_error(HAT_ERR_CAL_INVALID);
+                return;
+            }
         }
         bb_power_set(0, enable);
         break;
@@ -1061,8 +1227,12 @@ void handle_set_rail_enable(const uint8_t *payload, uint8_t len)
             uint16_t v4 = s_flash_cal.default_voltage_mv[2];
             if (v4 > 36000) v4 = 3300;
             float volts4 = (float)v4 / 1000.0f;
-            int8_t code4 = ds4424_voltage_to_code(2, volts4);
-            ds4424_set_code(2, code4);
+            int8_t code4 = 0;
+            if (!ds4424_voltage_to_code(2, volts4, &code4) || !ds4424_set_code(2, code4)) {
+                s_cal_last_error = HAT_ERR_CAL_INVALID;
+                send_error(HAT_ERR_CAL_INVALID);
+                return;
+            }
         }
         bb_power_set(1, enable);
         break;
@@ -1157,8 +1327,13 @@ void handle_calibrate_start(const uint8_t *payload, uint8_t len)
 
 void handle_calibrate_status(void)
 {
-    uint8_t rsp[12];
+    uint8_t rsp[30];
     int32_t measured_mv = s_cal_measured_mv;
+    int32_t min_mv = s_cal_min_mv;
+    int32_t max_mv = s_cal_max_mv;
+    int32_t max_gap_mv = s_cal_max_gap_mv;
+    int32_t max_error_mv = s_cal_max_error_mv;
+    uint16_t validation_flags = s_cal_validation_flags;
     int8_t code = s_cal_code;
     uint8_t stage = s_cal_stage;
     rsp[0] = s_cal_state;
@@ -1170,6 +1345,11 @@ void handle_calibrate_status(void)
     rsp[6] = s_cal_point;
     rsp[7] = (uint8_t)code;
     memcpy(&rsp[8], &measured_mv, sizeof(measured_mv));
+    memcpy(&rsp[12], &min_mv, sizeof(min_mv));
+    memcpy(&rsp[16], &max_mv, sizeof(max_mv));
+    memcpy(&rsp[20], &max_gap_mv, sizeof(max_gap_mv));
+    memcpy(&rsp[24], &max_error_mv, sizeof(max_error_mv));
+    memcpy(&rsp[28], &validation_flags, sizeof(validation_flags));
     send_response(HAT_RSP_CALIBRATE_STATUS, rsp, sizeof(rsp));
 }
 
@@ -1207,15 +1387,24 @@ void handle_calibrate_import(const uint8_t *payload, uint8_t len)
         return;
     }
 
-    memset(cal, 0, sizeof(DS4424CalData));
+    memset(&s_cal_candidate, 0, sizeof(s_cal_candidate));
     size_t pos = 2;
     for (int i = 0; i < count; i++) {
-        cal->points[i].dac_code = (int8_t)payload[pos++];
-        memcpy(&cal->points[i].measured_v, &payload[pos], 4);
+        s_cal_candidate.points[i].dac_code = (int8_t)payload[pos++];
+        memcpy(&s_cal_candidate.points[i].measured_v, &payload[pos], 4);
         pos += 4;
     }
-    cal->count = count;
-    cal->valid = (count >= 2);
+    s_cal_candidate.count = count;
+    s_cal_candidate.valid = (count >= 2);
+    if (rail_id == HAT_RAIL_VADJ3 || rail_id == HAT_RAIL_VADJ4) {
+        if (!validate_calibration(&s_cal_candidate)) {
+            send_error(HAT_ERR_CAL_INVALID);
+            bb_la_log("[CAL] import rejected rail=%u flags=0x%04x\n",
+                      rail_id, (unsigned)s_cal_validation_flags);
+            return;
+        }
+    }
+    memcpy(cal, &s_cal_candidate, sizeof(*cal));
 
     send_ok(NULL, 0);
     bool queued = flash_save();
@@ -1273,6 +1462,10 @@ void handle_set_rail_voltage(const uint8_t *payload, uint8_t len)
     uint16_t mv = (uint16_t)payload[1] | ((uint16_t)payload[2] << 8);
 
     if (!bb_hat_v2_set_rail_voltage(rail_id, mv)) {
+        if (s_cal_last_error == HAT_ERR_CAL_INVALID) {
+            send_error(HAT_ERR_CAL_INVALID);
+            return;
+        }
         send_error(HAT_ERR_INVALID_FUNC);
         return;
     }
@@ -1284,7 +1477,11 @@ bool bb_hat_v2_set_io_voltage(uint16_t mv)
 {
     if (!s_ds4424_present) return false;
     float volts = (float)mv / 1000.0f;
-    int8_t code = ds4424_voltage_to_code(0, volts);
+    int8_t code = 0;
+    if (!ds4424_voltage_to_code(0, volts, &code)) {
+        s_cal_last_error = HAT_ERR_CAL_INVALID;
+        return false;
+    }
     if (ds4424_set_code(0, code)) {
         s_io_voltage_mv = mv;
         return true;
@@ -1307,7 +1504,11 @@ bool bb_hat_v2_set_rail_voltage(uint8_t rail_id, uint16_t mv)
 
     uint8_t dac_ch = (rail_id == HAT_RAIL_VADJ3) ? 1 : 2;
     float volts = (float)mv / 1000.0f;
-    int8_t code = ds4424_voltage_to_code(dac_ch, volts);
+    int8_t code = 0;
+    if (!ds4424_voltage_to_code(dac_ch, volts, &code)) {
+        s_cal_last_error = HAT_ERR_CAL_INVALID;
+        return false;
+    }
     bool ok = ds4424_set_code(dac_ch, code);
     if (ok) {
         s_flash_cal.default_voltage_mv[rail_id] = mv;

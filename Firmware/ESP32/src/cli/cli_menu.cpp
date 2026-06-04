@@ -888,13 +888,39 @@ static bool take_snapshot(void) {
         }
     }
 
-    // Override IDAC voltages with live selftest measurements when available
+    // Override IDAC voltages with live selftest measurements when available.
+    // A disabled/not-yet-PG rail commonly measures 0 V; keep the requested
+    // IDAC setpoint in that case so the Power tab does not present a stale
+    // zero as the configured value.
     {
         const SelftestSupplyVoltages* sv = selftest_get_supply_voltages();
         if (sv) {
-            if (sv->voltage[SELFTEST_RAIL_VADJ1]   >= 0.0f) s_snap.vadj1  = sv->voltage[SELFTEST_RAIL_VADJ1];
-            if (sv->voltage[SELFTEST_RAIL_VADJ2]   >= 0.0f) s_snap.vadj2  = sv->voltage[SELFTEST_RAIL_VADJ2];
-            if (sv->voltage[SELFTEST_RAIL_3V3_ADJ] >= 0.0f) s_snap.vlogic = sv->voltage[SELFTEST_RAIL_3V3_ADJ];
+            if (sv->voltage[SELFTEST_RAIL_VADJ1]   > 0.050f || s_snap.vadj1Pg) s_snap.vadj1  = sv->voltage[SELFTEST_RAIL_VADJ1];
+            if (sv->voltage[SELFTEST_RAIL_VADJ2]   > 0.050f || s_snap.vadj2Pg) s_snap.vadj2  = sv->voltage[SELFTEST_RAIL_VADJ2];
+            if (sv->voltage[SELFTEST_RAIL_3V3_ADJ] > 0.050f || s_snap.logicPg) s_snap.vlogic = sv->voltage[SELFTEST_RAIL_3V3_ADJ];
+        }
+    }
+
+    if (s_tab == TAB_POWER) {
+        pca9535_update();
+        const PCA9535State* io = pca9535_get_state();
+        if (io) {
+            for (int i = 0; i < 4; i++) {
+                s_snap.efuseEn[i]  = io->efuse_en[i];
+                s_snap.efuseFlt[i] = io->efuse_flt[i];
+            }
+            s_snap.rail15v  = io->en_15v;
+            s_snap.muxEn    = io->en_mux;
+            s_snap.usbHubEn = io->en_usb_hub;
+            s_snap.vadj1Pg  = io->vadj1_pg;
+            s_snap.vadj2Pg  = io->vadj2_pg;
+            s_snap.logicPg  = io->logic_pg;
+        }
+        const DS4424State* ds = ds4424_get_state();
+        if (ds && ds->present) {
+            s_snap.vlogic = ds->state[0].target_v;
+            s_snap.vadj1  = ds->state[1].target_v;
+            s_snap.vadj2  = ds->state[2].target_v;
         }
     }
 
@@ -1255,6 +1281,7 @@ static void cb_apply_diag_slot(int32_t value, void* user) {
 
 static void cb_apply_vadj1(float v, void*) {
     bool ok = ds4424_set_voltage(1, v);
+    s_force_redraw = true;
     char msg[64];
     snprintf(msg, sizeof(msg), "VADJ1 -> %.3f V %s", v, ok ? "applied" : "FAILED");
     show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
@@ -1262,6 +1289,7 @@ static void cb_apply_vadj1(float v, void*) {
 
 static void cb_apply_vadj2(float v, void*) {
     bool ok = ds4424_set_voltage(2, v);
+    s_force_redraw = true;
     char msg[64];
     snprintf(msg, sizeof(msg), "VADJ2 -> %.3f V %s", v, ok ? "applied" : "FAILED");
     show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
@@ -1269,6 +1297,7 @@ static void cb_apply_vadj2(float v, void*) {
 
 static void cb_apply_vlogic(float v, void*) {
     bool ok = ds4424_set_voltage(0, v);
+    s_force_redraw = true;
     char msg[64];
     snprintf(msg, sizeof(msg), "VLOGIC -> %.3f V %s", v, ok ? "applied" : "FAILED");
     show_toast(msg, ok ? TERM_FG_B_GREEN : TERM_FG_B_RED);
@@ -1279,6 +1308,8 @@ static void cb_toggle_efuse(bool yes, void* user) {
     int idx = (int)(intptr_t)user;  // 0-based logical channel
     bool new_state = !s_snap.efuseEn[idx];
     bool ok = pca9535_user_arm_efuse((uint8_t)idx, new_state);
+    if (ok) pca9535_update();
+    s_force_redraw = true;
     char msg[64];
     snprintf(msg, sizeof(msg), "E-Fuse %d -> %s %s",
              idx + 1, new_state ? "ON" : "OFF", ok ? "" : "(FAILED)");
@@ -1289,6 +1320,8 @@ static void cb_toggle_15v(bool yes, void*) {
     if (!yes) return;
     bool new_state = !s_snap.rail15v;
     bool ok = pca9535_set_control(PCA_CTRL_15V_EN, new_state);
+    if (ok) pca9535_update();
+    s_force_redraw = true;
     char msg[48];
     snprintf(msg, sizeof(msg), "15V rail -> %s %s",
              new_state ? "ON" : "OFF", ok ? "" : "(FAILED)");
@@ -1299,6 +1332,8 @@ static void cb_toggle_mux(bool yes, void*) {
     if (!yes) return;
     bool new_state = !s_snap.muxEn;
     bool ok = pca9535_set_control(PCA_CTRL_MUX_EN, new_state);
+    if (ok) pca9535_update();
+    s_force_redraw = true;
     char msg[48];
     snprintf(msg, sizeof(msg), "Logic EN -> %s %s",
              new_state ? "ON" : "OFF", ok ? "" : "(FAILED)");
@@ -1309,6 +1344,8 @@ static void cb_toggle_usbhub(bool yes, void*) {
     if (!yes) return;
     bool new_state = !s_snap.usbHubEn;
     bool ok = pca9535_set_control(PCA_CTRL_USB_HUB_EN, new_state);
+    if (ok) pca9535_update();
+    s_force_redraw = true;
     char msg[48];
     snprintf(msg, sizeof(msg), "USB Hub -> %s %s",
              new_state ? "ON" : "OFF", ok ? "" : "(FAILED)");

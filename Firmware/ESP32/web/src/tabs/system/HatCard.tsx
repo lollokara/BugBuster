@@ -392,7 +392,7 @@ export function HatCard() {
               {/* VADJ3 Rail */}
               <div style={{ marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#06b6d4" }}>VADJ3 Rail (0–36V)</span>
+                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#06b6d4" }}>VADJ3 Rail (1.8–36V)</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: v3En ? "rgba(16,185,129,0.15)" : "var(--glass)", color: v3En ? "#10b981" : "var(--text)", borderColor: v3En ? "#10b98150" : "var(--border-bright)" }}
@@ -447,7 +447,7 @@ export function HatCard() {
               {/* VADJ4 Rail */}
               <div style={{ padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#ff4d6a" }}>VADJ4 Rail (0–36V)</span>
+                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#ff4d6a" }}>VADJ4 Rail (1.8–36V)</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: v4En ? "rgba(16,185,129,0.15)" : "var(--glass)", color: v4En ? "#10b981" : "var(--text)", borderColor: v4En ? "#10b98150" : "var(--border-bright)" }}
@@ -856,8 +856,8 @@ export function HatCard() {
                   value={calRailId}
                   onChange={(e) => setCalRailId(parseInt(e.currentTarget.value, 10))}
                 >
-                  <option value={1}>VADJ3 (0–36V, midpoint 18V)</option>
-                  <option value={2}>VADJ4 (0–36V, midpoint 18V)</option>
+                  <option value={1}>VADJ3 (1.8–36V, midpoint 18V)</option>
+                  <option value={2}>VADJ4 (1.8–36V, midpoint 18V)</option>
                 </select>
                 <button
                   class="btn primary"

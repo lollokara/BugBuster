@@ -497,6 +497,7 @@ class ErrorCode(IntEnum):
     HVPAK_UNSAFE_REGISTER  = 0x10
     # ERR_TIMEOUT            = 0x11  (firmware/Tauri only — not surfaced in Python)
     IO_OWNERSHIP_REQUIRED  = 0x12
+    CAL_INVALID            = 0x13
 
 
 # ---------------------------------------------------------------------------

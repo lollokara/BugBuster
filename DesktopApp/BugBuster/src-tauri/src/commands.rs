@@ -1318,6 +1318,11 @@ pub async fn hat_calibrate_status(
         "point": rsp[6],
         "code": (rsp[7] as i8),
         "measuredMv": i32::from_le_bytes([rsp[8], rsp[9], rsp[10], rsp[11]]),
+        "minMv": if rsp.len() >= 16 { i32::from_le_bytes([rsp[12], rsp[13], rsp[14], rsp[15]]) } else { -1 },
+        "maxMv": if rsp.len() >= 20 { i32::from_le_bytes([rsp[16], rsp[17], rsp[18], rsp[19]]) } else { -1 },
+        "maxGapMv": if rsp.len() >= 24 { i32::from_le_bytes([rsp[20], rsp[21], rsp[22], rsp[23]]) } else { -1 },
+        "maxErrorMv": if rsp.len() >= 28 { i32::from_le_bytes([rsp[24], rsp[25], rsp[26], rsp[27]]) } else { -1 },
+        "validationFlags": if rsp.len() >= 30 { u16::from_le_bytes([rsp[28], rsp[29]]) } else { 0 },
     }))
 }
 

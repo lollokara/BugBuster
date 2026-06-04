@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-pub const PROTO_VERSION: u8 = 6;
+pub const PROTO_VERSION: u8 = 7;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
 pub const HANDSHAKE_RSP_LEN: usize = 14;

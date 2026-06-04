@@ -3125,8 +3125,12 @@ static esp_err_t handle_get_hat_v2_calibrate_status(httpd_req_t *req)
     uint8_t persist_state = 0, stage = 0, point = 0;
     int8_t code = 0;
     int32_t measured_mv = -1;
+    int32_t min_mv = -1, max_mv = -1, max_gap_mv = -1, max_error_mv = -1;
+    uint16_t validation_flags = 0;
     if (!hat_calibrate_status(&state, &progress, &rail_id, &last_error,
-                              &persist_state, &stage, &point, &code, &measured_mv)) {
+                              &persist_state, &stage, &point, &code, &measured_mv,
+                              &min_mv, &max_mv, &max_gap_mv, &max_error_mv,
+                              &validation_flags)) {
         return send_error(req, 503, "HAT not responding");
     }
 
@@ -3140,6 +3144,11 @@ static esp_err_t handle_get_hat_v2_calibrate_status(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "point", point);
     cJSON_AddNumberToObject(root, "code", code);
     cJSON_AddNumberToObject(root, "measuredMv", measured_mv);
+    cJSON_AddNumberToObject(root, "minMv", min_mv);
+    cJSON_AddNumberToObject(root, "maxMv", max_mv);
+    cJSON_AddNumberToObject(root, "maxGapMv", max_gap_mv);
+    cJSON_AddNumberToObject(root, "maxErrorMv", max_error_mv);
+    cJSON_AddNumberToObject(root, "validationFlags", validation_flags);
     return send_json(req, root);
 }
 

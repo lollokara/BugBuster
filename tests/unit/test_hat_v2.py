@@ -170,7 +170,8 @@ def test_hat_calibrate_start():
 def test_hat_calibrate_status():
     usb_mock = _make_usb_transport({
         CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
-        CmdId.HAT_CALIBRATE_STATUS: struct.pack('<BBBB', 2, 50, 1, 0)
+        CmdId.HAT_CALIBRATE_STATUS: struct.pack('<BBBBBBBbiiiiiH',
+            2, 50, 1, 0, 0, 5, 128, -3, 3300, 0, 36000, 500, 0, 0)
     })
     client = BugBuster(usb_mock)
     result = client.hat_calibrate_status()
@@ -182,6 +183,32 @@ def test_hat_calibrate_status():
     assert result["progress"] == 50
     assert result["rail_id"] == 1
     assert result["last_error"] == 0
+    assert result["persist_state"] == 0
+    assert result["stage"] == 5
+    assert result["point"] == 128
+    assert result["code"] == -3
+    assert result["measured_mv"] == 3300
+    assert result["min_mv"] == 0
+    assert result["max_mv"] == 36000
+    assert result["max_gap_mv"] == 500
+    assert result["max_error_mv"] == 0
+    assert result["validation_flags"] == 0
+
+
+def test_hat_calibrate_status_legacy_payload():
+    usb_mock = _make_usb_transport({
+        CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
+        CmdId.HAT_CALIBRATE_STATUS: struct.pack('<BBBB', 2, 50, 1, 0)
+    })
+    client = BugBuster(usb_mock)
+    result = client.hat_calibrate_status()
+
+    assert result == {
+        "state": 2,
+        "progress": 50,
+        "rail_id": 1,
+        "last_error": 0,
+    }
 
 
 def test_hat_calibrate_import():

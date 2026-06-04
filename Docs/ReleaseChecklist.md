@@ -51,7 +51,7 @@ a top-level `SHA256SUMS.txt`.
 
 ### ESP32 (single file)
 
-1. **`Firmware/ESP32/src/bbp.h`** — `BBP_FW_VERSION_MAJOR` /
+1. **`Firmware/ESP32/src/bbp/bbp.h`** — `BBP_FW_VERSION_MAJOR` /
    `_MINOR` / `_PATCH`. CI joins them with dots.
 
 ### Desktop (three files, validated in lockstep)
@@ -65,7 +65,7 @@ Use `scripts/desktop_version.py X.Y.Z` (positional) to set all three at once
 instead of editing by hand:
 
 ```bash
-python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.6.0
+python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.7.0
 ```
 
 ---
@@ -75,18 +75,19 @@ python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.6.0
 Run from repo root. All three must print the expected version and exit 0:
 
 ```bash
-python Firmware/tools/firmware_version.py rp2040 --expect bb-hat-2.1
-python Firmware/tools/firmware_version.py esp32  --expect 3.1.0
-python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect 0.6.0
+python Firmware/tools/firmware_version.py rp2040 --expect 3.0
+python Firmware/tools/firmware_version.py esp32  --expect 3.2.0
+python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect 0.7.0
 ```
 
 Only then create and push the tags:
 
 ```bash
-git tag -a hat-fw-vbb-hat-2.1 -m "RP2040 HAT firmware bb-hat-2.1" <commit>
-git tag -a esp-fw-v3.1.0      -m "ESP32 BBP firmware v3.1.0"      <commit>
-git tag -a desktop-v0.6.0     -m "BugBuster Desktop v0.6.0"       <commit>
-git push origin hat-fw-vbb-hat-2.1 esp-fw-v3.1.0 desktop-v0.6.0
+git tag -a hat-fw-v3.0        -m "RP2040 HAT firmware v3.0"       <commit>
+git tag -a esp-fw-v3.2.0      -m "ESP32 BBP firmware v3.2.0"      <commit>
+git tag -a desktop-v0.7.0     -m "BugBuster Desktop v0.7.0"       <commit>
+git tag -a release-v1.1.0     -m "BugBuster v1.1.0"               <commit>
+git push origin hat-fw-v3.0 esp-fw-v3.2.0 desktop-v0.7.0 release-v1.1.0
 ```
 
 ---
@@ -99,7 +100,7 @@ across three files:
 
 | File | Constant |
 |---|---|
-| `Firmware/ESP32/src/bbp.h` | `BBP_PROTO_VERSION` |
+| `Firmware/ESP32/src/bbp/bbp.h` | `BBP_PROTO_VERSION` |
 | `python/bugbuster/protocol.py` | `BBP_PROTO_VERSION` |
 | `DesktopApp/BugBuster/src-tauri/src/bbp.rs` | `PROTO_VERSION` |
 

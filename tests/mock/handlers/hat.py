@@ -106,6 +106,26 @@ def _ensure_hat_state(device) -> None:
         device.hat_cal_rail_id = 0
     if not hasattr(device, "hat_cal_last_error"):
         device.hat_cal_last_error = 0
+    if not hasattr(device, "hat_cal_persist_state"):
+        device.hat_cal_persist_state = 0
+    if not hasattr(device, "hat_cal_stage"):
+        device.hat_cal_stage = 5
+    if not hasattr(device, "hat_cal_point"):
+        device.hat_cal_point = 128
+    if not hasattr(device, "hat_cal_code"):
+        device.hat_cal_code = 0
+    if not hasattr(device, "hat_cal_measured_mv"):
+        device.hat_cal_measured_mv = 3300
+    if not hasattr(device, "hat_cal_min_mv"):
+        device.hat_cal_min_mv = 0
+    if not hasattr(device, "hat_cal_max_mv"):
+        device.hat_cal_max_mv = 36000
+    if not hasattr(device, "hat_cal_max_gap_mv"):
+        device.hat_cal_max_gap_mv = 500
+    if not hasattr(device, "hat_cal_max_error_mv"):
+        device.hat_cal_max_error_mv = 0
+    if not hasattr(device, "hat_cal_validation_flags"):
+        device.hat_cal_validation_flags = 0
     if not hasattr(device, "hat_io_bank"):
         device.hat_io_bank = {"dirs": 0, "ups": 0, "dns": 0}
     if not hasattr(device, "hat_level_shift"):
@@ -159,6 +179,7 @@ def register(device) -> None:
     device.register_handler(CmdId.HAT_GET_CAPS,        _hat_get_caps(device))
     device.register_handler(CmdId.HAT_GET_RAIL_STATUS, _hat_get_rail_status(device))
     device.register_handler(CmdId.HAT_SET_RAIL_ENABLE, _hat_set_rail_enable(device))
+    device.register_handler(CmdId.HAT_SET_RAIL_VOLTAGE, _hat_set_rail_voltage(device))
     device.register_handler(CmdId.HAT_SET_LED_STATE,   _hat_set_led_state(device))
     device.register_handler(CmdId.HAT_LA_SET_ROUTE,    _hat_la_set_route(device))
     device.register_handler(CmdId.HAT_CALIBRATE_START,  _hat_calibrate_start(device))
@@ -720,6 +741,20 @@ def _hat_set_rail_enable(device):
     return handler
 
 
+def _hat_set_rail_voltage(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 3:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        rail_id, voltage_mv = struct.unpack_from('<BH', payload, 0)
+        if rail_id >= len(device.hat_rails):
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.hat_rails[rail_id]['voltage_mv'] = voltage_mv
+        if device.hat_rails[rail_id]['enabled']:
+            device.hat_rails[rail_id]['current_ma'] = 150 if rail_id == 0 else 100
+        return _hat_get_rail_status(device)(b"")
+    return handler
+
+
 def _hat_set_led_state(device):
     def handler(payload: bytes) -> bytes:
         if len(payload) < 2:
@@ -763,11 +798,21 @@ def _hat_calibrate_start(device):
 
 def _hat_calibrate_status(device):
     def handler(payload: bytes) -> bytes:
-        return struct.pack('<BBBB',
+        return struct.pack('<BBBBBBBbiiiiiH',
             device.hat_cal_state,
             device.hat_cal_progress,
             device.hat_cal_rail_id,
-            device.hat_cal_last_error
+            device.hat_cal_last_error,
+            device.hat_cal_persist_state,
+            device.hat_cal_stage,
+            device.hat_cal_point,
+            device.hat_cal_code,
+            device.hat_cal_measured_mv,
+            device.hat_cal_min_mv,
+            device.hat_cal_max_mv,
+            device.hat_cal_max_gap_mv,
+            device.hat_cal_max_error_mv,
+            device.hat_cal_validation_flags
         )
     return handler
 
@@ -805,4 +850,3 @@ def _hat_set_level_shift(device):
         device.hat_level_shift["dir"] = dir
         return struct.pack('<BB', 1 if oe else 0, 1 if dir else 0)
     return handler
-

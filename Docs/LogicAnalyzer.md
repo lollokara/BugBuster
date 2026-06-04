@@ -4,7 +4,7 @@
 **Firmware module:** `Firmware/RP2040/src/bb_la*.c/.pio/.h`
 **USB interface:** Vendor bulk (interface `BB_LA_VENDOR_ITF = 0`, EP `0x06` OUT / `0x87` IN)
 **Transport:** Direct host ⇄ RP2040 USB (bypasses the ESP32 entirely)
-**Current version:** `bb-hat-2.1`
+**Current version:** `bb-hat-3.0`
 
 ---
 
@@ -66,7 +66,7 @@ The RP2040 HAT enumerates as a composite device with three interfaces:
 
 The subclass fix in `bb_usb_descriptors.c` (2026-04) ensures TinyUSB's built-in vendor driver claims interface 0 only, letting the custom CMSIS-DAP driver own interface 1. Before that fix, the BB_LA interface index was 1 — any tooling still holding that constant needs updating.
 
-VID/PID: inherited from the debugprobe fork. Use `bb-hat-2.1` in the USB product string to disambiguate from upstream probes.
+VID/PID: inherited from the debugprobe fork. Use `bb-hat-3.0` in the USB product string to disambiguate from upstream probes.
 
 ---
 

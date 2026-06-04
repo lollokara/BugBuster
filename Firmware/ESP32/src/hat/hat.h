@@ -187,6 +187,7 @@ typedef enum {
 #define HAT_ERR_HVPAK_INVALID_ARG      0x10
 #define HAT_ERR_HVPAK_UNSAFE_REG       0x11
 #define HAT_ERR_UNSUPPORTED            0x12
+#define HAT_ERR_CAL_INVALID            0x13
 
 // HAT v2 capability flags
 #define HAT_CAP_RAILS             (1u << 0)
@@ -411,7 +412,9 @@ bool hat_calibrate_start(uint8_t rail_id, uint8_t *status_out);
 bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
                           uint8_t *last_error, uint8_t *persist_state,
                           uint8_t *stage, uint8_t *point, int8_t *code,
-                          int32_t *measured_mv);
+                          int32_t *measured_mv, int32_t *min_mv,
+                          int32_t *max_mv, int32_t *max_gap_mv,
+                          int32_t *max_error_mv, uint16_t *validation_flags);
 bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_data, size_t data_len);
 bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals);
 bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out);

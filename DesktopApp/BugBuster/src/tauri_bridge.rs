@@ -793,6 +793,11 @@ pub struct HatCalibrateStatus {
     pub point: u8,
     pub code: i8,
     pub measured_mv: i32,
+    pub min_mv: i32,
+    pub max_mv: i32,
+    pub max_gap_mv: i32,
+    pub max_error_mv: i32,
+    pub validation_flags: u16,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

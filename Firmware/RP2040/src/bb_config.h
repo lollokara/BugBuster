@@ -233,6 +233,7 @@
 #define HAT_ERR_NOT_CONNECTED   0x07
 #define HAT_ERR_POWER_FAULT     0x08
 #define HAT_ERR_UNSUPPORTED     0x12
+#define HAT_ERR_CAL_INVALID     0x13
 
 // HAT type codes
 #define HAT_TYPE_NONE           0x00
