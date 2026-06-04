@@ -89,12 +89,11 @@ static void decode_inputs(void)
 
     // E-Fuse faults are active LOW (fault when pin is low), but only meaningful
     // when the corresponding e-fuse output is enabled.
-    // PCB silkscreen cross: physical P3 wired to EFUSE_EN_4, P4 to EFUSE_EN_3 — swap here so tools see natural efuse1..4 order.
     bool raw_fault[4] = {
         (s_state.input1 & PCA9535_EFUSE_FLT_1) == 0,
         (s_state.input1 & PCA9535_EFUSE_FLT_2) == 0,
-        (s_state.input1 & PCA9535_EFUSE_FLT_4) == 0,
         (s_state.input1 & PCA9535_EFUSE_FLT_3) == 0,
+        (s_state.input1 & PCA9535_EFUSE_FLT_4) == 0,
     };
     for (int i = 0; i < 4; i++) {
         s_state.efuse_flt[i] = s_state.efuse_en[i] && raw_fault[i];
@@ -116,8 +115,8 @@ static void decode_outputs(void)
 
     s_state.efuse_en[0] = (s_state.output1 & PCA9535_EFUSE_EN_1) != 0;
     s_state.efuse_en[1] = (s_state.output1 & PCA9535_EFUSE_EN_2) != 0;
-    s_state.efuse_en[2] = (s_state.output1 & PCA9535_EFUSE_EN_4) != 0;  // PCB cross: P3→EFUSE_EN_4 pin
-    s_state.efuse_en[3] = (s_state.output1 & PCA9535_EFUSE_EN_3) != 0;  // PCB cross: P4→EFUSE_EN_3 pin
+    s_state.efuse_en[2] = (s_state.output1 & PCA9535_EFUSE_EN_3) != 0;
+    s_state.efuse_en[3] = (s_state.output1 & PCA9535_EFUSE_EN_4) != 0;
 }
 
 bool pca9535_init(void)
@@ -272,8 +271,8 @@ static bool set_efuse_bit_internal(uint8_t logical_ch, bool on)
     if (!s_state.present) return false;
     if (logical_ch > 3) return false;
 
-    // Logical -> physical bit (silkscreen-cross on physical P3/P4).
-    static const uint8_t logical_to_bit[4] = { 0, 2, 6, 4 };
+    // Logical user-facing EFUSE -> physical PCA bit.
+    static const uint8_t logical_to_bit[4] = { 0, 2, 4, 6 };
     uint8_t bit = logical_to_bit[logical_ch];
 
     // Stamp BEFORE the I2C write so a fault arriving in the same millisecond
@@ -492,19 +491,14 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
 
     // Check Port 1 e-fuse fault changes (odd bits: 1, 3, 5, 7).
     //
-    // PCB silkscreen cross: physical pins labelled EFUSE3/4 are swapped on
-    // current hardware. The write path at pca9535_set_control() already
-    // routes logical EFUSE3 through PCA9535_EFUSE_EN_4 and vice-versa, and
-    // pca9535_update_state() already remaps efuse_en[] from physical port
-    // bits into logical indices. Mirror the same translation here when
-    // reporting fault events, deciding whether the channel is enabled, and
-    // selecting which control to auto-disable — otherwise a logical-EFUSE3
-    // trip would surface as channel 4 and auto-disable the wrong rail.
+    // Mirror the same IO_Block 3/4 translation used by decode_* and
+    // set_efuse_bit_internal() when reporting fault events, deciding whether
+    // the channel is enabled, and selecting which control to auto-disable.
     static const uint8_t physical_to_logical[4] = {
         0,  // physical P1 → logical EFUSE1
         1,  // physical P2 → logical EFUSE2
-        3,  // physical P3 (FLT_3 / EN_3) → logical EFUSE4 (PCB cross)
-        2,  // physical P4 (FLT_4 / EN_4) → logical EFUSE3 (PCB cross)
+        3,  // physical bit pair 3 (FLT_3 / EN_3) → logical EFUSE4
+        2,  // physical bit pair 4 (FLT_4 / EN_4) → logical EFUSE3
     };
 
     uint8_t flt_changed = (old_input1 ^ new_input1) & PCA9535_PORT1_INPUT_MASK;

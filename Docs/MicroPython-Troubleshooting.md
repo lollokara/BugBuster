@@ -319,9 +319,9 @@ the AD74416H physical channels.
 **IO terminal numbering:** Digital IOs are 1-indexed in the DIO API (1–12),
 matching the silkscreen labels. Do not pass 0.
 
-**EFUSE silkscreen swap:** The PCA9535 HAL silently corrects the EFUSE3/EFUSE4
-silkscreen cross on the PCB. The Python/MCP API uses natural order (1–4) with
-no swap needed. See the project memory note on this.
+**EFUSE 3/4 placement swap:** IO_Block 3 and IO_Block 4 are physically placed
+as 1,2,4,3 on the PCB. The PCA9535 HAL silently corrects that hardware order,
+so Python/MCP scripts use natural EFUSE order (1–4) with no host-side swap.
 
 **MUX routing before GPIO:** When configuring a digital IO as input or output
 through a script, the firmware automatically routes the terminal through the

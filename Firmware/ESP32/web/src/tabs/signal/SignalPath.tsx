@@ -40,6 +40,7 @@ const C_CHIP_BD = "#1e3050";
 
 const ACCENTS = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"] as const;
 const MUX_REF = ["U10", "U11", "U17", "U16"] as const;
+const MUX_DEVICE_BY_LOGICAL = [0, 1, 3, 2] as const;
 
 const GPIO_PAIR_LABELS: ReadonlyArray<readonly [string, string, string]> = [
   ["IO3", "IO2", "IO1"],
@@ -48,7 +49,9 @@ const GPIO_PAIR_LABELS: ReadonlyArray<readonly [string, string, string]> = [
   ["IO12", "IO11", "IO10"],
 ];
 
-const ADC_LABELS = ["CH A", "CH B", "CH D", "CH C"] as const;
+// Operator-facing connector order is A/B/C/D. The AD74416H C/D hardware swap
+// is handled in firmware/host routing tables, not in the canvas labels.
+const ADC_LABELS = ["CH A", "CH B", "CH C", "CH D"] as const;
 const EXT_LABELS = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"] as const;
 
 const EFUSE_CTRL_NAMES = ["efuse1", "efuse2", "efuse3", "efuse4"] as const;
@@ -262,10 +265,10 @@ export function SignalPath() {
     const rt = psuH + 10;
     const ra = h - rt - 4;
     const rh = ra / 4;
-    const muxL = w * 0.18;
-    const muxR = w * 0.50;
+    const hitL = w * 0.12;
+    const hitR = w * 0.63;
 
-    if (y < rt || x < muxL || x > muxR) return;
+    if (y < rt || x < hitL || x > hitR) return;
     const ch = Math.floor((y - rt) / rh);
     if (ch < 0 || ch >= 4) return;
 
@@ -286,8 +289,8 @@ export function SignalPath() {
       const d = Math.abs(y - syArr[s]!);
       if (d < bestD) { bestD = d; best = s; }
     }
-    if (best < 0 || bestD > lh * 0.8) return;
-    toggleSwitch(ch, best);
+    if (best < 0 || bestD > Math.max(8, lh * 1.1)) return;
+    toggleSwitch(MUX_DEVICE_BY_LOGICAL[ch]!, best);
   };
 
   const toggleSwitch = (d: number, s: number) => {
@@ -429,6 +432,7 @@ export function SignalPath() {
             borderLeft: "none",
             borderRight: "none",
             borderRadius: 0,
+            pointerEvents: "none",
           }}
         >
           <canvas ref={canvasRef} class="signal-canvas" onClick={onCanvasClick} />
@@ -512,7 +516,8 @@ function render(
   /* --- Channel rows --- */
   for (let ch = 0; ch < 4; ch++) {
     const ry = rt + ch * rh;
-    const st = ms[ch]!;
+    const muxDevice = MUX_DEVICE_BY_LOGICAL[ch]!;
+    const st = ms[muxDevice]!;
     const ac = ACCENTS[ch]!;
     const pi = ch < 2 ? 0 : 1;
     const psuOn = ps[pi];
@@ -560,7 +565,7 @@ function render(
     c.fillStyle = ac;
     c.font = "bold 9px monospace";
     c.textAlign = "center";
-    c.fillText(`MUX ${ch + 1} · ${MUX_REF[ch]}`, (muxL + muxR) / 2, mt + mh - 3);
+    c.fillText(`MUX ${muxDevice + 1} · ${MUX_REF[ch]}`, (muxL + muxR) / 2, mt + mh - 3);
 
     /* --- GPIO pairs: IO -> LS -> split --- */
     const gpioPairs: ReadonlyArray<readonly [number, number, number]> = [[0, 1, 0], [4, 5, 1], [6, 7, 2]];

@@ -110,28 +110,30 @@ static const BusRouteEntry IO_ROUTES[12] = {
     { 6,  1, 1,  5, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 
-    // ── BLOCK 2, IO_BLOCK 3 — device 3 (U17), VADJ2, EFUSE4 ────────────
-    // PCB swap: physical connector 3 is wired to EFUSE4 (silkscreen EFUSE3↔EFUSE4 crossed)
+    // ── BLOCK 2, IO_BLOCK 3 — device 3 (U17), VADJ2, EFUSE3 ────────────
+    // Logical connector C is implemented by the swapped hardware position;
+    // pca9535_user_arm_efuse() maps logical EFUSE3 to the physical bit.
     // IO 7: position 3 (Group C), ESP GPIO 8
-    { 7,  3, 3,  8, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 7,  3, 3,  8, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },
     // IO 8: position 2 (Group B), ESP GPIO 9
-    { 8,  2, 3,  9, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 8,  2, 3,  9, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_B_ESP_HIGH, GROUP_CLEAR_2 },
     // IO 9: position 1 (Group A analog), ESP GPIO 10
-    { 9,  1, 3, 10, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 9,  1, 3, 10, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 
-    // ── BLOCK 2, IO_BLOCK 4 — device 2 (U16), VADJ2, EFUSE3 ────────────
-    // PCB swap: physical connector 4 is wired to EFUSE3
+    // ── BLOCK 2, IO_BLOCK 4 — device 2 (U16), VADJ2, EFUSE4 ────────────
+    // Logical connector D is implemented by the swapped hardware position;
+    // pca9535_user_arm_efuse() maps logical EFUSE4 to the physical bit.
     // IO 10: position 3 (Group C), ESP GPIO 11
-    { 10, 3, 2, 11, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 10, 3, 2, 11, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },
     // IO 11: position 2 (Group B), ESP GPIO 12
-    { 11, 2, 2, 12, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 11, 2, 2, 12, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_B_ESP_HIGH, GROUP_CLEAR_2 },
     // IO 12: position 1 (Group A analog), ESP GPIO 13
-    { 12, 1, 2, 13, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 12, 1, 2, 13, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 };
 

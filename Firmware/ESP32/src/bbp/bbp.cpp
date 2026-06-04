@@ -15,6 +15,7 @@
 #include "quicksetup.h"
 #include "bbp_adapter.h"
 #include "ws_stream.h"
+#include "adc_dsp.h"
 #include "esp_mac.h"
 #include "esp_log.h"
 
@@ -733,6 +734,141 @@ void bbpStopAdcStream(void)
 {
     s_adcStreamMask = 0;
     ESP_LOGI(TAG, "ADC stream stopped");
+}
+
+// -----------------------------------------------------------------------------
+// ADC DSP streaming
+// -----------------------------------------------------------------------------
+
+static bool        s_dspActive = false;
+static TaskHandle_t s_dspTask  = nullptr;
+
+static void taskAdcDsp(void * /*arg*/)
+{
+    ESP_LOGI(TAG, "DSP task started");
+    for (;;) {
+        // Wait for ADC poll task to deliver a completed buffer index
+        uint32_t buf_idx = ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(200));
+        if (!s_dspActive) break;
+        if (buf_idx == 0) continue;  // spurious wakeup or timeout
+
+        // buf_idx was sent as (buf + 1) so that 0 means "no notification yet"
+        uint8_t bidx = (uint8_t)(buf_idx - 1u);
+
+        AdcDspWindow w = {};
+        adc_dsp_process(bidx, &w);
+        bbpSendDspWindow(&w);
+    }
+    ESP_LOGI(TAG, "DSP task exit");
+    s_dspTask = nullptr;
+    vTaskDelete(nullptr);
+}
+
+void bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
+                          uint16_t window_samples, float spike_threshold,
+                          uint8_t n_fft_peaks, uint16_t *effective_rate_out)
+{
+    if (s_dspActive) {
+        ESP_LOGW(TAG, "DSP stream already active");
+        return;
+    }
+
+    AdcDspConfig cfg = {};
+    cfg.channel        = channel;
+    cfg.rate_code      = rate_code;
+    cfg.window_samples = (window_samples == 0) ? ADC_DSP_WINDOW_SIZE : window_samples;
+    cfg.spike_threshold = spike_threshold;
+    cfg.n_fft_peaks    = n_fft_peaks;
+
+    esp_err_t ret = adc_dsp_init(&cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "adc_dsp_init failed: %d", ret);
+        return;
+    }
+
+    // Estimate effective window rate (windows per second)
+    // = sample_rate_hz / window_size
+    uint16_t sps = 20;
+    switch (rate_code) {
+        case 0:  sps = 10;   break;
+        case 1: case 3: sps = 20;   break;
+        case 4: case 6: sps = 200;  break;
+        case 8: case 9: sps = 1200; break;
+        case 12: sps = 4800; break;
+        case 13: sps = 9600; break;
+    }
+    if (effective_rate_out) {
+        *effective_rate_out = (uint16_t)(sps / ADC_DSP_WINDOW_SIZE);
+        if (*effective_rate_out == 0) *effective_rate_out = 1;
+    }
+
+    s_dspActive = true;
+
+    if (xTaskCreatePinnedToCore(taskAdcDsp, "adcDsp", 4096,
+                                nullptr, 2, &s_dspTask, 0) != pdPASS) {
+        ESP_LOGE(TAG, "DSP task create failed");
+        s_dspActive = false;
+        adc_dsp_deinit();
+        return;
+    }
+
+    ESP_LOGI(TAG, "ADC DSP stream started ch=%d rate=%d peaks=%d",
+             channel, rate_code, n_fft_peaks);
+}
+
+void bbpStopAdcDspStream(void)
+{
+    if (!s_dspActive) return;
+    s_dspActive = false;
+    // Wake the task so it can exit its loop
+    if (s_dspTask) {
+        xTaskNotifyGive(s_dspTask);
+    }
+    adc_dsp_deinit();
+    ESP_LOGI(TAG, "ADC DSP stream stopped");
+}
+
+bool bbpAdcDspActive(void)
+{
+    return s_dspActive;
+}
+
+void bbpNotifyDspTask(uint8_t buf_idx)
+{
+    if (s_dspTask) {
+        // Encode as (buf_idx + 1) so 0 is reserved for "no notification"
+        xTaskNotify(s_dspTask, (uint32_t)(buf_idx + 1u), eSetValueWithOverwrite);
+    }
+}
+
+void bbpSendDspWindow(const AdcDspWindow *w)
+{
+    if (!w) return;
+
+    // Maximum payload: 25 base + 16*5 FFT + 16*8 spikes = 233 bytes
+    uint8_t buf[256];
+    size_t  pos = 0;
+
+    bbp_put_u8(buf,  &pos, w->channel);
+    bbp_put_u32(buf, &pos, w->window_start_us);
+    bbp_put_u16(buf, &pos, w->n_samples);
+    bbp_put_f32(buf, &pos, w->min_v);
+    bbp_put_f32(buf, &pos, w->max_v);
+    bbp_put_f32(buf, &pos, w->mean_v);
+    bbp_put_f32(buf, &pos, w->rms_v);
+    bbp_put_u8(buf,  &pos, w->n_fft_peaks);
+    for (uint8_t i = 0; i < w->n_fft_peaks; i++) {
+        bbp_put_u8(buf,  &pos, w->fft_peaks[i].bin);
+        bbp_put_f32(buf, &pos, w->fft_peaks[i].magnitude);
+    }
+    bbp_put_u8(buf,  &pos, w->n_spikes);
+    for (uint8_t i = 0; i < w->n_spikes; i++) {
+        bbp_put_u32(buf, &pos, w->spikes[i].offset_us);
+        bbp_put_f32(buf, &pos, w->spikes[i].value);
+    }
+
+    bbpSendEvent(BBP_EVT_ADC_DSP, buf, pos);
+    ws_stream_forward(WS_STREAM_ADC_DSP, buf, pos);
 }
 
 bool bbpScopeStreamActive(void)

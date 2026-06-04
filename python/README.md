@@ -167,28 +167,28 @@ block-beta
   block:BLOCK1["BLOCK 1 — VADJ1 (3–15 V)"]:2
     columns 2
     block:IB1["IO_Block 1 · EFUSE1"]
-      IO1["IO 1 ⚡ analog/HAT"]
+      IO1["IO 1 · digital"]
       IO2["IO 2 · digital"]
-      IO3["IO 3 · digital"]
+      IO3["IO 3 ⚡ analog/HAT"]
     end
     block:IB2["IO_Block 2 · EFUSE2"]
-      IO4["IO 4 ⚡ analog/HAT"]
+      IO4["IO 4 · digital"]
       IO5["IO 5 · digital"]
-      IO6["IO 6 · digital"]
+      IO6["IO 6 ⚡ analog/HAT"]
     end
   end
 
   block:BLOCK2["BLOCK 2 — VADJ2 (3–15 V)"]:2
     columns 2
     block:IB3["IO_Block 3 · EFUSE3"]
-      IO7["IO 7 ⚡ analog/HAT"]
+      IO7["IO 7 · digital"]
       IO8["IO 8 · digital"]
-      IO9["IO 9 · digital"]
+      IO9["IO 9 ⚡ analog/HAT"]
     end
     block:IB4["IO_Block 4 · EFUSE4"]
-      IO10["IO 10 ⚡ analog/HAT"]
+      IO10["IO 10 · digital"]
       IO11["IO 11 · digital"]
-      IO12["IO 12 · digital"]
+      IO12["IO 12 ⚡ analog/HAT"]
     end
   end
 ```

@@ -23,6 +23,7 @@ pub fn ChannelCard(
     #[prop(into)] func_name: Signal<String>,
     #[prop(default = "")] class: &'static str,
 ) -> impl IntoView {
+    // User-facing labels stay in logical connector order.
     let ch_names = ["A", "B", "C", "D"];
     let label = if channel < 4 { ch_names[channel] } else { "?" };
     view! {

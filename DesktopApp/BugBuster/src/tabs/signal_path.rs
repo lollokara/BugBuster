@@ -19,7 +19,7 @@ const PCA_EFUSE2_EN: u8 = 6;
 const PCA_EFUSE3_EN: u8 = 7;
 const PCA_EFUSE4_EN: u8 = 8;
 
-// Firmware pca9535_user_arm_efuse() handles the PCB silkscreen cross internally.
+// Firmware pca9535_user_arm_efuse() handles the IO_Block 3/4 PCB placement swap.
 // Pass logical channel IDs (EFUSE1..4 = 5..8) unchanged — no host-side swap needed.
 const PCA_EFUSE_IDS: [u8; 4] = [PCA_EFUSE1_EN, PCA_EFUSE2_EN, PCA_EFUSE3_EN, PCA_EFUSE4_EN];
 
@@ -53,6 +53,7 @@ const C_CHIP_BD: &str = "#1e3050";
 
 const ACCENTS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const MUX_REF: [&str; 4] = ["U10", "U11", "U17", "U16"];
+const MUX_DEVICE_BY_LOGICAL: [usize; 4] = [0, 1, 3, 2];
 
 // Switch input topology:
 // GPIO pairs: IO goes through level shifter, then SPLITS:
@@ -70,8 +71,9 @@ const GPIO_PAIR_LABELS: [[&str; 3]; 4] = [
     ["IO12", "IO11", "IO10"],  // U16
 ];
 
-// S3 and S4 labels
-const ADC_LABELS: [&str; 4] = ["CH A", "CH B", "CH D", "CH C"];
+// S3 and S4 labels. Keep the operator-facing connector order natural; the
+// AD74416H C/D hardware swap is handled in the routing tables.
+const ADC_LABELS: [&str; 4] = ["CH A", "CH B", "CH C", "CH D"];
 const EXT_LABELS: [&str; 4] = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"];
 
 #[component]
@@ -273,7 +275,8 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             // ── CHANNEL ROWS ──
             for ch in 0..4usize {
                 let ry = rt + ch as f64 * rh;
-                let st = ms[ch];
+                let mux_dev = MUX_DEVICE_BY_LOGICAL[ch];
+                let st = ms[mux_dev];
                 let ac = ACCENTS[ch];
                 let pi = if ch < 2 { 0 } else { 1 };
                 let psu_on = ps[pi];
@@ -309,7 +312,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                 // MUX label
                 c.set_fill_style_str(ac); c.set_font("bold 9px monospace"); c.set_text_align("center");
-                let _ = c.fill_text(&format!("MUX {} · {}", ch + 1, MUX_REF[ch]),
+                let _ = c.fill_text(&format!("MUX {} · {}", mux_dev + 1, MUX_REF[ch]),
                                     (mux_l + mux_r) / 2.0, mt + mh - 3.0);
 
                 // ── GPIO PAIRS: IO → LevelShifter → split (direct green / 2kΩ yellow) ──
@@ -540,7 +543,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let ry = rt2 + ch as f64 * rh2;
                 let lh = (rh2 - 12.0) / 8.5;
                 let sw = ((y - ry - 6.0) / lh).clamp(0.0, 7.0) as usize;
-                tog(ch, sw);
+                tog(MUX_DEVICE_BY_LOGICAL[ch], sw);
             }
         }
     };
@@ -617,9 +620,9 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             </div>
             <div class="sp-summary">
                 {move || { let st = mux.get();
-                    (0..4).map(|d| view! {
+                    (0..4).map(|ch| { let d = MUX_DEVICE_BY_LOGICAL[ch]; view! {
                         <div class="sp-dev-summary">
-                            <span class="sp-dev-label">{format!("MUX {} ({})", d+1, MUX_REF[d])}</span>
+                            <span class="sp-dev-label">{format!("CH {} · MUX {} ({})", ADC_LABELS[ch].trim_start_matches("CH "), d+1, MUX_REF[ch])}</span>
                             <div class="sp-sw-row">
                                 {(0..8).map(|s| { let on = (st[d] >> s) & 1 != 0;
                                     view! { <button class="sp-sw-btn" class:sp-sw-on=on
@@ -627,7 +630,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 }).collect::<Vec<_>>()}
                             </div>
                         </div>
-                    }).collect::<Vec<_>>()
+                    }}).collect::<Vec<_>>()
                 }}
             </div>
         </div>

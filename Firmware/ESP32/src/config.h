@@ -85,10 +85,10 @@
 #define IMON_R_IOCP_OHM     11000.0f  // External IOCP resistor (same for all 4 e-fuses)
 #define IMON_MV_PER_A       (IMON_GAIN_UA_PER_A * IMON_R_IOCP_OHM / 1000.0f)  // = 550 mV/A
 
-// Safety interlock: U16 S3 (device 2, bit 2) vs U23 any switch
-// Self-test uses Physical Channel D (index 3), which shares the trace with IO 12 (MUX 2).
-#define U16_S3_MASK         0x04   // U16 switch S3 = bit 2
-#define U16_DEVICE_IDX      2      // U16 = device index 2
+// Safety interlock: U17 S3 (device 3, bit 2) vs U23 any switch
+// Self-test uses Physical Channel D (index 3), owned by public C / IO9 / U17.
+#define U17_S3_MASK         0x04   // U17 switch S3 = bit 2
+#define U17_DEVICE_IDX      3      // U17 = device index 3
 
 // -----------------------------------------------------------------------------
 // SPI Configuration

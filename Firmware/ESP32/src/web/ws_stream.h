@@ -30,11 +30,13 @@ extern "C" {
 #define WS_STREAM_SCOPE     0x00u
 #define WS_STREAM_ADC       0x01u
 #define WS_STREAM_LA_META   0x02u
+#define WS_STREAM_ADC_DSP   0x03u  // DSP stream: stats + FFT peaks + spikes
 
 // Subscription bitmask values (1 << stream_id).
 #define WS_SUB_SCOPE        (1u << WS_STREAM_SCOPE)
 #define WS_SUB_ADC          (1u << WS_STREAM_ADC)
 #define WS_SUB_LA_META      (1u << WS_STREAM_LA_META)
+#define WS_SUB_ADC_DSP      (1u << WS_STREAM_ADC_DSP)
 
 /**
  * Register /api/ws/stream on @p server. Call once from startWebServer().

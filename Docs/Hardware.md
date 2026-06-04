@@ -65,11 +65,11 @@ blocks of 3 IOs each:
 
 ```
 Block 1 (VADJ1, 3-15 V)              Block 2 (VADJ2, 3-15 V)
-  IO_Block 1  [E-fuse 1, MUX U10]      IO_Block 3  [E-fuse 4, MUX U17]
+  IO_Block 1  [E-fuse 1, MUX U10]      IO_Block 3  [E-fuse 3, MUX U17]
     IO 1  — digital only                  IO 7  — digital only
     IO 2  — digital only                  IO 8  — digital only
     IO 3  — analog + digital + HAT        IO 9  — analog + digital + HAT
-  IO_Block 2  [E-fuse 2, MUX U11]      IO_Block 4  [E-fuse 3, MUX U16]
+  IO_Block 2  [E-fuse 2, MUX U11]      IO_Block 4  [E-fuse 4, MUX U16]
     IO 4  — digital only                  IO 10 — digital only
     IO 5  — digital only                  IO 11 — digital only
     IO 6  — analog + digital + HAT        IO 12 — analog + digital + HAT
@@ -82,6 +82,27 @@ the logic level for all digital IOs through TXS0108E level shifters.
 Analog-capable IOs (3, 6, 9, 12) can act as voltage input, current input,
 voltage output, current source, RTD excitation probe, or be routed to the HAT
 connector for SWD / LA.
+
+### User-facing C/D remap
+
+Operators, scripts, MCP tools, and UI surfaces always address the analog
+channels in natural order `A/B/C/D`:
+
+| Label | IO_Block | Analog IO | Public ADC channel | MUX device | ESP32 GPIO | E-fuse |
+|-------|----------|-----------|--------------------|------------|------------|--------|
+| A     | 1        | IO3       | 0                  | U10 / 0    | GPIO5      | EFUSE1 |
+| B     | 2        | IO6       | 1                  | U11 / 1    | GPIO7      | EFUSE2 |
+| C     | 3        | IO9       | 2                  | U17 / 3    | GPIO10     | EFUSE3 |
+| D     | 4        | IO12      | 3                  | U16 / 2    | GPIO13     | EFUSE4 |
+
+The PCB swaps the AD74416H C/D register wiring, so firmware translates public
+channel C to AD74416H physical D and public channel D to AD74416H physical C in
+`tasks_logical_to_physical()`. Do not apply that ADC-register swap in host code,
+docs, or UI labels. MUX devices, ESP32 GPIOs, e-fuses, and IO_Block ownership
+stay with the connector row above.
+
+The selftest U23 path is an internal exception: it is wired to AD74416H physical
+Channel D and claims the logical owner of that physical register while measuring.
 
 ---
 

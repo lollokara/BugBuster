@@ -198,7 +198,7 @@ class TestSPIBusPlanning(unittest.TestCase):
         )
 
         self.assertEqual(plan.supplies, ("VADJ1", "VADJ2"))
-        self.assertEqual(plan.efuses, ("EFUSE1", "EFUSE4"))
+        self.assertEqual(plan.efuses, ("EFUSE1", "EFUSE3"))
 
 
 class TestBugBusterBusFacade(unittest.TestCase):

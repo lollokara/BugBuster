@@ -5,6 +5,7 @@
 #include "tasks.h"
 #include "adc_leds.h"
 #include "bbp.h"
+#include "adc_dsp.h"
 #include "dio.h"
 #include "ds4424.h"
 #include "husb238.h"
@@ -269,9 +270,19 @@ static void taskAdcPoll(void* /*pvParameters*/)
             }
 
             // Push into BBP ADC stream ring buffer (lock-free, outside mutex)
+            uint32_t ts_us = (uint32_t)esp_timer_get_time();
             if (bbpAdcStreamMask() != 0) {
-                uint32_t ts_us = (uint32_t)esp_timer_get_time();
                 bbpPushAdcSample(raw, ts_us);
+            }
+
+            // Push into DSP pipeline (single-channel, outside mutex)
+            if (bbpAdcDspActive()) {
+                const AdcDspConfig *dcfg = adc_dsp_get_config();
+                if (dcfg && dcfg->channel < 4) {
+                    if (adc_dsp_push_sample(eng[dcfg->channel], ts_us)) {
+                        bbpNotifyDspTask(adc_dsp_last_completed_buf());
+                    }
+                }
             }
         }
 
@@ -484,21 +495,22 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
 {
     if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return;
 
-    // ---- Digital Remapping (C <-> D) ----------------------------------------
-    // Remap logical indices to physical hardware indices to match physical 
-    // connector order vs ADC internal channel layout.
-    // Logical 0 (A) -> Phys 0, MUX 0 (IO 3)
-    // Logical 1 (B) -> Phys 1, MUX 1 (IO 6)
-    // Logical 2 (C) -> Phys 3, MUX 2 (IO 12, Block 4)
-    // Logical 3 (D) -> Phys 2, MUX 3 (IO 9,  Block 3)
+    // ---- Logical API -> physical AD74416H + connector MUX ------------------
+    // Public channel APIs are logical/user-facing A/B/C/D. Only the AD74416H
+    // register index is swapped C<->D. The MUX device must stay with the
+    // user-facing IO_Block/connector:
+    //   logical 0 (A) -> AD74416H phys 0, MUX 0 (IO3 / IO_Block 1)
+    //   logical 1 (B) -> AD74416H phys 1, MUX 1 (IO6 / IO_Block 2)
+    //   logical 2 (C) -> AD74416H phys 3, MUX 3 (IO9 / IO_Block 3)
+    //   logical 3 (D) -> AD74416H phys 2, MUX 2 (IO12 / IO_Block 4)
     uint8_t physical_ch = logical_channel;
     uint8_t mux_dev = logical_channel;
     if (logical_channel == 2) {
         physical_ch = 3;
-        mux_dev = 2;
+        mux_dev = 3;
     } else if (logical_channel == 3) {
         physical_ch = 2;
-        mux_dev = 3;
+        mux_dev = 2;
     }
 
     if (!s_device->setChannelFunction(physical_ch, func)) {
@@ -567,12 +579,11 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     s_device->configureAdc(physical_ch, hwMux, hwRange, ADC_RATE_20SPS);
 
     // ---- MUX auto-routing ---------------------------------------------------
-    // Map AD74416H physical channel index to MUX device and Group A switch.
-    // Phys 0 (A) -> Device 0 (U10, IO 3)
-    // Phys 1 (B) -> Device 1 (U11, IO 6)
-    // Phys 3 (C) -> Device 2 (U16, IO 12)
-    // Phys 2 (D) -> Device 3 (U17, IO 9)
-    //
+    // mux_dev is connector/ESP-GPIO routing, not AD74416H register routing.
+    // Keep it with the logical IO_Block:
+    //   C -> U17/device 3/IO9/GPIO10
+    //   D -> U16/device 2/IO12/GPIO13
+    // Only physical_ch above carries the AD74416H C/D register swap.
     // Switch S3 (index 2) connects the AD74416H channel to the terminal.
     {
         bool close_analog = (func != CH_FUNC_HIGH_IMP);
@@ -1043,6 +1054,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
             case CMD_IDAC_CALIBRATE: {
                 uint8_t idac_ch = cmd.idacCal.ch;
                 if (idac_ch >= 3) break;
+                constexpr uint8_t selftest_logical_ch = 2;   // public C owns AD74416H physical D
+                constexpr uint8_t selftest_physical_ch = 3;  // U23 selftest path
 
                 ESP_LOGI("tasks", "Starting IDAC%u calibration sweep...", idac_ch);
 
@@ -1051,9 +1064,9 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 #if ADGS_HAS_SELFTEST
                 prev_selftest = adgs_get_selftest();
 #endif
-                ChannelFunction prev_func = s_device->getChannelFunction(3);
-                AdcRange prev_range = g_deviceState.channels[3].adcRange;
-                AdcConvMux prev_mux = g_deviceState.channels[3].adcMux;
+                ChannelFunction prev_func = s_device->getChannelFunction(selftest_physical_ch);
+                AdcRange prev_range = g_deviceState.channels[selftest_logical_ch].adcRange;
+                AdcConvMux prev_mux = g_deviceState.channels[selftest_logical_ch].adcMux;
 
                 // 2. Configure MUX for calibration
                 uint8_t cal_sw = 0;
@@ -1084,17 +1097,17 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 ESP_LOGW("tasks", "Self-test MUX not available - continuing without hardware routing");
 #endif
 
-                // 3. Configure AD74416H Channel D for measurement
-                s_device->setChannelFunction(3, CH_FUNC_VIN);
-                s_device->configureAdc(3, ADC_MUX_LF_TO_AGND, ADC_RNG_0_12V, ADC_RATE_20SPS);
+                // 3. Configure AD74416H physical Channel D for measurement.
+                s_device->setChannelFunction(selftest_physical_ch, CH_FUNC_VIN);
+                s_device->configureAdc(selftest_physical_ch, ADC_MUX_LF_TO_AGND, ADC_RNG_0_12V, ADC_RATE_20SPS);
                 
                 // Update conversion mask to include Channel D
                 {
                     uint8_t chMask = 0;
                     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                        g_deviceState.channels[3].function = CH_FUNC_VIN;
-                        g_deviceState.channels[3].adcRange = ADC_RNG_0_12V;
-                        g_deviceState.channels[3].adcMux   = ADC_MUX_LF_TO_AGND;
+                        g_deviceState.channels[selftest_logical_ch].function = CH_FUNC_VIN;
+                        g_deviceState.channels[selftest_logical_ch].adcRange = ADC_RNG_0_12V;
+                        g_deviceState.channels[selftest_logical_ch].adcMux   = ADC_MUX_LF_TO_AGND;
                         for (uint8_t c = 0; c < 4; c++) {
                             if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
                                 chMask |= (1u << tasks_logical_to_physical(c));
@@ -1126,8 +1139,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 #if ADGS_HAS_SELFTEST
                 adgs_set_selftest(prev_selftest);
 #endif
-                tasks_apply_channel_function(3, prev_func);
-                s_device->configureAdc(3, prev_mux, prev_range, ADC_RATE_20SPS);
+                tasks_apply_channel_function(selftest_logical_ch, prev_func);
+                s_device->configureAdc(selftest_physical_ch, prev_mux, prev_range, ADC_RATE_20SPS);
 
                 ESP_LOGI("tasks", "IDAC%u calibration complete and saved.", idac_ch);
                 break;

@@ -61,6 +61,17 @@ _Transport = Union[USBTransport, HTTPTransport]
 from collections import namedtuple
 
 AdcResult   = namedtuple("AdcResult",   ["raw", "value", "range", "rate", "mux"])
+AdcDspWindow = namedtuple("AdcDspWindow", [
+    "channel",        # int: logical channel 0–3
+    "timestamp_us",   # int: window start (µs, device clock)
+    "n_samples",      # int: samples in window
+    "min_v",          # float: minimum voltage in window
+    "max_v",          # float: maximum voltage
+    "mean_v",         # float: mean voltage
+    "rms_v",          # float: RMS voltage
+    "fft_peaks",      # list of (bin_index, magnitude) tuples, sorted by magnitude desc
+    "spikes",         # list of (offset_us, value) tuples for samples above threshold
+])
 DeviceInfo  = namedtuple("DeviceInfo",  ["spi_ok", "silicon_rev", "silicon_id0", "silicon_id1"])
 PingResult  = namedtuple("PingResult",  ["token", "uptime_ms"])
 GpioStatus  = namedtuple("GpioStatus",  ["id", "mode", "output", "input", "pulldown"])
@@ -1755,7 +1766,7 @@ class BugBuster:
                 "currents": [0.5, 0.3, -1.0, 0.1]   # amps, -1 = unavailable
             }
 
-        ``available`` is False when U17 S2 is closed (IO 9 in analog mode).
+        ``available`` is False when U17 S3 is closed (IO 9 analog mode).
         """
         if self._usb:
             resp = self._usb_cmd(CmdId.SELFTEST_EFUSE_CURRENTS)
@@ -3367,6 +3378,106 @@ class BugBuster:
         self._require_usb("stop_adc_stream")
         self._usb_cmd(CmdId.STOP_ADC_STREAM)
         self._t.remove_event(CmdId.ADC_DATA_EVT)
+
+    # ------------------------------------------------------------------
+    # ADC DSP streaming  (USB + HTTP/WebSocket)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_adc_dsp_evt(payload: bytes) -> "AdcDspWindow":
+        off = 0
+        channel       = payload[off]; off += 1
+        timestamp_us, = struct.unpack_from('<I', payload, off); off += 4
+        n_samples,    = struct.unpack_from('<H', payload, off); off += 2
+        min_v, max_v, mean_v, rms_v = struct.unpack_from('<ffff', payload, off); off += 16
+        n_fft = payload[off]; off += 1
+        fft_peaks = []
+        for _ in range(n_fft):
+            bin_idx = payload[off]; off += 1
+            mag,    = struct.unpack_from('<f', payload, off); off += 4
+            fft_peaks.append((bin_idx, mag))
+        n_spikes = payload[off]; off += 1
+        spikes = []
+        for _ in range(n_spikes):
+            offset_us, = struct.unpack_from('<I', payload, off); off += 4
+            val,       = struct.unpack_from('<f', payload, off); off += 4
+            spikes.append((offset_us, val))
+        return AdcDspWindow(channel, timestamp_us, n_samples,
+                            min_v, max_v, mean_v, rms_v,
+                            fft_peaks, spikes)
+
+    def start_adc_dsp_stream(
+        self,
+        channel:         int,
+        rate:            "AdcRate"  = None,
+        window_samples:  int        = 256,
+        spike_threshold: float      = 0.1,
+        n_fft_peaks:     int        = 8,
+        callback:        Optional[Callable[["AdcDspWindow"], None]] = None,
+    ) -> None:
+        """
+        Start high-rate ADC streaming with on-device DSP processing.
+
+        Works over **USB** (via BBP binary events) and **HTTP/WiFi** (via
+        WebSocket ``/api/ws/stream`` with ``"adc-dsp"`` subscription).
+
+        The device samples at *rate* (up to 9.6 kSPS), accumulates 256-sample
+        windows, applies a Hann window + FFT, detects spikes, and pushes a
+        compressed :class:`AdcDspWindow` for every window (~37 windows/sec at
+        9.6 kSPS — roughly 89 bytes/window vs 768 bytes raw).
+
+        *channel*         — logical AD74416H channel (0–3).
+        *rate*            — :class:`AdcRate` enum value; defaults to SPS_9600.
+        *window_samples*  — window size (256, only supported value for v1).
+        *spike_threshold* — V above mean to classify a sample as a spike.
+        *n_fft_peaks*     — dominant FFT bins to include (0 = skip FFT).
+        *callback*        — called with each :class:`AdcDspWindow`.
+        """
+        from .constants import AdcRate as _AdcRate
+        if rate is None:
+            rate = _AdcRate.SPS_9600
+
+        rate_code = int(rate)
+
+        if self._usb:
+            payload = struct.pack('<BBHfB',
+                                  channel, rate_code, window_samples,
+                                  spike_threshold, n_fft_peaks)
+            self._usb_cmd(CmdId.START_ADC_DSP_STREAM, payload)
+
+            if callback:
+                def _handler(data: bytes):
+                    try:
+                        callback(self._parse_adc_dsp_evt(data))
+                    except Exception:
+                        pass
+                self._t.on_event(CmdId.ADC_DSP_EVT, _handler)
+        else:
+            # HTTP path: POST to start, then open WebSocket for events
+            body = {
+                "channel":        channel,
+                "rate":           rate_code,
+                "windowSamples":  window_samples,
+                "spikeThreshold": spike_threshold,
+                "nFftPeaks":      n_fft_peaks,
+            }
+            self._t.post("adc/dsp/start", body)
+            if callback:
+                self._t.start_dsp_ws_stream(
+                    callback=lambda data: callback(self._parse_adc_dsp_evt(data))
+                )
+
+    def stop_adc_dsp_stream(self) -> None:
+        """Stop ADC DSP streaming (USB and HTTP)."""
+        if self._usb:
+            self._usb_cmd(CmdId.STOP_ADC_DSP_STREAM)
+            self._t.remove_event(CmdId.ADC_DSP_EVT)
+        else:
+            try:
+                self._t.post("adc/dsp/stop")
+            except Exception:
+                pass
+            self._t.stop_dsp_ws_stream()
 
     def on_scope_data(self, callback: Callable[[dict], None]) -> None:
         """

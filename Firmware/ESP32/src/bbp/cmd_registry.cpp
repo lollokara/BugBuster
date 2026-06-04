@@ -12,6 +12,7 @@ static const char *TAG = "cmd_registry";
 // subsystem is migrated.
 extern "C" void register_cmds_dac(void);
 extern "C" void register_cmds_adc(void);
+extern "C" void register_cmds_adc_dsp(void);
 extern "C" void register_cmds_dio(void);
 extern "C" void register_cmds_channel(void);
 // Slice 4 subsystems
@@ -63,6 +64,7 @@ void cmd_registry_init(void)
     // Register each migrated subsystem
     register_cmds_dac();
     register_cmds_adc();
+    register_cmds_adc_dsp();
     register_cmds_dio();
     register_cmds_channel();
     // Slice 4 subsystems

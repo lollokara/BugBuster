@@ -79,16 +79,16 @@ function DinDoutCard() {
   return (
     <GlassCard title="AD74416H DIN / DOUT">
       <div class="analog-grid">
-        {[0, 1, 2, 3].map((i) => {
-          const c = channels[i] ?? {};
+        {[0, 1, 2, 3].map((ch) => {
+          const c = channels[ch] ?? {};
           const dinState = !!(c.dinState ?? c.din_state);
           const counter = Number(c.dinCounter ?? c.din_counter ?? 0);
           const doState = !!(c.doState ?? c.do_state ?? c.doutState ?? c.dout_state);
-          const din = dinCfg[i]!;
-          const dout = doCfg[i]!;
+          const din = dinCfg[ch]!;
+          const dout = doCfg[ch]!;
           return (
-            <div class="analog-item" key={i}>
-              <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
+            <div class="analog-item" key={ch}>
+              <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
               <div class="kv-row">
                 <span class="uppercase-tag">DIN</span>
                 <Led state={dinState ? "on" : "off"} label={dinState ? "HIGH" : "LOW"} />
@@ -96,7 +96,7 @@ function DinDoutCard() {
               </div>
               <div class="kv-row">
                 <span class="uppercase-tag">DOUT</span>
-                <button class={"pill" + (doState ? " active" : "")} onClick={() => setDoState(i, !doState)}>
+                <button class={"pill" + (doState ? " active" : "")} onClick={() => setDoState(ch, !doState)}>
                   {doState ? "ON" : "OFF"}
                 </button>
               </div>
@@ -109,7 +109,7 @@ function DinDoutCard() {
                     value={String(din.debounce)}
                     onChange={(e) => {
                       const next = [...dinCfg];
-                      next[i] = { ...next[i]!, debounce: parseInt((e.currentTarget as HTMLSelectElement).value, 10) };
+                      next[ch] = { ...next[ch]!, debounce: parseInt((e.currentTarget as HTMLSelectElement).value, 10) };
                       setDinCfg(next);
                     }}
                   >
@@ -130,7 +130,7 @@ function DinDoutCard() {
                     value={String(din.thresh)}
                     onInput={(e) => {
                       const next = [...dinCfg];
-                      next[i] = { ...next[i]!, thresh: parseInt((e.currentTarget as HTMLInputElement).value || "64", 10) };
+                      next[ch] = { ...next[ch]!, thresh: parseInt((e.currentTarget as HTMLInputElement).value || "64", 10) };
                       setDinCfg(next);
                     }}
                   />
@@ -142,7 +142,7 @@ function DinDoutCard() {
                     checked={din.ocDet}
                     onChange={(e) => {
                       const next = [...dinCfg];
-                      next[i] = { ...next[i]!, ocDet: (e.currentTarget as HTMLInputElement).checked };
+                      next[ch] = { ...next[ch]!, ocDet: (e.currentTarget as HTMLInputElement).checked };
                       setDinCfg(next);
                     }}
                   />
@@ -154,12 +154,12 @@ function DinDoutCard() {
                     checked={din.scDet}
                     onChange={(e) => {
                       const next = [...dinCfg];
-                      next[i] = { ...next[i]!, scDet: (e.currentTarget as HTMLInputElement).checked };
+                      next[ch] = { ...next[ch]!, scDet: (e.currentTarget as HTMLInputElement).checked };
                       setDinCfg(next);
                     }}
                   />
                 </div>
-                <button class="btn" disabled={!mac} onClick={() => pushDin(i)}>
+                <button class="btn" disabled={!mac} onClick={() => pushDin(ch)}>
                   Apply DIN
                 </button>
               </details>
@@ -172,7 +172,7 @@ function DinDoutCard() {
                     value={String(dout.mode)}
                     onChange={(e) => {
                       const next = [...doCfg];
-                      next[i] = { ...next[i]!, mode: parseInt((e.currentTarget as HTMLSelectElement).value, 10) };
+                      next[ch] = { ...next[ch]!, mode: parseInt((e.currentTarget as HTMLSelectElement).value, 10) };
                       setDoCfg(next);
                     }}
                   >
@@ -190,7 +190,7 @@ function DinDoutCard() {
                     checked={dout.srcSelGpio}
                     onChange={(e) => {
                       const next = [...doCfg];
-                      next[i] = { ...next[i]!, srcSelGpio: (e.currentTarget as HTMLInputElement).checked };
+                      next[ch] = { ...next[ch]!, srcSelGpio: (e.currentTarget as HTMLInputElement).checked };
                       setDoCfg(next);
                     }}
                   />
@@ -205,7 +205,7 @@ function DinDoutCard() {
                     value={String(dout.t1)}
                     onInput={(e) => {
                       const next = [...doCfg];
-                      next[i] = { ...next[i]!, t1: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) };
+                      next[ch] = { ...next[ch]!, t1: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) };
                       setDoCfg(next);
                     }}
                   />
@@ -220,12 +220,12 @@ function DinDoutCard() {
                     value={String(dout.t2)}
                     onInput={(e) => {
                       const next = [...doCfg];
-                      next[i] = { ...next[i]!, t2: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) };
+                      next[ch] = { ...next[ch]!, t2: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) };
                       setDoCfg(next);
                     }}
                   />
                 </div>
-                <button class="btn" disabled={!mac} onClick={() => pushDo(i)}>
+                <button class="btn" disabled={!mac} onClick={() => pushDo(ch)}>
                   Apply DOUT
                 </button>
               </details>

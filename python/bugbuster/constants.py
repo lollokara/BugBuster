@@ -326,10 +326,12 @@ class CmdId(IntEnum):
     GET_UART_PINS    = 0x52
 
     # ADC streaming
-    START_ADC_STREAM   = 0x60
-    STOP_ADC_STREAM    = 0x61
-    START_SCOPE_STREAM = 0x62
-    STOP_SCOPE_STREAM  = 0x63
+    START_ADC_STREAM      = 0x60
+    STOP_ADC_STREAM       = 0x61
+    START_SCOPE_STREAM    = 0x62
+    STOP_SCOPE_STREAM     = 0x63
+    START_ADC_DSP_STREAM  = 0x64
+    STOP_ADC_DSP_STREAM   = 0x65
 
     # System
     DEVICE_RESET     = 0x70
@@ -346,6 +348,7 @@ class CmdId(IntEnum):
     ALERT_EVT        = 0x82
     DIN_EVT          = 0x83
     PCA_FAULT_EVT    = 0x84
+    ADC_DSP_EVT      = 0x88
 
     # MUX switch matrix
     MUX_SET_ALL      = 0x90

@@ -1,7 +1,7 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 3.0.0
-**BBP Protocol Version:** 4
+**Version:** 3.2.0
+**BBP Protocol Version:** 7
 **Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
 **Status:** Active
@@ -754,23 +754,25 @@ VADJ1/VADJ2 are measured through a voltage divider (R_top=34.8k, R_bottom=100k,
 ratio=0.7418).  The returned voltage is the actual supply voltage (corrected).
 3V3_ADJ is measured directly (no divider).
 
-#### 0x07 SELFTEST_EFUSE_CURRENTS
-Get all 4 e-fuse output currents from background monitoring.
+#### 0x07 SELFTEST_SUPPLY_VOLTAGES_CACHED
+Get the most recently cached supply rail voltages from the background supply monitor worker.
+Returns pre-measured values without triggering a new ADC read.
 
 **Request payload:** (empty)
 
 **Response payload:**
 ```
-0       available       bool    false if U17 S2 is closed (cannot measure)
-1       timestamp_ms    u32     device uptime when last measured
-5       efuse1_a        f32     e-fuse 1 current in amps (-1 = unavailable)
-9       efuse2_a        f32     e-fuse 2 current in amps
-13      efuse3_a        f32     e-fuse 3 current in amps
-17      efuse4_a        f32     e-fuse 4 current in amps
+0       available       bool    false if no measurement is cached yet
+1       timestamp_ms    u32     device uptime (ms) when rails were last measured
+5       vadj1_v         f32     VADJ1 supply voltage in volts (-1.0 = unavailable)
+9       vadj2_v         f32     VADJ2 supply voltage in volts (-1.0 = unavailable)
+13      vlogic_v        f32     3V3_ADJ logic supply voltage in volts (-1.0 = unavailable)
+
+Total: 17 bytes
 ```
 
-IMON scaling: V_IMON = I_OUT × G_IMON × R_IOCP.
-G_IMON = 50 µA/A (TPS1641x typ), R_IOCP = 11 kΩ → 550 mV per amp.
+Rail order matches `SELFTEST_RAIL_COUNT` (3): indices 0=VADJ1, 1=VADJ2, 2=VLOGIC.
+Values are corrected for voltage dividers (VADJ1/VADJ2 through R_top=34.8kΩ / R_bottom=100kΩ divider).
 
 #### 0x08 SELFTEST_AUTO_CAL
 Start automatic IDAC calibration. Sweeps DAC codes, measures output via U23,
@@ -910,6 +912,24 @@ Read a single IO (equivalent to `GET /api/dio/{n}`).
 1       mode            u8      Current mode (0=disabled, 1=input, 2=output)
 2       value           bool    Current level (input reads live, output reads last written)
 ```
+
+#### 0x47 ADC_LEDS_SET_MODE
+Set the WS2812B LED control mode on the BugBuster main board.
+
+**Request payload:**
+```
+0       mode            u8      0=auto (firmware-driven semantic colors), 1=manual (host-controlled)
+```
+
+**Response payload:** Echoes request.
+
+In `auto` mode (default) the firmware drives LED colors based on channel state:
+- Red = EFUSE fault active
+- Green = supply rail enabled + IO active
+- Blue = supply rail enabled, no IO
+- Yellow = IO active, supply rail off
+
+Switching to `manual` mode suppresses all automatic LED updates until `auto` is restored or the device resets.
 
 ---
 
@@ -1316,6 +1336,90 @@ Offset  Field           Type    Description
 0       success         bool    true if NVS write succeeded
 ```
 
+### 6.11b IO Ownership
+
+The IO ownership system prevents two callers (host sessions, scripts, or internal
+subsystems) from driving the same signal path simultaneously. There are 16 ownership
+slots (indices 0–15) corresponding to the IO/channel resources.  Callers must
+`IO_CLAIM` a slot before executing commands that drive it; the firmware returns
+`ERR_IO_OWNERSHIP_REQUIRED` (0x12) if a different session already holds the slot.
+Leases expire automatically after `lease_ms` milliseconds.
+
+**Owner kinds:**
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0 | NONE | Slot is free |
+| 1 | USB | USB BBP session |
+| 2 | WIFI | WiFi/HTTP session |
+| 3 | SCRIPT | On-device MicroPython script |
+| 4 | SELFTEST | Internal selftest / supply monitor |
+
+#### 0xA7 IO_CLAIM
+Atomically acquire one or more slots. Returns per-slot status.
+
+**Request payload:**
+```
+0       n_slots         u8      Number of slots to claim (1–16)
+1..N    slots           u8[]    Slot indices (one per entry, 0–15)
+N+1     lease_ms        u32     Lease duration in milliseconds (LE)
+N+5     purpose_tag     u32     Caller-defined opaque tag for debug (LE)
+```
+
+**Response payload:**
+```
+0       n_slots         u8      Echoed count
+1..N    status          u8[]    Per-slot result: 0=OK, non-zero=CmdError
+```
+
+Slots already held by the *same* session are re-claimed (lease refreshed). Slots
+held by a different session return `CMD_ERR_IO_OWNERSHIP` for that slot only;
+other slots in the batch are unaffected.
+
+#### 0xA8 IO_RELEASE
+Release a single previously claimed slot.
+
+**Request payload:**
+```
+0       slot_idx        u8      Slot index (0–15)
+1       session_id      u8      Session ID of the releasing caller
+```
+
+**Response payload:**
+```
+0       slot_idx        u8      Echoed slot index
+1       released        bool    true = slot was released, false = not owned by this session
+```
+
+#### 0xA9 IO_OWNER_STATUS
+Dump the full ownership table. Useful for debugging ownership conflicts.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+16 entries, stride = 10 bytes each (total 160 bytes):
++0      kind            u8      Owner kind (see table above)
++1      session_id      u8      Owner session identifier
++2      token_fp32      u32     Opaque token fingerprint (LE)
++6      lease_until_ms  u32     Lease expiry (low 32 bits of uptime ms, LE)
+```
+
+#### 0xAA IO_FORCE_RELEASE
+Admin command — release a slot unconditionally regardless of owner. Pass `0xFF` to release all 16 slots at once.
+
+**Request payload:**
+```
+0       slot_idx        u8      Slot to release (0–15), or 0xFF = release all
+```
+
+**Response payload:**
+```
+0       slot_idx        u8      Echoed value (0xFF if all were released)
+```
+
+---
+
 ### 6.12 PCA9535 GPIO Expander (I2C, addr 0x23)
 
 16-bit I/O expander controlling power supply enables, E-Fuse enables, and reading
@@ -1403,15 +1507,70 @@ Per event (count×):
 ### 6.13 HAT Expansion Board
 
 HAT (Hardware Attached on Top) boards connect via a dedicated header providing
-UART communication (GPIO43/44, 115200 8N1) and ADC-based detection (GPIO47).
+UART communication (GPIO43/44, 921600 8N1) and binary presence detection (GPIO47).
 BugBuster is the UART master. PCB mode only.
 
-**Detection:** GPIO47 has a 10kΩ pull-up to 3.3V. HAT boards have pull-down
-resistors creating a voltage divider. ~3.3V = no HAT, ~1.65V = SWD/GPIO HAT.
+**Detection (bb-hat-3.0):** GPIO47 is a binary digital input with an internal pull-up.
+HAT boards pull GPIO47 LOW; with no HAT attached it floats HIGH. HIGH = no HAT, LOW = HAT present.
+The ESP32 reads this pin directly — no ADC threshold comparison is used.
 
 **EXP_EXT_1-4:** Four I/O lines independently configurable as:
 DISCONNECTED(0), RESERVED(1), RESERVED(2), RESERVED(3), RESERVED(4),
 GPIO1(5), GPIO2(6), GPIO3(7), GPIO4(8).
+
+#### 0xC3 HAT_GET_CAPS
+Query the HAT capability flags and resource counts. This is the authoritative source
+for what the attached HAT supports — check before using rails, LEDs, or LA routes.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       hw_revision     u8      HAT hardware revision (bb-hat-3.0 reports 2)
+1       flags           u32     Capability flags (LE, see HAT_CAP_* below)
+5       rail_count      u8      Number of power rails (3 on bb-hat-3.0)
+6       led_count       u8      Number of WS2812B LEDs
+7       shifted_io_count u8     Number of shifted IO lines
+8       la_routes       u8      Bitmask of available LA capture routes
+9       fw_major        u8      RP2040 firmware major version
+10      fw_minor        u8      RP2040 firmware minor version
+11      hvpak_present   bool    GreenPAK HVPAK detected and ready
+
+Total: 12 bytes
+```
+
+**HAT_CAP flags:**
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 0 | HAT_CAP_RAILS | Power rails present (3V3_ADJ, VADJ3, VADJ4) |
+| 1 | HAT_CAP_LEDS | WS2812B LEDs present |
+| 2 | HAT_CAP_LA_LOW_SPEED | Logic analyzer (low-speed PIO mode) |
+| 3 | HAT_CAP_LA_HIGH_SPEED | Logic analyzer (high-speed DMA mode) |
+| 4 | HAT_CAP_SHIFTED_IO | Level-shifted GPIO bank present |
+| 5 | HAT_CAP_HVPAK_UNSUPPORTED | HVPAK detected but not provisioned |
+
+bb-hat-3.0 reports `flags = 0x37` (RAILS + LEDS + LA_LOW_SPEED + SHIFTED_IO + HVPAK_UNSUPPORTED),
+`la_routes = 0x03` (routes 0 and 1 available).
+
+#### 0xC4 HAT_GET_RAIL_STATUS
+Read the live status of all HAT power rails.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+0       count           u8      Number of rails (3 on bb-hat-3.0)
+
+Per rail (count × 7 bytes):
++0      rail_id         u8      Rail ID: 0=3V3_ADJ, 1=VADJ3, 2=VADJ4
++1      enabled         bool    Rail output enabled
++2      voltage_mv      u16     Measured/target voltage in mV (LE)
++4      current_ma      u16     Measured current in mA (LE)
++6      status          u8      Rail status flags (0=OK, non-zero=fault)
+
+Total: 1 + 3×7 = 22 bytes
+```
 
 #### 0xC5 HAT_GET_STATUS
 Get HAT detection state, connection status, and current pin configuration.
@@ -1421,7 +1580,7 @@ Get HAT detection state, connection status, and current pin configuration.
 0       detected        bool    HAT physically present (ADC)
 1       connected       bool    UART communication established
 2       type            u8      HAT type (0=none, 1=SWD/GPIO)
-3       detect_voltage  f32     Raw ADC voltage on detect pin
+3       detect_voltage  f32     GPIO47 read as voltage: 3.3V=no HAT, 0.0V=HAT present (bb-hat-3.0 binary mode)
 7       fw_major        u8      HAT firmware version major
 8       fw_minor        u8      HAT firmware version minor
 9       confirmed       bool    Last config was acknowledged by HAT
@@ -1478,7 +1637,7 @@ Re-run HAT detection (ADC read + UART connect attempt).
 ```
 0       detected        bool    HAT present
 1       type            u8      HAT type
-2       detect_voltage  f32     ADC voltage
+2       detect_voltage  f32     GPIO47 read as voltage: 3.3V=no HAT, 0.0V=HAT present
 6       connected       bool    UART connected
 ```
 
@@ -1613,6 +1772,167 @@ Guarded raw register access for advanced/debug use.
 
 `INVALID_PARAM` remains the top-level error for malformed payloads / invalid arguments.
 
+### 6.13e HAT Power Rails & LEDs
+
+Commands for controlling the three independent power rails (3V3_ADJ, VADJ3, VADJ4)
+and the WS2812B indicator LEDs on bb-hat-3.0. The DS4424 IDAC on the RP2040
+controls VADJ3/VADJ4 output voltage; 3V3_ADJ is fixed. Use `HAT_GET_RAIL_STATUS`
+(0xC4) to read back measured voltages and currents after applying changes.
+
+**Rail IDs:** 0 = 3V3_ADJ, 1 = VADJ3, 2 = VADJ4
+
+#### 0xB5 HAT_SET_RAIL_VOLTAGE
+Set the output voltage of a variable rail (VADJ3 or VADJ4 only; 3V3_ADJ is fixed).
+
+**Request payload:**
+```
+0       rail_id         u8      Rail ID (1=VADJ3, 2=VADJ4)
+1       voltage_mv      u16     Target voltage in millivolts (LE)
+```
+
+**Response payload:** Same as `HAT_GET_RAIL_STATUS` (full rail status snapshot).
+
+Valid range: 800 mV – 3300 mV for VADJ3/VADJ4. Returns `ERR_INVALID_PARAM` (0x03)
+if `rail_id = 0` (3V3_ADJ is not adjustable).
+
+#### 0xD2 HAT_SET_RAIL_ENABLE
+Enable or disable a HAT power rail output.
+
+**Request payload:**
+```
+0       rail_id         u8      Rail ID (0=3V3_ADJ, 1=VADJ3, 2=VADJ4)
+1       enable          bool    true = enable rail, false = disable
+```
+
+**Response payload:** Same as `HAT_GET_RAIL_STATUS` (full rail status snapshot).
+
+#### 0xD3 HAT_SET_LED_STATE
+Set the color of a single WS2812B LED on the HAT. Only meaningful when
+`ADC_LEDS_SET_MODE` (0x47) is in `manual` mode (1); in `auto` mode the firmware
+overrides this value at the next update cycle.
+
+**Request payload:**
+```
+0       led             u8      LED index (0-based)
+1       color           u8      Color code (see WS2812 color enum)
+```
+
+**Response payload:**
+```
+0       led             u8      Echoed LED index
+1       color           u8      Color code as applied
+```
+
+**Color codes:** 0=off, 1=red, 2=green, 3=blue, 4=yellow, 5=cyan, 6=magenta, 7=white.
+
+---
+
+### 6.13f HAT Calibration
+
+VADJ3 and VADJ4 use a DS4424 IDAC to trim the output voltage. The calibration
+subsystem sweeps DAC codes, measures the resulting voltage, fits a piecewise linear
+curve, and stores it to RP2040 flash so accurate mV targeting survives reboots.
+
+Calibration is a multi-step flow:
+1. `HAT_CALIBRATE_START` — arms the calibration engine for a given rail.
+2. Poll `HAT_CALIBRATE_STATUS` until `state` reaches 2 (success) or 3 (failed).
+3. If successful, the calibration table is held in a transactional candidate buffer.
+4. `HAT_CALIBRATE_IMPORT` — commits an externally-measured table (alternative path).
+
+#### 0xAB HAT_CALIBRATE_START
+Begin the automated calibration sequence for a rail.
+
+**Request payload:**
+```
+0       rail_id         u8      Rail to calibrate (1=VADJ3, 2=VADJ4)
+```
+
+**Response payload:**
+```
+0       status          u8      0=idle, 1=running, 2=success, 3=failed
+```
+
+Returns `ERR_BUSY` (0x06) if calibration is already in progress on any rail.
+
+#### 0xAC HAT_CALIBRATE_STATUS
+Poll the calibration state machine. Safe to call while calibration is running.
+
+**Request payload:** (empty)
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       state           u8      0=idle, 1=running, 2=success, 3=failed, 4=validating
+1       progress        u8      Completion percentage (0–100)
+2       rail_id         u8      Rail being calibrated
+3       last_error      u8      HAT-side error code (0=none)
+4       persist_state   u8      Flash persistence state (0=not saved, 1=saved)
+5       stage           u8      Current calibration stage
+6       point           u8      Current calibration point index
+7       code            u8      Current DAC code under test (signed, interpret as i8)
+8       measured_mv     u32     Last measured voltage in mV (LE, signed i32 cast to u32)
+12      min_mv          u32     Minimum measured voltage across sweep (LE)
+16      max_mv          u32     Maximum measured voltage across sweep (LE)
+20      max_gap_mv      u32     Largest gap between adjacent calibration points (LE)
+24      max_error_mv    u32     Peak fit error from validation check (LE)
+28      validation_flags u16    Bitfield of per-check pass/fail results (LE)
+
+Total: 30 bytes
+```
+
+#### 0xAD HAT_CALIBRATE_IMPORT
+Import an externally-measured calibration table for a rail (alternative to the
+automated sweep). Each entry is a `(code:i8, measured_mv:i32 LE)` 5-byte pair.
+
+**Request payload:**
+```
+0       rail_id         u8      Rail ID (1=VADJ3, 2=VADJ4)
+1       count           u8      Number of calibration points (must be > 0)
+2..N    entries         bytes   count × 5 bytes: [code:u8(i8), measured_mv:u32 LE]
+```
+
+**Response payload:** (empty on success)
+
+Returns `ERR_INVALID_PARAM` if `len != 2 + count*5`.
+
+---
+
+### 6.13g HAT Shifted IO
+
+The bb-hat-3.0 provides a level-shifted 8-bit GPIO bank (TXS0108E or equivalent)
+accessible via I2C on the RP2040. The bank supports configurable direction,
+pull-up/pull-down, and output values per pin.
+
+#### 0xAE HAT_SET_IO_BANK
+Set the direction, pull configuration, and output values for the entire 8-bit IO bank.
+
+**Request payload:**
+```
+0       dirs            u8      Direction bitmask: 1=output, 0=input (per bit)
+1       ups             u8      Pull-up enable bitmask (1=enable)
+2       dns             u8      Pull-down enable bitmask (1=enable)
+3       vals            u8      Output values for output-configured bits
+```
+
+**Response payload:** (empty on success)
+
+#### 0xAF HAT_SET_LEVEL_SHIFT
+Control the output-enable and direction of the level-shifter bank.
+
+**Request payload:**
+```
+0       oe              bool    true = enable level shifter outputs
+1       dir             bool    true = B→A direction, false = A→B
+```
+
+**Response payload:**
+```
+0       oe_out          bool    Applied OE state (readback)
+1       dir_out         bool    Applied direction state (readback)
+```
+
+---
+
 ### 6.13c HAT Logic Analyzer
 
 The RP2040 HAT provides a PIO-based logic analyzer with 1/2/4-channel capture at up to 125 MHz. Data is captured via DMA into a 76 KB SRAM buffer (19,456 × 32-bit words).
@@ -1665,6 +1985,23 @@ Set trigger condition for the next capture.
 Hardware triggers use a dedicated PIO state machine (SM 1 on PIO 1). The trigger SM fires IRQ 0 which enables the capture SM (SM 0).
 
 **Response payload:** `[type, channel]`
+
+#### 0xD4 HAT_LA_SET_ROUTE
+Select the input route for the logic analyzer capture. The bb-hat-3.0 supports two
+capture routes; the available set is reported in `la_routes` from `HAT_GET_CAPS`.
+
+**Request payload:**
+```
+0       route           u8      Route index (bitmask; 0x01=route 0, 0x02=route 1)
+```
+
+**Response payload:**
+```
+0       active_route    u8      Applied route bitmask as confirmed by RP2040
+```
+
+Returns `ERR_ADGS_ROUTE_REJECTED` (0x13) if the requested route combination
+violates the ADGS MUX mutual-exclusion rules enforced by the RP2040.
 
 #### 0xD5 HAT_LA_ARM
 Arm the logic analyzer. If a trigger is configured, capture begins when the trigger fires. If no trigger, capture starts immediately.
@@ -2189,7 +2526,7 @@ Returns firmware version, build metadata, and OTA partition information.
   "fwMajor": 1,
   "fwMinor": 0,
   "fwPatch": 0,
-  "protoVersion": 4,
+  "protoVersion": 7,
   "partition": "app0",
   "partitionSize": 1703936,
   "nextPartition": "app1",
@@ -2294,7 +2631,7 @@ Set the state of a single switch in the matrix.
 
 MicroPython scripts run on the ESP32-S3 inside a dedicated FreeRTOS task.
 All four commands are **USB-only** (cable-gated; no HTTP surface, no auth token
-required).  BBP wire-protocol version stays at **4** — no handshake change.
+required).  BBP wire-protocol version stays at **7** — no handshake change.
 
 Script source max: **32 768 bytes** (32 KB).
 Log ring drain: up to **1020 bytes** per call.
@@ -2768,7 +3105,33 @@ sends an unsolicited UART frame which the ESP32 forwards as this BBP event.
 The host should respond by reading the captured data via the RP2040 USB bulk
 endpoint (interface 3, EP 0x87 IN).
 
-### 7.7 LA Log Event
+### 7.7 IO Preempted Event
+
+#### 0x86 EVT_IO_PREEMPTED (Event)
+Pushed when an IO slot owned by a host session is forcibly reclaimed by an internal
+subsystem (e.g. selftest, supply monitor). The host must stop driving the affected
+slot immediately.
+
+**Event payload:**
+```
+0       slot            u8      Slot index that was preempted (0–15)
+1       new_owner_kind  u8      Kind of the subsystem that took over (see IO owner kinds)
+```
+
+### 7.8 IO Owner Reject Event
+
+#### 0x87 EVT_IO_OWNER_REJECT (Event)
+Pushed when a command is rejected because the required slot is owned by a different
+session. Supplements the `ERR_IO_OWNERSHIP_REQUIRED` error code with slot context.
+
+**Event payload:**
+```
+0       cmd_id          u8      CMD_ID of the rejected command
+1       slot            u8      Slot index that blocked the command
+2       owner_kind      u8      Kind of the current slot owner
+```
+
+### 7.9 LA Log Event
 
 #### 0xEC LA_LOG (Event)
 Unsolicited log message from RP2040 HAT.
@@ -2815,6 +3178,8 @@ the same SEQ as the failed command.
 | 0x0F | HVPAK_INVALID_INDEX | HVPAK block index out of range |
 | 0x10 | HVPAK_UNSAFE_REGISTER | HVPAK register access denied |
 | 0x11 | ERR_TIMEOUT | Command or sub-system timeout |
+| 0x12 | ERR_IO_OWNERSHIP_REQUIRED | IO slot is owned by a different session |
+| 0x13 | ERR_ADGS_ROUTE_REJECTED | MUX mutual-exclusion rejected the requested route |
 
 ### 8.3 Host Timeout Strategy
 
@@ -2913,8 +3278,8 @@ Host                                    Device
   │                                       │
   │──── 0xBB 0x42 0x55 0x47 ────────────>│  (magic bytes)
   │                                       │
-  │<──── 0xBB 0x42 0x55 0x47 0x04 ───────│  (ACK, proto v4, fw version)
-  │         0x01 0x06 0x00                │
+  │<──── 0xBB 0x42 0x55 0x47 0x07 ───────│  (ACK, proto v7, fw version)
+  │         0x03 0x02 0x00                │
   │                                       │  (device enters binary mode)
   │                                       │
   │──── [COBS: CMD seq=1 GET_STATUS] ───>│
@@ -2981,6 +3346,9 @@ Host                                    Device
 | 1.7 | 2026-03-31 | Added SET_RTD_CONFIG (0x1D) command for RTD excitation current selection (125/250 µA); GET_STATUS per-channel payload extended by 2 bytes (rtd_excitation_ua u16, stride 26→28, total 147→155 bytes); adc_value for RES_MEAS now returned in Ohms (R = V_adc / I_exc) |
 | 1.8 | 2026-04-01 | Added GET /api/debug and POST /api/mux/switch REST endpoints |
 | 1.9 | 2026-05-04 | Added WIFI_SET_AP_PASSWORD (0xEF): configurable SoftAP password persisted to NVS, applied live; POST /api/wifi/ap_password HTTP endpoint (admin-auth); added esp_task_wdt_reset() feeds around blocking wifi_scan (before scan_start, after scan_start returns, inside per-AP copy loop) |
+| 2.0 | 2026-05-10 | HAT capability system: HAT_GET_CAPS (0xC3) returning HatCaps struct; HAT_GET_RAIL_STATUS (0xC4) returning live rail snapshots; HAT_SET_RAIL_VOLTAGE (0xB5), HAT_SET_RAIL_ENABLE (0xD2) for VADJ3/VADJ4 power management; HAT_SET_LED_STATE (0xD3) for manual WS2812B control. BBP proto bumped to 5 |
+| 2.1 | 2026-05-15 | HAT calibration subsystem: HAT_CALIBRATE_START (0xAB), HAT_CALIBRATE_STATUS (0xAC, 30-byte response with transactional candidate table fields), HAT_CALIBRATE_IMPORT (0xAD) for DS4424 IDAC curve fitting; HAT shifted IO bank: HAT_SET_IO_BANK (0xAE), HAT_SET_LEVEL_SHIFT (0xAF). BBP proto bumped to 6 |
+| 2.2 | 2026-06-04 | IO Ownership system: IO_CLAIM (0xA7), IO_RELEASE (0xA8), IO_OWNER_STATUS (0xA9), IO_FORCE_RELEASE (0xAA) — 16-slot lease table with kind/session/token/expiry; EVT_IO_PREEMPTED (0x86), EVT_IO_OWNER_REJECT (0x87) events; ERR_IO_OWNERSHIP_REQUIRED (0x12), ERR_ADGS_ROUTE_REJECTED (0x13) error codes; HAT_LA_SET_ROUTE (0xD4) with ADGS MUX mutual-exclusion enforcement; ADC_LEDS_SET_MODE (0x47) for manual LED control; SELFTEST_EFUSE_CURRENTS (0x07) replaced by SELFTEST_SUPPLY_VOLTAGES_CACHED returning 3-rail voltage cache; HAT detection updated to binary GPIO47 mode (bb-hat-3.0); UART baud corrected to 921600. BBP proto bumped to 7 (firmware 3.2.0 / Desktop 0.7.0) |
 
 ---
 
@@ -3014,6 +3382,11 @@ Host                                    Device
 | 0x40 | GET_GPIO_STATUS | H->D | -- | `GET /api/gpio` |
 | 0x41 | SET_GPIO_CONFIG | H->D | gpio, mode, pd | `POST /api/gpio/X/config` |
 | 0x42 | SET_GPIO_VALUE | H->D | gpio, val | `POST /api/gpio/X/set` |
+| 0x43 | DIO_GET_ALL | H->D | -- | `GET /api/dio` |
+| 0x44 | DIO_CONFIG | H->D | io, mode | `POST /api/dio/{n}/config` |
+| 0x45 | DIO_WRITE | H->D | io, val | `POST /api/dio/{n}/set` |
+| 0x46 | DIO_READ | H->D | io | `GET /api/dio/{n}` |
+| 0x47 | ADC_LEDS_SET_MODE | H->D | mode | Set LED auto/manual mode |
 | 0x50 | GET_UART_CONFIG | H->D | -- | `GET /api/uart/config` |
 | 0x51 | SET_UART_CONFIG | H->D | bridge cfg | `POST /api/uart/X/config` |
 | 0x52 | GET_UART_PINS | H->D | -- | `GET /api/uart/pins` |
@@ -3037,11 +3410,21 @@ Host                                    Device
 | 0xA4 | IDAC_CAL_ADD_POINT | H->D | ch, code, voltage | (new) |
 | 0xA5 | IDAC_CAL_CLEAR | H->D | ch | (new) |
 | 0xA6 | IDAC_CAL_SAVE | H->D | -- | (new) |
+| 0xA7 | IO_CLAIM | H->D | n_slots, slots[], lease_ms, purpose_tag | Acquire IO ownership slots |
+| 0xA8 | IO_RELEASE | H->D | slot_idx, session_id | Release owned slot |
+| 0xA9 | IO_OWNER_STATUS | H->D | -- | Dump full 16-slot ownership table |
+| 0xAA | IO_FORCE_RELEASE | H->D | slot_idx (0xFF=all) | Admin: force-release slot |
+| 0xAB | HAT_CALIBRATE_START | H->D | rail_id | Start VADJ3/4 calibration sweep |
+| 0xAC | HAT_CALIBRATE_STATUS | H->D | -- | Poll calibration state (30-byte rsp) |
+| 0xAD | HAT_CALIBRATE_IMPORT | H->D | rail_id, count, entries[] | Import calibration table |
+| 0xAE | HAT_SET_IO_BANK | H->D | dirs, ups, dns, vals | Set shifted IO bank config |
+| 0xAF | HAT_SET_LEVEL_SHIFT | H->D | oe, dir | Level-shifter OE + direction |
 | 0xB0 | PCA_GET_STATUS | H->D | -- | `GET /api/ioexp` |
 | 0xB1 | PCA_SET_CONTROL | H->D | ctrl, on | `POST /api/ioexp/control` |
 | 0xB2 | PCA_SET_PORT | H->D | port, val | (new) |
 | 0xB3 | PCA_SET_FAULT_CFG | H->D | auto_dis, log | `POST /api/ioexp/fault_config` |
 | 0xB4 | PCA_GET_FAULT_LOG | H->D | -- | `GET /api/ioexp/faults` |
+| 0xB5 | HAT_SET_RAIL_VOLTAGE | H->D | rail_id, voltage_mv | Set VADJ3/4 target voltage |
 | 0xB8 | EXT_I2C_SETUP | H->D | sda, scl, freq_khz | Configure external I2C bus |
 | 0xB9 | EXT_I2C_SCAN | H->D | -- | Scan external I2C bus |
 | 0xBA | EXT_I2C_WRITE | H->D | addr, data | Write to external I2C device |
@@ -3049,6 +3432,8 @@ Host                                    Device
 | 0xBC | EXT_I2C_WRITE_READ | H->D | addr, write, read | Combined write+read |
 | 0xBD | EXT_SPI_SETUP | H->D | pins, freq, mode | Configure external SPI bus |
 | 0xBE | EXT_SPI_TRANSFER | H->D | cs, data | Full-duplex SPI transfer |
+| 0xC3 | HAT_GET_CAPS | H->D | -- | HAT capability flags + resource counts |
+| 0xC4 | HAT_GET_RAIL_STATUS | H->D | -- | Live rail voltage/current/status |
 | 0xC5 | HAT_GET_STATUS | H->D | -- | `GET /api/hat` |
 | 0xC6 | HAT_SET_PIN | H->D | pin, func | `POST /api/hat/config` |
 | 0xC7 | HAT_SET_ALL_PINS | H->D | 4× func | `POST /api/hat/config` |
@@ -3084,6 +3469,9 @@ Host                                    Device
 | 0xC2 | USBPD_GO | H->D | command | (new) |
 | 0xD0 | START_WAVEGEN | H->D | ch,wf,f,a,o,m | (new) |
 | 0xD1 | STOP_WAVEGEN | H->D | -- | (new) |
+| 0xD2 | HAT_SET_RAIL_ENABLE | H->D | rail_id, enable | Enable/disable HAT power rail |
+| 0xD3 | HAT_SET_LED_STATE | H->D | led, color | Set HAT WS2812B LED color |
+| 0xD4 | HAT_LA_SET_ROUTE | H->D | route | Select LA capture MUX route |
 | 0xE0 | SET_LSHIFT_OE | H->D | on | `POST /api/lshift/oe` |
 | 0xE1 | WIFI_GET_STATUS | H->D | -- | `GET /api/wifi` |
 | 0xE2 | WIFI_CONNECT | H->D | ssid, pass | `POST /api/wifi/connect` |
@@ -3103,6 +3491,8 @@ Host                                    Device
 | 0x83 | DIN_EVENT | D->H | Digital input state change |
 | 0x84 | PCA_FAULT_EVENT | D->H | E-fuse trip, PG change |
 | 0x85 | LA_DONE_EVENT | D->H | Logic analyzer capture complete |
+| 0x86 | EVT_IO_PREEMPTED | D->H | IO slot forcibly reclaimed by internal subsystem |
+| 0x87 | EVT_IO_OWNER_REJECT | D->H | Command rejected: slot owned by different session |
 | 0xEC | LA_LOG | D->H | Unsolicited log message from HAT |
 
 ## Appendix C: Wire Format Example

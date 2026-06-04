@@ -15,8 +15,11 @@ USB pairing and passed to the constructor via ``admin_token`` or
 See BugBusterProtocol.md and webserver.cpp for the full endpoint reference.
 """
 
+import json
 import logging
-from typing import Any, Optional
+import struct
+import threading
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -36,6 +39,9 @@ class HTTPTransport:
             info = t.get("/device/version")
             boards = t.get_board()
     """
+
+    # WS stream_id for ADC DSP (mirrors WS_STREAM_ADC_DSP = 0x03 in ws_stream.h)
+    _WS_STREAM_ADC_DSP = 0x03
 
     def __init__(
         self,
@@ -59,6 +65,13 @@ class HTTPTransport:
 
         # Firmware version info filled in after connect()
         self.fw_version: Optional[tuple[int, int, int]] = None
+
+        # WebSocket DSP stream state
+        self._ws_thread:   Optional[threading.Thread] = None
+        self._ws_stop      = threading.Event()
+        self._ws_app       = None   # websocket.WebSocketApp instance
+        self._host         = host
+        self._port         = port
 
     # ------------------------------------------------------------------
     # Admin token management
@@ -86,6 +99,7 @@ class HTTPTransport:
         return info
 
     def disconnect(self) -> None:
+        self.stop_dsp_ws_stream()
         self._session.close()
 
     # ------------------------------------------------------------------
@@ -178,6 +192,98 @@ class HTTPTransport:
     def set_board(self, board_id: str) -> dict:
         """Select a board profile. Requires admin token."""
         return self.post("/board/select", {"boardId": board_id})
+
+    # ------------------------------------------------------------------
+    # ADC DSP WebSocket stream (HTTP transport only)
+    # ------------------------------------------------------------------
+
+    def start_dsp_ws_stream(
+        self,
+        callback: Callable[[bytes], None],
+    ) -> None:
+        """
+        Open the WebSocket stream and subscribe to the ``adc-dsp`` stream.
+
+        *callback* receives raw payload bytes (the stripped DSP event payload,
+        without the 4-byte WS frame header). The caller is responsible for
+        parsing it via ``BugBuster._parse_adc_dsp_evt()``.
+
+        Requires ``websocket-client`` (``pip install websocket-client``).
+        """
+        try:
+            import websocket  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise ImportError(
+                "websocket-client is required for ADC DSP streaming over WiFi. "
+                "Install it with: pip install websocket-client"
+            ) from exc
+
+        self.stop_dsp_ws_stream()
+        self._ws_stop.clear()
+
+        ws_url = f"ws://{self._host}:{self._port}/api/ws/stream"
+
+        def _on_open(ws):
+            # Auth: send admin token (or empty string if none)
+            tok = self._admin_token or ""
+            ws.send(tok)
+            # Subscribe to adc-dsp stream
+            ws.send(json.dumps({"subscribe": ["adc-dsp"]}))
+            log.debug("WS stream open, subscribed to adc-dsp")
+
+        def _on_message(ws, msg):
+            if not isinstance(msg, bytes) or len(msg) < 4:
+                return
+            # Frame header: [opcode:1][stream_id:1][len:2 LE]
+            stream_id = msg[1]
+            payload_len = struct.unpack_from('<H', msg, 2)[0]
+            if stream_id == self._WS_STREAM_ADC_DSP and len(msg) >= 4 + payload_len:
+                try:
+                    callback(msg[4:4 + payload_len])
+                except Exception:
+                    log.debug("DSP callback error", exc_info=True)
+
+        def _on_error(ws, err):
+            log.debug("WS stream error: %s", err)
+
+        def _on_close(ws, code, msg):
+            log.debug("WS stream closed: %s %s", code, msg)
+
+        app = websocket.WebSocketApp(
+            ws_url,
+            on_open=_on_open,
+            on_message=_on_message,
+            on_error=_on_error,
+            on_close=_on_close,
+        )
+        self._ws_app = app
+
+        def _run():
+            while not self._ws_stop.is_set():
+                try:
+                    app.run_forever()
+                except Exception:
+                    pass
+                if not self._ws_stop.is_set():
+                    import time; time.sleep(1.0)  # reconnect delay
+
+        self._ws_thread = threading.Thread(target=_run, daemon=True,
+                                           name="bb_dsp_ws")
+        self._ws_thread.start()
+        log.info("DSP WebSocket stream started at %s", ws_url)
+
+    def stop_dsp_ws_stream(self) -> None:
+        """Close the DSP WebSocket stream if open."""
+        self._ws_stop.set()
+        if self._ws_app is not None:
+            try:
+                self._ws_app.close()
+            except Exception:
+                pass
+            self._ws_app = None
+        if self._ws_thread is not None:
+            self._ws_thread.join(timeout=2.0)
+            self._ws_thread = None
 
     # ------------------------------------------------------------------
     # Context-manager support

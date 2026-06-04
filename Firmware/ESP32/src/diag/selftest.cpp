@@ -53,6 +53,10 @@ static bool                  s_worker_enabled = false;
 static constexpr uint8_t CAL_EXPECTED_POINTS = 100;
 static constexpr const char *SELFTEST_NVS_NAMESPACE = "selftest";
 static constexpr const char *SELFTEST_NVS_WORKER_EN = "st_worker_en";
+// Selftest is the one intentional exception to the public logical-channel API:
+// U23 is wired to the AD74416H physical Channel D register path.
+static constexpr uint8_t SELFTEST_LOGICAL_CH = 2;   // logical channel whose physical register is D
+static constexpr uint8_t SELFTEST_PHYSICAL_CH = 3;  // AD74416H physical Channel D
 
 // Non-blocking monitor state machine
 // Cycles: VADJ1 → VADJ2 → 3V3_ADJ → repeat
@@ -82,21 +86,21 @@ static constexpr float CAL_STABLE_MAX_DEV_MV = 50.0f;
 // Internal helpers
 // -----------------------------------------------------------------------------
 
-// Configure AD74416H Channel D as voltage input and read it.
+// Configure AD74416H physical Channel D as voltage input and read it.
 // Returns the ADC reading in volts, or -1 on error.
 // Caller must have set U23 switches BEFORE calling this.
 //
 // This function does NOT call tasks_apply_channel_function to avoid the MUX
-// side effect (closing U16 S3) while U23 switches are closed. Instead it
+// side effect (closing U17 S3) while U23 switches are closed. Instead it
 // goes through the AD74416H driver directly for the VIN transition and the
 // HIGH_IMP cleanup. The caller is responsible for opening U23 switches BEFORE
 // restoring the user's function with tasks_apply_channel_function.
 //
 // Output parameters (all required, set even on failure so caller can restore):
-//   out_prev_func      — snapshot of channels[3].function before measurement
-//   out_prev_mux       — snapshot of channels[3].adcMux
-//   out_prev_range     — snapshot of channels[3].adcRange
-//   out_prev_rate      — snapshot of channels[3].adcRate
+//   out_prev_func      — snapshot of the logical owner of physical D before measurement
+//   out_prev_mux       — snapshot of the logical owner of physical D adcMux
+//   out_prev_range     — snapshot of the logical owner of physical D adcRange
+//   out_prev_rate      — snapshot of the logical owner of physical D adcRate
 //   out_have_prev_cfg  — true if the snapshot was successfully acquired
 static float read_channel_d(uint8_t adc_range,
                              ChannelFunction *out_prev_func,
@@ -105,9 +109,9 @@ static float read_channel_d(uint8_t adc_range,
                              AdcRate         *out_prev_rate,
                              bool            *out_have_prev_cfg)
 {
-    // We directly access the device through the tasks module extern.
-    // Channel D = channel index 3.
-    // The ADC config is set, we wait for a fresh conversion, then read.
+    // We directly access the device through the tasks module extern. This is
+    // intentionally physical-channel based because U23 is wired to AD74416H
+    // physical Channel D, regardless of the user-facing C/D abstraction.
 
     AD74416H *dev = tasks_get_device();
 
@@ -135,37 +139,34 @@ static float read_channel_d(uint8_t adc_range,
         return -1.0f;
     }
 
-    // Snapshot logical channel 2 (Physical 3, HW D) config so self-test measurement
+    // Snapshot the logical channel that owns physical Channel D so self-test measurement
     // does not clobber the user's manual function/config selection.
-    // With the logical→physical remap, logical 2 (UI "C") maps to physical 3 (HW D),
-    // which is the channel U23 routes supply rails to.
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-        *out_prev_func     = (ChannelFunction)g_deviceState.channels[2].function;
-        *out_prev_mux      = g_deviceState.channels[2].adcMux;
-        *out_prev_range    = g_deviceState.channels[2].adcRange;
-        *out_prev_rate     = g_deviceState.channels[2].adcRate;
+        *out_prev_func     = (ChannelFunction)g_deviceState.channels[SELFTEST_LOGICAL_CH].function;
+        *out_prev_mux      = g_deviceState.channels[SELFTEST_LOGICAL_CH].adcMux;
+        *out_prev_range    = g_deviceState.channels[SELFTEST_LOGICAL_CH].adcRange;
+        *out_prev_rate     = g_deviceState.channels[SELFTEST_LOGICAL_CH].adcRate;
         *out_have_prev_cfg = true;
         xSemaphoreGive(g_stateMutex);
     }
 
-    // Configure HW Channel D (physical index 3) as VIN directly via the driver,
+    // Configure AD74416H physical Channel D as VIN directly via the driver,
     // bypassing tasks_apply_channel_function to avoid its MUX side effect
-    // (auto-closing U16 S3 → IO12 terminal) while U23 switches are closed.
-    // Mirror into logical channels[2] (→ physical 3) so the chMask loop below
-    // sets CONV_D_EN (bit 3) and ADC_RESULT_3 gets updated.
-    dev->setChannelFunction(3, CH_FUNC_VIN);
+    // (auto-closing U17 S3 -> IO9 terminal) while U23 switches are closed.
+    // Mirror into the logical channel owning physical D so the chMask loop below sets the
+    // correct swapped physical conversion bit.
+    dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_VIN);
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-        g_deviceState.channels[2].function = CH_FUNC_VIN;
+        g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_VIN;
         xSemaphoreGive(g_stateMutex);
     }
-    dev->configureAdc(3,
+    dev->configureAdc(SELFTEST_PHYSICAL_CH,
                       ADC_MUX_LF_TO_AGND,
                       (AdcRange)adc_range,
                       ADC_RATE_200SPS_H);
 
-    // Rebuild ADC conversion mask using physical channel indices so HW D's
-    // CONV_D_EN bit is set during the measurement window. Without this,
-    // ADC_RESULT_3 never updates and readAdcResult returns stale 0V.
+    // Rebuild ADC conversion mask using physical channel indices so physical D's
+    // conversion bit is set during the measurement window.
     {
         uint8_t chMask = 0;
         if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -187,12 +188,12 @@ static float read_channel_d(uint8_t adc_range,
     float samples[5] = {0};
     for (int i = 0; i < 5; i++) {
         uint32_t raw = 0;
-        if (!dev->readAdcResult(3, &raw)) {
-            // Force HW D to HIGH_IMP before releasing mutex — do not leave it
+        if (!dev->readAdcResult(SELFTEST_PHYSICAL_CH, &raw)) {
+            // Force physical Channel D to HIGH_IMP before releasing mutex — do not leave it
             // in VIN mode with the U23 path still closed.
-            dev->setChannelFunction(3, CH_FUNC_HIGH_IMP);
+            dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-                g_deviceState.channels[2].function = CH_FUNC_HIGH_IMP;
+                g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_HIGH_IMP;
                 xSemaphoreGive(g_stateMutex);
             }
             if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
@@ -213,12 +214,12 @@ static float read_channel_d(uint8_t adc_range,
     }
     float voltage = samples[2];
 
-    // Force HW D back to HIGH_IMP via direct SPI before the caller opens U23.
+    // Force physical Channel D back to HIGH_IMP via direct SPI before the caller opens U23.
     // This ensures no driving function is active on HW D when the caller then
-    // calls tasks_apply_channel_function (which may close U16 S3 again).
-    dev->setChannelFunction(3, CH_FUNC_HIGH_IMP);
+    // calls tasks_apply_channel_function (which may close U17 S3 again).
+    dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-        g_deviceState.channels[2].function = CH_FUNC_HIGH_IMP;
+        g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_HIGH_IMP;
         xSemaphoreGive(g_stateMutex);
     }
 
@@ -229,10 +230,10 @@ static float read_channel_d(uint8_t adc_range,
 // Perform a single measurement through U23.
 // Opens all U23 switches, sets the requested switches, reads ADC, cleans up.
 // Returns voltage in volts, or -1 on error.
-// Slot index for logical channel 2 (physical channel D used by selftest)
+// Slot index for the public logical channel that maps to AD74416H physical D.
 #define SELFTEST_CH_SLOT  14u   // io_owner_slot_for_ch(2) = 2 + 12
 
-// Claim CH slot 14 on behalf of selftest.
+// Claim the logical owner slot for AD74416H physical D on behalf of selftest.
 //
 // Phase 2 Lane A2 (2026-05-12): if an external client (USB/HTTP/SCRIPT/CLI)
 // already owns the slot, the selftest YIELDS — it does not preempt. This
@@ -293,7 +294,7 @@ static void selftest_restore_ch_slot(const io_owner_slot_t *prev)
 
 static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
 {
-    // Claim CH slot 14 (logical ch 2 = selftest channel D).
+    // Claim the logical channel whose physical AD74416H register is D.
     // Phase 2 Lane A2: yield to active client claims — return early so the
     // user's IO_OWNERSHIP is preserved across the heartbeat tick.
     io_owner_slot_t prev_owner = {};
@@ -308,7 +309,7 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     // read via the 0.7418 divider) from being dumped into the next source's
     // op-amp output on the next measurement path.
     if (!adgs_set_selftest(U23_SW_ADC_CH_D)) {
-        ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S2 active?)");
+        ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S3 active?)");
         // Phase 2 Lane A2 (2026-05-12): restore prior owner before bailing,
         // else slot 14 stays held by IO_OWNER_INTERNAL forever and every
         // subsequent client claim 409s.
@@ -320,15 +321,15 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     // Measurement: close S4 + source switch
     uint8_t sw_byte = U23_SW_ADC_CH_D | source_sw;
     if (!adgs_set_selftest(sw_byte)) {
-        ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S2 active?)");
+        ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S3 active?)");
         selftest_restore_ch_slot(&prev_owner);
         return -1.0f;
     }
 
     delay_ms(100);  // allow MUX, divider, and ADC front-end to settle
 
-    // Snapshot of the user's previous Channel D configuration, captured inside
-    // read_channel_d under s_selftest_mutex.  Used to restore after U23 cleanup.
+    // Snapshot of the user's previous logical owner of physical D, captured
+    // inside read_channel_d under s_selftest_mutex. Used to restore after U23 cleanup.
     ChannelFunction prev_func     = CH_FUNC_HIGH_IMP;
     AdcConvMux      prev_mux      = ADC_MUX_LF_TO_AGND;
     AdcRange        prev_range    = ADC_RNG_0_12V;
@@ -347,25 +348,25 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     adgs_set_selftest(0x00);
 
     // Restore the user's previous logical channel 2 (Physical 3, HW D) function.
-    // This is safe now that U23 is open: if prev_func requires closing U16 S3
+    // This is safe now that U23 is open: if prev_func requires closing U17 S3
     // (IO12 analog path), there is no longer a supply-rail path on HW D to
     // cause contention.
     AD74416H *dev = tasks_get_device();
-    tasks_apply_channel_function(2, prev_func);
+    tasks_apply_channel_function(SELFTEST_LOGICAL_CH, prev_func);
     if (dev && have_prev_cfg &&
         prev_func != CH_FUNC_HIGH_IMP &&
         prev_func != CH_FUNC_DIN_LOGIC &&
         prev_func != CH_FUNC_DIN_LOOP) {
-        dev->configureAdc(3, prev_mux, prev_range, prev_rate);
+        dev->configureAdc(SELFTEST_PHYSICAL_CH, prev_mux, prev_range, prev_rate);
         if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-            g_deviceState.channels[2].adcMux   = prev_mux;
-            g_deviceState.channels[2].adcRange  = prev_range;
-            g_deviceState.channels[2].adcRate   = prev_rate;
+            g_deviceState.channels[SELFTEST_LOGICAL_CH].adcMux   = prev_mux;
+            g_deviceState.channels[SELFTEST_LOGICAL_CH].adcRange  = prev_range;
+            g_deviceState.channels[SELFTEST_LOGICAL_CH].adcRate   = prev_rate;
             xSemaphoreGive(g_stateMutex);
         }
     }
 
-    // Restore previous IO owner for CH slot 14 (selftest finished with channel D)
+    // Restore previous IO owner for the logical owner of physical D.
     selftest_restore_ch_slot(&prev_owner);
 
     return v;
@@ -621,19 +622,19 @@ bool selftest_is_supply_monitor_active(void)
 {
     return s_worker_enabled &&
            s_cal_result.status != CAL_STATUS_RUNNING &&
-           !adgs_u16_s3_active();
+           !adgs_u17_s3_active();
 }
 
 void selftest_monitor_step(void)
 {
     if (!s_worker_enabled) return;
-    // Don't run if calibration is active or U16 S3 is closed
+    // Don't run if calibration is active or U17 S3 is closed
     if (s_cal_result.status == CAL_STATUS_RUNNING) return;
     // If U23 is manually active (e.g. CLI Signal tab debug), do not touch it.
     // Monitor measurements route through U23 and would otherwise clear user state.
     if (adgs_selftest_active()) return;
 
-    if (adgs_u16_s3_active()) {
+    if (adgs_u17_s3_active()) {
         s_supply_volt.available = false;
         for (int i = 0; i < SELFTEST_RAIL_COUNT; i++)
             s_supply_volt.voltage[i] = -1.0f;
@@ -704,14 +705,16 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         return false;
     }
 
-    if (adgs_u16_s3_active()) {
-        ESP_LOGW(TAG, "U16 S3 active (IO 12 analog), attempting to open...");
-        // Ensure logical channel 2 (Physical 3, IO 12) is High-Z before opening the switch
-        tasks_apply_channel_function(2, CH_FUNC_HIGH_IMP);
-        adgs_set_switch_safe(U16_DEVICE_IDX, 2, false);
+    if (adgs_u17_s3_active()) {
+        ESP_LOGW(TAG, "U17 S3 active (IO 9 analog), attempting to open...");
+        // Ensure logical channel C (public index 2, IO9/U17) is High-Z before
+        // opening the switch. Firmware maps it to the swapped physical
+        // AD74416H register internally.
+        tasks_apply_channel_function(SELFTEST_LOGICAL_CH, CH_FUNC_HIGH_IMP);
+        adgs_set_switch_safe(U17_DEVICE_IDX, 2, false);
         
-        if (adgs_u16_s3_active()) {
-            ESP_LOGE(TAG, "Cannot calibrate: U16 S3 is closed and failed to open");
+        if (adgs_u17_s3_active()) {
+            ESP_LOGE(TAG, "Cannot calibrate: U17 S3 is closed and failed to open");
             return false;
         }
     }

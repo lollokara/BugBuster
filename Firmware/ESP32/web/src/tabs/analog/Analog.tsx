@@ -59,17 +59,17 @@ function AdcCard() {
   return (
     <GlassCard title="ADC Channels">
       <div class="analog-grid">
-        {[0, 1, 2, 3].map((i) => {
-          const c = readChannel(status, i);
-          const cfg = pending[i] ?? {
+        {[0, 1, 2, 3].map((ch) => {
+          const c = readChannel(status, ch);
+          const cfg = pending[ch] ?? {
             mux: Number.isFinite(c.muxCode) ? c.muxCode : 0,
             range: Number.isFinite(c.rangeCode) ? c.rangeCode : 0,
             rate: Number.isFinite(c.rateCode) ? c.rateCode : 0,
           };
           return (
-            <ChDOverlay key={i} active={i === 2 && supplyMonitorActive.value}>
+            <ChDOverlay key={ch} active={ch === 3 && supplyMonitorActive.value}>
               <div class="analog-item">
-                <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
+                <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
                 <BigValue value={Number(c.adcValue ?? NaN)} unit="V" precision={3} />
                 <div class="analog-row">
                   <label>Range</label>
@@ -79,7 +79,7 @@ function AdcCard() {
                     onChange={(e) =>
                       setPending((p) => ({
                         ...p,
-                        [i]: { ...cfg, range: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                        [ch]: { ...cfg, range: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
                       }))
                     }
                   >
@@ -98,7 +98,7 @@ function AdcCard() {
                     onChange={(e) =>
                       setPending((p) => ({
                         ...p,
-                        [i]: { ...cfg, rate: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                        [ch]: { ...cfg, rate: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
                       }))
                     }
                   >
@@ -117,7 +117,7 @@ function AdcCard() {
                     onChange={(e) =>
                       setPending((p) => ({
                         ...p,
-                        [i]: { ...cfg, mux: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
+                        [ch]: { ...cfg, mux: parseInt((e.currentTarget as HTMLSelectElement).value, 10) },
                       }))
                     }
                   >
@@ -128,7 +128,7 @@ function AdcCard() {
                     ))}
                   </select>
                 </div>
-                <button class="btn" disabled={!mac} onClick={() => apply(i)}>
+                <button class="btn" disabled={!mac} onClick={() => apply(ch)}>
                   Apply ADC
                 </button>
               </div>
@@ -185,21 +185,21 @@ function VdacCard() {
   return (
     <GlassCard title="VDAC (code/voltage/range)">
       <div class="analog-grid">
-        {[0, 1, 2, 3].map((i) => {
-          const c = readChannel(status, i);
+        {[0, 1, 2, 3].map((ch) => {
+          const c = readChannel(status, ch);
           // Suppress poll-driven updates within 5 s of the last user edit.
-          const recentlyEdited = (Date.now() - (lastEditMs.current[i] ?? 0)) < 5000;
-          const code = pendingCode[i] ?? (recentlyEdited ? (pendingCode[i] ?? 0) : (Number.isFinite(c.dacCode) ? c.dacCode : 0));
-          const voltage = pendingVoltage[i] ?? (recentlyEdited ? (pendingVoltage[i] ?? 0) : (Number.isFinite(c.dacValue) ? c.dacValue : 0));
-          const isBipolar = !!bipolar[i];
+          const recentlyEdited = (Date.now() - (lastEditMs.current[ch] ?? 0)) < 5000;
+          const code = pendingCode[ch] ?? (recentlyEdited ? (pendingCode[ch] ?? 0) : (Number.isFinite(c.dacCode) ? c.dacCode : 0));
+          const voltage = pendingVoltage[ch] ?? (recentlyEdited ? (pendingVoltage[ch] ?? 0) : (Number.isFinite(c.dacValue) ? c.dacValue : 0));
+          const isBipolar = !!bipolar[ch];
           return (
-            <ChDOverlay key={i} active={i === 2 && supplyMonitorActive.value}>
+            <ChDOverlay key={ch} active={ch === 3 && supplyMonitorActive.value}>
             <div class="analog-item">
-              <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
+              <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
               <BigValue value={Number(c.dacValue ?? NaN)} unit="V" precision={3} />
               <div class="analog-row">
                 <label>Bipolar</label>
-                <input type="checkbox" checked={isBipolar} onChange={(e) => setRange(i, (e.currentTarget as HTMLInputElement).checked)} />
+                <input type="checkbox" checked={isBipolar} onChange={(e) => setRange(ch, (e.currentTarget as HTMLInputElement).checked)} />
               </div>
               <div class="analog-row">
                 <label>DAC code</label>
@@ -210,12 +210,12 @@ function VdacCard() {
                   max={65535}
                   value={String(code)}
                   onInput={(e) => {
-                    lastEditMs.current[i] = Date.now();
-                    setPendingCode((p) => ({ ...p, [i]: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) }));
+                    lastEditMs.current[ch] = Date.now();
+                    setPendingCode((p) => ({ ...p, [ch]: parseInt((e.currentTarget as HTMLInputElement).value || "0", 10) }));
                   }}
                 />
               </div>
-              <button class="btn" disabled={!mac} onClick={() => setCode(i)}>
+              <button class="btn" disabled={!mac} onClick={() => setCode(ch)}>
                 Apply code
               </button>
               <div class="analog-row">
@@ -226,12 +226,12 @@ function VdacCard() {
                   step="0.001"
                   value={String(voltage)}
                   onInput={(e) => {
-                    lastEditMs.current[i] = Date.now();
-                    setPendingVoltage((p) => ({ ...p, [i]: parseFloat((e.currentTarget as HTMLInputElement).value || "0") }));
+                    lastEditMs.current[ch] = Date.now();
+                    setPendingVoltage((p) => ({ ...p, [ch]: parseFloat((e.currentTarget as HTMLInputElement).value || "0") }));
                   }}
                 />
               </div>
-              <button class="btn" disabled={!mac} onClick={() => setVoltage(i)}>
+              <button class="btn" disabled={!mac} onClick={() => setVoltage(ch)}>
                 Apply voltage
               </button>
             </div>
@@ -368,12 +368,12 @@ function IinCard() {
   return (
     <GlassCard title="IIN Channels">
       <div class="analog-grid">
-        {[0, 1, 2, 3].map((i) => {
-          const c = readChannel(status, i);
+        {[0, 1, 2, 3].map((ch) => {
+          const c = readChannel(status, ch);
           return (
-            <ChDOverlay key={i} active={i === 2 && supplyMonitorActive.value}>
+            <ChDOverlay key={ch} active={ch === 3 && supplyMonitorActive.value}>
             <div class="analog-item">
-              <div class="uppercase-tag">CH {CH_NAMES[i]}</div>
+              <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
               <BigValue value={Number(c.iinValue ?? NaN)} unit="mA" precision={2} />
               <div class="mono text-dim">
                 ADC {Number.isFinite(Number(c.adcValue ?? NaN)) ? Number(c.adcValue ?? 0).toFixed(3) : "—"} V

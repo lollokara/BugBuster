@@ -271,12 +271,14 @@ static uint8_t parse_subscription(const char* json)
             if      (strcmp(s, "scope")   == 0) mask |= WS_SUB_SCOPE;
             else if (strcmp(s, "adc")     == 0) mask |= WS_SUB_ADC;
             else if (strcmp(s, "la-meta") == 0) mask |= WS_SUB_LA_META;
+            else if (strcmp(s, "adc-dsp") == 0) mask |= WS_SUB_ADC_DSP;
         }
     } else if (cJSON_IsString(sub)) {
         const char* s = sub->valuestring;
         if      (strcmp(s, "scope")   == 0) mask = WS_SUB_SCOPE;
         else if (strcmp(s, "adc")     == 0) mask = WS_SUB_ADC;
         else if (strcmp(s, "la-meta") == 0) mask = WS_SUB_LA_META;
+        else if (strcmp(s, "adc-dsp") == 0) mask = WS_SUB_ADC_DSP;
     }
     cJSON_Delete(root);
     return mask;

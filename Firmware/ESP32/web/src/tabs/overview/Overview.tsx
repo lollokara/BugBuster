@@ -218,15 +218,15 @@ export function Overview() {
       <section>
         <h3 class="uppercase-tag" style={{ marginBottom: "10px" }}>Analog Channels</h3>
         <div class="overview-channels">
-          {[0, 1, 2, 3].map((i) => {
-            const ch = channels[i] ?? {};
+          {[0, 1, 2, 3].map((chIndex) => {
+            const ch = channels[chIndex] ?? {};
             const funcCode = functionCodeFromChannel(ch);
             const funcName = funcLabel(funcCode, ch.function);
             const displayValue = displayValueFromChannel(ch, funcCode);
             const card = (
-              <GlassCard title={`Channel ${CH_NAMES[i]}`}>
+              <GlassCard title={`Channel ${CH_NAMES[chIndex]}`}>
                 <div class="ch-tile-head">
-                  <span class="ch-swatch" style={{ color: CH_COLORS[i], background: CH_COLORS[i] }} />
+                  <span class="ch-swatch" style={{ color: CH_COLORS[chIndex], background: CH_COLORS[chIndex] }} />
                   <span class="uppercase-tag">{funcName}</span>
                 </div>
                 <div class="analog-row" style={{ marginTop: "6px" }}>
@@ -234,9 +234,9 @@ export function Overview() {
                   <select
                     class="input"
                     value={String(Number.isFinite(funcCode) ? funcCode : 0)}
-                    disabled={!mac || busyChannel === i || (i === 2 && supplyMonitorActive.value)}
+                    disabled={!mac || busyChannel === chIndex || (chIndex === 3 && supplyMonitorActive.value)}
                     onChange={(e) =>
-                      setFunction(i, parseInt((e.currentTarget as HTMLSelectElement).value, 10))
+                      setFunction(chIndex, parseInt((e.currentTarget as HTMLSelectElement).value, 10))
                     }
                   >
                     {CHANNEL_FUNCTION_OPTIONS.map((opt) => (
@@ -248,12 +248,12 @@ export function Overview() {
                 </div>
                 <BigValue value={displayValue} unit="V" precision={3} />
                 <div style={{ marginTop: "10px" }}>
-                  <Sparkline values={sparks[i] ?? []} color={CH_COLORS[i]} height={56} />
+                  <Sparkline values={sparks[chIndex] ?? []} color={CH_COLORS[chIndex]} height={56} />
                 </div>
               </GlassCard>
             );
             return (
-              <ChDOverlay key={i} active={i === 2 && supplyMonitorActive.value}>
+              <ChDOverlay key={chIndex} active={chIndex === 3 && supplyMonitorActive.value}>
                 {card}
               </ChDOverlay>
             );

@@ -8,23 +8,23 @@ engineer might hand off verbatim.
 
 ## 1. Debugging a sensor that reports incorrect values
 
-> **You:** "The temperature sensor on IO 1 reads 150 °C but the room is 22 °C. Figure out why."
+> **You:** "The temperature sensor on IO 3 reads 150 °C but the room is 22 °C. Figure out why."
 
-> **AI:** Configures IO 1 as analog input. Reads voltage (0.48 V — consistent with
+> **AI:** Configures IO 3 as analog input. Reads voltage (0.48 V — consistent with
 > 150 °C for a PT100). Switches to RTD mode with 4-wire excitation. Measures
 > 108.7 Ω.  Notes that a PT100 at 22 °C should read ~108.9 Ω. Concludes: the
 > sensor is correct; the target's ADC reference voltage is wrong. Measures the
-> target's 3.3 V rail on IO 4 — reads 2.87 V.  Reports:
+> target's 3.3 V rail on IO 6 — reads 2.87 V.  Reports:
 >
 > *"Your 3.3 V reference is sagging to 2.87 V, which causes the firmware's
 > voltage-to-temperature conversion to over-read by 128 °C."*
 
 What happened under the hood:
 
-1. `configure_io(1, "ANALOG_IN")` → `read_voltage(1)`
-2. `configure_io(1, "RTD_4WIRE")` → `read_resistance(1)`
+1. `configure_io(3, "ANALOG_IN")` → `read_voltage(3)`
+2. `configure_io(3, "RTD_4WIRE")` → `read_resistance(3)`
 3. Internal reasoning about PT100 R-T curve
-4. `configure_io(4, "ANALOG_IN")` → `read_voltage(4)`
+4. `configure_io(6, "ANALOG_IN")` → `read_voltage(6)`
 5. `check_faults()` between each measurement to guard against overcurrent
 
 ---
@@ -33,7 +33,7 @@ What happened under the hood:
 
 > **You:** "Test the board on connectors A and B. Check the 3.3 V rail, verify I²C pull-ups, and confirm the status LED blinks at 1 Hz."
 
-> **AI:** Powers connector A at 3.3 V.  Reads supply on IO 1 (3.31 V, within
+> **AI:** Powers connector A at 3.3 V.  Reads supply on IO 3 (3.31 V, within
 > spec). Configures IO 2 as digital input, checks pull-up (reads HIGH,
 > confirmed). Configures IO 3 as digital input, captures 5 seconds of data,
 > detects toggling at 0.98 Hz.  Reports:

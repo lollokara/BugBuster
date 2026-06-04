@@ -15,9 +15,9 @@ Physical layout
     |                                                                           |
     |   IO_Block 1 (EFUSE1)            IO_Block 2 (EFUSE2)                     |
     |   +---------------------+        +---------------------+                 |
-    |   | IO 1  - analog/HAT  |        | IO 4  - analog/HAT  |                 |
+    |   | IO 1  - digital     |        | IO 4  - digital     |                 |
     |   | IO 2  - digital     |        | IO 5  - digital     |                 |
-    |   | IO 3  - digital     |        | IO 6  - digital     |                 |
+    |   | IO 3  - analog/HAT  |        | IO 6  - analog/HAT  |                 |
     |   | VCC   GND           |        | VCC   GND           |                 |
     |   +---------------------+        +---------------------+                 |
     +---------------------------------------------------------------------------+
@@ -25,9 +25,9 @@ Physical layout
     |                                                                           |
     |   IO_Block 3 (EFUSE3)            IO_Block 4 (EFUSE4)                     |
     |   +---------------------+        +---------------------+                 |
-    |   | IO 7  - analog/HAT  |        | IO 10 - analog/HAT  |                 |
+    |   | IO 7  - digital     |        | IO 10 - digital     |                 |
     |   | IO 8  - digital     |        | IO 11 - digital     |                 |
-    |   | IO 9  - digital     |        | IO 12 - digital     |                 |
+    |   | IO 9  - analog/HAT  |        | IO 12 - analog/HAT  |                 |
     |   | VCC   GND           |        | VCC   GND           |                 |
     |   +---------------------+        +---------------------+                 |
     +---------------------------------------------------------------------------+
@@ -35,8 +35,8 @@ Physical layout
 IO capabilities (each IO can only be ONE mode at a time via MUX):
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 +--------------------+-------------------------------+----------+-----------+
-| Mode               | Description                   | IO 1,4,  | IO 2,3,   |
-|                    |                               | 7,10     | 5..12     |
+| Mode               | Description                   | IO 3,6,  | Other     |
+|                    |                               | 9,12     | IOs       |
 +--------------------+-------------------------------+----------+-----------+
 | DISABLED           | Safe default / disconnected    | yes      | yes       |
 | ANALOG_IN          | ADC voltage input  (0-12 V)   | yes      | no        |
@@ -70,9 +70,9 @@ MUX-exclusive: closing one switch in a group opens all others in that group.
     +-------+----------------+----------------------------------------------+
     | Group | Switches       | IO / function                                |
     +-------+----------------+----------------------------------------------+
-    | A     | S1-S4 (0x0F)   | Analog IO (pos. 1): ADC, ESP high/low, HAT  |
+    | A     | S1-S4 (0x0F)   | Analog IO (pos. 3): ADC, ESP high/low, HAT  |
     | B     | S5-S6 (0x30)   | Digital IO (pos. 2): ESP high/low drive      |
-    | C     | S7-S8 (0xC0)   | Digital IO (pos. 3): ESP high/low drive      |
+    | C     | S7-S8 (0xC0)   | Digital IO (pos. 1): ESP high/low drive      |
     +-------+----------------+----------------------------------------------+
 """
 

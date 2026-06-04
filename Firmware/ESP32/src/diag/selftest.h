@@ -10,7 +10,7 @@
 //   - Boot-time supply verification (VADJ1, VADJ2, 3V3_ADJ)
 //   - Automatic IDAC calibration (no external connections needed)
 //   - Background supply rail monitoring (VADJ1, VADJ2, 3V3_ADJ)
-//   - Safety interlocks with U17 S2 (IO 9 analog mode)
+//   - Safety interlocks with U17 S3 (IO 9 analog mode)
 //
 // PCB mode only — all functions are no-ops when ADGS_HAS_SELFTEST == 0.
 // =============================================================================
@@ -48,7 +48,7 @@ typedef struct {
 typedef struct {
     float    voltage[SELFTEST_RAIL_COUNT];  // VADJ1, VADJ2, 3V3_ADJ; -1.0f if disabled or unavailable
     uint32_t timestamp_ms;                  // when last measured
-    bool     available;                     // false if U17 S2 interlock closed
+    bool     available;                     // false if U17 S3 interlock closed
 } SelftestSupplyVoltages;
 
 // Calibration result
@@ -134,7 +134,7 @@ bool selftest_is_supply_monitor_active(void);
  *         over multiple calls.  This avoids blocking the main loop while still
  *         respecting MUX dead-time between switches.
  *
- *         Only runs if U17 S2 is open and calibration is not active.
+ *         Only runs if U17 S3 is open and calibration is not active.
  *         Skips rails whose PCA9535 enable bit is false (except 3V3_ADJ).
  */
 void selftest_monitor_step(void);
@@ -158,7 +158,7 @@ void selftest_clear_cal_trace(void);
 
 /**
  * @brief  Check if self-test / calibration is currently using U23.
- *         When true, U17 S2 must not be closed.
+ *         When true, U17 S3 must not be closed.
  */
 bool selftest_is_busy(void);
 

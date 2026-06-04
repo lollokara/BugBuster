@@ -212,7 +212,7 @@ export function ScopePanel() {
     <div class="scope-layout">
       <IoOwnerBanner lease={lease} slots={[12, 13, 14, 15]} />
       <aside class="scope-rail">
-        {[0, 1, 2, 3].map((i) => <ChannelRailCard index={i} key={i} />)}
+        {[0, 1, 2, 3].map((ch) => <ChannelRailCard index={ch} key={ch} />)}
       </aside>
 
       <div class="scope-main">
@@ -271,9 +271,9 @@ export function ScopePanel() {
                 )
               }
             >
-              {[0, 1, 2, 3].map((c) => (
-                <option key={c} value={String(c)}>
-                  CH {CH_LETTERS[c]}
+              {[0, 1, 2, 3].map((ch) => (
+                <option key={ch} value={String(ch)}>
+                  CH {CH_LETTERS[ch]}
                 </option>
               ))}
             </select>

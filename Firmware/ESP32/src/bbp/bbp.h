@@ -23,7 +23,7 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       7
+#define BBP_PROTO_VERSION       8
 
 #define BBP_FW_VERSION_MAJOR    3
 #define BBP_FW_VERSION_MINOR    2
@@ -118,10 +118,12 @@ extern "C" {
 #define BBP_CMD_GET_UART_PINS   0x52
 
 // Streaming
-#define BBP_CMD_START_ADC_STREAM    0x60
-#define BBP_CMD_STOP_ADC_STREAM     0x61
-#define BBP_CMD_START_SCOPE_STREAM  0x62
-#define BBP_CMD_STOP_SCOPE_STREAM   0x63
+#define BBP_CMD_START_ADC_STREAM      0x60
+#define BBP_CMD_STOP_ADC_STREAM       0x61
+#define BBP_CMD_START_SCOPE_STREAM    0x62
+#define BBP_CMD_STOP_SCOPE_STREAM     0x63
+#define BBP_CMD_START_ADC_DSP_STREAM  0x64
+#define BBP_CMD_STOP_ADC_DSP_STREAM   0x65
 
 // MUX Switch Matrix
 #define BBP_CMD_MUX_SET_ALL     0x90
@@ -267,6 +269,7 @@ extern "C" {
 #define BBP_EVT_LA_DONE         0x85    // Logic analyzer capture complete
 #define BBP_EVT_IO_PREEMPTED    0x86    // IO slot preempted by selftest/internal
 #define BBP_EVT_IO_OWNER_REJECT 0x87    // IO claim rejected: (cmd_id u8, slot u8, owner_kind u8)
+#define BBP_EVT_ADC_DSP         0x88    // DSP stream window (stats + FFT peaks + spikes)
 #define BBP_EVT_LA_LOG          0xEC    // RP2040 log message relay
 
 // -----------------------------------------------------------------------------
@@ -416,6 +419,34 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out);
 
 /** @brief Stop ADC streaming (sets s_adcStreamMask to 0). */
 void bbpStopAdcStream(void);
+
+/**
+ * @brief Start ADC DSP streaming on a single channel at the given rate.
+ *        Creates the DSP task and initialises the on-device pipeline.
+ *        Caller must check bbpAdcDspActive() == false before calling.
+ */
+void bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
+                          uint16_t window_samples, float spike_threshold,
+                          uint8_t n_fft_peaks, uint16_t *effective_rate_out);
+
+/** @brief Stop ADC DSP streaming, delete the DSP task, free FFT buffers. */
+void bbpStopAdcDspStream(void);
+
+/** @brief Returns true if DSP streaming is currently active. */
+bool bbpAdcDspActive(void);
+
+/**
+ * @brief Notify the DSP task that a window is complete.
+ *        Called from the ADC poll task (Core 1). buf_idx = completed ping-pong buffer.
+ */
+void bbpNotifyDspTask(uint8_t buf_idx);
+
+/**
+ * @brief Serialise an AdcDspWindow and emit BBP_EVT_ADC_DSP + WS forward.
+ *        Called from the DSP task after adc_dsp_process().
+ */
+struct AdcDspWindow;
+void bbpSendDspWindow(const struct AdcDspWindow *w);
 
 /** @brief Check if scope streaming is active. */
 bool bbpScopeStreamActive(void);

@@ -181,7 +181,7 @@ bool adgs_is_faulted(void);
 #if ADGS_HAS_SELFTEST
 /**
  * @brief Set the self-test device (U23) switch state.
- *        Enforces the safety interlock: returns false if U17 S2 is closed.
+ *        Enforces the safety interlock: returns false if U17 S3 is closed.
  *
  * @param sw_byte  8-bit switch mask for U23
  * @return true on success, false if interlock violation
@@ -194,14 +194,14 @@ bool adgs_set_selftest(uint8_t sw_byte);
 uint8_t adgs_get_selftest(void);
 
 /**
- * @brief Check if U16 S3 is currently closed (IO 12 analog mode).
+ * @brief Check if U17 S3 is currently closed (IO 9 analog mode).
  *        When true, U23 must NOT close any switches.
  */
-bool adgs_u16_s3_active(void);
+bool adgs_u17_s3_active(void);
 
 /**
  * @brief Check if U23 has any switches closed (self-test active).
- *        When true, U17 S2 must NOT be closed.
+ *        When true, U17 S3 must NOT be closed.
  */
 bool adgs_selftest_active(void);
 #endif
