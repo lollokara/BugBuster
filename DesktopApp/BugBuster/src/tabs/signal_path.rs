@@ -19,8 +19,9 @@ const PCA_EFUSE2_EN: u8 = 6;
 const PCA_EFUSE3_EN: u8 = 7;
 const PCA_EFUSE4_EN: u8 = 8;
 
-// PCB swap: physical P3 is wired to EFUSE4, P4 to EFUSE3 (silkscreen crossed).
-const PCA_EFUSE_IDS: [u8; 4] = [PCA_EFUSE1_EN, PCA_EFUSE2_EN, PCA_EFUSE4_EN, PCA_EFUSE3_EN];
+// Firmware pca9535_user_arm_efuse() handles the PCB silkscreen cross internally.
+// Pass logical channel IDs (EFUSE1..4 = 5..8) unchanged — no host-side swap needed.
+const PCA_EFUSE_IDS: [u8; 4] = [PCA_EFUSE1_EN, PCA_EFUSE2_EN, PCA_EFUSE3_EN, PCA_EFUSE4_EN];
 
 #[derive(Serialize)]
 struct PcaSetControlArgs { control: u8, on: bool }

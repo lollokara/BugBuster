@@ -1071,84 +1071,61 @@ void hat_update_leds(void)
 {
     if (!s_state.connected) return;
 
-    // 1. LED 2: Conn2 status (low-speed shifted IO)
-    // Green = IOs mapped/configured, Off = no IO active.
-    // Mapped/configured if any is not HAT_FUNC_DISCONNECTED and route is low-speed.
-    bool ext_io_active = false;
-    if (s_state.la_route == HAT_LA_ROUTE_LOW_SPEED) {
-        for (int i = 0; i < 4; i++) {
-            if (s_state.pin_config[i] != HAT_FUNC_DISCONNECTED) {
-                ext_io_active = true;
-                break;
+    // Color legend (applies to all LEDs below):
+    //   0 = Off     — no supply, no IO
+    //   1 = Red     — EFUSE fault
+    //   2 = Green   — supply present + IO/MUX configured
+    //   3 = Blue    — supply present, no IO configured
+    //   4 = Yellow  — IO configured, no supply
+
+    // 1. LED 2: Conn2 — 3V3_ADJ supply + low-speed IO route
+    {
+        bool supply = s_state.rail[HAT_RAIL_3V3_ADJ].enabled;
+        bool io = false;
+        if (s_state.la_route == HAT_LA_ROUTE_LOW_SPEED) {
+            for (int i = 0; i < 4; i++) {
+                if (s_state.pin_config[i] != HAT_FUNC_DISCONNECTED) { io = true; break; }
             }
         }
+        uint8_t c = (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
+        hat_set_led_state(2, c);
     }
-    uint8_t led2_color = ext_io_active ? 2 : 0;
-    hat_set_led_state(2, led2_color);
 
-    // 2. LED 3: Conn1 status (high-speed level shifter)
-    // Keyed to VADJ3 supply & high-speed route.
-    // Green = configured & supply active; Blue = supply active, no IO configured;
-    // Purple (6) = IO active, no supply; Off = unconfigured.
-    // Configured if la_route == HAT_LA_ROUTE_HIGH_SPEED.
-    bool conn1_io_active = (s_state.la_route == HAT_LA_ROUTE_HIGH_SPEED);
-    bool conn1_supply_active = s_state.rail[HAT_RAIL_VADJ3].enabled;
-    uint8_t led3_color = 0;
-    if (conn1_supply_active && conn1_io_active) {
-        led3_color = 2; // Green
-    } else if (conn1_supply_active && !conn1_io_active) {
-        led3_color = 3; // Blue
-    } else if (!conn1_supply_active && conn1_io_active) {
-        led3_color = 6; // Purple
-    } else {
-        led3_color = 0; // Off
+    // 2. LED 3: Conn1 — VADJ3 supply + high-speed route
+    {
+        bool supply = s_state.rail[HAT_RAIL_VADJ3].enabled;
+        bool io = (s_state.la_route == HAT_LA_ROUTE_HIGH_SPEED);
+        uint8_t c = (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
+        hat_set_led_state(3, c);
     }
-    hat_set_led_state(3, led3_color);
 
     // 3. LEDs 4–7: Mainboard IOBLOCKs 1–4
-    // Same status schema as LED 3, keyed to EFUSE1..4 (logical 0..3) and IOs 1..12:
     // Block 1 (LED 4): EFUSE1 + IO1–IO3.
     // Block 2 (LED 5): EFUSE2 + IO4–IO6.
-    // Block 3 (LED 7): EFUSE3 + IO7–IO9 (with silkscreen swap: logical index 2 -> LED 7).
-    // Block 4 (LED 6): EFUSE4 + IO10–IO12 (with silkscreen swap: logical index 3 -> LED 6).
-    const DioState *dio = dio_get_all();
-    const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
-
-    static const uint8_t logical_to_led[4] = { 4, 5, 7, 6 };
-    for (int j = 0; j < 4; j++) {
-        bool supply_active = pca ? pca->efuse_en[j] : false;
-        bool io_active = (dio[3 * j].mode != DIO_MODE_DISABLED) ||
-                         (dio[3 * j + 1].mode != DIO_MODE_DISABLED) ||
-                         (dio[3 * j + 2].mode != DIO_MODE_DISABLED);
-        uint8_t block_color = 0;
-        if (supply_active && io_active) {
-            block_color = 2; // Green
-        } else if (supply_active && !io_active) {
-            block_color = 3; // Blue
-        } else if (!supply_active && io_active) {
-            block_color = 6; // Purple
-        } else {
-            block_color = 0; // Off
+    // Block 3 (LED 6): EFUSE3 + IO7–IO9.
+    // Block 4 (LED 7): EFUSE4 + IO10–IO12.
+    {
+        const DioState *dio = dio_get_all();
+        const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
+        static const uint8_t logical_to_led[4] = { 4, 5, 6, 7 };
+        for (int j = 0; j < 4; j++) {
+            bool fault  = pca && pca->efuse_flt[j];
+            bool supply = pca && pca->efuse_en[j];
+            bool io     = (dio[3*j].mode     != DIO_MODE_DISABLED) ||
+                          (dio[3*j + 1].mode != DIO_MODE_DISABLED) ||
+                          (dio[3*j + 2].mode != DIO_MODE_DISABLED);
+            uint8_t c = fault ? 1 : (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
+            hat_set_led_state(logical_to_led[j], c);
         }
-        hat_set_led_state(logical_to_led[j], block_color);
     }
 
-    // 4. LED 8: SWD Connector
-    // Same status schema as LED 3, keyed to VADJ4 (rail 2) and SWD route/configuration
-    // (active when dap_connected or target_detected is true).
-    bool swd_io_active = s_state.dap_connected || s_state.target_detected;
-    bool swd_supply_active = s_state.rail[HAT_RAIL_VADJ4].enabled;
-    uint8_t led8_color = 0;
-    if (swd_supply_active && swd_io_active) {
-        led8_color = 2; // Green
-    } else if (swd_supply_active && !swd_io_active) {
-        led8_color = 3; // Blue
-    } else if (!swd_supply_active && swd_io_active) {
-        led8_color = 6; // Purple
-    } else {
-        led8_color = 0; // Off
+    // 4. LED 8: SWD Connector — VADJ4 supply + DAP/target active
+    {
+        bool supply = s_state.rail[HAT_RAIL_VADJ4].enabled;
+        bool io     = s_state.dap_connected || s_state.target_detected;
+        uint8_t c = (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
+        hat_set_led_state(8, c);
     }
-    hat_set_led_state(8, led8_color);
 }
 
 bool hat_set_io_voltage(uint16_t mv)
