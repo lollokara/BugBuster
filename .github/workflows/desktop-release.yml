@@ -93,7 +93,7 @@ jobs:
           python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect "$expected_version"
 
       - name: Build and (on tag) publish desktop bundles
-        uses: tauri-apps/tauri-action@v2
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NO_COLOR: "false"
