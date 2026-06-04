@@ -95,21 +95,26 @@ jobs:
           mkdir -p dist/release
 
           echo "::group::Downloaded RP2040 tree"
-          find dist/rp2040 -type f -printf '%s\t%p\n' | sort -n || true
+          find dist/rp2040 -maxdepth 3 -not -path '*/.*'
           echo "::endgroup::"
           echo "::group::Downloaded ESP32 tree"
-          find dist/esp32 -type f -printf '%s\t%p\n' | sort -n || true
+          find dist/esp32 -maxdepth 3 -not -path '*/.*'
           echo "::endgroup::"
           echo "::group::Downloaded Desktop tree"
-          find dist/desktop -type f -printf '%s\t%p\n' | sort -n || true
+          find dist/desktop -maxdepth 3 -not -path '*/.*'
           echo "::endgroup::"
 
           # RP2040 + ESP32: already named with version, copy as-is.
-          cp dist/rp2040/* dist/release/ || true
-          cp dist/esp32/*  dist/release/ || true
+          # Use -r and copy contents to handle potential subdirectories if merge-multiple failed.
+          if [ -d dist/rp2040 ]; then
+            cp -rv dist/rp2040/* dist/release/ || true
+          fi
+          if [ -d dist/esp32 ]; then
+            cp -rv dist/esp32/*  dist/release/ || true
+          fi
 
           # Desktop: tauri bundles are nested under
-          # DesktopApp/BugBuster/src-tauri/target/release/bundle/<format>/...
+          # target/release/bundle/<format>/...
           # Pull installable artifacts (skip raw .app dirs / intermediates).
           shopt -s globstar nullglob
           desktop_files=(
@@ -125,7 +130,7 @@ jobs:
           desktop_count=0
           for f in "${desktop_files[@]}"; do
             [ -f "$f" ] || continue
-            cp "$f" "dist/release/"
+            cp -v "$f" "dist/release/"
             desktop_count=$((desktop_count + 1))
           done
           echo "Staged $desktop_count desktop bundle file(s)."
@@ -133,8 +138,14 @@ jobs:
             echo "::warning title=No desktop bundles::Combined release will not contain Desktop installers — check the Desktop build job logs."
           fi
 
-          ( cd dist/release && sha256sum ./* > SHA256SUMS.txt )
-          ls -la dist/release/
+          if [ -n "$(ls -A dist/release/ 2>/dev/null)" ]; then
+            ( cd dist/release && sha256sum ./* > SHA256SUMS.txt )
+            echo "Release assets staged:"
+            ls -la dist/release/
+          else
+            echo "::error::No release assets staged! dist/release is empty."
+            exit 1
+          fi
 
       - name: Publish combined GitHub release
         env:

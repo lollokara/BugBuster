@@ -93,7 +93,7 @@ jobs:
           python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect "$expected_version"
 
       - name: Build and (on tag) publish desktop bundles
-        uses: tauri-apps/tauri-action@1ddc7b49b13c3038297360482fcb3e058764d7c9  # v0.6.2
+        uses: tauri-apps/tauri-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NO_COLOR: "false"
@@ -122,6 +122,6 @@ jobs:
         with:
           name: bugbuster-desktop-${{ matrix.name }}
           path: |
-            DesktopApp/BugBuster/src-tauri/target/release/bundle/**/*
+            DesktopApp/BugBuster/target/release/bundle/**/*
           if-no-files-found: warn
           retention-days: 14
