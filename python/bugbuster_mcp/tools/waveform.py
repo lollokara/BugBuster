@@ -120,7 +120,7 @@ def start_waveform(
     the DAC at the requested frequency (0.01-100 Hz).
 
     Parameters:
-    - io: IO number — must be 1, 4, 7, or 10.
+    - io: IO number — must be 3, 6, 9, or 12 (analog-capable IOs).
     - waveform: Shape — "sine", "square", "triangle", or "sawtooth".
     - freq_hz: Frequency in Hz (0.01 to 100.0).
     - amplitude: Peak amplitude in volts. The waveform spans
@@ -156,8 +156,10 @@ def start_waveform(
     require_io_mode(hal, io, PortMode.ANALOG_OUT, "start_waveform")
 
     bb = session.get_client()
-    # Analog IOs map to AD74416H channels: IO1→ch0, IO4→ch1, IO7→ch2, IO10→ch3
-    _IO_TO_CHANNEL = {1: 0, 4: 1, 7: 2, 10: 3}
+    # Analog IOs map to AD74416H channels: IO3→ch0, IO6→ch1, IO9→ch2, IO12→ch3
+    # (post 2026-04-25 logical-IO remap; must stay in sync with the analog
+    # tools' _ANALOG_IO_TO_SLOT = {3:12, 6:13, 9:14, 12:15}).
+    _IO_TO_CHANNEL = {3: 0, 6: 1, 9: 2, 12: 3}
     ch = _IO_TO_CHANNEL[io]
 
     from bugbuster.constants import WaveformType, OutputMode
@@ -215,7 +217,7 @@ def capture_adc_snapshot(
     statistical summary and a downsampled waveform preview.
 
     Parameters:
-    - io: IO number — must be 1, 4, 7, or 10.
+    - io: IO number — must be 3, 6, 9, or 12 (analog-capable IOs).
     - duration_s: Capture duration in seconds (default 1.0, max 10.0).
     - n_samples: Override sample count (0 = determine from duration).
 
