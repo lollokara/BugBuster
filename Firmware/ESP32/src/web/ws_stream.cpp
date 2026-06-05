@@ -68,38 +68,40 @@ static esp_err_t send_close_frame(httpd_handle_t hd, int fd, uint16_t code);
 // Ring helpers (require s_tx_mutex held)
 // ---------------------------------------------------------------------------
 
-static void ring_push_locked(const uint8_t* data, size_t len)
+static void ring_push_locked(const uint8_t* header, size_t h_len,
+                             const uint8_t* payload, size_t p_len)
 {
-    if (len == 0 || len > WS_TX_RING_SIZE) return;
+    size_t total = h_len + p_len;
+    if (total == 0 || total > WS_TX_RING_SIZE) return;
 
     // If frame won't fit, drop oldest complete frames until it does.
-    while (WS_TX_RING_SIZE - s_tx_used < len) {
+    while (WS_TX_RING_SIZE - s_tx_used < total) {
         if (s_tx_used < WS_HEADER_BYTES) {
-            // Should never happen with valid frames, but guard anyway.
-            s_tx_used = 0;
-            s_tx_head = 0;
-            break;
+            s_tx_used = 0; s_tx_head = 0; break;
         }
         size_t tail = (s_tx_head + WS_TX_RING_SIZE - s_tx_used) % WS_TX_RING_SIZE;
-        // Read header to find oldest frame size.
         uint16_t old_payload =
             (uint16_t)s_tx_ring[(tail + 2) % WS_TX_RING_SIZE] |
             ((uint16_t)s_tx_ring[(tail + 3) % WS_TX_RING_SIZE] << 8);
         size_t old_total = WS_HEADER_BYTES + old_payload;
         if (old_total > s_tx_used) {
-            // Corrupt; reset.
-            s_tx_used = 0;
-            s_tx_head = 0;
-            break;
+            s_tx_used = 0; s_tx_head = 0; break;
         }
         s_tx_used -= old_total;
     }
 
-    for (size_t i = 0; i < len; i++) {
-        s_tx_ring[(s_tx_head + i) % WS_TX_RING_SIZE] = data[i];
+    // Push header
+    for (size_t i = 0; i < h_len; i++) {
+        s_tx_ring[(s_tx_head + i) % WS_TX_RING_SIZE] = header[i];
     }
-    s_tx_head  = (s_tx_head + len) % WS_TX_RING_SIZE;
-    s_tx_used += len;
+    s_tx_head = (s_tx_head + h_len) % WS_TX_RING_SIZE;
+
+    // Push payload
+    for (size_t i = 0; i < p_len; i++) {
+        s_tx_ring[(s_tx_head + i) % WS_TX_RING_SIZE] = payload[i];
+    }
+    s_tx_head = (s_tx_head + p_len) % WS_TX_RING_SIZE;
+    s_tx_used += total;
 }
 
 // Drain one complete frame into @p out (max @p out_max). Returns frame size,
@@ -142,9 +144,8 @@ void ws_stream_forward(uint8_t stream_id, const uint8_t* payload, size_t len)
     };
 
     if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        // Write header + payload as a single contiguous frame.
-        ring_push_locked(header, WS_HEADER_BYTES);
-        ring_push_locked(payload, len);
+        // Write header + payload as a single atomic operation in the ring buffer.
+        ring_push_locked(header, WS_HEADER_BYTES, payload, len);
         xSemaphoreGive(s_tx_mutex);
     }
     xSemaphoreGive(s_tx_sem);
@@ -158,6 +159,7 @@ int ws_stream_has_subscriber(uint8_t stream_id)
 
 // ---------------------------------------------------------------------------
 // TX task — drains complete frames from the ring and sends them
+// Persistent task — created once at register time.
 // ---------------------------------------------------------------------------
 
 static void tx_task(void* arg)
@@ -166,13 +168,18 @@ static void tx_task(void* arg)
     static uint8_t tx_buf[WS_MAX_PAYLOAD];
 
     for (;;) {
-        if (xSemaphoreTake(s_tx_sem, pdMS_TO_TICKS(200)) != pdTRUE) {
-            if (s_ws_fd < 0) break;
-            continue;
-        }
+        // Block indefinitely until a frame is available.
+        if (xSemaphoreTake(s_tx_sem, portMAX_DELAY) != pdTRUE) continue;
 
         int fd = s_ws_fd;
-        if (fd < 0) break;
+        // If no one is connected, just drop the frame and keep the ring empty.
+        if (fd < 0) {
+            if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                ring_pop_frame_locked(NULL, 0); // Drop one frame
+                xSemaphoreGive(s_tx_mutex);
+            }
+            continue;
+        }
 
         for (;;) {
             size_t n = 0;
@@ -198,10 +205,6 @@ static void tx_task(void* arg)
             if (fd < 0) break;
         }
     }
-
-    ESP_LOGI(TAG, "tx_task exit");
-    s_tx_task = NULL;
-    vTaskDelete(NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,17 +318,6 @@ static esp_err_t handle_ws_stream(httpd_req_t* req)
             xSemaphoreGive(s_tx_mutex);
         }
 
-        if (s_tx_task == NULL) {
-            BaseType_t ok = xTaskCreate(tx_task, "wsstream_tx",
-                                        4096 / sizeof(StackType_t),
-                                        NULL, 2, &s_tx_task);
-            if (ok != pdPASS) {
-                ESP_LOGE(TAG, "tx_task create failed");
-                session_close();
-                return ESP_FAIL;
-            }
-        }
-
         if (s_auth_timer) xTimerStart(s_auth_timer, 0);
         ESP_LOGI(TAG, "stream session open fd=%d (awaiting auth)", fd);
         return ESP_OK;
@@ -400,6 +392,14 @@ void ws_stream_register(httpd_handle_t server)
     if (!s_tx_mutex || !s_tx_sem) {
         ESP_LOGE(TAG, "sync primitive create failed");
         return;
+    }
+
+    if (s_tx_task == NULL) {
+        BaseType_t ok = xTaskCreate(tx_task, "wsstream_tx", 3072,
+                                    NULL, 2, &s_tx_task);
+        if (ok != pdPASS) {
+            ESP_LOGE(TAG, "persistent tx_task create failed");
+        }
     }
 
     httpd_uri_t uri = {

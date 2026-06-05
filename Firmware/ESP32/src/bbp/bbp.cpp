@@ -747,10 +747,16 @@ static void taskAdcDsp(void * /*arg*/)
 {
     ESP_LOGI(TAG, "DSP task started");
     for (;;) {
-        // Wait for ADC poll task to deliver a completed buffer index
-        uint32_t buf_idx = ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(200));
+        // Wait for ADC poll task to deliver a completed buffer index.
+        // xTaskNotifyWait clears all bits on exit (ULONG_MAX mask), so the
+        // notification value returns to 0 after each read.  ulTaskNotifyTake
+        // with pdFALSE only decrements by 1, leaving a residual when Core 1
+        // uses eSetValueWithOverwrite to encode buf_idx+1 (value ≥ 2), which
+        // caused a spurious second wakeup that processed an already-cleared buf.
+        uint32_t buf_idx = 0;
+        xTaskNotifyWait(0, ULONG_MAX, &buf_idx, pdMS_TO_TICKS(200));
         if (!s_dspActive) break;
-        if (buf_idx == 0) continue;  // spurious wakeup or timeout
+        if (buf_idx == 0) continue;  // timeout
 
         // buf_idx was sent as (buf + 1) so that 0 means "no notification yet"
         uint8_t bidx = (uint8_t)(buf_idx - 1u);

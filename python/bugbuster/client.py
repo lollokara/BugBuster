@@ -3461,7 +3461,7 @@ class BugBuster:
                 "spikeThreshold": spike_threshold,
                 "nFftPeaks":      n_fft_peaks,
             }
-            self._t.post("adc/dsp/start", body)
+            self._t.post("/adc/dsp/start", body)
             if callback:
                 self._t.start_dsp_ws_stream(
                     callback=lambda data: callback(self._parse_adc_dsp_evt(data))
@@ -3474,7 +3474,7 @@ class BugBuster:
             self._t.remove_event(CmdId.ADC_DSP_EVT)
         else:
             try:
-                self._t.post("adc/dsp/stop")
+                self._t.post("/adc/dsp/stop")
             except Exception:
                 pass
             self._t.stop_dsp_ws_stream()

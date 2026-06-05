@@ -2879,6 +2879,7 @@ static esp_err_t handle_get_hat_la_status(httpd_req_t *req)
 // POST /api/hat/config  body: {"pin":0, "function":1} or {"pins":[1,2,3,4]}
 static esp_err_t handle_post_hat_config(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
     cJSON *doc = recv_json_body(req);
     if (!doc) return send_error(req, 400, "Invalid JSON");
 
@@ -2923,6 +2924,7 @@ static esp_err_t handle_post_hat_config(httpd_req_t *req)
 // POST /api/hat/reset
 static esp_err_t handle_post_hat_reset(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
     bool ok = hat_reset();
     cJSON *rsp = cJSON_CreateObject();
     cJSON_AddBoolToObject(rsp, "ok", ok);
@@ -2950,8 +2952,6 @@ static esp_err_t handle_post_hat_detect(httpd_req_t *req)
 // POST /api/hat dispatch
 static esp_err_t handle_hat_post_dispatch(httpd_req_t *req)
 {
-    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
     if (strstr(req->uri, "/api/hat/config")) return handle_post_hat_config(req);
     if (strstr(req->uri, "/api/hat/reset")) return handle_post_hat_reset(req);
     if (strstr(req->uri, "/api/hat/detect")) return handle_post_hat_detect(req);

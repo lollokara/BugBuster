@@ -89,14 +89,15 @@ static void decode_inputs(void)
 
     // E-Fuse faults are active LOW (fault when pin is low), but only meaningful
     // when the corresponding e-fuse output is enabled.
-    bool raw_fault[4] = {
+    // logical EFUSE3 is physically FLT_4. logical EFUSE4 is physically FLT_3.
+    bool raw_fault_logical[4] = {
         (s_state.input1 & PCA9535_EFUSE_FLT_1) == 0,
         (s_state.input1 & PCA9535_EFUSE_FLT_2) == 0,
-        (s_state.input1 & PCA9535_EFUSE_FLT_3) == 0,
         (s_state.input1 & PCA9535_EFUSE_FLT_4) == 0,
+        (s_state.input1 & PCA9535_EFUSE_FLT_3) == 0,
     };
     for (int i = 0; i < 4; i++) {
-        s_state.efuse_flt[i] = s_state.efuse_en[i] && raw_fault[i];
+        s_state.efuse_flt[i] = s_state.efuse_en[i] && raw_fault_logical[i];
     }
 }
 
@@ -115,8 +116,9 @@ static void decode_outputs(void)
 
     s_state.efuse_en[0] = (s_state.output1 & PCA9535_EFUSE_EN_1) != 0;
     s_state.efuse_en[1] = (s_state.output1 & PCA9535_EFUSE_EN_2) != 0;
-    s_state.efuse_en[2] = (s_state.output1 & PCA9535_EFUSE_EN_3) != 0;
-    s_state.efuse_en[3] = (s_state.output1 & PCA9535_EFUSE_EN_4) != 0;
+    // logical EFUSE3 is physically EN_4. logical EFUSE4 is physically EN_3.
+    s_state.efuse_en[2] = (s_state.output1 & PCA9535_EFUSE_EN_4) != 0;
+    s_state.efuse_en[3] = (s_state.output1 & PCA9535_EFUSE_EN_3) != 0;
 }
 
 bool pca9535_init(void)
@@ -272,7 +274,8 @@ static bool set_efuse_bit_internal(uint8_t logical_ch, bool on)
     if (logical_ch > 3) return false;
 
     // Logical user-facing EFUSE -> physical PCA bit.
-    static const uint8_t logical_to_bit[4] = { 0, 2, 4, 6 };
+    // logical EFUSE3 is physical pair 4 (bit 6). logical EFUSE4 is physical pair 3 (bit 4).
+    static const uint8_t logical_to_bit[4] = { 0, 2, 6, 4 };
     uint8_t bit = logical_to_bit[logical_ch];
 
     // Stamp BEFORE the I2C write so a fault arriving in the same millisecond

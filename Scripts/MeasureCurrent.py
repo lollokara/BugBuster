@@ -26,6 +26,13 @@ import collections
 import re
 
 import matplotlib
+if sys.platform == "darwin":
+    try:
+        matplotlib.use("macosx")
+    except ImportError:
+        matplotlib.use("TkAgg")
+else:
+    matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.gridspec as gridspec
@@ -350,8 +357,10 @@ class DspMeasurement:
         # Spike log: (wall_time_s, current_A)
         self.spikes = collections.deque(maxlen=DSP_SPIKE_DEQUE)
 
-        # Latest FFT: list of (freq_hz, magnitude_A)
+        # Latest FFT: list of (freq_hz, magnitude_A) — all N/2 bins with persistence
         self.fft_latest: list = []
+        # Persistent spectrum: magnitude decays each window so history is visible
+        self._spectrum_mag = [0.0] * (DSP_WIN_SAMPLES // 2)  # bins 0..127
 
         # Live stats
         self.live_mean_I     = 0.0
@@ -374,10 +383,21 @@ class DspMeasurement:
         # RMS: subtract offset in voltage then divide
         rms_i  = win.rms_v / (self._gain * self._rsense)
 
-        # FFT peaks: voltage magnitude → current magnitude (no offset subtraction for magnitude)
+        # Build persistence spectrum: decay all bins, then update with this window's
+        # top-N peaks.  Exporting all N/2 bins gives a full spectrum display in the UI.
         fft_scale = 1.0 / (self._gain * self._rsense)
-        fft = [(b * self._fs / DSP_WIN_SAMPLES, mag * fft_scale)
-               for b, mag in win.fft_peaks]
+        _DECAY = 0.97  # per-window decay (~1 s half-life at 37.5 win/s)
+        n_bins = len(self._spectrum_mag)
+        for i in range(n_bins):
+            self._spectrum_mag[i] *= _DECAY
+        for b, mag in win.fft_peaks:
+            if 0 <= b < n_bins:
+                mag_i = mag * fft_scale
+                if mag_i > self._spectrum_mag[b]:
+                    self._spectrum_mag[b] = mag_i
+        # Skip DC bin 0; export bins 1..N/2-1
+        fs, n = self._fs, DSP_WIN_SAMPLES
+        fft = [(k * fs / n, self._spectrum_mag[k]) for k in range(1, n_bins)]
 
         # Spikes: absolute wall time estimated from window end - remaining time
         spike_entries = []
@@ -434,11 +454,11 @@ _C_SPINE = "#0f3460"
 _C_GRID  = "#0f3460"
 _C_TEXT  = "#c0c0d0"
 _C_MEAN  = "#00d4ff"   # mean current line
+_C_SMOOTH= "#ffffff"   # smoothed mean
 _C_ENV   = "#00d4ff"   # min/max fill
 _C_SPIKE = "#ff4444"   # spike markers
 _C_FFT   = "#00ff88"   # FFT bars
 _C_TITLE = "#e0e0e0"
-
 
 def _style_ax(ax):
     ax.set_facecolor(_C_PANEL)
@@ -446,16 +466,16 @@ def _style_ax(ax):
         sp.set_color(_C_SPINE)
     ax.tick_params(colors=_C_TEXT, labelsize=8)
 
-
 def run_ui_dsp(dsp: DspMeasurement, rsense_mohm: float,
-               log_path: str, dut_supply_v: float) -> None:
+               log_path: str, dut_supply_v: float,
+               is_usb: bool = False) -> None:
 
-    fig = plt.figure(figsize=(13, 9), facecolor=_C_BG)
+    fig = plt.figure(figsize=(14, 9), facecolor=_C_BG)
     gs  = gridspec.GridSpec(
         3, 1, figure=fig,
-        height_ratios=[5, 3, 1.5],
-        hspace=0.38,
-        left=0.09, right=0.95, top=0.95, bottom=0.05,
+        height_ratios=[5, 2.8, 1.8],
+        hspace=0.40,
+        left=0.08, right=0.96, top=0.93, bottom=0.14,
     )
 
     ax_cur = fig.add_subplot(gs[0])
@@ -464,190 +484,229 @@ def run_ui_dsp(dsp: DspMeasurement, rsense_mohm: float,
 
     for ax in (ax_cur, ax_fft):
         _style_ax(ax)
-        ax.grid(True, color=_C_GRID, linewidth=0.5, alpha=0.7)
+        ax.grid(True, color=_C_GRID, linewidth=0.5, alpha=0.5)
     _style_ax(ax_hud)
     ax_hud.axis("off")
 
     # ── Current panel ────────────────────────────────────────────────
     log_name = os.path.basename(log_path)
-    ax_cur.set_xlabel("Time (s ago)", fontsize=8, color=_C_TEXT)
-    ax_cur.set_ylabel("Current", fontsize=8, color=_C_TEXT)
+    ax_cur.set_ylabel("Current", fontsize=9, color=_C_TEXT, labelpad=10)
     ax_cur.set_title(
         f"DSP Current Monitor  ·  Rsense {rsense_mohm:.3f} mΩ  ·  {log_name}",
-        color=_C_TITLE, fontsize=9, pad=5,
+        color=_C_TITLE, fontsize=10, pad=10, fontweight="bold",
     )
-    ax_cur.xaxis.label.set_color(_C_TEXT)
-    ax_cur.yaxis.label.set_color(_C_TEXT)
 
-    line_mean, = ax_cur.plot([], [], color=_C_MEAN, linewidth=1.0,
-                             label="mean", zorder=3, antialiased=True)
-    scat_spk   = ax_cur.scatter([], [], color=_C_SPIKE, s=30, zorder=5,
-                                marker="v", label="spike", linewidths=0)
+    # Shaded envelope (min to max per window)
+    fill_env = ax_cur.fill_between([], [], [], color=_C_ENV, alpha=0.18, label="Min/Max range", zorder=1)
+
+    # Per-window mean line (raw, no smoothing — shows granular data)
+    line_smooth, = ax_cur.plot([], [], color=_C_SMOOTH, linewidth=1.0,
+                                label="Mean (per window)", zorder=3)
+    
+    # Spike markers
+    scat_spk = ax_cur.scatter([], [], color=_C_SPIKE, s=40, zorder=5,
+                               marker="v", label="spike", edgecolors="white", linewidths=0.5)
+    
+    # Long-term average line
+    line_avg = ax_cur.axhline(0, color="#fbff00", linewidth=0.8, linestyle="--", alpha=0.6, label="session avg", zorder=4)
+
     ax_cur.legend(loc="upper left", fontsize=7, facecolor=_C_SPINE,
-                  labelcolor=_C_TEXT, framealpha=0.8)
+                  labelcolor=_C_TEXT, framealpha=0.9, edgecolor=_C_MEAN)
 
     # ── FFT panel ────────────────────────────────────────────────────
-    ax_fft.set_xlabel("Frequency (Hz)", fontsize=8, color=_C_TEXT)
     ax_fft.set_ylabel("Magnitude", fontsize=8, color=_C_TEXT)
     ax_fft.set_title("FFT Spectrum — latest 256-sample window",
-                     color=_C_TITLE, fontsize=8, pad=4)
-    ax_fft.xaxis.label.set_color(_C_TEXT)
-    ax_fft.yaxis.label.set_color(_C_TEXT)
+                     color=_C_TITLE, fontsize=8, pad=6)
 
     # ── HUD ─────────────────────────────────────────────────────────
     hud = ax_hud.text(
         0.5, 0.5, "Waiting for DSP windows…",
         transform=ax_hud.transAxes,
-        ha="center", va="center", fontsize=11,
+        ha="center", va="center", fontsize=12,
         color="#00ff88", fontfamily="monospace",
-        bbox=dict(boxstyle="round,pad=0.5", facecolor=_C_SPINE,
-                  edgecolor=_C_MEAN, alpha=0.9),
+        bbox=dict(boxstyle="round,pad=0.8", facecolor=_C_SPINE,
+                  edgecolor=_C_MEAN, alpha=1.0, linewidth=1.5),
     )
 
     # Mutable state for the animation closure
-    _fill_handle = [None]
-    _cur_unit    = [None]
-    _last_n_spk  = [0]
+    _fill_poly    = [fill_env]   # updated in-place via set_verts — no allocation per frame
+    _cur_unit     = [None]
+    _last_n_spk   = [0]
+    _fft_bars     = [None]
+    _fft_texts    = []
+    _stale_frames = [0]
+    _prev_n_wins  = [0]
 
     def _update(_frame):
-        with dsp._lock:
-            t_snap   = list(dsp.win_times)
-            mean_snap = list(dsp.mean_I)
-            max_snap  = list(dsp.max_I)
-            min_snap  = list(dsp.min_I)
-            rms_snap  = list(dsp.rms_I)
-            spk_snap  = list(dsp.spikes)
-            fft_snap  = list(dsp.fft_latest)
-            lm = dsp.live_mean_I
-            lx = dsp.live_max_I
-            lr = dsp.live_rms_I
-            n_spk_win = dsp.n_spikes_window
-            n_spk_tot = dsp.n_spikes_total
+        try:
+            with dsp._lock:
+                t_plot    = list(dsp.win_times)
+                mean_plot = list(dsp.mean_I)
+                max_plot  = list(dsp.max_I)
+                min_plot  = list(dsp.min_I)
+                spk_snap  = list(dsp.spikes)
+                fft_snap  = list(dsp.fft_latest)
+                lm = dsp.live_mean_I
+                lx = dsp.live_max_I
+                lr = dsp.live_rms_I
+                n_spk_tot = dsp.n_spikes_total
 
-        if not t_snap:
-            return
+            if not t_plot:
+                return
 
-        now = t_snap[-1]
+            now = t_plot[-1]
 
-        # ── Unit selection (based on max current seen) ────────────────
-        peak = max((abs(v) for v in max_snap), default=abs(lx))
-        _, unit = autorange(peak if peak > 0 else 1e-12)
-        sc = _scale_for(unit)
+            # ── USB watchdog (data-freshness check) ──────────────────────
+            if is_usb:
+                n_now = len(t_plot)
+                if n_now == _prev_n_wins[0]:
+                    _stale_frames[0] += 1
+                else:
+                    _stale_frames[0] = 0
+                    _prev_n_wins[0]  = n_now
+                if _stale_frames[0] > 33:  # ~5 s at 150 ms/frame
+                    hud.set_text("⚠  USB CONNECTION LOST\nClose window, reconnect, and restart.")
+                    hud.set_color("#ff4444")
+                    return
 
-        if unit != _cur_unit[0]:
-            ax_cur.set_ylabel(f"Current ({unit})", fontsize=8, color=_C_TEXT)
-            _cur_unit[0] = unit
+            # ── Unit selection ───────────────────────────────────────────
+            # Filter garbage values (> 1MA) from scaling calculation
+            valid_peaks = [abs(v) for v in max_plot if abs(v) < 1e6]
+            peak_now = max(valid_peaks, default=abs(lx) if abs(lx) < 1e6 else 1e-12)
+            _, unit = autorange(peak_now)
+            sc = _scale_for(unit)
 
-        x  = [t - now for t in t_snap]
-        ym = [v * sc for v in mean_snap]
-        yx = [v * sc for v in max_snap]
-        yn = [v * sc for v in min_snap]
+            if unit != _cur_unit[0]:
+                ax_cur.set_ylabel(f"Current ({unit})", fontsize=9, color=_C_TEXT)
+                _cur_unit[0] = unit
 
-        line_mean.set_data(x, ym)
+            x  = [t - now for t in t_plot]
+            ym = [v * sc if abs(v) < 1e6 else 0 for v in mean_plot]
+            yx = [max(0.0, v * sc) if abs(v) < 1e6 else 0 for v in max_plot]
+            # Clamp min_v to 0: ADC noise near 0 V produces small negative readings
+            # that are not real current and would drag the envelope below the axis.
+            yn = [max(0.0, v * sc) if abs(v) < 1e6 else 0 for v in min_plot]
 
-        # Envelope fill (replace each frame)
-        if _fill_handle[0] is not None:
-            _fill_handle[0].remove()
-        _fill_handle[0] = ax_cur.fill_between(
-            x, yn, yx, alpha=0.15, color=_C_ENV, zorder=2,
-        )
+            line_smooth.set_data(x, ym)
 
-        # Axis limits from data
-        if ym:
-            ylo = min(yn) - (max(yx) - min(yn)) * 0.08
-            yhi = max(yx) + (max(yx) - min(yn)) * 0.08
-            margin = (yhi - ylo) * 0.05 or 0.01
-            ax_cur.set_ylim(ylo - margin, yhi + margin)
-        ax_cur.set_xlim((x[0] if x else -WINDOW_SECONDS), 0.5)
+            # Update fill_between polygon in-place — no allocation per frame
+            if len(x) >= 2:
+                verts = [[xi, yi] for xi, yi in zip(x, yn)] + \
+                        [[xi, yi] for xi, yi in zip(reversed(x), reversed(yx))]
+                _fill_poly[0].set_verts([verts])
+                _fill_poly[0].set_visible(True)
+            else:
+                _fill_poly[0].set_visible(False)
 
-        # Spike scatter — only within the rolling window
-        recent = [(t, v) for t, v in spk_snap if t >= now - WINDOW_SECONDS]
-        if recent:
-            sx = [t - now for t, _ in recent]
-            sy = [v * sc  for _, v in recent]
-            scat_spk.set_offsets(list(zip(sx, sy)))
-            scat_spk.set_visible(True)
-        else:
-            scat_spk.set_visible(False)
+            # Update session average
+            valid_means = [v for v in mean_plot if abs(v) < 1e6]
+            if valid_means:
+                sess_avg = sum(valid_means) / len(valid_means)
+                line_avg.set_ydata([sess_avg * sc, sess_avg * sc])
 
-        # Title flash when new spikes arrive
-        new_spikes = n_spk_tot != _last_n_spk[0] and n_spk_win > 0
-        _last_n_spk[0] = n_spk_tot
-        ax_cur.set_title(
-            f"DSP Current Monitor  ·  Rsense {rsense_mohm:.3f} mΩ  ·  {log_name}"
-            + ("  ⚡" if new_spikes else ""),
-            color="#ff6666" if new_spikes else _C_TITLE,
-            fontsize=9, pad=5,
-        )
+            # Axis limits — scale to the last 30 s of data so an old spike from
+            # 2 min ago doesn't pin the axis while current signal is tiny, but
+            # real peaks happening NOW are always fully visible.
+            ylo = yhi = 0.0
+            if ym:
+                cutoff_y = now - 30.0
+                yx_win = [yx[i] for i, t in enumerate(t_plot) if t >= cutoff_y] or yx
+                yn_win = [yn[i] for i, t in enumerate(t_plot) if t >= cutoff_y] or yn
+                yhi = max(yx_win)
+                ylo = max(0.0, min(yn_win))
+                yhi = max(yhi, ylo + 0.001 * sc)
+                span     = yhi - ylo
+                margin   = max(span * 0.20, 0.001 * sc)
+                ax_cur.set_ylim(max(0.0, ylo - margin), yhi + margin)
+            ax_cur.set_xlim(-WINDOW_SECONDS, 0.5)
 
-        # ── FFT panel ─────────────────────────────────────────────────
-        ax_fft.cla()
-        _style_ax(ax_fft)
-        ax_fft.grid(True, axis="y", color=_C_GRID, linewidth=0.5, alpha=0.6)
-        ax_fft.set_title("FFT Spectrum — latest 256-sample window",
-                         color=_C_TITLE, fontsize=8, pad=4)
+            # Spikes — offset markers upward so they protrude above the envelope fill
+            # Filter: only positive-current spikes within the visible window.
+            # Negative values are ADC noise artifacts near 0 V, not real events.
+            recent = [(t, v) for t, v in spk_snap if t >= now - WINDOW_SECONDS and 0 < v < 1e6]
+            if recent:
+                spk_offset = 0.04 * max(yhi - ylo, 0.001 * sc)
+                sx = [t - now for t, _ in recent]
+                sy = [v * sc + spk_offset for _, v in recent]
+                scat_spk.set_offsets(list(zip(sx, sy)))
+                scat_spk.set_visible(True)
+            else:
+                scat_spk.set_visible(False)
 
-        if fft_snap:
-            freqs = [f for f, _ in fft_snap]
-            mags  = [m for _, m in fft_snap]
-            fp    = max(mags, default=1e-12)
-            _, fu = autorange(fp)
-            fsc   = _scale_for(fu)
-            bw    = dsp._fs / DSP_WIN_SAMPLES * 0.7   # bar width ~70% of bin spacing
+            # ── FFT panel — full persistence spectrum ─────────────────────
+            if fft_snap:
+                freqs = [f for f, _ in fft_snap]  # all 127 bins (1..N/2-1)
+                mags  = [m for _, m in fft_snap]
+                fp    = max(mags, default=1e-12)
+                _, fu = autorange(fp)
+                fsc   = _scale_for(fu)
+                scaled_mags = [m * fsc for m in mags]
 
-            bars = ax_fft.bar(
-                freqs, [m * fsc for m in mags], width=bw,
-                color=_C_FFT, alpha=0.85, zorder=3,
+                if _fft_bars[0] is None or len(_fft_bars[0]) != len(freqs):
+                    ax_fft.cla()
+                    _style_ax(ax_fft)
+                    ax_fft.grid(True, color=_C_GRID, linewidth=0.5, alpha=0.4)
+                    ax_fft.set_title(
+                        "FFT Spectrum — persistence (Hann, 256-pt, 37.5 Hz/bin)",
+                        color=_C_TITLE, fontsize=8, pad=6)
+                    bw = dsp._fs / DSP_WIN_SAMPLES * 0.9  # fill ~90% of each bin slot
+                    _fft_bars[0] = ax_fft.bar(
+                        freqs, scaled_mags, width=bw, color=_C_FFT, alpha=0.85, zorder=3)
+                    for t in _fft_texts: t.remove()
+                    _fft_texts.clear()
+                    for _ in range(5):  # 5 label stubs for top-5 peaks
+                        _fft_texts.append(ax_fft.text(
+                            0, 0, "", ha="center", va="bottom",
+                            fontsize=7, color=_C_TEXT, fontweight="bold", visible=False))
+
+                # Always update bar heights
+                for bar, m in zip(_fft_bars[0], scaled_mags):
+                    bar.set_height(m)
+
+                # Label only the top-5 bins by current magnitude
+                top5 = sorted(range(len(scaled_mags)), key=lambda i: scaled_mags[i], reverse=True)[:5]
+                for i, txt in enumerate(_fft_texts):
+                    if i < len(top5):
+                        idx = top5[i]
+                        txt.set_position((freqs[idx], scaled_mags[idx]))
+                        txt.set_text(f"{freqs[idx]:.0f}Hz")
+                        txt.set_visible(True)
+                    else:
+                        txt.set_visible(False)
+
+                ax_fft.set_ylabel(f"Magnitude ({fu})", fontsize=8, color=_C_TEXT)
+                ax_fft.set_xlim(0, dsp._fs / 2)
+                ax_fft.set_ylim(0, max(scaled_mags) * 1.2 if scaled_mags else 1.0)
+
+            # ── HUD ───────────────────────────────────────────────────────
+            lm_v, lm_u = autorange(lm if abs(lm) < 1e6 else 0)
+            lr_v, lr_u = autorange(lr if abs(lr) < 1e6 else 0)
+            lx_v, lx_u = autorange(lx if abs(lx) < 1e6 else 0)
+            pw_mw      = (lm * dut_supply_v * 1e3) if abs(lm) < 1e6 else 0.0
+
+            # 3-minute rolling energy: integrate only the last WINDOW_SECONDS of windows
+            dt_win = DSP_WIN_SAMPLES / DSP_SAMPLE_RATE  # seconds per window
+            cutoff = now - WINDOW_SECONDS
+            e3_wh  = sum(
+                i * dut_supply_v * dt_win / 3600.0
+                for t, i in zip(t_plot, mean_plot)
+                if t >= cutoff and abs(i) < 1e6
             )
-            # Annotate top bars with frequency
-            for bar, (freq, mag) in zip(bars, zip(freqs, mags)):
-                bh = bar.get_height()
-                if bh > 0:
-                    ax_fft.text(
-                        bar.get_x() + bar.get_width() / 2, bh * 1.02,
-                        f"{freq:.0f}",
-                        ha="center", va="bottom", fontsize=6.5,
-                        color=_C_TEXT,
-                    )
+            e3_v, e3_u = _energy_autorange(e3_wh)
 
-            ax_fft.set_xlabel("Frequency (Hz)", fontsize=8, color=_C_TEXT)
-            ax_fft.set_ylabel(f"Magnitude ({fu})", fontsize=8, color=_C_TEXT)
-            ax_fft.xaxis.label.set_color(_C_TEXT)
-            ax_fft.yaxis.label.set_color(_C_TEXT)
-            ax_fft.tick_params(colors=_C_TEXT, labelsize=8)
-        else:
-            ax_fft.text(0.5, 0.5, "No FFT data yet",
-                        transform=ax_fft.transAxes,
-                        ha="center", va="center",
-                        color=_C_TEXT, fontsize=9)
+            lm_str = f"{lm_v:+.3f} {lm_u}" if abs(lm) < 1e6 else "---"
+            lr_str = f"{lr_v:.3f} {lr_u}"  if abs(lr) < 1e6 else "---"
+            lx_str = f"{lx_v:.3f} {lx_u}"  if abs(lx) < 1e6 else "---"
 
-        # ── HUD ───────────────────────────────────────────────────────
-        lm_v, lm_u = autorange(lm)
-        lr_v, lr_u = autorange(lr)
-        lx_v, lx_u = autorange(lx)
-        pw_mw      = lm * dut_supply_v * 1e3
+            hud.set_text(
+                f"MEAN: {lm_str:<12}  RMS: {lr_str:<12}  PEAK: {lx_str:<12}\n"
+                f"POWER: {pw_mw:>8.2f} mW    PWR 3min: {e3_v:>7.3f} {e3_u}    SPIKES: {n_spk_tot}"
+            )
+        except Exception:
+            # Silent catch to prevent UI thread death
+            pass
 
-        if len(mean_snap) > 1 and len(t_snap) > 1:
-            dt = (t_snap[-1] - t_snap[0]) / max(len(t_snap) - 1, 1)
-            e_wh = sum(v * dut_supply_v for v in mean_snap) * dt / 3600.0
-        else:
-            e_wh = 0.0
-        e_v, e_u = _energy_autorange(e_wh)
-
-        spk_note = f"  ⚡ {n_spk_win} in window" if n_spk_win else ""
-        hud.set_text(
-            f"Live mean: {lm_v:+.3f} {lm_u:<3}   "
-            f"RMS: {lr_v:.3f} {lr_u:<3}   "
-            f"Peak: {lx_v:.3f} {lx_u:<3}   "
-            f"Power: {pw_mw:.4f} mW\n"
-            f"Energy: {e_v:.4f} {e_u}   "
-            f"Windows: {len(t_snap)}   "
-            f"Spikes: {n_spk_tot} total{spk_note}"
-        )
-
-    animation.FuncAnimation(
-        fig, _update, interval=200, blit=False, cache_frame_data=False,
-    )
+    anim = animation.FuncAnimation(fig, _update, interval=150, blit=False, cache_frame_data=False)
     plt.show()
 
 
@@ -789,7 +848,7 @@ def run_ui_poll(meas: Measurement, rsense_mohm: float,
         )
         return line, hud
 
-    animation.FuncAnimation(
+    anim = animation.FuncAnimation(
         fig, _update, interval=200, blit=False, cache_frame_data=False,
     )
     plt.show()
@@ -804,9 +863,11 @@ def main() -> None:
     print("║       BugBuster — AD8411A Current Measurement               ║")
     print("╚══════════════════════════════════════════════════════════════╝")
 
-    log_path = None
-    bb = None
-    hal = None
+    log_path    = None
+    bb          = None
+    hal         = None
+    adc_ch      = None
+    hat_present = False
 
     try:
         # ── Phase 1: Connection ──────────────────────────────────────
@@ -843,11 +904,9 @@ def main() -> None:
         else:
             options += [("BB IO_Block 1 (VADJ1, 3–15 V)", "bb", 1),
                         ("BB IO_Block 2 (VADJ1, 3–15 V)", "bb", 2)]
-        if hat_present and is_usb:
+        if hat_present:
             options += [("HAT VADJ3 (1.8–36 V)", "hat", 1),
                         ("HAT VADJ4 (1.8–36 V)", "hat", 2)]
-        elif hat_present:
-            print("  (HAT rails require USB — not offered over WiFi)")
 
         print("  Available DUT power sources:")
         for i, (label, _, _) in enumerate(options, 1):
@@ -911,7 +970,7 @@ def main() -> None:
             print(f"  Threshold: {st_v:.3g} {st_u}  →  {v_spike_thresh*1000:.3f} mV ADC")
 
             # Configure ADC: final range + 9.6 kSPS for DSP
-            bb.set_adc_config(adc_ch, AdcMux.LF_TO_AGND, adc_range, AdcRate.SPS_200_H)
+            bb.set_adc_config(adc_ch, AdcMux.LF_TO_AGND, adc_range, AdcRate.SPS_9600)
 
             # ── Log file ──────────────────────────────────────────────
             print("\n── Log File ─────────────────────────────────────────────────")
@@ -933,6 +992,7 @@ def main() -> None:
                                  sample_rate=DSP_SAMPLE_RATE)
             dsp.open_csv(log_path, vs_actual, rsense_mohm, ad8411a_block, dut_label)
 
+            _ka_active = [False]
             try:
                 bb.start_adc_dsp_stream(
                     channel        = adc_ch,
@@ -942,11 +1002,26 @@ def main() -> None:
                     n_fft_peaks    = DSP_N_FFT_PEAKS,
                     callback       = dsp.on_window,
                 )
+
+                # USB keepalive — CMD_PING every 25 s prevents macOS from idling
+                # the CDC interface (macOS idle threshold is ~2 minutes).
+                if is_usb:
+                    _ka_active[0] = True
+                    def _keepalive_loop():
+                        while _ka_active[0]:
+                            try:
+                                bb.ping()
+                            except Exception:
+                                pass
+                            time.sleep(25)
+                    threading.Thread(target=_keepalive_loop, daemon=True).start()
+
                 try:
-                    run_ui_dsp(dsp, rsense_mohm, log_path, dut_supply_v)
+                    run_ui_dsp(dsp, rsense_mohm, log_path, dut_supply_v, is_usb=is_usb)
                 except KeyboardInterrupt:
                     pass
             finally:
+                _ka_active[0] = False
                 bb.stop_adc_dsp_stream()
                 dsp.close_csv()
 
@@ -995,6 +1070,25 @@ def main() -> None:
                 print("  Hardware powered down.")
             except Exception as exc:
                 print(f"  HAL shutdown error: {exc}")
+        if bb is not None:
+            try:
+                # Reset ADC back to a safe low-rate state
+                if adc_ch is not None:
+                    bb.set_adc_config(adc_ch, AdcMux.LF_TO_AGND,
+                                      AdcRange.V_0_12, AdcRate.SPS_200_H)
+            except Exception:
+                pass
+            try:
+                if hat_present:
+                    bb.hat_reset()
+                    print("  HAT reset to default state.")
+            except Exception as exc:
+                print(f"  HAT reset error: {exc}")
+            try:
+                bb.disconnect()
+                print("  Connection closed.")
+            except Exception as exc:
+                print(f"  Disconnect error: {exc}")
         if log_path:
             print(f"  Log: {log_path}")
         print("  Done.")

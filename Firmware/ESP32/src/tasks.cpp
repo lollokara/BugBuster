@@ -144,6 +144,9 @@ static void taskAdcPoll(void* /*pvParameters*/)
                     rate[ch]  = g_deviceState.channels[ch].adcRate;
                     mux[ch]   = g_deviceState.channels[ch].adcMux;
                     excUa[ch] = g_deviceState.channels[ch].rtdExcitationUa;
+                    // Seed with last known good values to avoid garbage on read failure
+                    raw[ch]   = g_deviceState.channels[ch].adcRawCode;
+                    eng[ch]   = g_deviceState.channels[ch].adcValue;
                 }
                 xSemaphoreGive(g_stateMutex);
             }
@@ -164,8 +167,11 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 if (func[ch] != CH_FUNC_HIGH_IMP &&
                     func[ch] != CH_FUNC_DIN_LOGIC &&
                     func[ch] != CH_FUNC_DIN_LOOP) {
-                    s_device->readAdcResult(tasks_logical_to_physical(ch), &raw[ch]);
-                    eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch], excUa[ch]);
+                    uint32_t rawVal = 0;
+                    if (s_device->readAdcResult(tasks_logical_to_physical(ch), &rawVal)) {
+                        raw[ch] = rawVal;
+                        eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch], excUa[ch]);
+                    }
                 } else {
                     raw[ch] = 0;
                     eng[ch] = 0.0f;
@@ -286,6 +292,10 @@ static void taskAdcPoll(void* /*pvParameters*/)
             }
         }
 
+        // Add a small micro-delay even at high rates to relieve SPI bus pressure.
+        if (pollDelay == 0) {
+            delay_us(50);
+        }
         vTaskDelay(pollDelay);
     }
 }
@@ -501,16 +511,14 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     // user-facing IO_Block/connector:
     //   logical 0 (A) -> AD74416H phys 0, MUX 0 (IO3 / IO_Block 1)
     //   logical 1 (B) -> AD74416H phys 1, MUX 1 (IO6 / IO_Block 2)
-    //   logical 2 (C) -> AD74416H phys 3, MUX 3 (IO9 / IO_Block 3)
-    //   logical 3 (D) -> AD74416H phys 2, MUX 2 (IO12 / IO_Block 4)
+    //   logical 2 (C) -> AD74416H phys 3, MUX 2 (IO9 / IO_Block 3)
+    //   logical 3 (D) -> AD74416H phys 2, MUX 3 (IO12 / IO_Block 4)
     uint8_t physical_ch = logical_channel;
     uint8_t mux_dev = logical_channel;
     if (logical_channel == 2) {
         physical_ch = 3;
-        mux_dev = 3;
     } else if (logical_channel == 3) {
         physical_ch = 2;
-        mux_dev = 2;
     }
 
     if (!s_device->setChannelFunction(physical_ch, func)) {

@@ -34,6 +34,10 @@ static volatile uint16_t s_pos        = 0;
 // Index of the buffer most recently completed (valid after push returns true).
 static uint8_t s_last_completed = 0;
 
+// Snapshot buffer used exclusively by adc_dsp_process() (DSP task, single caller).
+// Keeps the hot-path off the DSP task stack and avoids a 1 KB stack frame.
+static float s_process_snap[ADC_DSP_WINDOW_SIZE];
+
 // ---------------------------------------------------------------------------
 // FFT workspace (heap-allocated only when FFT is requested)
 // ---------------------------------------------------------------------------
@@ -81,7 +85,7 @@ esp_err_t adc_dsp_init(const AdcDspConfig *cfg)
     s_last_completed = 0;
 
     for (int b = 0; b < 2; b++) {
-        s_stats[b] = { 0.0f, 0.0f, 1e30f, -1e30f, 0u };
+        s_stats[b] = { 0.0f, 0.0f, 0.0f, 0.0f, 0u };
     }
 
     if (cfg->n_fft_peaks > 0) {
@@ -127,10 +131,19 @@ bool adc_dsp_push_sample(float voltage, uint32_t timestamp_us)
 {
     if (!s_init) return false;
 
+    // Filter NaN/Inf to prevent corruption of stats deques on host
+    if (!isfinite(voltage)) voltage = 0.0f;
+
     uint8_t  buf = s_active_buf;
     uint16_t pos = s_pos;
 
-    if (pos == 0) s_stats[buf].window_start_us = timestamp_us;
+    if (pos == 0) {
+        s_stats[buf].window_start_us = timestamp_us;
+        s_stats[buf].min_v  = voltage;
+        s_stats[buf].max_v  = voltage;
+        s_stats[buf].sum    = 0.0f;
+        s_stats[buf].sum_sq = 0.0f;
+    }
 
     s_samples[buf][pos] = voltage;
 
@@ -145,9 +158,10 @@ bool adc_dsp_push_sample(float voltage, uint32_t timestamp_us)
         // Window complete: save completed buffer index, flip to other buffer
         s_last_completed = buf;
         uint8_t next = buf ^ 1u;
-        s_stats[next] = { 0.0f, 0.0f, 1e30f, -1e30f, 0u };
         s_active_buf = next;  // single byte write — atomic on Xtensa
         s_pos = 0;
+        // Memory barrier to ensure stats are visible to other core
+        __asm__ __volatile__ ("memw");
         return true;
     }
 
@@ -165,8 +179,13 @@ void adc_dsp_process(uint8_t buf_idx, AdcDspWindow *out)
     if (!out) return;
     buf_idx &= 1u;
 
-    const float    *samples = s_samples[buf_idx];
-    const BufStats &st      = s_stats[buf_idx];
+    // Snapshot the completed buffer immediately. The ADC poll task (Core 1) will
+    // recycle this buffer after filling the other one (~26.7 ms at 9.6 kSPS).
+    // If bbpSendDspWindow blocks on USB CDC TX for longer than that window,
+    // reading s_stats/s_samples directly would give corrupted (zeroed) stats.
+    BufStats st = s_stats[buf_idx];                                  // struct copy
+    memcpy(s_process_snap, s_samples[buf_idx], sizeof(s_process_snap));
+    const float    *samples = s_process_snap;
     const uint16_t  n       = ADC_DSP_WINDOW_SIZE;
 
     float mean = st.sum    / (float)n;
