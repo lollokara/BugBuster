@@ -223,6 +223,45 @@ rx = spi.transfer(b'\x9F\x00\x00\x00')                       # bytes
 
 **Limits:** Single transfer ≤ 512 bytes.
 
+### HAT v2 (rails, LEDs, shifted IO, SWD)
+
+HAT support is exposed as flat functions on the `bugbuster` module. These calls
+use the ESP32-to-RP2040 HAT UART bridge, so they raise `OSError(EIO)` if no HAT
+is connected or the command times out.
+
+```python
+import bugbuster
+
+status = bugbuster.hat_status()
+print('HAT:', status['detected'], status['connected'])
+
+if status['connected']:
+    caps = bugbuster.hat_caps()
+    print('rails:', caps['rail_count'], 'leds:', caps['led_count'])
+
+    for rail in bugbuster.hat_rails():
+        print('rail', rail['rail_id'], rail['voltage_mv'], 'mV', 'enabled=', rail['enabled'])
+
+    bugbuster.hat_led(1, bugbuster.HAT_LED_GREEN)
+    print('cal:', bugbuster.hat_calibrate_status())
+```
+
+**Functions:**
+- `hat_status()` — ESP32 HAT snapshot with presence, UART health, firmware version, pin config, SWD flags, and cached telemetry
+- `hat_caps()` — HAT capability metadata (`rail_count`, `led_count`, `shifted_io_count`, firmware version, etc.)
+- `hat_rails()` — list of rail dictionaries (`rail_id`, `enabled`, `voltage_mv`, `current_ma`, `status`)
+- `hat_set_rail_enable(rail_id, enable)` — enable/disable a HAT rail
+- `hat_set_rail_voltage(rail_id, voltage_mv)` — set adjustable rail target in mV
+- `hat_led(led_id, color_code)` — set status LED 1..8 using `HAT_LED_*` constants
+- `hat_io_bank(dirs, ups=0, dns=0, vals=0)` — configure shifted IO direction, pulls, and output values as 8-bit masks
+- `hat_level_shift(oe, dir)` — override HAT level-shifter OE/DIR and return the applied state
+- `hat_calibrate_start(rail_id)`, `hat_calibrate_status()`, `hat_calibrate_import(rail_id, points)` — HAT rail calibration controls
+- `hat_setup_swd(target_voltage_mv=3300, connector=0)` — set up the dedicated HAT CMSIS-DAP/SWD connector
+
+**Constants:**
+- Rails: `HAT_RAIL_3V3_ADJ`, `HAT_RAIL_VADJ3`, `HAT_RAIL_VADJ4`
+- LED colors: `HAT_LED_OFF`, `HAT_LED_RED`, `HAT_LED_GREEN`, `HAT_LED_BLUE`, `HAT_LED_YELLOW`, `HAT_LED_CYAN`, `HAT_LED_MAGENTA`, `HAT_LED_WHITE`
+
 ### Frozen Modules
 
 Three helper modules are pre-compiled and importable without VFS:
@@ -551,6 +590,7 @@ This allows you to:
 | Channel binding | `Firmware/ESP32/src/mp/modbugbuster_channel.c` | `Channel` class, voltage/function/digital methods |
 | I2C binding | `Firmware/ESP32/src/mp/modbugbuster_i2c.c` | `I2C` class, scan/read/write methods |
 | SPI binding | `Firmware/ESP32/src/mp/modbugbuster_spi.c` | `SPI` class, transfer method |
+| HAT binding | `Firmware/ESP32/src/mp/modbugbuster_hat.c` | HAT rails, LEDs, shifted IO, calibration, SWD setup |
 | Network HTTP/MQTT | `Firmware/ESP32/src/mp/modbugbuster_net.c` | `http_get`, `http_post`, `mqtt_publish` |
 | VM lifecycle & persistence | `Firmware/ESP32/src/mp/scripting.cpp` | `mp_init`, `mp_deinit`, stop flag, persistent mode, watermark, auto-reset |
 | Persistent VM header | `Firmware/ESP32/src/mp/scripting.h` | status struct definitions |

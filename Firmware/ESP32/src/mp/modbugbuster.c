@@ -23,6 +23,20 @@ MP_DECLARE_CONST_FUN_OBJ_KW(bugbuster_claim_fn_obj);
 MP_DECLARE_CONST_FUN_OBJ_KW(bugbuster_release_fn_obj);
 MP_DECLARE_CONST_FUN_OBJ_0(bugbuster_owner_status_fn_obj);
 
+// HAT v2 function objects defined in modbugbuster_hat.c
+MP_DECLARE_CONST_FUN_OBJ_0(bugbuster_hat_status_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(bugbuster_hat_caps_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(bugbuster_hat_rails_obj);
+MP_DECLARE_CONST_FUN_OBJ_2(bugbuster_hat_set_rail_enable_obj);
+MP_DECLARE_CONST_FUN_OBJ_2(bugbuster_hat_set_rail_voltage_obj);
+MP_DECLARE_CONST_FUN_OBJ_2(bugbuster_hat_led_obj);
+MP_DECLARE_CONST_FUN_OBJ_KW(bugbuster_hat_io_bank_obj);
+MP_DECLARE_CONST_FUN_OBJ_2(bugbuster_hat_level_shift_obj);
+MP_DECLARE_CONST_FUN_OBJ_1(bugbuster_hat_calibrate_start_obj);
+MP_DECLARE_CONST_FUN_OBJ_0(bugbuster_hat_calibrate_status_obj);
+MP_DECLARE_CONST_FUN_OBJ_2(bugbuster_hat_calibrate_import_obj);
+MP_DECLARE_CONST_FUN_OBJ_KW(bugbuster_hat_setup_swd_obj);
+
 static mp_obj_t bugbuster_sleep(mp_obj_t ms_in)
 {
     mp_int_t ms = mp_obj_get_int(ms_in);
@@ -49,6 +63,32 @@ static const mp_rom_map_elem_t bugbuster_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_release),      MP_ROM_PTR(&bugbuster_release_fn_obj) },
     { MP_ROM_QSTR(MP_QSTR_owner_status), MP_ROM_PTR(&bugbuster_owner_status_fn_obj) },
     { MP_ROM_QSTR(MP_QSTR_Claim),        MP_ROM_PTR(&bugbuster_claim_type) },
+
+    // HAT v2 bindings
+    { MP_ROM_QSTR(MP_QSTR_hat_status),              MP_ROM_PTR(&bugbuster_hat_status_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_caps),                MP_ROM_PTR(&bugbuster_hat_caps_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_rails),               MP_ROM_PTR(&bugbuster_hat_rails_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_set_rail_enable),     MP_ROM_PTR(&bugbuster_hat_set_rail_enable_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_set_rail_voltage),    MP_ROM_PTR(&bugbuster_hat_set_rail_voltage_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_led),                 MP_ROM_PTR(&bugbuster_hat_led_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_io_bank),             MP_ROM_PTR(&bugbuster_hat_io_bank_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_level_shift),         MP_ROM_PTR(&bugbuster_hat_level_shift_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_calibrate_start),     MP_ROM_PTR(&bugbuster_hat_calibrate_start_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_calibrate_status),    MP_ROM_PTR(&bugbuster_hat_calibrate_status_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_calibrate_import),    MP_ROM_PTR(&bugbuster_hat_calibrate_import_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hat_setup_swd),           MP_ROM_PTR(&bugbuster_hat_setup_swd_obj) },
+
+    { MP_ROM_QSTR(MP_QSTR_HAT_RAIL_3V3_ADJ), MP_ROM_INT(0) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_RAIL_VADJ3),   MP_ROM_INT(1) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_RAIL_VADJ4),   MP_ROM_INT(2) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_OFF),      MP_ROM_INT(0) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_RED),      MP_ROM_INT(1) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_GREEN),    MP_ROM_INT(2) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_BLUE),     MP_ROM_INT(3) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_YELLOW),   MP_ROM_INT(4) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_CYAN),     MP_ROM_INT(5) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_MAGENTA),  MP_ROM_INT(6) },
+    { MP_ROM_QSTR(MP_QSTR_HAT_LED_WHITE),    MP_ROM_INT(7) },
 
     { MP_ROM_QSTR(MP_QSTR_FUNC_HIGH_IMP), MP_ROM_INT(CH_FUNC_HIGH_IMP) },
     { MP_ROM_QSTR(MP_QSTR_FUNC_VOUT), MP_ROM_INT(CH_FUNC_VOUT) },

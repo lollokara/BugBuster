@@ -60,6 +60,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_i2c.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_spi.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_net.c
+        ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_hat.c
     )
 
     # ── qstr source list (all sources that contain Q(...) macros) ─────────────
