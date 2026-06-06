@@ -18,20 +18,6 @@ from bugbuster.constants import LaTriggerType, HatPinFunction
 from bugbuster.transport.usb import DeviceError
 from conftest import assert_no_faults
 
-try:
-    import serial
-    import serial.tools.list_ports
-    _SERIAL_AVAILABLE = True
-except ImportError:
-    _SERIAL_AVAILABLE = False
-
-try:
-    import usb.core
-    import usb.util
-    _PYUSB_AVAILABLE = True
-except ImportError:
-    _PYUSB_AVAILABLE = False
-
 pytestmark = [
     pytest.mark.requires_hat,
     pytest.mark.timeout(60),
