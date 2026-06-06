@@ -732,7 +732,7 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             spawn_local(async move {
                                                 let id = cal_rail_id.get_untracked();
                                                 if let Some(code) = hat_calibrate_start(id).await {
-                                                    if code == 0 {
+                                                    if code == 1 {
                                                         set_cal_active.set(true);
                                                         set_cal_progress.set(0);
                                                         show_toast("Calibration sweep started!", "ok");

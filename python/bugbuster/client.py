@@ -2452,9 +2452,17 @@ class BugBuster:
         """Get HAT v2 capability metadata."""
         self._require_hat_present()
         if not self._usb:
-            raise NotImplementedError(
-                "hat_get_caps() is not available over HTTP yet. Use a USB connection instead."
-            )
+            j = self._http_get("/hat/v2/caps")
+            return {
+                "hw_revision": j.get("hwRevision", 0),
+                "flags": j.get("flags", 0),
+                "rail_count": j.get("railCount", 0),
+                "led_count": j.get("ledCount", 0),
+                "shifted_io_count": j.get("shiftedIoCount", 0),
+                "la_routes": j.get("laRouteCount", 0),
+                "fw_version": f"{j.get('fwMajor', 0)}.{j.get('fwMinor', 0)}",
+                "hvpak_present": j.get("hvpakPresent", False),
+            }
 
         resp = self._usb_cmd(CmdId.HAT_GET_CAPS)
         _require_resp_len(resp, 12, "HAT_GET_CAPS")
@@ -2483,9 +2491,18 @@ class BugBuster:
         """Get HAT v2 rail status for 3V3_ADJ, VADJ3, and VADJ4."""
         self._require_hat_present()
         if not self._usb:
-            raise NotImplementedError(
-                "hat_get_rail_status() is not available over HTTP yet. Use a USB connection instead."
-            )
+            j = self._http_get("/hat/v2/rails")
+            rails = [
+                {
+                    "rail_id": r.get("railId", i),
+                    "enabled": r.get("enabled", False),
+                    "voltage_mv": r.get("voltageMv", 0),
+                    "current_ma": r.get("currentMa", 0),
+                    "status": r.get("status", 0),
+                }
+                for i, r in enumerate(j.get("rails", []))
+            ]
+            return {"count": j.get("railCount", len(rails)), "rails": rails}
 
         resp = self._usb_cmd(CmdId.HAT_GET_RAIL_STATUS)
         _require_resp_len(resp, 1, "HAT_GET_RAIL_STATUS")
@@ -2512,9 +2529,8 @@ class BugBuster:
         """Enable or disable a HAT v2 rail, then return refreshed rail status."""
         self._require_hat_present()
         if not self._usb:
-            raise NotImplementedError(
-                "hat_set_rail_enable() is not available over HTTP yet. Use a USB connection instead."
-            )
+            self._http_post("/hat/v2/rail/enable", {"railId": rail_id, "enable": bool(enable)})
+            return self.hat_get_rail_status()
 
         payload = struct.pack('<BB', rail_id & 0xFF, int(enable))
         self._usb_cmd(CmdId.HAT_SET_RAIL_ENABLE, payload)
@@ -2528,9 +2544,8 @@ class BugBuster:
         """
         self._require_hat_present()
         if not self._usb:
-            raise NotImplementedError(
-                "hat_set_rail_voltage() is not available over HTTP yet. Use a USB connection instead."
-            )
+            self._http_post("/hat/v2/rail/voltage", {"railId": rail_id, "voltageMv": int(voltage_mv)})
+            return self.hat_get_rail_status()
 
         payload = struct.pack('<BH', rail_id & 0xFF, int(voltage_mv) & 0xFFFF)
         self._usb_cmd(CmdId.HAT_SET_RAIL_VOLTAGE, payload)
@@ -2540,9 +2555,8 @@ class BugBuster:
         """Set a HAT status LED state. LED indexes are 1..8."""
         self._require_hat_present()
         if not self._usb:
-            raise NotImplementedError(
-                "hat_set_led_state() is not available over HTTP yet. Use a USB connection instead."
-            )
+            self._http_post("/hat/v2/led", {"ledId": led_index, "colorCode": color_code})
+            return True
 
         payload = struct.pack('<BB', led_index & 0xFF, color_code & 0xFF)
         self._usb_cmd(CmdId.HAT_SET_LED_STATE, payload)
@@ -2560,10 +2574,8 @@ class BugBuster:
             self._usb_cmd(CmdId.HAT_SET_IO_VOLT, payload)
             return True
         else:
-            raise NotImplementedError(
-                "hat_set_io_voltage() is not available over HTTP — firmware does not expose /api/hat/io_voltage. "
-                "Use a USB connection instead."
-            )
+            self._http_post("/hat/v2/io_voltage", {"voltageMv": int(voltage_mv)})
+            return True
 
     def hat_setup_swd(self, target_voltage_mv: int = 3300, connector: int = 0) -> bool:
         """
@@ -2580,8 +2592,8 @@ class BugBuster:
             self._usb_cmd(CmdId.HAT_SETUP_SWD, payload)
             return True
         else:
-            return self._http_post("/hat/setup_swd", {
-                "target_voltage_mv": target_voltage_mv,
+            return self._http_post("/hat/v2/swd/setup", {
+                "targetVoltageMv": target_voltage_mv,
                 "connector": connector,
             }).get("ok", False)
 

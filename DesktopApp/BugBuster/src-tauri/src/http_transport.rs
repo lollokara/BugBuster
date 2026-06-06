@@ -1517,6 +1517,337 @@ impl Transport for HttpTransport {
                 Ok(vec![if existed { 0 } else { 1 }])
             }
 
+            // =================================================================
+            // HAT v2 commands
+            // =================================================================
+
+            bbp::CMD_HAT_GET_STATUS => {
+                let j = self.get_json("/api/hat").await?;
+                let detected = j.get("detected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let connected = j.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let hat_type = j.get("type").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let detect_voltage = j.get("detectVoltage").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let fw_major = j.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let fw_minor = j.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let config_confirmed = j.get("configConfirmed")
+                    .or_else(|| j.get("config_confirmed"))
+                    .and_then(|v| v.as_bool()).unwrap_or(false);
+                let pin_config: Vec<u8> = j.get("pinConfig")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().take(4)
+                        .map(|e| e.get("function").and_then(|v| v.as_u64()).unwrap_or(0) as u8)
+                        .collect())
+                    .unwrap_or_else(|| vec![0u8; 4]);
+                let dap_connected = j.get("dapConnected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let target_detected = j.get("targetDetected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let target_dpidr = j.get("targetDpidr").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+                let mut buf = Vec::new();
+                buf.push(detected as u8);
+                buf.push(connected as u8);
+                buf.push(hat_type);
+                buf.extend_from_slice(&detect_voltage.to_le_bytes());
+                buf.push(fw_major);
+                buf.push(fw_minor);
+                buf.push(config_confirmed as u8);
+                for i in 0..4usize {
+                    buf.push(pin_config.get(i).copied().unwrap_or(0));
+                }
+                // 2 connector slots (enabled, current_ma, fault) — not in REST, use 0
+                for _ in 0..2 {
+                    buf.push(0);
+                    buf.extend_from_slice(&0.0f32.to_le_bytes());
+                    buf.push(0);
+                }
+                buf.extend_from_slice(&0u16.to_le_bytes()); // io_voltage_mv
+                buf.push(dap_connected as u8);
+                buf.push(target_detected as u8);
+                buf.extend_from_slice(&target_dpidr.to_le_bytes());
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_DETECT => {
+                let j = self.post_json("/api/hat/detect", &serde_json::json!({})).await?;
+                let detected = j.get("detected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let hat_type = j.get("type").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let detect_voltage = j.get("detectVoltage").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let connected = j.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let mut buf = vec![detected as u8, hat_type];
+                buf.extend_from_slice(&detect_voltage.to_le_bytes());
+                buf.push(connected as u8);
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_GET_CAPS => {
+                let j = self.get_json("/api/hat/v2/caps").await?;
+                let hw_revision = j.get("hwRevision").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let flags = j.get("flags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let rail_count = j.get("railCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let led_count = j.get("ledCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let shifted_io_count = j.get("shiftedIoCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let la_route_count = j.get("laRouteCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let fw_major = j.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let fw_minor = j.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let hvpak_present = j.get("hvpakPresent").and_then(|v| v.as_bool()).unwrap_or(false);
+                let mut buf = Vec::new();
+                buf.push(hw_revision);
+                buf.extend_from_slice(&flags.to_le_bytes());
+                buf.push(rail_count);
+                buf.push(led_count);
+                buf.push(shifted_io_count);
+                buf.push(la_route_count);
+                buf.push(fw_major);
+                buf.push(fw_minor);
+                buf.push(hvpak_present as u8);
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_GET_RAIL_STATUS => {
+                let j = self.get_json("/api/hat/v2/rails").await?;
+                let rails = j.get("rails").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let count = rails.len() as u8;
+                let mut buf = vec![count];
+                for rail in &rails {
+                    let rail_id = rail.get("railId").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    let enabled = rail.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let voltage_mv = rail.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                    let current_ma = rail.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                    let status = rail.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    buf.push(rail_id);
+                    buf.push(enabled as u8);
+                    buf.extend_from_slice(&voltage_mv.to_le_bytes());
+                    buf.extend_from_slice(&current_ma.to_le_bytes());
+                    buf.push(status);
+                }
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_SET_RAIL_ENABLE => {
+                if payload.len() < 2 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_RAIL_ENABLE"));
+                }
+                let rail_id = payload[0];
+                let enable = payload[1] != 0;
+                let j = self.post_json("/api/hat/v2/rail/enable", &serde_json::json!({
+                    "railId": rail_id,
+                    "enable": enable,
+                })).await?;
+                let r_rail_id = j.get("railId").and_then(|v| v.as_u64()).unwrap_or(rail_id as u64) as u8;
+                let r_enabled = j.get("enabled").and_then(|v| v.as_bool()).unwrap_or(enable);
+                let r_voltage_mv = j.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let r_current_ma = j.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let r_status = j.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let mut buf = vec![1u8]; // count = 1
+                buf.push(r_rail_id);
+                buf.push(r_enabled as u8);
+                buf.extend_from_slice(&r_voltage_mv.to_le_bytes());
+                buf.extend_from_slice(&r_current_ma.to_le_bytes());
+                buf.push(r_status);
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_SET_RAIL_VOLTAGE => {
+                if payload.len() < 3 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_RAIL_VOLTAGE"));
+                }
+                let rail_id = payload[0];
+                let voltage_mv = u16::from_le_bytes([payload[1], payload[2]]);
+                let j = self.post_json("/api/hat/v2/rail/voltage", &serde_json::json!({
+                    "railId": rail_id,
+                    "voltageMv": voltage_mv,
+                })).await?;
+                let r_rail_id = j.get("railId").and_then(|v| v.as_u64()).unwrap_or(rail_id as u64) as u8;
+                let r_enabled = j.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                let r_voltage_mv = j.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let r_current_ma = j.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let r_status = j.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let mut buf = vec![1u8]; // count = 1
+                buf.push(r_rail_id);
+                buf.push(r_enabled as u8);
+                buf.extend_from_slice(&r_voltage_mv.to_le_bytes());
+                buf.extend_from_slice(&r_current_ma.to_le_bytes());
+                buf.push(r_status);
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_CALIBRATE_START => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_CALIBRATE_START"));
+                }
+                let rail_id = payload[0];
+                let j = self.post_json("/api/hat/v2/calibrate/start", &serde_json::json!({
+                    "railId": rail_id,
+                })).await?;
+                let status = j.get("status").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
+                Ok(vec![status])
+            }
+
+            bbp::CMD_HAT_CALIBRATE_STATUS => {
+                let j = self.get_json("/api/hat/v2/calibrate/status").await?;
+                let state = j.get("state").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let progress = j.get("progress").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let rail_id = j.get("railId").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let last_error = j.get("lastError").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let persist_state = j.get("persistState").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let stage = j.get("stage").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let point = j.get("point").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let code = j.get("code").and_then(|v| v.as_i64()).unwrap_or(0) as i8 as u8;
+                let measured_mv = j.get("measuredMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                let min_mv = j.get("minMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                let max_mv = j.get("maxMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                let max_gap_mv = j.get("maxGapMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                let max_error_mv = j.get("maxErrorMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                let validation_flags = j.get("validationFlags").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let mut buf = Vec::new();
+                buf.push(state);
+                buf.push(progress);
+                buf.push(rail_id);
+                buf.push(last_error);
+                buf.push(persist_state);
+                buf.push(stage);
+                buf.push(point);
+                buf.push(code);
+                buf.extend_from_slice(&measured_mv.to_le_bytes());
+                buf.extend_from_slice(&min_mv.to_le_bytes());
+                buf.extend_from_slice(&max_mv.to_le_bytes());
+                buf.extend_from_slice(&max_gap_mv.to_le_bytes());
+                buf.extend_from_slice(&max_error_mv.to_le_bytes());
+                buf.extend_from_slice(&validation_flags.to_le_bytes());
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_CALIBRATE_IMPORT => {
+                if payload.len() < 2 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_CALIBRATE_IMPORT"));
+                }
+                let rail_id = payload[0];
+                let count = payload[1] as usize;
+                let mut points = Vec::new();
+                let mut pos = 2usize;
+                for _ in 0..count {
+                    if pos + 5 > payload.len() { break; }
+                    let dac_code = payload[pos] as i8;
+                    let measured_v = f32::from_le_bytes([payload[pos+1], payload[pos+2], payload[pos+3], payload[pos+4]]);
+                    pos += 5;
+                    points.push(serde_json::json!({"dacCode": dac_code, "measuredV": measured_v}));
+                }
+                self.post_json("/api/hat/v2/calibrate/import", &serde_json::json!({
+                    "railId": rail_id,
+                    "points": points,
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_SET_IO_BANK => {
+                if payload.len() < 3 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_IO_BANK"));
+                }
+                self.post_json("/api/hat/v2/io_bank", &serde_json::json!({
+                    "dirs": payload[0],
+                    "ups": payload[1],
+                    "dns": payload[2],
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_SET_LEVEL_SHIFT => {
+                if payload.len() < 2 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_LEVEL_SHIFT"));
+                }
+                let oe = payload[0] != 0;
+                let dir = payload[1] != 0;
+                let j = self.post_json("/api/hat/v2/level_shift", &serde_json::json!({
+                    "oe": oe,
+                    "dir": dir,
+                })).await?;
+                let r_oe = j.get("oe").and_then(|v| v.as_bool()).unwrap_or(oe);
+                let r_dir = j.get("dir").and_then(|v| v.as_bool()).unwrap_or(dir);
+                Ok(vec![r_oe as u8, r_dir as u8])
+            }
+
+            bbp::CMD_HAT_SET_IO_VOLTAGE => {
+                if payload.len() < 2 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_IO_VOLTAGE"));
+                }
+                let voltage_mv = u16::from_le_bytes([payload[0], payload[1]]);
+                self.post_json("/api/hat/v2/io_voltage", &serde_json::json!({
+                    "voltageMv": voltage_mv,
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_SETUP_SWD => {
+                if payload.len() < 3 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SETUP_SWD"));
+                }
+                let target_voltage_mv = u16::from_le_bytes([payload[0], payload[1]]);
+                let connector = payload[2];
+                self.post_json("/api/hat/v2/swd/setup", &serde_json::json!({
+                    "targetVoltageMv": target_voltage_mv,
+                    "connector": connector,
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_SET_LED_STATE => {
+                if payload.len() < 2 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_LED_STATE"));
+                }
+                self.post_json("/api/hat/v2/led", &serde_json::json!({
+                    "ledId": payload[0],
+                    "colorCode": payload[1],
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_LA_SET_ROUTE => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_LA_SET_ROUTE"));
+                }
+                let route = payload[0];
+                let j = self.post_json("/api/hat/v2/la/route", &serde_json::json!({
+                    "route": route,
+                })).await?;
+                let r_route = j.get("route").and_then(|v| v.as_u64()).unwrap_or(route as u64) as u8;
+                Ok(vec![r_route])
+            }
+
+            bbp::CMD_HAT_LA_LOG_ENABLE => {
+                if payload.is_empty() {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_LA_LOG_ENABLE"));
+                }
+                self.post_json("/api/hat/v2/la/log/enable", &serde_json::json!({
+                    "enable": payload[0] != 0,
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_SET_PIN => {
+                if payload.len() < 2 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_PIN"));
+                }
+                self.post_json("/api/hat/config", &serde_json::json!({
+                    "pin": payload[0],
+                    "function": payload[1],
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_SET_ALL_PINS => {
+                if payload.len() < 4 {
+                    return Err(anyhow!("Invalid payload for CMD_HAT_SET_ALL_PINS"));
+                }
+                self.post_json("/api/hat/config", &serde_json::json!({
+                    "pins": [payload[0], payload[1], payload[2], payload[3]],
+                })).await?;
+                Ok(vec![])
+            }
+
+            bbp::CMD_HAT_RESET => {
+                self.post_json("/api/hat/reset", &serde_json::json!({})).await?;
+                Ok(vec![])
+            }
+
             _ => Err(anyhow!(
                 "Command 0x{:02X} not implemented for HTTP transport",
                 cmd_id
