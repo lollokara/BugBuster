@@ -3106,7 +3106,8 @@ class BugBuster:
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_LOG_ENABLE, payload)
             return True
-        raise NotImplementedError("LA log control is USB-only")
+        self._http_post("/hat/v2/la/log/enable", {"enable": enable})
+        return True
 
     def hat_la_usb_reset(self) -> bool:
         """Reinitialize the RP2040 vendor bulk endpoint to a clean state.

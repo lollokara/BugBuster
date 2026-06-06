@@ -1536,6 +1536,29 @@ pub async fn hat_la_log_enable(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn hat_la_usb_reset(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_HAT_LA_USB_RESET, &[])
+        .await
+        .map_err(map_err)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hat_la_log_get(mgr: State<'_, ConnectionManager>) -> CmdResult<Vec<String>> {
+    match mgr.send_command(bbp::CMD_HAT_LA_LOG_GET, &[]).await {
+        Ok(bytes) => {
+            if bytes.is_empty() {
+                return Ok(vec![]);
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            Ok(text.split('\n').filter(|s| !s.is_empty()).map(String::from).collect())
+        }
+        // USB path: command unimplemented — logs arrive via BBP events, not polling
+        Err(_) => Ok(vec![]),
+    }
+}
+
 // -----------------------------------------------------------------------------
 // HUSB238 USB PD
 // -----------------------------------------------------------------------------

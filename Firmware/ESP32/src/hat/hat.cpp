@@ -1563,6 +1563,18 @@ void hat_poll(void)
 {
     if (!s_initialized || !s_state.connected) return;
 
+#if PIN_HAT_LA_DONE_IRQ >= 0
+    // Fast GPIO path: if the dedicated LA-done wire fired, emit BBP event immediately
+    // without waiting for the RP2040 to send a status frame over UART.
+    if (hat_la_done_consume()) {
+        ESP_LOGD(TAG, "LA_DONE IRQ consumed — forwarding to host");
+        if (bbpIsActive()) {
+            bbpSendEvent(BBP_EVT_LA_DONE, NULL, 0);
+        }
+        ws_stream_forward(WS_STREAM_LA_META, NULL, 0);
+    }
+#endif
+
     // Check if any bytes available on UART without blocking
     size_t buffered = 0;
     uart_get_buffered_data_len(HAT_UART_NUM, &buffered);

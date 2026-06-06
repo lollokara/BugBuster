@@ -7,6 +7,8 @@ name: Combined Release
         description: "Release version (without leading v), e.g. 1.0.0"
         required: true
   push:
+    branches:
+      - main
     tags:
       - "release-v*"
 
@@ -18,24 +20,126 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prep:
+    name: Prepare Release Version
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      version_suffix: ${{ steps.version.outputs.version_suffix }}
+      build_rp2040: ${{ steps.diff.outputs.build_rp2040 }}
+      build_esp32: ${{ steps.diff.outputs.build_esp32 }}
+      build_desktop: ${{ steps.diff.outputs.build_desktop }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0  # Fetch all history to ensure previous commit is available for diff
+
+      - name: Setup Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.x"
+
+      - name: Resolve version and tag
+        id: version
+        shell: bash
+        run: |
+          base_version=$(python DesktopApp/BugBuster/scripts/desktop_version.py --check)
+          if [[ "$GITHUB_REF" == refs/tags/release-v* ]]; then
+            version="${GITHUB_REF_NAME#release-v}"
+            tag="$GITHUB_REF_NAME"
+            is_prerelease="false"
+            version_suffix=""
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            version="${{ inputs.version }}"
+            tag="release-v${version}"
+            is_prerelease="false"
+            version_suffix=""
+          else
+            # Push to main
+            timestamp=$(date +'%Y%m%d%H%M%S')
+            version_suffix="_build${timestamp}"
+            version="${base_version}${version_suffix}"
+            tag="nightly"
+            is_prerelease="true"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+          echo "version_suffix=$version_suffix" >> "$GITHUB_OUTPUT"
+          echo "Resolved: version=$version tag=$tag is_prerelease=$is_prerelease version_suffix=$version_suffix"
+
+      - name: Check which components need building
+        id: diff
+        shell: bash
+        run: |
+          build_rp2040="true"
+          build_esp32="true"
+          build_desktop="true"
+          
+          # Only check for skipped builds if this is a push to main (prerelease)
+          if [ "${{ steps.version.outputs.is_prerelease }}" = "true" ]; then
+            if git rev-parse --verify "${{ github.event.before }}" >/dev/null 2>&1; then
+              echo "Checking git diff between ${{ github.event.before }} and HEAD"
+              
+              if git diff --quiet "${{ github.event.before }}" HEAD -- Firmware/RP2040/ Firmware/tools/firmware_version.py .github/workflows/rp2040-firmware.yml; then
+                build_rp2040="false"
+                echo "No RP2040 changes detected. Skipping build."
+              fi
+              
+              if git diff --quiet "${{ github.event.before }}" HEAD -- Firmware/ESP32/ Firmware/tools/firmware_version.py .github/workflows/esp32-firmware.yml; then
+                build_esp32="false"
+                echo "No ESP32 changes detected. Skipping build."
+              fi
+              
+              if git diff --quiet "${{ github.event.before }}" HEAD -- DesktopApp/BugBuster/ .github/workflows/desktop-release.yml; then
+                build_desktop="false"
+                echo "No Desktop changes detected. Skipping build."
+              fi
+            else
+              echo "Previous commit is not available, building all components."
+            fi
+          else
+            echo "Official release build, compiling all components."
+          fi
+          
+          echo "build_rp2040=$build_rp2040" >> "$GITHUB_OUTPUT"
+          echo "build_esp32=$build_esp32" >> "$GITHUB_OUTPUT"
+          echo "build_desktop=$build_desktop" >> "$GITHUB_OUTPUT"
+
   rp2040:
     name: Build RP2040
+    needs: prep
+    if: needs.prep.outputs.build_rp2040 == 'true'
     uses: ./.github/workflows/rp2040-firmware.yml
+    with:
+      version_suffix: ${{ needs.prep.outputs.version_suffix }}
     secrets: inherit
 
   esp32:
     name: Build ESP32
+    needs: prep
+    if: needs.prep.outputs.build_esp32 == 'true'
     uses: ./.github/workflows/esp32-firmware.yml
+    with:
+      version_suffix: ${{ needs.prep.outputs.version_suffix }}
     secrets: inherit
 
   desktop:
     name: Build Desktop
+    needs: prep
+    if: needs.prep.outputs.build_desktop == 'true'
     uses: ./.github/workflows/desktop-release.yml
+    with:
+      version_suffix: ${{ needs.prep.outputs.version_suffix }}
     secrets: inherit
 
   publish:
     name: Publish combined release
-    needs: [rp2040, esp32, desktop]
+    needs: [prep, rp2040, esp32, desktop]
+    if: always() && (needs.prep.result == 'success') && (needs.rp2040.result == 'success' || needs.rp2040.result == 'skipped') && (needs.esp32.result == 'success' || needs.esp32.result == 'skipped') && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped')
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -46,28 +150,8 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Resolve release version
-        id: version
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/release-v* ]]; then
-            version="${GITHUB_REF_NAME#release-v}"
-            tag="$GITHUB_REF_NAME"
-          else
-            version="${{ inputs.version }}"
-            tag="release-v${version}"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          rp2040_v=$(python Firmware/tools/firmware_version.py rp2040)
-          esp32_v=$(python Firmware/tools/firmware_version.py esp32)
-          desktop_v=$(python DesktopApp/BugBuster/scripts/desktop_version.py --check)
-          echo "rp2040=$rp2040_v"   >> "$GITHUB_OUTPUT"
-          echo "esp32=$esp32_v"     >> "$GITHUB_OUTPUT"
-          echo "desktop=$desktop_v" >> "$GITHUB_OUTPUT"
-          echo "Resolved component versions: rp2040=$rp2040_v esp32=$esp32_v desktop=$desktop_v"
-
       - name: Download RP2040 artifacts
+        if: needs.prep.outputs.build_rp2040 == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: rp2040-firmware-*
@@ -75,6 +159,7 @@ jobs:
           merge-multiple: true
 
       - name: Download ESP32 artifacts
+        if: needs.prep.outputs.build_esp32 == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: esp32-firmware-*
@@ -82,62 +167,106 @@ jobs:
           merge-multiple: true
 
       - name: Download Desktop artifacts
+        if: needs.prep.outputs.build_desktop == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: bugbuster-desktop-*
           path: dist/desktop
           merge-multiple: true
 
+      - name: Fetch previous release assets (if any skipped)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          build_rp2040="${{ needs.prep.outputs.build_rp2040 }}"
+          build_esp32="${{ needs.prep.outputs.build_esp32 }}"
+          build_desktop="${{ needs.prep.outputs.build_desktop }}"
+          
+          if [ "$build_rp2040" = "false" ] || [ "$build_esp32" = "false" ] || [ "$build_desktop" = "false" ]; then
+            echo "Downloading assets from previous nightly release..."
+            mkdir -p dist/prev_release
+            # Ignore failure if the release does not exist yet
+            gh release download nightly --dir dist/prev_release --pattern "*" || echo "No previous nightly release found."
+          fi
+
       - name: Stage release assets
         id: stage
         shell: bash
         run: |
           mkdir -p dist/release
+          build_rp2040="${{ needs.prep.outputs.build_rp2040 }}"
+          build_esp32="${{ needs.prep.outputs.build_esp32 }}"
+          build_desktop="${{ needs.prep.outputs.build_desktop }}"
 
-          echo "::group::Downloaded RP2040 tree"
-          find dist/rp2040 -maxdepth 3 -not -path '*/.*'
-          echo "::endgroup::"
-          echo "::group::Downloaded ESP32 tree"
-          find dist/esp32 -maxdepth 3 -not -path '*/.*'
-          echo "::endgroup::"
-          echo "::group::Downloaded Desktop tree"
-          find dist/desktop -maxdepth 3 -not -path '*/.*'
-          echo "::endgroup::"
-
-          # RP2040 + ESP32: already named with version, copy as-is.
-          # Use -r and copy contents to handle potential subdirectories if merge-multiple failed.
-          if [ -d dist/rp2040 ]; then
-            cp -rv dist/rp2040/* dist/release/ || true
-          fi
-          if [ -d dist/esp32 ]; then
-            cp -rv dist/esp32/*  dist/release/ || true
+          # RP2040 staging
+          if [ "$build_rp2040" = "true" ]; then
+            if [ -d dist/rp2040 ]; then
+              cp -rv dist/rp2040/* dist/release/ || true
+            fi
+          elif [ -d dist/prev_release ]; then
+            echo "Copying cached RP2040 assets..."
+            cp -v dist/prev_release/*rp2040* dist/release/ 2>/dev/null || true
+            cp -v dist/prev_release/*bugbuster-hat* dist/release/ 2>/dev/null || true
           fi
 
-          # Desktop: tauri bundles are nested under
-          # target/release/bundle/<format>/...
-          # Pull installable artifacts (skip raw .app dirs / intermediates).
-          shopt -s globstar nullglob
-          desktop_files=(
-            dist/desktop/**/*.dmg
-            dist/desktop/**/*.AppImage
-            dist/desktop/**/*.deb
-            dist/desktop/**/*.rpm
-            dist/desktop/**/*.msi
-            dist/desktop/**/*-setup.exe
-            dist/desktop/**/*.app.tar.gz
-            dist/desktop/**/*.app.tar.gz.sig
-          )
-          desktop_count=0
-          for f in "${desktop_files[@]}"; do
-            [ -f "$f" ] || continue
-            cp -v "$f" "dist/release/"
-            desktop_count=$((desktop_count + 1))
+          # ESP32 staging
+          if [ "$build_esp32" = "true" ]; then
+            if [ -d dist/esp32 ]; then
+              cp -rv dist/esp32/* dist/release/ || true
+            fi
+          elif [ -d dist/prev_release ]; then
+            echo "Copying cached ESP32 assets..."
+            cp -v dist/prev_release/*esp32s3* dist/release/ 2>/dev/null || true
+          fi
+
+          # Desktop staging
+          if [ "$build_desktop" = "true" ]; then
+            shopt -s globstar nullglob
+            desktop_files=(
+              dist/desktop/**/*.dmg
+              dist/desktop/**/*.AppImage
+              dist/desktop/**/*.deb
+              dist/desktop/**/*.rpm
+              dist/desktop/**/*.msi
+              dist/desktop/**/*-setup.exe
+              dist/desktop/**/*.app.tar.gz
+              dist/desktop/**/*.app.tar.gz.sig
+            )
+            desktop_count=0
+            for f in "${desktop_files[@]}"; do
+              [ -f "$f" ] || continue
+              cp -v "$f" "dist/release/"
+              desktop_count=$((desktop_count + 1))
+            done
+            echo "Staged $desktop_count new desktop bundle file(s)."
+          elif [ -d dist/prev_release ]; then
+            echo "Copying cached Desktop assets..."
+            desktop_count=0
+            for ext in dmg AppImage deb rpm msi exe app.tar.gz app.tar.gz.sig; do
+              if [ "$ext" = "exe" ]; then
+                cp -v dist/prev_release/*-setup.exe dist/release/ 2>/dev/null && desktop_count=$((desktop_count + 1)) || true
+              else
+                cp -v dist/prev_release/*."$ext" dist/release/ 2>/dev/null && desktop_count=$((desktop_count + 1)) || true
+              fi
+            done
+            echo "Staged $desktop_count cached desktop bundle file(s)."
+          fi
+
+          # Rename any staged desktop assets to replace -build with _build
+          for f in dist/release/*; do
+            if [[ -f "$f" ]]; then
+              new_f=$(echo "$f" | sed "s/-build/_build/")
+              if [ "$f" != "$new_f" ]; then
+                mv -v "$f" "$new_f"
+              fi
+            fi
           done
-          echo "Staged $desktop_count desktop bundle file(s)."
-          if [ "$desktop_count" -eq 0 ]; then
-            echo "::warning title=No desktop bundles::Combined release will not contain Desktop installers — check the Desktop build job logs."
-          fi
 
+          # Verify that staging folder is not empty
+          # (Remove any previous SHA256SUMS.txt from copied assets to regenerate fresh)
+          rm -f dist/release/SHA256SUMS.txt
+          
           if [ -n "$(ls -A dist/release/ 2>/dev/null)" ]; then
             ( cd dist/release && sha256sum ./* > SHA256SUMS.txt )
             echo "Release assets staged:"
@@ -152,11 +281,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          tag="${{ steps.version.outputs.tag }}"
-          version="${{ steps.version.outputs.version }}"
-          rp2040="${{ steps.version.outputs.rp2040 }}"
-          esp32="${{ steps.version.outputs.esp32 }}"
-          desktop="${{ steps.version.outputs.desktop }}"
+          tag="${{ needs.prep.outputs.tag }}"
+          version="${{ needs.prep.outputs.version }}"
+          is_prerelease="${{ needs.prep.outputs.is_prerelease }}"
+          
+          rp2040=$(python Firmware/tools/firmware_version.py rp2040)
+          esp32=$(python Firmware/tools/firmware_version.py esp32)
+          desktop=$(python DesktopApp/BugBuster/scripts/desktop_version.py --check)
 
           notes=$(cat <<EOF
           BugBuster combined release **v${version}**.
@@ -171,11 +302,26 @@ jobs:
           EOF
           )
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/release/* --clobber
-          else
-            gh release create "$tag" dist/release/* \
-              --draft \
-              --title "BugBuster v${version}" \
+          # Delete previous rolling release if we are updating nightly
+          if [ "$is_prerelease" = "true" ]; then
+            echo "Deleting previous nightly release and tag to avoid file accumulation..."
+            gh release delete nightly --cleanup-tag -y || true
+            # Allow some time for tag deletion to propagate on GitHub
+            sleep 3
+            
+            # Create a fresh prerelease
+            gh release create nightly dist/release/* \
+              --prerelease \
+              --title "BugBuster Nightly v${version}" \
               --notes "$notes"
+          else
+            # Official release (from tag release-v* or manual dispatch with version)
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" dist/release/* --clobber
+            else
+              gh release create "$tag" dist/release/* \
+                --draft \
+                --title "BugBuster v${version}" \
+                --notes "$notes"
+            fi
           fi

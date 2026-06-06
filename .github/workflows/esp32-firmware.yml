@@ -3,6 +3,11 @@ name: ESP32 Firmware
 "on":
   workflow_dispatch:
   workflow_call:
+    inputs:
+      version_suffix:
+        type: string
+        required: false
+        default: ""
   pull_request:
     paths:
       - ".github/workflows/esp32-firmware.yml"
@@ -10,8 +15,6 @@ name: ESP32 Firmware
       - "Firmware/tools/firmware_version.py"
       - "Firmware/ESP32/**"
   push:
-    branches:
-      - main
     tags:
       - "esp-fw-v*"
     paths:
@@ -49,8 +52,9 @@ jobs:
         id: version
         run: |
           version=$(python Firmware/tools/firmware_version.py esp32)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "ESP32 firmware version: $version"
+          suffix="${{ inputs.version_suffix }}"
+          echo "version=${version}${suffix}" >> "$GITHUB_OUTPUT"
+          echo "ESP32 firmware version: ${version}${suffix}"
 
       - name: Validate tag matches firmware version
         if: startsWith(github.ref, 'refs/tags/esp-fw-v')

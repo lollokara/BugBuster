@@ -200,6 +200,10 @@ pub const CMD_HAT_HVPAK_REG_WRITE_MASKED: u8 = 0xEA;
 
 // HAT LA extended
 pub const CMD_HAT_LA_LOG_ENABLE: u8 = 0xEB;
+// HTTP-only: drain buffered RP2040 log lines from the ESP32 ring buffer.
+// Same byte as EVT_LA_LOG (0xEC) but safe — commands are host→device,
+// events are device→host; they never collide in the protocol state machine.
+pub const CMD_HAT_LA_LOG_GET: u8 = 0xEC;
 pub const CMD_HAT_LA_USB_RESET: u8 = 0xED;
 // LA stream start via BBP — forwards HAT_CMD_LA_STREAM_START (0x37) to RP2040.
 // Routing START/STOP via BBP avoids the EP_OUT vendor-bulk path which becomes

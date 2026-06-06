@@ -943,6 +943,16 @@ pub async fn hat_la_log_enable(enable: bool) -> Option<()> {
     Some(())
 }
 
+pub async fn hat_la_usb_reset() -> Option<()> {
+    try_invoke("hat_la_usb_reset", JsValue::NULL).await?;
+    Some(())
+}
+
+pub async fn hat_la_log_get() -> Option<Vec<String>> {
+    let result = try_invoke("hat_la_log_get", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
 // -----------------------------------------------------------------------------
 // Logic Analyzer types & helpers
 // Logic Analyzer types & helpers

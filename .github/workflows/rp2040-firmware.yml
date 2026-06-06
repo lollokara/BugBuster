@@ -3,6 +3,11 @@ name: RP2040 Firmware
 "on":
   workflow_dispatch:
   workflow_call:
+    inputs:
+      version_suffix:
+        type: string
+        required: false
+        default: ""
   pull_request:
     paths:
       - ".github/workflows/rp2040-firmware.yml"
@@ -10,8 +15,6 @@ name: RP2040 Firmware
       - "Firmware/tools/firmware_version.py"
       - "Firmware/RP2040/**"
   push:
-    branches:
-      - main
     tags:
       - "hat-fw-v*"
     paths:
@@ -41,6 +44,13 @@ jobs:
         uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.x"
+
+      - name: Apply custom version suffix
+        if: inputs.version_suffix != ''
+        shell: bash
+        run: |
+          suffix="${{ inputs.version_suffix }}"
+          sed -i "s/set(PROBE_VERSION \"bb-hat-\([0-9\.]*\)\")/set(PROBE_VERSION \"bb-hat-\1${suffix}\")/g" Firmware/RP2040/CMakeLists.txt
 
       - name: Install RP2040 build dependencies
         run: |

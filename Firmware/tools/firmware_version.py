@@ -37,16 +37,16 @@ def esp32_version() -> str:
 
 def rp2040_version() -> str:
     cmake_text = read_text(RP2040_CMAKE)
-    # Match: set(PROBE_VERSION "bb-hat-X.Y")
-    match = re.search(r'set\s*\(\s*PROBE_VERSION\s+"bb-hat-([0-9]+)\.([0-9]+)"\s*\)', cmake_text)
+    # Match: set(PROBE_VERSION "bb-hat-X.Y<suffix>")
+    match = re.search(r'set\s*\(\s*PROBE_VERSION\s+"bb-hat-([0-9]+)\.([0-9]+)([^"]*)"\s*\)', cmake_text)
     if match is None:
         # Legacy fallback: file(WRITE ...) embedded the version string
         match = re.search(r'PROBE_VERSION\s+\\"bb-hat-([^"]+)\\"', cmake_text)
         if match is None:
             raise RuntimeError(f'Could not read PROBE_VERSION from {RP2040_CMAKE}')
         return match.group(1)
-    cmake_major, cmake_minor = match.group(1), match.group(2)
-    version = f"{cmake_major}.{cmake_minor}"
+    cmake_major, cmake_minor, suffix = match.group(1), match.group(2), match.group(3)
+    version = f"{cmake_major}.{cmake_minor}{suffix}"
 
     # Cross-check bb_main.c defines against CMakeLists.txt PROBE_VERSION.
     # Two forms are handled:

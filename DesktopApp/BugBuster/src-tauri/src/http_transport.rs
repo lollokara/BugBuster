@@ -1822,6 +1822,39 @@ impl Transport for HttpTransport {
                 Ok(vec![])
             }
 
+            bbp::CMD_HAT_LA_STATUS => {
+                let j = self.get_json("/api/hat/la/status").await?;
+                let state = j.get("state").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let channels = j.get("channels").and_then(|v| v.as_u64()).unwrap_or(4) as u8;
+                let captured = j.get("samplesCaptured").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let total = j.get("totalSamples").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let rate = j.get("actualRateHz").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let usb_conn = j.get("usbConnected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let usb_mnt = j.get("usbMounted").and_then(|v| v.as_bool()).unwrap_or(false);
+                let stop_reason = j.get("stopReason").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let mut buf = Vec::new();
+                buf.push(state);
+                buf.push(channels);
+                buf.extend_from_slice(&captured.to_le_bytes());
+                buf.extend_from_slice(&total.to_le_bytes());
+                buf.extend_from_slice(&rate.to_le_bytes());
+                buf.push(usb_conn as u8);
+                buf.push(usb_mnt as u8);
+                buf.push(stop_reason);
+                Ok(buf)
+            }
+
+            bbp::CMD_HAT_LA_LOG_GET => {
+                let j = self.get_json("/api/hat/v2/la/log").await?;
+                let lines: Vec<&str> = j
+                    .get("lines")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+                    .unwrap_or_default();
+                // Encode as newline-separated UTF-8 bytes so commands.rs can split them back
+                Ok(lines.join("\n").into_bytes())
+            }
+
             bbp::CMD_HAT_SET_PIN => {
                 if payload.len() < 2 {
                     return Err(anyhow!("Invalid payload for CMD_HAT_SET_PIN"));

@@ -131,6 +131,8 @@ pub fn run() {
             commands::hat_set_rail_enable,
             commands::hat_la_set_route,
             commands::hat_la_log_enable,
+            commands::hat_la_usb_reset,
+            commands::hat_la_log_get,
             // HUSB238 USB PD
             commands::usbpd_get_status,
             commands::usbpd_select_pdo,

@@ -3,9 +3,12 @@ name: Desktop Release
 "on":
   workflow_dispatch:
   workflow_call:
+    inputs:
+      version_suffix:
+        type: string
+        required: false
+        default: ""
   push:
-    branches:
-      - main
     tags:
       - "desktop-v*"
     paths:
@@ -69,6 +72,16 @@ jobs:
         uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.x"
+
+      - name: Apply custom version suffix
+        if: inputs.version_suffix != ''
+        shell: bash
+        run: |
+          suffix="${{ inputs.version_suffix }}"
+          cargo_suffix=$(echo "$suffix" | tr '_' '-')
+          base_version=$(python DesktopApp/BugBuster/scripts/desktop_version.py --check)
+          custom_version="${base_version}${cargo_suffix}"
+          python DesktopApp/BugBuster/scripts/desktop_version.py "$custom_version"
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae  # v2

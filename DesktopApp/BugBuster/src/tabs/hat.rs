@@ -52,6 +52,8 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     let (log_enabled, set_log_enabled) = signal(false);
     let log_lines: RwSignal<VecDeque<String>> = RwSignal::new(VecDeque::new());
+    let (uart_errors, set_uart_errors) = signal(0u8);
+    let (is_usb, set_is_usb) = signal(true);
 
     // ── hat-log Tauri event listener ─────────────────────────────────────────
     Effect::new(move |_| {
@@ -68,6 +70,23 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 }
             });
             listen("hat-log", &closure).await;
+            closure.forget();
+        });
+    });
+
+    // ── Track USB vs HTTP transport ───────────────────────────────────────────
+    Effect::new(move |_| {
+        spawn_local(async move {
+            let closure = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
+                if let Some(payload) = js_sys::Reflect::get(&event, &JsValue::from_str("payload"))
+                    .ok()
+                    .and_then(|p| js_sys::Reflect::get(&p, &JsValue::from_str("mode")).ok())
+                    .and_then(|m| m.as_string())
+                {
+                    set_is_usb.set(payload == "usb");
+                }
+            });
+            listen("connection-status", &closure).await;
             closure.forget();
         });
     });
@@ -127,6 +146,25 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
     });
 
+    // ── HTTP log polling (1 s interval when enabled over HTTP) ───────────────
+    Effect::new(move |_| {
+        let is_http = !is_usb.get();
+        if log_enabled.get() && is_http {
+            spawn_local(async move {
+                if let Some(lines) = hat_la_log_get().await {
+                    if !lines.is_empty() {
+                        log_lines.update(|buf| {
+                            for line in lines {
+                                buf.push_back(line);
+                                if buf.len() > 200 { buf.pop_front(); }
+                            }
+                        });
+                    }
+                }
+            });
+        }
+    });
+
     // ── Helpers to read individual rail fields without re-running stable DOM ──
     let rail_en  = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.enabled).unwrap_or(false);
     let rail_mv  = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.voltage_mv).unwrap_or(0);
@@ -148,7 +186,18 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     <div class="summary-banner" style="justify-content: space-between; padding: 8px 12px; margin-bottom: 14px">
                         <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
                             <HatPill label="Detected" ok=st.detected    value={if st.detected      { "Yes".into() } else { "No".into() }} />
-                            <HatPill label="UART"     ok=st.connected   value={if st.connected     { "OK".into()  } else { "—".into()  }} />
+                            {move || {
+                                let connected = hat.get().connected;
+                                let errs = uart_errors.get();
+                                let (ok, label) = if connected && errs == 0 {
+                                    (true, "OK".to_string())
+                                } else if connected && errs > 0 {
+                                    (false, "Degraded".to_string())
+                                } else {
+                                    (false, "—".to_string())
+                                };
+                                view! { <HatPill label="UART" ok=ok value=label /> }
+                            }}
                             <HatPill label="DAP"      ok=st.dap_connected value={if st.dap_connected { "OK".into() } else { "—".into() }} />
                             <HatPill label="Target"   ok=st.target_detected value={if st.target_detected { "OK".into() } else { "—".into() }} />
                             <HatPill label="Rev"  ok=true value=rev />
@@ -231,12 +280,15 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="display: flex; align-items: center; gap: 6px">
                                         <label class="toggle-wrap">
                                             <div class="toggle" class:active=move || rail_en(0)
+                                                style=move || if cal_active.get() { "opacity: 0.4; pointer-events: none" } else { "" }
                                                 on:click=move |_| {
+                                                    if cal_active.get_untracked() { return; }
                                                     let cur = rail_en(0);
                                                     spawn_local(async move {
                                                         if let Some(r) = hat_set_rail_enable(0, !cur).await {
                                                             set_rails.set(r);
                                                         } else {
+                                                            set_uart_errors.update(|e| *e = e.saturating_add(1));
                                                             show_toast("Failed to toggle 3V3_ADJ rail", "err");
                                                         }
                                                     });
@@ -283,7 +335,9 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             {move || format!("{:.2} V", v3v3_target_mv.get() as f32 / 1000.0)}
                                         </span>
                                         <button class="btn btn-primary" style="font-size: 10px; padding: 4px 10px"
+                                            disabled=move || cal_active.get()
                                             on:click=move |_| {
+                                                if cal_active.get_untracked() { return; }
                                                 let mv = v3v3_target_mv.get_untracked();
                                                 spawn_local(async move {
                                                     if let Some(r) = hat_set_rail_voltage(0, mv).await {
@@ -309,12 +363,15 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="display: flex; align-items: center; gap: 6px">
                                         <label class="toggle-wrap">
                                             <div class="toggle" class:active=move || rail_en(1)
+                                                style=move || if cal_active.get() { "opacity: 0.4; pointer-events: none" } else { "" }
                                                 on:click=move |_| {
+                                                    if cal_active.get_untracked() { return; }
                                                     let cur = rail_en(1);
                                                     spawn_local(async move {
                                                         if let Some(r) = hat_set_rail_enable(1, !cur).await {
                                                             set_rails.set(r);
                                                         } else {
+                                                            set_uart_errors.update(|e| *e = e.saturating_add(1));
                                                             show_toast("Failed to toggle VADJ3 rail", "err");
                                                         }
                                                     });
@@ -363,7 +420,9 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             {move || format!("{:.2} V", vadj3_target_mv.get() as f32 / 1000.0)}
                                         </span>
                                         <button class="btn btn-primary" style="font-size: 10px; padding: 4px 10px"
+                                            disabled=move || cal_active.get()
                                             on:click=move |_| {
+                                                if cal_active.get_untracked() { return; }
                                                 let mv = vadj3_target_mv.get_untracked();
                                                 spawn_local(async move {
                                                     if let Some(r) = hat_set_rail_voltage(1, mv).await {
@@ -388,12 +447,15 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="display: flex; align-items: center; gap: 6px">
                                         <label class="toggle-wrap">
                                             <div class="toggle" class:active=move || rail_en(2)
+                                                style=move || if cal_active.get() { "opacity: 0.4; pointer-events: none" } else { "" }
                                                 on:click=move |_| {
+                                                    if cal_active.get_untracked() { return; }
                                                     let cur = rail_en(2);
                                                     spawn_local(async move {
                                                         if let Some(r) = hat_set_rail_enable(2, !cur).await {
                                                             set_rails.set(r);
                                                         } else {
+                                                            set_uart_errors.update(|e| *e = e.saturating_add(1));
                                                             show_toast("Failed to toggle VADJ4 rail", "err");
                                                         }
                                                     });
@@ -442,7 +504,9 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             {move || format!("{:.2} V", vadj4_target_mv.get() as f32 / 1000.0)}
                                         </span>
                                         <button class="btn btn-primary" style="font-size: 10px; padding: 4px 10px"
+                                            disabled=move || cal_active.get()
                                             on:click=move |_| {
+                                                if cal_active.get_untracked() { return; }
                                                 let mv = vadj4_target_mv.get_untracked();
                                                 spawn_local(async move {
                                                     if let Some(r) = hat_set_rail_voltage(2, mv).await {
@@ -501,6 +565,34 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         "Low-skew buffered Conn1 — up to 3 ch."
                                     }}
                                 </div>
+                                <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px">
+                                    {move || {
+                                        let is_usb = is_usb.get();
+                                        view! {
+                                            <button class="btn"
+                                                disabled=move || !is_usb
+                                                title=move || if is_usb { "Reset RP2040 USB endpoint".to_string() } else { "USB connection required".to_string() }
+                                                style=move || format!("font-size: 10px; padding: 3px 10px{}",
+                                                    if !is_usb { "; opacity: 0.4; cursor: not-allowed" } else { "" })
+                                                on:click=move |_| {
+                                                    if !is_usb { return; }
+                                                    spawn_local(async move {
+                                                        if hat_la_usb_reset().await.is_some() {
+                                                            show_toast("LA USB endpoint reset", "ok");
+                                                        } else {
+                                                            show_toast("LA USB reset failed", "err");
+                                                        }
+                                                    });
+                                                }
+                                            >"Reset LA USB"</button>
+                                            {if !is_usb {
+                                                view! { <span style="font-size: 9px; color: var(--text-dim)">"(USB only)"</span> }.into_any()
+                                            } else {
+                                                ().into_any()
+                                            }}
+                                        }
+                                    }}
+                                </div>
                             </div>
 
                             // SWD target
@@ -547,7 +639,9 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     <div style="display: flex; align-items: center; gap: 6px">
                                         <label class="toggle-wrap">
                                             <div class="toggle" class:active=move || ls_oe.get()
+                                                style=move || if cal_active.get() { "opacity: 0.4; pointer-events: none" } else { "" }
                                                 on:click=move |_| {
+                                                    if cal_active.get_untracked() { return; }
                                                     spawn_local(async move {
                                                         let next = !ls_oe.get_untracked();
                                                         let dir  = ls_dir.get_untracked();
@@ -711,6 +805,16 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         <span>{if measured >= 0 { format!("measured: {:.3} V", measured as f32 / 1000.0) } else { "measured: —".into() }}</span>
                                         <span>{format!("point: {}", cal_point.get())}</span>
                                     </div>
+                                    {move || {
+                                        let (label, color) = match cal_persist_state.get() {
+                                            1 => ("Saved to flash", "#10b981"),
+                                            2 => ("Imported, not verified", "#3b82f6"),
+                                            _ => ("RAM only — reboot will reset", "#f59e0b"),
+                                        };
+                                        view! {
+                                            <div style=format!("margin-top: 6px; font-size: 9px; color: {}; text-align: center", color)>{label}</div>
+                                        }
+                                    }}
                                 </div>
                             }.into_any()
                         } else {
@@ -729,6 +833,10 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     </select>
                                     <button class="btn btn-primary" style="font-size: 11px; padding: 4px 16px"
                                         on:click=move |_| {
+                                            if ls_oe.get_untracked() {
+                                                show_toast("Disable Level Shifter OE before calibrating", "err");
+                                                return;
+                                            }
                                             spawn_local(async move {
                                                 let id = cal_rail_id.get_untracked();
                                                 if let Some(code) = hat_calibrate_start(id).await {
@@ -743,6 +851,61 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             });
                                         }
                                     >"Start Sweep"</button>
+                                    <button class="btn" style="font-size: 11px; padding: 4px 14px"
+                                        on:click=move |_| {
+                                            use wasm_bindgen::JsCast;
+                                            let input = web_sys::window()
+                                                .and_then(|w| w.document())
+                                                .and_then(|d| d.create_element("input").ok())
+                                                .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok());
+                                            if let Some(input) = input {
+                                                input.set_type("file");
+                                                input.set_accept(".json,application/json");
+                                                let rail_id = cal_rail_id.get_untracked();
+                                                let closure = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+                                                    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+                                                    if let Some(t) = target {
+                                                        if let Some(file) = t.files().and_then(|fl: web_sys::FileList| fl.get(0)) {
+                                                            let reader = web_sys::FileReader::new().unwrap();
+                                                            let reader_clone = reader.clone();
+                                                            let onload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
+                                                                if let Ok(result) = reader_clone.result() {
+                                                                    if let Some(text) = result.as_string() {
+                                                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                                                                            let points_json = json.get("points")
+                                                                                .and_then(|v| v.as_array())
+                                                                                .cloned()
+                                                                                .unwrap_or_default();
+                                                                            let mut points = Vec::new();
+                                                                            for p in &points_json {
+                                                                                let dac_code = p.get("dacCode").and_then(|v| v.as_i64()).unwrap_or(0) as i8;
+                                                                                let measured_v = p.get("measuredV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                                                                points.push(HatCalibratePoint { dac_code, measured_v });
+                                                                            }
+                                                                            let r = rail_id;
+                                                                            spawn_local(async move {
+                                                                                if hat_calibrate_import(r, points).await.is_some() {
+                                                                                    show_toast("Calibration imported successfully!", "ok");
+                                                                                } else {
+                                                                                    show_toast("Calibration import failed", "err");
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    }
+                                                                }
+                                                            });
+                                                            reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+                                                            let _ = reader.read_as_text(&file);
+                                                            onload.forget();
+                                                        }
+                                                    }
+                                                });
+                                                input.set_onchange(Some(closure.as_ref().unchecked_ref()));
+                                                input.click();
+                                                closure.forget();
+                                            }
+                                        }
+                                    >"Import…"</button>
                                 </div>
                             }.into_any()
                         }}
