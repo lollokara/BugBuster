@@ -240,6 +240,14 @@ void cliProcess()
         }
         if (b == 0xBB) continue;
 
+        if (bbpCdcClaimed() && !bbpIsActive()) {
+            bbpRestoreCdcCli();
+            emit_prompt_fresh();
+            cli_edit_on_prompt_shown(PROMPT_VIS_COLS);
+            s_showPrompt = false;
+            continue;
+        }
+
         cli_edit_feed(b);
 
         if (cli_edit_need_reprompt() && !bbpCdcClaimed()) {

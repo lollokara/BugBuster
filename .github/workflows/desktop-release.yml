@@ -78,7 +78,13 @@ jobs:
         shell: bash
         run: |
           suffix="${{ inputs.version_suffix }}"
-          cargo_suffix=$(echo "$suffix" | tr '_' '-')
+          # Extract only the digits from the suffix to satisfy WiX/MSI numeric-only version requirements
+          run_num=$(echo "$suffix" | grep -oE '[0-9]+' || echo "")
+          if [ -n "$run_num" ]; then
+            cargo_suffix="-${run_num}"
+          else
+            cargo_suffix=""
+          fi
           base_version=$(python DesktopApp/BugBuster/scripts/desktop_version.py --check)
           custom_version="${base_version}${cargo_suffix}"
           python DesktopApp/BugBuster/scripts/desktop_version.py "$custom_version"

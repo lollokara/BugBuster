@@ -386,6 +386,10 @@ void bbpSendEvent(uint8_t evtId, const uint8_t *payload, size_t len);
 /** @brief Exit binary mode and return to CLI. */
 void bbpExitBinaryMode(void);
 
+/** @brief Restore CDC CLI: clear sticky claimed flag, reset sessions, and restore logging. */
+void bbpRestoreCdcCli(void);
+
+
 // Returns true if BBP has ever successfully handshaken on CDC #0 this boot.
 // Sticky — once claimed, remains true until reboot. Used by CLI and other
 // ASCII-producing code paths to avoid writing text to CDC #0 which would

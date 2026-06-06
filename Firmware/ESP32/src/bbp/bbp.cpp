@@ -18,6 +18,7 @@
 #include "adc_dsp.h"
 #include "esp_mac.h"
 #include "esp_log.h"
+#include "serial_io.h"
 
 #include <string.h>
 
@@ -600,6 +601,21 @@ void bbpExitBinaryMode(void)
     // warned against.
 }
 
+void bbpRestoreCdcCli(void)
+{
+    if (!s_cdcClaimed) return;
+    s_cdcClaimed = false;
+    esp_log_level_set("*", ESP_LOG_INFO);
+
+    uint8_t prev_session = s_bbp_usb_session;
+    io_owner_release_session(IO_OWNER_USB, prev_session);
+    s_bbp_usb_session++;
+    if (s_bbp_usb_session == 0) s_bbp_usb_session = 1;
+    io_owner_release_all_except(IO_OWNER_INTERNAL);
+
+    serial_print("\r\n[BugBuster] BBP connection inactive. Serial CLI restored.\r\n");
+}
+
 void bbpProcess(void)
 {
     if (!s_active) return;
@@ -608,6 +624,7 @@ void bbpProcess(void)
     if (millis_now() - s_lastFrameMs > BBP_IDLE_TIMEOUT_MS) {
         ESP_LOGW(TAG, "Idle timeout, reverting to CLI");
         bbpExitBinaryMode();
+        bbpRestoreCdcCli();
         return;
     }
 

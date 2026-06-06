@@ -59,8 +59,8 @@ jobs:
             version_suffix=""
           else
             # Push to main
-            timestamp=$(date +'%Y%m%d%H%M%S')
-            version_suffix="_build${timestamp}"
+            # Use GitHub run number for a clean, numeric pre-release identifier <= 65535 (required by Windows MSI)
+            version_suffix="_build${{ github.run_number }}"
             version="${base_version}${version_suffix}"
             tag="nightly"
             is_prerelease="true"
@@ -253,10 +253,10 @@ jobs:
             echo "Staged $desktop_count cached desktop bundle file(s)."
           fi
 
-          # Rename any staged desktop assets to replace -build with _build
+          # Rename any staged desktop assets to replace -<run_number> or -build with _build
           for f in dist/release/*; do
             if [[ -f "$f" ]]; then
-              new_f=$(echo "$f" | sed "s/-build/_build/")
+              new_f=$(echo "$f" | sed -E "s/-([0-9]+)/_build\1/" | sed "s/-build/_build/")
               if [ "$f" != "$new_f" ]; then
                 mv -v "$f" "$new_f"
               fi
