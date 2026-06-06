@@ -1,5 +1,72 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Added
+
+#### ESP32 firmware
+- **MicroPython HAT v2 bindings**: Full HAT interface exposed via MicroPython (`modbugbuster_hat.c`) including HAT status queries, rail configuration, calibration, IO voltage control, SWD setup, LED control, and LA routing. New example script `14_hat_v2.py` demonstrates usage.
+- **PD/VADJ safety guard** (`pd_vadj_guard`): Prevents voltage configuration above negotiated USB-C PD input or measured rail voltage. Checks integrated into IDAC command handler, webserver JSON responses, and MicroPython bridge (I2C/SPI constructors). Python client `check_vadj_pd_limit()` provides advisory checks at the host level.
+- **QuickSetup client APIs**: Python client now exposes `get_quicksetup()`, `save_quicksetup()`, `apply_quicksetup()`, `list_quicksetups()`, and `delete_quicksetup()` for preset management.
+- **ADC DSP streaming enhancements**: Fixed task notification race (ulTaskNotifyTake → xTaskNotifyWait), added NaN/Inf filtering, proper memory barriers, and improved buffer handling to prevent reading recycled data. ADC poll task now seeds values on read failure and includes micro-delay at high rates.
+- **HAT HTTP parity**: REST endpoints for all HAT v2 commands previously USB-only (status, detect, caps, rail enable/voltage, calibration, IO configuration, SWD setup, LED, LA routing, pin config). Enables HAT control via HTTP when USB BBP is unavailable.
+- **HAT parity guardrails & MCP health**: New MCP tools for HAT state verification and consistency checking. Desktop HTTP transport now maps BBP HAT commands to `/api/hat` and `/api/hat/v2` REST endpoints.
+
+#### Desktop app
+- **Category-based tab organization**: UI refactored with a category bar grouping tabs into logical sections (Overview, Measurement, Hardware, Debug). Improved visual hierarchy and navigation.
+- **Local font bundling**: Added Inter (normal + italic) and JetBrains Mono (normal + italic) WOFF2 fonts; removed reliance on external CDN. Updated styles.css with extensive polish (cards, buttons, shadows, animations).
+- **Consolidated HAT UI**: Calibration tab removed (functionality moved to Voltages tab). HAT UI simplified with streaming status focus; per-rail voltage/enable controls, routing, SWD, and LA USB reset consolidated.
+
+#### Testing & CI
+- **SimHTTP server**: New mock HTTP server (`sim_http_server.py`) for hardware-free HTTP transport testing. Test suite extended with integration tests exercising the HTTP path without hardware.
+- **Expanded mock handlers**: New `handlers/quicksetup.py` and `handlers/bus.py` for broader BBP command coverage. Integration tests added (`tests/integration/test_sim_http_transport.py`).
+- **CI improvements**: Desktop release workflow updated with run-number support for Windows MSI versioning. Improved artifact staging to handle run-numbered filenames.
+
+### Changed
+
+#### Firmware
+- **CDC CLI restoration**: Added `bbpRestoreCdcCli()` to clear CDC claim, restore serial logging, and release USB sessions when BBP goes idle. CLI loop now restores CDC state when needed so serial prompt/editor state recovers after interactive commands.
+- **Logical ↔ physical IO/MUX mapping fixes**: PCA9535 EFUSE3/EFUSE4 bit/EN/FLT swaps corrected. Bus planner device indices and comments updated to match PCB wiring. Signal path and layout components now use `MUX_DEVICE_BY_LOGICAL` translation to maintain natural A/B/C/D channel order in UI.
+- **WebSocket streaming refactor**: Ring buffer API pushed header+payload atomically. Persistent TX task created at register time; TX semaphore blocks indefinitely. Frames dropped when no client connected; simplified task lifecycle.
+- **BBP protocol v8**: Formal version bump reflecting HAT v2, ADC DSP, and ownership lease features added post-v7.
+- **HAT calibration success code**: Changed from 0 to 1 for consistency.
+
+#### Python client
+- **HTTP HAT command mappings**: `hat_get_caps()`, `hat_get_rail_status()`, `hat_set_rail_enable()`, `hat_set_rail_voltage()`, `hat_set_led_state()`, `hat_set_io_voltage()`, and `hat_setup_swd()` now use HTTP `/api/hat/v2` endpoints. Field names and return shapes aligned with REST API.
+- **PD/VADJ advisory**: `check_vadj_pd_limit()` added as a utility; callsites in `io_config` now emit warnings when rail voltage exceeds PD limits.
+- **Improved error handling**: Short response checks added for `PING`, `GET_DEVICE_INFO`, `GET_ADC_VALUE`, `SCRIPT_LOGS`. Missing `states` key in `MUX_GET_ALL` HTTP path now caught. Helper `_require_resp_len()` introduced.
+
+#### Desktop Rust backend
+- **Explicit disconnect on BBP probe failure**: Improved error handling with clearer disconnection sequencing.
+- **Tauri command helpers**: Transport modules now expose/send command helpers to tidy up transport logic.
+- **Dead code annotations**: Added `#[allow(dead_code)]` where appropriate to reduce compiler noise.
+
+#### Documentation & scripts
+- **MeasureCurrent.py**: UI and DSP mode enhancements — backend selection, persistent FFT spectrum (decay-based), improved envelope/mean/spike rendering. Added USB keepalive thread (prevents macOS CDC idling), safer ADC/HAT cleanup on exit, and layout/style tweaks.
+- **Scratch test scripts**: New utilities for ADC testing, mDNS/HTTP probing, matplotlib plotting, and CSV polling.
+- **Updated examples & notebooks**: Desktop app launcher, ESP32 flash manager, and RP2040 firmware build notebooks refreshed.
+
+### Fixed
+
+- **ADC DSP robustness**: Task notification race fixed with xTaskNotifyWait; buffer snapshots prevent reading recycled data. Stats now properly initialized with NaN/Inf filtering applied post-FFT.
+- **PCA9535 fault ISR installation**: Deferred until `g_stateMutex` exists during boot (avoids race during initialization).
+- **IO ownership lease table**: Test coverage expanded; simulator now includes `WIFI_SET_AP_PASSWORD (0xEF)` handler.
+- **Selftest ADC behavior**: Now respects IO ownership of slots 14/15, preventing unauthorized access during scripting.
+
+### Removed
+
+- **Obsolete calibration.rs**: Desktop calibration tab removed; functionality consolidated.
+- **Legacy CDC tests**: Unused serial/USB test imports cleaned up (`test_11_hat.py`).
+- **Log data**: Stale CSV from `Scripts/logs/Log013.csv` removed.
+
+### Internal
+
+- **Simulator completeness**: Meta-tests updated for new LAcommands and `LA_LOG_EVT` handling. `test_sim_completeness` refactored to assert handler presence more thoroughly.
+- **Submodule updates**: `esp-dsp` added as a git submodule for DSP processing on ESP32. Debugprobe submodule version bumped.
+- **Build hygiene**: Minor CMakeLists.txt and sdkconfig refinements. Firmware tools now handle both single-source and legacy fallback version schemes.
+
+---
+
 ## [1.1.0] — 2026-06-04
 
 ### HAT & Protocol (v2.0 / `bb-hat-3.0`)
