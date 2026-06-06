@@ -6,20 +6,53 @@ The device dispatches binary commands to the registered handlers and
 routes HTTP requests to http_routes.py.
 """
 
+import importlib
 import threading
+from dataclasses import dataclass, field
 from bugbuster.transport.usb import DeviceError
 from bugbuster.constants import ErrorCode
+from bugbuster.protocol import BBP_PROTO_VERSION
+
+PROTO_VERSION = BBP_PROTO_VERSION
+
+
+@dataclass
+class HatState:
+    present: bool = False
+    rail_voltages: dict = field(default_factory=dict)
+    cal_flags: dict = field(default_factory=dict)
+    la_active: bool = False
+
+
+_HANDLER_MODULES = [
+    "tests.mock.handlers.core",
+    "tests.mock.handlers.channels",
+    "tests.mock.handlers.gpio",
+    "tests.mock.handlers.mux",
+    "tests.mock.handlers.power",
+    "tests.mock.handlers.uart",
+    "tests.mock.handlers.idac",
+    "tests.mock.handlers.misc",
+    "tests.mock.handlers.hat",
+    "tests.mock.handlers.streaming",
+    "tests.mock.handlers.scripts",
+    "tests.mock.handlers.io_owner",
+    "tests.mock.handlers.bus",
+    "tests.mock.handlers.quicksetup",
+]
+
+from tests.mock import http_routes as _http_routes
 
 
 class SimulatedDevice:
     """Simulated BugBuster device state machine."""
 
-    PROTO_VERSION = 7  # must match BBP_PROTO_VERSION in protocol.py
+    PROTO_VERSION = PROTO_VERSION
 
     def __init__(self):
-        self.fw_version = (1, 0, 0)
+        self.fw_version = (1, 0, 0)  # see bugbuster.protocol for BBP_PROTO_VERSION; firmware tuple not yet wired
         self.uptime_ms = 0
-        self.hat_present = False
+        self.hat = HatState()
 
         # Channel state: 4 channels, each with mutable fields
         self.channels = [
@@ -223,11 +256,7 @@ class SimulatedDevice:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
 
     def http_dispatch(self, method: str, path: str, params: dict, body: dict, headers: dict = None) -> dict:
-        try:
-            from tests.mock import http_routes
-            return http_routes.dispatch(self, method, path, params, body, headers or {})
-        except ImportError:
-            return {"error": "not implemented"}
+        return _http_routes.dispatch(self, method, path, params, body, headers or {})
 
     # ------------------------------------------------------------------
     # Streaming
@@ -255,74 +284,6 @@ class SimulatedDevice:
     # ------------------------------------------------------------------
 
     def _register_all_handlers(self) -> None:
-        try:
-            from tests.mock.handlers import core
-            core.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import channels
-            channels.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import gpio
-            gpio.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import mux
-            mux.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import power
-            power.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import uart
-            uart.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import idac
-            idac.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import misc
-            misc.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import hat
-            hat.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import streaming
-            streaming.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import scripts
-            scripts.register(self)
-        except ImportError:
-            pass
-
-        try:
-            from tests.mock.handlers import io_owner
-            io_owner.register(self)
-        except ImportError:
-            pass
+        for mod_path in _HANDLER_MODULES:
+            mod = importlib.import_module(mod_path)
+            mod.register(self)

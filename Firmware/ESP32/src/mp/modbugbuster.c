@@ -6,7 +6,10 @@
 #include "py/runtime.h"
 #include "py/mphal.h"
 
+#include <string.h>
+
 #include "ad74416h_regs.h"
+#include "modbugbuster_bridge.h"
 
 extern const mp_obj_type_t bugbuster_channel_type;
 extern const mp_obj_type_t bugbuster_i2c_type;
@@ -48,9 +51,25 @@ static mp_obj_t bugbuster_sleep(mp_obj_t ms_in)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(bugbuster_sleep_obj, bugbuster_sleep);
 
+static mp_obj_t bugbuster_vadj_pd_warning(mp_obj_t rail_in, mp_obj_t voltage_in)
+{
+    mp_int_t rail = mp_obj_get_int(rail_in);
+    mp_float_t voltage = mp_obj_get_float(voltage_in);
+    if (rail != 1 && rail != 2) {
+        mp_raise_ValueError(MP_ERROR_TEXT("rail must be 1 or 2"));
+    }
+    char warning[384] = {0};
+    if (bugbuster_mp_vadj_pd_warning((uint8_t)rail, (float)voltage, warning, sizeof(warning))) {
+        return mp_obj_new_str(warning, strlen(warning));
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(bugbuster_vadj_pd_warning_obj, bugbuster_vadj_pd_warning);
+
 static const mp_rom_map_elem_t bugbuster_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_bugbuster) },
     { MP_ROM_QSTR(MP_QSTR_sleep), MP_ROM_PTR(&bugbuster_sleep_obj) },
+    { MP_ROM_QSTR(MP_QSTR_vadj_pd_warning), MP_ROM_PTR(&bugbuster_vadj_pd_warning_obj) },
     { MP_ROM_QSTR(MP_QSTR_Channel), MP_ROM_PTR(&bugbuster_channel_type) },
     { MP_ROM_QSTR(MP_QSTR_I2C), MP_ROM_PTR(&bugbuster_i2c_type) },
     { MP_ROM_QSTR(MP_QSTR_SPI), MP_ROM_PTR(&bugbuster_spi_type) },

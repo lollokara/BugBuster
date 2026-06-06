@@ -8,9 +8,7 @@
 
 ### 🔴 Bugs
 
-- **`uint8_t` truncation in `bb_la_usb.c`** — remaining byte count is cast to `uint8_t` before the 60-byte clamp, producing zero-payload DATA frames and `duration=0` captures on long runs.  
-  File: `Firmware/RP2040/src/bb_la_usb.c`  
-  Ref: `.mex/context/la-subsystem.md` → "Known Bugs"
+*(none — `uint8_t` truncation in `bb_la_usb.c` was already fixed; both LIVE STREAM and ONE-SHOT paths use `uint32_t` intermediates with safe post-clamp cast. Verified 2026-06-06.)*
 
 ### 🟡 Missing / Pending
 
@@ -97,22 +95,32 @@
 
 ### 🟡 Missing Handlers
 
-The following BBP commands are in `_NOT_YET_SIMULATED` in `tests/simulator/test_sim_completeness.py` — CI passes them as known gaps, but they need handlers before simulator coverage is complete:
+✅ **Done 2026-06-06** — All 9 EXT bus commands now have handlers in `tests/mock/handlers/bus.py`. `_NOT_YET_SIMULATED` set removed entirely from `test_sim_completeness.py`. 408 unit + 231 sim tests passing.
 
-| Command | Description |
-|---------|-------------|
-| `EXT_JOB_SUBMIT` | Queue deferred external I2C/SPI job |
-| `EXT_JOB_GET` | Poll deferred job result |
-| `EXT_I2C_SETUP` | Configure external I2C bus |
-| `EXT_I2C_SCAN` | Scan I2C bus for devices |
-| `EXT_I2C_WRITE` | I2C write transaction |
-| `EXT_I2C_READ` | I2C read transaction |
-| `EXT_I2C_WRITE_READ` | Combined I2C write+read |
-| `EXT_SPI_SETUP` | Configure external SPI bus |
-| `EXT_SPI_TRANSFER` | SPI transfer |
+### 🟢 `--sim-full` HTTP transport testing
 
-File: `tests/simulator/test_sim_completeness.py:_NOT_YET_SIMULATED`  
-Handlers go in: `tests/mock/handlers/` (new `bus.py` handler module + entry in `simulated_device._register_all_handlers`)
+✅ **Done 2026-06-06** — `tests/mock/sim_http_server.py` (WSGI server backed by SimulatedDevice), `--sim-full` pytest flag in `conftest.py`, and `tests/integration/test_sim_http_transport.py` (6 transport-layer tests: GET roundtrip, POST admin-token enforcement, 401/404 HTTP error mapping). `check_admin_auth` in `http_routes.py` updated to case-insensitive header lookup. 6/6 integration tests pass; 408 unit + 231 sim unchanged.
+
+### 🔴 Simulator bugs found by deep dive (2026-06-06)
+
+Trace report: `.omc/specs/deep-dive-trace-sim-bugs-missing-impl.md`
+
+✅ **Fixed 2026-06-06** (413 unit + 231 sim passing):
+- `tests/mock/handlers/hat.py:770` — added `return handler` to `_hat_set_led_state`
+- `tests/mock/handlers/gpio.py:156` — `DIO_READ` now returns `d.get("input")` (was "output")
+- `tests/mock/handlers/misc.py:177` — `WIFI_CONNECT` now sets `device.wifi_connected = True`
+
+**HTTP↔BBP transport divergences:**
+✅ **Fixed 2026-06-06** — All 4 divergences resolved:
+- `http_routes.py` MUX switch: now enforces one-switch mutual exclusion + updates `adgs_active` (matches BBP handler)
+- `http_routes.py` channel func=0: now resets all 5 ADC fields (adc_raw/value/range/rate/mux)
+- `handlers/misc.py` USBPD_GET_STATUS: now derives voltage_v/power_w from live `device.usbpd_voltage` via `_USBPD_CODE_TO_V` table; all 6 PDOs reported detected
+- `handlers/core.py` DEVICE_RESET: now resets `la_state` to "IDLE" (matches HTTP handler)
+
+**Structural (low priority):**
+- `PCA_SET_CONTROL` writes `device.pca_control` dict that no GET ever reads (write-only island) — `handlers/power.py:58-62`
+- `IdacChannel` namedtuple missing `step_mv` field — consumed from wire (`idac.py:68`) but not exposed (`client.py:78`)
+- `bus.py` state fields (`i2c_devices`, `job_queue`, etc.) not declared in `SimulatedDevice.__init__`
 
 ### 🟢 Dead tests cleanup
 
@@ -123,20 +131,11 @@ Two tests in `test_11_hat.py` carry permanent `@pytest.mark.skip` because the CD
 
 File: `tests/mock/simulated_device.py`
 
-- **`PROTO_VERSION` is hardcoded** (`= 7`) instead of imported from `bugbuster.protocol.BBP_PROTO_VERSION`. Any protocol version bump requires two edits and risks silent drift.  
-  Fix: `from bugbuster.protocol import BBP_PROTO_VERSION; PROTO_VERSION = BBP_PROTO_VERSION`
-
-- **`_register_all_handlers()` boilerplate** — 12 separate `try/except ImportError` blocks. Refactor to a declarative list of module paths with a single registration loop; makes missing/broken handlers immediately visible instead of silently skipped.
-
-- **No type annotations** on `dispatch()`, `http_dispatch()`, `emit_event()`, `tick()`. Add `bytes`, `dict`, `int`, `None` annotations for IDE/mypy support.
+✅ **Done 2026-06-06** — PROTO_VERSION now imported from `bugbuster.protocol`, `_register_all_handlers()` refactored to declarative module list + single loop, type annotations added to `dispatch/http_dispatch/emit_event/tick`, `http_routes` import moved to module level, `HatState` dataclass introduced (replaces bare `hat_present` bool across `simulated_device.py`, `handlers/hat.py`, `simulated_transport.py`, `http_routes.py`). 408 unit + 231 sim tests passing.
 
 - **Static `fw_version = (1, 0, 0)`** — not wired to any real version source, so version-sensitive tests hardcode magic tuples. Consider deriving from or at least co-locating with the protocol constants.
 
 - **`uart_config` under-populated** — initialises a single UART bridge entry; firmware supports multiple. Pre-populate a realistic set so device tests don't silently skip multi-bridge scenarios.
-
-- **`http_dispatch()` re-imports on every call** — `from tests.mock import http_routes` runs on every HTTP dispatch. Cache the import or load it during `_register_all_handlers()`.
-
-- **HAT state is a bare `bool`** — `hat_present` gives no depth. Rail voltages, calibration flags, and LA state are tracked ad-hoc across handler modules. Introduce a `HatState` dataclass (or a `hat` sub-object on the device) so handler modules share a structured HAT model.
 
 ---
 

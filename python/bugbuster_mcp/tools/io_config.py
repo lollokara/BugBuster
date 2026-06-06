@@ -142,12 +142,18 @@ def register(mcp) -> None:
             )
         elif rail in (1, 2):
             validate_vadj_voltage(voltage, index=rail, confirm=confirm)
-            hal = session.get_hal()
-            hal.set_voltage(rail=rail, voltage=voltage)
             warnings = []
             try:
+                pd_warning = session.get_client().check_vadj_pd_limit(rail, voltage)
+                if pd_warning:
+                    warnings.append(pd_warning)
+            except Exception as e:
+                log.warning("PD limit check failed before set_supply_voltage: %s", e)
+            hal = session.get_hal()
+            hal.set_voltage(rail=rail, voltage=voltage)
+            try:
                 from ..safety import check_faults_post
-                warnings = check_faults_post(session.get_client())
+                warnings.extend(check_faults_post(session.get_client()))
             except Exception as e:
                 log.warning("Fault check failed after set_supply_voltage: %s", e)
                 warnings.append(f"Could not check faults after voltage change: {e}")

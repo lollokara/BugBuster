@@ -32,6 +32,57 @@ from .transport.http import HTTPTransport
 
 class BugBusterWarning(UserWarning):
     """General-purpose warning for the BugBuster host-side library."""
+
+
+PD_LIMITED_VADJ_MAX_V = 5.0
+PD_LIMITED_VADJ_TOLERANCE_V = 0.05
+
+
+def _pd_limited_vadj_warning(status: dict, rail: int, voltage: float) -> Optional[str]:
+    """Return a user-facing warning when VADJ1/2 is requested above the
+    voltage supported by the currently negotiated USB-C PD/input supply.
+
+    VADJ1 and VADJ2 are generated from the main USB-C input by buck supplies.
+    If the board is powered only from the data USB port, or the PD controller
+    has no/only a 5 V contract, those rails cannot rise meaningfully above
+    about 5 V. With a higher PD contract, VADJ1/VADJ2 still cannot be set
+    above the negotiated input voltage because they are buck rails. HAT
+    VADJ3/VADJ4 are buck-boost rails and are intentionally not covered by this
+    guard.
+    """
+    if rail not in (1, 2) or voltage <= PD_LIMITED_VADJ_MAX_V + PD_LIMITED_VADJ_TOLERANCE_V:
+        return None
+
+    pd_present = bool(status.get("present"))
+    attached = bool(status.get("attached"))
+    negotiated_v = float(status.get("voltage_v") or 0.0)
+    detected_pdos = [pdo for pdo in status.get("pdos", []) if isinstance(pdo, dict) and pdo.get("detected")]
+    higher_pdo_detected = len(detected_pdos) > 1
+
+    negotiated_ceiling = negotiated_v if negotiated_v > 0 else PD_LIMITED_VADJ_MAX_V
+    if (
+        (not pd_present)
+        or (not attached)
+        or voltage > negotiated_ceiling + PD_LIMITED_VADJ_TOLERANCE_V
+    ):
+        if not pd_present:
+            reason = "USB-C PD controller is not detected"
+        elif not attached:
+            reason = "USB-C PD power port is not attached"
+        elif negotiated_v > 0:
+            reason = f"negotiated USB-C input is only {negotiated_v:.1f} V"
+        elif not higher_pdo_detected:
+            reason = "no higher-voltage USB-C PD profile is available or negotiated"
+        else:
+            reason = "USB-C PD voltage is unknown"
+        return (
+            f"Requested VADJ{rail}={voltage:.2f} V, but {reason}. "
+            "VADJ1/VADJ2 are buck rails and cannot regulate above the active USB-C input voltage "
+            "(about 5 V when powered from the data USB port or a 5 V/no-PD source). "
+            "Connect/select a high-enough PD profile before requesting higher VADJ1/VADJ2 voltages; "
+            "HAT VADJ3/VADJ4 are buck-boost rails and are unaffected."
+        )
+    return None
 from .constants import (
     CmdId, ChannelFunction, AdcRange, AdcRate, AdcMux,
     GpioMode, WaveformType, OutputMode, RtdCurrent,
@@ -1503,7 +1554,7 @@ class BugBuster:
         count = resp[0]
         return list(resp[1:1 + count])
 
-    def ext_i2c_write(self, address: int, data: bytes | bytearray | list[int], *, timeout_ms: int = 100) -> int:
+    def ext_i2c_write(self, address: int, data: Union[bytes, bytearray, list[int]], *, timeout_ms: int = 100) -> int:
         """Write bytes to the configured external I2C bus."""
         raw = bytes(data)
         if len(raw) > 255:
@@ -1538,7 +1589,7 @@ class BugBuster:
     def ext_i2c_write_read(
         self,
         address: int,
-        write_data: bytes | bytearray | list[int],
+        write_data: Union[bytes, bytearray, list[int]],
         read_length: int,
         *,
         timeout_ms: int = 100,
@@ -1570,9 +1621,9 @@ class BugBuster:
         self,
         *,
         sck_gpio: int,
-        mosi_gpio: int | None = None,
-        miso_gpio: int | None = None,
-        cs_gpio: int | None = None,
+        mosi_gpio: Optional[int] = None,
+        miso_gpio: Optional[int] = None,
+        cs_gpio: Optional[int] = None,
         frequency_hz: int = 1_000_000,
         mode: int = 0,
     ) -> dict:
@@ -1606,7 +1657,7 @@ class BugBuster:
             "mode": resp[8],
         }
 
-    def ext_spi_transfer(self, data: bytes | bytearray | list[int], *, timeout_ms: int = 100) -> bytes:
+    def ext_spi_transfer(self, data: Union[bytes, bytearray, list[int]], *, timeout_ms: int = 100) -> bytes:
         """Run a bounded full-duplex transfer on the configured external SPI bus."""
         raw = bytes(data)
         if not (1 <= len(raw) <= 512):
@@ -1635,7 +1686,7 @@ class BugBuster:
     def ext_job_submit_i2c_write_read(
         self,
         address: int,
-        write_data: bytes | bytearray | list[int],
+        write_data: Union[bytes, bytearray, list[int]],
         read_length: int,
         *,
         timeout_ms: int = 100,
@@ -1659,7 +1710,7 @@ class BugBuster:
         resp = self._usb_cmd(CmdId.EXT_JOB_SUBMIT, payload)
         return struct.unpack_from("<I", resp, 0)[0]
 
-    def ext_job_submit_spi_transfer(self, data: bytes | bytearray | list[int], *, timeout_ms: int = 100) -> int:
+    def ext_job_submit_spi_transfer(self, data: Union[bytes, bytearray, list[int]], *, timeout_ms: int = 100) -> int:
         """Queue a deferred SPI transfer and return its job id."""
         if not self._usb:
             raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
@@ -2104,11 +2155,34 @@ class BugBuster:
 
         The power supply must be enabled first via :meth:`power_set`.
         """
+        warning = self.check_vadj_pd_limit(channel, float(voltage))
+        if warning:
+            warnings.warn(warning, BugBusterWarning, stacklevel=2)
         if self._usb:
             payload = struct.pack('<Bf', channel, float(voltage))
             self._usb_cmd(CmdId.IDAC_SET_VOLTAGE, payload)
         else:
             self._http_post("/idac/voltage", {"ch": channel, "voltage": float(voltage)})
+
+    def check_vadj_pd_limit(self, rail: int, voltage: float) -> Optional[str]:
+        """Return a warning if VADJ1/VADJ2 is requested above the active
+        USB-C input/PD contract capability.
+
+        The check is advisory and intentionally fail-open if PD status cannot
+        be read, so existing workflows do not break when using older firmware
+        or transports that lack USB-PD status.
+        """
+        if rail not in (1, 2) or float(voltage) <= PD_LIMITED_VADJ_MAX_V + PD_LIMITED_VADJ_TOLERANCE_V:
+            return None
+        try:
+            return _pd_limited_vadj_warning(self.usbpd_get_status(), rail, float(voltage))
+        except Exception as exc:
+            log.warning("Could not check USB-C PD status before VADJ%d %.2f V request: %s", rail, voltage, exc)
+            return (
+                f"Requested VADJ{rail}={float(voltage):.2f} V, but USB-C PD status could not be read ({exc}). "
+                "If the board is powered only from the data USB port or a 5 V/no-PD source, "
+                "VADJ1/VADJ2 are limited to about 5 V."
+            )
 
     def idac_set_code(self, channel: int, code: int) -> None:
         """
@@ -3566,7 +3640,7 @@ class BugBuster:
     # ── Fault management ─────────────────────────────────────────────
     # ------------------------------------------------------------------
 
-    def clear_alerts(self, channel: int | None = None) -> None:
+    def clear_alerts(self, channel: Optional[int] = None) -> None:
         """
         Clear alert flags.  Pass a *channel* index to clear only that channel;
         omit or pass ``None`` to clear all channels at once.
@@ -3808,6 +3882,103 @@ class BugBuster:
             return bool(result)
 
     # ------------------------------------------------------------------
+    # ── Quick Setup slots ─────────────────────────────────────────────
+    # ------------------------------------------------------------------
+
+    _QS_SLOT_COUNT = 4
+
+    def quicksetup_list(self) -> list:
+        """
+        Return summary info for all 4 quick-setup slots.
+
+        USB: QS_LIST (0xF0) → bitmap byte + 4 hash bytes.
+        HTTP: GET /api/quicksetup.
+        Returns a list of 4 dicts: ``{"index", "occupied", "hash"}``.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.QS_LIST)
+            bitmap = resp[0] if resp else 0
+            slots = []
+            for i in range(self._QS_SLOT_COUNT):
+                h = resp[1 + i] if len(resp) > 1 + i else 0
+                slots.append({"index": i, "occupied": bool(bitmap & (1 << i)), "hash": h})
+            return slots
+        else:
+            result = self._http_get("/quicksetup")
+            return result.get("slots", [])
+
+    def quicksetup_get(self, slot: int) -> Optional[dict]:
+        """
+        Return the JSON payload stored in *slot* (0–3), or ``None`` if empty.
+
+        USB: QS_GET (0xF1) → raw JSON bytes.
+        HTTP: GET /api/quicksetup/{slot}.
+        """
+        import json as _json
+        if self._usb:
+            resp = self._usb_cmd(CmdId.QS_GET, bytes([slot & 0xFF]))
+            if not resp:
+                return None
+            return _json.loads(resp.decode("utf-8", errors="replace"))
+        else:
+            try:
+                result = self._http_get(f"/quicksetup/{slot}")
+                return result if isinstance(result, dict) else None
+            except Exception:
+                return None
+
+    def quicksetup_save(self, slot: int) -> dict:
+        """
+        Snapshot the current device state into *slot* (0–3).
+
+        USB: QS_SAVE (0xF2) → raw JSON bytes of the saved snapshot.
+        HTTP: POST /api/quicksetup/{slot}.
+        Returns the saved JSON payload as a dict.
+        """
+        import json as _json
+        if self._usb:
+            resp = self._usb_cmd(CmdId.QS_SAVE, bytes([slot & 0xFF]))
+            return _json.loads(resp.decode("utf-8", errors="replace")) if resp else {}
+        else:
+            result = self._http_post(f"/quicksetup/{slot}", {})
+            return result if isinstance(result, dict) else {}
+
+    def quicksetup_apply(self, slot: int) -> dict:
+        """
+        Apply the quick-setup stored in *slot* to the live device state.
+
+        USB: QS_APPLY (0xF3) → u8 result (0=ok, 1=not_found, 2=error).
+        HTTP: POST /api/quicksetup/{slot}/apply.
+        Returns ``{"ok": bool, "applied": bool}``.
+        Raises ``RuntimeError`` on firmware error.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.QS_APPLY, bytes([slot & 0xFF]))
+            code = resp[0] if resp else 2
+            if code == 2:
+                raise RuntimeError(f"quicksetup_apply slot={slot}: firmware error")
+            return {"ok": code == 0, "applied": code == 0}
+        else:
+            result = self._http_post(f"/quicksetup/{slot}/apply", {})
+            return {"ok": bool(result.get("ok")), "applied": bool(result.get("applied"))}
+
+    def quicksetup_delete(self, slot: int) -> dict:
+        """
+        Delete the quick-setup stored in *slot*.
+
+        USB: QS_DELETE (0xF4) → u8 existed (0=existed, 1=not_found).
+        HTTP: POST /api/quicksetup/{slot}/delete.
+        Returns ``{"ok": bool, "deleted": bool}``.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.QS_DELETE, bytes([slot & 0xFF]))
+            existed = (resp[0] == 0) if resp else False
+            return {"ok": True, "deleted": existed}
+        else:
+            result = self._http_post(f"/quicksetup/{slot}/delete", {})
+            return {"ok": bool(result.get("ok")), "deleted": bool(result.get("deleted"))}
+
+    # ------------------------------------------------------------------
     # ── Raw register access  (USB only, debug/testing) ───────────────
     # ------------------------------------------------------------------
 
@@ -3971,7 +4142,7 @@ class BugBuster:
         payload = struct.pack('<BB', slot & 0xFF, len(tok_bytes)) + tok_bytes
         self._usb_cmd(CmdId.IO_FORCE_RELEASE, payload)
 
-    def reset_to_defaults(self, *, admin_token: str | None = None) -> list[str]:
+    def reset_to_defaults(self, *, admin_token: Optional[str] = None) -> list[str]:
         """
         Restore the device to its post-boot default state.
 

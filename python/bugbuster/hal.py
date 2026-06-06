@@ -372,7 +372,7 @@ class BugBusterHAL:
     def __init__(
         self,
         client,
-        routing:        dict | None    = None,
+        routing:        Optional[dict]    = None,
         supply_voltage: float   = 12.0,
         vlogic:         float   = 3.3,
         adc_rate:       AdcRate = AdcRate.SPS_200_H,

@@ -22,21 +22,6 @@ _EVENT_ONLY_CMDS = {
     "HAT_LA_LOG_EVT",
 }
 
-# CmdIds added to the protocol but not yet implemented in the simulator.
-# These are tracked here so the completeness test documents the gap without
-# blocking CI.  Add a simulator handler and remove from this set when implemented.
-_NOT_YET_SIMULATED = {
-    "EXT_JOB_SUBMIT",
-    "EXT_JOB_GET",
-    "EXT_I2C_SETUP",
-    "EXT_I2C_SCAN",
-    "EXT_I2C_WRITE",
-    "EXT_I2C_READ",
-    "EXT_I2C_WRITE_READ",
-    "EXT_SPI_SETUP",
-    "EXT_SPI_TRANSFER",
-}
-
 
 def test_proto_version_matches():
     """SimulatedDevice.PROTO_VERSION must match the client protocol version."""
@@ -50,7 +35,6 @@ def test_all_cmdids_have_handlers():
         cmd for cmd in CmdId
         if int(cmd) not in device._handlers
         and cmd.name not in _EVENT_ONLY_CMDS
-        and cmd.name not in _NOT_YET_SIMULATED
     ]
     assert not unhandled, f"Missing handlers for: {[c.name for c in unhandled]}"
 

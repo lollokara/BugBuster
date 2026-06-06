@@ -99,19 +99,20 @@ def _set_spi_clock(device):
 # Return canned "5V/3A" status.
 # ---------------------------------------------------------------------------
 
+_USBPD_CODE_TO_V = {1: 5.0, 2: 9.0, 3: 12.0, 4: 15.0, 5: 18.0, 6: 20.0}
+
+
 def _usbpd_get_status(device):
     def handler(payload: bytes) -> bytes:
-        pdo_code = getattr(device, 'usbpd_voltage', 1)  # 1 = 5V
+        pdo_code = getattr(device, 'usbpd_voltage', 1)
+        voltage_v = _USBPD_CODE_TO_V.get(pdo_code, 5.0)
         buf = bytearray()
         # present, attached, cc_dir, pd_resp, v_code, i_code
         buf += struct.pack('<BBBBBB', 1, 1, 0, 3, pdo_code, 3)
-        # voltage_v=5.0, current_a=3.0, power_w=15.0
-        buf += struct.pack('<fff', 5.0, 3.0, 15.0)
-        # 6 PDOs: first one detected (5V/3A), rest not detected
-        for i in range(6):
-            detected = 1 if i == 0 else 0
-            max_i = 3 if i == 0 else 0
-            buf += struct.pack('<BB', detected, max_i)
+        buf += struct.pack('<fff', voltage_v, 3.0, voltage_v * 3.0)
+        # all 6 PDOs reported as detected, 3 A max each
+        for _ in range(6):
+            buf += struct.pack('<BB', 1, 3)
         return bytes(buf)
     return handler
 
@@ -174,7 +175,8 @@ def _wifi_get_status(device):
 
 def _wifi_connect(device):
     def handler(payload: bytes) -> bytes:
-        return struct.pack('<B', 0)   # connected = False
+        device.wifi_connected = True
+        return struct.pack('<B', 1)   # connected = True
     return handler
 
 

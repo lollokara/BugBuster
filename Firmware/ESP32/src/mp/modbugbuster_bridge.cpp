@@ -9,6 +9,7 @@
 #include "ext_bus.h"
 #include "scripting.h"
 #include "io_owner.h"
+#include "pd_vadj_guard.h"
 #include "hat.h"
 #include "esp_timer.h"
 
@@ -43,6 +44,12 @@ extern "C" bool bugbuster_mp_channel_set_do(uint8_t channel, bool value)
     cmd.channel = channel;
     cmd.boolVal = value;
     return sendCommand(cmd);
+}
+
+extern "C" bool bugbuster_mp_vadj_pd_warning(uint8_t rail, float requested_v,
+                                             char *warning, size_t warning_len)
+{
+    return pd_vadj_guard_warning(rail, requested_v, warning, warning_len);
 }
 
 // =============================================================================

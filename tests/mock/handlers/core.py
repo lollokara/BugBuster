@@ -232,6 +232,8 @@ def _device_reset(device):
             ch["channel_alert"] = 0
         device.alert_status = 0
         device.supply_alert_status = 0
+        if hasattr(device, 'la_state'):
+            device.la_state = "IDLE"
         return b''
     return handler
 

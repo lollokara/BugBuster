@@ -13,6 +13,7 @@
 #include "py/obj.h"
 #include "py/runtime.h"
 #include "py/mperrno.h"
+#include "py/mpprint.h"
 
 #include "modbugbuster_bridge.h"
 
@@ -88,8 +89,24 @@ static mp_obj_t bugbuster_spi_make_new(const mp_obj_type_t *type,
         ? 3.3f : (float)mp_obj_get_float(parsed[ARG_vlogic].u_obj);
     bool allow_split_supplies = parsed[ARG_allow_split_supplies].u_bool;
 
-    if (supply_v > 5.0f) {
-        mp_raise_ValueError(MP_ERROR_TEXT("supply > 5.0 V not allowed"));
+    if (supply_v < 3.0f || supply_v > 15.0f) {
+        mp_raise_ValueError(MP_ERROR_TEXT("supply must be 3.0..15.0 V"));
+    }
+    uint8_t warn_rails[4] = {
+        (uint8_t)(sck_io <= 6 ? 1 : 2),
+        mosi_io ? (uint8_t)(mosi_io <= 6 ? 1 : 2) : 0,
+        miso_io ? (uint8_t)(miso_io <= 6 ? 1 : 2) : 0,
+        cs_io   ? (uint8_t)(cs_io   <= 6 ? 1 : 2) : 0,
+    };
+    bool warned[3] = { false, false, false };
+    for (size_t i = 0; i < 4; i++) {
+        uint8_t rail = warn_rails[i];
+        if (rail == 0 || warned[rail]) continue;
+        warned[rail] = true;
+        char warning[384] = {0};
+        if (bugbuster_mp_vadj_pd_warning(rail, supply_v, warning, sizeof(warning))) {
+            mp_printf(&mp_plat_print, "Warning: %s\n", warning);
+        }
     }
 
     char err[80] = {0};

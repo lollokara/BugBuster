@@ -6,8 +6,13 @@ that match what _normalize_http_* functions in client.py expect.
 """
 
 def check_admin_auth(device, headers: dict) -> bool:
-    """Checks for X-BugBuster-Admin-Token header."""
-    token = headers.get("X-BugBuster-Admin-Token")
+    """Checks for X-BugBuster-Admin-Token header (case-insensitive per HTTP spec)."""
+    # HTTP headers are case-insensitive; WSGI normalises them to uppercase so we
+    # do a lower-case scan rather than a direct dict.get().
+    token = next(
+        (v for k, v in headers.items() if k.lower() == "x-bugbuster-admin-token"),
+        None,
+    )
     # If device.admin_token is None, auth is disabled
     if getattr(device, 'admin_token', None) is None:
         return True
@@ -115,6 +120,11 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
                 if func == 0:  # HIGH_IMP resets DAC/ADC state
                     ch["dac_code"] = 0
                     ch["dac_value"] = 0.0
+                    ch["adc_raw"] = 0
+                    ch["adc_value"] = 0.0
+                    ch["adc_range"] = 0
+                    ch["adc_rate"] = 0
+                    ch["adc_mux"] = 0
             return {"ok": True}
         except ValueError:
             return {"error": "invalid path or body"}
@@ -343,12 +353,22 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             dev_idx  = int(body.get("device", 0))
             sw_idx   = int(body.get("switch", 0))
             closed   = bool(body.get("closed", False))
+            if not hasattr(device, "adgs_active"):
+                device.adgs_active = [None, None, None, None]
             if 0 <= dev_idx < 4 and 0 <= sw_idx < 8:
                 if closed:
+                    if dev_idx != 3:  # non-selftest: enforce one-switch-at-a-time
+                        device.mux_states[dev_idx] = 0
                     device.mux_states[dev_idx] |= (1 << sw_idx)
+                    device.adgs_active[dev_idx] = sw_idx
                 else:
                     device.mux_states[dev_idx] &= ~(1 << sw_idx)
                     device.mux_states[dev_idx] &= 0xFF
+                    if dev_idx != 3:
+                        remaining = device.mux_states[dev_idx]
+                        device.adgs_active[dev_idx] = (
+                            (remaining & -remaining).bit_length() - 1 if remaining else None
+                        )
             return {"ok": True}
         except ValueError:
             return {"error": "invalid value"}
@@ -356,7 +376,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     # HAT status
     if key == ("GET", "/hat"):
         pins = getattr(device, 'hat_pins', [0] * 8)
-        detected = device.hat_present
+        detected = device.hat.present
         return {
             "detected": detected,
             "connected": detected,
@@ -385,7 +405,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
 
     # HAT detect
     if key == ("POST", "/hat/detect"):
-        detected = device.hat_present
+        detected = device.hat.present
         return {
             "detected": detected,
             "type": 1 if detected else 0,
@@ -660,6 +680,76 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             return {"ok": True}
         except ValueError:
             return {"error": "invalid voltage"}
+
+    # Quick setup — GET /quicksetup
+    if key == ("GET", "/quicksetup"):
+        slots = getattr(device, "qs_slots", [None] * 4)
+        result = []
+        for i, slot in enumerate(slots):
+            entry = {"index": i, "occupied": slot is not None, "summary": None}
+            if slot is not None:
+                entry["summary"] = {
+                    "name": slot["name"],
+                    "ts": slot["ts"],
+                    "size": len(slot.get("payload_json", "{}")),
+                    "hash": slot["hash"],
+                }
+            result.append(entry)
+        return {"slots": result}
+
+    # Quick setup — GET /quicksetup/{slot}
+    if method == "GET" and path.startswith("/quicksetup/") and len(path) == len("/quicksetup/X"):
+        try:
+            idx = int(path[-1])
+            slots = getattr(device, "qs_slots", [None] * 4)
+            if 0 <= idx < 4 and slots[idx] is not None:
+                return slots[idx]["payload"]
+            return {"error": "not found", "code": 404}
+        except (ValueError, IndexError):
+            return {"error": "invalid slot", "code": 400}
+
+    # Quick setup — POST /quicksetup/{slot}[/apply|/delete]
+    if method == "POST" and path.startswith("/quicksetup/"):
+        import json as _json
+        import time as _time
+        parts = path.split("/")
+        try:
+            idx = int(parts[2])
+            suffix = parts[3] if len(parts) > 3 else ""
+        except (ValueError, IndexError):
+            return {"error": "invalid slot", "code": 400}
+        if not (0 <= idx < 4):
+            return {"error": "invalid slot", "code": 400}
+        if not hasattr(device, "qs_slots"):
+            device.qs_slots = [None] * 4
+
+        if suffix == "":
+            snap = {"channels": [{"id": ch["id"], "function": ch["function"], "dac_code": ch["dac_code"], "dac_value": ch["dac_value"]} for ch in device.channels]}
+            raw = _json.dumps(snap, sort_keys=True).encode()
+            h = 0
+            for b in raw:
+                h = ((h << 5) + h + b) & 0xFF
+            device.qs_slots[idx] = {"name": f"slot{idx}", "ts": int(_time.time()), "hash": h, "payload": snap}
+            return snap
+
+        if suffix == "apply":
+            slot = device.qs_slots[idx]
+            if slot is None:
+                return {"ok": False, "applied": False, "error": "not found", "code": 404}
+            for ch_snap in slot["payload"].get("channels", []):
+                for ch in device.channels:
+                    if ch["id"] == ch_snap.get("id"):
+                        ch["function"] = ch_snap.get("function", ch["function"])
+                        ch["dac_code"] = ch_snap.get("dac_code", ch["dac_code"])
+                        ch["dac_value"] = ch_snap.get("dac_value", ch["dac_value"])
+            return {"ok": True, "applied": True}
+
+        if suffix == "delete":
+            existed = device.qs_slots[idx] is not None
+            device.qs_slots[idx] = None
+            return {"ok": True, "deleted": existed}
+
+        return {"error": "unknown quicksetup action", "code": 404}
 
     # WiFi status — GET /wifi
     if key == ("GET", "/wifi"):

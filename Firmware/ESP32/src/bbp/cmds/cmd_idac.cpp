@@ -16,6 +16,7 @@
 #include "tasks.h"
 #include "state_lock.h"
 #include "ds4424.h"
+#include "pd_vadj_guard.h"
 #include "esp_log.h"
 
 static const char *TAG = "cmd_idac";
@@ -109,6 +110,11 @@ static int handler_idac_set_voltage(const uint8_t *payload, size_t len,
     uint8_t ch      = bbp_get_u8(payload, &rpos);
     float   voltage = bbp_get_f32(payload, &rpos);
     if (ch >= 3) return -CMD_ERR_OUT_OF_RANGE;  // legacy uses ch >= 3
+
+    char warning[384] = {0};
+    if (pd_vadj_guard_warning(ch, voltage, warning, sizeof(warning))) {
+        ESP_LOGW(TAG, "%s", warning);
+    }
 
     if (!ds4424_set_voltage(ch, voltage)) return -CMD_ERR_HARDWARE;
 

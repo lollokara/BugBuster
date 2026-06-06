@@ -24,7 +24,7 @@ class SimulatedUSBTransport(USBTransport):
 
         self._device = device
         device._transport = self
-        device.hat_present = hat
+        device.hat.present = hat
 
         # Attributes that client.py reads off the transport
         self.proto_version = device.PROTO_VERSION
@@ -89,7 +89,7 @@ class SimulatedHTTPTransport(HTTPTransport):
         self._base_url = "sim://device"
         self._device = device
         device._transport = self
-        device.hat_present = hat
+        device.hat.present = hat
 
         self.fw_version = device.fw_version
 

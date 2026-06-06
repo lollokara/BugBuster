@@ -153,7 +153,7 @@ def _dio_read(device):
         if 0 <= idx < len(device.dio):
             d = device.dio[idx]
             mode  = d.get("mode", 0)
-            value = int(d.get("output", False))
+            value = int(d.get("input", False))
         else:
             mode  = 0
             value = 0

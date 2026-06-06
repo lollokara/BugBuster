@@ -27,7 +27,7 @@ extern "C" {
  * @param scl_io          IO terminal 1..12 for SCL
  * @param freq_hz         I2C frequency in Hz
  * @param internal_pullups true = enable ESP32 internal pull-ups
- * @param supply_v        Target supply voltage (VADJ), max 5.0 V
+ * @param supply_v        Target supply voltage (VADJ), 3.0-15.0 V
  * @param vlogic_v        Target VLOGIC voltage
  * @param err             Error message buffer (may be NULL)
  * @param err_len         Size of error buffer
@@ -52,7 +52,7 @@ bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
  * @param cs_io_or_0      IO terminal 1..12 for CS,   or 0 = unused
  * @param freq_hz         SPI frequency in Hz
  * @param mode            SPI mode 0..3
- * @param supply_v        Target supply voltage (VADJ), max 5.0 V
+ * @param supply_v        Target supply voltage (VADJ), 3.0-15.0 V
  * @param vlogic_v        Target VLOGIC voltage
  * @param err             Error message buffer (may be NULL)
  * @param err_len         Size of error buffer

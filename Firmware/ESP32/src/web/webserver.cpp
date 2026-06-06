@@ -50,6 +50,7 @@
 #include "repl_ws.h"
 #include "serial_io.h"
 #include "cli/cli_term.h"
+#include "pd_vadj_guard.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -2566,6 +2567,12 @@ static esp_err_t handle_post_idac_voltage(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "ch", ch);
     cJSON_AddNumberToObject(root, "code", st->state[ch].dac_code);
     cJSON_AddNumberToObject(root, "voltage", st->state[ch].target_v);
+    char warning[384] = {0};
+    if (pd_vadj_guard_warning((uint8_t)ch, (float)voltage, warning, sizeof(warning))) {
+        cJSON_AddStringToObject(root, "warning", warning);
+        cJSON *warnings = cJSON_AddArrayToObject(root, "warnings");
+        cJSON_AddItemToArray(warnings, cJSON_CreateString(warning));
+    }
     return send_json(req, root);
 }
 

@@ -274,8 +274,8 @@ extern "C" bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
                                        char *err, size_t err_len)
 {
     // ── Validate ────────────────────────────────────────────────────────────
-    if (supply_v > 5.0f) {
-        set_err(err, err_len, "supply > 5.0 V not allowed");
+    if (isnan(supply_v) || supply_v < 3.0f || supply_v > 15.0f) {
+        set_err(err, err_len, "supply_v out of range [3.0, 15.0] V");
         return false;
     }
     if (isnan(vlogic_v) || vlogic_v < 1.2f || vlogic_v > 3.6f) {
@@ -344,8 +344,8 @@ extern "C" bool bus_planner_apply_spi(uint8_t sck_io,
                                        char *err, size_t err_len)
 {
     // ── Validate ────────────────────────────────────────────────────────────
-    if (supply_v > 5.0f) {
-        set_err(err, err_len, "supply > 5.0 V not allowed");
+    if (isnan(supply_v) || supply_v < 3.0f || supply_v > 15.0f) {
+        set_err(err, err_len, "supply_v out of range [3.0, 15.0] V");
         return false;
     }
     if (isnan(vlogic_v) || vlogic_v < 1.2f || vlogic_v > 3.6f) {

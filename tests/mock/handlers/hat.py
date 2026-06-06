@@ -196,7 +196,7 @@ def register(device) -> None:
 
 def _hat_detect(device):
     def handler(payload: bytes) -> bytes:
-        detected = device.hat_present
+        detected = device.hat.present
         hat_type = 1 if detected else 0
         detect_v = 3.3 if detected else 0.0
         connected = detected
@@ -215,7 +215,7 @@ def _hat_detect(device):
 
 def _hat_get_status(device):
     def handler(payload: bytes) -> bytes:
-        detected = device.hat_present
+        detected = device.hat.present
         connected = detected
         hat_type = 1 if detected else 0
         detect_v = 3.3 if detected else 0.0
@@ -320,7 +320,7 @@ def _hat_get_power(device):
         hvpak = device.hvpak
         buf += struct.pack('<BBB',
                            hvpak["identity"],
-                           int(hvpak["ready"] and device.hat_present),
+                           int(hvpak["ready"] and device.hat.present),
                            0)
         return bytes(buf)
     return handler
@@ -359,7 +359,7 @@ def _hat_setup_swd(device):
 def _hat_get_hvpak_info(device):
     def handler(payload: bytes) -> bytes:
         hvpak = device.hvpak
-        ready = hvpak["ready"] and device.hat_present
+        ready = hvpak["ready"] and device.hat.present
         mv = getattr(device, 'hat_io_volt', 3300)
         return struct.pack('<BBBBBHHBBB',
                            hvpak["identity"],
@@ -767,6 +767,7 @@ def _hat_set_led_state(device):
         else:
             device.hat_led_states[led_id] = [0, 0, 0, payload[1]]
         return b''
+    return handler
 
 
 def _hat_la_set_route(device):

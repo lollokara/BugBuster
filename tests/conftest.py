@@ -60,6 +60,16 @@ def pytest_addoption(parser):
         help="Use simulated device (no hardware required)",
     )
     parser.addoption(
+        "--sim-full",
+        action="store_true",
+        default=False,
+        help=(
+            "Use simulated device with a real localhost HTTP server so "
+            "HTTPTransport exercises actual requests serialization and "
+            "HTTP status-code handling (implies --sim for the HTTP path)."
+        ),
+    )
+    parser.addoption(
         "--admin-token",
         metavar="TOKEN",
         default=None,
@@ -78,13 +88,16 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     try:
         sim = config.getoption("--sim", default=False)
+        sim_full = config.getoption("--sim-full", default=False)
         usb = config.getoption("--device-usb", default=None)
         http = config.getoption("--device-http", default=None)
         hat = config.getoption("--hat", default=False)
-        if sim and (usb or http):
-            pytest.exit("ERROR: --sim is mutually exclusive with --device-usb / --device-http")
-        if sim and hat:
-            raise pytest.UsageError("--sim and --hat are mutually exclusive")
+        if sim and sim_full:
+            pytest.exit("ERROR: --sim and --sim-full are mutually exclusive")
+        if (sim or sim_full) and (usb or http):
+            pytest.exit("ERROR: --sim/--sim-full are mutually exclusive with --device-usb / --device-http")
+        if (sim or sim_full) and hat:
+            raise pytest.UsageError("--sim/--sim-full and --hat are mutually exclusive")
     except pytest.UsageError:
         raise
     except ValueError:
@@ -93,7 +106,7 @@ def pytest_configure(config):
 
 def pytest_sessionstart(session):
     try:
-        if session.config.getoption("--sim", default=False):
+        if session.config.getoption("--sim", default=False) or session.config.getoption("--sim-full", default=False):
             from tests.mock.simulated_device import SimulatedDevice
             from bugbuster.protocol import BBP_PROTO_VERSION
             assert SimulatedDevice.PROTO_VERSION == BBP_PROTO_VERSION, (
@@ -201,6 +214,10 @@ def assert_no_faults(device):
 # Connection factory helpers
 # ---------------------------------------------------------------------------
 
+# Fixed admin token used by --sim-full so HTTPTransport and SimulatedDevice agree.
+_SIM_FULL_ADMIN_TOKEN = "aa" * 32  # 64-char hex, never matches a real device token
+
+
 def _make_usb_device(config):
     """Open a USB BugBuster connection or skip if not configured."""
     if config.getoption("--sim", default=False):
@@ -253,7 +270,7 @@ def _resolve_admin_token(config):
     return token
 
 
-def _make_http_device(config):
+def _make_http_device(config, request=None):
     """Open an HTTP BugBuster connection or skip if not configured."""
     if config.getoption("--sim", default=False):
         from tests.mock import SimulatedDevice, SimulatedHTTPTransport
@@ -261,6 +278,29 @@ def _make_http_device(config):
         device = SimulatedDevice()
         transport = SimulatedHTTPTransport(device, hat=hat)
         return bb.BugBuster(transport)
+
+    if config.getoption("--sim-full", default=False):
+        from tests.mock import SimulatedDevice
+        from tests.mock.sim_http_server import SimHTTPServer
+        from bugbuster.transport.http import HTTPTransport
+        hat = config.getoption("--hat", default=False)
+        device = SimulatedDevice()
+        device.hat.present = hat
+        server = SimHTTPServer(device, admin_token=_SIM_FULL_ADMIN_TOKEN)
+        server.start()
+        transport = HTTPTransport(
+            host="127.0.0.1",
+            port=server.port,
+            admin_token=_SIM_FULL_ADMIN_TOKEN,
+        )
+        transport.connect()
+        dev = bb.BugBuster(transport)
+        # Store server on the device wrapper so the fixture finalizer can stop it.
+        dev._sim_http_server = server  # noqa: SLF001
+        if request is not None:
+            request.addfinalizer(server.stop)
+        return dev
+
     host = config.getoption("--device-http")
     if not host:
         pytest.skip("HTTP device not specified — pass --device-http <ip>")
@@ -689,9 +729,10 @@ def device(request):
     if transport == "usb":
         dev = _make_usb_device(request.config)
     else:
-        dev = _make_http_device(request.config)
+        dev = _make_http_device(request.config, request=request)
 
-    skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
+    _sim_mode = request.config.getoption("--sim", default=False) or request.config.getoption("--sim-full", default=False)
+    skip_reset = "no_reset" in request.keywords or _sim_mode
     tracker = _MutationTracker()
     yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
 
@@ -733,8 +774,9 @@ def usb_device(request):
 @pytest.fixture
 def http_device(request):
     """HTTP-only BugBuster fixture.  Skips if --device-http not given."""
-    dev = _make_http_device(request.config)
-    skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
+    dev = _make_http_device(request.config, request=request)
+    _sim_mode = request.config.getoption("--sim", default=False) or request.config.getoption("--sim-full", default=False)
+    skip_reset = "no_reset" in request.keywords or _sim_mode
     tracker = _MutationTracker()
     yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
     yield yielded
