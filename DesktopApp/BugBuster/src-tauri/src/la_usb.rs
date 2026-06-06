@@ -16,9 +16,12 @@ const BB_HAT_VID: u16 = 0x2E8A;
 const BB_HAT_PID: u16 = 0x000C;
 const LA_INTERFACE_NUM: u8 = 3;
 const LA_EP_IN: u8 = 0x87;
+#[allow(dead_code)]
 const LA_EP_OUT: u8 = 0x06;
 
+#[allow(dead_code)]
 pub const LA_USB_CMD_STOP: u8 = 0x00;
+#[allow(dead_code)]
 pub const LA_USB_CMD_START_STREAM: u8 = 0x01;
 
 pub const STREAM_PKT_START: u8 = 0x01;
@@ -360,6 +363,7 @@ impl LaUsbConnection {
         }
     }
 
+    #[allow(dead_code)]
     pub fn send_command(&self, cmd: u8) -> Result<()> {
         let iface = self
             .interface

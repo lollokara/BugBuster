@@ -14,7 +14,6 @@ pub mod scope;
 pub mod wavegen;
 pub mod signal_path;
 pub mod voltages;
-pub mod calibration;
 pub mod iin;
 pub mod usbpd;
 pub mod ioexp;

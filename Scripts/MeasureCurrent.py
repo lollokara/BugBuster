@@ -25,17 +25,21 @@ import threading
 import collections
 import re
 
-import matplotlib
-if sys.platform == "darwin":
-    try:
-        matplotlib.use("macosx")
-    except ImportError:
+try:
+    import matplotlib
+    if sys.platform == "darwin":
+        try:
+            matplotlib.use("macosx")
+        except ImportError:
+            matplotlib.use("TkAgg")
+    else:
         matplotlib.use("TkAgg")
-else:
-    matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-import matplotlib.gridspec as gridspec
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as animation
+    import matplotlib.gridspec as gridspec
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
@@ -469,6 +473,9 @@ def _style_ax(ax):
 def run_ui_dsp(dsp: DspMeasurement, rsense_mohm: float,
                log_path: str, dut_supply_v: float,
                is_usb: bool = False) -> None:
+    if not HAS_MATPLOTLIB:
+        print("Error: matplotlib is required to run the UI. Please run inside an environment with matplotlib installed.")
+        sys.exit(1)
 
     fig = plt.figure(figsize=(14, 9), facecolor=_C_BG)
     gs  = gridspec.GridSpec(
@@ -771,6 +778,9 @@ class Measurement:
 
 def run_ui_poll(meas: Measurement, rsense_mohm: float,
                 log_path: str, dut_supply_v: float) -> None:
+    if not HAS_MATPLOTLIB:
+        print("Error: matplotlib is required to run the UI. Please run inside an environment with matplotlib installed.")
+        sys.exit(1)
 
     fig = plt.figure(figsize=(12, 7), facecolor=_C_BG)
     ax_graph = fig.add_axes([0.09, 0.38, 0.87, 0.54])

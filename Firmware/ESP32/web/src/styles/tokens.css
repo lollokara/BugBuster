@@ -10,28 +10,28 @@
 
 :root {
   /* Surfaces */
-  --bg0: #060a14;
-  --bg1: #0c1222;
-  --bg2: #141c2e;
-  --surface: rgba(18, 27, 46, 0.6);
-  --glass: rgba(20, 30, 52, 0.55);
-  --glass-bright: rgba(28, 40, 64, 0.65);
-  --border: rgba(100, 130, 180, 0.10);
-  --border-bright: rgba(100, 140, 200, 0.18);
-  --glow-subtle: rgba(59, 130, 246, 0.04);
+  --bg0: #080d1a;
+  --bg1: #0e1529;
+  --bg2: #141c33;
+  --surface: rgba(28, 38, 59, 0.5);
+  --glass: rgba(20, 28, 45, 0.55);
+  --glass-bright: rgba(32, 44, 70, 0.65);
+  --border: rgba(148, 163, 184, 0.22);
+  --border-bright: rgba(148, 163, 184, 0.38);
+  --glow-subtle: rgba(96, 165, 250, 0.06);
 
   /* Text */
-  --text: #e2e8f0;
-  --text-dim: #8b9dc3;
-  --text-muted: #5a6d8a;
+  --text: #ffffff;
+  --text-dim: #d1d5db;
+  --text-muted: #9ca3af;
 
   /* Accents */
-  --blue: #3b82f6;
-  --green: #10b981;
-  --amber: #f59e0b;
-  --rose: #ef4444;
-  --purple: #a855f7;
-  --cyan: #06b6d4;
+  --blue: #60a5fa;
+  --green: #34d399;
+  --amber: #fbbf24;
+  --rose: #f87171;
+  --purple: #c084fc;
+  --cyan: #22d3ee;
   --neon-cyan: #22d3ee;
   --neon-green: #39ff88;
   --neon-pink: #ff3df2;

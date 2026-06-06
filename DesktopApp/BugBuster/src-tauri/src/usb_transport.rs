@@ -214,6 +214,7 @@ impl UsbTransport {
         self.seq_counter.fetch_add(1, Ordering::Relaxed)
     }
 
+    #[allow(dead_code)]
     fn merge_gpio_status_payload(state: &mut DeviceState, payload: &[u8]) {
         // Firmware BBP shape: 12 * (gpio_id, mode, output, input, pulldown) => 60 bytes.
         let mut r = PayloadReader::new(payload);

@@ -23,28 +23,38 @@ fn tab_slots(tab_id: &str) -> &'static [u8] {
     }
 }
 
-const TABS: &[(&str, &str)] = &[
-    ("overview", "Overview"),
-    ("board", "Board"),
-    ("adc", "ADC"),
-    ("vdac", "VDAC"),
-    ("idac", "IDAC"),
-    ("iin", "IIN"),
-    ("hv_io", "HV IO"),
-    ("gpio", "GPIO"),
-    ("din", "DIN"),
-    ("dout", "DOUT"),
-    ("uart", "UART"),
-    ("scope", "Scope"),
-    ("wavegen", "WaveGen"),
-    ("sigpath", "Signal Path"),
-    ("voltages", "Voltages"),
-    ("usbpd", "USB PD"),
-    ("ioexp", "IO Expander"),
-    ("hat", "HAT"),
-    ("la", "Logic Analyzer"),
-    ("faults", "Faults"),
-    ("diag", "Diagnostics"),
+const CATEGORIES: &[(&str, &str, &[(&str, &str)])] = &[
+    ("overview_cat", "Overview", &[
+        ("overview", "Dashboard"),
+        ("board", "Board Map"),
+        ("voltages", "Voltages & Cal"),
+        ("faults", "Faults"),
+        ("diag", "Diagnostics"),
+    ]),
+    ("analog_cat", "Analog", &[
+        ("adc", "ADC"),
+        ("vdac", "VDAC"),
+        ("idac", "IDAC"),
+        ("iin", "IIN"),
+    ]),
+    ("digital_cat", "Digital", &[
+        ("gpio", "GPIO"),
+        ("din", "DIN"),
+        ("dout", "DOUT"),
+        ("hv_io", "HV IO"),
+        ("ioexp", "IO Expander"),
+    ]),
+    ("instruments_cat", "Instruments", &[
+        ("scope", "Scope"),
+        ("la", "Logic Analyzer"),
+        ("wavegen", "WaveGen"),
+        ("sigpath", "Signal Path"),
+    ]),
+    ("system_cat", "System", &[
+        ("hat", "HAT"),
+        ("usbpd", "USB PD"),
+        ("uart", "UART"),
+    ]),
 ];
 
 #[component]
@@ -55,6 +65,15 @@ pub fn App() -> impl IntoView {
     let (scanning, set_scanning) = signal(false);
     let (device_state, set_device_state) = signal(DeviceState::default());
     let (active_tab, set_active_tab) = signal("overview".to_string());
+    let active_category = move || {
+        let tab = active_tab.get();
+        for (cat_id, _, tabs) in CATEGORIES {
+            if tabs.iter().any(|(t_id, _)| *t_id == tab) {
+                return cat_id.to_string();
+            }
+        }
+        "overview_cat".to_string()
+    };
     let uart_config = RwSignal::new(UartConfigState::new());
 
     // Hoist scope UI state so it survives tab switches (Bug 1).
@@ -433,18 +452,40 @@ pub fn App() -> impl IntoView {
 
             // Main content (when connected)
             <Show when=move || conn_mode.get() != "Disconnected">
-                // Tab bar
-                <nav class="tab-bar">
-                    {TABS.iter().map(|(id, label)| {
-                        let id_str = id.to_string();
-                        let id_click = id_str.clone();
+                // Category bar
+                <nav class="category-bar">
+                    {CATEGORIES.iter().map(|(cat_id, label, tabs)| {
+                        let cat_id_str = cat_id.to_string();
+                        let first_tab_id = tabs[0].0.to_string();
                         view! {
-                            <button class="tab-item"
-                                class:active=move || active_tab.get() == id_str
-                                on:click=move |_| set_active_tab.set(id_click.clone())
+                            <button class="category-item"
+                                class:active=move || active_category() == cat_id_str
+                                on:click=move |_| set_active_tab.set(first_tab_id.clone())
                             >{*label}</button>
                         }
                     }).collect::<Vec<_>>()}
+                </nav>
+
+                // Tab bar
+                <nav class="tab-bar">
+                    {move || {
+                        let cat = active_category();
+                        let tabs = CATEGORIES.iter()
+                            .find(|(cat_id, _, _)| **cat_id == cat)
+                            .map(|(_, _, t)| *t)
+                            .unwrap_or(&[]);
+                        
+                        tabs.iter().map(|(id, label)| {
+                            let id_str = id.to_string();
+                            let id_click = id_str.clone();
+                            view! {
+                                <button class="tab-item"
+                                    class:active=move || active_tab.get() == id_str
+                                    on:click=move |_| set_active_tab.set(id_click.clone())
+                                >{*label}</button>
+                            }
+                        }).collect::<Vec<_>>()
+                    }}
                 </nav>
 
                 // IO blocked banner — shown when the active tab's slots are held by another interface.

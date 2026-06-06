@@ -136,6 +136,7 @@ export function SignalPath() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const dimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  const lastWriteMs = useRef<number>(0);
 
   useEffect(() => startSelftestStatusPolling(), []);
 
@@ -143,6 +144,7 @@ export function SignalPath() {
   useEffect(() => {
     let alive = true;
     const tick = async () => {
+      if (Date.now() - lastWriteMs.current < 750) return;
       try {
         const st = deviceStatus.value;
         if (st?.muxStates && Array.isArray(st.muxStates) && st.muxStates.length >= 4) {
@@ -176,6 +178,7 @@ export function SignalPath() {
   useEffect(() => {
     let alive = true;
     const tick = async () => {
+      if (Date.now() - lastWriteMs.current < 750) return;
       try {
         const r = await api.ioexp();
         if (!alive || !r) return;
@@ -203,6 +206,7 @@ export function SignalPath() {
 
   /* ---- Also read lshift state from deviceStatus if present ---- */
   useEffect(() => {
+    if (Date.now() - lastWriteMs.current < 750) return;
     const st = deviceStatus.value;
     if (st && typeof st.lshiftEnabled === "boolean") oe.value = st.lshiftEnabled;
   }, [deviceStatus.value]);
@@ -294,6 +298,7 @@ export function SignalPath() {
   };
 
   const toggleSwitch = (d: number, s: number) => {
+    lastWriteMs.current = Date.now();
     opStatus.value = null;
     const cur = mux.value.slice() as [number, number, number, number];
     const prev = cur.slice() as [number, number, number, number];
@@ -320,6 +325,7 @@ export function SignalPath() {
   };
 
   const applyPreset = (states: readonly [number, number, number, number]) => {
+    lastWriteMs.current = Date.now();
     opStatus.value = null;
     const mac = deviceMac.value;
     const prev = mux.value.slice() as [number, number, number, number];
@@ -337,6 +343,7 @@ export function SignalPath() {
   };
 
   const togglePsu = (i: 0 | 1) => {
+    lastWriteMs.current = Date.now();
     opStatus.value = null;
     const mac = deviceMac.value;
     const prev = psu.value.slice() as [boolean, boolean];
@@ -354,6 +361,7 @@ export function SignalPath() {
   };
 
   const toggleEfuse = (i: 0 | 1 | 2 | 3) => {
+    lastWriteMs.current = Date.now();
     opStatus.value = null;
     const mac = deviceMac.value;
     const prev = ef.value.slice() as [boolean, boolean, boolean, boolean];
@@ -371,6 +379,7 @@ export function SignalPath() {
   };
 
   const toggleOe = () => {
+    lastWriteMs.current = Date.now();
     opStatus.value = null;
     const mac = deviceMac.value;
     const prev = oe.value;

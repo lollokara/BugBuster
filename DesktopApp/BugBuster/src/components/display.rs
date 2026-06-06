@@ -47,7 +47,7 @@ pub fn Led(
             <div class=size_class
                 class:led-on=move || on.get()
                 style=move || if on.get() {
-                    format!("background: {}; box-shadow: 0 0 8px {}", color, color)
+                    format!("background: {}; box-shadow: 0 0 12px {}", color, color)
                 } else {
                     String::new()
                 }

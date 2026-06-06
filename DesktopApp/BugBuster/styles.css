@@ -1,29 +1,52 @@
-/* =============================================================================
-   BugBuster Desktop App — Futuristic Glass UI
-   ============================================================================= */
-
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
+@font-face {
+    font-family: 'Inter';
+    src: url('./public/fonts/inter-latin-wght-normal.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Inter';
+    src: url('./public/fonts/inter-latin-wght-italic.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    src: url('./public/fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    src: url('./public/fonts/jetbrains-mono-latin-wght-italic.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
 
 :root {
-    --bg0: #060a14;
-    --bg1: #0c1222;
-    --bg2: #141c2e;
-    --surface: rgba(18, 27, 46, 0.6);
-    --glass: rgba(20, 30, 52, 0.55);
-    --glass-bright: rgba(28, 40, 64, 0.65);
-    --border: rgba(100, 130, 180, 0.10);
-    --border-bright: rgba(100, 140, 200, 0.18);
-    --glow-subtle: rgba(59, 130, 246, 0.04);
-    --text: #e2e8f0;
-    --text-dim: #8b9dc3;
-    --text-muted: #5a6d8a;
-    --blue: #3b82f6;
-    --green: #10b981;
-    --amber: #f59e0b;
-    --rose: #ef4444;
-    --purple: #a855f7;
-    --cyan: #06b6d4;
-    --radius: 12px;
+    --bg0: #080d1a;
+    --bg1: #0e1529;
+    --bg2: #141c33;
+    --surface: rgba(28, 38, 59, 0.5);
+    --glass: rgba(20, 28, 45, 0.55);
+    --glass-bright: rgba(32, 44, 70, 0.65);
+    --border: rgba(148, 163, 184, 0.22);
+    --border-bright: rgba(148, 163, 184, 0.38);
+    --glow-subtle: rgba(96, 165, 250, 0.06);
+    --text: #ffffff;
+    --text-dim: #d1d5db;
+    --text-muted: #9ca3af;
+    --blue: #60a5fa;
+    --green: #34d399;
+    --amber: #fbbf24;
+    --rose: #f87171;
+    --purple: #c084fc;
+    --cyan: #22d3ee;
+    --radius: 14px;
     --radius-sm: 8px;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     font-size: 14px;
@@ -67,9 +90,34 @@
 .spi-err { color: var(--rose); font-weight: 600; font-size: 0.75rem; }
 .temp-value { color: var(--amber); font-variant-numeric: tabular-nums; }
 
+/* ---- Category Bar ---- */
+.category-bar {
+    position: sticky; top: 42px; z-index: 195;
+    display: flex; gap: 4px; padding: 6px 20px 2px 20px;
+    background: rgba(8, 12, 24, 0.96);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid rgba(100, 130, 180, 0.08);
+    overflow-x: auto;
+}
+.category-item {
+    padding: 6px 12px; border: none; border-radius: 4px;
+    background: transparent; color: var(--text-muted);
+    font-size: 0.75rem; font-weight: 700; cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); white-space: nowrap;
+    font-family: inherit;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.category-item:hover { color: var(--text-dim); background: rgba(59, 130, 246, 0.05); }
+.category-item.active {
+    color: var(--blue); background: rgba(59, 130, 246, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.2);
+    text-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+}
+
 /* ---- Tab Bar ---- */
 .tab-bar {
-    position: sticky; top: 42px; z-index: 190;
+    position: sticky; top: 76px; z-index: 190;
     display: flex; gap: 2px; padding: 4px 20px;
     background: rgba(8,12,24,0.92);
     backdrop-filter: blur(16px);
@@ -80,7 +128,7 @@
     padding: 6px 14px; border: none; border-radius: 6px 6px 0 0;
     background: transparent; color: var(--text-muted);
     font-size: 0.8rem; font-weight: 500; cursor: pointer;
-    transition: all 0.2s; white-space: nowrap;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); white-space: nowrap;
     font-family: inherit;
 }
 .tab-item:hover { color: var(--text-dim); background: rgba(59,130,246,0.06); }
@@ -107,18 +155,21 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 16px;
-    backdrop-filter: blur(16px) saturate(1.2);
-    transition: all 0.25s ease;
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.15), 0 8px 32px 0 rgba(0, 0, 0, 0.35);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s, box-shadow 0.25s;
     position: relative;
 }
 .card::before {
     content: ''; position: absolute; inset: 0; pointer-events: none;
     border-radius: var(--radius);
-    background: linear-gradient(135deg, rgba(59,130,246,0.02) 0%, transparent 60%);
+    background: linear-gradient(135deg, rgba(59,130,246,0.03) 0%, transparent 60%);
 }
 .card:hover {
+    transform: translateY(-2px);
     border-color: var(--border-bright);
-    box-shadow: 0 4px 30px rgba(0,0,0,0.35), 0 0 1px rgba(59,130,246,0.1);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.22), 0 12px 40px rgba(0, 0, 0, 0.45), 0 0 20px rgba(59, 130, 246, 0.12);
 }
 .card-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -275,10 +326,23 @@
 
 /* ---- Buttons (Glass) ---- */
 .btn {
-    padding: 8px 20px; border: 1px solid transparent; border-radius: var(--radius-sm);
-    font-size: 0.85rem; font-weight: 600; cursor: pointer;
-    transition: all 0.2s; color: white; font-family: inherit;
+    padding: 8px 20px;
+    border: 1px solid var(--border-bright);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    color: var(--text-dim);
+    font-family: inherit;
     backdrop-filter: blur(4px);
+    background: rgba(255, 255, 255, 0.05);
+}
+.btn:hover:not(:disabled) {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.25);
+    box-shadow: 0 0 12px rgba(255, 255, 255, 0.08);
 }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-primary { background: rgba(59,130,246,0.8); border-color: rgba(59,130,246,0.3); }

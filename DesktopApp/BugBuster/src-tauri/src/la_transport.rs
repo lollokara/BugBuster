@@ -16,6 +16,7 @@ use crate::la_usb::{LaStreamPacket, LaUsbConnection};
 /// (e.g. `la_stream_usb_stop`) can acquire the same lock without deadlocking.
 pub trait LaTransport: Send + 'static {
     /// Send a single-byte command to the bulk OUT endpoint.
+    #[allow(dead_code)]
     fn send_command(&mut self, cmd: u8) -> Result<()>;
 
     /// Block until one stream packet is received from the bulk IN endpoint.
@@ -34,6 +35,7 @@ pub struct LockedLaTransport {
 }
 
 impl LaTransport for LockedLaTransport {
+    #[allow(dead_code)]
     fn send_command(&mut self, cmd: u8) -> Result<()> {
         self.usb
             .lock()
