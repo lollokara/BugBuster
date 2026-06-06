@@ -1,12 +1,174 @@
 """
 BugBuster MCP — HAT v2 management tools.
 
-Tools: hat_get_caps, hat_get_rail_status, hat_set_rail_enable, hat_set_led_state, hat_la_set_route
+Tools: hat_get_caps, hat_get_rail_status, hat_health_summary,
+       hat_preflight_rail_operation, hat_set_rail_enable, hat_set_led_state,
+       hat_la_set_route
 """
 
 from __future__ import annotations
 from .. import session
 from ..safety import require_hat
+
+
+HAT_RAIL_NAMES = {
+    0: "3V3_ADJ",
+    1: "VADJ3",
+    2: "VADJ4",
+}
+
+HAT_RAIL_STATUS_NAMES = {
+    0: "ok",
+    1: "fault",
+    2: "calibration_invalid",
+    3: "busy",
+}
+
+
+def _rail_status_name(status: int) -> str:
+    return HAT_RAIL_STATUS_NAMES.get(int(status), f"unknown_{int(status)}")
+
+
+def _rail_list_by_id(rail_status: dict) -> dict[int, dict]:
+    rails = rail_status.get("rails", []) if isinstance(rail_status, dict) else []
+    out: dict[int, dict] = {}
+    for rail in rails:
+        try:
+            rail_id = int(rail.get("rail_id", rail.get("railId")))
+        except (TypeError, ValueError):
+            continue
+        out[rail_id] = rail
+    return out
+
+
+def build_hat_health_summary(
+    status: dict | None = None,
+    caps: dict | None = None,
+    rail_status: dict | None = None,
+    cal_status: dict | None = None,
+    la_status: dict | None = None,
+) -> dict:
+    """Build a compact, transport-agnostic HAT health summary."""
+    status = status or {}
+    caps = caps or {}
+    rail_status = rail_status or {}
+    cal_status = cal_status or {}
+    la_status = la_status or {}
+
+    rails = []
+    faulted_rails = []
+    for rail_id, rail in sorted(_rail_list_by_id(rail_status).items()):
+        raw_status = int(rail.get("status", 0) or 0)
+        entry = {
+            "rail_id": rail_id,
+            "name": HAT_RAIL_NAMES.get(rail_id, f"rail_{rail_id}"),
+            "enabled": bool(rail.get("enabled", False)),
+            "voltage_mv": int(rail.get("voltage_mv", rail.get("voltageMv", 0)) or 0),
+            "current_ma": int(rail.get("current_ma", rail.get("currentMa", 0)) or 0),
+            "status": raw_status,
+            "status_name": _rail_status_name(raw_status),
+        }
+        rails.append(entry)
+        if raw_status != 0:
+            faulted_rails.append(entry)
+
+    cal_state = int(cal_status.get("state", 0) or 0) if isinstance(cal_status, dict) else 0
+    cal_summary = {
+        "state": cal_state,
+        "running": cal_state == 1,
+        "succeeded": cal_state == 2,
+        "failed": cal_state == 3,
+        "progress": int(cal_status.get("progress", 0) or 0) if isinstance(cal_status, dict) else 0,
+        "rail_id": cal_status.get("rail_id", cal_status.get("railId")) if isinstance(cal_status, dict) else None,
+        "persist_state": cal_status.get("persist_state", cal_status.get("persistState")) if isinstance(cal_status, dict) else None,
+        "validation_flags": cal_status.get("validation_flags", cal_status.get("validationFlags")) if isinstance(cal_status, dict) else None,
+    }
+
+    present = bool(status.get("detected", status.get("present", False)))
+    connected = bool(status.get("connected", False))
+    degraded = bool(status.get("degraded", False)) or bool(faulted_rails) or cal_summary["failed"]
+
+    return {
+        "present": present,
+        "connected": connected,
+        "healthy": present and connected and not degraded,
+        "degraded": degraded,
+        "fw_version": status.get("fw_version") or (
+            f"{status.get('fwMajor')}.{status.get('fwMinor')}"
+            if status.get("fwMajor") is not None else None
+        ),
+        "capabilities": {
+            "hw_revision": caps.get("hw_revision", caps.get("hwRevision")),
+            "rail_count": caps.get("rail_count", caps.get("railCount")),
+            "led_count": caps.get("led_count", caps.get("ledCount")),
+            "shifted_io_count": caps.get("shifted_io_count", caps.get("shiftedIoCount")),
+            "la_routes": caps.get("la_routes", caps.get("laRouteCount")),
+            "hvpak_present": bool(caps.get("hvpak_present", caps.get("hvpakPresent", False))),
+        },
+        "rails": rails,
+        "faulted_rails": faulted_rails,
+        "calibration": cal_summary,
+        "logic_analyzer": {
+            "state": la_status.get("state"),
+            "state_name": la_status.get("state_name", la_status.get("stateName")),
+            "route": status.get("la_route", status.get("laRoute")),
+            "usb_mounted": la_status.get("usb_mounted", la_status.get("usbMounted")),
+            "stop_reason": la_status.get("stop_reason", la_status.get("stopReason")),
+        },
+    }
+
+
+def build_hat_rail_preflight(
+    rail_id: int,
+    *,
+    target_voltage_mv: int | None = None,
+    rail_status: dict | None = None,
+    cal_status: dict | None = None,
+    caps: dict | None = None,
+) -> dict:
+    """Return whether a HAT rail operation is safe to attempt."""
+    reasons: list[str] = []
+    warnings: list[str] = []
+
+    if rail_id not in HAT_RAIL_NAMES:
+        reasons.append("rail_id must be 0 (3V3_ADJ), 1 (VADJ3), or 2 (VADJ4)")
+
+    if target_voltage_mv is not None:
+        if rail_id == 0 and not 1700 <= int(target_voltage_mv) <= 5000:
+            reasons.append("3V3_ADJ target must be between 1700 and 5000 mV")
+        if rail_id in (1, 2) and not 1800 <= int(target_voltage_mv) <= 36000:
+            reasons.append("VADJ3/VADJ4 target must be between 1800 and 36000 mV")
+
+    if caps:
+        rail_count = caps.get("rail_count", caps.get("railCount"))
+        if rail_count is not None and rail_id >= int(rail_count):
+            reasons.append(f"HAT reports only {rail_count} rail(s)")
+
+    rails_by_id = _rail_list_by_id(rail_status or {})
+    rail = rails_by_id.get(rail_id)
+    if rail:
+        raw_status = int(rail.get("status", 0) or 0)
+        if raw_status != 0:
+            reasons.append(f"{HAT_RAIL_NAMES.get(rail_id, rail_id)} status is {_rail_status_name(raw_status)}")
+
+    cal_state = int((cal_status or {}).get("state", 0) or 0)
+    cal_rail = (cal_status or {}).get("rail_id", (cal_status or {}).get("railId"))
+    if cal_state == 1:
+        if cal_rail is None or int(cal_rail) == rail_id:
+            reasons.append("calibration is currently running on this rail")
+        else:
+            warnings.append(f"calibration is currently running on rail {cal_rail}")
+    elif cal_state == 3:
+        warnings.append("last calibration failed; verify rail calibration before powering a DUT")
+
+    return {
+        "ok": not reasons,
+        "rail_id": rail_id,
+        "rail_name": HAT_RAIL_NAMES.get(rail_id, f"rail_{rail_id}"),
+        "target_voltage_mv": target_voltage_mv,
+        "reasons": reasons,
+        "warnings": warnings,
+    }
 
 
 def register(mcp) -> None:
@@ -41,6 +203,79 @@ def register(mcp) -> None:
         return bb.hat_get_rail_status()
 
     @mcp.tool()
+    def hat_health_summary() -> dict:
+        """
+        Return a compact HAT health summary for agents and automation.
+
+        Combines HAT presence, capabilities, rail status, calibration state, and
+        logic-analyzer status when available. HVPAK is only reported as a
+        presence capability because HVPAK controls are currently deferred.
+        """
+        bb = session.get_client()
+        require_hat(bb)
+        status = bb.hat_get_status()
+        caps = {}
+        rails = {}
+        cal = {}
+        la = {}
+        try:
+            caps = bb.hat_get_caps()
+        except Exception as e:
+            caps = {"error": str(e)}
+        try:
+            rails = bb.hat_get_rail_status()
+        except Exception as e:
+            rails = {"error": str(e)}
+        try:
+            cal = bb.hat_calibrate_status()
+        except Exception as e:
+            cal = {"error": str(e)}
+        try:
+            la = bb.hat_la_get_status()
+        except Exception as e:
+            la = {"error": str(e)}
+        return build_hat_health_summary(status, caps, rails, cal, la)
+
+    @mcp.tool()
+    def hat_preflight_rail_operation(
+        rail_id: int,
+        target_voltage_mv: int | None = None,
+    ) -> dict:
+        """
+        Check whether a HAT rail operation is safe before mutating hardware.
+
+        Parameters:
+        - rail_id: Rail ID (0 = 3V3_ADJ, 1 = VADJ3, 2 = VADJ4).
+        - target_voltage_mv: Optional requested voltage in millivolts.
+
+        Returns: ok, rail name, blocking reasons, and non-blocking warnings.
+        """
+        bb = session.get_client()
+        require_hat(bb)
+        caps = {}
+        rails = {}
+        cal = {}
+        try:
+            caps = bb.hat_get_caps()
+        except Exception:
+            pass
+        try:
+            rails = bb.hat_get_rail_status()
+        except Exception:
+            pass
+        try:
+            cal = bb.hat_calibrate_status()
+        except Exception:
+            pass
+        return build_hat_rail_preflight(
+            rail_id,
+            target_voltage_mv=target_voltage_mv,
+            rail_status=rails,
+            cal_status=cal,
+            caps=caps,
+        )
+
+    @mcp.tool()
     def hat_set_rail_enable(
         rail_id: int,
         enable: bool,
@@ -58,6 +293,14 @@ def register(mcp) -> None:
             raise ValueError(f"Invalid rail_id {rail_id}. Valid values: 0 (3V3_ADJ), 1 (VADJ3), 2 (VADJ4)")
         bb = session.get_client()
         require_hat(bb)
+        preflight = build_hat_rail_preflight(
+            rail_id,
+            rail_status=bb.hat_get_rail_status(),
+            cal_status=bb.hat_calibrate_status(),
+            caps=bb.hat_get_caps(),
+        )
+        if not preflight["ok"]:
+            raise RuntimeError("HAT rail preflight failed: " + "; ".join(preflight["reasons"]))
         return bb.hat_set_rail_enable(rail_id, enable)
 
     @mcp.tool()

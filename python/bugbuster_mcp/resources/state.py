@@ -111,6 +111,29 @@ def register(mcp) -> None:
             out["la_status"] = bb.hat_la_get_status()
         except Exception as e:
             out["la_status"] = {"error": str(e)}
+        try:
+            out["caps"] = bb.hat_get_caps()
+        except Exception as e:
+            out["caps"] = {"error": str(e)}
+        try:
+            out["rails"] = bb.hat_get_rail_status()
+        except Exception as e:
+            out["rails"] = {"error": str(e)}
+        try:
+            out["calibration"] = bb.hat_calibrate_status()
+        except Exception as e:
+            out["calibration"] = {"error": str(e)}
+        try:
+            from ..tools.hat import build_hat_health_summary
+            out["health"] = build_hat_health_summary(
+                out.get("status"),
+                out.get("caps"),
+                out.get("rails"),
+                out.get("calibration"),
+                out.get("la_status"),
+            )
+        except Exception as e:
+            out["health"] = {"error": str(e)}
         return json.dumps(out, indent=2)
 
     @mcp.resource("bugbuster://capabilities")

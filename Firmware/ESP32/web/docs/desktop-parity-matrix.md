@@ -1,6 +1,6 @@
 # Desktop → Web Settings Parity Matrix
 
-Last updated: 2026-04-17
+Last updated: 2026-06-06
 Scope: `Firmware/ESP32/web`
 
 ## Legend
@@ -27,15 +27,17 @@ Scope: `Firmware/ESP32/web`
 | UART bridge config | System | Full | `/api/uart/config`, `/api/uart/pins`, `/api/uart/{id}/config` |
 | Fault clear/mask (global+channel) | System | Full | `/api/faults/clear*`, `/api/faults/mask*` |
 | HAT detect/reset/pin config | System | Full | `/api/hat/*` wired |
+| HAT v2 rails/calibration/LA route/logs | System HAT card | Full | `/api/hat/v2/*` + `/api/hat/la/status`; web shows rail status, calibration persist/validation, and RP2040 log relay state |
+| HAT HVPAK controls | N/A | Deferred | Feature currently not used; keep HTTP/Desktop/MCP parity deferred until HVPAK is a release target |
 | Scope view controls | Scope | Partial | UI controls present; not all desktop streaming/recording semantics |
 | Wavegen advanced controls | Scope | Full | Channel/mode/waveform/freq/amplitude/offset + start/stop wired |
 | Logic Analyzer stream | N/A | Deferred | USB vendor-bulk desktop path; no HTTP stream parity |
-| Calibration tab deep flows | N/A | Deferred | Desktop workflow not fully represented in HTTP endpoints |
+| Calibration tab deep flows | System HAT card | Partial | On-device web surfaces HAT calibration progress/persist/validation telemetry; desktop-specific import/deep flows remain separate |
 | Voltages tab dedicated panel | N/A | Partial | Values shown via Overview/System, no standalone tab yet |
 
 ## Next closure targets
-1. Scope + wavegen advanced control parity in Scope tab (desktop-equivalent parameter panel).
-2. Explicit deferred messaging blocks for LA/USB-only surfaces.
+1. Keep HAT command parity allowlists current via `tests/unit/test_hat_parity.py`.
+2. Explicit deferred messaging blocks for LA/USB-only and HVPAK-deferred surfaces.
 3. Browser parity smoke checklist per row (set/read roundtrip evidence).
 
 ## Verification Commands

@@ -60,6 +60,12 @@ export function HatCard() {
   const [calCode, setCalCode] = useState<number>(0);
   const [calMeasuredMv, setCalMeasuredMv] = useState<number>(-1);
   const [calPersistState, setCalPersistState] = useState<number>(0);
+  const [calMinMv, setCalMinMv] = useState<number>(-1);
+  const [calMaxMv, setCalMaxMv] = useState<number>(-1);
+  const [calMaxGapMv, setCalMaxGapMv] = useState<number>(-1);
+  const [calMaxErrorMv, setCalMaxErrorMv] = useState<number>(-1);
+  const [calValidationFlags, setCalValidationFlags] = useState<number>(0);
+  const [laLogError, setLaLogError] = useState<string | null>(null);
   const [vadj3TargetMv, setVadj3TargetMv] = useState<number>(3300);
   const [vadj4TargetMv, setVadj4TargetMv] = useState<number>(3300);
   const [v3v3TargetMv, setV3v3TargetMv] = useState<number>(3300);
@@ -85,7 +91,9 @@ export function HatCard() {
             return combined.length > 200 ? combined.slice(combined.length - 200) : combined;
           });
         }
-      } catch(e) {}
+      } catch(e) {
+        setLaLogError(e instanceof Error ? e.message : "Failed to poll logs");
+      }
     }, 500);
     return () => clearInterval(interval);
   }, [laLogEnabled]);
@@ -165,6 +173,11 @@ export function HatCard() {
           setCalCode(res.code ?? 0);
           setCalMeasuredMv(res.measuredMv ?? -1);
           setCalPersistState(res.persistState ?? 0);
+          setCalMinMv(res.minMv ?? -1);
+          setCalMaxMv(res.maxMv ?? -1);
+          setCalMaxGapMv(res.maxGapMv ?? -1);
+          setCalMaxErrorMv(res.maxErrorMv ?? -1);
+          setCalValidationFlags(res.validationFlags ?? 0);
           if (res.state === 2) {
             setCalActive(false);
             setStatusText("Calibration completed successfully!");
@@ -206,6 +219,27 @@ export function HatCard() {
       case 5: return "done";
       case 8: return "error";
       default: return "idle";
+    }
+  };
+
+  const calPersistLabel = (state: number) => {
+    switch (state) {
+      case 0: return { label: "RAM only", color: "#f59e0b" };
+      case 1: return { label: "Save pending", color: "#3b82f6" };
+      case 2: return { label: "Saving", color: "#3b82f6" };
+      case 3: return { label: "Save failed", color: "#ef4444" };
+      default: return { label: `State ${state}`, color: "var(--text-dim)" };
+    }
+  };
+
+  const railStatusMeta = (rail: any) => {
+    const status = Number(rail?.status ?? 0);
+    switch (status) {
+      case 0: return { label: "OK", color: "#10b981" };
+      case 1: return { label: "FAULT", color: "#ef4444" };
+      case 2: return { label: "CAL INVALID", color: "#f59e0b" };
+      case 3: return { label: "BUSY", color: "#3b82f6" };
+      default: return { label: `STATUS ${status}`, color: "#f59e0b" };
     }
   };
 
@@ -274,6 +308,10 @@ export function HatCard() {
 
   const v3Ma = railV3?.currentMa || 0;
   const v4Ma = railV4?.currentMa || 0;
+  const adjStatus = railStatusMeta(railAdj);
+  const v3Status = railStatusMeta(railV3);
+  const v4Status = railStatusMeta(railV4);
+  const persistMeta = calPersistLabel(calPersistState);
 
   return (
     <GlassCard title="HAT Expansion Board v2">
@@ -341,12 +379,14 @@ export function HatCard() {
               <div style={{ marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                   <span style={{ fontSize: "11px", fontWeight: "700", color: "#10b981" }}>3V3_ADJ Rail (1.7–5.0V)</span>
+                  <span class="mono" style={{ fontSize: "8px", color: adjStatus.color }}>{adjStatus.label}</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: adjEn ? "rgba(16,185,129,0.15)" : "var(--glass)", color: adjEn ? "#10b981" : "var(--text)", borderColor: adjEn ? "#10b98150" : "var(--border-bright)" }}
                     onClick={async () => {
                       await toggleRail(0, !adjEn, "rail0");
                     }}
+                    disabled={calActive || busy === "rail0"}
                   >
                     {adjEn ? "ON" : "OFF"}
                   </button>
@@ -371,6 +411,7 @@ export function HatCard() {
                     step="100"
                     value={v3v3TargetMv}
                     onInput={(e) => setV3v3TargetMv(Number((e.currentTarget as HTMLInputElement).value) || 0)}
+                    disabled={calActive}
                   />
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <span class="mono" style={{ fontSize: "10px", color: "var(--text-dim)", minWidth: "50px", textAlign: "right" }}>
@@ -378,7 +419,7 @@ export function HatCard() {
                     </span>
                     <button class="btn" style={{ fontSize: "10px", padding: "4px 10px" }}
                       onClick={() => setRailVoltage(0, v3v3TargetMv, "v3v3-voltage")}
-                      disabled={busy === "v3v3-voltage"}
+                      disabled={calActive || busy === "v3v3-voltage"}
                     >
                       Confirm
                     </button>
@@ -393,12 +434,14 @@ export function HatCard() {
               <div style={{ marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                   <span style={{ fontSize: "11px", fontWeight: "700", color: "#06b6d4" }}>VADJ3 Rail (1.8–36V)</span>
+                  <span class="mono" style={{ fontSize: "8px", color: v3Status.color }}>{v3Status.label}</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: v3En ? "rgba(16,185,129,0.15)" : "var(--glass)", color: v3En ? "#10b981" : "var(--text)", borderColor: v3En ? "#10b98150" : "var(--border-bright)" }}
                     onClick={async () => {
                       await toggleRail(1, !v3En, "rail1");
                     }}
+                    disabled={calActive || busy === "rail1"}
                   >
                     {v3En ? "ON" : "OFF"}
                   </button>
@@ -429,6 +472,7 @@ export function HatCard() {
                     step="100"
                     value={vadj3TargetMv}
                     onInput={(e) => setVadj3TargetMv(Number((e.currentTarget as HTMLInputElement).value) || 0)}
+                    disabled={calActive}
                   />
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <span class="mono" style={{ fontSize: "10px", color: "var(--text-dim)", minWidth: "72px", textAlign: "right" }}>
@@ -436,7 +480,7 @@ export function HatCard() {
                     </span>
                     <button class="btn" style={{ fontSize: "10px", padding: "4px 10px" }}
                       onClick={() => setRailVoltage(1, vadj3TargetMv, "vadj3-voltage")}
-                      disabled={busy === "vadj3-voltage"}
+                      disabled={calActive || busy === "vadj3-voltage"}
                     >
                       Confirm
                     </button>
@@ -448,12 +492,14 @@ export function HatCard() {
               <div style={{ padding: "8px", borderRadius: "6px", background: "var(--bg2)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                   <span style={{ fontSize: "11px", fontWeight: "700", color: "#ff4d6a" }}>VADJ4 Rail (1.8–36V)</span>
+                  <span class="mono" style={{ fontSize: "8px", color: v4Status.color }}>{v4Status.label}</span>
                   <button
                     class="btn"
                     style={{ fontSize: "10px", padding: "2px 8px", background: v4En ? "rgba(16,185,129,0.15)" : "var(--glass)", color: v4En ? "#10b981" : "var(--text)", borderColor: v4En ? "#10b98150" : "var(--border-bright)" }}
                     onClick={async () => {
                       await toggleRail(2, !v4En, "rail2");
                     }}
+                    disabled={calActive || busy === "rail2"}
                   >
                     {v4En ? "ON" : "OFF"}
                   </button>
@@ -484,6 +530,7 @@ export function HatCard() {
                     step="100"
                     value={vadj4TargetMv}
                     onInput={(e) => setVadj4TargetMv(Number((e.currentTarget as HTMLInputElement).value) || 0)}
+                    disabled={calActive}
                   />
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <span class="mono" style={{ fontSize: "10px", color: "var(--text-dim)", minWidth: "72px", textAlign: "right" }}>
@@ -491,7 +538,7 @@ export function HatCard() {
                     </span>
                     <button class="btn" style={{ fontSize: "10px", padding: "4px 10px" }}
                       onClick={() => setRailVoltage(2, vadj4TargetMv, "vadj4-voltage")}
-                      disabled={busy === "vadj4-voltage"}
+                      disabled={calActive || busy === "vadj4-voltage"}
                     >
                       Confirm
                     </button>
@@ -622,6 +669,7 @@ export function HatCard() {
                     const newVal = !laLogEnabled;
                     setBusy("lalog");
                     try {
+                      setLaLogError(null);
                       await api.hatV2LaLogEnable(mac!, newVal);
                       setLaLogEnabled(newVal);
                     } catch(e) {
@@ -642,8 +690,12 @@ export function HatCard() {
                 </button>
               </div>
             </div>
+            <div style={{ fontSize: "9px", color: laLogEnabled ? "#10b981" : "var(--text-dim)", marginBottom: "6px" }}>
+              Relay {laLogEnabled ? "enabled" : "disabled"}. Showing last {laLogLines.length}/200 buffered lines.
+              {laLogError ? <span style={{ color: "#f59e0b", marginLeft: "8px" }}>Poll error: {laLogError}</span> : null}
+            </div>
             <pre style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", background: "var(--bg2)", borderRadius: "4px", padding: "8px", maxHeight: "180px", overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all", color: "var(--text-dim)", margin: 0 }}>
-              {laLogLines.length === 0 ? "(no log output — enable relay above)" : laLogLines.join("\n")}
+              {laLogLines.length === 0 ? (laLogEnabled ? "(waiting for RP2040 log output…)" : "(log relay disabled)") : laLogLines.join("\n")}
             </pre>
           </div>
 
@@ -844,7 +896,11 @@ export function HatCard() {
                   <span>Code: {calCode}</span>
                   <span>{calMeasuredMv >= 0 ? `Measured: ${(calMeasuredMv / 1000.0).toFixed(3)} V` : "Measured: —"}</span>
                   <span>Point: {calPoint}</span>
-                  <span>Persist: {calPersistState}</span>
+                  <span>Persist: <span style={{ color: persistMeta.color }}>{persistMeta.label}</span></span>
+                  <span>{calMinMv >= 0 ? `Range: ${(calMinMv / 1000.0).toFixed(2)}–${(calMaxMv / 1000.0).toFixed(2)} V` : "Range: —"}</span>
+                  <span>{calMaxGapMv >= 0 ? `Max gap: ${calMaxGapMv} mV` : "Max gap: —"}</span>
+                  <span>{calMaxErrorMv >= 0 ? `Max error: ${calMaxErrorMv} mV` : "Max error: —"}</span>
+                  <span style={{ color: calValidationFlags ? "#f59e0b" : "#10b981" }}>Flags: 0x{calValidationFlags.toString(16)}</span>
                 </div>
               </div>
             ) : (
