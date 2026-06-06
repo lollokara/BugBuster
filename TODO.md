@@ -124,8 +124,7 @@ Trace report: `.omc/specs/deep-dive-trace-sim-bugs-missing-impl.md`
 
 ### 🟢 Dead tests cleanup
 
-Two tests in `test_11_hat.py` carry permanent `@pytest.mark.skip` because the CDC streaming data path was removed — stream data now goes to vendor-bulk only. These are dead bodies that will never run; they should be deleted and their coverage replaced by entries in `test_la_usb_bulk.py` if not already covered.  
-  File: `tests/device/test_11_hat.py:559` and `:680`
+✅ **Done 2026-06-06** — `test_la_cdc_stream_five_seconds_legacy` and `test_la_cdc_stream_duration_truth_legacy` deleted from `test_11_hat.py`. The orphaned `_find_rp2040_cdc_port()` helper and its section header were removed too.
 
 ### 🟢 `SimulatedDevice` Code Quality
 
