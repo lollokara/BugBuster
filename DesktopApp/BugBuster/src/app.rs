@@ -4,22 +4,22 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, hv_io::*, faults::*, gpio::*, din::*, dout::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, calibration::*, usbpd::*, ioexp::*, hat::*, la::*};
+use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, hv_io::*, faults::*, gpio::*, din::*, dout::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, usbpd::*, ioexp::*, hat::*, la::*};
 use crate::components::io_blocked_banner::IoBlockedBanner;
 
 /// Map a tab id to its IO slot footprint. Returns an empty slice if the tab does not claim IOs.
 fn tab_slots(tab_id: &str) -> &'static [u8] {
     match tab_id {
-        "adc"         => crate::tabs::adc::SLOTS,
-        "vdac"        => crate::tabs::vdac::SLOTS,
-        "gpio"        => crate::tabs::gpio::SLOTS,
-        "din"         => crate::tabs::din::SLOTS,
-        "dout"        => crate::tabs::dout::SLOTS,
-        "scope"       => crate::tabs::scope::SLOTS,
-        "wavegen"     => crate::tabs::wavegen::SLOTS,
-        "sigpath"     => crate::tabs::signal_path::SLOTS,
-        "calibration" => crate::tabs::calibration::SLOTS,
-        _             => &[],
+        "adc"      => crate::tabs::adc::SLOTS,
+        "vdac"     => crate::tabs::vdac::SLOTS,
+        "gpio"     => crate::tabs::gpio::SLOTS,
+        "din"      => crate::tabs::din::SLOTS,
+        "dout"     => crate::tabs::dout::SLOTS,
+        "scope"    => crate::tabs::scope::SLOTS,
+        "wavegen"  => crate::tabs::wavegen::SLOTS,
+        "sigpath"  => crate::tabs::signal_path::SLOTS,
+        "voltages" => crate::tabs::voltages::SLOTS,
+        _          => &[],
     }
 }
 
@@ -39,7 +39,6 @@ const TABS: &[(&str, &str)] = &[
     ("wavegen", "WaveGen"),
     ("sigpath", "Signal Path"),
     ("voltages", "Voltages"),
-    ("calibration", "Calibration"),
     ("usbpd", "USB PD"),
     ("ioexp", "IO Expander"),
     ("hat", "HAT"),
@@ -484,7 +483,6 @@ pub fn App() -> impl IntoView {
                         "wavegen" => view! { <WavegenTab state=device_state /> }.into_any(),
                         "sigpath" => view! { <SignalPathTab state=device_state /> }.into_any(),
                         "voltages" => view! { <VoltagesTab state=device_state /> }.into_any(),
-                        "calibration" => view! { <CalibrationTab state=device_state /> }.into_any(),
                         "usbpd" => view! { <UsbPdTab state=device_state /> }.into_any(),
                         "ioexp" => view! { <IoExpTab state=device_state /> }.into_any(),
                         "hat" => view! { <HatTab state=device_state /> }.into_any(),
