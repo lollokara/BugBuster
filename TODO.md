@@ -146,7 +146,7 @@ Pattern file: `.mex/patterns/overview-selftest-quicksetup-parity.md`
 
 - **Selftest worker toggle** — `workerEnabled` and `supplyMonitorActive` not yet returned by `/api/selftest`. Worker default must be OFF on fresh flash.
 - **CH-D diagnostic reservation** — CH-D overlay should follow `supplyMonitorActive`; desktop fallback for older 25-byte USB selftest payloads needed.
-- **Quick-setup: firmware + web still missing** — desktop Tauri commands (`quicksetup_list/get/save/apply/delete` in `commands.rs:1032`) and the Overview tab UI are already wired. What's missing is the **ESP32 firmware** side (BBP handlers + `/api/quicksetup/*` HTTP routes) and the **on-device web UI** wiring. Slot JSON must stay under `BBP_MAX_PAYLOAD` (cap at 1 KB).
+- **Quick-setup: firmware + Python + simulator now complete** — Desktop Tauri commands (✅), ESP32 BBP handlers `0xF0–0xF4` in `cmd_wifi.cpp` (✅), HTTP routes in `webserver.cpp` (✅), `quicksetup.cpp/h` NVS store (✅), Python `client.py` `quicksetup_list/get/save/apply/delete` (✅ 2026-06-06), simulator `handlers/quicksetup.py` + HTTP routes in `http_routes.py` (✅ 2026-06-06). Remaining: **on-device web UI** wiring in `Firmware/ESP32/web/src/` (Overview quick-setup section). Verify checklist in pattern file above.
 
 Verify checklist lives in the pattern file above; do not mark done until all firmware + web + desktop checks pass.
 
