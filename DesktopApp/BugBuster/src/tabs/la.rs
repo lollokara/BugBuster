@@ -128,6 +128,13 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (streaming, set_streaming) = signal(false);
     let (stream_runtime, set_stream_runtime) = signal(LaStreamRuntimeStatus::default());
 
+    // HAT / Signal Conditioning state (fetched on mount, hidden if no HAT)
+    let (hat_detected, set_hat_detected) = signal(false);
+    let (hat_rails,    set_hat_rails)    = signal(Vec::<HatRailStatus>::new());
+    let (ls_oe,        set_ls_oe)        = signal(false);
+    let (ls_dir,       set_ls_dir)       = signal(false); // false = B→A (RP2040 listens)
+    let (la_route,     set_la_route_la)  = signal(0u8);   // 0 = Low-Speed, 1 = High-Speed
+
     // Decoder panel state
     let (decoder_panel_open, set_decoder_panel_open) = signal(false);
     let (add_dec_type, set_add_dec_type) = signal("uart".to_string());
@@ -216,6 +223,18 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         spawn_local(async move {
             if let Some(data) = la_get_view(vs, ve, max_p).await {
                 set_vd.set(Some(data));
+            }
+        });
+    });
+
+    // Fetch HAT capabilities and rail state once on mount
+    Effect::new(move |_| {
+        spawn_local(async move {
+            if hat_get_caps().await.is_some() {
+                set_hat_detected.set(true);
+            }
+            if let Some(rails) = hat_get_rail_status().await {
+                set_hat_rails.set(rails);
             }
         });
     });
@@ -1633,6 +1652,164 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 </div>
 
                 <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
+
+                // ── Signal Conditioning (HAT): VLOGIC, OE, DIR ──────────────────
+                {move || {
+                    if !hat_detected.get() {
+                        return ().into_any();
+                    }
+                    view! {
+                        <div style="display: contents">
+                        <div style="display: flex; flex-direction: column; gap: 2px">
+                            <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Signal Cond."</span>
+                            <div style="display: flex; gap: 3px; align-items: center">
+                                // LA Route: Low-Speed / High-Speed
+                                <button
+                                    style=move || format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                        if la_route.get() == 0 { "background: #10b98130; color: #10b981; border: 1px solid #10b981" }
+                                        else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
+                                    title="Low-Speed path via EXP_EXT (up to 4ch @ 1 MHz)"
+                                    on:click=move |_| {
+                                        spawn_local(async move {
+                                            if let Some(r) = hat_la_set_route(0).await {
+                                                set_la_route_la.set(r);
+                                                show_toast("Route → Low-Speed", "ok");
+                                            }
+                                        });
+                                    }
+                                >"LS"</button>
+                                <button
+                                    style=move || format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                        if la_route.get() == 1 { "background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f6" }
+                                        else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
+                                    title="High-Speed path via Conn1 (up to 3ch) — DIR auto-locked B\u{2192}A"
+                                    on:click=move |_| {
+                                        spawn_local(async move {
+                                            if let Some(r) = hat_la_set_route(1).await {
+                                                set_la_route_la.set(r);
+                                                // Immediately force DIR = B→A so RP2040 listens
+                                                let cur_oe = ls_oe.get_untracked();
+                                                if let Some(s) = hat_set_level_shift(cur_oe, false).await {
+                                                    set_ls_oe.set(s.oe);
+                                                    set_ls_dir.set(s.dir);
+                                                }
+                                                show_toast("Route \u{2192} High-Speed, DIR locked B\u{2192}A", "ok");
+                                            }
+                                        });
+                                    }
+                                >"HS"</button>
+                                <div style="width: 1px; height: 20px; background: var(--border, #1e293b); margin: 0 2px"></div>
+                                // VLOGIC (3V3_ADJ) voltage presets
+                                {[1800u16, 2500u16, 3300u16, 5000u16].into_iter().map(|mv| {
+                                    let label = format!("{:.1}V", mv as f32 / 1000.0);
+                                    let label_click = label.clone();
+                                    view! {
+                                        <button
+                                            style=move || format!("font-size: 9px; padding: 2px 6px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                                if hat_rails.get().iter().find(|r| r.rail_id == 0).map(|r| r.voltage_mv).unwrap_or(0) == mv {
+                                                    "background: #10b98130; color: #10b981; border: 1px solid #10b981"
+                                                } else {
+                                                    "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)"
+                                                })
+                                            title={format!("Set VLOGIC (3V3_ADJ) to {}", label)}
+                                            on:click={
+                                                let lc = label_click.clone();
+                                                move |_| {
+                                                    let lc2 = lc.clone();
+                                                    spawn_local(async move {
+                                                        if let Some(rails) = hat_set_rail_voltage(0, mv).await {
+                                                            set_hat_rails.set(rails);
+                                                            show_toast(&format!("VLOGIC \u{2192} {}", lc2), "ok");
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        >{label.clone()}</button>
+                                    }
+                                }).collect::<Vec<_>>()}
+                                // 3V3_ADJ rail enable toggle
+                                <button
+                                    style=move || {
+                                        let en = hat_rails.get().iter().find(|r| r.rail_id == 0).map(|r| r.enabled).unwrap_or(false);
+                                        format!("font-size: 9px; padding: 2px 6px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                            if en { "background: #10b98140; color: #10b981; border: 1px solid #10b98180" }
+                                            else  { "background: transparent; color: #ef444460; border: 1px solid #ef444430" })
+                                    }
+                                    title="Enable / disable 3V3_ADJ (VLOGIC) rail"
+                                    on:click=move |_| {
+                                        spawn_local(async move {
+                                            let cur = hat_rails.get_untracked().iter().find(|r| r.rail_id == 0).map(|r| r.enabled).unwrap_or(false);
+                                            if let Some(rails) = hat_set_rail_enable(0, !cur).await {
+                                                set_hat_rails.set(rails);
+                                                show_toast(if !cur { "VLOGIC enabled" } else { "VLOGIC disabled" }, "ok");
+                                            }
+                                        });
+                                    }
+                                >
+                                    {move || if hat_rails.get().iter().find(|r| r.rail_id == 0).map(|r| r.enabled).unwrap_or(false) { "PWR\u{25CF}" } else { "PWR\u{25CB}" }}
+                                </button>
+                                <div style="width: 1px; height: 20px; background: var(--border, #1e293b); margin: 0 2px"></div>
+                                // Level-Shifter Output Enable
+                                <button
+                                    style=move || format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
+                                        if ls_oe.get() { "background: #f59e0b30; color: #f59e0b; border: 1px solid #f59e0b" }
+                                        else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
+                                    title="Level-shifter Output Enable — requires VLOGIC"
+                                    on:click=move |_| {
+                                        spawn_local(async move {
+                                            let next_oe = !ls_oe.get_untracked();
+                                            let cur_dir = ls_dir.get_untracked();
+                                            if let Some(s) = hat_set_level_shift(next_oe, cur_dir).await {
+                                                set_ls_oe.set(s.oe);
+                                                set_ls_dir.set(s.dir);
+                                                show_toast(if s.oe { "OE active" } else { "OE tri-state" }, "ok");
+                                            }
+                                        });
+                                    }
+                                >
+                                    {move || if ls_oe.get() { "OE\u{25CF}" } else { "OE\u{25CB}" }}
+                                </button>
+                                // DIR toggle — locked B→A on High-Speed route
+                                <button
+                                    disabled=move || la_route.get() == 1
+                                    style=move || {
+                                        let locked = la_route.get() == 1;
+                                        let dir    = ls_dir.get();
+                                        format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: {}; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}{}",
+                                            if locked { "not-allowed" } else { "pointer" },
+                                            if dir { "background: #a855f730; color: #a855f7; border: 1px solid #a855f7" }
+                                            else   { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" },
+                                            if locked { "; opacity: 0.4" } else { "" })
+                                    }
+                                    title=move || {
+                                        if la_route.get() == 1 {
+                                            "DIR locked B\u{2192}A — High-Speed (RP2040 = input)".to_string()
+                                        } else if ls_dir.get() {
+                                            "DIR: A\u{2192}B (RP2040 drives) — click to switch B\u{2192}A".to_string()
+                                        } else {
+                                            "DIR: B\u{2192}A (RP2040 listens) — click to switch A\u{2192}B".to_string()
+                                        }
+                                    }
+                                    on:click=move |_| {
+                                        if la_route.get_untracked() == 1 { return; }
+                                        spawn_local(async move {
+                                            let cur_oe  = ls_oe.get_untracked();
+                                            let cur_dir = ls_dir.get_untracked();
+                                            if let Some(s) = hat_set_level_shift(cur_oe, !cur_dir).await {
+                                                set_ls_oe.set(s.oe);
+                                                set_ls_dir.set(s.dir);
+                                            }
+                                        });
+                                    }
+                                >
+                                    {move || if ls_dir.get() { "A\u{2192}B" } else { "B\u{2192}A" }}
+                                </button>
+                            </div>
+                        </div>
+                        <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
+                        </div>
+                    }.into_any()
+                }}
 
                 // Decoders toggle button
                 <div style="display: flex; flex-direction: column; gap: 2px">
