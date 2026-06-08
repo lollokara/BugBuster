@@ -184,10 +184,64 @@ jobs:
           build_desktop="${{ needs.prep.outputs.build_desktop }}"
           
           if [ "$build_rp2040" = "false" ] || [ "$build_esp32" = "false" ] || [ "$build_desktop" = "false" ]; then
-            echo "Downloading assets from previous nightly release..."
+            echo "Looking for cached assets from a previous release..."
             mkdir -p dist/prev_release
-            # Ignore failure if the release does not exist yet
-            gh release download nightly --dir dist/prev_release --pattern "*" || echo "No previous nightly release found."
+
+            release_has_required_assets() {
+              local tag="$1"
+              local asset_names
+
+              asset_names="$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+              [ -n "$asset_names" ] || return 1
+
+              if [ "$build_rp2040" = "false" ] && ! printf '%s\n' "$asset_names" | grep -Eq '^bugbuster-hat-rp2040-v.*\.(bin|uf2|hex|elf|dis|bundle\.zip|checksums\.txt)$'; then
+                return 1
+              fi
+
+              if [ "$build_esp32" = "false" ] && ! printf '%s\n' "$asset_names" | grep -Eq '^bugbuster-esp32s3-v.*-ota\.bin$'; then
+                return 1
+              fi
+
+              if [ "$build_desktop" = "false" ] && ! printf '%s\n' "$asset_names" | grep -Eq '^(bugbuster[_-].*\.(dmg|AppImage|deb|rpm|msi)|bugbuster[_-].*-setup\.exe|bugbuster\.app\.tar\.gz|bugbuster\.app\.tar\.gz\.sig)$'; then
+                return 1
+              fi
+
+              return 0
+            }
+
+            download_release_assets() {
+              local tag="$1"
+              rm -rf dist/prev_release
+              mkdir -p dist/prev_release
+              gh release download "$tag" --dir dist/prev_release --pattern "*"
+            }
+
+            if release_has_required_assets nightly; then
+              echo "Downloading assets from previous nightly release..."
+              download_release_assets nightly
+            else
+              echo "Searching recent releases for a complete cached asset set..."
+              found_tag=""
+              while IFS= read -r tag; do
+                [ -n "$tag" ] || continue
+                [ "$tag" = "nightly" ] && continue
+                if release_has_required_assets "$tag"; then
+                  found_tag="$tag"
+                  break
+                fi
+              done < <(
+                gh release list --limit 50 --json tagName,publishedAt \
+                  | python -c 'import json, sys; releases = json.load(sys.stdin); releases.sort(key=lambda item: item.get("publishedAt", ""), reverse=True); [print(release["tagName"]) for release in releases]'
+              )
+
+              if [ -n "$found_tag" ]; then
+                echo "Downloading assets from previous release $found_tag..."
+                download_release_assets "$found_tag"
+              else
+                echo "::error::No previous release contains all required cached assets for the skipped components."
+                exit 1
+              fi
+            fi
           fi
 
       - name: Stage release assets
