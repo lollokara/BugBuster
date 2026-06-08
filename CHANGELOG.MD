@@ -1,10 +1,13 @@
 # CHANGELOG
 
-## [Unreleased]
+## [1.2.0] — 2026-06-08
 
 ### Added
 
 #### ESP32 firmware
+- **GitHub Update Subsystem**: Introduced a robust update manager (`update_manager`) to check for available releases on GitHub, parse update manifests, stage updates, and verify SHA-256 and CRC-32 checksums.
+- **TUI & CLI Update Interfaces**: Added a serial CLI command (`fwupdate` / `update`) and interactive menu picker to check, list, and apply updates. Features a two-column picker comparing current vs available versions, component selection, and colored upgrade/downgrade indicators.
+- **Unsolicited Commit Log Forwarding**: Added real-time log forwarding during RP2040 updates. Intercepts commit logs from RP2040 UART and relays them directly to ESP32 logs. Introduces a `s_commit_in_progress` state to bypass standard UART flushes, timeouts, and reconnect retries.
 - **MicroPython HAT v2 bindings**: Full HAT interface exposed via MicroPython (`modbugbuster_hat.c`) including HAT status queries, rail configuration, calibration, IO voltage control, SWD setup, LED control, and LA routing. New example script `14_hat_v2.py` demonstrates usage.
 - **PD/VADJ safety guard** (`pd_vadj_guard`): Prevents voltage configuration above negotiated USB-C PD input or measured rail voltage. Checks integrated into IDAC command handler, webserver JSON responses, and MicroPython bridge (I2C/SPI constructors). Python client `check_vadj_pd_limit()` provides advisory checks at the host level.
 - **QuickSetup client APIs**: Python client now exposes `get_quicksetup()`, `save_quicksetup()`, `apply_quicksetup()`, `list_quicksetups()`, and `delete_quicksetup()` for preset management.
@@ -12,24 +15,38 @@
 - **HAT HTTP parity**: REST endpoints for all HAT v2 commands previously USB-only (status, detect, caps, rail enable/voltage, calibration, IO configuration, SWD setup, LED, LA routing, pin config). Enables HAT control via HTTP when USB BBP is unavailable.
 - **HAT parity guardrails & MCP health**: New MCP tools for HAT state verification and consistency checking. Desktop HTTP transport now maps BBP HAT commands to `/api/hat` and `/api/hat/v2` REST endpoints.
 
+#### RP2040 firmware
+- **RAM-Resident Commit Flow**: Rewrote the flash commit logic to run entirely from RP2040 RAM on Core 0. Halts Core 1, disables global interrupts, and copies the staged image sector-by-sector into RAM using a volatile buffer before invoking raw flash erase and program APIs. This prevents execution of flash-resident code (like inlined `memset` or division helper routines) when erasing/programming sector 0, avoiding system hangs.
+- **Watchdog Reboot**: Implemented a direct register-based watchdog reboot helper to trigger a clean restart upon completion of the flash commit.
+
 #### Desktop app
+- **3D Interactive Model View**: Integrated a beautiful, interactive 3D splash/connection UI powered by Three.js. Implements gyroscopic parallax/tilt for the 3D PCB models based on mouse movements, custom material heuristics, and dynamic lighting. Includes 3D PCB models (`bugbuster.glb` and `BugBusterMain.glb`).
+- **Dynamic SMD LED Animations**: Extracts native SMD LED meshes from the GLTF models of the boards to drive realistic breathing/boot animations using emissive materials and point lights.
+- **Screenshot Automation**: Added a `Ctrl+Alt+S` keyboard shortcut to cycle through all categories/tabs, perform programmatic mock configurations (WaveGen, Scope, Logic Analyzer), and automatically capture screenshots.
 - **Category-based tab organization**: UI refactored with a category bar grouping tabs into logical sections (Overview, Measurement, Hardware, Debug). Improved visual hierarchy and navigation.
 - **Local font bundling**: Added Inter (normal + italic) and JetBrains Mono (normal + italic) WOFF2 fonts; removed reliance on external CDN. Updated styles.css with extensive polish (cards, buttons, shadows, animations).
 - **Consolidated HAT UI**: Calibration tab removed (functionality moved to Voltages tab). HAT UI simplified with streaming status focus; per-rail voltage/enable controls, routing, SWD, and LA USB reset consolidated.
+- **HAT signal conditioning UI**: Added controls for HAT level-shifter OE/DIR, VLOGIC presets, and HS/LS route selection to the Logic Analyzer tab.
 
 #### Testing & CI
+- **Update Manifest Integration**: Configured CI release workflow to generate a JSON update manifest (`bugbuster-update-manifest.json`) alongside release assets.
 - **SimHTTP server**: New mock HTTP server (`sim_http_server.py`) for hardware-free HTTP transport testing. Test suite extended with integration tests exercising the HTTP path without hardware.
 - **Expanded mock handlers**: New `handlers/quicksetup.py` and `handlers/bus.py` for broader BBP command coverage. Integration tests added (`tests/integration/test_sim_http_transport.py`).
 - **CI improvements**: Desktop release workflow updated with run-number support for Windows MSI versioning. Improved artifact staging to handle run-numbered filenames.
 
 ### Changed
 
-#### Firmware
+#### ESP32 Firmware / Optimizations
+- **Memory Optimization**: Replaced large on-stack arrays and static task buffers with dynamic, heap-allocated structures. Update worker tasks now allocate their 12KB stack in internal memory (`MALLOC_CAP_INTERNAL`) during flashing, while check-only tasks run in PSRAM, reclaiming memory completely upon task termination to prevent heap fragmentation.
+- **Wi-Fi Buffer & Stack Tuning**: Reduced static Wi-Fi TX/RX DMA buffer counts (to 6 TX and 8 RX) and disabled hardware-accelerated AES in mbedTLS configurations to preserve internal RAM for TLS handshakes.
 - **CDC CLI restoration**: Added `bbpRestoreCdcCli()` to clear CDC claim, restore serial logging, and release USB sessions when BBP goes idle. CLI loop now restores CDC state when needed so serial prompt/editor state recovers after interactive commands.
 - **Logical ↔ physical IO/MUX mapping fixes**: PCA9535 EFUSE3/EFUSE4 bit/EN/FLT swaps corrected. Bus planner device indices and comments updated to match PCB wiring. Signal path and layout components now use `MUX_DEVICE_BY_LOGICAL` translation to maintain natural A/B/C/D channel order in UI.
 - **WebSocket streaming refactor**: Ring buffer API pushed header+payload atomically. Persistent TX task created at register time; TX semaphore blocks indefinitely. Frames dropped when no client connected; simplified task lifecycle.
 - **BBP protocol v8**: Formal version bump reflecting HAT v2, ADC DSP, and ownership lease features added post-v7.
 - **HAT calibration success code**: Changed from 0 to 1 for consistency.
+
+#### RP2040 Firmware
+- **Heap Implementation Upgrade**: Switched RP2040 FreeRTOS heap from Heap 1 to Heap 4 to support dynamic memory reclamation during update worker tasks.
 
 #### Python client
 - **HTTP HAT command mappings**: `hat_get_caps()`, `hat_get_rail_status()`, `hat_set_rail_enable()`, `hat_set_rail_voltage()`, `hat_set_led_state()`, `hat_set_io_voltage()`, and `hat_setup_swd()` now use HTTP `/api/hat/v2` endpoints. Field names and return shapes aligned with REST API.
@@ -48,6 +65,7 @@
 
 ### Fixed
 
+- **Update File Verification**: Added size checks in ESP32 `update_manager.cpp` to reject truncated or corrupted staged update files (such as incomplete 8KB files), falling back to downloading release binaries.
 - **ADC DSP robustness**: Task notification race fixed with xTaskNotifyWait; buffer snapshots prevent reading recycled data. Stats now properly initialized with NaN/Inf filtering applied post-FFT.
 - **PCA9535 fault ISR installation**: Deferred until `g_stateMutex` exists during boot (avoids race during initialization).
 - **IO ownership lease table**: Test coverage expanded; simulator now includes `WIFI_SET_AP_PASSWORD (0xEF)` handler.
