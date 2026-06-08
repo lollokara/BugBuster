@@ -221,7 +221,7 @@ pub fn ConnectionPanel(
                         view! {
                             <div class="scanning-loader-wrap">
                                 <div class="scanning-glow-ring"></div>
-                                <p class="scanning-status">"Initialising 3D viewport & scanning..."</p>
+                                <p class="scanning-status">"Initializing..."</p>
                             </div>
                         }.into_any()
                     } else {

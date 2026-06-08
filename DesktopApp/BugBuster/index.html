@@ -31,6 +31,123 @@
           origWarn.apply(console, args);
           logToTauri('[JS console.warn] ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
         };
+
+        window.addEventListener('keydown', async (e) => {
+          if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 's') {
+            console.log("[SCREENSHOT_SEQUENCE] Starting automated navigation...");
+            const categories = Array.from(document.querySelectorAll('.category-item'));
+            if (categories.length === 0) {
+              console.log("[SCREENSHOT_SEQUENCE] Warning: No categories found. Please connect to a device first!");
+              return;
+            }
+            for (let cat of categories) {
+              console.log("[SCREENSHOT_SEQUENCE] Clicking category: " + cat.textContent.trim());
+              cat.click();
+              await new Promise(r => setTimeout(r, 1500));
+              
+              const tabs = Array.from(document.querySelectorAll('.tab-item'));
+              for (let tab of tabs) {
+                console.log("[SCREENSHOT_SEQUENCE] Clicking tab: " + tab.textContent.trim());
+                tab.click();
+                
+                const activeTabName = tab.textContent.trim().replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                
+                // Programmatic setup for WaveGen
+                if (activeTabName === 'wavegen') {
+                  console.log("[SCREENSHOT_SEQUENCE] Setting up WaveGen...");
+                  // Set Channel to CH A
+                  const channelRow = Array.from(document.querySelectorAll('.config-row')).find(row => row.querySelector('label')?.textContent.includes('Channel'));
+                  if (channelRow) {
+                    const select = channelRow.querySelector('select');
+                    if (select && select.value !== '0') {
+                      select.value = '0';
+                      select.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                  }
+                  // Set Output Mode to Voltage
+                  const outputRow = Array.from(document.querySelectorAll('.config-row')).find(row => row.querySelector('label')?.textContent.includes('Output'));
+                  if (outputRow) {
+                    const toggle = outputRow.querySelector('.toggle');
+                    if (toggle && toggle.classList.contains('active')) {
+                      toggle.click();
+                    }
+                  }
+                  // Set Freq (Hz) to 0.5
+                  const freqRow = Array.from(document.querySelectorAll('.config-row')).find(row => row.querySelector('label')?.textContent.includes('Freq'));
+                  if (freqRow) {
+                    const input = freqRow.querySelector('input');
+                    if (input) {
+                      input.value = '0.5';
+                      input.dispatchEvent(new Event('input', { bubbles: true }));
+                      input.dispatchEvent(new Event('blur', { bubbles: true }));
+                    }
+                  }
+                  await new Promise(r => setTimeout(r, 500));
+                  // Start Generator
+                  const startBtn = document.querySelector('.wavegen-start-btn');
+                  if (startBtn && !startBtn.classList.contains('wavegen-running')) {
+                    startBtn.click();
+                  }
+                  await new Promise(r => setTimeout(r, 1500));
+                }
+                
+                // Programmatic setup for Scope
+                if (activeTabName === 'scope') {
+                  console.log("[SCREENSHOT_SEQUENCE] Setting up Scope...");
+                  // Enable CH A checkbox, disable CH B, C, D
+                  const cards = Array.from(document.querySelectorAll('.scope-ch-card'));
+                  if (cards.length > 0) {
+                    const ch0Checkbox = cards[0].querySelector('.scope-ch-enable input[type="checkbox"]');
+                    if (ch0Checkbox && !ch0Checkbox.checked) {
+                      ch0Checkbox.checked = true;
+                      ch0Checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    for (let i = 1; i < cards.length; i++) {
+                      const cb = cards[i].querySelector('.scope-ch-enable input[type="checkbox"]');
+                      if (cb && cb.checked) {
+                        cb.checked = false;
+                        cb.dispatchEvent(new Event('change', { bubbles: true }));
+                      }
+                    }
+                  }
+                  // Set Time base to 5 s
+                  const timebaseSelect = Array.from(document.querySelectorAll('.scope-toolbar select')).find(sel => Array.from(sel.options).some(opt => opt.value === '5'));
+                  if (timebaseSelect) {
+                    timebaseSelect.value = '5';
+                    timebaseSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                  }
+                  await new Promise(r => setTimeout(r, 500));
+                  // Click Start scope
+                  const startBtn = document.querySelector('.scope-pill');
+                  if (startBtn && !startBtn.classList.contains('scope-pill-running')) {
+                    startBtn.click();
+                  }
+                  // Wait longer for the 0.5Hz wave to fill the screen nicely
+                  console.log("[SCREENSHOT_SEQUENCE] Waiting 5 seconds for Scope buffer to populate...");
+                  await new Promise(r => setTimeout(r, 5000));
+                }
+                
+                // Programmatic setup for Logic Analyzer
+                if (activeTabName === 'logic_analyzer') {
+                  console.log("[SCREENSHOT_SEQUENCE] Setting up Logic Analyzer...");
+                  const testDataBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Test Data');
+                  if (testDataBtn) {
+                    testDataBtn.click();
+                  }
+                  await new Promise(r => setTimeout(r, 1500));
+                }
+                
+                // Default wait for other tabs
+                if (activeTabName !== 'scope' && activeTabName !== 'wavegen' && activeTabName !== 'logic_analyzer') {
+                  await new Promise(r => setTimeout(r, 2000));
+                }
+                
+                console.log("[SCREENSHOT_REQUEST] " + activeTabName);
+              }
+            }
+            console.log("[SCREENSHOT_SEQUENCE] Sequence completed successfully!");
+          }
+        });
       })();
     </script>
     <link data-trunk rel="css" href="styles.css" />

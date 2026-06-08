@@ -390,12 +390,13 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
                 return;
             }
             const CH_FUNC_VIN: u8 = 3;
+            const CH_FUNC_VOUT: u8 = 1;
             let ds = device_state.get_untracked();
             let mut to_promote: Vec<u8> = Vec::new();
             for (i, en) in ch_en.iter().enumerate() {
                 if !*en { continue; }
                 let func = ds.channels.get(i).map(|c| c.function).unwrap_or(0);
-                if func != CH_FUNC_VIN {
+                if func != CH_FUNC_VIN && func != CH_FUNC_VOUT {
                     to_promote.push(i as u8);
                     let msg = format!("CH{} auto-set to VIN for scope", CH_NAMES[i]);
                     show_toast(&msg, "ok");

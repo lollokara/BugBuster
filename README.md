@@ -21,7 +21,7 @@
 <br/>
 
 <p align="center">
-  <img src="Docs/Images/ScreenPCB.png" alt="BugBuster PCB" width="720"/>
+  <img src="Docs/Images/bugbuster_pcb_3d.gif" alt="Animated BugBuster PCB 3D model" width="720"/>
 </p>
 
 <br/>
@@ -310,11 +310,11 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 <table>
   <tr>
     <td align="center">
-      <img src="Docs/Images/ScreenOverview.png" alt="Overview" width="420"/>
+      <img src="Docs/Images/screenshots/screenshot_dashboard.png" alt="Dashboard" width="420"/>
       <br/><sub><b>Overview</b> &mdash; live 4-ch readings, SPI health, temperature</sub>
     </td>
     <td align="center">
-      <img src="Docs/Images/ScreenLogicAnalyzer.png" alt="Logic analyzer" width="420"/>
+      <img src="Docs/Images/screenshots/screenshot_logic_analyzer.png" alt="Logic analyzer" width="420"/>
       <br/><sub><b>Logic Analyzer</b> &mdash; 1–4 ch @ up to 125 MHz, UART/I²C/SPI decoders</sub>
     </td>
   </tr>

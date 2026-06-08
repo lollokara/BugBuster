@@ -10,6 +10,48 @@ Tauri v2 + Leptos 0.7 desktop application for controlling the BugBuster hardware
 - **Frontend:** Leptos 0.7 (WASM) -- reactive UI compiled via Trunk
 - **Build:** Trunk (WASM) + Cargo (Tauri)
 
+## Screenshots
+
+The current desktop screenshots live under [`../../Docs/Images/screenshots/`](../../Docs/Images/screenshots/).
+
+<table>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_dashboard.png" alt="Dashboard" width="300"/><br/><sub><b>Dashboard</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_adc.png" alt="ADC" width="300"/><br/><sub><b>ADC</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_scope.png" alt="Scope" width="300"/><br/><sub><b>Scope</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_logic_analyzer.png" alt="Logic Analyzer" width="300"/><br/><sub><b>Logic Analyzer</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_wavegen.png" alt="WaveGen" width="300"/><br/><sub><b>WaveGen</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_signal_path.png" alt="Signal Path" width="300"/><br/><sub><b>Signal Path</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_vdac.png" alt="VDAC" width="300"/><br/><sub><b>VDAC</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_idac.png" alt="IDAC" width="300"/><br/><sub><b>IDAC</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_iin.png" alt="IIN" width="300"/><br/><sub><b>IIN</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_din.png" alt="DIN" width="300"/><br/><sub><b>DIN</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_dout.png" alt="DOUT" width="300"/><br/><sub><b>DOUT</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_gpio.png" alt="GPIO" width="300"/><br/><sub><b>GPIO</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_usb_pd.png" alt="USB-PD" width="300"/><br/><sub><b>USB-PD</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_voltages___cal.png" alt="Voltages and calibration" width="300"/><br/><sub><b>Voltages + Cal</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_faults.png" alt="Faults" width="300"/><br/><sub><b>Faults</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_uart.png" alt="UART" width="300"/><br/><sub><b>UART</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_hv_io.png" alt="HV IO" width="300"/><br/><sub><b>HV IO</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_io_expander.png" alt="IO Expander" width="300"/><br/><sub><b>IO Expander</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_board_map.png" alt="Board Map" width="300"/><br/><sub><b>Board Map</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_hat.png" alt="HAT" width="300"/><br/><sub><b>HAT</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_diagnostics.png" alt="Diagnostics" width="300"/><br/><sub><b>Diagnostics</b></sub></td>
+  </tr>
+</table>
+
 ## Development
 
 ```bash
