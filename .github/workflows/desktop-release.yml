@@ -102,21 +102,15 @@ jobs:
         shell: bash
         run: |
           repo_root=$(git rev-parse --show-toplevel 2>/dev/null || printf '%s\n' "$GITHUB_WORKSPACE")
-          lockfile="$repo_root/DesktopApp/BugBuster/Cargo.lock"
-          if [ ! -f "$lockfile" ]; then
-            echo "Cargo.lock not found at $lockfile" >&2
-            find "$repo_root" -maxdepth 4 -name Cargo.lock -print >&2
-            exit 1
-          fi
-          version=$(awk '
-            /^\[\[package\]\]/ { in_pkg = 0 }
-            /^name = "wasm-bindgen"$/ { in_pkg = 1 }
-            in_pkg && /^version = / {
-              gsub(/"/, "", $3)
-              print $3
-              exit
-            }
-          ' "$lockfile")
+          version=$(cargo metadata \
+            --manifest-path "$repo_root/DesktopApp/BugBuster/Cargo.toml" \
+            --format-version 1 \
+            | python -c 'import json, sys
+          data = json.load(sys.stdin)
+          versions = [pkg["version"] for pkg in data["packages"] if pkg["name"] == "wasm-bindgen"]
+          if not versions:
+              raise SystemExit("wasm-bindgen not found in cargo metadata")
+          print(versions[0])')
           test -n "$version"
           cargo install wasm-bindgen-cli --version "$version" --locked
           wasm-bindgen --version
