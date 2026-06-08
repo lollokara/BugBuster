@@ -1,14 +1,17 @@
 #![allow(dead_code)]
 
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
 
 /// IO ownership slots claimed by the DOUT tab (IO1..IO12 → indices 0..11).
 pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 const DO_MODE_OPTIONS: &[(u8, &str)] = &[
-    (0, "High-Z"), (1, "Push-Pull"), (2, "Open Drain"), (3, "Push-Pull HART"),
+    (0, "High-Z"),
+    (1, "Push-Pull"),
+    (2, "Open Drain"),
+    (3, "Push-Pull HART"),
 ];
 
 #[derive(Serialize)]
@@ -23,8 +26,13 @@ struct DoConfigArgs {
 
 fn send_do_config(ch: u8, mode: u8, src_sel_gpio: bool, t1: u8, t2: u8) {
     let args = serde_wasm_bindgen::to_value(&DoConfigArgs {
-        channel: ch, mode, src_sel_gpio, t1, t2,
-    }).unwrap();
+        channel: ch,
+        mode,
+        src_sel_gpio,
+        t1,
+        t2,
+    })
+    .unwrap();
     let label = format!("Set CH {} DO config", CH_NAMES[ch as usize]);
     invoke_with_feedback("set_do_config", args, &label);
 }
@@ -32,10 +40,30 @@ fn send_do_config(ch: u8, mode: u8, src_sel_gpio: bool, t1: u8, t2: u8) {
 #[component]
 pub fn DoutTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Local config state per channel (firmware doesn't report these back)
-    let do_mode = [RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8)];
-    let src_gpio = [RwSignal::new(false), RwSignal::new(false), RwSignal::new(false), RwSignal::new(false)];
-    let t1_val = [RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8)];
-    let t2_val = [RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8)];
+    let do_mode = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
+    let src_gpio = [
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+    ];
+    let t1_val = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
+    let t2_val = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
 
     view! {
         <div class="tab-content">

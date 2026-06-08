@@ -24,6 +24,7 @@ esp_err_t update_manager_check(cJSON **out);
 esp_err_t update_manager_apply(bool update_rp2040, bool update_esp32, cJSON **out);
 esp_err_t update_manager_release_options(uint8_t max_options, cJSON **out);
 esp_err_t update_manager_apply_release_index(uint8_t index, bool update_rp2040, bool update_esp32, cJSON **out);
+esp_err_t update_manager_flash_rp2040_stage(uint32_t expected_size);
 cJSON *update_manager_status_json(void);
 bool update_manager_reboot_pending(void);
 

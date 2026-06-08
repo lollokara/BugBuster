@@ -153,9 +153,18 @@ impl From<&BoardConfig> for BoardProfileExport {
         BoardProfileExport {
             name: c.name.clone(),
             description: c.description.clone(),
-            vlogic: VLockedF32 { value: c.vlogic, locked: c.vlogic_locked },
-            vadj1: VLockedF32 { value: c.vadj1, locked: c.vadj1_locked },
-            vadj2: VLockedF32 { value: c.vadj2, locked: c.vadj2_locked },
+            vlogic: VLockedF32 {
+                value: c.vlogic,
+                locked: c.vlogic_locked,
+            },
+            vadj1: VLockedF32 {
+                value: c.vadj1,
+                locked: c.vadj1_locked,
+            },
+            vadj2: VLockedF32 {
+                value: c.vadj2,
+                locked: c.vadj2_locked,
+            },
             pins,
             efuses: EfusesExport {
                 vadj1_a: e(0),
@@ -175,7 +184,10 @@ pub struct EfuseConfig {
 
 impl Default for EfuseConfig {
     fn default() -> Self {
-        Self { sw_limit_ma: 500, sw_limit_enabled: false }
+        Self {
+            sw_limit_ma: 500,
+            sw_limit_enabled: false,
+        }
     }
 }
 
@@ -189,7 +201,7 @@ pub struct BoardConfig {
     pub vadj1_locked: bool,
     pub vadj2: f32,
     pub vadj2_locked: bool,
-    pub pins: Vec<PinMode>, // 12 pins
+    pub pins: Vec<PinMode>,     // 12 pins
     pub pin_names: Vec<String>, // 12 names
     #[serde(default = "default_pin_drive")]
     pub pin_drive: Vec<DriveStrength>, // 12 drive strengths (digital only)
@@ -237,29 +249,43 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let json = serde_json::to_string_pretty(&export).unwrap();
         let default_name = cfg.name.clone();
         #[derive(Serialize)]
-        struct PickArgs { #[serde(rename = "defaultName")] default_name: String }
+        struct PickArgs {
+            #[serde(rename = "defaultName")]
+            default_name: String,
+        }
         #[derive(Serialize)]
         struct SaveArgs {
-            #[serde(rename = "profileJson")] profile_json: String,
-            #[serde(rename = "targetPath")] target_path: Option<String>,
+            #[serde(rename = "profileJson")]
+            profile_json: String,
+            #[serde(rename = "targetPath")]
+            target_path: Option<String>,
         }
         spawn_local(async move {
             let pick_args = serde_wasm_bindgen::to_value(&PickArgs { default_name }).unwrap();
-            let picked = invoke("pick_profile_save_path", pick_args).await;
-            let target_path: Option<String> = serde_wasm_bindgen::from_value(picked).ok().flatten();
-            if target_path.is_none() { return; }
+            let picked = try_invoke("pick_profile_save_path", pick_args).await;
+            let target_path: Option<String> =
+                picked.and_then(|r| serde_wasm_bindgen::from_value(r).ok().flatten());
+            if target_path.is_none() {
+                return;
+            }
 
             let args = serde_wasm_bindgen::to_value(&SaveArgs {
                 profile_json: json,
                 target_path,
-            }).unwrap();
+            })
+            .unwrap();
             match try_invoke("save_board_profile", args).await {
                 Some(val) => {
                     let path = val.as_string().unwrap_or_default();
-                    if path.is_empty() { show_toast("Board profile exported", "ok"); }
-                    else { show_toast(&format!("Exported to {}", path), "ok"); }
+                    if path.is_empty() {
+                        show_toast("Board profile exported", "ok");
+                    } else {
+                        show_toast(&format!("Exported to {}", path), "ok");
+                    }
                 }
-                None => { show_toast("Board profile export failed (see log)", "err"); }
+                None => {
+                    show_toast("Board profile export failed (see log)", "err");
+                }
             }
             let _ = JsValue::NULL;
         });
@@ -273,27 +299,49 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Pin→power-domain helper. Pins 1-6 → VADJ1, 7-12 → VADJ2.
     let pin_domain = |i: usize| -> (&'static str, &'static str) {
-        if i < 6 { ("VADJ1", "vadj1") } else { ("VADJ2", "vadj2") }
+        if i < 6 {
+            ("VADJ1", "vadj1")
+        } else {
+            ("VADJ2", "vadj2")
+        }
     };
     // Pin→efuse-block index. Each VADJ has two efuses covering 3 pins each:
     // IO1-3 → efuse 0 (VADJ1-A), IO4-6 → efuse 1 (VADJ1-B),
     // IO7-9 → efuse 2 (VADJ2-A), IO10-12 → efuse 3 (VADJ2-B).
     let pin_efuse = |i: usize| -> usize { i / 3 };
     let efuse_label = |e: usize| -> &'static str {
-        match e { 0 => "VADJ1-A", 1 => "VADJ1-B", 2 => "VADJ2-A", _ => "VADJ2-B" }
+        match e {
+            0 => "VADJ1-A",
+            1 => "VADJ1-B",
+            2 => "VADJ2-A",
+            _ => "VADJ2-B",
+        }
     };
     let efuse_domain_cls = |e: usize| -> &'static str {
-        if e < 2 { "vadj1" } else { "vadj2" }
+        if e < 2 {
+            "vadj1"
+        } else {
+            "vadj2"
+        }
     };
     let is_analog_capable = |i: usize| matches!(i, 2 | 5 | 8 | 11);
 
     // Push efuse config to backend stub.
     let push_efuse = move |efuse: u8, sw_limit_ma: u16, enabled: bool| {
         #[derive(Serialize)]
-        struct Args { efuse: u8, sw_limit_ma: u16, enabled: bool }
-        let args = serde_wasm_bindgen::to_value(&Args { efuse, sw_limit_ma, enabled }).unwrap();
+        struct Args {
+            efuse: u8,
+            sw_limit_ma: u16,
+            enabled: bool,
+        }
+        let args = serde_wasm_bindgen::to_value(&Args {
+            efuse,
+            sw_limit_ma,
+            enabled,
+        })
+        .unwrap();
         spawn_local(async move {
-            let _ = invoke("set_efuse_config", args).await;
+            let _ = try_invoke("set_efuse_config", args).await;
         });
     };
 
@@ -301,11 +349,17 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // the Rust side until firmware wiring lands).
     let push_drive = move |pin: u8, drive: DriveStrength| {
         #[derive(Serialize)]
-        struct Args { pin: u8, drive: u8 }
-        let payload = Args { pin, drive: drive.to_u8() };
+        struct Args {
+            pin: u8,
+            drive: u8,
+        }
+        let payload = Args {
+            pin,
+            drive: drive.to_u8(),
+        };
         let args = serde_wasm_bindgen::to_value(&payload).unwrap();
         spawn_local(async move {
-            let _ = invoke("set_pin_drive_strength", args).await;
+            let _ = try_invoke("set_pin_drive_strength", args).await;
         });
     };
 

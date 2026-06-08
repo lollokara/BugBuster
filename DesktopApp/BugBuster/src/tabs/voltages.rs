@@ -1,8 +1,8 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::time::Duration;
 use wasm_bindgen::JsValue;
-use crate::tauri_bridge::*;
 
 /// IO slots claimed by this tab — CH0..CH3 (indices 12..15) for selftest auto-cal.
 pub const SLOTS: &[u8] = &[12, 13, 14, 15];
@@ -37,12 +37,23 @@ fn start_idac_cal(
     set_last_v.set(-1.0);
     set_error_mv.set(0.0);
     set_last_points.set(0);
-    let ch_name = match ch { 1 => "VADJ1", 2 => "VADJ2", _ => "VLOGIC" };
-    set_log.update(|l| l.push(format!("Starting auto-calibration for {} (IDAC ch {})", ch_name, ch)));
+    let ch_name = match ch {
+        1 => "VADJ1",
+        2 => "VADJ2",
+        _ => "VLOGIC",
+    };
+    set_log.update(|l| {
+        l.push(format!(
+            "Starting auto-calibration for {} (IDAC ch {})",
+            ch_name, ch
+        ))
+    });
     spawn_local(async move {
         let args = serde_wasm_bindgen::to_value(&serde_json::json!({"channel": ch})).unwrap();
-        let result = invoke("selftest_auto_calibrate", args).await;
-        if let Ok(r) = serde_wasm_bindgen::from_value::<serde_json::Value>(result) {
+        let result = try_invoke("selftest_auto_calibrate", args).await;
+        if let Some(r) =
+            result.and_then(|r| serde_wasm_bindgen::from_value::<serde_json::Value>(r).ok())
+        {
             let status = r.get("status").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
             if status == 3 {
                 set_log.update(|l| l.push("Rejected (busy / interlock / error).".into()));
@@ -111,64 +122,130 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (hat_cal_persist_state, set_hat_cal_persist_state) = signal(0u8);
     let hat_cal_poll_handle = RwSignal::new(None::<IntervalHandle>);
 
+    // Alive flag — flips false on tab unmount so background polls stop safely.
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
+
     // ── Initial + reactive fetch ───────────────────────────────────────────────
+    let alive_init = alive.clone();
     Effect::new(move |_| {
         let _ = state.get();
+        let alive = alive_init.clone();
         spawn_local(async move {
-            if let Some(st) = fetch_idac_status().await  { set_idac.set(st); }
-            if let Some(st) = fetch_hat_status().await   { set_hat.set(st); }
-            if let Some(rl) = hat_get_rail_status().await { set_rails.set(rl); }
+            if let Some(st) = fetch_idac_status().await {
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_idac.set(st);
+                }
+            }
+            if let Some(st) = fetch_hat_status().await {
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_hat.set(st);
+                }
+            }
+            if let Some(rl) = hat_get_rail_status().await {
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_rails.set(rl);
+                }
+            }
         });
     });
 
     // 2 s HAT status + rails refresh
+    let alive_poll = alive.clone();
     Effect::new(move |_| {
-        let handle = leptos::prelude::set_interval_with_handle(move || {
-            spawn_local(async move {
-                if let Some(st) = fetch_hat_status().await    { set_hat.set(st); }
-                if let Some(rl) = hat_get_rail_status().await { set_rails.set(rl); }
-            });
-        }, Duration::from_secs(2)).ok();
-        on_cleanup(move || { if let Some(h) = handle { h.clear(); } });
+        let alive = alive_poll.clone();
+        let handle = leptos::prelude::set_interval_with_handle(
+            move || {
+                let alive = alive.clone();
+                spawn_local(async move {
+                    if let Some(st) = fetch_hat_status().await {
+                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                            set_hat.set(st);
+                        }
+                    }
+                    if let Some(rl) = hat_get_rail_status().await {
+                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                            set_rails.set(rl);
+                        }
+                    }
+                });
+            },
+            Duration::from_secs(2),
+        )
+        .ok();
+        on_cleanup(move || {
+            if let Some(h) = handle {
+                h.clear();
+            }
+        });
     });
 
     // IDAC calibration poll (400 ms, only while running)
+    let alive_cal = alive.clone();
     Effect::new(move |_| {
         let running = idac_cal_state.get() == IdacCalState::Running;
+        let alive = alive_cal.clone();
         if running {
             if idac_poll_handle.get_untracked().is_none() {
-                let handle = leptos::prelude::set_interval_with_handle(move || {
-                    if idac_cal_state.get_untracked() != IdacCalState::Running { return; }
-                    spawn_local(async move {
-                        let result = invoke("selftest_status", JsValue::NULL).await;
-                        if let Ok(v) = serde_wasm_bindgen::from_value::<serde_json::Value>(result) {
-                            let cal = v.get("cal").cloned().unwrap_or(serde_json::Value::Null);
-                            let status  = cal.get("status").and_then(|x| x.as_u64()).unwrap_or(0) as u8;
-                            let points  = cal.get("points").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
-                            let meas_v  = cal.get("lastVoltageV").and_then(|x| x.as_f64()).unwrap_or(-1.0) as f32;
-                            let err_mv  = cal.get("errorMv").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
-                            set_idac_cal_points.set(points);
-                            set_idac_cal_last_v.set(meas_v);
-                            set_idac_cal_error_mv.set(err_mv);
-                            let prev = idac_last_points.get_untracked();
-                            if points > prev {
-                                set_idac_cal_log.update(|l| l.push(
-                                    format!("Progress: {}/{} pts  ·  {:.4}V", points, CAL_TOTAL_POINTS, meas_v)
-                                ));
-                                set_idac_last_points.set(points);
-                            }
-                            if status == 2 {
-                                set_idac_cal_log.update(|l| l.push(
-                                    format!("Complete: {} pts, error {:.1} mV", points, err_mv)
-                                ));
-                                set_idac_cal_state.set(IdacCalState::Complete);
-                            } else if status == 3 {
-                                set_idac_cal_log.update(|l| l.push(format!("Failed (status={})", status)));
-                                set_idac_cal_state.set(IdacCalState::Failed);
-                            }
+                let handle = leptos::prelude::set_interval_with_handle(
+                    move || {
+                        if idac_cal_state.get_untracked() != IdacCalState::Running {
+                            return;
                         }
-                    });
-                }, Duration::from_millis(400)).ok();
+                        let alive = alive.clone();
+                        spawn_local(async move {
+                            let result = try_invoke("selftest_status", JsValue::NULL).await;
+                            if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                                return;
+                            }
+                            if let Some(v) = result.and_then(|r| {
+                                serde_wasm_bindgen::from_value::<serde_json::Value>(r).ok()
+                            }) {
+                                let cal = v.get("cal").cloned().unwrap_or(serde_json::Value::Null);
+                                let status =
+                                    cal.get("status").and_then(|x| x.as_u64()).unwrap_or(0) as u8;
+                                let points =
+                                    cal.get("points").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                                let meas_v =
+                                    cal.get("lastVoltageV")
+                                        .and_then(|x| x.as_f64())
+                                        .unwrap_or(-1.0) as f32;
+                                let err_mv =
+                                    cal.get("errorMv").and_then(|x| x.as_f64()).unwrap_or(0.0)
+                                        as f32;
+                                set_idac_cal_points.set(points);
+                                set_idac_cal_last_v.set(meas_v);
+                                set_idac_cal_error_mv.set(err_mv);
+                                let prev = idac_last_points.get_untracked();
+                                if points > prev {
+                                    set_idac_cal_log.update(|l| {
+                                        l.push(format!(
+                                            "Progress: {}/{} pts  ·  {:.4}V",
+                                            points, CAL_TOTAL_POINTS, meas_v
+                                        ))
+                                    });
+                                    set_idac_last_points.set(points);
+                                }
+                                if status == 2 {
+                                    set_idac_cal_log.update(|l| {
+                                        l.push(format!(
+                                            "Complete: {} pts, error {:.1} mV",
+                                            points, err_mv
+                                        ))
+                                    });
+                                    set_idac_cal_state.set(IdacCalState::Complete);
+                                } else if status == 3 {
+                                    set_idac_cal_log
+                                        .update(|l| l.push(format!("Failed (status={})", status)));
+                                    set_idac_cal_state.set(IdacCalState::Failed);
+                                }
+                            }
+                        });
+                    },
+                    Duration::from_millis(400),
+                )
+                .ok();
                 idac_poll_handle.set(handle);
             }
         } else if let Some(h) = idac_poll_handle.get_untracked() {
@@ -178,29 +255,41 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // HAT calibration poll (400 ms, only while active)
+    let alive_hat = alive.clone();
     Effect::new(move |_| {
+        let alive = alive_hat.clone();
         if hat_cal_active.get() {
             if hat_cal_poll_handle.get_untracked().is_none() {
-                let handle = leptos::prelude::set_interval_with_handle(move || {
-                    if !hat_cal_active.get_untracked() { return; }
-                    spawn_local(async move {
-                        if let Some(s) = hat_calibrate_status().await {
-                            set_hat_cal_progress.set(s.progress);
-                            set_hat_cal_stage.set(s.stage);
-                            set_hat_cal_point.set(s.point);
-                            set_hat_cal_code.set(s.code);
-                            set_hat_cal_measured_mv.set(s.measured_mv);
-                            set_hat_cal_persist_state.set(s.persist_state);
-                            if s.state == 2 {
-                                set_hat_cal_active.set(false);
-                                show_toast("HAT calibration complete!", "ok");
-                            } else if s.state == 3 {
-                                set_hat_cal_active.set(false);
-                                show_toast("HAT calibration failed!", "err");
-                            }
+                let handle = leptos::prelude::set_interval_with_handle(
+                    move || {
+                        if !hat_cal_active.get_untracked() {
+                            return;
                         }
-                    });
-                }, Duration::from_millis(400)).ok();
+                        let alive = alive.clone();
+                        spawn_local(async move {
+                            if let Some(s) = hat_calibrate_status().await {
+                                if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                                    return;
+                                }
+                                set_hat_cal_progress.set(s.progress);
+                                set_hat_cal_stage.set(s.stage);
+                                set_hat_cal_point.set(s.point);
+                                set_hat_cal_code.set(s.code);
+                                set_hat_cal_measured_mv.set(s.measured_mv);
+                                set_hat_cal_persist_state.set(s.persist_state);
+                                if s.state == 2 {
+                                    set_hat_cal_active.set(false);
+                                    show_toast("HAT calibration complete!", "ok");
+                                } else if s.state == 3 {
+                                    set_hat_cal_active.set(false);
+                                    show_toast("HAT calibration failed!", "err");
+                                }
+                            }
+                        });
+                    },
+                    Duration::from_millis(400),
+                )
+                .ok();
                 hat_cal_poll_handle.set(handle);
             }
         } else if let Some(h) = hat_cal_poll_handle.get_untracked() {
@@ -210,9 +299,30 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // ── Rail helpers ───────────────────────────────────────────────────────────
-    let rail_en = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.enabled).unwrap_or(false);
-    let rail_mv = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.voltage_mv).unwrap_or(0);
-    let rail_ma = move |id: u8| rails.get().iter().find(|r| r.rail_id == id).map(|r| r.current_ma).unwrap_or(0);
+    let rail_en = move |id: u8| {
+        rails
+            .get()
+            .iter()
+            .find(|r| r.rail_id == id)
+            .map(|r| r.enabled)
+            .unwrap_or(false)
+    };
+    let rail_mv = move |id: u8| {
+        rails
+            .get()
+            .iter()
+            .find(|r| r.rail_id == id)
+            .map(|r| r.voltage_mv)
+            .unwrap_or(0)
+    };
+    let rail_ma = move |id: u8| {
+        rails
+            .get()
+            .iter()
+            .find(|r| r.rail_id == id)
+            .map(|r| r.current_ma)
+            .unwrap_or(0)
+    };
 
     // ── Static channel metadata ────────────────────────────────────────────────
     let ch_colors = ["#10b981", "#06b6d4", "#ff4d6a"];
@@ -221,10 +331,10 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         "V_ADJ1 — Domain A  ·  LTM8063 #1",
         "V_ADJ2 — Domain B  ·  LTM8063 #2",
     ];
-    let ch_vfb   = [0.8f32, 0.774, 0.774];
-    let ch_rint  = 249.0f32;
-    let ifs_ua   = 50.0f32;
-    let r_fs     = (0.976 * 127.0) / (16.0 * ifs_ua * 1e-6) / 1000.0;
+    let ch_vfb = [0.8f32, 0.774, 0.774];
+    let ch_rint = 249.0f32;
+    let ifs_ua = 50.0f32;
+    let r_fs = (0.976 * 127.0) / (16.0 * ifs_ua * 1e-6) / 1000.0;
 
     view! {
         <div class="tab-content">

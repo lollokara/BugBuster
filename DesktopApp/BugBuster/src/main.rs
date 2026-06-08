@@ -1,7 +1,7 @@
 mod app;
-mod tauri_bridge;
 mod components;
 mod tabs;
+mod tauri_bridge;
 
 use app::*;
 use leptos::prelude::*;

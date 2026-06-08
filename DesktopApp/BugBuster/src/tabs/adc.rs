@@ -1,8 +1,8 @@
+use crate::components::channel_sparkline::ChannelSparkline;
+use crate::tauri_bridge::{self, *};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
-use crate::tauri_bridge::{self, *};
-use crate::components::channel_sparkline::ChannelSparkline;
 
 /// IO ownership slots claimed by the ADC tab (CH0..CH3 → indices 12..15).
 pub const SLOTS: &[u8] = &[12, 13, 14, 15];
@@ -177,32 +177,54 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 }
 
 #[derive(Serialize)]
-struct AdcConfigArgs { channel: u8, mux: u8, range: u8, rate: u8 }
+struct AdcConfigArgs {
+    channel: u8,
+    mux: u8,
+    range: u8,
+    rate: u8,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AdcStartArgs { channel_mask: u8, divider: u8 }
+struct AdcStartArgs {
+    channel_mask: u8,
+    divider: u8,
+}
 
 fn send_adc_config(ch: u8, mux: u8, range: u8, rate: u8) {
     // Stop ADC stream, apply config, restart stream to avoid conflicts.
     // (Bug 6) — must restart the stream after config, or UI reads go stale.
     spawn_local(async move {
-        let _ = invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+        let _ = try_invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
         sleep_ms(200).await;
 
-        let args = serde_wasm_bindgen::to_value(&AdcConfigArgs { channel: ch, mux, range, rate }).unwrap();
-        let _ = invoke("set_adc_config", args).await;
+        let args = serde_wasm_bindgen::to_value(&AdcConfigArgs {
+            channel: ch,
+            mux,
+            range,
+            rate,
+        })
+        .unwrap();
+        let _ = try_invoke("set_adc_config", args).await;
 
         // Resume stream for all 4 channels (mask 0b1111). Divider 0 = default rate.
-        let start_args = serde_wasm_bindgen::to_value(&AdcStartArgs { channel_mask: 0x0F, divider: 0 }).unwrap();
-        let _ = invoke("start_adc_stream", start_args).await;
-        log(&format!("[send_adc_config] ch={} mux={} range={} rate={} (stream restarted)", ch, mux, range, rate));
+        let start_args = serde_wasm_bindgen::to_value(&AdcStartArgs {
+            channel_mask: 0x0F,
+            divider: 0,
+        })
+        .unwrap();
+        let _ = try_invoke("start_adc_stream", start_args).await;
+        log(&format!(
+            "[send_adc_config] ch={} mux={} range={} rate={} (stream restarted)",
+            ch, mux, range, rate
+        ));
     });
 }
 
 async fn sleep_ms(ms: u32) {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
-        web_sys::window().unwrap()
+        web_sys::window()
+            .unwrap()
             .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32)
             .unwrap();
     });

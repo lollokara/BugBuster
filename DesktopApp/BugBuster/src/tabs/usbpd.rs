@@ -1,6 +1,6 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::tauri_bridge::*;
 
 #[component]
 pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {

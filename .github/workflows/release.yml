@@ -202,6 +202,10 @@ jobs:
                 return 1
               fi
 
+              if [ "$build_esp32" = "false" ] && ! printf '%s\n' "$asset_names" | grep -Eq '^spiffs\.bin$'; then
+                return 1
+              fi
+
               if [ "$build_desktop" = "false" ] && ! printf '%s\n' "$asset_names" | grep -Eq '^(bugbuster[_-].*\.(dmg|AppImage|deb|rpm|msi)|bugbuster[_-].*-setup\.exe|bugbuster\.app\.tar\.gz|bugbuster\.app\.tar\.gz\.sig)$'; then
                 return 1
               fi
@@ -272,6 +276,7 @@ jobs:
           elif [ -d dist/prev_release ]; then
             echo "Copying cached ESP32 assets..."
             cp -v dist/prev_release/*esp32s3* dist/release/ 2>/dev/null || true
+            cp -v dist/prev_release/*spiffs* dist/release/ 2>/dev/null || true
           fi
 
           # Desktop staging
@@ -365,8 +370,10 @@ jobs:
 
           rp = pick(["bugbuster-hat-rp2040-v*.bin"])
           esp = pick(["bugbuster-esp32s3-v*-ota.bin"])
+          spiffs = pick(["spiffs.bin"])
           rp_name = os.path.basename(rp)
           esp_name = os.path.basename(esp)
+          spiffs_name = os.path.basename(spiffs)
           rp_ver = version_from_name(rp, r"bugbuster-hat-rp2040-v(.+)\.bin")
           esp_ver = version_from_name(esp, r"bugbuster-esp32s3-v(.+)-ota\.bin")
 
@@ -393,6 +400,14 @@ jobs:
                   "url": f"{base}/{esp_name}",
                   "size": os.path.getsize(esp),
                   "sha256": sha256(esp),
+              },
+              "spiffs": {
+                  "buildId": f"{esp_ver}+{run_number}.{sha[:12]}",
+                  "version": esp_ver,
+                  "asset": spiffs_name,
+                  "url": f"{base}/{spiffs_name}",
+                  "size": os.path.getsize(spiffs),
+                  "sha256": sha256(spiffs),
               },
           }
           out = "dist/release/bugbuster-update-manifest.json"

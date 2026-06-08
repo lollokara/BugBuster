@@ -1,31 +1,58 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
 
 // ALERT_STATUS register (0x3F)
 const GLOBAL_ALERTS: &[(usize, &str)] = &[
-    (0, "RESET"), (2, "SUPPLY_ERR"), (3, "SPI_ERR"), (4, "TEMP_ALERT"), (5, "ADC_ERR"),
-    (8, "CH_A"), (9, "CH_B"), (10, "CH_C"), (11, "CH_D"),
-    (12, "HART_A"), (13, "HART_B"), (14, "HART_C"), (15, "HART_D"),
+    (0, "RESET"),
+    (2, "SUPPLY_ERR"),
+    (3, "SPI_ERR"),
+    (4, "TEMP_ALERT"),
+    (5, "ADC_ERR"),
+    (8, "CH_A"),
+    (9, "CH_B"),
+    (10, "CH_C"),
+    (11, "CH_D"),
+    (12, "HART_A"),
+    (13, "HART_B"),
+    (14, "HART_C"),
+    (15, "HART_D"),
 ];
 // SUPPLY_ALERT_STATUS register (0x57)
 const SUPPLY_ALERTS: &[(usize, &str)] = &[
-    (0, "CAL_MEM"), (1, "AVSS"), (2, "DVCC"), (3, "AVCC"), (4, "DO_VDD"), (5, "AVDD_LO"), (6, "AVDD_HI"),
+    (0, "CAL_MEM"),
+    (1, "AVSS"),
+    (2, "DVCC"),
+    (3, "AVCC"),
+    (4, "DO_VDD"),
+    (5, "AVDD_LO"),
+    (6, "AVDD_HI"),
 ];
 // CHANNEL_ALERT_STATUS register (0x58 + ch)
 const CH_ALERTS: &[(usize, &str)] = &[
-    (0, "DIN_SC"), (1, "DIN_OC"), (2, "DO_SC"), (3, "DO_TIMEOUT"),
-    (4, "AIO_SC"), (5, "AIO_OC"), (6, "VIOUT_SHDN"),
+    (0, "DIN_SC"),
+    (1, "DIN_OC"),
+    (2, "DO_SC"),
+    (3, "DO_TIMEOUT"),
+    (4, "AIO_SC"),
+    (5, "AIO_OC"),
+    (6, "VIOUT_SHDN"),
 ];
 
 #[component]
 pub fn FaultsTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let clear_all = move |_: leptos::ev::MouseEvent| {
-        invoke_with_feedback("clear_all_alerts", wasm_bindgen::JsValue::NULL, "Clear all alerts");
+        invoke_with_feedback(
+            "clear_all_alerts",
+            wasm_bindgen::JsValue::NULL,
+            "Clear all alerts",
+        );
     };
     let clear_ch = move |ch: u8| {
         #[derive(Serialize)]
-        struct Args { channel: u8 }
+        struct Args {
+            channel: u8,
+        }
         let args = serde_wasm_bindgen::to_value(&Args { channel: ch }).unwrap();
         let label = format!("Clear CH {} alerts", CH_NAMES[ch as usize]);
         invoke_with_feedback("clear_channel_alert", args, &label);
@@ -33,8 +60,12 @@ pub fn FaultsTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     let total_faults = move || {
         let ds = state.get();
-        (ds.alert_status.count_ones() + ds.supply_alert_status.count_ones() +
-         ds.channels.iter().map(|c| c.channel_alert.count_ones()).sum::<u32>()) as usize
+        (ds.alert_status.count_ones()
+            + ds.supply_alert_status.count_ones()
+            + ds.channels
+                .iter()
+                .map(|c| c.channel_alert.count_ones())
+                .sum::<u32>()) as usize
     };
 
     view! {

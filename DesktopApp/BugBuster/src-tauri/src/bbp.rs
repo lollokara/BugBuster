@@ -227,6 +227,7 @@ pub const CMD_SET_WATCHDOG: u8 = 0x73;
 pub const CMD_GET_ADMIN_TOKEN: u8 = 0x74;
 pub const CMD_EXT_JOB_SUBMIT: u8 = 0x75;
 pub const CMD_EXT_JOB_GET: u8 = 0x76;
+pub const CMD_OTA: u8 = 0x77;
 pub const CMD_PING: u8 = 0xFE;
 pub const CMD_DISCONNECT: u8 = 0xFF;
 

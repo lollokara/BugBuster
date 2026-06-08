@@ -1,8 +1,8 @@
+use crate::components::channel_sparkline::ChannelSparkline;
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
-use crate::tauri_bridge::*;
-use crate::components::channel_sparkline::ChannelSparkline;
 
 /// IO ownership slots claimed by the VDAC tab (CH0..CH3 → indices 12..15).
 pub const SLOTS: &[u8] = &[12, 13, 14, 15];
@@ -41,15 +41,29 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let ch_idx = i as u8;
                 let range = ch.adc_range;
                 let rate = ch.adc_rate;
-                web_sys::console::log_1(&format!(
-                    "[VDAC] auto-fix: CH {} VOUT mux was {} — forcing 0 (LF_TO_AGND)",
-                    i, ch.adc_mux
-                ).into());
+                web_sys::console::log_1(
+                    &format!(
+                        "[VDAC] auto-fix: CH {} VOUT mux was {} — forcing 0 (LF_TO_AGND)",
+                        i, ch.adc_mux
+                    )
+                    .into(),
+                );
                 spawn_local(async move {
                     #[derive(Serialize)]
-                    struct A { channel: u8, mux: u8, range: u8, rate: u8 }
-                    let args = serde_wasm_bindgen::to_value(&A { channel: ch_idx, mux: 0, range, rate }).unwrap();
-                    let _ = invoke("set_adc_config", args).await;
+                    struct A {
+                        channel: u8,
+                        mux: u8,
+                        range: u8,
+                        rate: u8,
+                    }
+                    let args = serde_wasm_bindgen::to_value(&A {
+                        channel: ch_idx,
+                        mux: 0,
+                        range,
+                        rate,
+                    })
+                    .unwrap();
+                    let _ = try_invoke("set_adc_config", args).await;
                 });
             }
         }
@@ -190,18 +204,40 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 }
 
 #[derive(Serialize)]
-struct DacVoltageArgs { channel: u8, voltage: f32, bipolar: bool }
+struct DacVoltageArgs {
+    channel: u8,
+    voltage: f32,
+    bipolar: bool,
+}
 #[derive(Serialize)]
-struct VoutRangeArgs { channel: u8, bipolar: bool }
+struct VoutRangeArgs {
+    channel: u8,
+    bipolar: bool,
+}
 
 fn send_dac_voltage(ch: u8, voltage: f32, bipolar: bool) {
-    web_sys::console::log_1(&format!("[VDAC] ch={} V={:.3} bipolar={}", ch, voltage, bipolar).into());
-    let args = serde_wasm_bindgen::to_value(&DacVoltageArgs { channel: ch, voltage, bipolar }).unwrap();
+    web_sys::console::log_1(
+        &format!("[VDAC] ch={} V={:.3} bipolar={}", ch, voltage, bipolar).into(),
+    );
+    let args = serde_wasm_bindgen::to_value(&DacVoltageArgs {
+        channel: ch,
+        voltage,
+        bipolar,
+    })
+    .unwrap();
     let label = format!("Set CH {} to {:.3}V", CH_NAMES[ch as usize], voltage);
     invoke_with_feedback("set_dac_voltage", args, &label);
 }
 fn send_vout_range(ch: u8, bipolar: bool) {
-    let args = serde_wasm_bindgen::to_value(&VoutRangeArgs { channel: ch, bipolar }).unwrap();
-    let label = format!("Set CH {} range to {}", CH_NAMES[ch as usize], if bipolar { "+/-12V" } else { "0-12V" });
+    let args = serde_wasm_bindgen::to_value(&VoutRangeArgs {
+        channel: ch,
+        bipolar,
+    })
+    .unwrap();
+    let label = format!(
+        "Set CH {} range to {}",
+        CH_NAMES[ch as usize],
+        if bipolar { "+/-12V" } else { "0-12V" }
+    );
     invoke_with_feedback("set_vout_range", args, &label);
 }

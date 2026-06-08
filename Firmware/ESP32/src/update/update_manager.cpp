@@ -630,6 +630,18 @@ static bool flash_rp2040_from_file(const UpdateComponent *component, const char 
     return false;
 }
 
+esp_err_t update_manager_flash_rp2040_stage(uint32_t expected_size)
+{
+    UpdateComponent component = {};
+    snprintf(component.build_id, sizeof(component.build_id), "usb-stage");
+    component.size = expected_size;
+    component.crc32 = 0;
+    if (!flash_rp2040_from_file(&component, RP2040_STAGE_PATH)) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t ota_event_handler(esp_http_client_event_t *evt)
 {
     OtaDownloadState *s = (OtaDownloadState *)evt->user_data;

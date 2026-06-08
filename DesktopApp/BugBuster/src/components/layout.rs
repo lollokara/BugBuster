@@ -4,10 +4,7 @@ use leptos::prelude::*;
 
 /// Glass card wrapper
 #[component]
-pub fn Card(
-    children: Children,
-    #[prop(default = "")] class: &'static str,
-) -> impl IntoView {
+pub fn Card(children: Children, #[prop(default = "")] class: &'static str) -> impl IntoView {
     view! {
         <div class=format!("card {}", class)>
             {children()}

@@ -9,51 +9,19 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"])]
-    pub async fn invoke(cmd: &str, args: JsValue) -> JsValue;
+    #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "core"], catch)]
+    pub async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "event"])]
     pub async fn listen(event: &str, handler: &Closure<dyn FnMut(JsValue)>) -> JsValue;
 }
 
 /// Safe invoke that returns None instead of panicking on error.
-///
-/// Internally distinguishes two failure modes:
-///   - JS-level error (invoke rejected): `.catch` returns sentinel `{__err:true}` → mapped to `None`
-///   - `Ok(null)` (void commands): returns `Some(JsValue::NULL)`
-///
-/// Callers that need to tell apart "command failed" from "command returned nothing"
-/// should check `val == JsValue::NULL` on the `Some` branch.  For fire-and-forget
-/// commands, discarding `None` is correct.
 pub async fn try_invoke(cmd: &str, args: JsValue) -> Option<JsValue> {
-    let promise = js_sys::Function::new_with_args(
-        "cmd, args",
-        "return window.__TAURI__.core.invoke(cmd, args).catch(function(e) { console.warn('[try_invoke] ' + cmd + ' error:', e); return {__err:true,msg:String(e)}; })"
-    );
-    let result = match promise.call2(&JsValue::NULL, &JsValue::from_str(cmd), &args) {
-        Ok(r) => r,
+    match invoke(cmd, args).await {
+        Ok(val) => Some(val),
         Err(e) => {
-            web_sys::console::warn_1(
-                &format!("[try_invoke] JS call failed for {}: {:?}", cmd, e).into(),
-            );
-            return None;
-        }
-    };
-    let future = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(result));
-    match future.await {
-        Ok(val) => {
-            // Check for error sentinel returned by .catch above
-            let is_err = js_sys::Reflect::get(&val, &"__err".into())
-                .map(|v| v.is_truthy())
-                .unwrap_or(false);
-            if is_err {
-                None
-            } else {
-                Some(val)
-            }
-        }
-        Err(e) => {
-            web_sys::console::warn_1(&format!("[try_invoke] {} rejected: {:?}", cmd, e).into());
+            web_sys::console::warn_2(&format!("[try_invoke] {} rejected:", cmd).into(), &e);
             None
         }
     }
@@ -499,11 +467,10 @@ fn idac_point_voltage(ch: &IdacChannelState, code: i8) -> Option<f32> {
     for pair in pts.windows(2) {
         let c0 = pair[0].code;
         let c1 = pair[1].code;
-        if ((code >= c0 && code <= c1) || (code <= c0 && code >= c1))
-            && c1 != c0 {
-                let t = (code - c0) as f32 / (c1 - c0) as f32;
-                return Some(pair[0].voltage + t * (pair[1].voltage - pair[0].voltage));
-            }
+        if ((code >= c0 && code <= c1) || (code <= c0 && code >= c1)) && c1 != c0 {
+            let t = (code - c0) as f32 / (c1 - c0) as f32;
+            return Some(pair[0].voltage + t * (pair[1].voltage - pair[0].voltage));
+        }
     }
     if code <= pts[0].code {
         Some(pts[0].voltage)
@@ -920,7 +887,11 @@ pub async fn hat_set_rail_voltage(rail_id: u8, voltage_mv: u16) -> Option<Vec<Ha
         rail_id: u8,
         voltage_mv: u16,
     }
-    let args = serde_wasm_bindgen::to_value(&Args { rail_id, voltage_mv }).unwrap();
+    let args = serde_wasm_bindgen::to_value(&Args {
+        rail_id,
+        voltage_mv,
+    })
+    .unwrap();
     let result = try_invoke("hat_set_rail_voltage", args).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
@@ -1295,7 +1266,7 @@ pub async fn la_delete_range(start: u64, end: u64) -> Option<LaCaptureInfo> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnerSlot {
-    pub kind: u8,            // io_owner_kind_t: 0=NONE,1=USB,2=HTTP,3=SCRIPT,4=CLI,5=INTERNAL
+    pub kind: u8, // io_owner_kind_t: 0=NONE,1=USB,2=HTTP,3=SCRIPT,4=CLI,5=INTERNAL
     pub session_id: u8,
     pub token_fp32: u32,
     pub lease_until_ms: u32, // low 32 bits of monotonic lease deadline (ms)
@@ -1364,7 +1335,9 @@ pub async fn io_release(slots: &[u8]) {
     struct Args {
         slots: Vec<u8>,
     }
-    let args = match serde_wasm_bindgen::to_value(&Args { slots: slots.to_vec() }) {
+    let args = match serde_wasm_bindgen::to_value(&Args {
+        slots: slots.to_vec(),
+    }) {
         Ok(v) => v,
         Err(e) => {
             web_sys::console::warn_1(&format!("[io_release] serialize error: {:?}", e).into());
@@ -1396,7 +1369,9 @@ pub async fn io_force_release(slot: u8) -> bool {
     let args = match serde_wasm_bindgen::to_value(&Args { slot }) {
         Ok(v) => v,
         Err(e) => {
-            web_sys::console::warn_1(&format!("[io_force_release] serialize error: {:?}", e).into());
+            web_sys::console::warn_1(
+                &format!("[io_force_release] serialize error: {:?}", e).into(),
+            );
             return false;
         }
     };
@@ -1642,7 +1617,8 @@ pub async fn upload_firmware(path: &str) -> Result<String, String> {
         file_path: path.to_string(),
     })
     .unwrap();
-    let result = try_invoke("ota_upload_firmware", args).await
+    let result = try_invoke("ota_upload_firmware", args)
+        .await
         .ok_or_else(|| "ota_upload_firmware command failed".to_string())?;
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }
@@ -1663,6 +1639,10 @@ pub struct DesktopGitRelease {
     pub esp32_url: String,
     pub esp32_size: u64,
     pub esp32_sha256: String,
+    pub spiffs_version: String,
+    pub spiffs_url: String,
+    pub spiffs_size: u64,
+    pub spiffs_sha256: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1674,10 +1654,10 @@ pub struct OtaProgress {
 }
 
 pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
-    let result = try_invoke("fetch_github_releases", JsValue::NULL).await
+    let result = try_invoke("fetch_github_releases", JsValue::NULL)
+        .await
         .ok_or_else(|| "fetch_github_releases command failed".to_string())?;
-    serde_wasm_bindgen::from_value::<Vec<DesktopGitRelease>>(result)
-        .map_err(|e| e.to_string())
+    serde_wasm_bindgen::from_value::<Vec<DesktopGitRelease>>(result).map_err(|e| e.to_string())
 }
 
 pub async fn start_desktop_ota(
@@ -1719,3 +1699,26 @@ pub async fn start_desktop_ota(
     }
 }
 
+pub async fn start_desktop_spiffs_ota(
+    spiffs_url: String,
+    spiffs_size: u64,
+    spiffs_sha256: String,
+) -> Result<(), String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        spiffs_url: String,
+        spiffs_size: u64,
+        spiffs_sha256: String,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        spiffs_url,
+        spiffs_size,
+        spiffs_sha256,
+    })
+    .unwrap();
+    match try_invoke("start_desktop_spiffs_ota", args).await {
+        Some(_) => Ok(()),
+        None => Err("start_desktop_spiffs_ota command failed".to_string()),
+    }
+}

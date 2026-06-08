@@ -61,21 +61,27 @@ pub fn Led(
 
 /// Temperature gauge (vertical bar)
 #[component]
-pub fn TempGauge(
-    #[prop(into)] temp: Signal<f32>,
-) -> impl IntoView {
+pub fn TempGauge(#[prop(into)] temp: Signal<f32>) -> impl IntoView {
     let percent = move || ((temp.get() + 25.0) / 150.0 * 100.0).clamp(0.0, 100.0);
     let color = move || {
         let t = temp.get();
-        if t > 100.0 { "var(--rose)" }
-        else if t > 70.0 { "var(--amber)" }
-        else { "var(--green)" }
+        if t > 100.0 {
+            "var(--rose)"
+        } else if t > 70.0 {
+            "var(--amber)"
+        } else {
+            "var(--green)"
+        }
     };
     let status = move || {
         let t = temp.get();
-        if t > 100.0 { "HOT" }
-        else if t > 70.0 { "Warm" }
-        else { "Normal" }
+        if t > 100.0 {
+            "HOT"
+        } else if t > 70.0 {
+            "Warm"
+        } else {
+            "Normal"
+        }
     };
 
     view! {

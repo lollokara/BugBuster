@@ -84,9 +84,7 @@ impl ConnectionManager {
     /// Return a guard that sets ota_in_progress to true, and back to false when dropped.
     pub fn ota_guard(&self) -> OtaGuard {
         self.set_ota_in_progress(true);
-        OtaGuard {
-            mgr: self.clone(),
-        }
+        OtaGuard { mgr: self.clone() }
     }
 
     /// Connect to a device by its discovery ID.
@@ -185,11 +183,11 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self
-                .connection_status
-                .lock()
-                .unwrap_or_else(|e| {
-                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+            let mut status = self.connection_status.lock().unwrap_or_else(|e| {
+                log::warn!(
+                    "ConnectionStatus mutex poisoned — recovering stale state: {}",
+                    e
+                );
                 e.into_inner()
             });
             status.mode = ConnectionMode::Usb;
@@ -203,7 +201,10 @@ impl ConnectionManager {
             .connection_status
             .lock()
             .unwrap_or_else(|e| {
-                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                log::warn!(
+                    "ConnectionStatus mutex poisoned — recovering stale state: {}",
+                    e
+                );
                 e.into_inner()
             })
             .clone();
@@ -280,7 +281,9 @@ impl ConnectionManager {
                                 }
                             }
                             bbp::EVT_IO_OWNER_REJECT => {
-                                if let Some(evt) = crate::state::IoOwnerRejectEvent::from_payload(&msg.payload) {
+                                if let Some(evt) =
+                                    crate::state::IoOwnerRejectEvent::from_payload(&msg.payload)
+                                {
                                     let _ = app_handle.emit("io-owner-reject", &evt);
                                 } else {
                                     log::warn!(
@@ -347,7 +350,7 @@ impl ConnectionManager {
         }
 
         // 2. Check for Pairing (Admin Token)
-        let admin_token = self.get_token(&mac);
+        let admin_token = self.get_token(&mac, app);
         if admin_token.is_none() {
             log::warn!(
                 "HTTP connection to {} (MAC: {}) requires pairing via USB",
@@ -366,7 +369,8 @@ impl ConnectionManager {
             ));
         }
 
-        let token = admin_token.ok_or_else(|| anyhow::anyhow!("admin token missing after pairing check"))?;
+        let token = admin_token
+            .ok_or_else(|| anyhow::anyhow!("admin token missing after pairing check"))?;
         transport.set_admin_token(&token)?;
         // Inject AppHandle so background scope-polling task can emit
         // `scope-data` events (Bug 2).
@@ -381,11 +385,11 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self
-                .connection_status
-                .lock()
-                .unwrap_or_else(|e| {
-                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+            let mut status = self.connection_status.lock().unwrap_or_else(|e| {
+                log::warn!(
+                    "ConnectionStatus mutex poisoned — recovering stale state: {}",
+                    e
+                );
                 e.into_inner()
             });
             status.mode = ConnectionMode::Http;
@@ -399,7 +403,10 @@ impl ConnectionManager {
             .connection_status
             .lock()
             .unwrap_or_else(|e| {
-                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                log::warn!(
+                    "ConnectionStatus mutex poisoned — recovering stale state: {}",
+                    e
+                );
                 e.into_inner()
             })
             .clone();
@@ -426,11 +433,11 @@ impl ConnectionManager {
         }
 
         {
-            let mut status = self
-                .connection_status
-                .lock()
-                .unwrap_or_else(|e| {
-                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+            let mut status = self.connection_status.lock().unwrap_or_else(|e| {
+                log::warn!(
+                    "ConnectionStatus mutex poisoned — recovering stale state: {}",
+                    e
+                );
                 e.into_inner()
             });
             *status = ConnectionStatus::default();
@@ -481,7 +488,7 @@ impl ConnectionManager {
         // sometimes does not stick over WiFi).
         if !payload.is_empty() {
             let ch = payload[0];
-            if ch < 4 {
+            if ch < 4 && cmd_id != bbp::CMD_OTA {
                 let mark = match cmd_id {
                     bbp::CMD_SET_ADC_CONFIG if payload.len() >= 4 => {
                         if let Ok(mut ds) = self.device_state.lock() {
@@ -501,9 +508,9 @@ impl ConnectionManager {
                         }
                         true
                     }
-                    bbp::CMD_SET_DAC_CODE
-                    | bbp::CMD_SET_DAC_VOLTAGE
-                    | bbp::CMD_SET_DAC_CURRENT => true,
+                    bbp::CMD_SET_DAC_CODE | bbp::CMD_SET_DAC_VOLTAGE | bbp::CMD_SET_DAC_CURRENT => {
+                        true
+                    }
                     _ => false,
                 };
                 if mark {
@@ -531,7 +538,10 @@ impl ConnectionManager {
         self.device_state
             .lock()
             .unwrap_or_else(|e| {
-                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                log::warn!(
+                    "ConnectionStatus mutex poisoned — recovering stale state: {}",
+                    e
+                );
                 e.into_inner()
             })
             .clone()
@@ -542,7 +552,10 @@ impl ConnectionManager {
         self.connection_status
             .lock()
             .unwrap_or_else(|e| {
-                log::warn!("ConnectionStatus mutex poisoned — recovering stale state: {}", e);
+                log::warn!(
+                    "ConnectionStatus mutex poisoned — recovering stale state: {}",
+                    e
+                );
                 e.into_inner()
             })
             .clone()
@@ -587,7 +600,7 @@ impl ConnectionManager {
                     payload.push(slots.len() as u8);
                     payload.extend_from_slice(&slots);
                     payload.extend_from_slice(&30_000_u32.to_le_bytes()); // 30 s lease
-                    payload.extend_from_slice(&0_u32.to_le_bytes());      // purpose_tag = 0 for renewal
+                    payload.extend_from_slice(&0_u32.to_le_bytes()); // purpose_tag = 0 for renewal
                     let t = transport_ka.lock().await;
                     if let Some(tr) = t.as_ref() {
                         if tr.is_connected() {
@@ -666,10 +679,9 @@ impl ConnectionManager {
                                     Some(t) if now.duration_since(t) < WRITE_SUPPRESS
                                 );
                                 if suppress {
-                                    if let (Some(prev), Some(cur)) = (
-                                        prev_state.channels.get(ch),
-                                        state.channels.get_mut(ch),
-                                    ) {
+                                    if let (Some(prev), Some(cur)) =
+                                        (prev_state.channels.get(ch), state.channels.get_mut(ch))
+                                    {
                                         cur.function = prev.function;
                                         cur.adc_mux = prev.adc_mux;
                                         cur.adc_range = prev.adc_range;
@@ -802,12 +814,20 @@ impl ConnectionManager {
                                 match entry {
                                     Ok(e) => {
                                         if let Err(e) = e.set_password(token) {
-                                            log::warn!("Keychain migration failed for {}: {}", mac, e);
+                                            log::warn!(
+                                                "Keychain migration failed for {}: {}",
+                                                mac,
+                                                e
+                                            );
                                             failed.insert(mac.clone(), token.clone());
                                         }
                                     }
                                     Err(e) => {
-                                        log::warn!("Keychain entry creation failed for {}: {}", mac, e);
+                                        log::warn!(
+                                            "Keychain entry creation failed for {}: {}",
+                                            mac,
+                                            e
+                                        );
                                         failed.insert(mac.clone(), token.clone());
                                     }
                                 }
@@ -838,7 +858,10 @@ impl ConnectionManager {
                                                 log::warn!("{} token(s) failed keychain migration; tokens.json updated to retry on next launch", failed.len());
                                             }
                                         }
-                                        Err(e) => log::warn!("Could not serialise failed migration entries: {}", e),
+                                        Err(e) => log::warn!(
+                                            "Could not serialise failed migration entries: {}",
+                                            e
+                                        ),
                                     }
                                 }
                             }
@@ -868,7 +891,7 @@ impl ConnectionManager {
     /// Save a token to persistent storage (OS keychain).
     /// Falls back to in-memory only if the keychain is unavailable — does NOT
     /// write plaintext to disk in that case.
-    pub fn save_token(&self, mac: String, token: String, _app: &AppHandle) {
+    pub fn save_token(&self, mac: String, token: String, app: &AppHandle) {
         let mac = Self::normalize_mac(&mac);
 
         // Persist to OS keychain.
@@ -877,7 +900,8 @@ impl ConnectionManager {
                 if let Err(e) = entry.set_password(&token) {
                     log::warn!(
                         "OS keychain unavailable for {}: {} — token stored in-memory only",
-                        mac, e
+                        mac,
+                        e
                     );
                 } else {
                     log::info!("Admin token for {} saved to OS keychain", mac);
@@ -886,7 +910,8 @@ impl ConnectionManager {
             Err(e) => {
                 log::warn!(
                     "Could not create keychain entry for {}: {} — token stored in-memory only",
-                    mac, e
+                    mac,
+                    e
                 );
             }
         }
@@ -894,6 +919,17 @@ impl ConnectionManager {
         // Always update in-memory cache regardless of keychain outcome.
         if let Ok(mut tokens) = self.tokens.lock() {
             tokens.insert(mac, token);
+
+            // Dev mode fallback: write tokens to a file so they survive macOS keychain
+            // amnesia caused by binary re-signing during 'tauri dev'.
+            if cfg!(debug_assertions) {
+                if let Ok(app_dir) = app.path().app_data_dir() {
+                    let path = app_dir.join("tokens.dev.json");
+                    if let Ok(json) = serde_json::to_string(&*tokens) {
+                        let _ = std::fs::write(&path, json);
+                    }
+                }
+            }
         }
     }
 
@@ -901,7 +937,7 @@ impl ConnectionManager {
     ///
     /// Checks the in-memory cache first (populated by save_token and migration),
     /// then falls back to the OS keychain for tokens from previous sessions.
-    pub fn get_token(&self, mac: &str) -> Option<String> {
+    pub fn get_token(&self, mac: &str, app: &AppHandle) -> Option<String> {
         let key = Self::normalize_mac(mac);
 
         // Check in-memory cache first.
@@ -927,7 +963,33 @@ impl ConnectionManager {
                     Some(token)
                 }
                 Err(keyring::Error::NoEntry) => {
-                    log::warn!("No keychain entry found for {} — device needs USB pairing", key);
+                    log::warn!(
+                        "No keychain entry found for {} — device needs USB pairing",
+                        key
+                    );
+
+                    // Dev mode fallback: read tokens from a file if the keychain is empty.
+                    // This handles macOS re-signing issues during development.
+                    if cfg!(debug_assertions) {
+                        if let Ok(app_dir) = app.path().app_data_dir() {
+                            let path = app_dir.join("tokens.dev.json");
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                if let Ok(map) =
+                                    serde_json::from_str::<HashMap<String, String>>(&content)
+                                {
+                                    if let Some(token) = map.get(&key) {
+                                        log::info!("Dev mode: loaded token from tokens.dev.json fallback for {}", key);
+                                        // Update in-memory cache
+                                        if let Ok(mut tokens) = self.tokens.lock() {
+                                            tokens.insert(key.clone(), token.clone());
+                                        }
+                                        return Some(token.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     None
                 }
                 Err(e) => {

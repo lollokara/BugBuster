@@ -25,6 +25,7 @@ extern "C" void register_cmds_hat(void);
 extern "C" void register_cmds_ext_bus(void);
 extern "C" void register_cmds_wifi(void);
 extern "C" void register_cmds_misc(void);
+extern "C" void register_cmds_ota(void);
 // Slice 5 subsystems
 extern "C" void register_cmds_streaming(void);
 extern "C" void register_cmds_script(void);
@@ -77,6 +78,7 @@ void cmd_registry_init(void)
     register_cmds_ext_bus();
     register_cmds_wifi();
     register_cmds_misc();
+    register_cmds_ota();
     // Slice 5 subsystems
     register_cmds_streaming();
     register_cmds_script();

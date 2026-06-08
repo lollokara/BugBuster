@@ -1,15 +1,21 @@
 #![allow(dead_code)]
 
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
 
 /// IO ownership slots claimed by the DIN tab (IO1..IO12 → indices 0..11).
 pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 const DEBOUNCE_OPTIONS: &[(u8, &str)] = &[
-    (0, "None"), (1, "1ms"), (2, "2ms"), (3, "4ms"),
-    (4, "8ms"), (5, "16ms"), (6, "32ms"), (7, "64ms"),
+    (0, "None"),
+    (1, "1ms"),
+    (2, "2ms"),
+    (3, "4ms"),
+    (4, "8ms"),
+    (5, "16ms"),
+    (6, "32ms"),
+    (7, "64ms"),
 ];
 
 #[derive(Serialize)]
@@ -27,9 +33,16 @@ struct DinConfigArgs {
 
 fn send_din_config(ch: u8, thresh: u8, debounce: u8, oc_det: bool, sc_det: bool) {
     let args = serde_wasm_bindgen::to_value(&DinConfigArgs {
-        channel: ch, thresh, thresh_mode: false, debounce,
-        sink: 0, sink_range: false, oc_det, sc_det,
-    }).unwrap();
+        channel: ch,
+        thresh,
+        thresh_mode: false,
+        debounce,
+        sink: 0,
+        sink_range: false,
+        oc_det,
+        sc_det,
+    })
+    .unwrap();
     let label = format!("Set CH {} DIN config", CH_NAMES[ch as usize]);
     invoke_with_feedback("set_din_config", args, &label);
 }
@@ -37,10 +50,30 @@ fn send_din_config(ch: u8, thresh: u8, debounce: u8, oc_det: bool, sc_det: bool)
 #[component]
 pub fn DinTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Local config state per channel (firmware doesn't report these back)
-    let thresh = [RwSignal::new(64u8), RwSignal::new(64u8), RwSignal::new(64u8), RwSignal::new(64u8)];
-    let debounce = [RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8), RwSignal::new(0u8)];
-    let oc_det = [RwSignal::new(false), RwSignal::new(false), RwSignal::new(false), RwSignal::new(false)];
-    let sc_det = [RwSignal::new(false), RwSignal::new(false), RwSignal::new(false), RwSignal::new(false)];
+    let thresh = [
+        RwSignal::new(64u8),
+        RwSignal::new(64u8),
+        RwSignal::new(64u8),
+        RwSignal::new(64u8),
+    ];
+    let debounce = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
+    let oc_det = [
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+    ];
+    let sc_det = [
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+    ];
 
     view! {
         <div class="tab-content">

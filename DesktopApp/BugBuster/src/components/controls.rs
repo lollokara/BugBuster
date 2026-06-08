@@ -45,7 +45,11 @@ pub fn Toggle(
     #[prop(default = "")] label_off: &'static str,
     #[prop(default = "")] label_on: &'static str,
 ) -> impl IntoView {
-    let off = if label_off.is_empty() { "Off" } else { label_off };
+    let off = if label_off.is_empty() {
+        "Off"
+    } else {
+        label_off
+    };
     let on = if label_on.is_empty() { "On" } else { label_on };
     view! {
         <label class="toggle-wrap">

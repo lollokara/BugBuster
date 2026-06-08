@@ -3,59 +3,79 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
-use crate::tauri_bridge::*;
-use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, hv_io::*, faults::*, gpio::*, din::*, dout::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, usbpd::*, ioexp::*, hat::*, la::*};
-use crate::components::io_blocked_banner::IoBlockedBanner;
 use crate::components::connection::ConnectionPanel;
+use crate::components::io_blocked_banner::IoBlockedBanner;
+use crate::tabs::{
+    adc::*, board::*, diag::*, din::*, dout::*, faults::*, gpio::*, hat::*, hv_io::*, idac::*,
+    iin::*, ioexp::*, la::*, overview::*, scope::*, signal_path::*, uart::*, usbpd::*, vdac::*,
+    voltages::*, wavegen::*,
+};
+use crate::tauri_bridge::*;
 
 /// Map a tab id to its IO slot footprint. Returns an empty slice if the tab does not claim IOs.
 fn tab_slots(tab_id: &str) -> &'static [u8] {
     match tab_id {
-        "adc"      => crate::tabs::adc::SLOTS,
-        "vdac"     => crate::tabs::vdac::SLOTS,
-        "gpio"     => crate::tabs::gpio::SLOTS,
-        "din"      => crate::tabs::din::SLOTS,
-        "dout"     => crate::tabs::dout::SLOTS,
-        "scope"    => crate::tabs::scope::SLOTS,
-        "wavegen"  => crate::tabs::wavegen::SLOTS,
-        "sigpath"  => crate::tabs::signal_path::SLOTS,
+        "adc" => crate::tabs::adc::SLOTS,
+        "vdac" => crate::tabs::vdac::SLOTS,
+        "gpio" => crate::tabs::gpio::SLOTS,
+        "din" => crate::tabs::din::SLOTS,
+        "dout" => crate::tabs::dout::SLOTS,
+        "scope" => crate::tabs::scope::SLOTS,
+        "wavegen" => crate::tabs::wavegen::SLOTS,
+        "sigpath" => crate::tabs::signal_path::SLOTS,
         "voltages" => crate::tabs::voltages::SLOTS,
-        _          => &[],
+        _ => &[],
     }
 }
 
 const CATEGORIES: &[(&str, &str, &[(&str, &str)])] = &[
-    ("overview_cat", "Overview", &[
-        ("overview", "Dashboard"),
-        ("board", "Board Map"),
-        ("voltages", "Voltages & Cal"),
-        ("faults", "Faults"),
-        ("diag", "Diagnostics"),
-    ]),
-    ("analog_cat", "Analog", &[
-        ("adc", "ADC"),
-        ("vdac", "VDAC"),
-        ("idac", "IDAC"),
-        ("iin", "IIN"),
-    ]),
-    ("digital_cat", "Digital", &[
-        ("gpio", "GPIO"),
-        ("din", "DIN"),
-        ("dout", "DOUT"),
-        ("hv_io", "HV IO"),
-        ("ioexp", "IO Expander"),
-    ]),
-    ("instruments_cat", "Instruments", &[
-        ("scope", "Scope"),
-        ("la", "Logic Analyzer"),
-        ("wavegen", "WaveGen"),
-        ("sigpath", "Signal Path"),
-    ]),
-    ("system_cat", "System", &[
-        ("hat", "HAT"),
-        ("usbpd", "USB PD"),
-        ("uart", "UART"),
-    ]),
+    (
+        "overview_cat",
+        "Overview",
+        &[
+            ("overview", "Dashboard"),
+            ("board", "Board Map"),
+            ("voltages", "Voltages & Cal"),
+            ("faults", "Faults"),
+            ("diag", "Diagnostics"),
+        ],
+    ),
+    (
+        "analog_cat",
+        "Analog",
+        &[
+            ("adc", "ADC"),
+            ("vdac", "VDAC"),
+            ("idac", "IDAC"),
+            ("iin", "IIN"),
+        ],
+    ),
+    (
+        "digital_cat",
+        "Digital",
+        &[
+            ("gpio", "GPIO"),
+            ("din", "DIN"),
+            ("dout", "DOUT"),
+            ("hv_io", "HV IO"),
+            ("ioexp", "IO Expander"),
+        ],
+    ),
+    (
+        "instruments_cat",
+        "Instruments",
+        &[
+            ("scope", "Scope"),
+            ("la", "Logic Analyzer"),
+            ("wavegen", "WaveGen"),
+            ("sigpath", "Signal Path"),
+        ],
+    ),
+    (
+        "system_cat",
+        "System",
+        &[("hat", "HAT"), ("usbpd", "USB PD"), ("uart", "UART")],
+    ),
 ];
 
 #[component]
@@ -244,9 +264,13 @@ pub fn App() -> impl IntoView {
             let event: web_sys::CustomEvent = event.unchecked_into();
             if let Some(detail) = event.detail().dyn_ref::<js_sys::Object>() {
                 let msg = js_sys::Reflect::get(detail, &"msg".into())
-                    .ok().and_then(|v| v.as_string()).unwrap_or_default();
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_default();
                 let kind = js_sys::Reflect::get(detail, &"kind".into())
-                    .ok().and_then(|v| v.as_string()).unwrap_or_else(|| "info".into());
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_else(|| "info".into());
                 let now = js_sys::Date::now();
                 // Errors persist longer (10 s) so users can actually read them;
                 // other toasts auto-dismiss after 3 s as before.
@@ -254,13 +278,19 @@ pub fn App() -> impl IntoView {
                 set_toasts.update(|t| {
                     t.push((msg, kind, now));
                     // Keep max 5 toasts
-                    if t.len() > 5 { t.remove(0); }
+                    if t.len() > 5 {
+                        t.remove(0);
+                    }
                 });
                 let set_t = set_toasts;
                 spawn_local(async move {
                     let promise = js_sys::Promise::new(&mut |resolve, _| {
                         if let Some(w) = web_sys::window() {
-                            w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, dismiss_ms as i32).ok();
+                            w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                                &resolve,
+                                dismiss_ms as i32,
+                            )
+                            .ok();
                         } else {
                             web_sys::console::warn_1(&"toast dismiss: window unavailable".into());
                         }
@@ -273,7 +303,9 @@ pub fn App() -> impl IntoView {
             }
         });
         if let Some(window) = web_sys::window() {
-            window.add_event_listener_with_callback("bb-toast", closure.as_ref().unchecked_ref()).ok();
+            window
+                .add_event_listener_with_callback("bb-toast", closure.as_ref().unchecked_ref())
+                .ok();
         }
         // INTENTIONAL: app-lifetime listener — do not cleanup
         closure.forget();
@@ -283,8 +315,10 @@ pub fn App() -> impl IntoView {
     let scan = move |_: ev::MouseEvent| {
         set_scanning.set(true);
         spawn_local(async move {
-            let result = invoke("discover_devices", JsValue::NULL).await;
-            if let Ok(devs) = serde_wasm_bindgen::from_value::<Vec<DiscoveredDevice>>(result) {
+            let result = try_invoke("discover_devices", JsValue::NULL).await;
+            if let Some(devs) =
+                result.and_then(|r| serde_wasm_bindgen::from_value::<Vec<DiscoveredDevice>>(r).ok())
+            {
                 set_devices.set(devs);
             }
             set_scanning.set(false);
@@ -292,14 +326,18 @@ pub fn App() -> impl IntoView {
             if let Some(window) = web_sys::window() {
                 let update_fn = js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
                 if update_fn.is_function() {
-                    let _ = update_fn.unchecked_into::<js_sys::Function>().call1(&window, &true.into());
+                    let _ = update_fn
+                        .unchecked_into::<js_sys::Function>()
+                        .call1(&window, &true.into());
                 }
             }
         });
     };
 
     let disconnect = move |_: ev::MouseEvent| {
-        spawn_local(async move { invoke("disconnect_device", JsValue::NULL).await; });
+        spawn_local(async move {
+            try_invoke("disconnect_device", JsValue::NULL).await;
+        });
         set_conn_mode.set("Disconnected".to_string());
         set_conn_addr.set(String::new());
         set_device_state.set(DeviceState::default());
@@ -332,9 +370,18 @@ pub fn App() -> impl IntoView {
     // Listen for protocol version mismatch
     spawn_local(async move {
         let closure = Closure::new(move |event: JsValue| {
-            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event) {
-                let dev_ver = evt.payload.get("device_version").and_then(|v| v.as_u64()).unwrap_or(0);
-                let exp_ver = evt.payload.get("expected_version").and_then(|v| v.as_u64()).unwrap_or(0);
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event)
+            {
+                let dev_ver = evt
+                    .payload
+                    .get("device_version")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let exp_ver = evt
+                    .payload
+                    .get("expected_version")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 let msg = format!("Protocol mismatch: device v{}, app v{}. Some features may not work. Consider updating firmware.", dev_ver, exp_ver);
                 // Dispatch toast event
                 if let Some(window) = web_sys::window() {
@@ -343,10 +390,9 @@ pub fn App() -> impl IntoView {
                     let _ = js_sys::Reflect::set(&detail, &"kind".into(), &"err".into());
                     let init = web_sys::CustomEventInit::new();
                     init.set_detail(&detail);
-                    if let Ok(evt) = web_sys::CustomEvent::new_with_event_init_dict(
-                        "bb-toast",
-                        &init,
-                    ) {
+                    if let Ok(evt) =
+                        web_sys::CustomEvent::new_with_event_init_dict("bb-toast", &init)
+                    {
                         let _ = window.dispatch_event(&evt);
                     }
                 }
@@ -360,8 +406,13 @@ pub fn App() -> impl IntoView {
     // Listen for pairing-required (HTTP connect attempt without cached token)
     spawn_local(async move {
         let closure = Closure::new(move |event: JsValue| {
-            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event) {
-                let mac = evt.payload.get("mac").and_then(|v| v.as_str()).unwrap_or("unknown");
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event)
+            {
+                let mac = evt
+                    .payload
+                    .get("mac")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
                 let msg = format!("Secure pairing required for device {}. Please connect via USB once to authorize this computer.", mac);
                 if let Some(window) = web_sys::window() {
                     let detail = js_sys::Object::new();
@@ -369,7 +420,9 @@ pub fn App() -> impl IntoView {
                     let _ = js_sys::Reflect::set(&detail, &"kind".into(), &"err".into());
                     let init = web_sys::CustomEventInit::new();
                     init.set_detail(&detail);
-                    if let Ok(evt) = web_sys::CustomEvent::new_with_event_init_dict("bb-toast", &init) {
+                    if let Ok(evt) =
+                        web_sys::CustomEvent::new_with_event_init_dict("bb-toast", &init)
+                    {
                         let _ = window.dispatch_event(&evt);
                     }
                 }
@@ -392,16 +445,28 @@ pub fn App() -> impl IntoView {
                         0 => format!("E-Fuse {} tripped — output disabled!", channel + 1),
                         1 => format!("E-Fuse {} fault cleared", channel + 1),
                         2 => {
-                            let name = match channel { 0 => "Logic", 1 => "VADJ1", _ => "VADJ2" };
+                            let name = match channel {
+                                0 => "Logic",
+                                1 => "VADJ1",
+                                _ => "VADJ2",
+                            };
                             format!("{} power-good LOST!", name)
                         }
                         3 => {
-                            let name = match channel { 0 => "Logic", 1 => "VADJ1", _ => "VADJ2" };
+                            let name = match channel {
+                                0 => "Logic",
+                                1 => "VADJ1",
+                                _ => "VADJ2",
+                            };
                             format!("{} power-good restored", name)
                         }
                         _ => format!("PCA fault type={} ch={}", fault_type, channel),
                     };
-                    let kind = if fault_type == 0 || fault_type == 2 { "err" } else { "ok" };
+                    let kind = if fault_type == 0 || fault_type == 2 {
+                        "err"
+                    } else {
+                        "ok"
+                    };
                     show_toast(&msg, kind);
                 }
             }
@@ -417,12 +482,17 @@ pub fn App() -> impl IntoView {
     // without waiting for the next tab-mount claim attempt.
     spawn_local(async move {
         let closure = Closure::new(move |event: JsValue| {
-            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event) {
-                let slot = evt.payload.get("slot")
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<serde_json::Value>>(event)
+            {
+                let slot = evt
+                    .payload
+                    .get("slot")
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u8)
                     .unwrap_or(0xFF);
-                let kind = evt.payload.get("current_owner_kind")
+                let kind = evt
+                    .payload
+                    .get("current_owner_kind")
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u8)
                     .unwrap_or(0);
@@ -450,15 +520,19 @@ pub fn App() -> impl IntoView {
     // Auto-scan
     spawn_local(async move {
         slp(2000).await;
-        let result = invoke("discover_devices", JsValue::NULL).await;
-        if let Ok(devs) = serde_wasm_bindgen::from_value::<Vec<DiscoveredDevice>>(result) {
+        let result = try_invoke("discover_devices", JsValue::NULL).await;
+        if let Some(devs) =
+            result.and_then(|r| serde_wasm_bindgen::from_value::<Vec<DiscoveredDevice>>(r).ok())
+        {
             set_devices.set(devs);
         }
         set_scan_completed.set(true);
         if let Some(window) = web_sys::window() {
             let update_fn = js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
             if update_fn.is_function() {
-                let _ = update_fn.unchecked_into::<js_sys::Function>().call1(&window, &true.into());
+                let _ = update_fn
+                    .unchecked_into::<js_sys::Function>()
+                    .call1(&window, &true.into());
             }
         }
     });
@@ -514,26 +588,26 @@ pub fn App() -> impl IntoView {
                                     }}
                                     <button class="btn btn-ghost btn-xs" on:click=move |_| {
                                         spawn_local(async move {
-                                            let result = invoke("pick_config_save_file", JsValue::NULL).await;
-                                            if let Ok(Some(path)) = serde_wasm_bindgen::from_value::<Option<String>>(result) {
+                                            let result = try_invoke("pick_config_save_file", JsValue::NULL).await;
+                                            if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
                                                 if !path.is_empty() {
                                                     #[derive(serde::Serialize)]
                                                     struct Args { path: String }
                                                     let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
-                                                    let _ = invoke("export_config", args).await;
+                                                    let _ = try_invoke("export_config", args).await;
                                                 }
                                             }
                                         });
                                     }>"Export"</button>
                                     <button class="btn btn-ghost btn-xs" on:click=move |_| {
                                         spawn_local(async move {
-                                            let result = invoke("pick_config_open_file", JsValue::NULL).await;
-                                            if let Ok(Some(path)) = serde_wasm_bindgen::from_value::<Option<String>>(result) {
+                                            let result = try_invoke("pick_config_open_file", JsValue::NULL).await;
+                                            if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
                                                 if !path.is_empty() {
                                                     #[derive(serde::Serialize)]
                                                     struct Args { path: String }
                                                     let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
-                                                    let _ = invoke("import_config", args).await;
+                                                    let _ = try_invoke("import_config", args).await;
                                                 }
                                             }
                                         });
@@ -581,7 +655,7 @@ pub fn App() -> impl IntoView {
                             .find(|(cat_id, _, _)| **cat_id == cat)
                             .map(|(_, _, t)| *t)
                             .unwrap_or(&[]);
-                        
+
                         tabs.iter().map(|(id, label)| {
                             let id_str = id.to_string();
                             let id_click = id_str.clone();
@@ -655,12 +729,11 @@ pub fn App() -> impl IntoView {
     }
 }
 
-
-
 async fn slp(ms: u32) {
     let p = js_sys::Promise::new(&mut |r, _| {
         if let Some(w) = web_sys::window() {
-            w.set_timeout_with_callback_and_timeout_and_arguments_0(&r, ms as i32).ok();
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(&r, ms as i32)
+                .ok();
         } else {
             web_sys::console::warn_1(&"slp: window unavailable, timeout will not fire".into());
         }
@@ -685,9 +758,10 @@ pub struct OtaContext {
 
 fn parse_version(v: &str) -> Vec<u32> {
     let clean = v.trim_start_matches('v');
-    clean.split('.')
-         .map(|s| s.parse::<u32>().unwrap_or(0))
-         .collect()
+    clean
+        .split('.')
+        .map(|s| s.parse::<u32>().unwrap_or(0))
+        .collect()
 }
 
 pub fn is_version_newer(current: &str, latest: &str) -> bool {

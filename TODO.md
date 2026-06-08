@@ -35,6 +35,8 @@
 
 - **Expose and Map HAT Power Commands over HTTP** — Implement `GET /api/hat/power` and `POST /api/hat/power` in [webserver.cpp](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/Firmware/ESP32/src/web/webserver.cpp) to query/toggle HAT rail power.
 
+- **SPIFFS OTA over WiFi and USB** — Add a first-class OTA flow for the SPIFFS partition over both transports, including upload, integrity verification, progress reporting, and final apply/reboot handling. Desktop and firmware currently cover firmware OTA, but SPIFFS still needs the same WiFi + USB path.
+
 ### ⏳ Deferred
 
 - **HVPAK controls** — command IDs `0xCC–0xEA` are protocol-defined and stubbed in ESP32/Python/Desktop, but the feature is not yet a release target. Allowlisted in `tests/unit/test_hat_parity.py`.  

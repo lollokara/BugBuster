@@ -1,24 +1,36 @@
 //! Unified HV IO tab — each of the 4 channel tiles has its own independent
 //! In/Out mode selector. Compact layout so 2x2 tiles fit in a 1400x900 window
 //! without scrolling.
+use crate::components::channel_sparkline::ChannelSparkline;
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
-use crate::components::channel_sparkline::ChannelSparkline;
 
 const SPARK_CAP: usize = 120;
 
 const DEBOUNCE_OPTIONS: &[(u8, &str)] = &[
-    (0, "None"), (1, "1ms"), (2, "2ms"), (3, "4ms"),
-    (4, "8ms"), (5, "16ms"), (6, "32ms"), (7, "64ms"),
+    (0, "None"),
+    (1, "1ms"),
+    (2, "2ms"),
+    (3, "4ms"),
+    (4, "8ms"),
+    (5, "16ms"),
+    (6, "32ms"),
+    (7, "64ms"),
 ];
 
 const DO_MODE_OPTIONS: &[(u8, &str)] = &[
-    (0, "High-Z"), (1, "Push-Pull"), (2, "Open Drain"), (3, "Push-Pull HART"),
+    (0, "High-Z"),
+    (1, "Push-Pull"),
+    (2, "Open Drain"),
+    (3, "Push-Pull HART"),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum HvMode { Din, Dout }
+pub enum HvMode {
+    Din,
+    Dout,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,9 +47,16 @@ struct DinConfigArgs {
 
 fn send_din_config(ch: u8, thresh: u8, debounce: u8, oc_det: bool, sc_det: bool) {
     let args = serde_wasm_bindgen::to_value(&DinConfigArgs {
-        channel: ch, thresh, thresh_mode: false, debounce,
-        sink: 0, sink_range: false, oc_det, sc_det,
-    }).unwrap();
+        channel: ch,
+        thresh,
+        thresh_mode: false,
+        debounce,
+        sink: 0,
+        sink_range: false,
+        oc_det,
+        sc_det,
+    })
+    .unwrap();
     let label = format!("Set CH {} DIN config", CH_NAMES[ch as usize]);
     invoke_with_feedback("set_din_config", args, &label);
 }
@@ -54,8 +73,13 @@ struct DoConfigArgs {
 
 fn send_do_config(ch: u8, mode: u8, src_sel_gpio: bool, t1: u8, t2: u8) {
     let args = serde_wasm_bindgen::to_value(&DoConfigArgs {
-        channel: ch, mode, src_sel_gpio, t1, t2,
-    }).unwrap();
+        channel: ch,
+        mode,
+        src_sel_gpio,
+        t1,
+        t2,
+    })
+    .unwrap();
     let label = format!("Set CH {} DO config", CH_NAMES[ch as usize]);
     invoke_with_feedback("set_do_config", args, &label);
 }
@@ -66,16 +90,56 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let mode: [RwSignal<HvMode>; 4] = std::array::from_fn(|_| RwSignal::new(HvMode::Din));
 
     // DIN state (per channel)
-    let din_thresh   = [RwSignal::new(64u8),  RwSignal::new(64u8),  RwSignal::new(64u8),  RwSignal::new(64u8)];
-    let din_debounce = [RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8)];
-    let din_oc_det   = [RwSignal::new(false), RwSignal::new(false), RwSignal::new(false), RwSignal::new(false)];
-    let din_sc_det   = [RwSignal::new(false), RwSignal::new(false), RwSignal::new(false), RwSignal::new(false)];
+    let din_thresh = [
+        RwSignal::new(64u8),
+        RwSignal::new(64u8),
+        RwSignal::new(64u8),
+        RwSignal::new(64u8),
+    ];
+    let din_debounce = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
+    let din_oc_det = [
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+    ];
+    let din_sc_det = [
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+    ];
 
     // DOUT state (per channel)
-    let do_mode   = [RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8)];
-    let do_srcgp  = [RwSignal::new(false), RwSignal::new(false), RwSignal::new(false), RwSignal::new(false)];
-    let do_t1     = [RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8)];
-    let do_t2     = [RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8),   RwSignal::new(0u8)];
+    let do_mode = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
+    let do_srcgp = [
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+        RwSignal::new(false),
+    ];
+    let do_t1 = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
+    let do_t2 = [
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+        RwSignal::new(0u8),
+    ];
 
     // History of digital state as 0/1 floats (per channel) for the sparkline.
     let history: [RwSignal<Vec<f32>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
@@ -83,8 +147,20 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let ds = state.get();
         for (i, ch) in ds.channels.iter().enumerate().take(4) {
             let v = match mode[i].get() {
-                HvMode::Din  => if ch.din_state { 1.0_f32 } else { 0.0 },
-                HvMode::Dout => if ch.do_state  { 1.0_f32 } else { 0.0 },
+                HvMode::Din => {
+                    if ch.din_state {
+                        1.0_f32
+                    } else {
+                        0.0
+                    }
+                }
+                HvMode::Dout => {
+                    if ch.do_state {
+                        1.0_f32
+                    } else {
+                        0.0
+                    }
+                }
             };
             history[i].update(|buf| {
                 buf.push(v);

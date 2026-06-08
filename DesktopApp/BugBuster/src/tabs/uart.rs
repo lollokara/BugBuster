@@ -1,17 +1,27 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
 
-const BAUD_OPTIONS: &[u32] = &[300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+const BAUD_OPTIONS: &[u32] = &[
+    300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
+];
 const PARITY_OPTIONS: &[(u8, &str)] = &[(0, "None"), (1, "Odd"), (2, "Even")];
 const STOP_BITS_OPTIONS: &[(u8, &str)] = &[(0, "1"), (1, "1.5"), (2, "2")];
 
 // PCB IO terminal numbering -> ESP32 GPIO mapping.
 const UART_IO_MAP: &[(u8, u8)] = &[
-    (1, 4), (2, 2), (3, 1),
-    (4, 7), (5, 6), (6, 5),
-    (7, 8), (8, 9), (9, 10),
-    (10, 11), (11, 12), (12, 13),
+    (1, 4),
+    (2, 2),
+    (3, 1),
+    (4, 7),
+    (5, 6),
+    (6, 5),
+    (7, 8),
+    (8, 9),
+    (9, 10),
+    (10, 11),
+    (11, 12),
+    (12, 13),
 ];
 
 fn io_label_for_gpio(gpio: u8) -> String {
@@ -36,9 +46,7 @@ struct UartConfig {
 }
 
 #[component]
-pub fn UartTab(
-    uart_config: RwSignal<UartConfigState>,
-) -> impl IntoView {
+pub fn UartTab(uart_config: RwSignal<UartConfigState>) -> impl IntoView {
     let apply = move |_: leptos::ev::MouseEvent| {
         let cfg = uart_config.get();
         let args = serde_wasm_bindgen::to_value(&UartConfig {
@@ -51,7 +59,8 @@ pub fn UartTab(
             parity: cfg.parity,
             stop_bits: cfg.stop_bits,
             enabled: cfg.enabled,
-        }).unwrap();
+        })
+        .unwrap();
         let label = format!("Apply UART config: {} baud", cfg.baud);
         invoke_with_feedback("set_uart_config", args, &label);
     };

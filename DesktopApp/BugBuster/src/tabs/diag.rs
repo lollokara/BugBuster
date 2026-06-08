@@ -1,19 +1,33 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
 
 // ALERT_STATUS register (0x3F)
 const ALERT_BITS: &[(usize, &str, &str)] = &[
-    (0, "RESET", "amber"), (2, "SUPPLY_ERR", "rose"), (3, "SPI_ERR", "rose"),
-    (4, "TEMP_ALERT", "amber"), (5, "ADC_ERR", "rose"),
-    (8, "CH_A", "blue"), (9, "CH_B", "blue"), (10, "CH_C", "blue"), (11, "CH_D", "blue"),
-    (12, "HART_A", "amber"), (13, "HART_B", "amber"), (14, "HART_C", "amber"), (15, "HART_D", "amber"),
+    (0, "RESET", "amber"),
+    (2, "SUPPLY_ERR", "rose"),
+    (3, "SPI_ERR", "rose"),
+    (4, "TEMP_ALERT", "amber"),
+    (5, "ADC_ERR", "rose"),
+    (8, "CH_A", "blue"),
+    (9, "CH_B", "blue"),
+    (10, "CH_C", "blue"),
+    (11, "CH_D", "blue"),
+    (12, "HART_A", "amber"),
+    (13, "HART_B", "amber"),
+    (14, "HART_C", "amber"),
+    (15, "HART_D", "amber"),
 ];
 
 // SUPPLY_ALERT_STATUS register (0x57)
 const SUPPLY_BITS: &[(usize, &str, &str)] = &[
-    (0, "CAL_MEM", "amber"), (1, "AVSS", "rose"), (2, "DVCC", "rose"),
-    (3, "AVCC", "rose"), (4, "DO_VDD", "rose"), (5, "AVDD_LO", "rose"), (6, "AVDD_HI", "rose"),
+    (0, "CAL_MEM", "amber"),
+    (1, "AVSS", "rose"),
+    (2, "DVCC", "rose"),
+    (3, "AVCC", "rose"),
+    (4, "DO_VDD", "rose"),
+    (5, "AVDD_LO", "rose"),
+    (6, "AVDD_HI", "rose"),
 ];
 
 fn led_color(name: &str) -> &'static str {
@@ -242,8 +256,7 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 #[component]
 fn FirmwareSection() -> impl IntoView {
     let fw = RwSignal::new(FirmwareInfo::default());
-    let ota_ctx = use_context::<crate::app::OtaContext>()
-        .expect("OtaContext must be provided");
+    let ota_ctx = use_context::<crate::app::OtaContext>().expect("OtaContext must be provided");
 
     let git_releases = ota_ctx.git_releases;
     let esp32_current = ota_ctx.esp32_current_version;
@@ -261,6 +274,7 @@ fn FirmwareSection() -> impl IntoView {
     // Per-device version selection: each device independently picks from available releases
     let selected_esp32_tag = RwSignal::new(String::new());
     let selected_rp2040_tag = RwSignal::new(String::new());
+    let selected_spiffs_tag = RwSignal::new(String::new());
     let update_esp32 = RwSignal::new(true);
     let update_rp2040 = RwSignal::new(true);
 
@@ -271,10 +285,18 @@ fn FirmwareSection() -> impl IntoView {
     let manual_status = RwSignal::new(String::new());
     let manual_uploading = RwSignal::new(false);
 
+    // Alive flag for the subcomponent scope
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
+
     // Fetch firmware info
+    let alive_fw = alive.clone();
     leptos::task::spawn_local(async move {
         if let Some(info) = fetch_firmware_info().await {
-            fw.set(info);
+            if alive_fw.load(std::sync::atomic::Ordering::Relaxed) {
+                fw.set(info);
+            }
         }
     });
 
@@ -291,16 +313,35 @@ fn FirmwareSection() -> impl IntoView {
                 selected_rp2040_tag.set(r.tag.clone());
             }
         }
+        if selected_spiffs_tag.get_untracked().is_empty() {
+            if let Some(r) = releases.iter().find(|r| !r.spiffs_url.is_empty()) {
+                selected_spiffs_tag.set(r.tag.clone());
+            }
+        }
     });
 
     let selected_esp32_release = move || {
         let tag = selected_esp32_tag.get();
-        git_releases.get().into_iter().find(|r| r.tag == tag && !r.esp32_url.is_empty())
+        git_releases
+            .get()
+            .into_iter()
+            .find(|r| r.tag == tag && !r.esp32_url.is_empty())
     };
 
     let selected_rp2040_release = move || {
         let tag = selected_rp2040_tag.get();
-        git_releases.get().into_iter().find(|r| r.tag == tag && !r.rp2040_url.is_empty())
+        git_releases
+            .get()
+            .into_iter()
+            .find(|r| r.tag == tag && !r.rp2040_url.is_empty())
+    };
+
+    let selected_spiffs_release = move || {
+        let tag = selected_spiffs_tag.get();
+        git_releases
+            .get()
+            .into_iter()
+            .find(|r| r.tag == tag && !r.spiffs_url.is_empty())
     };
 
     // Auto-set checkboxes: enable if the selected version is newer than what's installed
@@ -308,8 +349,9 @@ fn FirmwareSection() -> impl IntoView {
         let esp_curr = esp32_current.get();
         if let Some(r) = selected_esp32_release() {
             update_esp32.set(
-                !esp_curr.is_empty() && !r.esp32_version.is_empty()
-                && crate::app::is_version_newer(&esp_curr, &r.esp32_version)
+                !esp_curr.is_empty()
+                    && !r.esp32_version.is_empty()
+                    && crate::app::is_version_newer(&esp_curr, &r.esp32_version),
             );
         }
     });
@@ -318,8 +360,9 @@ fn FirmwareSection() -> impl IntoView {
         let rp_curr = rp2040_current.get();
         if let Some(r) = selected_rp2040_release() {
             update_rp2040.set(
-                !rp_curr.is_empty() && !r.rp2040_version.is_empty()
-                && crate::app::is_version_newer(&rp_curr, &r.rp2040_version)
+                !rp_curr.is_empty()
+                    && !r.rp2040_version.is_empty()
+                    && crate::app::is_version_newer(&rp_curr, &r.rp2040_version),
             );
         }
     });
@@ -327,8 +370,16 @@ fn FirmwareSection() -> impl IntoView {
     let on_start_git_ota = move |_| {
         let up_esp = update_esp32.get();
         let up_rp = update_rp2040.get();
-        let esp_release = if up_esp { selected_esp32_release() } else { None };
-        let rp_release = if up_rp { selected_rp2040_release() } else { None };
+        let esp_release = if up_esp {
+            selected_esp32_release()
+        } else {
+            None
+        };
+        let rp_release = if up_rp {
+            selected_rp2040_release()
+        } else {
+            None
+        };
 
         if esp_release.is_none() && rp_release.is_none() {
             return;
@@ -352,15 +403,39 @@ fn FirmwareSection() -> impl IntoView {
 
         leptos::task::spawn_local(async move {
             if let Err(e) = start_desktop_ota(
-                up_rp,
-                up_esp,
-                rp_url,
-                rp_size,
-                rp_sha,
-                esp_url,
-                esp_size,
-                esp_sha,
-            ).await {
+                up_rp, up_esp, rp_url, rp_size, rp_sha, esp_url, esp_size, esp_sha,
+            )
+            .await
+            {
+                set_ota_active.set(false);
+                set_ota_error.set(Some(e));
+            }
+        });
+    };
+
+    let on_start_spiffs_ota = move |_| {
+        let release = selected_spiffs_release();
+        let Some(release) = release else {
+            return;
+        };
+
+        set_ota_active.set(true);
+        set_ota_success.set(false);
+        set_ota_error.set(None);
+        set_ota_progress.set(OtaProgress {
+            stage: "starting".to_string(),
+            percent: 0.0,
+            message: "Initializing SPIFFS update sequence...".to_string(),
+        });
+
+        leptos::task::spawn_local(async move {
+            if let Err(e) = start_desktop_spiffs_ota(
+                release.spiffs_url,
+                release.spiffs_size,
+                release.spiffs_sha256,
+            )
+            .await
+            {
                 set_ota_active.set(false);
                 set_ota_error.set(Some(e));
             }
@@ -564,6 +639,82 @@ fn FirmwareSection() -> impl IntoView {
                 </div>
             </div>
 
+            <div class="alert-panel" style="margin-top: 16px">
+                <div class="alert-panel-header">
+                    <div class="alert-panel-title">"SPIFFS UPDATE (GIT)"</div>
+                </div>
+                <div class="alert-panel-scanline supply-scanline"></div>
+                <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px">
+                    <div style="font-size: 10px; color: var(--text-dim); line-height: 1.6; font-family: 'JetBrains Mono', monospace">
+                        "Updates the ESP32 SPIFFS partition used by the web UI. The image comes from the ESP32 release assets and is applied over WiFi or USB."
+                    </div>
+                    {move || {
+                        let releases = git_releases.get();
+                        let spiffs_releases: Vec<_> = releases.iter().filter(|r| !r.spiffs_url.is_empty()).cloned().collect();
+                        if spiffs_releases.is_empty() {
+                            view! {
+                                <div style="font-size: 11px; color: var(--text-dim); padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px">
+                                    "No SPIFFS images available in the current release set."
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div style="display: flex; align-items: center; gap: 8px">
+                                    <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
+                                        <span>"SPIFFS"</span>
+                                    </label>
+                                    <select class="dropdown"
+                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
+                                        prop:value=move || selected_spiffs_tag.get()
+                                        on:change=move |ev| selected_spiffs_tag.set(event_target_value(&ev))
+                                    >
+                                        {spiffs_releases.into_iter().map(|r| {
+                                            let tag = r.tag.clone();
+                                            let label = if r.spiffs_version.is_empty() {
+                                                tag.clone()
+                                            } else {
+                                                format!("{} (v{})", tag, r.spiffs_version)
+                                            };
+                                            view! { <option value=tag>{label}</option> }
+                                        }).collect::<Vec<_>>()}
+                                    </select>
+                                    <button class="btn btn-sm btn-primary"
+                                        disabled=move || ota_active.get() || selected_spiffs_release().is_none()
+                                        on:click=on_start_spiffs_ota
+                                        style="white-space: nowrap"
+                                    >
+                                        {move || if ota_active.get() { "Updating..." } else { "Update SPIFFS" }}
+                                    </button>
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+                    {move || {
+                        if ota_active.get() {
+                            let prog = ota_progress.get();
+                            view! {
+                                <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
+                                    <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
+                                        <span style="color: var(--text-muted); text-transform: uppercase">{prog.stage}</span>
+                                        <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
+                                    </div>
+                                    <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
+                                        <div style:width=move || format!("{}%", ota_progress.get().percent)
+                                            style="height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)"
+                                        ></div>
+                                    </div>
+                                    <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">
+                                        {prog.message}
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <></> }.into_any()
+                        }
+                    }}
+                </div>
+            </div>
+
             // Collapsible Manual upload fallback
             <div style="margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--glass); overflow: hidden">
                 <button class="btn btn-ghost"
@@ -577,7 +728,7 @@ fn FirmwareSection() -> impl IntoView {
                 <Show when=move || show_manual.get()>
                     <div style="padding: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px">
                         <div style="font-size: 10px; color: var(--text-dim); line-height: 1.6; font-family: 'JetBrains Mono', monospace">
-                            "Directly upload a compiled firmware.bin (ESP32) to flash over WiFi. Choose this only for custom development builds."
+                            "Directly upload a compiled firmware.bin (ESP32) over WiFi or USB. Choose this only for custom development builds."
                         </div>
                         <div style="display: flex; gap: 8px; align-items: center">
                             <button class="btn btn-sm btn-ghost"
@@ -595,8 +746,8 @@ fn FirmwareSection() -> impl IntoView {
                                                 "filters": [{"name": "Firmware", "extensions": ["bin"]}]
                                             })
                                         ).unwrap();
-                                        let result = invoke("plugin:dialog|open", args).await;
-                                        let path: Option<String> = serde_wasm_bindgen::from_value(result).ok().flatten();
+                                        let result = try_invoke("plugin:dialog|open", args).await;
+                                        let path: Option<String> = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok().flatten());
 
                                         if let Some(p) = path {
                                             manual_status.set(format!("Uploading {}...", p.split('/').next_back().unwrap_or(&p)));
@@ -635,25 +786,42 @@ fn WifiSection() -> impl IntoView {
     let scan_results: RwSignal<Vec<WifiNetwork>> = RwSignal::new(Vec::new());
     let scanning = RwSignal::new(false);
 
+    // Alive flag for the subcomponent scope
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
+
     // Poll WiFi status every 2 seconds
+    let alive_poll = alive.clone();
     let poll = move || {
+        let alive = alive_poll.clone();
         leptos::task::spawn_local(async move {
             if let Some(ws) = fetch_wifi_status().await {
-                wifi.set(ws);
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    wifi.set(ws);
+                }
             }
         });
     };
     poll();
-    let _interval = leptos::prelude::set_interval_with_handle(
-        poll,
-        std::time::Duration::from_secs(2),
-    );
+    let handle =
+        leptos::prelude::set_interval_with_handle(poll, std::time::Duration::from_secs(2)).ok();
+    on_cleanup(move || {
+        if let Some(h) = handle {
+            h.clear();
+        }
+    });
 
+    let alive_scan = alive.clone();
     let do_scan = move |_| {
+        let alive = alive_scan.clone();
         scanning.set(true);
         connect_status.set("Scanning...".to_string());
         leptos::task::spawn_local(async move {
             let results = fetch_wifi_scan().await;
+            if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             let count = results.len();
             if count > 0 && connect_ssid.get().is_empty() {
                 connect_ssid.set(results[0].ssid.clone());
@@ -663,15 +831,24 @@ fn WifiSection() -> impl IntoView {
             if count == 0 {
                 connect_status.set("No networks found".to_string());
             } else {
-                connect_status.set(format!("Found {} network{}", count, if count == 1 { "" } else { "s" }));
+                connect_status.set(format!(
+                    "Found {} network{}",
+                    count,
+                    if count == 1 { "" } else { "s" }
+                ));
             }
         });
     };
 
+    let alive_forget = alive.clone();
     let do_forget = move |_| {
+        let alive = alive_forget.clone();
         connect_status.set("Clearing credentials...".to_string());
         leptos::task::spawn_local(async move {
             let ok = crate::tauri_bridge::wifi_forget().await;
+            if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
             connect_status.set(if ok {
                 "Credentials cleared".to_string()
             } else {
@@ -777,8 +954,8 @@ fn WifiSection() -> impl IntoView {
                                 let args = serde_wasm_bindgen::to_value(
                                     &Args { ssid: ssid.clone(), password: pass }
                                 ).unwrap();
-                                let result = invoke("wifi_connect", args).await;
-                                let ok: bool = serde_wasm_bindgen::from_value(result).unwrap_or(false);
+                                let result = try_invoke("wifi_connect", args).await;
+                                let ok: bool = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok()).unwrap_or(false);
                                 if ok {
                                     connect_status.set(format!("Connected to {}", ssid));
                                 } else {

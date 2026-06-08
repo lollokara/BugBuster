@@ -26,7 +26,7 @@ extern "C" {
 #define BBP_PROTO_VERSION       8
 
 #define BBP_FW_VERSION_MAJOR    3
-#define BBP_FW_VERSION_MINOR    3
+#define BBP_FW_VERSION_MINOR    4
 #define BBP_FW_VERSION_PATCH    0
 
 // Handshake magic bytes: 0xBB 'B' 'U' 'G'
@@ -255,6 +255,7 @@ extern "C" {
 #define BBP_CMD_GET_ADMIN_TOKEN 0x74  // Retrieve derived admin token (USB only)
 #define BBP_CMD_EXT_JOB_SUBMIT  0x75  // Queue deferred external I2C/SPI operation
 #define BBP_CMD_EXT_JOB_GET     0x76  // Poll deferred external I2C/SPI operation
+#define BBP_CMD_OTA             0x77  // USB OTA info/upload/rollback control
 #define BBP_CMD_PING            0xFE
 #define BBP_CMD_DISCONNECT      0xFF
 

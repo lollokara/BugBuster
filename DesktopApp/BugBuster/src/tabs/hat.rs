@@ -1,11 +1,11 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::collections::VecDeque;
 use std::time::Duration;
-use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
-use crate::tauri_bridge::*;
 
 // ── Local helpers ─────────────────────────────────────────────────────────────
 
@@ -23,13 +23,13 @@ fn HatPill(label: &'static str, ok: bool, value: String) -> impl IntoView {
 
 #[component]
 pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
-    let (hat, set_hat)   = signal(HatStatus::default());
+    let (hat, set_hat) = signal(HatStatus::default());
     let (caps, set_caps) = signal(None::<HatCaps>);
     let (la_route, set_la_route_sig) = signal(0u8);
 
     let (io_dirs, set_io_dirs) = signal(0u8);
-    let (io_ups,  set_io_ups)  = signal(0u8);
-    let (io_dns,  set_io_dns)  = signal(0u8);
+    let (io_ups, set_io_ups) = signal(0u8);
+    let (io_dns, set_io_dns) = signal(0u8);
 
     let (ls_oe, set_ls_oe) = signal(false);
     let (ls_dir, set_ls_dir) = signal(false);
@@ -39,17 +39,30 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (uart_errors, _set_uart_errors) = signal(0u8);
     let (is_usb, set_is_usb) = signal(true);
 
+    // Alive flag — flips false on tab unmount so background tasks stop safely.
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
+
     // ── hat-log Tauri event listener ─────────────────────────────────────────
+    let alive_log = alive.clone();
     Effect::new(move |_| {
         let log_lines = log_lines;
+        let alive = alive_log.clone();
         spawn_local(async move {
             let closure = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
+                if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
                 if let Some(payload) = js_sys::Reflect::get(&event, &JsValue::from_str("payload"))
-                    .ok().and_then(|v| v.as_string())
+                    .ok()
+                    .and_then(|v| v.as_string())
                 {
                     log_lines.update(|lines| {
                         lines.push_back(payload);
-                        if lines.len() > 200 { lines.pop_front(); }
+                        if lines.len() > 200 {
+                            lines.pop_front();
+                        }
                     });
                 }
             });
@@ -59,9 +72,14 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // ── Track USB vs HTTP transport ───────────────────────────────────────────
+    let alive_conn = alive.clone();
     Effect::new(move |_| {
+        let alive = alive_conn.clone();
         spawn_local(async move {
             let closure = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
+                if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
                 if let Some(payload) = js_sys::Reflect::get(&event, &JsValue::from_str("payload"))
                     .ok()
                     .and_then(|p| js_sys::Reflect::get(&p, &JsValue::from_str("mode")).ok())
@@ -76,22 +94,47 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // ── Initial fetch ─────────────────────────────────────────────────────────
+    let alive_init = alive.clone();
     Effect::new(move |_| {
         let _ = state.get();
+        let alive = alive_init.clone();
         spawn_local(async move {
-            if let Some(st) = fetch_hat_status().await { set_hat.set(st); }
-            if let Some(cp) = hat_get_caps().await     { set_caps.set(Some(cp)); }
+            if let Some(st) = fetch_hat_status().await {
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_hat.set(st);
+                }
+            }
+            if let Some(cp) = hat_get_caps().await {
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_caps.set(Some(cp));
+                }
+            }
         });
     });
 
     // ── 1 s status poll ───────────────────────────────────────────────────────
+    let alive_poll = alive.clone();
     Effect::new(move |_| {
-        let handle = leptos::prelude::set_interval_with_handle(move || {
-            spawn_local(async move {
-                if let Some(st) = fetch_hat_status().await { set_hat.set(st); }
-            });
-        }, Duration::from_secs(1)).ok();
-        on_cleanup(move || { if let Some(h) = handle { h.clear(); } });
+        let alive = alive_poll.clone();
+        let handle = leptos::prelude::set_interval_with_handle(
+            move || {
+                let alive = alive.clone();
+                spawn_local(async move {
+                    if let Some(st) = fetch_hat_status().await {
+                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                            set_hat.set(st);
+                        }
+                    }
+                });
+            },
+            Duration::from_secs(1),
+        )
+        .ok();
+        on_cleanup(move || {
+            if let Some(h) = handle {
+                h.clear();
+            }
+        });
     });
 
     view! {

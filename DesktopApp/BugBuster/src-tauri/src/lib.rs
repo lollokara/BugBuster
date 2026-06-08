@@ -89,7 +89,9 @@ pub fn run() {
             // Firmware / OTA
             commands::get_firmware_info,
             commands::ota_upload_firmware,
+            commands::ota_rollback,
             commands::fetch_github_releases,
+            commands::start_desktop_spiffs_ota,
             commands::start_desktop_ota,
             // DS4424 IDAC
             commands::idac_get_status,

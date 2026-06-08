@@ -35,34 +35,57 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let alive_poll = alive.clone();
     spawn_local(async move {
         loop {
-            if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) { break; }
+            if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             // Skip fetches when disconnected to avoid spamming failed BBP commands.
             let snap = state.get_untracked();
             if snap.spi_ok || !snap.channels.is_empty() {
                 if let Some(st) = fetch_selftest_status().await {
+                    if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     if worker_pending.get_untracked() {
                         // A toggle command is in flight — update boot/cal but
                         // don't overwrite the optimistic worker_enabled state.
-                        set_selftest.update(|s| { s.boot = st.boot; s.cal = st.cal; });
+                        set_selftest.update(|s| {
+                            s.boot = st.boot;
+                            s.cal = st.cal;
+                        });
                     } else {
                         set_selftest.set(st);
                     }
                 } else if let Some(enabled) = fetch_selftest_worker_enabled().await {
+                    if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     if !worker_pending.get_untracked() {
                         set_selftest.update(|s| s.worker_enabled = enabled);
                     }
                 }
+                if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
                 if selftest.get_untracked().worker_enabled {
                     if let Some(sup) = fetch_selftest_supplies_cached().await {
+                        if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
                         set_supplies.set(sup);
                     }
                 } else {
                     set_supplies.set(SelftestSuppliesCached::default());
                 }
                 if let Some(st) = fetch_idac_status().await {
+                    if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     set_idac.set(st);
                 }
                 if let Some(st) = fetch_pca_status().await {
+                    if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     set_ioexp.set(st);
                 }
             }

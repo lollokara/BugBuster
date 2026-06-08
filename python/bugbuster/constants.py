@@ -455,6 +455,7 @@ class CmdId(IntEnum):
     SET_SPI_CLOCK         = 0xE3
     WIFI_SCAN             = 0xE4
     WIFI_SET_AP_PASSWORD  = 0xEF  # Set SoftAP password (persist NVS, apply live)
+    OTA                   = 0x77  # USB OTA info/upload/rollback control
 
     # Quick Setup slots (NVS-backed snapshot store, 4 slots: 0..3)
     QS_LIST          = 0xF0  # list slots (returns occupied bitmap + per-slot summary hash)

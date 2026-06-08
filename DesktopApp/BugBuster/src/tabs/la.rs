@@ -130,10 +130,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // HAT / Signal Conditioning state (fetched on mount, hidden if no HAT)
     let (hat_detected, set_hat_detected) = signal(false);
-    let (hat_rails,    set_hat_rails)    = signal(Vec::<HatRailStatus>::new());
-    let (ls_oe,        set_ls_oe)        = signal(false);
-    let (ls_dir,       set_ls_dir)       = signal(false); // false = B→A (RP2040 listens)
-    let (la_route,     set_la_route_la)  = signal(0u8);   // 0 = Low-Speed, 1 = High-Speed
+    let (hat_rails, set_hat_rails) = signal(Vec::<HatRailStatus>::new());
+    let (ls_oe, set_ls_oe) = signal(false);
+    let (ls_dir, set_ls_dir) = signal(false); // false = B→A (RP2040 listens)
+    let (la_route, set_la_route_la) = signal(0u8); // 0 = Low-Speed, 1 = High-Speed
 
     // Decoder panel state
     let (decoder_panel_open, set_decoder_panel_open) = signal(false);
@@ -159,10 +159,14 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     leptos::prelude::Effect::new(move |_| {
         if stream_mode.get() {
             let ch_count: u8 = channels.get().parse().unwrap_or(4);
-            let max_rate = if ch_count <= 1 { 5000000 }
-                          else if ch_count == 2 { 2000000 }
-                          else { 1000000 };
-            
+            let max_rate = if ch_count <= 1 {
+                5000000
+            } else if ch_count == 2 {
+                2000000
+            } else {
+                1000000
+            };
+
             let current_rate: u32 = rate.get_untracked().parse().unwrap_or(1000000);
             if current_rate > max_rate {
                 set_rate.set(max_rate.to_string());
@@ -192,18 +196,31 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Canvas ref
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
+    // Alive flag — flips false on tab unmount so background tasks stop safely.
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
+
     // Listen for "la-done" event (capture complete notification from RP2040)
     {
         let set_ci2 = set_capture_info;
+        let alive = alive.clone();
         spawn_local(async move {
+            let alive_inner = alive.clone();
             let closure = Closure::new(move |_event: JsValue| {
+                if !alive_inner.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
                 show_toast("LA Capture complete!", "ok");
                 // Fetch capture info and update view
+                let alive_deep = alive_inner.clone();
                 spawn_local(async move {
                     if let Some(info) = la_get_capture_info().await {
-                        set_view_start.set(0);
-                        set_view_end.set(info.total_samples);
-                        set_ci2.set(Some(info));
+                        if alive_deep.load(std::sync::atomic::Ordering::Relaxed) {
+                            set_view_start.set(0);
+                            set_view_end.set(info.total_samples);
+                            set_ci2.set(Some(info));
+                        }
                     }
                 });
             });
@@ -215,26 +232,36 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Fetch view data when viewport or capture changes (streaming updates capture_info)
     let set_vd = set_view_data;
     let canvas_ref_fetch = canvas_ref;
+    let alive_view = alive.clone();
     Effect::new(move |_| {
         let vs = view_start.get();
         let ve = view_end.get();
         let _ci = capture_info.get(); // re-fetch when new data arrives during streaming
         let max_p = canvas_ref_fetch.get().map(|el| el.width() as usize);
+        let alive = alive_view.clone();
         spawn_local(async move {
             if let Some(data) = la_get_view(vs, ve, max_p).await {
-                set_vd.set(Some(data));
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_vd.set(Some(data));
+                }
             }
         });
     });
 
     // Fetch HAT capabilities and rail state once on mount
+    let alive_hat = alive.clone();
     Effect::new(move |_| {
+        let alive = alive_hat.clone();
         spawn_local(async move {
             if hat_get_caps().await.is_some() {
-                set_hat_detected.set(true);
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_hat_detected.set(true);
+                }
             }
             if let Some(rails) = hat_get_rail_status().await {
-                set_hat_rails.set(rails);
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_hat_rails.set(rails);
+                }
             }
         });
     });
@@ -244,8 +271,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let data = view_data.get();
         let cursor = cursor_sample.get();
         let fmt = ann_fmt.get(); // track format at top level so changes always redraw
-        // Stale-mount guard (Fix 1): a newer LaTab has taken over — skip render.
-        if render_epoch.get_untracked() != my_epoch { return; }
+                                 // Stale-mount guard (Fix 1): a newer LaTab has taken over — skip render.
+        if render_epoch.get_untracked() != my_epoch {
+            return;
+        }
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
@@ -1284,7 +1313,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             "uart" => {
                                 ch_names.insert(*ch_a, "TX".into());
                                 // Only register RX if it's enabled (extra = "baud,rxch")
-                                let has_rx = extra.split_once(',').map(|x| x.1)
+                                let has_rx = extra
+                                    .split_once(',')
+                                    .map(|x| x.1)
                                     .and_then(|s| s.parse::<u8>().ok())
                                     .is_some();
                                 if has_rx {
@@ -1497,7 +1528,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         {move || {
                             let is_stream = stream_mode.get();
                             let ch_count: u8 = channels.get().parse().unwrap_or(4);
-                            
+
                             let max_rate = if is_stream {
                                 if ch_count <= 1 { 5000000 }
                                 else if ch_count == 2 { 2000000 }
@@ -2002,8 +2033,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         #[serde(default, rename = "actualRateHz")]
                                         actual_rate_hz: u32,
                                     }
-                                    let result = invoke("la_get_status", JsValue::NULL).await;
-                                    if let Ok(st) = serde_wasm_bindgen::from_value::<StRsp>(result) {
+                                    let result = try_invoke("la_get_status", JsValue::NULL).await;
+                                    if let Some(st) = result.and_then(|r| serde_wasm_bindgen::from_value::<StRsp>(r).ok()) {
                                         let state = st.state.unwrap_or(255);
                                         if state == 3 {
                                             // DONE — auto-read data
@@ -2021,8 +2052,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 sample_rate_hz: if st.actual_rate_hz > 0 { st.actual_rate_hz } else { r },
                                                 total_samples: if st.samples_captured > 0 { st.samples_captured } else { d },
                                             }).unwrap();
-                                            let read_result = invoke("la_read_uart_chunks", args).await;
-                                            if let Ok(info) = serde_wasm_bindgen::from_value::<LaCaptureInfo>(read_result) {
+                                            let read_result = try_invoke("la_read_uart_chunks", args).await;
+                                            if let Some(info) = read_result.and_then(|r| serde_wasm_bindgen::from_value::<LaCaptureInfo>(r).ok()) {
                                                 set_view_start.set(0);
                                                 set_view_end.set(info.total_samples);
                                                 set_ci5.set(Some(info));
@@ -2097,16 +2128,16 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 let args = serde_wasm_bindgen::to_value(&Args {
                                     channels: ch, sample_rate_hz: r, total_samples: d,
                                 }).unwrap();
-                                let result = invoke("la_read_uart_chunks", args).await;
-                                match serde_wasm_bindgen::from_value::<LaCaptureInfo>(result) {
-                                    Ok(info) => {
+                                let result = try_invoke("la_read_uart_chunks", args).await;
+                                match result.and_then(|r| serde_wasm_bindgen::from_value::<LaCaptureInfo>(r).ok()) {
+                                    Some(info) => {
                                         set_view_start.set(0);
                                         set_view_end.set(info.total_samples);
                                         set_ci4.set(Some(info));
                                         show_toast("Capture data loaded!", "ok");
                                     }
-                                    Err(e) => {
-                                        show_toast(&format!("Read failed: {:?}", e), "err");
+                                    None => {
+                                        show_toast("Read failed", "err");
                                     }
                                 }
                             });
@@ -2251,12 +2282,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 let args = serde_wasm_bindgen::to_value(&Args {
                                     raw_data: raw, channels, sample_rate_hz: sample_rate
                                 }).unwrap();
-                                let result = invoke("la_load_raw", args).await;
+                                let result = try_invoke("la_load_raw", args).await;
 
                                 // Debug: log what we got back
                                 web_sys::console::log_1(&format!("la_load_raw result: {:?}", result).into());
 
-                                let total: u64 = serde_wasm_bindgen::from_value(result).unwrap_or(0);
+                                let total: u64 = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok()).unwrap_or(0);
 
                                 if total > 0 {
                                     set_view_start.set(0);
@@ -2676,8 +2707,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         title: "Export VCD".into(),
                                         filters: vec![Filter { name: "VCD files".into(), extensions: vec!["vcd".into()] }],
                                     }).unwrap();
-                                    let result = invoke("pick_save_file", args).await;
-                                    if let Some(path) = serde_wasm_bindgen::from_value::<Option<String>>(result).ok().flatten() {
+                                    let result = try_invoke("pick_save_file", args).await;
+                                    if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
                                         if !path.is_empty() {
                                             la_export_vcd(&path).await;
                                             show_toast("Exported VCD", "ok");
@@ -2697,8 +2728,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         title: "Export JSON".into(),
                                         filters: vec![Filter { name: "JSON files".into(), extensions: vec!["json".into()] }],
                                     }).unwrap();
-                                    let result = invoke("pick_save_file", args).await;
-                                    if let Some(path) = serde_wasm_bindgen::from_value::<Option<String>>(result).ok().flatten() {
+                                    let result = try_invoke("pick_save_file", args).await;
+                                    if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
                                         if !path.is_empty() {
                                             la_export_json(&path).await;
                                             show_toast("Exported JSON", "ok");
@@ -2720,8 +2751,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             title: "Import JSON".into(),
                                             filters: vec![Filter { name: "JSON files".into(), extensions: vec!["json".into()] }],
                                         }).unwrap();
-                                        let result = invoke("pick_config_open_file", args).await;
-                                        if let Some(path) = serde_wasm_bindgen::from_value::<Option<String>>(result).ok().flatten() {
+                                        let result = try_invoke("pick_config_open_file", args).await;
+                                        if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
                                             if !path.is_empty() {
                                                 if let Some(info) = la_import_json_file(&path).await {
                                                     set_view_start.set(0);

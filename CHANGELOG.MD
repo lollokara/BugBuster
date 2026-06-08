@@ -1,14 +1,18 @@
 # CHANGELOG
 
-## [Unreleased]
+## [1.3.0] — 2026-06-08
 
 ### Added
 
 #### ESP32 firmware
+- **USB OTA control command (0x77)**: New BBP command for firmware updates over USB. Implements `INFO` (read partition/version info), `BEGIN` (start upload with SHA-256 validation), `CHUNK` (960-byte data chunks), and `ROLLBACK` ops. Integrated with `update_manager` to support reliable USB-driven flashing of both ESP32 and RP2040. (`bbp.h`, `cmd_ota.cpp`)
+- **RP2040 Stage Helper**: New `update_manager_flash_rp2040_stage` function allows flashing a pre-staged RP2040 binary from SPIFFS without re-fetching a manifest, improving the "local upload" flow. (`update_manager.cpp`)
 - **WIFI_FORGET command (0x0A)**: New BBP command erases saved STA credentials (`sta_ssid` / `sta_pass`) from NVS and disconnects. Implemented in `wifi_manager.cpp` (`wifi_forget_credentials()`), registered in `cmd_wifi.cpp`, documented in `BugBusterProtocol.md`. Returns a bool indicating NVS erase success.
 - **RP2040 HTTP upload endpoint**: New `POST /api/ota/upload_rp2040` endpoint in `webserver.cpp` accepts a raw RP2040 `.bin` body (admin-gated, max 1 MB) and stages it to `/scripts/update-rp2040.bin` on SPIFFS for the update manager to pick up.
 
 #### Desktop app
+- **USB OTA Transport**: Added a dedicated `usb_upload_blob` flow that pushes firmware binaries directly over USB using the new BBP 0x77 command. Provides a robust fallback when the ESP32 is not on WiFi or has no internet access. (`commands.rs`)
+- **Robust Tauri Bridge**: Refactored `try_invoke` to use a standard `wasm-bindgen` bridge with the `catch` attribute. This eliminates the need for `js_sys::Function::new_with_args` and custom JS wrappers, providing a more efficient and stable path for Tauri commands that safely handles rejections and avoids re-entrancy panics in the WASM task executor. (`tauri_bridge.rs`)
 - **Desktop OTA from GitHub releases**: Full desktop-driven firmware update flow added. `fetch_github_releases` Tauri command queries the GitHub Releases API (up to 10 releases), downloads each release's `bugbuster-update-manifest.json` if present (with fallback to asset-name parsing), and returns `DesktopGitRelease` structs with per-component version, URL, size, and SHA-256. `start_desktop_ota` downloads RP2040 and ESP32 binaries from GitHub, verifies SHA-256, and pushes them to the device via `/api/ota/upload_rp2040` and `/api/ota/upload`. Progress is streamed to the frontend via `desktop-ota-progress` Tauri events. (`commands.rs`, `tauri_bridge.rs`)
 - **OTA per-device version picker**: The Firmware Update card in the Diagnostics tab shows independent version dropdowns for ESP32 Mainboard and RP2040 HAT. Each dropdown lists only releases that have a valid binary for that device, labelled as `<tag> (vX.Y.Z)`. Updates can target different releases per device in a single operation. Checkboxes auto-enable when the selected version is newer than installed firmware. (`diag.rs`)
 - **OTA context & "Update Available" badge**: App-level `OtaContext` provided to all components carries release list, current versions, progress, and error/success state. A pulsing "Update Available" button appears in the header status bar when any connected device has an older firmware than the latest GitHub release, linking directly to the Diagnostics tab. (`app.rs`, `styles.css`)
@@ -21,6 +25,8 @@
 ### Fixed
 
 #### Desktop app
+- **Reactive Disposal Panics**: Added `alive` guards (using `Arc<AtomicBool>` and `on_cleanup`) to `OverviewTab`, `VoltagesTab`, `HatTab`, `LaTab`, and `DiagTab`. These guards prevent async tasks from updating signals after a component is unmounted, which previously triggered "access to disposed reactive value" panics during tab navigation. (`overview.rs`, `voltages.rs`, etc.)
+- **WASM Task Executor Panic**: Replaced high-frequency `new_with_args` JS bridge with a native `extern "C" catch` bridge, resolving "RefCell already borrowed" errors in the WASM single-threaded task executor. (`tauri_bridge.rs`)
 - **WASM panic on network error**: All `tauri_bridge` fetch/status/LA/OTA functions were using the raw `invoke` extern which panics the WASM runtime when the underlying JS promise rejects (e.g. device unreachable, HTTP timeout). Converted every call site to `try_invoke`, which catches rejections and returns `None`/default instead. Affected: `fetch_wifi_status`, `fetch_wifi_scan`, `wifi_forget`, `fetch_firmware_info`, `fetch_idac_status`, `fetch_usbpd_status`, `fetch_pca_status`, `fetch_hat_status`, `upload_firmware`, `la_get_view`, `la_get_capture_info`, `la_export_vcd`, `la_export_json`, `la_import_json_file`, `la_decode_uart/i2c/spi`, `la_delete_range`. (`tauri_bridge.rs`)
 - **RP2040 OTA apply fails after upload**: After uploading the RP2040 binary to SPIFFS via `/api/ota/upload_rp2040`, the ESP32 httpd briefly stops accepting new connections while the filesystem write finalises, causing the immediate `/api/update/apply` POST to fail with a transport error. Fixed by adding an 800 ms pause after upload and retrying the apply request up to 3 times (2 s apart) on transport-level errors. HTTP error responses (4xx/5xx) are not retried. (`commands.rs`)
 - **OTA runtime crash**: `start_desktop_ota` was declared as a synchronous `pub fn` Tauri command. Calling `tokio::spawn` from a sync command handler panics with "no reactor running" because Tauri doesn't guarantee a Tokio runtime in that context. Changed to `pub async fn`. (`commands.rs`)
@@ -212,6 +218,14 @@
 ---
 
 ## [Unreleased — whole-repo audit] — 2026-05-11
+
+### Added
+
+#### Desktop app
+- **SPIFFS OTA section**: Added a dedicated Firmware Update subsection for the ESP32 SPIFFS partition. It now pulls `spiffs.bin` from the Git release asset list, supports WiFi and USB transports, and emits the same staged progress/status updates as the main firmware updater. (`diag.rs`, `commands.rs`, `tauri_bridge.rs`)
+
+#### CI
+- **SPIFFS release asset packaging**: The ESP32 release workflow now includes `spiffs.bin` in the flash zip and exposes it in `bugbuster-update-manifest.json`, so desktop OTA can fetch the filesystem image directly from GitHub releases. (`.github/workflows/release.yml`)
 
 Read-only audit across 10 surfaces of the repo (RP2040 fw, ESP32 fw core,
 ESP32 web UI, desktop Leptos, desktop Tauri/Rust, Python lib, MCP server,

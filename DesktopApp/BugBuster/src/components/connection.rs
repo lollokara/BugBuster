@@ -1,8 +1,8 @@
-use leptos::prelude::*;
+use crate::tauri_bridge::{log, show_toast, try_invoke, DiscoveredDevice};
 use leptos::ev;
+use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
-use crate::tauri_bridge::{DiscoveredDevice, invoke, try_invoke, log, show_toast};
 
 /// Floating particle network background for the connection screen.
 #[component]
@@ -10,8 +10,8 @@ fn ParticleBackground() -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
     spawn_local(async move {
-        use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
         use wasm_bindgen::JsCast;
+        use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
         // Wait for canvas to mount
         slp(50).await;
@@ -26,7 +26,9 @@ fn ParticleBackground() -> impl IntoView {
         {
             Some(c) => c,
             None => {
-                web_sys::console::warn_1(&"ParticleBackground: failed to get 2D canvas context".into());
+                web_sys::console::warn_1(
+                    &"ParticleBackground: failed to get 2D canvas context".into(),
+                );
                 return;
             }
         };
@@ -44,7 +46,13 @@ fn ParticleBackground() -> impl IntoView {
         const CONNECT_DIST: f64 = 140.0;
         const SPEED: f64 = 0.3;
 
-        struct P { x: f64, y: f64, vx: f64, vy: f64, r: f64 }
+        struct P {
+            x: f64,
+            y: f64,
+            vx: f64,
+            vy: f64,
+            r: f64,
+        }
 
         let mut particles: Vec<P> = Vec::with_capacity(NUM);
         // Seed with pseudo-random using simple LCG
@@ -89,10 +97,18 @@ fn ParticleBackground() -> impl IntoView {
             for p in particles.iter_mut() {
                 p.x += p.vx;
                 p.y += p.vy;
-                if p.x < 0.0 { p.x = w; }
-                if p.x > w { p.x = 0.0; }
-                if p.y < 0.0 { p.y = h; }
-                if p.y > h { p.y = 0.0; }
+                if p.x < 0.0 {
+                    p.x = w;
+                }
+                if p.x > w {
+                    p.x = 0.0;
+                }
+                if p.y < 0.0 {
+                    p.y = h;
+                }
+                if p.y > h {
+                    p.y = 0.0;
+                }
             }
 
             // Draw connections
@@ -157,19 +173,24 @@ pub fn ConnectionPanel(
                     let init_fn = js_sys::Reflect::get(&window, &"initSplash".into()).unwrap();
                     if init_fn.is_function() {
                         let _ = init_fn.unchecked_into::<js_sys::Function>().call0(&window);
-                        
+
                         // Set correct state in JS
-                        let update_fn = js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
+                        let update_fn =
+                            js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
                         if update_fn.is_function() {
-                            let _ = update_fn.unchecked_into::<js_sys::Function>().call1(&window, &scan_completed.get().into());
+                            let _ = update_fn
+                                .unchecked_into::<js_sys::Function>()
+                                .call1(&window, &scan_completed.get().into());
                         }
                         break;
                     }
                 }
-                
+
                 retries += 1;
                 if retries > 50 {
-                    web_sys::console::error_1(&"ConnectionPanel: initSplash not found after 5 seconds".into());
+                    web_sys::console::error_1(
+                        &"ConnectionPanel: initSplash not found after 5 seconds".into(),
+                    );
                     break;
                 }
                 slp(100).await;
@@ -181,7 +202,9 @@ pub fn ConnectionPanel(
             if let Some(window) = web_sys::window() {
                 let destroy_fn = js_sys::Reflect::get(&window, &"destroySplash".into()).unwrap();
                 if destroy_fn.is_function() {
-                    let _ = destroy_fn.unchecked_into::<js_sys::Function>().call0(&window);
+                    let _ = destroy_fn
+                        .unchecked_into::<js_sys::Function>()
+                        .call0(&window);
                 }
             }
         });
@@ -190,7 +213,10 @@ pub fn ConnectionPanel(
     let connect = move |device_id: String| {
         use serde::Serialize;
         #[derive(Serialize)]
-        struct Args { #[serde(rename = "deviceId")] device_id: String }
+        struct Args {
+            #[serde(rename = "deviceId")]
+            device_id: String,
+        }
         spawn_local(async move {
             log(&format!("Connecting to: {}", device_id));
             let args = serde_wasm_bindgen::to_value(&Args { device_id }).unwrap();
@@ -271,7 +297,8 @@ pub fn ConnectionPanel(
 async fn slp(ms: u32) {
     let p = js_sys::Promise::new(&mut |r, _| {
         if let Some(w) = web_sys::window() {
-            w.set_timeout_with_callback_and_timeout_and_arguments_0(&r, ms as i32).ok();
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(&r, ms as i32)
+                .ok();
         } else {
             web_sys::console::warn_1(&"slp: window unavailable, timeout will not fire".into());
         }

@@ -499,6 +499,177 @@ pub struct FirmwareInfo {
     pub next_partition: String,
 }
 
+const USB_OTA_TARGET_ESP32: u8 = 0;
+const USB_OTA_TARGET_RP2040: u8 = 1;
+const USB_OTA_TARGET_SPIFFS: u8 = 2;
+const USB_OTA_CHUNK_SIZE: usize = 960;
+const USB_OTA_OP_INFO: u8 = 0x01;
+const USB_OTA_OP_ROLLBACK: u8 = 0x02;
+const USB_OTA_OP_BEGIN: u8 = 0x10;
+const USB_OTA_OP_CHUNK: u8 = 0x11;
+
+fn firmware_info_from_json(json: &serde_json::Value) -> FirmwareInfo {
+    FirmwareInfo {
+        fw_version: format!(
+            "{}.{}.{}",
+            json.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0),
+            json.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0),
+            json.get("fwPatch").and_then(|v| v.as_u64()).unwrap_or(0)
+        ),
+        proto_version: json
+            .get("protoVersion")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u8,
+        build_date: format!(
+            "{} {}",
+            json.get("date").and_then(|v| v.as_str()).unwrap_or("?"),
+            json.get("time").and_then(|v| v.as_str()).unwrap_or("")
+        ),
+        idf_version: json
+            .get("idfVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        partition: json
+            .get("partition")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        next_partition: json
+            .get("nextPartition")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
+
+fn decode_hex_32(hex: &str) -> Result<[u8; 32], String> {
+    if hex.len() != 64 {
+        return Err("expected 64 hex chars".to_string());
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|e| format!("invalid sha256 hex: {}", e))?;
+    }
+    Ok(out)
+}
+
+async fn usb_send_ota_command(mgr: &ConnectionManager, payload: &[u8]) -> Result<Vec<u8>, String> {
+    mgr.send_command(bbp::CMD_OTA, payload)
+        .await
+        .map_err(map_err)
+}
+
+async fn usb_get_firmware_info(mgr: &ConnectionManager) -> Result<FirmwareInfo, String> {
+    let rsp = usb_send_ota_command(mgr, &[USB_OTA_OP_INFO]).await?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&rsp).map_err(|e| format!("USB OTA info parse failed: {}", e))?;
+    Ok(firmware_info_from_json(&json))
+}
+
+async fn usb_upload_blob(
+    app: Option<&tauri::AppHandle>,
+    mgr: &ConnectionManager,
+    target: u8,
+    data: &[u8],
+    start_pct: f32,
+    end_pct: f32,
+    label: &str,
+) -> Result<String, String> {
+    let sha = sha256_hex(data);
+    let sha_bytes = decode_hex_32(&sha)?;
+
+    if let Some(app) = app {
+        emit_progress(
+            app,
+            "uploading",
+            start_pct,
+            &format!("{}: preparing upload...", label),
+        );
+    }
+
+    let mut begin = PayloadWriter::new();
+    begin.put_u8(USB_OTA_OP_BEGIN);
+    begin.put_u8(target);
+    begin.put_u32(data.len() as u32);
+    begin.put_bool(true);
+    begin.buf.extend_from_slice(&sha_bytes);
+    usb_send_ota_command(mgr, &begin.buf).await?;
+
+    let mut offset = 0usize;
+    while offset < data.len() {
+        let chunk_len = std::cmp::min(USB_OTA_CHUNK_SIZE, data.len() - offset);
+        let final_chunk = offset + chunk_len == data.len();
+        let mut payload = PayloadWriter::new();
+        payload.put_u8(USB_OTA_OP_CHUNK);
+        payload.put_u8(target);
+        payload.put_u32(offset as u32);
+        payload.put_u16(chunk_len as u16);
+        payload.put_bool(final_chunk);
+        payload
+            .buf
+            .extend_from_slice(&data[offset..offset + chunk_len]);
+        usb_send_ota_command(mgr, &payload.buf).await?;
+        offset += chunk_len;
+
+        if let Some(app) = app {
+            let pct = if data.is_empty() {
+                end_pct
+            } else {
+                start_pct + (offset as f32 / data.len() as f32) * (end_pct - start_pct)
+            };
+            let stage = if final_chunk {
+                "finalizing"
+            } else {
+                "uploading"
+            };
+            emit_progress(
+                app,
+                stage,
+                pct.min(end_pct),
+                &format!("{}: {} / {} bytes", label, offset, data.len()),
+            );
+        }
+    }
+
+    if let Some(app) = app {
+        emit_progress(app, "done", end_pct, &format!("{} complete", label));
+    }
+
+    Ok(format!("Uploaded {} bytes over USB", data.len()))
+}
+
+async fn usb_ota_rollback(mgr: &ConnectionManager) -> Result<String, String> {
+    let rsp = usb_send_ota_command(mgr, &[USB_OTA_OP_ROLLBACK]).await?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&rsp).map_err(|e| format!("USB rollback parse failed: {}", e))?;
+    if json
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        Ok(json
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Rollback requested")
+            .to_string())
+    } else {
+        Err("USB rollback rejected".to_string())
+    }
+}
+
+fn is_usb_connection(mgr: &ConnectionManager) -> bool {
+    matches!(mgr.get_connection_status().mode, ConnectionMode::Usb)
+}
+
 #[tauri::command]
 pub async fn get_firmware_info(mgr: State<'_, ConnectionManager>) -> CmdResult<FirmwareInfo> {
     // Try HTTP endpoint first (richer info)
@@ -515,38 +686,12 @@ pub async fn get_firmware_info(mgr: State<'_, ConnectionManager>) -> CmdResult<F
             .map_err(|e| e.to_string())?;
         if resp.status().is_success() {
             let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            return Ok(FirmwareInfo {
-                fw_version: format!(
-                    "{}.{}.{}",
-                    json.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0),
-                    json.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0),
-                    json.get("fwPatch").and_then(|v| v.as_u64()).unwrap_or(0)
-                ),
-                proto_version: json
-                    .get("protoVersion")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u8,
-                build_date: format!(
-                    "{} {}",
-                    json.get("date").and_then(|v| v.as_str()).unwrap_or("?"),
-                    json.get("time").and_then(|v| v.as_str()).unwrap_or("")
-                ),
-                idf_version: json
-                    .get("idfVersion")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
-                    .to_string(),
-                partition: json
-                    .get("partition")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
-                    .to_string(),
-                next_partition: json
-                    .get("nextPartition")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
-                    .to_string(),
-            });
+            return Ok(firmware_info_from_json(&json));
+        }
+    }
+    if is_usb_connection(&mgr) {
+        if let Ok(info) = usb_get_firmware_info(&mgr).await {
+            return Ok(info);
         }
     }
     // Fallback: use handshake info from connection
@@ -568,6 +713,7 @@ pub async fn get_firmware_info(mgr: State<'_, ConnectionManager>) -> CmdResult<F
 #[tauri::command]
 pub async fn ota_upload_firmware(
     file_path: String,
+    app: tauri::AppHandle,
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<String> {
     // Read the firmware binary
@@ -583,19 +729,29 @@ pub async fn ota_upload_firmware(
 
     log::info!("OTA: uploading {} bytes from {}", size, file_path);
 
-    // Get HTTP base URL (OTA only works over HTTP)
+    let _guard = mgr.ota_guard();
+
+    if is_usb_connection(&mgr) {
+        emit_progress(&app, "uploading", 0.0, "Uploading firmware over USB...");
+        return usb_upload_blob(
+            Some(&app),
+            &mgr,
+            USB_OTA_TARGET_ESP32,
+            &data,
+            0.0,
+            100.0,
+            "USB firmware",
+        )
+        .await;
+    }
+
+    // Get HTTP base URL (legacy WiFi OTA path)
     let base_url = mgr
         .get_base_url()
         .await
-        .ok_or("OTA requires HTTP connection (WiFi). Connect via WiFi first.")?;
+        .ok_or("OTA requires USB or HTTP connection. Connect via WiFi or USB first.")?;
 
-    // Compute SHA-256 hash of the firmware binary
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(&data);
-    let sha256_hex = format!("{:x}", hasher.finalize());
-
-    // Get active admin token
+    let sha256_hex = sha256_hex(&data);
     let conn_status = mgr.get_connection_status();
     let admin_token = conn_status.admin_token;
 
@@ -612,7 +768,7 @@ pub async fn ota_upload_firmware(
         req = req.header("X-BugBuster-Admin-Token", token);
     }
 
-    let _guard = mgr.ota_guard();
+    emit_progress(&app, "uploading", 0.0, "Uploading firmware over HTTP...");
     let resp = req
         .body(data)
         .send()
@@ -625,10 +781,68 @@ pub async fn ota_upload_firmware(
         return Err(format!("OTA failed (HTTP {}): {}", status, body));
     }
 
+    emit_progress(
+        &app,
+        "done",
+        100.0,
+        "Firmware upload completed successfully.",
+    );
     Ok(format!(
         "Firmware updated ({} bytes). Device is rebooting...",
         size
     ))
+}
+
+#[tauri::command]
+pub async fn ota_rollback(
+    app: tauri::AppHandle,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<String> {
+    let _guard = mgr.ota_guard();
+
+    if is_usb_connection(&mgr) {
+        emit_progress(&app, "flashing", 0.0, "Requesting rollback over USB...");
+        let result = usb_ota_rollback(&mgr).await?;
+        emit_progress(&app, "done", 100.0, &result);
+        return Ok(result);
+    }
+
+    let base_url = mgr
+        .get_base_url()
+        .await
+        .ok_or("Rollback requires USB or HTTP connection. Connect via WiFi or USB first.")?;
+
+    let conn_status = mgr.get_connection_status();
+    let admin_token = conn_status.admin_token;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut req = client.post(format!("{}/api/ota/rollback", base_url));
+    if let Some(token) = admin_token {
+        req = req.header("X-BugBuster-Admin-Token", token);
+    }
+
+    emit_progress(&app, "flashing", 0.0, "Requesting rollback over HTTP...");
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Rollback failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Rollback failed (HTTP {}): {}", status, body));
+    }
+
+    emit_progress(
+        &app,
+        "done",
+        100.0,
+        "Rollback requested; device is rebooting...",
+    );
+    Ok("Rollback requested; device is rebooting...".to_string())
 }
 
 // -----------------------------------------------------------------------------
@@ -1271,7 +1485,8 @@ pub async fn hat_set_rail_voltage(
     let mut pw = bbp::PayloadWriter::new();
     pw.put_u8(rail_id);
     pw.put_u16(voltage_mv);
-    let rsp = mgr.send_command(bbp::CMD_HAT_SET_RAIL_VOLTAGE, &pw.buf)
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_SET_RAIL_VOLTAGE, &pw.buf)
         .await
         .map_err(map_err)?;
     if rsp.is_empty() {
@@ -1313,13 +1528,11 @@ pub async fn hat_setup_swd(
 }
 
 #[tauri::command]
-pub async fn hat_calibrate_start(
-    rail_id: u8,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<u8> {
+pub async fn hat_calibrate_start(rail_id: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<u8> {
     let mut pw = bbp::PayloadWriter::new();
     pw.put_u8(rail_id);
-    let rsp = mgr.send_command(bbp::CMD_HAT_CALIBRATE_START, &pw.buf)
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_CALIBRATE_START, &pw.buf)
         .await
         .map_err(map_err)?;
     Ok(rsp.first().copied().unwrap_or(0))
@@ -1329,7 +1542,8 @@ pub async fn hat_calibrate_start(
 pub async fn hat_calibrate_status(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<serde_json::Value> {
-    let rsp = mgr.send_command(bbp::CMD_HAT_CALIBRATE_STATUS, &[])
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_CALIBRATE_STATUS, &[])
         .await
         .map_err(map_err)?;
     if rsp.len() < 12 {
@@ -1400,7 +1614,8 @@ pub async fn hat_set_level_shift(
     let mut pw = bbp::PayloadWriter::new();
     pw.put_bool(oe);
     pw.put_bool(dir);
-    let rsp = mgr.send_command(bbp::CMD_HAT_SET_LEVEL_SHIFT, &pw.buf)
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_SET_LEVEL_SHIFT, &pw.buf)
         .await
         .map_err(map_err)?;
     if rsp.len() < 2 {
@@ -1437,10 +1652,9 @@ pub struct HatRailStatus {
 }
 
 #[tauri::command]
-pub async fn hat_get_caps(
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<HatCaps> {
-    let rsp = mgr.send_command(bbp::CMD_HAT_GET_CAPS, &[])
+pub async fn hat_get_caps(mgr: State<'_, ConnectionManager>) -> CmdResult<HatCaps> {
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_GET_CAPS, &[])
         .await
         .map_err(map_err)?;
     if rsp.len() < 12 {
@@ -1473,7 +1687,8 @@ pub async fn hat_get_caps(
 pub async fn hat_get_rail_status(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<Vec<HatRailStatus>> {
-    let rsp = mgr.send_command(bbp::CMD_HAT_GET_RAIL_STATUS, &[])
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_GET_RAIL_STATUS, &[])
         .await
         .map_err(map_err)?;
     if rsp.is_empty() {
@@ -1508,7 +1723,8 @@ pub async fn hat_set_rail_enable(
     let mut pw = bbp::PayloadWriter::new();
     pw.put_u8(rail_id);
     pw.put_bool(enable);
-    let rsp = mgr.send_command(bbp::CMD_HAT_SET_RAIL_ENABLE, &pw.buf)
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_SET_RAIL_ENABLE, &pw.buf)
         .await
         .map_err(map_err)?;
     if rsp.is_empty() {
@@ -1535,13 +1751,11 @@ pub async fn hat_set_rail_enable(
 }
 
 #[tauri::command]
-pub async fn hat_la_set_route(
-    route: u8,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<u8> {
+pub async fn hat_la_set_route(route: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<u8> {
     let mut pw = bbp::PayloadWriter::new();
     pw.put_u8(route);
-    let rsp = mgr.send_command(bbp::CMD_HAT_LA_SET_ROUTE, &pw.buf)
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_LA_SET_ROUTE, &pw.buf)
         .await
         .map_err(map_err)?;
     if rsp.is_empty() {
@@ -1551,10 +1765,7 @@ pub async fn hat_la_set_route(
 }
 
 #[tauri::command]
-pub async fn hat_la_log_enable(
-    enable: bool,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<()> {
+pub async fn hat_la_log_enable(enable: bool, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
     let mut pw = bbp::PayloadWriter::new();
     pw.put_u8(if enable { 1 } else { 0 });
     mgr.send_command(bbp::CMD_HAT_LA_LOG_ENABLE, &pw.buf)
@@ -1579,7 +1790,11 @@ pub async fn hat_la_log_get(mgr: State<'_, ConnectionManager>) -> CmdResult<Vec<
                 return Ok(vec![]);
             }
             let text = String::from_utf8_lossy(&bytes);
-            Ok(text.split('\n').filter(|s| !s.is_empty()).map(String::from).collect())
+            Ok(text
+                .split('\n')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect())
         }
         // USB path: command unimplemented — logs arrive via BBP events, not polling
         Err(_) => Ok(vec![]),
@@ -2963,9 +3178,7 @@ pub async fn io_release(
 /// Wire response: 16 × 10 bytes = 160 bytes.
 /// Per-slot layout: `kind(u8), session_id(u8), token_fp32(u32 LE), lease_until_ms(u32 LE)`.
 #[tauri::command]
-pub async fn io_owner_status(
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<Vec<OwnerSlot>> {
+pub async fn io_owner_status(mgr: State<'_, ConnectionManager>) -> CmdResult<Vec<OwnerSlot>> {
     let rsp = mgr
         .send_command(bbp::CMD_IO_OWNER_STATUS, &[])
         .await
@@ -2988,18 +3201,10 @@ pub async fn io_owner_status(
         let base = i * SLOT_STRIDE;
         let kind = rsp[base];
         let session_id = rsp[base + 1];
-        let token_fp32 = u32::from_le_bytes([
-            rsp[base + 2],
-            rsp[base + 3],
-            rsp[base + 4],
-            rsp[base + 5],
-        ]);
-        let lease_until_ms = u32::from_le_bytes([
-            rsp[base + 6],
-            rsp[base + 7],
-            rsp[base + 8],
-            rsp[base + 9],
-        ]);
+        let token_fp32 =
+            u32::from_le_bytes([rsp[base + 2], rsp[base + 3], rsp[base + 4], rsp[base + 5]]);
+        let lease_until_ms =
+            u32::from_le_bytes([rsp[base + 6], rsp[base + 7], rsp[base + 8], rsp[base + 9]]);
         slots.push(OwnerSlot::from_wire(
             i as u8,
             kind,
@@ -3017,10 +3222,7 @@ pub async fn io_owner_status(
 /// Uses the admin token stored in the connection state automatically.
 /// `slot = 0xFF` releases all slots.
 #[tauri::command]
-pub async fn io_force_release(
-    slot: u8,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<()> {
+pub async fn io_force_release(slot: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
     // The admin token is embedded in the transport layer (HTTP Authorization
     // header or the USB session which is implicitly trusted); the firmware
     // checks it server-side. We pass it as the first byte of the payload so
@@ -3064,6 +3266,10 @@ pub struct DesktopGitRelease {
     pub esp32_url: String,
     pub esp32_size: u64,
     pub esp32_sha256: String,
+    pub spiffs_version: String,
+    pub spiffs_url: String,
+    pub spiffs_size: u64,
+    pub spiffs_sha256: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -3076,11 +3282,14 @@ pub struct OtaProgress {
 
 fn emit_progress(app: &tauri::AppHandle, stage: &str, percent: f32, message: &str) {
     use tauri::Emitter;
-    let _ = app.emit("desktop-ota-progress", OtaProgress {
-        stage: stage.to_string(),
-        percent,
-        message: message.to_string(),
-    });
+    let _ = app.emit(
+        "desktop-ota-progress",
+        OtaProgress {
+            stage: stage.to_string(),
+            percent,
+            message: message.to_string(),
+        },
+    );
 }
 
 #[tauri::command]
@@ -3107,14 +3316,25 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
         return Err(format!("GitHub API returned HTTP {}", status));
     }
     log::info!("GitHub API response OK, parsing releases...");
-    let releases_json: serde_json::Value = resp.json().await.map_err(|e| format!("Failed to parse GitHub releases: {}", e))?;
-    
+    let releases_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub releases: {}", e))?;
+
     let mut git_releases = Vec::new();
 
     if let Some(releases_arr) = releases_json.as_array() {
         for release in releases_arr {
-            let tag = release.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let published_at = release.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let tag = release
+                .get("tag_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let published_at = release
+                .get("published_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let assets = release.get("assets").and_then(|v| v.as_array());
 
             if tag.is_empty() {
@@ -3128,7 +3348,9 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
                 for asset in assets_arr {
                     if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
                         if name == "bugbuster-update-manifest.json" {
-                            if let Some(browser_url) = asset.get("browser_download_url").and_then(|v| v.as_str()) {
+                            if let Some(browser_url) =
+                                asset.get("browser_download_url").and_then(|v| v.as_str())
+                            {
                                 manifest_url = browser_url.to_string();
                                 break;
                             }
@@ -3148,21 +3370,83 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
             }
 
             if let Some(m) = manifest_val {
-                let manifest_build_id = m.get("buildId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let commit = m.get("commit").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let manifest_build_id = m
+                    .get("buildId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let commit = m
+                    .get("commit")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
                 let rp = m.get("rp2040");
-                let rp_version = rp.and_then(|v| v.get("version")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let rp_url = rp.and_then(|v| v.get("url")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let rp_size = rp.and_then(|v| v.get("size")).and_then(|v| v.as_u64()).unwrap_or(0);
-                let rp_sha = rp.and_then(|v| v.get("sha256")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let rp_crc = rp.and_then(|v| v.get("crc32")).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let rp_version = rp
+                    .and_then(|v| v.get("version"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let rp_url = rp
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let rp_size = rp
+                    .and_then(|v| v.get("size"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let rp_sha = rp
+                    .and_then(|v| v.get("sha256"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let rp_crc = rp
+                    .and_then(|v| v.get("crc32"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
 
                 let esp = m.get("esp32");
-                let esp_version = esp.and_then(|v| v.get("version")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let esp_url = esp.and_then(|v| v.get("url")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let esp_size = esp.and_then(|v| v.get("size")).and_then(|v| v.as_u64()).unwrap_or(0);
-                let esp_sha = esp.and_then(|v| v.get("sha256")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let esp_version = esp
+                    .and_then(|v| v.get("version"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let esp_url = esp
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let esp_size = esp
+                    .and_then(|v| v.get("size"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let esp_sha = esp
+                    .and_then(|v| v.get("sha256"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let spiffs = m.get("spiffs");
+                let spiffs_version = spiffs
+                    .and_then(|v| v.get("version"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let spiffs_url = spiffs
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let spiffs_size = spiffs
+                    .and_then(|v| v.get("size"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let spiffs_sha = spiffs
+                    .and_then(|v| v.get("sha256"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
                 git_releases.push(DesktopGitRelease {
                     tag,
@@ -3178,6 +3462,10 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
                     esp32_url: esp_url,
                     esp32_size: esp_size,
                     esp32_sha256: esp_sha,
+                    spiffs_version,
+                    spiffs_url,
+                    spiffs_size,
+                    spiffs_sha256: spiffs_sha,
                 });
             } else {
                 let mut rp_url = String::new();
@@ -3186,14 +3474,22 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
                 let mut esp_url = String::new();
                 let mut esp_size = 0;
                 let mut esp_version = String::new();
+                let mut spiffs_url = String::new();
+                let mut spiffs_size = 0;
+                let mut spiffs_version = String::new();
 
                 if let Some(assets_arr) = assets {
                     for asset in assets_arr {
                         if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
-                            let browser_url = asset.get("browser_download_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let browser_url = asset
+                                .get("browser_download_url")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let size = asset.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
 
-                            if name.starts_with("bugbuster-hat-rp2040-v") && name.ends_with(".bin") {
+                            if name.starts_with("bugbuster-hat-rp2040-v") && name.ends_with(".bin")
+                            {
                                 rp_url = browser_url;
                                 rp_size = size;
                                 rp_version = name
@@ -3201,7 +3497,9 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
                                     .and_then(|s| s.strip_suffix(".bin"))
                                     .unwrap_or("")
                                     .to_string();
-                            } else if name.starts_with("bugbuster-esp32s3-v") && name.ends_with("-ota.bin") {
+                            } else if name.starts_with("bugbuster-esp32s3-v")
+                                && name.ends_with("-ota.bin")
+                            {
                                 esp_url = browser_url;
                                 esp_size = size;
                                 esp_version = name
@@ -3209,12 +3507,20 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
                                     .and_then(|s| s.strip_suffix("-ota.bin"))
                                     .unwrap_or("")
                                     .to_string();
+                            } else if name == "spiffs.bin" {
+                                spiffs_url = browser_url;
+                                spiffs_size = size;
+                                spiffs_version = esp_version.clone();
                             }
                         }
                     }
                 }
 
-                if !rp_url.is_empty() || !esp_url.is_empty() {
+                if !spiffs_url.is_empty() && spiffs_version.is_empty() {
+                    spiffs_version = esp_version.clone();
+                }
+
+                if !rp_url.is_empty() || !esp_url.is_empty() || !spiffs_url.is_empty() {
                     git_releases.push(DesktopGitRelease {
                         tag: tag.clone(),
                         published_at,
@@ -3229,6 +3535,10 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
                         esp32_url: esp_url,
                         esp32_size: esp_size,
                         esp32_sha256: String::new(),
+                        spiffs_version,
+                        spiffs_url,
+                        spiffs_size,
+                        spiffs_sha256: String::new(),
                     });
                 }
             }
@@ -3238,7 +3548,7 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
     Ok(git_releases)
 }
 
-async fn run_desktop_ota_flow(
+async fn run_usb_desktop_ota_flow(
     app: tauri::AppHandle,
     update_rp2040: bool,
     update_esp32: bool,
@@ -3258,24 +3568,202 @@ async fn run_desktop_ota_flow(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let base_url = mgr.get_base_url().await
+    emit_progress(&app, "starting", 0.0, "Preparing USB OTA update...");
+
+    if update_rp2040 {
+        emit_progress(
+            &app,
+            "downloading",
+            10.0,
+            "Downloading RP2040 HAT firmware...",
+        );
+        let rp_resp = client
+            .get(&rp2040_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download RP2040 binary: {}", e))?;
+        if !rp_resp.status().is_success() {
+            return Err(format!(
+                "RP2040 download returned HTTP {}",
+                rp_resp.status()
+            ));
+        }
+        let rp_data = rp_resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read RP2040 binary: {}", e))?;
+        if rp_data.len() != rp2040_size as usize {
+            return Err(format!(
+                "RP2040 size mismatch: got {}, expected {}",
+                rp_data.len(),
+                rp2040_size
+            ));
+        }
+        if !rp2040_sha256.is_empty() && sha256_hex(&rp_data) != rp2040_sha256 {
+            return Err("RP2040 SHA256 verification failed".to_string());
+        }
+
+        emit_progress(
+            &app,
+            "uploading",
+            30.0,
+            "Uploading RP2040 firmware over USB...",
+        );
+        usb_upload_blob(
+            Some(&app),
+            &mgr,
+            USB_OTA_TARGET_RP2040,
+            &rp_data,
+            30.0,
+            78.0,
+            "RP2040",
+        )
+        .await?;
+
+        emit_progress(
+            &app,
+            "flashing",
+            80.0,
+            "HAT flashing completed successfully.",
+        );
+    }
+
+    if update_esp32 {
+        emit_progress(&app, "downloading", 85.0, "Downloading ESP32 firmware...");
+        let esp_resp = client
+            .get(&esp32_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download ESP32 binary: {}", e))?;
+        if !esp_resp.status().is_success() {
+            return Err(format!(
+                "ESP32 download returned HTTP {}",
+                esp_resp.status()
+            ));
+        }
+        let esp_data = esp_resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read ESP32 binary: {}", e))?;
+        if esp_data.len() != esp32_size as usize {
+            return Err(format!(
+                "ESP32 size mismatch: got {}, expected {}",
+                esp_data.len(),
+                esp32_size
+            ));
+        }
+
+        let sha = sha256_hex(&esp_data);
+        if !esp32_sha256.is_empty() && sha != esp32_sha256 {
+            return Err("ESP32 SHA256 verification failed".to_string());
+        }
+
+        emit_progress(
+            &app,
+            "uploading",
+            90.0,
+            "Uploading ESP32 firmware over USB...",
+        );
+        usb_upload_blob(
+            Some(&app),
+            &mgr,
+            USB_OTA_TARGET_ESP32,
+            &esp_data,
+            90.0,
+            95.0,
+            "ESP32",
+        )
+        .await?;
+
+        emit_progress(
+            &app,
+            "rebooting",
+            95.0,
+            "ESP32 update successful. Device is rebooting...",
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+
+    emit_progress(
+        &app,
+        "done",
+        100.0,
+        "Firmware update finished successfully.",
+    );
+    Ok(())
+}
+
+async fn run_desktop_ota_flow(
+    app: tauri::AppHandle,
+    update_rp2040: bool,
+    update_esp32: bool,
+    rp2040_url: String,
+    rp2040_size: u64,
+    rp2040_sha256: String,
+    esp32_url: String,
+    esp32_size: u64,
+    esp32_sha256: String,
+    mgr: ConnectionManager,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("BugBuster-Desktop/1.0.0")
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    if is_usb_connection(&mgr) {
+        return run_usb_desktop_ota_flow(
+            app,
+            update_rp2040,
+            update_esp32,
+            rp2040_url,
+            rp2040_size,
+            rp2040_sha256,
+            esp32_url,
+            esp32_size,
+            esp32_sha256,
+            mgr,
+        )
+        .await;
+    }
+
+    let base_url = mgr
+        .get_base_url()
+        .await
         .ok_or("OTA requires HTTP connection (WiFi). Connect via WiFi first.")?;
 
     let conn_status = mgr.get_connection_status();
     let admin_token = conn_status.admin_token;
 
     if update_rp2040 {
-        emit_progress(&app, "downloading", 10.0, "Downloading RP2040 HAT firmware...");
-        let rp_resp = client.get(&rp2040_url).send().await
+        emit_progress(
+            &app,
+            "downloading",
+            10.0,
+            "Downloading RP2040 HAT firmware...",
+        );
+        let rp_resp = client
+            .get(&rp2040_url)
+            .send()
+            .await
             .map_err(|e| format!("Failed to download RP2040 binary: {}", e))?;
         if !rp_resp.status().is_success() {
-            return Err(format!("RP2040 download returned HTTP {}", rp_resp.status()));
+            return Err(format!(
+                "RP2040 download returned HTTP {}",
+                rp_resp.status()
+            ));
         }
-        let rp_data = rp_resp.bytes().await
+        let rp_data = rp_resp
+            .bytes()
+            .await
             .map_err(|e| format!("Failed to read RP2040 binary: {}", e))?;
 
         if rp_data.len() != rp2040_size as usize {
-            return Err(format!("RP2040 size mismatch: got {}, expected {}", rp_data.len(), rp2040_size));
+            return Err(format!(
+                "RP2040 size mismatch: got {}, expected {}",
+                rp_data.len(),
+                rp2040_size
+            ));
         }
 
         if !rp2040_sha256.is_empty() {
@@ -3288,29 +3776,46 @@ async fn run_desktop_ota_flow(
             }
         }
 
-        emit_progress(&app, "uploading", 30.0, "Uploading RP2040 firmware to ESP32 staging...");
+        emit_progress(
+            &app,
+            "uploading",
+            30.0,
+            "Uploading RP2040 firmware to ESP32 staging...",
+        );
         let upload_url = format!("{}/api/ota/upload_rp2040", base_url);
-        let mut req = client.post(upload_url)
+        let mut req = client
+            .post(upload_url)
             .header("Content-Type", "application/octet-stream")
             .body(rp_data.to_vec());
         if let Some(ref token) = admin_token {
             req = req.header("X-BugBuster-Admin-Token", token);
         }
-        let upload_resp = req.send().await
+        let upload_resp = req
+            .send()
+            .await
             .map_err(|e| format!("Failed to upload RP2040 binary to ESP32: {}", e))?;
         if !upload_resp.status().is_success() {
             let status = upload_resp.status();
             let err_body = upload_resp.text().await.unwrap_or_default();
-            return Err(format!("RP2040 upload failed (HTTP {}): {}", status, err_body));
+            return Err(format!(
+                "RP2040 upload failed (HTTP {}): {}",
+                status, err_body
+            ));
         }
 
         // Small pause: the SPIFFS write for the binary upload can temporarily block
         // the ESP32 httpd from accepting new connections.
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
-        emit_progress(&app, "flashing", 55.0, "Triggering RP2040 HAT flash update...");
+        emit_progress(
+            &app,
+            "flashing",
+            55.0,
+            "Triggering RP2040 HAT flash update...",
+        );
         let apply_url = format!("{}/api/update/apply", base_url);
-        let mut apply_req = client.post(&apply_url)
+        let mut apply_req = client
+            .post(&apply_url)
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({ "rp2040": true, "esp32": false }));
         if let Some(ref token) = admin_token {
@@ -3322,9 +3827,15 @@ async fn run_desktop_ota_flow(
             Ok(resp) if !resp.status().is_success() => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                return Err(format!("RP2040 flashing trigger failed (HTTP {}): {}", status, body));
+                return Err(format!(
+                    "RP2040 flashing trigger failed (HTTP {}): {}",
+                    status, body
+                ));
             }
-            Err(e) => log::warn!("apply request transport error (may still have started): {}", e),
+            Err(e) => log::warn!(
+                "apply request transport error (may still have started): {}",
+                e
+            ),
             _ => {}
         }
 
@@ -3350,16 +3861,32 @@ async fn run_desktop_ota_flow(
                 Ok(r) => r,
                 Err(_) => continue, // device may be briefly unreachable during flash
             };
-            if !resp.status().is_success() { continue; }
+            if !resp.status().is_success() {
+                continue;
+            }
             let json: serde_json::Value = match resp.json().await {
                 Ok(j) => j,
                 Err(_) => continue,
             };
             let state = json.get("state").and_then(|v| v.as_u64()).unwrap_or(0);
-            let step = json.get("step").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let last_error = json.get("lastError").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let progress_done = json.get("progressDone").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let progress_total = json.get("progressTotal").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let step = json
+                .get("step")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let last_error = json
+                .get("lastError")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let progress_done = json
+                .get("progressDone")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let progress_total = json
+                .get("progressTotal")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
 
             let pct = if progress_total > 0.0 {
                 55.0 + (progress_done / progress_total * 25.0) as f32
@@ -3370,30 +3897,49 @@ async fn run_desktop_ota_flow(
 
             match state {
                 0 => break, // IDLE — done
-                6 => return Err(if last_error.is_empty() {
-                    "RP2040 flash failed (unknown error)".to_string()
-                } else {
-                    format!("RP2040 flash failed: {}", last_error)
-                }),
+                6 => {
+                    return Err(if last_error.is_empty() {
+                        "RP2040 flash failed (unknown error)".to_string()
+                    } else {
+                        format!("RP2040 flash failed: {}", last_error)
+                    })
+                }
                 _ => {} // still running
             }
         }
 
-        emit_progress(&app, "flashing", 80.0, "HAT flashing completed successfully.");
+        emit_progress(
+            &app,
+            "flashing",
+            80.0,
+            "HAT flashing completed successfully.",
+        );
     }
 
     if update_esp32 {
         emit_progress(&app, "downloading", 85.0, "Downloading ESP32 firmware...");
-        let esp_resp = client.get(&esp32_url).send().await
+        let esp_resp = client
+            .get(&esp32_url)
+            .send()
+            .await
             .map_err(|e| format!("Failed to download ESP32 binary: {}", e))?;
         if !esp_resp.status().is_success() {
-            return Err(format!("ESP32 download returned HTTP {}", esp_resp.status()));
+            return Err(format!(
+                "ESP32 download returned HTTP {}",
+                esp_resp.status()
+            ));
         }
-        let esp_data = esp_resp.bytes().await
+        let esp_data = esp_resp
+            .bytes()
+            .await
             .map_err(|e| format!("Failed to read ESP32 binary: {}", e))?;
 
         if esp_data.len() != esp32_size as usize {
-            return Err(format!("ESP32 size mismatch: got {}, expected {}", esp_data.len(), esp32_size));
+            return Err(format!(
+                "ESP32 size mismatch: got {}, expected {}",
+                esp_data.len(),
+                esp32_size
+            ));
         }
 
         let sha256_hex = if !esp32_sha256.is_empty() {
@@ -3414,25 +3960,149 @@ async fn run_desktop_ota_flow(
 
         emit_progress(&app, "uploading", 90.0, "Uploading ESP32 firmware...");
         let upload_url = format!("{}/api/ota/upload?sha256={}", base_url, sha256_hex);
-        let mut req = client.post(upload_url)
+        let mut req = client
+            .post(upload_url)
             .header("Content-Type", "application/octet-stream")
             .body(esp_data.to_vec());
         if let Some(ref token) = admin_token {
             req = req.header("X-BugBuster-Admin-Token", token);
         }
-        let upload_resp = req.send().await
+        let upload_resp = req
+            .send()
+            .await
             .map_err(|e| format!("Failed to upload ESP32 binary: {}", e))?;
         if !upload_resp.status().is_success() {
             let status = upload_resp.status();
             let err_body = upload_resp.text().await.unwrap_or_default();
-            return Err(format!("ESP32 upload failed (HTTP {}): {}", status, err_body));
+            return Err(format!(
+                "ESP32 upload failed (HTTP {}): {}",
+                status, err_body
+            ));
         }
 
-        emit_progress(&app, "rebooting", 95.0, "ESP32 update successful. Device is rebooting...");
+        emit_progress(
+            &app,
+            "rebooting",
+            95.0,
+            "ESP32 update successful. Device is rebooting...",
+        );
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
 
-    emit_progress(&app, "done", 100.0, "Firmware update finished successfully.");
+    emit_progress(
+        &app,
+        "done",
+        100.0,
+        "Firmware update finished successfully.",
+    );
+    Ok(())
+}
+
+async fn run_desktop_spiffs_flow(
+    app: tauri::AppHandle,
+    spiffs_url: String,
+    spiffs_size: u64,
+    spiffs_sha256: String,
+    mgr: ConnectionManager,
+) -> Result<(), String> {
+    let _guard = mgr.ota_guard();
+
+    let client = reqwest::Client::builder()
+        .user_agent("BugBuster-Desktop/1.0.0")
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    emit_progress(&app, "starting", 0.0, "Preparing SPIFFS update...");
+    emit_progress(
+        &app,
+        "downloading",
+        15.0,
+        "Downloading SPIFFS filesystem image...",
+    );
+
+    let spiffs_resp = client
+        .get(&spiffs_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download SPIFFS image: {}", e))?;
+    if !spiffs_resp.status().is_success() {
+        return Err(format!(
+            "SPIFFS download returned HTTP {}",
+            spiffs_resp.status()
+        ));
+    }
+    let spiffs_data = spiffs_resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read SPIFFS image: {}", e))?;
+    if spiffs_data.len() != spiffs_size as usize {
+        return Err(format!(
+            "SPIFFS size mismatch: got {}, expected {}",
+            spiffs_data.len(),
+            spiffs_size
+        ));
+    }
+    if !spiffs_sha256.is_empty() && sha256_hex(&spiffs_data) != spiffs_sha256 {
+        return Err("SPIFFS SHA256 verification failed".to_string());
+    }
+
+    if is_usb_connection(&mgr) {
+        emit_progress(
+            &app,
+            "uploading",
+            40.0,
+            "Uploading SPIFFS filesystem over USB...",
+        );
+        usb_upload_blob(
+            Some(&app),
+            &mgr,
+            USB_OTA_TARGET_SPIFFS,
+            &spiffs_data,
+            40.0,
+            100.0,
+            "SPIFFS",
+        )
+        .await?;
+        emit_progress(&app, "done", 100.0, "SPIFFS update finished successfully.");
+        return Ok(());
+    }
+
+    let base_url = mgr
+        .get_base_url()
+        .await
+        .ok_or("SPIFFS update requires USB or HTTP connection. Connect via WiFi or USB first.")?;
+    let conn_status = mgr.get_connection_status();
+    let admin_token = conn_status.admin_token;
+
+    emit_progress(
+        &app,
+        "uploading",
+        40.0,
+        "Uploading SPIFFS filesystem over HTTP...",
+    );
+    let upload_url = format!("{}/api/ota/uploadfs", base_url);
+    let mut req = client
+        .post(upload_url)
+        .header("Content-Type", "application/octet-stream")
+        .body(spiffs_data.to_vec());
+    if let Some(ref token) = admin_token {
+        req = req.header("X-BugBuster-Admin-Token", token);
+    }
+    let upload_resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Failed to upload SPIFFS image: {}", e))?;
+    if !upload_resp.status().is_success() {
+        let status = upload_resp.status();
+        let err_body = upload_resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "SPIFFS upload failed (HTTP {}): {}",
+            status, err_body
+        ));
+    }
+
+    emit_progress(&app, "done", 100.0, "SPIFFS update finished successfully.");
     Ok(())
 }
 
@@ -3464,7 +4134,37 @@ pub async fn start_desktop_ota(
             esp32_size,
             esp32_sha256,
             mgr_clone,
-        ).await {
+        )
+        .await
+        {
+            emit_progress(&app_clone, "error", 0.0, &e);
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_desktop_spiffs_ota(
+    app_handle: tauri::AppHandle,
+    spiffs_url: String,
+    spiffs_size: u64,
+    spiffs_sha256: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mgr_clone = mgr.inner().clone();
+    let app_clone = app_handle.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = run_desktop_spiffs_flow(
+            app_clone.clone(),
+            spiffs_url,
+            spiffs_size,
+            spiffs_sha256,
+            mgr_clone,
+        )
+        .await
+        {
             emit_progress(&app_clone, "error", 0.0, &e);
         }
     });
@@ -3488,6 +4188,45 @@ mod tests {
         let mut w = PayloadWriter::new();
         f(&mut w);
         w.buf
+    }
+
+    #[test]
+    fn firmware_info_from_json_parses_version_fields() {
+        let json = serde_json::json!({
+            "fwMajor": 3,
+            "fwMinor": 4,
+            "fwPatch": 5,
+            "protoVersion": 8,
+            "date": "Jun 8 2026",
+            "time": "12:34:56",
+            "idfVersion": "v5.3.1",
+            "partition": "factory",
+            "nextPartition": "ota_1"
+        });
+        let info = firmware_info_from_json(&json);
+        assert_eq!(info.fw_version, "3.4.5");
+        assert_eq!(info.proto_version, 8);
+        assert_eq!(info.build_date, "Jun 8 2026 12:34:56");
+        assert_eq!(info.idf_version, "v5.3.1");
+        assert_eq!(info.partition, "factory");
+        assert_eq!(info.next_partition, "ota_1");
+    }
+
+    #[test]
+    fn decode_hex_32_parses_valid_sha256() {
+        let bytes =
+            decode_hex_32("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                .expect("valid sha256 hex");
+        assert_eq!(bytes[0], 0x01);
+        assert_eq!(bytes[31], 0xef);
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_digest() {
+        assert_eq!(
+            sha256_hex(b"bugbuster"),
+            "691663b1c67325a8f1509b69cb3a2acb0085b9aea656dec9e5612a46360ae4ed"
+        );
     }
 
     // -------------------------------------------------------------------------

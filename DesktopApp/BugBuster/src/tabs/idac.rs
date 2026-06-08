@@ -1,7 +1,7 @@
+use crate::components::channel_sparkline::ChannelSparkline;
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
-use crate::components::channel_sparkline::ChannelSparkline;
 
 const SPARK_CAP: usize = 120;
 
@@ -138,10 +138,17 @@ pub fn IdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DacCurrentArgs { channel: u8, current_ma: f32 }
+struct DacCurrentArgs {
+    channel: u8,
+    current_ma: f32,
+}
 
 fn send_dac_current(ch: u8, current_ma: f32) {
-    let args = serde_wasm_bindgen::to_value(&DacCurrentArgs { channel: ch, current_ma }).unwrap();
+    let args = serde_wasm_bindgen::to_value(&DacCurrentArgs {
+        channel: ch,
+        current_ma,
+    })
+    .unwrap();
     let label = format!("Set CH {} to {:.3}mA", CH_NAMES[ch as usize], current_ma);
     invoke_with_feedback("set_dac_current", args, &label);
 }

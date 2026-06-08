@@ -1,6 +1,6 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
 
 /// IO ownership slots claimed by the GPIO tab (IO1..IO12 → indices 0..11).
 pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
@@ -94,17 +94,35 @@ pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 }
 
 #[derive(Serialize)]
-struct GpioConfigArgs { gpio: u8, mode: u8, pulldown: bool }
+struct GpioConfigArgs {
+    gpio: u8,
+    mode: u8,
+    pulldown: bool,
+}
 #[derive(Serialize)]
-struct GpioValueArgs { gpio: u8, value: bool }
+struct GpioValueArgs {
+    gpio: u8,
+    value: bool,
+}
 
 fn send_gpio_config(gpio: u8, mode: u8, pulldown: bool) {
-    let args = serde_wasm_bindgen::to_value(&GpioConfigArgs { gpio, mode, pulldown }).unwrap();
-    let mode_name = GPIO_MODE_OPTIONS.iter()
+    let args = serde_wasm_bindgen::to_value(&GpioConfigArgs {
+        gpio,
+        mode,
+        pulldown,
+    })
+    .unwrap();
+    let mode_name = GPIO_MODE_OPTIONS
+        .iter()
         .find(|(c, _)| *c == mode)
-        .map(|(_, n)| *n).unwrap_or("?");
-    let label = format!("Set IO {} to {}{}", gpio + 1, mode_name,
-        if pulldown { " (pull-down)" } else { "" });
+        .map(|(_, n)| *n)
+        .unwrap_or("?");
+    let label = format!(
+        "Set IO {} to {}{}",
+        gpio + 1,
+        mode_name,
+        if pulldown { " (pull-down)" } else { "" }
+    );
     invoke_with_feedback("set_gpio_config", args, &label);
 }
 

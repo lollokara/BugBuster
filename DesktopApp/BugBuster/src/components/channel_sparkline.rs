@@ -30,7 +30,9 @@ pub fn ChannelSparkline(
 
         // Defer to next tick so the canvas is mounted and sized.
         spawn_local(async move {
-            let Some(canvas_el) = canvas_ref.get() else { return };
+            let Some(canvas_el) = canvas_ref.get() else {
+                return;
+            };
             let canvas: HtmlCanvasElement = canvas_el;
 
             let dpr = web_sys::window()
@@ -51,7 +53,9 @@ pub fn ChannelSparkline(
                 canvas.set_height(ch);
             }
 
-            let Some(ctx_obj) = canvas.get_context("2d").ok().flatten() else { return };
+            let Some(ctx_obj) = canvas.get_context("2d").ok().flatten() else {
+                return;
+            };
             let ctx: CanvasRenderingContext2d = ctx_obj.unchecked_into();
             ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
 

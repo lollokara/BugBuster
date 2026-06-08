@@ -102,11 +102,13 @@ impl HttpTransport {
             }
             match authed_info {
                 Some(i) => i,
-                None => return Err(anyhow!(
-                    "Device at {} requires authentication and no stored token matched — \
+                None => {
+                    return Err(anyhow!(
+                        "Device at {} requires authentication and no stored token matched — \
                      connect via USB once to pair",
-                    base_url
-                )),
+                        base_url
+                    ))
+                }
             }
         } else if !resp.status().is_success() {
             return Err(anyhow!("Device returned HTTP {}", resp.status()));
@@ -222,9 +224,7 @@ impl HttpTransport {
                     None => continue,
                 };
 
-                let first_seq = last_seq
-                    .saturating_sub(samples.len() as i64 - 1)
-                    .max(0) as u32;
+                let first_seq = last_seq.saturating_sub(samples.len() as i64 - 1).max(0) as u32;
                 for (i, bucket) in samples.iter().enumerate() {
                     let arr = match bucket.as_array() {
                         Some(a) if a.len() >= 13 => a,
@@ -1467,15 +1467,9 @@ impl Transport for HttpTransport {
                     .send()
                     .await?;
                 let status_code = resp.status();
-                let json: Value = resp
-                    .json()
-                    .await
-                    .unwrap_or_else(|_| serde_json::json!({}));
+                let json: Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
                 let status_byte: u8 = if status_code.is_success()
-                    && json
-                        .get("ok")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
+                    && json.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)
                 {
                     0
                 } else if status_code.as_u16() == 404 {
@@ -1505,10 +1499,7 @@ impl Transport for HttpTransport {
                         slot
                     ));
                 }
-                let json: Value = resp
-                    .json()
-                    .await
-                    .unwrap_or_else(|_| serde_json::json!({}));
+                let json: Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
                 // BBP status: 0 = deleted, 1 = was not present.
                 let existed = json
                     .get("deleted")
@@ -1520,27 +1511,45 @@ impl Transport for HttpTransport {
             // =================================================================
             // HAT v2 commands
             // =================================================================
-
             bbp::CMD_HAT_GET_STATUS => {
                 let j = self.get_json("/api/hat").await?;
                 let detected = j.get("detected").and_then(|v| v.as_bool()).unwrap_or(false);
-                let connected = j.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let connected = j
+                    .get("connected")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let hat_type = j.get("type").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let detect_voltage = j.get("detectVoltage").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                let detect_voltage = j
+                    .get("detectVoltage")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
                 let fw_major = j.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let fw_minor = j.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let config_confirmed = j.get("configConfirmed")
+                let config_confirmed = j
+                    .get("configConfirmed")
                     .or_else(|| j.get("config_confirmed"))
-                    .and_then(|v| v.as_bool()).unwrap_or(false);
-                let pin_config: Vec<u8> = j.get("pinConfig")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let pin_config: Vec<u8> = j
+                    .get("pinConfig")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().take(4)
-                        .map(|e| e.get("function").and_then(|v| v.as_u64()).unwrap_or(0) as u8)
-                        .collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .take(4)
+                            .map(|e| e.get("function").and_then(|v| v.as_u64()).unwrap_or(0) as u8)
+                            .collect()
+                    })
                     .unwrap_or_else(|| vec![0u8; 4]);
-                let dap_connected = j.get("dapConnected").and_then(|v| v.as_bool()).unwrap_or(false);
-                let target_detected = j.get("targetDetected").and_then(|v| v.as_bool()).unwrap_or(false);
-                let target_dpidr = j.get("targetDpidr").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let dap_connected = j
+                    .get("dapConnected")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let target_detected = j
+                    .get("targetDetected")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let target_dpidr =
+                    j.get("targetDpidr").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
                 let mut buf = Vec::new();
                 buf.push(detected as u8);
@@ -1567,11 +1576,19 @@ impl Transport for HttpTransport {
             }
 
             bbp::CMD_HAT_DETECT => {
-                let j = self.post_json("/api/hat/detect", &serde_json::json!({})).await?;
+                let j = self
+                    .post_json("/api/hat/detect", &serde_json::json!({}))
+                    .await?;
                 let detected = j.get("detected").and_then(|v| v.as_bool()).unwrap_or(false);
                 let hat_type = j.get("type").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let detect_voltage = j.get("detectVoltage").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let connected = j.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let detect_voltage = j
+                    .get("detectVoltage")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let connected = j
+                    .get("connected")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let mut buf = vec![detected as u8, hat_type];
                 buf.extend_from_slice(&detect_voltage.to_le_bytes());
                 buf.push(connected as u8);
@@ -1584,11 +1601,18 @@ impl Transport for HttpTransport {
                 let flags = j.get("flags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let rail_count = j.get("railCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let led_count = j.get("ledCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let shifted_io_count = j.get("shiftedIoCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let la_route_count = j.get("laRouteCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let shifted_io_count = j
+                    .get("shiftedIoCount")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u8;
+                let la_route_count =
+                    j.get("laRouteCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let fw_major = j.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let fw_minor = j.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let hvpak_present = j.get("hvpakPresent").and_then(|v| v.as_bool()).unwrap_or(false);
+                let hvpak_present = j
+                    .get("hvpakPresent")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let mut buf = Vec::new();
                 buf.push(hw_revision);
                 buf.extend_from_slice(&flags.to_le_bytes());
@@ -1604,14 +1628,23 @@ impl Transport for HttpTransport {
 
             bbp::CMD_HAT_GET_RAIL_STATUS => {
                 let j = self.get_json("/api/hat/v2/rails").await?;
-                let rails = j.get("rails").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let rails = j
+                    .get("rails")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 let count = rails.len() as u8;
                 let mut buf = vec![count];
                 for rail in &rails {
                     let rail_id = rail.get("railId").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                    let enabled = rail.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let voltage_mv = rail.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-                    let current_ma = rail.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                    let enabled = rail
+                        .get("enabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let voltage_mv =
+                        rail.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                    let current_ma =
+                        rail.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                     let status = rail.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                     buf.push(rail_id);
                     buf.push(enabled as u8);
@@ -1628,11 +1661,19 @@ impl Transport for HttpTransport {
                 }
                 let rail_id = payload[0];
                 let enable = payload[1] != 0;
-                let j = self.post_json("/api/hat/v2/rail/enable", &serde_json::json!({
-                    "railId": rail_id,
-                    "enable": enable,
-                })).await?;
-                let r_rail_id = j.get("railId").and_then(|v| v.as_u64()).unwrap_or(rail_id as u64) as u8;
+                let j = self
+                    .post_json(
+                        "/api/hat/v2/rail/enable",
+                        &serde_json::json!({
+                            "railId": rail_id,
+                            "enable": enable,
+                        }),
+                    )
+                    .await?;
+                let r_rail_id = j
+                    .get("railId")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(rail_id as u64) as u8;
                 let r_enabled = j.get("enabled").and_then(|v| v.as_bool()).unwrap_or(enable);
                 let r_voltage_mv = j.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                 let r_current_ma = j.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
@@ -1652,11 +1693,19 @@ impl Transport for HttpTransport {
                 }
                 let rail_id = payload[0];
                 let voltage_mv = u16::from_le_bytes([payload[1], payload[2]]);
-                let j = self.post_json("/api/hat/v2/rail/voltage", &serde_json::json!({
-                    "railId": rail_id,
-                    "voltageMv": voltage_mv,
-                })).await?;
-                let r_rail_id = j.get("railId").and_then(|v| v.as_u64()).unwrap_or(rail_id as u64) as u8;
+                let j = self
+                    .post_json(
+                        "/api/hat/v2/rail/voltage",
+                        &serde_json::json!({
+                            "railId": rail_id,
+                            "voltageMv": voltage_mv,
+                        }),
+                    )
+                    .await?;
+                let r_rail_id = j
+                    .get("railId")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(rail_id as u64) as u8;
                 let r_enabled = j.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
                 let r_voltage_mv = j.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                 let r_current_ma = j.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
@@ -1675,9 +1724,14 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload for CMD_HAT_CALIBRATE_START"));
                 }
                 let rail_id = payload[0];
-                let j = self.post_json("/api/hat/v2/calibrate/start", &serde_json::json!({
-                    "railId": rail_id,
-                })).await?;
+                let j = self
+                    .post_json(
+                        "/api/hat/v2/calibrate/start",
+                        &serde_json::json!({
+                            "railId": rail_id,
+                        }),
+                    )
+                    .await?;
                 let status = j.get("status").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
                 Ok(vec![status])
             }
@@ -1688,7 +1742,8 @@ impl Transport for HttpTransport {
                 let progress = j.get("progress").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let rail_id = j.get("railId").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let last_error = j.get("lastError").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let persist_state = j.get("persistState").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let persist_state =
+                    j.get("persistState").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let stage = j.get("stage").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let point = j.get("point").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let code = j.get("code").and_then(|v| v.as_i64()).unwrap_or(0) as i8 as u8;
@@ -1696,8 +1751,12 @@ impl Transport for HttpTransport {
                 let min_mv = j.get("minMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
                 let max_mv = j.get("maxMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
                 let max_gap_mv = j.get("maxGapMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
-                let max_error_mv = j.get("maxErrorMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
-                let validation_flags = j.get("validationFlags").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+                let max_error_mv =
+                    j.get("maxErrorMv").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                let validation_flags = j
+                    .get("validationFlags")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u16;
                 let mut buf = Vec::new();
                 buf.push(state);
                 buf.push(progress);
@@ -1725,16 +1784,27 @@ impl Transport for HttpTransport {
                 let mut points = Vec::new();
                 let mut pos = 2usize;
                 for _ in 0..count {
-                    if pos + 5 > payload.len() { break; }
+                    if pos + 5 > payload.len() {
+                        break;
+                    }
                     let dac_code = payload[pos] as i8;
-                    let measured_v = f32::from_le_bytes([payload[pos+1], payload[pos+2], payload[pos+3], payload[pos+4]]);
+                    let measured_v = f32::from_le_bytes([
+                        payload[pos + 1],
+                        payload[pos + 2],
+                        payload[pos + 3],
+                        payload[pos + 4],
+                    ]);
                     pos += 5;
                     points.push(serde_json::json!({"dacCode": dac_code, "measuredV": measured_v}));
                 }
-                self.post_json("/api/hat/v2/calibrate/import", &serde_json::json!({
-                    "railId": rail_id,
-                    "points": points,
-                })).await?;
+                self.post_json(
+                    "/api/hat/v2/calibrate/import",
+                    &serde_json::json!({
+                        "railId": rail_id,
+                        "points": points,
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
@@ -1742,11 +1812,15 @@ impl Transport for HttpTransport {
                 if payload.len() < 3 {
                     return Err(anyhow!("Invalid payload for CMD_HAT_SET_IO_BANK"));
                 }
-                self.post_json("/api/hat/v2/io_bank", &serde_json::json!({
-                    "dirs": payload[0],
-                    "ups": payload[1],
-                    "dns": payload[2],
-                })).await?;
+                self.post_json(
+                    "/api/hat/v2/io_bank",
+                    &serde_json::json!({
+                        "dirs": payload[0],
+                        "ups": payload[1],
+                        "dns": payload[2],
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
@@ -1756,10 +1830,15 @@ impl Transport for HttpTransport {
                 }
                 let oe = payload[0] != 0;
                 let dir = payload[1] != 0;
-                let j = self.post_json("/api/hat/v2/level_shift", &serde_json::json!({
-                    "oe": oe,
-                    "dir": dir,
-                })).await?;
+                let j = self
+                    .post_json(
+                        "/api/hat/v2/level_shift",
+                        &serde_json::json!({
+                            "oe": oe,
+                            "dir": dir,
+                        }),
+                    )
+                    .await?;
                 let r_oe = j.get("oe").and_then(|v| v.as_bool()).unwrap_or(oe);
                 let r_dir = j.get("dir").and_then(|v| v.as_bool()).unwrap_or(dir);
                 Ok(vec![r_oe as u8, r_dir as u8])
@@ -1770,9 +1849,13 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload for CMD_HAT_SET_IO_VOLTAGE"));
                 }
                 let voltage_mv = u16::from_le_bytes([payload[0], payload[1]]);
-                self.post_json("/api/hat/v2/io_voltage", &serde_json::json!({
-                    "voltageMv": voltage_mv,
-                })).await?;
+                self.post_json(
+                    "/api/hat/v2/io_voltage",
+                    &serde_json::json!({
+                        "voltageMv": voltage_mv,
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
@@ -1782,10 +1865,14 @@ impl Transport for HttpTransport {
                 }
                 let target_voltage_mv = u16::from_le_bytes([payload[0], payload[1]]);
                 let connector = payload[2];
-                self.post_json("/api/hat/v2/swd/setup", &serde_json::json!({
-                    "targetVoltageMv": target_voltage_mv,
-                    "connector": connector,
-                })).await?;
+                self.post_json(
+                    "/api/hat/v2/swd/setup",
+                    &serde_json::json!({
+                        "targetVoltageMv": target_voltage_mv,
+                        "connector": connector,
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
@@ -1793,10 +1880,14 @@ impl Transport for HttpTransport {
                 if payload.len() < 2 {
                     return Err(anyhow!("Invalid payload for CMD_HAT_SET_LED_STATE"));
                 }
-                self.post_json("/api/hat/v2/led", &serde_json::json!({
-                    "ledId": payload[0],
-                    "colorCode": payload[1],
-                })).await?;
+                self.post_json(
+                    "/api/hat/v2/led",
+                    &serde_json::json!({
+                        "ledId": payload[0],
+                        "colorCode": payload[1],
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
@@ -1805,10 +1896,18 @@ impl Transport for HttpTransport {
                     return Err(anyhow!("Invalid payload for CMD_HAT_LA_SET_ROUTE"));
                 }
                 let route = payload[0];
-                let j = self.post_json("/api/hat/v2/la/route", &serde_json::json!({
-                    "route": route,
-                })).await?;
-                let r_route = j.get("route").and_then(|v| v.as_u64()).unwrap_or(route as u64) as u8;
+                let j = self
+                    .post_json(
+                        "/api/hat/v2/la/route",
+                        &serde_json::json!({
+                            "route": route,
+                        }),
+                    )
+                    .await?;
+                let r_route = j
+                    .get("route")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(route as u64) as u8;
                 Ok(vec![r_route])
             }
 
@@ -1816,9 +1915,13 @@ impl Transport for HttpTransport {
                 if payload.is_empty() {
                     return Err(anyhow!("Invalid payload for CMD_HAT_LA_LOG_ENABLE"));
                 }
-                self.post_json("/api/hat/v2/la/log/enable", &serde_json::json!({
-                    "enable": payload[0] != 0,
-                })).await?;
+                self.post_json(
+                    "/api/hat/v2/la/log/enable",
+                    &serde_json::json!({
+                        "enable": payload[0] != 0,
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
@@ -1826,11 +1929,20 @@ impl Transport for HttpTransport {
                 let j = self.get_json("/api/hat/la/status").await?;
                 let state = j.get("state").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let channels = j.get("channels").and_then(|v| v.as_u64()).unwrap_or(4) as u8;
-                let captured = j.get("samplesCaptured").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let captured = j
+                    .get("samplesCaptured")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
                 let total = j.get("totalSamples").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let rate = j.get("actualRateHz").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let usb_conn = j.get("usbConnected").and_then(|v| v.as_bool()).unwrap_or(false);
-                let usb_mnt = j.get("usbMounted").and_then(|v| v.as_bool()).unwrap_or(false);
+                let usb_conn = j
+                    .get("usbConnected")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let usb_mnt = j
+                    .get("usbMounted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let stop_reason = j.get("stopReason").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let mut buf = Vec::new();
                 buf.push(state);
@@ -1859,10 +1971,14 @@ impl Transport for HttpTransport {
                 if payload.len() < 2 {
                     return Err(anyhow!("Invalid payload for CMD_HAT_SET_PIN"));
                 }
-                self.post_json("/api/hat/config", &serde_json::json!({
-                    "pin": payload[0],
-                    "function": payload[1],
-                })).await?;
+                self.post_json(
+                    "/api/hat/config",
+                    &serde_json::json!({
+                        "pin": payload[0],
+                        "function": payload[1],
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
@@ -1870,14 +1986,19 @@ impl Transport for HttpTransport {
                 if payload.len() < 4 {
                     return Err(anyhow!("Invalid payload for CMD_HAT_SET_ALL_PINS"));
                 }
-                self.post_json("/api/hat/config", &serde_json::json!({
-                    "pins": [payload[0], payload[1], payload[2], payload[3]],
-                })).await?;
+                self.post_json(
+                    "/api/hat/config",
+                    &serde_json::json!({
+                        "pins": [payload[0], payload[1], payload[2], payload[3]],
+                    }),
+                )
+                .await?;
                 Ok(vec![])
             }
 
             bbp::CMD_HAT_RESET => {
-                self.post_json("/api/hat/reset", &serde_json::json!({})).await?;
+                self.post_json("/api/hat/reset", &serde_json::json!({}))
+                    .await?;
                 Ok(vec![])
             }
 

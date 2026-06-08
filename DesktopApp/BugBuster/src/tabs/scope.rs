@@ -1,10 +1,10 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
-use crate::tauri_bridge::*;
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
 /// IO ownership slots claimed by the Scope tab (CH0..CH3 → indices 12..15).
 pub const SLOTS: &[u8] = &[12, 13, 14, 15];
@@ -29,11 +29,13 @@ pub struct ScopePoint {
 /// Parse EVT_SCOPE_DATA payload into per-channel avg values.
 /// Format: bucketSeq(u32) + timestamp_ms(u32) + count(u16) + [avg(f32), min(f32), max(f32)] × 4
 fn parse_scope_event(data: &[u8]) -> Option<[f32; 4]> {
-    if data.len() < 58 { return None; }
+    if data.len() < 58 {
+        return None;
+    }
     let mut pos = 10;
     let mut avg = [0f32; 4];
     for ch in 0..4 {
-        avg[ch] = f32::from_le_bytes([data[pos], data[pos+1], data[pos+2], data[pos+3]]);
+        avg[ch] = f32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
         pos += 12;
     }
     Some(avg)
@@ -49,11 +51,20 @@ fn rate_to_sps(rate_code: u8) -> u32 {
             let mut num = String::new();
             let mut chars = s.chars().peekable();
             while let Some(&c) = chars.peek() {
-                if c.is_ascii_digit() || c == '.' { num.push(c); chars.next(); } else { break; }
+                if c.is_ascii_digit() || c == '.' {
+                    num.push(c);
+                    chars.next();
+                } else {
+                    break;
+                }
             }
             let val: f32 = num.parse().unwrap_or(0.0);
             let is_k = s.to_lowercase().contains("k");
-            return if is_k { (val * 1000.0) as u32 } else { val as u32 };
+            return if is_k {
+                (val * 1000.0) as u32
+            } else {
+                val as u32
+            };
         }
     }
     0
@@ -83,10 +94,15 @@ fn range_unit(range_code: u8) -> &'static str {
 /// Auto-scale a time delta (ms) into engineering units.
 fn fmt_duration_ms(dt_ms: f64) -> String {
     let abs = dt_ms.abs();
-    if abs < 1000.0 { format!("{:.2} ms", dt_ms) }
-    else if abs < 60_000.0 { format!("{:.3} s", dt_ms / 1000.0) }
-    else if abs < 3_600_000.0 { format!("{:.2} min", dt_ms / 60_000.0) }
-    else { format!("{:.2} h", dt_ms / 3_600_000.0) }
+    if abs < 1000.0 {
+        format!("{:.2} ms", dt_ms)
+    } else if abs < 60_000.0 {
+        format!("{:.3} s", dt_ms / 1000.0)
+    } else if abs < 3_600_000.0 {
+        format!("{:.2} min", dt_ms / 60_000.0)
+    } else {
+        format!("{:.2} h", dt_ms / 3_600_000.0)
+    }
 }
 
 /// Format elapsed ms as HH:MM:SS.s (tenths of a second).
@@ -111,8 +127,9 @@ fn fmt_hms(ms: f64) -> String {
 
 /// Truncate a path for display.
 fn truncate_path(p: &str, max_len: usize) -> String {
-    if p.len() <= max_len { p.to_string() }
-    else {
+    if p.len() <= max_len {
+        p.to_string()
+    } else {
         let tail = p.len().saturating_sub(max_len - 3);
         format!("...{}", &p[tail..])
     }
@@ -145,7 +162,9 @@ fn compute_stats(data: &[ScopePoint], t_start: f64) -> ChStats {
 
     // First pass: mean
     for p in data.iter().rev() {
-        if p.time_ms < t_start { break; }
+        if p.time_ms < t_start {
+            break;
+        }
         sum += p.value as f64;
         n += 1;
     }
@@ -156,20 +175,28 @@ fn compute_stats(data: &[ScopePoint], t_start: f64) -> ChStats {
 
     // Second pass: min/max/rms/zero crossings around mean
     for p in data.iter() {
-        if p.time_ms < t_start { continue; }
+        if p.time_ms < t_start {
+            continue;
+        }
         let v = p.value;
-        if v < mn { mn = v; }
-        if v > mx { mx = v; }
+        if v < mn {
+            mn = v;
+        }
+        if v > mx {
+            mx = v;
+        }
         let dev = (v - mean) as f64;
         sum_sq += dev * dev;
         last = Some(v);
-        if first_ms.is_none() { first_ms = Some(p.time_ms); }
+        if first_ms.is_none() {
+            first_ms = Some(p.time_ms);
+        }
         last_ms = Some(p.time_ms);
         if let Some(pv) = prev {
             let a = pv - mean;
             let b = v - mean;
-            if a == 0.0 && b == 0.0 {}
-            else if (a <= 0.0 && b > 0.0) || (a >= 0.0 && b < 0.0) {
+            if a == 0.0 && b == 0.0 {
+            } else if (a <= 0.0 && b > 0.0) || (a >= 0.0 && b < 0.0) {
                 crossings += 1;
             }
         }
@@ -257,12 +284,10 @@ impl ScopeUiState {
             recording_stop_ms: RwSignal::new(None),
             recording_freeze_label: RwSignal::new(None),
             recording_bucket_count: RwSignal::new(0u64),
-            adc_rate: std::array::from_fn(|_| RwSignal::new(3u8)),   // 20 SPS HR
-            adc_range: std::array::from_fn(|_| RwSignal::new(1u8)),  // ±12V
-            adc_mux: std::array::from_fn(|_| RwSignal::new(0u8)),    // LF to AGND
-            channel_labels: std::array::from_fn(|i| {
-                RwSignal::new(format!("CH {}", CH_NAMES[i]))
-            }),
+            adc_rate: std::array::from_fn(|_| RwSignal::new(3u8)), // 20 SPS HR
+            adc_range: std::array::from_fn(|_| RwSignal::new(1u8)), // ±12V
+            adc_mux: std::array::from_fn(|_| RwSignal::new(0u8)),  // LF to AGND
+            channel_labels: std::array::from_fn(|i| RwSignal::new(format!("CH {}", CH_NAMES[i]))),
             y_offset: std::array::from_fn(|_| RwSignal::new(0.0f64)),
             invert: std::array::from_fn(|_| RwSignal::new(false)),
             plot_mode: RwSignal::new(PlotMode::Overlay),
@@ -312,11 +337,19 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
     spawn_local(async move {
         let closure = Closure::new(move |event: JsValue| {
             #[derive(Deserialize)]
-            struct TauriEvt { payload: Vec<u8> }
-            let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvt>(event) else { return };
-            if !running.get_untracked() { return; }
+            struct TauriEvt {
+                payload: Vec<u8>,
+            }
+            let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvt>(event) else {
+                return;
+            };
+            if !running.get_untracked() {
+                return;
+            }
 
-            let Some(avg) = parse_scope_event(&evt.payload) else { return };
+            let Some(avg) = parse_scope_event(&evt.payload) else {
+                return;
+            };
             let now = js_sys::Date::now();
             let ch_en = channels_en.get_untracked();
             let y_off = [
@@ -333,12 +366,19 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
             ];
 
             for ch in 0..4 {
-                if !ch_en[ch] { continue; }
+                if !ch_en[ch] {
+                    continue;
+                }
                 let mut v = avg[ch];
-                if inv[ch] { v = -v; }
+                if inv[ch] {
+                    v = -v;
+                }
                 v += y_off[ch] as f32;
                 scope_data[ch].update(|data| {
-                    data.push(ScopePoint { time_ms: now, value: v });
+                    data.push(ScopePoint {
+                        time_ms: now,
+                        value: v,
+                    });
                 });
             }
 
@@ -361,7 +401,9 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
             for ch in 0..4 {
                 scope_data[ch].update(|data| {
                     data.retain(|p| p.time_ms > cutoff);
-                    if data.len() > MAX_POINTS { data.drain(0..data.len() - MAX_POINTS); }
+                    if data.len() > MAX_POINTS {
+                        data.drain(0..data.len() - MAX_POINTS);
+                    }
                 });
             }
         });
@@ -394,7 +436,9 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
             let ds = device_state.get_untracked();
             let mut to_promote: Vec<u8> = Vec::new();
             for (i, en) in ch_en.iter().enumerate() {
-                if !*en { continue; }
+                if !*en {
+                    continue;
+                }
                 let func = ds.channels.get(i).map(|c| c.function).unwrap_or(0);
                 if func != CH_FUNC_VIN && func != CH_FUNC_VOUT {
                     to_promote.push(i as u8);
@@ -405,39 +449,56 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
             }
 
             let rate_v = [
-                adc_rate[0].get_untracked(), adc_rate[1].get_untracked(),
-                adc_rate[2].get_untracked(), adc_rate[3].get_untracked(),
+                adc_rate[0].get_untracked(),
+                adc_rate[1].get_untracked(),
+                adc_rate[2].get_untracked(),
+                adc_rate[3].get_untracked(),
             ];
             let range_v = [
-                adc_range[0].get_untracked(), adc_range[1].get_untracked(),
-                adc_range[2].get_untracked(), adc_range[3].get_untracked(),
+                adc_range[0].get_untracked(),
+                adc_range[1].get_untracked(),
+                adc_range[2].get_untracked(),
+                adc_range[3].get_untracked(),
             ];
             let mux_v = [
-                adc_mux[0].get_untracked(), adc_mux[1].get_untracked(),
-                adc_mux[2].get_untracked(), adc_mux[3].get_untracked(),
+                adc_mux[0].get_untracked(),
+                adc_mux[1].get_untracked(),
+                adc_mux[2].get_untracked(),
+                adc_mux[3].get_untracked(),
             ];
 
             capture_start_ms.set(Some(js_sys::Date::now()));
-            web_sys::console::log_1(&JsValue::from_str(
-                &format!("[scope] start_scope_stream @ {:.0}", js_sys::Date::now())
-            ));
+            web_sys::console::log_1(&JsValue::from_str(&format!(
+                "[scope] start_scope_stream @ {:.0}",
+                js_sys::Date::now()
+            )));
 
             spawn_local(async move {
                 #[derive(serde::Serialize)]
-                struct ChFuncArgs { channel: u8, function: u8 }
+                struct ChFuncArgs {
+                    channel: u8,
+                    function: u8,
+                }
                 for ch_idx in to_promote {
                     let args = serde_wasm_bindgen::to_value(&ChFuncArgs {
-                        channel: ch_idx, function: CH_FUNC_VIN,
-                    }).unwrap();
-                    let _ = invoke("set_channel_function", args).await;
+                        channel: ch_idx,
+                        function: CH_FUNC_VIN,
+                    })
+                    .unwrap();
+                    let _ = try_invoke("set_channel_function", args).await;
                 }
                 sleep_ms(300).await;
 
-                let _ = invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
+                let _ = try_invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
                 sleep_ms(200).await;
 
                 #[derive(serde::Serialize)]
-                struct AdcCfgArgs { channel: u8, mux: u8, range: u8, rate: u8 }
+                struct AdcCfgArgs {
+                    channel: u8,
+                    mux: u8,
+                    range: u8,
+                    rate: u8,
+                }
                 for (i, en) in ch_en.iter().enumerate() {
                     if *en {
                         let args = serde_wasm_bindgen::to_value(&AdcCfgArgs {
@@ -445,22 +506,24 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
                             mux: mux_v[i],
                             range: range_v[i],
                             rate: rate_v[i],
-                        }).unwrap();
-                        let _ = invoke("set_adc_config", args).await;
+                        })
+                        .unwrap();
+                        let _ = try_invoke("set_adc_config", args).await;
                     }
                 }
 
-                let result = invoke("start_scope_stream", wasm_bindgen::JsValue::NULL).await;
+                let result = try_invoke("start_scope_stream", wasm_bindgen::JsValue::NULL).await;
                 log(&format!("Scope: stream started, result={:?}", result));
                 backend_stream_active.set(true);
             });
         } else {
             capture_start_ms.set(None);
-            web_sys::console::log_1(&JsValue::from_str(
-                &format!("[scope] stop_scope_stream @ {:.0}", js_sys::Date::now())
-            ));
+            web_sys::console::log_1(&JsValue::from_str(&format!(
+                "[scope] stop_scope_stream @ {:.0}",
+                js_sys::Date::now()
+            )));
             spawn_local(async move {
-                let _ = invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
+                let _ = try_invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
                 log("Scope: stream stopped");
                 backend_stream_active.set(false);
             });
@@ -535,7 +598,9 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     spawn_local(async move {
         loop {
             sleep_ms(100).await;
-            if render_epoch.get_untracked() != my_epoch { break; }
+            if render_epoch.get_untracked() != my_epoch {
+                break;
+            }
             timer_tick.update(|t| *t = t.wrapping_add(1));
             // Clear stop-freeze after 3 s.
             if let Some(stop_ms) = recording_stop_ms.get_untracked() {
@@ -556,7 +621,9 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let mut last_seen_counter: u32 = 0;
         loop {
             sleep_ms(500).await;
-            if render_epoch.get_untracked() != my_epoch { break; }
+            if render_epoch.get_untracked() != my_epoch {
+                break;
+            }
             let sc = sample_counter.get_untracked();
             if !running.get_untracked() && sc == last_seen_counter {
                 continue;
@@ -584,7 +651,9 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     spawn_local(async move {
         loop {
             sleep_ms(1000).await;
-            if render_epoch.get_untracked() != my_epoch { break; }
+            if render_epoch.get_untracked() != my_epoch {
+                break;
+            }
             if !running.get_untracked() {
                 zero_count.set(0);
                 restart_count.set(0);
@@ -604,11 +673,18 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     let restarts = restart_count.get() + 1;
                     restart_count.set(restarts);
                     if restarts <= MAX_RESTARTS {
-                        log(&format!("Scope: 0 SPS for 3s, restarting stream ({}/{})...", restarts, MAX_RESTARTS));
+                        log(&format!(
+                            "Scope: 0 SPS for 3s, restarting stream ({}/{})...",
+                            restarts, MAX_RESTARTS
+                        ));
                         set_running.set(false);
                         sleep_ms(500).await;
-                        if render_epoch.get_untracked() != my_epoch { break; }
-                        if running.get_untracked() { continue; }
+                        if render_epoch.get_untracked() != my_epoch {
+                            break;
+                        }
+                        if running.get_untracked() {
+                            continue;
+                        }
                         set_running.set(true);
                     } else {
                         auto_restart_disabled.set(true);
@@ -650,10 +726,18 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let idle = !is_running && sc == ldc && !cursor_active;
             // Background CPU win: a hidden Scope tab (running=false, no
             // pending redraw) used to wake at 30 Hz; now backs off to 5 Hz.
-            let delay = if is_running { 50 } else if idle { 200 } else { 33 };
+            let delay = if is_running {
+                50
+            } else if idle {
+                200
+            } else {
+                33
+            };
             sleep_ms(delay).await;
 
-            if render_epoch.get_untracked() != my_epoch { break; }
+            if render_epoch.get_untracked() != my_epoch {
+                break;
+            }
 
             // Skip redraw when nothing changed AND no interactive cursor moved.
             if idle {
@@ -662,14 +746,18 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             last_draw_counter.set(sc);
 
             let draw_start = js_sys::Date::now();
-            let Some(canvas) = canvas_ref.get() else { continue };
+            let Some(canvas) = canvas_ref.get() else {
+                continue;
+            };
             let canvas: HtmlCanvasElement = canvas;
             if first_iter {
                 canvas.set_width(0);
                 canvas.set_height(0);
                 first_iter = false;
             }
-            let Some(ctx) = canvas.get_context("2d").ok().flatten() else { continue };
+            let Some(ctx) = canvas.get_context("2d").ok().flatten() else {
+                continue;
+            };
             let ctx: CanvasRenderingContext2d = ctx.unchecked_into();
 
             let dpr = web_sys::window().unwrap().device_pixel_ratio();
@@ -678,8 +766,12 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let h = rect.height();
             let cw = (w * dpr) as u32;
             let ch_px = (h * dpr) as u32;
-            if canvas.width() != cw { canvas.set_width(cw); }
-            if canvas.height() != ch_px { canvas.set_height(ch_px); }
+            if canvas.width() != cw {
+                canvas.set_width(cw);
+            }
+            if canvas.height() != ch_px {
+                canvas.set_height(ch_px);
+            }
             ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
 
             // Clear — darker background for scientific view.
@@ -700,31 +792,45 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let mut mn = f64::MAX;
                 let mut mx = f64::MIN;
                 for i in 0..4 {
-                    if !ch_en[i] { continue; }
+                    if !ch_en[i] {
+                        continue;
+                    }
                     scope_data[i].with_untracked(|data| {
                         for p in data.iter().rev().take(STATS_WINDOW) {
-                            if p.time_ms < t_start { break; }
+                            if p.time_ms < t_start {
+                                break;
+                            }
                             let v = p.value as f64;
-                            if v < mn { mn = v; }
-                            if v > mx { mx = v; }
+                            if v < mn {
+                                mn = v;
+                            }
+                            if v > mx {
+                                mx = v;
+                            }
                         }
                     });
                 }
-                if mn == f64::MAX { (0.0, 1.0) }
-                else {
+                if mn == f64::MAX {
+                    (0.0, 1.0)
+                } else {
                     let margin = (mx - mn).max(0.01) * 0.15;
                     (mn - margin, mx + margin)
                 }
             } else {
                 match yr.as_str() {
-                    "0-12" => (0.0, 12.0), "pm12" => (-12.0, 12.0),
-                    "0-625m" => (0.0, 0.625), "0-25m" => (0.0, 25.0),
+                    "0-12" => (0.0, 12.0),
+                    "pm12" => (-12.0, 12.0),
+                    "0-625m" => (0.0, 0.625),
+                    "0-25m" => (0.0, 25.0),
                     _ => (0.0, 12.0),
                 }
             };
 
             // Plot area margins
-            let ml = 65.0; let mr = 15.0; let mt = 18.0; let mb = 30.0;
+            let ml = 65.0;
+            let mr = 15.0;
+            let mt = 18.0;
+            let mb = 30.0;
             let pw = w - ml - mr;
             let ph = h - mt - mb;
 
@@ -760,7 +866,9 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.set_stroke_style_str("rgba(148,163,184,0.08)");
             ctx.set_line_width(0.5);
             for j in 0..v_majors * 5 {
-                if j % 5 == 0 { continue; }
+                if j % 5 == 0 {
+                    continue;
+                }
                 let frac = j as f64 / (v_majors as f64 * 5.0);
                 let x = ml + frac * pw;
                 ctx.begin_path();
@@ -769,7 +877,9 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 ctx.stroke();
             }
             for j in 0..h_majors * 5 {
-                if j % 5 == 0 { continue; }
+                if j % 5 == 0 {
+                    continue;
+                }
                 let frac = j as f64 / (h_majors as f64 * 5.0);
                 let y = mt + frac * ph;
                 ctx.begin_path();
@@ -800,24 +910,37 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             let mut mx = f64::MIN;
                             scope_data[c].with_untracked(|data| {
                                 for p in data.iter().rev().take(STATS_WINDOW) {
-                                    if p.time_ms < t_start { break; }
+                                    if p.time_ms < t_start {
+                                        break;
+                                    }
                                     let v = p.value as f64;
-                                    if v < mn { mn = v; }
-                                    if v > mx { mx = v; }
+                                    if v < mn {
+                                        mn = v;
+                                    }
+                                    if v > mx {
+                                        mx = v;
+                                    }
                                 }
                             });
-                            if mn == f64::MAX { (0.0, 1.0) }
-                            else {
+                            if mn == f64::MAX {
+                                (0.0, 1.0)
+                            } else {
                                 let margin = (mx - mn).max(0.01) * 0.15;
                                 (mn - margin, mx + margin)
                             }
-                        } else { (y_min_all, y_max_all) };
+                        } else {
+                            (y_min_all, y_max_all)
+                        };
                         let band_top = mt + bi as f64 * band_h;
                         let band_bot = band_top + band_h;
                         // Label at band top + middle + bottom
                         ctx.set_fill_style_str(COLORS[c]);
                         let _ = ctx.fill_text(&format!("{:.2}", bmax), ml - 8.0, band_top + 10.0);
-                        let _ = ctx.fill_text(&format!("{:.2}", (bmin + bmax) / 2.0), ml - 8.0, (band_top + band_bot) / 2.0);
+                        let _ = ctx.fill_text(
+                            &format!("{:.2}", (bmin + bmax) / 2.0),
+                            ml - 8.0,
+                            (band_top + band_bot) / 2.0,
+                        );
                         let _ = ctx.fill_text(&format!("{:.2}", bmin), ml - 8.0, band_bot - 4.0);
                     }
                 }
@@ -844,23 +967,43 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.stroke_rect(ml, mt, pw, ph);
 
             // -- Plot channel traces --
-            let plot_ch = |ctx: &CanvasRenderingContext2d, c: usize, color: &str, get_val: &dyn Fn(usize) -> Option<(f64, f32)>, n: usize, band_top: f64, band_h: f64, y_min: f64, y_max: f64| {
-                if n < 2 { return; }
+            let plot_ch = |ctx: &CanvasRenderingContext2d,
+                           c: usize,
+                           color: &str,
+                           get_val: &dyn Fn(usize) -> Option<(f64, f32)>,
+                           n: usize,
+                           band_top: f64,
+                           band_h: f64,
+                           y_min: f64,
+                           y_max: f64| {
+                if n < 2 {
+                    return;
+                }
                 let y_span = y_max - y_min;
                 ctx.set_stroke_style_str(color);
                 ctx.set_line_width(1.3);
                 ctx.begin_path();
                 let mut started = false;
                 // Decimation
-                let skip = if n > (pw as usize * 2) { n / (pw as usize * 2) } else { 1 };
+                let skip = if n > (pw as usize * 2) {
+                    n / (pw as usize * 2)
+                } else {
+                    1
+                };
                 for idx in 0..n {
-                    if skip > 1 && idx % skip != 0 { continue; }
+                    if skip > 1 && idx % skip != 0 {
+                        continue;
+                    }
                     let Some((t, v)) = get_val(idx) else { continue };
                     let x = ml + ((t - t_start) / win_ms) * pw;
                     let y = band_top + ((y_max - v as f64) / y_span) * band_h;
                     let y = y.clamp(band_top, band_top + band_h);
-                    if !started { ctx.move_to(x, y); started = true; }
-                    else { ctx.line_to(x, y); }
+                    if !started {
+                        ctx.move_to(x, y);
+                        started = true;
+                    } else {
+                        ctx.line_to(x, y);
+                    }
                 }
                 ctx.stroke();
                 let _ = c;
@@ -869,15 +1012,28 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             match mode {
                 PlotMode::Overlay => {
                     for c in 0..4 {
-                        if !ch_en[c] { continue; }
+                        if !ch_en[c] {
+                            continue;
+                        }
                         scope_data[c].with_untracked(|data| {
                             // Build a filtered view
-                            let filt: Vec<(f64, f32)> = data.iter()
+                            let filt: Vec<(f64, f32)> = data
+                                .iter()
                                 .filter(|p| p.time_ms >= t_start)
                                 .map(|p| (p.time_ms, p.value))
                                 .collect();
                             let n = filt.len();
-                            plot_ch(&ctx, c, COLORS[c], &|i| filt.get(i).copied(), n, mt, ph, y_min_all, y_max_all);
+                            plot_ch(
+                                &ctx,
+                                c,
+                                COLORS[c],
+                                &|i| filt.get(i).copied(),
+                                n,
+                                mt,
+                                ph,
+                                y_min_all,
+                                y_max_all,
+                            );
                         });
                     }
                     // Math trace: CH A - CH B (overlay only)
@@ -885,12 +1041,18 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         // Build via nearest-neighbor alignment on A's timestamps
                         scope_data[0].with_untracked(|data_a| {
                             scope_data[1].with_untracked(|data_b| {
-                                if data_a.is_empty() || data_b.is_empty() { return; }
+                                if data_a.is_empty() || data_b.is_empty() {
+                                    return;
+                                }
                                 let mut bj = 0usize;
-                                let filt: Vec<(f64, f32)> = data_a.iter()
+                                let filt: Vec<(f64, f32)> = data_a
+                                    .iter()
                                     .filter(|p| p.time_ms >= t_start)
                                     .map(|pa| {
-                                        while bj + 1 < data_b.len() && (data_b[bj + 1].time_ms - pa.time_ms).abs() < (data_b[bj].time_ms - pa.time_ms).abs() {
+                                        while bj + 1 < data_b.len()
+                                            && (data_b[bj + 1].time_ms - pa.time_ms).abs()
+                                                < (data_b[bj].time_ms - pa.time_ms).abs()
+                                        {
                                             bj += 1;
                                         }
                                         let vb = data_b[bj].value;
@@ -898,7 +1060,17 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     })
                                     .collect();
                                 let n = filt.len();
-                                plot_ch(&ctx, 4, MATH_COLOR, &|i| filt.get(i).copied(), n, mt, ph, y_min_all, y_max_all);
+                                plot_ch(
+                                    &ctx,
+                                    4,
+                                    MATH_COLOR,
+                                    &|i| filt.get(i).copied(),
+                                    n,
+                                    mt,
+                                    ph,
+                                    y_min_all,
+                                    y_max_all,
+                                );
                             });
                         });
                     }
@@ -920,25 +1092,45 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             let mut mx = f64::MIN;
                             scope_data[c].with_untracked(|data| {
                                 for p in data.iter().rev().take(STATS_WINDOW) {
-                                    if p.time_ms < t_start { break; }
+                                    if p.time_ms < t_start {
+                                        break;
+                                    }
                                     let v = p.value as f64;
-                                    if v < mn { mn = v; }
-                                    if v > mx { mx = v; }
+                                    if v < mn {
+                                        mn = v;
+                                    }
+                                    if v > mx {
+                                        mx = v;
+                                    }
                                 }
                             });
-                            if mn == f64::MAX { (0.0, 1.0) }
-                            else {
+                            if mn == f64::MAX {
+                                (0.0, 1.0)
+                            } else {
                                 let margin = (mx - mn).max(0.01) * 0.15;
                                 (mn - margin, mx + margin)
                             }
-                        } else { (y_min_all, y_max_all) };
+                        } else {
+                            (y_min_all, y_max_all)
+                        };
                         scope_data[c].with_untracked(|data| {
-                            let filt: Vec<(f64, f32)> = data.iter()
+                            let filt: Vec<(f64, f32)> = data
+                                .iter()
                                 .filter(|p| p.time_ms >= t_start)
                                 .map(|p| (p.time_ms, p.value))
                                 .collect();
                             let n = filt.len();
-                            plot_ch(&ctx, c, COLORS[c], &|i| filt.get(i).copied(), n, band_top, band_h, bmin, bmax);
+                            plot_ch(
+                                &ctx,
+                                c,
+                                COLORS[c],
+                                &|i| filt.get(i).copied(),
+                                n,
+                                band_top,
+                                band_h,
+                                bmin,
+                                bmax,
+                            );
                         });
                         // Channel badge
                         ctx.set_fill_style_str("rgba(10,15,30,0.75)");
@@ -948,28 +1140,34 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         ctx.set_font("10px 'JetBrains Mono', monospace");
                         ctx.set_text_align("left");
                         ctx.set_fill_style_str(COLORS[c]);
-                        let _ = ctx.fill_text(&format!("CH {}", CH_NAMES[c]), ml + 12.0, band_top + 15.0);
+                        let _ = ctx.fill_text(
+                            &format!("CH {}", CH_NAMES[c]),
+                            ml + 12.0,
+                            band_top + 15.0,
+                        );
                     }
                 }
             }
 
             // -- Measurement cursors A / B --
-            let draw_named_cursor = |ctx: &CanvasRenderingContext2d, x: f64, label: &str, color: &str| {
-                ctx.set_stroke_style_str(color);
-                ctx.set_line_width(1.0);
-                ctx.set_line_dash(&js_sys::Array::of2(&4.0.into(), &4.0.into()).into()).ok();
-                ctx.begin_path();
-                ctx.move_to(x, mt);
-                ctx.line_to(x, mt + ph);
-                ctx.stroke();
-                ctx.set_line_dash(&js_sys::Array::new().into()).ok();
-                ctx.set_font("10px 'JetBrains Mono', monospace");
-                ctx.set_text_align("center");
-                ctx.set_fill_style_str("rgba(10,15,30,0.85)");
-                ctx.fill_rect(x - 10.0, mt - 2.0, 20.0, 14.0);
-                ctx.set_fill_style_str(color);
-                let _ = ctx.fill_text(label, x, mt + 9.0);
-            };
+            let draw_named_cursor =
+                |ctx: &CanvasRenderingContext2d, x: f64, label: &str, color: &str| {
+                    ctx.set_stroke_style_str(color);
+                    ctx.set_line_width(1.0);
+                    ctx.set_line_dash(&js_sys::Array::of2(&4.0.into(), &4.0.into()).into())
+                        .ok();
+                    ctx.begin_path();
+                    ctx.move_to(x, mt);
+                    ctx.line_to(x, mt + ph);
+                    ctx.stroke();
+                    ctx.set_line_dash(&js_sys::Array::new().into()).ok();
+                    ctx.set_font("10px 'JetBrains Mono', monospace");
+                    ctx.set_text_align("center");
+                    ctx.set_fill_style_str("rgba(10,15,30,0.85)");
+                    ctx.fill_rect(x - 10.0, mt - 2.0, 20.0, 14.0);
+                    ctx.set_fill_style_str(color);
+                    let _ = ctx.fill_text(label, x, mt + 9.0);
+                };
 
             let cur_a_ms = cursor_a.get_untracked();
             let cur_b_ms = cursor_b.get_untracked();
@@ -1003,16 +1201,20 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 tooltip_lines.push(format!("t: -{:.2}s", secs_ago));
 
                 for c in 0..4 {
-                    if !ch_en[c] { continue; }
+                    if !ch_en[c] {
+                        continue;
+                    }
                     scope_data[c].with_untracked(|data| {
                         let mut interp_val: Option<f32> = None;
                         for i in 1..data.len() {
-                            if data[i - 1].time_ms <= cursor_time && data[i].time_ms >= cursor_time {
+                            if data[i - 1].time_ms <= cursor_time && data[i].time_ms >= cursor_time
+                            {
                                 let dt_seg = data[i].time_ms - data[i - 1].time_ms;
                                 if dt_seg > 0.0 {
                                     let t_frac = (cursor_time - data[i - 1].time_ms) / dt_seg;
                                     interp_val = Some(
-                                        data[i - 1].value + (data[i].value - data[i - 1].value) * t_frac as f32
+                                        data[i - 1].value
+                                            + (data[i].value - data[i - 1].value) * t_frac as f32,
                                     );
                                 } else {
                                     interp_val = Some(data[i].value);
@@ -1026,7 +1228,11 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     });
                 }
 
-                let tt_x = if cx + 160.0 > w - mr { cx - 165.0 } else { cx + 10.0 };
+                let tt_x = if cx + 160.0 > w - mr {
+                    cx - 165.0
+                } else {
+                    cx + 10.0
+                };
                 let tt_y = mt + 10.0;
                 let line_h = 16.0;
                 let tt_h = tooltip_lines.len() as f64 * line_h + 8.0;
@@ -1048,7 +1254,10 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         for c in 0..4 {
                             if ch_en[c] {
                                 count += 1;
-                                if count == li { ch_idx = c; break; }
+                                if count == li {
+                                    ch_idx = c;
+                                    break;
+                                }
                             }
                         }
                         COLORS[ch_idx].to_string()
@@ -1067,14 +1276,26 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             // configured rate derived directly from the ADC_RATE_OPTIONS label.
             let bucket_rate = sample_rate.get_untracked(); // buckets per second (≈100 when healthy)
             let first_en = (0..4).find(|&i| ch_en[i]);
-            let cfg_lbl = first_en.map(|i| rate_label(adc_rate[i].get_untracked())).unwrap_or_else(|| "— SPS".to_string());
+            let cfg_lbl = first_en
+                .map(|i| rate_label(adc_rate[i].get_untracked()))
+                .unwrap_or_else(|| "— SPS".to_string());
             let rate_overlay = format!("{}   buckets: {}/s", cfg_lbl, bucket_rate);
             ctx.set_fill_style_str("rgba(10,15,30,0.7)");
             let tw = 220.0;
             ctx.fill_rect(w - mr - tw - 4.0, mt + 2.0, tw, 16.0);
-            ctx.set_fill_style_str(if running.get_untracked() && bucket_rate > 0 { "#10b981" } else { "rgba(148,163,184,0.7)" });
+            ctx.set_fill_style_str(if running.get_untracked() && bucket_rate > 0 {
+                "#10b981"
+            } else {
+                "rgba(148,163,184,0.7)"
+            });
             ctx.begin_path();
-            let _ = ctx.arc(w - mr - tw + 4.0, mt + 10.0, 3.5, 0.0, std::f64::consts::TAU);
+            let _ = ctx.arc(
+                w - mr - tw + 4.0,
+                mt + 10.0,
+                3.5,
+                0.0,
+                std::f64::consts::TAU,
+            );
             ctx.fill();
             ctx.set_fill_style_str("rgba(226,232,240,0.85)");
             ctx.set_text_align("right");
@@ -1096,11 +1317,19 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let first_ch_for_buf = first_en.unwrap_or(0);
             let ch_samples = scope_data[first_ch_for_buf].with_untracked(|d| d.len());
             let fill_frac = (ch_samples as f64 / MAX_POINTS as f64).clamp(0.0, 1.0);
-            let cfg_sps_first = first_en.map(|i| rate_to_sps(adc_rate[i].get_untracked())).unwrap_or(0);
+            let cfg_sps_first = first_en
+                .map(|i| rate_to_sps(adc_rate[i].get_untracked()))
+                .unwrap_or(0);
             let time_str = if cfg_sps_first > 0 {
                 let secs = ch_samples as f64 / cfg_sps_first as f64;
-                if secs >= 60.0 { format!("~{:.1}m", secs / 60.0) } else { format!("~{:.0}s", secs) }
-            } else { "—".to_string() };
+                if secs >= 60.0 {
+                    format!("~{:.1}m", secs / 60.0)
+                } else {
+                    format!("~{:.0}s", secs)
+                }
+            } else {
+                "—".to_string()
+            };
             let bar_w = 190.0;
             let bar_x = w - mr - bar_w - 4.0;
             let bar_y = h - mb - 14.0;
@@ -1112,17 +1341,25 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.fill_rect(bar_x, bar_y, bar_w * fill_frac, 8.0);
             ctx.set_fill_style_str("rgba(226,232,240,0.85)");
             ctx.set_text_align("right");
-            let buf_lbl = format!("buf {:.0}% · {}k/{}k · {}",
+            let buf_lbl = format!(
+                "buf {:.0}% · {}k/{}k · {}",
                 fill_frac * 100.0,
                 ch_samples / 1000,
                 MAX_POINTS / 1000,
-                time_str);
+                time_str
+            );
             let _ = ctx.fill_text(&buf_lbl, bar_x - 6.0, bar_y + 8.0);
 
             // Bottom-left: mode + time base
-            let mode_str = match mode { PlotMode::Overlay => "OVERLAY", PlotMode::Stacked => "STACKED" };
-            let tb_label = if win_sec >= 60.0 { format!("{:.1} min/div", (win_sec / v_majors as f64) / 60.0) }
-                else { format!("{:.2} s/div", win_sec / v_majors as f64) };
+            let mode_str = match mode {
+                PlotMode::Overlay => "OVERLAY",
+                PlotMode::Stacked => "STACKED",
+            };
+            let tb_label = if win_sec >= 60.0 {
+                format!("{:.1} min/div", (win_sec / v_majors as f64) / 60.0)
+            } else {
+                format!("{:.2} s/div", win_sec / v_majors as f64)
+            };
             let lbl = format!("{}   {}", mode_str, tb_label);
             ctx.set_fill_style_str("rgba(10,15,30,0.7)");
             ctx.fill_rect(ml + 4.0, h - mb - 16.0, 200.0, 14.0);
@@ -1149,9 +1386,10 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let draw_dt = draw_end - draw_start;
             if draw_dt > 30.0 && draw_end - last_perf_log > 1000.0 {
                 last_perf_log = draw_end;
-                web_sys::console::warn_1(&JsValue::from_str(
-                    &format!("scope: draw {:.1} ms (>30ms budget)", draw_dt)
-                ));
+                web_sys::console::warn_1(&JsValue::from_str(&format!(
+                    "scope: draw {:.1} ms (>30ms budget)",
+                    draw_dt
+                )));
             }
         }
     });
@@ -1226,7 +1464,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                     let args = serde_wasm_bindgen::to_value(&AdcCfgArgs {
                                                         channel: ch as u8, mux, range, rate: new_rate,
                                                     }).unwrap();
-                                                    let _ = invoke("set_adc_config", args).await;
+                                                    let _ = try_invoke("set_adc_config", args).await;
                                                 });
                                             }
                                         >
@@ -1427,7 +1665,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 set_sample_rate.set(0);
                                 for ch in 0..4 { scope_data[ch].set(Vec::new()); }
                                 spawn_local(async {
-                                    let _ = invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
+                                    let _ = try_invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
                                 });
                                 show_toast("Scope force reset", "ok");
                             }
@@ -1440,8 +1678,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             on:click=move |_| {
                                 if recording.get_untracked() {
                                     spawn_local(async move {
-                                        let result = invoke("stop_recording", wasm_bindgen::JsValue::NULL).await;
-                                        if let Ok(count) = serde_wasm_bindgen::from_value::<u64>(result) {
+                                        let result = try_invoke("stop_recording", wasm_bindgen::JsValue::NULL).await;
+                                        if let Some(count) = result.and_then(|r| serde_wasm_bindgen::from_value::<u64>(r).ok()) {
                                             log(&format!("Recording stopped: {} samples", count));
                                         }
                                     });
@@ -1463,8 +1701,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     let rate = sample_rate.get_untracked();
 
                                     spawn_local(async move {
-                                        let result = invoke("pick_save_file", wasm_bindgen::JsValue::NULL).await;
-                                        if let Ok(opt) = serde_wasm_bindgen::from_value::<Option<String>>(result) {
+                                        let result = try_invoke("pick_save_file", wasm_bindgen::JsValue::NULL).await;
+                                        if let Some(opt) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok()) {
                                             if let Some(path) = opt {
                                                 if !path.is_empty() {
                                                     let bbsc_path = if path.ends_with(".csv") {
@@ -1481,7 +1719,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                             "sampleRate": rate.max(20)
                                                         })
                                                     ).unwrap();
-                                                    let _ = invoke("start_recording", args).await;
+                                                    let _ = try_invoke("start_recording", args).await;
                                                     set_csv_path.set(bbsc_path);
                                                     recording_start_ms.set(Some(js_sys::Date::now()));
                                                     recording_bucket_count.set(0);
@@ -1518,8 +1756,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             title="Export recorded BBSC to CSV"
                             on:click=move |_| {
                                 spawn_local(async move {
-                                    let result = invoke("pick_save_file", wasm_bindgen::JsValue::NULL).await;
-                                    if let Ok(Some(export_csv)) = serde_wasm_bindgen::from_value::<Option<String>>(result) {
+                                    let result = try_invoke("pick_save_file", wasm_bindgen::JsValue::NULL).await;
+                                    if let Some(Some(export_csv)) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok()) {
                                         if export_csv.is_empty() { return; }
                                         let last_rec = csv_path.get_untracked();
                                         let bbsc = if !last_rec.is_empty() && last_rec.ends_with(".bbsc") {
@@ -1534,8 +1772,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         let args = serde_wasm_bindgen::to_value(
                                             &serde_json::json!({ "bbscPath": bbsc, "csvPath": csv })
                                         ).unwrap();
-                                        let result = invoke("export_bbsc_to_csv", args).await;
-                                        if let Ok(count) = serde_wasm_bindgen::from_value::<u64>(result) {
+                                        let result = try_invoke("export_bbsc_to_csv", args).await;
+                                        if let Some(count) = result.and_then(|r| serde_wasm_bindgen::from_value::<u64>(r).ok()) {
                                             log(&format!("Exported {} samples to CSV", count));
                                         }
                                     }
@@ -1688,7 +1926,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
 async fn sleep_ms(ms: u32) {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
-        web_sys::window().unwrap()
+        web_sys::window()
+            .unwrap()
             .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32)
             .unwrap();
     });

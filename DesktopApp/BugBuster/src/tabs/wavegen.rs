@@ -1,9 +1,9 @@
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
-use crate::tauri_bridge::*;
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
 /// IO ownership slots claimed by the WaveGen tab (CH0..CH3 → indices 12..15).
 pub const SLOTS: &[u8] = &[12, 13, 14, 15];
@@ -24,7 +24,11 @@ fn decode_channel_alert(bits: u16) -> String {
         .iter()
         .filter_map(|(b, n)| if bits & b != 0 { Some(*n) } else { None })
         .collect();
-    if names.is_empty() { format!("0x{:04X}", bits) } else { names.join(",") }
+    if names.is_empty() {
+        format!("0x{:04X}", bits)
+    } else {
+        names.join(",")
+    }
 }
 
 /// Hoisted Wavegen UI state — lives in app-level context so signals survive
@@ -102,19 +106,26 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let wf = waveform.get();
         let amp = amplitude.get();
         let off = offset.get();
-        let Some(canvas) = preview_ref.get() else { return };
+        let Some(canvas) = preview_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas;
         let dpr = web_sys::window().unwrap().device_pixel_ratio();
         let rect = canvas.get_bounding_client_rect();
         let w = rect.width();
         let h = rect.height();
-        if w < 10.0 { return; }
+        if w < 10.0 {
+            return;
+        }
         canvas.set_width((w * dpr) as u32);
         canvas.set_height((h * dpr) as u32);
 
         let ctx: CanvasRenderingContext2d = canvas
-            .get_context("2d").unwrap().unwrap()
-            .dyn_into().unwrap();
+            .get_context("2d")
+            .unwrap()
+            .unwrap()
+            .dyn_into()
+            .unwrap();
         ctx.scale(dpr, dpr).unwrap();
 
         ctx.set_fill_style_str("#0f1729");
@@ -131,7 +142,11 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let y_range = (amp.abs() + off.abs()) * 1.3;
         let y_range = y_range.max(0.1);
 
-        let color = if mode.get() == "current" { "#a855f7" } else { "#3b82f6" };
+        let color = if mode.get() == "current" {
+            "#a855f7"
+        } else {
+            "#3b82f6"
+        };
         ctx.set_stroke_style_str(color);
         ctx.set_line_width(2.0);
         ctx.begin_path();
@@ -143,17 +158,24 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 "sine" => off + amp * (t * std::f64::consts::TAU).sin(),
                 "square" => off + if t < 0.5 { amp } else { -amp },
                 "triangle" => {
-                    let v = if t < 0.25 { t * 4.0 }
-                        else if t < 0.75 { 2.0 - t * 4.0 }
-                        else { t * 4.0 - 4.0 };
+                    let v = if t < 0.25 {
+                        t * 4.0
+                    } else if t < 0.75 {
+                        2.0 - t * 4.0
+                    } else {
+                        t * 4.0 - 4.0
+                    };
                     off + amp * v
                 }
                 "sawtooth" => off + amp * (2.0 * t - 1.0),
                 _ => 0.0,
             };
             let y = h / 2.0 - (v / y_range) * (h / 2.0 - 10.0);
-            if px == 0 { ctx.move_to(px as f64, y); }
-            else { ctx.line_to(px as f64, y); }
+            if px == 0 {
+                ctx.move_to(px as f64, y);
+            } else {
+                ctx.line_to(px as f64, y);
+            }
         }
         ctx.stroke();
 
@@ -166,26 +188,41 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     let commit_freq = move || {
-        if let Ok(v) = edit_freq.get_untracked().parse::<f64>() { set_freq_hz.set(v.clamp(0.01, 100.0)); }
+        if let Ok(v) = edit_freq.get_untracked().parse::<f64>() {
+            set_freq_hz.set(v.clamp(0.01, 100.0));
+        }
         set_edit_freq.set(format!("{:.1}", freq_hz.get_untracked()));
     };
     let commit_amp = move || {
-        if let Ok(v) = edit_amp.get_untracked().parse::<f64>() { set_amplitude.set(v.clamp(0.0, max_amp())); }
+        if let Ok(v) = edit_amp.get_untracked().parse::<f64>() {
+            set_amplitude.set(v.clamp(0.0, max_amp()));
+        }
         set_edit_amp.set(format!("{:.1}", amplitude.get_untracked()));
     };
     let commit_off = move || {
-        if let Ok(v) = edit_off.get_untracked().parse::<f64>() { set_offset.set(v.clamp(-max_amp(), max_amp())); }
+        if let Ok(v) = edit_off.get_untracked().parse::<f64>() {
+            set_offset.set(v.clamp(-max_amp(), max_amp()));
+        }
         set_edit_off.set(format!("{:.1}", offset.get_untracked()));
     };
 
     let toggle = move |_: leptos::ev::MouseEvent| {
-        if sending.get_untracked() { return; } // guard double-click
+        if sending.get_untracked() {
+            return;
+        } // guard double-click
         set_sending.set(true);
         let new_state = !running.get_untracked();
         if new_state {
             #[derive(Serialize)]
             #[serde(rename_all = "camelCase")]
-            struct Args { channel: u8, waveform: String, freq_hz: f64, amplitude: f64, offset: f64, mode: String }
+            struct Args {
+                channel: u8,
+                waveform: String,
+                freq_hz: f64,
+                amplitude: f64,
+                offset: f64,
+                mode: String,
+            }
             let ch_idx = channel.get_untracked();
             let wf_val = waveform.get_untracked();
             let mode_val = mode.get_untracked();
@@ -195,10 +232,13 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             // AIO_SC diagnostic log: user reports short-circuit fault when wavegen
             // is active. Record request context so we can correlate with backend
             // [wavegen_start] + [faults] edges.
-            web_sys::console::log_1(&format!(
-                "[wavegen_start] ch={} mode={} wf={} freq={} amp={} off={}",
-                ch_idx, mode_val, wf_val, f_val, a_val, o_val
-            ).into());
+            web_sys::console::log_1(
+                &format!(
+                    "[wavegen_start] ch={} mode={} wf={} freq={} amp={} off={}",
+                    ch_idx, mode_val, wf_val, f_val, a_val, o_val
+                )
+                .into(),
+            );
             let args = serde_wasm_bindgen::to_value(&Args {
                 channel: ch_idx,
                 waveform: wf_val.clone(),
@@ -206,18 +246,19 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 amplitude: a_val,
                 offset: o_val,
                 mode: mode_val,
-            }).unwrap();
+            })
+            .unwrap();
             let ch_name = CH_NAMES[ch_idx as usize];
             let label = format!("Start {} {}Hz on CH {}", wf_val, f_val, ch_name);
             spawn_local(async move {
-                let _ = invoke("start_wavegen", args).await;
+                let _ = try_invoke("start_wavegen", args).await;
                 set_running.set(true);
                 set_sending.set(false);
                 show_toast(&label, "ok");
             });
         } else {
             spawn_local(async move {
-                let _ = invoke("stop_wavegen", wasm_bindgen::JsValue::NULL).await;
+                let _ = try_invoke("stop_wavegen", wasm_bindgen::JsValue::NULL).await;
                 set_running.set(false);
                 set_sending.set(false);
                 show_toast("Stop wavegen", "ok");

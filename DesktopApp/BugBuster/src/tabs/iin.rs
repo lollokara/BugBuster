@@ -1,25 +1,45 @@
+use crate::components::channel_sparkline::ChannelSparkline;
+use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
-use crate::tauri_bridge::*;
-use crate::components::channel_sparkline::ChannelSparkline;
 
 const SPARK_CAP: usize = 120;
 
 fn send_ch_func(ch: u8, func: u8) {
     #[derive(Serialize)]
-    struct Args { channel: u8, function: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { channel: ch, function: func }).unwrap();
+    struct Args {
+        channel: u8,
+        function: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        channel: ch,
+        function: func,
+    })
+    .unwrap();
     let label = format!("Set CH {} to {}", CH_NAMES[ch as usize], func_name(func));
     invoke_with_feedback("set_channel_function", args, &label);
 }
 
 fn send_adc_cfg(ch: u8, mux: u8, range: u8, rate: u8) {
     #[derive(Serialize)]
-    struct Args { channel: u8, mux: u8, range: u8, rate: u8 }
-    let args = serde_wasm_bindgen::to_value(&Args { channel: ch, mux, range, rate }).unwrap();
-    let range_name = ADC_RANGE_OPTIONS.iter()
+    struct Args {
+        channel: u8,
+        mux: u8,
+        range: u8,
+        rate: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        channel: ch,
+        mux,
+        range,
+        rate,
+    })
+    .unwrap();
+    let range_name = ADC_RANGE_OPTIONS
+        .iter()
         .find(|(c, _, _, _)| *c == range)
-        .map(|(_, n, _, _)| *n).unwrap_or("?");
+        .map(|(_, n, _, _)| *n)
+        .unwrap_or("?");
     let label = format!("Set CH {} ADC: {}", CH_NAMES[ch as usize], range_name);
     invoke_with_feedback("set_adc_config", args, &label);
 }
