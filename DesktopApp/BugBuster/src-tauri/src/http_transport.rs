@@ -51,6 +51,64 @@ fn encode_husb_voltage_code(voltage_v: f64) -> u8 {
     }
 }
 
+fn encode_gpio_status_payload(gpios: Option<&[Value]>) -> Vec<u8> {
+    let mut pw = bbp::PayloadWriter::new();
+    for i in 0..12 {
+        let g = gpios.and_then(|a| a.get(i));
+        pw.put_u8(
+            g.and_then(|v| v.get("id"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(i as u64) as u8,
+        );
+        pw.put_u8(
+            g.and_then(|v| v.get("mode"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u8,
+        );
+        pw.put_bool(
+            g.and_then(|v| v.get("output"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        );
+        pw.put_bool(
+            g.and_then(|v| v.get("input"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        );
+        pw.put_bool(
+            g.and_then(|v| v.get("pulldown"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        );
+    }
+    pw.buf
+}
+
+fn encode_selftest_supplies_cached_payload(json: &Value) -> Vec<u8> {
+    let mut pw = bbp::PayloadWriter::new();
+    pw.put_bool(
+        json.get("available")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    );
+    pw.put_u32(
+        json.get("timestampMs")
+            .or_else(|| json.get("timestamp_ms"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+    );
+    let rails = json.get("rails").and_then(|v| v.as_array());
+    for i in 0..3 {
+        let rail = rails.and_then(|a| a.get(i));
+        let voltage = rail
+            .and_then(|v| v.get("voltageV").or_else(|| v.get("voltage_v")))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-1.0);
+        pw.put_f32(voltage as f32);
+    }
+    pw.buf
+}
+
 pub struct HttpTransport {
     client: Client,      // Fast client for status polls and normal commands
     slow_client: Client, // Slow client for WiFi connect/scan (long-blocking)
@@ -581,29 +639,9 @@ impl Transport for HttpTransport {
                 Ok(pw.buf)
             }
 
-            bbp::CMD_SELFTEST_EFUSE_CURRENTS => {
-                let json = self.get_json("/api/selftest/efuse").await?;
-                let mut pw = bbp::PayloadWriter::new();
-                pw.put_bool(
-                    json.get("available")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                );
-                pw.put_u32(
-                    json.get("timestampMs")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32,
-                );
-                let efuses = json.get("efuses").and_then(|v| v.as_array());
-                for i in 0..4 {
-                    let cur = efuses
-                        .and_then(|a| a.get(i))
-                        .and_then(|v| v.get("currentA"))
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(-1.0);
-                    pw.put_f32(cur as f32);
-                }
-                Ok(pw.buf)
+            bbp::CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED => {
+                let json = self.get_json("/api/selftest/supplies/cached").await?;
+                Ok(encode_selftest_supplies_cached_payload(&json))
             }
 
             bbp::CMD_SELFTEST_AUTO_CAL => {
@@ -733,32 +771,11 @@ impl Transport for HttpTransport {
 
             bbp::CMD_GET_GPIO_STATUS => {
                 let json = self.get_json("/api/gpio").await?;
-                let mut pw = bbp::PayloadWriter::new();
-                let gpios = json.get("gpios").and_then(|v| v.as_array());
-                for i in 0..6 {
-                    let g = gpios.and_then(|a| a.get(i));
-                    pw.put_u8(
-                        g.and_then(|v| v.get("mode"))
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u8,
-                    );
-                    pw.put_bool(
-                        g.and_then(|v| v.get("output"))
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
-                    );
-                    pw.put_bool(
-                        g.and_then(|v| v.get("input"))
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
-                    );
-                    pw.put_bool(
-                        g.and_then(|v| v.get("pulldown"))
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
-                    );
-                }
-                Ok(pw.buf)
+                Ok(encode_gpio_status_payload(
+                    json.get("gpios")
+                        .and_then(|v| v.as_array())
+                        .map(|v| v.as_slice()),
+                ))
             }
 
             bbp::CMD_SET_GPIO_CONFIG => {
@@ -2067,5 +2084,54 @@ impl Transport for HttpTransport {
 
     fn base_url(&self) -> Option<String> {
         Some(self.base_url.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{encode_gpio_status_payload, encode_selftest_supplies_cached_payload};
+    use serde_json::json;
+
+    #[test]
+    fn encode_gpio_status_payload_serializes_all_twelve_pins() {
+        let gpios = (0..12)
+            .map(|i| {
+                json!({
+                    "id": i,
+                    "mode": i % 5,
+                    "output": i % 2 == 0,
+                    "input": i % 3 == 0,
+                    "pulldown": i % 4 == 0,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let buf = encode_gpio_status_payload(Some(&gpios));
+
+        assert_eq!(buf.len(), 60);
+        assert_eq!(&buf[0..5], &[0, 0, 1, 1, 1]);
+        assert_eq!(&buf[55..60], &[11, 1, 0, 0, 0]);
+    }
+
+    #[test]
+    fn encode_selftest_supplies_cached_payload_serializes_three_rails() {
+        let json = json!({
+            "available": true,
+            "timestampMs": 12345,
+            "rails": [
+                {"rail": 0, "name": "VADJ1", "voltageV": 12.0},
+                {"rail": 1, "name": "VADJ2", "voltageV": 5.0},
+                {"rail": 2, "name": "VLOGIC", "voltageV": 3.3},
+            ],
+        });
+
+        let buf = encode_selftest_supplies_cached_payload(&json);
+
+        assert_eq!(buf.len(), 17);
+        assert_eq!(buf[0], 1);
+        assert_eq!(u32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]), 12345);
+        assert!((f32::from_le_bytes([buf[5], buf[6], buf[7], buf[8]]) - 12.0).abs() < 1e-6);
+        assert!((f32::from_le_bytes([buf[9], buf[10], buf[11], buf[12]]) - 5.0).abs() < 1e-6);
+        assert!((f32::from_le_bytes([buf[13], buf[14], buf[15], buf[16]]) - 3.3).abs() < 1e-6);
     }
 }

@@ -278,10 +278,11 @@ class CmdId(IntEnum):
     GET_FAULTS       = 0x03
     GET_DIAGNOSTICS  = 0x04
 
-    # Self-test / calibration / e-fuse monitoring
+    # Self-test / calibration / cached supply-voltage monitoring
     SELFTEST_STATUS         = 0x05
     SELFTEST_MEASURE_SUPPLY = 0x06
-    SELFTEST_EFUSE_CURRENTS = 0x07
+    SELFTEST_SUPPLY_VOLTAGES_CACHED = 0x07
+    SELFTEST_EFUSE_CURRENTS = SELFTEST_SUPPLY_VOLTAGES_CACHED
     SELFTEST_AUTO_CAL       = 0x08
     SELFTEST_INT_SUPPLIES   = 0x09
     SELFTEST_WORKER         = 0x0B  # enable/disable/query supply-monitor worker

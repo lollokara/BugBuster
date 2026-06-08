@@ -220,8 +220,27 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
         except ValueError:
             return {"error": "invalid supply index"}
 
+    if key == ("GET", "/selftest/supplies/cached"):
+        return {
+            "available": True,
+            "timestampMs": 0,
+            "rails": [
+                {"rail": 0, "name": "VADJ1", "voltageV": 12.0},
+                {"rail": 1, "name": "VADJ2", "voltageV": 5.0},
+                {"rail": 2, "name": "VLOGIC", "voltageV": 3.3},
+            ],
+        }
+
     if key == ("GET", "/selftest/efuse"):
-        return {"available": True, "timestamp_ms": 0, "currents": [0.0, 0.0, 0.0, 0.0]}
+        return {
+            "available": True,
+            "timestampMs": 0,
+            "rails": [
+                {"rail": 0, "name": "VADJ1", "voltageV": 12.0},
+                {"rail": 1, "name": "VADJ2", "voltageV": 5.0},
+                {"rail": 2, "name": "VLOGIC", "voltageV": 3.3},
+            ],
+        }
 
     if key == ("GET", "/selftest/supplies"):
         return {

@@ -1,6 +1,8 @@
 import struct
 from unittest.mock import MagicMock
 
+import pytest
+
 from bugbuster import BugBuster
 from bugbuster.constants import CmdId
 from bugbuster.transport.usb import DeviceError
@@ -172,6 +174,25 @@ def test_hat_hvpak_reg_helpers_parse_payload():
     write_result = client.hat_hvpak_reg_write_masked(0x6D, 0x03, 0x01)
     assert read_result == {"addr": 0x6D, "value": 0x05}
     assert write_result == {"addr": 0x6D, "mask": 0x03, "value": 0x01, "actual": 0x05}
+
+
+def test_selftest_supplies_cached_parses_payload():
+    payload = (
+        bytes([1])
+        + struct.pack("<I", 12345)
+        + struct.pack("<fff", 12.0, 5.0, 3.3)
+    )
+    client = BugBuster(_make_usb_transport({
+        CmdId.SELFTEST_SUPPLY_VOLTAGES_CACHED: payload,
+    }))
+
+    result = client.selftest_supplies_cached()
+
+    assert result["available"] is True
+    assert result["timestamp_ms"] == 12345
+    assert len(result["rails"]) == 3
+    assert result["rails"][0]["name"] == "VADJ1"
+    assert result["rails"][2]["voltage_v"] == pytest.approx(3.3, abs=1e-6)
 
 
 def test_device_error_uses_new_hvpak_error_names():

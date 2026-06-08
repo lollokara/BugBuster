@@ -1805,32 +1805,57 @@ class BugBuster:
             r = self._http_get(f"/selftest/supply/{rail}")
             return r.get("voltage", -1.0)
 
-    def selftest_efuse_currents(self) -> dict:
+    def selftest_supplies_cached(self) -> dict:
         """
-        Get all 4 e-fuse output currents measured via IMON.
+        Get the cached supply rail voltages from the self-test worker.
 
         Returns::
 
             {
                 "available": True,
                 "timestamp_ms": 12345,
-                "currents": [0.5, 0.3, -1.0, 0.1]   # amps, -1 = unavailable
+                "rails": [
+                    {"rail": 0, "name": "VADJ1", "voltage_v": 12.0},
+                    {"rail": 1, "name": "VADJ2", "voltage_v": 5.0},
+                    {"rail": 2, "name": "VLOGIC", "voltage_v": 3.3},
+                ]
             }
 
-        ``available`` is False when U17 S3 is closed (IO 9 analog mode).
+        ``available`` is False when the cached sample is stale or the worker is
+        disabled.  ``selftest_efuse_currents()`` remains as a compatibility
+        alias.
         """
         if self._usb:
-            resp = self._usb_cmd(CmdId.SELFTEST_EFUSE_CURRENTS)
+            resp = self._usb_cmd(CmdId.SELFTEST_SUPPLY_VOLTAGES_CACHED)
             off = 0
             avail = bool(resp[off]); off += 1
             ts,   = struct.unpack_from('<I', resp, off); off += 4
-            currents = []
-            for _ in range(4):
-                c, = struct.unpack_from('<f', resp, off); off += 4
-                currents.append(c)
-            return {"available": avail, "timestamp_ms": ts, "currents": currents}
+            rail_names = ["VADJ1", "VADJ2", "VLOGIC"]
+            rails = []
+            for i, name in enumerate(rail_names):
+                v, = struct.unpack_from('<f', resp, off); off += 4
+                rails.append({"rail": i, "name": name, "voltage_v": v})
+            return {"available": avail, "timestamp_ms": ts, "rails": rails}
         else:
-            return self._http_get("/selftest/efuse")
+            raw = self._http_get("/selftest/supplies/cached")
+            rails = []
+            for i, rail in enumerate(raw.get("rails", [])):
+                rails.append({
+                    "rail": _parse_int_maybe_hex(_first_present(rail, "rail"), i),
+                    "name": _first_present(rail, "name", default=["VADJ1", "VADJ2", "VLOGIC"][i] if i < 3 else f"Rail {i}"),
+                    "voltage_v": float(_first_present(rail, "voltageV", "voltage_v", default=-1.0)),
+                })
+            return {
+                "available": bool(raw.get("available", False)),
+                "timestamp_ms": _parse_int_maybe_hex(_first_present(raw, "timestampMs", "timestamp_ms"), 0),
+                "rails": rails,
+            }
+
+    def selftest_efuse_currents(self) -> dict:
+        """
+        Compatibility alias for :meth:`selftest_supplies_cached`.
+        """
+        return self.selftest_supplies_cached()
 
     def selftest_auto_calibrate(self, idac_channel: int) -> dict:
         """

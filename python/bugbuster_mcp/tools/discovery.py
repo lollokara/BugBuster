@@ -138,10 +138,11 @@ def register(mcp) -> None:
         Run the BugBuster built-in self-test suite.
 
         Checks: boot test status, internal supply voltages (±15 V, VADJ1,
-        VADJ2, VLOGIC, 3.3 V), and e-fuse current measurements.
+        VADJ2, VLOGIC, 3.3 V), and cached supply rail voltages from the
+        self-test worker.
 
-        Returns a dict with: boot_ok, supplies (voltages), efuse_currents,
-        all_pass (bool), warnings (list).
+        Returns a dict with: boot_ok, supplies (voltages),
+        supply_voltages_cached, all_pass (bool), warnings (list).
         """
         bb  = session.get_client()
         from typing import Any
@@ -176,11 +177,13 @@ def register(mcp) -> None:
             out["supplies"] = {"error": str(e)}
             out["warnings"].append(f"Could not measure supplies: {e}")
 
-        # E-fuse current monitoring
+        # Cached supply rail voltages from the self-test worker
         try:
-            efuse = bb.selftest_efuse_currents()
-            out["efuse_currents"] = efuse
+            supplies_cached = bb.selftest_supplies_cached()
+            out["supply_voltages_cached"] = supplies_cached
+            out["efuse_currents"] = supplies_cached  # backward-compatible alias
         except Exception as e:
+            out["supply_voltages_cached"] = {"error": str(e)}
             out["efuse_currents"] = {"error": str(e)}
 
         if out["all_pass"]:

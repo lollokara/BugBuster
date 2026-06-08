@@ -101,7 +101,7 @@ KNOWN_HTTP_ROUTES = [
     ("POST", "/api/faults/channel/0/clear"),
     ("GET", "/api/selftest"),
     ("GET", "/api/selftest/supply/0"),
-    ("GET", "/api/selftest/efuse"),
+    ("GET", "/api/selftest/supplies/cached"),
     ("GET", "/api/selftest/supplies"),
     ("GET", "/api/gpio"),
     ("POST", "/api/gpio/0/config"),
@@ -251,6 +251,5 @@ def test_handlers_validate_payload_bounds(description, cmd_name, payload, expect
         # Non-error case: just verify it doesn't crash catastrophically
         result = device.dispatch(int(cmd), payload)
         assert isinstance(result, bytes)
-
 
 

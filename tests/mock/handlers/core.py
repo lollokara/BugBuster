@@ -26,7 +26,7 @@ def register(device) -> None:
     # Selftest stubs
     device.register_handler(CmdId.SELFTEST_STATUS,          _selftest_status(device))
     device.register_handler(CmdId.SELFTEST_MEASURE_SUPPLY,  _selftest_measure_supply(device))
-    device.register_handler(CmdId.SELFTEST_EFUSE_CURRENTS,  _selftest_efuse_currents(device))
+    device.register_handler(CmdId.SELFTEST_SUPPLY_VOLTAGES_CACHED, _selftest_supplies_cached(device))
     device.register_handler(CmdId.SELFTEST_AUTO_CAL,        _selftest_auto_cal(device))
     device.register_handler(CmdId.SELFTEST_INT_SUPPLIES,    _selftest_int_supplies(device))
 
@@ -286,16 +286,20 @@ def _selftest_measure_supply(device):
 
 
 # ---------------------------------------------------------------------------
-# SELFTEST_EFUSE_CURRENTS (0x07)
-# client.py: avail (B), ts (I), 4× current (f)
+# SELFTEST_SUPPLY_VOLTAGES_CACHED (0x07)
+# client.py: avail (B), ts (I), 3× voltage (f)
 # ---------------------------------------------------------------------------
 
-def _selftest_efuse_currents(device):
+def _selftest_supplies_cached(device):
     def handler(payload: bytes) -> bytes:
-        return struct.pack('<BIffff',
-                           1,      # available
-                           0,      # timestamp_ms
-                           0.0, 0.0, 0.0, 0.0)
+        return struct.pack(
+            '<BIfff',
+            1,      # available
+            0,      # timestamp_ms
+            12.0,   # VADJ1
+            5.0,    # VADJ2
+            3.3,    # VLOGIC
+        )
     return handler
 
 

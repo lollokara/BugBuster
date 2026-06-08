@@ -106,42 +106,30 @@ def test_selftest_measure_supply_all_rails(usb_device):
 
 
 # ---------------------------------------------------------------------------
-# E-fuse current monitoring
+# Cached supply rail voltages (BBP 0x07)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.usb_only
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Wire-protocol drift: Python CmdId.SELFTEST_EFUSE_CURRENTS=0x07 "
-        "collides with firmware BBP_CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED=0x07 "
-        "(see Firmware/ESP32/src/bbp/cmds/cmd_selftest.cpp). Firmware has "
-        "no BBP efuse-currents handler; only the CLI 'efusei' command "
-        "exposes per-channel IMON. Fix requires either reassigning the "
-        "Python cmd-id, adding a firmware BBP handler, or deleting the "
-        "Python wrapper. Tracked in PRD Lane G1."
-    ),
-)
-def test_selftest_efuse_currents(usb_device):
+def test_selftest_supplies_cached(usb_device):
     """
-    selftest_efuse_currents() returns a dict with 'available' and 'currents' list.
-    When available, currents[i] is the measured e-fuse output current in Amps.
-    A value of -1.0 means the channel is unavailable.
+    selftest_supplies_cached() returns the cached supply rail voltages
+    published by the self-test worker.
     """
-    result = usb_device.selftest_efuse_currents()
+    result = usb_device.selftest_supplies_cached()
 
     assert isinstance(result, dict), (
-        f"selftest_efuse_currents() must return dict, got {type(result)}"
+        f"selftest_supplies_cached() must return dict, got {type(result)}"
     )
     assert "available" in result, "Result missing 'available' key"
-    assert "currents" in result, "Result missing 'currents' key"
+    assert "timestamp_ms" in result, "Result missing 'timestamp_ms' key"
+    assert "rails" in result, "Result missing 'rails' key"
 
-    currents = result["currents"]
-    assert isinstance(currents, list), f"'currents' must be list, got {type(currents)}"
-    assert len(currents) == 4, f"Expected 4 e-fuse channels, got {len(currents)}"
-
-    for i, c in enumerate(currents):
-        assert isinstance(c, (int, float)), f"currents[{i}] must be float, got {type(c)}"
+    rails = result["rails"]
+    assert isinstance(rails, list), f"'rails' must be list, got {type(rails)}"
+    assert len(rails) == 3, f"Expected 3 cached rails, got {len(rails)}"
+    assert rails[0]["name"] == "VADJ1"
+    assert rails[1]["name"] == "VADJ2"
+    assert rails[2]["name"] == "VLOGIC"
     assert_no_faults(usb_device)
 
 

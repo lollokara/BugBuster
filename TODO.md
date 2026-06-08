@@ -54,12 +54,6 @@
 
 ### 🔴 Bugs
 
-- **Tauri Backend `parse_hat_status` Off-by-Three Byte Mismatch** — [commands.rs](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/DesktopApp/BugBuster/src-tauri/src/commands.rs#L2723) reads SWD fields immediately after `io_voltage_mv`, skipping the 3 HVPAK bytes (`hvpak_part`, `hvpak_ready`, `hvpak_last_error`) written by the firmware. This corrupts subsequent reads (e.g. `dap_connected`) when a HAT is present.
-
-- **Tauri HTTP Transport `CMD_GET_GPIO_STATUS` (0x40) Out of Sync** — [http_transport.rs](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/DesktopApp/BugBuster/src-tauri/src/http_transport.rs#L734) loops `0..6` and serializes 4 bytes instead of the full 12 pins * 5 bytes payload (which includes the pin index byte).
-
-- **Wire-Protocol Command ID Collision (`0x07`)** — Rust HTTP transport maps `CMD_SELFTEST_EFUSE_CURRENTS` (0x07) to `/api/selftest/efuse` which is 404 on real firmware. It should map `CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED` (0x07) to `/api/selftest/supplies/cached` and serialize 17 bytes (available, timestamp, and 3 float voltages).
-
 ### 🟡 Missing / Incomplete
 
 - **Scope export** — PNG and JSON export paths show "not implemented yet" toasts.  
@@ -105,8 +99,6 @@
 
 - **`BBP_CMD_PCA_GET_STATUS` (0xB0) Payload Size Mismatch** — `_parse_pca_status` in [client.py](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/python/bugbuster/client.py#L4323) reads/parses only 12 bytes, truncating the 9 trailing enable bytes written by the firmware.
 
-- **Wire-Protocol Command ID Collision (`0x07`)** — Python client treats `0x07` as `SELFTEST_EFUSE_CURRENTS` (expects 21 bytes) instead of `SELFTEST_SUPPLY_VOLTAGES_CACHED` (expects 17 bytes) and requests `/selftest/efuse` over HTTP.
-
 ### 🟢 Refactor
 
 - **Batch IO-owner claim+write** — `client.py:4072` has `TODO: batch claim+write into one frame in v6`. Currently does two round-trips when it could be one.  
@@ -119,8 +111,6 @@
 ### 🔴 Simulator Bugs
 
 - **`BBP_CMD_PCA_GET_STATUS` (0xB0) Payload Size Mismatch** — Mock `_pca_get_status` handler in [power.py](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/tests/mock/handlers/power.py#L34) only returns 12 bytes instead of 21 bytes.
-
-- **Wire-Protocol Command ID Collision (`0x07`)** — Simulator handler in [core.py](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/tests/mock/handlers/core.py#L289) and HTTP mock in [http_routes.py](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/tests/mock/http_routes.py#L223) treat `0x07` as `SELFTEST_EFUSE_CURRENTS` and expect/return 21 bytes.
 
 ### 🟢 `SimulatedDevice` Code Quality & Enhancements
 

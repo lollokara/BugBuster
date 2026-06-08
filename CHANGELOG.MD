@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [Unreleased — parser and simulator parity fixes] — 2026-06-09
+
+### Fixed
+
+#### Desktop app
+- **HAT status SWD parsing**: `parse_hat_status()` now skips the 3 inserted HVPAK metadata bytes (`hvpak_part`, `hvpak_ready`, `hvpak_last_error`) before reading the SWD fields, so `dap_connected`, `target_detected`, and `target_dpidr` stay aligned. (`commands.rs`)
+- **GPIO HTTP transport framing**: `CMD_GET_GPIO_STATUS` now serializes all 12 logical GPIOs as full 5-byte records (`id`, `mode`, `output`, `input`, `pulldown`) instead of the legacy 6-pin layout. (`http_transport.rs`)
+
+#### Python client / simulator
+- **0x07 self-test alignment**: `SELFTEST_SUPPLY_VOLTAGES_CACHED` is now the canonical BBP name for command `0x07`; the Python client exposes `selftest_supplies_cached()` and keeps `selftest_efuse_currents()` as a compatibility alias. The simulator and HTTP mock now return cached rail voltages from `/api/selftest/supplies/cached`, and the MCP discovery tool reports the cached supply snapshot under `supply_voltages_cached`. (`python/bugbuster/constants.py`, `python/bugbuster/client.py`, `tests/mock/*`, `python/bugbuster_mcp/tools/discovery.py`)
+
+### Changed
+
+#### Tests
+- **Regression coverage**: Added parser and transport regression tests for HAT status framing, cached supply payloads, and the simulator route coverage for `/api/selftest/supplies/cached`. (`tests/unit/test_hat_status_parsing.py`, `tests/device/test_09_selftest.py`, `tests/simulator/test_sim_completeness.py`)
+
 ## [1.3.0] — 2026-06-08
 
 ### Added
