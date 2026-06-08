@@ -1,7 +1,8 @@
 """
 BugBuster MCP — Over-the-air firmware tools.
 
-Tools: ota_get_info, ota_upload_firmware, ota_upload_spiffs, ota_rollback.
+Tools: ota_get_info, ota_upload_firmware, ota_upload_spiffs, ota_rollback,
+ota_check_update, ota_apply_update, ota_update_status.
 
 Notes
 -----
@@ -168,3 +169,52 @@ def register(mcp) -> None:
             return ota.rollback()
         except OTAError as e:
             raise RuntimeError(f"Rollback failed: {e}") from e
+
+    @mcp.tool()
+    def ota_check_update(
+        host: Optional[str] = None,
+        admin_token: Optional[str] = None,
+    ) -> dict:
+        """
+        Ask the device to check the GitHub nightly update manifest.
+
+        This is read-only. Returns current/available build IDs for RP2040 and
+        ESP32 plus asset metadata and updateAvailable flags.
+        """
+        ota = _make_ota(host, admin_token)
+        try:
+            return ota.check_update()
+        except OTAError as e:
+            raise RuntimeError(f"Update check failed: {e}") from e
+
+    @mcp.tool()
+    def ota_apply_update(
+        rp2040: bool = True,
+        esp32: bool = True,
+        host: Optional[str] = None,
+        admin_token: Optional[str] = None,
+    ) -> dict:
+        """
+        Apply newer GitHub nightly firmware. The device updates the RP2040 HAT
+        first, then the ESP32. If ESP32 updates, the device reboots after the
+        response is sent.
+        """
+        ota = _make_ota(host, admin_token)
+        try:
+            return ota.apply_update(rp2040=rp2040, esp32=esp32)
+        except OTAError as e:
+            raise RuntimeError(f"Update apply failed: {e}") from e
+
+    @mcp.tool()
+    def ota_update_status(
+        host: Optional[str] = None,
+        admin_token: Optional[str] = None,
+    ) -> dict:
+        """
+        Read current device-side update state, progress counters, and last error.
+        """
+        ota = _make_ota(host, admin_token)
+        try:
+            return ota.get_update_status()
+        except OTAError as e:
+            raise RuntimeError(f"Update status failed: {e}") from e

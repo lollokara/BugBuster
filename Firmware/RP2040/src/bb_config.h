@@ -209,6 +209,12 @@
 #define HAT_CMD_SET_LEVEL_SHIFT 0x47
 #define HAT_CMD_SET_RAIL_VOLTAGE 0x48
 
+// Firmware update staging (ESP32 -> RP2040 over HAT UART)
+#define HAT_CMD_FW_BEGIN        0x49
+#define HAT_CMD_FW_CHUNK        0x4A
+#define HAT_CMD_FW_COMMIT       0x4B
+#define HAT_CMD_FW_STATUS       0x4C
+
 // Responses
 #define HAT_RSP_OK              0x80
 #define HAT_RSP_ERROR           0x81

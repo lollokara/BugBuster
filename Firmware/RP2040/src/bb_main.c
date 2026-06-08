@@ -30,6 +30,7 @@
 #include "bb_swd.h"
 #include "bb_la.h"
 #include "bb_la_usb.h"
+#include "bb_fw_update.h"
 #include "tusb.h"
 #include "bb_hat_v2.h"
 #include "bb_hat_v2.h"
@@ -584,6 +585,65 @@ static void handle_hvpak_reg_write_masked(const uint8_t *payload, uint8_t len)
     send_ok(rsp, sizeof(rsp));
 }
 
+static uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0]
+         | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16)
+         | ((uint32_t)p[3] << 24);
+}
+
+static void handle_fw_begin(const uint8_t *payload, uint8_t len)
+{
+    if (len < 8) { send_error(HAT_ERR_FRAME); return; }
+    uint32_t image_size = le32(payload);
+    uint32_t crc32 = le32(payload + 4);
+    if (!bb_fw_update_begin(image_size, crc32)) {
+        uint8_t state, err;
+        uint32_t written, size, expect, actual;
+        bb_fw_update_get_status(&state, &written, &size, &expect, &actual, &err);
+        send_error(err ? err : HAT_ERR_BUSY);
+        return;
+    }
+    send_ok(NULL, 0);
+}
+
+static void handle_fw_chunk(const uint8_t *payload, uint8_t len)
+{
+    if (len <= 4) { send_error(HAT_ERR_FRAME); return; }
+    uint32_t offset = le32(payload);
+    if (!bb_fw_update_chunk(offset, payload + 4, (uint8_t)(len - 4))) {
+        uint8_t state, err;
+        uint32_t written, size, expect, actual;
+        bb_fw_update_get_status(&state, &written, &size, &expect, &actual, &err);
+        send_error(err ? err : HAT_ERR_FRAME);
+        return;
+    }
+    uint8_t rsp[4] = {
+        (uint8_t)(offset + len - 4),
+        (uint8_t)((offset + len - 4) >> 8),
+        (uint8_t)((offset + len - 4) >> 16),
+        (uint8_t)((offset + len - 4) >> 24),
+    };
+    send_ok(rsp, sizeof(rsp));
+}
+
+static void handle_fw_status(void)
+{
+    uint8_t state, err;
+    uint32_t written, size, expect, actual;
+    bb_fw_update_get_status(&state, &written, &size, &expect, &actual, &err);
+    uint8_t rsp[18];
+    size_t p = 0;
+    rsp[p++] = state;
+    rsp[p++] = err;
+    memcpy(&rsp[p], &written, 4); p += 4;
+    memcpy(&rsp[p], &size, 4); p += 4;
+    memcpy(&rsp[p], &expect, 4); p += 4;
+    memcpy(&rsp[p], &actual, 4); p += 4;
+    send_ok(rsp, (uint8_t)p);
+}
+
 // -----------------------------------------------------------------------------
 // Command Dispatcher
 // -----------------------------------------------------------------------------
@@ -895,6 +955,20 @@ static void dispatch_command(const HatFrame *frame)
     case HAT_CMD_SET_RAIL_VOLTAGE:
         handle_set_rail_voltage(frame->payload, frame->payload_len);
         break;
+    case HAT_CMD_FW_BEGIN:
+        handle_fw_begin(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_FW_CHUNK:
+        handle_fw_chunk(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_FW_STATUS:
+        handle_fw_status();
+        break;
+    case HAT_CMD_FW_COMMIT:
+        send_ok(NULL, 0);
+        sleep_ms(50);
+        (void)bb_fw_update_commit_verified();
+        break;
 
 
     default:
@@ -974,6 +1048,7 @@ void bb_cmd_task(void *params)
     bb_la_init();
     bb_la_usb_init();
     bb_hat_v2_init();
+    bb_fw_update_init();
 
     // Configure IRQ pin as open-drain output (shared line, active low).
     // Default state: high-Z (input with pull-up). To assert: set output low.

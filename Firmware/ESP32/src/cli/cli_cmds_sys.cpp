@@ -20,6 +20,7 @@
 #include "pca9535.h"
 #include "adgs2414d.h"
 #include "selftest.h"
+#include "update_manager.h"
 #include "ad74416h_regs.h"
 #include "auth.h"
 #include "esp_mac.h"
@@ -819,6 +820,277 @@ extern "C" void cli_cmd_token(const char* args)
     term_println("");
     term_println("  Keep this secret — anyone with this token can control the device.");
     term_println("");
+}
+
+// ---------------------------------------------------------------------------
+// update — operator helper for GitHub nightly firmware updates.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    bool check_only;
+    bool rp2040;
+    bool esp32;
+} CliUpdateTaskArgs;
+
+static TaskHandle_t s_cli_update_task = NULL;
+static CliUpdateTaskArgs s_cli_update_args = {};
+static volatile bool s_cli_update_done = true;
+static esp_err_t s_cli_update_err = ESP_OK;
+static char s_cli_update_result[512] = {};
+
+static const char *update_state_name(int state)
+{
+    switch ((update_state_t)state) {
+        case UPDATE_STATE_IDLE: return "idle";
+        case UPDATE_STATE_CHECKING: return "checking";
+        case UPDATE_STATE_DOWNLOADING_RP2040: return "download_rp2040";
+        case UPDATE_STATE_FLASHING_RP2040: return "flash_rp2040";
+        case UPDATE_STATE_DOWNLOADING_ESP32: return "download_esp32";
+        case UPDATE_STATE_REBOOTING: return "rebooting";
+        case UPDATE_STATE_FAILED: return "failed";
+        default: return "unknown";
+    }
+}
+
+static const char *json_string(cJSON *obj, const char *name, const char *fallback)
+{
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, name);
+    return cJSON_IsString(item) && item->valuestring ? item->valuestring : fallback;
+}
+
+static int json_int(cJSON *obj, const char *name, int fallback)
+{
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, name);
+    return cJSON_IsNumber(item) ? item->valueint : fallback;
+}
+
+static bool json_bool(cJSON *obj, const char *name)
+{
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, name);
+    return cJSON_IsTrue(item);
+}
+
+static void update_print_status(void)
+{
+    cJSON *st = update_manager_status_json();
+    if (!st) {
+        term_println("[update] status unavailable");
+        return;
+    }
+
+    int state = json_int(st, "state", -1);
+    const char *step = json_string(st, "step", "");
+    const char *last_error = json_string(st, "lastError", "");
+    int done = json_int(st, "progressDone", 0);
+    int total = json_int(st, "progressTotal", 0);
+
+    if (total > 0) {
+        term_printf("[update] %-15s %-16s %d/%d bytes\r\n",
+                    update_state_name(state), step, done, total);
+    } else {
+        term_printf("[update] %-15s %s\r\n", update_state_name(state), step);
+    }
+    if (last_error && last_error[0]) {
+        term_printf("[update] error: %s\r\n", last_error);
+    }
+    cJSON_Delete(st);
+}
+
+static void update_print_component(const char *name, cJSON *root)
+{
+    cJSON *component = cJSON_GetObjectItemCaseSensitive(root, name);
+    if (!cJSON_IsObject(component)) {
+        term_printf("  %-6s: unavailable\r\n", name);
+        return;
+    }
+    const char *current = json_string(component, "currentBuildId", "?");
+    const char *available = json_string(component, "availableBuildId", "?");
+    bool newer = json_bool(component, "updateAvailable");
+    term_printf("  %-6s: current=%s available=%s %s\r\n",
+                name, current, available, newer ? "UPDATE" : "ok");
+}
+
+static void cli_update_apply_task(void *ctx)
+{
+    CliUpdateTaskArgs args = *(CliUpdateTaskArgs *)ctx;
+    cJSON *out = NULL;
+    esp_err_t err = args.check_only
+        ? update_manager_check(&out)
+        : update_manager_apply(args.rp2040, args.esp32, &out);
+
+    s_cli_update_result[0] = '\0';
+    if (out) {
+        char *printed = cJSON_PrintUnformatted(out);
+        if (printed) {
+            snprintf(s_cli_update_result, sizeof(s_cli_update_result), "%s", printed);
+            cJSON_free(printed);
+        }
+        cJSON_Delete(out);
+    }
+    s_cli_update_err = err;
+    s_cli_update_done = true;
+    s_cli_update_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void update_wait_for_task(void)
+{
+    int last_state = -1;
+    int last_done = -1;
+    while (!s_cli_update_done) {
+        cJSON *st = update_manager_status_json();
+        if (st) {
+            int state = json_int(st, "state", -1);
+            int done = json_int(st, "progressDone", 0);
+            int total = json_int(st, "progressTotal", 0);
+            if (state != last_state || done != last_done) {
+                const char *step = json_string(st, "step", "");
+                if (total > 0) {
+                    term_printf("[update] %-15s %-16s %d/%d bytes\r\n",
+                                update_state_name(state), step, done, total);
+                } else {
+                    term_printf("[update] %-15s %s\r\n", update_state_name(state), step);
+                }
+                last_state = state;
+                last_done = done;
+            }
+            cJSON_Delete(st);
+        }
+        vTaskDelay(pdMS_TO_TICKS(750));
+    }
+}
+
+static bool update_start_task(bool check_only, bool rp2040, bool esp32)
+{
+    if (s_cli_update_task || !s_cli_update_done) {
+        term_println("[update] an operation is already running");
+        update_print_status();
+        return false;
+    }
+
+    s_cli_update_args.check_only = check_only;
+    s_cli_update_args.rp2040 = rp2040;
+    s_cli_update_args.esp32 = esp32;
+    s_cli_update_done = false;
+    s_cli_update_err = ESP_OK;
+    s_cli_update_result[0] = '\0';
+
+    BaseType_t ok = xTaskCreatePinnedToCore(cli_update_apply_task, "cli_update", 8192,
+                                            &s_cli_update_args, 5, &s_cli_update_task, 0);
+    if (ok != pdPASS) {
+        s_cli_update_done = true;
+        s_cli_update_task = NULL;
+        term_println("[update] failed to start worker task");
+        return false;
+    }
+    return true;
+}
+
+static bool update_parse_target(const char *target, bool *rp2040, bool *esp32)
+{
+    if (!target || target[0] == '\0' || strcmp(target, "all") == 0) {
+        *rp2040 = true;
+        *esp32 = true;
+        return true;
+    }
+    if (strcmp(target, "rp2040") == 0 || strcmp(target, "hat") == 0) {
+        *rp2040 = true;
+        *esp32 = false;
+        return true;
+    }
+    if (strcmp(target, "esp32") == 0 || strcmp(target, "main") == 0) {
+        *rp2040 = false;
+        *esp32 = true;
+        return true;
+    }
+    return false;
+}
+
+extern "C" void cli_cmd_update(const char* args)
+{
+    while (args && *args == ' ') args++;
+    if (!args) args = "";
+
+    char sub[16] = {};
+    char target[16] = {};
+    int n = sscanf(args, "%15s %15s", sub, target);
+    if (n <= 0) {
+        snprintf(sub, sizeof(sub), "status");
+    }
+
+    if (strcmp(sub, "status") == 0) {
+        update_print_status();
+        return;
+    }
+
+    if (strcmp(sub, "check") == 0) {
+        term_println("[update] checking GitHub nightly manifest...");
+        if (!update_start_task(true, false, false)) {
+            return;
+        }
+        update_wait_for_task();
+        if (s_cli_update_err != ESP_OK || !s_cli_update_result[0]) {
+            term_printf("[update] check failed: %s\r\n", esp_err_to_name(s_cli_update_err));
+            update_print_status();
+            return;
+        }
+        cJSON *out = cJSON_Parse(s_cli_update_result);
+        if (!out) {
+            term_println("[update] check failed: invalid result JSON");
+            return;
+        }
+        term_printf("[update] channel=%s manifest=%s commit=%s\r\n",
+                    json_string(out, "channel", "?"),
+                    json_string(out, "manifestBuildId", "?"),
+                    json_string(out, "commit", "?"));
+        update_print_component("rp2040", out);
+        update_print_component("esp32", out);
+        cJSON_Delete(out);
+        return;
+    }
+
+    if (strcmp(sub, "apply") == 0) {
+        bool rp2040 = true;
+        bool esp32 = true;
+        if (!update_parse_target(target, &rp2040, &esp32)) {
+            term_println("Usage: update apply [all|rp2040|esp32]");
+            return;
+        }
+
+        term_printf("[update] applying target=%s%s%s\r\n",
+                    rp2040 ? "rp2040" : "",
+                    (rp2040 && esp32) ? "+" : "",
+                    esp32 ? "esp32" : "");
+        if (esp32) {
+            term_println("[update] ESP32 update will reboot after the new image is selected.");
+        }
+
+        if (!update_start_task(false, rp2040, esp32)) {
+            return;
+        }
+        update_wait_for_task();
+
+        if (s_cli_update_err != ESP_OK) {
+            term_printf("[update] apply failed: %s\r\n", esp_err_to_name(s_cli_update_err));
+            update_print_status();
+            return;
+        }
+
+        if (s_cli_update_result[0]) {
+            term_printf("[update] result: %s\r\n", s_cli_update_result);
+        }
+
+        if (update_manager_reboot_pending()) {
+            term_println("[update] rebooting ESP32 now...");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            esp_restart();
+        }
+
+        update_print_status();
+        return;
+    }
+
+    term_println("Usage: update [check|status|apply [all|rp2040|esp32]]");
 }
 
 extern "C" void cli_cmd_rstinfo(const char* args)

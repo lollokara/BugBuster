@@ -154,6 +154,10 @@ typedef enum {
 #define HAT_CMD_SET_IO_BANK      0x46
 #define HAT_CMD_SET_LEVEL_SHIFT  0x47
 #define HAT_CMD_SET_RAIL_VOLTAGE 0x48
+#define HAT_CMD_FW_BEGIN         0x49
+#define HAT_CMD_FW_CHUNK         0x4A
+#define HAT_CMD_FW_COMMIT        0x4B
+#define HAT_CMD_FW_STATUS        0x4C
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -419,6 +423,20 @@ bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_
 bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals);
 bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out);
 bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv);
+
+typedef struct {
+    uint8_t state;
+    uint8_t last_error;
+    uint32_t bytes_written;
+    uint32_t image_size;
+    uint32_t expected_crc32;
+    uint32_t actual_crc32;
+} HatFwUpdateStatus;
+
+bool hat_fw_begin(uint32_t image_size, uint32_t expected_crc32);
+bool hat_fw_chunk(uint32_t offset, const uint8_t *data, uint8_t len, uint32_t *ack_offset);
+bool hat_fw_commit(void);
+bool hat_fw_status(HatFwUpdateStatus *status);
 
 /**
  * @brief Send an advanced HVPAK command to the RP2040 HAT and return the raw

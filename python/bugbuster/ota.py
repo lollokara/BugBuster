@@ -266,6 +266,50 @@ class OTAClient:
             raise OTAError(f"/api/ota/rollback -> HTTP {r.status_code}: {r.text[:300]}")
         return r.json()
 
+    # ---------------------------------------------------------- GitHub update
+
+    def check_update(self) -> dict:
+        """Ask the device to check the GitHub nightly update manifest.
+
+        Returns the firmware's decoded JSON snapshot for RP2040 and ESP32:
+        current build ID, available build ID, asset metadata, and whether an
+        update is available. This is a read-only operation.
+        """
+        r = self._session.get(
+            f"{self._base}/update/check",
+            headers={ADMIN_TOKEN_HEADER: self._token},
+            timeout=30,
+        )
+        if not r.ok:
+            raise OTAError(f"/api/update/check -> HTTP {r.status_code}: {r.text[:300]}")
+        return r.json()
+
+    def apply_update(self, *, rp2040: bool = True, esp32: bool = True) -> dict:
+        """Apply newer GitHub nightly firmware, RP2040 first, then ESP32.
+
+        On ESP32 success the device reboots after the HTTP response flushes.
+        """
+        r = self._session.post(
+            f"{self._base}/update/apply",
+            json={"rp2040": bool(rp2040), "esp32": bool(esp32)},
+            headers={ADMIN_TOKEN_HEADER: self._token},
+            timeout=300,
+        )
+        if not r.ok:
+            raise OTAError(f"/api/update/apply -> HTTP {r.status_code}: {r.text[:300]}")
+        return r.json()
+
+    def get_update_status(self) -> dict:
+        """Return current device-side update state and progress counters."""
+        r = self._session.get(
+            f"{self._base}/update/status",
+            headers={ADMIN_TOKEN_HEADER: self._token},
+            timeout=10,
+        )
+        if not r.ok:
+            raise OTAError(f"/api/update/status -> HTTP {r.status_code}: {r.text[:300]}")
+        return r.json()
+
 
 __all__ = [
     "OTAClient",

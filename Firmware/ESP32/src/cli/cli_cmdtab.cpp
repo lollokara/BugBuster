@@ -171,6 +171,9 @@ const CliCommand g_cliCommands[] = {
       cli_complete_wifi_sub },
     { "token",    NULL,     cli_cmd_token,         CAT_NETWORK,
       "token",              "Show admin token for HTTP pairing", NULL, NULL },
+    { "update",   "fwupdate", cli_cmd_update,      CAT_NETWORK,
+      "update [check|status|apply [all|rp2040|esp32]]",
+      "Check/apply GitHub nightly firmware updates", NULL },
 
     // ---- Diagnostic / low-level ----
     { "clkout",   NULL,     cli_cmd_clkout,        CAT_DIAG,

@@ -23,6 +23,7 @@ void cli_cmd_cstest(const char* args);
 void cli_cmd_muxtest(const char* args);
 void cli_cmd_spiclock(const char* args);
 void cli_cmd_token(const char* args);
+void cli_cmd_update(const char* args);
 void cli_cmd_rstinfo(const char* args);
 void cli_cmd_coredump(const char* args);
 

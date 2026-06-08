@@ -592,6 +592,12 @@ bool hat_init(void)
 #ifndef HAT_BOOT_RETRY_DELAY_MS
 #define HAT_BOOT_RETRY_DELAY_MS  250
 #endif
+#ifndef HAT_CONNECT_RETRY_COUNT
+#define HAT_CONNECT_RETRY_COUNT   6
+#endif
+#ifndef HAT_CONNECT_RETRY_DELAY_MS
+#define HAT_CONNECT_RETRY_DELAY_MS  500
+#endif
 
     hat_detect();
 
@@ -611,11 +617,20 @@ bool hat_init(void)
 
     if (s_state.detected) {
         ESP_LOGI(TAG, "HAT detected: %s (%.2fV)", hat_type_name(s_state.type), s_state.detect_voltage);
-        // Try to connect
-        if (hat_connect()) {
-            ESP_LOGI(TAG, "HAT connected: fw v%d.%d", s_state.fw_version_major, s_state.fw_version_minor);
-        } else {
-            ESP_LOGW(TAG, "HAT detected but UART connection failed");
+        for (int attempt = 1; attempt <= HAT_CONNECT_RETRY_COUNT && !s_state.connected; attempt++) {
+            if (hat_connect()) {
+                ESP_LOGI(TAG, "HAT connected: fw v%d.%d", s_state.fw_version_major, s_state.fw_version_minor);
+                break;
+            }
+            if (attempt < HAT_CONNECT_RETRY_COUNT) {
+                ESP_LOGW(TAG, "HAT UART connection attempt %d/%d failed; retrying in %d ms",
+                         attempt, HAT_CONNECT_RETRY_COUNT, HAT_CONNECT_RETRY_DELAY_MS);
+                vTaskDelay(pdMS_TO_TICKS(HAT_CONNECT_RETRY_DELAY_MS));
+            }
+        }
+        if (!s_state.connected) {
+            ESP_LOGW(TAG, "HAT detected but UART connection failed after %d attempts",
+                     HAT_CONNECT_RETRY_COUNT);
         }
     } else {
         ESP_LOGI(TAG, "No HAT detected after retries (%.2fV)", s_state.detect_voltage);
@@ -680,13 +695,24 @@ bool hat_connect(void)
     s_state.connected = true;
     hat_note_uart_success();
 
-    // Query HAT info
+    // Query HAT info. PING only proves UART liveness; firmware metadata lives
+    // in GET_INFO and must be valid before we mark the HAT connected.
     cmd = hat_command(HAT_CMD_GET_INFO, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
-    if (cmd == HAT_RSP_INFO && rsp_len >= 3) {
-        s_state.type = (HatType)rsp[0];
-        s_state.fw_version_major = rsp[1];
-        s_state.fw_version_minor = rsp[2];
+    if (cmd != HAT_RSP_INFO || rsp_len < 3) {
+        ESP_LOGW(TAG, "HAT GET_INFO failed after PING (cmd=0x%02x len=%u)", cmd, rsp_len);
+        s_state.connected = false;
+        s_state.degraded = false;
+        return false;
     }
+    if (rsp[1] == 0 && rsp[2] == 0) {
+        ESP_LOGW(TAG, "HAT reports sentinel firmware v0.0; rebuild/flash RP2040 from CMake output");
+        s_state.connected = false;
+        s_state.degraded = true;
+        return false;
+    }
+    s_state.type = (HatType)rsp[0];
+    s_state.fw_version_major = rsp[1];
+    s_state.fw_version_minor = rsp[2];
 
     // Query current pin config
     hat_get_pin_config(s_state.pin_config);
@@ -1328,6 +1354,60 @@ bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out)
         return true;
     }
     return false;
+}
+
+bool hat_fw_begin(uint32_t image_size, uint32_t expected_crc32)
+{
+    if (!s_state.connected) return false;
+    uint8_t payload[8];
+    memcpy(payload, &image_size, 4);
+    memcpy(payload + 4, &expected_crc32, 4);
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_FW_BEGIN, payload, sizeof(payload),
+                              rsp, &rsp_len, 15000, sizeof(rsp));
+    return cmd == HAT_RSP_OK;
+}
+
+bool hat_fw_chunk(uint32_t offset, const uint8_t *data, uint8_t len, uint32_t *ack_offset)
+{
+    if (!s_state.connected || !data || len == 0 || len > (HAT_FRAME_MAX_LEN - 4)) return false;
+    uint8_t payload[HAT_FRAME_MAX_LEN] = {};
+    memcpy(payload, &offset, 4);
+    memcpy(payload + 4, data, len);
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_FW_CHUNK, payload, (uint8_t)(len + 4),
+                              rsp, &rsp_len, 1000, sizeof(rsp));
+    if (cmd != HAT_RSP_OK || rsp_len < 4) return false;
+    if (ack_offset) memcpy(ack_offset, rsp, 4);
+    return true;
+}
+
+bool hat_fw_commit(void)
+{
+    if (!s_state.connected) return false;
+    uint8_t rsp[4] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_FW_COMMIT, NULL, 0, rsp, &rsp_len, 1000, sizeof(rsp));
+    return cmd == HAT_RSP_OK;
+}
+
+bool hat_fw_status(HatFwUpdateStatus *status)
+{
+    if (!s_state.connected || !status) return false;
+    uint8_t rsp[18] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_FW_STATUS, NULL, 0, rsp, &rsp_len, 1000, sizeof(rsp));
+    if (cmd != HAT_RSP_OK || rsp_len < sizeof(rsp)) return false;
+    size_t p = 0;
+    status->state = rsp[p++];
+    status->last_error = rsp[p++];
+    memcpy(&status->bytes_written, rsp + p, 4); p += 4;
+    memcpy(&status->image_size, rsp + p, 4); p += 4;
+    memcpy(&status->expected_crc32, rsp + p, 4); p += 4;
+    memcpy(&status->actual_crc32, rsp + p, 4);
+    return true;
 }
 
 bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,

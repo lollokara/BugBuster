@@ -90,6 +90,16 @@ CONFIG_LWIP_MAX_SOCKETS=16
 # WebSocket support in esp_http_server (required for /api/scripts/repl/ws)
 CONFIG_HTTPD_WS_SUPPORT=y
 
+# HTTPS/GitHub update checks need a full TLS handshake while the firmware is
+# already running WiFi, TinyUSB, MicroPython, BBP, and HTTPD. Keep the TLS
+# buffers in PSRAM instead of consuming scarce contiguous internal heap.
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+# CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE is not set
+
 # Diagnostic crash capture: store panic core dumps in the flash coredump partition.
 # This avoids relying on TinyUSB CDC surviving long enough to print Guru Meditation logs.
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y

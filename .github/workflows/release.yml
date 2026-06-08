@@ -269,6 +269,84 @@ jobs:
           
           if [ -n "$(ls -A dist/release/ 2>/dev/null)" ]; then
             ( cd dist/release && sha256sum ./* > SHA256SUMS.txt )
+          python - <<'PY'
+          import glob
+          import hashlib
+          import json
+          import os
+          import re
+          import zlib
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = "${{ needs.prep.outputs.tag }}"
+          run_number = os.environ["GITHUB_RUN_NUMBER"]
+          sha = os.environ["GITHUB_SHA"]
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+
+          def pick(patterns):
+              for pattern in patterns:
+                  matches = sorted(glob.glob(os.path.join("dist/release", pattern)))
+                  if matches:
+                      return matches[0]
+              raise SystemExit(f"missing release asset for {patterns}")
+
+          def sha256(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for block in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(block)
+              return h.hexdigest()
+
+          def crc32(path):
+              c = 0
+              with open(path, "rb") as f:
+                  for block in iter(lambda: f.read(1024 * 1024), b""):
+                      c = zlib.crc32(block, c)
+              return c & 0xFFFFFFFF
+
+          def version_from_name(path, regex):
+              name = os.path.basename(path)
+              m = re.search(regex, name)
+              return m.group(1) if m else ""
+
+          rp = pick(["bugbuster-hat-rp2040-v*.bin"])
+          esp = pick(["bugbuster-esp32s3-v*-ota.bin"])
+          rp_name = os.path.basename(rp)
+          esp_name = os.path.basename(esp)
+          rp_ver = version_from_name(rp, r"bugbuster-hat-rp2040-v(.+)\.bin")
+          esp_ver = version_from_name(esp, r"bugbuster-esp32s3-v(.+)-ota\.bin")
+
+          manifest = {
+              "schemaVersion": 1,
+              "channel": "nightly" if tag == "nightly" else "release",
+              "repo": repo,
+              "commit": sha,
+              "githubRunNumber": int(run_number),
+              "buildId": f"{tag}.{run_number}.{sha[:12]}",
+              "rp2040": {
+                  "buildId": f"{rp_ver}+{run_number}.{sha[:12]}",
+                  "version": rp_ver,
+                  "asset": rp_name,
+                  "url": f"{base}/{rp_name}",
+                  "size": os.path.getsize(rp),
+                  "sha256": sha256(rp),
+                  "crc32": crc32(rp),
+              },
+              "esp32": {
+                  "buildId": f"{esp_ver}+{run_number}.{sha[:12]}",
+                  "version": esp_ver,
+                  "asset": esp_name,
+                  "url": f"{base}/{esp_name}",
+                  "size": os.path.getsize(esp),
+                  "sha256": sha256(esp),
+              },
+          }
+          out = "dist/release/bugbuster-update-manifest.json"
+          with open(out, "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+            ( cd dist/release && sha256sum ./* > SHA256SUMS.txt )
             echo "Release assets staged:"
             ls -la dist/release/
           else

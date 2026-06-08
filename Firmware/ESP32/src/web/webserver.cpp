@@ -51,6 +51,7 @@
 #include "serial_io.h"
 #include "cli/cli_term.h"
 #include "pd_vadj_guard.h"
+#include "update_manager.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -4368,6 +4369,55 @@ static esp_err_t handle_post_ota_rollback(httpd_req_t *req)
     return ret;
 }
 
+static esp_err_t handle_get_update_check(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+    cJSON *root = NULL;
+    if (update_manager_check(&root) != ESP_OK || !root) {
+        return send_error(req, 500, "Update check failed");
+    }
+    return send_json(req, root);
+}
+
+static esp_err_t handle_get_update_status(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+    return send_json(req, update_manager_status_json());
+}
+
+static esp_err_t handle_post_update_apply(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+    bool rp2040 = true;
+    bool esp32 = true;
+    if (req->content_len > 0) {
+        cJSON *body = recv_json_body(req);
+        if (!body) return send_error(req, 400, "Invalid JSON");
+        cJSON *j_rp = cJSON_GetObjectItem(body, "rp2040");
+        cJSON *j_esp = cJSON_GetObjectItem(body, "esp32");
+        if (cJSON_IsBool(j_rp)) rp2040 = cJSON_IsTrue(j_rp);
+        if (cJSON_IsBool(j_esp)) esp32 = cJSON_IsTrue(j_esp);
+        cJSON_Delete(body);
+    }
+    cJSON *root = NULL;
+    if (update_manager_apply(rp2040, esp32, &root) != ESP_OK || !root) {
+        return send_error(req, 500, "Update apply failed");
+    }
+    bool reboot = update_manager_reboot_pending();
+    esp_err_t ret = send_json(req, root);
+    if (reboot) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_restart();
+    }
+    return ret;
+}
+
 // POST /api/ota/uploadfs — Upload SPIFFS filesystem image (binary body = spiffs.bin)
 // Unmounts SPIFFS, writes the raw image to the partition, and remounts.
 // This lets the desktop app / curl push a new web UI without USB access.
@@ -5058,7 +5108,7 @@ static esp_err_t handle_post_scripts_run_file(httpd_req_t *req)
 // Server init / stop
 // =============================================================================
 
-void initWebServer(void)
+bool initWebServer(void)
 {
     // M06: check-then-act on s_server under the mux to prevent a second
     // concurrent caller from entering httpd_start and corrupting the handle.
@@ -5067,17 +5117,18 @@ void initWebServer(void)
     taskEXIT_CRITICAL(&s_server_mux);
     if (already_running) {
         ESP_LOGW(TAG, "Web server already running");
-        return;
+        return true;
     }
 
     quicksetup_init();
+    update_manager_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     // Keep route capacity close to the real table size. The current explicit
     // route count is 87 plus two WebSocket routes and four registry routes; 96
     // gives safe headroom without reserving another 32 unused handler slots
     // from heap.
-    config.max_uri_handlers = 112;
+    config.max_uri_handlers = 128;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     // HTTPD task stack must stay in internal RAM, not PSRAM. Any handler
     // that touches flash (OTA partition reads, SPIFFS, NVS) goes through
@@ -5106,7 +5157,7 @@ void initWebServer(void)
     esp_err_t ret = httpd_start(&new_server, &config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTP server: %s", esp_err_to_name(ret));
-        return;
+        return false;
     }
     taskENTER_CRITICAL(&s_server_mux);
     s_server = new_server;
@@ -5543,6 +5594,21 @@ void initWebServer(void)
     };
     httpd_register_uri_handler(s_server, &uri_ota_rollback);
 
+    httpd_uri_t uri_update_check = {
+        .uri = "/api/update/check", .method = HTTP_GET, .handler = handle_get_update_check, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_update_check);
+
+    httpd_uri_t uri_update_apply = {
+        .uri = "/api/update/apply", .method = HTTP_POST, .handler = handle_post_update_apply, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_update_apply);
+
+    httpd_uri_t uri_update_status = {
+        .uri = "/api/update/status", .method = HTTP_GET, .handler = handle_get_update_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_update_status);
+
     // ----- Board profile + pairing -----
 
     httpd_uri_t uri_board_get = {
@@ -5706,6 +5772,7 @@ void initWebServer(void)
     httpd_register_uri_handler(s_server, &uri_browser_fallback);
 
     ESP_LOGI(TAG, "All URI handlers registered");
+    return true;
 }
 
 void stopWebServer(void)

@@ -52,6 +52,7 @@
 #include "pca9535.h"
 #include "adgs2414d.h"
 #include "hat.h"
+#include "update_manager.h"
 #include "dio/dio.h"
 #include "selftest.h"
 #include "ds4424.h"
@@ -171,6 +172,7 @@ typedef enum {
     SET_FIELD_CAL_LOAD,
     SET_FIELD_CAL_CLEAR,
     SET_FIELD_CAL_VLOGIC,
+    SET_FIELD_FW_UPDATE,
     SET_FIELD_RESET_DEVICE,
     NUM_SET_FIELDS
 } SettingsField;
@@ -1436,6 +1438,34 @@ static const PickerItem kDioModeItems[] = {
 };
 static const uint8_t kDioModeItemCount = 3;
 
+// Firmware update picker -----------------------------------------------------
+
+#define UPDATE_MENU_MAX_OPTIONS 5
+
+static PickerItem s_update_items[UPDATE_MENU_MAX_OPTIONS];
+static char       s_update_labels[UPDATE_MENU_MAX_OPTIONS][144];
+static uint8_t    s_update_selected_index = 0;
+static TaskHandle_t s_update_task = nullptr;
+static volatile bool s_update_task_done = false;
+static volatile bool s_update_task_failed = false;
+static char s_update_task_status[96];
+
+static const char* json_string(cJSON *obj, const char *name, const char *fallback)
+{
+    if (!obj) return fallback;
+    cJSON *item = cJSON_GetObjectItem(obj, name);
+    return cJSON_IsString(item) ? item->valuestring : fallback;
+}
+
+static const char* json_component_available(cJSON *component)
+{
+    cJSON *available = component ? cJSON_GetObjectItem(component, "available") : nullptr;
+    if (cJSON_IsBool(available) && !cJSON_IsTrue(available)) return "-";
+    const char *version = json_string(component, "version", "");
+    if (version[0]) return version;
+    return json_string(component, "availableBuildId", "?");
+}
+
 // HAT v2 rail callbacks
 static void cb_hat_rail_en(bool yes, void* user) {
     if (!yes) return;
@@ -1576,6 +1606,147 @@ static void cb_reset_device(bool yes, void*) {
     show_toast("Rebooting...", TERM_FG_B_RED, 1000);
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
+}
+
+static void update_apply_task(void *arg)
+{
+    uint8_t index = (uint8_t)(uintptr_t)arg;
+    cJSON *out = nullptr;
+    esp_err_t err = update_manager_apply_release_index(index, true, true, &out);
+    if (out) cJSON_Delete(out);
+
+    if (err == ESP_OK) {
+        snprintf(s_update_task_status, sizeof(s_update_task_status),
+                 update_manager_reboot_pending() ? "Update applied; rebooting ESP32..." :
+                                                    "Update complete");
+        s_update_task_failed = false;
+    } else {
+        cJSON *status = update_manager_status_json();
+        const char *last = json_string(status, "lastError", "update failed");
+        snprintf(s_update_task_status, sizeof(s_update_task_status), "%s", last);
+        cJSON_Delete(status);
+        s_update_task_failed = true;
+    }
+
+    s_update_task_done = true;
+    if (err == ESP_OK && update_manager_reboot_pending()) {
+        vTaskDelay(pdMS_TO_TICKS(1200));
+        esp_restart();
+    }
+    s_update_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
+static void update_progress_tick(ModalFrame* f, void*)
+{
+    cJSON *status = update_manager_status_json();
+    const char *step = json_string(status, "step", "updating");
+    cJSON *done = cJSON_GetObjectItem(status, "progressDone");
+    cJSON *total = cJSON_GetObjectItem(status, "progressTotal");
+    uint32_t progress_done = cJSON_IsNumber(done) ? (uint32_t)done->valuedouble : 0;
+    uint32_t progress_total = cJSON_IsNumber(total) ? (uint32_t)total->valuedouble : 0;
+
+    if (s_update_task_done) {
+        f->progress_status = s_update_task_status;
+        f->progress_percent = s_update_task_failed ? 100 : 100;
+        f->progress_failed = s_update_task_failed;
+        f->progress_done = !update_manager_reboot_pending();
+        cJSON_Delete(status);
+        return;
+    }
+
+    if (progress_total > 0) {
+        int pct = (int)((progress_done * 100ULL) / progress_total);
+        if (pct < 0) pct = 0;
+        if (pct > 99) pct = 99;
+        f->progress_percent = pct;
+        snprintf(s_update_task_status, sizeof(s_update_task_status),
+                 "%s  %u/%u bytes",
+                 step, (unsigned)progress_done, (unsigned)progress_total);
+    } else {
+        f->progress_percent = -1;
+        snprintf(s_update_task_status, sizeof(s_update_task_status), "%s", step);
+    }
+    f->progress_status = s_update_task_status;
+    cJSON_Delete(status);
+}
+
+static void cb_update_confirm(bool yes, void*)
+{
+    if (!yes) return;
+    if (s_update_task) {
+        show_toast("Firmware update already running", TERM_FG_B_YELLOW, 2500);
+        return;
+    }
+
+    s_update_task_done = false;
+    s_update_task_failed = false;
+    snprintf(s_update_task_status, sizeof(s_update_task_status), "Starting update...");
+    BaseType_t ok = xTaskCreate(update_apply_task, "fwupd_menu", 8192,
+                                (void *)(uintptr_t)s_update_selected_index,
+                                tskIDLE_PRIORITY + 2, &s_update_task);
+    if (ok != pdPASS) {
+        s_update_task = nullptr;
+        show_toast("Failed to start update task", TERM_FG_B_RED, 3500);
+        return;
+    }
+    open_progress("Firmware Update", update_progress_tick, nullptr);
+}
+
+static void cb_update_select(int32_t value, void*)
+{
+    s_update_selected_index = (uint8_t)value;
+    open_confirm("Install selected firmware release?", cb_update_confirm, nullptr);
+}
+
+static void open_update_release_picker(void)
+{
+    if (s_update_task) {
+        show_toast("Firmware update already running", TERM_FG_B_YELLOW, 2500);
+        return;
+    }
+
+    cJSON *root = nullptr;
+    esp_err_t err = update_manager_release_options(UPDATE_MENU_MAX_OPTIONS, &root);
+    if (err != ESP_OK || !root) {
+        cJSON *status = update_manager_status_json();
+        const char *last = json_string(status, "lastError", "release lookup failed");
+        char msg[80];
+        snprintf(msg, sizeof(msg), "%s", last);
+        show_toast(msg, TERM_FG_B_RED, 4500);
+        cJSON_Delete(status);
+        if (root) cJSON_Delete(root);
+        return;
+    }
+
+    const char *current_rp = json_string(root, "currentRp2040", "?");
+    const char *current_esp = json_string(root, "currentEsp32", "?");
+    cJSON *options = cJSON_GetObjectItem(root, "options");
+    int count = cJSON_IsArray(options) ? cJSON_GetArraySize(options) : 0;
+    if (count > UPDATE_MENU_MAX_OPTIONS) count = UPDATE_MENU_MAX_OPTIONS;
+    if (count <= 0) {
+        show_toast("No firmware releases available", TERM_FG_B_RED, 3500);
+        cJSON_Delete(root);
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        cJSON *opt = cJSON_GetArrayItem(options, i);
+        cJSON *rp = cJSON_GetObjectItem(opt, "rp2040");
+        cJSON *esp = cJSON_GetObjectItem(opt, "esp32");
+        const char *tag = json_string(opt, "tag", "release");
+        const char *rp_avail = json_component_available(rp);
+        const char *esp_avail = json_component_available(esp);
+        snprintf(s_update_labels[i], sizeof(s_update_labels[i]),
+                 "%s  RP %s -> %s  ESP %s -> %s",
+                 tag, current_rp, rp_avail, current_esp, esp_avail);
+        s_update_items[i].value = i;
+        s_update_items[i].label = s_update_labels[i];
+    }
+
+    cJSON_Delete(root);
+    open_picker("Firmware Releases", s_update_items, (uint8_t)count, 0,
+                cb_update_select, nullptr);
 }
 
 // ===========================================================================
@@ -1761,6 +1932,9 @@ static void activate_settings_field(SettingsField field) {
             } else {
                 show_toast("Cal start FAILED (busy or interlock)", TERM_FG_B_RED);
             }
+            break;
+        case SET_FIELD_FW_UPDATE:
+            open_update_release_picker();
             break;
         case SET_FIELD_RESET_DEVICE:
             open_confirm("Reboot ESP32 now?", cb_reset_device, nullptr);
@@ -2585,6 +2759,10 @@ static void render_settings_tab(void) {
                  "%s", busy ? "BUSY" : "Start VLOGIC auto-calibration");
         items[SET_FIELD_CAL_VLOGIC].label = "Cal VLOGIC";
     }
+    snprintf(items[SET_FIELD_FW_UPDATE].value, sizeof(items[0].value),
+             "Choose GitHub release (latest 5)");
+    items[SET_FIELD_FW_UPDATE].label = "FW Update";
+
     snprintf(items[SET_FIELD_RESET_DEVICE].value, sizeof(items[0].value),
              "Reboot device now");
     items[SET_FIELD_RESET_DEVICE].label = "Reset Device";
@@ -3229,10 +3407,11 @@ static void modal_picker_feed(ModalFrame* f, uint8_t b, char csi_final) {
     } else if (csi_final == 'B') {     // down
         if (f->selected + 1 < f->item_count) f->selected++;
     } else if (b == '\r' || b == '\n') {
-        if (f->picker_cb) {
-            f->picker_cb(f->items[f->selected].value, f->user);
-        }
+        PickerCb cb = f->picker_cb;
+        void *user = f->user;
+        int32_t value = f->items[f->selected].value;
         modal_pop();
+        if (cb) cb(value, user);
     }
 }
 
@@ -3267,14 +3446,21 @@ static void modal_confirm_feed(ModalFrame* f, uint8_t b, char csi_final) {
     if (csi_final == 'C' || csi_final == 'D') {
         f->confirm_yes = !f->confirm_yes;
     } else if (b == 'y' || b == 'Y') {
-        if (f->confirm_cb) f->confirm_cb(true, f->user);
+        ConfirmCb cb = f->confirm_cb;
+        void *user = f->user;
         modal_pop();
+        if (cb) cb(true, user);
     } else if (b == 'n' || b == 'N') {
-        if (f->confirm_cb) f->confirm_cb(false, f->user);
+        ConfirmCb cb = f->confirm_cb;
+        void *user = f->user;
         modal_pop();
+        if (cb) cb(false, user);
     } else if (b == '\r' || b == '\n') {
-        if (f->confirm_cb) f->confirm_cb(f->confirm_yes, f->user);
+        ConfirmCb cb = f->confirm_cb;
+        void *user = f->user;
+        bool yes = f->confirm_yes;
         modal_pop();
+        if (cb) cb(yes, user);
     }
 }
 
@@ -3690,6 +3876,8 @@ static void render_field_hint(int row) {
                 hint = "Hint: restores last saved calibration; current values will be overwritten."; break;
             case SET_FIELD_CAL_CLEAR:
                 hint = "Hint: removes all calibration; voltage outputs revert to theoretical conversion."; break;
+            case SET_FIELD_FW_UPDATE:
+                hint = "Hint: queries GitHub releases, shows up to 5 choices, and installs selected HAT/ESP firmware."; break;
             default: break;
         }
     }

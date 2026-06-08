@@ -16,7 +16,7 @@ const char* channelFunctionToString(ChannelFunction f);
  * @brief Create and start the HTTP server, registering all URI handlers.
  *        Call once from setup() after SPIFFS is mounted and initTasks().
  */
-void initWebServer(void);
+bool initWebServer(void);
 
 /**
  * @brief Stop the HTTP server and release resources.

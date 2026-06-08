@@ -52,6 +52,8 @@
 // -----------------------------------------------------------------------------
 AD74416H_SPI spiDriver(PIN_SDO, PIN_SDI, PIN_SYNC, PIN_SCLK, AD74416H_DEV_ADDR);
 static AD74416H device(spiDriver, PIN_RESET);
+static StaticTask_t s_mainLoopTcb;
+static StackType_t s_mainLoopStack[4096 / sizeof(StackType_t)];
 
 static void log_internal_heap(const char *phase)
 {
@@ -394,6 +396,17 @@ extern "C" void app_main(void)
     cmd_registry_init();
     serial_println("[BugBuster] Command registry initialized");
 
+    // 13c. Web server — start before later service tasks fragment internal heap.
+    coredump_diag_print_boot_report();
+    log_internal_heap("before webserver");
+    bool webServerStarted = initWebServer();
+    log_internal_heap("after webserver");
+    if (webServerStarted) {
+        serial_println("[BugBuster] Web server on port 80");
+    } else {
+        serial_println("[BugBuster] ERROR: Web server failed to start");
+    }
+
     // On-device scripting (MicroPython) — Phase 1: in-memory eval only.
     scripting_init();
     serial_println("[BugBuster] Scripting engine ready");
@@ -446,23 +459,23 @@ extern "C" void app_main(void)
     // exhaustion observed 2026-05-07; the trade-off was wrong.
     TaskHandle_t mainLoopHandle = nullptr;
     log_internal_heap("before mainLoopTask");
-    BaseType_t mainLoopOk = xTaskCreatePinnedToCore(
-        mainLoopTask, "mainLoop", 4096, NULL, 1, &mainLoopHandle, 0);
-    if (mainLoopOk != pdPASS || mainLoopHandle == nullptr) {
+    mainLoopHandle = xTaskCreateStaticPinnedToCore(
+        mainLoopTask,
+        "mainLoop",
+        sizeof(s_mainLoopStack) / sizeof(s_mainLoopStack[0]),
+        NULL,
+        1,
+        s_mainLoopStack,
+        &s_mainLoopTcb,
+        0);
+    if (mainLoopHandle == nullptr) {
         term_println("[BugBuster] ERROR: mainLoopTask creation failed");
-        ESP_LOGE("main_task", "mainLoopTask creation failed (ret=%d handle=%p)",
-                 (int)mainLoopOk, (void *)mainLoopHandle);
+        ESP_LOGE("main_task", "mainLoopTask creation failed (static handle=NULL)");
     } else {
-        term_println("[BugBuster] Main loop task started (stack in INTERNAL RAM)");
+        term_println("[BugBuster] Main loop task started (static stack in INTERNAL RAM)");
     }
     log_internal_heap("after mainLoopTask");
 
-    // 17. Web server
-    coredump_diag_print_boot_report();
-    log_internal_heap("before webserver");
-    initWebServer();
-    log_internal_heap("after webserver");
-    term_println("[BugBuster] Web server on port 80");
     term_println("[BugBuster] Boot complete.");
 
     // 18. Autorun boot check — MUST run after mainLoopTask so that CLI/BBP

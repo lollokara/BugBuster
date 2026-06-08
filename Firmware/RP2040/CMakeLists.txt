@@ -57,6 +57,7 @@ add_executable(bugbuster_hat
     src/bb_la_rle.c
     src/bb_la_usb.c
     src/bb_hat_v2.c
+    src/bb_fw_update.c
 )
 
 target_include_directories(bugbuster_hat PRIVATE

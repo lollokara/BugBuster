@@ -203,6 +203,51 @@ def test_rollback_409_maps_to_otaerror():
 
 
 # ---------------------------------------------------------------------------
+# GitHub autoupdate endpoints
+# ---------------------------------------------------------------------------
+
+def test_check_update_calls_device_update_endpoint():
+    t = _StubTransport()
+    t._session.get.return_value = _ok_response(json_payload={
+        "rp2040": {"updateAvailable": True},
+        "esp32": {"updateAvailable": False},
+    })
+
+    out = OTAClient(t).check_update()
+
+    args, kwargs = t._session.get.call_args
+    assert args[0] == "http://10.0.0.1/api/update/check"
+    assert kwargs["headers"]["X-BugBuster-Admin-Token"] == "t" * 64
+    assert out["rp2040"]["updateAvailable"] is True
+
+
+def test_apply_update_posts_component_selection():
+    t = _StubTransport()
+    t._session.post.return_value = _ok_response(json_payload={"success": True})
+
+    OTAClient(t).apply_update(rp2040=True, esp32=False)
+
+    args, kwargs = t._session.post.call_args
+    assert args[0] == "http://10.0.0.1/api/update/apply"
+    assert kwargs["json"] == {"rp2040": True, "esp32": False}
+    assert kwargs["headers"]["X-BugBuster-Admin-Token"] == "t" * 64
+
+
+def test_get_update_status_calls_status_endpoint():
+    t = _StubTransport()
+    t._session.get.return_value = _ok_response(json_payload={
+        "state": 1,
+        "step": "checking",
+    })
+
+    out = OTAClient(t).get_update_status()
+
+    args, kwargs = t._session.get.call_args
+    assert args[0] == "http://10.0.0.1/api/update/status"
+    assert out["step"] == "checking"
+
+
+# ---------------------------------------------------------------------------
 # Construction guards
 # ---------------------------------------------------------------------------
 
