@@ -778,9 +778,13 @@ esp_err_t update_manager_release_options(uint8_t max_options, cJSON **out)
     set_state(UPDATE_STATE_CHECKING, "checking_releases");
     s_update.last_error[0] = '\0';
 
-    UpdateOption options[5];
+    UpdateOption *options = (UpdateOption *)malloc(sizeof(UpdateOption) * 5);
+    if (!options) { set_error("OOM for release options"); return ESP_ERR_NO_MEM; }
     uint8_t count = 0;
-    if (!collect_release_options(options, max_options, &count)) return ESP_FAIL;
+    if (!collect_release_options(options, max_options, &count)) {
+        free(options);
+        return ESP_FAIL;
+    }
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "currentRp2040", current_rp2040_build_id());
@@ -790,6 +794,7 @@ esp_err_t update_manager_release_options(uint8_t max_options, cJSON **out)
         cJSON_AddItemToArray(arr, option_json(i, &options[i]));
     }
     cJSON_AddItemToObject(root, "options", arr);
+    free(options);
     set_state(UPDATE_STATE_IDLE, "idle");
     *out = root;
     return ESP_OK;
@@ -802,15 +807,18 @@ esp_err_t update_manager_apply_release_index(uint8_t index, bool update_rp2040,
     set_state(UPDATE_STATE_CHECKING, "checking_releases");
     s_update.last_error[0] = '\0';
 
-    UpdateOption options[5];
+    UpdateOption *options = (UpdateOption *)malloc(sizeof(UpdateOption) * 5);
+    if (!options) { set_error("OOM for release options"); return ESP_ERR_NO_MEM; }
     uint8_t count = 0;
-    if (!collect_release_options(options, 5, &count)) return ESP_FAIL;
+    if (!collect_release_options(options, 5, &count)) { free(options); return ESP_FAIL; }
     if (index >= count) {
+        free(options);
         set_error("selected firmware release is no longer available");
         return ESP_FAIL;
     }
 
     UpdateManifest manifest = options[index].manifest;
+    free(options);
     bool did_rp = false;
     bool did_esp = false;
     bool rp_newer = component_available(&manifest.rp2040) &&

@@ -30,6 +30,7 @@
 
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "mbedtls/base64.h"
@@ -975,8 +976,15 @@ static bool update_start_task(bool check_only, bool rp2040, bool esp32)
     s_cli_update_err = ESP_OK;
     s_cli_update_result[0] = '\0';
 
-    BaseType_t ok = xTaskCreatePinnedToCore(cli_update_apply_task, "cli_update", 8192,
-                                            &s_cli_update_args, 5, &s_cli_update_task, 0);
+    // check-only: HTTP GET + JSON only, no flash writes — PSRAM stack is safe and
+    // gives the TLS/software-AES call chain the 16 KB it needs without consuming
+    // internal RAM. apply path writes OTA partition, so it must stay internal.
+    UBaseType_t stack_caps = check_only
+        ? MALLOC_CAP_SPIRAM
+        : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(cli_update_apply_task, "cli_update", 16384,
+                                                    &s_cli_update_args, 5, &s_cli_update_task, 0,
+                                                    stack_caps);
     if (ok != pdPASS) {
         s_cli_update_done = true;
         s_cli_update_task = NULL;

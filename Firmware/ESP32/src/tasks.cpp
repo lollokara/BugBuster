@@ -1421,6 +1421,12 @@ void initTasks(AD74416H& device)
     }
 
     // Start tasks pinned to Core 1
+    // Stacks must be in internal RAM. When any core calls esp_ota_write /
+    // NVS erase / SPIFFS write, ESP-IDF disables the D-cache on both cores
+    // via cross-core IPC. PSRAM is accessed through that same D-cache, so a
+    // PSRAM stack becomes unreadable during the disable window — FreeRTOS
+    // corrupts the suspended task's frame, producing assertion failures
+    // (observed: xQueueSemaphoreTake uxItemSize==0 in faultMon during OTA).
     if (xTaskCreatePinnedToCore(
         taskAdcPoll,
         "adcPoll",

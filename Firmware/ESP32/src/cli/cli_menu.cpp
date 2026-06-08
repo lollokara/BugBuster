@@ -59,6 +59,7 @@
 #include "wifi_manager.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
@@ -1443,12 +1444,25 @@ static const uint8_t kDioModeItemCount = 3;
 #define UPDATE_MENU_MAX_OPTIONS 5
 
 static PickerItem s_update_items[UPDATE_MENU_MAX_OPTIONS];
-static char       s_update_labels[UPDATE_MENU_MAX_OPTIONS][144];
 static uint8_t    s_update_selected_index = 0;
+static bool       s_update_do_rp2040 = true;
+static bool       s_update_do_esp32  = true;
 static TaskHandle_t s_update_task = nullptr;
 static volatile bool s_update_task_done = false;
 static volatile bool s_update_task_failed = false;
 static char s_update_task_status[96];
+
+// 2-column firmware update picker layout data
+struct FwPickerRow {
+    char tag[48];
+    char rp_avail[28];
+    char esp_avail[28];
+    uint8_t rp_color;   // TERM_FG_* for available version
+    uint8_t esp_color;
+};
+static FwPickerRow s_fw_picker_rows[UPDATE_MENU_MAX_OPTIONS];
+static char s_fw_picker_cur_rp[32];
+static char s_fw_picker_cur_esp[32];
 
 static const char* json_string(cJSON *obj, const char *name, const char *fallback)
 {
@@ -1464,6 +1478,33 @@ static const char* json_component_available(cJSON *component)
     const char *version = json_string(component, "version", "");
     if (version[0]) return version;
     return json_string(component, "availableBuildId", "?");
+}
+
+// Parse up to 3 dotted numeric components from a version string,
+// stripping an optional "bb-hat-" prefix first.
+static int fw_version_cmp(const char *a, const char *b)
+{
+    if (!a || !b) return 0;
+    if (strncmp(a, "bb-hat-", 7) == 0) a += 7;
+    if (strncmp(b, "bb-hat-", 7) == 0) b += 7;
+    int av[3] = {}, bv[3] = {};
+    sscanf(a, "%d.%d.%d", &av[0], &av[1], &av[2]);
+    sscanf(b, "%d.%d.%d", &bv[0], &bv[1], &bv[2]);
+    for (int i = 0; i < 3; i++) {
+        if (av[i] != bv[i]) return av[i] - bv[i];
+    }
+    return 0;
+}
+
+// Returns the TERM_FG color for an available version compared to current.
+// Green = upgrade, red = downgrade, yellow = same, default = unknown/unavailable.
+static uint8_t fw_version_color(const char *current, const char *avail)
+{
+    if (!avail || avail[0] == '-' || avail[0] == '?') return (uint8_t)TERM_FG_DEFAULT;
+    int c = fw_version_cmp(avail, current);
+    if (c > 0) return (uint8_t)TERM_FG_B_GREEN;
+    if (c < 0) return (uint8_t)TERM_FG_B_RED;
+    return (uint8_t)TERM_FG_B_YELLOW;
 }
 
 // HAT v2 rail callbacks
@@ -1612,7 +1653,7 @@ static void update_apply_task(void *arg)
 {
     uint8_t index = (uint8_t)(uintptr_t)arg;
     cJSON *out = nullptr;
-    esp_err_t err = update_manager_apply_release_index(index, true, true, &out);
+    esp_err_t err = update_manager_apply_release_index(index, s_update_do_rp2040, s_update_do_esp32, &out);
     if (out) cJSON_Delete(out);
 
     if (err == ESP_OK) {
@@ -1682,9 +1723,14 @@ static void cb_update_confirm(bool yes, void*)
     s_update_task_done = false;
     s_update_task_failed = false;
     snprintf(s_update_task_status, sizeof(s_update_task_status), "Starting update...");
-    BaseType_t ok = xTaskCreate(update_apply_task, "fwupd_menu", 8192,
+    // 16 KB internal stack: software-AES TLS needs deep frames; internal caps
+    // required because update_apply_task calls apply_esp32_ota → esp_ota_write
+    // which disables the D-cache — a PSRAM stack would become inaccessible.
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+                                update_apply_task, "fwupd_menu", 16384,
                                 (void *)(uintptr_t)s_update_selected_index,
-                                tskIDLE_PRIORITY + 2, &s_update_task);
+                                tskIDLE_PRIORITY + 2, &s_update_task, 0,
+                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (ok != pdPASS) {
         s_update_task = nullptr;
         show_toast("Failed to start update task", TERM_FG_B_RED, 3500);
@@ -1693,10 +1739,42 @@ static void cb_update_confirm(bool yes, void*)
     open_progress("Firmware Update", update_progress_tick, nullptr);
 }
 
+static const PickerItem kUpdateComponentItems[] = {
+    { 0, "Both  RP2040 + ESP32" },
+    { 1, "ESP32 only" },
+    { 2, "RP2040 only" },
+};
+
+static void cb_component_select(int32_t value, void*)
+{
+    s_update_do_rp2040 = (value != 1);
+    s_update_do_esp32  = (value != 2);
+    open_confirm("Install selected firmware?", cb_update_confirm, nullptr);
+}
+
 static void cb_update_select(int32_t value, void*)
 {
     s_update_selected_index = (uint8_t)value;
-    open_confirm("Install selected firmware release?", cb_update_confirm, nullptr);
+    const FwPickerRow *fr = &s_fw_picker_rows[value];
+    bool has_rp  = fr->rp_avail[0]  && fr->rp_avail[0]  != '-';
+    bool has_esp = fr->esp_avail[0] && fr->esp_avail[0] != '-';
+
+    if (has_rp && has_esp) {
+        open_picker("Update components", kUpdateComponentItems, 3, 0,
+                    cb_component_select, nullptr);
+    } else if (has_esp) {
+        s_update_do_rp2040 = false;
+        s_update_do_esp32  = true;
+        open_confirm("Install ESP32 firmware? (RP2040 not in this release)",
+                     cb_update_confirm, nullptr);
+    } else if (has_rp) {
+        s_update_do_rp2040 = true;
+        s_update_do_esp32  = false;
+        open_confirm("Install RP2040 firmware? (ESP32 not in this release)",
+                     cb_update_confirm, nullptr);
+    } else {
+        show_toast("No firmware components available in this release", TERM_FG_B_RED, 3500);
+    }
 }
 
 static void open_update_release_picker(void)
@@ -1731,22 +1809,29 @@ static void open_update_release_picker(void)
     }
 
     for (int i = 0; i < count; i++) {
-        cJSON *opt = cJSON_GetArrayItem(options, i);
-        cJSON *rp = cJSON_GetObjectItem(opt, "rp2040");
-        cJSON *esp = cJSON_GetObjectItem(opt, "esp32");
-        const char *tag = json_string(opt, "tag", "release");
-        const char *rp_avail = json_component_available(rp);
+        cJSON *opt        = cJSON_GetArrayItem(options, i);
+        cJSON *rp         = cJSON_GetObjectItem(opt, "rp2040");
+        cJSON *esp        = cJSON_GetObjectItem(opt, "esp32");
+        const char *tag       = json_string(opt, "tag", "release");
+        const char *rp_avail  = json_component_available(rp);
         const char *esp_avail = json_component_available(esp);
-        snprintf(s_update_labels[i], sizeof(s_update_labels[i]),
-                 "%s  RP %s -> %s  ESP %s -> %s",
-                 tag, current_rp, rp_avail, current_esp, esp_avail);
+
+        FwPickerRow *frow = &s_fw_picker_rows[i];
+        snprintf(frow->tag,      sizeof(frow->tag),       "%s", tag);
+        snprintf(frow->rp_avail, sizeof(frow->rp_avail),  "%s", rp_avail);
+        snprintf(frow->esp_avail,sizeof(frow->esp_avail), "%s", esp_avail);
+        frow->rp_color  = fw_version_color(current_rp,  rp_avail);
+        frow->esp_color = fw_version_color(current_esp, esp_avail);
+
         s_update_items[i].value = i;
-        s_update_items[i].label = s_update_labels[i];
+        s_update_items[i].label = frow->tag;
     }
+    snprintf(s_fw_picker_cur_rp,  sizeof(s_fw_picker_cur_rp),  "%s", current_rp);
+    snprintf(s_fw_picker_cur_esp, sizeof(s_fw_picker_cur_esp), "%s", current_esp);
 
     cJSON_Delete(root);
     open_picker("Firmware Releases", s_update_items, (uint8_t)count, 0,
-                cb_update_select, nullptr);
+                cb_update_select, (void*)s_fw_picker_rows);
 }
 
 // ===========================================================================
@@ -3147,6 +3232,114 @@ static void render_io_tab(void) {
 // ===========================================================================
 
 static void render_picker(ModalFrame* f) {
+    // -----------------------------------------------------------------------
+    // Firmware update 2-column layout (RP2040 | ESP32)
+    // -----------------------------------------------------------------------
+    if (f->user == (void*)s_fw_picker_rows) {
+        // Column start offsets relative to the box's left edge (col)
+        // col+0  : border
+        // col+1  : cursor '>' / ' '
+        // col+3  : Release tag  (22 chars)
+        // col+27 : RP2040 col   (18 chars)
+        // col+47 : ESP32 col    (20 chars)
+        // col+71 : border  → box_w = 72
+        const int COL_TAG = 3;
+        const int COL_RP  = 27;
+        const int COL_ESP = 47;
+
+        int box_w = 72;
+        if (box_w > s_cols - 4) box_w = s_cols - 4;
+        if (box_w < 52) box_w = 52;
+
+        int max_visible = s_rows - 11;
+        if (max_visible < 2) max_visible = 2;
+        int visible = (f->item_count < max_visible) ? f->item_count : max_visible;
+        int box_h = visible + 7;  // headers(4) + items + footer(1) + borders(2)
+        if (box_h > s_rows - 4) { box_h = s_rows - 4; visible = box_h - 7; }
+
+        int row = (s_rows - box_h) / 2;
+        int col = (s_cols - box_w) / 2;
+        if (col < 0) col = 0;
+
+        draw_fill(row, col, box_h, box_w, ' ', 0, 0);
+        draw_box(row, col, box_h, box_w, (uint8_t)TERM_FG_B_CYAN, ATTR_BOLD);
+        draw_textf(row, col + 2, (uint8_t)TERM_FG_B_WHITE, ATTR_BOLD,
+                   " Firmware Releases ");
+
+        // Column header row
+        draw_textf(row + 1, col + COL_TAG, (uint8_t)TERM_FG_B_WHITE, ATTR_BOLD,
+                   "%-22s", "Release");
+        draw_textf(row + 1, col + COL_RP,  (uint8_t)TERM_FG_B_WHITE, ATTR_BOLD,
+                   "%-18s", "RP2040");
+        draw_textf(row + 1, col + COL_ESP, (uint8_t)TERM_FG_B_WHITE, ATTR_BOLD,
+                   "%-18s", "ESP32");
+
+        // Divider
+        for (int c = col + 1; c < col + box_w - 1; c++)
+            draw_glyph(row + 2, c, G_BOX_H, (uint8_t)TERM_FG_B_BLACK, 0);
+
+        // Current firmware row
+        draw_textf(row + 3, col + COL_TAG, (uint8_t)TERM_FG_B_BLACK, 0,
+                   "%-22s", "Current:");
+        draw_textf(row + 3, col + COL_RP,  (uint8_t)TERM_FG_DEFAULT, 0,
+                   "%-18s", s_fw_picker_cur_rp);
+        draw_textf(row + 3, col + COL_ESP, (uint8_t)TERM_FG_DEFAULT, 0,
+                   "%-18s", s_fw_picker_cur_esp);
+
+        // Divider
+        for (int c = col + 1; c < col + box_w - 1; c++)
+            draw_glyph(row + 4, c, G_BOX_H, (uint8_t)TERM_FG_B_BLACK, 0);
+
+        // Scroll: keep selected in view
+        int scroll = f->scroll;
+        if (f->selected < scroll) scroll = f->selected;
+        if (f->selected >= scroll + visible) scroll = f->selected - visible + 1;
+        if (scroll < 0) scroll = 0;
+        f->scroll = (uint8_t)scroll;
+
+        // Release rows
+        for (int i = 0; i < visible; i++) {
+            int idx = scroll + i;
+            if (idx >= f->item_count) break;
+            const FwPickerRow *fr = &s_fw_picker_rows[idx];
+            bool sel = (idx == f->selected);
+            int r2 = row + 5 + i;
+
+            draw_fill(r2, col + 1, 1, box_w - 2, ' ', 0, 0);
+
+            // Cursor
+            draw_text(r2, col + 1,
+                      sel ? ">" : " ",
+                      sel ? (uint8_t)TERM_FG_B_YELLOW : (uint8_t)TERM_FG_B_BLACK,
+                      sel ? ATTR_BOLD : 0);
+
+            // Release tag
+            draw_textf(r2, col + COL_TAG,
+                       sel ? (uint8_t)TERM_FG_B_WHITE : (uint8_t)TERM_FG_DEFAULT,
+                       sel ? ATTR_BOLD : 0,
+                       "%-22.22s", fr->tag);
+
+            // RP2040 available version — colored by direction
+            draw_textf(r2, col + COL_RP,
+                       sel ? (uint8_t)TERM_FG_B_WHITE : fr->rp_color,
+                       sel ? ATTR_BOLD : 0,
+                       "%-18.18s", fr->rp_avail);
+
+            // ESP32 available version — colored by direction
+            draw_textf(r2, col + COL_ESP,
+                       sel ? (uint8_t)TERM_FG_B_WHITE : fr->esp_color,
+                       sel ? ATTR_BOLD : 0,
+                       "%-18.18s", fr->esp_avail);
+        }
+
+        // Footer
+        draw_textf(row + box_h - 2, col + 2, (uint8_t)TERM_FG_B_BLACK, 0,
+                   " Up/Down  select   Enter  apply   ESC  cancel "
+                   "  green=upgrade  red=downgrade  yellow=same");
+        return;
+    }
+    // -----------------------------------------------------------------------
+
     int box_w = 0;
     // size box to content
     for (uint8_t i = 0; i < f->item_count; i++) {

@@ -78,6 +78,13 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
 # allocations stay internal via explicit MALLOC_CAP_DMA|INTERNAL flags.
 # CONFIG_MDNS_MEMORY_ALLOC_INTERNAL is not set
 
+# WiFi buffer tuning — BugBuster is a bench instrument, not a media server.
+# Static TX/RX buffers live in internal DMA RAM regardless of SPIRAM_USE_MALLOC.
+# Cutting TX from 16→6 and RX from 16→8 frees ~28 KB of scarce internal DMA RAM.
+# CACHE_TX_BUFFER_NUM (dynamic PSRAM) stays at 32 to absorb burst headroom.
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+
 # Cache: bump with octal PSRAM (default 16 KB/32 KB is too small for external RAM workloads)
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
@@ -99,6 +106,12 @@ CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
 # CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE is not set
+# Hardware AES requires DMA-capable internal RAM for its GDMA buffers even when
+# MBEDTLS_EXTERNAL_MEM_ALLOC=y. The 49 KB internal reserve is depleted by
+# WiFi/SPI DMA by the time an HTTPS connection fires, causing esp-aes OOM.
+# Software AES uses the normal PSRAM-backed allocator — acceptable for the
+# infrequent firmware-update path.
+# CONFIG_MBEDTLS_HARDWARE_AES is not set
 
 # Diagnostic crash capture: store panic core dumps in the flash coredump partition.
 # This avoids relying on TinyUSB CDC surviving long enough to print Guru Meditation logs.

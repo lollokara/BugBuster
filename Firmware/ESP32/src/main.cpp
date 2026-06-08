@@ -53,7 +53,7 @@
 AD74416H_SPI spiDriver(PIN_SDO, PIN_SDI, PIN_SYNC, PIN_SCLK, AD74416H_DEV_ADDR);
 static AD74416H device(spiDriver, PIN_RESET);
 static StaticTask_t s_mainLoopTcb;
-static StackType_t s_mainLoopStack[4096 / sizeof(StackType_t)];
+static StackType_t s_mainLoopStack[8192 / sizeof(StackType_t)];
 
 static void log_internal_heap(const char *phase)
 {
