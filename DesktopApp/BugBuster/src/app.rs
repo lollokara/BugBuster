@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::tauri_bridge::*;
 use crate::tabs::{overview::*, board::*, adc::*, diag::*, vdac::*, idac::*, iin::*, hv_io::*, faults::*, gpio::*, din::*, dout::*, uart::*, scope::*, wavegen::*, signal_path::*, voltages::*, usbpd::*, ioexp::*, hat::*, la::*};
 use crate::components::io_blocked_banner::IoBlockedBanner;
+use crate::components::connection::ConnectionPanel;
 
 /// Map a tab id to its IO slot footprint. Returns an empty slice if the tab does not claim IOs.
 fn tab_slots(tab_id: &str) -> &'static [u8] {
@@ -63,6 +64,7 @@ pub fn App() -> impl IntoView {
     let (conn_mode, set_conn_mode) = signal("Disconnected".to_string());
     let (conn_addr, set_conn_addr) = signal(String::new());
     let (scanning, set_scanning) = signal(false);
+    let (scan_completed, set_scan_completed) = signal(false);
     let (device_state, set_device_state) = signal(DeviceState::default());
     let (active_tab, set_active_tab) = signal("overview".to_string());
     let active_category = move || {
@@ -182,6 +184,13 @@ pub fn App() -> impl IntoView {
                 set_devices.set(devs);
             }
             set_scanning.set(false);
+            set_scan_completed.set(true);
+            if let Some(window) = web_sys::window() {
+                let update_fn = js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
+                if update_fn.is_function() {
+                    let _ = update_fn.unchecked_into::<js_sys::Function>().call1(&window, &true.into());
+                }
+            }
         });
     };
 
@@ -336,9 +345,17 @@ pub fn App() -> impl IntoView {
 
     // Auto-scan
     spawn_local(async move {
+        slp(2000).await;
         let result = invoke("discover_devices", JsValue::NULL).await;
         if let Ok(devs) = serde_wasm_bindgen::from_value::<Vec<DiscoveredDevice>>(result) {
             set_devices.set(devs);
+        }
+        set_scan_completed.set(true);
+        if let Some(window) = web_sys::window() {
+            let update_fn = js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
+            if update_fn.is_function() {
+                let _ = update_fn.unchecked_into::<js_sys::Function>().call1(&window, &true.into());
+            }
         }
     });
 
@@ -413,41 +430,12 @@ pub fn App() -> impl IntoView {
 
             // Connection panel (when disconnected)
             <Show when=move || conn_mode.get() == "Disconnected">
-                <ParticleBackground />
-                <div class="connection-panel">
-                    <div class="card" style="max-width: 500px; width: 100%; text-align: center; z-index: 10; position: relative;">
-                        <h2>"Connect to BugBuster"</h2>
-                        <p class="hint">"Scanning for devices on USB and network..."</p>
-                        <button class="btn btn-primary" on:click=scan disabled=move || scanning.get()>
-                            {move || if scanning.get() { "Scanning..." } else { "Scan for Devices" }}
-                        </button>
-                        <div class="device-list">
-                            <For
-                                each=move || devices.get()
-                                key=|dev| dev.id.clone()
-                                children=move |dev: DiscoveredDevice| {
-                                    let id = dev.id.clone();
-                                    let icon = if dev.transport == "usb" { "🔌" } else { "📡" };
-                                    let name = dev.name.clone();
-                                    let addr = dev.address.clone();
-                                    let tbadge = dev.transport.to_uppercase();
-                                    view! {
-                                        <button class="device-item" on:click=move |_| {
-                                            do_connect(id.clone());
-                                        }>
-                                            <span class="device-icon">{icon}</span>
-                                            <div class="device-info">
-                                                <span class="device-name">{name}</span>
-                                                <span class="device-addr">{addr}</span>
-                                            </div>
-                                            <span class="device-transport">{tbadge}</span>
-                                        </button>
-                                    }
-                                }
-                            />
-                        </div>
-                    </div>
-                </div>
+                <ConnectionPanel
+                    devices=devices.into()
+                    scanning=scanning.into()
+                    scan_completed=scan_completed.into()
+                    on_scan=Callback::new(scan)
+                />
             </Show>
 
             // Main content (when connected)
@@ -548,146 +536,7 @@ pub fn App() -> impl IntoView {
     }
 }
 
-/// Floating particle network background for the connection screen.
-#[component]
-fn ParticleBackground() -> impl IntoView {
-    let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
-    spawn_local(async move {
-        use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
-        use wasm_bindgen::JsCast;
-
-        // Wait for canvas to mount
-        slp(50).await;
-
-        let Some(el) = canvas_ref.get() else { return };
-        let canvas: HtmlCanvasElement = el;
-        let ctx: CanvasRenderingContext2d = match canvas
-            .get_context("2d")
-            .ok()
-            .flatten()
-            .and_then(|o| o.dyn_into().ok())
-        {
-            Some(c) => c,
-            None => {
-                web_sys::console::warn_1(&"ParticleBackground: failed to get 2D canvas context".into());
-                return;
-            }
-        };
-
-        let window = match web_sys::window() {
-            Some(w) => w,
-            None => {
-                web_sys::console::warn_1(&"ParticleBackground: window unavailable".into());
-                return;
-            }
-        };
-
-        // Particle state
-        const NUM: usize = 80;
-        const CONNECT_DIST: f64 = 140.0;
-        const SPEED: f64 = 0.3;
-
-        struct P { x: f64, y: f64, vx: f64, vy: f64, r: f64 }
-
-        let mut particles: Vec<P> = Vec::with_capacity(NUM);
-        // Seed with pseudo-random using simple LCG
-        let mut seed: u64 = 42;
-        let mut rng = || -> f64 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            ((seed >> 33) as f64) / (u32::MAX as f64)
-        };
-
-        let w0 = window.inner_width().unwrap().as_f64().unwrap();
-        let h0 = window.inner_height().unwrap().as_f64().unwrap();
-        for _ in 0..NUM {
-            particles.push(P {
-                x: rng() * w0,
-                y: rng() * h0,
-                vx: (rng() - 0.5) * SPEED * 2.0,
-                vy: (rng() - 0.5) * SPEED * 2.0,
-                r: 1.2 + rng() * 1.8,
-            });
-        }
-
-        loop {
-            slp(16).await; // ~60fps
-
-            let dp = window.device_pixel_ratio();
-            let w = window.inner_width().unwrap().as_f64().unwrap();
-            let h = window.inner_height().unwrap().as_f64().unwrap();
-            canvas.set_width((w * dp) as u32);
-            canvas.set_height((h * dp) as u32);
-            let _ = ctx.scale(dp, dp);
-
-            // Clear
-            ctx.set_fill_style_str("rgba(6,10,20,0.85)");
-            ctx.fill_rect(0.0, 0.0, w, h);
-
-            // Update positions
-            for p in particles.iter_mut() {
-                p.x += p.vx;
-                p.y += p.vy;
-                if p.x < 0.0 { p.x = w; }
-                if p.x > w { p.x = 0.0; }
-                if p.y < 0.0 { p.y = h; }
-                if p.y > h { p.y = 0.0; }
-            }
-
-            // Draw connections
-            for i in 0..particles.len() {
-                for j in (i + 1)..particles.len() {
-                    let dx = particles[i].x - particles[j].x;
-                    let dy = particles[i].y - particles[j].y;
-                    let dist = (dx * dx + dy * dy).sqrt();
-                    if dist < CONNECT_DIST {
-                        let alpha = (1.0 - dist / CONNECT_DIST) * 0.35;
-                        ctx.set_stroke_style_str(&format!("rgba(59,130,246,{:.3})", alpha));
-                        ctx.set_line_width(0.6);
-                        ctx.begin_path();
-                        ctx.move_to(particles[i].x, particles[i].y);
-                        ctx.line_to(particles[j].x, particles[j].y);
-                        ctx.stroke();
-                    }
-                }
-            }
-
-            // Draw particles
-            for p in &particles {
-                // Glow
-                ctx.set_fill_style_str("rgba(59,130,246,0.15)");
-                ctx.begin_path();
-                let _ = ctx.arc(p.x, p.y, p.r * 3.0, 0.0, std::f64::consts::TAU);
-                ctx.fill();
-                // Core
-                ctx.set_fill_style_str("rgba(139,170,220,0.6)");
-                ctx.begin_path();
-                let _ = ctx.arc(p.x, p.y, p.r, 0.0, std::f64::consts::TAU);
-                ctx.fill();
-            }
-
-            // Reset transform for next frame
-            ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0).ok();
-        }
-    });
-
-    view! {
-        <canvas node_ref=canvas_ref
-            style="position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none;"
-        />
-    }
-}
-
-fn do_connect(device_id: String) {
-    use serde::Serialize;
-    #[derive(Serialize)]
-    struct Args { #[serde(rename = "deviceId")] device_id: String }
-    spawn_local(async move {
-        log(&format!("Connecting to: {}", device_id));
-        let args = serde_wasm_bindgen::to_value(&Args { device_id }).unwrap();
-        let _result = invoke("connect_device", args).await;
-    });
-}
 
 async fn slp(ms: u32) {
     let p = js_sys::Promise::new(&mut |r, _| {

@@ -1,6 +1,9 @@
 /dist/
 /target/
 /Cargo.lock
+/public/models/
+/public/vendor/
+/public/utils/
 
 # macOS metadata
 .DS_Store

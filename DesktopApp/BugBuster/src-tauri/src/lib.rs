@@ -37,6 +37,7 @@ pub fn run() {
         .manage(LaState::new())
         .invoke_handler(tauri::generate_handler![
             // Discovery & Connection
+            commands::js_log,
             commands::discover_devices,
             commands::connect_device,
             commands::disconnect_device,

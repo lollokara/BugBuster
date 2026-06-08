@@ -1516,4 +1516,190 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
     width: 14px; height: 14px; margin: 0; cursor: pointer;
     accent-color: var(--blue);
 }
-\n@media (prefers-reduced-motion: reduce) {\n  *, ::before, ::after {\n    animation-duration: 0.01ms !important;\n    animation-iteration-count: 1 !important;\n    transition-duration: 0.01ms !important;\n    scroll-behavior: auto !important;\n  }\n}
+
+/* ---- Splash & Connection Screen ---- */
+.connection-layout {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 10;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    overflow: hidden;
+}
+
+#board-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.connection-ui-side {
+    position: absolute;
+    left: 50%;
+    width: 50%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+    pointer-events: auto;
+    transition: width 1.2s cubic-bezier(0.25, 1, 0.5, 1), left 1.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.connection-layout.centered .connection-ui-side {
+    width: 100%;
+    left: 0;
+}
+
+.connection-header-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: transform 1.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* Push header group UP and connection card/loader DOWN when centered/loading */
+.connection-layout.centered .connection-header-group {
+    transform: translateY(-20vh);
+}
+
+.connection-layout.centered .connection-card {
+    transform: translateY(24vh);
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/* Logo Title & Subtitle */
+.logo-title {
+    font-size: 3.8rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+    margin: 0 0 4px 0;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 20px rgba(96, 165, 250, 0.2));
+    transition: font-size 1.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.connection-layout.split .logo-title {
+    font-size: 2.8rem;
+}
+
+.subtitle-desc {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 1.5px;
+    margin: 0 0 32px 0;
+    text-transform: uppercase;
+    opacity: 0.8;
+}
+
+/* Glass Connection Card */
+.connection-card {
+    width: 90%;
+    max-width: 420px;
+    padding: 28px;
+    text-align: center;
+    background: rgba(10, 18, 36, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(25px);
+    -webkit-backdrop-filter: blur(25px);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55), inset 0 1px 1px rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    transition: all 1.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.connection-layout.split .connection-card {
+    max-width: 440px;
+}
+
+/* Scanning Loader animation */
+.scanning-loader-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 0;
+}
+
+.scanning-glow-ring {
+    width: 44px;
+    height: 44px;
+    border: 2px solid rgba(59, 130, 246, 0.15);
+    border-top: 2px solid var(--blue);
+    border-radius: 50%;
+    animation: spin-glow 1.0s linear infinite;
+    filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.6));
+    margin-bottom: 20px;
+}
+
+@keyframes spin-glow {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.scanning-status {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+}
+
+/* Device List Container */
+.device-list-container {
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    margin-top: 16px;
+    transition: opacity 0.8s ease 0.4s, max-height 0.8s ease 0.4s;
+    width: 100%;
+}
+
+.connection-layout.split .device-list-container {
+    opacity: 1;
+    max-height: 380px;
+}
+
+.btn-scan {
+    margin-bottom: 8px;
+    width: 100%;
+}
+
+/* Fade In animations */
+.fade-in-center {
+    animation: fadeInCenter 1.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+@keyframes fadeInCenter {
+    from {
+        opacity: 0;
+        transform: scale(0.97) translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
