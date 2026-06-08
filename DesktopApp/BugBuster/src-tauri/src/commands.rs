@@ -579,14 +579,30 @@ pub async fn ota_upload_firmware(
         .await
         .ok_or("OTA requires HTTP connection (WiFi). Connect via WiFi first.")?;
 
+    // Compute SHA-256 hash of the firmware binary
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    let sha256_hex = format!("{:x}", hasher.finalize());
+
+    // Get active admin token
+    let conn_status = mgr.get_connection_status();
+    let admin_token = conn_status.admin_token;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let resp = client
-        .post(format!("{}/api/ota/upload", base_url))
-        .header("Content-Type", "application/octet-stream")
+    let mut req = client
+        .post(format!("{}/api/ota/upload?sha256={}", base_url, sha256_hex))
+        .header("Content-Type", "application/octet-stream");
+
+    if let Some(token) = admin_token {
+        req = req.header("X-BugBuster-Admin-Token", token);
+    }
+
+    let resp = req
         .body(data)
         .send()
         .await

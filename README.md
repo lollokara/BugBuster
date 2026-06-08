@@ -76,6 +76,18 @@ More scenarios: [`Docs/Scenarios.md`](Docs/Scenarios.md).
 
 <br/>
 
+## Support Development
+
+If you find BugBuster useful and would like to support its ongoing development, hardware prototyping, and maintenance, you can donate via PayPal:
+
+<p align="left">
+  <a href="https://www.paypal.com/donate/?hosted_button_id=D736X49DQBQXE">
+    <img src="https://img.shields.io/badge/Donate-PayPal-00457C?style=flat-square&logo=paypal&logoColor=white" alt="Donate via PayPal"/>
+  </a>
+</p>
+
+<br/>
+
 ## What's in the box
 
 <table>
