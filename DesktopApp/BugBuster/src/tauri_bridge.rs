@@ -552,7 +552,7 @@ pub fn send_idac_voltage(channel: u8, voltage: f32) {
 }
 
 pub async fn fetch_idac_status() -> Option<IdacState> {
-    let result = invoke("idac_get_status", JsValue::NULL).await;
+    let result = try_invoke("idac_get_status", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
@@ -621,7 +621,7 @@ pub struct UsbPdState {
 }
 
 pub async fn fetch_usbpd_status() -> Option<UsbPdState> {
-    let result = invoke("usbpd_get_status", JsValue::NULL).await;
+    let result = try_invoke("usbpd_get_status", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
@@ -674,7 +674,7 @@ pub struct IoExpState {
 }
 
 pub async fn fetch_pca_status() -> Option<IoExpState> {
-    let result = invoke("pca_get_status", JsValue::NULL).await;
+    let result = try_invoke("pca_get_status", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
@@ -709,7 +709,7 @@ pub struct HatStatus {
 }
 
 pub async fn fetch_hat_status() -> Option<HatStatus> {
-    let result = invoke("hat_get_status", JsValue::NULL).await;
+    let result = try_invoke("hat_get_status", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
@@ -1044,14 +1044,14 @@ pub async fn la_get_view(start: u64, end: u64, max_points: Option<usize>) -> Opt
         max_points,
     })
     .unwrap();
-    let result = invoke("la_get_view", args).await;
+    let result = try_invoke("la_get_view", args).await?;
     serde_wasm_bindgen::from_value::<Option<LaViewData>>(result)
         .ok()
         .flatten()
 }
 
 pub async fn la_get_capture_info() -> Option<LaCaptureInfo> {
-    let result = invoke("la_get_capture_info", JsValue::NULL).await;
+    let result = try_invoke("la_get_capture_info", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value::<Option<LaCaptureInfo>>(result)
         .ok()
         .flatten()
@@ -1090,7 +1090,7 @@ pub async fn la_export_vcd(path: &str) {
         path: path.to_string(),
     })
     .unwrap();
-    let _ = invoke("la_export_vcd_file", args).await;
+    let _ = try_invoke("la_export_vcd_file", args).await;
 }
 
 pub async fn la_export_json(path: &str) {
@@ -1102,7 +1102,7 @@ pub async fn la_export_json(path: &str) {
         path: path.to_string(),
     })
     .unwrap();
-    let _ = invoke("la_export_json", args).await;
+    let _ = try_invoke("la_export_json", args).await;
 }
 
 pub async fn la_import_json_file(path: &str) -> Option<LaCaptureInfo> {
@@ -1114,7 +1114,7 @@ pub async fn la_import_json_file(path: &str) -> Option<LaCaptureInfo> {
         path: path.to_string(),
     })
     .unwrap();
-    let result = invoke("la_import_json", args).await;
+    let result = try_invoke("la_import_json", args).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 pub async fn la_invoke_force() {
@@ -1166,7 +1166,10 @@ pub async fn la_decode_uart(
         end_sample,
     })
     .unwrap();
-    let result = invoke("la_decode", args).await;
+    let result = match try_invoke("la_decode", args).await {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
@@ -1201,7 +1204,10 @@ pub async fn la_decode_i2c(
         end_sample,
     })
     .unwrap();
-    let result = invoke("la_decode", args).await;
+    let result = match try_invoke("la_decode", args).await {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
@@ -1255,7 +1261,10 @@ pub async fn la_decode_spi(
         end_sample,
     })
     .unwrap();
-    let result = invoke("la_decode", args).await;
+    let result = match try_invoke("la_decode", args).await {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
@@ -1271,7 +1280,7 @@ pub async fn la_delete_range(start: u64, end: u64) -> Option<LaCaptureInfo> {
         end_sample: end,
     })
     .unwrap();
-    let result = invoke("la_delete_range", args).await;
+    let result = try_invoke("la_delete_range", args).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
@@ -1575,7 +1584,7 @@ pub struct WifiState {
 }
 
 pub async fn fetch_wifi_status() -> Option<WifiState> {
-    let result = invoke("wifi_get_status", JsValue::NULL).await;
+    let result = try_invoke("wifi_get_status", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
@@ -1588,12 +1597,18 @@ pub struct WifiNetwork {
 }
 
 pub async fn fetch_wifi_scan() -> Vec<WifiNetwork> {
-    let result = invoke("wifi_scan", JsValue::NULL).await;
+    let result = match try_invoke("wifi_scan", JsValue::NULL).await {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
 pub async fn wifi_forget() -> bool {
-    let result = invoke("wifi_forget", JsValue::NULL).await;
+    let result = match try_invoke("wifi_forget", JsValue::NULL).await {
+        Some(v) => v,
+        None => return false,
+    };
     serde_wasm_bindgen::from_value(result).unwrap_or(false)
 }
 
@@ -1613,7 +1628,7 @@ pub struct FirmwareInfo {
 }
 
 pub async fn fetch_firmware_info() -> Option<FirmwareInfo> {
-    let result = invoke("get_firmware_info", JsValue::NULL).await;
+    let result = try_invoke("get_firmware_info", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 
@@ -1627,7 +1642,8 @@ pub async fn upload_firmware(path: &str) -> Result<String, String> {
         file_path: path.to_string(),
     })
     .unwrap();
-    let result = invoke("ota_upload_firmware", args).await;
+    let result = try_invoke("ota_upload_firmware", args).await
+        .ok_or_else(|| "ota_upload_firmware command failed".to_string())?;
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }
 

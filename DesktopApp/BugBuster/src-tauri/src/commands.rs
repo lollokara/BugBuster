@@ -612,6 +612,7 @@ pub async fn ota_upload_firmware(
         req = req.header("X-BugBuster-Admin-Token", token);
     }
 
+    let _guard = mgr.ota_guard();
     let resp = req
         .body(data)
         .send()
@@ -3249,6 +3250,8 @@ async fn run_desktop_ota_flow(
     esp32_sha256: String,
     mgr: ConnectionManager,
 ) -> Result<(), String> {
+    let _guard = mgr.ota_guard();
+
     let client = reqwest::Client::builder()
         .user_agent("BugBuster-Desktop/1.0.0")
         .timeout(std::time::Duration::from_secs(120))
@@ -3301,23 +3304,79 @@ async fn run_desktop_ota_flow(
             return Err(format!("RP2040 upload failed (HTTP {}): {}", status, err_body));
         }
 
-        emit_progress(&app, "flashing", 60.0, "Triggering RP2040 HAT flash update...");
+        // Small pause: the SPIFFS write for the binary upload can temporarily block
+        // the ESP32 httpd from accepting new connections.
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+        emit_progress(&app, "flashing", 55.0, "Triggering RP2040 HAT flash update...");
         let apply_url = format!("{}/api/update/apply", base_url);
-        let mut apply_req = client.post(apply_url)
+        let mut apply_req = client.post(&apply_url)
             .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "rp2040": true,
-                "esp32": false
-            }));
+            .json(&serde_json::json!({ "rp2040": true, "esp32": false }));
         if let Some(ref token) = admin_token {
             apply_req = apply_req.header("X-BugBuster-Admin-Token", token);
         }
-        let apply_resp = apply_req.send().await
-            .map_err(|e| format!("Failed to apply update: {}", e))?;
-        if !apply_resp.status().is_success() {
-            let status = apply_resp.status();
-            let err_body = apply_resp.text().await.unwrap_or_default();
-            return Err(format!("RP2040 flashing trigger failed (HTTP {}): {}", status, err_body));
+        // The handler now returns immediately (202) — transport errors are unexpected
+        // but we proceed to polling regardless, since the task may have started.
+        match apply_req.send().await {
+            Ok(resp) if !resp.status().is_success() => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(format!("RP2040 flashing trigger failed (HTTP {}): {}", status, body));
+            }
+            Err(e) => log::warn!("apply request transport error (may still have started): {}", e),
+            _ => {}
+        }
+
+        // Poll /api/update/status until state returns to IDLE (0) or FAILED (6).
+        // UPDATE_STATE_IDLE=0, UPDATE_STATE_FAILED=6
+        let status_url = format!("{}/api/update/status", base_url);
+        let poll_client = reqwest::Client::builder()
+            .user_agent("BugBuster-Desktop/1.0.0")
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if tokio::time::Instant::now() > deadline {
+                return Err("RP2040 flash timed out after 120 s".to_string());
+            }
+            let mut status_req = poll_client.get(&status_url);
+            if let Some(ref token) = admin_token {
+                status_req = status_req.header("X-BugBuster-Admin-Token", token);
+            }
+            let resp = match status_req.send().await {
+                Ok(r) => r,
+                Err(_) => continue, // device may be briefly unreachable during flash
+            };
+            if !resp.status().is_success() { continue; }
+            let json: serde_json::Value = match resp.json().await {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+            let state = json.get("state").and_then(|v| v.as_u64()).unwrap_or(0);
+            let step = json.get("step").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let last_error = json.get("lastError").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let progress_done = json.get("progressDone").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let progress_total = json.get("progressTotal").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+            let pct = if progress_total > 0.0 {
+                55.0 + (progress_done / progress_total * 25.0) as f32
+            } else {
+                65.0
+            };
+            emit_progress(&app, "flashing", pct, &format!("RP2040: {}", step));
+
+            match state {
+                0 => break, // IDLE — done
+                6 => return Err(if last_error.is_empty() {
+                    "RP2040 flash failed (unknown error)".to_string()
+                } else {
+                    format!("RP2040 flash failed: {}", last_error)
+                }),
+                _ => {} // still running
+            }
         }
 
         emit_progress(&app, "flashing", 80.0, "HAT flashing completed successfully.");
@@ -3378,7 +3437,7 @@ async fn run_desktop_ota_flow(
 }
 
 #[tauri::command]
-pub fn start_desktop_ota(
+pub async fn start_desktop_ota(
     app_handle: tauri::AppHandle,
     update_rp2040: bool,
     update_esp32: bool,

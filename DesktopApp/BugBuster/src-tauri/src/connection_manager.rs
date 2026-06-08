@@ -46,6 +46,19 @@ pub struct ConnectionManager {
     // The keep-alive timer (2 s) re-issues CMD_IO_CLAIM for the union of these
     // slots. Cleared on disconnect so the device frees them automatically.
     pub active_slots: Arc<StdMutex<HashSet<u8>>>,
+    // Flag set during OTA to relax health-check failure thresholds.
+    // OTA can take 30-120 s during which /api/status may time out (M19).
+    ota_in_progress: Arc<AtomicBool>,
+}
+
+pub struct OtaGuard {
+    mgr: ConnectionManager,
+}
+
+impl Drop for OtaGuard {
+    fn drop(&mut self) {
+        self.mgr.set_ota_in_progress(false);
+    }
 }
 
 impl ConnectionManager {
@@ -58,6 +71,21 @@ impl ConnectionManager {
             tokens: Arc::new(StdMutex::new(HashMap::new())),
             recent_writes: Arc::new(StdMutex::new([None; 4])),
             active_slots: Arc::new(StdMutex::new(HashSet::new())),
+            ota_in_progress: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Set whether an OTA update is currently in progress.
+    pub fn set_ota_in_progress(&self, in_progress: bool) {
+        log::info!("OTA in progress: {}", in_progress);
+        self.ota_in_progress.store(in_progress, Ordering::Release);
+    }
+
+    /// Return a guard that sets ota_in_progress to true, and back to false when dropped.
+    pub fn ota_guard(&self) -> OtaGuard {
+        self.set_ota_in_progress(true);
+        OtaGuard {
+            mgr: self.clone(),
         }
     }
 
@@ -572,6 +600,8 @@ impl ConnectionManager {
             });
         }
 
+        let ota_in_progress = self.ota_in_progress.clone();
+
         tokio::spawn(async move {
             // Determine poll interval based on transport type
             let poll_ms = {
@@ -584,6 +614,10 @@ impl ConnectionManager {
 
             let mut consecutive_failures: u32 = 0;
             const MAX_RETRIES: u32 = 3;
+            // During OTA, the device is extremely busy and may ignore HTTP requests
+            // for up to 60-90 seconds. We increase the threshold to prevent
+            // dropping the connection UI (M19).
+            const MAX_RETRIES_OTA: u32 = 300; // ~90 s at 300 ms poll
 
             // Edge-detect channel_alert transitions (Bug Issue 5 — AIO_SC diag).
             // Log only the bits that went 0 -> 1 since last poll to avoid spam.
@@ -610,6 +644,7 @@ impl ConnectionManager {
                 match result {
                     Ok(mut state) => {
                         consecutive_failures = 0;
+                        // ... (rest of Ok branch)
 
                         // Bug 3 suppression: for any channel with a recent
                         // write (CMD_SET_ADC_CONFIG / CMD_SET_CH_FUNC / DAC),
@@ -692,16 +727,21 @@ impl ConnectionManager {
                     }
                     Err(e) => {
                         consecutive_failures += 1;
+                        let in_ota = ota_in_progress.load(Ordering::Acquire);
+                        let threshold = if in_ota { MAX_RETRIES_OTA } else { MAX_RETRIES };
+
                         log::warn!(
-                            "Status poll failed (attempt {}/{}): {}",
+                            "Status poll failed (attempt {}/{}): {}{}",
                             consecutive_failures,
-                            MAX_RETRIES,
-                            e
+                            threshold,
+                            e,
+                            if in_ota { " (OTA mode active)" } else { "" }
                         );
-                        if consecutive_failures >= MAX_RETRIES {
+
+                        if consecutive_failures >= threshold {
                             log::error!(
                                 "Status poll failed {} consecutive times, marking disconnected",
-                                MAX_RETRIES
+                                threshold
                             );
                             break;
                         }

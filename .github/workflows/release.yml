@@ -478,7 +478,7 @@ jobs:
             gh release create "$archive_tag" dist/archive/* \
               --prerelease \
               --target "$GITHUB_SHA" \
-              --title "BugBuster Nightly v${version}" \
+              --title "BugBuster Nightly Archive v${version}" \
               --notes "$notes"
 
             echo "Pruning archived nightly releases, keeping the latest 3..."

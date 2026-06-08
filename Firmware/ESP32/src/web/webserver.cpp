@@ -4458,6 +4458,24 @@ static esp_err_t handle_get_update_status(httpd_req_t *req)
     return send_json(req, update_manager_status_json());
 }
 
+typedef struct { bool rp2040; bool esp32; } http_update_apply_args_t;
+
+static void http_update_apply_task(void *arg)
+{
+    http_update_apply_args_t *a = (http_update_apply_args_t *)arg;
+    bool rp2040 = a->rp2040, esp32 = a->esp32;
+    free(a);
+    cJSON *root = NULL;
+    esp_err_t err = update_manager_apply(rp2040, esp32, &root);
+    if (root) cJSON_Delete(root);
+    bool reboot = update_manager_reboot_pending();
+    if (err == ESP_OK && reboot) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_restart();
+    }
+    vTaskDelete(NULL);
+}
+
 static esp_err_t handle_post_update_apply(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) {
@@ -4474,17 +4492,25 @@ static esp_err_t handle_post_update_apply(httpd_req_t *req)
         if (cJSON_IsBool(j_esp)) esp32 = cJSON_IsTrue(j_esp);
         cJSON_Delete(body);
     }
-    cJSON *root = NULL;
-    if (update_manager_apply(rp2040, esp32, &root) != ESP_OK || !root) {
-        return send_error(req, 500, "Update apply failed");
+
+    http_update_apply_args_t *args = (http_update_apply_args_t *)malloc(sizeof(http_update_apply_args_t));
+    if (!args) return send_error(req, 500, "OOM");
+    args->rp2040 = rp2040;
+    args->esp32 = esp32;
+
+    // 12 KB internal-RAM stack — must NOT use PSRAM (D-cache disable during flash
+    // corrupts PSRAM stacks on both cores via cross-core IPC).
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+        http_update_apply_task, "http_update", 12288,
+        args, 5, NULL, 0, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (ok != pdPASS) {
+        free(args);
+        return send_error(req, 500, "Failed to start update task");
     }
-    bool reboot = update_manager_reboot_pending();
-    esp_err_t ret = send_json(req, root);
-    if (reboot) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        esp_restart();
-    }
-    return ret;
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "started", true);
+    return send_json(req, resp);
 }
 
 // POST /api/ota/uploadfs — Upload SPIFFS filesystem image (binary body = spiffs.bin)
