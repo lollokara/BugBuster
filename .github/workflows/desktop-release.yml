@@ -98,6 +98,22 @@ jobs:
       - name: Install Trunk
         run: cargo install trunk --locked
 
+      - name: Install matching wasm-bindgen CLI
+        shell: bash
+        run: |
+          version=$(awk '
+            /^\[\[package\]\]/ { in_pkg = 0 }
+            /^name = "wasm-bindgen"$/ { in_pkg = 1 }
+            in_pkg && /^version = / {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' DesktopApp/BugBuster/Cargo.lock)
+          test -n "$version"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+          wasm-bindgen --version
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version '^2' --locked
 
