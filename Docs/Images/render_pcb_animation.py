@@ -55,9 +55,11 @@ const camera = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.1, 10
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
 renderer.setPixelRatio(1);
 renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x0d1117, 1);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+scene.background = new THREE.Color(0x0d1117);
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x0f172a, 0.22));
 const key = new THREE.DirectionalLight(0xffffff, 0.85);
