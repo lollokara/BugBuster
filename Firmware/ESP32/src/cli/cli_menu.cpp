@@ -70,6 +70,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_mac.h"
+#include "esp_log.h"
 
 // ---------------------------------------------------------------------------
 // Geometry / buffer caps
@@ -1652,14 +1653,27 @@ static void cb_reset_device(bool yes, void*) {
 static void update_apply_task(void *arg)
 {
     uint8_t index = (uint8_t)(uintptr_t)arg;
+    const FwPickerRow *fr = &s_fw_picker_rows[index];
+    ESP_LOGI("TUI_UPDATE", "Starting update to %s (RP2040: %s -> %s, ESP32: %s -> %s)",
+             fr->tag,
+             s_fw_picker_cur_rp, s_update_do_rp2040 ? fr->rp_avail : "skip",
+             s_fw_picker_cur_esp, s_update_do_esp32 ? fr->esp_avail : "skip");
+
     cJSON *out = nullptr;
     esp_err_t err = update_manager_apply_release_index(index, s_update_do_rp2040, s_update_do_esp32, &out);
     if (out) cJSON_Delete(out);
 
     if (err == ESP_OK) {
-        snprintf(s_update_task_status, sizeof(s_update_task_status),
-                 update_manager_reboot_pending() ? "Update applied; rebooting ESP32..." :
-                                                    "Update complete");
+        if (s_update_do_rp2040 && !s_update_do_esp32) {
+            snprintf(s_update_task_status, sizeof(s_update_task_status),
+                     "Update complete (RP2040: %s)", fr->rp_avail);
+        } else if (s_update_do_esp32 && !s_update_do_rp2040) {
+            snprintf(s_update_task_status, sizeof(s_update_task_status),
+                     "Rebooting to ESP32 %s...", fr->esp_avail);
+        } else {
+            snprintf(s_update_task_status, sizeof(s_update_task_status),
+                     "Rebooting (RP:%s ESP:%s)...", fr->rp_avail, fr->esp_avail);
+        }
         s_update_task_failed = false;
     } else {
         cJSON *status = update_manager_status_json();
@@ -1723,11 +1737,9 @@ static void cb_update_confirm(bool yes, void*)
     s_update_task_done = false;
     s_update_task_failed = false;
     snprintf(s_update_task_status, sizeof(s_update_task_status), "Starting update...");
-    // 16 KB internal stack: software-AES TLS needs deep frames; internal caps
-    // required because update_apply_task calls apply_esp32_ota → esp_ota_write
-    // which disables the D-cache — a PSRAM stack would become inaccessible.
     BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-                                update_apply_task, "fwupd_menu", 16384,
+                                update_apply_task, "fwupd_menu",
+                                12288,
                                 (void *)(uintptr_t)s_update_selected_index,
                                 tskIDLE_PRIORITY + 2, &s_update_task, 0,
                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);

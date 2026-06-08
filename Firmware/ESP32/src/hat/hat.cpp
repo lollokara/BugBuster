@@ -41,6 +41,7 @@ static SemaphoreHandle_t s_log_mutex = NULL;
 static HatLogRing *s_log_ring = nullptr;
 
 static volatile bool s_la_done_pending = false;
+static volatile bool s_commit_in_progress = false;
 #if PIN_HAT_LA_DONE_IRQ >= 0
 // Dedicated LA-done IRQ, if a board revision routes one separately from HAT INT.
 // Set from the GPIO ISR on falling edge, consumed by hat_la_done_consume().
@@ -112,6 +113,7 @@ void hat_uart_flush(void)
 // real failure remains observable.
 static void hat_reset_connection(void)
 {
+    if (s_commit_in_progress) return;
     ESP_LOGW(TAG, "Resetting HAT connection (UART flush)");
     hat_uart_flush();
 }
@@ -247,7 +249,9 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
     ESP_LOGD(TAG, "TX cmd=0x%02X len=%d t=%" PRIu64 "us", cmd, payload_len, esp_timer_get_time());
 
     // Flush any stale data before sending
-    uart_flush_input(HAT_UART_NUM);
+    if (!s_commit_in_progress) {
+        uart_flush_input(HAT_UART_NUM);
+    }
 
     if (!hat_send_frame(cmd, payload, payload_len)) {
         ESP_LOGW(TAG, "Failed to send command 0x%02X", cmd);
@@ -313,6 +317,7 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
                 memcpy(log_line, local_payload, copy_len);
                 log_line[copy_len] = '\0';
                 hat_log_ring_push(log_line);
+                ESP_LOGI(TAG, "HAT: %s", log_line);
             }
             continue;
         }
@@ -357,7 +362,7 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                                        pending_events, &pending_count);
 
     // One retry with a connection reset if the first attempt failed (timeout or junk)
-    if (rsp == 0) {
+    if (rsp == 0 && !s_commit_in_progress) {
         ESP_LOGD(TAG, "HAT command 0x%02X first attempt failed, retrying after reset...", cmd);
         hat_reset_connection();
         rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len,
@@ -370,10 +375,12 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
 
     if (rsp == 0) {
         hat_note_uart_timeout();
-        ESP_LOGW(TAG,
-                 "HAT command 0x%02X failed or timed out after retry; "
-                 "keeping HAT marked connected so later commands can retry",
-                 cmd);
+        if (!s_commit_in_progress) {
+            ESP_LOGW(TAG,
+                     "HAT command 0x%02X failed or timed out after retry; "
+                     "keeping HAT marked connected so later commands can retry",
+                     cmd);
+        }
     } else {
         hat_note_uart_success();
     }
@@ -693,6 +700,7 @@ bool hat_connect(void)
     }
 
     s_state.connected = true;
+    s_commit_in_progress = false;
     hat_note_uart_success();
 
     // Query HAT info. PING only proves UART liveness; firmware metadata lives
@@ -1358,6 +1366,7 @@ bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out)
 
 bool hat_fw_begin(uint32_t image_size, uint32_t expected_crc32)
 {
+    s_commit_in_progress = false;
     if (!s_state.connected) return false;
     uint8_t payload[8];
     memcpy(payload, &image_size, 4);
@@ -1387,10 +1396,15 @@ bool hat_fw_chunk(uint32_t offset, const uint8_t *data, uint8_t len, uint32_t *a
 bool hat_fw_commit(void)
 {
     if (!s_state.connected) return false;
+    s_commit_in_progress = true;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_FW_COMMIT, NULL, 0, rsp, &rsp_len, 1000, sizeof(rsp));
-    return cmd == HAT_RSP_OK;
+    if (cmd != HAT_RSP_OK) {
+        s_commit_in_progress = false;
+        return false;
+    }
+    return true;
 }
 
 bool hat_fw_status(HatFwUpdateStatus *status)
@@ -1686,6 +1700,7 @@ void hat_poll(void)
             memcpy(log_line, rsp, copy_len);
             log_line[copy_len] = '\0';
             hat_log_ring_push(log_line);
+            ESP_LOGI(TAG, "HAT: %s", log_line);
         }
         return;
     }

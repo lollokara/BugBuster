@@ -125,7 +125,7 @@ target_link_libraries(bugbuster_hat PRIVATE
     hardware_i2c
     hardware_uart
     FreeRTOS-Kernel
-    FreeRTOS-Kernel-Heap1
+    FreeRTOS-Kernel-Heap4
 )
 
 # Keep the image XIP by default; the LA already uses DMA/PIO for the fast path,

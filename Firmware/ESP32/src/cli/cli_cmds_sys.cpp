@@ -884,6 +884,8 @@ static void update_print_status(void)
     const char *last_error = json_string(st, "lastError", "");
     int done = json_int(st, "progressDone", 0);
     int total = json_int(st, "progressTotal", 0);
+    const char *cur_rp = json_string(st, "currentRp2040", "?");
+    const char *cur_esp = json_string(st, "currentEsp32", "?");
 
     if (total > 0) {
         term_printf("[update] %-15s %-16s %d/%d bytes\r\n",
@@ -891,6 +893,8 @@ static void update_print_status(void)
     } else {
         term_printf("[update] %-15s %s\r\n", update_state_name(state), step);
     }
+    term_printf("[update] current: rp2040=%s esp32=%s\r\n", cur_rp, cur_esp);
+
     if (last_error && last_error[0]) {
         term_printf("[update] error: %s\r\n", last_error);
     }
@@ -978,11 +982,14 @@ static bool update_start_task(bool check_only, bool rp2040, bool esp32)
 
     // check-only: HTTP GET + JSON only, no flash writes — PSRAM stack is safe and
     // gives the TLS/software-AES call chain the 16 KB it needs without consuming
-    // internal RAM. apply path writes OTA partition, so it must stay internal.
+    // internal RAM. apply path writes OTA/SPIFFS partitions, so it must stay internal
+    // but can be safely reduced to 12 KB to avoid allocation failure due to heap fragmentation.
     UBaseType_t stack_caps = check_only
         ? MALLOC_CAP_SPIRAM
         : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(cli_update_apply_task, "cli_update", 16384,
+    uint32_t stack_size = check_only ? 16384 : 12288;
+
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(cli_update_apply_task, "cli_update", stack_size,
                                                     &s_cli_update_args, 5, &s_cli_update_task, 0,
                                                     stack_caps);
     if (ok != pdPASS) {

@@ -565,15 +565,15 @@ static bool file_crc32(const char *path, uint32_t *out)
     return true;
 }
 
-static bool flash_rp2040_from_file(const UpdateComponent *component)
+static bool flash_rp2040_from_file(const UpdateComponent *component, const char *stage_path)
 {
-    FILE *f = fopen(RP2040_STAGE_PATH, "rb");
+    FILE *f = fopen(stage_path, "rb");
     if (!f) {
         set_error("RP2040 staged file missing");
         return false;
     }
     uint32_t expected_crc = component->crc32;
-    if (!expected_crc && !file_crc32(RP2040_STAGE_PATH, &expected_crc)) {
+    if (!expected_crc && !file_crc32(stage_path, &expected_crc)) {
         fclose(f);
         set_error("failed to compute RP2040 staged CRC");
         return false;
@@ -622,7 +622,7 @@ static bool flash_rp2040_from_file(const UpdateComponent *component)
         hat_connect();
         const HatState *hs = hat_get_state();
         if (hs && hs->connected) {
-            remove(RP2040_STAGE_PATH);
+            remove(stage_path);
             return true;
         }
     }
@@ -742,15 +742,72 @@ esp_err_t update_manager_apply(bool update_rp2040, bool update_esp32, cJSON **ou
     bool esp_newer = component_available(&manifest.esp32) &&
                      strcmp(current_esp32_build_id(), manifest.esp32.build_id) != 0 &&
                      strcmp(current_esp32_build_id(), manifest.esp32.version) != 0;
+    
+    ESP_LOGI(TAG, "Update check - ESP32: current = %s, available = %s (newer=%d)",
+             current_esp32_build_id(), manifest.esp32.build_id, esp_newer);
+    ESP_LOGI(TAG, "Update check - RP2040: current = %s, available = %s (newer=%d)",
+             current_rp2040_build_id(), manifest.rp2040.build_id, rp_newer);
+
     bool did_rp = false;
     bool did_esp = false;
 
-    if (update_rp2040 && rp_newer) {
-        set_state(UPDATE_STATE_DOWNLOADING_RP2040, "download_rp2040");
-        if (!download_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
-        set_state(UPDATE_STATE_FLASHING_RP2040, "flash_rp2040");
-        if (!flash_rp2040_from_file(&manifest.rp2040)) return ESP_FAIL;
-        did_rp = true;
+    if (update_rp2040) {
+        bool has_local = false;
+        char local_path[64];
+        struct stat st_buf;
+        
+        strcpy(local_path, RP2040_STAGE_PATH);
+        if (stat(local_path, &st_buf) == 0 && st_buf.st_size > 0) {
+            uint32_t expected_size = manifest.rp2040.size;
+            if (expected_size > 0 && st_buf.st_size != expected_size) {
+                ESP_LOGW(TAG, "Local staged image %s size mismatch: %lu vs expected %lu. Discarding.",
+                         local_path, (unsigned long)st_buf.st_size, (unsigned long)expected_size);
+                remove(local_path);
+            } else if (st_buf.st_size < 16384) {
+                ESP_LOGW(TAG, "Local staged image %s size is too small: %lu. Discarding.",
+                         local_path, (unsigned long)st_buf.st_size);
+                remove(local_path);
+            } else {
+                has_local = true;
+            }
+        }
+        
+        if (!has_local) {
+            strcpy(local_path, "/scripts/update-rp2040.py");
+            if (stat(local_path, &st_buf) == 0 && st_buf.st_size > 0) {
+                uint32_t expected_size = manifest.rp2040.size;
+                if (expected_size > 0 && st_buf.st_size != expected_size) {
+                    ESP_LOGW(TAG, "Local staged image %s size mismatch: %lu vs expected %lu. Discarding.",
+                             local_path, (unsigned long)st_buf.st_size, (unsigned long)expected_size);
+                    remove(local_path);
+                } else if (st_buf.st_size < 16384) {
+                    ESP_LOGW(TAG, "Local staged image %s size is too small: %lu. Discarding.",
+                             local_path, (unsigned long)st_buf.st_size);
+                    remove(local_path);
+                } else {
+                    has_local = true;
+                }
+            }
+        }
+
+        if (has_local) {
+            ESP_LOGI(TAG, "Found local staged RP2040 image %s (%ld bytes), flashing directly", local_path, st_buf.st_size);
+            UpdateComponent local_comp = {};
+            local_comp.size = st_buf.st_size;
+            if (!file_crc32(local_path, &local_comp.crc32)) {
+                set_error("failed to compute local staged CRC");
+                return ESP_FAIL;
+            }
+            set_state(UPDATE_STATE_FLASHING_RP2040, "flash_rp2040");
+            if (!flash_rp2040_from_file(&local_comp, local_path)) return ESP_FAIL;
+            did_rp = true;
+        } else if (rp_newer) {
+            set_state(UPDATE_STATE_DOWNLOADING_RP2040, "download_rp2040");
+            if (!download_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
+            set_state(UPDATE_STATE_FLASHING_RP2040, "flash_rp2040");
+            if (!flash_rp2040_from_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
+            did_rp = true;
+        }
     }
 
     if (update_esp32 && esp_newer) {
@@ -818,6 +875,8 @@ esp_err_t update_manager_apply_release_index(uint8_t index, bool update_rp2040,
     }
 
     UpdateManifest manifest = options[index].manifest;
+    char selected_label[128] = {};
+    snprintf(selected_label, sizeof(selected_label), "%s", options[index].label);
     free(options);
     bool did_rp = false;
     bool did_esp = false;
@@ -828,11 +887,16 @@ esp_err_t update_manager_apply_release_index(uint8_t index, bool update_rp2040,
                      strcmp(current_esp32_build_id(), manifest.esp32.build_id) != 0 &&
                      strcmp(current_esp32_build_id(), manifest.esp32.version) != 0;
 
+    ESP_LOGI(TAG, "Applying release - ESP32: current = %s, target = %s (newer=%d)",
+             current_esp32_build_id(), manifest.esp32.build_id, esp_newer);
+    ESP_LOGI(TAG, "Applying release - RP2040: current = %s, target = %s (newer=%d)",
+             current_rp2040_build_id(), manifest.rp2040.build_id, rp_newer);
+
     if (update_rp2040 && rp_newer) {
         set_state(UPDATE_STATE_DOWNLOADING_RP2040, "download_rp2040");
         if (!download_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
         set_state(UPDATE_STATE_FLASHING_RP2040, "flash_rp2040");
-        if (!flash_rp2040_from_file(&manifest.rp2040)) return ESP_FAIL;
+        if (!flash_rp2040_from_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
         did_rp = true;
     }
 
@@ -844,7 +908,7 @@ esp_err_t update_manager_apply_release_index(uint8_t index, bool update_rp2040,
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "success", true);
-    cJSON_AddStringToObject(root, "selected", options[index].label);
+    cJSON_AddStringToObject(root, "selected", selected_label);
     cJSON_AddBoolToObject(root, "rp2040Updated", did_rp);
     cJSON_AddBoolToObject(root, "esp32Updated", did_esp);
     cJSON_AddItemToObject(root, "status", update_manager_status_json());
@@ -861,6 +925,8 @@ cJSON *update_manager_status_json(void)
     cJSON_AddStringToObject(root, "lastError", s_update.last_error);
     cJSON_AddNumberToObject(root, "progressDone", s_update.progress_done);
     cJSON_AddNumberToObject(root, "progressTotal", s_update.progress_total);
+    cJSON_AddStringToObject(root, "currentRp2040", current_rp2040_build_id());
+    cJSON_AddStringToObject(root, "currentEsp32", current_esp32_build_id());
     return root;
 }
 
