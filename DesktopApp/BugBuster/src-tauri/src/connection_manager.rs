@@ -27,6 +27,7 @@ use crate::state::*;
 use crate::transport::Transport;
 use crate::usb_transport::UsbTransport;
 
+#[derive(Clone)]
 pub struct ConnectionManager {
     // tokio::Mutex because we hold it across .await in send_command / get_status
     transport: Arc<TokioMutex<Option<Box<dyn Transport>>>>,
@@ -885,7 +886,10 @@ impl ConnectionManager {
                     }
                     Some(token)
                 }
-                Err(keyring::Error::NoEntry) => None,
+                Err(keyring::Error::NoEntry) => {
+                    log::warn!("No keychain entry found for {} — device needs USB pairing", key);
+                    None
+                }
                 Err(e) => {
                     log::warn!("OS keychain read failed for {}: {}", mac, e);
                     None

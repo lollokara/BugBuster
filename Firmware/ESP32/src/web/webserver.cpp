@@ -4287,6 +4287,75 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
     return ret;
 }
 
+// POST /api/ota/upload_rp2040 — Upload RP2040 firmware update (binary body = bugbuster_hat.bin)
+//   Saves file directly to /scripts/update-rp2040.bin, gated by admin token.
+static esp_err_t handle_rp2040_upload(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+
+    ESP_LOGI(TAG, "RP2040 upload started, content_len=%d", req->content_len);
+
+    if (req->content_len <= 0 || req->content_len > 1024 * 1024) {
+        return send_error(req, 400, "Invalid RP2040 firmware size (max 1MB)");
+    }
+
+    const char *stage_path = "/scripts/update-rp2040.bin";
+    remove(stage_path);
+    FILE *f = fopen(stage_path, "wb");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to open staging path %s for writing", stage_path);
+        return send_error(req, 500, "Failed to open stage file");
+    }
+
+    char *buf = (char*)malloc(4096);
+    if (!buf) {
+        fclose(f);
+        return send_error(req, 500, "Out of memory");
+    }
+
+    int remaining = req->content_len;
+    int total_written = 0;
+    bool failed = false;
+
+    while (remaining > 0) {
+        int to_read = (remaining > 4096) ? 4096 : remaining;
+        int received = httpd_req_recv(req, buf, to_read);
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ESP_LOGE(TAG, "RP2040 upload receive error at %d/%d bytes", total_written, req->content_len);
+            failed = true;
+            break;
+        }
+
+        if (fwrite(buf, 1, received, f) != (size_t)received) {
+            ESP_LOGE(TAG, "RP2040 upload write failed at %d bytes", total_written);
+            failed = true;
+            break;
+        }
+
+        remaining -= received;
+        total_written += received;
+    }
+
+    free(buf);
+    fclose(f);
+
+    if (failed) {
+        remove(stage_path);
+        return send_error(req, 500, "RP2040 upload failed");
+    }
+
+    ESP_LOGI(TAG, "RP2040 upload success! %d bytes written to %s", total_written, stage_path);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddNumberToObject(root, "bytesWritten", total_written);
+    return send_json(req, root);
+}
+
+
 // Helper: stringify esp_ota_img_states_t for JSON.
 static const char* ota_state_str(esp_ota_img_states_t s)
 {
@@ -5578,6 +5647,12 @@ bool initWebServer(void)
         .uri = "/api/ota/upload", .method = HTTP_POST, .handler = handle_ota_upload, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_ota);
+
+    httpd_uri_t uri_ota_rp2040 = {
+        .uri = "/api/ota/upload_rp2040", .method = HTTP_POST, .handler = handle_rp2040_upload, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ota_rp2040);
+
 
     httpd_uri_t uri_uploadfs = {
         .uri = "/api/ota/uploadfs", .method = HTTP_POST, .handler = handle_uploadfs, .user_ctx = NULL

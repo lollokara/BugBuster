@@ -434,7 +434,8 @@ jobs:
           EOF
           )
 
-          # Delete previous rolling release if we are updating nightly
+          # Delete previous rolling release if we are updating nightly.
+          # Also keep the latest three archived nightly builds for rollback.
           if [ "$is_prerelease" = "true" ]; then
             echo "Deleting previous nightly release and tag to avoid file accumulation..."
             gh release delete nightly --cleanup-tag -y || true
@@ -446,6 +447,62 @@ jobs:
               --prerelease \
               --title "BugBuster Nightly v${version}" \
               --notes "$notes"
+
+            archive_tag="nightly-build${GITHUB_RUN_NUMBER}"
+            echo "Publishing archived nightly release ${archive_tag}..."
+            gh release delete "$archive_tag" --cleanup-tag -y || true
+            rm -rf dist/archive
+            mkdir -p dist/archive
+            cp -R dist/release/. dist/archive/
+            ARCHIVE_TAG="$archive_tag" python -c 'import textwrap; exec(textwrap.dedent(r"""
+            import json
+            import os
+
+            archive_tag = os.environ["ARCHIVE_TAG"]
+            manifest_path = "dist/archive/bugbuster-update-manifest.json"
+            if os.path.exists(manifest_path):
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                for component in ("rp2040", "esp32"):
+                    asset = manifest.get(component, {}).get("asset")
+                    if asset:
+                        repo = manifest["repo"]
+                        manifest[component]["url"] = (
+                            f"https://github.com/{repo}/releases/download/{archive_tag}/{asset}"
+                        )
+                with open(manifest_path, "w", encoding="utf-8") as f:
+                    json.dump(manifest, f, indent=2, sort_keys=True)
+                    f.write("\n")
+            """))'
+            ( cd dist/archive && rm -f SHA256SUMS.txt && sha256sum ./* > SHA256SUMS.txt )
+            gh release create "$archive_tag" dist/archive/* \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "BugBuster Nightly v${version}" \
+              --notes "$notes"
+
+            echo "Pruning archived nightly releases, keeping the latest 3..."
+            gh release list --limit 100 --json tagName,createdAt \
+              | python -c 'import textwrap; exec(textwrap.dedent(r"""
+            import json
+            import re
+            import sys
+
+            releases = json.load(sys.stdin)
+            archived = [
+                release
+                for release in releases
+                if re.fullmatch(r"nightly-build[0-9]+", release.get("tagName", ""))
+            ]
+            archived.sort(key=lambda release: release.get("createdAt", ""), reverse=True)
+            for release in archived[3:]:
+                print(release["tagName"])
+            """))' \
+              | while IFS= read -r old_tag; do
+                  [ -n "$old_tag" ] || continue
+                  echo "Deleting archived nightly ${old_tag}..."
+                  gh release delete "$old_tag" --cleanup-tag -y || true
+                done
           else
             # Official release (from tag release-v* or manual dispatch with version)
             if gh release view "$tag" >/dev/null 2>&1; then

@@ -62,6 +62,110 @@ const CATEGORIES: &[(&str, &str, &[(&str, &str)])] = &[
 pub fn App() -> impl IntoView {
     let (devices, set_devices) = signal(Vec::<DiscoveredDevice>::new());
     let (conn_mode, set_conn_mode) = signal("Disconnected".to_string());
+
+    let (git_releases, set_git_releases) = signal(Vec::<DesktopGitRelease>::new());
+    let (esp32_current_version, set_esp32_current_version) = signal(String::new());
+    let (rp2040_current_version, set_rp2040_current_version) = signal(String::new());
+
+    let (ota_progress, set_ota_progress) = signal(OtaProgress::default());
+    let (ota_active, set_ota_active) = signal(false);
+    let (ota_error, set_ota_error) = signal(Option::<String>::None);
+    let (ota_success, set_ota_success) = signal(false);
+
+    provide_context(OtaContext {
+        git_releases,
+        esp32_current_version,
+        rp2040_current_version,
+        ota_progress,
+        ota_active,
+        ota_error,
+        ota_success,
+        set_ota_active,
+        set_ota_error,
+        set_ota_success,
+        set_ota_progress,
+    });
+
+    // Fetch GitHub releases on startup
+    spawn_local(async move {
+        if let Ok(rels) = fetch_github_releases().await {
+            set_git_releases.set(rels);
+        }
+    });
+
+    // Listen for desktop OTA progress
+    spawn_local(async move {
+        let closure = Closure::new(move |event: JsValue| {
+            if let Ok(evt) = serde_wasm_bindgen::from_value::<TauriEvent<OtaProgress>>(event) {
+                let p = evt.payload;
+                if p.stage == "error" {
+                    set_ota_active.set(false);
+                    set_ota_error.set(Some(p.message.clone()));
+                } else if p.stage == "done" {
+                    set_ota_active.set(false);
+                    set_ota_success.set(true);
+                    set_ota_progress.set(p);
+                } else {
+                    set_ota_progress.set(p);
+                }
+            }
+        });
+        listen("desktop-ota-progress", &closure).await;
+        closure.forget();
+    });
+
+    // Fetch versions and update GitHub releases list on connection
+    Effect::new(move |_| {
+        let mode = conn_mode.get();
+        if mode != "Disconnected" {
+            spawn_local(async move {
+                if let Ok(rels) = fetch_github_releases().await {
+                    set_git_releases.set(rels);
+                }
+            });
+            spawn_local(async move {
+                if let Some(info) = fetch_firmware_info().await {
+                    set_esp32_current_version.set(info.fw_version);
+                }
+            });
+            spawn_local(async move {
+                if let Some(caps) = hat_get_caps().await {
+                    let version = format!("{}.{}", caps.fw_major, caps.fw_minor);
+                    set_rp2040_current_version.set(version);
+                }
+            });
+        } else {
+            set_esp32_current_version.set(String::new());
+            set_rp2040_current_version.set(String::new());
+        }
+    });
+
+    let has_update = move || {
+        let releases = git_releases.get();
+        if releases.is_empty() {
+            return false;
+        }
+        let esp_curr = esp32_current_version.get();
+        let rp_curr = rp2040_current_version.get();
+        if esp_curr.is_empty() && rp_curr.is_empty() {
+            return false;
+        }
+        if let Some(latest) = releases.first() {
+            let esp_update = if !esp_curr.is_empty() && !latest.esp32_version.is_empty() {
+                is_version_newer(&esp_curr, &latest.esp32_version)
+            } else {
+                false
+            };
+            let rp_update = if !rp_curr.is_empty() && !latest.rp2040_version.is_empty() {
+                is_version_newer(&rp_curr, &latest.rp2040_version)
+            } else {
+                false
+            };
+            esp_update || rp_update
+        } else {
+            false
+        }
+    };
     let (conn_addr, set_conn_addr) = signal(String::new());
     let (scanning, set_scanning) = signal(false);
     let (scan_completed, set_scan_completed) = signal(false);
@@ -393,6 +497,21 @@ pub fn App() -> impl IntoView {
                                         {move || format!("{:.1} °C", device_state.get().die_temperature)}
                                     </span>
                                     <span class="status-separator">"|"</span>
+                                    {move || {
+                                        if has_update() {
+                                            view! {
+                                                <button class="btn btn-xs update-glow-btn"
+                                                    on:click=move |_| set_active_tab.set("diag".to_string())
+                                                >
+                                                    <span class="update-glow-dot"></span>
+                                                    "Update Available"
+                                                </button>
+                                                <span class="status-separator">"|"</span>
+                                            }.into_any()
+                                        } else {
+                                            view! { <></> }.into_any()
+                                        }
+                                    }}
                                     <button class="btn btn-ghost btn-xs" on:click=move |_| {
                                         spawn_local(async move {
                                             let result = invoke("pick_config_save_file", JsValue::NULL).await;
@@ -547,4 +666,41 @@ async fn slp(ms: u32) {
         }
     });
     wasm_bindgen_futures::JsFuture::from(p).await.ok();
+}
+
+#[derive(Clone, Copy)]
+pub struct OtaContext {
+    pub git_releases: ReadSignal<Vec<DesktopGitRelease>>,
+    pub esp32_current_version: ReadSignal<String>,
+    pub rp2040_current_version: ReadSignal<String>,
+    pub ota_progress: ReadSignal<OtaProgress>,
+    pub ota_active: ReadSignal<bool>,
+    pub ota_error: ReadSignal<Option<String>>,
+    pub ota_success: ReadSignal<bool>,
+    pub set_ota_active: WriteSignal<bool>,
+    pub set_ota_error: WriteSignal<Option<String>>,
+    pub set_ota_success: WriteSignal<bool>,
+    pub set_ota_progress: WriteSignal<OtaProgress>,
+}
+
+fn parse_version(v: &str) -> Vec<u32> {
+    let clean = v.trim_start_matches('v');
+    clean.split('.')
+         .map(|s| s.parse::<u32>().unwrap_or(0))
+         .collect()
+}
+
+pub fn is_version_newer(current: &str, latest: &str) -> bool {
+    let curr_parts = parse_version(current);
+    let lat_parts = parse_version(latest);
+    for i in 0..std::cmp::max(curr_parts.len(), lat_parts.len()) {
+        let c = curr_parts.get(i).cloned().unwrap_or(0);
+        let l = lat_parts.get(i).cloned().unwrap_or(0);
+        if l > c {
+            return true;
+        } else if c > l {
+            return false;
+        }
+    }
+    false
 }

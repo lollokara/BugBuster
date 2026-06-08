@@ -1592,6 +1592,11 @@ pub async fn fetch_wifi_scan() -> Vec<WifiNetwork> {
     serde_wasm_bindgen::from_value(result).unwrap_or_default()
 }
 
+pub async fn wifi_forget() -> bool {
+    let result = invoke("wifi_forget", JsValue::NULL).await;
+    serde_wasm_bindgen::from_value(result).unwrap_or(false)
+}
+
 // -----------------------------------------------------------------------------
 // Firmware / OTA
 // -----------------------------------------------------------------------------
@@ -1625,3 +1630,76 @@ pub async fn upload_firmware(path: &str) -> Result<String, String> {
     let result = invoke("ota_upload_firmware", args).await;
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopGitRelease {
+    pub tag: String,
+    pub published_at: String,
+    pub manifest_build_id: String,
+    pub commit: String,
+    pub rp2040_version: String,
+    pub rp2040_url: String,
+    pub rp2040_size: u64,
+    pub rp2040_sha256: String,
+    pub rp2040_crc32: u32,
+    pub esp32_version: String,
+    pub esp32_url: String,
+    pub esp32_size: u64,
+    pub esp32_sha256: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtaProgress {
+    pub stage: String,
+    pub percent: f32,
+    pub message: String,
+}
+
+pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
+    let result = try_invoke("fetch_github_releases", JsValue::NULL).await
+        .ok_or_else(|| "fetch_github_releases command failed".to_string())?;
+    serde_wasm_bindgen::from_value::<Vec<DesktopGitRelease>>(result)
+        .map_err(|e| e.to_string())
+}
+
+pub async fn start_desktop_ota(
+    update_rp2040: bool,
+    update_esp32: bool,
+    rp2040_url: String,
+    rp2040_size: u64,
+    rp2040_sha256: String,
+    esp32_url: String,
+    esp32_size: u64,
+    esp32_sha256: String,
+) -> Result<(), String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        update_rp2040: bool,
+        update_esp32: bool,
+        rp2040_url: String,
+        rp2040_size: u64,
+        rp2040_sha256: String,
+        esp32_url: String,
+        esp32_size: u64,
+        esp32_sha256: String,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        update_rp2040,
+        update_esp32,
+        rp2040_url,
+        rp2040_size,
+        rp2040_sha256,
+        esp32_url,
+        esp32_size,
+        esp32_sha256,
+    })
+    .unwrap();
+    match try_invoke("start_desktop_ota", args).await {
+        Some(_) => Ok(()),
+        None => Err("start_desktop_ota command failed".to_string()),
+    }
+}
+

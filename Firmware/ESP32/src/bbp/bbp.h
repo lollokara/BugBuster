@@ -74,6 +74,7 @@ extern "C" {
 #define BBP_CMD_SELFTEST_AUTO_CAL       0x08  // Start automatic IDAC calibration
 #define BBP_CMD_SELFTEST_INT_SUPPLIES  0x09  // Measure internal ADC supplies (AVDD, DVCC, etc.)
 #define BBP_CMD_SELFTEST_WORKER        0x0B  // Enable/disable/query supply monitor worker
+#define BBP_CMD_WIFI_FORGET            0x0A  // Erase saved STA credentials from NVS and disconnect
 
 // Channel Configuration
 #define BBP_CMD_SET_CH_FUNC     0x10

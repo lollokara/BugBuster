@@ -420,6 +420,21 @@ const char* wifi_get_ap_ip(void)   { return s_ap_ip; }
 const char* wifi_get_ap_mac(void)  { return s_ap_mac; }
 const char* wifi_get_sta_ssid(void){ return s_sta_ssid; }
 
+bool wifi_forget_credentials(void)
+{
+    esp_wifi_disconnect();
+    memset(s_sta_ssid, 0, sizeof(s_sta_ssid));
+
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    nvs_erase_key(h, "sta_ssid");
+    nvs_erase_key(h, "sta_pass");
+    esp_err_t err = nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "STA credentials erased from NVS");
+    return err == ESP_OK;
+}
+
 int wifi_get_rssi(void) {
     wifi_ap_record_t info;
     if (esp_wifi_sta_get_ap_info(&info) == ESP_OK) return info.rssi;

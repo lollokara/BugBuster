@@ -2477,6 +2477,17 @@ Returns `ERR_INVALID_PARAM` if `pass_len` is outside the 8–63 character range.
 
 **Web API equivalent:** `POST /api/wifi/ap_password` with body `{"password":"..."}` and header `X-BugBuster-Admin-Token: <token>`. Returns `{"success":true,"persisted":true,"message":"AP password updated and applied live"}` on full success, or `{"success":true,"persisted":false,"message":"AP password applied live but NVS write failed; will revert after reboot"}` when the live apply succeeded but NVS persistence failed.
 
+#### 0x0A WIFI_FORGET
+Erase saved STA credentials (`sta_ssid` / `sta_pass`) from NVS and disconnect. After this command the device will no longer reconnect to the previous network on reboot.
+
+**Request payload:** none
+
+**Response payload:**
+```
+Offset  Field           Type    Description
+0       ok              bool    true = NVS erase succeeded; false = NVS error (credentials may persist)
+```
+
 ### 6.18 Level Shifter Control
 
 #### 0xE0 SET_LSHIFT_OE

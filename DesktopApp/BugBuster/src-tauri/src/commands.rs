@@ -472,6 +472,16 @@ pub async fn wifi_scan(mgr: State<'_, ConnectionManager>) -> CmdResult<Vec<WifiN
     Ok(parse_wifi_scan(&rsp))
 }
 
+#[tauri::command]
+pub async fn wifi_forget(mgr: State<'_, ConnectionManager>) -> CmdResult<bool> {
+    let rsp = mgr
+        .send_command(bbp::CMD_WIFI_FORGET, &[])
+        .await
+        .map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    Ok(r.get_bool().unwrap_or(false))
+}
+
 // -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------
@@ -3035,6 +3045,372 @@ pub async fn io_force_release(
 #[tauri::command]
 pub fn js_log(msg: String) {
     println!("[JS Log] {}", msg);
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopGitRelease {
+    pub tag: String,
+    pub published_at: String,
+    pub manifest_build_id: String,
+    pub commit: String,
+    pub rp2040_version: String,
+    pub rp2040_url: String,
+    pub rp2040_size: u64,
+    pub rp2040_sha256: String,
+    pub rp2040_crc32: u32,
+    pub esp32_version: String,
+    pub esp32_url: String,
+    pub esp32_size: u64,
+    pub esp32_sha256: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtaProgress {
+    pub stage: String,
+    pub percent: f32,
+    pub message: String,
+}
+
+fn emit_progress(app: &tauri::AppHandle, stage: &str, percent: f32, message: &str) {
+    use tauri::Emitter;
+    let _ = app.emit("desktop-ota-progress", OtaProgress {
+        stage: stage.to_string(),
+        percent,
+        message: message.to_string(),
+    });
+}
+
+#[tauri::command]
+pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
+    log::info!("Fetching GitHub releases...");
+    let client = reqwest::Client::builder()
+        .user_agent("BugBuster-Desktop/1.0.0")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| {
+            log::error!("Failed to build reqwest client: {}", e);
+            e.to_string()
+        })?;
+
+    let url = "https://api.github.com/repos/lollokara/BugBuster/releases?per_page=10";
+    log::info!("GET {}", url);
+    let resp = client.get(url).send().await.map_err(|e| {
+        log::error!("GitHub API request failed: {}", e);
+        format!("Failed to connect to GitHub: {}", e)
+    })?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        log::error!("GitHub API returned HTTP {}", status);
+        return Err(format!("GitHub API returned HTTP {}", status));
+    }
+    log::info!("GitHub API response OK, parsing releases...");
+    let releases_json: serde_json::Value = resp.json().await.map_err(|e| format!("Failed to parse GitHub releases: {}", e))?;
+    
+    let mut git_releases = Vec::new();
+
+    if let Some(releases_arr) = releases_json.as_array() {
+        for release in releases_arr {
+            let tag = release.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let published_at = release.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let assets = release.get("assets").and_then(|v| v.as_array());
+
+            if tag.is_empty() {
+                continue;
+            }
+
+            let mut manifest_val: Option<serde_json::Value> = None;
+            let mut manifest_url = String::new();
+
+            if let Some(assets_arr) = assets {
+                for asset in assets_arr {
+                    if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
+                        if name == "bugbuster-update-manifest.json" {
+                            if let Some(browser_url) = asset.get("browser_download_url").and_then(|v| v.as_str()) {
+                                manifest_url = browser_url.to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !manifest_url.is_empty() {
+                if let Ok(manifest_resp) = client.get(&manifest_url).send().await {
+                    if manifest_resp.status().is_success() {
+                        if let Ok(m_json) = manifest_resp.json::<serde_json::Value>().await {
+                            manifest_val = Some(m_json);
+                        }
+                    }
+                }
+            }
+
+            if let Some(m) = manifest_val {
+                let manifest_build_id = m.get("buildId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let commit = m.get("commit").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                let rp = m.get("rp2040");
+                let rp_version = rp.and_then(|v| v.get("version")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let rp_url = rp.and_then(|v| v.get("url")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let rp_size = rp.and_then(|v| v.get("size")).and_then(|v| v.as_u64()).unwrap_or(0);
+                let rp_sha = rp.and_then(|v| v.get("sha256")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let rp_crc = rp.and_then(|v| v.get("crc32")).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+                let esp = m.get("esp32");
+                let esp_version = esp.and_then(|v| v.get("version")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let esp_url = esp.and_then(|v| v.get("url")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let esp_size = esp.and_then(|v| v.get("size")).and_then(|v| v.as_u64()).unwrap_or(0);
+                let esp_sha = esp.and_then(|v| v.get("sha256")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                git_releases.push(DesktopGitRelease {
+                    tag,
+                    published_at,
+                    manifest_build_id,
+                    commit,
+                    rp2040_version: rp_version,
+                    rp2040_url: rp_url,
+                    rp2040_size: rp_size,
+                    rp2040_sha256: rp_sha,
+                    rp2040_crc32: rp_crc,
+                    esp32_version: esp_version,
+                    esp32_url: esp_url,
+                    esp32_size: esp_size,
+                    esp32_sha256: esp_sha,
+                });
+            } else {
+                let mut rp_url = String::new();
+                let mut rp_size = 0;
+                let mut rp_version = String::new();
+                let mut esp_url = String::new();
+                let mut esp_size = 0;
+                let mut esp_version = String::new();
+
+                if let Some(assets_arr) = assets {
+                    for asset in assets_arr {
+                        if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
+                            let browser_url = asset.get("browser_download_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let size = asset.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                            if name.starts_with("bugbuster-hat-rp2040-v") && name.ends_with(".bin") {
+                                rp_url = browser_url;
+                                rp_size = size;
+                                rp_version = name
+                                    .strip_prefix("bugbuster-hat-rp2040-v")
+                                    .and_then(|s| s.strip_suffix(".bin"))
+                                    .unwrap_or("")
+                                    .to_string();
+                            } else if name.starts_with("bugbuster-esp32s3-v") && name.ends_with("-ota.bin") {
+                                esp_url = browser_url;
+                                esp_size = size;
+                                esp_version = name
+                                    .strip_prefix("bugbuster-esp32s3-v")
+                                    .and_then(|s| s.strip_suffix("-ota.bin"))
+                                    .unwrap_or("")
+                                    .to_string();
+                            }
+                        }
+                    }
+                }
+
+                if !rp_url.is_empty() || !esp_url.is_empty() {
+                    git_releases.push(DesktopGitRelease {
+                        tag: tag.clone(),
+                        published_at,
+                        manifest_build_id: format!("{}.fallback", tag),
+                        commit: String::new(),
+                        rp2040_version: rp_version,
+                        rp2040_url: rp_url,
+                        rp2040_size: rp_size,
+                        rp2040_sha256: String::new(),
+                        rp2040_crc32: 0,
+                        esp32_version: esp_version,
+                        esp32_url: esp_url,
+                        esp32_size: esp_size,
+                        esp32_sha256: String::new(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(git_releases)
+}
+
+async fn run_desktop_ota_flow(
+    app: tauri::AppHandle,
+    update_rp2040: bool,
+    update_esp32: bool,
+    rp2040_url: String,
+    rp2040_size: u64,
+    rp2040_sha256: String,
+    esp32_url: String,
+    esp32_size: u64,
+    esp32_sha256: String,
+    mgr: ConnectionManager,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("BugBuster-Desktop/1.0.0")
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let base_url = mgr.get_base_url().await
+        .ok_or("OTA requires HTTP connection (WiFi). Connect via WiFi first.")?;
+
+    let conn_status = mgr.get_connection_status();
+    let admin_token = conn_status.admin_token;
+
+    if update_rp2040 {
+        emit_progress(&app, "downloading", 10.0, "Downloading RP2040 HAT firmware...");
+        let rp_resp = client.get(&rp2040_url).send().await
+            .map_err(|e| format!("Failed to download RP2040 binary: {}", e))?;
+        if !rp_resp.status().is_success() {
+            return Err(format!("RP2040 download returned HTTP {}", rp_resp.status()));
+        }
+        let rp_data = rp_resp.bytes().await
+            .map_err(|e| format!("Failed to read RP2040 binary: {}", e))?;
+
+        if rp_data.len() != rp2040_size as usize {
+            return Err(format!("RP2040 size mismatch: got {}, expected {}", rp_data.len(), rp2040_size));
+        }
+
+        if !rp2040_sha256.is_empty() {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&rp_data);
+            let sha = format!("{:x}", hasher.finalize());
+            if sha != rp2040_sha256 {
+                return Err(format!("RP2040 SHA256 verification failed"));
+            }
+        }
+
+        emit_progress(&app, "uploading", 30.0, "Uploading RP2040 firmware to ESP32 staging...");
+        let upload_url = format!("{}/api/ota/upload_rp2040", base_url);
+        let mut req = client.post(upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .body(rp_data.to_vec());
+        if let Some(ref token) = admin_token {
+            req = req.header("X-BugBuster-Admin-Token", token);
+        }
+        let upload_resp = req.send().await
+            .map_err(|e| format!("Failed to upload RP2040 binary to ESP32: {}", e))?;
+        if !upload_resp.status().is_success() {
+            let status = upload_resp.status();
+            let err_body = upload_resp.text().await.unwrap_or_default();
+            return Err(format!("RP2040 upload failed (HTTP {}): {}", status, err_body));
+        }
+
+        emit_progress(&app, "flashing", 60.0, "Triggering RP2040 HAT flash update...");
+        let apply_url = format!("{}/api/update/apply", base_url);
+        let mut apply_req = client.post(apply_url)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "rp2040": true,
+                "esp32": false
+            }));
+        if let Some(ref token) = admin_token {
+            apply_req = apply_req.header("X-BugBuster-Admin-Token", token);
+        }
+        let apply_resp = apply_req.send().await
+            .map_err(|e| format!("Failed to apply update: {}", e))?;
+        if !apply_resp.status().is_success() {
+            let status = apply_resp.status();
+            let err_body = apply_resp.text().await.unwrap_or_default();
+            return Err(format!("RP2040 flashing trigger failed (HTTP {}): {}", status, err_body));
+        }
+
+        emit_progress(&app, "flashing", 80.0, "HAT flashing completed successfully.");
+    }
+
+    if update_esp32 {
+        emit_progress(&app, "downloading", 85.0, "Downloading ESP32 firmware...");
+        let esp_resp = client.get(&esp32_url).send().await
+            .map_err(|e| format!("Failed to download ESP32 binary: {}", e))?;
+        if !esp_resp.status().is_success() {
+            return Err(format!("ESP32 download returned HTTP {}", esp_resp.status()));
+        }
+        let esp_data = esp_resp.bytes().await
+            .map_err(|e| format!("Failed to read ESP32 binary: {}", e))?;
+
+        if esp_data.len() != esp32_size as usize {
+            return Err(format!("ESP32 size mismatch: got {}, expected {}", esp_data.len(), esp32_size));
+        }
+
+        let sha256_hex = if !esp32_sha256.is_empty() {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&esp_data);
+            let sha = format!("{:x}", hasher.finalize());
+            if sha != esp32_sha256 {
+                return Err(format!("ESP32 SHA256 verification failed"));
+            }
+            sha
+        } else {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&esp_data);
+            format!("{:x}", hasher.finalize())
+        };
+
+        emit_progress(&app, "uploading", 90.0, "Uploading ESP32 firmware...");
+        let upload_url = format!("{}/api/ota/upload?sha256={}", base_url, sha256_hex);
+        let mut req = client.post(upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .body(esp_data.to_vec());
+        if let Some(ref token) = admin_token {
+            req = req.header("X-BugBuster-Admin-Token", token);
+        }
+        let upload_resp = req.send().await
+            .map_err(|e| format!("Failed to upload ESP32 binary: {}", e))?;
+        if !upload_resp.status().is_success() {
+            let status = upload_resp.status();
+            let err_body = upload_resp.text().await.unwrap_or_default();
+            return Err(format!("ESP32 upload failed (HTTP {}): {}", status, err_body));
+        }
+
+        emit_progress(&app, "rebooting", 95.0, "ESP32 update successful. Device is rebooting...");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+
+    emit_progress(&app, "done", 100.0, "Firmware update finished successfully.");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn start_desktop_ota(
+    app_handle: tauri::AppHandle,
+    update_rp2040: bool,
+    update_esp32: bool,
+    rp2040_url: String,
+    rp2040_size: u64,
+    rp2040_sha256: String,
+    esp32_url: String,
+    esp32_size: u64,
+    esp32_sha256: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    let mgr_clone = mgr.inner().clone();
+    let app_clone = app_handle.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = run_desktop_ota_flow(
+            app_clone.clone(),
+            update_rp2040,
+            update_esp32,
+            rp2040_url,
+            rp2040_size,
+            rp2040_sha256,
+            esp32_url,
+            esp32_size,
+            esp32_sha256,
+            mgr_clone,
+        ).await {
+            emit_progress(&app_clone, "error", 0.0, &e);
+        }
+    });
+
+    Ok(())
 }
 
 // =============================================================================

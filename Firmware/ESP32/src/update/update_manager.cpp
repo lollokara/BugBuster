@@ -733,10 +733,24 @@ esp_err_t update_manager_apply(bool update_rp2040, bool update_esp32, cJSON **ou
     if (!out) return ESP_ERR_INVALID_ARG;
     set_state(UPDATE_STATE_CHECKING, "checking");
     s_update.last_error[0] = '\0';
+
+    bool has_local_rp = false;
+    struct stat local_st;
+    if (stat(RP2040_STAGE_PATH, &local_st) == 0 && local_st.st_size >= 16384) {
+        has_local_rp = true;
+    } else if (stat("/scripts/update-rp2040.py", &local_st) == 0 && local_st.st_size >= 16384) {
+        has_local_rp = true;
+    }
+
+    bool need_manifest = update_esp32 || (update_rp2040 && !has_local_rp);
+
     UpdateManifest manifest = {};
-    if (!fetch_manifest(&manifest)) return ESP_FAIL;
+    if (need_manifest) {
+        if (!fetch_manifest(&manifest)) return ESP_FAIL;
+    }
 
     bool rp_newer = component_available(&manifest.rp2040) &&
+
                     strcmp(current_rp2040_build_id(), manifest.rp2040.build_id) != 0 &&
                     strcmp(current_rp2040_build_id(), manifest.rp2040.version) != 0;
     bool esp_newer = component_available(&manifest.esp32) &&

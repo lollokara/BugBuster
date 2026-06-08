@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos::ev;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
-use crate::tauri_bridge::{DiscoveredDevice, invoke, log};
+use crate::tauri_bridge::{DiscoveredDevice, invoke, try_invoke, log, show_toast};
 
 /// Floating particle network background for the connection screen.
 #[component]
@@ -194,7 +194,9 @@ pub fn ConnectionPanel(
         spawn_local(async move {
             log(&format!("Connecting to: {}", device_id));
             let args = serde_wasm_bindgen::to_value(&Args { device_id }).unwrap();
-            let _result = invoke("connect_device", args).await;
+            if try_invoke("connect_device", args).await.is_none() {
+                show_toast("Connection failed — check logs for details", "err");
+            }
         });
     };
 

@@ -26,7 +26,7 @@ use la_commands::LaState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,bugbuster_lib=debug,bugbuster=debug"),
+        env_logger::Env::default().default_filter_or("info,bugbuster_lib::bbp=warn"),
     )
     .init();
 
@@ -85,9 +85,12 @@ pub fn run() {
             commands::wifi_get_status,
             commands::wifi_connect,
             commands::wifi_scan,
+            commands::wifi_forget,
             // Firmware / OTA
             commands::get_firmware_info,
             commands::ota_upload_firmware,
+            commands::fetch_github_releases,
+            commands::start_desktop_ota,
             // DS4424 IDAC
             commands::idac_get_status,
             commands::idac_set_code,

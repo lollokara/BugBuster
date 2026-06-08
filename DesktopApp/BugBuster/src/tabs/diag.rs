@@ -242,8 +242,34 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 #[component]
 fn FirmwareSection() -> impl IntoView {
     let fw = RwSignal::new(FirmwareInfo::default());
-    let ota_status = RwSignal::new(String::new());
-    let uploading = RwSignal::new(false);
+    let ota_ctx = use_context::<crate::app::OtaContext>()
+        .expect("OtaContext must be provided");
+
+    let git_releases = ota_ctx.git_releases;
+    let esp32_current = ota_ctx.esp32_current_version;
+    let rp2040_current = ota_ctx.rp2040_current_version;
+    let ota_progress = ota_ctx.ota_progress;
+    let ota_active = ota_ctx.ota_active;
+    let ota_error = ota_ctx.ota_error;
+    let ota_success = ota_ctx.ota_success;
+
+    let set_ota_active = ota_ctx.set_ota_active;
+    let set_ota_error = ota_ctx.set_ota_error;
+    let set_ota_success = ota_ctx.set_ota_success;
+    let set_ota_progress = ota_ctx.set_ota_progress;
+
+    // Per-device version selection: each device independently picks from available releases
+    let selected_esp32_tag = RwSignal::new(String::new());
+    let selected_rp2040_tag = RwSignal::new(String::new());
+    let update_esp32 = RwSignal::new(true);
+    let update_rp2040 = RwSignal::new(true);
+
+    // Collapsible manual upload foldout state
+    let show_manual = RwSignal::new(false);
+
+    // Local manual upload OTA state
+    let manual_status = RwSignal::new(String::new());
+    let manual_uploading = RwSignal::new(false);
 
     // Fetch firmware info
     leptos::task::spawn_local(async move {
@@ -252,90 +278,349 @@ fn FirmwareSection() -> impl IntoView {
         }
     });
 
+    // Auto-init each device to the newest release that has a valid binary for it
+    Effect::new(move |_| {
+        let releases = git_releases.get();
+        if selected_esp32_tag.get_untracked().is_empty() {
+            if let Some(r) = releases.iter().find(|r| !r.esp32_url.is_empty()) {
+                selected_esp32_tag.set(r.tag.clone());
+            }
+        }
+        if selected_rp2040_tag.get_untracked().is_empty() {
+            if let Some(r) = releases.iter().find(|r| !r.rp2040_url.is_empty()) {
+                selected_rp2040_tag.set(r.tag.clone());
+            }
+        }
+    });
+
+    let selected_esp32_release = move || {
+        let tag = selected_esp32_tag.get();
+        git_releases.get().into_iter().find(|r| r.tag == tag && !r.esp32_url.is_empty())
+    };
+
+    let selected_rp2040_release = move || {
+        let tag = selected_rp2040_tag.get();
+        git_releases.get().into_iter().find(|r| r.tag == tag && !r.rp2040_url.is_empty())
+    };
+
+    // Auto-set checkboxes: enable if the selected version is newer than what's installed
+    Effect::new(move |_| {
+        let esp_curr = esp32_current.get();
+        if let Some(r) = selected_esp32_release() {
+            update_esp32.set(
+                !esp_curr.is_empty() && !r.esp32_version.is_empty()
+                && crate::app::is_version_newer(&esp_curr, &r.esp32_version)
+            );
+        }
+    });
+
+    Effect::new(move |_| {
+        let rp_curr = rp2040_current.get();
+        if let Some(r) = selected_rp2040_release() {
+            update_rp2040.set(
+                !rp_curr.is_empty() && !r.rp2040_version.is_empty()
+                && crate::app::is_version_newer(&rp_curr, &r.rp2040_version)
+            );
+        }
+    });
+
+    let on_start_git_ota = move |_| {
+        let up_esp = update_esp32.get();
+        let up_rp = update_rp2040.get();
+        let esp_release = if up_esp { selected_esp32_release() } else { None };
+        let rp_release = if up_rp { selected_rp2040_release() } else { None };
+
+        if esp_release.is_none() && rp_release.is_none() {
+            return;
+        }
+
+        set_ota_active.set(true);
+        set_ota_success.set(false);
+        set_ota_error.set(None);
+        set_ota_progress.set(OtaProgress {
+            stage: "starting".to_string(),
+            percent: 0.0,
+            message: "Initializing desktop update sequence...".to_string(),
+        });
+
+        let (rp_url, rp_size, rp_sha) = rp_release
+            .map(|r| (r.rp2040_url, r.rp2040_size, r.rp2040_sha256))
+            .unwrap_or_default();
+        let (esp_url, esp_size, esp_sha) = esp_release
+            .map(|r| (r.esp32_url, r.esp32_size, r.esp32_sha256))
+            .unwrap_or_default();
+
+        leptos::task::spawn_local(async move {
+            if let Err(e) = start_desktop_ota(
+                up_rp,
+                up_esp,
+                rp_url,
+                rp_size,
+                rp_sha,
+                esp_url,
+                esp_size,
+                esp_sha,
+            ).await {
+                set_ota_active.set(false);
+                set_ota_error.set(Some(e));
+            }
+        });
+    };
+
     view! {
-        <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
-            // Firmware Info card
-            <div class="alert-panel">
-                <div class="alert-panel-header">
-                    <div class="alert-panel-title">"FIRMWARE INFO"</div>
-                    <span class="alert-panel-reg">{move || format!("PROTO v{}", fw.get().proto_version)}</span>
+        <div>
+            <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
+                // Firmware Info card
+                <div class="alert-panel">
+                    <div class="alert-panel-header">
+                        <div class="alert-panel-title">"FIRMWARE INFO"</div>
+                        <span class="alert-panel-reg">{move || format!("PROTO v{}", fw.get().proto_version)}</span>
+                    </div>
+                    <div class="alert-panel-scanline"></div>
+                    <div style="padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
+                        <span style="color: var(--text-muted)">"ESP32 Version:"</span>
+                        <span style="color: var(--green); font-weight: 700">{move || {
+                            let v = fw.get().fw_version.clone();
+                            if v.is_empty() || v == "0.0.0" { "Fetching...".to_string() } else { format!("v{}", v) }
+                        }}</span>
+                        <span style="color: var(--text-muted)">"RP2040 Version:"</span>
+                        <span style="color: var(--green); font-weight: 700">{move || {
+                            let v = rp2040_current.get();
+                            if v.is_empty() { "Fetching...".to_string() } else { format!("v{}", v) }
+                        }}</span>
+                        <span style="color: var(--text-muted)">"Built:"</span>
+                        <span style="color: var(--text-dim)">{move || {
+                            let d = fw.get().build_date.clone();
+                            if d.is_empty() { "—".to_string() } else { d }
+                        }}</span>
+                        <span style="color: var(--text-muted)">"ESP-IDF:"</span>
+                        <span style="color: var(--text-dim)">{move || {
+                            let v = fw.get().idf_version.clone();
+                            if v.is_empty() { "—".to_string() } else { v }
+                        }}</span>
+                        <span style="color: var(--text-muted)">"Partition:"</span>
+                        <span style="color: var(--text-dim)">{move || {
+                            let p = fw.get().partition.clone();
+                            let n = fw.get().next_partition.clone();
+                            if p.is_empty() { "—".to_string() } else { format!("{} (next: {})", p, n) }
+                        }}</span>
+                    </div>
                 </div>
-                <div class="alert-panel-scanline"></div>
-                <div style="padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
-                    <span style="color: var(--text-muted)">"Version:"</span>
-                    <span style="color: var(--green); font-weight: 700">{move || {
-                        let v = fw.get().fw_version.clone();
-                        if v.is_empty() || v == "0.0.0" { "Fetching...".to_string() } else { format!("v{}", v) }
-                    }}</span>
-                    <span style="color: var(--text-muted)">"Built:"</span>
-                    <span style="color: var(--text-dim)">{move || {
-                        let d = fw.get().build_date.clone();
-                        if d.is_empty() { "—".to_string() } else { d }
-                    }}</span>
-                    <span style="color: var(--text-muted)">"ESP-IDF:"</span>
-                    <span style="color: var(--text-dim)">{move || {
-                        let v = fw.get().idf_version.clone();
-                        if v.is_empty() { "—".to_string() } else { v }
-                    }}</span>
-                    <span style="color: var(--text-muted)">"Partition:"</span>
-                    <span style="color: var(--text-dim)">{move || {
-                        let p = fw.get().partition.clone();
-                        let n = fw.get().next_partition.clone();
-                        if p.is_empty() { "—".to_string() } else { format!("{} (next: {})", p, n) }
-                    }}</span>
+
+                // OTA Update card (Git-based)
+                <div class="alert-panel">
+                    <div class="alert-panel-header">
+                        <div class="alert-panel-title">"FIRMWARE UPDATE (GIT)"</div>
+                    </div>
+                    <div class="alert-panel-scanline supply-scanline"></div>
+                    <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px">
+                        // Per-device version selection
+                        {move || {
+                            let releases = git_releases.get();
+                            if releases.is_empty() {
+                                view! {
+                                    <div style="font-size: 11px; color: var(--text-dim); padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px">
+                                        "Querying GitHub releases..."
+                                    </div>
+                                }.into_any()
+                            } else {
+                                let esp_releases: Vec<_> = releases.iter().filter(|r| !r.esp32_url.is_empty()).cloned().collect();
+                                let rp_releases: Vec<_> = releases.iter().filter(|r| !r.rp2040_url.is_empty()).cloned().collect();
+                                view! {
+                                    <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px; background: rgba(0,0,0,0.15); border-radius: 6px">
+                                        // ESP32 row
+                                        <div style="display: flex; align-items: center; gap: 8px">
+                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
+                                                <input type="checkbox"
+                                                    prop:checked=move || update_esp32.get()
+                                                    on:change=move |ev| update_esp32.set(event_target_checked(&ev))
+                                                    style="accent-color: var(--blue)"
+                                                />
+                                                "ESP32 Mainboard"
+                                            </label>
+                                            {if esp_releases.is_empty() {
+                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1">"No releases available"</span> }.into_any()
+                                            } else {
+                                                view! {
+                                                    <select class="dropdown"
+                                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
+                                                        prop:value=move || selected_esp32_tag.get()
+                                                        on:change=move |ev| selected_esp32_tag.set(event_target_value(&ev))
+                                                    >
+                                                        {esp_releases.into_iter().map(|r| {
+                                                            let tag = r.tag.clone();
+                                                            let label = if r.esp32_version.is_empty() {
+                                                                tag.clone()
+                                                            } else {
+                                                                format!("{} (v{})", tag, r.esp32_version)
+                                                            };
+                                                            view! { <option value=tag>{label}</option> }
+                                                        }).collect::<Vec<_>>()}
+                                                    </select>
+                                                }.into_any()
+                                            }}
+                                        </div>
+                                        // RP2040 row
+                                        <div style="display: flex; align-items: center; gap: 8px">
+                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
+                                                <input type="checkbox"
+                                                    prop:checked=move || update_rp2040.get()
+                                                    on:change=move |ev| update_rp2040.set(event_target_checked(&ev))
+                                                    style="accent-color: var(--blue)"
+                                                />
+                                                "RP2040 HAT"
+                                            </label>
+                                            {if rp_releases.is_empty() {
+                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1">"No releases available"</span> }.into_any()
+                                            } else {
+                                                view! {
+                                                    <select class="dropdown"
+                                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
+                                                        prop:value=move || selected_rp2040_tag.get()
+                                                        on:change=move |ev| selected_rp2040_tag.set(event_target_value(&ev))
+                                                    >
+                                                        {rp_releases.into_iter().map(|r| {
+                                                            let tag = r.tag.clone();
+                                                            let label = if r.rp2040_version.is_empty() {
+                                                                tag.clone()
+                                                            } else {
+                                                                format!("{} (v{})", tag, r.rp2040_version)
+                                                            };
+                                                            view! { <option value=tag>{label}</option> }
+                                                        }).collect::<Vec<_>>()}
+                                                    </select>
+                                                }.into_any()
+                                            }}
+                                        </div>
+                                    </div>
+                                }.into_any()
+                            }
+                        }}
+
+                        // Trigger/Cancel button
+                        <div style="display: flex; gap: 8px; align-items: center">
+                            <button class="btn btn-sm btn-primary"
+                                disabled=move || ota_active.get() || (!update_esp32.get() && !update_rp2040.get()) || (update_esp32.get() && selected_esp32_release().is_none()) || (update_rp2040.get() && selected_rp2040_release().is_none())
+                                on:click=on_start_git_ota
+                                style="flex: 1"
+                            >
+                                {move || if ota_active.get() { "Update in progress..." } else { "Perform Update" }}
+                            </button>
+                        </div>
+
+                        // Active progress bar and status message
+                        {move || {
+                            if ota_active.get() {
+                                let prog = ota_progress.get();
+                                view! {
+                                    <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
+                                        <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
+                                            <span style="color: var(--text-muted); text-transform: uppercase">{prog.stage}</span>
+                                            <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
+                                        </div>
+                                        <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
+                                            <div style:width=move || format!("{}%", ota_progress.get().percent)
+                                                style="height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)"
+                                            ></div>
+                                        </div>
+                                        <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">
+                                            {prog.message}
+                                        </div>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { <></> }.into_any()
+                            }
+                        }}
+
+                        // Success state
+                        {move || {
+                            if ota_success.get() {
+                                view! {
+                                    <div style="padding: 10px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; color: var(--green); font-size: 11px; font-family: 'JetBrains Mono', monospace; display: flex; flex-direction: column; gap: 4px">
+                                        <b style="font-weight: 700">"✓ UPDATE SUCCESSFUL"</b>
+                                        <span>"Firmware updated successfully. The device is now rebooting."</span>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { <></> }.into_any()
+                            }
+                        }}
+
+                        // Error state
+                        {move || {
+                            if let Some(err) = ota_error.get() {
+                                view! {
+                                    <div style="padding: 10px 12px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; color: var(--rose); font-size: 11px; font-family: 'JetBrains Mono', monospace; display: flex; flex-direction: column; gap: 4px">
+                                        <b style="font-weight: 700">"✗ UPDATE FAILED"</b>
+                                        <span>{err}</span>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { <></> }.into_any()
+                            }
+                        }}
+                    </div>
                 </div>
             </div>
 
-            // OTA Update card
-            <div class="alert-panel">
-                <div class="alert-panel-header">
-                    <div class="alert-panel-title">"OTA UPDATE"</div>
-                </div>
-                <div class="alert-panel-scanline supply-scanline"></div>
-                <div style="padding: 12px 16px">
-                    <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 10px; line-height: 1.6; font-family: 'JetBrains Mono', monospace">
-                        "Upload a firmware.bin to flash the device over WiFi. The device reboots automatically after a successful update. NVS data is preserved."
-                    </div>
-                    <div style="display: flex; gap: 8px; align-items: center">
-                        <button class="btn btn-sm btn-primary"
-                            disabled=move || uploading.get()
-                            on:click=move |_| {
-                                uploading.set(true);
-                                ota_status.set("Selecting file...".to_string());
-                                leptos::task::spawn_local(async move {
-                                    // Use Tauri file dialog
-                                    #[derive(serde::Deserialize)]
-                                    struct DialogResult { path: Option<String> }
+            // Collapsible Manual upload fallback
+            <div style="margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--glass); overflow: hidden">
+                <button class="btn btn-ghost"
+                    style="width: 100%; text-align: left; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 0; font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; font-family: 'JetBrains Mono', monospace; border: none; background: transparent; cursor: pointer"
+                    on:click=move |_| show_manual.set(!show_manual.get())
+                >
+                    <span>"Advanced: Manual File Upload (Fallback)"</span>
+                    <span>{move || if show_manual.get() { "▲" } else { "▼" }}</span>
+                </button>
 
-                                    let args = serde_wasm_bindgen::to_value(
-                                        &serde_json::json!({
-                                            "title": "Select Firmware Binary",
-                                            "filters": [{"name": "Firmware", "extensions": ["bin"]}]
-                                        })
-                                    ).unwrap();
-                                    let result = invoke("plugin:dialog|open", args).await;
-                                    let path: Option<String> = serde_wasm_bindgen::from_value(result).ok().flatten();
+                <Show when=move || show_manual.get()>
+                    <div style="padding: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px">
+                        <div style="font-size: 10px; color: var(--text-dim); line-height: 1.6; font-family: 'JetBrains Mono', monospace">
+                            "Directly upload a compiled firmware.bin (ESP32) to flash over WiFi. Choose this only for custom development builds."
+                        </div>
+                        <div style="display: flex; gap: 8px; align-items: center">
+                            <button class="btn btn-sm btn-ghost"
+                                disabled=move || manual_uploading.get()
+                                on:click=move |_| {
+                                    manual_uploading.set(true);
+                                    manual_status.set("Selecting file...".to_string());
+                                    leptos::task::spawn_local(async move {
+                                        #[derive(serde::Deserialize)]
+                                        struct DialogResult { path: Option<String> }
 
-                                    if let Some(p) = path {
-                                        ota_status.set(format!("Uploading {}...", p.split('/').next_back().unwrap_or(&p)));
-                                        match upload_firmware(&p).await {
-                                            Ok(msg) => ota_status.set(msg),
-                                            Err(e) => ota_status.set(format!("Error: {}", e)),
+                                        let args = serde_wasm_bindgen::to_value(
+                                            &serde_json::json!({
+                                                "title": "Select Firmware Binary",
+                                                "filters": [{"name": "Firmware", "extensions": ["bin"]}]
+                                            })
+                                        ).unwrap();
+                                        let result = invoke("plugin:dialog|open", args).await;
+                                        let path: Option<String> = serde_wasm_bindgen::from_value(result).ok().flatten();
+
+                                        if let Some(p) = path {
+                                            manual_status.set(format!("Uploading {}...", p.split('/').next_back().unwrap_or(&p)));
+                                            match upload_firmware(&p).await {
+                                                Ok(msg) => manual_status.set(msg),
+                                                Err(e) => manual_status.set(format!("Error: {}", e)),
+                                            }
+                                        } else {
+                                            manual_status.set(String::new());
                                         }
-                                    } else {
-                                        ota_status.set(String::new());
-                                    }
-                                    uploading.set(false);
-                                });
-                            }
-                        >{move || if uploading.get() { "Uploading..." } else { "Select & Upload .bin" }}</button>
+                                        manual_uploading.set(false);
+                                    });
+                                }
+                            >
+                                {move || if manual_uploading.get() { "Uploading..." } else { "Select & Upload Local .bin" }}
+                            </button>
+                        </div>
+                        <div style="font-size: 10px; font-family: 'JetBrains Mono', monospace; min-height: 16px"
+                            style:color=move || if manual_status.get().starts_with("Error") { "var(--rose)" } else { "var(--green)" }
+                        >
+                            {move || manual_status.get()}
+                        </div>
                     </div>
-                    <div style="margin-top: 8px; font-size: 10px; font-family: 'JetBrains Mono', monospace; min-height: 16px"
-                        style:color=move || if ota_status.get().starts_with("Error") { "var(--rose)" } else { "var(--green)" }
-                    >
-                        {move || ota_status.get()}
-                    </div>
-                </div>
+                </Show>
             </div>
         </div>
     }
@@ -375,7 +660,23 @@ fn WifiSection() -> impl IntoView {
             }
             scan_results.set(results);
             scanning.set(false);
-            connect_status.set(format!("Found {} networks", count));
+            if count == 0 {
+                connect_status.set("No networks found".to_string());
+            } else {
+                connect_status.set(format!("Found {} network{}", count, if count == 1 { "" } else { "s" }));
+            }
+        });
+    };
+
+    let do_forget = move |_| {
+        connect_status.set("Clearing credentials...".to_string());
+        leptos::task::spawn_local(async move {
+            let ok = crate::tauri_bridge::wifi_forget().await;
+            connect_status.set(if ok {
+                "Credentials cleared".to_string()
+            } else {
+                "Failed to clear credentials".to_string()
+            });
         });
     };
 
@@ -487,8 +788,24 @@ fn WifiSection() -> impl IntoView {
                         }
                     >"Connect"</button>
                 </div>
-                <div class="text-xs" style="margin-top: 0.5rem; color: var(--text-dim)">
-                    {move || connect_status.get()}
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 0.5rem; gap: 0.5rem">
+                    <div class="text-xs" style=move || {
+                        let s = connect_status.get();
+                        let color = if s == "No networks found" || s.starts_with("Failed") {
+                            "color: var(--rose)"
+                        } else if s.starts_with("Found") || s.starts_with("Connected to") || s == "Credentials cleared" {
+                            "color: var(--green)"
+                        } else {
+                            "color: var(--text-dim)"
+                        };
+                        color.to_string()
+                    }>
+                        {move || connect_status.get()}
+                    </div>
+                    <button class="btn btn-sm"
+                        style="white-space: nowrap; background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: var(--rose); font-size: 0.7rem"
+                        on:click=do_forget
+                    >"Clear Saved Credentials"</button>
                 </div>
             </div>
         </div>

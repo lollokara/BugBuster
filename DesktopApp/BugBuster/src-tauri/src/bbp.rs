@@ -189,6 +189,7 @@ pub const CMD_WIFI_GET_STATUS: u8 = 0xE1;
 pub const CMD_WIFI_CONNECT: u8 = 0xE2;
 pub const CMD_SET_SPI_CLOCK: u8 = 0xE3;
 pub const CMD_WIFI_SCAN: u8 = 0xE4;
+pub const CMD_WIFI_FORGET: u8 = 0x0A;
 
 // HAT HVPAK extended
 pub const CMD_HAT_GET_HVPAK_ANALOG: u8 = 0xE5;

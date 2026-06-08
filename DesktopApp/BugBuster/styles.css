@@ -271,6 +271,8 @@
     backdrop-filter: blur(4px);
     transition: all 0.2s;
 }
+/* Explicit option styling prevents white-on-white on Linux GTK themes */
+option { background: #0c1426; color: #e2e8f0; }
 .dropdown:focus, .input:focus, select:focus {
     outline: none; border-color: rgba(59,130,246,0.4);
     box-shadow: 0 0 0 2px rgba(59,130,246,0.1), 0 0 12px rgba(59,130,246,0.08);
@@ -1703,3 +1705,41 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
     scroll-behavior: auto !important;
   }
 }
+
+/* Update Available glowing/breathing button */
+.update-glow-btn {
+    background: rgba(16, 185, 129, 0.1) !important;
+    border: 1px solid rgba(16, 185, 129, 0.4) !important;
+    color: #10b981 !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    animation: breathing-glow 2.5s ease-in-out infinite;
+    cursor: pointer;
+}
+.update-glow-btn:hover {
+    background: rgba(16, 185, 129, 0.2) !important;
+    border-color: #10b981 !important;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.4) !important;
+}
+.update-glow-dot {
+    width: 6px;
+    height: 6px;
+    background-color: #10b981;
+    border-radius: 50%;
+    display: inline-block;
+    box-shadow: 0 0 8px #10b981;
+}
+@keyframes breathing-glow {
+    0%, 100% {
+        box-shadow: 0 0 4px rgba(16, 185, 129, 0.2);
+        border-color: rgba(16, 185, 129, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 14px rgba(16, 185, 129, 0.6);
+        border-color: rgba(16, 185, 129, 0.9);
+    }
+}
+

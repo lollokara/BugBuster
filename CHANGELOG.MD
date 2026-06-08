@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Added
+
+#### ESP32 firmware
+- **WIFI_FORGET command (0x0A)**: New BBP command erases saved STA credentials (`sta_ssid` / `sta_pass`) from NVS and disconnects. Implemented in `wifi_manager.cpp` (`wifi_forget_credentials()`), registered in `cmd_wifi.cpp`, documented in `BugBusterProtocol.md`. Returns a bool indicating NVS erase success.
+- **RP2040 HTTP upload endpoint**: New `POST /api/ota/upload_rp2040` endpoint in `webserver.cpp` accepts a raw RP2040 `.bin` body (admin-gated, max 1 MB) and stages it to `/scripts/update-rp2040.bin` on SPIFFS for the update manager to pick up.
+
+#### Desktop app
+- **Desktop OTA from GitHub releases**: Full desktop-driven firmware update flow added. `fetch_github_releases` Tauri command queries the GitHub Releases API (up to 10 releases), downloads each release's `bugbuster-update-manifest.json` if present (with fallback to asset-name parsing), and returns `DesktopGitRelease` structs with per-component version, URL, size, and SHA-256. `start_desktop_ota` downloads RP2040 and ESP32 binaries from GitHub, verifies SHA-256, and pushes them to the device via `/api/ota/upload_rp2040` and `/api/ota/upload`. Progress is streamed to the frontend via `desktop-ota-progress` Tauri events. (`commands.rs`, `tauri_bridge.rs`)
+- **OTA per-device version picker**: The Firmware Update card in the Diagnostics tab shows independent version dropdowns for ESP32 Mainboard and RP2040 HAT. Each dropdown lists only releases that have a valid binary for that device, labelled as `<tag> (vX.Y.Z)`. Updates can target different releases per device in a single operation. Checkboxes auto-enable when the selected version is newer than installed firmware. (`diag.rs`)
+- **OTA context & "Update Available" badge**: App-level `OtaContext` provided to all components carries release list, current versions, progress, and error/success state. A pulsing "Update Available" button appears in the header status bar when any connected device has an older firmware than the latest GitHub release, linking directly to the Diagnostics tab. (`app.rs`, `styles.css`)
+- **WiFi Forget Tauri command**: `wifi_forget` command and `tauri_bridge` wrapper wired up, enabling "Clear Saved Credentials" from the desktop Diagnostics WiFi section. (`commands.rs`, `lib.rs`, `tauri_bridge.rs`)
+- **Connection error toast**: `ConnectionPanel` now surfaces a "Connection failed" error toast when `connect_device` returns an error instead of silently ignoring it. (`connection.rs`)
+
+#### CI
+- **Archived nightly rollback builds**: Release workflow now publishes a versioned `nightly-build<run_number>` archive alongside the rolling `nightly` release, with manifest URLs rewritten to the archive tag. Archives are pruned to keep the latest three, providing three rollback builds at all times. (`.github/workflows/release.yml`)
+
+### Changed
+
+#### Desktop app
+- **reqwest TLS**: `reqwest` dependency switched to `rustls-tls` with `default-features = false` for deterministic TLS without system OpenSSL dependency. (`Cargo.toml`)
+- **Log filter**: Default log filter tightened to `info,bugbuster_lib::bbp=warn` to reduce BBP protocol noise. (`lib.rs`)
+- **`ConnectionManager` now `Clone`**: Derived `Clone` on `ConnectionManager` to allow it to be passed into spawned OTA tasks. (`connection_manager.rs`)
+- **Keychain miss log**: Missing keychain entry now logs a `warn` with a human-readable message instead of silently returning `None`. (`connection_manager.rs`)
+- **Linux dropdown fix**: Added explicit `option { background; color }` CSS rule so dropdowns are readable on Linux GTK themes that default to white-on-white. (`styles.css`)
+
+#### ESP32 firmware
+- **Update manager skip-manifest optimisation**: `update_manager_apply` now skips fetching the GitHub manifest when an RP2040 binary is already staged locally and only an RP2040 update is requested, saving an HTTPS round-trip. (`update_manager.cpp`)
+
+---
+
 ## [1.2.0] — 2026-06-08
 
 ### Added

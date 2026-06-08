@@ -126,6 +126,21 @@ static int handler_wifi_connect(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// WIFI_FORGET  payload: (none)
+// resp: bool ok
+// ---------------------------------------------------------------------------
+static int handler_wifi_forget(const uint8_t *payload, size_t len,
+                               uint8_t *resp, size_t *resp_len)
+{
+    (void)payload; (void)len;
+    bool ok = wifi_forget_credentials();
+    size_t pos = 0;
+    bbp_put_bool(resp, &pos, ok);
+    *resp_len = pos;
+    return (int)pos;
+}
+
+// ---------------------------------------------------------------------------
 // WIFI_SCAN  payload: (none)
 // resp: u8 count, then N * (u8 ssid_len, ssid, u8 rssi(signed), u8 auth)
 // Wire format matches legacy handleWifiScan (bbp.cpp:2480-2499).
@@ -313,6 +328,8 @@ static const CmdDescriptor s_wifi_cmds[] = {
       NULL,            0, NULL,             0, handler_wifi_connect,         0                   },
     { BBP_CMD_WIFI_SCAN,            "wifi_scan",
       NULL,            0, NULL,             0, handler_wifi_scan,            0                   },
+    { BBP_CMD_WIFI_FORGET,          "wifi_forget",
+      NULL,            0, NULL,             0, handler_wifi_forget,          0                   },
     { BBP_CMD_WIFI_SET_AP_PASSWORD, "wifi_set_ap_password",
       NULL,            0, NULL,             0, handler_wifi_set_ap_password, 0                   },
     { BBP_CMD_QS_LIST,         "qs_list",

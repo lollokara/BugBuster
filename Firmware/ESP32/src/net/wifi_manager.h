@@ -71,6 +71,12 @@ int wifi_scan(wifi_scan_result_t* results, int max_results);
  */
 bool wifi_set_ap_password(const char* new_pass, bool* persisted_out);
 
+/**
+ * @brief Erase saved STA credentials from NVS and disconnect.
+ * @return true if NVS erase succeeded (or no credentials were stored)
+ */
+bool wifi_forget_credentials(void);
+
 #ifdef __cplusplus
 }
 #endif
