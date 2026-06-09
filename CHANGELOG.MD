@@ -1,17 +1,43 @@
 # CHANGELOG
 
-## [Unreleased — parser and simulator parity fixes] — 2026-06-09
+## [Unreleased]
+
+*(no changes yet)*
+
+## [1.3.1] — 2026-06-09
+
+### Added
+
+#### ESP32 firmware
+- **TUI ESP_LOG suppression**: `cli_menu_enter()` now calls `esp_log_level_set("*", ESP_LOG_NONE)` before switching to the alt-screen, and `cli_menu_leave()` restores `ESP_LOG_INFO` after leaving, preventing log output from corrupting the TUI. (`cli/cli_menu.cpp`)
+- **Stack overflow canary**: Added `CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y` to `sdkconfig.defaults`. FreeRTOS now writes canary words at the bottom of every task stack and validates them on each context switch; overflow triggers `abort()` which saves a core dump to the `coredump` flash partition. (~0.04% CPU overhead.)
+- **Stack high-water mark logging**: `tasks_log_stack_hwm()` (new function in `tasks.cpp` / `tasks.h`) reports free words remaining on each task stack (`adcPoll`, `faultMon`, `cmdProc`, `wavegen`) using `uxTaskGetStackHighWaterMark()`. Logs a `*** LOW ***` warning when any task drops below 128 words free. Call from CLI or let it fire automatically after 60 s at steady state.
+- **Post-creation heap log**: `initTasks()` now logs internal free heap and largest contiguous block after all tasks are created, making it easy to see headroom at the console without connecting a debugger.
+- **`Firmware/tools/check_memory.py`** — post-build memory size gate. Runs automatically as a PlatformIO post-build action (wired in `platformio.ini`). Checks static DRAM (`.data + .bss < 160 KB` baseline; current: 144 KB) and estimated flash binary size vs OTA partition from ELF sections (fail at 90%; current: ~44%). Also runnable standalone: `python Firmware/tools/check_memory.py <firmware.elf> <partitions.csv>`.
+- **3 new CLI commands** (`version`/`ver`, `heap`, `stack_hwm`/`hwm`) added to `cli_cmds_sys.cpp` and the command table in `cli_cmdtab.cpp`. `version` shows ESP32 app version, build date, IDF version, and RP2040 HAT firmware. `heap` shows internal free/min-ever/largest-block + PSRAM with fragmentation warning. `stack_hwm` prints FreeRTOS high-water marks for all 4 measurement tasks with `*** LOW ***` warning below 128 words. `g_wavegenTask` promoted from `static` to a proper global exported in `tasks.h` (was `s_wavegenTask`; updated in `bbp.cpp`, `webserver.cpp`, `cmd_streaming.cpp`).
+
+#### Docs
+- **`Docs/SimulatedDevice.md`** — full reference for the BugBuster Python simulator: handler coverage table (144 commands across 15 files), test file → feature matrix, state field inventory, known gaps, and a reliability improvement roadmap.
+- **`Docs/MemoryTesting.md`** — ESP32-S3 memory safety guide: SRAM layout diagram, pre-ship checklist (binary gate, stack HWM, heap fragmentation, canary), common failure modes and fixes, and CI integration notes.
 
 ### Fixed
+
+#### ESP32 firmware
+- **Removed unused `ADMIN_TOKEN` fallback**: The static `#define ADMIN_TOKEN "000..."` in `config.h` was a Phase-1 placeholder never referenced by any code path — the live token always comes from `auth_get_admin_token()`. Removed to eliminate dead-code confusion. (`config.h`)
+
+#### Python client / simulator
+- **`BBP_CMD_PCA_GET_STATUS` (0xB0) payload truncation**: `_parse_pca_status()` previously read only 12 bytes, silently dropping the 9 trailing enable fields that firmware has always written (`vadj1_en`, `vadj2_en`, `en_15v`, `en_mux`, `en_usb_hub`, `efuse_en[0..3]`). Parser now reads all 21 bytes and exposes the enable flags in the returned dict; older firmware returning 12 bytes degrades gracefully. (`python/bugbuster/client.py`)
+- **Simulator `PCA_GET_STATUS` returns full 21-byte payload**: `_pca_get_status` handler in `tests/mock/handlers/power.py` now appends the 9 enable bytes, keyed by the `PcaControl` integer enum (0–8), so round-trip tests against the simulator match the real firmware. (`tests/mock/handlers/power.py`)
+- **0x07 self-test alignment**: `SELFTEST_SUPPLY_VOLTAGES_CACHED` is now the canonical BBP name for command `0x07`; the Python client exposes `selftest_supplies_cached()` and keeps `selftest_efuse_currents()` as a compatibility alias. The simulator and HTTP mock now return cached rail voltages from `/api/selftest/supplies/cached`, and the MCP discovery tool reports the cached supply snapshot under `supply_voltages_cached`. (`python/bugbuster/constants.py`, `python/bugbuster/client.py`, `tests/mock/*`, `python/bugbuster_mcp/tools/discovery.py`)
 
 #### Desktop app
 - **HAT status SWD parsing**: `parse_hat_status()` now skips the 3 inserted HVPAK metadata bytes (`hvpak_part`, `hvpak_ready`, `hvpak_last_error`) before reading the SWD fields, so `dap_connected`, `target_detected`, and `target_dpidr` stay aligned. (`commands.rs`)
 - **GPIO HTTP transport framing**: `CMD_GET_GPIO_STATUS` now serializes all 12 logical GPIOs as full 5-byte records (`id`, `mode`, `output`, `input`, `pulldown`) instead of the legacy 6-pin layout. (`http_transport.rs`)
 
-#### Python client / simulator
-- **0x07 self-test alignment**: `SELFTEST_SUPPLY_VOLTAGES_CACHED` is now the canonical BBP name for command `0x07`; the Python client exposes `selftest_supplies_cached()` and keeps `selftest_efuse_currents()` as a compatibility alias. The simulator and HTTP mock now return cached rail voltages from `/api/selftest/supplies/cached`, and the MCP discovery tool reports the cached supply snapshot under `supply_voltages_cached`. (`python/bugbuster/constants.py`, `python/bugbuster/client.py`, `tests/mock/*`, `python/bugbuster_mcp/tools/discovery.py`)
-
 ### Changed
+
+#### CI
+- **Proto-version check runs on every push/PR**: `.github/workflows/proto-version-check.yml` path filter removed; `BBP_PROTO_VERSION` sync is now verified on all pushes and pull requests, not only when the three protocol files are in the diff. (`.github/workflows/proto-version-check.yml`)
 
 #### Tests
 - **Regression coverage**: Added parser and transport regression tests for HAT status framing, cached supply payloads, and the simulator route coverage for `/api/selftest/supplies/cached`. (`tests/unit/test_hat_status_parsing.py`, `tests/device/test_09_selftest.py`, `tests/simulator/test_sim_completeness.py`)

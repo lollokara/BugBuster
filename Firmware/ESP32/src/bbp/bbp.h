@@ -27,7 +27,7 @@ extern "C" {
 
 #define BBP_FW_VERSION_MAJOR    3
 #define BBP_FW_VERSION_MINOR    4
-#define BBP_FW_VERSION_PATCH    0
+#define BBP_FW_VERSION_PATCH    1
 
 // Handshake magic bytes: 0xBB 'B' 'U' 'G'
 #define BBP_MAGIC_0             0xBB
@@ -471,7 +471,7 @@ void bbpStopScopeStream(void);
  * @brief Start waveform generation.
  *        Applies channel function synchronously (avoids scheduler race),
  *        stores config in g_deviceState.wavegen under g_stateMutex, then
- *        notifies s_wavegenTask.
+ *        notifies g_wavegenTask.
  *
  *  @param channel   DAC channel 0-3
  *  @param waveform  WaveformType enum value (0-3)
