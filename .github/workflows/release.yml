@@ -423,6 +423,82 @@ jobs:
             exit 1
           fi
 
+      - name: Generate Tauri v2 desktop update manifest
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, pathlib, datetime, glob
+
+          release_dir = pathlib.Path("dist/release")
+          version_raw = os.environ.get("RELEASE_VERSION", "")
+          # Strip numeric suffix from nightly builds (e.g. "1.1.1_build123" -> "1.1.1")
+          version = version_raw.split("_")[0] if "_" in version_raw else version_raw
+
+          repo = "lollokara/BugBuster"
+          tag = os.environ.get("RELEASE_TAG", "nightly")
+          base_url = f"https://github.com/{repo}/releases/download/{tag}"
+
+          # Map file patterns to Tauri platform keys
+          platform_map = [
+              ("darwin-aarch64", [".dmg", ".app.tar.gz"]),
+              ("linux-x86_64",   [".AppImage"]),
+              ("windows-x86_64", [".exe", ".msi"]),
+          ]
+
+          platforms = {}
+          for platform_key, exts in platform_map:
+              for ext in exts:
+                  # Find bundle file (not .sig)
+                  matches = [
+                      f for f in release_dir.iterdir()
+                      if f.name.endswith(ext) and not f.name.endswith(".sig")
+                      and "bugbuster" in f.name.lower()
+                  ]
+                  if not matches:
+                      continue
+                  bundle = matches[0]
+                  sig_path = pathlib.Path(str(bundle) + ".sig")
+                  if not sig_path.exists():
+                      print(f"WARNING: No .sig for {bundle.name}, skipping {platform_key}")
+                      continue
+                  signature = sig_path.read_text().strip()
+                  url = f"{base_url}/{bundle.name}"
+                  platforms[platform_key] = {"signature": signature, "url": url}
+                  print(f"  {platform_key}: {bundle.name}")
+                  break  # use first match per platform
+
+          if not platforms:
+              print("WARNING: No signed bundles found; skipping manifest generation")
+          else:
+              manifest = {
+                  "version": version,
+                  "notes": f"BugBuster Desktop {version}",
+                  "pub_date": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "platforms": platforms,
+              }
+              out = release_dir / "bugbuster-desktop-update-manifest.json"
+              with open(out, "w") as f:
+                  json.dump(manifest, f, indent=2)
+              print(f"Manifest written: {out}")
+              print(json.dumps(manifest, indent=2))
+          PYEOF
+        env:
+          RELEASE_VERSION: ${{ needs.prep.outputs.version }}
+          RELEASE_TAG: ${{ needs.prep.outputs.tag }}
+
+      - name: Upload desktop update manifest to release
+        shell: bash
+        run: |
+          manifest="dist/release/bugbuster-desktop-update-manifest.json"
+          if [ -f "$manifest" ]; then
+            gh release upload "${{ needs.prep.outputs.tag }}" "$manifest" --clobber
+            echo "Uploaded $manifest to release ${{ needs.prep.outputs.tag }}"
+          else
+            echo "No manifest found, skipping upload"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish combined GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

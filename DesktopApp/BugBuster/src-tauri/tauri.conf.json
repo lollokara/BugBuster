@@ -41,5 +41,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyRTA3MjVBMTRERDM5NTEKUldSUk9kMFVXbkxnNHFQNGFTTVZiQlMrS05hR1QvaGtkNVJCUmI3aHFGcHA4aC9ZTytvQVBMM1IK",
+      "endpoints": [
+        "https://github.com/lollokara/BugBuster/releases/latest/download/bugbuster-desktop-update-manifest.json",
+        "https://github.com/lollokara/BugBuster/releases/download/nightly/bugbuster-desktop-update-manifest.json"
+      ],
+      "dialog": false
+    }
   }
 }

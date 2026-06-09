@@ -2,6 +2,27 @@ use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
 
+#[derive(serde::Deserialize, Clone, Debug)]
+struct AppUpdateInfo {
+    available: bool,
+    version: String,
+    current_version: String,
+    notes: String,
+    is_nightly: bool,
+}
+
+#[derive(serde::Deserialize, Clone, Debug)]
+#[allow(dead_code)]
+struct DesktopReleaseEntry {
+    tag: String,
+    name: String,
+    version: String,
+    prerelease: bool,
+    published_at: String,
+    installer_url: String,
+    installer_size: u64,
+}
+
 // ALERT_STATUS register (0x3F)
 const ALERT_BITS: &[(usize, &str, &str)] = &[
     (0, "RESET", "amber"),
@@ -41,6 +62,113 @@ fn led_color(name: &str) -> &'static str {
 
 #[component]
 pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    let update_checking = RwSignal::new(false);
+    let update_info: RwSignal<Option<AppUpdateInfo>> = RwSignal::new(None);
+    let update_error: RwSignal<Option<String>> = RwSignal::new(None);
+    let update_installing = RwSignal::new(false);
+    let show_update_popup = RwSignal::new(false);
+    let releases_loading = RwSignal::new(false);
+    let releases: RwSignal<Vec<DesktopReleaseEntry>> = RwSignal::new(Vec::new());
+    let selected_release: RwSignal<Option<usize>> = RwSignal::new(None);
+    let installing_url: RwSignal<Option<String>> = RwSignal::new(None);
+
+    // Auto-check for updates on mount
+    {
+        let update_checking = update_checking;
+        let update_info = update_info;
+        let update_error = update_error;
+        leptos::task::spawn_local(async move {
+            update_checking.set(true);
+            match invoke("check_app_update", wasm_bindgen::JsValue::NULL).await {
+                Ok(val) => {
+                    match serde_wasm_bindgen::from_value::<AppUpdateInfo>(val) {
+                        Ok(info) => {
+                            if info.available {
+                                show_update_popup.set(true);
+                            }
+                            update_info.set(Some(info));
+                            update_error.set(None);
+                        }
+                        Err(e) => { update_error.set(Some(e.to_string())); }
+                    }
+                }
+                Err(e) => { update_error.set(Some(e.as_string().unwrap_or_default())); }
+            }
+            update_checking.set(false);
+        });
+    }
+
+    let on_check = move |_| {
+        update_checking.set(true);
+        update_info.set(None);
+        update_error.set(None);
+        leptos::task::spawn_local(async move {
+            match invoke("check_app_update", wasm_bindgen::JsValue::NULL).await {
+                Ok(val) => {
+                    match serde_wasm_bindgen::from_value::<AppUpdateInfo>(val) {
+                        Ok(info) => { update_info.set(Some(info)); update_error.set(None); }
+                        Err(e) => { update_error.set(Some(e.to_string())); }
+                    }
+                }
+                Err(e) => { update_error.set(Some(e.as_string().unwrap_or_default())); }
+            }
+            update_checking.set(false);
+        });
+    };
+
+    let on_install = move |_| {
+        update_installing.set(true);
+        leptos::task::spawn_local(async move {
+            match invoke("apply_app_update", wasm_bindgen::JsValue::NULL).await {
+                Ok(_) => {} // app will restart itself
+                Err(e) => {
+                    update_error.set(Some(e.as_string().unwrap_or_default()));
+                    update_installing.set(false);
+                }
+            }
+        });
+    };
+
+    let on_load_releases = move |_| {
+        releases_loading.set(true);
+        releases.set(Vec::new());
+        selected_release.set(None);
+        leptos::task::spawn_local(async move {
+            match invoke("list_desktop_releases", wasm_bindgen::JsValue::NULL).await {
+                Ok(val) => {
+                    match serde_wasm_bindgen::from_value::<Vec<DesktopReleaseEntry>>(val) {
+                        Ok(list) => { releases.set(list); }
+                        Err(e) => { update_error.set(Some(e.to_string())); }
+                    }
+                }
+                Err(e) => { update_error.set(Some(e.as_string().unwrap_or_default())); }
+            }
+            releases_loading.set(false);
+        });
+    };
+
+    let on_install_selected = move |_| {
+        if let Some(idx) = selected_release.get() {
+            let rlist = releases.get();
+            if let Some(entry) = rlist.get(idx) {
+                let url = entry.installer_url.clone();
+                installing_url.set(Some(url.clone()));
+                leptos::task::spawn_local(async move {
+                    #[derive(serde::Serialize)]
+                    struct Args { url: String }
+                    let args = serde_wasm_bindgen::to_value(&Args { url }).unwrap();
+                    match invoke("install_desktop_version", args).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            update_error.set(Some(e.as_string().unwrap_or_default()));
+                            installing_url.set(None);
+                        }
+                    }
+                });
+            }
+        }
+    };
+
     view! {
         <div class="tab-content">
             <div class="tab-desc">"Internal diagnostic ADC channels. Select what to measure per slot: die temperature, supply voltages (DVCC, AVCC, AVDD), or sense voltages. Useful for verifying power rail health."</div>
@@ -249,6 +377,158 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             // WiFi section
             <h3 class="section-title">"WiFi"</h3>
             <WifiSection />
+
+            // Startup popup — fixed overlay, shown when update is available
+            {move || if show_update_popup.get() {
+                let info = update_info.get();
+                view! {
+                    <div style="position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px)">
+                        <div style="background: var(--surface-2, #1a1a2e); border: 1px solid rgba(59,130,246,0.4); border-radius: 12px; padding: 28px 32px; max-width: 420px; width: 90%; box-shadow: 0 0 40px rgba(59,130,246,0.15)">
+                            <div style="font-size: 13px; font-weight: 700; color: var(--blue); font-family: 'JetBrains Mono', monospace; margin-bottom: 8px">
+                                "UPDATE AVAILABLE"
+                            </div>
+                            <div style="font-size: 22px; font-weight: 700; color: var(--text-primary, #e2e8f0); margin-bottom: 6px">
+                                {info.as_ref().map(|i| format!("v{}", i.version)).unwrap_or_default()}
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-bottom: 20px">
+                                {info.as_ref().map(|i| {
+                                    if i.is_nightly {
+                                        format!("A newer nightly build is available (you have v{})", i.current_version)
+                                    } else {
+                                        format!("A new stable release is available (you have v{})", i.current_version)
+                                    }
+                                }).unwrap_or_default()}
+                            </div>
+                            <div style="display: flex; gap: 10px">
+                                <button class="btn btn-sm btn-primary"
+                                    disabled=move || update_installing.get()
+                                    on:click=move |_| {
+                                        show_update_popup.set(false);
+                                        update_installing.set(true);
+                                        leptos::task::spawn_local(async move {
+                                            match invoke("apply_app_update", wasm_bindgen::JsValue::NULL).await {
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    update_error.set(Some(e.as_string().unwrap_or_default()));
+                                                    update_installing.set(false);
+                                                }
+                                            }
+                                        });
+                                    }
+                                >
+                                    {move || if update_installing.get() { "Installing..." } else { "Install & Restart" }}
+                                </button>
+                                <button class="btn btn-sm btn-ghost"
+                                    on:click=move |_| { show_update_popup.set(false); }
+                                >"Later"</button>
+                            </div>
+                        </div>
+                    </div>
+                }.into_any()
+            } else {
+                view! { <></> }.into_any()
+            }}
+
+            // App Updates section
+            <h3 class="section-title">"App Updates"</h3>
+            <div class="alert-panel">
+                <div class="alert-panel-header">
+                    <div class="alert-panel-title">"APP UPDATE"</div>
+                    <span class="alert-panel-reg">{move || {
+                        update_info.get()
+                            .map(|i| format!("v{}", i.current_version))
+                            .unwrap_or_else(|| "—".to_string())
+                    }}</span>
+                </div>
+                <div class="alert-panel-scanline supply-scanline"></div>
+                <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 10px">
+                    // Status row
+                    {move || {
+                        if update_checking.get() {
+                            view! {
+                                <div style="font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace">"Checking for updates..."</div>
+                            }.into_any()
+                        } else if let Some(info) = update_info.get() {
+                            if info.available {
+                                let notes_preview = if info.notes.len() > 200 { format!("{}…", &info.notes[..200]) } else { info.notes.clone() };
+                                view! {
+                                    <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px; background: rgba(59,130,246,0.07); border: 1px solid rgba(59,130,246,0.2); border-radius: 6px">
+                                        <span style="color: var(--blue); font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace">
+                                            {format!("v{} available", info.version)}
+                                        </span>
+                                        {if !notes_preview.is_empty() {
+                                            view! { <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.5; white-space: pre-wrap">{notes_preview}</div> }.into_any()
+                                        } else { view! { <></> }.into_any() }}
+                                        <button class="btn btn-sm btn-primary" style="align-self: flex-start"
+                                            disabled=move || update_installing.get() || update_checking.get()
+                                            on:click=on_install
+                                        >{move || if update_installing.get() { "Installing..." } else { "Install & Restart" }}</button>
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <div style="display: flex; align-items: center; gap: 8px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
+                                        <span style="color: var(--green); font-weight: 700">"✓"</span>
+                                        <span style="color: var(--green)">"Up to date"</span>
+                                    </div>
+                                }.into_any()
+                            }
+                        } else { view! { <></> }.into_any() }
+                    }}
+
+                    // Error
+                    {move || update_error.get().map(|err| view! {
+                        <div style="padding: 8px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; color: var(--rose); font-size: 10px; font-family: 'JetBrains Mono', monospace">{err}</div>
+                    })}
+
+                    // Action buttons row
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+                        <button class="btn btn-sm btn-ghost"
+                            disabled=move || update_checking.get() || update_installing.get()
+                            on:click=on_check
+                        >"Check for Updates"</button>
+                        <button class="btn btn-sm btn-ghost"
+                            disabled=move || releases_loading.get()
+                            on:click=on_load_releases
+                        >{move || if releases_loading.get() { "Loading..." } else { "Browse Releases" }}</button>
+                    </div>
+
+                    // Release version picker (shown when releases list is loaded)
+                    {move || {
+                        let rlist = releases.get();
+                        if rlist.is_empty() { return view! { <></> }.into_any(); }
+                        view! {
+                            <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px">
+                                <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.05em">"Select version to install:"</div>
+                                <select class="dropdown dropdown-sm"
+                                    on:change=move |e| {
+                                        let val = event_target_value(&e);
+                                        selected_release.set(val.parse::<usize>().ok());
+                                    }
+                                >
+                                    <option value="">"— choose a release —"</option>
+                                    {rlist.iter().enumerate().map(|(i, r)| {
+                                        let label = if r.prerelease {
+                                            format!("{} (nightly)", r.version)
+                                        } else {
+                                            format!("{} — {}", r.version, &r.published_at[..10])
+                                        };
+                                        let size_kb = r.installer_size / 1024;
+                                        let label = format!("{} [{} KB]", label, size_kb);
+                                        view! { <option value=i.to_string()>{label}</option> }
+                                    }).collect::<Vec<_>>()}
+                                </select>
+                                <button class="btn btn-sm btn-primary" style="align-self: flex-start"
+                                    disabled=move || selected_release.get().is_none() || installing_url.get().is_some()
+                                    on:click=on_install_selected
+                                >
+                                    {move || if installing_url.get().is_some() { "Downloading & Installing..." } else { "Install Selected" }}
+                                </button>
+                            </div>
+                        }.into_any()
+                    }}
+                </div>
+            </div>
         </div>
     }
 }

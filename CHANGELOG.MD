@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 
-*(no changes yet)*
+### Added
+
+#### Desktop app
+- **Startup update popup**: On mount, if a desktop app update is detected, a fixed overlay popup appears with the new version, a contextual subtitle (stable vs nightly build), and Install & Restart / Later buttons. The popup is dismissible; the update section in Diagnostics remains for manual re-check. (`src/tabs/diag.rs`)
+- **Version picker / Browse Releases**: Added a "Browse Releases" button in the App Updates card that calls the new `list_desktop_releases` Tauri command. Fetches up to 20 GitHub releases, filters to platform-appropriate installers (.dmg / .exe / .AppImage), and populates a dropdown. Selecting a version and clicking "Install Selected" calls `install_desktop_version` which downloads to a temp file, launches the installer natively, and exits the running app. (`src/tabs/diag.rs`, `src-tauri/src/commands.rs`)
+- **Nightly build detection in `check_app_update`**: If the current version contains a hyphen (e.g. `1.1.1-123`), the command now also checks the nightly manifest directly and compares build numbers, returning `is_nightly: true` in `AppUpdateInfo`. (`src-tauri/src/commands.rs`)
+- **App Updates card in Diagnostics tab**: Added a new "App Updates" card to the bottom of the Diagnostics tab (`src/tabs/diag.rs`). On mount it auto-checks for a desktop app update via the `check_app_update` Tauri command. Shows current version, a spinner while checking, a "Up to date" green indicator when current, or the new version string + release notes preview (first 200 chars) + "Install & Restart" button when an update is available. The button calls `apply_app_update` which downloads and restarts the app. A "Check for Updates" button is always visible to re-run the check.
+
+#### Docs / Planning
+- **TODO: Desktop auto-update + macOS Gatekeeper bypass** — Added two tracked items under Desktop App: (1) in-app GitHub release checking and download via `tauri-plugin-updater`; (2) options for distributing unsigned macOS builds without Gatekeeper blocking (ad-hoc codesign, quarantine strip, Homebrew cask).
+
+### Fixed
+
+#### Desktop app
+- **Token persistence after app restart**: Replaced OS keychain (`keyring` crate) with a plain `tokens.json` file in the app data directory. Unsigned macOS builds cannot access the keychain, causing admin tokens to be stored in-memory only and lost on restart — requiring USB re-pairing every launch. Tokens are now read from `tokens.json` on startup (`load_tokens`) and written back atomically on every USB pairing (`save_token`). Removed `keyring = "3"` dependency. (`src-tauri/src/connection_manager.rs`, `src-tauri/Cargo.toml`)
 
 ## [1.3.1] — 2026-06-09
 

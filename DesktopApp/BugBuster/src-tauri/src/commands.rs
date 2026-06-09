@@ -3257,6 +3257,18 @@ pub fn js_log(msg: String) {
     println!("[JS Log] {}", msg);
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopReleaseEntry {
+    pub tag: String,
+    pub name: String,
+    pub version: String,
+    pub prerelease: bool,
+    pub published_at: String,
+    pub installer_url: String,
+    pub installer_size: u64,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopGitRelease {
@@ -3553,6 +3565,252 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
     }
 
     Ok(git_releases)
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct AppUpdateInfo {
+    pub available: bool,
+    pub version: String,
+    pub current_version: String,
+    pub notes: String,
+    pub is_nightly: bool,
+}
+
+#[tauri::command]
+pub async fn check_app_update(app: tauri::AppHandle) -> Result<AppUpdateInfo, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let current = app.package_info().version.to_string();
+    // Detect nightly: version contains a hyphen like "1.1.1-123"
+    let is_nightly = current.contains('-');
+
+    // First try tauri-plugin-updater (stable endpoint)
+    let updater_result = app.updater().map_err(|e| e.to_string())?.check().await;
+
+    match updater_result {
+        Ok(Some(update)) => {
+            return Ok(AppUpdateInfo {
+                available: true,
+                version: update.version.clone(),
+                current_version: current,
+                notes: update.body.clone().unwrap_or_default(),
+                is_nightly,
+            });
+        }
+        Ok(None) => {}
+        Err(_) => {}
+    }
+
+    // If running a nightly, also check the nightly manifest directly
+    if is_nightly {
+        let nightly_url = "https://github.com/lollokara/BugBuster/releases/download/nightly/bugbuster-desktop-update-manifest.json";
+        let client = reqwest::Client::builder()
+            .user_agent("BugBuster-Desktop/1.0.0")
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| e.to_string())?;
+        if let Ok(resp) = client.get(nightly_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(manifest) = resp.json::<serde_json::Value>().await {
+                    if let Some(manifest_version) = manifest.get("version").and_then(|v| v.as_str()) {
+                        // Compare build numbers: "1.1.1-125" vs "1.1.1-123"
+                        let current_build: u64 = current.split('-').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let manifest_build: u64 = manifest_version.split('-').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        if manifest_build > current_build {
+                            return Ok(AppUpdateInfo {
+                                available: true,
+                                version: manifest_version.to_string(),
+                                current_version: current,
+                                notes: format!("Nightly build {} is available (you have build {})", manifest_build, current_build),
+                                is_nightly: true,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(AppUpdateInfo {
+        available: false,
+        version: current.clone(),
+        current_version: current,
+        notes: String::new(),
+        is_nightly,
+    })
+}
+
+#[tauri::command]
+pub async fn apply_app_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No update available".to_string())?;
+    update
+        .download_and_install(
+            |downloaded, total| {
+                let _ = app.emit(
+                    "app-update-progress",
+                    serde_json::json!({ "downloaded": downloaded, "total": total }),
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
+}
+
+#[tauri::command]
+pub async fn list_desktop_releases() -> Result<Vec<DesktopReleaseEntry>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("BugBuster-Desktop/1.0.0")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = "https://api.github.com/repos/lollokara/BugBuster/releases?per_page=20";
+    let resp = client.get(url).send().await.map_err(|e| format!("GitHub API error: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API returned HTTP {}", resp.status()));
+    }
+    let releases_json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let mut entries = Vec::new();
+
+    if let Some(arr) = releases_json.as_array() {
+        for release in arr {
+            let tag = release.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = release.get("name").and_then(|v| v.as_str()).unwrap_or(&tag).to_string();
+            let prerelease = release.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false);
+            let published_at = release.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if tag.is_empty() { continue; }
+
+            // Extract semver from tag: "desktop-v1.2.3" -> "1.2.3", "nightly" -> tag as-is
+            let version = if let Some(v) = tag.strip_prefix("desktop-v") {
+                v.to_string()
+            } else if let Some(v) = tag.strip_prefix("release-v") {
+                v.to_string()
+            } else {
+                tag.clone()
+            };
+
+            // Find platform-appropriate installer asset
+            #[cfg(target_os = "macos")]
+            let ext_filter: &[&str] = &[".dmg"];
+            #[cfg(target_os = "windows")]
+            let ext_filter: &[&str] = &["-setup.exe", ".msi", ".exe"];
+            #[cfg(target_os = "linux")]
+            let ext_filter: &[&str] = &[".AppImage"];
+            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+            let ext_filter: &[&str] = &[];
+
+            let mut installer_url = String::new();
+            let mut installer_size = 0u64;
+
+            if let Some(assets) = release.get("assets").and_then(|v| v.as_array()) {
+                'asset: for asset in assets {
+                    let aname = asset.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    // Skip .sig sidecar files and manifests
+                    if aname.ends_with(".sig") || aname.ends_with(".json") { continue; }
+                    for ext in ext_filter {
+                        if aname.ends_with(ext) {
+                            installer_url = asset.get("browser_download_url")
+                                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            installer_size = asset.get("size")
+                                .and_then(|v| v.as_u64()).unwrap_or(0);
+                            break 'asset;
+                        }
+                    }
+                }
+            }
+
+            // Only include releases that have an installer for this platform
+            if installer_url.is_empty() { continue; }
+
+            entries.push(DesktopReleaseEntry {
+                tag,
+                name,
+                version,
+                prerelease,
+                published_at,
+                installer_url,
+                installer_size,
+            });
+        }
+    }
+
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn install_desktop_version(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use std::io::Write;
+    use tauri::Emitter;
+
+    // Determine file extension from URL
+    #[cfg(target_os = "macos")]
+    let ext = ".dmg";
+    #[cfg(target_os = "windows")]
+    let ext = ".exe";
+    #[cfg(target_os = "linux")]
+    let ext = ".AppImage";
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let ext = ".bin";
+
+    let tmp_path = std::env::temp_dir().join(format!("bugbuster-update{}", ext));
+
+    // Download
+    let client = reqwest::Client::builder()
+        .user_agent("BugBuster-Desktop/1.0.0")
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url).send().await.map_err(|e| format!("Download failed: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("Download HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+
+    let mut f = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+    f.write_all(&bytes).map_err(|e| e.to_string())?;
+    drop(f);
+
+    // Launch installer platform-specifically
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&tmp_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open DMG: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new(&tmp_path)
+            .spawn()
+            .map_err(|e| format!("Failed to run installer: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&tmp_path).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&tmp_path, perms).map_err(|e| e.to_string())?;
+        std::process::Command::new(&tmp_path)
+            .spawn()
+            .map_err(|e| format!("Failed to launch AppImage: {}", e))?;
+    }
+
+    // Emit progress event and exit the current app after a short delay
+    let _ = app.emit("app-update-progress", serde_json::json!({ "downloaded": bytes.len(), "total": bytes.len() }));
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    app.exit(0);
+    Ok(())
 }
 
 async fn run_usb_desktop_ota_flow(

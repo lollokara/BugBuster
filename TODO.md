@@ -51,6 +51,12 @@
 
 ### 🟡 Missing / Incomplete
 
+- **Desktop auto-update via GitHub** — Implement in-app update checking and download from GitHub releases. On startup (or on demand) the app should fetch the latest release manifest, compare against the running version, and prompt the user to update if a newer build is available. Tauri's built-in updater plugin (`tauri-plugin-updater`) is the natural fit — needs a signed update artefact URL in `tauri.conf.json` and a GitHub Actions step to publish the updater JSON alongside each release. Related: the existing nightly/release CI already publishes platform binaries; the manifest and delta-update signing just need wiring in.  
+  Related files: `src-tauri/tauri.conf.json`, `.github/workflows/desktop-release.yml`, `src-tauri/Cargo.toml`
+
+- **macOS unsigned app — bypass Gatekeeper for distribution** — Without an Apple Developer account the app is blocked by Gatekeeper on first launch ("cannot be opened because the developer cannot be verified"). Options to investigate: (1) `xattr -cr` post-install script / DMG install helper that strips the quarantine bit; (2) ship a notarised ad-hoc-signed build using a free Apple ID + `codesign --deep --force --sign -` (ad-hoc) which satisfies Gatekeeper for local installs without a paid account; (3) document the one-time right-click → Open workaround in README; (4) evaluate distributing via Homebrew cask (users `brew install` and Homebrew handles the quarantine strip). The token-persistence bug (keychain blocked on unsigned binaries) is already fixed by switching to `tokens.json`.  
+  Related files: `.github/workflows/desktop-release.yml`, `DesktopApp/README.md`
+
 - **Scope export** — PNG and JSON export paths show "not implemented yet" toasts.  
   File: `DesktopApp/BugBuster/src/tabs/scope.rs:1405–1406`
 

@@ -33,6 +33,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ConnectionManager::new())
         .manage(LaState::new())
         .invoke_handler(tauri::generate_handler![
@@ -93,6 +94,10 @@ pub fn run() {
             commands::fetch_github_releases,
             commands::start_desktop_spiffs_ota,
             commands::start_desktop_ota,
+            commands::check_app_update,
+            commands::apply_app_update,
+            commands::list_desktop_releases,
+            commands::install_desktop_version,
             // DS4424 IDAC
             commands::idac_get_status,
             commands::idac_set_code,
