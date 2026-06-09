@@ -392,13 +392,15 @@ def _hat_la_config(device):
 
 def _hat_la_arm(device):
     def handler(payload: bytes) -> bytes:
-        device.la_state = "DONE"
+        # Correct transition: IDLE → ARMED (hardware waits for trigger)
+        device.la_state = "ARMED"
         return b''
     return handler
 
 
 def _hat_la_force(device):
     def handler(payload: bytes) -> bytes:
+        # Force-trigger: immediately completes capture → DONE
         device.la_state = "DONE"
         return b''
     return handler

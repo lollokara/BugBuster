@@ -119,3 +119,8 @@ CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=32
+
+# Stack overflow detection — writes canary words at the bottom of every task
+# stack and validates them on every context switch. Overflow triggers abort()
+# which saves a core dump to flash (see CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH).
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y

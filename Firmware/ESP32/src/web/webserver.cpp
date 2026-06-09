@@ -3512,9 +3512,8 @@ static esp_err_t handle_post_wavegen_start(httpd_req_t *req)
     }
 
     // Wake wavegen task
-    extern TaskHandle_t s_wavegenTask;
-    if (s_wavegenTask) {
-        xTaskNotifyGive(s_wavegenTask);
+    if (g_wavegenTask) {
+        xTaskNotifyGive(g_wavegenTask);
     }
 
     cJSON *root = cJSON_CreateObject();

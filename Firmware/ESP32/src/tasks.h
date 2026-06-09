@@ -139,6 +139,8 @@ struct DeviceState {
 
 extern DeviceState        g_deviceState;
 extern SemaphoreHandle_t  g_stateMutex;
+extern TaskHandle_t       g_adcTaskHandle;
+extern TaskHandle_t       g_wavegenTask;
 
 // -----------------------------------------------------------------------------
 // Command Queue
@@ -338,3 +340,10 @@ bool tasks_apply_dac_current(uint8_t channel, float current_mA);
  * @brief Apply the VOUT bipolar/unipolar range synchronously for a channel.
  */
 bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
+
+/**
+ * @brief Log the FreeRTOS stack high-water mark (words free) for every
+ *        measurement task.  Call after steady-state warm-up (~60 s) to detect
+ *        stacks that are close to exhaustion before shipping.
+ */
+void tasks_log_stack_hwm(void);

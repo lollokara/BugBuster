@@ -55,7 +55,11 @@ def _adc_stream_loop(device, stop_event, interval_s, channel_mask):
         for code in samples:
             buf += code.to_bytes(3, 'little')
 
-        handler = device._transport._event_handlers.get(int(CmdId.ADC_DATA_EVT))
+        transport = device._transport
+        handler = (
+            transport._event_handlers.get(int(CmdId.ADC_DATA_EVT))
+            if transport is not None else None
+        )
         if handler:
             try:
                 handler(buf)
@@ -91,7 +95,11 @@ def _scope_stream_loop(device, stop_event, interval_s):
             mx = voltage + noise
             buf += struct.pack('<fff', avg, mn, mx)
 
-        handler = device._transport._event_handlers.get(int(CmdId.SCOPE_DATA_EVT))
+        transport = device._transport
+        handler = (
+            transport._event_handlers.get(int(CmdId.SCOPE_DATA_EVT))
+            if transport is not None else None
+        )
         if handler:
             try:
                 handler(buf)

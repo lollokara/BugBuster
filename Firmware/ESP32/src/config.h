@@ -114,9 +114,6 @@
 // -----------------------------------------------------------------------------
 // Security / Authentication
 // -----------------------------------------------------------------------------
-// In Phase 1, we use a static admin token. This must be replaced with a 
-// unique token generated at first boot and stored in NVS in Phase 2.
-#define ADMIN_TOKEN         "00000000000000000000000000000000"
 #define ADMIN_TOKEN_HEADER  "X-BugBuster-Admin-Token"
 
 // -----------------------------------------------------------------------------

@@ -27,7 +27,7 @@
 
 ### 🔴 Bugs
 
-- **Unused Dead Code `#define ADMIN_TOKEN`** — [config.h](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/Firmware/ESP32/src/config.h#L119) contains a static fallback token definition that is never used. Only `ADMIN_TOKEN_HEADER` is used.
+*(none)*
 
 ### 🟡 Missing / Pending
 
@@ -36,11 +36,6 @@
 - **Expose and Map HAT Power Commands over HTTP** — Implement `GET /api/hat/power` and `POST /api/hat/power` in [webserver.cpp](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/Firmware/ESP32/src/web/webserver.cpp) to query/toggle HAT rail power.
 
 - **SPIFFS OTA over WiFi and USB** — Add a first-class OTA flow for the SPIFFS partition over both transports, including upload, integrity verification, progress reporting, and final apply/reboot handling. Desktop and firmware currently cover firmware OTA, but SPIFFS still needs the same WiFi + USB path.
-
-### ⏳ Deferred
-
-- **HVPAK controls** — command IDs `0xCC–0xEA` are protocol-defined and stubbed in ESP32/Python/Desktop, but the feature is not yet a release target. Allowlisted in `tests/unit/test_hat_parity.py`.  
-  Unblock: decide HVPAK release milestone, then implement Python/Desktop/web surfaces end-to-end.
 
 ### 🟢 Forward-looking note
 
@@ -65,8 +60,6 @@
 - **Calibration deep flows** — HAT calibration telemetry is shown in the web HAT card, but desktop-specific import flows and deep cal workflows have no web equivalent.  
   Ref: parity matrix row "Calibration tab deep flows"
 
-- **Extend `parse_hat_get_power` in Tauri Backend** — Parse the trailing 3 HVPAK bytes (`hvpak_part`, `hvpak_ready`, `hvpak_last_error`) written by the firmware in `parse_hat_get_power` in [commands.rs](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/DesktopApp/BugBuster/src-tauri/src/commands.rs#L2557).
-
 ### 🟢 Stubs awaiting firmware wiring
 
 - **`set_pin_drive_strength`** — Tauri command only logs the request (`pin`, `drive`); no BBP command or firmware handler exists yet. The comment says hardware wiring is "pending firmware support" (likely via PCA GPIO expander controlling series-resistor bypass switches).  
@@ -89,15 +82,13 @@
 - **Logic Analyzer streaming** — USB vendor-bulk path; no HTTP stream parity is architecturally possible. Needs explicit "USB only" messaging in the web UI.  
   Ref: parity matrix row "Logic Analyzer stream"
 
-- **HVPAK web controls** — mirrored from firmware deferral above; keep HTTP/Desktop/MCP parity deferred until HVPAK is a release target.
-
 ---
 
 ## Python Client
 
 ### 🔴 Bugs
 
-- **`BBP_CMD_PCA_GET_STATUS` (0xB0) Payload Size Mismatch** — `_parse_pca_status` in [client.py](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/python/bugbuster/client.py#L4323) reads/parses only 12 bytes, truncating the 9 trailing enable bytes written by the firmware.
+*(none)*
 
 ### 🟢 Refactor
 
@@ -110,7 +101,7 @@
 
 ### 🔴 Simulator Bugs
 
-- **`BBP_CMD_PCA_GET_STATUS` (0xB0) Payload Size Mismatch** — Mock `_pca_get_status` handler in [power.py](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/tests/mock/handlers/power.py#L34) only returns 12 bytes instead of 21 bytes.
+*(none)*
 
 ### 🟢 `SimulatedDevice` Code Quality & Enhancements
 
@@ -136,6 +127,4 @@ Pattern file: `.mex/patterns/overview-selftest-quicksetup-parity.md`
 
 ## Version / Protocol Hygiene
 
-- **`PROTO_VERSION` CI gate is path-scoped** — `.github/workflows/proto-version-check.yml` runs `check_proto_version.py` only when `bbp.h`, `protocol.py`, or `bbp.rs` are in the diff. A bump that touches none of those files would bypass the check.
-
-- **Broaden CI Protocol Version Check** — Update the CI workflow to trigger on all pushes/PRs or expand checked files to prevent protocol drift.
+*(none — CI proto-version check now runs on all pushes/PRs, path filter removed 2026-06-09)*

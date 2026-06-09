@@ -4353,12 +4353,26 @@ def _parse_pca_status(resp: bytes) -> dict:
     vadj1_pg       = bool(resp[6])
     vadj2_pg       = bool(resp[7])
     efuse_faults   = [bool(resp[8 + i]) for i in range(4)]
+    # Decoded enable flags — firmware appends these 9 bytes after efuse_faults.
+    # Older firmware (< 3.4.0) returned only 12 bytes; degrade gracefully.
+    vadj1_en = vadj2_en = en_15v = en_mux = en_usb_hub = False
+    efuse_enables: list[bool] = [False] * 4
+    if len(resp) >= 21:
+        vadj1_en   = bool(resp[12])
+        vadj2_en   = bool(resp[13])
+        en_15v     = bool(resp[14])
+        en_mux     = bool(resp[15])
+        en_usb_hub = bool(resp[16])
+        efuse_enables = [bool(resp[17 + i]) for i in range(4)]
     return {
         "present": present, "logic_pg": logic_pg,
         "vadj1_pg": vadj1_pg, "vadj2_pg": vadj2_pg,
         "efuse_faults": efuse_faults,
         "input0": input0, "input1": input1,
         "output0": out0,  "output1": out1,
+        "vadj1_en": vadj1_en, "vadj2_en": vadj2_en,
+        "en_15v": en_15v, "en_mux": en_mux, "en_usb_hub": en_usb_hub,
+        "efuse_enables": efuse_enables,
     }
 
 

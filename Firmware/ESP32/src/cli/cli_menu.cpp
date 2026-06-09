@@ -4179,6 +4179,7 @@ extern "C" void cli_menu_enter(void) {
         term_println("Menu: failed to allocate cell buffer.");
         return;
     }
+    esp_log_level_set("*", ESP_LOG_NONE);
     enter_alt_screen();
     s_active            = true;
     s_alt_out           = false;
@@ -4207,6 +4208,7 @@ extern "C" void cli_menu_leave(void) {
     s_active   = false;
     s_alt_out  = false;
     buffer_free();
+    esp_log_level_set("*", ESP_LOG_INFO);
 }
 
 extern "C" void cli_menu_preempt(void) {

@@ -6,7 +6,7 @@
 //
 //   BBP_CMD_START_SCOPE_STREAM  (0x62)  — state-machine: syncs seq, sets active
 //   BBP_CMD_STOP_SCOPE_STREAM   (0x63)  — state-machine: clears active flag
-//   BBP_CMD_START_WAVEGEN       (0xD0)  — configure + kick s_wavegenTask
+//   BBP_CMD_START_WAVEGEN       (0xD0)  — configure + kick g_wavegenTask
 //   BBP_CMD_STOP_WAVEGEN        (0xD1)  — stop + restore channel to HIGH_IMP
 //
 // Wire-format is byte-for-byte identical to the legacy handlers in bbp.cpp:
@@ -84,7 +84,7 @@ static int handler_stop_scope_stream(const uint8_t *payload, size_t len,
 // Side effects via bbpStartWavegen():
 //   - tasks_apply_channel_function() synchronously (avoids scheduler race)
 //   - g_deviceState.wavegen.* updated under g_stateMutex (50 ms)
-//   - xTaskNotifyGive(s_wavegenTask) to wake the generator task
+//   - xTaskNotifyGive(g_wavegenTask) to wake the generator task
 // ---------------------------------------------------------------------------
 static int handler_start_wavegen(const uint8_t *payload, size_t len,
                                   uint8_t *resp, size_t *resp_len)

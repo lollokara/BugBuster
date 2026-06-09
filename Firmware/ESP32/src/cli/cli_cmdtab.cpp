@@ -61,6 +61,8 @@ const CliCommand g_cliCommands[] = {
       "rstinfo",            "Show last ESP reset reason code", NULL },
     { "coredump", "cdump",   cli_cmd_coredump,      CAT_GENERAL,
       "coredump [info|dump|clear]", "Show, dump, or clear saved ESP panic coredump", NULL },
+    { "version",  "ver",     cli_cmd_version,       CAT_GENERAL,
+      "version",              "ESP32 app version, build date, IDF version, RP2040 HAT firmware", NULL },
     { "silicon",  NULL,     cli_cmd_silicon,       CAT_GENERAL,
       "silicon",            "Read silicon revision and ID", NULL },
     { "regs",     NULL,     cli_cmd_regs,          CAT_GENERAL,
@@ -176,6 +178,12 @@ const CliCommand g_cliCommands[] = {
       "Check/apply GitHub nightly firmware updates", NULL },
 
     // ---- Diagnostic / low-level ----
+    { "heap",     NULL,     cli_cmd_heap,          CAT_DIAG,
+      "heap",
+      "Internal heap free/min-ever/largest-block + PSRAM free; warns on fragmentation", NULL },
+    { "stack_hwm","hwm",    cli_cmd_stack_hwm,     CAT_DIAG,
+      "stack_hwm",
+      "FreeRTOS stack high-water mark for adcPoll/faultMon/cmdProc/wavegen; warns if < 128 words", NULL },
     { "clkout",   NULL,     cli_cmd_clkout,        CAT_DIAG,
       "clkout <io> <src> <hz>|off|status",
       "Bench clock on IO 1-12 (src=ledc|mcpwm). LEDC<=40MHz, MCPWM<=80MHz; level shifter ~25MHz limit.", NULL },

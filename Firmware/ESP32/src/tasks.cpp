@@ -1209,7 +1209,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 // The task is created once at init and sleeps via a notification when idle.
 // -----------------------------------------------------------------------------
 
-TaskHandle_t s_wavegenTask = nullptr;
+TaskHandle_t g_wavegenTask = nullptr;
 
 // Precomputed sine lookup table (256 entries, 0..1 range)
 #define WAVEGEN_SINE_LUT_SIZE 256
@@ -1472,7 +1472,7 @@ void initTasks(AD74416H& device)
         4096,
         nullptr,
         3,
-        &s_wavegenTask,
+        &g_wavegenTask,
         1
     ) != pdPASS) {
         ESP_LOGE("tasks", "Failed to create task wavegen — heap exhausted");
@@ -1480,6 +1480,30 @@ void initTasks(AD74416H& device)
 
     // Note: I2C devices (PCA9535, HUSB238, DS4424) are polled on-demand
     // by BBP/HTTP/CLI handlers — no background polling task needed.
+
+    ESP_LOGI("tasks", "All tasks started — internal free heap: %lu KB  largest block: %lu KB",
+        (unsigned long)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+        (unsigned long)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
+}
+
+void tasks_log_stack_hwm(void)
+{
+    struct { const char *name; TaskHandle_t h; } tasks[] = {
+        { "adcPoll",  g_adcTaskHandle },
+        { "faultMon", xTaskGetHandle("faultMon") },
+        { "cmdProc",  xTaskGetHandle("cmdProc") },
+        { "wavegen",  g_wavegenTask },
+    };
+    for (auto &t : tasks) {
+        if (!t.h) continue;
+        UBaseType_t hwm = uxTaskGetStackHighWaterMark(t.h);
+        const char *warn = (hwm < 128) ? " *** LOW ***" : (hwm < 256) ? " (warn)" : "";
+        ESP_LOGI("tasks", "Stack HWM %s: %lu words free%s", t.name, (unsigned long)hwm, warn);
+    }
+    ESP_LOGI("tasks", "Heap internal free: %lu KB  min-ever: %lu KB  largest block: %lu KB",
+        (unsigned long)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+        (unsigned long)(esp_get_minimum_free_heap_size() / 1024),
+        (unsigned long)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
 }
 
 void tasks_reset_hardware(void)

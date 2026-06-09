@@ -46,6 +46,18 @@ def _pca_get_status(device):
         buf.append(0)            # efuse_fault[1]
         buf.append(0)            # efuse_fault[2]
         buf.append(0)            # efuse_fault[3]
+        # Decoded enables (9 bytes added in fw 3.4.0).
+        # Keys match PcaControl enum: 0=VADJ1_EN, 1=VADJ2_EN, 2=15V_EN,
+        # 3=MUX_EN, 4=USB_HUB_EN, 5-8=EFUSE1-4_EN.
+        buf.append(int(device.pca_control.get(0, False)))   # VADJ1_EN
+        buf.append(int(device.pca_control.get(1, False)))   # VADJ2_EN
+        buf.append(int(device.pca_control.get(2, False)))   # 15V_EN
+        buf.append(int(device.pca_control.get(3, True)))    # MUX_EN
+        buf.append(int(device.pca_control.get(4, True)))    # USB_HUB_EN
+        buf.append(int(device.pca_control.get(5, False)))   # EFUSE1_EN
+        buf.append(int(device.pca_control.get(6, False)))   # EFUSE2_EN
+        buf.append(int(device.pca_control.get(7, False)))   # EFUSE3_EN
+        buf.append(int(device.pca_control.get(8, False)))   # EFUSE4_EN
         return bytes(buf)
     return handler
 

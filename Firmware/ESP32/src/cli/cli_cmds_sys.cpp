@@ -27,6 +27,9 @@
 #include "esp_system.h"
 #include "esp_core_dump.h"
 #include "esp_partition.h"
+#include "esp_app_desc.h"
+#include "esp_heap_caps.h"
+#include "hat/hat.h"
 
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -1168,4 +1171,89 @@ extern "C" void cli_cmd_coredump(const char* args)
     }
 
     term_println("Usage: coredump [info|dump|clear]");
+}
+
+// ---------------------------------------------------------------------------
+// stack_hwm — FreeRTOS stack high-water mark for every measurement task
+// ---------------------------------------------------------------------------
+
+extern "C" void cli_cmd_stack_hwm(const char* args)
+{
+    (void)args;
+    struct { const char *name; TaskHandle_t h; } tasks[] = {
+        { "adcPoll",  g_adcTaskHandle },
+        { "faultMon", xTaskGetHandle("faultMon") },
+        { "cmdProc",  xTaskGetHandle("cmdProc") },
+        { "wavegen",  g_wavegenTask },
+    };
+    term_println("\r\n--- Stack High-Water Marks (words free at minimum) ---");
+    for (auto &t : tasks) {
+        if (!t.h) {
+            term_printf("  %-10s  handle not found\r\n", t.name);
+            continue;
+        }
+        UBaseType_t hwm = uxTaskGetStackHighWaterMark(t.h);
+        const char *flag = "";
+        if      (hwm < 128) flag = "  *** LOW — overflow risk ***";
+        else if (hwm < 256) flag = "  (warn — monitor closely)";
+        term_printf("  %-10s  %4lu words free  (%4lu bytes)%s\r\n",
+                    t.name, (unsigned long)hwm, (unsigned long)hwm * 4, flag);
+    }
+    term_println("  (1 word = 4 bytes; each task stack declared in tasks.cpp)");
+    // Also emit to ESP log so it appears in the serial monitor stream
+    tasks_log_stack_hwm();
+}
+
+// ---------------------------------------------------------------------------
+// heap — runtime internal heap and PSRAM status with fragmentation indicator
+// ---------------------------------------------------------------------------
+
+extern "C" void cli_cmd_heap(const char* args)
+{
+    (void)args;
+    uint32_t free_int  = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    uint32_t min_int   = esp_get_minimum_free_heap_size();
+    uint32_t blk_int   = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    uint32_t free_spi  = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    uint32_t blk_spi   = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+
+    term_println("\r\n--- Heap Status ---");
+    term_printf("  Internal free:     %6lu KB\r\n", free_int / 1024);
+    term_printf("  Internal min-ever: %6lu KB  (all-time low since boot)\r\n", min_int / 1024);
+    term_printf("  Internal largest:  %6lu KB  (biggest contiguous block)\r\n", blk_int / 1024);
+    term_printf("  PSRAM free:        %6lu KB\r\n", free_spi / 1024);
+    term_printf("  PSRAM largest:     %6lu KB\r\n", blk_spi / 1024);
+
+    if (blk_int < 8192)
+        term_println("  *** WARNING: largest internal block < 8 KB — heap fragmented,"
+                     " xTaskCreate may fail ***");
+    else if (blk_int < 16384)
+        term_println("  (notice: largest internal block < 16 KB — headroom shrinking)");
+
+    if (min_int < 20480)
+        term_println("  *** WARNING: all-time minimum < 20 KB — sustained memory pressure ***");
+}
+
+// ---------------------------------------------------------------------------
+// version — firmware version, build date, and RP2040 HAT firmware version
+// ---------------------------------------------------------------------------
+
+extern "C" void cli_cmd_version(const char* args)
+{
+    (void)args;
+    const esp_app_desc_t *app = esp_app_get_description();
+    term_println("\r\n--- Firmware Version ---");
+    term_printf("  ESP32 app:    %s\r\n", app->version);
+    term_printf("  Build date:   %s %s\r\n", app->date, app->time);
+    term_printf("  IDF version:  %s\r\n", esp_get_idf_version());
+
+    const HatState *hs = hat_get_state();
+    if (hs && hs->connected) {
+        term_printf("  RP2040 HAT:   bb-hat-%u.%u\r\n",
+                    hs->fw_version_major, hs->fw_version_minor);
+    } else if (hs && hs->detected) {
+        term_println("  RP2040 HAT:   detected but UART not established");
+    } else {
+        term_println("  RP2040 HAT:   not detected");
+    }
 }

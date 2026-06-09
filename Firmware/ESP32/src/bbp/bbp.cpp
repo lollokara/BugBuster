@@ -916,8 +916,7 @@ void bbpStopScopeStream(void)
     ESP_LOGI(TAG, "Scope stream stopped");
 }
 
-// Task handle is defined in tasks.cpp
-extern TaskHandle_t s_wavegenTask;
+// g_wavegenTask declared in tasks.h (included above)
 
 void bbpStartWavegen(uint8_t channel, uint8_t waveform,
                      float freq_hz, float amplitude, float offset,
@@ -940,8 +939,8 @@ void bbpStartWavegen(uint8_t channel, uint8_t waveform,
         xSemaphoreGive(g_stateMutex);
     }
 
-    if (s_wavegenTask) {
-        xTaskNotifyGive(s_wavegenTask);
+    if (g_wavegenTask) {
+        xTaskNotifyGive(g_wavegenTask);
     }
 
     ESP_LOGI(TAG, "Wavegen start: ch=%d wf=%d freq=%.1f amp=%.2f off=%.2f mode=%d",
