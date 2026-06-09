@@ -12,6 +12,7 @@ struct AppUpdateInfo {
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 struct DesktopReleaseEntry {
     tag: String,
