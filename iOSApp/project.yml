@@ -1,0 +1,49 @@
+name: bugbuster
+options:
+  bundleIdPrefix: com.lorenzo.bugbuster
+  deploymentTarget:
+    iOS: 16.0
+fileGroups: []
+configs:
+  debug: debug
+  release: release
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: BugBuster
+      PRODUCT_BUNDLE_IDENTIFIER: com.lorenzo.bugbuster
+targets:
+  bugbuster_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+      - path: LaunchScreen.storyboard
+      - path: assets
+        buildPhase: resources
+        type: folder
+    info:
+      path: Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities: [arm64]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        CFBundleShortVersionString: 1.0.0
+        CFBundleVersion: "1"
+        NSCameraUsageDescription: "Scan QR code to connect to the BugBuster hardware device over Wi-Fi."
+        NSLocalNetworkUsageDescription: "Access BugBuster hardware devices on your local network."
+        NSBonjourServices:
+          - _bugbuster._tcp
+          - _http._tcp
+    settings:
+      base:
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        SWIFT_VERSION: "5.9"
+      groups: [app]
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: Combine.framework

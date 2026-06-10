@@ -1,0 +1,490 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project bugbuster.xcodeproj -scheme bugbuster_iOS -sdk iphonesimulator build
+
+Build settings from command line:
+    SDKROOT = iphonesimulator26.5
+
+2026-06-10 20:12:20.050 xcodebuild[77280:1649921]  DVTDeviceOperation: Encountered a build number "" that is incompatible with DVTBuildVersion.
+2026-06-10 20:12:20.109 xcodebuild[77280:1649887] [MT] DVTDeviceOperation: Encountered a build number "" that is incompatible with DVTBuildVersion.
+2026-06-10 20:12:20.223 xcodebuild[77280:1649887] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }
+{ platform:iOS Simulator, arch:arm64, id:69962D6F-AE7C-4D2B-A763-5A2416301AC9, OS:26.5, name:iPad (A16) }
+{ platform:iOS Simulator, arch:arm64, id:931B1E77-58FF-4329-8C2A-3F3454C22943, OS:26.5, name:iPad Air 11-inch (M4) }
+{ platform:iOS Simulator, arch:arm64, id:8F94CC26-10DC-47C4-B541-09BA2AE60FA4, OS:26.5, name:iPad Air 13-inch (M4) }
+{ platform:iOS Simulator, arch:arm64, id:D5A50B93-6A4F-4F05-B445-8F153D1A11B9, OS:26.5, name:iPad Pro 11-inch (M5) }
+{ platform:iOS Simulator, arch:arm64, id:22089C2D-EDDD-4CA1-A022-4D034A17D735, OS:26.5, name:iPad Pro 13-inch (M5) }
+{ platform:iOS Simulator, arch:arm64, id:F5EDDEF3-6E15-431E-AAEC-0B7F07D4E568, OS:26.5, name:iPad mini (A17 Pro) }
+{ platform:iOS Simulator, arch:arm64, id:D62F7A4C-7394-43C5-A825-932137191C2D, OS:26.5, name:iPhone 17 }
+{ platform:iOS Simulator, arch:arm64, id:7C457FE2-99BD-46E2-8D85-200DA854DD43, OS:26.5, name:iPhone 17 Pro }
+{ platform:iOS Simulator, arch:arm64, id:33B003BA-D9D5-4905-8A49-5EE740A42AB2, OS:26.5, name:iPhone 17 Pro Max }
+{ platform:iOS Simulator, arch:arm64, id:CE3036FE-46FA-49D6-9154-CE27F20DE600, OS:26.5, name:iPhone 17e }
+{ platform:iOS Simulator, arch:arm64, id:155886BB-9B2E-4DBA-9315-B9AD95290366, OS:26.5, name:iPhone Air }
+{ platform:macOS, arch:arm64, variant:Designed for [iPad,iPhone], id:00008112-001250883C31401E, name:My Mac }
+{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }
+{ platform:iOS, arch:arm64, id:00008120-00027CEC0260201E, name:iPhone 14 Pro }
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (1 target)
+    Target 'bugbuster_iOS' in project 'bugbuster' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/ibtool --version --output-format xml1
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --print-asset-tag-combinations --output-format xml1 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Assets.xcassets
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --version --output-format xml1
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+Build description signature: a77e4796b4e23b9e3109f2187925eea3
+Build description path: /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/XCBuildData/a77e4796b4e23b9e3109f2187925eea3.xcbuilddata
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk /Users/lorenzo/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/bugbuster.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -o /Users/lorenzo/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache
+
+LinkAssetCatalog /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Assets.xcassets (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-linkAssetCatalog --thinned /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_output/thinned --thinned-dependencies /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_dependencies_thinned --thinned-info-plist-content /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_generated_info.plist_thinned --unthinned /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_output/unthinned --unthinned-dependencies /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_dependencies_unthinned --unthinned-info-plist-content /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_generated_info.plist_unthinned --output /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.app --plist-output /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_generated_info.plist
+note: Emplaced /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.app/AppIcon76x76@2x~ipad.png (in target 'bugbuster_iOS' from project 'bugbuster')
+note: Emplaced /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.app/Assets.car (in target 'bugbuster_iOS' from project 'bugbuster')
+note: Emplaced /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.app/AppIcon60x60@2x.png (in target 'bugbuster_iOS' from project 'bugbuster')
+
+ProcessInfoPlistFile /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.app/Info.plist /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Info.plist (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-infoPlistUtility /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Info.plist -producttype com.apple.product-type.application -genpkginfo /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.app/PkgInfo -expandbuildsettings -format binary -platform iphonesimulator -additionalcontentfile /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/LaunchScreen-SBPartialInfo.plist -additionalcontentfile /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/assetcatalog_generated_info.plist -o /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.app/Info.plist
+
+SwiftDriver bugbuster_iOS normal x86_64 com.apple.xcode.tools.swift.compiler (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name BugBuster -Onone @/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.SwiftFileList -DDEBUG -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -target x86_64-apple-ios16.0-simulator -g -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -F /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -c -j8 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache -output-file-map /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/bugbuster_iOS-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/bugbuster_iOS_const_extract_protocols.json -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-generated-files.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-own-target-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-all-target-headers.hmap -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-project-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/include -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources-normal/x86_64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/x86_64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster-Swift.h -working-directory /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp -experimental-emit-module-separately -disable-cmo
+
+SwiftDriver bugbuster_iOS normal arm64 com.apple.xcode.tools.swift.compiler (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name BugBuster -Onone @/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.SwiftFileList -DDEBUG -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -target arm64-apple-ios16.0-simulator -g -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -F /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -c -j8 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache -output-file-map /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/bugbuster_iOS-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/bugbuster_iOS_const_extract_protocols.json -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-generated-files.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-own-target-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-all-target-headers.hmap -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-project-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/include -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources-normal/arm64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/arm64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster-Swift.h -working-directory /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp -experimental-emit-module-separately -disable-cmo
+
+SwiftExplicitDependencyGeneratePcm x86_64 /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/AVFAudio-DZA96LMMGR8LSUEIK4WTBEXQ6.pcm
+
+SwiftCompile normal arm64 Compiling\ ConnectionManager.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:97:25: warning: initialization of immutable value 'hostname' was never used; consider replacing with assignment to '_' or removing it
+                    let hostname = txtRecord.dictionary["model"] ?? "bugbuster-s3"
+                    ~~~~^~~~~~~~
+                    _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:150:13: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+            self.connectionState = .connecting
+            ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:161:17: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                self.connectionState = .error
+                ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:192:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.connectionState = .unauthorized
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:205:17: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                self.lastStatus = status
+                ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:205:35: warning: capture of 'status' with non-Sendable type 'DeviceStatus' in a '@Sendable' closure
+                self.lastStatus = status
+                                  ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:49:15: note: consider making struct 'DeviceStatus' conform to the 'Sendable' protocol
+public struct DeviceStatus: Codable {
+              ^
+                                   , Sendable
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:254:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.lastStatus = status
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:254:39: warning: capture of 'status' with non-Sendable type 'DeviceStatus' in a '@Sendable' closure
+                    self.lastStatus = status
+                                      ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:49:15: note: consider making struct 'DeviceStatus' conform to the 'Sendable' protocol
+public struct DeviceStatus: Codable {
+              ^
+                                   , Sendable
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:260:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.lastOverview = overview
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:260:41: warning: capture of 'overview' with non-Sendable type 'OverviewSnapshot' in a '@Sendable' closure
+                    self.lastOverview = overview
+                                        ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:144:15: note: consider making struct 'OverviewSnapshot' conform to the 'Sendable' protocol
+public struct OverviewSnapshot: Codable {
+              ^
+                                       , Sendable
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:266:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.lastSelftest = selftest
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:266:41: warning: capture of 'selftest' with non-Sendable type 'SelftestStatus' in a '@Sendable' closure
+                    self.lastSelftest = selftest
+                                        ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:167:15: note: consider making struct 'SelftestStatus' conform to the 'Sendable' protocol
+public struct SelftestStatus: Codable {
+              ^
+                                     , Sendable
+
+SwiftCompile normal arm64 Compiling\ BugBusterApp.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/BugBusterApp.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/BugBusterApp.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal arm64 Compiling\ DeviceModels.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal arm64 Compiling\ SignalPathTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:269:13: warning: initialization of immutable value 'adcX' was never used; consider replacing with assignment to '_' or removing it
+        let adcX = w * 0.155
+        ~~~~^~~~
+        _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:272:13: warning: initialization of immutable value 'outX' was never used; consider replacing with assignment to '_' or removing it
+        let outX = w * 0.52
+        ~~~~^~~~
+        _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:273:13: warning: initialization of immutable value 'efX' was never used; consider replacing with assignment to '_' or removing it
+        let efX = w * 0.63
+        ~~~~^~~
+        _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:274:13: warning: initialization of immutable value 'cnL' was never used; consider replacing with assignment to '_' or removing it
+        let cnL = w * 0.76
+        ~~~~^~~
+        _
+
+SwiftCompile normal arm64 Compiling\ OverviewTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/OverviewTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/OverviewTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ BugBuster (in target 'bugbuster_iOS' from project 'bugbuster')
+
+EmitSwiftModule normal arm64 (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal arm64 Compiling\ ScriptsTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/ScriptsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/ScriptsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal arm64 Compiling\ MainTabView.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/MainTabView.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/MainTabView.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftDriverJobDiscovery normal arm64 Compiling BugBusterApp.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal arm64 Compiling\ main.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/main.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/main.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftExplicitDependencyGeneratePcm x86_64 /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/AVFoundation-4BAHKIK1SHYN3DGXIKG09Q2C9.pcm
+
+SwiftDriverJobDiscovery normal arm64 Compiling main.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal arm64 Compiling\ DiagnosticsTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+Failed frontend command:
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend -frontend -c /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/BugBusterApp.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift -primary-file /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/MainTabView.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/OverviewTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/ScriptsTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/WebSocketREPL.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/main.swift /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/GeneratedAssetSymbols.swift -emit-dependencies-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/DiagnosticsTab.d -emit-const-values-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/DiagnosticsTab.swiftconstvalues -emit-reference-dependencies-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/DiagnosticsTab.swiftdeps -serialize-diagnostics-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/DiagnosticsTab.dia -target arm64-apple-ios16.0-simulator -module-can-import-version DeveloperToolsSupport 23.40.26 23.40.26 -module-can-import-version SwiftUI 7.5.3 7.5.3 -module-can-import-version UIKit 9126.5.5.2 9126.5.5 -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/lib/swift/host/plugins/libFoundationMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/bin/swift-plugin-server\#FoundationMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/lib/swift/host/plugins/libObservationMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/bin/swift-plugin-server\#ObservationMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/lib/swift/host/plugins/libPreviewsMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/bin/swift-plugin-server\#PreviewsMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/lib/swift/host/plugins/libSwiftMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/bin/swift-plugin-server\#SwiftMacros -load-resolved-plugin /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib\#/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/usr/bin/swift-plugin-server\#SwiftUIMacros -disable-implicit-swift-modules -Xcc -fno-implicit-modules -Xcc -fno-implicit-module-maps -explicit-swift-module-map-file /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster-dependencies-2.json -debug-module-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.swiftmodule -Xllvm -aarch64-use-tbi -enable-objc-interop -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -I /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -F /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -no-color-diagnostics -Xcc -fno-color-diagnostics -enable-testing -g -debug-info-format\=dwarf -dwarf-version\=4 -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -swift-version 5 -Onone -D DEBUG -serialize-debugging-options -const-gather-protocols-file /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/bugbuster_iOS_const_extract_protocols.json -enable-experimental-feature DebugDescriptionMacro -enable-bare-slash-regex -empty-abi-descriptor -validate-clang-modules-once -clang-build-session-file /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -working-directory -Xcc /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp -enable-anonymous-context-mangled-names -file-compilation-dir /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -Xcc -ivfsstatcache -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/swift-overrides.hmap -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-generated-files.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-own-target-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-all-target-headers.hmap -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-project-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/include -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources-normal/arm64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/arm64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources -Xcc -DDEBUG\=1 -no-auto-bridging-header-chaining -module-name BugBuster -frontend-parseable-output -disable-clang-spi -clang-target arm64-apple-ios26.5-simulator -target-sdk-version 26.5 -target-sdk-name iphonesimulator26.5 -in-process-plugin-server-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/libSwiftInProcPluginServer.dylib -o /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/DiagnosticsTab.o -index-unit-output-path /bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/DiagnosticsTab.o -index-store-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Index.noindex/DataStore -index-system-modules
+
+SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:117:77: error: type 'Font.Design?' has no member 'monospace'
+                            .font(.system(size: 14, weight: .bold, design: .monospace))
+                                                                           ~^~~~~~~~~
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:260:29: error: cannot convert value 'wifiNetworks' of type '[WifiNetworkScanItem]' to expected type 'Binding<[WifiNetworkScanItem]>', use wrapper instead
+                    ForEach(wifiNetworks) { net in
+                            ^
+                            $
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:262:48: error: cannot assign value of type 'Binding<String>' to type 'String'
+                            selectedSSID = net.ssid
+                                           ~~~~^~~~
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:262:48: error: cannot assign to property: 'ssid' is a 'let' constant
+                            selectedSSID = net.ssid
+                                           ~~~~^~~~
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:5:5: note: change 'let' to 'var' to make it mutable
+    let ssid: String
+    ^~~
+    var
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:267:55: error: cannot assign to property: 'auth' is a 'let' constant
+                                Image(systemName: net.auth != 0 ? "lock.fill" : "lock.open.fill")
+                                                  ~~~~^~~~
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:7:5: note: change 'let' to 'var' to make it mutable
+    let auth: Int
+    ^~~
+    var
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift:267:60: error: referencing operator function '!=' on 'BinaryInteger' requires that 'Binding<Int>' conform to 'BinaryInteger'
+                                Image(systemName: net.auth != 0 ? "lock.fill" : "lock.open.fill")
+                                                           ^
+Swift.BinaryInteger:1:11: note: where 'Self' = 'Binding<Int>'
+extension BinaryInteger {
+          ^
+
+SwiftDriverJobDiscovery normal arm64 Emitting module for BugBuster (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftDriver\ Compilation\ Requirements bugbuster_iOS normal arm64 com.apple.xcode.tools.swift.compiler (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name BugBuster -Onone @/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.SwiftFileList -DDEBUG -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -target arm64-apple-ios16.0-simulator -g -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -F /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -c -j8 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache -output-file-map /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/bugbuster_iOS-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/bugbuster_iOS_const_extract_protocols.json -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-generated-files.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-own-target-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-all-target-headers.hmap -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-project-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/include -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources-normal/arm64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/arm64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster-Swift.h -working-directory /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling DeviceModels.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+Copy /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/arm64-apple-ios-simulator.abi.json /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.abi.json (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.abi.json /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/arm64-apple-ios-simulator.abi.json
+
+Copy /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/Project/arm64-apple-ios-simulator.swiftsourceinfo /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.swiftsourceinfo (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster.swiftsourceinfo /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/Project/arm64-apple-ios-simulator.swiftsourceinfo
+
+SwiftDriverJobDiscovery normal arm64 Compiling ConnectionManager.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftDriverJobDiscovery normal arm64 Compiling SignalPathTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftEmitModule normal x86_64 Emitting\ module\ for\ BugBuster (in target 'bugbuster_iOS' from project 'bugbuster')
+
+EmitSwiftModule normal x86_64 (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal x86_64 Compiling\ main.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/main.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/main.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal x86_64 Compiling\ GeneratedAssetSymbols.swift /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal x86_64 Compiling\ BugBusterApp.swift,\ ConnectionManager.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/BugBusterApp.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/BugBusterApp.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:97:25: warning: initialization of immutable value 'hostname' was never used; consider replacing with assignment to '_' or removing it
+                    let hostname = txtRecord.dictionary["model"] ?? "bugbuster-s3"
+                    ~~~~^~~~~~~~
+                    _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:150:13: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+            self.connectionState = .connecting
+            ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:161:17: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                self.connectionState = .error
+                ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:192:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.connectionState = .unauthorized
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:205:17: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                self.lastStatus = status
+                ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:205:35: warning: capture of 'status' with non-Sendable type 'DeviceStatus' in a '@Sendable' closure
+                self.lastStatus = status
+                                  ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:49:15: note: consider making struct 'DeviceStatus' conform to the 'Sendable' protocol
+public struct DeviceStatus: Codable {
+              ^
+                                   , Sendable
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:254:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.lastStatus = status
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:254:39: warning: capture of 'status' with non-Sendable type 'DeviceStatus' in a '@Sendable' closure
+                    self.lastStatus = status
+                                      ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:49:15: note: consider making struct 'DeviceStatus' conform to the 'Sendable' protocol
+public struct DeviceStatus: Codable {
+              ^
+                                   , Sendable
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:260:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.lastOverview = overview
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:260:41: warning: capture of 'overview' with non-Sendable type 'OverviewSnapshot' in a '@Sendable' closure
+                    self.lastOverview = overview
+                                        ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:144:15: note: consider making struct 'OverviewSnapshot' conform to the 'Sendable' protocol
+public struct OverviewSnapshot: Codable {
+              ^
+                                       , Sendable
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:266:21: warning: capture of 'self' with non-Sendable type 'ConnectionManager' in a '@Sendable' closure
+                    self.lastSelftest = selftest
+                    ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:32:14: note: class 'ConnectionManager' does not conform to the 'Sendable' protocol
+public class ConnectionManager: ObservableObject {
+             ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/ConnectionManager.swift:266:41: warning: capture of 'selftest' with non-Sendable type 'SelftestStatus' in a '@Sendable' closure
+                    self.lastSelftest = selftest
+                                        ^
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift:167:15: note: consider making struct 'SelftestStatus' conform to the 'Sendable' protocol
+public struct SelftestStatus: Codable {
+              ^
+                                     , Sendable
+
+SwiftCompile normal x86_64 Compiling\ DeviceModels.swift,\ DiagnosticsTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Models/DeviceModels.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftDriverJobDiscovery normal x86_64 Emitting module for BugBuster (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftDriver\ Compilation\ Requirements bugbuster_iOS normal x86_64 com.apple.xcode.tools.swift.compiler (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name BugBuster -Onone @/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.SwiftFileList -DDEBUG -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk -target x86_64-apple-ios16.0-simulator -g -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -F /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator -c -j8 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/iphonesimulator26.5-23F73-6cfe768891a92b912361537c460fe42b.sdkstatcache -output-file-map /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/bugbuster_iOS-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -sdk-module-cache-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/lorenzo/Library/Developer/Xcode/DerivedData/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/bugbuster_iOS_const_extract_protocols.json -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-generated-files.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-own-target-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-all-target-headers.hmap -Xcc -iquote -Xcc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/BugBuster-project-headers.hmap -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/include -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources-normal/x86_64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/x86_64 -Xcc -I/Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster-Swift.h -working-directory /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling ScriptsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 Compiling\ SignalPathTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:269:13: warning: initialization of immutable value 'adcX' was never used; consider replacing with assignment to '_' or removing it
+        let adcX = w * 0.155
+        ~~~~^~~~
+        _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:272:13: warning: initialization of immutable value 'outX' was never used; consider replacing with assignment to '_' or removing it
+        let outX = w * 0.52
+        ~~~~^~~~
+        _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:273:13: warning: initialization of immutable value 'efX' was never used; consider replacing with assignment to '_' or removing it
+        let efX = w * 0.63
+        ~~~~^~~
+        _
+/Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/SignalPathTab.swift:274:13: warning: initialization of immutable value 'cnL' was never used; consider replacing with assignment to '_' or removing it
+        let cnL = w * 0.76
+        ~~~~^~~
+        _
+
+SwiftMergeGeneratedHeaders /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/BugBuster-Swift.h /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster-Swift.h /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster-Swift.h (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-swiftHeaderTool -arch arm64 /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/arm64/BugBuster-Swift.h -arch x86_64 /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster-Swift.h -o /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/DerivedSources/BugBuster-Swift.h
+
+SwiftDriverJobDiscovery normal x86_64 Compiling BugBusterApp.swift, ConnectionManager.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+Copy /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/x86_64-apple-ios-simulator.swiftmodule /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftmodule (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftmodule /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/x86_64-apple-ios-simulator.swiftmodule
+
+SwiftDriverJobDiscovery normal x86_64 Compiling main.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+Copy /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/x86_64-apple-ios-simulator.swiftdoc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftdoc (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftdoc /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/x86_64-apple-ios-simulator.swiftdoc
+
+Copy /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/x86_64-apple-ios-simulator.abi.json /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.abi.json (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.abi.json /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/x86_64-apple-ios-simulator.abi.json
+
+Copy /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/Project/x86_64-apple-ios-simulator.swiftsourceinfo /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftsourceinfo (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Intermediates.noindex/bugbuster.build/debug-iphonesimulator/bugbuster_iOS.build/Objects-normal/x86_64/BugBuster.swiftsourceinfo /Users/lorenzo/Library/Developer/Xcode/DerivedData/bugbuster-dzkmwlosripwrubskvclyuaiqium/Build/Products/debug-iphonesimulator/BugBuster.swiftmodule/Project/x86_64-apple-ios-simulator.swiftsourceinfo
+
+SwiftCompile normal x86_64 Compiling\ MainTabView.swift,\ OverviewTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/MainTabView.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/OverviewTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/MainTabView.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/OverviewTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftCompile normal x86_64 Compiling\ WebSocketREPL.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/WebSocketREPL.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Services/WebSocketREPL.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftDriverJobDiscovery normal x86_64 Compiling SignalPathTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 Compiling\ ScriptsTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/ScriptsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftCompile normal x86_64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/ScriptsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+    cd /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp
+    
+
+SwiftDriverJobDiscovery normal x86_64 Compiling GeneratedAssetSymbols.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftDriverJobDiscovery normal x86_64 Compiling WebSocketREPL.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+SwiftDriverJobDiscovery normal x86_64 Compiling ScriptsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+
+** BUILD FAILED **
+
+
+The following build commands failed:
+	SwiftCompile normal arm64 Compiling\ DiagnosticsTab.swift /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+	SwiftCompile normal arm64 /Users/lorenzo/Documents/Sviluppo/BugBuster/iOSApp/Sources/Views/DiagnosticsTab.swift (in target 'bugbuster_iOS' from project 'bugbuster')
+	Building project bugbuster with scheme bugbuster_iOS
+(3 failures)
