@@ -20,6 +20,8 @@
 	<string>0.1.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan QR code to connect to the BugBuster hardware device over Wi-Fi.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
@@ -40,9 +42,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>BugBuster needs to scan your local network to find and connect to your device via WiFi.</string>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>BugBuster uses Bluetooth to connect to and control your hardware.</string>
 </dict>
 </plist>

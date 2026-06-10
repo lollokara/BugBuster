@@ -22,20 +22,37 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		015BF9DC73D9026223966CC9 /* bbp.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = bbp.rs; sourceTree = "<group>"; };
+		13779F270929257AC1B73B58 /* la_store.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = la_store.rs; sourceTree = "<group>"; };
+		13A968C9764972DD118D3755 /* transport.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = transport.rs; sourceTree = "<group>"; };
 		1AE837278E0E0BE4E1CC860D /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		1CDDC1DC6CCBD76C1EE5A009 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		23610CACCA41767DA4B0936C /* i2c.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = i2c.rs; sourceTree = "<group>"; };
+		2A6E95123EAB6A7AD8169B03 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
 		2BD2FA82D3D558815A041881 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		2D4468755CE27D500808F6F8 /* la_commands.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = la_commands.rs; sourceTree = "<group>"; };
+		2D58547C78162685680DE57D /* commands.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = commands.rs; sourceTree = "<group>"; };
 		2D828D3852AF045ECA3F9044 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		3B4CF24C957412B57FBD63C1 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		3E36A75C2AB886192C02B5EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		3E890988EB26007BE46281E6 /* main.rs */ = {isa = PBXFileReference; lastKnownFileType = file; path = main.rs; sourceTree = "<group>"; };
+		41C30FC4CF2BCDD1A69D7B4F /* http_transport.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = http_transport.rs; sourceTree = "<group>"; };
+		468EED3061B10CA5E6E9AD92 /* discovery.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = discovery.rs; sourceTree = "<group>"; };
+		4E30CE5A895C5BD570E9BC0B /* tests.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = tests.rs; sourceTree = "<group>"; };
 		59D377036C43272182252021 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		62612DB3C6E1218FD195D087 /* uart.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = uart.rs; sourceTree = "<group>"; };
 		6760C845B46DA313BB491C60 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		785535B23A1E3B43FF7EFEB9 /* bugbuster.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bugbuster.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		68D5C879D146A292B5E49A9D /* la_usb.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = la_usb.rs; sourceTree = "<group>"; };
+		785535B23A1E3B43FF7EFEB9 /* BugBuster.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BugBuster.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E7FBE358A0AECB064D856A5 /* ios_utils.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = ios_utils.rs; sourceTree = "<group>"; };
 		875AACD9B934157EF7C7FCFC /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		9CE968DDA263214380554121 /* la_store_tests.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = la_store_tests.rs; sourceTree = "<group>"; };
+		A0541602DE19ADEC6BBFAC14 /* state.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = state.rs; sourceTree = "<group>"; };
+		A0E92BFAB24E6537D9146E38 /* spi.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = spi.rs; sourceTree = "<group>"; };
 		A31294FFE4A17217EF133E8A /* lib.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = lib.rs; sourceTree = "<group>"; };
+		A77B2D60C76D348CF6F6B9A6 /* connection_manager.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = connection_manager.rs; sourceTree = "<group>"; };
 		AC8D965D2B6B384B3CE326DE /* bugbuster_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = bugbuster_iOS.entitlements; sourceTree = "<group>"; };
 		AD82D67152075E63D7CA50D6 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		D71F9656D7C129593C7D606C /* la_transport.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = la_transport.rs; sourceTree = "<group>"; };
 		E58503605E52F29AEE46D77E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		EC8028B8D10D78CC833D9E14 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		F199B476CDF4840B55126C1D /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
@@ -69,6 +86,18 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		2CAD8BB271E5C333660E9C59 /* la_decoders */ = {
+			isa = PBXGroup;
+			children = (
+				23610CACCA41767DA4B0936C /* i2c.rs */,
+				2A6E95123EAB6A7AD8169B03 /* mod.rs */,
+				A0E92BFAB24E6537D9146E38 /* spi.rs */,
+				4E30CE5A895C5BD570E9BC0B /* tests.rs */,
+				62612DB3C6E1218FD195D087 /* uart.rs */,
+			);
+			path = la_decoders;
+			sourceTree = "<group>";
+		};
 		31D732DF1C1FB69946578D4A /* bugbuster_iOS */ = {
 			isa = PBXGroup;
 			children = (
@@ -78,17 +107,10 @@
 			path = bugbuster_iOS;
 			sourceTree = "<group>";
 		};
-		816F66259C93F591BD56C32D /* Externals */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Externals;
-			sourceTree = "<group>";
-		};
 		9A2F64562D3022BEF7333027 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				785535B23A1E3B43FF7EFEB9 /* bugbuster.app */,
+				785535B23A1E3B43FF7EFEB9 /* BugBuster.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -124,7 +146,6 @@
 				3E36A75C2AB886192C02B5EB /* Assets.xcassets */,
 				F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */,
 				31D732DF1C1FB69946578D4A /* bugbuster_iOS */,
-				816F66259C93F591BD56C32D /* Externals */,
 				0E66E3775F8A4DFC012D7C43 /* Sources */,
 				E830BD3E7ABA0CB6A89819BE /* src */,
 				9FA8EF5C6BE1BD36D7526D19 /* Frameworks */,
@@ -143,8 +164,21 @@
 		E830BD3E7ABA0CB6A89819BE /* src */ = {
 			isa = PBXGroup;
 			children = (
+				015BF9DC73D9026223966CC9 /* bbp.rs */,
+				2D58547C78162685680DE57D /* commands.rs */,
+				A77B2D60C76D348CF6F6B9A6 /* connection_manager.rs */,
+				468EED3061B10CA5E6E9AD92 /* discovery.rs */,
+				41C30FC4CF2BCDD1A69D7B4F /* http_transport.rs */,
+				7E7FBE358A0AECB064D856A5 /* ios_utils.rs */,
+				2D4468755CE27D500808F6F8 /* la_commands.rs */,
+				9CE968DDA263214380554121 /* la_store_tests.rs */,
+				13779F270929257AC1B73B58 /* la_store.rs */,
+				D71F9656D7C129593C7D606C /* la_transport.rs */,
+				68D5C879D146A292B5E49A9D /* la_usb.rs */,
 				A31294FFE4A17217EF133E8A /* lib.rs */,
-				3E890988EB26007BE46281E6 /* main.rs */,
+				A0541602DE19ADEC6BBFAC14 /* state.rs */,
+				13A968C9764972DD118D3755 /* transport.rs */,
+				2CAD8BB271E5C333660E9C59 /* la_decoders */,
 			);
 			name = src;
 			path = ../../src;
@@ -170,7 +204,7 @@
 			packageProductDependencies = (
 			);
 			productName = bugbuster_iOS;
-			productReference = 785535B23A1E3B43FF7EFEB9 /* bugbuster.app */;
+			productReference = 785535B23A1E3B43FF7EFEB9 /* BugBuster.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -180,7 +214,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2650;
+				LastUpgradeCheck = 1430;
 			};
 			buildConfigurationList = A6281A948F15F8FD55C92958 /* Build configuration list for PBXProject "bugbuster" */;
 			developmentRegion = en;
@@ -234,7 +268,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+			shellScript = "if [ -f \"$HOME/.cargo/env\" ]; then\n  source \"$HOME/.cargo/env\"\nfi\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -253,11 +287,13 @@
 		157F50409290441AD0722C1A /* debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = bugbuster_iOS/bugbuster_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = WA89J3K5QQ;
 				ENABLE_BITCODE = NO;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
@@ -283,7 +319,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.lorenzo.bugbuster;
-				PRODUCT_NAME = "bugbuster";
+				PRODUCT_NAME = "BugBuster";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -293,11 +329,13 @@
 		4F4703D9AB02A8F3D1CD2DF4 /* release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = bugbuster_iOS/bugbuster_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = WA89J3K5QQ;
 				ENABLE_BITCODE = NO;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
@@ -323,7 +361,7 @@
 					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.lorenzo.bugbuster;
-				PRODUCT_NAME = "bugbuster";
+				PRODUCT_NAME = "BugBuster";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -365,10 +403,8 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = WA89J3K5QQ;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -382,7 +418,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
@@ -424,10 +459,8 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = WA89J3K5QQ;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -448,7 +481,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;

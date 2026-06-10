@@ -26,6 +26,12 @@ pub fn run() {
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin({
+            #[cfg(mobile)]
+            { tauri_plugin_barcode_scanner::init() }
+            #[cfg(not(mobile))]
+            { tauri::plugin::Builder::<_, ()>::new("barcode-scanner-stub").build() }
+        })
         .manage(ConnectionManager::new())
         .manage(LaState::new())
         .invoke_handler(tauri::generate_handler![

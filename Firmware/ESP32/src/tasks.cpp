@@ -517,8 +517,10 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     uint8_t mux_dev = logical_channel;
     if (logical_channel == 2) {
         physical_ch = 3;
+        mux_dev = 3;
     } else if (logical_channel == 3) {
         physical_ch = 2;
+        mux_dev = 2;
     }
 
     if (!s_device->setChannelFunction(physical_ch, func)) {

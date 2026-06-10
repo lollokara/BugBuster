@@ -191,11 +191,24 @@ static float read_channel_d(uint8_t adc_range,
         if (!dev->readAdcResult(SELFTEST_PHYSICAL_CH, &raw)) {
             // Force physical Channel D to HIGH_IMP before releasing mutex — do not leave it
             // in VIN mode with the U23 path still closed.
-            dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
                 g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_HIGH_IMP;
                 xSemaphoreGive(g_stateMutex);
             }
+            {
+                uint8_t chMask = 0;
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    for (uint8_t logical = 0; logical < 4; logical++) {
+                        ChannelFunction f = (ChannelFunction)g_deviceState.channels[logical].function;
+                        if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP) {
+                            chMask |= (1u << tasks_logical_to_physical(logical));
+                        }
+                    }
+                    xSemaphoreGive(g_stateMutex);
+                }
+                dev->startAdcConversion(true, chMask, 0x0F);
+            }
+            dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
             if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
             return -1.0f;
         }
@@ -217,11 +230,24 @@ static float read_channel_d(uint8_t adc_range,
     // Force physical Channel D back to HIGH_IMP via direct SPI before the caller opens U23.
     // This ensures no driving function is active on HW D when the caller then
     // calls tasks_apply_channel_function (which may close U17 S3 again).
-    dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_HIGH_IMP;
         xSemaphoreGive(g_stateMutex);
     }
+    {
+        uint8_t chMask = 0;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            for (uint8_t logical = 0; logical < 4; logical++) {
+                ChannelFunction f = (ChannelFunction)g_deviceState.channels[logical].function;
+                if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP) {
+                    chMask |= (1u << tasks_logical_to_physical(logical));
+                }
+            }
+            xSemaphoreGive(g_stateMutex);
+        }
+        dev->startAdcConversion(true, chMask, 0x0F);
+    }
+    dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
 
     if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
     return voltage;

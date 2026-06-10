@@ -51,11 +51,16 @@ async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDe
     let resp = client.get(&url).send().await.ok()?;
 
     if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        // addr is the full URL (http://x.x.x.x); store just the IP for address
+        let ip = addr
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .to_string();
         return Some(DiscoveredDevice {
-            id: format!("http:{}", addr),
-            name: format!("BugBuster (WiFi: {})", addr),
+            id: addr.to_string(),
+            name: "BugBuster (WiFi)".to_string(),
             transport: "http".to_string(),
-            address: addr.to_string(),
+            address: ip,
             serial_number: None,
         });
     }
@@ -67,11 +72,15 @@ async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDe
     if json.get("spiOk").is_none() {
         return None;
     }
+    let ip = addr
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .to_string();
     Some(DiscoveredDevice {
-        id: format!("http:{}", addr),
-        name: format!("BugBuster (WiFi: {})", addr),
+        id: addr.to_string(),
+        name: "BugBuster (WiFi)".to_string(),
         transport: "http".to_string(),
-        address: addr.to_string(),
+        address: ip,
         serial_number: None,
     })
 }

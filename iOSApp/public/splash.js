@@ -6,8 +6,13 @@ let group;
 let scale = 0;
 let targetX = 0;
 let currentX = 0;
+let targetY = 0;
+let currentY = 0;
+let targetScale = 1.0;
+let currentScale = 0;
 let isScanCompleted = false;
 let isDestroyed = false;
+let isPaused = false;
 
 // Cursor tracking and gyroscopic tilt variables
 let mouseX = 0;
@@ -138,10 +143,17 @@ window.initSplash = function() {
     }
     
     isDestroyed = false;
-    scale = 0;
+    currentScale = 0;
+    targetScale = 1.0;
     targetX = 0;
     currentX = 0;
+    targetY = 0;
+    currentY = 0;
     isScanCompleted = false;
+    isPaused = false;
+    
+    const width = canvas.clientWidth || window.innerWidth;
+    const height = canvas.clientHeight || window.innerHeight;
     
     // Create WebGLRenderer with alpha for transparency over the particle background
     renderer = new THREE.WebGLRenderer({
@@ -150,7 +162,7 @@ window.initSplash = function() {
         alpha: true
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(width, height, false);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     if (THREE.SRGBColorSpace !== undefined) {
@@ -163,14 +175,14 @@ window.initSplash = function() {
     scene = new THREE.Scene();
     
     // Create Camera
-    camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 10000);
+    camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 10000);
     camera.position.set(0, 4, 12);
     
     // Add camera to scene so its children are rendered
     scene.add(camera);
     
     // Create cursor tracking point light (cool white)
-    cursorLight = new THREE.PointLight(0xf1f5f9, 1.2, 0, 2);
+    cursorLight = new THREE.PointLight(0xf1f5f9, 0.1, 0, 2);
     cursorLight.position.set(0, 0, -0.05); // offset slightly in front of camera lens
     camera.add(cursorLight);
     
@@ -191,12 +203,12 @@ window.initSplash = function() {
     };
     window.addEventListener('mousemove', mouseMoveListener);
     
-    // Hemisphere light for natural ambient/ground lighting - calibrated for sRGB contrast
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x0f172a, 0.12);
+    // Hemisphere light with cool blue sky tint and very low intensity to prevent wash out
+    const hemiLight = new THREE.HemisphereLight(0x93c5fd, 0x080d1a, 0.05);
     scene.add(hemiLight);
     
-    // Main white key light from top-right-front - calibrated to prevent wash out
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    // Main white key light - soft to prevent wash out
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.1);
     keyLight.position.set(150, 250, 100);
     scene.add(keyLight);
     
@@ -206,17 +218,17 @@ window.initSplash = function() {
     scene.add(fillLight);
 
     // Rim light from behind to pop edges
-    const rimLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.15);
     rimLight.position.set(0, 150, -200);
     scene.add(rimLight);
     
     // Theme accent colored lights from front-left and front-right for spectacular metallic specular highlights
     // grazing angles used to highlight pins and components
-    const accentLight1 = new THREE.DirectionalLight(0x00f0ff, 1.8); // neon cyan
+    const accentLight1 = new THREE.DirectionalLight(0x00f0ff, 0.8); // neon cyan
     accentLight1.position.set(-15, 3, 10);
     scene.add(accentLight1);
 
-    const accentLight2 = new THREE.DirectionalLight(0x0044ff, 1.4); // neon blue (removed pink to fix reddish tint)
+    const accentLight2 = new THREE.DirectionalLight(0x0044ff, 0.6); // neon blue (removed pink to fix reddish tint)
     accentLight2.position.set(15, 3, 10);
     scene.add(accentLight2);
     
@@ -307,11 +319,11 @@ window.initSplash = function() {
                         // 2. Detect Gold / Copper pins (gold/yellow dominant in sRGB space)
                         else if (sr > 0.45 && sg > 0.35 && sb < 0.65 && sr > sb * 1.3 && sg > sb * 1.1) {
                             // High-end gold material (lower metalness to render diffuse color in dark environment)
-                            mat.roughness = 0.15;
+                            mat.roughness = 0.50;
                             mat.metalness = 0.40;
                             mat.color.setHex(0xe5a93b); 
                             if (mat.clearcoat !== undefined) {
-                                mat.clearcoat = 1.0;
+                                mat.clearcoat = 0.0;
                                 mat.clearcoatRoughness = 0.05;
                             }
                             mat.needsUpdate = true;
@@ -319,10 +331,10 @@ window.initSplash = function() {
                         // 3. Detect Silver / Solder / Metal contacts (neutral grey and bright in sRGB space)
                         else if (Math.abs(sr - sg) < 0.08 && Math.abs(sg - sb) < 0.08 && sr > 0.35) {
                             // Solder/silver metal (lower metalness to render diffuse light)
-                            mat.roughness = 0.20;
+                            mat.roughness = 0.60;
                             mat.metalness = 0.30;
                             if (mat.clearcoat !== undefined) {
-                                mat.clearcoat = 0.5;
+                                mat.clearcoat = 0.0;
                                 mat.clearcoatRoughness = 0.10;
                             }
                             mat.needsUpdate = true;
@@ -330,7 +342,7 @@ window.initSplash = function() {
                         // 4. Detect Black / Dark Grey component bodies
                         else if (sr < 0.32 && sg < 0.32 && sb < 0.32) {
                             // Dark matte look for ICs, plastics, and sockets
-                            mat.roughness = 0.70;
+                            mat.roughness = 0.90;
                             mat.metalness = 0.05;
                             // Make it slightly darker for better contrast
                             mat.color.multiplyScalar(0.6);
@@ -338,8 +350,8 @@ window.initSplash = function() {
                         }
                         // 5. General defaults for other components (LEDs, blue connectors, silkscreens)
                         else {
-                            mat.roughness = 0.4;
-                            mat.metalness = 0.1;
+                            mat.roughness = 0.8;
+                            mat.metalness = 0.0;
                         }
                     }
                 });
@@ -406,7 +418,7 @@ window.initSplash = function() {
         // Position camera to fit the model occupying ~40% of screen height
         const fovRad = camera.fov * (Math.PI / 180);
         let cameraZ = Math.abs(maxDim / 2 / Math.tan(fovRad / 2));
-        cameraZ = cameraZ / 0.40; // Aim for ~40% window height coverage
+        cameraZ = cameraZ / 0.65; // Aim for ~65% window height coverage (bigger initial size)
         
         console.log('[splash.js] maxDim:', maxDim, 'cameraZ:', cameraZ, 'window size:', window.innerWidth, window.innerHeight);
         
@@ -439,26 +451,23 @@ window.initSplash = function() {
 function animate() {
     if (isDestroyed) return;
     
-    // Zoom in animation (scale from 0 to 1)
-    scale += (1.0 - scale) * 0.04;
-    group.scale.set(scale, scale, scale);
+    if (isPaused) {
+        // Pause heavy rendering when the 3D canvas is hidden
+        animationFrameId = requestAnimationFrame(animate);
+        return;
+    }
+    
+    // Smooth scale and position animation
+    currentScale += (targetScale - currentScale) * 0.05;
+    group.scale.set(currentScale, currentScale, currentScale);
+    
+    // Smooth X/Y position translation
+    currentX += (targetX - currentX) * 0.05;
+    currentY += (targetY - currentY) * 0.05;
+    group.position.set(currentX, currentY, 0);
     
     // Rotate group
     group.rotation.y += 0.005;
-    
-    // Gyroscopic tilt (3D Parallax) towards mouse cursor - increased 3x
-    const targetTiltX = mouseY * 0.18; // 3x increased: max ~10 degrees
-    const targetTiltZ = -mouseX * 0.18;
-    tiltX += (targetTiltX - tiltX) * 0.05;
-    tiltZ += (targetTiltZ - tiltZ) * 0.05;
-    
-    // Combine Y rotation, X/Z wobble, and mouse-controlled gyroscopic tilt
-    group.rotation.x = Math.sin(Date.now() * 0.0008) * 0.05 + tiltX;
-    group.rotation.z = Math.cos(Date.now() * 0.0006) * 0.03 + tiltZ;
-    
-    // Smooth X position translation (shift left when scan done)
-    currentX += (targetX - currentX) * 0.05;
-    group.position.x = currentX;
     
     // Smoothly interpolate mouse coordinates for dynamic lighting
     mouseX += (targetMouseX - mouseX) * 0.08;
@@ -543,12 +552,13 @@ function animate() {
 function updateCameraAndPositions() {
     if (!renderer || !camera) return;
     
-    const width = window.innerWidth;
-    const height = window.innerHeight;
+    const canvas = renderer.domElement;
+    const width = canvas.clientWidth || window.innerWidth;
+    const height = canvas.clientHeight || window.innerHeight;
     
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
-    renderer.setSize(width, height);
+    renderer.setSize(width, height, false);
     
     // Calculate visible width at camera's distance to target (0,0,0)
     const vFOV = camera.fov * Math.PI / 180;
@@ -556,9 +566,13 @@ function updateCameraAndPositions() {
     const visibleWidth = visibleHeight * camera.aspect;
     
     if (isScanCompleted) {
-        targetX = -visibleWidth / 4.0; // Shift to the center of the left half
+        targetY = visibleHeight / 4.0; // Move up
+        targetScale = 0.6;             // Make smaller
+        targetX = 0;                   // Keep centered horizontally
     } else {
-        targetX = 0; // Centered
+        targetY = 0;                   // Centered vertically
+        targetScale = 1.0;             // Full size
+        targetX = 0;                   // Centered horizontally
     }
 }
 
@@ -566,7 +580,12 @@ window.addEventListener('resize', updateCameraAndPositions);
 
 window.updateScanStatus = function(completed) {
     isScanCompleted = completed;
-    updateCameraAndPositions();
+    isPaused = completed; // Pause rendering loop when hidden
+    
+    // Let the DOM reflow first so clientWidth/Height are updated
+    setTimeout(() => {
+        updateCameraAndPositions();
+    }, 50);
 };
 
 window.destroySplash = function() {

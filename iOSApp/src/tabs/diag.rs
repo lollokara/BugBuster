@@ -196,7 +196,6 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
-            <div class="tab-desc">"Internal diagnostic ADC channels. Select what to measure per slot: die temperature, supply voltages (DVCC, AVCC, AVDD), or sense voltages. Useful for verifying power rail health."</div>
             // Top row: Temp + Status LEDs
             <div class="diag-top">
                 // Temperature
@@ -785,7 +784,7 @@ fn FirmwareSection() -> impl IntoView {
 
     view! {
         <div>
-            <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
+            <div class="channel-grid">
                 // Firmware Info card
                 <div class="alert-panel">
                     <div class="alert-panel-header">
@@ -845,8 +844,8 @@ fn FirmwareSection() -> impl IntoView {
                                 view! {
                                     <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px; background: rgba(0,0,0,0.15); border-radius: 6px">
                                         // ESP32 row
-                                        <div style="display: flex; align-items: center; gap: 8px">
-                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
+                                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap">
+                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap;">
                                                 <input type="checkbox"
                                                     prop:checked=move || update_esp32.get()
                                                     on:change=move |ev| update_esp32.set(event_target_checked(&ev))
@@ -855,11 +854,11 @@ fn FirmwareSection() -> impl IntoView {
                                                 "ESP32 Mainboard"
                                             </label>
                                             {if esp_releases.is_empty() {
-                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1">"No releases available"</span> }.into_any()
+                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1; text-align: right">"No releases available"</span> }.into_any()
                                             } else {
                                                 view! {
                                                     <select class="dropdown"
-                                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
+                                                        style="flex: 1; min-width: 140px; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
                                                         prop:value=move || selected_esp32_tag.get()
                                                         on:change=move |ev| selected_esp32_tag.set(event_target_value(&ev))
                                                     >
@@ -871,14 +870,15 @@ fn FirmwareSection() -> impl IntoView {
                                                                 format!("{} (v{})", tag, r.esp32_version)
                                                             };
                                                             view! { <option value=tag>{label}</option> }
-                                                        }).collect::<Vec<_>>()}
+                                                        }).collect::<Vec<_>>()
+                                                        }
                                                     </select>
                                                 }.into_any()
                                             }}
                                         </div>
                                         // RP2040 row
-                                        <div style="display: flex; align-items: center; gap: 8px">
-                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
+                                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap">
+                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap;">
                                                 <input type="checkbox"
                                                     prop:checked=move || update_rp2040.get()
                                                     on:change=move |ev| update_rp2040.set(event_target_checked(&ev))
@@ -887,11 +887,11 @@ fn FirmwareSection() -> impl IntoView {
                                                 "RP2040 HAT"
                                             </label>
                                             {if rp_releases.is_empty() {
-                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1">"No releases available"</span> }.into_any()
+                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1; text-align: right">"No releases available"</span> }.into_any()
                                             } else {
                                                 view! {
                                                     <select class="dropdown"
-                                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
+                                                        style="flex: 1; min-width: 140px; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
                                                         prop:value=move || selected_rp2040_tag.get()
                                                         on:change=move |ev| selected_rp2040_tag.set(event_target_value(&ev))
                                                     >
@@ -903,7 +903,8 @@ fn FirmwareSection() -> impl IntoView {
                                                                 format!("{} (v{})", tag, r.rp2040_version)
                                                             };
                                                             view! { <option value=tag>{label}</option> }
-                                                        }).collect::<Vec<_>>()}
+                                                        }).collect::<Vec<_>>()
+                                                        }
                                                     </select>
                                                 }.into_any()
                                             }}
@@ -1211,7 +1212,7 @@ fn WifiSection() -> impl IntoView {
     };
 
     view! {
-        <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
+        <div class="channel-grid">
             // AP Mode card
             <div class="card">
                 <div class="card-header"><span>"Access Point"</span></div>
@@ -1267,56 +1268,60 @@ fn WifiSection() -> impl IntoView {
         <div class="card" style="margin-top: 0.5rem">
             <div class="card-header"><span>"Connect to Network"</span></div>
             <div class="card-body">
-                <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap">
-                    <button class="btn btn-sm btn-primary"
-                        disabled=move || scanning.get()
-                        on:click=do_scan
-                        style="white-space: nowrap"
-                    >{move || if scanning.get() { "Scanning..." } else { "Scan" }}</button>
-                    <select class="input"
-                        style="flex: 1; min-width: 160px; max-width: none"
-                        prop:value=move || connect_ssid.get()
-                        on:change=move |e| connect_ssid.set(event_target_value(&e))
-                    >
-                        <option value="" disabled=true selected=move || connect_ssid.get().is_empty()>"Select network..."</option>
-                        {move || {
-                            scan_results.get().into_iter().map(|n| {
-                                let label = format!("{} ({} dBm)", n.ssid, n.rssi);
-                                let ssid = n.ssid.clone();
-                                view! { <option value=ssid>{label}</option> }
-                            }).collect::<Vec<_>>()
-                        }}
-                    </select>
-                    <input type="password" class="input" placeholder="Password"
-                        style="flex: 1; min-width: 120px"
-                        prop:value=move || connect_pass.get()
-                        on:input=move |e| connect_pass.set(event_target_value(&e))
-                    />
-                    <button class="btn btn-sm" style="background: rgba(16,185,129,0.7); border-color: rgba(16,185,129,0.3)"
-                        on:click=move |_| {
-                            let ssid = connect_ssid.get();
-                            let pass = connect_pass.get();
-                            if ssid.is_empty() {
-                                connect_status.set("Select a network first".to_string());
-                                return;
-                            }
-                            connect_status.set("Connecting...".to_string());
-                            leptos::task::spawn_local(async move {
-                                #[derive(serde::Serialize)]
-                                struct Args { ssid: String, password: String }
-                                let args = serde_wasm_bindgen::to_value(
-                                    &Args { ssid: ssid.clone(), password: pass }
-                                ).unwrap();
-                                let result = try_invoke("wifi_connect", args).await;
-                                let ok: bool = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok()).unwrap_or(false);
-                                if ok {
-                                    connect_status.set(format!("Connected to {}", ssid));
-                                } else {
-                                    connect_status.set(format!("Failed to connect to {}", ssid));
+                <div style="display: flex; flex-direction: column; gap: 10px">
+                    <div style="display: flex; gap: 8px">
+                        <button class="btn btn-sm btn-primary"
+                            disabled=move || scanning.get()
+                            on:click=do_scan
+                            style="flex: 0 0 auto; white-space: nowrap; height: 38px"
+                        >{move || if scanning.get() { "Scanning..." } else { "Scan" }}</button>
+                        <select class="input"
+                            style="flex: 1; min-width: 0; height: 38px"
+                            prop:value=move || connect_ssid.get()
+                            on:change=move |e| connect_ssid.set(event_target_value(&e))
+                        >
+                            <option value="" disabled=true selected=move || connect_ssid.get().is_empty()>"Select network..."</option>
+                            {move || {
+                                scan_results.get().into_iter().map(|n| {
+                                    let label = format!("{} ({} dBm)", n.ssid, n.rssi);
+                                    let ssid = n.ssid.clone();
+                                    view! { <option value=ssid>{label}</option> }
+                                }).collect::<Vec<_>>()
+                            }}
+                        </select>
+                    </div>
+                    <div style="display: flex; gap: 8px">
+                        <input type="password" class="input" placeholder="Password"
+                            style="flex: 1; min-width: 0; height: 38px"
+                            prop:value=move || connect_pass.get()
+                            on:input=move |e| connect_pass.set(event_target_value(&e))
+                        />
+                        <button class="btn btn-sm" style="flex: 0 0 auto; background: rgba(16,185,129,0.7); border-color: rgba(16,185,129,0.3); height: 38px"
+                            on:click=move |_| {
+                                let ssid = connect_ssid.get();
+                                let pass = connect_pass.get();
+                                if ssid.is_empty() {
+                                    connect_status.set("Select a network first".to_string());
+                                    return;
                                 }
-                            });
-                        }
-                    >"Connect"</button>
+                                connect_status.set("Connecting...".to_string());
+                                leptos::task::spawn_local(async move {
+                                    #[derive(serde::Serialize)]
+                                    struct Args { ssid: String, password: String }
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &Args { ssid: ssid.clone(), password: pass }
+                                    ).unwrap();
+                                    let result = try_invoke("wifi_connect", args).await;
+                                    let ok: bool = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok()).unwrap_or(false);
+                                    if ok {
+                                        connect_status.set(format!("Connected to {}", ssid));
+                                    } else {
+                                        connect_status.set(format!("Failed to connect to {}", ssid));
+                                    }
+                                });
+                            }
+                        >"Connect"</button>
+                    </div>
                 </div>
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 0.5rem; gap: 0.5rem">
                     <div class="text-xs" style=move || {

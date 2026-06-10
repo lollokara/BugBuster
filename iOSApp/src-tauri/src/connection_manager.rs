@@ -63,7 +63,11 @@ impl ConnectionManager {
     pub async fn connect(&self, device_id: &str, app: &AppHandle) -> Result<()> {
         self.disconnect(app).await?;
 
-        if device_id.starts_with("http:") {
+        // device_id is the full URL: http://x.x.x.x
+        if device_id.starts_with("http://") || device_id.starts_with("https://") {
+            self.connect_http(device_id, app).await
+        } else if device_id.starts_with("http:") {
+            // Legacy format: http:http://... — strip the spurious prefix
             let base_url = &device_id[5..];
             self.connect_http(base_url, app).await
         } else {
@@ -93,7 +97,16 @@ impl ConnectionManager {
             );
         }
 
-        let admin_token = self.get_token(&mac, app);
+        // Try to find token: first by MAC, then by IP (for QR-scanned tokens saved by IP)
+        let ip = base_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .unwrap_or("");
+        let admin_token = self.get_token(&mac, app)
+            .or_else(|| self.get_token(ip, app));
+
         if admin_token.is_none() {
             let _ = app.emit(
                 "pairing-required",
@@ -265,7 +278,7 @@ impl ConnectionManager {
 
         tokio::spawn(async move {
             let mut consecutive_failures: u32 = 0;
-            const MAX_RETRIES: u32 = 3;
+            const MAX_RETRIES: u32 = 50;
             const MAX_RETRIES_OTA: u32 = 300;
 
             loop {

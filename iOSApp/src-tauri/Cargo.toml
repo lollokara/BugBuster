@@ -22,6 +22,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
+tauri-plugin-barcode-scanner = "2"
+
 env_logger = "0.11"
 log = "0.4"
 sha2 = "0.10"

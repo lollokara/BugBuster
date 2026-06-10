@@ -135,6 +135,14 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         spawn_local(async move {
             if let Some(st) = fetch_idac_status().await {
                 if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    for (i, ch) in st.channels.iter().take(3).enumerate() {
+                        if !dirty[i].get_untracked() {
+                            slider_vals[i].set(ch.target_v as f64);
+                        }
+                        if !code_dirty[i].get_untracked() {
+                            code_vals[i].set(ch.code as i32);
+                        }
+                    }
                     set_idac.set(st);
                 }
             }
@@ -375,9 +383,6 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             let color = ch_colors[i];
                             let v_fb  = ch_vfb[i];
                             let r_fb  = ch_rint / (ch.midpoint_v / v_fb - 1.0);
-
-                            if !dirty[i].get()      { slider_vals[i].set(ch.target_v as f64); }
-                            if !code_dirty[i].get() { code_vals[i].set(ch.code as i32); }
 
                             let has_cal     = ch.calibrated || ch.cal_points.len() >= 2;
                             let disp_code   = if code_dirty[i].get() { code_vals[i].get() as i8 } else { ch.code };
