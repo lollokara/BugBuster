@@ -149,6 +149,10 @@ pub fn run() {
             commands::usbpd_select_pdo,
             // File Dialog
             commands::pick_save_file,
+            commands::pick_png_save_file,
+            commands::pick_json_save_file,
+            commands::save_scope_png,
+            commands::write_text_file,
             // Recording (BBSC binary + CSV legacy)
             commands::start_recording,
             commands::stop_recording,

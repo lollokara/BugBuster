@@ -43,7 +43,13 @@ export function Repl() {
   const wsRef = useRef<WebSocket | null>(null);
   const inputDisposable = useRef<IDisposable | null>(null);
   const [status, setStatus] = useState<ConnStatus>("disconnected");
+  const statusRef = useRef<ConnStatus>("disconnected");
   const [errorMsg, setErrorMsg] = useState<string>("");
+
+  const updateStatus = (s: ConnStatus) => {
+    statusRef.current = s;
+    setStatus(s);
+  };
 
   // -------------------------------------------------------------------------
   // Mount terminal (once)
@@ -80,12 +86,17 @@ export function Repl() {
 
     termInstance.current = term;
 
+    let lastCols = -1;
+    let lastRows = -1;
     const resizeTerminal = () => {
       const el = termRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
       const cols = Math.max(24, Math.floor(rect.width / 8));
       const rows = Math.max(4, Math.floor(rect.height / 18));
+      if (cols === lastCols && rows === lastRows) return;
+      lastCols = cols;
+      lastRows = rows;
       try {
         term.resize(cols, rows);
         term.scrollToBottom();
@@ -121,7 +132,7 @@ export function Repl() {
       throw new PairingRequiredError();
     }
 
-    setStatus("connecting");
+    updateStatus("connecting");
     setErrorMsg("");
     termInstance.current?.writeln("\r\n\x1b[90mConnecting…\x1b[0m");
 
@@ -131,12 +142,13 @@ export function Repl() {
     ws.onopen = () => {
       // First frame = auth token.
       ws.send(token);
-      setStatus("auth");
+      updateStatus("auth");
     };
 
     ws.onmessage = (ev) => {
-      // Once the server echoes the welcome banner the session is live.
-      if (status !== "connected") setStatus("connected");
+      // Use statusRef (not stale closure `status`) to avoid triggering a
+      // re-render on every received message once already connected.
+      if (statusRef.current !== "connected") updateStatus("connected");
       if (termInstance.current) {
         termInstance.current.write(
           typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data),
@@ -153,21 +165,21 @@ export function Repl() {
       wsRef.current = null;
       const code = ev.code;
       if (code === 4001) {
-        setStatus("error");
+        updateStatus("error");
         setErrorMsg("Auth failed (4001) — check pairing token.");
         termInstance.current?.writeln("\r\n\x1b[31mAuth rejected (4001). Re-pair and retry.\x1b[0m");
       } else if (code === 4002) {
-        setStatus("error");
+        updateStatus("error");
         setErrorMsg("Session in use (4002) — another client is connected.");
         termInstance.current?.writeln("\r\n\x1b[33mSession in use (4002). Disconnect the other client first.\x1b[0m");
       } else {
-        setStatus("disconnected");
+        updateStatus("disconnected");
         termInstance.current?.writeln("\r\n\x1b[90mDisconnected.\x1b[0m");
       }
     };
 
     ws.onerror = () => {
-      setStatus("error");
+      updateStatus("error");
       setErrorMsg("WebSocket error — check device connectivity.");
       termInstance.current?.writeln("\r\n\x1b[31mConnection error.\x1b[0m");
     };
@@ -184,10 +196,10 @@ export function Repl() {
   const disconnect = () => {
     const ws = wsRef.current;
     if (!ws) {
-      setStatus("disconnected");
+      updateStatus("disconnected");
       return;
     }
-    setStatus("disconnecting");
+    updateStatus("disconnecting");
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
       ws.close(1000, "client disconnect");
     }
@@ -277,10 +289,11 @@ export function Repl() {
         </div>
       </div>
 
-      {/* xterm.js terminal */}
+      {/* xterm.js terminal — explicit height prevents ResizeObserver loop */}
       <div
         class="script-repl-terminal"
         ref={termRef}
+        style={{ flex: 1, minHeight: "200px", overflow: "hidden" }}
       />
     </div>
   );

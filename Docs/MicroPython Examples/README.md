@@ -275,10 +275,28 @@ import bb_helpers
 bb_helpers.settle(100)
 
 # Ramp DAC output with automatic readback
+# Sets FUNC_VOUT, steps from lo to hi V, reads ADC at each step, restores FUNC_HIGH_IMP.
 results = bb_helpers.dac_ramp(channel=0, lo=0.0, hi=5.0, step=1.0, settle_ms=50)
 for v, readback in results:
     print('set=%.2f  read=%.5f' % (v, readback))
+
+# Sweep through an explicit voltage list
+# Same FUNC_VOUT / FUNC_HIGH_IMP lifecycle as dac_ramp.
+results = bb_helpers.channel_sweep(channel=0, voltages=[0.0, 1.0, 2.5, 5.0], settle_ms=100)
+for v, readback in results:
+    print('set=%.2f  read=%.5f' % (v, readback))
+
+# Sweep without readback (faster, returns target voltages only)
+bb_helpers.channel_sweep(0, [0.0, 2.5, 5.0], readback=False)
 ```
+
+**`bb_helpers` API:**
+
+| Function | Signature | Returns |
+|---|---|---|
+| `settle` | `settle(ms)` | None |
+| `dac_ramp` | `dac_ramp(channel, lo, hi, step, settle_ms=50)` | `list[(v, readback)]` |
+| `channel_sweep` | `channel_sweep(channel, voltages, settle_ms=100, readback=True)` | `list[(v, readback)]` or `list[v]` |
 
 #### `bb_devices`
 

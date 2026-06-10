@@ -271,17 +271,31 @@ function GpioCard() {
           const input = !!p.input;
           const pulldown = !!p.pulldown;
           return (
-            <div class="dio-cell" key={idx}>
-              <Led state={input ? "on" : "off"} />
-              <span class="mono">IO {gpio + 1}</span>
-              <select class="input" value={String(mode)} onChange={(e) => setConfig(gpio, parseInt((e.currentTarget as HTMLSelectElement).value, 10), pulldown)}>
-                <option value="0">HIGH_IMP</option>
-                <option value="1">OUTPUT</option>
-                <option value="2">INPUT</option>
-              </select>
-              <button class={"pill" + (output ? " active" : "")} onClick={() => setOutput(gpio, !output)}>
-                {output ? "HIGH" : "LOW"}
-              </button>
+            <div class="dio-cell" key={idx} style={{ flexDirection: "column", alignItems: "stretch", gap: "4px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <Led state={input ? "on" : "off"} />
+                <span class="mono" style={{ fontWeight: 600 }}>IO {gpio + 1}</span>
+                <button
+                  class={"pill" + (output ? " active" : "")}
+                  style={{ marginLeft: "auto", minWidth: "44px" }}
+                  disabled={mode !== 1}
+                  onClick={() => setOutput(gpio, !output)}
+                >
+                  {output ? "HIGH" : "LOW"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: "3px" }}>
+                {([{v: 0, l: "Hi-Z"}, {v: 1, l: "Out"}, {v: 2, l: "In"}] as const).map(opt => (
+                  <button
+                    key={opt.v}
+                    class={"pill" + (mode === opt.v ? " active" : "")}
+                    style={{ flex: 1, padding: "2px 0", fontSize: "0.7rem" }}
+                    onClick={() => setConfig(gpio, opt.v, pulldown)}
+                  >
+                    {opt.l}
+                  </button>
+                ))}
+              </div>
             </div>
           );
         })}

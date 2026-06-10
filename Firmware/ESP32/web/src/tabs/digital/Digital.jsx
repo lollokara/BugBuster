@@ -1,0 +1,287 @@
+// =============================================================================
+// Digital tab — DIN/DOUT/GPIO/DIO/IOexp control parity
+// =============================================================================
+import { useEffect, useState } from "preact/hooks";
+import { GlassCard } from "../../components/GlassCard";
+import { Led } from "../../components/Led";
+import { IoOwnerBanner } from "../../components/IoOwnerBanner";
+import { api, PairingRequiredError } from "../../api/client";
+import { useIoLease } from "../../api/io_lease";
+import { deviceMac, deviceStatus } from "../../state/signals";
+import { DIN_DEBOUNCE_OPTIONS, DO_MODE_OPTIONS, } from "../../config/options";
+const CH_NAMES = ["A", "B", "C", "D"];
+function useInterval(fn, ms) {
+    const [value, setValue] = useState(null);
+    useEffect(() => {
+        let alive = true;
+        const tick = async () => {
+            if (!alive)
+                return;
+            try {
+                const r = await fn();
+                if (alive)
+                    setValue(r);
+            }
+            catch {
+                /* ignore */
+            }
+            if (alive)
+                setTimeout(tick, ms);
+        };
+        tick();
+        return () => {
+            alive = false;
+        };
+    }, []);
+    return value;
+}
+function DinDoutCard() {
+    const status = deviceStatus.value;
+    const mac = deviceMac.value;
+    const channels = Array.isArray(status?.channels) ? status.channels : [];
+    const [dinCfg, setDinCfg] = useState(Array.from({ length: 4 }, () => ({ thresh: 64, debounce: 0, ocDet: false, scDet: false })));
+    const [doCfg, setDoCfg] = useState(Array.from({ length: 4 }, () => ({ mode: 0, srcSelGpio: false, t1: 0, t2: 0 })));
+    const pushDin = async (ch) => {
+        if (!mac)
+            return;
+        try {
+            await api.channel.setDinConfig(mac, ch, dinCfg[ch]);
+        }
+        catch (e) {
+            if (!(e instanceof PairingRequiredError))
+                console.warn("setDinConfig failed", e);
+        }
+    };
+    const pushDo = async (ch) => {
+        if (!mac)
+            return;
+        try {
+            await api.channel.setDoConfig(mac, ch, doCfg[ch]);
+        }
+        catch (e) {
+            if (!(e instanceof PairingRequiredError))
+                console.warn("setDoConfig failed", e);
+        }
+    };
+    const setDoState = async (ch, on) => {
+        if (!mac)
+            return;
+        try {
+            await api.channel.setDoState(mac, ch, on);
+        }
+        catch (e) {
+            if (!(e instanceof PairingRequiredError))
+                console.warn("setDoState failed", e);
+        }
+    };
+    return (<GlassCard title="AD74416H DIN / DOUT">
+      <div class="analog-grid">
+        {[0, 1, 2, 3].map((ch) => {
+            const c = channels[ch] ?? {};
+            const dinState = !!(c.dinState ?? c.din_state);
+            const counter = Number(c.dinCounter ?? c.din_counter ?? 0);
+            const doState = !!(c.doState ?? c.do_state ?? c.doutState ?? c.dout_state);
+            const din = dinCfg[ch];
+            const dout = doCfg[ch];
+            return (<div class="analog-item" key={ch}>
+              <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
+              <div class="kv-row">
+                <span class="uppercase-tag">DIN</span>
+                <Led state={dinState ? "on" : "off"} label={dinState ? "HIGH" : "LOW"}/>
+                <span class="mono">#{counter}</span>
+              </div>
+              <div class="kv-row">
+                <span class="uppercase-tag">DOUT</span>
+                <button class={"pill" + (doState ? " active" : "")} onClick={() => setDoState(ch, !doState)}>
+                  {doState ? "ON" : "OFF"}
+                </button>
+              </div>
+              <details>
+                <summary class="uppercase-tag">DIN Config</summary>
+                <div class="analog-row">
+                  <label>Debounce</label>
+                  <select class="input" value={String(din.debounce)} onChange={(e) => {
+                    const next = [...dinCfg];
+                    next[ch] = { ...next[ch], debounce: parseInt(e.currentTarget.value, 10) };
+                    setDinCfg(next);
+                }}>
+                    {DIN_DEBOUNCE_OPTIONS.map((opt) => (<option key={opt.code} value={String(opt.code)}>
+                        {opt.label}
+                      </option>))}
+                  </select>
+                </div>
+                <div class="analog-row">
+                  <label>Threshold</label>
+                  <input class="input" type="number" min={0} max={127} value={String(din.thresh)} onInput={(e) => {
+                    const next = [...dinCfg];
+                    next[ch] = { ...next[ch], thresh: parseInt(e.currentTarget.value || "64", 10) };
+                    setDinCfg(next);
+                }}/>
+                </div>
+                <div class="analog-row">
+                  <label>OC Detect</label>
+                  <input type="checkbox" checked={din.ocDet} onChange={(e) => {
+                    const next = [...dinCfg];
+                    next[ch] = { ...next[ch], ocDet: e.currentTarget.checked };
+                    setDinCfg(next);
+                }}/>
+                </div>
+                <div class="analog-row">
+                  <label>SC Detect</label>
+                  <input type="checkbox" checked={din.scDet} onChange={(e) => {
+                    const next = [...dinCfg];
+                    next[ch] = { ...next[ch], scDet: e.currentTarget.checked };
+                    setDinCfg(next);
+                }}/>
+                </div>
+                <button class="btn" disabled={!mac} onClick={() => pushDin(ch)}>
+                  Apply DIN
+                </button>
+              </details>
+              <details>
+                <summary class="uppercase-tag">DOUT Config</summary>
+                <div class="analog-row">
+                  <label>Mode</label>
+                  <select class="input" value={String(dout.mode)} onChange={(e) => {
+                    const next = [...doCfg];
+                    next[ch] = { ...next[ch], mode: parseInt(e.currentTarget.value, 10) };
+                    setDoCfg(next);
+                }}>
+                    {DO_MODE_OPTIONS.map((opt) => (<option key={opt.code} value={String(opt.code)}>
+                        {opt.label}
+                      </option>))}
+                  </select>
+                </div>
+                <div class="analog-row">
+                  <label>Source GPIO</label>
+                  <input type="checkbox" checked={dout.srcSelGpio} onChange={(e) => {
+                    const next = [...doCfg];
+                    next[ch] = { ...next[ch], srcSelGpio: e.currentTarget.checked };
+                    setDoCfg(next);
+                }}/>
+                </div>
+                <div class="analog-row">
+                  <label>T1</label>
+                  <input class="input" type="number" min={0} max={15} value={String(dout.t1)} onInput={(e) => {
+                    const next = [...doCfg];
+                    next[ch] = { ...next[ch], t1: parseInt(e.currentTarget.value || "0", 10) };
+                    setDoCfg(next);
+                }}/>
+                </div>
+                <div class="analog-row">
+                  <label>T2</label>
+                  <input class="input" type="number" min={0} max={255} value={String(dout.t2)} onInput={(e) => {
+                    const next = [...doCfg];
+                    next[ch] = { ...next[ch], t2: parseInt(e.currentTarget.value || "0", 10) };
+                    setDoCfg(next);
+                }}/>
+                </div>
+                <button class="btn" disabled={!mac} onClick={() => pushDo(ch)}>
+                  Apply DOUT
+                </button>
+              </details>
+            </div>);
+        })}
+      </div>
+    </GlassCard>);
+}
+function GpioCard() {
+    const mac = deviceMac.value;
+    const data = useInterval(() => api.gpio(), 1000);
+    const pins = Array.isArray(data) ? data : [];
+    const setConfig = async (gpio, mode, pulldown) => {
+        if (!mac)
+            return;
+        try {
+            await api.gpioSetConfig(mac, gpio, mode, pulldown);
+        }
+        catch (e) {
+            if (!(e instanceof PairingRequiredError))
+                console.warn("gpioSetConfig failed", e);
+        }
+    };
+    const setOutput = async (gpio, value) => {
+        if (!mac)
+            return;
+        try {
+            await api.gpioSetValue(mac, gpio, value);
+        }
+        catch (e) {
+            if (!(e instanceof PairingRequiredError))
+                console.warn("gpioSetValue failed", e);
+        }
+    };
+    return (<GlassCard title="ESP32 GPIO (12)">
+      <div class="dio-grid-compact">
+        {pins.length === 0 && <span class="text-dim">No data</span>}
+        {pins.map((p, idx) => {
+            const gpio = Number(p.id ?? idx);
+            const mode = Number(p.mode ?? 0);
+            const output = !!p.output;
+            const input = !!p.input;
+            const pulldown = !!p.pulldown;
+            return (<div class="dio-cell" key={idx} style={{ flexDirection: "column", alignItems: "stretch", gap: "4px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <Led state={input ? "on" : "off"}/>
+                <span class="mono" style={{ fontWeight: 600 }}>IO {gpio + 1}</span>
+                <button class={"pill" + (output ? " active" : "")} style={{ marginLeft: "auto", minWidth: "44px" }} disabled={mode !== 1} onClick={() => setOutput(gpio, !output)}>
+                  {output ? "HIGH" : "LOW"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: "3px" }}>
+                {[{ v: 0, l: "Hi-Z" }, { v: 1, l: "Out" }, { v: 2, l: "In" }].map(opt => (<button key={opt.v} class={"pill" + (mode === opt.v ? " active" : "")} style={{ flex: 1, padding: "2px 0", fontSize: "0.7rem" }} onClick={() => setConfig(gpio, opt.v, pulldown)}>
+                    {opt.l}
+                  </button>))}
+              </div>
+            </div>);
+        })}
+      </div>
+    </GlassCard>);
+}
+function IoExpCard() {
+    const data = useInterval(() => api.ioexp(), 1000);
+    const faultLog = useInterval(() => api.ioexp.faults(), 1500);
+    const enables = data?.enables ?? {};
+    const efuses = Array.isArray(data?.efuses) ? data.efuses : [];
+    return (<GlassCard title="PCA9535 IO Expander">
+      <div class="dio-grid-compact">
+        <div class="dio-cell">
+          <span class="uppercase-tag">VADJ1</span>
+          <Led state={enables.vadj1 ? "on" : "off"}/>
+        </div>
+        <div class="dio-cell">
+          <span class="uppercase-tag">VADJ2</span>
+          <Led state={enables.vadj2 ? "on" : "off"}/>
+        </div>
+        <div class="dio-cell">
+          <span class="uppercase-tag">15V</span>
+          <Led state={enables.analog15v ? "on" : "off"}/>
+        </div>
+        <div class="dio-cell">
+          <span class="uppercase-tag">MUX</span>
+          <Led state={enables.mux ? "on" : "off"}/>
+        </div>
+        <div class="dio-cell">
+          <span class="uppercase-tag">USB HUB</span>
+          <Led state={enables.usbHub ? "on" : "off"}/>
+        </div>
+      </div>
+      <div class="dio-grid-compact" style={{ marginTop: "8px" }}>
+        {efuses.map((e, idx) => (<div class="dio-cell" key={idx}>
+            <span class="mono">EF{e.id ?? idx + 1}</span>
+            <Led state={e.enabled ? "on" : "off"}/>
+            <Led state={e.fault ? "err" : "off"} label={e.fault ? "fault" : "ok"}/>
+          </div>))}
+      </div>
+      <pre class="debug-dump mono">{JSON.stringify(faultLog, null, 2)}</pre>
+    </GlassCard>);
+}
+export function Digital() {
+    const lease = useIoLease([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], "digital-tab");
+    return (<div class="tab-stack">
+      <IoOwnerBanner lease={lease} slots={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]}/>
+      <DinDoutCard />
+      <GpioCard />
+      <IoExpCard />
+    </div>);
+}

@@ -1776,11 +1776,15 @@ class BugBuster:
             cal_ch     = resp[off]; off += 1
             cal_pts    = resp[off]; off += 1
             cal_err,   = struct.unpack_from('<f', resp, off); off += 4
+            worker_enabled = bool(resp[off]) if len(resp) > off else False; off += 1
+            supply_monitor = bool(resp[off]) if len(resp) > off else False; off += 1
             return {
                 "boot": {"ran": boot_ran, "passed": boot_passed,
                          "vadj1_v": vadj1, "vadj2_v": vadj2, "vlogic_v": vlogic},
                 "cal":  {"status": cal_status, "channel": cal_ch,
                          "points": cal_pts, "error_mv": cal_err},
+                "worker_enabled": worker_enabled,
+                "supply_monitor_active": supply_monitor,
             }
         else:
             return self._http_get("/selftest")
@@ -2517,10 +2521,8 @@ class BugBuster:
             self._usb_cmd(CmdId.HAT_SET_POWER, payload)
             return True
         else:
-            raise NotImplementedError(
-                "hat_set_power() is not available over HTTP — firmware does not expose /api/hat/power. "
-                "Use a USB connection instead."
-            )
+            self._http_post("/hat/power", {"connector": connector, "enable": enable})
+            return True
 
     def hat_get_power(self) -> dict:
         """Get power status for both HAT connectors (enabled, current, fault)."""
@@ -2542,10 +2544,20 @@ class BugBuster:
                 result["hvpak_last_error"] = resp[off]; off += 1
             return result
         else:
-            raise NotImplementedError(
-                "hat_get_power() is not available over HTTP — firmware does not expose /api/hat/power. "
-                "Use a USB connection instead."
-            )
+            j = self._http_get("/hat/power")
+            connectors = [
+                {
+                    "enabled": j["connA"]["enabled"],
+                    "current_ma": j["connA"]["currentMa"],
+                    "fault": j["connA"]["fault"],
+                },
+                {
+                    "enabled": j["connB"]["enabled"],
+                    "current_ma": j["connB"]["currentMa"],
+                    "fault": j["connB"]["fault"],
+                },
+            ]
+            return {"connectors": connectors, "io_voltage_mv": j.get("ioVoltageMv", 0)}
 
     def hat_get_caps(self) -> dict:
         """Get HAT v2 capability metadata."""
@@ -2994,11 +3006,11 @@ class BugBuster:
             })
             return resp.get("ok", False)
 
-    def hat_set_level_shift(self, oe: bool, dir: bool) -> dict:
+    def hat_set_level_shift(self, oe: bool, direction: bool) -> dict:
         """Override output enable (oe) and direction (dir) of level shifters."""
         self._require_hat_present()
         if self._usb:
-            payload = struct.pack('<BB', int(oe), int(dir))
+            payload = struct.pack('<BB', int(oe), int(direction))
             resp = self._usb_cmd(CmdId.HAT_SET_LEVEL_SHIFT, payload)
             _require_resp_len(resp, 2, "HAT_SET_LEVEL_SHIFT")
             return {
@@ -3008,7 +3020,7 @@ class BugBuster:
         else:
             resp = self._http_post("/hat/v2/level_shift", {
                 "oe": oe,
-                "dir": dir
+                "dir": direction
             })
             return {
                 "oe": resp.get("oe", False),

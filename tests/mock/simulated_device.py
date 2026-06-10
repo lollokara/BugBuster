@@ -11,7 +11,7 @@ import threading
 from dataclasses import dataclass, field
 from bugbuster.transport.usb import DeviceError
 from bugbuster.constants import ErrorCode
-from bugbuster.protocol import BBP_PROTO_VERSION
+from bugbuster.protocol import BBP_PROTO_VERSION, ESP32_FW_VERSION
 
 PROTO_VERSION = BBP_PROTO_VERSION
 
@@ -50,9 +50,10 @@ class SimulatedDevice:
     PROTO_VERSION = PROTO_VERSION
 
     def __init__(self):
-        self.fw_version = (1, 0, 0)  # see bugbuster.protocol for BBP_PROTO_VERSION; firmware tuple not yet wired
+        self.fw_version = ESP32_FW_VERSION
         self.uptime_ms = 0
         self.hat = HatState()
+        self.hat_power = [False, False]
 
         # Channel state: 4 channels, each with mutable fields
         self.channels = [
@@ -95,8 +96,10 @@ class SimulatedDevice:
 
         # UART state (list of bridge configs)
         self.uart_config = [
-            {"uart_num": 1, "tx_pin": 17, "rx_pin": 18, "baudrate": 115200,
-             "data_bits": 8, "parity": 0, "stop_bits": 0, "enabled": False}
+            {"uart_num": 1, "tx_pin": 4, "rx_pin": 2, "baudrate": 921600,
+             "data_bits": 8, "parity": 0, "stop_bits": 0, "enabled": False},
+            {"uart_num": 2, "tx_pin": 7, "rx_pin": 6, "baudrate": 921600,
+             "data_bits": 8, "parity": 0, "stop_bits": 0, "enabled": False},
         ]
 
         # IDAC state (4 channels)

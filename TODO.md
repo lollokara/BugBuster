@@ -33,7 +33,7 @@
 
 - **3-Wire RTD Mode Support** — Expose 3-wire RTD configurations in [tasks.cpp](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/Firmware/ESP32/src/tasks.cpp#L1180) (setting `RTD_MODE_SEL=0`, `MUX=3`) and update BBP `SET_RTD_CONFIG` command parameters. Currently, it is hardcoded to 2-wire mode.
 
-- **Expose and Map HAT Power Commands over HTTP** — Implement `GET /api/hat/power` and `POST /api/hat/power` in [webserver.cpp](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/Firmware/ESP32/src/web/webserver.cpp) to query/toggle HAT rail power.
+- **Expose and Map HAT Power Commands over HTTP** — ✅ Done 2026-06-09: `GET /api/hat/power` and `POST /api/hat/power` added to `webserver.cpp` + TS client functions `hatGetPower`/`hatSetPower` added to `client.ts` + Python `hat_get_power`/`hat_set_power` HTTP transport wired + simulator routes added.
 
 - **SPIFFS OTA over WiFi and USB** — Add a first-class OTA flow for the SPIFFS partition over both transports, including upload, integrity verification, progress reporting, and final apply/reboot handling. Desktop and firmware currently cover firmware OTA, but SPIFFS still needs the same WiFi + USB path.
 
@@ -57,9 +57,6 @@
 - **macOS unsigned app — bypass Gatekeeper for distribution** — Without an Apple Developer account the app is blocked by Gatekeeper on first launch ("cannot be opened because the developer cannot be verified"). Options to investigate: (1) `xattr -cr` post-install script / DMG install helper that strips the quarantine bit; (2) ship a notarised ad-hoc-signed build using a free Apple ID + `codesign --deep --force --sign -` (ad-hoc) which satisfies Gatekeeper for local installs without a paid account; (3) document the one-time right-click → Open workaround in README; (4) evaluate distributing via Homebrew cask (users `brew install` and Homebrew handles the quarantine strip). The token-persistence bug (keychain blocked on unsigned binaries) is already fixed by switching to `tokens.json`.  
   Related files: `.github/workflows/desktop-release.yml`, `DesktopApp/README.md`
 
-- **Scope export** — PNG and JSON export paths show "not implemented yet" toasts.  
-  File: `DesktopApp/BugBuster/src/tabs/scope.rs:1405–1406`
-
 - **Scope recording semantics** — web Scope tab is Partial vs desktop: not all streaming/recording controls are mirrored over HTTP.  
   Ref: `Firmware/ESP32/web/docs/desktop-parity-matrix.md`
 
@@ -80,8 +77,7 @@
 
 ### 🟡 Partial
 
-- **Voltages standalone tab** — supply values shown via Overview/System cards, but there is no dedicated Voltages tab in the on-device web UI equivalent to the desktop tab.  
-  Ref: parity matrix row "Voltages tab dedicated panel"
+- **Voltages standalone tab** — ✅ Done 2026-06-09: new `Voltages.tsx` tab added to on-device web UI, aggregating supply rails (from overview), IDAC channels, and HAT rails (when detected). Registered as lazy tab in `App.tsx` between Signal Path and System.
 
 ### ⏳ Deferred
 
@@ -109,13 +105,7 @@
 
 *(none)*
 
-### 🟢 `SimulatedDevice` Code Quality & Enhancements
-
-- **Static `fw_version` in Simulator** — `simulated_device.py` uses static `fw_version = (1, 0, 0)` which is not derived from any project version constants.
-
-- **Expand Simulator `uart_config`** — Simulator pre-populates only a single UART bridge config; refactor to pre-populate multiple to match physical capabilities.
-
-- **Expand Simulator `hat_power`** — Refactor mock `device.hat_power` to be an array of 2 booleans representing both power connectors independently.
+*(none)*
 
 ---
 
@@ -125,8 +115,8 @@
 
 Pattern file: `.mex/patterns/overview-selftest-quicksetup-parity.md`
 
-- **Selftest worker toggle** — `workerEnabled` and `supplyMonitorActive` not yet returned by `/api/selftest`. Worker default must be OFF on fresh flash.
-- **CH-D diagnostic reservation** — CH-D overlay should follow `supplyMonitorActive`; desktop fallback for older 25-byte USB selftest payloads needed.
+- **Selftest worker toggle** — ✅ Done 2026-06-09: Python `selftest_status()` now parses `worker_enabled` + `supply_monitor_active` (23-byte payload, size fallback for older firmware). Desktop `DiagTab` now fetches worker state on mount via `fetch_selftest_status()`, shows a toggle card, and updates `supply_monitor_active` after toggling.
+- **CH-D diagnostic reservation** — ✅ Done 2026-06-09: CH-D alert cell in desktop `DiagTab` shows amber `⚡MON` badge and amber border when `supply_monitor_active` is true.
 - **Quick-setup: firmware + Python + simulator + web UI now complete** — Desktop Tauri commands (✅), ESP32 BBP handlers `0xF0–0xF4` in `cmd_wifi.cpp` (✅), HTTP routes in `webserver.cpp` (✅), `quicksetup.cpp/h` NVS store (✅), Python `client.py` `quicksetup_list/get/save/apply/delete` (✅ 2026-06-06), simulator `handlers/quicksetup.py` + HTTP routes in `http_routes.py` (✅ 2026-06-06), on-device web UI wiring in `Overview.tsx` and `QuickSetupTile.tsx` (✅ 2026-06-07).
 
 ---

@@ -23,6 +23,7 @@ const Digital = lazy(() => import("./tabs/digital/Digital").then((m) => ({ defau
 const SignalPath = lazy(() => import("./tabs/signal/SignalPath").then((m) => ({ default: m.SignalPath })));
 const System = lazy(() => import("./tabs/system/System").then((m) => ({ default: m.System })));
 const Scripts = lazy(() => import("./tabs/scripts/Scripts").then((m) => ({ default: m.Scripts })));
+const Voltages = lazy(() => import("./tabs/voltages/Voltages").then((m) => ({ default: m.Voltages })));
 
 type TabId =
   | "overview"
@@ -31,7 +32,8 @@ type TabId =
   | "digital"
   | "signal"
   | "system"
-  | "scripts";
+  | "scripts"
+  | "voltages";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -39,6 +41,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "analog", label: "Analog" },
   { id: "digital", label: "Digital" },
   { id: "signal", label: "Signal Path" },
+  { id: "voltages", label: "Voltages" },
   { id: "system", label: "System" },
   { id: "scripts", label: "Scripts" },
 ];
@@ -152,6 +155,7 @@ export function App() {
           {activeTab.value === "analog" && <Analog />}
           {activeTab.value === "digital" && <Digital />}
           {activeTab.value === "signal" && <SignalPath />}
+          {activeTab.value === "voltages" && <Voltages />}
           {activeTab.value === "system" && <System />}
           {activeTab.value === "scripts" && <Scripts />}
         </Suspense>

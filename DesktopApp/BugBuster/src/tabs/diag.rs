@@ -72,12 +72,12 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let releases: RwSignal<Vec<DesktopReleaseEntry>> = RwSignal::new(Vec::new());
     let selected_release: RwSignal<Option<usize>> = RwSignal::new(None);
     let installing_url: RwSignal<Option<String>> = RwSignal::new(None);
+    let worker_enabled = RwSignal::new(false);
+    let supply_monitor_active = RwSignal::new(false);
+    let worker_toggling = RwSignal::new(false);
 
     // Auto-check for updates on mount
     {
-        let update_checking = update_checking;
-        let update_info = update_info;
-        let update_error = update_error;
         leptos::task::spawn_local(async move {
             update_checking.set(true);
             match invoke("check_app_update", wasm_bindgen::JsValue::NULL).await {
@@ -98,6 +98,30 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             update_checking.set(false);
         });
     }
+
+    // Fetch selftest worker state on mount
+    {
+        leptos::task::spawn_local(async move {
+            if let Some(st) = fetch_selftest_status().await {
+                worker_enabled.set(st.worker_enabled);
+                supply_monitor_active.set(st.supply_monitor_active);
+            }
+        });
+    }
+
+    let on_worker_toggle = move |_| {
+        let new_val = !worker_enabled.get();
+        worker_toggling.set(true);
+        leptos::task::spawn_local(async move {
+            if let Some(confirmed) = fetch_selftest_worker_set(new_val).await {
+                worker_enabled.set(confirmed);
+                if let Some(st) = fetch_selftest_status().await {
+                    supply_monitor_active.set(st.supply_monitor_active);
+                }
+            }
+            worker_toggling.set(false);
+        });
+    };
 
     let on_check = move |_| {
         update_checking.set(true);
@@ -216,12 +240,15 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     <div class="alert-grid">
                         {ALERT_BITS.iter().map(|(bit, name, color)| {
                             let bit = *bit;
+                            let is_ch_d = *name == "CH_D";
                             let lc = led_color(color);
                             let accent = match *color { "rose" => "#ef4444", "amber" => "#f59e0b", "blue" => "#3b82f6", _ => "#10b981" };
                             view! {
                                 <div class="alert-cell"
                                     style=move || if (state.get().alert_status >> bit) & 1 != 0 {
                                         format!("border-color: {}; background: {}0a; box-shadow: inset 0 0 20px {}08, 0 0 12px {}15", accent, accent, accent, accent)
+                                    } else if is_ch_d && supply_monitor_active.get() {
+                                        "border-color: #f59e0b; background: #f59e0b0a; opacity: 0.75;".to_string()
                                     } else { String::new() }
                                 >
                                     <div class="alert-cell-dot"
@@ -234,6 +261,12 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             format!("color: {}", accent)
                                         } else { String::new() }
                                     >{*name}</span>
+                                    <span
+                                        title="Reserved for supply monitoring"
+                                        style=move || if is_ch_d && supply_monitor_active.get() {
+                                            "display:block;font-size:0.5rem;color:#f59e0b;line-height:1.2;"
+                                        } else { "display:none;" }
+                                    >"⚡MON"</span>
                                 </div>
                             }
                         }).collect::<Vec<_>>()}
@@ -293,6 +326,32 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             if count == 0 { "ALL CLEAR".to_string() } else { format!("{} ACTIVE", count) }
                         }}</span>
                     </div>
+                </div>
+            </div>
+
+            // Selftest Worker toggle
+            <div class="card" style="margin-bottom:0.75rem;">
+                <div class="card-header">
+                    <span class="card-title">"Selftest Worker"</span>
+                    <span style=move || if supply_monitor_active.get() {
+                        "font-size:0.7rem;color:#f59e0b;padding:2px 6px;border:1px solid #f59e0b44;border-radius:4px;"
+                    } else {
+                        "font-size:0.7rem;color:#6b7280;padding:2px 6px;border:1px solid #ffffff11;border-radius:4px;"
+                    }>
+                        {move || if supply_monitor_active.get() { "CH-D RESERVED" } else { "Inactive" }}
+                    </span>
+                </div>
+                <div class="card-body" style="display:flex;align-items:center;gap:1rem;">
+                    <span style="font-size:0.8rem;color:#9ca3af;">
+                        "Periodic supply-rail selftest. When active, CH-D is reserved for internal measurements."
+                    </span>
+                    <button
+                        class=move || if worker_enabled.get() { "btn btn-sm btn-primary" } else { "btn btn-sm" }
+                        disabled=move || worker_toggling.get()
+                        on:click=on_worker_toggle
+                    >
+                        {move || if worker_toggling.get() { "…" } else if worker_enabled.get() { "Disable" } else { "Enable" }}
+                    </button>
                 </div>
             </div>
 

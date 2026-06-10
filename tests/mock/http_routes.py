@@ -518,6 +518,23 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             "status": r["status"]
         }
 
+    # HAT connector power GET
+    if key == ("GET", "/hat/power"):
+        return {
+            "connA": {"enabled": device.hat_power[0], "currentMa": 0.0, "fault": False},
+            "connB": {"enabled": device.hat_power[1], "currentMa": 0.0, "fault": False},
+            "ioVoltageMv": device.hat_io_volt,
+        }
+
+    # HAT connector power SET
+    if key == ("POST", "/hat/power"):
+        connector = int(body.get("connector", 0))
+        enable = bool(body.get("enable", False))
+        if 0 <= connector <= 1:
+            device.hat_power[connector] = enable
+        conn_key = "connA" if connector == 0 else "connB"
+        return {"ok": True, "connector": connector, "enabled": device.hat_power[connector], "currentMa": 0.0, "fault": False}
+
     # HAT v2 set LED state
     if key == ("POST", "/hat/v2/led"):
         led_id = int(body.get("ledId", 0))
@@ -576,13 +593,13 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     # HAT v2 set level shift
     if key == ("POST", "/hat/v2/level_shift"):
         oe = bool(body.get("oe", False))
-        dir = bool(body.get("dir", False))
+        ls_dir = bool(body.get("dir", False))
         device.hat_level_shift["oe"] = oe
-        device.hat_level_shift["dir"] = dir
+        device.hat_level_shift["dir"] = ls_dir
         return {
             "ok": True,
             "oe": oe,
-            "dir": dir
+            "dir": ls_dir
         }
 
 

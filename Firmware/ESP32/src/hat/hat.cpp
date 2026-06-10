@@ -7,6 +7,7 @@
 // =============================================================================
 
 #include "hat.h"
+#include "tasks.h"
 #include "pca9535.h"
 #include "dio.h"
 #include "config.h"
@@ -1138,16 +1139,23 @@ void hat_update_leds(void)
     // Block 2 (LED 5): EFUSE2 + IO4–IO6.
     // Block 3 (LED 6): EFUSE3 + IO7–IO9.
     // Block 4 (LED 7): EFUSE4 + IO10–IO12.
+    //
+    // MUX device per logical IO block (matches MUX_DEVICE_BY_LOGICAL in SignalPath.tsx):
+    //   block 0 → ADGS dev 0, block 1 → ADGS dev 1, block 2 → ADGS dev 3, block 3 → ADGS dev 2
     {
         const DioState *dio = dio_get_all();
         const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
-        static const uint8_t logical_to_led[4] = { 4, 5, 6, 7 };
+        static const uint8_t logical_to_led[4]    = { 4, 5, 6, 7 };
+        static const uint8_t block_to_mux_dev[4]  = { 0, 1, 3, 2 };
         for (int j = 0; j < 4; j++) {
             bool fault  = pca && pca->efuse_flt[j];
             bool supply = pca && pca->efuse_en[j];
+            bool mux_active = (g_deviceState.muxState[block_to_mux_dev[j]] != 0);
             bool io     = (dio[3*j].mode     != DIO_MODE_DISABLED) ||
                           (dio[3*j + 1].mode != DIO_MODE_DISABLED) ||
-                          (dio[3*j + 2].mode != DIO_MODE_DISABLED);
+                          (dio[3*j + 2].mode != DIO_MODE_DISABLED) ||
+                          (g_deviceState.channels[j].function != CH_FUNC_HIGH_IMP) ||
+                          mux_active;
             uint8_t c = fault ? 1 : (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
             hat_set_led_state(logical_to_led[j], c);
         }

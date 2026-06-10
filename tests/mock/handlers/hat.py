@@ -30,7 +30,7 @@ def _ensure_hat_state(device) -> None:
             "trigger_channel": 0,
         }
     if not hasattr(device, "hat_power"):
-        device.hat_power = False
+        device.hat_power = [False, False]
     if not hasattr(device, "hat_io_volt"):
         device.hat_io_volt = 3300
     if not hasattr(device, "hvpak"):
@@ -231,8 +231,8 @@ def _hat_get_status(device):
         pins = device.hat_pins[:4] if hasattr(device, 'hat_pins') else [0, 0, 0, 0]
         buf += struct.pack('<4B', *pins)
         # 2 connectors
-        for _ in range(2):
-            buf += struct.pack('<BfB', int(device.hat_power), 0.0, 0)
+        for i in range(2):
+            buf += struct.pack('<BfB', int(device.hat_power[i]), 0.0, 0)
         # io_voltage_mv
         buf += struct.pack('<H', getattr(device, 'hat_io_volt', 3300))
         # hvpak fields
@@ -300,7 +300,8 @@ def _hat_reset(device):
 def _hat_set_power(device):
     def handler(payload: bytes) -> bytes:
         connector, enable = struct.unpack_from('<BB', payload)
-        device.hat_power = bool(enable)
+        if 0 <= connector < 2:
+            device.hat_power[connector] = bool(enable)
         return b''
     return handler
 
@@ -314,8 +315,8 @@ def _hat_set_power(device):
 def _hat_get_power(device):
     def handler(payload: bytes) -> bytes:
         buf = bytearray()
-        for _ in range(2):
-            buf += struct.pack('<BfB', int(device.hat_power), 0.0, 0)
+        for i in range(2):
+            buf += struct.pack('<BfB', int(device.hat_power[i]), 0.0, 0)
         buf += struct.pack('<H', getattr(device, 'hat_io_volt', 3300))
         hvpak = device.hvpak
         buf += struct.pack('<BBB',

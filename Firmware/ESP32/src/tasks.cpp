@@ -630,6 +630,8 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
         delay_ms(50);
         s_device->clearAllAlerts();
     }
+
+    hat_update_leds();
 }
 
 bool tasks_apply_gpio_config(uint8_t gpio, GpioSelect mode, bool pulldown)

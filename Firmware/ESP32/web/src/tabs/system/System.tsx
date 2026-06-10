@@ -5,7 +5,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { SystemHero } from "./SystemHero";
 import { BoardCard } from "./BoardCard";
-import { OtaCard } from "./OtaCard";
+import { OtaCard, GitOtaCard } from "./OtaCard";
 import { HatCard } from "./HatCard";
 import { UsbPdCard } from "./UsbPdCard";
 import { UartCard } from "./UartCard";
@@ -58,6 +58,7 @@ export function System() {
         {activeSection === "device" && (
           <>
             <BoardCard />
+            <GitOtaCard />
             <OtaCard />
           </>
         )}

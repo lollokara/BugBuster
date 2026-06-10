@@ -1886,6 +1886,52 @@ pub async fn pick_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> 
     Ok(path.map(|p| p.to_string()))
 }
 
+#[tauri::command]
+pub async fn pick_png_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = app
+        .dialog()
+        .file()
+        .set_title("Save PNG")
+        .add_filter("PNG Image", &["png"])
+        .set_file_name("bugbuster_scope.png")
+        .blocking_save_file();
+    Ok(path.map(|p| p.to_string()))
+}
+
+#[tauri::command]
+pub async fn pick_json_save_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = app
+        .dialog()
+        .file()
+        .set_title("Save JSON")
+        .add_filter("JSON File", &["json"])
+        .set_file_name("bugbuster_scope.json")
+        .blocking_save_file();
+    Ok(path.map(|p| p.to_string()))
+}
+
+#[tauri::command]
+pub fn save_scope_png(path: String, data_url: String) -> CmdResult<()> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let prefix = "data:image/png;base64,";
+    let b64 = data_url.strip_prefix(prefix).unwrap_or(&data_url);
+    let bytes = STANDARD
+        .decode(b64)
+        .map_err(|e| format!("PNG decode error: {}", e))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("Write error: {}", e))?;
+    log::info!("Scope PNG saved to {}", path);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn write_text_file(path: String, content: String) -> CmdResult<()> {
+    std::fs::write(&path, content.as_bytes()).map_err(|e| format!("Write error: {}", e))?;
+    log::info!("Text file saved to {}", path);
+    Ok(())
+}
+
 // -----------------------------------------------------------------------------
 // BBSC Binary Recording + CSV Export
 //
@@ -4037,7 +4083,7 @@ async fn run_desktop_ota_flow(
             hasher.update(&rp_data);
             let sha = format!("{:x}", hasher.finalize());
             if sha != rp2040_sha256 {
-                return Err(format!("RP2040 SHA256 verification failed"));
+                return Err("RP2040 SHA256 verification failed".to_string());
             }
         }
 
@@ -4213,7 +4259,7 @@ async fn run_desktop_ota_flow(
             hasher.update(&esp_data);
             let sha = format!("{:x}", hasher.finalize());
             if sha != esp32_sha256 {
-                return Err(format!("ESP32 SHA256 verification failed"));
+                return Err("ESP32 SHA256 verification failed".to_string());
             }
             sha
         } else {

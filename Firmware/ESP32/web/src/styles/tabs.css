@@ -163,7 +163,7 @@
 .dio-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .dio-grid-compact {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 6px;
 }
 .dio-cell {

@@ -43,6 +43,8 @@ export type {
   OtaPartition,
   OtaInfo,
   OtaUploadResult,
+  UpdateCheckResult,
+  UpdateStatus,
 } from "./types";
 
 import {
@@ -70,6 +72,8 @@ import type {
   QuickSetupApplyResult,
   OtaInfo,
   OtaUploadResult,
+  UpdateCheckResult,
+  UpdateStatus,
 } from "./types";
 
 /* ---- Typed endpoints ---- */
@@ -325,6 +329,14 @@ export const api = {
     request<any>("/api/hat/reset", { method: "POST", mac, admin: true }),
   hatDetect: (mac: string) =>
     request<any>("/api/hat/detect", { method: "POST", mac, admin: true }),
+  hatGetPower: () => request<any>("/api/hat/power"),
+  hatSetPower: (mac: string, connector: 0 | 1, enable: boolean) =>
+    request<any>("/api/hat/power", {
+      method: "POST",
+      body: { connector, enable },
+      mac,
+      admin: true,
+    }),
   hatV2Caps: () => request<any>("/api/hat/v2/caps"),
   hatV2Rails: () => request<any>("/api/hat/v2/rails"),
   hatV2SetRailEnable: (mac: string, railId: number, enable: boolean) =>
@@ -638,6 +650,18 @@ export const api = {
     }),
   deviceReset: (mac: string) =>
     request<void>("/api/device/reset", { method: "POST", mac, admin: true }),
+
+  /* ---- GitHub firmware autoupdate ---- */
+  update: {
+    check: () => request<UpdateCheckResult>("/api/update/check", { admin: true }),
+    status: () => request<UpdateStatus>("/api/update/status", { admin: true }),
+    apply: (rp2040: boolean, esp32: boolean) =>
+      request<{ success: boolean }>("/api/update/apply", {
+        method: "POST",
+        admin: true,
+        body: JSON.stringify({ rp2040, esp32 }),
+      }),
+  },
 
   /* ---- OTA ---- */
   ota: {

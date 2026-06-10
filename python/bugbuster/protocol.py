@@ -18,6 +18,7 @@ from .constants import MsgType
 # 0xBB is non-printable so it cannot appear in normal CLI typing.
 HANDSHAKE_MAGIC = bytes([0xBB, 0x42, 0x55, 0x47])
 BBP_PROTO_VERSION = 8
+ESP32_FW_VERSION = (3, 4, 0)
 
 
 # ---------------------------------------------------------------------------

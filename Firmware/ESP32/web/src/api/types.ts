@@ -143,3 +143,31 @@ export interface OtaUploadResult {
   partition?: string;
   sha256Verified?: boolean;
 }
+
+export interface UpdateComponent {
+  available: boolean;
+  availableBuildId: string;
+  version: string;
+  newer: boolean;
+  size: number;
+  sha256: string;
+  crc32?: number;
+}
+
+export interface UpdateCheckResult {
+  channel: string;
+  manifestBuildId: string;
+  commit: string;
+  rp2040: UpdateComponent;
+  esp32: UpdateComponent;
+}
+
+export interface UpdateStatus {
+  state: number;
+  step: string;
+  lastError: string;
+  progressDone: number;
+  progressTotal: number;
+  currentRp2040: string;
+  currentEsp32: string;
+}

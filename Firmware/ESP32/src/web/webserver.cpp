@@ -3100,6 +3100,61 @@ static esp_err_t handle_post_hat_v2_rail_voltage(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/hat/power
+static esp_err_t handle_get_hat_power(httpd_req_t *req)
+{
+    if (!hat_detected()) {
+        return send_error(req, 404, "HAT not detected");
+    }
+    const HatState *hs = hat_get_state();
+    cJSON *root = cJSON_CreateObject();
+    for (int i = 0; i < 2; i++) {
+        const HatConnectorStatus *c = &hs->connector[i];
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddBoolToObject(obj, "enabled", c->enabled);
+        cJSON_AddNumberToObject(obj, "currentMa", c->current_ma);
+        cJSON_AddBoolToObject(obj, "fault", c->fault);
+        cJSON_AddItemToObject(root, i == 0 ? "connA" : "connB", obj);
+    }
+    cJSON_AddNumberToObject(root, "ioVoltageMv", hs->io_voltage_mv);
+    return send_json(req, root);
+}
+
+// POST /api/hat/power
+static esp_err_t handle_post_hat_power(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
+
+    cJSON *doc = recv_json_body(req);
+    if (!doc) return send_error(req, 400, "Invalid JSON");
+
+    VALIDATE_JSON_FIELD(doc, "connector", Number, "Field 'connector' must be a number");
+    VALIDATE_JSON_FIELD(doc, "enable", Bool, "Field 'enable' must be a boolean");
+
+    int connector = cJSON_GetObjectItem(doc, "connector")->valueint;
+    bool enable = cJSON_IsTrue(cJSON_GetObjectItem(doc, "enable"));
+    cJSON_Delete(doc);
+
+    if (connector < 0 || connector > 1) {
+        return send_error(req, 400, "connector must be 0 or 1");
+    }
+
+    if (!hat_set_power((HatConnector)connector, enable)) {
+        return send_error(req, 503, "HAT power command failed");
+    }
+
+    const HatState *hs = hat_get_state();
+    const HatConnectorStatus *c = &hs->connector[connector];
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "connector", connector);
+    cJSON_AddBoolToObject(root, "enabled", c->enabled);
+    cJSON_AddNumberToObject(root, "currentMa", c->current_ma);
+    cJSON_AddBoolToObject(root, "fault", c->fault);
+    return send_json(req, root);
+}
+
 // POST /api/hat/v2/led
 static esp_err_t handle_post_hat_v2_led(httpd_req_t *req)
 {
@@ -3580,6 +3635,7 @@ static esp_err_t handle_post_mux_switch(httpd_req_t *req)
         adgs_get_all_states(g_deviceState.muxState);
         xSemaphoreGive(g_stateMutex);
     }
+    hat_update_leds();
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "device", dev);
@@ -3609,6 +3665,7 @@ static esp_err_t handle_post_mux_all(httpd_req_t *req)
         adgs_get_all_states(g_deviceState.muxState);
         xSemaphoreGive(g_stateMutex);
     }
+    hat_update_leds();
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "ok");
     return send_json(req, root);
@@ -5565,6 +5622,16 @@ bool initWebServer(void)
         .uri = "/api/hat/v2/io_voltage", .method = HTTP_POST, .handler = handle_post_hat_v2_io_voltage, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_v2_io_voltage);
+
+    httpd_uri_t uri_hat_power_get = {
+        .uri = "/api/hat/power", .method = HTTP_GET, .handler = handle_get_hat_power, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_power_get);
+
+    httpd_uri_t uri_hat_power_post = {
+        .uri = "/api/hat/power", .method = HTTP_POST, .handler = handle_post_hat_power, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_power_post);
 
     httpd_uri_t uri_hat_v2_swd_setup = {
         .uri = "/api/hat/v2/swd/setup", .method = HTTP_POST, .handler = handle_post_hat_v2_swd_setup, .user_ctx = NULL

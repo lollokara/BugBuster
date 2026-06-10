@@ -328,7 +328,7 @@ impl LaStore {
 
         // Header
         vcd.push_str("$date\n  BugBuster Logic Analyzer capture\n$end\n");
-        vcd.push_str(&format!("$version\n  BugBuster HAT LA v1.0\n$end\n"));
+        vcd.push_str("$version\n  BugBuster HAT LA v1.0\n$end\n");
 
         // Timescale: derive from sample rate
         let timescale_ns = if self.sample_rate_hz > 0 {

@@ -1641,8 +1641,55 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 let v = event_target_value(&e);
                                 match v.as_str() {
                                     "csv" => show_toast("Use Record to capture a BBSC + Export", "info"),
-                                    "png" => show_toast("PNG export not implemented yet", "info"),
-                                    "json" => show_toast("JSON export not implemented yet", "info"),
+                                    "png" => {
+                                        if let Some(canvas) = canvas_ref.get_untracked() {
+                                            let data_url = canvas.to_data_url().ok().unwrap_or_default();
+                                            spawn_local(async move {
+                                                let result = try_invoke("pick_png_save_file", wasm_bindgen::JsValue::NULL).await;
+                                                if let Some(Some(path)) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok()) {
+                                                    if !path.is_empty() {
+                                                        let args = serde_wasm_bindgen::to_value(
+                                                            &serde_json::json!({ "path": path, "dataUrl": data_url })
+                                                        ).unwrap();
+                                                        match try_invoke("save_scope_png", args).await {
+                                                            Some(_) => show_toast("PNG saved", "ok"),
+                                                            None => show_toast("PNG export failed", "err"),
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                    "json" => {
+                                        let ts = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
+                                        let points_all: Vec<serde_json::Value> = (0..4_usize).map(|ch| {
+                                            let pts: Vec<serde_json::Value> = scope_data[ch].get_untracked()
+                                                .iter()
+                                                .map(|p| serde_json::json!({ "time_ms": p.time_ms, "value": p.value }))
+                                                .collect();
+                                            serde_json::json!({
+                                                "label": channel_labels[ch].get_untracked(),
+                                                "points": pts,
+                                            })
+                                        }).collect();
+                                        let json_str = serde_json::to_string_pretty(
+                                            &serde_json::json!({ "exported_at": ts, "channels": points_all })
+                                        ).unwrap_or_default();
+                                        spawn_local(async move {
+                                            let result = try_invoke("pick_json_save_file", wasm_bindgen::JsValue::NULL).await;
+                                            if let Some(Some(path)) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok()) {
+                                                if !path.is_empty() {
+                                                    let args = serde_wasm_bindgen::to_value(
+                                                        &serde_json::json!({ "path": path, "content": json_str })
+                                                    ).unwrap();
+                                                    match try_invoke("write_text_file", args).await {
+                                                        Some(_) => show_toast("JSON saved", "ok"),
+                                                        None => show_toast("JSON export failed", "err"),
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    }
                                     _ => {}
                                 }
                             }
