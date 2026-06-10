@@ -14,6 +14,10 @@
 
 ## [1.3.3] — 2026-06-10
 
+*(no changes yet)*
+
+## [1.3.3] — 2026-06-10
+
 ### Fixed
 - **Lint cleanup**: removed unused `deviceMac` import in `Voltages.tsx`; renamed `dir` parameter to `direction` in `client.py:hat_set_level_shift` and `http_routes.py` to avoid shadowing Python builtin; removed redundant `RwSignal` rebindings in `diag.rs`; replaced `useless_format!` calls with `.to_string()` in `commands.rs` and `push_str` literal in `la_store.rs`.
 
