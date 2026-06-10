@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>BugBuster</title>
+    <script>
+      (function() {
+        function logToTauri(msg) {
+          if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+            window.__TAURI__.core.invoke('js_log', { msg: msg }).catch(() => {});
+          }
+        }
+        window.addEventListener('error', function(e) {
+          logToTauri('[JS Error] ' + e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno);
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+          logToTauri('[JS Unhandled Rejection] ' + String(e.reason));
+        });
+        const origLog = console.log;
+        console.log = function(...args) {
+          origLog.apply(console, args);
+          logToTauri('[JS console.log] ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
+        };
+        const origError = console.error;
+        console.error = function(...args) {
+          origError.apply(console, args);
+          logToTauri('[JS console.error] ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
+        };
+        const origWarn = console.warn;
+        console.warn = function(...args) {
+          origWarn.apply(console, args);
+          logToTauri('[JS console.warn] ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
+        };
+      })();
+    </script>
+    <link data-trunk rel="css" href="styles.css" />
+    <link data-trunk rel="copy-dir" href="public" />
+    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./public/vendor/three.module.min.js",
+          "three/addons/": "./public/vendor/"
+        }
+      }
+    </script>
+    <script type="module" src="./public/splash.js"></script>
+  </head>
+  <body>
+    <canvas id="board-canvas"></canvas>
+  </body>
+</html>
