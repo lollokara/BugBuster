@@ -2,12 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- iOS app: MicroPython Scripts tab (🐍) with three sub-panels — File Manager (list/create/edit/delete/run scripts, storage quota bar), Editor (glass monospace textarea, dirty indicator, Save/Run/Stop/Reset VM), and REPL (WebSocket live terminal with Connect/Disconnect, log polling fallback, auto-scroll). Backend adds 13 new Tauri commands covering the ESP32 `/api/scripts/*` HTTP REST API and WebSocket REPL proxy via `tokio-tungstenite`.
+
 ### Fixed
 - Desktop app update check now detects newer stable releases for nightly users (e.g. `1.1.2-25` correctly sees `1.1.3` available via manual stable-manifest fallback when tauri-plugin-updater returns no update)
 - `published_at` deserialization no longer crashes on GitHub releases with `null` date (`#[serde(default)]` + safe `.get(..10)` slice in browse-releases list)
 
 ### Improved
 - OTA upload progress bar animates with a green shimmer during HTTP upload stages instead of freezing at 40% (SPIFFS) or 90% (ESP32); backend emits intermediate progress ticks every 250 ms via `http_upload_with_progress` helper
+- iOS app device scan is now ~5× faster: HTTP probe timeout reduced from 800 ms to 300 ms and concurrent chunk size increased from 30 to 64 hosts, bringing worst-case scan time from ~30 s down to ~5 s per subnet
 
 ## [1.3.3] — 2026-06-10
 

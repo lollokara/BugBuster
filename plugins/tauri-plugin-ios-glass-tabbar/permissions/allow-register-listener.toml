@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-register-listener"
+description = "Allows registering a listener for the native glass tab bar events."
+commands.allow = ["register_listener", "registerListener"]

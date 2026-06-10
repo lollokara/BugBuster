@@ -233,6 +233,21 @@ impl ConnectionManager {
         self.connection_status.lock().unwrap().clone()
     }
 
+    pub fn get_http_base_and_token(&self) -> anyhow::Result<(String, String)> {
+        let status = self
+            .connection_status
+            .lock()
+            .map_err(|_| anyhow!("lock poisoned"))?;
+        if status.mode == ConnectionMode::Disconnected {
+            return Err(anyhow!("not connected"));
+        }
+        let token = status
+            .admin_token
+            .clone()
+            .ok_or_else(|| anyhow!("no admin token"))?;
+        Ok((status.port_or_url.clone(), token))
+    }
+
     fn start_polling(&self, app: AppHandle) {
         self.poll_shutdown.store(false, Ordering::Release);
         let shutdown = self.poll_shutdown.clone();

@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::components::connection::ConnectionPanel;
 use crate::tabs::{
-    diag::*, overview::*,
+    diag::*, overview::*, scripts::ScriptsTab, signal_path::SignalPathMobileTab,
 };
 use crate::tauri_bridge::*;
 
@@ -77,6 +77,60 @@ pub fn App() -> impl IntoView {
         set_ota_error,
         set_ota_success,
         set_ota_progress,
+    });
+
+    // Native iOS tab bar → sync active_tab when user taps a native tab.
+    // We listen to BOTH Tauri IPC events AND standard DOM events.
+    spawn_local(async move {
+        let (active_tab_signal, set_active_tab) = (active_tab, set_active_tab);
+        
+        let handler = Closure::<dyn FnMut(JsValue)>::new(move |event: JsValue| {
+            web_sys::console::log_2(&"[bb] Received event:".into(), &event);
+            
+            // 1. Try as Tauri Event (Payload field)
+            let mut key = js_sys::Reflect::get(&event, &"payload".into())
+                .ok()
+                .and_then(|p| {
+                    if p.is_string() { p.as_string() }
+                    else { js_sys::Reflect::get(&p, &"key".into()).ok().and_then(|k| k.as_string()) }
+                });
+
+            // 2. Try as CustomEvent (detail field)
+            if key.is_none() {
+                if let Ok(custom_event) = event.dyn_into::<web_sys::CustomEvent>() {
+                    let detail = custom_event.detail();
+                    key = js_sys::Reflect::get(&detail, &"key".into()).ok().and_then(|v| v.as_string());
+                }
+            }
+
+            if let Some(key) = key {
+                web_sys::console::log_1(&format!("[bb] Switching to: {}", key).into());
+                set_active_tab.set(key);
+            }
+        });
+
+        // Listen for all possible event name variants via Tauri bridge
+        let variants = [
+            "tabSelected", 
+            "ios-glass-tabbar:tabSelected",
+            "plugin:ios-glass-tabbar:tabSelected",
+            "ios_glass_tabbar:tabSelected"
+        ];
+        for v in variants {
+            listen(v, &handler).await;
+            web_sys::console::log_1(&format!("[bb] Rust listening to Tauri event: {}", v).into());
+        }
+        
+        // Also listen for the standard DOM event dispatched by our JS middleman
+        if let Some(window) = web_sys::window() {
+            let _ = window.add_event_listener_with_callback(
+                "bb-native-tab",
+                handler.as_ref().unchecked_ref(),
+            );
+            web_sys::console::log_1(&"[bb] Rust listening to DOM event: bb-native-tab".into());
+        }
+
+        handler.forget();
     });
 
     // Toast notification system
@@ -188,15 +242,30 @@ pub fn App() -> impl IntoView {
         closure.forget();
     });
 
+    // Dispatch bb-conn-state DOM event whenever connection mode changes.
+    // Covers: initial load, Tauri event, disconnect button — all paths.
+    Effect::new(move |_| {
+        let connected = conn_mode.get_untracked() != "Disconnected";
+        if let Some(window) = web_sys::window() {
+            let mut init = web_sys::CustomEventInit::new();
+            init.detail(&serde_wasm_bindgen::to_value(&serde_json::json!({ "connected": connected })).unwrap_or(JsValue::NULL));
+            if let Ok(ev) = web_sys::CustomEvent::new_with_event_init_dict("bb-conn-state", &init) {
+                let _ = window.dispatch_event(&ev);
+            }
+        }
+    });
+
     // Fetch versions and update GitHub releases list on connection
     Effect::new(move |_| {
         let mode = conn_mode.get();
         if mode != "Disconnected" {
-            spawn_local(async move {
-                if let Ok(rels) = fetch_github_releases().await {
-                    set_git_releases.set(rels);
-                }
-            });
+            if git_releases.get_untracked().is_empty() {
+                spawn_local(async move {
+                    if let Ok(rels) = fetch_github_releases().await {
+                        set_git_releases.set(rels);
+                    }
+                });
+            }
             spawn_local(async move {
                 if let Some(info) = fetch_firmware_info().await {
                     set_esp32_current_version.set(info.fw_version);
@@ -280,11 +349,25 @@ pub fn App() -> impl IntoView {
                         "Overview"
                     </button>
                     <button class="tab-item"
+                        class:active=move || active_tab.get() == "signal_path"
+                        on:click=move |_| set_active_tab.set("signal_path".to_string())
+                    >
+                        <span class="icon">"🔀"</span>
+                        "Signal"
+                    </button>
+                    <button class="tab-item"
                         class:active=move || active_tab.get() == "diag"
                         on:click=move |_| set_active_tab.set("diag".to_string())
                     >
                         <span class="icon">"🩺"</span>
                         "Diag"
+                    </button>
+                    <button class="tab-item"
+                        class:active=move || active_tab.get() == "scripts"
+                        on:click=move |_| set_active_tab.set("scripts".to_string())
+                    >
+                        <span class="icon">"🐍"</span>
+                        "Scripts"
                     </button>
                 </nav>
 
@@ -292,7 +375,9 @@ pub fn App() -> impl IntoView {
                 <div class="tab-container">
                     {move || match active_tab.get().as_str() {
                         "overview" => view! { <OverviewTab state=device_state /> }.into_any(),
+                        "signal_path" => view! { <SignalPathMobileTab state=device_state /> }.into_any(),
                         "diag" => view! { <DiagTab state=device_state /> }.into_any(),
+                        "scripts" => view! { <ScriptsTab /> }.into_any(),
                         _ => view! { <div>"Unknown tab"</div> }.into_any(),
                     }}
                 </div>

@@ -936,3 +936,433 @@ async fn slp(ms: u32) {
     });
     wasm_bindgen_futures::JsFuture::from(p).await.unwrap();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mobile-native Signal Path view: 4 IOBlock vertical tiles
+// ─────────────────────────────────────────────────────────────────────────────
+
+// IOBlock accent colors (Blue, Emerald, Amber, Purple)
+const BLOCK_ACCENTS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
+const BLOCK_ACCENTS_DIM: [&str; 4] = ["#1e3a5f", "#0d3d28", "#3d2e08", "#2e1654"];
+const BLOCK_GLOW: [&str; 4] = [
+    "rgba(59,130,246,0.35)",
+    "rgba(16,185,129,0.35)",
+    "rgba(245,158,11,0.35)",
+    "rgba(168,85,247,0.35)",
+];
+
+/// Which VADJ rail feeds each IOBlock (0 = VADJ1, 1 = VADJ2)
+const BLOCK_VADJ: [usize; 4] = [0, 0, 1, 1];
+
+/// IO labels per IOBlock (3 IOs each, label = GPIO_PAIR_LABELS[block])
+const BLOCK_IO_LABELS: [[&str; 3]; 4] = [
+    ["IO3", "IO2", "IO1"],
+    ["IO6", "IO5", "IO4"],
+    ["IO9", "IO8", "IO7"],
+    ["IO12", "IO11", "IO10"],
+];
+
+/// Per-IO channel index within the block:
+///   ch0 = analog-capable  → switches 0/1 (direct/2kΩ), S3=ADC, S4=HAT LA
+///   ch1 = aux1            → switches 4/5
+///   ch2 = aux2            → switches 6/7
+/// We expose ch0 (IO label [0]) as the bottom IO, ch1 as mid, ch2 as top — matching connector order.
+/// The MUX device is MUX_DEVICE_BY_LOGICAL[block].
+///
+/// Dropdown values encode the switch to close:
+///   0 = Not Connected (open all)
+///   1 = Digital (S1 direct: switch 0 for ch0, switch 4 for ch1, switch 6 for ch2)
+///   2 = High Imp. Digital (S2 resistor: switch 1, 5, 7)
+///   3 = Analog (ch0 only: S3, switch 2)
+///   4 = HAT LA (ch0 only: S4, switch 3)
+
+fn io_switch_index(ch_in_block: usize, mode: u8) -> Option<usize> {
+    // ch_in_block: 0=analog-capable(S1-S4), 1=aux1(S5-S6), 2=aux2(S7-S8)
+    match (ch_in_block, mode) {
+        (0, 1) => Some(0), // Digital direct
+        (0, 2) => Some(1), // High-Imp digital via 2kΩ
+        (0, 3) => Some(2), // Analog (ADC)
+        (0, 4) => Some(3), // HAT LA (EXT)
+        (1, 1) => Some(4), // Digital direct (aux1)
+        (1, 2) => Some(5), // High-Imp (aux1)
+        (2, 1) => Some(6), // Digital direct (aux2)
+        (2, 2) => Some(7), // High-Imp (aux2)
+        _ => None,          // Not connected or invalid
+    }
+}
+
+fn mux_byte_to_io_mode(st: u8, ch_in_block: usize) -> u8 {
+    // Returns the dropdown value (0=NC, 1=Dig, 2=HiImp, 3=Analog, 4=HAT LA)
+    match ch_in_block {
+        0 => {
+            if (st >> 0) & 1 != 0 { 1 }
+            else if (st >> 1) & 1 != 0 { 2 }
+            else if (st >> 2) & 1 != 0 { 3 }
+            else if (st >> 3) & 1 != 0 { 4 }
+            else { 0 }
+        }
+        1 => {
+            if (st >> 4) & 1 != 0 { 1 }
+            else if (st >> 5) & 1 != 0 { 2 }
+            else { 0 }
+        }
+        2 => {
+            if (st >> 6) & 1 != 0 { 1 }
+            else if (st >> 7) & 1 != 0 { 2 }
+            else { 0 }
+        }
+        _ => 0,
+    }
+}
+
+#[component]
+pub fn SignalPathMobileTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    let (mux, set_mux) = signal([0u8; 4]);
+    let (psu, set_psu) = signal([false; 2]);
+    let (ef, set_ef) = signal([false; 4]);
+    let (oe, set_oe) = signal(false);
+
+    let psu_inflight: [RwSignal<bool>; 2] = std::array::from_fn(|_| RwSignal::new(false));
+    let ef_inflight: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
+
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
+
+    // Sync MUX from device-state event
+    Effect::new(move || {
+        let d = state.get();
+        if d.mux_states.len() >= 4 {
+            let mut a = [0u8; 4];
+            a.copy_from_slice(&d.mux_states[..4]);
+            set_mux.set(a);
+        }
+    });
+
+    // Poll PCA9535 every 500ms
+    let alive_poll = alive.clone();
+    spawn_local(async move {
+        let mut fail = 0u32;
+        loop {
+            slp(500).await;
+            if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) { break; }
+            if let Some(st) = try_invoke("pca_get_status", wasm_bindgen::JsValue::NULL)
+                .await
+                .and_then(|r| serde_wasm_bindgen::from_value::<IoExpState>(r).ok())
+            {
+                fail = 0;
+                if st.present {
+                    let psu_new = [st.vadj1_en, st.vadj2_en];
+                    set_psu.update(|v| {
+                        for i in 0..2 {
+                            if !psu_inflight[i].get_untracked() { v[i] = psu_new[i]; }
+                        }
+                    });
+                    let mut ef_new = [false; 4];
+                    for (i, e) in st.efuses.iter().enumerate().take(4) { ef_new[i] = e.enabled; }
+                    set_ef.update(|v| {
+                        for i in 0..4 {
+                            if !ef_inflight[i].get_untracked() { v[i] = ef_new[i]; }
+                        }
+                    });
+                }
+            } else {
+                fail += 1;
+                if fail >= 10 { break; }
+            }
+        }
+    });
+
+    // Sends a mux switch command and updates local state
+    let do_mux = move |block: usize, new_mode: u8| {
+        let mux_dev = MUX_DEVICE_BY_LOGICAL[block];
+        let mut st = mux.get_untracked();
+        // Clear all 8 switches for this device first
+        st[mux_dev] = 0;
+        if let Some(sw) = io_switch_index(0, new_mode) {
+            // For the analog-capable channel (ch_in_block=0), just close that switch
+            // But we must also respect existing aux1/aux2 switches — so we read them first
+            // Actually: we're building a new byte based on ALL three channels' modes.
+            // Since this closure only fires from one IO's dropdown, keep other bits intact.
+            let old = mux.get_untracked()[mux_dev];
+            let aux1_mode = mux_byte_to_io_mode(old, 1);
+            let aux2_mode = mux_byte_to_io_mode(old, 2);
+            st[mux_dev] = 0;
+            if let Some(s) = io_switch_index(0, new_mode) { st[mux_dev] |= 1 << s; }
+            if let Some(s) = io_switch_index(1, aux1_mode) { st[mux_dev] |= 1 << s; }
+            if let Some(s) = io_switch_index(2, aux2_mode) { st[mux_dev] |= 1 << s; }
+            let _ = sw;
+        } else {
+            // Not connected for ch0; preserve aux channels
+            let old = mux.get_untracked()[mux_dev];
+            let aux1_mode = mux_byte_to_io_mode(old, 1);
+            let aux2_mode = mux_byte_to_io_mode(old, 2);
+            st[mux_dev] = 0;
+            if let Some(s) = io_switch_index(1, aux1_mode) { st[mux_dev] |= 1 << s; }
+            if let Some(s) = io_switch_index(2, aux2_mode) { st[mux_dev] |= 1 << s; }
+        }
+        #[derive(serde::Serialize)]
+        struct MuxAllArgs { states: Vec<u8> }
+        let args = serde_wasm_bindgen::to_value(&MuxAllArgs { states: st.to_vec() }).unwrap();
+        invoke_with_feedback("mux_set_all", args, "Signal Path: Set IO mode");
+        set_mux.set(st);
+    };
+
+    let do_mux_aux = move |block: usize, ch_in_block: usize, new_mode: u8| {
+        let mux_dev = MUX_DEVICE_BY_LOGICAL[block];
+        let old = mux.get_untracked()[mux_dev];
+        let ch0_mode = mux_byte_to_io_mode(old, 0);
+        let ch1_mode = if ch_in_block == 1 { new_mode } else { mux_byte_to_io_mode(old, 1) };
+        let ch2_mode = if ch_in_block == 2 { new_mode } else { mux_byte_to_io_mode(old, 2) };
+        let mut st = mux.get_untracked();
+        st[mux_dev] = 0;
+        if let Some(s) = io_switch_index(0, ch0_mode) { st[mux_dev] |= 1 << s; }
+        if let Some(s) = io_switch_index(1, ch1_mode) { st[mux_dev] |= 1 << s; }
+        if let Some(s) = io_switch_index(2, ch2_mode) { st[mux_dev] |= 1 << s; }
+        #[derive(serde::Serialize)]
+        struct MuxAllArgs { states: Vec<u8> }
+        let args = serde_wasm_bindgen::to_value(&MuxAllArgs { states: st.to_vec() }).unwrap();
+        invoke_with_feedback("mux_set_all", args, "Signal Path: Set IO mode");
+        set_mux.set(st);
+    };
+
+    view! {
+        <div class="tab-content sp-mobile-tab">
+            // ── Global Control Bar ──────────────────────────────────────────
+            <div class="sp-global-bar">
+                <span class="sp-global-title">"SIGNAL PATH"</span>
+                <div class="sp-global-controls">
+                    // VADJ1 toggle
+                    <div class="sp-global-item">
+                        <span class="sp-global-label">"VADJ1"</span>
+                        <button
+                            class="sp-toggle-pill"
+                            class:sp-toggle-active=move || psu.get()[0]
+                            style="--pill-color: #ef4444; --pill-glow: rgba(239,68,68,0.35)"
+                            on:click=move |_| {
+                                let new_val = !psu.get_untracked()[0];
+                                psu_inflight[0].set(true);
+                                send_pca_control(PCA_VADJ1_EN, new_val);
+                                set_psu.update(|v| v[0] = new_val);
+                                spawn_local(async move { slp(700).await; psu_inflight[0].set(false); });
+                            }
+                        >
+                            {move || if psu.get()[0] { "ON" } else { "OFF" }}
+                        </button>
+                    </div>
+                    // VADJ2 toggle
+                    <div class="sp-global-item">
+                        <span class="sp-global-label">"VADJ2"</span>
+                        <button
+                            class="sp-toggle-pill"
+                            class:sp-toggle-active=move || psu.get()[1]
+                            style="--pill-color: #ef4444; --pill-glow: rgba(239,68,68,0.35)"
+                            on:click=move |_| {
+                                let new_val = !psu.get_untracked()[1];
+                                psu_inflight[1].set(true);
+                                send_pca_control(PCA_VADJ2_EN, new_val);
+                                set_psu.update(|v| v[1] = new_val);
+                                spawn_local(async move { slp(700).await; psu_inflight[1].set(false); });
+                            }
+                        >
+                            {move || if psu.get()[1] { "ON" } else { "OFF" }}
+                        </button>
+                    </div>
+                    // OE toggle (Level Shifter Output Enable)
+                    <div class="sp-global-item">
+                        <span class="sp-global-label">"LS OE"</span>
+                        <button
+                            class="sp-toggle-pill"
+                            class:sp-toggle-active=move || oe.get()
+                            style="--pill-color: #22c55e; --pill-glow: rgba(34,197,94,0.35)"
+                            on:click=move |_| {
+                                let new_val = !oe.get_untracked();
+                                set_oe.set(new_val);
+                                #[derive(serde::Serialize)]
+                                struct Args { on: bool }
+                                let args = serde_wasm_bindgen::to_value(&Args { on: new_val }).unwrap();
+                                invoke_with_feedback("set_lshift_oe", args,
+                                    if new_val { "Enable Level Shifter OE" } else { "Disable Level Shifter OE" });
+                            }
+                        >
+                            {move || if oe.get() { "ON" } else { "OFF" }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            // ── IOBlock Tiles ───────────────────────────────────────────────
+            <div class="sp-blocks-scroll">
+                <div class="sp-blocks-row">
+                    {(0..4usize).map(|block| {
+                        let accent = BLOCK_ACCENTS[block];
+                        let accent_dim = BLOCK_ACCENTS_DIM[block];
+                        let glow = BLOCK_GLOW[block];
+                        let vadj_idx = BLOCK_VADJ[block];
+                        let io_labels = BLOCK_IO_LABELS[block];
+                        let mux_dev = MUX_DEVICE_BY_LOGICAL[block];
+
+                        view! {
+                            <div
+                                class="sp-block"
+                                class:sp-block-powered=move || psu.get()[vadj_idx] && ef.get()[block]
+                                style=move || {
+                                    let powered = psu.get()[vadj_idx] && ef.get()[block];
+                                    if powered {
+                                        format!(
+                                            "--block-accent: {}; --block-dim: {}; --block-glow: {}; border-color: {}; box-shadow: 0 0 18px {}, inset 0 0 12px {};",
+                                            accent, accent_dim, glow, accent, glow, "rgba(255,255,255,0.03)"
+                                        )
+                                    } else {
+                                        format!(
+                                            "--block-accent: {}; --block-dim: {}; --block-glow: {};",
+                                            accent, accent_dim, glow
+                                        )
+                                    }
+                                }
+                            >
+                                // Block header
+                                <div class="sp-block-header" style=format!("color: {}", accent)>
+                                    <span class="sp-block-title">{format!("IO Block {}", block + 1)}</span>
+                                    <span class="sp-block-ref" style=format!("color: {}", accent)>
+                                        {format!("{}", MUX_REF[block])}
+                                    </span>
+                                </div>
+
+                                // Supply indicator badge
+                                <div class="sp-supply-badge">
+                                    <span
+                                        class="sp-supply-dot"
+                                        style=move || {
+                                            if psu.get()[vadj_idx] {
+                                                format!("background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.6);")
+                                            } else {
+                                                "background: #1e293b;".to_string()
+                                            }
+                                        }
+                                    ></span>
+                                    <span class="sp-supply-label" style=move || {
+                                        if psu.get()[vadj_idx] { "color: #ef4444;" } else { "color: #475569;" }
+                                    }>
+                                        {if vadj_idx == 0 { "VADJ1" } else { "VADJ2" }}
+                                    </span>
+                                </div>
+
+                                // ── E-Fuse Switch ─────────────────────
+                                <div class="sp-efuse-section">
+                                    <span class="sp-efuse-label">"E-FUSE"</span>
+                                    <button
+                                        class="sp-efuse-btn"
+                                        class:sp-efuse-on=move || ef.get()[block]
+                                        class:sp-efuse-no-psu=move || !psu.get()[vadj_idx]
+                                        style=format!("--ef-color: {}; --ef-glow: {}", accent, glow)
+                                        on:click=move |_| {
+                                            if !psu.get_untracked()[vadj_idx] { return; }
+                                            let new_val = !ef.get_untracked()[block];
+                                            ef_inflight[block].set(true);
+                                            send_pca_control(PCA_EFUSE_IDS[block], new_val);
+                                            set_ef.update(|v| v[block] = new_val);
+                                            spawn_local(async move { slp(700).await; ef_inflight[block].set(false); });
+                                        }
+                                    >
+                                        <span class="sp-efuse-icon">
+                                            {move || if ef.get()[block] { "⚡" } else { "○" }}
+                                        </span>
+                                        {move || if ef.get()[block] { "ARMED" } else { "OFF" }}
+                                    </button>
+                                </div>
+
+                                // ── IO Channels ───────────────────────
+                                // ch2 = aux2 (IO label [2] = top = e.g. IO1)
+                                <div class="sp-io-row">
+                                    <span class="sp-io-label" style=format!("color: {}", accent)>
+                                        {io_labels[2]}
+                                    </span>
+                                    <select
+                                        class="sp-io-select"
+                                        style=format!("--sel-accent: {}", accent)
+                                        on:change=move |ev| {
+                                            let val: u8 = event_target_value(&ev).parse().unwrap_or(0);
+                                            do_mux_aux(block, 2, val);
+                                        }
+                                        prop:value=move || {
+                                            mux_byte_to_io_mode(mux.get()[mux_dev], 2).to_string()
+                                        }
+                                    >
+                                        <option value="0">"Not Connected"</option>
+                                        <option value="1">"Digital"</option>
+                                        <option value="2">"High Imp. Digital"</option>
+                                    </select>
+                                </div>
+
+                                // ch1 = aux1 (IO label [1] = mid = e.g. IO2)
+                                <div class="sp-io-row">
+                                    <span class="sp-io-label" style=format!("color: {}", accent)>
+                                        {io_labels[1]}
+                                    </span>
+                                    <select
+                                        class="sp-io-select"
+                                        style=format!("--sel-accent: {}", accent)
+                                        on:change=move |ev| {
+                                            let val: u8 = event_target_value(&ev).parse().unwrap_or(0);
+                                            do_mux_aux(block, 1, val);
+                                        }
+                                        prop:value=move || {
+                                            mux_byte_to_io_mode(mux.get()[mux_dev], 1).to_string()
+                                        }
+                                    >
+                                        <option value="0">"Not Connected"</option>
+                                        <option value="1">"Digital"</option>
+                                        <option value="2">"High Imp. Digital"</option>
+                                    </select>
+                                </div>
+
+                                // ch0 = analog-capable (IO label [0] = bottom = e.g. IO3) — full options
+                                <div class="sp-io-row">
+                                    <span class="sp-io-label" style=format!("color: {}", accent)>
+                                        {io_labels[0]}
+                                    </span>
+                                    <select
+                                        class="sp-io-select"
+                                        style=format!("--sel-accent: {}", accent)
+                                        on:change=move |ev| {
+                                            let val: u8 = event_target_value(&ev).parse().unwrap_or(0);
+                                            do_mux(block, val);
+                                        }
+                                        prop:value=move || {
+                                            mux_byte_to_io_mode(mux.get()[mux_dev], 0).to_string()
+                                        }
+                                    >
+                                        <option value="0">"Not Connected"</option>
+                                        <option value="1">"Digital"</option>
+                                        <option value="2">"High Imp. Digital"</option>
+                                        <option value="3">"Analog"</option>
+                                        <option value="4">"HAT LA"</option>
+                                    </select>
+                                </div>
+
+                                // ADC channel badge (ch0 = S3 = ADC)
+                                <div
+                                    class="sp-block-badge"
+                                    class:sp-badge-active=move || mux_byte_to_io_mode(mux.get()[mux_dev], 0) == 3
+                                    style=format!("--badge-color: #3b82f6")
+                                >
+                                    {format!("ADC · {}", ADC_LABELS[block])}
+                                </div>
+                                // HAT LA badge (ch0 = S4 = EXT)
+                                <div
+                                    class="sp-block-badge"
+                                    class:sp-badge-active=move || mux_byte_to_io_mode(mux.get()[mux_dev], 0) == 4
+                                    style=format!("--badge-color: #f97316")
+                                >
+                                    {format!("HAT LA · {}", EXT_LABELS[block])}
+                                </div>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+        </div>
+    }
+}
+

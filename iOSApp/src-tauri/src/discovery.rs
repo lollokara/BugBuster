@@ -88,7 +88,7 @@ async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDe
 /// Scan known network addresses for BugBuster HTTP API.
 pub async fn discover_http() -> Vec<DiscoveredDevice> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(800))
+        .timeout(Duration::from_millis(300))
         .build()
         .unwrap();
 
@@ -102,8 +102,8 @@ pub async fn discover_http() -> Vec<DiscoveredDevice> {
     }
 
     let mut devices = Vec::new();
-    // Scan in chunks of 30 to avoid overwhelming the iOS network stack
-    for chunk in candidates.chunks(30) {
+    // Scan in chunks of 64; BugBuster responds in <50 ms so 300 ms timeout is ample
+    for chunk in candidates.chunks(64) {
         let futs: Vec<_> = chunk.iter().map(|addr| probe_http(&client, addr)).collect();
         let results = futures::future::join_all(futs).await;
         for dev in results.into_iter().flatten() {

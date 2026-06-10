@@ -13,6 +13,7 @@ pub mod ioexp;
 pub mod la;
 pub mod overview;
 pub mod scope;
+pub mod scripts;
 pub mod signal_path;
 pub mod uart;
 pub mod usbpd;

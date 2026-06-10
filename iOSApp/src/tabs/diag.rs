@@ -921,14 +921,14 @@ fn FirmwareSection() -> impl IntoView {
                                 on:click=on_start_git_ota
                                 style="flex: 1"
                             >
-                                {move || if ota_active.get() { "Update in progress..." } else { "Perform Update" }}
+                                {move || if ota_active.get_untracked() { "Update in progress..." } else { "Perform Update" }}
                             </button>
                         </div>
 
                         // Active progress bar and status message
                         {move || {
-                            if ota_active.get() {
-                                let prog = ota_progress.get();
+                            if ota_active.get_untracked() {
+                                let prog = ota_progress.get_untracked();
                                 let uploading = prog.stage == "uploading";
                                 view! {
                                     <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
@@ -938,7 +938,7 @@ fn FirmwareSection() -> impl IntoView {
                                         </div>
                                         <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
                                             <div
-                                                style:width=move || format!("{}%", ota_progress.get().percent)
+                                                style:width=move || format!("{}%", ota_progress.get_untracked().percent)
                                                 style=move || if uploading {
                                                     "height: 100%; background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7, #34d399, #10b981); background-size: 200% 100%; animation: progress-shimmer 1.4s linear infinite; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
                                                 } else {
@@ -958,7 +958,7 @@ fn FirmwareSection() -> impl IntoView {
 
                         // Success state
                         {move || {
-                            if ota_success.get() {
+                            if ota_success.get_untracked() {
                                 view! {
                                     <div style="padding: 10px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; color: var(--green); font-size: 11px; font-family: 'JetBrains Mono', monospace; display: flex; flex-direction: column; gap: 4px">
                                         <b style="font-weight: 700">"✓ UPDATE SUCCESSFUL"</b>
@@ -972,7 +972,7 @@ fn FirmwareSection() -> impl IntoView {
 
                         // Error state
                         {move || {
-                            if let Some(err) = ota_error.get() {
+                            if let Some(err) = ota_error.get_untracked() {
                                 view! {
                                     <div style="padding: 10px 12px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; color: var(--rose); font-size: 11px; font-family: 'JetBrains Mono', monospace; display: flex; flex-direction: column; gap: 4px">
                                         <b style="font-weight: 700">"✗ UPDATE FAILED"</b>

@@ -23,7 +23,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 tauri-plugin-barcode-scanner = "2"
-
 env_logger = "0.11"
 log = "0.4"
 sha2 = "0.10"
@@ -33,6 +32,7 @@ async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures = "0.3"
 serialport = "4"
 local-ip-address = "0.6"
@@ -42,3 +42,6 @@ image = "0.25"
 zip = "2"
 cobs = "0.2"
 crc = "3"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+tauri-plugin-ios-glass-tabbar = { path = "../../plugins/tauri-plugin-ios-glass-tabbar" }

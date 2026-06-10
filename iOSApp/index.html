@@ -7,6 +7,8 @@
     <script>
       (function() {
         function logToTauri(msg) {
+          // Temporarily disabled to clear IPC errors
+          return;
           if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
             window.__TAURI__.core.invoke('js_log', { msg: msg }).catch(() => {});
           }
@@ -46,6 +48,124 @@
       }
     </script>
     <script type="module" src="./public/splash.js"></script>
+    <script>
+      // Native iOS glass tab bar.
+      (function initNativeTabBar() {
+        var TAB_ITEMS = [
+          { key: 'overview',    title: 'Overview', sfSymbol: 'chart.bar.fill' },
+          { key: 'signal_path', title: 'Signal',   sfSymbol: 'arrow.triangle.branch' },
+          { key: 'diag',        title: 'Diag',     sfSymbol: 'stethoscope' },
+          { key: 'scripts',     title: 'Scripts',  sfSymbol: 'terminal.fill' },
+        ];
+
+        function dispatchTab(key) {
+          console.log('[bb] dispatching native tab:', key);
+          if (key) window.dispatchEvent(new CustomEvent('bb-native-tab', { detail: { key: key } }));
+        }
+
+        function wireTabListener(inv) {
+          console.log('[bb] wireTabListener called');
+          
+          function onTabEvent(ev) {
+            console.log('[bb] TAB EVENT DETECTED:', JSON.stringify(ev));
+            var key = null;
+            if (typeof ev === 'string') key = ev;
+            else if (ev && typeof ev === 'object') {
+              // Handle both direct and nested payload structures
+              key = ev.key || (ev.payload && (typeof ev.payload === 'object' ? ev.payload.key : ev.payload));
+            }
+            if (key) dispatchTab(key);
+          }
+
+          // 1. OFFICIAL TAURI 2 MOBILE LISTENER
+          const apl = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.addPluginListener;
+          if (apl) {
+            apl('ios-glass-tabbar', 'tabSelected', onTabEvent)
+              .then(function(handler) { 
+                console.log('[bb] addPluginListener success. handler id:', handler); 
+              })
+              .catch(function(e) { 
+                console.warn('[bb] addPluginListener failed (likely register_listener missing):', e); 
+              });
+          }
+
+          // 3. Brute force listen for all variants
+          if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
+            const variants = [
+              'tabSelected', 
+              'ios-glass-tabbar:tabSelected',
+              'plugin:ios-glass-tabbar:tabSelected',
+              'ios_glass_tabbar:tabSelected'
+            ];
+            variants.forEach(v => {
+              window.__TAURI__.event.listen(v, function(e) {
+                console.log('[bb] EVENT via window.__TAURI__.event.listen:', v, JSON.stringify(e));
+                onTabEvent(e);
+              });
+            });
+          }
+
+          // 3. LOW-LEVEL HOOKS (SPYING)
+          if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.onEvent) {
+            const oldOnEvent = window.__TAURI_INTERNALS__.onEvent;
+            window.__TAURI_INTERNALS__.onEvent = function(event, payload) {
+              if (event.indexOf('tab') !== -1) console.log('[bb] LOW-LEVEL Tauri Event:', event, JSON.stringify(payload));
+              return oldOnEvent.apply(this, arguments);
+            };
+          }
+          
+          const hooks = ['__tauri_emit__', '__tauri_emit', 'tauri_emit'];
+          hooks.forEach(h => {
+            const old = window[h];
+            window[h] = function(event, payload) {
+              if (event.indexOf('tab') !== -1) console.log(`[bb] GLOBAL HOOK ${h}:`, event, JSON.stringify(payload));
+              if (old) return old.apply(this, arguments);
+            };
+          });
+        }
+
+        function tryInit() {
+          if (!window.__TAURI__ || !window.__TAURI__.core || !window.__TAURI__.core.invoke) return false;
+          var inv = window.__TAURI__.core.invoke;
+
+          const isConnected = !!document.querySelector('.mobile-tab-bar');
+          const args = { items: TAB_ITEMS, selectedIndex: 0 };
+          
+          inv('plugin:ios-glass-tabbar|set_items', { payload: args })
+            .then(function() {
+              console.log('[bb] set_items success');
+              
+              // Hide IMMEDIATELY if we are not in connected view (e.g. splash screen)
+              if (!isConnected) {
+                inv('plugin:ios-glass-tabbar|set_hidden', { payload: { hidden: true } }).catch(function(){});
+              }
+
+              wireTabListener(inv);
+
+              function sync() {
+                var connected = !!document.querySelector('.mobile-tab-bar');
+                console.log('[bb] sync visibility. connected:', connected);
+                inv('plugin:ios-glass-tabbar|set_hidden', { payload: { hidden: !connected } }).catch(function(){});
+                if (connected) {
+                  document.body.classList.add('ios-native-tabs');
+                } else {
+                  document.body.classList.remove('ios-native-tabs');
+                }
+              }
+
+              sync();
+              new MutationObserver(sync).observe(document.body, { childList: true, subtree: true });
+            })
+            .catch(function(e) { console.error('[bb] set_items failed:', e); });
+
+          return true;
+        }
+
+        if (!tryInit()) {
+          var t = setInterval(function() { if (tryInit()) clearInterval(t); }, 50);
+        }
+      })();
+    </script>
   </head>
   <body>
   </body>

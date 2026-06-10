@@ -1,0 +1,9 @@
+[default]
+description = "Allows configuring the native glass tab bar (set items, active tab, hidden, badge)."
+permissions = [
+  "allow-set-items",
+  "allow-set-active-tab",
+  "allow-set-hidden",
+  "allow-set-badge",
+  "allow-register-listener",
+]

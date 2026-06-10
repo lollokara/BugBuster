@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-set-active-tab"
+description = "Enables the set_active_tab command without any pre-configured scope."
+commands.allow = ["set_active_tab"]
+
+[[permission]]
+identifier = "deny-set-active-tab"
+description = "Denies the set_active_tab command without any pre-configured scope."
+commands.deny = ["set_active_tab"]

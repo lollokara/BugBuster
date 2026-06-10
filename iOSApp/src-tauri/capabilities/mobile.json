@@ -8,6 +8,12 @@
     "barcode-scanner:allow-scan",
     "barcode-scanner:allow-cancel",
     "barcode-scanner:allow-check-permissions",
-    "barcode-scanner:allow-request-permissions"
+    "barcode-scanner:allow-request-permissions",
+    "ios-glass-tabbar:allow-set-items",
+    "ios-glass-tabbar:allow-set-hidden",
+    "ios-glass-tabbar:allow-set-active-tab",
+    "ios-glass-tabbar:allow-set-badge",
+    "ios-glass-tabbar:allow-register-listener",
+    "ios-glass-tabbar:default"
   ]
 }

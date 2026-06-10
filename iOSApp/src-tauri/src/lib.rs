@@ -14,11 +14,13 @@ mod la_usb;
 mod la_transport;
 
 mod ios_utils;
+mod scripts_commands;
 mod state;
 mod transport;
 
 use connection_manager::ConnectionManager;
 use la_commands::LaState;
+use scripts_commands::ReplState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,8 +34,15 @@ pub fn run() {
             #[cfg(not(mobile))]
             { tauri::plugin::Builder::<_, ()>::new("barcode-scanner-stub").build() }
         })
+        .plugin({
+            #[cfg(target_os = "ios")]
+            { tauri_plugin_ios_glass_tabbar::init() }
+            #[cfg(not(target_os = "ios"))]
+            { tauri::plugin::Builder::<_, ()>::new("ios-glass-tabbar-stub").build() }
+        })
         .manage(ConnectionManager::new())
         .manage(LaState::new())
+        .manage(ReplState::new())
         .invoke_handler(tauri::generate_handler![
             ios_utils::get_device_token,
             ios_utils::save_device_token,
@@ -204,6 +213,20 @@ pub fn run() {
             la_commands::la_export_vcd_file,
             la_commands::la_export_json,
             la_commands::la_import_json,
+            // Scripts / MicroPython
+            scripts_commands::scripts_list_files,
+            scripts_commands::scripts_get_file,
+            scripts_commands::scripts_save_file,
+            scripts_commands::scripts_delete_file,
+            scripts_commands::scripts_get_storage,
+            scripts_commands::scripts_run_file,
+            scripts_commands::scripts_stop,
+            scripts_commands::scripts_reset_vm,
+            scripts_commands::scripts_get_status,
+            scripts_commands::scripts_get_logs,
+            scripts_commands::scripts_repl_connect,
+            scripts_commands::scripts_repl_send,
+            scripts_commands::scripts_repl_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
