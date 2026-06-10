@@ -3,8 +3,8 @@ import SwiftUI
 struct SignalPathTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @State private var opStatus: String? = nil
-    @State private var lastWriteMs: Double = 0
     
+    // Constants
     let PRESETS: [(name: String, states: [Int])] = [
         ("All Open", [0x00, 0x00, 0x00, 0x00]),
         ("GPIO Direct", [0x51, 0x51, 0x51, 0x51]),
@@ -12,19 +12,11 @@ struct SignalPathTab: View {
         ("External", [0x08, 0x08, 0x08, 0x08])
     ]
     
-    let C_GPIO = Color(red: 0.13, green: 0.77, blue: 0.37)     // Green
-    let C_GPIO_R = Color(red: 0.92, green: 0.70, blue: 0.03)   // Yellow
-    let C_ADC = Color(red: 0.23, green: 0.51, blue: 0.96)      // Blue
-    let C_EXT = Color(red: 0.98, green: 0.45, blue: 0.09)      // Orange
-    let C_BG = Color(red: 0.03, green: 0.05, blue: 0.10)
-    let C_CHIP = Color(red: 0.05, green: 0.09, blue: 0.16)
-    let C_CHIP_BD = Color(red: 0.12, green: 0.19, blue: 0.31)
-    
     let ACCENTS = [
-        Color(red: 0.23, green: 0.51, blue: 0.96),
-        Color(red: 0.06, green: 0.73, blue: 0.51),
-        Color(red: 0.96, green: 0.62, blue: 0.04),
-        Color(red: 0.66, green: 0.33, blue: 0.97)
+        Color(red: 0.23, green: 0.51, blue: 0.96), // Blue
+        Color(red: 0.06, green: 0.73, blue: 0.51), // Emerald
+        Color(red: 0.96, green: 0.62, blue: 0.04), // Amber
+        Color(red: 0.66, green: 0.33, blue: 0.97)  // Purple
     ]
     
     let MUX_REF = ["U10", "U11", "U17", "U16"]
@@ -37,172 +29,76 @@ struct SignalPathTab: View {
         ["IO12", "IO11", "IO10"]
     ]
     
-    let ADC_LABELS = ["CH A", "CH B", "CH C", "CH D"]
-    let EXT_LABELS = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"]
     let EFUSE_CTRL_NAMES = ["efuse1", "efuse2", "efuse3", "efuse4"]
-    
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Toolbar
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    Text("Presets:")
+        ZStack(alignment: .top) {
+            Color(red: 0.03, green: 0.05, blue: 0.10)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                if let status = opStatus {
+                    Text(status)
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.secondary)
-                    
-                    ForEach(PRESETS, id: \.name) { preset in
-                        Button(preset.name) {
-                            applyPreset(preset.states)
+                        .foregroundColor(.white)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.red.opacity(0.8))
+                        .transition(.move(edge: .top))
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                withAnimation { opStatus = nil }
+                            }
                         }
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.05))
-                        .cornerRadius(8)
-                    }
-                    
-                    Divider()
-                        .frame(height: 16)
-                        .background(Color.white.opacity(0.1))
-                    
-                    // Controls
-                    let ioexpEnables = connectionManager.lastOverview?.ioexp.enables
-                    let isOeActive = connectionManager.lastStatus?.liveStatus != nil // simple simulation/read
-                    
-                    ControlPill(title: "LShift OE", isActive: isOeActive) {
-                        toggleOe()
-                    }
-                    
-                    ControlPill(title: "V_ADJ1", isActive: ioexpEnables?.vadj1 ?? false) {
-                        togglePsu(0)
-                    }
-                    
-                    ControlPill(title: "V_ADJ2", isActive: ioexpEnables?.vadj2 ?? false) {
-                        togglePsu(1)
-                    }
-                    
-                    ForEach(0..<4) { i in
-                        let efActive = false // simple simulation or check overview snapshot
-                        ControlPill(title: "EF\(i+1)", isActive: efActive) {
-                            toggleEfuse(i)
-                        }
-                    }
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-            }
-            .background(Color.black.opacity(0.3))
-            
-            // Legend
-            HStack(spacing: 12) {
-                LegendItem(color: C_GPIO, text: "GPIO (direct)")
-                LegendItem(color: C_GPIO_R, text: "GPIO (2kΩ)")
-                LegendItem(color: C_ADC, text: "ADC Channel")
-                LegendItem(color: C_EXT, text: "External")
-                LegendItem(color: Color.red, text: "Power")
-            }
-            .padding(.vertical, 8)
-            
-            if let status = opStatus {
-                Text(status)
-                    .font(.system(size: 11))
-                    .foregroundColor(.red)
-                    .padding(.bottom, 4)
-            }
-            
-            // Interactive Canvas Schematic
-            GeometryReader { geo in
-                let muxStates = connectionManager.lastStatus?.muxStates ?? [0, 0, 0, 0]
-                let isPsuOn = [
-                    connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false,
-                    connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false
-                ]
-                let isEfOn = [false, false, false, false]
-                let isOeOn = true // simulated/real OE
-                
-                Canvas { context, size in
-                    render(
-                        c: context,
-                        w: size.width,
-                        h: size.height,
-                        ms: muxStates,
-                        ps: isPsuOn,
-                        es: isEfOn,
-                        oeOn: isOeOn
-                    )
-                }
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onEnded { value in
-                            handleTap(at: value.location, in: geo.size)
+
+                ScrollView {
+                    VStack(spacing: 16) {
+                        ForEach(0..<4) { ch in
+                            let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
+                            let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
+                                ? connectionManager.lastStatus!.muxStates[muxDev] : 0
+
+                            let isPsuOn = ch < 2
+                                ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
+                                : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
+
+                            let efuses = connectionManager.lastOverview?.ioexp.efuses
+                            let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
+                            let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
+
+                            let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
+                            let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
+                            let vAdjIndex  = ch < 2 ? 0 : 1
+
+                            BlockTile(
+                                blockIndex: ch,
+                                muxDevice: muxDev,
+                                muxRef: MUX_REF[ch],
+                                muxState: muxState,
+                                ioLabels: GPIO_PAIR_LABELS[ch],
+                                accentColor: ACCENTS[ch],
+                                isPsuActive: isPsuOn,
+                                isEfuseActive: isEfOn,
+                                isEfuseFault: isEfFault,
+                                isOeActive: isOeActive,
+                                vAdjLabel: vAdjLabel,
+                                onApplyMuxStates: { states in applyPreset(states) },
+                                onToggleOe:     { toggleOe() },
+                                onToggleVAdj:   { togglePsu(vAdjIndex) },
+                                onToggleEfuse:  { toggleEfuse(ch) }
+                            )
                         }
-                )
+                    }
+                    .padding()
+                }
             }
         }
-        .background(C_BG)
         .preferredColorScheme(.dark)
     }
-    
-    private func handleTap(at pt: CGPoint, in size: CGSize) {
-        let psuH: CGFloat = 42
-        let rt = psuH + 10
-        let ra = size.height - rt - 4
-        let rh = ra / 4
-        let hitL = size.width * 0.12
-        let hitR = size.width * 0.63
-        
-        if pt.y < rt || pt.x < hitL || pt.x > hitR { return }
-        let ch = Int((pt.y - rt) / rh)
-        if ch < 0 || ch >= 4 { return }
-        
-        let ry = rt + CGFloat(ch) * rh
-        let lh = (rh - 12) / 8.5
-        let g = lh * 0.4
-        var syArr = [CGFloat](repeating: 0.0, count: 8)
-        for s in 0..<8 {
-            let gap = s >= 6 ? g * 2.0 : (s >= 4 ? g : 0.0)
-            syArr[s] = ry + 6.0 + CGFloat(s) * lh + gap
-        }
-        for s in 0..<8 {
-            syArr[s] = 2.0 * ry + rh - syArr[s]
-        }
-        
-        var best = -1
-        var bestD = CGFloat.infinity
-        for s in 0..<8 {
-            let d = abs(pt.y - syArr[s])
-            if d < bestD {
-                bestD = d
-                best = s
-            }
-        }
-        if best < 0 || bestD > max(8.0, lh * 1.1) { return }
-        
-        let dev = MUX_DEVICE_BY_LOGICAL[ch]
-        let currentStates = connectionManager.lastStatus?.muxStates ?? [0, 0, 0, 0]
-        let on = ((currentStates[dev] >> best) & 1) != 0
-        
-        toggleSwitch(device: dev, sw: best, closed: !on)
-    }
-    
-    private func toggleSwitch(device: Int, sw: Int, closed: Bool) {
-        Task {
-            do {
-                let ok = try await connectionManager.postAction(
-                    path: "/api/mux/switch",
-                    json: ["device": device, "switch": sw, "closed": closed]
-                )
-                if !ok {
-                    opStatus = "Failed to toggle switch"
-                } else {
-                    opStatus = nil
-                }
-            } catch {
-                opStatus = error.localizedDescription
-            }
-        }
-    }
-    
+
+    // MARK: - Actions (with optimistic local state updates)
+
     private func applyPreset(_ states: [Int]) {
         Task {
             do {
@@ -210,182 +106,330 @@ struct SignalPathTab: View {
                     path: "/api/mux/all",
                     json: ["states": states]
                 )
-                if !ok {
-                    opStatus = "Failed to apply preset"
-                } else {
-                    opStatus = nil
-                }
+                if !ok { opStatus = "Failed to apply MUX state" }
             } catch {
                 opStatus = error.localizedDescription
             }
         }
     }
-    
+
     private func toggleOe() {
+        let current = connectionManager.lastOverview?.ioexp.enables.mux ?? false
+        let next    = !current
+        // Optimistic: update UI immediately
+        connectionManager.applyOptimisticEnable(key: "mux", value: next)
         Task {
-            let nextState = true // Simple toggle logic or read from active
-            _ = try? await connectionManager.postAction(path: "/api/ioexp/control", json: ["control": "mux", "on": nextState])
+            _ = try? await connectionManager.postAction(
+                path: "/api/ioexp/control",
+                json: ["control": "mux", "on": next]
+            )
+            // Refresh once to sync any server-side side-effects
+            connectionManager.fetchOverviewQuick()
         }
     }
-    
+
     private func togglePsu(_ index: Int) {
-        let control = index == 0 ? "vadj1" : "vadj2"
-        let currentEn = index == 0 ?
-            (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false) :
-            (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
+        let control   = index == 0 ? "vadj1" : "vadj2"
+        let currentEn = index == 0
+            ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
+            : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
+        let next = !currentEn
+        connectionManager.applyOptimisticEnable(key: control, value: next)
         Task {
-            _ = try? await connectionManager.postAction(path: "/api/ioexp/control", json: ["control": control, "on": !currentEn])
+            _ = try? await connectionManager.postAction(
+                path: "/api/ioexp/control",
+                json: ["control": control, "on": next]
+            )
+            connectionManager.fetchOverviewQuick()
         }
     }
-    
+
     private func toggleEfuse(_ index: Int) {
-        let control = EFUSE_CTRL_NAMES[index]
+        let control   = EFUSE_CTRL_NAMES[index]
+        let efuseId   = index + 1
+        let currentEn = connectionManager.lastOverview?.ioexp.efuses?
+            .first(where: { $0.id == efuseId })?.enabled ?? false
+        let next = !currentEn
+        connectionManager.applyOptimisticEfuse(id: efuseId, enabled: next)
         Task {
-            _ = try? await connectionManager.postAction(path: "/api/ioexp/control", json: ["control": control, "on": true])
+            _ = try? await connectionManager.postAction(
+                path: "/api/ioexp/control",
+                json: ["control": control, "on": next]
+            )
+            connectionManager.fetchOverviewQuick()
         }
-    }
-    
-    // MARK: - Canvas Rendering Port
-    private func render(
-        c: GraphicsContext,
-        w: CGFloat,
-        h: CGFloat,
-        ms: [Int],
-        ps: [Bool],
-        es: [Bool],
-        oeOn: Bool
-    ) {
-        // Draw background
-        c.fill(Path(CGRect(x: 0, y: 0, width: w, height: h)), with: .color(C_BG))
-        
-        let psuH: CGFloat = 42
-        let rt = psuH + 10
-        let ra = h - rt - 4
-        let rh = ra / 4
-        
-        let gpioX = w * 0.06
-        let lsL = w * 0.085
-        let lsR = w * 0.115
-        let muxL = w * 0.18
-        let muxR = w * 0.50
-        
-        // PSU Bars
-        drawPsuBar(c: c, r: CGRect(x: 8, y: 4, width: w * 0.48 - 12, height: psuH), name: "V_ADJ1", feeds: "→ P1, P2", on: ps[0])
-        drawPsuBar(c: c, r: CGRect(x: w * 0.5 + 4, y: 4, width: w * 0.48 - 12, height: psuH), name: "V_ADJ2", feeds: "→ P3, P4", on: ps[1])
-        
-        // Level Shifters U13 & U15
-        for pair in 0..<2 {
-            let y1 = rt + CGFloat(pair * 2) * rh
-            let y2 = y1 + 2.0 * rh
-            let lsName = pair == 0 ? "U13" : "U15"
-            let lsPad: CGFloat = 4
-            
-            let rect = CGRect(x: lsL - 1, y: y1 + lsPad, width: lsR - lsL + 2, height: (y2 - y1) - lsPad * 2)
-            c.fill(Path(roundedRect: rect, cornerRadius: 3), with: .color(oeOn ? Color(red: 0.05, green: 0.10, blue: 0.07) : Color(red: 0.04, green: 0.06, blue: 0.11)))
-            c.stroke(Path(roundedRect: rect, cornerRadius: 3), with: .color(oeOn ? Color(red: 0.10, green: 0.25, blue: 0.19) : Color(red: 0.10, green: 0.16, blue: 0.25)), lineWidth: 1.0)
-            
-            // Text label
-            c.draw(Text(lsName).font(.system(size: 7, weight: .bold, design: .monospaced)).foregroundColor(oeOn ? .green : .secondary), at: CGPoint(x: (lsL + lsR) / 2, y: y1 + lsPad + 4))
-        }
-        
-        // Channels Rows
-        for ch in 0..<4 {
-            let ry = rt + CGFloat(ch) * rh
-            let dev = MUX_DEVICE_BY_LOGICAL[ch]
-            let st = ms.count > dev ? ms[dev] : 0
-            let accent = ACCENTS[ch]
-            
-            if ch > 0 {
-                var linePath = Path()
-                linePath.move(to: CGPoint(x: 0, y: ry))
-                linePath.addLine(to: CGPoint(x: w, y: ry))
-                c.stroke(linePath, with: .color(Color(white: 0.1)), lineWidth: 0.5)
-            }
-            
-            let lh = (rh - 12.0) / 8.5
-            let g = lh * 0.4
-            var sy = [CGFloat](repeating: 0.0, count: 8)
-            for s in 0..<8 {
-                let gap = s >= 6 ? g * 2.0 : (s >= 4 ? g : 0.0)
-                sy[s] = ry + 6.0 + CGFloat(s) * lh + gap
-            }
-            for s in 0..<8 {
-                sy[s] = 2.0 * ry + rh - sy[s]
-            }
-            
-            // MUX chip background
-            let chipRect = CGRect(x: muxL, y: ry + 2, width: muxR - muxL, height: rh - 4)
-            c.fill(Path(chipRect), with: .color(C_CHIP))
-            c.stroke(Path(chipRect), with: .color(C_CHIP_BD), lineWidth: 1.0)
-            
-            // Switch labels inside MUX chip
-            for s in 0..<8 {
-                let closed = ((st >> s) & 1) != 0
-                let syVal = sy[s]
-                
-                var swPath = Path()
-                swPath.move(to: CGPoint(x: muxL + 10, y: syVal))
-                swPath.addLine(to: CGPoint(x: muxR - 10, y: syVal))
-                c.stroke(swPath, with: .color(closed ? accent : Color(white: 0.15)), lineWidth: closed ? 2.5 : 1.0)
-                
-                let swLabel = Text("S\(s+1)")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundColor(closed ? .white : .secondary)
-                c.draw(swLabel, at: CGPoint(x: muxL + 25, y: syVal))
-            }
-            
-            // Mux chip label
-            let chipLabel = Text("MUX \(dev+1) · \(MUX_REF[ch])")
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                .foregroundColor(accent)
-            c.draw(chipLabel, at: CGPoint(x: (muxL + muxR) / 2, y: ry + rh - 10))
-            
-            // Draw schematic paths
-            // IO ports
-            let pairs = [[0, 1, 0], [4, 5, 1], [6, 7, 2]]
-            for pair in pairs {
-                let yd = sy[pair[0]]
-                let yr = sy[pair[1]]
-                let ym = (yd + yr) / 2
-                
-                let lblText = Text(GPIO_PAIR_LABELS[ch][pair[2]])
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white)
-                c.draw(lblText, at: CGPoint(x: gpioX, y: ym))
-                
-                var connectPath = Path()
-                connectPath.move(to: CGPoint(x: gpioX + 10, y: ym))
-                connectPath.addLine(to: CGPoint(x: lsL, y: ym))
-                c.stroke(connectPath, with: .color(.secondary), lineWidth: 1.0)
-            }
-        }
-    }
-    
-    private func drawPsuBar(c: GraphicsContext, r: CGRect, name: String, feeds: String, on: Bool) {
-        c.fill(Path(roundedRect: r, cornerRadius: 5), with: .color(on ? Color(red: 0.15, green: 0.05, blue: 0.05) : Color(red: 0.04, green: 0.06, blue: 0.12)))
-        c.stroke(Path(roundedRect: r, cornerRadius: 5), with: .color(on ? Color(red: 0.45, green: 0.12, blue: 0.12) : Color(red: 0.12, green: 0.18, blue: 0.28)), lineWidth: 1.0)
-        
-        let titleText = Text(name)
-            .font(.system(size: 11, weight: .bold, design: .rounded))
-            .foregroundColor(on ? .red : .secondary)
-        c.draw(titleText, at: CGPoint(x: r.minX + 12, y: r.minY + 12), anchor: .leading)
-        
-        let descText = Text(feeds)
-            .font(.system(size: 8, design: .monospaced))
-            .foregroundColor(.secondary)
-        c.draw(descText, at: CGPoint(x: r.minX + 12, y: r.minY + 26), anchor: .leading)
-        
-        // indicator light
-        let indicatorColor = on ? Color.green : Color(white: 0.1)
-        c.fill(Path(ellipseIn: CGRect(x: r.maxX - 20, y: r.midY - 4, width: 8, height: 8)), with: .color(indicatorColor))
     }
 }
+
+// MARK: - BlockTile
+
+struct BlockTile: View {
+    let blockIndex: Int
+    let muxDevice: Int
+    let muxRef: String
+    let muxState: Int
+    let ioLabels: [String]
+    let accentColor: Color
+    let isPsuActive: Bool
+    let isEfuseActive: Bool
+    let isEfuseFault: Bool
+    let isOeActive: Bool
+    let vAdjLabel: String
+    let onApplyMuxStates: ([Int]) -> Void
+    let onToggleOe: () -> Void
+    let onToggleVAdj: () -> Void
+    let onToggleEfuse: () -> Void
+
+    @EnvironmentObject var connectionManager: ConnectionManager
+
+    var body: some View {
+        let isGlowActive = isPsuActive && isEfuseActive
+
+        VStack(alignment: .leading, spacing: 12) {
+            // ── Header ────────────────────────────────────────────────────
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("BLOCK \(blockIndex + 1)")
+                        .font(.system(size: 12, weight: .black))
+                        .foregroundColor(accentColor)
+                    Text("MUX \(muxDevice + 1) · \(muxRef)")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                HStack(spacing: 6) {
+                    if (muxState & 0x04) != 0 {
+                        BadgeView(text: "ADC", color: .blue)
+                    }
+                    if isOeActive && (muxState & 0xF3) != 0 {
+                        BadgeView(text: "HAT LA", color: .green)
+                    }
+                    Circle()
+                        .fill(isGlowActive ? Color.green : Color.red.opacity(0.3))
+                        .frame(width: 8, height: 8)
+                        .shadow(color: isGlowActive ? .green : .clear, radius: 4)
+                }
+            }
+
+            Divider().background(Color.white.opacity(0.1))
+
+            // ── IO Rows ───────────────────────────────────────────────────
+            VStack(spacing: 12) {
+                IORow(label: ioLabels[0],
+                      mode: currentMode(for: 0),
+                      options: [.highZ, .direct, .resistor, .adc, .external],
+                      onSelect: { selectMode($0, for: 0) })
+                IORow(label: ioLabels[1],
+                      mode: currentMode(for: 1),
+                      options: [.highZ, .direct, .resistor],
+                      onSelect: { selectMode($0, for: 1) })
+                IORow(label: ioLabels[2],
+                      mode: currentMode(for: 2),
+                      options: [.highZ, .direct, .resistor],
+                      onSelect: { selectMode($0, for: 2) })
+            }
+
+            // ── Power & eFuse Controls ────────────────────────────────────
+            Divider().background(Color.white.opacity(0.06))
+
+            HStack(spacing: 10) {
+                ControlPill(title: "LS OE",    isActive: isOeActive,  action: onToggleOe)
+                ControlPill(title: vAdjLabel,  isActive: isPsuActive, action: onToggleVAdj)
+                Spacer()
+                EFuseInlineRow(
+                    index: blockIndex,
+                    enabled: isEfuseActive,
+                    fault: isEfuseFault,
+                    onToggle: onToggleEfuse
+                )
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(red: 0.05, green: 0.09, blue: 0.16))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isGlowActive ? accentColor : Color.white.opacity(0.1),
+                        lineWidth: isGlowActive ? 2 : 1)
+        )
+        .shadow(color: isGlowActive ? accentColor.opacity(0.4) : .clear,
+                radius: isGlowActive ? 14 : 0)
+        .animation(.easeInOut(duration: 0.3), value: isGlowActive)
+    }
+
+    private func currentMode(for ioIndex: Int) -> IOMode {
+        if ioIndex == 0 {
+            if (muxState & 0x01) != 0 { return .direct }
+            if (muxState & 0x02) != 0 { return .resistor }
+            if (muxState & 0x04) != 0 { return .adc }
+            if (muxState & 0x08) != 0 { return .external }
+        } else if ioIndex == 1 {
+            if (muxState & 0x10) != 0 { return .direct }
+            if (muxState & 0x20) != 0 { return .resistor }
+        } else if ioIndex == 2 {
+            if (muxState & 0x40) != 0 { return .direct }
+            if (muxState & 0x80) != 0 { return .resistor }
+        }
+        return .highZ
+    }
+
+    private func selectMode(_ mode: IOMode, for ioIndex: Int) {
+        guard var currentStates = connectionManager.lastStatus?.muxStates,
+              currentStates.count > muxDevice else { return }
+        var state = currentStates[muxDevice]
+        if ioIndex == 0 {
+            state &= ~0x0F
+            switch mode {
+            case .direct:   state |= 0x01
+            case .resistor: state |= 0x02
+            case .adc:      state |= 0x04
+            case .external: state |= 0x08
+            case .highZ:    break
+            }
+        } else if ioIndex == 1 {
+            state &= ~0x30
+            switch mode {
+            case .direct:   state |= 0x10
+            case .resistor: state |= 0x20
+            default: break
+            }
+        } else if ioIndex == 2 {
+            state &= ~0xC0
+            switch mode {
+            case .direct:   state |= 0x40
+            case .resistor: state |= 0x80
+            default: break
+            }
+        }
+        currentStates[muxDevice] = state
+        onApplyMuxStates(currentStates)
+    }
+}
+
+// MARK: - EFuseInlineRow
+
+struct EFuseInlineRow: View {
+    let index: Int
+    let enabled: Bool
+    let fault: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(fault ? Color.red : (enabled ? Color.orange : Color.gray.opacity(0.4)))
+                .frame(width: 7, height: 7)
+                .shadow(color: fault ? .red : (enabled ? .orange : .clear), radius: 5)
+
+            Text("EF\(index + 1)")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+
+            Text(fault ? "FAULT" : (enabled ? "ON" : "OFF"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(fault ? .red : (enabled ? .orange : .secondary))
+
+            Button(action: onToggle) {
+                Text(enabled ? "Disable" : "Enable")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(enabled ? .red : .cyan)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background((enabled ? Color.red : Color.cyan).opacity(0.12))
+                    .cornerRadius(7)
+            }
+        }
+    }
+}
+
+// MARK: - IOMode
+
+enum IOMode: String, CaseIterable {
+    case highZ    = "High-Z"
+    case direct   = "Direct"
+    case resistor = "2kΩ Resistor"
+    case adc      = "ADC Channel"
+    case external = "External"
+}
+
+// MARK: - IORow
+
+struct IORow: View {
+    let label: String
+    let mode: IOMode
+    let options: [IOMode]
+    let onSelect: (IOMode) -> Void
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .foregroundColor(.white)
+            Spacer()
+            Menu {
+                ForEach(options, id: \.self) { option in
+                    Button {
+                        onSelect(option)
+                    } label: {
+                        HStack {
+                            Text(option.rawValue)
+                            if option == mode { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(mode.rawValue)
+                        .font(.system(size: 13, weight: .semibold))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundColor(modeColor)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(8)
+            }
+        }
+    }
+
+    private var modeColor: Color {
+        switch mode {
+        case .highZ:    return .secondary
+        case .direct:   return Color(red: 0.13, green: 0.77, blue: 0.37)
+        case .resistor: return Color(red: 0.92, green: 0.70, blue: 0.03)
+        case .adc:      return Color(red: 0.23, green: 0.51, blue: 0.96)
+        case .external: return Color(red: 0.98, green: 0.45, blue: 0.09)
+        }
+    }
+}
+
+// MARK: - BadgeView
+
+struct BadgeView: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .black))
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.8))
+            .cornerRadius(4)
+    }
+}
+
+// MARK: - ControlPill
 
 struct ControlPill: View {
     let title: String
     let isActive: Bool
     var action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -395,22 +439,6 @@ struct ControlPill: View {
                 .padding(.vertical, 6)
                 .background(isActive ? Color.cyan : Color.white.opacity(0.1))
                 .cornerRadius(12)
-        }
-    }
-}
-
-struct LegendItem: View {
-    let color: Color
-    let text: String
-    
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(text)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.secondary)
         }
     }
 }

@@ -214,6 +214,28 @@ public struct WifiScanResponse: Codable, Equatable {
     public let networks: [WifiNetwork]
 }
 
+// MARK: - HAT Rails
+public struct HatRail: Codable, Identifiable, Equatable {
+    public var id: Int { railId }
+    public let railId: Int
+    public let enabled: Bool
+    public let voltageMv: Int
+    public let currentMa: Int
+    public let status: Int
+}
+
+public struct HatRailsResponse: Codable, Equatable {
+    public let railCount: Int
+    public let rails: [HatRail]
+}
+
+// MARK: - HAT Status
+public struct HatStatus: Codable, Equatable {
+    public let detected: Bool?
+    public let present: Bool?
+    public var isPresent: Bool { detected ?? present ?? false }
+}
+
 // MARK: - Device Info
 public struct DeviceInfo: Codable, Equatable {
     public let siliconRev: Int

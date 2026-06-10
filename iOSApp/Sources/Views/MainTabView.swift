@@ -5,40 +5,78 @@ import AVFoundation
 struct CustomTabBar: View {
     @Binding var selectedTab: Int
     let tabs: [(icon: String, name: String)]
-    
+    @Namespace private var tabAnimation
+
     var body: some View {
-        HStack {
-            ForEach(0..<tabs.count, id: \.self) { index in
-                Button(action: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        selectedTab = index
+        VStack(spacing: 0) {
+            // Hair-line separator so glass edge is visible against content
+            Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(height: 0.5)
+
+            HStack(spacing: 0) {
+                ForEach(0..<tabs.count, id: \.self) { index in
+                    let isActive = selectedTab == index
+                    Button {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
+                            selectedTab = index
+                        }
+                    } label: {
+                        VStack(spacing: 4) {
+                            ZStack {
+                                // Sliding blue capsule behind the active icon
+                                if isActive {
+                                    Capsule()
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [Color.blue.opacity(0.30), Color.cyan.opacity(0.14)],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                        .matchedGeometryEffect(id: "tab_bg", in: tabAnimation)
+                                        .frame(width: 54, height: 32)
+                                }
+
+                                Image(systemName: tabs[index].icon)
+                                    .font(.system(size: 19, weight: isActive ? .bold : .medium))
+                                    .foregroundStyle(
+                                        isActive
+                                            ? LinearGradient(colors: [.blue, .cyan], startPoint: .top, endPoint: .bottom)
+                                            : LinearGradient(colors: [Color(white: 0.50), Color(white: 0.50)], startPoint: .top, endPoint: .bottom)
+                                    )
+                                    .shadow(color: isActive ? Color.blue.opacity(0.65) : .clear, radius: 7)
+                                    .scaleEffect(isActive ? 1.08 : 1.0)
+                                    .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isActive)
+                            }
+                            .frame(width: 54, height: 32)
+
+                            Text(tabs[index].name)
+                                .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+                                .foregroundColor(isActive ? .blue : Color(white: 0.42))
+                                .animation(.easeInOut(duration: 0.18), value: isActive)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 10)
+                        .padding(.bottom, 6)
                     }
-                }) {
-                    VStack(spacing: 4) {
-                        Image(systemName: tabs[index].icon)
-                            .font(.system(size: 20, weight: selectedTab == index ? .bold : .medium))
-                            .foregroundColor(selectedTab == index ? Color.blue : Color.secondary)
-                        
-                        Text(tabs[index].name)
-                            .font(.system(size: 10, weight: selectedTab == index ? .semibold : .regular))
-                            .foregroundColor(selectedTab == index ? Color.blue : Color.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    .buttonStyle(.plain)
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+        // Glass background that EXTENDS below the safe area so it covers the
+        // home indicator — no black bar, no separate spacer needed.
+        .background {
+            Rectangle()
                 .fill(.ultraThinMaterial)
-                .shadow(color: Color.black.opacity(0.15), radius: 10, x: 0, y: -2)
-        )
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+                .ignoresSafeArea(edges: .bottom)
+        }
+        // Force the entire bar (including its background) into dark appearance
+        // so the material renders as dark frosted glass, not white.
+        .environment(\.colorScheme, .dark)
     }
 }
+
 
 struct MainTabView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
@@ -58,24 +96,24 @@ struct MainTabView: View {
     var body: some View {
         Group {
             if connectionManager.connectionState == .connected {
-                ZStack(alignment: .bottom) {
+                ZStack {
+                    Color(red: 0.03, green: 0.05, blue: 0.10)
+                        .ignoresSafeArea()
+
                     Group {
                         switch selectedTab {
-                        case 0:
-                            OverviewTab()
-                        case 1:
-                            SignalPathTab()
-                        case 2:
-                            DiagnosticsTab()
-                        case 3:
-                            ScriptsTab()
-                        default:
-                            OverviewTab()
+                        case 0:  OverviewTab()
+                        case 1:  SignalPathTab()
+                        case 2:  DiagnosticsTab()
+                        case 3:  ScriptsTab()
+                        default: OverviewTab()
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.bottom, 90)
-                    
+                }
+                // safeAreaInset is the correct approach: content is pushed up by the
+                // tab bar height AND the material blurs the content behind it.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
                     CustomTabBar(selectedTab: $selectedTab, tabs: tabs)
                 }
                 .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -158,12 +196,12 @@ struct MainTabView: View {
                                     .font(.system(size: 44))
                                     .foregroundStyle(
                                         LinearGradient(
-                                            colors: [.amber, .orange],
+                                            colors: [.orange, .orange],
                                             startPoint: .top,
                                             endPoint: .bottom
                                         )
                                     )
-                                    .shadow(color: .amber.opacity(0.3), radius: 10)
+                                    .shadow(color: .orange.opacity(0.3), radius: 10)
                                     .padding(.top, 16)
                                 
                                 Text("Token Required")
@@ -175,17 +213,34 @@ struct MainTabView: View {
                                     .multilineTextAlignment(.center)
                                     .padding(.horizontal)
                                 
-                                SecureField("Admin Access Token", text: $manualToken)
-                                    .autocorrectionDisabled()
-                                    .textInputAutocapitalization(.never)
-                                    .padding()
-                                    .background(Color.white.opacity(0.05))
-                                    .cornerRadius(12)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                    )
-                                    .padding(.horizontal)
+                                HStack(spacing: 8) {
+                                    SecureField("Admin Access Token", text: $manualToken)
+                                        .autocorrectionDisabled()
+                                        .textInputAutocapitalization(.never)
+                                        .padding()
+                                        .background(Color.white.opacity(0.05))
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        )
+                                    
+                                    Button(action: {
+                                        showingScanSheet = true
+                                    }) {
+                                        Image(systemName: "qrcode.viewfinder")
+                                            .font(.system(size: 20))
+                                            .foregroundColor(.cyan)
+                                            .padding()
+                                            .background(Color.cyan.opacity(0.1))
+                                            .cornerRadius(12)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+                                            )
+                                    }
+                                }
+                                .padding(.horizontal)
                                 
                                 HStack(spacing: 16) {
                                     Button("Cancel") {
@@ -230,7 +285,7 @@ struct MainTabView: View {
                             .cornerRadius(20)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 20)
-                                    .stroke(Color.amber.opacity(0.3), lineWidth: 1)
+                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
                             )
                             .padding(.horizontal)
                         } else {
@@ -422,12 +477,28 @@ struct MainTabView: View {
                     showingScanSheet = false
                     parseScannedCode(code)
                 })
+                .environmentObject(connectionManager)
             }
         }
     }
     
     private func parseScannedCode(_ code: String) {
-        // Expected format: bugbuster://<ip>?token=<token>
+        // Handle plain token scanning when in unauthorized state
+        if connectionManager.connectionState == .unauthorized {
+            manualToken = code
+            Task {
+                let ip = connectionManager.activeDevice?.ip ?? manualIp
+                let success = await connectionManager.connect(ip: ip, token: code)
+                if !success {
+                    errorMessage = "Authentication failed. Invalid token scanned."
+                } else {
+                    errorMessage = nil
+                }
+            }
+            return
+        }
+        
+        // Handle full device URL: bugbuster://<ip>?token=<token>
         guard let url = URL(string: code), url.scheme == "bugbuster" else {
             errorMessage = "Invalid QR code format"
             return
@@ -453,6 +524,7 @@ struct MainTabView: View {
 
 // Camera QR Code Scanner Subview
 struct QRScannerView: View {
+    @EnvironmentObject var connectionManager: ConnectionManager
     var scannedCode: (String) -> Void
     @Environment(\.dismiss) var dismiss
     
@@ -469,7 +541,11 @@ struct QRScannerView: View {
                     Text("Camera not available on simulator.")
                         .font(.headline)
                     Button("Simulate QR Code Scan") {
-                        scannedCode("bugbuster://192.168.1.100?token=admin_secret_token")
+                        if connectionManager.connectionState == .unauthorized {
+                            scannedCode("admin_secret_token")
+                        } else {
+                            scannedCode("bugbuster://bugbuster-s3.local?token=admin_secret_token")
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                 }

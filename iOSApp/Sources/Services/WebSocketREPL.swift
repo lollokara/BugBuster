@@ -48,6 +48,10 @@ public class WebSocketREPL: ObservableObject {
         self.webSocketTask = task
         task.resume()
         
+        // Start the receive pump immediately — before auth — so we never miss
+        // frames (including the welcome banner) that arrive before the send callback fires.
+        self.readMessage()
+        
         // Send the authentication token as the first message
         let authMessage = URLSessionWebSocketTask.Message.string(token)
         task.send(authMessage) { [weak self] error in
@@ -60,7 +64,7 @@ public class WebSocketREPL: ObservableObject {
                 DispatchQueue.main.async {
                     self?.connectionState = .connected
                 }
-                self?.readMessage()
+                // readMessage() is already running from above — no second call needed.
             }
         }
     }
@@ -93,8 +97,11 @@ public class WebSocketREPL: ObservableObject {
     }
     
     private func readMessage() {
-        guard let task = webSocketTask, connectionState == .connected else { return }
-        
+        // Allow both .connecting and .connected — the pump is started immediately
+        // after task.resume() while the auth handshake is still in flight.
+        guard let task = webSocketTask,
+              connectionState == .connected || connectionState == .connecting else { return }
+
         task.receive { [weak self] result in
             guard let self = self else { return }
             switch result {
@@ -116,6 +123,7 @@ public class WebSocketREPL: ObservableObject {
                 @unknown default:
                     break
                 }
+                // Re-arm — keep receiving as long as we're connected or connecting
                 self.readMessage()
             case .failure(let error):
                 print("WebSocket read error: \(error)")

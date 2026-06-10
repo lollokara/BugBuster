@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct ScriptFile: Identifiable {
     var id: String { name }
@@ -22,62 +23,68 @@ struct ScriptsTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @State private var files: [ScriptFile] = []
     @State private var storageInfo: StorageInfo? = nil
-    
+
     // Editor States
     @State private var editingFileName: String? = nil
     @State private var editingContent: String = ""
     @State private var isEditorDirty = false
-    
+
     // REPL States
     @State private var replClient: WebSocketREPL? = nil
     @State private var inputCommand: String = ""
     @State private var isShowingREPL = false
-    @State private var terminalText: String = ""
-    
+    @FocusState private var replInputFocused: Bool
+
+    // Keyboard height (manual observation since parent ignores keyboard safe area)
+    @State private var keyboardHeight: CGFloat = 0
+
     // Alert / Prompt States
     @State private var showingCreateAlert = false
     @State private var newFileName = ""
     @State private var errorMessage: String? = nil
-    
+    @State private var runStatusMessage: String? = nil
+
     var body: some View {
-        NavigationStack {
-            ZStack {
-                // Background
-                LinearGradient(
-                    colors: [Color(red: 0.05, green: 0.08, blue: 0.16), Color(red: 0.02, green: 0.03, blue: 0.06)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
-                
-                VStack(spacing: 0) {
-                    if let editingName = editingFileName {
-                        editorView(name: editingName)
-                    } else if isShowingREPL {
-                        replView
-                    } else {
-                        browserView
-                    }
-                }
-            }
-            .navigationTitle("Python Scripts")
-            .navigationBarHidden(true)
-            .onAppear {
-                loadFiles()
-            }
-            .alert("New Script Name", isPresented: $showingCreateAlert) {
-                TextField("script_name.py", text: $newFileName)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Button("Cancel", role: .cancel) {}
-                Button("Create") {
-                    createNewScript()
+        ZStack {
+            // Background
+            LinearGradient(
+                colors: [Color(red: 0.05, green: 0.08, blue: 0.16), Color(red: 0.02, green: 0.03, blue: 0.06)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                if let editingName = editingFileName {
+                    editorView(name: editingName)
+                } else if isShowingREPL {
+                    replView
+                } else {
+                    browserView
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { n in
+            if let frame = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                withAnimation(.easeOut(duration: 0.22)) { keyboardHeight = frame.height }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.22)) { keyboardHeight = 0 }
+        }
+        .onAppear { loadFiles() }
+        .alert("New Script Name", isPresented: $showingCreateAlert) {
+            TextField("script_name.py", text: $newFileName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Cancel", role: .cancel) {}
+            Button("Create") { createNewScript() }
+        }
     }
-    
+
     // MARK: - Stored Scripts Browser
+
     var browserView: some View {
         VStack(spacing: 16) {
             // Header toolbar
@@ -86,21 +93,20 @@ struct ScriptsTab: View {
                     Text("Stored Scripts")
                         .font(.system(size: 24, weight: .bold))
                     if let storage = storageInfo {
-                        Text(String(format: "Used %.1f KB / %.1f KB", storage.usedBytes / 1024, storage.totalBytes / 1024))
+                        Text(String(format: "Used %.1f KB / %.1f KB",
+                                    storage.usedBytes / 1024, storage.totalBytes / 1024))
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                     }
                 }
                 Spacer()
-                
-                Button(action: {
-                    showingCreateAlert = true
-                }) {
+
+                Button(action: { showingCreateAlert = true }) {
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 24))
                         .foregroundColor(.blue)
                 }
-                
+
                 Button(action: {
                     isShowingREPL = true
                     initializeREPL()
@@ -113,14 +119,33 @@ struct ScriptsTab: View {
             }
             .padding(.horizontal)
             .padding(.top, 16)
-            
+
             if let error = errorMessage {
                 Text(error)
                     .font(.system(size: 12))
                     .foregroundColor(.red)
                     .padding(.horizontal)
             }
-            
+
+            if let runMsg = runStatusMessage {
+                HStack {
+                    Image(systemName: runMsg.hasPrefix("Error") ? "xmark.circle.fill" : "checkmark.circle.fill")
+                    Text(runMsg)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(runMsg.hasPrefix("Error") ? .red : .green)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background((runMsg.hasPrefix("Error") ? Color.red : Color.green).opacity(0.12))
+                .cornerRadius(8)
+                .padding(.horizontal)
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        withAnimation { runStatusMessage = nil }
+                    }
+                }
+            }
+
             if files.isEmpty {
                 VStack(spacing: 20) {
                     Spacer()
@@ -130,27 +155,21 @@ struct ScriptsTab: View {
                     Text("No stored scripts found.")
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
-                    Button("Refresh List") {
-                        loadFiles()
-                    }
-                    .buttonStyle(.bordered)
+                    Button("Refresh List") { loadFiles() }
+                        .buttonStyle(.bordered)
                     Spacer()
                 }
             } else {
                 List {
                     ForEach(files) { file in
-                        Button(action: {
-                            openEditor(for: file.name)
-                        }) {
+                        Button(action: { openEditor(for: file.name) }) {
                             HStack {
-                                Image(systemName: "doc.text")
-                                    .foregroundColor(.cyan)
+                                Image(systemName: "doc.text").foregroundColor(.cyan)
                                 Text(file.name)
                                     .font(.system(size: 15, design: .monospaced))
                                     .foregroundColor(.primary)
                                 Spacer()
-                                Image(systemName: "pencil")
-                                    .foregroundColor(.secondary)
+                                Image(systemName: "pencil").foregroundColor(.secondary)
                             }
                         }
                         .listRowBackground(Color.white.opacity(0.02))
@@ -160,9 +179,9 @@ struct ScriptsTab: View {
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
-                            
                             Button {
-                                runScript(file.name)
+                                // Open REPL first so output is visible, then run
+                                openREPLAndRun(file.name)
                             } label: {
                                 Label("Run", systemImage: "play.fill")
                             }
@@ -171,77 +190,61 @@ struct ScriptsTab: View {
                     }
                 }
                 .listStyle(.plain)
-                .refreshable {
-                    loadFiles()
-                }
+                .refreshable { loadFiles() }
             }
         }
     }
-    
+
     // MARK: - Script Editor View
+
     func editorView(name: String) -> some View {
         VStack(spacing: 0) {
-            // Editor toolbar
             HStack {
-                Button(action: {
-                    if isEditorDirty {
-                        // Confirm discard changes
-                        editingFileName = nil
-                    } else {
-                        editingFileName = nil
-                    }
-                }) {
+                Button(action: { editingFileName = nil }) {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
                         Text("Back")
                     }
                 }
-                
                 Spacer()
                 Text(name)
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                 Spacer()
-                
                 HStack(spacing: 12) {
-                    Button(action: {
-                        saveScript()
-                    }) {
+                    Button(action: { saveScript() }) {
                         Text("Save")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundColor(isEditorDirty ? .cyan : .secondary)
                     }
-                    
-                    Button(action: {
-                        saveAndRunScript()
-                    }) {
-                        Image(systemName: "play.fill")
-                            .foregroundColor(.green)
+                    Button(action: { saveAndRunScript() }) {
+                        Image(systemName: "play.fill").foregroundColor(.green)
                     }
                 }
             }
             .padding()
             .background(Color.black.opacity(0.3))
-            
+
             TextEditor(text: $editingContent)
                 .font(.system(size: 13, design: .monospaced))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .scrollContentBackground(.hidden)
                 .background(Color(red: 0.02, green: 0.03, blue: 0.05))
-                .onChange(of: editingContent) { _ in
-                    isEditorDirty = true
-                }
+                .onChange(of: editingContent) { _ in isEditorDirty = true }
         }
     }
-    
+
     // MARK: - Interactive REPL View
+
     var replView: some View {
         VStack(spacing: 0) {
-            // REPL Toolbar
+            // Toolbar
             HStack {
                 Button(action: {
                     replClient?.disconnect()
+                    replClient = nil
                     isShowingREPL = false
+                    replInputFocused = false
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
@@ -252,67 +255,96 @@ struct ScriptsTab: View {
                 Text("MicroPython Shell")
                     .font(.system(size: 14, weight: .bold))
                 Spacer()
-                
                 HStack(spacing: 16) {
-                    Button("Ctrl-C") {
-                        replClient?.sendControlChar("C")
-                    }
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(.red)
-                    
-                    Button("Ctrl-D") {
-                        replClient?.sendControlChar("D")
-                    }
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(.cyan)
+                    Button("Ctrl-C") { replClient?.sendControlChar("C") }
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.red)
+                    Button("Ctrl-D") { replClient?.sendControlChar("D") }
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.cyan)
                 }
             }
-            .padding()
-            .background(Color.black.opacity(0.3))
-            
-            // Console Terminal Output
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.35))
+
+            // Terminal output — fills all remaining space
             if let client = replClient {
                 REPLTerminalConsole(client: client)
             } else {
                 Spacer()
-                ProgressView()
+                ProgressView().tint(.cyan)
                 Spacer()
             }
-            
-            // Interactive Input Row
-            HStack(spacing: 8) {
+
+            // Input bar — sits above keyboard via padding
+            HStack(spacing: 10) {
                 Text(">>>")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundColor(.green)
-                
-                TextField("Send command", text: $inputCommand, onCommit: {
-                    sendREPLCommand()
-                })
-                .font(.system(size: 14, design: .monospaced))
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .submitLabel(.send)
-                
-                Button(action: {
-                    sendREPLCommand()
-                }) {
+
+                TextField("Send command…", text: $inputCommand)
+                    .font(.system(size: 14, design: .monospaced))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.send)
+                    .focused($replInputFocused)
+                    .onSubmit { sendREPLCommand() }
+
+                Button(action: { sendREPLCommand() }) {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(.blue)
+                        .font(.system(size: 22))
+                        .foregroundColor(inputCommand.isEmpty ? .secondary : .blue)
                 }
+                .disabled(inputCommand.isEmpty)
             }
-            .padding()
-            .background(Color.black.opacity(0.4))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                Color(red: 0.06, green: 0.08, blue: 0.12)
+                    .overlay(Color.white.opacity(0.04))
+            )
+            // Push above keyboard (keyboard height from notification;
+            // subtract ~83pt tab bar area already outside content)
+            .padding(.bottom, max(0, keyboardHeight - 83))
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                replInputFocused = true
+            }
         }
     }
-    
+
     // MARK: - Helper Methods
+
+    private func initializeREPL() {
+        guard replClient == nil else { return }
+        let ip = connectionManager.activeDevice?.ip ?? ""
+        replClient = WebSocketREPL(host: ip, token: connectionManager.adminToken)
+        replClient?.connect()
+    }
+
+    /// Open REPL, connect it, then run the script so output is visible.
+    private func openREPLAndRun(_ name: String) {
+        isShowingREPL = true
+        initializeREPL()
+        // Brief delay to let WebSocket auth complete, then run
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            runScript(name)
+        }
+    }
+
+    private func sendREPLCommand() {
+        guard !inputCommand.isEmpty else { return }
+        replClient?.send(inputCommand + "\r\n")
+        inputCommand = ""
+    }
+
     private func loadFiles() {
         Task {
             do {
                 let res: ScriptListResponse = try await connectionManager.getRequest(path: "/api/scripts/files")
                 let storage: StorageInfo = try await connectionManager.getRequest(path: "/api/scripts/storage")
-                
                 DispatchQueue.main.async {
                     self.files = res.files.map { ScriptFile(name: $0) }
                     self.storageInfo = storage
@@ -325,13 +357,11 @@ struct ScriptsTab: View {
             }
         }
     }
-    
+
     private func createNewScript() {
         let name = newFileName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        
         let normalizedName = name.hasSuffix(".py") ? name : "\(name).py"
-        
         Task {
             do {
                 let urlStr = connectionManager.activeDevice?.ip ?? ""
@@ -340,7 +370,6 @@ struct ScriptsTab: View {
                 urlComponents.host = urlStr
                 urlComponents.path = "/api/scripts/files"
                 urlComponents.queryItems = [URLQueryItem(name: "name", value: normalizedName)]
-                
                 guard let url = urlComponents.url else { return }
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
@@ -349,25 +378,22 @@ struct ScriptsTab: View {
                     request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
                 }
                 request.httpBody = "# \(normalizedName)\n# Write your MicroPython code here\n".data(using: .utf8)
-                
                 let (_, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
                     throw URLError(.badServerResponse)
                 }
-                
                 DispatchQueue.main.async {
                     newFileName = ""
                     loadFiles()
                     openEditor(for: normalizedName)
                 }
             } catch {
-                DispatchQueue.main.async {
-                    errorMessage = "Create failed: \(error.localizedDescription)"
-                }
+                DispatchQueue.main.async { errorMessage = "Create failed: \(error.localizedDescription)" }
             }
         }
     }
-    
+
     private func openEditor(for name: String) {
         Task {
             do {
@@ -377,97 +403,116 @@ struct ScriptsTab: View {
                 urlComponents.host = urlStr
                 urlComponents.path = "/api/scripts/files/get"
                 urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-                
                 guard let url = urlComponents.url else { return }
                 var request = URLRequest(url: url)
                 request.httpMethod = "GET"
                 if !connectionManager.adminToken.isEmpty {
                     request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
                 }
-                
                 let (data, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
                     throw URLError(.badServerResponse)
                 }
-                
                 let content = String(data: data, encoding: .utf8) ?? ""
-                
                 DispatchQueue.main.async {
                     self.editingContent = content
                     self.editingFileName = name
                     self.isEditorDirty = false
                 }
             } catch {
-                DispatchQueue.main.async {
-                    errorMessage = "Load file failed: \(error.localizedDescription)"
-                }
+                DispatchQueue.main.async { errorMessage = "Load file failed: \(error.localizedDescription)" }
             }
         }
     }
-    
+
     private func saveScript() {
-        guard let name = editingFileName else { return }
-        Task {
-            do {
-                let urlStr = connectionManager.activeDevice?.ip ?? ""
-                var urlComponents = URLComponents()
-                urlComponents.scheme = "http"
-                urlComponents.host = urlStr
-                urlComponents.path = "/api/scripts/files"
-                urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-                
-                guard let url = urlComponents.url else { return }
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
-                if !connectionManager.adminToken.isEmpty {
-                    request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
-                }
-                request.httpBody = editingContent.data(using: .utf8)
-                
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
-                
-                DispatchQueue.main.async {
-                    isEditorDirty = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    errorMessage = "Save file failed: \(error.localizedDescription)"
-                }
-            }
-        }
+        Task { await saveScriptCore() }
     }
-    
-    private func runScript(_ name: String) {
-        Task {
-            let urlStr = connectionManager.activeDevice?.ip ?? ""
+
+    @discardableResult
+    private func saveScriptCore() async -> Bool {
+        guard let name = editingFileName else { return false }
+        guard let ip = connectionManager.activeDevice?.ip, !ip.isEmpty else { return false }
+        do {
             var urlComponents = URLComponents()
             urlComponents.scheme = "http"
-            urlComponents.host = urlStr
+            urlComponents.host = ip
+            urlComponents.path = "/api/scripts/files"
+            urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
+            guard let url = urlComponents.url else { return false }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
+            if !connectionManager.adminToken.isEmpty {
+                request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
+            }
+            request.httpBody = editingContent.data(using: .utf8)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+            DispatchQueue.main.async { self.isEditorDirty = false }
+            return true
+        } catch {
+            DispatchQueue.main.async { self.errorMessage = "Save file failed: \(error.localizedDescription)" }
+            return false
+        }
+    }
+
+    private func runScript(_ name: String) {
+        Task {
+            guard let ip = connectionManager.activeDevice?.ip, !ip.isEmpty else {
+                DispatchQueue.main.async { runStatusMessage = "Error: not connected" }
+                return
+            }
+            var urlComponents = URLComponents()
+            urlComponents.scheme = "http"
+            urlComponents.host = ip
             urlComponents.path = "/api/scripts/run-file"
             urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-            
-            guard let url = urlComponents.url else { return }
+            guard let url = urlComponents.url else {
+                DispatchQueue.main.async { runStatusMessage = "Error: bad URL" }
+                return
+            }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             if !connectionManager.adminToken.isEmpty {
                 request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
             }
-            
-            _ = try? await URLSession.shared.data(for: request)
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                DispatchQueue.main.async {
+                    if (200...299).contains(code) {
+                        withAnimation { runStatusMessage = "Running \(name)…" }
+                    } else {
+                        withAnimation { runStatusMessage = "Error: server returned \(code)" }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    withAnimation { runStatusMessage = "Error: \(error.localizedDescription)" }
+                }
+            }
         }
     }
-    
+
     private func saveAndRunScript() {
-        saveScript()
-        if let name = editingFileName {
-            runScript(name)
+        guard let name = editingFileName else { return }
+        Task {
+            let saved = await saveScriptCore()
+            if saved {
+                DispatchQueue.main.async {
+                    // Navigate to REPL to see output
+                    editingFileName = nil
+                    openREPLAndRun(name)
+                }
+            }
         }
     }
-    
+
     private func deleteFile(_ name: String) {
         Task {
             do {
@@ -477,61 +522,58 @@ struct ScriptsTab: View {
                 urlComponents.host = urlStr
                 urlComponents.path = "/api/scripts/files"
                 urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-                
                 guard let url = urlComponents.url else { return }
                 var request = URLRequest(url: url)
                 request.httpMethod = "DELETE"
                 if !connectionManager.adminToken.isEmpty {
                     request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
                 }
-                
                 let (_, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
                     throw URLError(.badServerResponse)
                 }
-                
-                DispatchQueue.main.async {
-                    loadFiles()
-                }
+                DispatchQueue.main.async { loadFiles() }
             } catch {
-                DispatchQueue.main.async {
-                    errorMessage = "Delete failed: \(error.localizedDescription)"
-                }
+                DispatchQueue.main.async { errorMessage = "Delete failed: \(error.localizedDescription)" }
             }
         }
     }
-    
-    private func initializeREPL() {
-        let ip = connectionManager.activeDevice?.ip ?? ""
-        replClient = WebSocketREPL(host: ip, token: connectionManager.adminToken)
-        replClient?.connect()
-    }
-    
-    private func sendREPLCommand() {
-        guard !inputCommand.isEmpty else { return }
-        replClient?.send(inputCommand + "\r\n")
-        inputCommand = ""
-    }
 }
+
+// MARK: - REPL Terminal Console
 
 struct REPLTerminalConsole: View {
     @ObservedObject var client: WebSocketREPL
-    
+    @State private var cursorVisible = true
+    let cursorTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Output text
                     Text(client.consoleOutput)
                         .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(Color(red: 0.8, green: 0.85, blue: 0.9))
+                        .foregroundColor(Color(red: 0.78, green: 0.87, blue: 0.95))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .id("bottom")
+                        .textSelection(.enabled)
+
+                    // Blinking block cursor
+                    Text(cursorVisible ? "█" : " ")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.55))
+                        .id("cursor")
                 }
-                .padding()
+                .padding(12)
+                .id("bottom")
             }
             .background(Color(red: 0.01, green: 0.02, blue: 0.04))
             .onChange(of: client.consoleOutput) { _ in
-                proxy.scrollTo("bottom", anchor: .bottom)
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onReceive(cursorTimer) { _ in
+                cursorVisible.toggle()
             }
         }
     }

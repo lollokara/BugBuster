@@ -42,18 +42,28 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var lastOverview: OverviewSnapshot? = nil
     @Published public var lastIoExp: IOExpState? = nil
     @Published public var lastSelftest: SelftestStatus? = nil
+    @Published public var lastHatStatus: HatStatus? = nil
+    @Published public var lastHatRails: [HatRail] = []
     
     @Published public var isSearching = false
     
     private var serviceBrowser: NetServiceBrowser?
     private var services: Set<NetService> = []
-    private var pollTimer: AnyCancellable?
+    private var pollTimer: AnyCancellable?       // kept for compile compat, unused
     private let session: URLSession
+    private var pollTask: Task<Void, Never>? = nil
+    private var pollCycle: Int = 0
     
     public override init() {
         let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 4.0
-        configuration.timeoutIntervalForResource = 5.0
+        configuration.timeoutIntervalForRequest = 5.0
+        configuration.timeoutIntervalForResource = 10.0
+        // Keep-alive: reuse one TCP connection to the ESP32 so lwIP sockets
+        // don't pile up in TIME_WAIT and exhaust the device's socket pool.
+        // URLSession handles stale keep-alive automatically by retrying on
+        // connection-lost errors for idempotent GET requests.
+        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: configuration)
         
         super.init()
@@ -306,6 +316,11 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                 self.activeDevice = DiscoveredDevice(hostname: "BugBuster Board", ip: cleanIp, port: 80)
                 self.connectionState = .connected
             }
+            // Kick off a one-shot slow fetch after connect — overview/ioexp/selftest/hat.
+            // This runs after the connection is established; failures are silently ignored.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.fetchOverviewOnce()
+            }
             return true
         } catch {
             print("Connection test failed: \(error)")
@@ -314,6 +329,8 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     public func disconnect() {
+        pollTask?.cancel()
+        pollTask = nil
         stopPolling()
         DispatchQueue.main.async {
             self.activeDevice = nil
@@ -322,6 +339,8 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             self.lastOverview = nil
             self.lastIoExp = nil
             self.lastSelftest = nil
+            self.lastHatStatus = nil
+            self.lastHatRails = []
             self.lshiftOe = false
         }
         UserDefaults.standard.removeObject(forKey: "bugbuster_ip")
@@ -330,56 +349,94 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     public func startPolling() {
-        DispatchQueue.main.async {
-            self.pollTimer?.cancel()
-            self.pollTimer = Timer.publish(every: 1.0, on: .main, in: .common)
-                .autoconnect()
-                .sink { [weak self] _ in
-                    self?.pollDeviceState()
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            var cycle = 0
+            while !Task.isCancelled {
+                guard let self = self,
+                      self.connectionState == .connected,
+                      let device = self.activeDevice else {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
                 }
+
+                let ip = device.ip
+                let token = self.adminToken
+                cycle += 1
+
+                if let status: DeviceStatus = try? await self.performRequest(ip: ip, path: "/api/status", token: token) {
+                    DispatchQueue.main.async { self.lastStatus = status }
+                }
+
+                if cycle % 5 == 0 {
+                    // Slow-cycle: reuse self.session (no new session per cycle) with
+                    // per-request timeout override. Sequential so only one TCP
+                    // connection is open at a time. /api/overview embeds ioexp.
+                    if let ov: OverviewSnapshot = await self.fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
+                        DispatchQueue.main.async {
+                            self.lastOverview = ov
+                            self.lastIoExp = ov.ioexp
+                        }
+                    }
+                    if let st: SelftestStatus = await self.fetchDecoded(SelftestStatus.self, ip: ip, path: "/api/selftest", token: token) {
+                        DispatchQueue.main.async { self.lastSelftest = st }
+                    }
+                    if let ht: HatStatus = await self.fetchDecoded(HatStatus.self, ip: ip, path: "/api/hat", token: token) {
+                        DispatchQueue.main.async { self.lastHatStatus = ht }
+                        if ht.isPresent {
+                            if let rr: HatRailsResponse = await self.fetchDecoded(HatRailsResponse.self, ip: ip, path: "/api/hat/v2/rails", token: token) {
+                                DispatchQueue.main.async { self.lastHatRails = rr.rails }
+                            }
+                        }
+                    }
+                }
+
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
         }
     }
-    
+
     public func stopPolling() {
-        DispatchQueue.main.async {
-            self.pollTimer?.cancel()
-            self.pollTimer = nil
-        }
+        pollTask?.cancel()
+        pollTask = nil
     }
-    
-    private func pollDeviceState() {
+
+    /// Fetch slow endpoints once (on connect or pull-to-refresh). Sequential,
+    /// reuses self.session — no throwaway URLSession objects.
+    public func fetchOverviewOnce() {
         guard connectionState == .connected, let device = activeDevice else { return }
-        
         let ip = device.ip
         let token = adminToken
-        
         Task {
-            if let status: DeviceStatus = try? await self.performRequest(ip: ip, path: "/api/status", token: token) {
-                DispatchQueue.main.async {
-                    self.lastStatus = status
-                }
+            if let ov: OverviewSnapshot = await fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
+                DispatchQueue.main.async { self.lastOverview = ov; self.lastIoExp = ov.ioexp }
             }
-            
-            if let overview: OverviewSnapshot = try? await self.performRequest(ip: ip, path: "/api/overview", token: token) {
-                DispatchQueue.main.async {
-                    self.lastOverview = overview
-                }
+            if let st: SelftestStatus = await fetchDecoded(SelftestStatus.self, ip: ip, path: "/api/selftest", token: token) {
+                DispatchQueue.main.async { self.lastSelftest = st }
             }
-            
-            if let ioexp: IOExpState = try? await self.performRequest(ip: ip, path: "/api/ioexp", token: token) {
-                DispatchQueue.main.async {
-                    self.lastIoExp = ioexp
-                }
-            }
-            
-            if let selftest: SelftestStatus = try? await self.performRequest(ip: ip, path: "/api/selftest", token: token) {
-                DispatchQueue.main.async {
-                    self.lastSelftest = selftest
+            if let ht: HatStatus = await fetchDecoded(HatStatus.self, ip: ip, path: "/api/hat", token: token) {
+                DispatchQueue.main.async { self.lastHatStatus = ht }
+                if ht.isPresent {
+                    if let rr: HatRailsResponse = await fetchDecoded(HatRailsResponse.self, ip: ip, path: "/api/hat/v2/rails", token: token) {
+                        DispatchQueue.main.async { self.lastHatRails = rr.rails }
+                    }
                 }
             }
         }
     }
     
+    private func fetchDecoded<T: Decodable>(_ type: T.Type, ip: String, path: String, token: String, timeout: TimeInterval = 10.0) async -> T? {
+        var urlStr = ip
+        if !urlStr.lowercased().hasPrefix("http://") { urlStr = "http://\(urlStr)" }
+        guard let url = URL(string: "\(urlStr)\(path)") else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = timeout
+        if !token.isEmpty { req.setValue(token, forHTTPHeaderField: "X-BugBuster-Admin-Token") }
+        guard let (data, resp) = try? await session.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode ?? 0 < 300 else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
     private func performRequest<T: Decodable>(ip: String, path: String, token: String) async throws -> T {
         var urlStr = ip
         if !urlStr.lowercased().hasPrefix("http://") && !urlStr.lowercased().hasPrefix("https://") {
@@ -442,6 +499,88 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             return ok
         } catch {
             return false
+        }
+    }
+
+    // MARK: - Optimistic local state helpers
+
+    /// Instantly mutate lastOverview enables so the UI reflects the toggle without
+    /// waiting for the round-trip HTTP response.
+    public func applyOptimisticEnable(key: String, value: Bool) {
+        guard let overview = lastOverview else { return }
+        let en = overview.ioexp.enables
+        let newEnables = IOExpEnables(
+            vadj1:    key == "vadj1"    ? value : en.vadj1,
+            vadj2:    key == "vadj2"    ? value : en.vadj2,
+            analog15v: key == "analog15v" ? value : en.analog15v,
+            mux:      key == "mux"      ? value : en.mux,
+            usbHub:   key == "usbHub"   ? value : en.usbHub
+        )
+        let newIoExp = IOExpState(
+            present:   overview.ioexp.present,
+            enables:   newEnables,
+            powerGood: overview.ioexp.powerGood,
+            efuses:    overview.ioexp.efuses
+        )
+        DispatchQueue.main.async {
+            self.lastOverview = OverviewSnapshot(
+                idac:  overview.idac,
+                ioexp: newIoExp,
+                rails: overview.rails
+            )
+        }
+    }
+
+    /// Instantly mutate lastOverview efuse list so the UI reflects toggle
+    /// without waiting for the round-trip HTTP response.
+    public func applyOptimisticEfuse(id: Int, enabled: Bool) {
+        guard let overview = lastOverview else { return }
+        let existing = overview.ioexp.efuses ?? []
+        let updated  = existing.map { ef in
+            ef.id == id ? IOExpEFuse(id: ef.id, enabled: enabled, fault: ef.fault) : ef
+        }
+        let newIoExp = IOExpState(
+            present:   overview.ioexp.present,
+            enables:   overview.ioexp.enables,
+            powerGood: overview.ioexp.powerGood,
+            efuses:    updated
+        )
+        DispatchQueue.main.async {
+            self.lastOverview = OverviewSnapshot(
+                idac:  overview.idac,
+                ioexp: newIoExp,
+                rails: overview.rails
+            )
+        }
+    }
+
+    public func applyOptimisticHatRailEnable(railId: Int, enabled: Bool) {
+        DispatchQueue.main.async {
+            self.lastHatRails = self.lastHatRails.map { r in
+                r.railId == railId ? HatRail(railId: r.railId, enabled: enabled, voltageMv: r.voltageMv, currentMa: r.currentMa, status: r.status) : r
+            }
+        }
+    }
+
+    public func fetchHatRailsQuick() {
+        guard connectionState == .connected, let device = activeDevice else { return }
+        let ip = device.ip; let token = adminToken
+        Task {
+            if let rr: HatRailsResponse = await fetchDecoded(HatRailsResponse.self, ip: ip, path: "/api/hat/v2/rails", token: token) {
+                DispatchQueue.main.async { self.lastHatRails = rr.rails }
+            }
+        }
+    }
+
+    /// Lightweight post-action refresh: single /api/overview via self.session.
+    public func fetchOverviewQuick() {
+        guard connectionState == .connected, let device = activeDevice else { return }
+        let ip = device.ip
+        let token = adminToken
+        Task {
+            if let ov: OverviewSnapshot = await fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
+                DispatchQueue.main.async { self.lastOverview = ov; self.lastIoExp = ov.ioexp }
+            }
         }
     }
 }
