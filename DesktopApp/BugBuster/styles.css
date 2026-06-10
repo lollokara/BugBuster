@@ -1101,6 +1101,7 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes glowPulse { 0%, 100% { box-shadow: 0 0 4px var(--glow-color); } 50% { box-shadow: 0 0 16px var(--glow-color); } }
+@keyframes progress-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 /* ---- Scrollbar ---- */
 ::-webkit-scrollbar { width: 6px; height: 6px; }

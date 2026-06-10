@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
-*(no changes yet)*
+### Fixed
+- Desktop app update check now detects newer stable releases for nightly users (e.g. `1.1.2-25` correctly sees `1.1.3` available via manual stable-manifest fallback when tauri-plugin-updater returns no update)
+- `published_at` deserialization no longer crashes on GitHub releases with `null` date (`#[serde(default)]` + safe `.get(..10)` slice in browse-releases list)
+
+### Improved
+- OTA upload progress bar animates with a green shimmer during HTTP upload stages instead of freezing at 40% (SPIFFS) or 90% (ESP32); backend emits intermediate progress ticks every 250 ms via `http_upload_with_progress` helper
 
 ## [1.3.3] — 2026-06-10
 

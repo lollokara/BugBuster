@@ -571,7 +571,8 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         let label = if r.prerelease {
                                             format!("{} (nightly)", r.version)
                                         } else {
-                                            format!("{} — {}", r.version, &r.published_at[..10])
+                                            let date = r.published_at.get(..10).unwrap_or(&r.published_at);
+                                            format!("{} — {}", r.version, date)
                                         };
                                         let size_kb = r.installer_size / 1024;
                                         let label = format!("{} [{} KB]", label, size_kb);
@@ -927,6 +928,7 @@ fn FirmwareSection() -> impl IntoView {
                         {move || {
                             if ota_active.get() {
                                 let prog = ota_progress.get();
+                                let uploading = prog.stage == "uploading";
                                 view! {
                                     <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
                                         <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
@@ -934,8 +936,13 @@ fn FirmwareSection() -> impl IntoView {
                                             <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
                                         </div>
                                         <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
-                                            <div style:width=move || format!("{}%", ota_progress.get().percent)
-                                                style="height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)"
+                                            <div
+                                                style:width=move || format!("{}%", ota_progress.get().percent)
+                                                style=move || if uploading {
+                                                    "height: 100%; background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7, #34d399, #10b981); background-size: 200% 100%; animation: progress-shimmer 1.4s linear infinite; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
+                                                } else {
+                                                    "height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
+                                                }
                                             ></div>
                                         </div>
                                         <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">
@@ -1032,6 +1039,7 @@ fn FirmwareSection() -> impl IntoView {
                     {move || {
                         if ota_active.get() {
                             let prog = ota_progress.get();
+                            let uploading = prog.stage == "uploading";
                             view! {
                                 <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
                                     <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
@@ -1039,8 +1047,13 @@ fn FirmwareSection() -> impl IntoView {
                                         <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
                                     </div>
                                     <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
-                                        <div style:width=move || format!("{}%", ota_progress.get().percent)
-                                            style="height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)"
+                                        <div
+                                            style:width=move || format!("{}%", ota_progress.get().percent)
+                                            style=move || if uploading {
+                                                "height: 100%; background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7, #34d399, #10b981); background-size: 200% 100%; animation: progress-shimmer 1.4s linear infinite; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
+                                            } else {
+                                                "height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
+                                            }
                                         ></div>
                                     </div>
                                     <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">

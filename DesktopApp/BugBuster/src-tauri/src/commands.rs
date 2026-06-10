@@ -3613,6 +3613,14 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
     Ok(git_releases)
 }
 
+fn semver_gt(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> (u32, u32, u32) {
+        let mut p = v.splitn(3, '.').map(|s| s.parse::<u32>().unwrap_or(0));
+        (p.next().unwrap_or(0), p.next().unwrap_or(0), p.next().unwrap_or(0))
+    };
+    parse(a) > parse(b)
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct AppUpdateInfo {
     pub available: bool,
@@ -3626,12 +3634,10 @@ pub struct AppUpdateInfo {
 pub async fn check_app_update(app: tauri::AppHandle) -> Result<AppUpdateInfo, String> {
     use tauri_plugin_updater::UpdaterExt;
     let current = app.package_info().version.to_string();
-    // Detect nightly: version contains a hyphen like "1.1.1-123"
     let is_nightly = current.contains('-');
 
-    // First try tauri-plugin-updater (stable endpoint)
+    // First try tauri-plugin-updater (handles stable endpoint with signature verification)
     let updater_result = app.updater().map_err(|e| e.to_string())?.check().await;
-
     match updater_result {
         Ok(Some(update)) => {
             return Ok(AppUpdateInfo {
@@ -3646,19 +3652,42 @@ pub async fn check_app_update(app: tauri::AppHandle) -> Result<AppUpdateInfo, St
         Err(_) => {}
     }
 
-    // If running a nightly, also check the nightly manifest directly
+    let client = reqwest::Client::builder()
+        .user_agent("BugBuster-Desktop/1.0.0")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Fallback: manually compare against latest stable manifest.
+    // Catches nightly users (e.g. 1.1.2-25) whose tauri updater check failed but a
+    // newer stable release (e.g. 1.1.3) is available.
+    let stable_url = "https://github.com/lollokara/BugBuster/releases/latest/download/bugbuster-desktop-update-manifest.json";
+    if let Ok(resp) = client.get(stable_url).send().await {
+        if resp.status().is_success() {
+            if let Ok(manifest) = resp.json::<serde_json::Value>().await {
+                if let Some(stable_ver) = manifest.get("version").and_then(|v| v.as_str()) {
+                    let current_base = current.splitn(2, '-').next().unwrap_or(&current);
+                    if semver_gt(stable_ver, current_base) {
+                        return Ok(AppUpdateInfo {
+                            available: true,
+                            version: stable_ver.to_string(),
+                            current_version: current,
+                            notes: format!("Stable release v{} is available.", stable_ver),
+                            is_nightly,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // If running a nightly, also check the nightly manifest for a newer build
     if is_nightly {
         let nightly_url = "https://github.com/lollokara/BugBuster/releases/download/nightly/bugbuster-desktop-update-manifest.json";
-        let client = reqwest::Client::builder()
-            .user_agent("BugBuster-Desktop/1.0.0")
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| e.to_string())?;
         if let Ok(resp) = client.get(nightly_url).send().await {
             if resp.status().is_success() {
                 if let Ok(manifest) = resp.json::<serde_json::Value>().await {
                     if let Some(manifest_version) = manifest.get("version").and_then(|v| v.as_str()) {
-                        // Compare build numbers: "1.1.1-125" vs "1.1.1-123"
                         let current_build: u64 = current.split('-').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                         let manifest_build: u64 = manifest_version.split('-').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                         if manifest_build > current_build {
@@ -4269,27 +4298,13 @@ async fn run_desktop_ota_flow(
             format!("{:x}", hasher.finalize())
         };
 
-        emit_progress(&app, "uploading", 90.0, "Uploading ESP32 firmware...");
         let upload_url = format!("{}/api/ota/upload?sha256={}", base_url, sha256_hex);
-        let mut req = client
-            .post(upload_url)
-            .header("Content-Type", "application/octet-stream")
-            .body(esp_data.to_vec());
-        if let Some(ref token) = admin_token {
-            req = req.header("X-BugBuster-Admin-Token", token);
-        }
-        let upload_resp = req
-            .send()
-            .await
-            .map_err(|e| format!("Failed to upload ESP32 binary: {}", e))?;
-        if !upload_resp.status().is_success() {
-            let status = upload_resp.status();
-            let err_body = upload_resp.text().await.unwrap_or_default();
-            return Err(format!(
-                "ESP32 upload failed (HTTP {}): {}",
-                status, err_body
-            ));
-        }
+        http_upload_with_progress(
+            &app, &client, &upload_url,
+            esp_data.to_vec(),
+            admin_token.as_deref(),
+            90.0, 95.0, "Uploading ESP32 firmware",
+        ).await?;
 
         emit_progress(
             &app,
@@ -4307,6 +4322,49 @@ async fn run_desktop_ota_flow(
         "Firmware update finished successfully.",
     );
     Ok(())
+}
+
+async fn http_upload_with_progress(
+    app: &tauri::AppHandle,
+    client: &reqwest::Client,
+    url: &str,
+    data: Vec<u8>,
+    token: Option<&str>,
+    start_pct: f32,
+    end_pct: f32,
+    label: &str,
+) -> Result<(), String> {
+    let data_len = data.len();
+    let mut req_builder = client
+        .post(url)
+        .header("Content-Type", "application/octet-stream")
+        .body(data);
+    if let Some(tok) = token {
+        req_builder = req_builder.header("X-BugBuster-Admin-Token", tok);
+    }
+    let send_fut = req_builder.send();
+    tokio::pin!(send_fut);
+    let mut current_pct = start_pct;
+    loop {
+        tokio::select! {
+            result = &mut send_fut => {
+                let resp = result.map_err(|e| format!("Upload failed: {}", e))?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(format!("Upload failed (HTTP {}): {}", status, body));
+                }
+                return Ok(());
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
+                let remaining = (end_pct - 2.0) - current_pct;
+                current_pct += (remaining * 0.12_f32).max(0.4_f32);
+                current_pct = current_pct.min(end_pct - 2.0);
+                emit_progress(app, "uploading", current_pct,
+                    &format!("{} ({} KB)...", label, data_len / 1024));
+            }
+        }
+    }
 }
 
 async fn run_desktop_spiffs_flow(
@@ -4386,33 +4444,13 @@ async fn run_desktop_spiffs_flow(
     let conn_status = mgr.get_connection_status();
     let admin_token = conn_status.admin_token;
 
-    emit_progress(
-        &app,
-        "uploading",
-        40.0,
-        "Uploading SPIFFS filesystem over HTTP...",
-    );
     let upload_url = format!("{}/api/ota/uploadfs", base_url);
-    let mut req = client
-        .post(upload_url)
-        .header("Content-Type", "application/octet-stream")
-        .body(spiffs_data.to_vec());
-    if let Some(ref token) = admin_token {
-        req = req.header("X-BugBuster-Admin-Token", token);
-    }
-    let upload_resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Failed to upload SPIFFS image: {}", e))?;
-    if !upload_resp.status().is_success() {
-        let status = upload_resp.status();
-        let err_body = upload_resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "SPIFFS upload failed (HTTP {}): {}",
-            status, err_body
-        ));
-    }
-
+    http_upload_with_progress(
+        &app, &client, &upload_url,
+        spiffs_data.to_vec(),
+        admin_token.as_deref(),
+        40.0, 98.0, "Uploading SPIFFS",
+    ).await?;
     emit_progress(&app, "done", 100.0, "SPIFFS update finished successfully.");
     Ok(())
 }

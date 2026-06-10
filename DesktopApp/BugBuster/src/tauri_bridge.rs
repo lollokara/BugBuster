@@ -1627,6 +1627,7 @@ pub async fn upload_firmware(path: &str) -> Result<String, String> {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopGitRelease {
     pub tag: String,
+    #[serde(default)]
     pub published_at: String,
     pub manifest_build_id: String,
     pub commit: String,
