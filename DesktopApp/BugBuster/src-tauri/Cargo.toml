@@ -1,6 +1,6 @@
 [package]
 name = "bugbuster"
-version = "1.1.2"
+version = "1.1.3"
 description = "BugBuster desktop app — Tauri host for the BugBuster electronics debug platform: serial/USB transport to the ESP32-S3 + RP2040 HAT, logic analyzer streaming, AD74416H I/O control."
 authors = ["lollokara"]
 license = "MIT"
@@ -43,6 +43,7 @@ local-ip-address = "0.6"
 futures = "0.3"
 nusb = "0.1"                    # Raw USB for RP2040 LA vendor bulk endpoint
 sha2 = "0.10"
+base64 = "0.22"
 tauri-plugin-updater = "2"
 
 

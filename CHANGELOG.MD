@@ -4,6 +4,50 @@
 
 *(no changes yet)*
 
+## [1.3.3] — 2026-06-10
+
+### Fixed
+- **Lint cleanup**: removed unused `deviceMac` import in `Voltages.tsx`; renamed `dir` parameter to `direction` in `client.py:hat_set_level_shift` and `http_routes.py` to avoid shadowing Python builtin; removed redundant `RwSignal` rebindings in `diag.rs`; replaced `useless_format!` calls with `.to_string()` in `commands.rs` and `push_str` literal in `la_store.rs`.
+
+### Added
+
+#### Desktop app
+- **Selftest worker toggle + CH-D reservation overlay**: `DiagTab` now fetches worker state on mount via `fetch_selftest_status()`, shows an enable/disable toggle card, and reactively dims the CH-D alert cell with an amber `⚡MON` badge when `supply_monitor_active` is true. (`src/tabs/diag.rs`)
+
+#### ESP32 firmware
+- **HAT IO block LED analog awareness**: `hat_update_leds()` now includes the AD74416H channel function in the IO block `io` flag — setting `FUNC_VOUT` (or any non-HIGH_IMP function) on a channel now lights the corresponding IO block LED yellow when no e-fuse supply is active, matching the expected "Analog enabled, no supply" indicator. `tasks_apply_channel_function` now calls `hat_update_leds()` on completion so LEDs update immediately. (`Firmware/ESP32/src/hat/hat.cpp`, `Firmware/ESP32/src/tasks.cpp`)
+
+#### ESP32 firmware (web API)
+- **`GET /POST /api/hat/power`**: Two new HTTP handlers in `webserver.cpp` expose HAT connector power state and toggling over HTTP. `GET` returns `{connA, connB}` objects with `enabled`/`currentMa`/`fault` plus `ioVoltageMv`; `POST` accepts `{connector, enable}`. Routes registered alongside existing HAT v2 handlers.
+
+#### ESP32 web UI (on-device)
+- **Signal path MUX → IO block LED**: toggling a MUX switch via the Signal Path tab now calls `hat_update_leds()` after state update (`handle_post_mux_switch`, `handle_post_mux_all` in `webserver.cpp`). `hat_update_leds` also checks `g_deviceState.muxState` per block (mapping `{0,1,3,2}`) so any active switch lights the IO block LED yellow/green. (`hat.cpp`, `webserver.cpp`)
+- **Web GitHub firmware update**: new `GitOtaCard` in the System → Device section lets users check for nightly releases and selectively install ESP32 and/or RP2040 updates. Calls `GET /api/update/check`, `POST /api/update/apply`, `GET /api/update/status` with progress polling. Added `UpdateCheckResult`/`UpdateStatus` types to `types.ts` and `api.update` namespace to `client.ts`. (`OtaCard.tsx`, `System.tsx`, `client.ts`, `types.ts`)
+- **GPIO picker redesign**: replaced the truncated `<select>` in the ESP32 GPIO card with three compact pill toggle buttons (Hi-Z / Out / In); cells are now two-row (IO label + HIGH/LOW on top, mode pills on bottom); HIGH/LOW button is disabled when mode ≠ Out. (`Digital.tsx`, `styles/tabs.css`)
+- **REPL browser freeze fix**: fixed two bugs in `Repl.tsx` that caused the browser to become unresponsive after connecting. (1) `ResizeObserver` loop: `term.resize()` changed xterm DOM height, which re-fired the observer — added an early-exit guard that skips resize when cols/rows haven't changed. (2) Stale closure: `ws.onmessage` captured `status` at connect time (`"disconnected"`) so `setStatus("connected")` fired on every incoming message causing a render storm — replaced with a `statusRef` that stays current across closures.
+- **`bb_helpers` API docs**: Added `bb_helpers.settle`, `bb_helpers.dac_ramp`, and `bb_helpers.channel_sweep` entries (new "Helpers" group) to the on-device Scripts tab API reference. (`Firmware/ESP32/web/src/tabs/scripts/apiDocs.ts`)
+- **Voltages tab**: New `Voltages.tsx` lazy tab aggregates supply rails (from `/api/overview`), IDAC channels (`/api/idac`), and HAT power rails (`/api/hat/v2/rails`, shown only when HAT detected). Polled every 2 s. Registered in `App.tsx` between Signal Path and System.
+
+#### TypeScript API client
+- **`hatGetPower` / `hatSetPower`**: New API client functions in `client.ts` targeting `GET/POST /api/hat/power`.
+
+#### Python client
+- **`hat_get_power` / `hat_set_power` HTTP transport**: Both methods now support HTTP transport (previously raised `NotImplementedError`); parse response into the same dict format as the USB path. (`python/bugbuster/client.py`)
+- **`selftest_status()` extended fields**: USB path now parses `worker_enabled` and `supply_monitor_active` from the 23-byte firmware payload; falls back gracefully for older 21-byte firmware. (`python/bugbuster/client.py`)
+
+#### Simulator
+- **`GET/POST /hat/power` HTTP routes**: Added to `tests/mock/http_routes.py` to back the new Python HTTP transport.
+
+#### Desktop app (prior entries)
+- **Scope PNG export**: Export dropdown "PNG" now captures the live scope canvas via `canvas.to_data_url()`, prompts for a save path (`.png`), and writes the file via the new `save_scope_png` Tauri command (base64 decode + `fs::write`). (`src/tabs/scope.rs`, `src-tauri/src/commands.rs`)
+- **Scope JSON export**: Export dropdown "JSON" serialises all four channels (label + `{time_ms, value}` point arrays) and the export timestamp to pretty-printed JSON, prompts for a save path (`.json`), and writes it via the new `write_text_file` Tauri command. (`src/tabs/scope.rs`, `src-tauri/src/commands.rs`)
+- **`pick_png_save_file` / `pick_json_save_file` Tauri commands**: Two new file-dialog helpers for PNG and JSON save paths, analogous to the existing `pick_save_file`. (`src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`)
+
+#### Simulator / Tests
+- **`ESP32_FW_VERSION` constant**: Added `ESP32_FW_VERSION = (3, 4, 0)` to `python/bugbuster/protocol.py`; `SimulatedDevice.fw_version` now imports and uses it instead of the stale hardcoded `(1, 0, 0)`.
+- **Simulator `uart_config` expanded**: Pre-populated with two UART bridge entries matching firmware defaults (UART1: tx=4/rx=2/921600, UART2: tx=7/rx=6/921600). (`tests/mock/simulated_device.py`)
+- **Simulator `hat_power` array**: `SimulatedDevice.__init__` now initialises `hat_power = [False, False]` (two connectors). `HAT_SET_POWER` handler indexes by connector, `HAT_GET_STATUS` and `HAT_GET_POWER` pack per-connector state. (`tests/mock/simulated_device.py`, `tests/mock/handlers/hat.py`)
+
 ## [1.3.2] — 2026-06-09
 
 ### Added
