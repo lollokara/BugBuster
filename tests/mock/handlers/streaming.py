@@ -141,6 +141,11 @@ def register(device) -> None:
         return b''
 
     def handle_start_scope(payload: bytes) -> bytes:
+        ch_mask = payload[0] if len(payload) >= 1 else 0x0F
+        if ch_mask == 0:
+            ch_mask = 0x0F
+        device.scope_ch_mask = ch_mask
+        device.adc_diag_paused = True
         _scope_stop.clear()
         t = threading.Thread(
             target=_scope_stream_loop,
@@ -157,6 +162,8 @@ def register(device) -> None:
         if th and th.is_alive():
             th.join(timeout=2.0)
         _scope_thread_holder[0] = None
+        device.scope_ch_mask = 0x0F
+        device.adc_diag_paused = False
         return b''
 
     device.register_handler(CmdId.START_ADC_STREAM,   handle_start_adc)

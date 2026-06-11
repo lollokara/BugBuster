@@ -31,6 +31,7 @@ struct ChannelState {
     AdcConvMux       adcMux;
     uint16_t         dacCode;
     float            dacValue;
+    bool             dacBipolar;        // Last requested VOUT range; false for current-output/raw default
     bool             dinState;          // comparator output
     uint32_t         dinCounter;
     bool             doState;           // digital output on/off
@@ -347,3 +348,40 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
  *        stacks that are close to exhaustion before shipping.
  */
 void tasks_log_stack_hwm(void);
+
+// -----------------------------------------------------------------------------
+// Scope ADC mode
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Rebuild ADC_CONV_CTRL from the current channel functions and scope
+ *        mode state.  Must be called with the SPI bus free (not inside the
+ *        ADC poll task's read window).
+ *
+ * Normal mode : diagMask = 0x0F, all active channels in sequence.
+ * Scope mode  : diagMask = 0x00, only scope-enabled channels in sequence.
+ *               If the supply-monitor safety interlock is active, logical
+ *               channel D (physical 2) is kept in the mask regardless.
+ */
+void tasks_rebuild_adc_conv_ctrl(void);
+
+/**
+ * @brief Enter scope ADC mode.  Drops diagnostic conversions from the
+ *        sequencer and restricts channel conversions to logical_ch_mask.
+ *        bit0 = CH A, bit1 = CH B, bit2 = CH C, bit3 = CH D.
+ *        Pass 0 to convert all channels (same as 0x0F).
+ *        Calls are refcounted so BBP, SSE, and WebSocket streams can overlap.
+ */
+void tasks_scope_mode_enter(uint8_t logical_ch_mask);
+
+/**
+ * @brief Exit scope ADC mode.  Restores full diagnostic sequencing once the
+ *        final stream owner exits.
+ */
+void tasks_scope_mode_exit(void);
+
+/** @brief Returns true while scope ADC mode is active. */
+bool tasks_scope_mode_active(void);
+
+/** @brief Returns the current logical channel mask used in scope mode. */
+uint8_t tasks_scope_mode_mask(void);

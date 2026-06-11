@@ -110,6 +110,8 @@ static int handler_device_reset(const uint8_t *payload, size_t len,
 {
     (void)payload; (void)len; (void)resp;
 
+    bbpStopWavegen();
+
     for (uint8_t ch = 0; ch < 4; ch++) {
         Command cmd = {};
         cmd.type = CMD_SET_CHANNEL_FUNC;

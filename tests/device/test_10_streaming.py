@@ -230,3 +230,93 @@ def test_adc_stream_restart(usb_device):
 
         assert len(events) >= 1, f"Cycle {cycle}: no events received"
     assert_no_faults(usb_device)
+
+
+# ---------------------------------------------------------------------------
+# Scope stream ch_mask / diagnostics-paused behaviour (sim-only state checks)
+# ---------------------------------------------------------------------------
+
+def _get_sim_device(usb_device):
+    """Return the underlying SimulatedDevice, or None if running on real hardware."""
+    t = getattr(usb_device, "_t", None)
+    return getattr(t, "_device", None)
+
+
+def test_scope_stream_ch_mask_recorded(usb_device):
+    """
+    start with mask 0x3 → simulator records scope_ch_mask=0x3 and adc_diag_paused=True.
+    """
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Sim state inspection requires --sim")
+
+    event_ready = threading.Event()
+
+    def on_scope(data):
+        event_ready.set()
+
+    usb_device.on_scope_data(on_scope, ch_mask=0x3)
+    event_ready.wait(timeout=2.0)
+
+    assert sim.scope_ch_mask == 0x3, (
+        f"Expected scope_ch_mask=0x3, got {sim.scope_ch_mask:#x}"
+    )
+    assert sim.adc_diag_paused is True, "adc_diag_paused should be True while scope stream active"
+    assert_no_faults(usb_device)
+
+
+def test_scope_stream_zero_mask_defaults_to_all(usb_device):
+    """
+    start with mask 0 → simulator normalises to 0x0F (all channels).
+    """
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Sim state inspection requires --sim")
+
+    event_ready = threading.Event()
+
+    def on_scope(data):
+        event_ready.set()
+
+    usb_device.on_scope_data(on_scope, ch_mask=0)
+    event_ready.wait(timeout=2.0)
+
+    assert sim.scope_ch_mask == 0x0F, (
+        f"Expected scope_ch_mask=0x0F for mask=0, got {sim.scope_ch_mask:#x}"
+    )
+    assert sim.adc_diag_paused is True, "adc_diag_paused should be True while scope stream active"
+    assert_no_faults(usb_device)
+
+
+def test_scope_stream_stop_restores_diag(usb_device):
+    """
+    stop scope stream → simulator clears adc_diag_paused and resets scope_ch_mask to 0x0F.
+    """
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Sim state inspection requires --sim")
+
+    event_ready = threading.Event()
+
+    def on_scope(data):
+        event_ready.set()
+
+    usb_device.on_scope_data(on_scope, ch_mask=0x5)
+    event_ready.wait(timeout=2.0)
+
+    # Confirm streaming started with the requested mask
+    assert sim.scope_ch_mask == 0x5
+    assert sim.adc_diag_paused is True
+
+    # Stop the stream by dispatching the stop command directly to the sim device
+    from bugbuster.constants import CmdId
+    sim.dispatch(int(CmdId.STOP_SCOPE_STREAM), b'')
+
+    # Allow stop handler to finish joining the scope thread
+    import time
+    time.sleep(0.05)
+
+    assert sim.adc_diag_paused is False, "adc_diag_paused should be False after stop"
+    assert sim.scope_ch_mask == 0x0F, (
+        f"scope_ch_mask should reset to 0x0F after stop, got {sim.scope_ch_mask:#x}"
+    )

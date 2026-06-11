@@ -31,11 +31,15 @@
 
 ### 🟡 Missing / Pending
 
+- **`startAdcConversion()` holds the SPI bus mutex during the ADC_BUSY busy-wait** — `ad74416h.cpp:259–271` stops the sequencer and polls `LIVE_STATUS` for up to 500 ms *while holding `g_spi_bus_mutex`*. The normal-mode diagnostic rate has been shortened, reducing the expected wait, but the driver still holds the mutex through the busy-wait. Consider releasing the mutex between `LIVE_STATUS` poll reads after auditing the register-update race. Found 2026-06-11; partially mitigated 2026-06-11.
+
 - **3-Wire RTD Mode Support** — Expose 3-wire RTD configurations in [tasks.cpp](file:///Users/lorenzo/Documents/Sviluppo/BugBuster/Firmware/ESP32/src/tasks.cpp#L1180) (setting `RTD_MODE_SEL=0`, `MUX=3`) and update BBP `SET_RTD_CONFIG` command parameters. Currently, it is hardcoded to 2-wire mode.
 
-- **Expose and Map HAT Power Commands over HTTP** — ✅ Done 2026-06-09: `GET /api/hat/power` and `POST /api/hat/power` added to `webserver.cpp` + TS client functions `hatGetPower`/`hatSetPower` added to `client.ts` + Python `hat_get_power`/`hat_set_power` HTTP transport wired + simulator routes added.
-
 - **SPIFFS OTA over WiFi and USB** — Add a first-class OTA flow for the SPIFFS partition over both transports, including upload, integrity verification, progress reporting, and final apply/reboot handling. Desktop and firmware currently cover firmware OTA, but SPIFFS still needs the same WiFi + USB path.
+
+### 🟢 Refactor / Cleanup
+
+*(none)*
 
 ### 🟢 Forward-looking note
 
@@ -75,10 +79,6 @@
 
 ## ESP32 Web UI
 
-### 🟡 Partial
-
-- **Voltages standalone tab** — ✅ Done 2026-06-09: new `Voltages.tsx` tab added to on-device web UI, aggregating supply rails (from overview), IDAC channels, and HAT rails (when detected). Registered as lazy tab in `App.tsx` between Signal Path and System.
-
 ### ⏳ Deferred
 
 - **Logic Analyzer streaming** — USB vendor-bulk path; no HTTP stream parity is architecturally possible. Needs explicit "USB only" messaging in the web UI.  
@@ -106,18 +106,6 @@
 *(none)*
 
 *(none)*
-
----
-
-## Cross-Stack — Pending Parity Work
-
-### 🟡 Overview / Selftest Worker / Quick Setup
-
-Pattern file: `.mex/patterns/overview-selftest-quicksetup-parity.md`
-
-- **Selftest worker toggle** — ✅ Done 2026-06-09: Python `selftest_status()` now parses `worker_enabled` + `supply_monitor_active` (23-byte payload, size fallback for older firmware). Desktop `DiagTab` now fetches worker state on mount via `fetch_selftest_status()`, shows a toggle card, and updates `supply_monitor_active` after toggling.
-- **CH-D diagnostic reservation** — ✅ Done 2026-06-09: CH-D alert cell in desktop `DiagTab` shows amber `⚡MON` badge and amber border when `supply_monitor_active` is true.
-- **Quick-setup: firmware + Python + simulator + web UI now complete** — Desktop Tauri commands (✅), ESP32 BBP handlers `0xF0–0xF4` in `cmd_wifi.cpp` (✅), HTTP routes in `webserver.cpp` (✅), `quicksetup.cpp/h` NVS store (✅), Python `client.py` `quicksetup_list/get/save/apply/delete` (✅ 2026-06-06), simulator `handlers/quicksetup.py` + HTTP routes in `http_routes.py` (✅ 2026-06-06), on-device web UI wiring in `Overview.tsx` and `QuickSetupTile.tsx` (✅ 2026-06-07).
 
 ---
 

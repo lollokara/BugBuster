@@ -2,8 +2,8 @@ use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
 
-/// IO ownership slots claimed by the GPIO tab (IO1..IO12 → indices 0..11).
-pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+/// GPIO claims only the edited IO slot when a write action is sent.
+pub const SLOTS: &[u8] = &[];
 
 #[component]
 pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
@@ -123,11 +123,11 @@ fn send_gpio_config(gpio: u8, mode: u8, pulldown: bool) {
         mode_name,
         if pulldown { " (pull-down)" } else { "" }
     );
-    invoke_with_feedback("set_gpio_config", args, &label);
+    invoke_with_io_claim("set_gpio_config", args, &label, &[gpio]);
 }
 
 fn send_gpio_value(gpio: u8, value: bool) {
     let args = serde_wasm_bindgen::to_value(&GpioValueArgs { gpio, value }).unwrap();
     let label = format!("Set IO {} {}", gpio + 1, if value { "HIGH" } else { "LOW" });
-    invoke_with_feedback("set_gpio_value", args, &label);
+    invoke_with_io_claim("set_gpio_value", args, &label, &[gpio]);
 }

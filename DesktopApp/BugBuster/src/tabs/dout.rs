@@ -4,8 +4,8 @@ use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
 
-/// IO ownership slots claimed by the DOUT tab (IO1..IO12 → indices 0..11).
-pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+/// DOUT claims only the edited logical channel slot when a write action is sent.
+pub const SLOTS: &[u8] = &[];
 
 const DO_MODE_OPTIONS: &[(u8, &str)] = &[
     (0, "High-Z"),
@@ -34,7 +34,7 @@ fn send_do_config(ch: u8, mode: u8, src_sel_gpio: bool, t1: u8, t2: u8) {
     })
     .unwrap();
     let label = format!("Set CH {} DO config", CH_NAMES[ch as usize]);
-    invoke_with_feedback("set_do_config", args, &label);
+    invoke_with_io_claim("set_do_config", args, &label, &[12 + ch]);
 }
 
 #[component]
@@ -97,7 +97,7 @@ pub fn DoutTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                 let new_state = !ch.do_state;
                                                 let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx, on: new_state }).unwrap();
                                                 let label = format!("Set CH {} DO {}", CH_NAMES[ch_idx as usize], if new_state { "ON" } else { "OFF" });
-                                                invoke_with_feedback("set_do_state", args, &label);
+                                                invoke_with_io_claim("set_do_state", args, &label, &[12 + ch_idx]);
                                             }
                                         >
                                             <div class="do-btn-indicator"></div>

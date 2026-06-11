@@ -913,6 +913,7 @@ void bbpStartScopeStream(void)
 void bbpStopScopeStream(void)
 {
     s_scopeStreamActive = false;
+    tasks_scope_mode_exit();
     ESP_LOGI(TAG, "Scope stream stopped");
 }
 

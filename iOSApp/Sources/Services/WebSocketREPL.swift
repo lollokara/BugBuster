@@ -97,10 +97,7 @@ public class WebSocketREPL: ObservableObject {
     }
     
     private func readMessage() {
-        // Allow both .connecting and .connected — the pump is started immediately
-        // after task.resume() while the auth handshake is still in flight.
-        guard let task = webSocketTask,
-              connectionState == .connected || connectionState == .connecting else { return }
+        guard let task = webSocketTask else { return }
 
         task.receive { [weak self] result in
             guard let self = self else { return }

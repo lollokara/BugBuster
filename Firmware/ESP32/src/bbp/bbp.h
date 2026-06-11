@@ -23,7 +23,7 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       8
+#define BBP_PROTO_VERSION       9
 
 #define BBP_FW_VERSION_MAJOR    3
 #define BBP_FW_VERSION_MINOR    5

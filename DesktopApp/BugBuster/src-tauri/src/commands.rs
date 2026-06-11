@@ -958,9 +958,15 @@ pub async fn stop_adc_stream(mgr: State<'_, ConnectionManager>) -> CmdResult<()>
 }
 
 #[tauri::command]
-pub async fn start_scope_stream(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    log::info!("[start_scope_stream] sending CMD_START_SCOPE_STREAM, payload_len=0");
-    mgr.send_command(bbp::CMD_START_SCOPE_STREAM, &[])
+pub async fn start_scope_stream(ch_mask: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
+    let mask = ch_mask & 0x0F;
+    log::info!(
+        "[start_scope_stream] sending CMD_START_SCOPE_STREAM, ch_mask=0x{:02X}",
+        mask
+    );
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(mask);
+    mgr.send_command(bbp::CMD_START_SCOPE_STREAM, &pw.buf)
         .await
         .map_err(map_err)?;
     Ok(())
@@ -1914,7 +1920,7 @@ pub async fn pick_json_save_file(app: tauri::AppHandle) -> CmdResult<Option<Stri
 
 #[tauri::command]
 pub fn save_scope_png(path: String, data_url: String) -> CmdResult<()> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     let prefix = "data:image/png;base64,";
     let b64 = data_url.strip_prefix(prefix).unwrap_or(&data_url);
     let bytes = STANDARD
@@ -3183,10 +3189,14 @@ pub async fn io_claim(
         .await
         .map_err(map_err)?;
 
-    // Register slots in the keep-alive set
+    // Register only slots that the device actually granted. A rejected claim
+    // still returns a response, but must not become a stale keep-alive entry.
     if let Ok(mut active) = mgr.active_slots.lock() {
-        for s in &slots {
-            active.insert(*s);
+        let n = rsp.first().copied().unwrap_or(0) as usize;
+        for (idx, slot) in slots.iter().take(n).enumerate() {
+            if rsp.get(1 + idx).copied() == Some(0) {
+                active.insert(*slot);
+            }
         }
     }
 
@@ -3616,7 +3626,11 @@ pub async fn fetch_github_releases() -> Result<Vec<DesktopGitRelease>, String> {
 fn semver_gt(a: &str, b: &str) -> bool {
     let parse = |v: &str| -> (u32, u32, u32) {
         let mut p = v.splitn(3, '.').map(|s| s.parse::<u32>().unwrap_or(0));
-        (p.next().unwrap_or(0), p.next().unwrap_or(0), p.next().unwrap_or(0))
+        (
+            p.next().unwrap_or(0),
+            p.next().unwrap_or(0),
+            p.next().unwrap_or(0),
+        )
     };
     parse(a) > parse(b)
 }
@@ -3687,15 +3701,27 @@ pub async fn check_app_update(app: tauri::AppHandle) -> Result<AppUpdateInfo, St
         if let Ok(resp) = client.get(nightly_url).send().await {
             if resp.status().is_success() {
                 if let Ok(manifest) = resp.json::<serde_json::Value>().await {
-                    if let Some(manifest_version) = manifest.get("version").and_then(|v| v.as_str()) {
-                        let current_build: u64 = current.split('-').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-                        let manifest_build: u64 = manifest_version.split('-').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    if let Some(manifest_version) = manifest.get("version").and_then(|v| v.as_str())
+                    {
+                        let current_build: u64 = current
+                            .split('-')
+                            .nth(1)
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        let manifest_build: u64 = manifest_version
+                            .split('-')
+                            .nth(1)
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
                         if manifest_build > current_build {
                             return Ok(AppUpdateInfo {
                                 available: true,
                                 version: manifest_version.to_string(),
                                 current_version: current,
-                                notes: format!("Nightly build {} is available (you have build {})", manifest_build, current_build),
+                                notes: format!(
+                                    "Nightly build {} is available (you have build {})",
+                                    manifest_build, current_build
+                                ),
                                 is_nightly: true,
                             });
                         }
@@ -3749,7 +3775,11 @@ pub async fn list_desktop_releases() -> Result<Vec<DesktopReleaseEntry>, String>
         .map_err(|e| e.to_string())?;
 
     let url = "https://api.github.com/repos/lollokara/BugBuster/releases?per_page=20";
-    let resp = client.get(url).send().await.map_err(|e| format!("GitHub API error: {}", e))?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("GitHub API error: {}", e))?;
     if !resp.status().is_success() {
         return Err(format!("GitHub API returned HTTP {}", resp.status()));
     }
@@ -3759,11 +3789,28 @@ pub async fn list_desktop_releases() -> Result<Vec<DesktopReleaseEntry>, String>
 
     if let Some(arr) = releases_json.as_array() {
         for release in arr {
-            let tag = release.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let name = release.get("name").and_then(|v| v.as_str()).unwrap_or(&tag).to_string();
-            let prerelease = release.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false);
-            let published_at = release.get("published_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if tag.is_empty() { continue; }
+            let tag = release
+                .get("tag_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = release
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&tag)
+                .to_string();
+            let prerelease = release
+                .get("prerelease")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let published_at = release
+                .get("published_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if tag.is_empty() {
+                continue;
+            }
 
             // Extract semver from tag: "desktop-v1.2.3" -> "1.2.3", "nightly" -> tag as-is
             let version = if let Some(v) = tag.strip_prefix("desktop-v") {
@@ -3791,13 +3838,18 @@ pub async fn list_desktop_releases() -> Result<Vec<DesktopReleaseEntry>, String>
                 'asset: for asset in assets {
                     let aname = asset.get("name").and_then(|v| v.as_str()).unwrap_or("");
                     // Skip .sig sidecar files and manifests
-                    if aname.ends_with(".sig") || aname.ends_with(".json") { continue; }
+                    if aname.ends_with(".sig") || aname.ends_with(".json") {
+                        continue;
+                    }
                     for ext in ext_filter {
                         if aname.ends_with(ext) {
-                            installer_url = asset.get("browser_download_url")
-                                .and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            installer_size = asset.get("size")
-                                .and_then(|v| v.as_u64()).unwrap_or(0);
+                            installer_url = asset
+                                .get("browser_download_url")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            installer_size =
+                                asset.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
                             break 'asset;
                         }
                     }
@@ -3805,7 +3857,9 @@ pub async fn list_desktop_releases() -> Result<Vec<DesktopReleaseEntry>, String>
             }
 
             // Only include releases that have an installer for this platform
-            if installer_url.is_empty() { continue; }
+            if installer_url.is_empty() {
+                continue;
+            }
 
             entries.push(DesktopReleaseEntry {
                 tag,
@@ -3846,7 +3900,11 @@ pub async fn install_desktop_version(app: tauri::AppHandle, url: String) -> Resu
         .build()
         .map_err(|e| e.to_string())?;
 
-    let resp = client.get(&url).send().await.map_err(|e| format!("Download failed: {}", e))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
     if !resp.status().is_success() {
         return Err(format!("Download HTTP {}", resp.status()));
     }
@@ -3873,7 +3931,9 @@ pub async fn install_desktop_version(app: tauri::AppHandle, url: String) -> Resu
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&tmp_path).map_err(|e| e.to_string())?.permissions();
+        let mut perms = std::fs::metadata(&tmp_path)
+            .map_err(|e| e.to_string())?
+            .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&tmp_path, perms).map_err(|e| e.to_string())?;
         std::process::Command::new(&tmp_path)
@@ -3882,7 +3942,10 @@ pub async fn install_desktop_version(app: tauri::AppHandle, url: String) -> Resu
     }
 
     // Emit progress event and exit the current app after a short delay
-    let _ = app.emit("app-update-progress", serde_json::json!({ "downloaded": bytes.len(), "total": bytes.len() }));
+    let _ = app.emit(
+        "app-update-progress",
+        serde_json::json!({ "downloaded": bytes.len(), "total": bytes.len() }),
+    );
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     app.exit(0);
     Ok(())
@@ -4300,11 +4363,16 @@ async fn run_desktop_ota_flow(
 
         let upload_url = format!("{}/api/ota/upload?sha256={}", base_url, sha256_hex);
         http_upload_with_progress(
-            &app, &client, &upload_url,
+            &app,
+            &client,
+            &upload_url,
             esp_data.to_vec(),
             admin_token.as_deref(),
-            90.0, 95.0, "Uploading ESP32 firmware",
-        ).await?;
+            90.0,
+            95.0,
+            "Uploading ESP32 firmware",
+        )
+        .await?;
 
         emit_progress(
             &app,
@@ -4446,11 +4514,16 @@ async fn run_desktop_spiffs_flow(
 
     let upload_url = format!("{}/api/ota/uploadfs", base_url);
     http_upload_with_progress(
-        &app, &client, &upload_url,
+        &app,
+        &client,
+        &upload_url,
         spiffs_data.to_vec(),
         admin_token.as_deref(),
-        40.0, 98.0, "Uploading SPIFFS",
-    ).await?;
+        40.0,
+        98.0,
+        "Uploading SPIFFS",
+    )
+    .await?;
     emit_progress(&app, "done", 100.0, "SPIFFS update finished successfully.");
     Ok(())
 }

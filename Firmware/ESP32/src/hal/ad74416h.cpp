@@ -333,9 +333,8 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
         ctrl &= ~ch_en_masks[ch];
     }
 
-    // Restart with continuous mode
-    ctrl = (ctrl & ~ADC_CONV_CTRL_CONV_SEQ_MASK)
-         | ((uint16_t)ADC_CONV_SEQ_START_CONT << ADC_CONV_CTRL_CONV_SEQ_SHIFT);
+    // Restore the previous conversion mode instead of unconditionally starting
+    // continuous conversions when the sequencer had been idle or single-shot.
     _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
 
     xSemaphoreGiveRecursive(g_spi_bus_mutex);
@@ -549,6 +548,39 @@ void AD74416H::setVoutRange(uint8_t ch, bool bipolar)
     _spi.updateRegister(AD74416H_REG_OUTPUT_CONFIG(ch),
                         OUTPUT_CONFIG_VOUT_RANGE_MASK,
                         bipolar ? OUTPUT_CONFIG_VOUT_RANGE_MASK : 0);
+}
+
+bool AD74416H::setVoutRangeSafe(uint8_t ch, uint16_t dac_code, bool bipolar)
+{
+    ch = clampCh(ch);
+
+    const uint8_t func_reg = AD74416H_REG_CH_FUNC_SETUP(ch);
+
+    // Datasheet Table 69: changing VOUT_RANGE while CH_FUNC is not HIGH_IMP
+    // shuts down VOUT/IOUT. Keep the channel Hi-Z while range and DAC code
+    // are prepared, then re-enable VOUT after the required settling time.
+    if (!_spi.updateRegister(func_reg,
+                             CH_FUNC_SETUP_CH_FUNC_MASK,
+                             (uint16_t)((CH_FUNC_HIGH_IMP << CH_FUNC_SETUP_CH_FUNC_SHIFT)
+                                        & CH_FUNC_SETUP_CH_FUNC_MASK))) {
+        return false;
+    }
+    delay_us(CHANNEL_SWITCH_US);
+
+    setVoutRange(ch, bipolar);
+    if (!setDacCode(ch, dac_code)) {
+        return false;
+    }
+    delay_us(CHANNEL_SWITCH_US);
+
+    if (!_spi.updateRegister(func_reg,
+                             CH_FUNC_SETUP_CH_FUNC_MASK,
+                             (uint16_t)((CH_FUNC_VOUT << CH_FUNC_SETUP_CH_FUNC_SHIFT)
+                                        & CH_FUNC_SETUP_CH_FUNC_MASK))) {
+        return false;
+    }
+    delay_us(CHANNEL_SWITCH_US);
+    return true;
 }
 
 void AD74416H::setCurrentLimit(uint8_t ch, bool limit_8mA)

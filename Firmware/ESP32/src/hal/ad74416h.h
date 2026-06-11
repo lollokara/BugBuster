@@ -314,6 +314,14 @@ public:
     void setVoutRange(uint8_t ch, bool bipolar);
 
     /**
+     * @brief Change VOUT range using the datasheet-safe HIGH_IMP sequence.
+     *
+     * VOUT_RANGE must only change while CH_FUNC is HIGH_IMP; for bipolar VOUT,
+     * the DAC code must be valid before VOUT is re-enabled.
+     */
+    bool setVoutRangeSafe(uint8_t ch, uint16_t dac_code, bool bipolar);
+
+    /**
      * @brief Set the current output limit.
      *
      * @param ch        Channel 0..3

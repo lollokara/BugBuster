@@ -69,6 +69,34 @@ static portMUX_TYPE s_server_mux = portMUX_INITIALIZER_UNLOCKED;
 
 #define BUGBUSTER_WEB_BUILD_MARKER "scripts-fix-20260427-1150"
 
+static bool is_valid_adc_mux(int value)
+{
+    return value >= ADC_MUX_LF_TO_AGND && value <= ADC_MUX_AGND_TO_AGND;
+}
+
+static bool is_valid_adc_range(int value)
+{
+    return value >= ADC_RNG_0_12V && value <= ADC_RNG_NEG2_5_2_5V;
+}
+
+static bool is_valid_adc_rate(int value)
+{
+    switch (value) {
+        case ADC_RATE_10SPS_H:
+        case ADC_RATE_20SPS:
+        case ADC_RATE_20SPS_H:
+        case ADC_RATE_200SPS_H1:
+        case ADC_RATE_200SPS_H:
+        case ADC_RATE_1_2KSPS:
+        case ADC_RATE_1_2KSPS_H:
+        case ADC_RATE_4_8KSPS:
+        case ADC_RATE_9_6KSPS:
+            return true;
+        default:
+            return false;
+    }
+}
+
 #ifndef BUGBUSTER_TRACE_URI_REGISTRATION
 #define BUGBUSTER_TRACE_URI_REGISTRATION 0
 #endif
@@ -841,6 +869,7 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
     // a little if the device reboots. EventSource default is 3 s — bump to
     // 5 s to be gentler on the ESP32.
     httpd_resp_send_chunk(req, "retry: 5000\n\n", 13);
+    tasks_scope_mode_enter(0x0F);
 
     uint16_t last_seq = 0;
     bool primed = false;
@@ -872,14 +901,25 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
                 if (avail > SCOPE_BUF_SIZE) avail = SCOPE_BUF_SIZE;
                 if (avail > 32) avail = 32;
 
+                ScopeBucket *snapshot = (ScopeBucket *)malloc(sizeof(ScopeBucket) * 32);
+                if (!snapshot) {
+                    xSemaphoreGive(g_stateMutex);
+                    tasks_scope_mode_exit();
+                    return ESP_ERR_NO_MEM;
+                }
+                uint16_t start = (head + SCOPE_BUF_SIZE - avail) % SCOPE_BUF_SIZE;
+                for (uint16_t n = 0; n < avail; n++) {
+                    uint16_t idx = (start + n) % SCOPE_BUF_SIZE;
+                    snapshot[n] = sb.buckets[idx];
+                }
+                xSemaphoreGive(g_stateMutex);
+
                 cJSON *root = cJSON_CreateObject();
                 cJSON_AddNumberToObject(root, "seq", cur_seq);
                 cJSON *samples = cJSON_AddArrayToObject(root, "samples");
 
-                uint16_t start = (head + SCOPE_BUF_SIZE - avail) % SCOPE_BUF_SIZE;
                 for (uint16_t n = 0; n < avail; n++) {
-                    uint16_t idx = (start + n) % SCOPE_BUF_SIZE;
-                    const ScopeBucket& bk = sb.buckets[idx];
+                    const ScopeBucket& bk = snapshot[n];
                     cJSON *pt = cJSON_CreateArray();
                     cJSON_AddItemToArray(pt, cJSON_CreateNumber(bk.timestamp_ms));
                     float invCount = (bk.count > 0) ? (1.0f / bk.count) : 0.0f;
@@ -892,11 +932,13 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
                     }
                     cJSON_AddItemToArray(samples, pt);
                 }
-                xSemaphoreGive(g_stateMutex);
+
+                free(snapshot);
 
                 char *body = cJSON_PrintUnformatted(root);
                 cJSON_Delete(root);
                 if (!body) {
+                    tasks_scope_mode_exit();
                     return ESP_FAIL;
                 }
                 // SSE wire format: "data: <json>\n\n"
@@ -905,6 +947,7 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
                     httpd_resp_send_chunk(req, body, blen) != ESP_OK ||
                     httpd_resp_send_chunk(req, "\n\n", 2) != ESP_OK) {
                     free(body);
+                    tasks_scope_mode_exit();
                     return ESP_OK; // client disconnected — clean exit
                 }
                 free(body);
@@ -923,6 +966,7 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
             uint32_t now = millis_now();
             if (now - last_heartbeat_ms >= HEARTBEAT_MS) {
                 if (httpd_resp_send_chunk(req, ": keep-alive\n\n", 14) != ESP_OK) {
+                    tasks_scope_mode_exit();
                     return ESP_OK;
                 }
                 last_heartbeat_ms = now;
@@ -1135,12 +1179,28 @@ static esp_err_t handle_post_adc_config(httpd_req_t *req)
     VALIDATE_JSON_FIELD(doc, "range", Number, "Missing field 'range'");
     VALIDATE_JSON_FIELD(doc, "rate", Number, "Missing field 'rate'");
 
+    int mux = cJSON_GetObjectItem(doc, "mux")->valueint;
+    int range = cJSON_GetObjectItem(doc, "range")->valueint;
+    int rate = cJSON_GetObjectItem(doc, "rate")->valueint;
+    if (!is_valid_adc_mux(mux)) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Invalid ADC mux");
+    }
+    if (!is_valid_adc_range(range)) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Invalid ADC range");
+    }
+    if (!is_valid_adc_rate(rate)) {
+        cJSON_Delete(doc);
+        return send_error(req, 400, "Invalid ADC rate");
+    }
+
     Command cmd{};
     cmd.type           = CMD_ADC_CONFIG;
     cmd.channel        = (uint8_t)ch;
-    cmd.adcCfg.mux     = (AdcConvMux)cJSON_GetObjectItem(doc, "mux")->valueint;
-    cmd.adcCfg.range   = (AdcRange)cJSON_GetObjectItem(doc, "range")->valueint;
-    cmd.adcCfg.rate    = (AdcRate)cJSON_GetObjectItem(doc, "rate")->valueint;
+    cmd.adcCfg.mux     = (AdcConvMux)mux;
+    cmd.adcCfg.range   = (AdcRange)range;
+    cmd.adcCfg.rate    = (AdcRate)rate;
     sendCommand(cmd);
     cJSON_Delete(doc);
 
@@ -1387,6 +1447,8 @@ static esp_err_t handle_post_device_reset(httpd_req_t *req)
     // Consume body (may be empty)
     cJSON *body = recv_json_body(req);
     if (body) cJSON_Delete(body);
+
+    bbpStopWavegen();
 
     Command cmd{};
     cmd.type = CMD_CLEAR_ALERTS;
@@ -2146,6 +2208,15 @@ static esp_err_t handle_get_overview(httpd_req_t *req)
         cJSON_AddBoolToObject(pg, "logic", st->logic_pg);
         cJSON_AddBoolToObject(pg, "vadj1", st->vadj1_pg);
         cJSON_AddBoolToObject(pg, "vadj2", st->vadj2_pg);
+
+        cJSON *efuses = cJSON_AddArrayToObject(ioexp, "efuses");
+        for (int i = 0; i < 4; i++) {
+            cJSON *obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(obj, "id", i + 1);
+            cJSON_AddBoolToObject(obj, "enabled", st->efuse_en[i]);
+            cJSON_AddBoolToObject(obj, "fault", st->efuse_flt[i]);
+            cJSON_AddItemToArray(efuses, obj);
+        }
     }
 
     // ---- Supplies: rails 0..2 measured voltages. Mirrors the wire format
@@ -2942,6 +3013,8 @@ static esp_err_t handle_post_hat_reset(httpd_req_t *req)
 // POST /api/hat/detect
 static esp_err_t handle_post_hat_detect(httpd_req_t *req)
 {
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
     HatType type = hat_detect();
     const HatState *hs = hat_get_state();
     if (hs->detected && !hs->connected) {
@@ -3539,37 +3612,30 @@ static esp_err_t handle_post_wavegen_start(httpd_req_t *req)
     cJSON *body = recv_json_body(req);
     if (!body) return send_error(req, 400, "Invalid JSON");
 
-    int ch = cJSON_GetObjectItem(body, "channel") ? cJSON_GetObjectItem(body, "channel")->valueint : 0;
-    int wf = cJSON_GetObjectItem(body, "waveform") ? cJSON_GetObjectItem(body, "waveform")->valueint : 0;
-    double freq = cJSON_GetObjectItem(body, "freq_hz") ? cJSON_GetObjectItem(body, "freq_hz")->valuedouble : 1.0;
-    double amp = cJSON_GetObjectItem(body, "amplitude") ? cJSON_GetObjectItem(body, "amplitude")->valuedouble : 5.0;
-    double off = cJSON_GetObjectItem(body, "offset") ? cJSON_GetObjectItem(body, "offset")->valuedouble : 0.0;
-    int mode = cJSON_GetObjectItem(body, "mode") ? cJSON_GetObjectItem(body, "mode")->valueint : 0;
+    cJSON *ch_item = cJSON_GetObjectItem(body, "channel");
+    cJSON *wf_item = cJSON_GetObjectItem(body, "waveform");
+    cJSON *freq_item = cJSON_GetObjectItem(body, "freq_hz");
+    cJSON *amp_item = cJSON_GetObjectItem(body, "amplitude");
+    cJSON *off_item = cJSON_GetObjectItem(body, "offset");
+    cJSON *mode_item = cJSON_GetObjectItem(body, "mode");
+
+    int ch = cJSON_IsNumber(ch_item) ? ch_item->valueint : 0;
+    int wf = cJSON_IsNumber(wf_item) ? wf_item->valueint : 0;
+    double freq = cJSON_IsNumber(freq_item) ? freq_item->valuedouble : 1.0;
+    double amp = cJSON_IsNumber(amp_item) ? amp_item->valuedouble : 5.0;
+    double off = cJSON_IsNumber(off_item) ? off_item->valuedouble : 0.0;
+    int mode = cJSON_IsNumber(mode_item) ? mode_item->valueint : 0;
     cJSON_Delete(body);
 
-    if (ch > 3) return send_error(req, 400, "Invalid channel");
-    if (wf > 3) return send_error(req, 400, "Invalid waveform");
+    if (ch < 0 || ch > 3) return send_error(req, 400, "Invalid channel");
+    if (wf < 0 || wf > 3) return send_error(req, 400, "Invalid waveform");
+    if (mode < 0 || mode > 1) return send_error(req, 400, "Invalid mode");
     if (freq < 0.01 || freq > 100.0) return send_error(req, 400, "Frequency out of range");
+    double max_out = (mode == WAVEGEN_CURRENT) ? IOUT_MAX_MA : VOUT_BIPOLAR_OFFSET_V;
+    if (amp < 0.0 || amp > max_out) return send_error(req, 400, "Amplitude out of range");
+    if (off < -max_out || off > max_out) return send_error(req, 400, "Offset out of range");
 
-    // Apply channel function synchronously — see bbp.cpp handleStartWavegen for rationale.
-    tasks_apply_channel_function((uint8_t)ch, (mode == 1) ? CH_FUNC_IOUT : CH_FUNC_VOUT);
-
-    // Set wavegen state
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        g_deviceState.wavegen.active    = true;
-        g_deviceState.wavegen.channel   = (uint8_t)ch;
-        g_deviceState.wavegen.waveform  = (WaveformType)wf;
-        g_deviceState.wavegen.freq_hz   = (float)freq;
-        g_deviceState.wavegen.amplitude = (float)amp;
-        g_deviceState.wavegen.offset    = (float)off;
-        g_deviceState.wavegen.mode      = (WavegenMode)mode;
-        xSemaphoreGive(g_stateMutex);
-    }
-
-    // Wake wavegen task
-    if (g_wavegenTask) {
-        xTaskNotifyGive(g_wavegenTask);
-    }
+    bbpStartWavegen((uint8_t)ch, (uint8_t)wf, (float)freq, (float)amp, (float)off, (uint8_t)mode);
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "started");
@@ -4922,6 +4988,45 @@ static esp_err_t handle_post_scripts_eval(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// POST /api/scripts/lint
+static esp_err_t handle_post_scripts_lint(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    int total = req->content_len;
+    if (total < 0 || total > SCRIPTS_EVAL_MAX_BYTES) {
+        return send_error(req, 400, "Body must be 0-32768 bytes of Python source");
+    }
+
+    char *src = (char*)malloc(total + 1);
+    if (!src) return send_error(req, 500, "Out of memory");
+
+    int received = 0;
+    while (received < total) {
+        int ret = httpd_req_recv(req, src + received, total - received);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            free(src);
+            return send_error(req, 500, "Receive error");
+        }
+        received += ret;
+    }
+    src[total] = '\0';
+
+    char err_buf[512] = {0};
+    bool ok = scripting_lint_string(src, (size_t)total, err_buf, sizeof(err_buf));
+    free(src);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", ok);
+    if (!ok) {
+        cJSON_AddStringToObject(root, "err", err_buf);
+    }
+    return send_json(req, root);
+}
+
 // GET /api/scripts/logs
 static esp_err_t handle_get_scripts_logs(httpd_req_t *req)
 {
@@ -5809,6 +5914,11 @@ bool initWebServer(void)
         .uri = "/api/scripts/eval", .method = HTTP_POST, .handler = handle_post_scripts_eval, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_scripts_eval);
+
+    httpd_uri_t uri_scripts_lint = {
+        .uri = "/api/scripts/lint", .method = HTTP_POST, .handler = handle_post_scripts_lint, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_scripts_lint);
 
     httpd_uri_t uri_scripts_logs = {
         .uri = "/api/scripts/logs", .method = HTTP_GET, .handler = handle_get_scripts_logs, .user_ctx = NULL

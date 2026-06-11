@@ -199,6 +199,10 @@ class SimulatedDevice:
         self._stream_stop = threading.Event()
         self._stream_thread = None
 
+        # Scope stream state
+        self.scope_ch_mask = 0x0F    # active channel bitmask (0x01–0x0F)
+        self.adc_diag_paused = False  # True while scope stream is active
+
         self._register_all_handlers()
 
     # ------------------------------------------------------------------

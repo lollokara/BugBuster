@@ -68,3 +68,6 @@ AGENTS.md
 /Scripts/logs
 /Docs/superpowers
 /iOSApp/.omc
+/iOSApp/bugbuster.xcodeproj/project.xcworkspace/xcuserdata
+/Firmware/ESP32/src/.omc
+/Firmware/ESP32/src/.omc

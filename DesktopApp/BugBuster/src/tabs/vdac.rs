@@ -4,8 +4,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
 
-/// IO ownership slots claimed by the VDAC tab (CH0..CH3 → indices 12..15).
-pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+/// VDAC claims analog slots only when a write action is sent.
+pub const SLOTS: &[u8] = &[];
 
 const SPARK_CAP: usize = 120;
 

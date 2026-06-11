@@ -44,6 +44,10 @@ struct ScriptsTab: View {
     @State private var errorMessage: String? = nil
     @State private var runStatusMessage: String? = nil
 
+    // Lint States
+    @State private var lintErrorMessage: String? = nil
+    @State private var lintSuccess: Bool? = nil
+
     var body: some View {
         ZStack {
             // Background
@@ -211,6 +215,11 @@ struct ScriptsTab: View {
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                 Spacer()
                 HStack(spacing: 12) {
+                    Button(action: { lintScript() }) {
+                        Text("Check")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.orange)
+                    }
                     Button(action: { saveScript() }) {
                         Text("Save")
                             .font(.system(size: 14, weight: .bold))
@@ -224,13 +233,36 @@ struct ScriptsTab: View {
             .padding()
             .background(Color.black.opacity(0.3))
 
-            TextEditor(text: $editingContent)
-                .font(.system(size: 13, design: .monospaced))
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .scrollContentBackground(.hidden)
+            if let success = lintSuccess {
+                HStack(alignment: .top) {
+                    Image(systemName: success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    Text(success ? "Syntax OK" : (lintErrorMessage ?? "Syntax Error"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(3)
+                }
+                .foregroundColor(success ? .green : .red)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background((success ? Color.green : Color.red).opacity(0.1))
+            }
+
+            SelectableCodeEditor(text: $editingContent)
                 .background(Color(red: 0.02, green: 0.03, blue: 0.05))
-                .onChange(of: editingContent) { _ in isEditorDirty = true }
+                .onChange(of: editingContent) { newValue in
+                    let sanitized = newValue
+                        .replacingOccurrences(of: "“", with: "\"")
+                        .replacingOccurrences(of: "”", with: "\"")
+                        .replacingOccurrences(of: "‘", with: "'")
+                        .replacingOccurrences(of: "’", with: "'")
+                        .replacingOccurrences(of: "—", with: "--")
+                        .replacingOccurrences(of: "–", with: "-")
+                    if sanitized != newValue {
+                        editingContent = sanitized
+                    }
+                    isEditorDirty = true
+                    lintSuccess = nil
+                }
         }
     }
 
@@ -256,6 +288,13 @@ struct ScriptsTab: View {
                     .font(.system(size: 14, weight: .bold))
                 Spacer()
                 HStack(spacing: 16) {
+                    Button(action: {
+                        UIPasteboard.general.string = replClient?.consoleOutput ?? ""
+                    }) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 14))
+                            .foregroundColor(.cyan)
+                    }
                     Button("Ctrl-C") { replClient?.sendControlChar("C") }
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundColor(.red)
@@ -285,11 +324,24 @@ struct ScriptsTab: View {
 
                 TextField("Send command…", text: $inputCommand)
                     .font(.system(size: 14, design: .monospaced))
+                    .keyboardType(.asciiCapable)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .submitLabel(.send)
                     .focused($replInputFocused)
                     .onSubmit { sendREPLCommand() }
+                    .onChange(of: inputCommand) { newValue in
+                        let sanitized = newValue
+                            .replacingOccurrences(of: "“", with: "\"")
+                            .replacingOccurrences(of: "”", with: "\"")
+                            .replacingOccurrences(of: "‘", with: "'")
+                            .replacingOccurrences(of: "’", with: "'")
+                            .replacingOccurrences(of: "—", with: "--")
+                            .replacingOccurrences(of: "–", with: "-")
+                        if sanitized != newValue {
+                            inputCommand = sanitized
+                        }
+                    }
 
                 Button(action: { sendREPLCommand() }) {
                     Image(systemName: "arrow.up.circle.fill")
@@ -336,7 +388,7 @@ struct ScriptsTab: View {
 
     private func sendREPLCommand() {
         guard !inputCommand.isEmpty else { return }
-        replClient?.send(inputCommand + "\r\n")
+        replClient?.send(inputCommand + "\r")
         inputCommand = ""
     }
 
@@ -513,6 +565,59 @@ struct ScriptsTab: View {
         }
     }
 
+    private func lintScript() {
+        guard let ip = connectionManager.activeDevice?.ip, !ip.isEmpty else {
+            self.lintErrorMessage = "Not connected"
+            self.lintSuccess = false
+            return
+        }
+
+        Task {
+            do {
+                var urlComponents = URLComponents()
+                urlComponents.scheme = "http"
+                urlComponents.host = ip
+                urlComponents.path = "/api/scripts/lint"
+                guard let url = urlComponents.url else { return }
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
+                if !connectionManager.adminToken.isEmpty {
+                    request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
+                }
+                request.httpBody = editingContent.data(using: .utf8)
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    DispatchQueue.main.async {
+                        self.lintErrorMessage = "Server returned status \(code)"
+                        self.lintSuccess = false
+                    }
+                    return
+                }
+
+                struct LintResponse: Codable {
+                    let ok: Bool
+                    let err: String?
+                }
+
+                let res = try JSONDecoder().decode(LintResponse.self, from: data)
+                DispatchQueue.main.async {
+                    self.lintSuccess = res.ok
+                    self.lintErrorMessage = res.err
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.lintErrorMessage = "Network error: \(error.localizedDescription)"
+                    self.lintSuccess = false
+                }
+            }
+        }
+    }
+
     private func deleteFile(_ name: String) {
         Task {
             do {
@@ -549,32 +654,177 @@ struct REPLTerminalConsole: View {
     let cursorTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Output text
-                    Text(client.consoleOutput)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(Color(red: 0.78, green: 0.87, blue: 0.95))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 0) {
+            SelectableConsoleView(text: client.consoleOutput)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(red: 0.01, green: 0.02, blue: 0.04))
 
-                    // Blinking block cursor
-                    Text(cursorVisible ? "█" : " ")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.55))
-                        .id("cursor")
-                }
-                .padding(12)
-                .id("bottom")
+            // Blinking block cursor
+            Text(cursorVisible ? "█" : " ")
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.55))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
+        }
+        .background(Color(red: 0.01, green: 0.02, blue: 0.04))
+        .onReceive(cursorTimer) { _ in
+            cursorVisible.toggle()
+        }
+    }
+}
+
+struct SelectableConsoleView: UIViewRepresentable {
+    let text: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.backgroundColor = .clear
+        textView.textColor = UIColor(red: 0.78, green: 0.87, blue: 0.95, alpha: 1.0)
+        textView.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = true
+        textView.showsVerticalScrollIndicator = true
+        textView.showsHorizontalScrollIndicator = false
+        textView.smartQuotesType = .no
+        textView.smartDashesType = .no
+        textView.smartInsertDeleteType = .no
+        textView.autocorrectionType = .no
+        textView.autocapitalizationType = .none
+        return textView
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        if uiView.text != text {
+            let isAtBottom = uiView.contentOffset.y >= (uiView.contentSize.height - uiView.frame.size.height - 10) || uiView.text.isEmpty
+            uiView.text = text
+            if isAtBottom {
+                let range = NSRange(location: text.utf16.count, length: 0)
+                uiView.scrollRangeToVisible(range)
             }
-            .background(Color(red: 0.01, green: 0.02, blue: 0.04))
-            .onChange(of: client.consoleOutput) { _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+}
+
+struct SelectableCodeEditor: UIViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.backgroundColor = UIColor(red: 0.02, green: 0.03, blue: 0.05, alpha: 1.0)
+        textView.textColor = .white
+        textView.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isScrollEnabled = true
+        textView.delegate = context.coordinator
+        context.coordinator.textView = textView
+
+        // Disable smart features
+        textView.smartQuotesType = .no
+        textView.smartDashesType = .no
+        textView.smartInsertDeleteType = .no
+        textView.autocorrectionType = .no
+        textView.autocapitalizationType = .none
+        textView.keyboardType = .asciiCapable
+
+        // Build horizontally scrollable accessory bar
+        let scrollView = UIScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44)
+        scrollView.backgroundColor = UIColor(red: 0.08, green: 0.11, blue: 0.18, alpha: 1.0)
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.alwaysBounceHorizontal = true
+
+        let stackView = UIStackView()
+        stackView.axis = .horizontal
+        stackView.spacing = 8
+        stackView.alignment = .fill
+        stackView.distribution = .fillProportionally
+
+        let keys = ["Tab", "#", ":", "_", "(", ")", "=", "Done"]
+        for key in keys {
+            let button = UIButton(type: .system)
+            button.setTitle(key, for: .normal)
+            button.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: key == "Done" || key == "Tab" ? .bold : .semibold)
+            button.setTitleColor(.cyan, for: .normal)
+            button.backgroundColor = UIColor(white: 1.0, alpha: 0.08)
+            button.layer.cornerRadius = 8
+            button.contentEdgeInsets = UIEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
+            
+            if key == "Done" {
+                button.addTarget(context.coordinator, action: #selector(Coordinator.donePressed), for: .touchUpInside)
+            } else {
+                button.addTarget(context.coordinator, action: #selector(Coordinator.accessoryButtonTapped(_:)), for: .touchUpInside)
             }
-            .onReceive(cursorTimer) { _ in
-                cursorVisible.toggle()
+            stackView.addArrangedSubview(button)
+        }
+
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 12),
+            stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -12),
+            stackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 6),
+            stackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -6),
+            stackView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor, constant: -12)
+        ])
+
+        textView.inputAccessoryView = scrollView
+
+        return textView
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        if uiView.text != text {
+            uiView.text = text
+        }
+    }
+
+    class Coordinator: NSObject, UITextViewDelegate {
+        var parent: SelectableCodeEditor
+        weak var textView: UITextView?
+
+        init(_ parent: SelectableCodeEditor) {
+            self.parent = parent
+        }
+
+        @objc func accessoryButtonTapped(_ sender: UIButton) {
+            guard let textView = textView else { return }
+            let title = sender.currentTitle ?? ""
+            let toInsert = title == "Tab" ? "    " : title
+            insertText(toInsert)
+        }
+
+        @objc func donePressed() {
+            textView?.resignFirstResponder()
+        }
+
+        private func insertText(_ string: String) {
+            guard let textView = textView else { return }
+            let range = textView.selectedRange
+            if let textRange = Range(range, in: textView.text) {
+                let newText = textView.text.replacingCharacters(in: textRange, with: string)
+                textView.text = newText
+                parent.text = newText
+                textView.selectedRange = NSRange(location: range.location + string.count, length: 0)
             }
+        }
+
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            if text == "\t" {
+                insertText("    ")
+                return false
+            }
+            return true
         }
     }
 }

@@ -23,10 +23,10 @@ struct SignalPathTab: View {
     let MUX_DEVICE_BY_LOGICAL = [0, 1, 3, 2]
     
     let GPIO_PAIR_LABELS = [
-        ["IO3", "IO2", "IO1"],
-        ["IO6", "IO5", "IO4"],
-        ["IO9", "IO8", "IO7"],
-        ["IO12", "IO11", "IO10"]
+        ["IO1", "IO2", "IO3"],
+        ["IO4", "IO5", "IO6"],
+        ["IO7", "IO8", "IO9"],
+        ["IO10", "IO11", "IO12"]
     ]
     
     let EFUSE_CTRL_NAMES = ["efuse1", "efuse2", "efuse3", "efuse4"]

@@ -251,6 +251,8 @@ bool pca9535_update(void)
     bool ok = true;
     ok &= read_reg(PCA9535_REG_INPUT0, &s_state.input0);
     ok &= read_reg(PCA9535_REG_INPUT1, &s_state.input1);
+    ok &= read_reg(PCA9535_REG_OUTPUT0, &s_state.output0);
+    ok &= read_reg(PCA9535_REG_OUTPUT1, &s_state.output1);
 
     if (ok) {
         // Outputs first so decode_inputs can correctly gate FLT by efuse_en.

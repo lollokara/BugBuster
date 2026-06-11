@@ -348,10 +348,10 @@ struct OverviewTab: View {
                     VoltageSliderRow(label: "HAT VLOGIC", value: $hatVlogicValue, range: 1.7...5.0, step: 0.05,
                         isDirty: $hatVlogicDirty,
                         onApply: { setHatRailVoltage(railId: 0, val: hatVlogicValue); hatVlogicDirty = false })
-                    VoltageSliderRow(label: "HAT VADJ3", value: $hatVadj3Value, range: 1.7...5.0, step: 0.05,
+                    VoltageSliderRow(label: "HAT VADJ3", value: $hatVadj3Value, range: 0.0...36.0, step: 0.1,
                         isDirty: $hatVadj3Dirty,
                         onApply: { setHatRailVoltage(railId: 1, val: hatVadj3Value); hatVadj3Dirty = false })
-                    VoltageSliderRow(label: "HAT VADJ4", value: $hatVadj4Value, range: 1.7...5.0, step: 0.05,
+                    VoltageSliderRow(label: "HAT VADJ4", value: $hatVadj4Value, range: 0.0...36.0, step: 0.1,
                         isDirty: $hatVadj4Dirty,
                         onApply: { setHatRailVoltage(railId: 2, val: hatVadj4Value); hatVadj4Dirty = false })
                 }

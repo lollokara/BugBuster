@@ -247,6 +247,52 @@ pub fn invoke_with_feedback(cmd: &str, args: JsValue, label: &str) {
     });
 }
 
+pub fn invoke_with_io_claim(cmd: &str, args: JsValue, label: &str, slots: &[u8]) {
+    let cmd = cmd.to_string();
+    let label = label.to_string();
+    let slots = slots.to_vec();
+    leptos::task::spawn_local(async move {
+        if !io_claim(&slots, 5000, &cmd).await {
+            show_toast(&format!("IO held by another interface: {}", format_slots(&slots)), "err");
+            return;
+        }
+
+        let ok = match try_invoke(&cmd, args).await {
+            Some(result) => {
+                let result_str = js_sys::JSON::stringify(&result)
+                    .map(|s| s.as_string().unwrap_or_default())
+                    .unwrap_or_default();
+                !(result_str.contains("error")
+                    || result_str.contains("Error")
+                    || result_str.contains("timeout"))
+            }
+            None => false,
+        };
+
+        io_release(&slots).await;
+        if ok {
+            show_toast(&label, "ok");
+        } else {
+            show_toast(&format!("Failed: {}", label), "err");
+            log(&format!("CMD FAIL [{}]: command rejected", cmd));
+        }
+    });
+}
+
+fn format_slots(slots: &[u8]) -> String {
+    slots
+        .iter()
+        .map(|slot| {
+            if *slot < 12 {
+                format!("IO{}", slot + 1)
+            } else {
+                format!("CH{}", slot - 12)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 // Global toast system using a JS custom event
 pub fn show_toast(msg: &str, kind: &str) {
     if let Some(window) = web_sys::window() {

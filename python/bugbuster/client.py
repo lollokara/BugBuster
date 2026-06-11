@@ -1223,9 +1223,15 @@ class BugBuster:
 
             bb.set_adc_config(1, rate=AdcRate.SPS_9600)
         """
+        if not 0 <= int(channel) < 4:
+            raise ValueError("channel must be 0-3")
+        mux = AdcMux(mux)
+        range_ = AdcRange(range_)
+        rate = AdcRate(rate)
+
         def _body():
             if self._usb:
-                payload = struct.pack('<BBBB', channel, int(mux), int(range_), int(rate))
+                payload = struct.pack('<BBBB', int(channel), int(mux), int(range_), int(rate))
                 self._usb_cmd(CmdId.SET_ADC_CONFIG, payload)
             else:
                 self._http_post(
@@ -3422,16 +3428,28 @@ class BugBuster:
             bb.set_channel_function(0, ChannelFunction.VOUT)
             bb.start_waveform(0, WaveformType.SINE, freq_hz=1.0, amplitude=2.5, offset=2.5)
         """
+        if not 0 <= int(channel) < 4:
+            raise ValueError("channel must be 0-3")
+        waveform = WaveformType(waveform)
+        mode = OutputMode(mode)
+        if not 0.01 <= float(freq_hz) <= 100.0:
+            raise ValueError("freq_hz must be 0.01-100.0")
+        max_out = 25.0 if mode == OutputMode.CURRENT else 12.0
+        if not 0.0 <= float(amplitude) <= max_out:
+            raise ValueError(f"amplitude must be 0.0-{max_out}")
+        if not -max_out <= float(offset) <= max_out:
+            raise ValueError(f"offset must be -{max_out}..{max_out}")
+
         if self._usb:
             payload = struct.pack(
                 '<BBfffB',
-                channel, int(waveform), float(freq_hz),
+                int(channel), int(waveform), float(freq_hz),
                 float(amplitude), float(offset), int(mode),
             )
             self._usb_cmd(CmdId.START_WAVEGEN, payload)
         else:
             self._http_post("/wavegen/start", {
-                "ch": channel, "waveform": int(waveform),
+                "channel": int(channel), "waveform": int(waveform),
                 "freq_hz": float(freq_hz), "amplitude": float(amplitude),
                 "offset": float(offset), "mode": int(mode),
             })
@@ -3603,14 +3621,25 @@ class BugBuster:
                 pass
             self._t.stop_dsp_ws_stream()
 
-    def on_scope_data(self, callback: Callable[[dict], None]) -> None:
+    def on_scope_data(self, callback: Callable[[dict], None], ch_mask: int = 0x0F) -> None:
         """
         Register a callback for 10 ms oscilloscope buckets. **USB only.**
 
         The device streams pre-computed min/max/avg per channel every 10 ms.
         The callback receives a dict with keys: ``seq``, ``timestamp_ms``,
         ``count``, ``channels`` (list of 4 dicts with ``avg``, ``min``, ``max``).
+
+        *ch_mask* is a 4-bit logical channel bitmask (bit 0 = CH A … bit 3 = CH D).
+        Only the selected channels are converted while scope streaming is active,
+        which maximises sample rate by disabling the 4 ADC diagnostic slots for
+        non-selected channels.  Pass 0 or omit to select all four channels (0x0F).
+        The diagnostic conversions are restored automatically when the stream stops
+        via :meth:`stop_scope_stream` or device reset.
         """
+        if not (0 <= ch_mask <= 15):
+            raise ValueError(f"ch_mask must be 0–15, got {ch_mask!r}")
+        if ch_mask == 0:
+            ch_mask = 0x0F
         self._require_usb("on_scope_data")
 
         def _handler(payload: bytes):
@@ -3624,7 +3653,7 @@ class BugBuster:
             callback({"seq": seq, "timestamp_ms": ts_ms, "count": count, "channels": channels})
 
         self._t.on_event(CmdId.SCOPE_DATA_EVT, _handler)
-        self._usb_cmd(CmdId.START_SCOPE_STREAM)
+        self._usb_cmd(CmdId.START_SCOPE_STREAM, struct.pack("<B", ch_mask))
 
     def on_alert(self, callback: Callable[[dict], None]) -> None:
         """

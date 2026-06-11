@@ -62,7 +62,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         // don't pile up in TIME_WAIT and exhaust the device's socket pool.
         // URLSession handles stale keep-alive automatically by retrying on
         // connection-lost errors for idempotent GET requests.
-        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpMaximumConnectionsPerHost = 5
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: configuration)
         
@@ -75,7 +75,10 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             self.activeDevice = DiscoveredDevice(hostname: "Saved Device", ip: savedIp, port: 80)
             // Auto connect in background
             Task {
-                await self.tryConnect(ip: savedIp, token: savedToken)
+                let success = await self.tryConnect(ip: savedIp, token: savedToken)
+                if success {
+                    self.startPolling()
+                }
             }
         }
         
@@ -360,6 +363,13 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                     continue
                 }
 
+                // Skip high-frequency diagnostic polling when active scope streaming is running
+                // to prevent socket starvation and network load on the ESP32.
+                if ScopeStreamManager.shared.isStreaming {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
+
                 let ip = device.ip
                 let token = self.adminToken
                 cycle += 1
@@ -374,8 +384,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                     // connection is open at a time. /api/overview embeds ioexp.
                     if let ov: OverviewSnapshot = await self.fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
                         DispatchQueue.main.async {
-                            self.lastOverview = ov
-                            self.lastIoExp = ov.ioexp
+                            self.updateLastOverview(ov)
                         }
                     }
                     if let st: SelftestStatus = await self.fetchDecoded(SelftestStatus.self, ip: ip, path: "/api/selftest", token: token) {
@@ -409,7 +418,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let token = adminToken
         Task {
             if let ov: OverviewSnapshot = await fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
-                DispatchQueue.main.async { self.lastOverview = ov; self.lastIoExp = ov.ioexp }
+                DispatchQueue.main.async { self.updateLastOverview(ov) }
             }
             if let st: SelftestStatus = await fetchDecoded(SelftestStatus.self, ip: ip, path: "/api/selftest", token: token) {
                 DispatchQueue.main.async { self.lastSelftest = st }
@@ -535,7 +544,10 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     /// without waiting for the round-trip HTTP response.
     public func applyOptimisticEfuse(id: Int, enabled: Bool) {
         guard let overview = lastOverview else { return }
-        let existing = overview.ioexp.efuses ?? []
+        var existing = overview.ioexp.efuses ?? []
+        if existing.isEmpty {
+            existing = (1...4).map { IOExpEFuse(id: $0, enabled: false, fault: false) }
+        }
         let updated  = existing.map { ef in
             ef.id == id ? IOExpEFuse(id: ef.id, enabled: enabled, fault: ef.fault) : ef
         }
@@ -579,8 +591,24 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let token = adminToken
         Task {
             if let ov: OverviewSnapshot = await fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
-                DispatchQueue.main.async { self.lastOverview = ov; self.lastIoExp = ov.ioexp }
+                DispatchQueue.main.async { self.updateLastOverview(ov) }
             }
         }
+    }
+
+    private func updateLastOverview(_ ov: OverviewSnapshot) {
+        let finalEfuses = ov.ioexp.efuses ?? self.lastOverview?.ioexp.efuses ?? (1...4).map { IOExpEFuse(id: $0, enabled: false, fault: false) }
+        let newIoExp = IOExpState(
+            present:   ov.ioexp.present,
+            enables:   ov.ioexp.enables,
+            powerGood: ov.ioexp.powerGood,
+            efuses:    finalEfuses
+        )
+        self.lastOverview = OverviewSnapshot(
+            idac:  ov.idac,
+            ioexp: newIoExp,
+            rails: ov.rails
+        )
+        self.lastIoExp = newIoExp
     }
 }

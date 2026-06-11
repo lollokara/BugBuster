@@ -52,10 +52,15 @@ static const char *TAG = "scripting";
 // ---------------------------------------------------------------------------
 
 typedef struct {
-    uint32_t id;
-    char    *payload;   // heap-allocated copy; freed by task after run
-    size_t   len;
-    bool     persist;   // V2-A: true = switch to / stay in PERSISTENT mode
+    uint32_t          id;
+    char             *payload;   // heap-allocated copy; freed by task after run
+    size_t            len;
+    bool              persist;   // V2-A: true = switch to / stay in PERSISTENT mode
+    bool              is_lint;
+    SemaphoreHandle_t lint_sem;
+    char             *lint_err_out;
+    size_t            lint_err_max;
+    bool             *lint_ok_out;
 } ScriptCmd;
 
 // ---------------------------------------------------------------------------
@@ -114,6 +119,7 @@ extern "C" bool  scripting_stop_requested(void);
 extern "C" void  scripting_vm_hook(void);
 extern "C" void  scripting_init(void);
 extern "C" bool  scripting_run_string(const char *src, size_t len, bool persist);
+extern "C" bool  scripting_lint_string(const char *src, size_t len, char *out_err, size_t max_err);
 extern "C" bool  scripting_run_file(const char *name, uint32_t *out_id);
 extern "C" void  scripting_stop(void);
 extern "C" size_t scripting_get_logs(char *out, size_t max);
@@ -390,6 +396,28 @@ static void vm_do_deinit(void)
     s_vm_initialized = false;
 }
 
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t max;
+} string_printer_t;
+
+static void string_printer_strn(void *data, const char *str, size_t len)
+{
+    string_printer_t *sp = (string_printer_t *)data;
+    if (sp->len + len < sp->max) {
+        memcpy(sp->buf + sp->len, str, len);
+        sp->len += len;
+        sp->buf[sp->len] = '\0';
+    } else if (sp->len + 1 < sp->max) {
+        size_t fit = sp->max - sp->len - 1;
+        memcpy(sp->buf + sp->len, str, fit);
+        sp->len += fit;
+        sp->buf[sp->len] = '\0';
+    }
+}
+
+
 static void taskMicroPython(void *pvParam)
 {
     (void)pvParam;
@@ -470,18 +498,6 @@ static void taskMicroPython(void *pvParam)
             ESP_LOGI(TAG, "Persistent VM reset honored before eval id=%u", (unsigned)cmd.id);
         }
 
-        // In EPHEMERAL mode with persist=true: switch to persistent mode.
-        // In PERSISTENT mode: persist flag is sticky (ignored if false).
-        if (cmd.persist && s_mode == SCRIPTING_MODE_EPHEMERAL) {
-            s_mode = SCRIPTING_MODE_PERSISTENT;
-        }
-
-        s_last_eval_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-
-        // Clear stop flag at the start of each new script
-        s_stop_requested = false;
-        status_set_running(cmd.id);
-
         bool had_error = false;
         char err_msg[64] = {0};
 
@@ -490,28 +506,64 @@ static void taskMicroPython(void *pvParam)
             vm_do_init();
         }
 
-        nlr_buf_t nlr;
-        if (nlr_push(&nlr) == 0) {
-            mp_lexer_t *lex = mp_lexer_new_from_str_len(
-                MP_QSTR__lt_string_gt_, cmd.payload, cmd.len, 0);
-            qstr source_name = lex->source_name;
-            mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
-            mp_obj_t module_fun = mp_compile(&pt, source_name, false);
-            mp_call_function_0(module_fun);
-            nlr_pop();
-        } else {
-            // Exception was raised — print traceback to log ring via mp_hal_stdout
-            had_error = true;
-            mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
-            mp_obj_print_exception(&mp_plat_print, exc);
-
-            // Also capture a short form into status
-            mp_obj_type_t *type = (mp_obj_type_t *)mp_obj_get_type(exc);
-            if (type && type->name) {
-                const char *type_name = qstr_str(type->name);
-                snprintf(err_msg, sizeof(err_msg), "%s", type_name);
+        if (cmd.is_lint) {
+            bool lint_ok = false;
+            nlr_buf_t nlr;
+            if (nlr_push(&nlr) == 0) {
+                mp_lexer_t *lex = mp_lexer_new_from_str_len(
+                    MP_QSTR__lt_string_gt_, cmd.payload, cmd.len, 0);
+                qstr source_name = lex->source_name;
+                mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
+                mp_compile(&pt, source_name, false);
+                nlr_pop();
+                lint_ok = true;
             } else {
-                snprintf(err_msg, sizeof(err_msg), "exception");
+                lint_ok = false;
+                mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
+                if (cmd.lint_err_out && cmd.lint_err_max > 0) {
+                    string_printer_t sp_data = { cmd.lint_err_out, 0, cmd.lint_err_max };
+                    mp_print_t custom_print = { &sp_data, string_printer_strn };
+                    mp_obj_print_exception(&custom_print, exc);
+                }
+            }
+            if (cmd.lint_ok_out) *cmd.lint_ok_out = lint_ok;
+            if (cmd.lint_sem) xSemaphoreGive(cmd.lint_sem);
+        } else {
+            // In EPHEMERAL mode with persist=true: switch to persistent mode.
+            // In PERSISTENT mode: persist flag is sticky (ignored if false).
+            if (cmd.persist && s_mode == SCRIPTING_MODE_EPHEMERAL) {
+                s_mode = SCRIPTING_MODE_PERSISTENT;
+            }
+
+            s_last_eval_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
+            // Clear stop flag at the start of each new script
+            s_stop_requested = false;
+            status_set_running(cmd.id);
+
+            nlr_buf_t nlr;
+            if (nlr_push(&nlr) == 0) {
+                mp_lexer_t *lex = mp_lexer_new_from_str_len(
+                    MP_QSTR__lt_string_gt_, cmd.payload, cmd.len, 0);
+                qstr source_name = lex->source_name;
+                mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
+                mp_obj_t module_fun = mp_compile(&pt, source_name, false);
+                mp_call_function_0(module_fun);
+                nlr_pop();
+            } else {
+                // Exception was raised — print traceback to log ring via mp_hal_stdout
+                had_error = true;
+                mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
+                mp_obj_print_exception(&mp_plat_print, exc);
+
+                // Also capture a short form into status
+                mp_obj_type_t *type = (mp_obj_type_t *)mp_obj_get_type(exc);
+                if (type && type->name) {
+                    const char *type_name = qstr_str(type->name);
+                    snprintf(err_msg, sizeof(err_msg), "%s", type_name);
+                } else {
+                    snprintf(err_msg, sizeof(err_msg), "exception");
+                }
             }
         }
 
@@ -519,7 +571,7 @@ static void taskMicroPython(void *pvParam)
         // In PERSISTENT mode: keep VM alive; check hard watermark.
         if (s_mode == SCRIPTING_MODE_EPHEMERAL) {
             vm_do_deinit();
-        } else {
+        } else if (!cmd.is_lint) {
             // Check watermarks immediately after eval
             gc_info_t info;
             gc_info(&info);
@@ -543,13 +595,15 @@ static void taskMicroPython(void *pvParam)
         // Free the payload copy
         free(cmd.payload);
 
-        // Update persistent-mode status fields under mutex
-        if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-            status_update_mp_fields_locked();
-            xSemaphoreGive(s_status_mutex);
-        }
+        if (!cmd.is_lint) {
+            // Update persistent-mode status fields under mutex
+            if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                status_update_mp_fields_locked();
+                xSemaphoreGive(s_status_mutex);
+            }
 
-        status_set_done(had_error, err_msg);
+            status_set_done(had_error, err_msg);
+        }
 
         // M05: yield at least one tick between back-to-back evals so lower-
         // priority tasks (idle, WDT feed) get CPU time even when the queue is
@@ -645,6 +699,81 @@ bool scripting_run_string(const char *src, size_t len, bool persist)
     }
     return true;
 }
+
+bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t max_err)
+{
+    if (!s_enabled || !src || !s_queue) {
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Scripting engine not enabled");
+        }
+        return false;
+    }
+
+    // Allocate payload copy
+    char *payload = (char *)malloc(len + 1);
+    if (!payload) {
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Out of memory");
+        }
+        return false;
+    }
+    memcpy(payload, src, len);
+    payload[len] = '\0';
+
+    // Check if a script is currently running
+    bool running = false;
+    if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        running = s_status.is_running;
+        xSemaphoreGive(s_status_mutex);
+    }
+    if (running) {
+        free(payload);
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Interpreter is busy running a script");
+        }
+        return false;
+    }
+
+    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
+    if (!sem) {
+        free(payload);
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Failed to create semaphore");
+        }
+        return false;
+    }
+
+    bool lint_ok = false;
+    if (out_err && max_err > 0) {
+        out_err[0] = '\0';
+    }
+
+    ScriptCmd cmd = {};
+    cmd.id = 0;
+    cmd.payload = payload;
+    cmd.len = len;
+    cmd.persist = false;
+    cmd.is_lint = true;
+    cmd.lint_sem = sem;
+    cmd.lint_err_out = out_err;
+    cmd.lint_err_max = max_err;
+    cmd.lint_ok_out = &lint_ok;
+
+    if (xQueueSend(s_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+        free(payload);
+        vSemaphoreDelete(sem);
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Scripting queue is full");
+        }
+        return false;
+    }
+
+    xSemaphoreTake(sem, portMAX_DELAY);
+    vSemaphoreDelete(sem);
+
+    return lint_ok;
+}
+
 
 // ---------------------------------------------------------------------------
 // scripting_reset_vm — request VM teardown from any context

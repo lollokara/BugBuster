@@ -45,6 +45,13 @@ typedef enum {
 bool scripting_run_string(const char *src, size_t len, bool persist);
 
 /**
+ * Compile a Python source string to verify its syntax.
+ * Enqueues a lint job to the MicroPython task queue and blocks until completed.
+ * Returns true if syntax is valid, false otherwise (writing the error to out_err).
+ */
+bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t max_err);
+
+/**
  * Load the named script file from SPIFFS and enqueue it for execution.
  * name must be a valid script name (validated by script_storage).
  * Returns true if the file was loaded and enqueued.

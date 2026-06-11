@@ -89,6 +89,7 @@ struct MainTabView: View {
     let tabs = [
         (icon: "waveform.path.ecg", name: "Overview"),
         (icon: "arrow.up.left.and.down.right.and.arrow.up.right.and.down.left", name: "Signal Path"),
+        (icon: "waveform", name: "Scope"),
         (icon: "cpu", name: "Diagnostics"),
         (icon: "doc.text.magnifyingglass", name: "Scripts")
     ]
@@ -104,8 +105,9 @@ struct MainTabView: View {
                         switch selectedTab {
                         case 0:  OverviewTab()
                         case 1:  SignalPathTab()
-                        case 2:  DiagnosticsTab()
-                        case 3:  ScriptsTab()
+                        case 2:  ScopeTab()
+                        case 3:  DiagnosticsTab()
+                        case 4:  ScriptsTab()
                         default: OverviewTab()
                         }
                     }
@@ -122,6 +124,14 @@ struct MainTabView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            if let savedIp = UserDefaults.standard.string(forKey: "bugbuster_ip") {
+                manualIp = savedIp
+            }
+            if let savedToken = UserDefaults.standard.string(forKey: "bugbuster_token") {
+                manualToken = savedToken
+            }
+        }
     }
     
     var connectionDashboard: some View {
@@ -333,9 +343,7 @@ struct MainTabView: View {
                                             Task {
                                                 var tokenToUse = manualToken
                                                 if tokenToUse.isEmpty {
-                                                    if let savedIp = UserDefaults.standard.string(forKey: "bugbuster_ip"),
-                                                       savedIp == device.ip,
-                                                       let savedToken = UserDefaults.standard.string(forKey: "bugbuster_token") {
+                                                    if let savedToken = UserDefaults.standard.string(forKey: "bugbuster_token") {
                                                         tokenToUse = savedToken
                                                     }
                                                 }

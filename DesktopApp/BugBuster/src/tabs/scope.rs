@@ -6,8 +6,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
-/// IO ownership slots claimed by the Scope tab (CH0..CH3 → indices 12..15).
-pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+/// Scope does not claim analog slots merely for opening the tab.
+pub const SLOTS: &[u8] = &[];
 
 const COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const MATH_COLOR: &str = "#ec4899";
@@ -512,8 +512,20 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
                     }
                 }
 
-                let result = try_invoke("start_scope_stream", wasm_bindgen::JsValue::NULL).await;
-                log(&format!("Scope: stream started, result={:?}", result));
+                let ch_mask: u8 = ch_en
+                    .iter()
+                    .enumerate()
+                    .fold(0u8, |m, (i, &en)| if en { m | (1 << i) } else { m });
+                #[derive(serde::Serialize)]
+                struct StartScopeArgs {
+                    ch_mask: u8,
+                }
+                let args = serde_wasm_bindgen::to_value(&StartScopeArgs { ch_mask }).unwrap();
+                let result = try_invoke("start_scope_stream", args).await;
+                log(&format!(
+                    "Scope: stream started ch_mask=0x{:02X}, result={:?}",
+                    ch_mask, result
+                ));
                 backend_stream_active.set(true);
             });
         } else {
@@ -528,6 +540,56 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
                 backend_stream_active.set(false);
             });
         }
+    });
+
+    // (3) Channel-mask restart Effect. When the user toggles a channel enable
+    // while the stream is running, restart the stream with the new mask so the
+    // firmware sequence matches the displayed channels.  Guard against
+    // re-entrancy: only act when the backend stream is actually active and the
+    // start/stop Effect above is not already mid-flight (backend_stream_active
+    // is our source of truth for that).
+    Effect::new(move || {
+        let ch_en = channels_en.get(); // reactive — fires when mask changes
+        let is_running = running.get_untracked();
+        let active = backend_stream_active.get_untracked();
+
+        // Only restart when the stream is live and we have at least one channel.
+        if !is_running || !active {
+            return;
+        }
+        let has_channels = ch_en.iter().any(|&en| en);
+        if !has_channels {
+            return;
+        }
+
+        let ch_mask: u8 = ch_en
+            .iter()
+            .enumerate()
+            .fold(0u8, |m, (i, &en)| if en { m | (1 << i) } else { m });
+
+        log(&format!(
+            "Scope: channel mask changed while streaming, restarting with ch_mask=0x{:02X}",
+            ch_mask
+        ));
+
+        spawn_local(async move {
+            // Stop first, then restart with the new mask.
+            let _ = try_invoke("stop_scope_stream", wasm_bindgen::JsValue::NULL).await;
+            backend_stream_active.set(false);
+            sleep_ms(150).await;
+
+            #[derive(serde::Serialize)]
+            struct StartScopeArgs {
+                ch_mask: u8,
+            }
+            let args = serde_wasm_bindgen::to_value(&StartScopeArgs { ch_mask }).unwrap();
+            let result = try_invoke("start_scope_stream", args).await;
+            log(&format!(
+                "Scope: restarted with ch_mask=0x{:02X}, result={:?}",
+                ch_mask, result
+            ));
+            backend_stream_active.set(true);
+        });
     });
 }
 
@@ -573,6 +635,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let math_a_enabled = ui.math_a_enabled;
     let single_shot = ui.single_shot;
     let channel_collapsed = ui.channel_collapsed;
+    let backend_stream_active = ui.backend_stream_active.read_only();
     let capture_start_ms = ui.capture_start_ms;
     let timer_tick = ui.timer_tick;
     let cached_stats = ui.cached_stats;
@@ -1578,6 +1641,12 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 set_running.set(true);
                             }
                         >"Single"</button>
+
+                        {move || backend_stream_active.get().then(|| view! {
+                            <span class="scope-diag-pause-badge"
+                                title="Firmware pauses ADC diagnostics during scope capture to maximize sample rate"
+                            >"⏸ Diagnostics paused during capture"</span>
+                        })}
 
                         <div class="toolbar-divider"></div>
 

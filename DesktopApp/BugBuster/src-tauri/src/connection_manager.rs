@@ -604,8 +604,32 @@ impl ConnectionManager {
                     let t = transport_ka.lock().await;
                     if let Some(tr) = t.as_ref() {
                         if tr.is_connected() {
-                            if let Err(e) = tr.send_command(bbp::CMD_IO_CLAIM, &payload).await {
-                                log::warn!("IO keep-alive renewal failed: {}", e);
+                            match tr.send_command(bbp::CMD_IO_CLAIM, &payload).await {
+                                Ok(rsp) => {
+                                    let n = rsp.first().copied().unwrap_or(0) as usize;
+                                    let rejected: Vec<u8> = slots
+                                        .iter()
+                                        .take(n)
+                                        .enumerate()
+                                        .filter_map(|(idx, slot)| {
+                                            (rsp.get(1 + idx).copied() != Some(0)).then_some(*slot)
+                                        })
+                                        .collect();
+                                    if !rejected.is_empty() {
+                                        log::warn!(
+                                            "IO keep-alive dropped rejected slots: {:?}",
+                                            rejected
+                                        );
+                                        if let Ok(mut active) = active_slots_ka.lock() {
+                                            for slot in rejected {
+                                                active.remove(&slot);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("IO keep-alive renewal failed: {}", e);
+                                }
                             }
                         }
                     }
@@ -803,7 +827,10 @@ impl ConnectionManager {
 
     /// Returns the path to the token storage file.
     fn tokens_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("tokens.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("tokens.json"))
     }
 
     /// Load tokens from tokens.json into the in-memory cache.

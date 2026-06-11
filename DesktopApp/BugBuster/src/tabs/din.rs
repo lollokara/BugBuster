@@ -4,8 +4,8 @@ use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
 
-/// IO ownership slots claimed by the DIN tab (IO1..IO12 → indices 0..11).
-pub const SLOTS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+/// DIN claims only the edited logical channel slot when a write action is sent.
+pub const SLOTS: &[u8] = &[];
 
 const DEBOUNCE_OPTIONS: &[(u8, &str)] = &[
     (0, "None"),
@@ -44,7 +44,7 @@ fn send_din_config(ch: u8, thresh: u8, debounce: u8, oc_det: bool, sc_det: bool)
     })
     .unwrap();
     let label = format!("Set CH {} DIN config", CH_NAMES[ch as usize]);
-    invoke_with_feedback("set_din_config", args, &label);
+    invoke_with_io_claim("set_din_config", args, &label, &[12 + ch]);
 }
 
 #[component]

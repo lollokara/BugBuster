@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0612859A274C667B2908A00F /* ScopeTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BE3A2BF72606706AD83539 /* ScopeTab.swift */; };
 		08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */; };
 		115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */; };
 		161A773C2C0A3B9F851F620F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3E36A75C2AB886192C02B5EB /* Assets.xcassets */; };
@@ -40,6 +41,7 @@
 		96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalPathTab.swift; sourceTree = "<group>"; };
 		A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		C7BE3A2BF72606706AD83539 /* ScopeTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeTab.swift; sourceTree = "<group>"; };
 		E11A9C8116A9BEBC05E47330 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Combine.framework; path = System/Library/Frameworks/Combine.framework; sourceTree = SDKROOT; };
 		F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -115,6 +117,7 @@
 				8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */,
 				96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */,
 				23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */,
+				C7BE3A2BF72606706AD83539 /* ScopeTab.swift */,
 				09B963A369295728D4B4FFF7 /* ScriptsTab.swift */,
 				9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */,
 			);
@@ -204,6 +207,7 @@
 				B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */,
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,
 				781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */,
+				0612859A274C667B2908A00F /* ScopeTab.swift in Sources */,
 				EB728E06F8D482391320DBED /* ScriptsTab.swift in Sources */,
 				115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */,
 				B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */,

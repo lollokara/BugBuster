@@ -5,8 +5,8 @@ use serde::Serialize;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
-/// IO ownership slots claimed by the WaveGen tab (CH0..CH3 → indices 12..15).
-pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+/// WaveGen claims only the selected logical channel when the generator starts.
+pub const SLOTS: &[u8] = &[];
 
 /// Decode channel_alert bits (per ad74416h.h:294-300) for UI display.
 const CHANNEL_ALERT_BITS: &[(u16, &str)] = &[
@@ -44,6 +44,7 @@ pub struct WavegenUiState {
     pub offset: RwSignal<f64>,
     pub running: RwSignal<bool>,
     pub sending: RwSignal<bool>,
+    pub active_channel: RwSignal<Option<u8>>,
     pub edit_freq: RwSignal<String>,
     pub edit_amp: RwSignal<String>,
     pub edit_off: RwSignal<String>,
@@ -60,6 +61,7 @@ impl WavegenUiState {
             offset: RwSignal::new(0.0f64),
             running: RwSignal::new(false),
             sending: RwSignal::new(false),
+            active_channel: RwSignal::new(None),
             edit_freq: RwSignal::new("1.0".to_string()),
             edit_amp: RwSignal::new("5.0".to_string()),
             edit_off: RwSignal::new("0.0".to_string()),
@@ -88,6 +90,8 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let set_running = ui.running.write_only();
     let sending = ui.sending.read_only();
     let set_sending = ui.sending.write_only();
+    let active_channel = ui.active_channel.read_only();
+    let set_active_channel = ui.active_channel.write_only();
 
     let edit_freq = ui.edit_freq.read_only();
     let set_edit_freq = ui.edit_freq.write_only();
@@ -224,6 +228,7 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 mode: String,
             }
             let ch_idx = channel.get_untracked();
+            let slot = 12 + ch_idx;
             let wf_val = waveform.get_untracked();
             let mode_val = mode.get_untracked();
             let f_val = freq_hz.get_untracked();
@@ -251,14 +256,31 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let ch_name = CH_NAMES[ch_idx as usize];
             let label = format!("Start {} {}Hz on CH {}", wf_val, f_val, ch_name);
             spawn_local(async move {
-                let _ = try_invoke("start_wavegen", args).await;
-                set_running.set(true);
+                if !io_claim(&[slot], 5000, "wavegen").await {
+                    set_sending.set(false);
+                    show_toast(&format!("CH {} is held by another interface", ch_name), "err");
+                    return;
+                }
+
+                if try_invoke("start_wavegen", args).await.is_some() {
+                    set_active_channel.set(Some(ch_idx));
+                    set_running.set(true);
+                    show_toast(&label, "ok");
+                } else {
+                    io_release(&[slot]).await;
+                    show_toast(&format!("Failed to start wavegen on CH {}", ch_name), "err");
+                }
                 set_sending.set(false);
-                show_toast(&label, "ok");
             });
         } else {
+            let stop_ch = active_channel
+                .get_untracked()
+                .unwrap_or_else(|| channel.get_untracked());
+            let stop_slot = 12 + stop_ch;
             spawn_local(async move {
                 let _ = try_invoke("stop_wavegen", wasm_bindgen::JsValue::NULL).await;
+                io_release(&[stop_slot]).await;
+                set_active_channel.set(None);
                 set_running.set(false);
                 set_sending.set(false);
                 show_toast("Stop wavegen", "ok");

@@ -4,8 +4,8 @@ use leptos::task::spawn_local;
 use std::time::Duration;
 use wasm_bindgen::JsValue;
 
-/// IO slots claimed by this tab — CH0..CH3 (indices 12..15) for selftest auto-cal.
-pub const SLOTS: &[u8] = &[12, 13, 14, 15];
+/// Voltages is read-only on open; calibration commands manage ownership server-side.
+pub const SLOTS: &[u8] = &[];
 
 const CAL_TOTAL_POINTS: u32 = 100;
 

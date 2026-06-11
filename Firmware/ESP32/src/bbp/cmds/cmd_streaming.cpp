@@ -26,25 +26,35 @@
 #include "tasks.h"
 
 // ---------------------------------------------------------------------------
-// START_SCOPE_STREAM  payload: (none)  resp: (none, 0 bytes)
+// START_SCOPE_STREAM  payload: [u8 scope_ch_mask]  (OPTIONAL, 0 or 1 bytes)
+//                     resp: (none, 0 bytes)
 //
-// Legacy (bbp.cpp:2695-2709):
-//   - Rejects with BBP_ERR_STREAM_ACTIVE if s_scopeStreamActive
-//   - Takes g_stateMutex (50 ms) to sync s_scopeLastSeq = g_deviceState.scope.seq
-//   - Sets s_scopeStreamActive = true
-//   - Returns 0 bytes
+// scope_ch_mask: logical channel bitmask, bit0=CH A … bit3=CH D.
+//   len == 0 or mask value 0  → treat as 0x0F (all channels, diags still off).
 //
-// Registry handler calls bbpStartScopeStream() which reproduces the same
-// side effects. BUSY mapped to CMD_ERR_BUSY (adapter sends BBP_ERR_STREAM_ACTIVE).
+// Side effects:
+//   - Rejects with BBP_ERR_STREAM_ACTIVE if scope stream already running.
+//   - Syncs scope ring-buffer sequence number (no stale frames sent).
+//   - Enters scope ADC mode: drops diagnostic conversions from the sequencer,
+//     restricts channel conversions to scope_ch_mask.
+//   - Sets s_scopeStreamActive = true.
+//   - Returns 0 bytes.
 // ---------------------------------------------------------------------------
 static int handler_start_scope_stream(const uint8_t *payload, size_t len,
                                        uint8_t *resp, size_t *resp_len)
 {
-    (void)payload; (void)len; (void)resp;
+    (void)resp;
 
     if (bbpScopeStreamActive()) return -CMD_ERR_BUSY;  // BBP_ERR_STREAM_ACTIVE
 
+    // Parse optional 1-byte channel mask (proto v9+)
+    uint8_t scope_ch_mask = 0x0F;
+    if (len >= 1 && payload[0] != 0) {
+        scope_ch_mask = payload[0] & 0x0F;
+    }
+
     bbpStartScopeStream();
+    tasks_scope_mode_enter(scope_ch_mask);
 
     *resp_len = 0;
     return 0;

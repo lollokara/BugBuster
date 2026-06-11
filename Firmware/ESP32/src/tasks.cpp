@@ -36,6 +36,14 @@ TaskHandle_t       g_adcTaskHandle = nullptr;
 static AD74416H*   s_device       = nullptr;
 
 // -----------------------------------------------------------------------------
+// Scope ADC mode state
+// Protected by g_stateMutex; written only by tasks_scope_mode_enter/exit.
+// -----------------------------------------------------------------------------
+static bool    s_scopeMode     = false;
+static uint8_t s_scopeChMask   = 0x0F;  // logical channel bitmask (bit0=A..bit3=D)
+static uint8_t s_scopeModeRefs = 0;     // overlapping BBP/SSE/WS scope stream owners
+
+// -----------------------------------------------------------------------------
 // Helper: Convert raw ADC code to engineering value based on channel function
 // -----------------------------------------------------------------------------
 
@@ -71,6 +79,88 @@ static float convertAdcCode(uint32_t raw, ChannelFunction func, AdcRange range, 
             // Voltage input, VOUT readback, high-impedance, DIN – return V
             return s_device->adcCodeToVoltage(raw, range);
     }
+}
+
+static uint16_t dacCodeForVoltage(float voltage, bool bipolar)
+{
+    float normalised = bipolar
+        ? ((voltage + VOUT_BIPOLAR_OFFSET_V) / VOUT_BIPOLAR_SPAN_V)
+        : (voltage / VOUT_UNIPOLAR_SPAN_V);
+    if (normalised < 0.0f) normalised = 0.0f;
+    if (normalised > 1.0f) normalised = 1.0f;
+    uint32_t raw = (uint32_t)(normalised * 65536.0f);
+    if (raw > 0xFFFF) raw = 0xFFFF;
+    return (uint16_t)raw;
+}
+
+static uint16_t dacCodeForCurrent(float current_mA)
+{
+    float normalised = current_mA / IOUT_MAX_MA;
+    if (normalised < 0.0f) normalised = 0.0f;
+    if (normalised > 1.0f) normalised = 1.0f;
+    uint32_t raw = (uint32_t)(normalised * 65536.0f);
+    if (raw > 0xFFFF) raw = 0xFFFF;
+    return (uint16_t)raw;
+}
+
+static float dacCodeToVoltage(uint16_t code, bool bipolar)
+{
+    float normalised = (float)code / 65536.0f;
+    if (bipolar) {
+        return normalised * VOUT_BIPOLAR_SPAN_V - VOUT_BIPOLAR_OFFSET_V;
+    }
+    return normalised * VOUT_UNIPOLAR_SPAN_V;
+}
+
+static float dacCodeToCurrent(uint16_t code)
+{
+    return ((float)code / 65536.0f) * IOUT_MAX_MA;
+}
+
+static bool setVoutRangePreservingOutput(uint8_t logical_channel, float present_voltage, bool bipolar)
+{
+    if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) {
+        return false;
+    }
+
+    uint8_t physical_ch = tasks_logical_to_physical(logical_channel);
+    uint16_t code = dacCodeForVoltage(present_voltage, bipolar);
+    AdcRange adc_range = bipolar ? ADC_RNG_NEG12_12V : ADC_RNG_0_12V;
+    AdcRate adc_rate = ADC_RATE_20SPS;
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        adc_rate = g_deviceState.channels[logical_channel].adcRate;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    // Continuous ADC conversions must be stopped before ADC_CONFIG changes.
+    s_device->startAdcConversion(false, 0, 0);
+    delay_ms(5);
+
+    if (!s_device->setVoutRangeSafe(physical_ch, code, bipolar)) {
+        tasks_rebuild_adc_conv_ctrl();
+        return false;
+    }
+
+    s_device->configureAdc(physical_ch, ADC_MUX_LF_TO_AGND, adc_range, adc_rate);
+    tasks_rebuild_adc_conv_ctrl();
+    delay_ms(20);
+    s_device->clearChannelAlert(physical_ch);
+    s_device->clearAllAlerts();
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        ChannelState& cs = g_deviceState.channels[logical_channel];
+        cs.function = CH_FUNC_VOUT;
+        cs.adcMux = ADC_MUX_LF_TO_AGND;
+        cs.adcRange = adc_range;
+        cs.adcRate = adc_rate;
+        cs.dacCode = code;
+        cs.dacValue = dacCodeToVoltage(code, bipolar);
+        cs.dacBipolar = bipolar;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -161,21 +251,47 @@ static void taskAdcPoll(void* /*pvParameters*/)
             }
             pollDelay = pdMS_TO_TICKS(minPollMs);
 
-            // Read hardware (outside mutex) - only for channels that have ADC active
+            // Snapshot scope mode state (outside mutex — written only by scope enter/exit)
+            bool    scopeActive = false;
+            uint8_t scopeMask   = 0x0F;
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                scopeActive = s_scopeMode;
+                scopeMask   = s_scopeChMask;
+                xSemaphoreGive(g_stateMutex);
+            }
+            // Channels to read: scope mask union supply-monitor CH D exception
+            // (supply monitor uses logical CH D / physical 2 for rail measurement)
+            bool supplyMonD = scopeActive && selftest_is_supply_monitor_active();
+
+            bool adcReady = s_device->isAdcReady();
+
+            // Read hardware (outside mutex) - only for channels that have fresh ADC data
             // DIN_LOGIC and DIN_LOOP use the comparator path, not the ADC conversion path
-            for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                if (func[ch] != CH_FUNC_HIGH_IMP &&
-                    func[ch] != CH_FUNC_DIN_LOGIC &&
-                    func[ch] != CH_FUNC_DIN_LOOP) {
-                    uint32_t rawVal = 0;
-                    if (s_device->readAdcResult(tasks_logical_to_physical(ch), &rawVal)) {
-                        raw[ch] = rawVal;
-                        eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch], excUa[ch]);
+            // In scope mode, skip channels not in the scope mask (keep last cached values)
+            // EXCEPTION: always read CH D when supply monitor is active
+            if (adcReady) {
+                for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+                    if (func[ch] != CH_FUNC_HIGH_IMP &&
+                        func[ch] != CH_FUNC_DIN_LOGIC &&
+                        func[ch] != CH_FUNC_DIN_LOOP) {
+                        // In scope mode, skip channels outside the read mask
+                        bool inScopeMask = (scopeMask & (1u << ch)) != 0;
+                        bool keepForMon  = (ch == 3) && supplyMonD;
+                        if (scopeActive && !inScopeMask && !keepForMon) {
+                            // Leave raw[ch] / eng[ch] at last cached values (seeded above)
+                            continue;
+                        }
+                        uint32_t rawVal = 0;
+                        if (s_device->readAdcResult(tasks_logical_to_physical(ch), &rawVal)) {
+                            raw[ch] = rawVal;
+                            eng[ch] = convertAdcCode(raw[ch], func[ch], range[ch], excUa[ch]);
+                        }
+                    } else {
+                        raw[ch] = 0;
+                        eng[ch] = 0.0f;
                     }
-                } else {
-                    raw[ch] = 0;
-                    eng[ch] = 0.0f;
                 }
+                s_device->clearAdcDataReady();
             }
 
             // ---- Auto-ranging -----------------------------------------------
@@ -203,7 +319,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                                     range[ch] == ADC_RNG_NEG2_5_2_5V);
                     if (bipolar && raw[ch] <= 0x00FFFFU) over = true;
 
-                    if (over && (now - s_lastRangeChange[ch]) >= RANGE_DEBOUNCE) {
+                    if (adcReady && over && (now - s_lastRangeChange[ch]) >= RANGE_DEBOUNCE) {
                         AdcRange wider = nextWiderRange(range[ch]);
                         if (wider != range[ch]) {
                             s_lastRangeChange[ch] = now;
@@ -221,68 +337,70 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 }
             }
 
-            // Write results back under mutex + accumulate into scope bucket
-            // raw[ch] and eng[ch] are already indexed by logical channel — the read loop
-            // used tasks_logical_to_physical(ch) to read from the correct physical register
-            // into raw[ch].  No second remapping needed here.
-            uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
-            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-                    g_deviceState.channels[ch].adcRawCode = raw[ch];
-                    g_deviceState.channels[ch].adcValue   = eng[ch];
-                }
-
-                ScopeBuffer& sb = g_deviceState.scope;
-
-                // Initialise first bucket if needed
-                if (sb.curStart == 0) {
-                    sb.curStart = nowMs;
-                    sb.cur.timestamp_ms = nowMs;
-                    sb.cur.count = 0;
-                    for (uint8_t ch = 0; ch < 4; ch++) {
-                        sb.cur.vMin[ch] =  1e30f;
-                        sb.cur.vMax[ch] = -1e30f;
-                        sb.cur.vSum[ch] = 0.0f;
+            if (adcReady) {
+                // Write fresh results back under mutex + accumulate into scope bucket
+                // raw[ch] and eng[ch] are already indexed by logical channel — the read loop
+                // used tasks_logical_to_physical(ch) to read from the correct physical register
+                // into raw[ch].  No second remapping needed here.
+                uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
+                        g_deviceState.channels[ch].adcRawCode = raw[ch];
+                        g_deviceState.channels[ch].adcValue   = eng[ch];
                     }
-                }
 
-                // If current bucket interval has elapsed, commit it and start new
-                if (nowMs - sb.curStart >= SCOPE_BUCKET_MS && sb.cur.count > 0) {
-                    uint16_t idx = sb.head % SCOPE_BUF_SIZE;
-                    sb.buckets[idx] = sb.cur;
-                    sb.head = (sb.head + 1) % SCOPE_BUF_SIZE;
-                    sb.seq = static_cast<uint16_t>(sb.seq + 1);
-                    // Start fresh bucket
-                    sb.curStart = nowMs;
-                    sb.cur.timestamp_ms = nowMs;
-                    sb.cur.count = 0;
-                    for (uint8_t ch = 0; ch < 4; ch++) {
-                        sb.cur.vMin[ch] =  1e30f;
-                        sb.cur.vMax[ch] = -1e30f;
-                        sb.cur.vSum[ch] = 0.0f;
+                    ScopeBuffer& sb = g_deviceState.scope;
+
+                    // Initialise first bucket if needed
+                    if (sb.curStart == 0) {
+                        sb.curStart = nowMs;
+                        sb.cur.timestamp_ms = nowMs;
+                        sb.cur.count = 0;
+                        for (uint8_t ch = 0; ch < 4; ch++) {
+                            sb.cur.vMin[ch] =  1e30f;
+                            sb.cur.vMax[ch] = -1e30f;
+                            sb.cur.vSum[ch] = 0.0f;
+                        }
                     }
-                }
 
-                // Accumulate sample into current bucket
-                for (uint8_t ch = 0; ch < 4; ch++) {
-                    float v = eng[ch];
-                    if (v < sb.cur.vMin[ch]) sb.cur.vMin[ch] = v;
-                    if (v > sb.cur.vMax[ch]) sb.cur.vMax[ch] = v;
-                    sb.cur.vSum[ch] += v;
-                }
-                sb.cur.count++;
+                    // If current bucket interval has elapsed, commit it and start new
+                    if (nowMs - sb.curStart >= SCOPE_BUCKET_MS && sb.cur.count > 0) {
+                        uint16_t idx = sb.head % SCOPE_BUF_SIZE;
+                        sb.buckets[idx] = sb.cur;
+                        sb.head = (sb.head + 1) % SCOPE_BUF_SIZE;
+                        sb.seq = static_cast<uint16_t>(sb.seq + 1);
+                        // Start fresh bucket
+                        sb.curStart = nowMs;
+                        sb.cur.timestamp_ms = nowMs;
+                        sb.cur.count = 0;
+                        for (uint8_t ch = 0; ch < 4; ch++) {
+                            sb.cur.vMin[ch] =  1e30f;
+                            sb.cur.vMax[ch] = -1e30f;
+                            sb.cur.vSum[ch] = 0.0f;
+                        }
+                    }
 
-                xSemaphoreGive(g_stateMutex);
+                    // Accumulate sample into current bucket
+                    for (uint8_t ch = 0; ch < 4; ch++) {
+                        float v = eng[ch];
+                        if (v < sb.cur.vMin[ch]) sb.cur.vMin[ch] = v;
+                        if (v > sb.cur.vMax[ch]) sb.cur.vMax[ch] = v;
+                        sb.cur.vSum[ch] += v;
+                    }
+                    sb.cur.count++;
+
+                    xSemaphoreGive(g_stateMutex);
+                }
             }
 
             // Push into BBP ADC stream ring buffer (lock-free, outside mutex)
             uint32_t ts_us = (uint32_t)esp_timer_get_time();
-            if (bbpAdcStreamMask() != 0) {
+            if (adcReady && bbpAdcStreamMask() != 0) {
                 bbpPushAdcSample(raw, ts_us);
             }
 
             // Push into DSP pipeline (single-channel, outside mutex)
-            if (bbpAdcDspActive()) {
+            if (adcReady && bbpAdcDspActive()) {
                 const AdcDspConfig *dcfg = adc_dsp_get_config();
                 if (dcfg && dcfg->channel < 4) {
                     if (adc_dsp_push_sample(eng[dcfg->channel], ts_us)) {
@@ -359,11 +477,19 @@ static void taskFaultMonitor(void* /*pvParameters*/)
             const DioState* allDio = dio_get_all();
 
             // --- Read diagnostics every 5th iteration (~1 second) ---
+            // Skip diag reads while scope mode is active: diag conversions are
+            // disabled in scope mode so ADC_DIAG_RESULT registers hold stale data.
+            // Alert-status reads above are unaffected and continue normally.
             float dieTemp = 0.0f;
             uint16_t diagRaw[4] = {0};
             float    diagVal[4] = {0.0f};
             uint8_t  diagSrc[4] = {0};
-            bool  readDiag = (iteration % 5 == 0);
+            bool scopeModeNow = false;
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                scopeModeNow = s_scopeMode;
+                xSemaphoreGive(g_stateMutex);
+            }
+            bool  readDiag = (iteration % 5 == 0) && !scopeModeNow;
             if (readDiag) {
                 // Snapshot diag sources under mutex
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -396,11 +522,13 @@ static void taskFaultMonitor(void* /*pvParameters*/)
 
             // --- Verify SPI health via SCRATCH register (with retry) ---
             // A single transient CRC glitch should not flip the health flag.
-            bool spiHealthy = false;
-            {
+            static bool s_lastSpiHealthy = false;
+            bool spiHealthy = s_lastSpiHealthy;
+            if (iteration % 5 == 0) {
                 extern AD74416H_SPI spiDriver;
                 static constexpr int SPI_HEALTH_RETRIES = 3;
                 uint16_t testVal = 0xA5C3;
+                spiHealthy = false;
                 for (int attempt = 0; attempt < SPI_HEALTH_RETRIES; attempt++) {
                     if (!spiDriver.writeRegister(0x76, testVal)) continue;
                     uint16_t readBack = 0;
@@ -409,6 +537,7 @@ static void taskFaultMonitor(void* /*pvParameters*/)
                         break;
                     }
                 }
+                s_lastSpiHealthy = spiHealthy;
             }
 
             // --- Update global state under mutex ---
@@ -488,6 +617,141 @@ uint8_t tasks_logical_to_physical(uint8_t logical) {
     if (logical == 2) return 3;
     if (logical == 3) return 2;
     return logical;
+}
+
+// -----------------------------------------------------------------------------
+// tasks_rebuild_adc_conv_ctrl
+//
+// Single source of truth for ADC_CONV_CTRL:
+//   Normal mode: diagMask = 0x0F, all active (non-HI_IMP/DIN) channels.
+//   Scope mode:  diagMask = 0x00, channels restricted to scope logical mask.
+//                Supply-monitor safety interlock: if selftest_is_supply_monitor_active()
+//                is true, logical channel D (physical 2) is always included
+//                regardless of the scope mask.
+//
+// Caller must NOT hold g_stateMutex; this function takes it internally.
+// Caller must ensure the SPI bus is free (i.e. call outside the ADC poll read
+// window, or from within the command processor which already holds the bus).
+// -----------------------------------------------------------------------------
+void tasks_rebuild_adc_conv_ctrl(void)
+{
+    if (!s_device) return;
+
+    bool    scopeMode = false;
+    uint8_t scopeMask = 0x0F;
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        scopeMode = s_scopeMode;
+        scopeMask = s_scopeChMask;
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    uint8_t chMask   = 0;
+    uint8_t diagMask = scopeMode ? 0x00 : 0x0F;
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
+            ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
+            if (f == CH_FUNC_HIGH_IMP || f == CH_FUNC_DIN_LOGIC || f == CH_FUNC_DIN_LOOP)
+                continue;
+            if (scopeMode) {
+                // Only include channels present in the scope logical mask,
+                // EXCEPT: always keep channel D (logical 3) when the supply
+                // monitor safety interlock is active — its conversions are
+                // needed for background rail voltage measurement.
+                bool inScopeMask = (scopeMask & (1u << c)) != 0;
+                bool supplyMonD  = (c == 3) && selftest_is_supply_monitor_active();
+                if (!inScopeMask && !supplyMonD) continue;
+            }
+            chMask |= (1u << tasks_logical_to_physical(c));
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+
+    s_device->startAdcConversion(true, chMask, diagMask);
+
+    if (!scopeMode) {
+        extern AD74416H_SPI spiDriver;
+        static constexpr uint16_t FAST_DIAG_RATE =
+            (uint16_t)(0x03u << ADC_CONV_CTRL_CONV_RATE_DIAG_SHIFT);
+        spiDriver.updateRegister(REG_ADC_CONV_CTRL,
+                                 ADC_CONV_CTRL_CONV_RATE_DIAG_MASK,
+                                 FAST_DIAG_RATE);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Scope mode public API
+// -----------------------------------------------------------------------------
+
+void tasks_scope_mode_enter(uint8_t logical_ch_mask)
+{
+    // Treat 0 as "all channels" for legacy callers
+    uint8_t mask = (logical_ch_mask == 0) ? 0x0F : logical_ch_mask;
+    bool changed = false;
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_scopeModeRefs < 0xFF) {
+            s_scopeModeRefs++;
+        }
+        if (!s_scopeMode) {
+            s_scopeMode   = true;
+            s_scopeChMask = mask;
+            changed = true;
+        } else {
+            uint8_t combined = (uint8_t)(s_scopeChMask | mask);
+            changed = (combined != s_scopeChMask);
+            s_scopeChMask = combined;
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+    if (changed) {
+        tasks_rebuild_adc_conv_ctrl();
+    }
+    ESP_LOGI("tasks", "Scope ADC mode entered (logical ch mask 0x%02X)", mask);
+}
+
+void tasks_scope_mode_exit(void)
+{
+    bool changed = false;
+
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_scopeModeRefs > 0) {
+            s_scopeModeRefs--;
+        }
+        if (s_scopeModeRefs == 0 && s_scopeMode) {
+            s_scopeMode   = false;
+            s_scopeChMask = 0x0F;
+            changed = true;
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+    if (changed) {
+        tasks_rebuild_adc_conv_ctrl();
+        ESP_LOGI("tasks", "Scope ADC mode exited — diagnostics restored");
+    } else {
+        ESP_LOGI("tasks", "Scope ADC mode exit released one owner");
+    }
+}
+
+bool tasks_scope_mode_active(void)
+{
+    bool active = false;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        active = s_scopeMode;
+        xSemaphoreGive(g_stateMutex);
+    }
+    return active;
+}
+
+uint8_t tasks_scope_mode_mask(void)
+{
+    uint8_t mask = 0x0F;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        mask = s_scopeChMask;
+        xSemaphoreGive(g_stateMutex);
+    }
+    return mask;
 }
 
 // -----------------------------------------------------------------------------
@@ -617,21 +881,10 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
         xSemaphoreGive(g_stateMutex);
     }
 
-    // Rebuild ADC_CONV_CTRL.
-    {
-        uint8_t chMask = 0;
-        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
-                ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
-                if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP)
-                    chMask |= (1u << tasks_logical_to_physical(c));
-            }
-            xSemaphoreGive(g_stateMutex);
-        }
-        s_device->startAdcConversion(true, chMask, 0x0F);
-        delay_ms(50);
-        s_device->clearAllAlerts();
-    }
+    // Rebuild ADC_CONV_CTRL (respects scope mode if active).
+    tasks_rebuild_adc_conv_ctrl();
+    delay_ms(50);
+    s_device->clearAllAlerts();
 
     hat_update_leds();
 }
@@ -695,8 +948,13 @@ bool tasks_apply_dac_code(uint8_t logical_channel, uint16_t code)
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         g_deviceState.channels[logical_channel].dacCode = code;
-        g_deviceState.channels[logical_channel].dacValue =
-            (code / 65536.0f) * VOUT_UNIPOLAR_SPAN_V;
+        ChannelState& cs = g_deviceState.channels[logical_channel];
+        if (cs.function == CH_FUNC_IOUT || cs.function == CH_FUNC_IOUT_HART) {
+            cs.dacValue = dacCodeToCurrent(code);
+            cs.dacBipolar = false;
+        } else {
+            cs.dacValue = dacCodeToVoltage(code, cs.dacBipolar);
+        }
         xSemaphoreGive(g_stateMutex);
     } else {
         ESP_LOGE("tasks", "tasks_apply_dac_code: g_stateMutex timeout — state cache stale");
@@ -711,17 +969,22 @@ bool tasks_apply_dac_voltage(uint8_t logical_channel, float voltage, bool bipola
     if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
     uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
 
-    s_device->setVoutRange(physical_ch, bipolar);
+    float present_voltage = 0.0f;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        present_voltage = g_deviceState.channels[logical_channel].dacValue;
+        xSemaphoreGive(g_stateMutex);
+    }
+    if (!setVoutRangePreservingOutput(logical_channel, present_voltage, bipolar)) {
+        return false;
+    }
     if (!s_device->setDacVoltage(physical_ch, voltage, bipolar)) {
         return false;
     }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         g_deviceState.channels[logical_channel].dacValue = voltage;
-        float span = bipolar ? VOUT_BIPOLAR_SPAN_V : VOUT_UNIPOLAR_SPAN_V;
-        float off  = bipolar ? VOUT_BIPOLAR_OFFSET_V : 0.0f;
-        g_deviceState.channels[logical_channel].dacCode =
-            (uint16_t)(((voltage + off) / span) * 65536.0f);
+        g_deviceState.channels[logical_channel].dacCode = dacCodeForVoltage(voltage, bipolar);
+        g_deviceState.channels[logical_channel].dacBipolar = bipolar;
         xSemaphoreGive(g_stateMutex);
     } else {
         ESP_LOGE("tasks", "tasks_apply_dac_voltage: g_stateMutex timeout — state cache stale");
@@ -742,8 +1005,8 @@ bool tasks_apply_dac_current(uint8_t logical_channel, float current_mA)
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         g_deviceState.channels[logical_channel].dacValue = current_mA;
-        g_deviceState.channels[logical_channel].dacCode =
-            (uint16_t)((current_mA / IOUT_MAX_MA) * 65536.0f);
+        g_deviceState.channels[logical_channel].dacCode = dacCodeForCurrent(current_mA);
+        g_deviceState.channels[logical_channel].dacBipolar = false;
         xSemaphoreGive(g_stateMutex);
     } else {
         ESP_LOGE("tasks", "tasks_apply_dac_current: g_stateMutex timeout — state cache stale");
@@ -756,9 +1019,19 @@ bool tasks_apply_dac_current(uint8_t logical_channel, float current_mA)
 bool tasks_apply_vout_range(uint8_t logical_channel, bool bipolar)
 {
     if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
-    uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
-
-    s_device->setVoutRange(physical_ch, bipolar);
+    float present_voltage = 0.0f;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        present_voltage = g_deviceState.channels[logical_channel].dacValue;
+        xSemaphoreGive(g_stateMutex);
+    }
+    if (!setVoutRangePreservingOutput(logical_channel, present_voltage, bipolar)) {
+        return false;
+    }
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_deviceState.channels[logical_channel].dacBipolar = bipolar;
+        g_deviceState.channels[logical_channel].dacCode = dacCodeForVoltage(present_voltage, bipolar);
+        xSemaphoreGive(g_stateMutex);
+    }
     return true;
 }
 
@@ -790,10 +1063,14 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
                 s_device->setDacCode(physical_ch, cmd.dacCode);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                    g_deviceState.channels[cmd.channel].dacCode = cmd.dacCode;
-                    // Approximate engineering value (unipolar 0..12V as default)
-                    g_deviceState.channels[cmd.channel].dacValue =
-                        (cmd.dacCode / 65536.0f) * VOUT_UNIPOLAR_SPAN_V;
+                    ChannelState& cs = g_deviceState.channels[cmd.channel];
+                    cs.dacCode = cmd.dacCode;
+                    if (cs.function == CH_FUNC_IOUT || cs.function == CH_FUNC_IOUT_HART) {
+                        cs.dacValue = dacCodeToCurrent(cmd.dacCode);
+                        cs.dacBipolar = false;
+                    } else {
+                        cs.dacValue = dacCodeToVoltage(cmd.dacCode, cs.dacBipolar);
+                    }
                     xSemaphoreGive(g_stateMutex);
                 }
                 break;
@@ -804,15 +1081,19 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 bool bipolar = cmd.dacVoltage.bipolar;
                 float voltage = cmd.dacVoltage.voltage;
                 uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
-                // Set hardware VOUT_RANGE to match bipolar setting, then write DAC
-                s_device->setVoutRange(physical_ch, bipolar);
+                float present_voltage = 0.0f;
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    present_voltage = g_deviceState.channels[cmd.channel].dacValue;
+                    xSemaphoreGive(g_stateMutex);
+                }
+                if (!setVoutRangePreservingOutput(cmd.channel, present_voltage, bipolar)) {
+                    break;
+                }
                 s_device->setDacVoltage(physical_ch, voltage, bipolar);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].dacValue = voltage;
-                    float span = bipolar ? VOUT_BIPOLAR_SPAN_V : VOUT_UNIPOLAR_SPAN_V;
-                    float off  = bipolar ? VOUT_BIPOLAR_OFFSET_V : 0.0f;
-                    g_deviceState.channels[cmd.channel].dacCode =
-                        (uint16_t)(((voltage + off) / span) * 65536.0f);
+                    g_deviceState.channels[cmd.channel].dacCode = dacCodeForVoltage(voltage, bipolar);
+                    g_deviceState.channels[cmd.channel].dacBipolar = bipolar;
                     xSemaphoreGive(g_stateMutex);
                 }
                 break;
@@ -824,8 +1105,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 s_device->setDacCurrent(physical_ch, cmd.floatVal);
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     g_deviceState.channels[cmd.channel].dacValue = cmd.floatVal;
-                    g_deviceState.channels[cmd.channel].dacCode =
-                        (uint16_t)((cmd.floatVal / IOUT_MAX_MA) * 65536.0f);
+                    g_deviceState.channels[cmd.channel].dacCode = dacCodeForCurrent(cmd.floatVal);
+                    g_deviceState.channels[cmd.channel].dacBipolar = false;
                     xSemaphoreGive(g_stateMutex);
                 }
                 break;
@@ -860,27 +1141,10 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                     xSemaphoreGive(g_stateMutex);
                 }
 
-                // Restart ADC conversion with all active channels
-                // diagMask = 0x0F: all 4 diagnostic slots always active in conversion sequence
-                // (slot source assignments are in DIAG_ASSIGN registers, unaffected by this)
-                // DIN_LOGIC and DIN_LOOP are excluded — they use the comparator path, not ADC.
-                {
-                    uint8_t chMask = 0;
-                    const uint8_t diagMask = 0x0F;
-                    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                        for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
-                            ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
-                            if (f != CH_FUNC_HIGH_IMP &&
-                                f != CH_FUNC_DIN_LOGIC &&
-                                f != CH_FUNC_DIN_LOOP)
-                                chMask |= (1u << tasks_logical_to_physical(c));
-                        }
-                        xSemaphoreGive(g_stateMutex);
-                    }
-                    s_device->startAdcConversion(true, chMask, diagMask);
-                    delay_ms(20);
-                    s_device->clearAllAlerts();
-                }
+                // Restart ADC conversion (respects scope mode if active).
+                tasks_rebuild_adc_conv_ctrl();
+                delay_ms(20);
+                s_device->clearAllAlerts();
 
                 // Release bus — ADC poll task resumes
                 xSemaphoreGiveRecursive(g_spi_bus_mutex);
@@ -982,8 +1246,19 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
             // -----------------------------------------------------------------
             case CMD_SET_VOUT_RANGE: {
-                uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
-                s_device->setVoutRange(physical_ch, cmd.boolVal);
+                float present_voltage = 0.0f;
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    present_voltage = g_deviceState.channels[cmd.channel].dacValue;
+                    xSemaphoreGive(g_stateMutex);
+                }
+                if (!setVoutRangePreservingOutput(cmd.channel, present_voltage, cmd.boolVal)) {
+                    break;
+                }
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    g_deviceState.channels[cmd.channel].dacBipolar = cmd.boolVal;
+                    g_deviceState.channels[cmd.channel].dacCode = dacCodeForVoltage(present_voltage, cmd.boolVal);
+                    xSemaphoreGive(g_stateMutex);
+                }
                 break;
             }
 
@@ -999,23 +1274,9 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 // Per AD74416H datasheet: DIAG_ASSIGN cannot be changed while
                 // continuous ADC conversion is running.  Must stop, update, restart.
                 {
-                    // Build current channel mask
-                    uint8_t chMask = 0;
-                    const uint8_t diagMask = 0x0F;
-                    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                        for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
-                            ChannelFunction f = (ChannelFunction)g_deviceState.channels[c].function;
-                            if (f != CH_FUNC_HIGH_IMP &&
-                                f != CH_FUNC_DIN_LOGIC &&
-                                f != CH_FUNC_DIN_LOOP)
-                                chMask |= (1u << tasks_logical_to_physical(c));
-                        }
-                        xSemaphoreGive(g_stateMutex);
-                    }
-
-                    // Update DIAG_ASSIGN and restart ADC conversion
+                    // Update DIAG_ASSIGN and restart ADC conversion (respects scope mode).
                     s_device->configureDiagSlot(cmd.diagCfg.slot, cmd.diagCfg.source);
-                    s_device->startAdcConversion(true, chMask, diagMask);
+                    tasks_rebuild_adc_conv_ctrl();
                 }
 
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -1114,20 +1375,16 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 s_device->setChannelFunction(selftest_physical_ch, CH_FUNC_VIN);
                 s_device->configureAdc(selftest_physical_ch, ADC_MUX_LF_TO_AGND, ADC_RNG_0_12V, ADC_RATE_20SPS);
                 
-                // Update conversion mask to include Channel D
+                // Update state and restart ADC conversion including Channel D
                 {
-                    uint8_t chMask = 0;
                     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                         g_deviceState.channels[selftest_logical_ch].function = CH_FUNC_VIN;
                         g_deviceState.channels[selftest_logical_ch].adcRange = ADC_RNG_0_12V;
                         g_deviceState.channels[selftest_logical_ch].adcMux   = ADC_MUX_LF_TO_AGND;
-                        for (uint8_t c = 0; c < 4; c++) {
-                            if (g_deviceState.channels[c].function != CH_FUNC_HIGH_IMP)
-                                chMask |= (1u << tasks_logical_to_physical(c));
-                        }
                         xSemaphoreGive(g_stateMutex);
                     }
-                    s_device->startAdcConversion(true, chMask, 0x0F);
+                    // Rebuild respects scope mode; supply-monitor exception ensures CH D stays in
+                    tasks_rebuild_adc_conv_ctrl();
                 }
 
                 vTaskDelay(pdMS_TO_TICKS(200)); // Settling
@@ -1273,6 +1530,9 @@ static void taskWavegen(void* /*pvParameters*/)
         }
 
         if (!wg.active || !s_device) continue;
+        // Host apps store and send logical channels. Keep the C/D board swap
+        // isolated at the final HAL write boundary.
+        uint8_t physical_ch = tasks_logical_to_physical(wg.channel);
 
         // Compute timing
         float freq = wg.freq_hz;
@@ -1296,7 +1556,14 @@ static void taskWavegen(void* /*pvParameters*/)
             float minVal = wg.offset - wg.amplitude;
             needsBipolar = (minVal < 0.0f);
             // Set VOUT range ONCE before the loop
-            s_device->setVoutRange(wg.channel, needsBipolar);
+            if (!setVoutRangePreservingOutput(wg.channel, 0.0f, needsBipolar)) {
+                ESP_LOGE("wavegen", "Failed to set VOUT range for logical ch %u", wg.channel);
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    g_deviceState.wavegen.active = false;
+                    xSemaphoreGive(g_stateMutex);
+                }
+                continue;
+            }
             delay_ms(10);  // Let range change settle
         }
 
@@ -1334,18 +1601,18 @@ static void taskWavegen(void* /*pvParameters*/)
                 bool ok;
                 if (wg.mode == WAVEGEN_VOLTAGE) {
                     if (!needsBipolar && value < 0.0f) value = 0.0f;
-                    ok = s_device->setDacVoltage(wg.channel, value, needsBipolar);
+                    ok = s_device->setDacVoltage(physical_ch, value, needsBipolar);
                 } else {
                     if (value < 0.0f) value = 0.0f;
-                    ok = s_device->setDacCurrent(wg.channel, value);
+                    ok = s_device->setDacCurrent(physical_ch, value);
                 }
                 if (!ok) {
                     taskYIELD();
                     // Retry once
                     if (wg.mode == WAVEGEN_VOLTAGE) {
-                        s_device->setDacVoltage(wg.channel, value, needsBipolar);
+                        s_device->setDacVoltage(physical_ch, value, needsBipolar);
                     } else {
-                        s_device->setDacCurrent(wg.channel, value);
+                        s_device->setDacCurrent(physical_ch, value);
                     }
                 }
             }

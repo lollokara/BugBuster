@@ -907,6 +907,17 @@ button.device-item:hover { background: rgba(59,130,246,0.08); border-color: rgba
     box-shadow: 0 0 8px var(--green);
     animation: pulse 1.5s infinite;
 }
+.scope-diag-pause-badge {
+    display: inline-flex; align-items: center;
+    padding: 3px 9px;
+    border: 1px solid rgba(245,158,11,0.35);
+    border-radius: 10px;
+    background: rgba(245,158,11,0.08);
+    color: rgba(251,191,36,0.9);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    pointer-events: none;
+}
 .scope-mode-toggle {
     display: flex; border: 1px solid var(--border-bright);
     border-radius: 6px; overflow: hidden;

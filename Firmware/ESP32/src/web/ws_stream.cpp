@@ -10,6 +10,7 @@
 
 #include "ws_stream.h"
 #include "auth.h"
+#include "tasks.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -225,10 +226,14 @@ static esp_err_t send_close_frame(httpd_handle_t hd, int fd, uint16_t code)
 static void session_close(void)
 {
     if (s_auth_timer) xTimerStop(s_auth_timer, 0);
+    bool had_scope_subscription = (s_subscriptions & WS_SUB_SCOPE) != 0;
     s_ws_fd          = -1;
     s_authenticated  = false;
     s_subscriptions  = 0;
     s_session_count  = 0;
+    if (had_scope_subscription) {
+        tasks_scope_mode_exit();
+    }
     if (s_tx_mutex && xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         s_tx_head = 0;
         s_tx_used = 0;
@@ -367,9 +372,15 @@ static esp_err_t handle_ws_stream(httpd_req_t* req)
     }
 
     // Subscribe / control frame (JSON).
+    uint8_t old_mask = s_subscriptions;
     uint8_t new_mask = parse_subscription((const char*)buf);
     s_subscriptions = new_mask;
     free(buf);
+    if (!(old_mask & WS_SUB_SCOPE) && (new_mask & WS_SUB_SCOPE)) {
+        tasks_scope_mode_enter(0x0F);
+    } else if ((old_mask & WS_SUB_SCOPE) && !(new_mask & WS_SUB_SCOPE)) {
+        tasks_scope_mode_exit();
+    }
     ESP_LOGI(TAG, "stream subs=0x%02X", (unsigned)new_mask);
     return ESP_OK;
 }
