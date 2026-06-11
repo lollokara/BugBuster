@@ -1,6 +1,6 @@
 [package]
 name = "bugbuster-ui"
-version = "1.1.3"
+version = "1.2.0"
 edition = "2021"
 description = "BugBuster desktop UI — Leptos/WASM frontend for the BugBuster electronics debug platform (logic analyzer, AD74416H I/O, ESP32-S3 host)."
 authors = ["lollokara"]

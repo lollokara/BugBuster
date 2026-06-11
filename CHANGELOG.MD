@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+*(no changes yet)*
+
+## [1.4.0] — 2026-06-12
+
 ### Added
 - **iOS Oscilloscope Scope Tab**: Added a new "Scope" tab (waveform icon) to the iOS app bottom navigation. It features a real-time waveform display rendering active channels with distinct colors, a configuration settings modal sheet (for selecting MUX inputs, voltage ranges, and sample rates per channel), pinch-to-zoom scaling for the timebase using magnification gestures, and auto-fit Y-axis scaling. Implemented URLSession response disposition handling to enable chunked stream delivery, added Play/Pause toolbar buttons, and added connection error state overlays with retry flows.
 - **iOS Oscilloscope sample counter**: Displays the count of all received samples next to the streaming state in the header.
