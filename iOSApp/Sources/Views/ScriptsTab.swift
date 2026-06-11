@@ -110,6 +110,8 @@ struct ScriptsTab: View {
                         .font(.system(size: 24))
                         .foregroundColor(.blue)
                 }
+                .padding(8)
+                .glassEffect(.regular.tint(.blue), in: Circle())
 
                 Button(action: {
                     isShowingREPL = true
@@ -120,6 +122,8 @@ struct ScriptsTab: View {
                         .foregroundColor(.cyan)
                         .padding(.leading, 8)
                 }
+                .padding(8)
+                .glassEffect(.regular.tint(.cyan), in: Circle())
             }
             .padding(.horizontal)
             .padding(.top, 16)
@@ -140,8 +144,12 @@ struct ScriptsTab: View {
                 .foregroundColor(runMsg.hasPrefix("Error") ? .red : .green)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background((runMsg.hasPrefix("Error") ? Color.red : Color.green).opacity(0.12))
-                .cornerRadius(8)
+                .glassEffect(
+                    runMsg.hasPrefix("Error")
+                        ? .regular.tint(.red)
+                        : .regular.tint(.green),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .padding(.horizontal)
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -160,7 +168,10 @@ struct ScriptsTab: View {
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
                     Button("Refresh List") { loadFiles() }
-                        .buttonStyle(.bordered)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .buttonStyle(.plain)
                     Spacer()
                 }
             } else {
@@ -175,8 +186,11 @@ struct ScriptsTab: View {
                                 Spacer()
                                 Image(systemName: "pencil").foregroundColor(.secondary)
                             }
+                            .padding(.vertical, 12)
+                            .padding(.horizontal, 14)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
-                        .listRowBackground(Color.white.opacity(0.02))
+                        .listRowBackground(Color.clear)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(role: .destructive) {
                                 deleteFile(file.name)
@@ -231,7 +245,7 @@ struct ScriptsTab: View {
                 }
             }
             .padding()
-            .background(Color.black.opacity(0.3))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             if let success = lintSuccess {
                 HStack(alignment: .top) {
@@ -244,19 +258,23 @@ struct ScriptsTab: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background((success ? Color.green : Color.red).opacity(0.1))
+                .glassEffect(
+                    success ? .regular.tint(.green) : .regular.tint(.red),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
             }
 
             SelectableCodeEditor(text: $editingContent)
-                .background(Color(red: 0.02, green: 0.03, blue: 0.05))
+                .padding(.horizontal)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .onChange(of: editingContent) { newValue in
                     let sanitized = newValue
-                        .replacingOccurrences(of: "“", with: "\"")
-                        .replacingOccurrences(of: "”", with: "\"")
-                        .replacingOccurrences(of: "‘", with: "'")
-                        .replacingOccurrences(of: "’", with: "'")
-                        .replacingOccurrences(of: "—", with: "--")
-                        .replacingOccurrences(of: "–", with: "-")
+                        .replacingOccurrences(of: "\u{201C}", with: "\"")
+                        .replacingOccurrences(of: "\u{201D}", with: "\"")
+                        .replacingOccurrences(of: "\u{2018}", with: "'")
+                        .replacingOccurrences(of: "\u{2019}", with: "'")
+                        .replacingOccurrences(of: "\u{2014}", with: "--")
+                        .replacingOccurrences(of: "\u{2013}", with: "-")
                     if sanitized != newValue {
                         editingContent = sanitized
                     }
@@ -295,6 +313,8 @@ struct ScriptsTab: View {
                             .font(.system(size: 14))
                             .foregroundColor(.cyan)
                     }
+                    .padding(8)
+                    .glassEffect(.regular.tint(.cyan), in: Circle())
                     Button("Ctrl-C") { replClient?.sendControlChar("C") }
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundColor(.red)
@@ -305,7 +325,7 @@ struct ScriptsTab: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 12)
-            .background(Color.black.opacity(0.35))
+            .glassEffect(.regular, in: Rectangle())
 
             // Terminal output — fills all remaining space
             if let client = replClient {
@@ -327,17 +347,20 @@ struct ScriptsTab: View {
                     .keyboardType(.asciiCapable)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .submitLabel(.send)
                     .focused($replInputFocused)
                     .onSubmit { sendREPLCommand() }
                     .onChange(of: inputCommand) { newValue in
                         let sanitized = newValue
-                            .replacingOccurrences(of: "“", with: "\"")
-                            .replacingOccurrences(of: "”", with: "\"")
-                            .replacingOccurrences(of: "‘", with: "'")
-                            .replacingOccurrences(of: "’", with: "'")
-                            .replacingOccurrences(of: "—", with: "--")
-                            .replacingOccurrences(of: "–", with: "-")
+                            .replacingOccurrences(of: "\u{201C}", with: "\"")
+                            .replacingOccurrences(of: "\u{201D}", with: "\"")
+                            .replacingOccurrences(of: "\u{2018}", with: "'")
+                            .replacingOccurrences(of: "\u{2019}", with: "'")
+                            .replacingOccurrences(of: "\u{2014}", with: "--")
+                            .replacingOccurrences(of: "\u{2013}", with: "-")
                         if sanitized != newValue {
                             inputCommand = sanitized
                         }
@@ -349,13 +372,12 @@ struct ScriptsTab: View {
                         .foregroundColor(inputCommand.isEmpty ? .secondary : .blue)
                 }
                 .disabled(inputCommand.isEmpty)
+                .padding(6)
+                .glassEffect(.regular.tint(.blue), in: Circle())
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(
-                Color(red: 0.06, green: 0.08, blue: 0.12)
-                    .overlay(Color.white.opacity(0.04))
-            )
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             // Push above keyboard (keyboard height from notification;
             // subtract ~83pt tab bar area already outside content)
             .padding(.bottom, max(0, keyboardHeight - 83))
@@ -657,7 +679,6 @@ struct REPLTerminalConsole: View {
         VStack(alignment: .leading, spacing: 0) {
             SelectableConsoleView(text: client.consoleOutput)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(red: 0.01, green: 0.02, blue: 0.04))
 
             // Blinking block cursor
             Text(cursorVisible ? "█" : " ")
@@ -666,7 +687,8 @@ struct REPLTerminalConsole: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 6)
         }
-        .background(Color(red: 0.01, green: 0.02, blue: 0.04))
+        .padding()
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onReceive(cursorTimer) { _ in
             cursorVisible.toggle()
         }
@@ -715,7 +737,7 @@ struct SelectableCodeEditor: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
-        textView.backgroundColor = UIColor(red: 0.02, green: 0.03, blue: 0.05, alpha: 1.0)
+        textView.backgroundColor = .clear
         textView.textColor = .white
         textView.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         textView.isEditable = true
@@ -735,7 +757,7 @@ struct SelectableCodeEditor: UIViewRepresentable {
         // Build horizontally scrollable accessory bar
         let scrollView = UIScrollView()
         scrollView.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44)
-        scrollView.backgroundColor = UIColor(red: 0.08, green: 0.11, blue: 0.18, alpha: 1.0)
+        scrollView.backgroundColor = .clear
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.alwaysBounceHorizontal = true
 
@@ -751,7 +773,7 @@ struct SelectableCodeEditor: UIViewRepresentable {
             button.setTitle(key, for: .normal)
             button.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: key == "Done" || key == "Tab" ? .bold : .semibold)
             button.setTitleColor(.cyan, for: .normal)
-            button.backgroundColor = UIColor(white: 1.0, alpha: 0.08)
+            button.backgroundColor = UIColor(white: 1.0, alpha: 0.04)
             button.layer.cornerRadius = 8
             button.contentEdgeInsets = UIEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
             

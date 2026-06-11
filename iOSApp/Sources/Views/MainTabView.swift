@@ -18,11 +18,11 @@ struct CustomTabBar: View {
                     tabButton(index: index)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.top, 6)
+            .padding(.horizontal, 6)
+            .padding(.top, 4)
             // Bottom padding absorbs home-indicator inset exactly — no extra.
-            .padding(.bottom, max(safeAreaBottom, 8))
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 36, style: .continuous))
+            .padding(.bottom, max(safeAreaBottom - 6, 4))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity)
@@ -38,19 +38,19 @@ struct CustomTabBar: View {
         } label: {
             VStack(spacing: 2) {
                 Image(systemName: tabs[index].icon)
-                    .font(.system(size: 18, weight: isActive ? .semibold : .regular))
+                    .font(.system(size: 16, weight: isActive ? .semibold : .regular))
                     .scaleEffect(isActive ? 1.05 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.65), value: isActive)
 
                 Text(tabs[index].name)
-                    .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+                    .font(.system(size: 9, weight: isActive ? .semibold : .regular))
             }
             .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
+            .padding(.vertical, 5)
             .glassEffect(
                 isActive ? Glass.regular : Glass.clear,
-                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
             )
             .glassEffectID(isActive ? "active" : nil, in: glassNS)
         }
@@ -98,7 +98,7 @@ struct MainTabView: View {
                         // Spacer = pill visible content height (6 top + 7+18+2+13+7 item + some slack).
                         // The pill's own internal bottom padding absorbs safeAreaBottom.
                         .safeAreaInset(edge: .bottom, spacing: 0) {
-                            Color.clear.frame(height: 72)
+                            Color.clear.frame(height: 54)
                         }
 
                         // Floating Liquid Glass pill — flush at the physical bottom
@@ -168,12 +168,7 @@ struct MainTabView: View {
                                 .foregroundColor(.red)
                                 .padding(12)
                                 .frame(maxWidth: .infinity)
-                                .background(Color.red.opacity(0.1))
-                                .cornerRadius(12)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color.red.opacity(0.3), lineWidth: 1)
-                                )
+                                .glassEffect(.regular.tint(.red), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 .padding(.horizontal)
                         }
                         
@@ -187,261 +182,217 @@ struct MainTabView: View {
                                     .foregroundColor(.secondary)
                             }
                             .padding()
-                            .background(Color.black.opacity(0.2))
-                            .cornerRadius(16)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
                         
                         if connectionManager.connectionState == .unauthorized {
                             // Unauthorized / Token Request UI
-                            VStack(spacing: 16) {
-                                Image(systemName: "lock.shield.fill")
-                                    .font(.system(size: 44))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [.orange, .orange],
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                    )
-                                    .shadow(color: .orange.opacity(0.3), radius: 10)
-                                    .padding(.top, 16)
-                                
-                                Text("Token Required")
-                                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                                
-                                Text("Please enter the admin access token for the device at:\n\(connectionManager.activeDevice?.ip ?? "BugBuster Board")")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal)
-                                
-                                HStack(spacing: 8) {
-                                    SecureField("Admin Access Token", text: $manualToken)
-                                        .autocorrectionDisabled()
-                                        .textInputAutocapitalization(.never)
-                                        .padding()
-                                        .background(Color.white.opacity(0.05))
-                                        .cornerRadius(12)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                        )
-                                    
-                                    Button(action: {
-                                        showingScanSheet = true
-                                    }) {
-                                        Image(systemName: "qrcode.viewfinder")
-                                            .font(.system(size: 20))
-                                            .foregroundColor(.cyan)
-                                            .padding()
-                                            .background(Color.cyan.opacity(0.1))
-                                            .cornerRadius(12)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+                            GlassEffectContainer(spacing: 12) {
+                                VStack(spacing: 16) {
+                                    Image(systemName: "lock.shield.fill")
+                                        .font(.system(size: 44))
+                                        .foregroundStyle(
+                                            LinearGradient(
+                                                colors: [.orange, .orange],
+                                                startPoint: .top,
+                                                endPoint: .bottom
                                             )
-                                    }
-                                }
-                                .padding(.horizontal)
-                                
-                                HStack(spacing: 16) {
-                                    Button("Cancel") {
-                                        connectionManager.disconnect()
-                                        errorMessage = nil
-                                    }
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(.secondary)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.white.opacity(0.05))
-                                    .cornerRadius(12)
-                                    
-                                    Button("Authenticate") {
-                                        Task {
-                                            let ip = connectionManager.activeDevice?.ip ?? manualIp
-                                            let success = await connectionManager.connect(ip: ip, token: manualToken)
-                                            if !success {
-                                                errorMessage = "Authentication failed. Invalid token."
-                                            } else {
-                                                errorMessage = nil
-                                            }
-                                        }
-                                    }
-                                    .font(.system(size: 15, weight: .bold))
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(
-                                        LinearGradient(
-                                            colors: [.blue, .cyan],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
                                         )
-                                    )
-                                    .cornerRadius(12)
-                                }
-                                .padding(.horizontal)
-                                .padding(.bottom, 16)
-                            }
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(20)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20)
-                                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                            )
-                            .padding(.horizontal)
-                        } else {
-                            // Normal Dashboard UI (Scan + Connect)
-                            
-                            // Discovered Devices Section
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Text("Discovered Devices")
-                                        .font(.system(size: 18, weight: .semibold))
-                                    Spacer()
-                                    if connectionManager.isSearching {
-                                        ProgressView()
-                                            .tint(.blue)
-                                    } else {
-                                        Button("Scan") {
-                                            connectionManager.startDiscovery()
-                                        }
-                                        .font(.system(size: 14, weight: .medium))
-                                    }
-                                }
-                                .padding(.horizontal)
-                                
-                                if connectionManager.discoveredDevices.isEmpty {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: "wifi")
-                                            .font(.system(size: 24))
-                                            .foregroundColor(.secondary)
-                                        VStack(alignment: .leading) {
-                                            Text("Searching Bonjour...")
-                                                .font(.system(size: 14, weight: .medium))
-                                            Text("Ensure hardware is powered & on same Wi-Fi.")
-                                                .font(.system(size: 12))
-                                                .foregroundColor(.secondary)
-                                        }
-                                    }
-                                    .padding()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(.ultraThinMaterial)
-                                    .cornerRadius(16)
-                                    .padding(.horizontal)
-                                } else {
-                                    ForEach(connectionManager.discoveredDevices) { device in
+                                        .shadow(color: .orange.opacity(0.3), radius: 10)
+                                        .padding(.top, 16)
+                                    
+                                    Text("Token Required")
+                                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                                    
+                                    Text("Please enter the admin access token for the device at:\n\(connectionManager.activeDevice?.ip ?? "BugBuster Board")")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
+                                        .multilineTextAlignment(.center)
+                                        .padding(.horizontal)
+                                    
+                                    HStack(spacing: 8) {
+                                        SecureField("Admin Access Token", text: $manualToken)
+                                            .autocorrectionDisabled()
+                                            .textInputAutocapitalization(.never)
+                                            .padding()
+                                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        
                                         Button(action: {
+                                            showingScanSheet = true
+                                        }) {
+                                            Image(systemName: "qrcode.viewfinder")
+                                                .font(.system(size: 20))
+                                                .foregroundColor(.cyan)
+                                                .padding()
+                                                .glassEffect(.regular.tint(.cyan), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(.horizontal)
+                                    
+                                    HStack(spacing: 16) {
+                                        Button("Cancel") {
+                                            connectionManager.disconnect()
+                                            errorMessage = nil
+                                        }
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        
+                                        Button("Authenticate") {
                                             Task {
-                                                var tokenToUse = manualToken
-                                                if tokenToUse.isEmpty {
-                                                    if let savedToken = UserDefaults.standard.string(forKey: "bugbuster_token") {
-                                                        tokenToUse = savedToken
-                                                    }
-                                                }
-                                                let success = await connectionManager.connect(ip: device.ip, token: tokenToUse)
+                                                let ip = connectionManager.activeDevice?.ip ?? manualIp
+                                                let success = await connectionManager.connect(ip: ip, token: manualToken)
                                                 if !success {
-                                                    if connectionManager.connectionState == .unauthorized {
-                                                        errorMessage = "Token Required: Enter admin access token."
-                                                    } else {
-                                                        errorMessage = "Failed to connect to \(device.hostname). Invalid token or device offline."
-                                                    }
+                                                    errorMessage = "Authentication failed. Invalid token."
                                                 } else {
                                                     errorMessage = nil
                                                 }
                                             }
-                                        }) {
-                                            HStack {
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    Text(device.hostname)
-                                                        .font(.system(size: 16, weight: .semibold))
-                                                        .foregroundColor(.primary)
-                                                    Text(device.ip)
-                                                        .font(.system(size: 13, design: .monospaced))
-                                                        .foregroundColor(.secondary)
-                                                }
-                                                Spacer()
-                                                Image(systemName: "chevron.right")
+                                        }
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundColor(.black)
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    }
+                .padding(.horizontal)
+                                    .padding(.bottom, 16)
+                                }
+                                .glassEffect(.regular.tint(.orange), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            }
+                            .padding(.horizontal)
+                        } else {
+                            // Normal Dashboard UI (Scan + Connect)
+                            GlassEffectContainer(spacing: 16) {
+                                // Discovered Devices Section
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack {
+                                        Text("Discovered Devices")
+                                            .font(.system(size: 18, weight: .semibold))
+                                        Spacer()
+                                        if connectionManager.isSearching {
+                                            ProgressView()
+                                                .tint(.blue)
+                                        } else {
+                                            Button("Scan") {
+                                                connectionManager.startDiscovery()
+                                            }
+                                            .font(.system(size: 14, weight: .medium))
+                                            .foregroundColor(.black)
+                                            .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        }
+                                    }
+                                    .padding(.horizontal)
+                                    
+                                    if connectionManager.discoveredDevices.isEmpty {
+                                        HStack(spacing: 12) {
+                                            Image(systemName: "wifi")
+                                                .font(.system(size: 24))
+                                                .foregroundColor(.secondary)
+                                            VStack(alignment: .leading) {
+                                                Text("Searching Bonjour...")
+                                                    .font(.system(size: 14, weight: .medium))
+                                                Text("Ensure hardware is powered & on same Wi-Fi.")
+                                                    .font(.system(size: 12))
                                                     .foregroundColor(.secondary)
                                             }
-                                            .padding()
-                                            .background(.ultraThinMaterial)
-                                            .cornerRadius(16)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 16)
-                                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                                            )
                                         }
+                                        .padding()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                                         .padding(.horizontal)
-                                    }
-                                }
-                            }
-                            
-                            // Manual Entry Form
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Manual Connection")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .padding(.horizontal)
-                                
-                                VStack(spacing: 16) {
-                                    TextField("IP Address or Hostname", text: $manualIp)
-                                        .keyboardType(.numbersAndPunctuation)
-                                        .autocorrectionDisabled()
-                                        .textInputAutocapitalization(.never)
-                                        .padding()
-                                        .background(Color.white.opacity(0.05))
-                                        .cornerRadius(12)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                        )
-                                    
-                                    SecureField("Admin Access Token", text: $manualToken)
-                                        .autocorrectionDisabled()
-                                        .textInputAutocapitalization(.never)
-                                        .padding()
-                                        .background(Color.white.opacity(0.05))
-                                        .cornerRadius(12)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                        )
-                                    
-                                    Button(action: {
-                                        guard !manualIp.isEmpty else {
-                                            errorMessage = "Please enter an IP address"
-                                            return
-                                        }
-                                        Task {
-                                            let success = await connectionManager.connect(ip: manualIp, token: manualToken)
-                                            if !success {
-                                                errorMessage = "Failed to connect. Verify IP & Token."
+                                    } else {
+                                        ForEach(connectionManager.discoveredDevices) { device in
+                                            Button(action: {
+                                                Task {
+                                                    var tokenToUse = manualToken
+                                                    if tokenToUse.isEmpty {
+                                                        if let savedToken = UserDefaults.standard.string(forKey: "bugbuster_token") {
+                                                            tokenToUse = savedToken
+                                                        }
+                                                    }
+                                                    let success = await connectionManager.connect(ip: device.ip, token: tokenToUse)
+                                                    if !success {
+                                                        if connectionManager.connectionState == .unauthorized {
+                                                            errorMessage = "Token Required: Enter admin access token."
+                                                        } else {
+                                                            errorMessage = "Failed to connect to \(device.hostname). Invalid token or device offline."
+                                                        }
+                                                    } else {
+                                                        errorMessage = nil
+                                                    }
+                                                }
+                                            }) {
+                                                HStack {
+                                                    VStack(alignment: .leading, spacing: 4) {
+                                                        Text(device.hostname)
+                                                            .font(.system(size: 16, weight: .semibold))
+                                                            .foregroundColor(.primary)
+                                                        Text(device.ip)
+                                                            .font(.system(size: 13, design: .monospaced))
+                                                            .foregroundColor(.secondary)
+                                                    }
+                                                    Spacer()
+                                                    Image(systemName: "chevron.right")
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                .padding()
+                                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                                             }
+                                            .padding(.horizontal)
+                                            .buttonStyle(.plain)
                                         }
-                                    }) {
-                                        Text("Connect")
-                                            .font(.system(size: 16, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .frame(maxWidth: .infinity)
-                                            .padding()
-                                            .background(
-                                                LinearGradient(
-                                                    colors: [.blue, .cyan],
-                                                    startPoint: .leading,
-                                                    endPoint: .trailing
-                                                )
-                                            )
-                                            .cornerRadius(12)
                                     }
                                 }
-                                .padding()
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(16)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Color.white.opacity(0.05), lineWidth: 1)
-                                )
-                                .padding(.horizontal)
+                                
+                                // Manual Entry Form
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Manual Connection")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .padding(.horizontal)
+                                    
+                                    VStack(spacing: 16) {
+                                        TextField("IP Address or Hostname", text: $manualIp)
+                                            .keyboardType(.numbersAndPunctuation)
+                                            .autocorrectionDisabled()
+                                            .textInputAutocapitalization(.never)
+                                            .padding()
+                                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        
+                                        SecureField("Admin Access Token", text: $manualToken)
+                                            .autocorrectionDisabled()
+                                            .textInputAutocapitalization(.never)
+                                            .padding()
+                                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        
+                                        Button(action: {
+                                            guard !manualIp.isEmpty else {
+                                                errorMessage = "Please enter an IP address"
+                                                return
+                                            }
+                                            Task {
+                                                let success = await connectionManager.connect(ip: manualIp, token: manualToken)
+                                                if !success {
+                                                    errorMessage = "Failed to connect. Verify IP & Token."
+                                                }
+                                            }
+                                        }) {
+                                                Text("Connect")
+                                                    .font(.system(size: 16, weight: .bold))
+                                                .foregroundColor(.black)
+                                                .frame(maxWidth: .infinity)
+                                                .padding()
+                                                .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding()
+                                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    .padding(.horizontal)
+                                }
                             }
                         }
                         
@@ -458,12 +409,8 @@ struct MainTabView: View {
                             .foregroundColor(.cyan)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.cyan.opacity(0.1))
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
-                            )
+                            .glassEffect(.regular.tint(.cyan), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .foregroundColor(.black)
                             .padding(.horizontal)
                         }
                         .padding(.bottom, 40)

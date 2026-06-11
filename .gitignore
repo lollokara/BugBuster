@@ -83,3 +83,4 @@ Diag/repro_*
 /Docs/superpowers
 /iOSApp/.omc
 /Firmware/ESP32/src/.omc
+iOSApp/bugbuster.xcodeproj/project.xcworkspace/xcuserdata/lorenzo.xcuserdatad/UserInterfaceState.xcuserstate

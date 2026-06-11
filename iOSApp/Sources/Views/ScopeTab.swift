@@ -184,35 +184,36 @@ struct ScopeTab: View {
                 }
                 Spacer()
                 
-                // Play / Pause button
-                Button(action: {
-                    if streamManager.isStreaming {
-                        streamManager.stopStream()
-                    } else {
-                        streamManager.startStream(
-                            ip: connectionManager.activeDevice?.ip ?? "",
-                            token: connectionManager.adminToken
-                        )
+                // Play / Pause + Settings buttons wrapped in GlassEffectContainer
+                GlassEffectContainer(spacing: 8) {
+                    // Play / Pause button
+                    Button(action: {
+                        if streamManager.isStreaming {
+                            streamManager.stopStream()
+                        } else {
+                            streamManager.startStream(
+                                ip: connectionManager.activeDevice?.ip ?? "",
+                                token: connectionManager.adminToken
+                            )
+                        }
+                    }) {
+                        Image(systemName: streamManager.isStreaming ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(streamManager.isStreaming ? .orange : .green)
+                            .padding(10)
+                            .glassEffect(.regular, in: Circle())
                     }
-                }) {
-                    Image(systemName: streamManager.isStreaming ? "pause.fill" : "play.fill")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(streamManager.isStreaming ? .orange : .green)
-                        .padding(10)
-                        .background(Color.white.opacity(0.06))
-                        .clipShape(Circle())
-                }
-                .padding(.trailing, 6)
-                
-                Button(action: {
-                    showingSettings = true
-                }) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.cyan)
-                        .padding(10)
-                        .background(Color.white.opacity(0.06))
-                        .clipShape(Circle())
+                    .padding(.trailing, 6)
+                    
+                    Button(action: {
+                        showingSettings = true
+                    }) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.cyan)
+                            .padding(10)
+                            .glassEffect(.regular, in: Circle())
+                    }
                 }
             }
             .padding(.horizontal)
@@ -250,8 +251,7 @@ struct ScopeTab: View {
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundColor(.secondary)
                                 .padding(4)
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(4)
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                             Spacer()
                         }
                         Spacer()
@@ -260,8 +260,7 @@ struct ScopeTab: View {
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundColor(.secondary)
                                 .padding(4)
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(4)
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                             Spacer()
                         }
                     }
@@ -307,14 +306,7 @@ struct ScopeTab: View {
                                     .foregroundColor(.secondary)
                             }
                             .padding(8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color(red: 0.05, green: 0.07, blue: 0.12).opacity(0.85))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(ACCENTS[info.channelIndex].opacity(0.5), lineWidth: 1)
-                            )
+                            .glassEffect(.regular.tint(ACCENTS[info.channelIndex]), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                             // Position bubble near the touch/point, keeping it within bounds
                             .position(
                                 x: max(60, min(geometry.size.width - 60, info.x + (info.x > geometry.size.width / 2 ? -70 : 70))),
@@ -349,18 +341,12 @@ struct ScopeTab: View {
                                     .foregroundColor(.cyan)
                                     .padding(.horizontal, 20)
                                     .padding(.vertical, 8)
-                                    .background(Color.cyan.opacity(0.12))
-                                    .cornerRadius(8)
+                                    .glassEffect(.regular.tint(.cyan), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                         }
                         .padding()
                         .frame(maxWidth: 280)
-                        .background(Color(red: 0.05, green: 0.07, blue: 0.12).opacity(0.95))
-                        .cornerRadius(16)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
+                        .glassEffect(.regular.tint(.red), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     } else if streamManager.isStreaming && streamManager.sampleBuffer.isEmpty {
                         VStack(spacing: 8) {
                             ProgressView()
@@ -370,8 +356,7 @@ struct ScopeTab: View {
                                 .foregroundColor(.secondary)
                         }
                         .padding()
-                        .background(Color.black.opacity(0.5))
-                        .cornerRadius(8)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
                 .contentShape(Rectangle())
@@ -399,36 +384,37 @@ struct ScopeTab: View {
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(red: 0.01, green: 0.02, blue: 0.04))
-            .cornerRadius(12)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .padding()
             
             // Channel legend selector
-            HStack(spacing: 12) {
-                ForEach(0..<4) { ch in
-                    Button(action: {
-                        withAnimation {
-                            activeChannels[ch].toggle()
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 12) {
+                    ForEach(0..<4) { ch in
+                        Button(action: {
+                            withAnimation {
+                                activeChannels[ch].toggle()
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(ACCENTS[ch])
+                                    .frame(width: 8, height: 8)
+                                Text("CH\(ch + 1)")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundColor(activeChannels[ch] ? .white : .secondary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .glassEffect(
+                                activeChannels[ch]
+                                    ? .regular.tint(ACCENTS[ch])
+                                    : .regular,
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            )
                         }
-                    }) {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(ACCENTS[ch])
-                                .frame(width: 8, height: 8)
-                            Text("CH\(ch + 1)")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundColor(activeChannels[ch] ? .white : .secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.white.opacity(activeChannels[ch] ? 0.08 : 0.02))
-                        .cornerRadius(8)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(activeChannels[ch] ? ACCENTS[ch].opacity(0.3) : Color.clear, lineWidth: 1)
-                        )
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.bottom, 20)
@@ -775,12 +761,7 @@ struct ChannelConfigRowView: View {
             }
         }
         .padding()
-        .background(Color.white.opacity(0.02))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-        )
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -797,17 +778,19 @@ struct ScopeSettingsView: View {
                     .ignoresSafeArea()
                 
                 ScrollView {
-                    VStack(spacing: 20) {
-                        ForEach(0..<4) { ch in
-                            ChannelConfigRowView(
-                                ch: ch,
-                                config: $configs[ch],
-                                isActive: $activeChannels[ch],
-                                onApply: onApply
-                            )
+                    GlassEffectContainer(spacing: 8) {
+                        VStack(spacing: 20) {
+                            ForEach(0..<4) { ch in
+                                ChannelConfigRowView(
+                                    ch: ch,
+                                    config: $configs[ch],
+                                    isActive: $activeChannels[ch],
+                                    onApply: onApply
+                                )
+                            }
                         }
+                        .padding()
                     }
-                    .padding()
                 }
             }
             .navigationTitle("Scope Settings")

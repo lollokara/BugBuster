@@ -43,7 +43,7 @@ struct SignalPathTab: View {
                         .foregroundColor(.white)
                         .padding(.vertical, 8)
                         .frame(maxWidth: .infinity)
-                        .background(Color.red.opacity(0.8))
+                        .glassEffect(.regular.tint(.red), in: Rectangle())
                         .transition(.move(edge: .top))
                         .onAppear {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -53,41 +53,43 @@ struct SignalPathTab: View {
                 }
 
                 ScrollView {
-                    VStack(spacing: 16) {
-                        ForEach(0..<4) { ch in
-                            let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
-                            let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
-                                ? connectionManager.lastStatus!.muxStates[muxDev] : 0
+                    GlassEffectContainer(spacing: 16) {
+                        VStack(spacing: 16) {
+                            ForEach(0..<4) { ch in
+                                let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
+                                let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
+                                    ? connectionManager.lastStatus!.muxStates[muxDev] : 0
 
-                            let isPsuOn = ch < 2
-                                ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
-                                : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
+                                let isPsuOn = ch < 2
+                                    ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
+                                    : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
 
-                            let efuses = connectionManager.lastOverview?.ioexp.efuses
-                            let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
-                            let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
+                                let efuses = connectionManager.lastOverview?.ioexp.efuses
+                                let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
+                                let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
 
-                            let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
-                            let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
-                            let vAdjIndex  = ch < 2 ? 0 : 1
+                                let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
+                                let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
+                                let vAdjIndex  = ch < 2 ? 0 : 1
 
-                            BlockTile(
-                                blockIndex: ch,
-                                muxDevice: muxDev,
-                                muxRef: MUX_REF[ch],
-                                muxState: muxState,
-                                ioLabels: GPIO_PAIR_LABELS[ch],
-                                accentColor: ACCENTS[ch],
-                                isPsuActive: isPsuOn,
-                                isEfuseActive: isEfOn,
-                                isEfuseFault: isEfFault,
-                                isOeActive: isOeActive,
-                                vAdjLabel: vAdjLabel,
-                                onApplyMuxStates: { states in applyPreset(states) },
-                                onToggleOe:     { toggleOe() },
-                                onToggleVAdj:   { togglePsu(vAdjIndex) },
-                                onToggleEfuse:  { toggleEfuse(ch) }
-                            )
+                                BlockTile(
+                                    blockIndex: ch,
+                                    muxDevice: muxDev,
+                                    muxRef: MUX_REF[ch],
+                                    muxState: muxState,
+                                    ioLabels: GPIO_PAIR_LABELS[ch],
+                                    accentColor: ACCENTS[ch],
+                                    isPsuActive: isPsuOn,
+                                    isEfuseActive: isEfOn,
+                                    isEfuseFault: isEfFault,
+                                    isOeActive: isOeActive,
+                                    vAdjLabel: vAdjLabel,
+                                    onApplyMuxStates: { states in applyPreset(states) },
+                                    onToggleOe:     { toggleOe() },
+                                    onToggleVAdj:   { togglePsu(vAdjIndex) },
+                                    onToggleEfuse:  { toggleEfuse(ch) }
+                                )
+                            }
                         }
                     }
                     .padding()
@@ -245,15 +247,7 @@ struct BlockTile: View {
             }
         }
         .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(red: 0.05, green: 0.09, blue: 0.16))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isGlowActive ? accentColor : Color.white.opacity(0.1),
-                        lineWidth: isGlowActive ? 2 : 1)
-        )
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: isGlowActive ? accentColor.opacity(0.4) : .clear,
                 radius: isGlowActive ? 14 : 0)
         .animation(.easeInOut(duration: 0.3), value: isGlowActive)
@@ -337,8 +331,10 @@ struct EFuseInlineRow: View {
                     .foregroundColor(enabled ? .red : .cyan)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background((enabled ? Color.red : Color.cyan).opacity(0.12))
-                    .cornerRadius(7)
+                    .glassEffect(
+                        enabled ? .regular.tint(.red) : .regular.tint(.cyan),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
             }
         }
     }
@@ -389,8 +385,7 @@ struct IORow: View {
                 .foregroundColor(modeColor)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(8)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
     }
@@ -415,11 +410,10 @@ struct BadgeView: View {
     var body: some View {
         Text(text)
             .font(.system(size: 9, weight: .black))
-            .foregroundColor(.white)
+            .foregroundColor(.black)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
-            .background(color.opacity(0.8))
-            .cornerRadius(4)
+            .glassEffect(.regular.tint(color), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 }
 
@@ -437,8 +431,10 @@ struct ControlPill: View {
                 .foregroundColor(isActive ? .black : .white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(isActive ? Color.cyan : Color.white.opacity(0.1))
-                .cornerRadius(12)
+                .glassEffect(
+                    isActive ? .regular.tint(.cyan) : .regular,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
         }
     }
 }

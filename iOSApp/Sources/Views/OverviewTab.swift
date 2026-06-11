@@ -122,20 +122,18 @@ struct OverviewTab: View {
                         .frame(width: 8, height: 8)
                     Text("Live")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.green)
+                        .foregroundColor(.black)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Color.green.opacity(0.1))
-                .cornerRadius(12)
+                .glassEffect(.regular.tint(.green), in: Capsule())
 
                 Button(action: { connectionManager.disconnect() }) {
                     Image(systemName: "power")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.red)
+                        .foregroundColor(.black)
                         .padding(8)
-                        .background(Color.red.opacity(0.1))
-                        .clipShape(Circle())
+                        .glassEffect(.regular.tint(.red), in: Circle())
                 }
             }
         }
@@ -151,56 +149,52 @@ struct OverviewTab: View {
                 .foregroundColor(.blue)
                 .padding(.horizontal, 4)
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                let channels = connectionManager.lastStatus?.channels ?? defaultChannels()
-                ForEach(channels) { ch in
-                    Button(action: { selectedChannel = ch }) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("CH \(ch.id)")
-                                    .font(.system(size: 14, weight: .bold))
+            GlassEffectContainer(spacing: 12) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                    let channels = connectionManager.lastStatus?.channels ?? defaultChannels()
+                    ForEach(channels) { ch in
+                        Button(action: { selectedChannel = ch }) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("CH \(ch.id)")
+                                        .font(.system(size: 14, weight: .bold))
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Image(systemName: "slider.horizontal.3")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Text(ch.function.replacingOccurrences(of: "CH_FUNC_", with: ""))
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.cyan)
+                                    .lineLimit(1)
+
+                                Text(String(format: "%.4f", ch.adcValue))
+                                    .font(.system(size: 18, weight: .bold, design: .monospaced))
                                     .foregroundColor(.white)
-                                Spacer()
-                                Image(systemName: "slider.horizontal.3")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
+
+                                // Mini sparkline histogram
+                                MiniSparklineView(values: connectionManager.channelHistory[ch.id] ?? [])
+                                    .frame(height: 28)
+
+                                HStack {
+                                    Text("Raw: \(ch.adcRaw)")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Text(ch.function.contains("OUT") ? "DAC: \(ch.dacCode)" : "ADC")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                }
                             }
-
-                            Text(ch.function.replacingOccurrences(of: "CH_FUNC_", with: ""))
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.cyan)
-                                .lineLimit(1)
-
-                            Text(String(format: "%.4f", ch.adcValue))
-                                .font(.system(size: 18, weight: .bold, design: .monospaced))
-                                .foregroundColor(.white)
-
-                            // Mini sparkline histogram
-                            MiniSparklineView(values: connectionManager.channelHistory[ch.id] ?? [])
-                                .frame(height: 28)
-
-                            HStack {
-                                Text("Raw: \(ch.adcRaw)")
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text(ch.function.contains("OUT") ? "DAC: \(ch.dacCode)" : "ADC")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 2)
-                                    .background(Color.white.opacity(0.05))
-                                    .cornerRadius(4)
-                            }
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(16)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                        )
                     }
                 }
             }
@@ -216,39 +210,40 @@ struct OverviewTab: View {
                 .foregroundColor(.blue)
 
             // Live rail status tiles — driven by ioexp.enables for on/off truth
-            HStack(spacing: 12) {
-                let rails = connectionManager.lastOverview?.rails ?? []
-                let enables = connectionManager.lastOverview?.ioexp.enables
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 12) {
+                    let rails = connectionManager.lastOverview?.rails ?? []
+                    let enables = connectionManager.lastOverview?.ioexp.enables
 
-                let railNames = ["VADJ1", "VADJ2", "3V3_ADJ"]
-                let railEnabled = [enables?.vadj1 ?? false, enables?.vadj2 ?? false, enables?.analog15v ?? false]
+                    let railNames = ["VADJ1", "VADJ2", "3V3_ADJ"]
+                    let railEnabled = [enables?.vadj1 ?? false, enables?.vadj2 ?? false, enables?.analog15v ?? false]
 
-                ForEach(0..<3, id: \.self) { i in
-                    let measuredV = rails.first(where: { $0.rail == i })?.voltage
-                    let isOn = railEnabled[i]
+                    ForEach(0..<3, id: \.self) { i in
+                        let measuredV = rails.first(where: { $0.rail == i })?.voltage
+                        let isOn = railEnabled[i]
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(railNames[i])
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.secondary)
-                        if isOn, let v = measuredV {
-                            Text(String(format: "%.3f V", v))
-                                .font(.system(size: 16, weight: .bold, design: .monospaced))
-                                .foregroundColor(.green)
-                        } else if isOn {
-                            Text("ON")
-                                .font(.system(size: 16, weight: .bold, design: .monospaced))
-                                .foregroundColor(.green)
-                        } else {
-                            Text("OFF")
-                                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(railNames[i])
+                                .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(.secondary)
+                            if isOn, let v = measuredV {
+                                Text(String(format: "%.3f V", v))
+                                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.green)
+                            } else if isOn {
+                                Text("ON")
+                                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.green)
+                            } else {
+                                Text("OFF")
+                                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(Color.white.opacity(0.03))
-                    .cornerRadius(10)
                 }
             }
 
@@ -298,39 +293,42 @@ struct OverviewTab: View {
 
                     // Measured voltage + current tiles
                     let hatRailNames = ["VLOGIC", "VADJ3", "VADJ4"]
-                    HStack(spacing: 12) {
-                        ForEach(0..<3, id: \.self) { i in
-                            let rail = connectionManager.lastHatRails.first(where: { $0.railId == i })
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(hatRailNames[i])
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(.secondary)
-                                if let r = rail, r.enabled {
-                                    Text(String(format: "%.3f V", Double(r.voltageMv) / 1000.0))
-                                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.purple)
-                                    Text(String(format: "%d mA", r.currentMa))
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundColor(.purple.opacity(0.7))
-                                } else {
-                                    Text("OFF")
-                                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    GlassEffectContainer(spacing: 8) {
+                        HStack(spacing: 12) {
+                            ForEach(0..<3, id: \.self) { i in
+                                let rail = connectionManager.lastHatRails.first(where: { $0.railId == i })
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(hatRailNames[i])
+                                        .font(.system(size: 11, weight: .semibold))
                                         .foregroundColor(.secondary)
+                                    if let r = rail, r.enabled {
+                                        Text(String(format: "%.3f V", Double(r.voltageMv) / 1000.0))
+                                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                            .foregroundColor(.purple)
+                                        Text(String(format: "%d mA", r.currentMa))
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundColor(.purple.opacity(0.7))
+                                    } else {
+                                        Text("OFF")
+                                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(Color.purple.opacity(0.05))
-                            .cornerRadius(10)
                         }
                     }
 
                     // Enable toggles
-                    HStack(spacing: 12) {
-                        ForEach(0..<3, id: \.self) { i in
-                            let rail = connectionManager.lastHatRails.first(where: { $0.railId == i })
-                            ToggleRow(title: "Enable \(hatRailNames[i])", isOn: rail?.enabled ?? false, pg: true) { state in
-                                toggleHatRailEnable(railId: i, on: state)
+                    GlassEffectContainer(spacing: 8) {
+                        HStack(spacing: 12) {
+                            ForEach(0..<3, id: \.self) { i in
+                                let rail = connectionManager.lastHatRails.first(where: { $0.railId == i })
+                                ToggleRow(title: "Enable \(hatRailNames[i])", isOn: rail?.enabled ?? false, pg: true) { state in
+                                    toggleHatRailEnable(railId: i, on: state)
+                                }
                             }
                         }
                     }
@@ -354,35 +352,32 @@ struct OverviewTab: View {
             let enables = connectionManager.lastOverview?.ioexp.enables
             let pg = connectionManager.lastOverview?.ioexp.powerGood
 
-            VStack(spacing: 12) {
-                HStack {
-                    ToggleRow(title: "Enable VADJ1 Rail", isOn: enables?.vadj1 ?? false, pg: pg?.vadj1 ?? false) { state in
-                        toggleControl("vadj1", on: state)
+            GlassEffectContainer(spacing: 8) {
+                VStack(spacing: 12) {
+                    HStack {
+                        ToggleRow(title: "Enable VADJ1 Rail", isOn: enables?.vadj1 ?? false, pg: pg?.vadj1 ?? false) { state in
+                            toggleControl("vadj1", on: state)
+                        }
+                        ToggleRow(title: "Enable VADJ2 Rail", isOn: enables?.vadj2 ?? false, pg: pg?.vadj2 ?? false) { state in
+                            toggleControl("vadj2", on: state)
+                        }
                     }
-                    ToggleRow(title: "Enable VADJ2 Rail", isOn: enables?.vadj2 ?? false, pg: pg?.vadj2 ?? false) { state in
-                        toggleControl("vadj2", on: state)
+                    HStack {
+                        ToggleRow(title: "Enable Analog 15V", isOn: enables?.analog15v ?? false, pg: pg?.logic ?? false) { state in
+                            toggleControl("15v", on: state)
+                        }
+                        ToggleRow(title: "Enable Signal Mux", isOn: enables?.mux ?? false, pg: true) { state in
+                            toggleControl("mux", on: state)
+                        }
                     }
-                }
-                HStack {
-                    ToggleRow(title: "Enable Analog 15V", isOn: enables?.analog15v ?? false, pg: pg?.logic ?? false) { state in
-                        toggleControl("15v", on: state)
+                    ToggleRow(title: "Enable USB Hub Controller", isOn: enables?.usbHub ?? false, pg: true) { state in
+                        toggleControl("usb", on: state)
                     }
-                    ToggleRow(title: "Enable Signal Mux", isOn: enables?.mux ?? false, pg: true) { state in
-                        toggleControl("mux", on: state)
-                    }
-                }
-                ToggleRow(title: "Enable USB Hub Controller", isOn: enables?.usbHub ?? false, pg: true) { state in
-                    toggleControl("usb", on: state)
                 }
             }
         }
         .padding()
-        .background(.ultraThinMaterial)
-        .cornerRadius(20)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(Color.white.opacity(0.05), lineWidth: 1)
-        )
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     // MARK: - Quick Presets
@@ -404,19 +399,14 @@ struct OverviewTab: View {
                             Button(action: { applyPreset(slot.index) }) {
                                 HStack {
                                     Image(systemName: "play.circle.fill")
-                                        .foregroundColor(.cyan)
+                                        .foregroundColor(.black)
                                     Text(slot.name)
                                         .font(.system(size: 14, weight: .semibold))
-                                        .foregroundColor(.white)
+                                        .foregroundColor(.black)
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 10)
-                                .background(Color.cyan.opacity(0.1))
-                                .cornerRadius(12)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
-                                )
+                                .glassEffect(.regular.tint(.cyan), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
                         }
                     }
@@ -424,12 +414,7 @@ struct OverviewTab: View {
             }
         }
         .padding()
-        .background(.ultraThinMaterial)
-        .cornerRadius(20)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(Color.white.opacity(0.05), lineWidth: 1)
-        )
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     // MARK: - Helpers
@@ -560,8 +545,7 @@ struct VoltageSliderRow: View {
                     .foregroundColor(.black)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .background(Color.cyan)
-                    .cornerRadius(10)
+                    .glassEffect(.regular.tint(.cyan), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -632,8 +616,7 @@ struct ToggleRow: View {
                     .font(.system(size: 20))
             }
             .padding(10)
-            .background(Color.white.opacity(0.04))
-            .cornerRadius(12)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 }

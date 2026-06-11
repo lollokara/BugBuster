@@ -240,6 +240,10 @@ struct DiagnosticsTab: View {
                 } else {
                     Button("Scan Networks") { scanWifi() }
                         .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
 
@@ -268,8 +272,7 @@ struct DiagnosticsTab: View {
                             }
                             .padding(.vertical, 8)
                             .padding(.horizontal, 10)
-                            .background(Color.white.opacity(0.03))
-                            .cornerRadius(8)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                     }
                 }
@@ -294,6 +297,8 @@ struct DiagnosticsTab: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 14))
                     }
+                    .padding(8)
+                    .glassEffect(.regular, in: Circle())
                 }
             }
 
@@ -392,13 +397,13 @@ struct DiagnosticsTab: View {
                             Text("Apply Selected Firmware")
                                 .fontWeight(.bold)
                         }
-                        .foregroundColor(.white)
+                        .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        .background(
-                            (updateEsp32 || updateHat) ? Color.blue : Color.gray.opacity(0.3)
+                        .glassEffect(
+                            (updateEsp32 || updateHat) ? .regular.tint(.blue) : .regular,
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                         )
-                        .cornerRadius(12)
                     }
                     .disabled(!updateEsp32 && !updateHat)
                 }
@@ -423,6 +428,8 @@ struct DiagnosticsTab: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 14))
                     }
+                    .padding(8)
+                    .glassEffect(.regular, in: Circle())
                 }
             }
 
@@ -490,19 +497,44 @@ struct DiagnosticsTab: View {
 
     var wifiConnectionSheet: some View {
         NavigationStack {
-            Form {
-                Section("Network parameters") {
-                    LabeledContent("Network SSID", value: selectedSSID)
-                    SecureField("WPA2 Network Password", text: $wifiPassword)
-                }
-                Section {
+            ZStack {
+                Color(red: 0.03, green: 0.05, blue: 0.10)
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    GlassEffectContainer(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Network parameters")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.secondary)
+
+                                LabeledContent("Network SSID", value: selectedSSID)
+                                SecureField("WPA2 Network Password", text: $wifiPassword)
+                                    .padding()
+                                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+
                     Button("Confirm & Connect") { connectToWifi() }
                         .bold()
                         .frame(maxWidth: .infinity, alignment: .center)
-                }
-                if let status = wifiConnectStatus {
-                    Section("Status") {
-                        Text(status).foregroundColor(.blue)
+                        .padding(.vertical, 10)
+                        .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .foregroundColor(.black)
+
+                            if let status = wifiConnectStatus {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Status")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                    Text(status)
+                                        .foregroundColor(.blue)
+                                }
+                                .padding()
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                        }
+                        .padding()
                     }
                 }
             }
@@ -721,12 +753,7 @@ private extension View {
     func cardStyle() -> some View {
         self
             .padding()
-            .background(.ultraThinMaterial)
-            .cornerRadius(20)
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(Color.white.opacity(0.05), lineWidth: 1)
-            )
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 
@@ -750,8 +777,7 @@ struct RegisterBitIndicator: View {
             Spacer()
         }
         .padding(8)
-        .background(Color.white.opacity(0.04))
-        .cornerRadius(8)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -766,11 +792,10 @@ struct StatusPill: View {
                 .frame(width: 6, height: 6)
             Text(title)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundColor(ok ? .green : .secondary)
+                .foregroundColor(ok ? .black : .secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .background(ok ? Color.green.opacity(0.1) : Color.white.opacity(0.05))
-        .cornerRadius(10)
+        .glassEffect(ok ? .regular.tint(.green) : .regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
