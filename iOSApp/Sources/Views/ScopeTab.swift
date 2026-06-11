@@ -378,10 +378,23 @@ struct ScopeTab: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            touchLocation = value.location
+                            if gestureScale == 1.0 {
+                                touchLocation = value.location
+                            } else {
+                                touchLocation = nil
+                            }
                         }
                         .onEnded { _ in
                             touchLocation = nil
+                        }
+                )
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .updating($gestureScale) { value, state, _ in
+                            state = value
+                        }
+                        .onEnded { value in
+                            timeScale = max(0.2, min(5.0, timeScale * value))
                         }
                 )
             }
@@ -389,15 +402,6 @@ struct ScopeTab: View {
             .background(Color(red: 0.01, green: 0.02, blue: 0.04))
             .cornerRadius(12)
             .padding()
-            .gesture(
-                MagnificationGesture()
-                    .updating($gestureScale) { value, state, _ in
-                        state = value
-                    }
-                    .onEnded { value in
-                        timeScale = max(0.2, min(5.0, timeScale * value))
-                    }
-            )
             
             // Channel legend selector
             HStack(spacing: 12) {

@@ -39,6 +39,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     
     // Live telemetries
     @Published public var lastStatus: DeviceStatus? = nil
+    @Published public var channelHistory: [Int: [Double]] = [:]
     @Published public var lastOverview: OverviewSnapshot? = nil
     @Published public var lastIoExp: IOExpState? = nil
     @Published public var lastSelftest: SelftestStatus? = nil
@@ -314,7 +315,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             guard (200...299).contains(verifyHttp.statusCode) else { return false }
             
             DispatchQueue.main.async {
-                self.lastStatus = status
+                self.updateStatus(status)
                 self.adminToken = cleanToken
                 self.activeDevice = DiscoveredDevice(hostname: "BugBuster Board", ip: cleanIp, port: 80)
                 self.connectionState = .connected
@@ -338,7 +339,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         DispatchQueue.main.async {
             self.activeDevice = nil
             self.connectionState = .disconnected
-            self.lastStatus = nil
+            self.updateStatus(nil)
             self.lastOverview = nil
             self.lastIoExp = nil
             self.lastSelftest = nil
@@ -375,7 +376,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                 cycle += 1
 
                 if let status: DeviceStatus = try? await self.performRequest(ip: ip, path: "/api/status", token: token) {
-                    DispatchQueue.main.async { self.lastStatus = status }
+                    DispatchQueue.main.async { self.updateStatus(status) }
                 }
 
                 if cycle % 5 == 0 {
@@ -400,8 +401,24 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                     }
                 }
 
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: 250_000_000)
             }
+        }
+    }
+
+    public func updateStatus(_ status: DeviceStatus?) {
+        self.lastStatus = status
+        if let channels = status?.channels {
+            for ch in channels {
+                var history = self.channelHistory[ch.id] ?? []
+                history.append(ch.adcValue)
+                if history.count > 60 {
+                    history.removeFirst(history.count - 60)
+                }
+                self.channelHistory[ch.id] = history
+            }
+        } else if status == nil {
+            self.channelHistory = [:]
         }
     }
 

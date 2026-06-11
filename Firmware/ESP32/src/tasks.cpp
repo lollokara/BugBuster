@@ -173,16 +173,16 @@ static bool setVoutRangePreservingOutput(uint8_t logical_channel, float present_
 static uint32_t adcRateToPollMs(AdcRate fastest)
 {
     switch (fastest) {
-        case ADC_RATE_10SPS_H:   return 100;  // 10 SPS
-        case ADC_RATE_20SPS:     return 50;   // 20 SPS
-        case ADC_RATE_20SPS_H:   return 50;   // 20 SPS (HR)
-        case ADC_RATE_200SPS_H1: return 5;    // 200 SPS
-        case ADC_RATE_200SPS_H:  return 5;    // 200 SPS (HR)
-        case ADC_RATE_1_2KSPS:   return 2;    // 1.2 kSPS
-        case ADC_RATE_1_2KSPS_H: return 2;    // 1.2 kSPS (HR)
-        case ADC_RATE_4_8KSPS:   return 1;    // 4.8 kSPS
-        case ADC_RATE_9_6KSPS:   return 1;    // 9.6 kSPS
-        default:                 return 50;
+        case ADC_RATE_10SPS_H:   return 50;   // Poll at 20 Hz (for 10 SPS)
+        case ADC_RATE_20SPS:     return 20;   // Poll at 50 Hz (for 20 SPS)
+        case ADC_RATE_20SPS_H:   return 20;   // Poll at 50 Hz (for 20 SPS HR)
+        case ADC_RATE_200SPS_H1: return 2;    // Poll at 500 Hz (for 200 SPS)
+        case ADC_RATE_200SPS_H:  return 2;    // Poll at 500 Hz (for 200 SPS HR)
+        case ADC_RATE_1_2KSPS:   return 1;    // Poll at 1000 Hz (for 1.2 kSPS)
+        case ADC_RATE_1_2KSPS_H: return 1;    // Poll at 1000 Hz (for 1.2 kSPS HR)
+        case ADC_RATE_4_8KSPS:   return 1;    // Poll at 1000 Hz
+        case ADC_RATE_9_6KSPS:   return 1;    // Poll at 1000 Hz
+        default:                 return 20;
     }
 }
 

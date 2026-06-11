@@ -247,46 +247,59 @@ void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagM
     // Per datasheet: channels/diagnostics cannot be modified while continuous
     // sequence is in progress. Must stop first, wait for ADC_BUSY=0, then restart.
     //
-    // Hold g_spi_bus_mutex across the full RMW sequence so no other SPI caller
-    // (e.g. ADGS transfer) can interleave between the read and write phases.
+    // To prevent socket/SPI bus starvation, we do NOT hold the SPI bus mutex
+    // across the busy-wait loop. We only acquire the mutex briefly for each
+    // register access.
     extern SemaphoreHandle_t g_spi_bus_mutex;
     static constexpr TickType_t BUS_TIMEOUT = pdMS_TO_TICKS(500);
-    if (g_spi_bus_mutex == NULL ||
-        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
+
+    // Step 1: Stop current sequence (CONV_SEQ = 0b00 = idle/power-up)
+    if (g_spi_bus_mutex != NULL &&
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) == pdTRUE) {
+        uint16_t current = 0;
+        _spi.readRegister(REG_ADC_CONV_CTRL, &current);
+        uint16_t stopped = current & ~ADC_CONV_CTRL_CONV_SEQ_MASK;
+        _spi.writeRegister(REG_ADC_CONV_CTRL, stopped);
+        xSemaphoreGiveRecursive(g_spi_bus_mutex);
+    } else {
         return;
     }
 
-    // Step 1: Stop current sequence (CONV_SEQ = 0b00 = idle/power-up)
-    uint16_t current = 0;
-    _spi.readRegister(REG_ADC_CONV_CTRL, &current);
-    uint16_t stopped = current & ~ADC_CONV_CTRL_CONV_SEQ_MASK;
-    _spi.writeRegister(REG_ADC_CONV_CTRL, stopped);
-
     // Step 2: Wait for ADC_BUSY to clear (timeout ~500ms for slow ADC rates)
+    // without holding the mutex continuously.
     for (int i = 0; i < 5000; i++) {
         uint16_t live = 0;
-        _spi.readRegister(REG_LIVE_STATUS, &live);
-        if (!(live & LIVE_STATUS_ADC_BUSY_MASK)) break;
+        bool busy = true;
+        if (g_spi_bus_mutex != NULL &&
+            xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) == pdTRUE) {
+            _spi.readRegister(REG_LIVE_STATUS, &live);
+            busy = (live & LIVE_STATUS_ADC_BUSY_MASK) != 0;
+            xSemaphoreGiveRecursive(g_spi_bus_mutex);
+        }
+        if (!busy) break;
         delay_us(100);
     }
 
     // Step 3: Build and write new configuration
-    AdcConvSeq seq = continuous ? ADC_CONV_SEQ_START_CONT : ADC_CONV_SEQ_START_SINGLE;
+    if (g_spi_bus_mutex != NULL &&
+        xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) == pdTRUE) {
+        AdcConvSeq seq = continuous ? ADC_CONV_SEQ_START_CONT : ADC_CONV_SEQ_START_SINGLE;
 
-    uint16_t ctrl = 0;
-    ctrl |= (uint16_t)(((uint16_t)seq << ADC_CONV_CTRL_CONV_SEQ_SHIFT) & ADC_CONV_CTRL_CONV_SEQ_MASK);
-    if (chMask & 0x01) ctrl |= ADC_CONV_CTRL_CONV_A_EN_MASK;
-    if (chMask & 0x02) ctrl |= ADC_CONV_CTRL_CONV_B_EN_MASK;
-    if (chMask & 0x04) ctrl |= ADC_CONV_CTRL_CONV_C_EN_MASK;
-    if (chMask & 0x08) ctrl |= ADC_CONV_CTRL_CONV_D_EN_MASK;
-    if (diagMask & 0x01) ctrl |= ADC_CONV_CTRL_DIAG_EN0_MASK;
-    if (diagMask & 0x02) ctrl |= ADC_CONV_CTRL_DIAG_EN1_MASK;
-    if (diagMask & 0x04) ctrl |= ADC_CONV_CTRL_DIAG_EN2_MASK;
-    if (diagMask & 0x08) ctrl |= ADC_CONV_CTRL_DIAG_EN3_MASK;
+        uint16_t ctrl = 0;
+        ctrl |= (uint16_t)(((uint16_t)seq << ADC_CONV_CTRL_CONV_SEQ_SHIFT) & ADC_CONV_CTRL_CONV_SEQ_MASK);
+        if (chMask & 0x01) ctrl |= ADC_CONV_CTRL_CONV_A_EN_MASK;
+        if (chMask & 0x02) ctrl |= ADC_CONV_CTRL_CONV_B_EN_MASK;
+        if (chMask & 0x04) ctrl |= ADC_CONV_CTRL_CONV_C_EN_MASK;
+        if (chMask & 0x08) ctrl |= ADC_CONV_CTRL_CONV_D_EN_MASK;
+        if (diagMask & 0x01) ctrl |= ADC_CONV_CTRL_DIAG_EN0_MASK;
+        if (diagMask & 0x02) ctrl |= ADC_CONV_CTRL_DIAG_EN1_MASK;
+        if (diagMask & 0x04) ctrl |= ADC_CONV_CTRL_DIAG_EN2_MASK;
+        if (diagMask & 0x08) ctrl |= ADC_CONV_CTRL_DIAG_EN3_MASK;
 
-    _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
+        _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
 
-    xSemaphoreGiveRecursive(g_spi_bus_mutex);
+        xSemaphoreGiveRecursive(g_spi_bus_mutex);
+    }
 }
 
 void AD74416H::enableAdcChannel(uint8_t ch, bool enable)

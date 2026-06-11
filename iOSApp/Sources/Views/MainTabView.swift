@@ -2,78 +2,59 @@ import SwiftUI
 import Network
 import AVFoundation
 
+// MARK: - Liquid Glass tab bar (iOS 26+)
+// Uses the real GlassEffectContainer + .glassEffect() APIs so the active-tab
+// bubble genuinely merges with the outer pill — exactly like Apple Music.
 struct CustomTabBar: View {
     @Binding var selectedTab: Int
     let tabs: [(icon: String, name: String)]
-    @Namespace private var tabAnimation
+    let safeAreaBottom: CGFloat
+    @Namespace private var glassNS
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Hair-line separator so glass edge is visible against content
-            Rectangle()
-                .fill(Color.white.opacity(0.10))
-                .frame(height: 0.5)
-
+        GlassEffectContainer(spacing: 10) {
             HStack(spacing: 0) {
                 ForEach(0..<tabs.count, id: \.self) { index in
-                    let isActive = selectedTab == index
-                    Button {
-                        withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
-                            selectedTab = index
-                        }
-                    } label: {
-                        VStack(spacing: 4) {
-                            ZStack {
-                                // Sliding blue capsule behind the active icon
-                                if isActive {
-                                    Capsule()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [Color.blue.opacity(0.30), Color.cyan.opacity(0.14)],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                        .matchedGeometryEffect(id: "tab_bg", in: tabAnimation)
-                                        .frame(width: 54, height: 32)
-                                }
-
-                                Image(systemName: tabs[index].icon)
-                                    .font(.system(size: 19, weight: isActive ? .bold : .medium))
-                                    .foregroundStyle(
-                                        isActive
-                                            ? LinearGradient(colors: [.blue, .cyan], startPoint: .top, endPoint: .bottom)
-                                            : LinearGradient(colors: [Color(white: 0.50), Color(white: 0.50)], startPoint: .top, endPoint: .bottom)
-                                    )
-                                    .shadow(color: isActive ? Color.blue.opacity(0.65) : .clear, radius: 7)
-                                    .scaleEffect(isActive ? 1.08 : 1.0)
-                                    .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isActive)
-                            }
-                            .frame(width: 54, height: 32)
-
-                            Text(tabs[index].name)
-                                .font(.system(size: 10, weight: isActive ? .semibold : .regular))
-                                .foregroundColor(isActive ? .blue : Color(white: 0.42))
-                                .animation(.easeInOut(duration: 0.18), value: isActive)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 10)
-                        .padding(.bottom, 6)
-                    }
-                    .buttonStyle(.plain)
+                    tabButton(index: index)
                 }
             }
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            // Bottom padding absorbs home-indicator inset exactly — no extra.
+            .padding(.bottom, max(safeAreaBottom, 8))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 36, style: .continuous))
         }
-        // Glass background that EXTENDS below the safe area so it covers the
-        // home indicator — no black bar, no separate spacer needed.
-        .background {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea(edges: .bottom)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func tabButton(index: Int) -> some View {
+        let isActive = selectedTab == index
+        Button {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.80)) {
+                selectedTab = index
+            }
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: tabs[index].icon)
+                    .font(.system(size: 18, weight: isActive ? .semibold : .regular))
+                    .scaleEffect(isActive ? 1.05 : 1.0)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.65), value: isActive)
+
+                Text(tabs[index].name)
+                    .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+            }
+            .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .glassEffect(
+                isActive ? Glass.regular : Glass.clear,
+                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+            )
+            .glassEffectID(isActive ? "active" : nil, in: glassNS)
         }
-        // Force the entire bar (including its background) into dark appearance
-        // so the material renders as dark frosted glass, not white.
-        .environment(\.colorScheme, .dark)
+        .buttonStyle(.plain)
     }
 }
 
@@ -97,28 +78,39 @@ struct MainTabView: View {
     var body: some View {
         Group {
             if connectionManager.connectionState == .connected {
-                ZStack {
-                    Color(red: 0.03, green: 0.05, blue: 0.10)
-                        .ignoresSafeArea()
+                GeometryReader { geometry in
+                    ZStack(alignment: .bottom) {
+                        Color(red: 0.03, green: 0.05, blue: 0.10)
+                            .ignoresSafeArea()
 
-                    Group {
-                        switch selectedTab {
-                        case 0:  OverviewTab()
-                        case 1:  SignalPathTab()
-                        case 2:  ScopeTab()
-                        case 3:  DiagnosticsTab()
-                        case 4:  ScriptsTab()
-                        default: OverviewTab()
+                        // Tab content
+                        Group {
+                            switch selectedTab {
+                            case 0:  OverviewTab()
+                            case 1:  SignalPathTab()
+                            case 2:  ScopeTab()
+                            case 3:  DiagnosticsTab()
+                            case 4:  ScriptsTab()
+                            default: OverviewTab()
+                            }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // Spacer = pill visible content height (6 top + 7+18+2+13+7 item + some slack).
+                        // The pill's own internal bottom padding absorbs safeAreaBottom.
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            Color.clear.frame(height: 72)
+                        }
+
+                        // Floating Liquid Glass pill — flush at the physical bottom
+                        CustomTabBar(
+                            selectedTab: $selectedTab,
+                            tabs: tabs,
+                            safeAreaBottom: geometry.safeAreaInsets.bottom
+                        )
+                        .ignoresSafeArea(edges: .bottom)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
                 }
-                // safeAreaInset is the correct approach: content is pushed up by the
-                // tab bar height AND the material blurs the content behind it.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    CustomTabBar(selectedTab: $selectedTab, tabs: tabs)
-                }
-                .ignoresSafeArea(.keyboard, edges: .bottom)
             } else {
                 connectionDashboard
             }

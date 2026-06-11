@@ -13,6 +13,9 @@
 - **iOS script editor "Check" tool**: Added a "Check" button and syntax success/error badge directly above the script editor on iOS to trigger the on-device linter.
 
 ### Fixed
+- **ESP32 SPI bus lock optimization**: Released the recursive SPI bus mutex during the `ADC_BUSY` check wait inside `startAdcConversion` in `ad74416h.cpp`, preventing socket and SPI bus starvation when modifying channel functions or VOUT/DAC voltages.
+- **ESP32 true 20+ SPS polling rate**: Configured `adcRateToPollMs()` in `tasks.cpp` to poll at approximately twice the conversion rate (twice Nyquist) relative to the hardware period (e.g., 20 ms for 20 SPS), resolving Nyquist alignment misses that capped the scope updates to 10 SPS.
+- **iOS Snappy VOUT/Channel Settings**: Updated `saveSettings()` in `OverviewTab.swift` to close the settings sheet instantly, executing sequential POST calls asynchronously in the background instead of freezing the UI.
 - **iOS Scope background persistence & disabled by default**: Promoted `ScopeStreamManager` to a singleton to persist background streaming when switching tabs, and removed auto-start/stop on view lifecycle to start disabled by default.
 - **iOS connection timeouts during streaming**: Increased `httpMaximumConnectionsPerHost` to 5 in `ConnectionManager` and paused diagnostics polling while the scope stream is active to prevent socket starvation and configuration timeouts.
 - **iOS Scope negative array index bounds check**: resolved a fatal Swift/Array index out-of-range crash in `ScopeTab.swift` by enforcing bounds checks (`max(0, ...)`) on the waveform display slicing range when the rolling sample buffer contains fewer than 10 samples.

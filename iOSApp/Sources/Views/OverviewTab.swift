@@ -42,8 +42,7 @@ struct OverviewTab: View {
     @State private var hatVadj3Dirty = false
     @State private var hatVadj4Dirty = false
 
-    // Per-channel ADC history for sparklines (last 60 samples)
-    @State private var channelHistory: [Int: [Double]] = [:]
+
 
 
     @State private var quicksetupSlots: [QuickSetupSlot] = []
@@ -93,15 +92,7 @@ struct OverviewTab: View {
         .onChange(of: connectionManager.lastHatRails) { _ in
             updateHatSlidersFromModel()
         }
-        .onChange(of: connectionManager.lastStatus) { newStatus in
-            guard let channels = newStatus?.channels else { return }
-            for ch in channels {
-                var history = channelHistory[ch.id] ?? []
-                history.append(ch.adcValue)
-                if history.count > 60 { history.removeFirst(history.count - 60) }
-                channelHistory[ch.id] = history
-            }
-        }
+
         .sheet(item: $selectedChannel) { channel in
             ChannelConfigSheet(channel: channel) {
                 selectedChannel = nil
@@ -185,7 +176,7 @@ struct OverviewTab: View {
                                 .foregroundColor(.white)
 
                             // Mini sparkline histogram
-                            MiniSparklineView(values: channelHistory[ch.id] ?? [])
+                            MiniSparklineView(values: connectionManager.channelHistory[ch.id] ?? [])
                                 .frame(height: 28)
 
                             HStack {
@@ -708,20 +699,24 @@ struct ChannelConfigSheet: View {
     }
 
     private func saveSettings() {
+        let funcIndex = selectedFuncIndex
+        let valString = targetVal
+        let chId = channel.id
+        onDismiss() // Dismiss sheet immediately for snappy UI feel
+        
         Task {
             _ = try? await connectionManager.postAction(
-                path: "/api/channel/\(channel.id)/function",
-                json: ["function": selectedFuncIndex]
+                path: "/api/channel/\(chId)/function",
+                json: ["function": funcIndex]
             )
-            if (selectedFuncIndex == 1 || selectedFuncIndex == 2 || selectedFuncIndex == 10),
-               let val = Double(targetVal) {
-                let key = selectedFuncIndex == 1 ? "voltage" : "current_mA"
+            if (funcIndex == 1 || funcIndex == 2 || funcIndex == 10),
+               let val = Double(valString) {
+                let key = funcIndex == 1 ? "voltage" : "current_mA"
                 _ = try? await connectionManager.postAction(
-                    path: "/api/channel/\(channel.id)/dac",
+                    path: "/api/channel/\(chId)/dac",
                     json: [key: val]
                 )
             }
-            DispatchQueue.main.async { onDismiss() }
         }
     }
 }

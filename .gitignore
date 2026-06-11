@@ -31,43 +31,55 @@ __pycache__/
 .venv/
 .venv-*/
 **/.venv/
+*.egg-info/
 
 # Test outputs & reports
 Scripts/*.csv
 tests/.report.json
 tests/report.html
+test-results/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.xcuserstate
 
 # Jupyter
 .ipynb_checkpoints/
 /Firmware/RP2040/build
 /Firmware/RP2040/build-local-*/
 /DesktopApp/BugBuster/tests/e2e/node_modules
-/.omc
-.mex/context/stack.md
+
+# AI / Tooling state
+.omc/
+.mex/
+.omx/
+.omg/
 CLAUDE.md
+AGENTS.md
+
+# Logs and artifacts
+*.log
+build_log.txt
+*.orig
+*.rej
+
+# Scratch and reproduction scripts
+scratch/
+Scripts/scratch_*
+Diag/repro_*
+
 /.mex
 /DesktopApp/BugBuster/.omc
-.omx/
-/.omg
-AGENTS.md
 /Firmware/RP2040/.omc
 /DesktopApp/BugBuster/src-tauri/.omc
 /Firmware/ESP32/managed_components
 /Firmware/ESP32/.omc
 /Firmware/ESP32/src/mp/.omc
-/Firmware/ESP32/src/mp/.omc
-/Firmware/ESP32/src/mp/.omc
-/Firmware/ESP32/web/.omc
 /Firmware/ESP32/web/.omc
 /Scripts/logs
 /Docs/superpowers
 /iOSApp/.omc
-/iOSApp/bugbuster.xcodeproj/project.xcworkspace/xcuserdata
-/Firmware/ESP32/src/.omc
 /Firmware/ESP32/src/.omc
