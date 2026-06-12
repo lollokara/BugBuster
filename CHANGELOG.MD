@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+*(no changes yet)*
+
+## [1.4.1] — 2026-06-12
+
 ### Added
 - **MicroPython device bundle expansion**: Added frozen OneWire support plus `bb_devices` wrappers for DS18B20, DS3231, BH1750, AHT20, SHT31, BME280, INA219, ADS1115, MCP23017, PCF8574, PCA9685, TCS34725, MPU6050, MCP4725, and SSD1306. `MCP23017` now also exposes pin-level helpers for direction and pull-ups (`pin_mode()`, `set_dir()`, `set_pullup()`) so scripts can read like `pinMode()` / `digitalWrite()` examples instead of raw bitmask manipulation. The MicroPython I2C examples now power the rail and logic voltage explicitly, the MicroPython `I2C` object now exposes a shared-controller `close()` method, and the planner now rejects a second active I2C setup on a different pin pair with a clear error instead of silently stealing the only free controller. Updated the on-device Scripts tab docs/autocomplete and expanded the MicroPython example gallery to match.
 - **MicroPython SPI bus close & active-use verification**: Added `bugbuster.SPI` close support (`spi.close()`) to release the shared external SPI controller. Added safety active-use checks in the bus planner, which rejects a second active SPI setup on different pins with a clear error instead of silently stealing the controller. Enabled standard `machine.SPI` and `machine.SoftSPI` mapping to the software SPI implementation in the MicroPython core to ensure parity with `machine.SoftI2C` and to prevent missing driver symbols. Updated the Web UI autocomplete and API documentation to cover `SPI.close()`.
