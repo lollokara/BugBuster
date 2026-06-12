@@ -237,7 +237,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let vs = view_start.get();
         let ve = view_end.get();
         let _ci = capture_info.get(); // re-fetch when new data arrives during streaming
-        let max_p = canvas_ref_fetch.get().map(|el| el.width() as usize);
+        let max_p = canvas_ref_fetch
+            .get()
+            .and_then(|el| {
+                let w = el.client_width() as usize;
+                if w == 0 { None } else { Some(w) }
+            });
         let alive = alive_view.clone();
         spawn_local(async move {
             if let Some(data) = la_get_view(vs, ve, max_p).await {

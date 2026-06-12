@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-*(no changes yet)*
+### Fixed
+- **Bipolar ±12V Range Support**: Restored support for the `±12V` bipolar range on Voltage Input (`CH_FUNC_VIN`) channels in the ESP32 firmware by removing the safety clamp override in `tasks.cpp` and initializing the default Scope tab range back to `1u8` (`±12V`). This resolves the Scope tab streaming freeze when negative voltages are applied.
+- **Logic Analyzer blank waveform view**: Guarded the desktop LA tab against zero-width canvas measurements before requesting view data, and made the LA store treat `max_points=0` as an un-decimated viewport instead of dividing by zero. This fixes the case where streaming/capture succeeds but the waveform panel stays empty.
 
 ## [1.4.0] — 2026-06-12
 

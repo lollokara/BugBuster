@@ -117,4 +117,15 @@ mod tests {
         store.append_raw(&[0b0101_1010, 0b1111_0000]);
         assert_eq!(store.total_samples, 6);
     }
+
+    #[test]
+    fn test_get_visible_zero_max_points_does_not_panic() {
+        let mut store = LaStore::from_raw(&[], 1, 1_000_000);
+        store.transitions = vec![vec![(0, 0), (4, 1), (8, 0)]];
+        store.total_samples = 12;
+
+        let (visible, decimated) = store.get_visible(0, 0, 12, Some(0));
+        assert!(!decimated);
+        assert_eq!(visible, vec![(0, 0), (4, 1), (8, 0)]);
+    }
 }

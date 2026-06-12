@@ -206,6 +206,11 @@ struct ScriptsTab: View {
                             .tint(.green)
                         }
                     }
+                    
+                    // Spacer row to clear the floating custom tab bar
+                    Color.clear
+                        .frame(height: 90)
+                        .listRowBackground(Color.clear)
                 }
                 .listStyle(.plain)
                 .refreshable { loadFiles() }
@@ -267,6 +272,7 @@ struct ScriptsTab: View {
             SelectableCodeEditor(text: $editingContent)
                 .padding(.horizontal)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.bottom, keyboardHeight > 0 ? 0 : 90)
                 .onChange(of: editingContent) { newValue in
                     let sanitized = newValue
                         .replacingOccurrences(of: "\u{201C}", with: "\"")
@@ -380,7 +386,7 @@ struct ScriptsTab: View {
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             // Push above keyboard (keyboard height from notification;
             // subtract ~83pt tab bar area already outside content)
-            .padding(.bottom, max(0, keyboardHeight - 83))
+            .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 83) : 90)
         }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {

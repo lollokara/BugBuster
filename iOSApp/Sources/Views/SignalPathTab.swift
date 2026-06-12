@@ -53,46 +53,50 @@ struct SignalPathTab: View {
                 }
 
                 ScrollView {
-                    GlassEffectContainer(spacing: 16) {
-                        VStack(spacing: 16) {
-                            ForEach(0..<4) { ch in
-                                let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
-                                let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
-                                    ? connectionManager.lastStatus!.muxStates[muxDev] : 0
+                    VStack(spacing: 0) {
+                        GlassEffectContainer(spacing: 16) {
+                            VStack(spacing: 16) {
+                                ForEach(0..<4) { ch in
+                                    let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
+                                    let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
+                                        ? connectionManager.lastStatus!.muxStates[muxDev] : 0
 
-                                let isPsuOn = ch < 2
-                                    ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
-                                    : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
+                                    let isPsuOn = ch < 2
+                                        ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
+                                        : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
 
-                                let efuses = connectionManager.lastOverview?.ioexp.efuses
-                                let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
-                                let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
+                                    let efuses = connectionManager.lastOverview?.ioexp.efuses
+                                    let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
+                                    let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
 
-                                let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
-                                let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
-                                let vAdjIndex  = ch < 2 ? 0 : 1
+                                    let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
+                                    let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
+                                    let vAdjIndex  = ch < 2 ? 0 : 1
 
-                                BlockTile(
-                                    blockIndex: ch,
-                                    muxDevice: muxDev,
-                                    muxRef: MUX_REF[ch],
-                                    muxState: muxState,
-                                    ioLabels: GPIO_PAIR_LABELS[ch],
-                                    accentColor: ACCENTS[ch],
-                                    isPsuActive: isPsuOn,
-                                    isEfuseActive: isEfOn,
-                                    isEfuseFault: isEfFault,
-                                    isOeActive: isOeActive,
-                                    vAdjLabel: vAdjLabel,
-                                    onApplyMuxStates: { states in applyPreset(states) },
-                                    onToggleOe:     { toggleOe() },
-                                    onToggleVAdj:   { togglePsu(vAdjIndex) },
-                                    onToggleEfuse:  { toggleEfuse(ch) }
-                                )
+                                    BlockTile(
+                                        blockIndex: ch,
+                                        muxDevice: muxDev,
+                                        muxRef: MUX_REF[ch],
+                                        muxState: muxState,
+                                        ioLabels: GPIO_PAIR_LABELS[ch],
+                                        accentColor: ACCENTS[ch],
+                                        isPsuActive: isPsuOn,
+                                        isEfuseActive: isEfOn,
+                                        isEfuseFault: isEfFault,
+                                        isOeActive: isOeActive,
+                                        vAdjLabel: vAdjLabel,
+                                        onApplyMuxStates: { states in applyPreset(states) },
+                                        onToggleOe:     { toggleOe() },
+                                        onToggleVAdj:   { togglePsu(vAdjIndex) },
+                                        onToggleEfuse:  { toggleEfuse(ch) }
+                                    )
+                                }
                             }
                         }
+                        .padding()
+
+                        Spacer(minLength: 90)
                     }
-                    .padding()
                 }
             }
         }

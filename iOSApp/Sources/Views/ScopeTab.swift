@@ -417,7 +417,7 @@ struct ScopeTab: View {
                     }
                 }
             }
-            .padding(.bottom, 20)
+            .padding(.bottom, 90)
         }
         .sheet(isPresented: $showingSettings) {
             ScopeSettingsView(

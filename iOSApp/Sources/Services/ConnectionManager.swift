@@ -37,6 +37,28 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var adminToken: String = ""
     @Published public var lshiftOe: Bool = false
     
+    // Saved tokens: [MAC: Token]
+    public var savedTokens: [String: String] {
+        get {
+            UserDefaults.standard.dictionary(forKey: "bugbuster_tokens") as? [String: String] ?? [:]
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "bugbuster_tokens")
+        }
+    }
+    
+    // Saved last known IPs: [MAC: IP]
+    public var savedIps: [String: String] {
+        get {
+            UserDefaults.standard.dictionary(forKey: "bugbuster_last_ips") as? [String: String] ?? [:]
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "bugbuster_last_ips")
+        }
+    }
+    
+    private var lastAutoConnectTime: Date? = nil
+    
     // Live telemetries
     @Published public var lastStatus: DeviceStatus? = nil
     @Published public var channelHistory: [Int: [Double]] = [:]
@@ -70,13 +92,29 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         super.init()
         
         // Load saved connection info if any
-        if let savedIp = UserDefaults.standard.string(forKey: "bugbuster_ip"),
-           let savedToken = UserDefaults.standard.string(forKey: "bugbuster_token") {
-            self.adminToken = savedToken
-            self.activeDevice = DiscoveredDevice(hostname: "Saved Device", ip: savedIp, port: 80)
+        let lastMac = UserDefaults.standard.string(forKey: "bugbuster_last_mac") ?? ""
+        let normLastMac = lastMac.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        var savedIp = UserDefaults.standard.string(forKey: "bugbuster_ip")
+        var savedToken = UserDefaults.standard.string(forKey: "bugbuster_token")
+        
+        if !normLastMac.isEmpty {
+            let tokens = self.savedTokens
+            let ips = self.savedIps
+            if let token = tokens[normLastMac] {
+                savedToken = token
+            }
+            if let ip = ips[normLastMac] {
+                savedIp = ip
+            }
+        }
+        
+        if let ip = savedIp, let token = savedToken {
+            self.adminToken = token
+            self.activeDevice = DiscoveredDevice(hostname: "Saved Device", ip: ip, port: 80, mac: lastMac)
             // Auto connect in background
             Task {
-                let success = await self.tryConnect(ip: savedIp, token: savedToken)
+                let success = await self.tryConnect(ip: ip, token: token)
                 if success {
                     self.startPolling()
                 }
@@ -222,6 +260,36 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         
         DispatchQueue.main.async {
             self.discoveredDevices = devices
+            
+            // Auto-reconnect to the last connected device if its IP has changed and Bonjour found it
+            if self.connectionState == .disconnected || self.connectionState == .error || self.connectionState == .unauthorized {
+                let lastMac = UserDefaults.standard.string(forKey: "bugbuster_last_mac") ?? ""
+                let normLastMac = lastMac.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                if !normLastMac.isEmpty {
+                    if let matchingDevice = devices.first(where: { $0.mac.uppercased().trimmingCharacters(in: .whitespacesAndNewlines) == normLastMac }) {
+                        let tokens = self.savedTokens
+                        if let token = tokens[normLastMac] {
+                            let now = Date()
+                            if let lastTime = self.lastAutoConnectTime, now.timeIntervalSince(lastTime) < 5.0 {
+                                return // cooldown
+                            }
+                            
+                            // Only trigger auto-connect if we aren't currently trying to connect to the exact same IP
+                            // or if we were disconnected/error.
+                            if self.activeDevice?.ip != matchingDevice.ip || self.connectionState == .disconnected || self.connectionState == .error {
+                                print("[ConnectionManager] mDNS discovered matching last device at new IP \(matchingDevice.ip). Reconnecting...")
+                                self.lastAutoConnectTime = now
+                                Task {
+                                    let success = await self.connect(ip: matchingDevice.ip, token: token)
+                                    if success {
+                                        self.startPolling()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -234,8 +302,6 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let success = await tryConnect(ip: ip, token: token)
         
         if success {
-            UserDefaults.standard.set(ip, forKey: "bugbuster_ip")
-            UserDefaults.standard.set(token, forKey: "bugbuster_token")
             startPolling()
         } else {
             DispatchQueue.main.async {
@@ -314,12 +380,52 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             
             guard (200...299).contains(verifyHttp.statusCode) else { return false }
             
+            // Fetch device info to get the station MAC address
+            var deviceMac = ""
+            if let infoUrl = URL(string: "\(urlStr)/api/device/info") {
+                var infoRequest = URLRequest(url: infoUrl)
+                infoRequest.httpMethod = "GET"
+                if !cleanToken.isEmpty {
+                    infoRequest.setValue(cleanToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
+                }
+                if let (infoData, _) = try? await session.data(for: infoRequest),
+                   let info = try? JSONDecoder().decode(DeviceInfo.self, from: infoData) {
+                    deviceMac = info.macAddress
+                }
+            }
+            
+            let finalMac = deviceMac.isEmpty ? (self.discoveredDevices.first(where: { $0.ip == cleanIp })?.mac ?? "") : deviceMac
+            let normMac = finalMac.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            
             DispatchQueue.main.async {
                 self.updateStatus(status)
                 self.adminToken = cleanToken
-                self.activeDevice = DiscoveredDevice(hostname: "BugBuster Board", ip: cleanIp, port: 80)
+                self.activeDevice = DiscoveredDevice(
+                    hostname: "BugBuster Board",
+                    ip: cleanIp,
+                    port: 80,
+                    mac: finalMac
+                )
                 self.connectionState = .connected
+                
+                // Save pairing token and IP per MAC
+                if !normMac.isEmpty {
+                    var tokens = self.savedTokens
+                    tokens[normMac] = cleanToken
+                    self.savedTokens = tokens
+                    
+                    var ips = self.savedIps
+                    ips[normMac] = cleanIp
+                    self.savedIps = ips
+                    
+                    UserDefaults.standard.set(finalMac, forKey: "bugbuster_last_mac")
+                }
+                
+                // Keep the old global keys for backward compatibility
+                UserDefaults.standard.set(cleanIp, forKey: "bugbuster_ip")
+                UserDefaults.standard.set(cleanToken, forKey: "bugbuster_token")
             }
+            
             // Kick off a one-shot slow fetch after connect — overview/ioexp/selftest/hat.
             // This runs after the connection is established; failures are silently ignored.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -349,6 +455,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         }
         UserDefaults.standard.removeObject(forKey: "bugbuster_ip")
         UserDefaults.standard.removeObject(forKey: "bugbuster_token")
+        UserDefaults.standard.removeObject(forKey: "bugbuster_last_mac")
         startDiscovery()
     }
     

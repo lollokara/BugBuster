@@ -199,6 +199,10 @@ impl LaStore {
 
         // 3. Decimate if needed
         if let Some(limit) = max_points {
+            if limit == 0 {
+                result.extend_from_slice(raw);
+                return (result, false);
+            }
             if raw.len() > limit {
                 let bucket_size = (end - start) / limit as u64;
                 if bucket_size > 1 {

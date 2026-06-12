@@ -61,18 +61,20 @@ struct OverviewTab: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                headerSection
-
-                // AFE at top
                 channelsGrid
-
                 suppliesCard
-
                 presetsCard
-
                 Spacer(minLength: 100)
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            headerSection
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
         }
         .background(
             LinearGradient(
@@ -137,7 +139,26 @@ struct OverviewTab: View {
                 }
             }
         }
-        .padding(.top, 10)
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color(red: 0.05, green: 0.08, blue: 0.14).opacity(0.35))
+                .background(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.20), Color.white.opacity(0.05)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 8)
+        )
+        .padding(.horizontal, 0)
     }
 
     // MARK: - AFE Channels Grid (with sparklines)
@@ -153,21 +174,22 @@ struct OverviewTab: View {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                     let channels = connectionManager.lastStatus?.channels ?? defaultChannels()
                     ForEach(channels) { ch in
+                        let accent = channelAccentColor(for: ch.id)
                         Button(action: { selectedChannel = ch }) {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Text("CH \(ch.id)")
                                         .font(.system(size: 14, weight: .bold))
-                                        .foregroundColor(.white)
+                                        .foregroundColor(accent)
                                     Spacer()
                                     Image(systemName: "slider.horizontal.3")
                                         .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(accent.opacity(0.75))
                                 }
 
                                 Text(ch.function.replacingOccurrences(of: "CH_FUNC_", with: ""))
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.cyan)
+                                    .foregroundColor(accent)
                                     .lineLimit(1)
 
                                 Text(String(format: "%.4f", ch.adcValue))
@@ -175,7 +197,7 @@ struct OverviewTab: View {
                                     .foregroundColor(.white)
 
                                 // Mini sparkline histogram
-                                MiniSparklineView(values: connectionManager.channelHistory[ch.id] ?? [])
+                                MiniSparklineView(values: connectionManager.channelHistory[ch.id] ?? [], tint: accent)
                                     .frame(height: 28)
 
                                 HStack {
@@ -185,15 +207,19 @@ struct OverviewTab: View {
                                     Spacer()
                                     Text(ch.function.contains("OUT") ? "DAC: \(ch.dacCode)" : "ADC")
                                         .font(.system(size: 9, weight: .bold))
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(accent.opacity(0.85))
                                         .padding(.horizontal, 4)
                                         .padding(.vertical, 2)
-                                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                        .glassEffect(.regular.tint(accent), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                                 }
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .glassEffect(.regular.tint(accent), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(accent.opacity(0.32), lineWidth: 1)
+                            )
                         }
                     }
                 }
@@ -506,6 +532,16 @@ struct OverviewTab: View {
                          doState: false, channelAlert: 0, channelAlertMask: 0, rtdExcitationUa: 500.0)
         }
     }
+
+    private func channelAccentColor(for channelId: Int) -> Color {
+        switch channelId {
+        case 0: return .blue
+        case 1: return .green
+        case 2: return .yellow
+        case 3: return .purple
+        default: return .cyan
+        }
+    }
 }
 
 // MARK: - Voltage Slider Row with animated confirm button
@@ -558,6 +594,12 @@ struct VoltageSliderRow: View {
 
 struct MiniSparklineView: View {
     let values: [Double]
+    let tint: Color
+
+    init(values: [Double], tint: Color = .cyan) {
+        self.values = values
+        self.tint = tint
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -576,7 +618,7 @@ struct MiniSparklineView: View {
                         let normalized = CGFloat((v - minV) / range)
                         let barHeight = max(2, normalized * geo.size.height)
                         Rectangle()
-                            .fill(Color.cyan.opacity(0.6))
+                            .fill(tint.opacity(0.7))
                             .frame(width: max(1, barWidth - 1), height: barHeight)
                     }
                 }
