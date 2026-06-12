@@ -50,7 +50,7 @@ import textwrap
 
 def read_temp_c(addr):
     # Runs on-device; imports and hardware access happen there.
-    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=400000)
+    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=400000, supply=3.3, vlogic=3.3)
     i2c.writeto(addr, b'\x00')
     raw = i2c.readfrom(addr, 2)
     temp = ((raw[0] << 8) | raw[1]) / 256.0

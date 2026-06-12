@@ -55,9 +55,15 @@ struct CustomTabBar: View {
         }
         .padding(10)
         .background(
+            // .fill(.ultraThinMaterial) keeps the material inside the pill;
+            // .background(.ultraThinMaterial) on a Shape fills its rectangular
+            // bounding box and renders a visible slab behind the bar.
             RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .fill(Color(red: 0.05, green: 0.08, blue: 0.16).opacity(0.30))
-                .background(.ultraThinMaterial)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 34, style: .continuous)
+                        .fill(Color(red: 0.05, green: 0.08, blue: 0.16).opacity(0.55))
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 34, style: .continuous)
                         .stroke(
@@ -72,7 +78,6 @@ struct CustomTabBar: View {
                 .shadow(color: Color.black.opacity(0.34), radius: 18, x: 0, y: 10)
         )
         .frame(maxWidth: .infinity)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
     }
 }
 
@@ -117,9 +122,15 @@ struct MainTabView: View {
                         tabs: tabs
                     )
                     .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 12)
+                    .padding(.top, 6)
+                    // Sit closer to the home indicator: shrink the measured
+                    // inset so the pill shifts down into the bottom safe area.
+                    .padding(.bottom, -10)
                 }
+                // Tabs (Scripts editor/REPL) manage keyboard clearance themselves;
+                // without this the system also squeezes content and the tab bar
+                // rides up above the keyboard.
+                .ignoresSafeArea(.keyboard)
             } else {
                 connectionDashboard
             }
@@ -741,8 +752,11 @@ extension View {
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.45))
-                    .background(.ultraThinMaterial)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.45))
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .stroke(

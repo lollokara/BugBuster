@@ -66,6 +66,11 @@ extern "C" bool bugbuster_mp_i2c_setup(uint8_t sda_io, uint8_t scl_io,
                                   supply_v, vlogic_v, allow_split_supplies, err, err_len);
 }
 
+extern "C" bool bugbuster_mp_i2c_close(void)
+{
+    return ext_i2c_close();
+}
+
 extern "C" bool bugbuster_mp_i2c_scan(uint8_t start, uint8_t stop,
                                        bool skip_reserved, uint16_t timeout_ms,
                                        uint8_t *out_addrs, size_t max, size_t *count)
@@ -114,6 +119,11 @@ extern "C" bool bugbuster_mp_spi_transfer(const uint8_t *tx, size_t tx_len,
                                            uint16_t timeout_ms)
 {
     return ext_spi_transfer(tx, tx_len, rx, inout_rx_len, timeout_ms);
+}
+
+extern "C" bool bugbuster_mp_spi_close(void)
+{
+    return ext_spi_close();
 }
 
 // =============================================================================

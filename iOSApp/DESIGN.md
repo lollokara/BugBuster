@@ -4,17 +4,18 @@
 - Status: Active
 - Last refreshed: 2026-06-12
 - Primary product surfaces: `iOSApp/Sources/Views/MainTabView.swift`, `iOSApp/Sources/Views/OverviewTab.swift`, `iOSApp/Sources/Views/SignalPathTab.swift`, `iOSApp/Sources/Views/ScopeTab.swift`, `iOSApp/Sources/Views/DiagnosticsTab.swift`, `iOSApp/Sources/Views/ScriptsTab.swift`
-- Evidence reviewed: `iOSApp/Sources/Views/MainTabView.swift`, `iOSApp/Sources/Views/OverviewTab.swift`, `iOSApp/Sources/Views/SignalPathTab.swift`, `iOSApp/Sources/Views/ScopeTab.swift`, `iOSApp/Sources/Views/DiagnosticsTab.swift`, `iOSApp/Sources/Views/ScriptsTab.swift`, `iOSApp/Sources/BugBusterApp.swift`, `iOSApp/DESIGN 2.md`, `.mex/patterns/ios-glass-shell.md`, Apple HIG Materials, Liquid Glass, WWDC25 "Meet Liquid Glass", WWDC25 "Build a SwiftUI app with the new design", and Apple Design "What's new"
+- Evidence reviewed: `iOSApp/Sources/Views/MainTabView.swift`, `iOSApp/Sources/Views/OverviewTab.swift`, `iOSApp/Sources/Views/SignalPathTab.swift`, `iOSApp/Sources/Views/ScopeTab.swift`, `iOSApp/Sources/Views/DiagnosticsTab.swift`, `iOSApp/Sources/Views/ScriptsTab.swift`, `iOSApp/Sources/BugBusterApp.swift`, `iOSApp/DESIGN 2.md`, screenshots from 2026-06-12, Apple HIG Materials, Liquid Glass, WWDC25 "Meet Liquid Glass", WWDC25 "Build a SwiftUI app with the new design", and Apple Design "What's new"
 
 ## Brand
 - Personality: a precise bench-instrument control app wrapped in a premium dark glass shell
 - Trust signals: live connection state stays visible, measured values use monospaced numerals, channel identity is deterministic, and shell chrome never steals attention from the data
-- Avoid: marketing-gallery composition, decorative gradients on cards or controls, low-contrast translucent layers, hard slabs, and motion that exists only to look modern
+- Trust signals: live connection state stays visible, measured values use monospaced numerals, channel identity is deterministic, the Overview histogram stays visible, and shell chrome never steals attention from the data
+- Avoid: marketing-gallery composition, decorative gradients on cards or controls, low-contrast translucent layers, hard slabs, visible box layers behind chrome, and motion that exists only to look modern
 
 ## Product goals
 - Goals: let the operator see hardware state quickly, keep navigation stable, make touch interactions safe on a phone, and preserve live status while moving between tabs
 - Non-goals: mimic desktop chrome exactly, turn the app into a photo-first showcase, over-animate the shell, or bury important state behind trendy translucency
-- Success signals: the shell reads as native, the tab bar floats cleanly, the Overview header never collides with the notch, and channel/state cards are scannable at a glance
+- Success signals: the shell reads as native, the tab bar floats cleanly without rectangular slabs, the Overview header never collides with the notch, the Overview histogram remains visible, and channel/state cards are scannable at a glance
 
 ## Personas and jobs
 - Primary personas: hardware developers, test engineers, and lab operators
@@ -31,10 +32,11 @@
 - Principle 2: use color to identify channels and state, not as decoration
 - Principle 3: prefer rounded continuous geometry and system materials over hard rectangles and custom blur stacks
 - Principle 4: adopt Liquid Glass where it improves navigation or control clarity, but keep legibility above visual novelty
+- Principle 5: protect usable content geometry first; do not let shell experiments shrink Scope, REPL, or other dense interaction surfaces
 - Tradeoffs: use enough blur and translucency to feel current, but stop as soon as text, affordance, or touch precision starts to degrade
 
 ## Visual language
-- Color: deep obsidian and navy backgrounds, cyan/blue as the primary interactive accent, and blue/emerald/amber/purple as stable channel or semantic colors; background gradients may add atmosphere, but controls and cards stay low-chroma
+- Color: deep obsidian and navy backgrounds, cyan/blue as the primary interactive accent, and blue/green/yellow/purple as stable channel colors; background gradients may add atmosphere, but controls and cards stay low-chroma and text-friendly
 - Typography: use the SF system stack already in the app; titles can stay bold and rounded, body text should remain calm and compact, and voltages/codes/counters should use monospaced numerals
 - Spacing/layout rhythm: generous vertical breathing room, consistent card gutters, and fixed chrome placed with `safeAreaInset` so it never touches unsafe edges
 - Shape/radius/elevation: continuous rounded rectangles, capsules for status pills, circular icon buttons, regular glass for floating shell elements, and soft shadows only where a control needs separation from the background
@@ -43,20 +45,22 @@
 
 ## Components
 - Existing components to reuse: `CustomTabBar`, `OverviewTab` header, `GlassEffectContainer`, `glassEffect` cards, connection status pills, channel cards, `VoltageSliderRow`, `ToggleRow`, `StatusPill`, `RegisterBitIndicator`, and the `ScriptsTab` browser/editor/repl stack
-- New/changed components: shell-level glass tab bar and pinned Overview header treatment, the disconnected connection dashboard, tab-specific full-bleed backgrounds, and channel-colored overview cards that stay local to their section
+- New/changed components: shell-level glass tab bar and pinned Overview header treatment, the disconnected connection dashboard, tab-specific full-bleed backgrounds, channel-colored overview cards that stay local to their section, and preserved sparkline/histogram affordances in Overview
 - Variants and states: disconnected, connecting, unauthorized, connected, live, paused, hat present, hat absent, enabled, off, fault, warning, and error
-- Token/component ownership: shell chrome belongs in `MainTabView`; Overview chrome and live cards belong in `OverviewTab`; measurement formatting stays local to the tab that renders it
+- Token/component ownership: shell chrome belongs in `MainTabView`; Overview chrome, live cards, and histogram belong in `OverviewTab`; measurement formatting stays local to the tab that renders it; dense interaction surfaces in `ScopeTab` and `ScriptsTab` must keep their usable height
 
 ## Accessibility
 - Target standard: legible at phone distance with Dynamic Type and Reduce Transparency in mind
 - Keyboard/focus behavior: use standard SwiftUI buttons, toggles, and text fields with visible pressed states; do not rely on gesture-only controls for critical actions
 - Contrast/readability: do not depend on blur to separate layers; text must stay readable over material and background color changes, and transparent layers should flatten cleanly if the system reduces transparency
+- Layout preservation: do not trade away usable content height for chrome polish; REPL and Scope must remain operable when the keyboard or tab bar is present
 - Screen-reader semantics: keep tab labels, connection state, live status, and control labels concise and ordered
 - Reduced motion and sensory considerations: respect Reduce Motion, keep live indicators subtle, and avoid flashing or high-frequency shell animation
 
 ## Responsive behavior
 - Supported breakpoints/devices: iPhone portrait first, with safe-area-aware behavior on notched and non-notched devices; iPad can share the same shell unless a separate tablet IA is approved later
 - Layout adaptations: use `safeAreaInset` for fixed chrome, let content scroll underneath it, and allow tab-specific cards and grids to widen naturally on larger screens
+- Guardrail: safe-area wrappers must not render as visible rectangular slabs, and fixed chrome must not create boxy backplates behind the header or bottom navigation
 - Touch/hover differences: design for thumbs and direct touch, not hover; keep targets large enough to hit without precision
 
 ## Interaction states
@@ -74,11 +78,12 @@
 
 ## Implementation constraints
 - Framework/styling system: SwiftUI with `glassEffect`, `Material`, and native controls
-- Design-token constraints: the dark shell palette stays low-chroma; cyan/blue accent can appear in active states; channel colors stay stable and local to the content they annotate
+- Design-token constraints: the dark shell palette stays low-chroma; cyan/blue accent can appear in active states; channel colors stay stable and local to the content they annotate; avoid bright solid fills that overpower white text
 - Performance constraints: prefer native materials over custom blur stacks, keep background effects lightweight, and avoid expensive custom drawing in chrome
 - Compatibility constraints: respect safe areas, notch geometry, and Reduce Transparency; the shell must still read correctly when materials flatten
-- Test/screenshot expectations: Xcode builds should remain clean, and screenshots should show edge-to-edge background, floating tab bar, pinned Overview header, and legible control states over material
+- Test/screenshot expectations: Xcode builds should remain clean, and screenshots should show edge-to-edge background, floating tab bar, pinned Overview header, visible Overview histogram, dark legible channel cards, and usable Scope/REPL layouts over material
 
 ## Open questions
 - [ ] Should iPad keep the current bottom-tab shell or move to a sidebar later?
 - [ ] Should non-Overview tabs adopt a lighter pinned subheader pattern, or keep their current in-content section titles?
+- [ ] Should the shell use a dedicated shared glass backdrop component, or keep each surface responsible for its own background treatment?

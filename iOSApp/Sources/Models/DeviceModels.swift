@@ -2,6 +2,26 @@ import Foundation
 
 // MARK: - Core Status Models
 
+public struct USBPDSourcePDO: Codable, Equatable, Identifiable {
+    public var id: String { voltage }
+    public let voltage: String
+    public let detected: Bool
+    public let maxCurrentA: Double
+    public let maxPowerW: Double
+}
+
+public struct USBPDStatus: Codable, Equatable {
+    public let present: Bool
+    public let attached: Bool
+    public let cc: String
+    public let voltageV: Double
+    public let currentA: Double
+    public let powerW: Double
+    public let pdResponse: Int
+    public let sourcePdos: [USBPDSourcePDO]
+    public let selectedPdo: Int
+}
+
 public struct ChannelState: Codable, Identifiable, Equatable {
     public let id: Int
     public let function: String
@@ -155,6 +175,12 @@ public struct OverviewSnapshot: Codable, Equatable {
 }
 
 // MARK: - Self-Test / Calibration
+public struct CalibrationPoint: Codable, Equatable, Identifiable {
+    public var id: Int { dacCode }
+    public let dacCode: Int
+    public let measuredV: Double
+}
+
 public struct SelftestBoot: Codable, Equatable {
     public let ran: Bool
     public let passed: Bool

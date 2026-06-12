@@ -16,7 +16,7 @@ import bugbuster
 print("Scanning I2C bus on IO2 (SDA) / IO3 (SCL)...")
 
 try:
-    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=100000, pullups='external')
+    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=100000, pullups='external', supply=3.3, vlogic=3.3)
     addrs = i2c.scan(start=0x08, stop=0x77, skip_reserved=True, timeout_ms=50)
 
     if addrs:

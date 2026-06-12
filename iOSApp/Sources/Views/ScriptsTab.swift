@@ -272,8 +272,8 @@ struct ScriptsTab: View {
             SelectableCodeEditor(text: $editingContent)
                 .padding(.horizontal)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .padding(.bottom, keyboardHeight > 0 ? 0 : 90)
-                .onChange(of: editingContent) { newValue in
+                .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 66) : 10)
+                .onChange(of: editingContent) { _, newValue in
                     let sanitized = newValue
                         .replacingOccurrences(of: "\u{201C}", with: "\"")
                         .replacingOccurrences(of: "\u{201D}", with: "\"")
@@ -331,7 +331,6 @@ struct ScriptsTab: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 12)
-            .glassEffect(.regular, in: Rectangle())
 
             // Terminal output — fills all remaining space
             if let client = replClient {
@@ -359,7 +358,7 @@ struct ScriptsTab: View {
                     .submitLabel(.send)
                     .focused($replInputFocused)
                     .onSubmit { sendREPLCommand() }
-                    .onChange(of: inputCommand) { newValue in
+                    .onChange(of: inputCommand) { _, newValue in
                         let sanitized = newValue
                             .replacingOccurrences(of: "\u{201C}", with: "\"")
                             .replacingOccurrences(of: "\u{201D}", with: "\"")
@@ -384,14 +383,70 @@ struct ScriptsTab: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            // Push above keyboard (keyboard height from notification;
-            // subtract ~83pt tab bar area already outside content)
-            .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 83) : 90)
+            // Push above keyboard (keyboard height from notification; the shell
+            // ignores the keyboard safe area, so clearance is manual here.
+            // Subtract the ~66pt of tab bar chrome already below the content.)
+            .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 66) : 10)
+        }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    replKeyboardShortcutBar(
+                        onInsert: { inputCommand += $0 },
+                        onDone: { replInputFocused = false }
+                )
+            }
         }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 replInputFocused = true
             }
+        }
+    }
+
+    @ViewBuilder
+    private func replKeyboardShortcutBar(onInsert: @escaping (String) -> Void, onDone: @escaping () -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(["Tab", "#", ":", "_", "(", ")", "="], id: \.self) { key in
+                    Button(action: {
+                        onInsert(key == "Tab" ? "    " : key)
+                    }) {
+                        Text(key)
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(Color.cyan.opacity(0.28), lineWidth: 1)
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button(action: onDone) {
+                    Text("Done")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.blue.opacity(0.35))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.blue.opacity(0.45), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
         }
     }
 
@@ -762,7 +817,8 @@ struct SelectableCodeEditor: UIViewRepresentable {
 
         // Build horizontally scrollable accessory bar
         let scrollView = UIScrollView()
-        scrollView.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44)
+        scrollView.frame = CGRect(x: 0, y: 0, width: 1, height: 44)
+        scrollView.autoresizingMask = [.flexibleWidth]
         scrollView.backgroundColor = .clear
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.alwaysBounceHorizontal = true
@@ -776,12 +832,13 @@ struct SelectableCodeEditor: UIViewRepresentable {
         let keys = ["Tab", "#", ":", "_", "(", ")", "=", "Done"]
         for key in keys {
             let button = UIButton(type: .system)
+            button.configuration = UIButton.Configuration.plain()
             button.setTitle(key, for: .normal)
             button.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: key == "Done" || key == "Tab" ? .bold : .semibold)
             button.setTitleColor(.cyan, for: .normal)
             button.backgroundColor = UIColor(white: 1.0, alpha: 0.04)
             button.layer.cornerRadius = 8
-            button.contentEdgeInsets = UIEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
+            button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
             
             if key == "Done" {
                 button.addTarget(context.coordinator, action: #selector(Coordinator.donePressed), for: .touchUpInside)
@@ -822,7 +879,7 @@ struct SelectableCodeEditor: UIViewRepresentable {
         }
 
         @objc func accessoryButtonTapped(_ sender: UIButton) {
-            guard let textView = textView else { return }
+            guard textView != nil else { return }
             let title = sender.currentTitle ?? ""
             let toInsert = title == "Tab" ? "    " : title
             insertText(toInsert)

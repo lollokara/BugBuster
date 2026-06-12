@@ -2598,6 +2598,36 @@ static esp_err_t handle_get_idac(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// GET /api/idac/cal/points?ch=0
+static esp_err_t handle_get_idac_cal_points(httpd_req_t *req)
+{
+    char buf[128];
+    int ch = 0;
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+        char param[32];
+        if (httpd_query_key_value(buf, "ch", param, sizeof(param)) == ESP_OK) {
+            ch = atoi(param);
+        }
+    }
+    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
+
+    const DS4424State *st = ds4424_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "ch", ch);
+    cJSON_AddNumberToObject(root, "count", st->cal[ch].count);
+    cJSON_AddBoolToObject(root, "valid", st->cal[ch].valid);
+    
+    cJSON *points = cJSON_AddArrayToObject(root, "points");
+    for (uint8_t i = 0; i < st->cal[ch].count; i++) {
+        cJSON *pt = cJSON_CreateObject();
+        cJSON_AddNumberToObject(pt, "dacCode", st->cal[ch].points[i].dac_code);
+        cJSON_AddNumberToObject(pt, "measuredV", (double)st->cal[ch].points[i].measured_v);
+        cJSON_AddItemToArray(points, pt);
+    }
+    
+    return send_json(req, root);
+}
+
 // POST /api/idac/code  body: {"ch":0, "code":-10}
 static esp_err_t handle_post_idac_code(httpd_req_t *req)
 {
@@ -5623,6 +5653,11 @@ bool initWebServer(void)
         .uri = "/api/idac", .method = HTTP_GET, .handler = handle_get_idac, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_idac_get);
+
+    httpd_uri_t uri_idac_cal_points_get = {
+        .uri = "/api/idac/cal/points", .method = HTTP_GET, .handler = handle_get_idac_cal_points, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_idac_cal_points_get);
 
     httpd_uri_t uri_idac_post = {
         .uri = "/api/idac/*", .method = HTTP_POST, .handler = handle_idac_post_dispatch, .user_ctx = NULL

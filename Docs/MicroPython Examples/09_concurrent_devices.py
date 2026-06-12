@@ -20,7 +20,7 @@ print('Setting up I2C and SPI concurrently...')
 
 # I2C on IO2/IO3
 try:
-    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=100000, pullups='external')
+    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=100000, pullups='external', supply=3.3, vlogic=3.3)
     i2c_ok = True
 except (ValueError, OSError) as e:
     print('I2C setup error: %s' % e)

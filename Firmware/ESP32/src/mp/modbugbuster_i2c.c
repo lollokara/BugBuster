@@ -4,6 +4,7 @@
 // API:
 //   i2c = bugbuster.I2C(sda_io, scl_io, *, freq=400000, pullups='external',
 //                       supply=3.3, vlogic=3.3)
+//   i2c.close()
 //   i2c.scan([start=0x08, stop=0x77, skip_reserved=True, timeout_ms=50]) -> list
 //   i2c.writeto(addr, buf [, timeout_ms=50])
 //   i2c.readfrom(addr, n [, timeout_ms=50]) -> bytes
@@ -120,6 +121,16 @@ static mp_obj_t bugbuster_i2c_make_new(const mp_obj_type_t *type,
 // ---------------------------------------------------------------------------
 // scan(start=0x08, stop=0x77, skip_reserved=True, timeout_ms=50) -> list
 // ---------------------------------------------------------------------------
+
+static mp_obj_t bugbuster_i2c_close(mp_obj_t self_in)
+{
+    (void)self_in;
+    if (!bugbuster_mp_i2c_close()) {
+        mp_raise_OSError(MP_EIO);
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(bugbuster_i2c_close_obj, bugbuster_i2c_close);
 
 static mp_obj_t bugbuster_i2c_scan(size_t n_args, const mp_obj_t *pos_args,
                                     mp_map_t *kw_args)
@@ -266,6 +277,7 @@ static MP_DEFINE_CONST_FUN_OBJ_KW(bugbuster_i2c_writeto_then_readfrom_obj, 1,
 // ---------------------------------------------------------------------------
 
 static const mp_rom_map_elem_t bugbuster_i2c_locals_table[] = {
+    { MP_ROM_QSTR(MP_QSTR_close),                 MP_ROM_PTR(&bugbuster_i2c_close_obj) },
     { MP_ROM_QSTR(MP_QSTR_scan),                  MP_ROM_PTR(&bugbuster_i2c_scan_obj) },
     { MP_ROM_QSTR(MP_QSTR_writeto),               MP_ROM_PTR(&bugbuster_i2c_writeto_obj) },
     { MP_ROM_QSTR(MP_QSTR_readfrom),              MP_ROM_PTR(&bugbuster_i2c_readfrom_obj) },

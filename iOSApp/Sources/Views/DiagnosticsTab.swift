@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 struct WifiNetworkScanItem: Identifiable, Codable {
     var id: String { ssid }
@@ -42,6 +43,20 @@ struct DiagnosticsTab: View {
     @State private var isApplyingOta = false
     @State private var otaApplyStatus = ""
 
+    // USB PD
+    @State private var isNegotiatingPd = false
+
+    // Calibration
+    @State private var selectedCalSupply = 1
+    @State private var showingCalData = false
+    @State private var loadedCalPoints: [CalibrationPoint] = []
+    @State private var isLoadingCalData = false
+    let calSupplies = [
+        (id: 0, name: "LevelShift (IDAC0)"),
+        (id: 1, name: "V_ADJ1 (IDAC1)"),
+        (id: 2, name: "V_ADJ2 (IDAC2)")
+    ]
+
     // SPIFFS
     @State private var spiffsStorage: StorageInfoDiag? = nil
     @State private var isLoadingSpiffs = false
@@ -54,10 +69,11 @@ struct DiagnosticsTab: View {
                 headerSection
                 selfTestCard
                 registersCard
+                usbPdCard
+                calibrationCard
                 wifiCard
                 otaCard
                 spiffsCard
-                Spacer(minLength: 100)
             }
             .padding()
         }
@@ -71,6 +87,9 @@ struct DiagnosticsTab: View {
         )
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showWifiSheet) { wifiConnectionSheet }
+        .sheet(isPresented: $showingCalData) {
+            CalibrationDataView(supplyName: calSupplies.first(where: { $0.id == selectedCalSupply })?.name ?? "Unknown", points: loadedCalPoints)
+        }
         .onAppear {
             fetchGitReleases()
             loadSpiffsStorage()
@@ -221,6 +240,144 @@ struct DiagnosticsTab: View {
                     RegisterBitIndicator(label: "DATA RDY",  active: (val & (1 << 2)) != 0, normalIsOff: false)
                     RegisterBitIndicator(label: "TEMP HIGH", active: (val & (1 << 3)) != 0, normalIsOff: true)
                 }
+            }
+        }
+        .cardStyle()
+    }
+
+    // MARK: - USB PD Card
+
+    var usbPdCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("USB Power Delivery (HUSB238)")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.blue)
+                Spacer()
+                if isNegotiatingPd {
+                    ProgressView().tint(.blue)
+                } else {
+                    Button(action: { connectionManager.fetchUsbPdQuick() }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14))
+                    }
+                    .padding(8)
+                    .glassEffect(.regular, in: Circle())
+                }
+            }
+
+            let pd = connectionManager.lastUsbPd
+
+            if let pd = pd, pd.present {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Status Overview
+                    HStack(spacing: 12) {
+                        StatusPill(title: pd.attached ? "Attached" : "No Source", ok: pd.attached)
+                        StatusPill(title: pd.cc, ok: true)
+                    }
+
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading) {
+                            Text("VOLTAGE").font(.system(size: 10)).foregroundColor(.secondary)
+                            Text(String(format: "%.1f V", pd.voltageV))
+                                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        VStack(alignment: .leading) {
+                            Text("CURRENT").font(.system(size: 10)).foregroundColor(.secondary)
+                            Text(String(format: "%.2f A", pd.currentA))
+                                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        VStack(alignment: .leading) {
+                            Text("POWER").font(.system(size: 10)).foregroundColor(.secondary)
+                            Text(String(format: "%.1f W", pd.powerW))
+                                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.vertical, 4)
+
+                    Divider().background(Color.white.opacity(0.1))
+
+                    Text("AVAILABLE PROFILES")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(pd.sourcePdos) { pdo in
+                                let isSelected = pdo.voltage == "\(Int(pd.voltageV))V"
+                                Button(action: { selectUsbPdVoltage(pdo.voltage) }) {
+                                    VStack(alignment: .center, spacing: 4) {
+                                        Text(pdo.voltage)
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(isSelected ? .black : .blue)
+                                        Text(String(format: "%.1fA", pdo.maxCurrentA))
+                                            .font(.system(size: 10))
+                                            .foregroundColor(isSelected ? .black.opacity(0.7) : .secondary)
+                                    }
+                                    .frame(width: 60, height: 50)
+                                    .glassEffect(
+                                        pdo.detected ? (isSelected ? .regular.tint(.blue) : .regular) : .regular,
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    )
+                                    .opacity(pdo.detected ? 1.0 : 0.4)
+                                }
+                                .disabled(!pdo.detected || isNegotiatingPd)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text("HUSB238 controller not detected or status unavailable.")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .cardStyle()
+    }
+
+    // MARK: - Calibration Card
+
+    var calibrationCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Supply Calibration")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.blue)
+                Spacer()
+                if isLoadingCalData {
+                    ProgressView().tint(.blue)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("SELECT SUPPLY")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.secondary)
+
+                Picker("Supply", selection: $selectedCalSupply) {
+                    ForEach(calSupplies, id: \.id) { supply in
+                        Text(supply.name).tag(supply.id)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Button(action: { fetchCalibrationData() }) {
+                    HStack {
+                        Image(systemName: "chart.xyaxis.line")
+                        Text("View Calibration Data")
+                            .fontWeight(.bold)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .disabled(isLoadingCalData)
             }
         }
         .cardStyle()
@@ -556,6 +713,32 @@ struct DiagnosticsTab: View {
         }
     }
 
+    private func fetchCalibrationData() {
+        isLoadingCalData = true
+        Task {
+            let pts = await connectionManager.fetchCalibrationPoints(ch: selectedCalSupply)
+            DispatchQueue.main.async {
+                self.loadedCalPoints = pts
+                self.isLoadingCalData = false
+                self.showingCalData = true
+            }
+        }
+    }
+
+    private func selectUsbPdVoltage(_ voltageStr: String) {
+        // Extract number from "5V", "9V", etc.
+        let v = Int(voltageStr.replacingOccurrences(of: "V", with: "")) ?? 0
+        guard v > 0 else { return }
+        
+        isNegotiatingPd = true
+        Task {
+            let success = await connectionManager.setUsbPdVoltage(v)
+            DispatchQueue.main.async {
+                self.isNegotiatingPd = false
+            }
+        }
+    }
+
     private func scanWifi() {
         isScanningWifi = true
         Task {
@@ -724,15 +907,253 @@ struct DiagnosticsTab: View {
     private func loadSpiffsStorage() {
         isLoadingSpiffs = true
         Task {
-            if let s: StorageInfoDiag = try? await connectionManager.getRequest(path: "/api/scripts/storage") {
-                DispatchQueue.main.async {
-                    self.spiffsStorage = s
-                    self.isLoadingSpiffs = false
+            // Retry a few times: the first load can race a device that is
+            // still busy (e.g. right after connect or a heavy stream).
+            for attempt in 0..<3 {
+                if let s: StorageInfoDiag = try? await connectionManager.getRequest(path: "/api/scripts/storage") {
+                    DispatchQueue.main.async {
+                        self.spiffsStorage = s
+                        self.isLoadingSpiffs = false
+                    }
+                    return
                 }
-            } else {
-                DispatchQueue.main.async { self.isLoadingSpiffs = false }
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                }
+            }
+            DispatchQueue.main.async { self.isLoadingSpiffs = false }
+        }
+    }
+}
+
+// MARK: - Calibration Data View
+
+struct CalibrationAnalysis {
+    let slope: Double
+    let intercept: Double
+    let rSquared: Double
+    let maxDevMv: Double
+    let minDevMv: Double
+    let rmseMv: Double
+    
+    init(points: [CalibrationPoint]) {
+        guard points.count >= 2 else {
+            slope = 0; intercept = 0; rSquared = 0; maxDevMv = 0; minDevMv = 0; rmseMv = 0
+            return
+        }
+        
+        let n = Double(points.count)
+        let sumX = points.reduce(0.0) { $0 + Double($1.dacCode) }
+        let sumY = points.reduce(0.0) { $0 + $1.measuredV }
+        let sumXY = points.reduce(0.0) { $0 + Double($1.dacCode) * $1.measuredV }
+        let sumX2 = points.reduce(0.0) { $0 + Double($1.dacCode) * Double($1.dacCode) }
+        let sumY2 = points.reduce(0.0) { $0 + $1.measuredV * $1.measuredV }
+        
+        let denominator = (n * sumX2 - sumX * sumX)
+        if abs(denominator) < 1e-9 {
+            slope = 0; intercept = 0; rSquared = 0; maxDevMv = 0; minDevMv = 0; rmseMv = 0
+            return
+        }
+        
+        slope = (n * sumXY - sumX * sumY) / denominator
+        intercept = (sumY - slope * sumX) / n
+        
+        // R^2
+        let numRSq = (n * sumXY - sumX * sumY) * (n * sumXY - sumX * sumY)
+        let denRSq = (n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY)
+        rSquared = denRSq > 0 ? numRSq / denRSq : 1.0
+        
+        // Deviations (residuals)
+        var maxD = -Double.infinity
+        var minD = Double.infinity
+        var sumSqErr = 0.0
+        
+        for pt in points {
+            let predicted = slope * Double(pt.dacCode) + intercept
+            let dev = (pt.measuredV - predicted) * 1000.0 // Convert to mV
+            maxD = max(maxD, dev)
+            minD = min(minD, dev)
+            sumSqErr += (dev * dev)
+        }
+        
+        maxDevMv = maxD
+        minDevMv = minD
+        rmseMv = sqrt(sumSqErr / n)
+    }
+}
+
+struct CalibrationDataView: View {
+    @Environment(\.dismiss) var dismiss
+    let supplyName: String
+    let points: [CalibrationPoint]
+    
+    var analysis: CalibrationAnalysis { CalibrationAnalysis(points: points) }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(red: 0.03, green: 0.05, blue: 0.10)
+                    .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    if points.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "chart.bar.xaxis")
+                                .font(.system(size: 50))
+                                .foregroundColor(.secondary)
+                            Text("No calibration data found")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                            Text("Run an auto-calibration sweep first.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 40)
+                        }
+                        .frame(maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 20) {
+                                Text("Linearity Curve")
+                                    .font(.title3)
+                                    .bold()
+                                    .foregroundColor(.white)
+
+                                Chart {
+                                    ForEach(points) { pt in
+                                        LineMark(
+                                            x: .value("DAC Code", pt.dacCode),
+                                            y: .value("Voltage", pt.measuredV)
+                                        )
+                                        .foregroundStyle(Color.cyan)
+                                        .interpolationMethod(.linear)
+
+                                        PointMark(
+                                            x: .value("DAC Code", pt.dacCode),
+                                            y: .value("Voltage", pt.measuredV)
+                                        )
+                                        .foregroundStyle(Color.blue)
+                                    }
+                                    
+                                    // Trend Line (Fitting Rect)
+                                    if points.count >= 2 {
+                                        let firstX = Double(points.first?.dacCode ?? -127)
+                                        let lastX  = Double(points.last?.dacCode ?? 127)
+                                        
+                                        LineMark(
+                                            x: .value("DAC Code", firstX),
+                                            y: .value("Voltage", analysis.slope * firstX + analysis.intercept)
+                                        )
+                                        .foregroundStyle(Color.red.opacity(0.5))
+                                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                                        
+                                        LineMark(
+                                            x: .value("DAC Code", lastX),
+                                            y: .value("Voltage", analysis.slope * lastX + analysis.intercept)
+                                        )
+                                        .foregroundStyle(Color.red.opacity(0.5))
+                                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                                    }
+                                }
+                                .chartXAxis {
+                                    AxisMarks(values: .automatic) { _ in
+                                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 4])).foregroundStyle(.white.opacity(0.1))
+                                        AxisValueLabel().foregroundStyle(.secondary)
+                                    }
+                                }
+                                .chartYAxis {
+                                    AxisMarks(values: .automatic) { _ in
+                                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 4])).foregroundStyle(.white.opacity(0.1))
+                                        AxisValueLabel().foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(height: 240)
+                                .padding()
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                                // Math Analysis Section
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("FITTING ANALYSIS")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundColor(.secondary)
+                                    
+                                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                        AnalysisPill(title: "Slope (G)", value: String(format: "%.4f V/LSB", analysis.slope))
+                                        AnalysisPill(title: "Offset", value: String(format: "%.3f V", analysis.intercept))
+                                        AnalysisPill(title: "Max Dev", value: String(format: "%.2f mV", analysis.maxDevMv))
+                                        AnalysisPill(title: "Min Dev", value: String(format: "%.2f mV", analysis.minDevMv))
+                                        AnalysisPill(title: "RMSE", value: String(format: "%.3f mV", analysis.rmseMv))
+                                        AnalysisPill(title: "Linearity (R²)", value: String(format: "%.5f", analysis.rSquared))
+                                    }
+                                }
+                                .padding()
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Data Points").font(.headline)
+                                    LazyVStack(spacing: 8) {
+                                        ForEach(points) { pt in
+                                            let predicted = analysis.slope * Double(pt.dacCode) + analysis.intercept
+                                            let dev = (pt.measuredV - predicted) * 1000.0
+                                            
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Code \(pt.dacCode)")
+                                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                                    Text(String(format: "%.1f mV dev", dev))
+                                                        .font(.system(size: 10))
+                                                        .foregroundColor(abs(dev) > 10 ? .red : .secondary)
+                                                }
+                                                Spacer()
+                                                Text(String(format: "%.4f V", pt.measuredV))
+                                                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                                                    .foregroundColor(.cyan)
+                                            }
+                                            .padding(.horizontal)
+                                            .padding(.vertical, 8)
+                                            .background(Color.white.opacity(0.05))
+                                            .cornerRadius(8)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                }
+            }
+            .navigationTitle(supplyName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.bold)
+                        .foregroundColor(.cyan)
+                }
             }
         }
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct AnalysisPill: View {
+    let title: String
+    let value: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(10)
     }
 }
 

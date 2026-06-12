@@ -315,9 +315,19 @@ extern "C" bool bus_planner_apply_i2c(uint8_t sda_io, uint8_t scl_io,
         return false;
     }
 
+    const BusRouteEntry *routes[2] = { sda_r, scl_r };
     bool ok = false;
 
-    const BusRouteEntry *routes[2] = { sda_r, scl_r };
+    bool i2c_ready = false;
+    uint8_t active_sda = 0xFF;
+    uint8_t active_scl = 0xFF;
+    ext_i2c_get_status(&i2c_ready, &active_sda, &active_scl, NULL, NULL);
+    if (i2c_ready && (active_sda != sda_r->esp_gpio || active_scl != scl_r->esp_gpio)) {
+        set_err(err, err_len,
+                "external I2C controller already in use; call i2c.close() first or reuse the existing bus object");
+        goto done;
+    }
+
     if (!apply_power_and_mux(mtx, routes, 2, supply_v, vlogic_v, err, err_len)) {
         goto done;
     }
@@ -433,6 +443,18 @@ extern "C" bool bus_planner_apply_spi(uint8_t sck_io,
     }
 
     bool ok = false;
+
+    bool spi_ready = false;
+    uint8_t active_sck = 0xFF, active_mosi = 0xFF, active_miso = 0xFF, active_cs = 0xFF;
+    ext_spi_get_status(&spi_ready, &active_sck, &active_mosi, &active_miso, &active_cs, NULL, NULL);
+    if (spi_ready && (active_sck != sck_r->esp_gpio ||
+                      active_mosi != esp_mosi ||
+                      active_miso != esp_miso ||
+                      active_cs != esp_cs)) {
+        set_err(err, err_len,
+                "external SPI controller already in use; call spi.close() first or reuse the existing bus object");
+        goto done;
+    }
 
     if (!apply_power_and_mux(mtx, routes, n_routes, supply_v, vlogic_v, err, err_len)) {
         goto done;

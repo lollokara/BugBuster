@@ -67,8 +67,15 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var lastSelftest: SelftestStatus? = nil
     @Published public var lastHatStatus: HatStatus? = nil
     @Published public var lastHatRails: [HatRail] = []
+    @Published public var lastUsbPd: USBPDStatus? = nil
     
     @Published public var isSearching = false
+
+    /// True after 2+ consecutive connection-level failures (timeout / refused /
+    /// connection lost). Polling backs off and the UI can show a busy state.
+    /// Cleared by the first successful request.
+    @Published public var transportDegraded = false
+    private var consecutiveTransportFailures = 0
     
     private var serviceBrowser: NetServiceBrowser?
     private var services: Set<NetService> = []
@@ -76,16 +83,30 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     private let session: URLSession
     private var pollTask: Task<Void, Never>? = nil
     private var pollCycle: Int = 0
+
+    private func updateOnMain(_ body: @MainActor @escaping () -> Void) {
+        Task { @MainActor in body() }
+    }
+
+    private func updateOnMain(after nanoseconds: UInt64, _ body: @MainActor @escaping () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            body()
+        }
+    }
     
     public override init() {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 5.0
         configuration.timeoutIntervalForResource = 10.0
-        // Keep-alive: reuse one TCP connection to the ESP32 so lwIP sockets
-        // don't pile up in TIME_WAIT and exhaust the device's socket pool.
-        // URLSession handles stale keep-alive automatically by retrying on
-        // connection-lost errors for idempotent GET requests.
-        configuration.httpMaximumConnectionsPerHost = 5
+        // One keep-alive TCP connection for the whole control plane. The
+        // ESP32 httpd has only a handful of sockets (shared with the SSE
+        // scope stream and the REPL WebSocket, which use their own sessions)
+        // and serializes request handling anyway, so client-side parallelism
+        // only exhausts its socket pool. All requests are additionally
+        // serialized through `requestGate` so at most one is in flight.
+        configuration.httpMaximumConnectionsPerHost = 1
+        configuration.waitsForConnectivity = false
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: configuration)
         
@@ -125,7 +146,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     public func startDiscovery() {
-        DispatchQueue.main.async {
+        updateOnMain {
             guard self.serviceBrowser == nil else { return }
             self.isSearching = true
             self.discoveredDevices.removeAll()
@@ -137,9 +158,9 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             browser.searchForServices(ofType: "_bugbuster._tcp", inDomain: "local.")
         }
     }
-    
+
     public func stopDiscovery() {
-        DispatchQueue.main.async {
+        updateOnMain {
             self.serviceBrowser?.stop()
             self.serviceBrowser = nil
             for s in self.services {
@@ -151,39 +172,39 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     // MARK: - NetServiceBrowserDelegate
-    
+
     public func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        DispatchQueue.main.async {
+        updateOnMain {
             self.services.insert(service)
             service.delegate = self
             service.resolve(withTimeout: 5.0)
         }
     }
-    
+
     public func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        DispatchQueue.main.async {
+        updateOnMain {
             self.services.remove(service)
             self.updateDiscoveredDevices()
         }
     }
-    
+
     public func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
-        DispatchQueue.main.async {
+        updateOnMain {
             self.isSearching = false
         }
     }
     
     public func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
         print("Bonjour search failed: \(errorDict)")
-        DispatchQueue.main.async {
+        updateOnMain {
             self.isSearching = false
         }
     }
     
     // MARK: - NetServiceDelegate
-    
+
     public func netServiceDidResolveAddress(_ sender: NetService) {
-        DispatchQueue.main.async {
+        updateOnMain {
             self.updateDiscoveredDevices()
         }
     }
@@ -258,7 +279,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             }
         }
         
-        DispatchQueue.main.async {
+        updateOnMain {
             self.discoveredDevices = devices
             
             // Auto-reconnect to the last connected device if its IP has changed and Bonjour found it
@@ -279,7 +300,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                             if self.activeDevice?.ip != matchingDevice.ip || self.connectionState == .disconnected || self.connectionState == .error {
                                 print("[ConnectionManager] mDNS discovered matching last device at new IP \(matchingDevice.ip). Reconnecting...")
                                 self.lastAutoConnectTime = now
-                                Task {
+                                Task { @MainActor in
                                     let success = await self.connect(ip: matchingDevice.ip, token: token)
                                     if success {
                                         self.startPolling()
@@ -295,7 +316,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     
     public func connect(ip: String, token: String) async -> Bool {
         stopDiscovery()
-        DispatchQueue.main.async {
+        updateOnMain {
             self.connectionState = .connecting
         }
         
@@ -304,7 +325,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         if success {
             startPolling()
         } else {
-            DispatchQueue.main.async {
+            updateOnMain {
                 if self.connectionState != .unauthorized {
                     self.connectionState = .error
                 }
@@ -333,11 +354,11 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         }
         
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await gatedData(for: request)
             guard let httpResponse = response as? HTTPURLResponse else { return false }
             
             if httpResponse.statusCode == 401 {
-                DispatchQueue.main.async {
+                updateOnMain {
                     self.connectionState = .unauthorized
                     self.adminToken = cleanToken
                     self.activeDevice = DiscoveredDevice(hostname: "BugBuster Board", ip: cleanIp, port: 80)
@@ -352,7 +373,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             
             // Require a token to be entered to connect successfully
             if cleanToken.isEmpty {
-                DispatchQueue.main.async {
+                updateOnMain {
                     self.connectionState = .unauthorized
                     self.adminToken = ""
                     self.activeDevice = DiscoveredDevice(hostname: "BugBuster Board", ip: cleanIp, port: 80)
@@ -366,11 +387,11 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             verifyRequest.httpMethod = "POST"
             verifyRequest.setValue(cleanToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
             
-            let (_, verifyResponse) = try await session.data(for: verifyRequest)
+            let (_, verifyResponse) = try await gatedData(for: verifyRequest)
             guard let verifyHttp = verifyResponse as? HTTPURLResponse else { return false }
             
             if verifyHttp.statusCode == 401 {
-                DispatchQueue.main.async {
+                updateOnMain {
                     self.connectionState = .unauthorized
                     self.adminToken = cleanToken
                     self.activeDevice = DiscoveredDevice(hostname: "BugBuster Board", ip: cleanIp, port: 80)
@@ -388,7 +409,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                 if !cleanToken.isEmpty {
                     infoRequest.setValue(cleanToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
                 }
-                if let (infoData, _) = try? await session.data(for: infoRequest),
+                if let (infoData, _) = try? await gatedData(for: infoRequest),
                    let info = try? JSONDecoder().decode(DeviceInfo.self, from: infoData) {
                     deviceMac = info.macAddress
                 }
@@ -397,7 +418,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             let finalMac = deviceMac.isEmpty ? (self.discoveredDevices.first(where: { $0.ip == cleanIp })?.mac ?? "") : deviceMac
             let normMac = finalMac.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
             
-            DispatchQueue.main.async {
+            updateOnMain {
                 self.updateStatus(status)
                 self.adminToken = cleanToken
                 self.activeDevice = DiscoveredDevice(
@@ -428,7 +449,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             
             // Kick off a one-shot slow fetch after connect — overview/ioexp/selftest/hat.
             // This runs after the connection is established; failures are silently ignored.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            updateOnMain(after: 500_000_000) {
                 self.fetchOverviewOnce()
             }
             return true
@@ -442,7 +463,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         pollTask?.cancel()
         pollTask = nil
         stopPolling()
-        DispatchQueue.main.async {
+        updateOnMain {
             self.activeDevice = nil
             self.connectionState = .disconnected
             self.updateStatus(nil)
@@ -451,6 +472,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             self.lastSelftest = nil
             self.lastHatStatus = nil
             self.lastHatRails = []
+            self.lastUsbPd = nil
             self.lshiftOe = false
         }
         UserDefaults.standard.removeObject(forKey: "bugbuster_ip")
@@ -483,28 +505,42 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                 cycle += 1
 
                 if let status: DeviceStatus = try? await self.performRequest(ip: ip, path: "/api/status", token: token) {
-                    DispatchQueue.main.async { self.updateStatus(status) }
+                    updateOnMain { self.updateStatus(status) }
                 }
 
-                if cycle % 5 == 0 {
+                // Circuit breaker: when the device stops answering, drop to a
+                // 2s probe cadence and skip the multi-request slow cycle so we
+                // don't pile more requests onto a wedged httpd.
+                let degraded = await MainActor.run { self.transportDegraded }
+                if degraded {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
+
+                // Re-check before the multi-request slow cycle: the stream may
+                // have started while /api/status above was in flight.
+                if cycle % 5 == 0 && !ScopeStreamManager.shared.isStreaming {
                     // Slow-cycle: reuse self.session (no new session per cycle) with
                     // per-request timeout override. Sequential so only one TCP
                     // connection is open at a time. /api/overview embeds ioexp.
                     if let ov: OverviewSnapshot = await self.fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
-                        DispatchQueue.main.async {
+                        updateOnMain {
                             self.updateLastOverview(ov)
                         }
                     }
                     if let st: SelftestStatus = await self.fetchDecoded(SelftestStatus.self, ip: ip, path: "/api/selftest", token: token) {
-                        DispatchQueue.main.async { self.lastSelftest = st }
+                        updateOnMain { self.lastSelftest = st }
                     }
                     if let ht: HatStatus = await self.fetchDecoded(HatStatus.self, ip: ip, path: "/api/hat", token: token) {
-                        DispatchQueue.main.async { self.lastHatStatus = ht }
+                        updateOnMain { self.lastHatStatus = ht }
                         if ht.isPresent {
                             if let rr: HatRailsResponse = await self.fetchDecoded(HatRailsResponse.self, ip: ip, path: "/api/hat/v2/rails", token: token) {
-                                DispatchQueue.main.async { self.lastHatRails = rr.rails }
+                                updateOnMain { self.lastHatRails = rr.rails }
                             }
                         }
+                    }
+                    if let pd: USBPDStatus = await self.fetchDecoded(USBPDStatus.self, ip: ip, path: "/api/usbpd", token: token) {
+                        updateOnMain { self.lastUsbPd = pd }
                     }
                 }
 
@@ -542,30 +578,98 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let token = adminToken
         Task {
             if let ov: OverviewSnapshot = await fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
-                DispatchQueue.main.async { self.updateLastOverview(ov) }
+                updateOnMain { self.updateLastOverview(ov) }
             }
             if let st: SelftestStatus = await fetchDecoded(SelftestStatus.self, ip: ip, path: "/api/selftest", token: token) {
-                DispatchQueue.main.async { self.lastSelftest = st }
+                updateOnMain { self.lastSelftest = st }
             }
             if let ht: HatStatus = await fetchDecoded(HatStatus.self, ip: ip, path: "/api/hat", token: token) {
-                DispatchQueue.main.async { self.lastHatStatus = ht }
+                updateOnMain { self.lastHatStatus = ht }
                 if ht.isPresent {
                     if let rr: HatRailsResponse = await fetchDecoded(HatRailsResponse.self, ip: ip, path: "/api/hat/v2/rails", token: token) {
-                        DispatchQueue.main.async { self.lastHatRails = rr.rails }
+                        updateOnMain { self.lastHatRails = rr.rails }
                     }
                 }
+            }
+            if let pd: USBPDStatus = await fetchDecoded(USBPDStatus.self, ip: ip, path: "/api/usbpd", token: token) {
+                updateOnMain { self.lastUsbPd = pd }
             }
         }
     }
     
-    private func fetchDecoded<T: Decodable>(_ type: T.Type, ip: String, path: String, token: String, timeout: TimeInterval = 10.0) async -> T? {
+    // MARK: - Serialized transport core
+
+    /// FIFO gate: at most one control-plane request in flight at a time.
+    /// (An actor method alone does not serialize across `await` suspension
+    /// points, hence the explicit continuation queue.)
+    private actor RequestGate {
+        private var busy = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func acquire() async {
+            if busy {
+                await withCheckedContinuation { waiters.append($0) }
+            } else {
+                busy = true
+            }
+        }
+
+        func release() {
+            if waiters.isEmpty {
+                busy = false
+            } else {
+                waiters.removeFirst().resume()
+            }
+        }
+    }
+
+    private let requestGate = RequestGate()
+
+    /// Single funnel for every control-plane request. Serializes through the
+    /// gate and feeds the transport-health circuit breaker.
+    private func gatedData(for request: URLRequest) async throws -> (Data, URLResponse) {
+        await requestGate.acquire()
+        do {
+            let result = try await session.data(for: request)
+            await requestGate.release()
+            noteTransportSuccess()
+            return result
+        } catch {
+            await requestGate.release()
+            noteTransportFailure(error)
+            throw error
+        }
+    }
+
+    private func noteTransportSuccess() {
+        updateOnMain {
+            self.consecutiveTransportFailures = 0
+            if self.transportDegraded { self.transportDegraded = false }
+        }
+    }
+
+    private func noteTransportFailure(_ error: Error) {
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain,
+              ns.code == NSURLErrorTimedOut
+                || ns.code == NSURLErrorCannotConnectToHost
+                || ns.code == NSURLErrorNetworkConnectionLost else { return }
+        updateOnMain {
+            self.consecutiveTransportFailures += 1
+            if self.consecutiveTransportFailures >= 2 {
+                self.transportDegraded = true
+            }
+        }
+    }
+
+    private func fetchDecoded<T: Decodable>(_ type: T.Type, ip: String, path: String, token: String, timeout: TimeInterval = 5.0) async -> T? {
         var urlStr = ip
         if !urlStr.lowercased().hasPrefix("http://") { urlStr = "http://\(urlStr)" }
         guard let url = URL(string: "\(urlStr)\(path)") else { return nil }
         var req = URLRequest(url: url)
         req.timeoutInterval = timeout
         if !token.isEmpty { req.setValue(token, forHTTPHeaderField: "X-BugBuster-Admin-Token") }
-        guard let (data, resp) = try? await session.data(for: req),
+        guard let (data, resp) = try? await gatedData(for: req),
               (resp as? HTTPURLResponse)?.statusCode ?? 0 < 300 else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
@@ -585,7 +689,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             request.setValue(token, forHTTPHeaderField: "X-BugBuster-Admin-Token")
         }
         
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await gatedData(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
             throw URLError(.badServerResponse)
         }
@@ -611,7 +715,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: json)
         
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await gatedData(for: request)
         guard let httpResponse = response as? HTTPURLResponse else { return false }
         return (200...299).contains(httpResponse.statusCode)
     }
@@ -625,7 +729,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         do {
             let ok = try await postAction(path: "/api/lshift/oe", json: ["on": on])
             if ok {
-                DispatchQueue.main.async {
+                updateOnMain {
                     self.lshiftOe = on
                 }
             }
@@ -655,7 +759,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             powerGood: overview.ioexp.powerGood,
             efuses:    overview.ioexp.efuses
         )
-        DispatchQueue.main.async {
+        updateOnMain {
             self.lastOverview = OverviewSnapshot(
                 idac:  overview.idac,
                 ioexp: newIoExp,
@@ -681,7 +785,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             powerGood: overview.ioexp.powerGood,
             efuses:    updated
         )
-        DispatchQueue.main.async {
+        updateOnMain {
             self.lastOverview = OverviewSnapshot(
                 idac:  overview.idac,
                 ioexp: newIoExp,
@@ -691,7 +795,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
 
     public func applyOptimisticHatRailEnable(railId: Int, enabled: Bool) {
-        DispatchQueue.main.async {
+        updateOnMain {
             self.lastHatRails = self.lastHatRails.map { r in
                 r.railId == railId ? HatRail(railId: r.railId, enabled: enabled, voltageMv: r.voltageMv, currentMa: r.currentMa, status: r.status) : r
             }
@@ -703,7 +807,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let ip = device.ip; let token = adminToken
         Task {
             if let rr: HatRailsResponse = await fetchDecoded(HatRailsResponse.self, ip: ip, path: "/api/hat/v2/rails", token: token) {
-                DispatchQueue.main.async { self.lastHatRails = rr.rails }
+                updateOnMain { self.lastHatRails = rr.rails }
             }
         }
     }
@@ -715,8 +819,33 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let token = adminToken
         Task {
             if let ov: OverviewSnapshot = await fetchDecoded(OverviewSnapshot.self, ip: ip, path: "/api/overview", token: token) {
-                DispatchQueue.main.async { self.updateLastOverview(ov) }
+                updateOnMain { self.updateLastOverview(ov) }
             }
+        }
+    }
+
+    public func fetchUsbPdQuick() {
+        guard connectionState == .connected, let device = activeDevice else { return }
+        let ip = device.ip; let token = adminToken
+        Task {
+            if let pd: USBPDStatus = await fetchDecoded(USBPDStatus.self, ip: ip, path: "/api/usbpd", token: token) {
+                updateOnMain { self.lastUsbPd = pd }
+            }
+        }
+    }
+
+    public func setUsbPdVoltage(_ voltage: Int) async -> Bool {
+        do {
+            let ok = try await postAction(path: "/api/usbpd/select", json: ["voltage": voltage])
+            if ok {
+                // Optimistically fetch updated status after a short delay for negotiation
+                updateOnMain(after: 1_000_000_000) {
+                    self.fetchUsbPdQuick()
+                }
+            }
+            return ok
+        } catch {
+            return false
         }
     }
 
@@ -735,4 +864,21 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         )
         self.lastIoExp = newIoExp
     }
+
+    public func fetchCalibrationPoints(ch: Int) async -> [CalibrationPoint] {
+        guard connectionState == .connected, let device = activeDevice else { return [] }
+        let ip = device.ip; let token = adminToken
+        if let res: CalibrationPointsResponse = await fetchDecoded(CalibrationPointsResponse.self, ip: ip, path: "/api/idac/cal/points?ch=\(ch)", token: token) {
+            return res.points
+        }
+        return []
+    }
 }
+
+public struct CalibrationPointsResponse: Codable {
+    public let ch: Int
+    public let count: Int
+    public let valid: Bool
+    public let points: [CalibrationPoint]
+}
+

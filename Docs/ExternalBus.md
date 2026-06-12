@@ -93,6 +93,7 @@ physical IO number equals GPIO number.
 - Do not enable `allow_split_supplies` unless the target wiring is intentional.
 - The MUX matrix gives each IO one active path; using a bus route will replace
   conflicting paths for the selected IO group.
+- The external I2C/SPI controllers are shared. On-device MicroPython exposes `i2c.close()` and `spi.close()` to release them before wiring different pin groups; while a controller is active, a second setup on different pins fails with a clear error instead of stealing the bus.
 - HTTP direct bus operations exist, but deferred jobs are currently USB BBP only.
 
 ---

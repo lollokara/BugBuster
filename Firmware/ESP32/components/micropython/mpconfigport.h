@@ -85,16 +85,54 @@
 
 // ── Disable modules that require port-specific C source files ─────────────────
 // These are enabled in the official ESP32 port but we don't include those files.
-#define MICROPY_PY_MACHINE                  (0)
+#define MICROPY_PY_MACHINE                  (1)
+#define MICROPY_PY_MACHINE_INCLUDEFILE      "ports/esp32/modmachine.c"
+#define MICROPY_PY_SYS_EXIT                 (1)
+#define MICROPY_PY_MACHINE_CAN              (0)
+#define MICROPY_PY_MACHINE_ADC              (0)
+#define MICROPY_PY_MACHINE_ADC_INCLUDEFILE  "ports/esp32/machine_adc.c"
+#define MICROPY_PY_MACHINE_ADC_BLOCK        (0)
+#define MICROPY_PY_MACHINE_ADC_BLOCK_INCLUDEFILE "ports/esp32/machine_adc_block.c"
+#define MICROPY_PY_MACHINE_PIN_MAKE_NEW     mp_pin_make_new
+#define MICROPY_PY_MACHINE_PWM              (0)
+#define MICROPY_PY_MACHINE_PWM_INCLUDEFILE  "ports/esp32/machine_pwm.c"
+#define MICROPY_PY_MACHINE_I2S              (0)
+#define MICROPY_PY_MACHINE_I2S_INCLUDEFILE  "ports/esp32/machine_i2s.c"
+#define MICROPY_PY_MACHINE_UART             (0)
+#define MICROPY_PY_MACHINE_UART_INCLUDEFILE "ports/esp32/machine_uart.c"
+#define MICROPY_PY_MACHINE_WDT              (1)
+#define MICROPY_PY_MACHINE_WDT_INCLUDEFILE  "ports/esp32/machine_wdt.c"
 #define MICROPY_PY_NETWORK                  (0)
 #define MICROPY_PY_ESPNOW                   (0)
 #define MICROPY_PY_BLUETOOTH                (0)
 #define MICROPY_PY_SSL                      (0)
 #define MICROPY_PY_WEBSOCKET                (0)
 #define MICROPY_PY_WEBREPL                  (0)
-#define MICROPY_PY_ONEWIRE                  (0)
+#define MICROPY_PY_ONEWIRE                  (1)
+#define MICROPY_PY_MACHINE_BITSTREAM        (0)
+#define MICROPY_PY_MACHINE_DHT_READINTO     (0)
+#define MICROPY_PY_MACHINE_PULSE            (0)
+#define MICROPY_PY_MACHINE_PWM_DUTY         (0)
+#define MICROPY_PY_MACHINE_ADC_ATTEN_WIDTH  (0)
+#define MICROPY_PY_MACHINE_ADC_INIT         (0)
+#define MICROPY_PY_MACHINE_ADC_DEINIT       (0)
+#define MICROPY_PY_MACHINE_ADC_READ         (0)
+#define MICROPY_PY_MACHINE_ADC_READ_UV      (0)
+#define MICROPY_PY_MACHINE_I2C               (1)
+#define MICROPY_PY_MACHINE_I2C_TRANSFER_WRITE1 (1)
+#define MICROPY_PY_MACHINE_SOFTI2C          (1)
+#define MICROPY_PY_MACHINE_SPI              (1)
+#define MICROPY_PY_MACHINE_SOFTSPI          (1)
+#define MICROPY_PY_MACHINE_UART_SENDBREAK   (0)
+#define MICROPY_PY_MACHINE_UART_IRQ         (0)
+#define MICROPY_PY_MACHINE_I2S_FINALISER    (0)
 #define MICROPY_HW_ENABLE_SDCARD            (0)
 #define MICROPY_HW_ENABLE_USBDEV            (0)
+
+#define MICROPY_PY_MACHINE_TIMER            (0)
+#define MICROPY_PY_MACHINE_RTC              (0)
+#define MICROPY_PY_MACHINE_TOUCHPAD         (0)
+#define MICROPY_PY_MACHINE_SIGNAL           (0)
 
 // ── builtins ──────────────────────────────────────────────────────────────────
 #define MICROPY_PY_STR_BYTES_CMP_WARN       (1)

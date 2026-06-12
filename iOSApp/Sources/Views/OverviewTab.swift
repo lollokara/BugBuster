@@ -64,17 +64,45 @@ struct OverviewTab: View {
                 channelsGrid
                 suppliesCard
                 presetsCard
-                Spacer(minLength: 100)
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
-            .padding(.bottom, 24)
+            .padding(.bottom, 12)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             headerSection
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
                 .padding(.bottom, 10)
+                .background(
+                    // Blurred scrim: material + dark wash, faded out at the
+                    // bottom edge by the mask so there is no visible box line.
+                    ZStack {
+                        Rectangle().fill(.ultraThinMaterial)
+                        LinearGradient(
+                            stops: [
+                                .init(color: Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.92), location: 0.0),
+                                .init(color: Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.78), location: 0.65),
+                                .init(color: Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.55), location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+                    .compositingGroup()
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0.0),
+                                .init(color: .black, location: 0.72),
+                                .init(color: .clear, location: 1.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .ignoresSafeArea(edges: .top)
+                )
         }
         .background(
             LinearGradient(
@@ -88,10 +116,10 @@ struct OverviewTab: View {
             loadQuicksetups()
             updateSlidersFromModel()
         }
-        .onChange(of: connectionManager.lastOverview?.idac) { _ in
+        .onChange(of: connectionManager.lastOverview?.idac) { _, _ in
             updateSlidersFromModel()
         }
-        .onChange(of: connectionManager.lastHatRails) { _ in
+        .onChange(of: connectionManager.lastHatRails) { _, _ in
             updateHatSlidersFromModel()
         }
 
@@ -120,15 +148,15 @@ struct OverviewTab: View {
             HStack(spacing: 12) {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(Color.green)
+                        .fill(connectionManager.transportDegraded ? Color.orange : Color.green)
                         .frame(width: 8, height: 8)
-                    Text("Live")
+                    Text(connectionManager.transportDegraded ? "Busy" : "Live")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(.black)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .glassEffect(.regular.tint(.green), in: Capsule())
+                .glassEffect(.regular.tint(connectionManager.transportDegraded ? .orange : .green), in: Capsule())
 
                 Button(action: { connectionManager.disconnect() }) {
                     Image(systemName: "power")
@@ -139,26 +167,8 @@ struct OverviewTab: View {
                 }
             }
         }
-        .padding(16)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(Color(red: 0.05, green: 0.08, blue: 0.14).opacity(0.35))
-                .background(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.20), Color.white.opacity(0.05)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
-                )
-                .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 8)
-        )
-        .padding(.horizontal, 0)
     }
 
     // MARK: - AFE Channels Grid (with sparklines)
@@ -210,12 +220,12 @@ struct OverviewTab: View {
                                         .foregroundColor(accent.opacity(0.85))
                                         .padding(.horizontal, 4)
                                         .padding(.vertical, 2)
-                                        .glassEffect(.regular.tint(accent), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                        .glassEffect(.regular.tint(accent.opacity(0.14)), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                                 }
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .glassEffect(.regular.tint(accent), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .glassEffect(.regular.tint(accent.opacity(0.12)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .stroke(accent.opacity(0.32), lineWidth: 1)

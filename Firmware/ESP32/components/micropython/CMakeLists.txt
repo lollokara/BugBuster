@@ -48,6 +48,8 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # ── Port sources (our minimal HAL) ────────────────────────────────────────
     list(APPEND MICROPY_SOURCE_PORT
         ${CMAKE_CURRENT_LIST_DIR}/mphalport.c
+        ${CMAKE_CURRENT_LIST_DIR}/machine_pin.c
+        ${MICROPY_DIR}/drivers/bus/softspi.c
     )
 
     # ── BugBuster app sources that contain qstr/module-registration macros ────
@@ -63,6 +65,15 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_hat.c
     )
 
+    # MicroPython extmod machine sources that are compiled in by mpconfigport.h
+    # when machine.Pin is enabled, but are not always picked up by the generic
+    # extmod source list on this build setup. Add them explicitly so qstr
+    # generation sees the same sources the compiler will.
+    list(APPEND MICROPY_SOURCE_QSTR_EXTRA
+        ${MICROPY_DIR}/extmod/machine_mem.c
+        ${MICROPY_DIR}/extmod/machine_signal.c
+    )
+
     # ── qstr source list (all sources that contain Q(...) macros) ─────────────
     list(APPEND MICROPY_SOURCE_QSTR
         ${MICROPY_SOURCE_PY}
@@ -70,6 +81,45 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ${MICROPY_SOURCE_SHARED}
         ${MICROPY_SOURCE_PORT}
         ${MICROPY_SOURCE_BUGBUSTER}
+        ${MICROPY_SOURCE_QSTR_EXTRA}
+    )
+
+    # qstr generation only sees CMake compile definitions, not mpconfigport.h.
+    # Mirror the enabled machine feature macros here so the generated qstr
+    # header includes the machine/extmod symbols compiled by this port.
+    list(APPEND MICROPY_DEF_CORE
+        MICROPY_PY_MACHINE=1
+        MICROPY_PY_MACHINE_RESET=1
+        MICROPY_PY_MACHINE_BARE_METAL_FUNCS=1
+        MICROPY_PY_MACHINE_DISABLE_IRQ_ENABLE_IRQ=1
+        MICROPY_PY_MACHINE_MEMX=0
+        MICROPY_PY_MACHINE_SIGNAL=0
+        MICROPY_PY_MACHINE_BITSTREAM=0
+        MICROPY_PY_MACHINE_DHT_READINTO=0
+        MICROPY_PY_MACHINE_PULSE=0
+        MICROPY_PY_MACHINE_PWM=0
+        MICROPY_PY_MACHINE_PWM_DUTY=0
+        MICROPY_PY_MACHINE_ADC=0
+        MICROPY_PY_MACHINE_ADC_ATTEN_WIDTH=0
+        MICROPY_PY_MACHINE_ADC_INIT=0
+        MICROPY_PY_MACHINE_ADC_DEINIT=0
+        MICROPY_PY_MACHINE_ADC_READ=0
+        MICROPY_PY_MACHINE_ADC_READ_UV=0
+        MICROPY_PY_MACHINE_ADC_BLOCK=0
+        MICROPY_PY_MACHINE_I2C=1
+        MICROPY_PY_MACHINE_I2C_TRANSFER_WRITE1=1
+        MICROPY_PY_MACHINE_SOFTI2C=1
+        MICROPY_PY_MACHINE_SPI=1
+        MICROPY_PY_MACHINE_SOFTSPI=1
+        MICROPY_PY_MACHINE_UART=0
+        MICROPY_PY_MACHINE_UART_SENDBREAK=0
+        MICROPY_PY_MACHINE_UART_IRQ=0
+        MICROPY_PY_MACHINE_WDT=1
+        MICROPY_PY_MACHINE_I2S=0
+        MICROPY_PY_MACHINE_I2S_FINALISER=0
+        MICROPY_PY_MACHINE_TIMER=0
+        MICROPY_PY_MACHINE_RTC=0
+        MICROPY_PY_MACHINE_TOUCHPAD=0
     )
 
     # Port qstr definitions
@@ -137,6 +187,16 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     )
 endif()
 
+# Resolve the root of the installed ESP-IDF components early so both the
+# component registration and the qstr preprocessor can use the same paths.
+set(_IDF_COMP $ENV{IDF_PATH}/components)
+if(NOT EXISTS ${_IDF_COMP}/freertos)
+    # PlatformIO stores IDF in a different location.
+    get_filename_component(_IDF_COMP
+        ${CMAKE_CURRENT_LIST_DIR}/../../../../.platformio/packages/framework-espidf/components
+        ABSOLUTE)
+endif()
+
 # ── Register the IDF component ────────────────────────────────────────────────
 idf_component_register(
     SRCS
@@ -152,6 +212,14 @@ idf_component_register(
         ${CMAKE_CURRENT_LIST_DIR}/shim
         ${CMAKE_BINARY_DIR}
         ${MICROPY_GENHDR_DIR}
+        ${_IDF_COMP}/esp_driver_i2c/include
+        ${_IDF_COMP}/esp_driver_i2s/include
+        ${_IDF_COMP}/esp_driver_ledc/include
+        ${_IDF_COMP}/esp_driver_uart/include
+        ${_IDF_COMP}/esp_pm/include
+        ${_IDF_COMP}/esp_adc/include
+        ${_IDF_COMP}/esp_adc/interface
+        ${_IDF_COMP}/esp_adc/esp32s3/include
     REQUIRES
         ${IDF_COMPONENTS}
 )
@@ -233,23 +301,26 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # Add essential IDF component include paths that appear as generator expressions
     # in target properties (and thus were skipped above). These are needed for the
     # qstrdefs preprocessing step which runs the C preprocessor at configure time.
-    set(_IDF_COMP $ENV{IDF_PATH}/components)
-    # Also handle PlatformIO's framework-espidf path
-    if(NOT EXISTS ${_IDF_COMP}/freertos)
-        # PlatformIO stores IDF in a different location
-        get_filename_component(_IDF_COMP
-            ${CMAKE_CURRENT_LIST_DIR}/../../../../.platformio/packages/framework-espidf/components
-            ABSOLUTE)
-    endif()
-
     if(EXISTS ${_IDF_COMP}/freertos)
         # FreeRTOS
         list(APPEND MICROPY_CPP_FLAGS
             "-I${_IDF_COMP}/freertos/FreeRTOS-Kernel/include"
             "-I${_IDF_COMP}/freertos/FreeRTOS-Kernel/portable/xtensa/include"
+            "-I${_IDF_COMP}/freertos/FreeRTOS-Kernel/portable/xtensa/include/freertos"
             "-I${_IDF_COMP}/freertos/esp_additions/include"
             "-I${_IDF_COMP}/freertos/esp_additions/include/freertos"
+            "-I${_IDF_COMP}/freertos/config/include"
+            "-I${_IDF_COMP}/freertos/config/include/freertos"
+            "-I${_IDF_COMP}/freertos/config/xtensa/include"
             "-I${_IDF_COMP}/freertos/FreeRTOS-Kernel/include/freertos"
+            "-I${_IDF_COMP}/esp_driver_gpio/include"
+            "-I${_IDF_COMP}/esp_driver_i2c/include"
+            "-I${_IDF_COMP}/esp_driver_i2s/include"
+            "-I${_IDF_COMP}/esp_driver_ledc/include"
+            "-I${_IDF_COMP}/esp_driver_uart/include"
+            "-I${_IDF_COMP}/esp_adc/include"
+            "-I${_IDF_COMP}/esp_adc/interface"
+            "-I${_IDF_COMP}/esp_adc/esp32s3/include"
         )
         # esp_common, esp_system, esp_rom, newlib, soc, hal
         list(APPEND MICROPY_CPP_FLAGS
@@ -269,6 +340,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
             "-I${_IDF_COMP}/esp_hw_support/include"
             "-I${_IDF_COMP}/esp_hw_support/include/soc"
             "-I${_IDF_COMP}/esp_hw_support/port/esp32s3/include"
+            "-I${_IDF_COMP}/esp_pm/include"
             "-I${_IDF_COMP}/xtensa/include"
             "-I${_IDF_COMP}/xtensa/esp32s3/include"
             "-DESP_PLATFORM"
@@ -276,6 +348,44 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
             "-DGCC_NOT_5_2_0=0"
         )
     endif()
+
+    # qstr generation needs the same machine feature gates as the runtime
+    # build so extmod/machine_*.c and modonewire.c emit their qstrs.
+    list(APPEND MICROPY_CPP_FLAGS
+        "-DMICROPY_PY_MACHINE=1"
+        "-DMICROPY_PY_MACHINE_RESET=1"
+        "-DMICROPY_PY_MACHINE_BARE_METAL_FUNCS=1"
+        "-DMICROPY_PY_MACHINE_DISABLE_IRQ_ENABLE_IRQ=1"
+        "-DMICROPY_PY_MACHINE_MEMX=0"
+        "-DMICROPY_PY_MACHINE_SIGNAL=0"
+        "-DMICROPY_PY_MACHINE_BITSTREAM=0"
+        "-DMICROPY_PY_MACHINE_DHT_READINTO=0"
+        "-DMICROPY_PY_MACHINE_PULSE=0"
+        "-DMICROPY_PY_MACHINE_PWM=0"
+        "-DMICROPY_PY_MACHINE_PWM_DUTY=0"
+        "-DMICROPY_PY_MACHINE_ADC=0"
+        "-DMICROPY_PY_MACHINE_ADC_ATTEN_WIDTH=0"
+        "-DMICROPY_PY_MACHINE_ADC_INIT=0"
+        "-DMICROPY_PY_MACHINE_ADC_DEINIT=0"
+        "-DMICROPY_PY_MACHINE_ADC_READ=0"
+        "-DMICROPY_PY_MACHINE_ADC_READ_UV=0"
+        "-DMICROPY_PY_MACHINE_ADC_BLOCK=0"
+        "-DMICROPY_PY_MACHINE_I2C=1"
+        "-DMICROPY_PY_MACHINE_I2C_TRANSFER_WRITE1=1"
+        "-DMICROPY_PY_MACHINE_SOFTI2C=1"
+        "-DMICROPY_PY_MACHINE_SPI=1"
+        "-DMICROPY_PY_MACHINE_SOFTSPI=1"
+        "-DMICROPY_PY_MACHINE_UART=0"
+        "-DMICROPY_PY_MACHINE_UART_SENDBREAK=0"
+        "-DMICROPY_PY_MACHINE_UART_IRQ=0"
+        "-DMICROPY_PY_MACHINE_WDT=1"
+        "-DMICROPY_PY_MACHINE_I2S=0"
+        "-DMICROPY_PY_MACHINE_I2S_FINALISER=0"
+        "-DMICROPY_PY_ONEWIRE=1"
+        "-DMICROPY_PY_MACHINE_TIMER=0"
+        "-DMICROPY_PY_MACHINE_RTC=0"
+        "-DMICROPY_PY_MACHINE_TOUCHPAD=0"
+    )
 
     # ── Step 1: mpversion.h ───────────────────────────────────────────────────
     set(MICROPY_MPVERSION ${MICROPY_GENHDR_DIR}/mpversion.h)

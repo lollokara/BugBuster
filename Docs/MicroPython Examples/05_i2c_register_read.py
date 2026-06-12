@@ -16,7 +16,7 @@ import bugbuster
 print("Reading temperature from TMP102-like sensor at 0x48...")
 
 try:
-    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=100000, pullups='external')
+    i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=100000, pullups='external', supply=3.3, vlogic=3.3)
 
     # Read two bytes from register 0x00 (temperature register)
     data = i2c.writeto_then_readfrom(0x48, b'\x00', 2)

@@ -217,7 +217,7 @@ struct ScopeTab: View {
                 }
             }
             .padding(.horizontal)
-            .padding(.top, 16)
+            .padding(.top, 4)
             
             // Scope screen graph
             GeometryReader { geometry in
@@ -385,11 +385,13 @@ struct ScopeTab: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .padding()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             
             // Channel legend selector
             GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 12) {
+                let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+                LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(0..<4) { ch in
                         Button(action: {
                             withAnimation {
@@ -404,8 +406,7 @@ struct ScopeTab: View {
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                                     .foregroundColor(activeChannels[ch] ? .white : .secondary)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, minHeight: 42)
                             .glassEffect(
                                 activeChannels[ch]
                                     ? .regular.tint(ACCENTS[ch])
@@ -413,11 +414,12 @@ struct ScopeTab: View {
                                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                             )
                         }
+                        .frame(maxWidth: .infinity, minHeight: 42)
                         .buttonStyle(.plain)
                     }
                 }
             }
-            .padding(.bottom, 90)
+            .padding(.bottom, 10)
         }
         .sheet(isPresented: $showingSettings) {
             ScopeSettingsView(

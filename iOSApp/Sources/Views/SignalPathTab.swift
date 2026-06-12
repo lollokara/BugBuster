@@ -95,7 +95,6 @@ struct SignalPathTab: View {
                         }
                         .padding()
 
-                        Spacer(minLength: 90)
                     }
                 }
             }

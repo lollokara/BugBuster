@@ -17,6 +17,7 @@ extern "C" {
 
 bool ext_i2c_setup(uint8_t sda_gpio, uint8_t scl_gpio, uint32_t frequency_hz, bool internal_pullups);
 bool ext_i2c_ready(void);
+bool ext_i2c_close(void);
 void ext_i2c_get_status(bool *ready, uint8_t *sda_gpio, uint8_t *scl_gpio,
                         uint32_t *frequency_hz, bool *internal_pullups);
 bool ext_i2c_scan(uint8_t start_addr, uint8_t stop_addr, bool skip_reserved,
@@ -30,6 +31,7 @@ bool ext_i2c_write_read(uint8_t addr, const uint8_t *wr_data, size_t wr_len,
 bool ext_spi_setup(uint8_t sck_gpio, uint8_t mosi_gpio, uint8_t miso_gpio, uint8_t cs_gpio,
                    uint32_t frequency_hz, uint8_t mode);
 bool ext_spi_ready(void);
+bool ext_spi_close(void);
 void ext_spi_get_status(bool *ready, uint8_t *sck_gpio, uint8_t *mosi_gpio,
                         uint8_t *miso_gpio, uint8_t *cs_gpio,
                         uint32_t *frequency_hz, uint8_t *mode);

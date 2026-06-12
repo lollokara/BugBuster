@@ -184,6 +184,7 @@ addrs = i2c.scan()                                           # [0x48, 0x68, ...]
 i2c.writeto(0x48, b'\x01\x80')                              # Write bytes
 data = i2c.readfrom(0x48, 2)                                # Read N bytes
 data = i2c.writeto_then_readfrom(0x48, b'\x00', 2)          # Write, then read
+i2c.close()                                                 # Release the shared controller
 ```
 
 **Constructor arguments:**
@@ -194,6 +195,7 @@ data = i2c.writeto_then_readfrom(0x48, b'\x00', 2)          # Write, then read
 - `vlogic` — logic-level voltage (3.3 or 5.0 V); default 3.3 V
 
 **Methods:**
+- `close()` — release the shared external I2C controller so another wire pair can be configured
 - `scan(start=0x08, stop=0x77, skip_reserved=True, timeout_ms=50)` — find all responding 7-bit addresses; returns `list[int]`
 - `writeto(addr, buf, timeout_ms=50)` — write bytes to address
 - `readfrom(addr, n, timeout_ms=50)` — read N bytes from address
@@ -209,6 +211,7 @@ data = i2c.writeto_then_readfrom(0x48, b'\x00', 2)          # Write, then read
 spi = bugbuster.SPI(sck_io=4, mosi_io=5, miso_io=6, cs_io=7, 
                      freq=1_000_000, mode=0, supply=3.3, vlogic=3.3)
 rx = spi.transfer(b'\x9F\x00\x00\x00')                       # bytes
+spi.close()                                                  # Release the shared controller
 ```
 
 **Constructor arguments:**
@@ -220,6 +223,7 @@ rx = spi.transfer(b'\x9F\x00\x00\x00')                       # bytes
 
 **Methods:**
 - `transfer(buf)` — full-duplex SPI transfer; returns `bytes` (same length as input)
+- `close()` — release the shared external SPI controller so another wire group can be configured
 
 **Limits:** Single transfer ≤ 512 bytes.
 
@@ -304,23 +308,69 @@ bb_helpers.channel_sweep(0, [0.0, 2.5, 5.0], readback=False)
 import bb_devices
 import bugbuster
 
-# TMP102 temperature sensor
-i2c = bugbuster.I2C(sda_io=2, scl_io=3, freq=400000, pullups='external')
-sensor = bb_devices.TMP102(i2c, addr=0x48)
-print('Temp: %.2f C' % sensor.read_celsius())
+# OneWire / DS18B20 temperature sensor.
+# Wire the data line to an ESP32 GPIO and add a 4.7 kOhm pull-up to 3.3 V.
+sensor = bb_devices.DS18B20(2)
+print(sensor.read_all())
 
-# BMP280 pressure/temperature (raw ADC values)
-bmp = bb_devices.BMP280(i2c, addr=0x76)
-t_raw, p_raw = bmp.read()
-print('Temp raw: %d  Pressure raw: %d' % (t_raw, p_raw))
+# I2C devices all share the same bus object.
+i2c = bugbuster.I2C(1, 2, freq=400000, pullups='external', supply=3.3, vlogic=3.3)
 
-# MCP3008 SPI 8-channel ADC
-spi = bugbuster.SPI(sck_io=4, mosi_io=5, miso_io=6, cs_io=7, freq=1_000_000)
-adc = bb_devices.MCP3008(spi)
-raw = adc.read(channel=0)
-volts = raw * 3.3 / 1023.0
-print('CH0: %.3f V' % volts)
+rtc = bb_devices.DS3231(i2c)
+print(rtc.read_datetime(), '%.2f C' % rtc.temperature_c())
+
+light = bb_devices.BH1750(i2c)
+print('Lux: %.1f' % light.read_lux())
+
+env = bb_devices.BME280(i2c)
+temp_c, pressure_pa, humidity = env.read()
+print('T=%.2f C  P=%.0f Pa  RH=%.1f%%' % (temp_c, pressure_pa, humidity))
+
+display = bb_devices.SSD1306(128, 64, i2c)
+display.fill(0)
+display.text('BugBuster', 0, 0, 1)
+display.text('Scripts tab', 0, 12, 1)
+display.show()
 ```
+
+`bb_devices` bundles small, educational drivers for the most common bench parts:
+
+| Device | Notes |
+|---|---|
+| `DS18B20` | OneWire sensor. Requires `machine.Pin`, `onewire`, `ds18x20`, and a 4.7 kOhm pull-up. |
+| `DS3231` | RTC plus temperature readback. |
+| `BH1750`, `AHT20`, `SHT31`, `BME280` | Ambient light, humidity, and environmental sensors. |
+| `INA219`, `ADS1115` | Current/power monitor and precision ADC. |
+| `MCP23017`, `PCF8574`, `PCA9685` | GPIO expanders and PWM driver. `MCP23017` includes per-pin `pin_mode()`, `set_dir()`, and `set_pullup()` helpers. |
+| `TCS34725`, `MPU6050` | Color sensor and IMU. |
+| `MCP4725` | 12-bit I2C DAC. |
+| `SSD1306` | I2C OLED wrapper over the upstream MicroPython driver. |
+
+I2C/SPI setup rule of thumb:
+
+- Use one `I2C(...)` or `SPI(...)` object for every device on the same pin group.
+- If you wire a second bus on a different pin group while the first one is active, the constructor fails cleanly instead of stealing the controller.
+- If the planner cannot route the bus or power domain, the constructor raises an error instead of silently half-configuring the target.
+- If you need to move the shared controller to a different pin group, call `i2c.close()` or `spi.close()` first, then create a new bus object on the new pins.
+- If the external controller is already in use on a different pin group, the constructor fails cleanly instead of stealing the active bus.
+
+New device examples live beside the existing scripts:
+
+- `15_mcp4725_dac.py` - MCP4725 DAC sweep
+- `17_ds18b20_1wire.py` - OneWire temperature readout
+- `18_ds3231_rtc.py` - RTC and temperature readback
+- `19_bh1750_lux.py` - Ambient light readout
+- `20_aht20_humidity.py` - Humidity and temperature
+- `21_sht31_humidity.py` - Humidity and temperature
+- `22_bme280_environment.py` - Temperature, pressure, humidity
+- `23_ina219_power.py` - Bus voltage, shunt voltage, current, power
+- `24_ads1115_adc.py` - Precision ADC voltage read
+- `25_mcp23017_gpio.py` - 16-bit GPIO expander
+- `26_pcf8574_gpio.py` - 8-bit GPIO expander
+- `27_pca9685_pwm.py` - PWM output demo
+- `28_tcs34725_color.py` - RGB color readout
+- `29_mpu6050_imu.py` - Accelerometer and gyro readout
+- `30_ssd1306_display.py` - OLED text demo
 
 #### `bb_logging`
 
@@ -409,7 +459,7 @@ bb = connect_usb('/dev/cu.usbmodem...')
 @on_device
 def read_sensor():
     import bb_devices, bugbuster
-    i2c = bugbuster.I2C(sda_io=2, scl_io=3)
+    i2c = bugbuster.I2C(sda_io=2, scl_io=3, supply=3.3, vlogic=3.3)
     sensor = bb_devices.TMP102(i2c)
     temp = sensor.read_celsius()
     print(repr(temp))  # Return via print(repr(...))
@@ -455,6 +505,9 @@ See the examples folder for V2-specific scripts:
 - **`11_frozen_helpers.py`** — uses `bb_helpers.dac_ramp()` and `bb_devices.TMP102()`
 - **`12_network_post.py`** — HTTP POST to a remote endpoint with HTTPS
 - **`13_on_device_decorator.py`** — shows the host-side `@on_device` decorator usage pattern
+- **`15_mcp4725_dac.py`** — MCP4725 DAC control through `bb_devices.MCP4725()`
+- **`17_ds18b20_1wire.py`** — OneWire temperature readout with `bb_devices.DS18B20()`
+- **`30_ssd1306_display.py`** — OLED text output using `bb_devices.SSD1306()`
 
 Classic examples (still valid):
 - **`02_channel_voltage_sweep.py`** — sweep 0–5 V on channel 0 with ADC readback

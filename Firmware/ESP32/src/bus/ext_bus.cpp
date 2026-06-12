@@ -142,6 +142,35 @@ bool ext_i2c_ready(void)
     return s_i2c_ready;
 }
 
+bool ext_i2c_close(void)
+{
+    if (s_i2c_mutex == nullptr) {
+        return true;
+    }
+
+    if (xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return false;
+    }
+
+    if (s_i2c_ready) {
+        esp_err_t err = i2c_driver_delete(EXT_I2C_PORT);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "External I2C close failed: %s", esp_err_to_name(err));
+            xSemaphoreGive(s_i2c_mutex);
+            return false;
+        }
+        s_i2c_ready = false;
+        s_sda_gpio = 0xFF;
+        s_scl_gpio = 0xFF;
+        s_frequency_hz = 0;
+        s_i2c_internal_pullups = false;
+        ESP_LOGI(TAG, "External I2C closed");
+    }
+
+    xSemaphoreGive(s_i2c_mutex);
+    return true;
+}
+
 void ext_i2c_get_status(bool *ready, uint8_t *sda_gpio, uint8_t *scl_gpio,
                         uint32_t *frequency_hz, bool *internal_pullups)
 {
@@ -318,6 +347,36 @@ bool ext_spi_setup(uint8_t sck_gpio, uint8_t mosi_gpio, uint8_t miso_gpio, uint8
 bool ext_spi_ready(void)
 {
     return s_spi_dev != nullptr;
+}
+
+bool ext_spi_close(void)
+{
+    if (s_spi_mutex == nullptr) {
+        return true;
+    }
+
+    if (xSemaphoreTake(s_spi_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return false;
+    }
+
+    if (s_spi_dev != nullptr) {
+        spi_bus_remove_device(s_spi_dev);
+        s_spi_dev = nullptr;
+    }
+    if (s_spi_bus_ready) {
+        spi_bus_free(EXT_SPI_HOST);
+        s_spi_bus_ready = false;
+    }
+    s_spi_sck_gpio = 0xFF;
+    s_spi_mosi_gpio = 0xFF;
+    s_spi_miso_gpio = 0xFF;
+    s_spi_cs_gpio = 0xFF;
+    s_spi_frequency_hz = 0;
+    s_spi_mode = 0;
+    ESP_LOGI(TAG, "External SPI closed");
+
+    xSemaphoreGive(s_spi_mutex);
+    return true;
 }
 
 void ext_spi_get_status(bool *ready, uint8_t *sck_gpio, uint8_t *mosi_gpio,

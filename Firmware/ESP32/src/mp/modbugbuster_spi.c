@@ -154,12 +154,22 @@ static mp_obj_t bugbuster_spi_transfer(mp_obj_t self_in, mp_obj_t buf_in)
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(bugbuster_spi_transfer_obj, bugbuster_spi_transfer);
 
+static mp_obj_t bugbuster_spi_close(mp_obj_t self_in) {
+    (void)self_in;
+    if (!bugbuster_mp_spi_close()) {
+        mp_raise_OSError(MP_EIO);
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(bugbuster_spi_close_obj, bugbuster_spi_close);
+
 // ---------------------------------------------------------------------------
 // Type definition
 // ---------------------------------------------------------------------------
 
 static const mp_rom_map_elem_t bugbuster_spi_locals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_transfer), MP_ROM_PTR(&bugbuster_spi_transfer_obj) },
+    { MP_ROM_QSTR(MP_QSTR_close),    MP_ROM_PTR(&bugbuster_spi_close_obj) },
 };
 static MP_DEFINE_CONST_DICT(bugbuster_spi_locals_dict, bugbuster_spi_locals_table);
 
