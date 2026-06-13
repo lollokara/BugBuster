@@ -26,40 +26,42 @@ def register(device) -> None:
 
 # ---------------------------------------------------------------------------
 # ADGS mutual-exclusion helper
-# Device index 3 (U23 selftest) is exempt from the one-switch-at-a-time rule.
+# Each main device has three independent physical IO groups:
+# S1-S4, S5-S6, and S7-S8. Only switches inside one group are exclusive.
 # ---------------------------------------------------------------------------
 
-_ADGS_SELFTEST_IDX = 3  # U23 — exempt from mutual-exclusion enforcement
+_GROUP_MASKS = (0x0F, 0x30, 0xC0)
+
+
+def _group_mask_for_switch(sw_idx: int) -> int:
+    if sw_idx < 4:
+        return _GROUP_MASKS[0]
+    if sw_idx < 6:
+        return _GROUP_MASKS[1]
+    return _GROUP_MASKS[2]
 
 
 def _adgs_apply_mutual_exclusion(device, dev_idx: int, new_state: int) -> int:
     """
-    Enforce the one-switch-closed-at-a-time rule for non-selftest ADGS devices.
+    Enforce the one-switch-closed-at-a-time rule per physical IO group.
 
     *new_state* is the desired bitmask for device *dev_idx*.
-    Returns the allowed new_state (possibly modified to auto-open prior switch).
+    Returns the allowed new_state (possibly modified to auto-open same-group switches).
     Updates device.adgs_active[dev_idx] to reflect the first closed switch.
     """
-    if dev_idx == _ADGS_SELFTEST_IDX:
-        # Selftest device is exempt — no mutual exclusion
-        return new_state
-
-    # Determine the first (lowest-bit) switch that is closed in new_state
+    allowed = 0
     first_closed = None
-    for bit in range(8):
-        if new_state & (1 << bit):
-            first_closed = bit
-            break
+    for mask in _GROUP_MASKS:
+        group_state = new_state & mask
+        if not group_state:
+            continue
+        lowest = group_state & -group_state
+        allowed |= lowest
+        if first_closed is None:
+            first_closed = lowest.bit_length() - 1
 
     device.adgs_active[dev_idx] = first_closed
-    # Enforce: only one switch may be closed — keep lowest bit only
-    if new_state and (new_state & (new_state - 1)):
-        # More than one bit set — open all except the lowest
-        lowest = new_state & (-new_state)
-        new_state = lowest
-        device.adgs_active[dev_idx] = lowest.bit_length() - 1
-
-    return new_state
+    return allowed
 
 
 # ---------------------------------------------------------------------------
@@ -76,13 +78,12 @@ def _mux_set_all(device):
                 state = payload[i] & 0xFF
                 device.mux_states[i] = state
                 # Update adgs_active tracking (no enforcement — raw write)
-                if i != _ADGS_SELFTEST_IDX:
-                    first = None
-                    for bit in range(8):
-                        if state & (1 << bit):
-                            first = bit
-                            break
-                    device.adgs_active[i] = first
+                first = None
+                for bit in range(8):
+                    if state & (1 << bit):
+                        first = bit
+                        break
+                device.adgs_active[i] = first
         return b''
     return handler
 
@@ -109,19 +110,18 @@ def _mux_set_switch(device):
         dev_idx, switch_idx, closed = struct.unpack_from('<BBB', payload)
         if 0 <= dev_idx < 4 and 0 <= switch_idx < 8:
             if closed:
-                if dev_idx != _ADGS_SELFTEST_IDX:
-                    # Auto-open any previously closed switch on this device
-                    device.mux_states[dev_idx] = 0
+                group_mask = _group_mask_for_switch(switch_idx)
+                device.mux_states[dev_idx] &= ~group_mask & 0xFF
                 device.mux_states[dev_idx] |= (1 << switch_idx)
-                device.adgs_active[dev_idx] = switch_idx
+                device.mux_states[dev_idx] = _adgs_apply_mutual_exclusion(
+                    device, dev_idx, device.mux_states[dev_idx]
+                )
             else:
                 device.mux_states[dev_idx] &= ~(1 << switch_idx)
                 device.mux_states[dev_idx] &= 0xFF
-                # Update adgs_active: find next closed switch, or None
-                if dev_idx != _ADGS_SELFTEST_IDX:
-                    remaining = device.mux_states[dev_idx]
-                    device.adgs_active[dev_idx] = (
-                        (remaining & -remaining).bit_length() - 1 if remaining else None
-                    )
+                remaining = device.mux_states[dev_idx]
+                device.adgs_active[dev_idx] = (
+                    (remaining & -remaining).bit_length() - 1 if remaining else None
+                )
         return b''
     return handler

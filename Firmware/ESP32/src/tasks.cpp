@@ -259,16 +259,12 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 scopeMask   = s_scopeChMask;
                 xSemaphoreGive(g_stateMutex);
             }
-            // Channels to read: scope mask union supply-monitor CH D exception
-            // (supply monitor uses logical CH D / physical 2 for rail measurement)
-            bool supplyMonD = scopeActive && selftest_is_supply_monitor_active();
 
             bool adcReady = s_device->isAdcReady();
 
             // Read hardware (outside mutex) - only for channels that have fresh ADC data
             // DIN_LOGIC and DIN_LOOP use the comparator path, not the ADC conversion path
             // In scope mode, skip channels not in the scope mask (keep last cached values)
-            // EXCEPTION: always read CH D when supply monitor is active
             if (adcReady) {
                 for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                     if (func[ch] != CH_FUNC_HIGH_IMP &&
@@ -276,8 +272,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                         func[ch] != CH_FUNC_DIN_LOOP) {
                         // In scope mode, skip channels outside the read mask
                         bool inScopeMask = (scopeMask & (1u << ch)) != 0;
-                        bool keepForMon  = (ch == 3) && supplyMonD;
-                        if (scopeActive && !inScopeMask && !keepForMon) {
+                        if (scopeActive && !inScopeMask) {
                             // Leave raw[ch] / eng[ch] at last cached values (seeded above)
                             continue;
                         }
@@ -655,13 +650,9 @@ void tasks_rebuild_adc_conv_ctrl(void)
             if (f == CH_FUNC_HIGH_IMP || f == CH_FUNC_DIN_LOGIC || f == CH_FUNC_DIN_LOOP)
                 continue;
             if (scopeMode) {
-                // Only include channels present in the scope logical mask,
-                // EXCEPT: always keep channel D (logical 3) when the supply
-                // monitor safety interlock is active — its conversions are
-                // needed for background rail voltage measurement.
+                // Only include channels present in the scope logical mask.
                 bool inScopeMask = (scopeMask & (1u << c)) != 0;
-                bool supplyMonD  = (c == 3) && selftest_is_supply_monitor_active();
-                if (!inScopeMask && !supplyMonD) continue;
+                if (!inScopeMask) continue;
             }
             chMask |= (1u << tasks_logical_to_physical(c));
         }
@@ -769,6 +760,10 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
 {
     if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return;
 
+    // Continuous ADC conversions must be stopped before ADC_CONFIG or CH_FUNC_SETUP changes.
+    s_device->startAdcConversion(false, 0, 0);
+    delay_ms(5);
+
     // ---- Logical API -> physical AD74416H + connector MUX ------------------
     // Public channel APIs are logical/user-facing A/B/C/D. Only the AD74416H
     // register index is swapped C<->D. The MUX device must stay with the
@@ -781,10 +776,10 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     uint8_t mux_dev = logical_channel;
     if (logical_channel == 2) {
         physical_ch = 3;
-        mux_dev = 3;
+        mux_dev = 2;
     } else if (logical_channel == 3) {
         physical_ch = 2;
-        mux_dev = 2;
+        mux_dev = 3;
     }
 
     if (!s_device->setChannelFunction(physical_ch, func)) {
@@ -855,8 +850,8 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     // ---- MUX auto-routing ---------------------------------------------------
     // mux_dev is connector/ESP-GPIO routing, not AD74416H register routing.
     // Keep it with the logical IO_Block:
-    //   C -> U17/device 3/IO9/GPIO10
-    //   D -> U16/device 2/IO12/GPIO13
+    //   C -> U17/device 2/IO9/GPIO10
+    //   D -> U16/device 3/IO12/GPIO13
     // Only physical_ch above carries the AD74416H C/D register swap.
     // Switch S3 (index 2, bit 2 = 0x04 = U17_S3_MASK in config.h) connects
     // the AD74416H channel to the terminal for all analog/current/RTD/HART modes.
@@ -1372,6 +1367,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 #endif
 
                 // 3. Configure AD74416H physical Channel D for measurement.
+                s_device->startAdcConversion(false, 0, 0);
+                delay_ms(5);
                 s_device->setChannelFunction(selftest_physical_ch, CH_FUNC_VIN);
                 s_device->configureAdc(selftest_physical_ch, ADC_MUX_LF_TO_AGND, ADC_RNG_0_12V, ADC_RATE_20SPS);
                 
@@ -1410,7 +1407,13 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 adgs_set_selftest(prev_selftest);
 #endif
                 tasks_apply_channel_function(selftest_logical_ch, prev_func);
+
+                s_device->startAdcConversion(false, 0, 0);
+                delay_ms(5);
                 s_device->configureAdc(selftest_physical_ch, prev_mux, prev_range, ADC_RATE_20SPS);
+                s_device->clearChannelAlert(selftest_physical_ch);
+                s_device->clearAllAlerts();
+                tasks_rebuild_adc_conv_ctrl();
 
                 ESP_LOGI("tasks", "IDAC%u calibration complete and saved.", idac_ch);
                 break;

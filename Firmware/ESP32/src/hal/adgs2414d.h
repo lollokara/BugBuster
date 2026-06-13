@@ -67,8 +67,8 @@ extern "C" {
 static const uint8_t MUX_GPIO_MAP[4][3] = {
     { 1,  2,  4},   // U10 (MUX1): IO3→S1,  IO2→S5,  IO1→S7
     { 5,  6,  7},   // U11 (MUX2): IO6→S1,  IO5→S5,  IO4→S7
-    {13, 12, 11},   // U16 (MUX3): IO12→S1, IO11→S5, IO10→S7
-    {10,  9,  8},   // U17 (MUX4): IO9→S1,  IO8→S5,  IO7→S7
+    {10,  9,  8},   // U17 (MUX3): IO9→S1,  IO8→S5,  IO7→S7
+    {13, 12, 11},   // U16 (MUX4): IO12→S1, IO11→S5, IO10→S7
 };
 
 /**

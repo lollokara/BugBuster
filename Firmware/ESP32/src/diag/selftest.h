@@ -51,6 +51,23 @@ typedef struct {
     bool     available;                     // false if U17 S3 interlock closed
 } SelftestSupplyVoltages;
 
+typedef struct {
+    uint8_t  rail;
+    uint8_t  u23_mask;
+    uint32_t raw_code;
+    uint16_t adc_upr;
+    uint16_t adc_config;
+    uint8_t  requested_range;
+    uint8_t  requested_mux;
+    uint16_t live_status;
+    uint16_t channel_alert;
+    uint16_t alert_status;
+    float    raw_voltage_v;
+    bool     read_ok;
+    bool     adc_ready;
+    bool     mux_faulted;
+} SelftestSupplyDebug;
+
 // Calibration result
 typedef struct {
     uint8_t  status;            // CAL_STATUS_*
@@ -96,9 +113,12 @@ const SelftestBootResult* selftest_get_boot_result(void);
  * @brief  Measure a single supply rail using U23 + ADC Channel D.
  *
  * @param rail  SELFTEST_RAIL_VADJ1, SELFTEST_RAIL_VADJ2, or SELFTEST_RAIL_3V3_ADJ
+ * @param fast  If true, use shorter settling delays and skip multi-sample median.
  * @return Measured voltage in volts (corrected for divider), or -1.0f on error.
  */
-float selftest_measure_supply(uint8_t rail);
+float selftest_measure_supply(uint8_t rail, bool fast = false);
+
+const SelftestSupplyDebug* selftest_get_last_supply_debug(void);
 
 /**
  * @brief  Get the cached supply rail voltages (from background monitoring).

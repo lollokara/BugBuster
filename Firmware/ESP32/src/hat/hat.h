@@ -250,6 +250,7 @@ typedef struct {
     uint16_t voltage_mv;
     uint16_t current_ma;
     uint8_t  status;
+    uint16_t target_mv;  // DS4424 configured target (cached on ESP32, not from RP2040)
 } HatRailStatus;
 
 // -----------------------------------------------------------------------------

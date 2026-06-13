@@ -389,8 +389,18 @@ struct ScopeTab: View {
             
             // Channel legend selector
             GlassEffectContainer(spacing: 8) {
+<<<<<<< Updated upstream
                 HStack(spacing: 12) {
+=======
+                let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+                let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
+                
+                LazyVGrid(columns: columns, spacing: 10) {
+>>>>>>> Stashed changes
                     ForEach(0..<4) { ch in
+                        let isChannelCGreyed = ch == 2 && workerEnabled
+                        let accent = isChannelCGreyed ? Color.gray : ACCENTS[ch]
+                        
                         Button(action: {
                             withAnimation {
                                 activeChannels[ch].toggle()
@@ -398,7 +408,7 @@ struct ScopeTab: View {
                         }) {
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(ACCENTS[ch])
+                                    .fill(accent)
                                     .frame(width: 8, height: 8)
                                 Text("CH\(ch + 1)")
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -408,12 +418,15 @@ struct ScopeTab: View {
                             .padding(.vertical, 8)
                             .glassEffect(
                                 activeChannels[ch]
-                                    ? .regular.tint(ACCENTS[ch])
+                                    ? .regular.tint(accent)
                                     : .regular,
                                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                             )
+                            .opacity(isChannelCGreyed ? 0.4 : 1.0)
+                            .grayscale(isChannelCGreyed ? 1.0 : 0)
                         }
                         .buttonStyle(.plain)
+                        .disabled(isChannelCGreyed)
                     }
                 }
             }

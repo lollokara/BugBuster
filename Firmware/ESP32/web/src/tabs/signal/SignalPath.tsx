@@ -40,7 +40,7 @@ const C_CHIP_BD = "#1e3050";
 
 const ACCENTS = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"] as const;
 const MUX_REF = ["U10", "U11", "U17", "U16"] as const;
-const MUX_DEVICE_BY_LOGICAL = [0, 1, 3, 2] as const;
+const MUX_DEVICE_BY_LOGICAL = [0, 1, 2, 3] as const;
 
 const GPIO_PAIR_LABELS: ReadonlyArray<readonly [string, string, string]> = [
   ["IO3", "IO2", "IO1"],

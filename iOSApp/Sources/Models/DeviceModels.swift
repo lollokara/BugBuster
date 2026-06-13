@@ -2,6 +2,28 @@ import Foundation
 
 // MARK: - Core Status Models
 
+<<<<<<< Updated upstream
+=======
+public struct USBPDSourcePDO: Codable, Equatable, Identifiable {
+    public var id: String { voltage }
+    public let voltage: String
+    public let detected: Bool
+    public let maxCurrentA: Double
+    public let maxPowerW: Double
+}
+
+public struct USBPDStatus: Codable, Equatable {
+    public let present: Bool
+    public let attached: Bool
+    public let cc: String
+    public let voltageV: Double
+    public let currentA: Double
+    public let powerW: Double
+    public let pdResponse: Int
+    public let sourcePdos: [USBPDSourcePDO]
+    public let selectedPdo: Int
+}
+>>>>>>> Stashed changes
 public struct ChannelState: Codable, Identifiable, Equatable {
     public let id: Int
     public let function: String
@@ -16,10 +38,10 @@ public struct ChannelState: Codable, Identifiable, Equatable {
     public let dinState: Bool
     public let dinCounter: Int
     public let doState: Bool
-    public let channelAlert: Int
-    public let channelAlertMask: Int
-    public let rtdExcitationUa: Double
-    
+    public let alert: Int
+    public let alertMask: Int
+    public let rtdExcitationUa: Int?
+
     enum CodingKeys: String, CodingKey {
         case id
         case function
@@ -34,10 +56,19 @@ public struct ChannelState: Codable, Identifiable, Equatable {
         case dinState = "din_state"
         case dinCounter = "din_counter"
         case doState = "do_state"
-        case channelAlert = "channel_alert"
-        case channelAlertMask = "channel_alert_mask"
+        case alert = "channel_alert"
+        case alertMask = "channel_alert_mask"
         case rtdExcitationUa = "rtd_excitation_ua"
     }
+}
+
+public struct ChannelAdcResponse: Codable, Equatable {
+    public let id: Int
+    public let adcRaw: Int
+    public let adcValue: Double
+    public let adcRange: Int
+    public let adcRate: Int
+    public let adcMux: Int
 }
 
 public struct DiagnosticSlot: Codable, Equatable {
@@ -220,8 +251,14 @@ public struct HatRail: Codable, Identifiable, Equatable {
     public let railId: Int
     public let enabled: Bool
     public let voltageMv: Int
+    public let targetVoltageMv: Int?
     public let currentMa: Int
     public let status: Int
+
+    public var configuredVoltageMv: Int {
+        if let t = targetVoltageMv, t > 0 { return t }
+        return voltageMv
+    }
 }
 
 public struct HatRailsResponse: Codable, Equatable {

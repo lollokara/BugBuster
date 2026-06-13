@@ -110,9 +110,9 @@ static const BusRouteEntry IO_ROUTES[12] = {
     { 6,  1, 1,  5, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 
-    // ── BLOCK 2, IO_BLOCK 3 — device 2 (U16), VADJ2, EFUSE3 ────────────
-    // Logical connector C is implemented by the swapped hardware position;
-    // pca9535_user_arm_efuse() maps logical EFUSE3 to the physical bit.
+    // ── BLOCK 2, IO_BLOCK 3 — device 2 (U17), VADJ2, EFUSE3 ────────────
+    // Logical connector C stays with U17; only the AD74416H C/D register
+    // index is swapped in tasks_logical_to_physical().
     // IO 7: position 3 (Group C), ESP GPIO 8
     { 7,  3, 2,  8, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },
@@ -123,9 +123,9 @@ static const BusRouteEntry IO_ROUTES[12] = {
     { 9,  1, 2, 10, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 
-    // ── BLOCK 2, IO_BLOCK 4 — device 3 (U17), VADJ2, EFUSE4 ────────────
-    // Logical connector D is implemented by the swapped hardware position;
-    // pca9535_user_arm_efuse() maps logical EFUSE4 to the physical bit.
+    // ── BLOCK 2, IO_BLOCK 4 — device 3 (U16), VADJ2, EFUSE4 ────────────
+    // Logical connector D stays with U16; only the AD74416H C/D register
+    // index is swapped in tasks_logical_to_physical().
     // IO 10: position 3 (Group C), ESP GPIO 11
     { 10, 3, 3, 11, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },

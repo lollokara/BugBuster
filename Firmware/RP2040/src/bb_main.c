@@ -212,13 +212,14 @@ uint16_t clamp_u16_from_float(float v)
 
 void append_rail_status(uint8_t *rsp, size_t *p, uint8_t rail_id,
                                bool enabled, uint16_t mv, uint16_t ma,
-                               uint8_t status)
+                               uint8_t status, uint16_t target_mv)
 {
     rsp[(*p)++] = rail_id;
     rsp[(*p)++] = enabled ? 1 : 0;
     memcpy(&rsp[*p], &mv, sizeof(mv)); *p += sizeof(mv);
     memcpy(&rsp[*p], &ma, sizeof(ma)); *p += sizeof(ma);
     rsp[(*p)++] = status;
+    memcpy(&rsp[*p], &target_mv, sizeof(target_mv)); *p += sizeof(target_mv);
 }
 
 static void handle_set_power(const uint8_t *payload, uint8_t len)

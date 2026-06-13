@@ -104,7 +104,7 @@ extern void bb_la_log(const char *fmt, ...);
 extern uint16_t clamp_u16_from_float(float v);
 extern void append_rail_status(uint8_t *rsp, size_t *p, uint8_t rail_id,
                                bool enabled, uint16_t mv, uint16_t ma,
-                               uint8_t status);
+                               uint8_t status, uint16_t target_mv);
 
 // State Variables
 static uint8_t s_led_states[BB_WS2812_COUNT][4]; // [r, g, b, mode]
@@ -1019,18 +1019,26 @@ void bb_hat_v2_init(void)
             ds4424_set_code(0, code0);
         }
 
-        // Restore VADJ3 (rail 1)
+        // Restore VADJ3 (rail 1) — default 12V on first boot, rails stay disabled
         uint16_t v3 = s_flash_cal.default_voltage_mv[1];
-        if (v3 > 36000) v3 = 3300; // fallback to 3.3V if unitialized/invalid
+        if (v3 == 0 || v3 > 36000) {
+            v3 = DS4424_CAL_POST_TARGET_MV;
+            s_flash_cal.default_voltage_mv[1] = v3;
+            // persist task not yet running; will be saved on next explicit set_rail_voltage
+        }
         float volts3 = (float)v3 / 1000.0f;
         int8_t code3 = 0;
         if (ds4424_voltage_to_code(1, volts3, &code3)) {
             ds4424_set_code(1, code3);
         }
 
-        // Restore VADJ4 (rail 2)
+        // Restore VADJ4 (rail 2) — default 12V on first boot, rails stay disabled
         uint16_t v4 = s_flash_cal.default_voltage_mv[2];
-        if (v4 > 36000) v4 = 3300; // fallback to 3.3V if unitialized/invalid
+        if (v4 == 0 || v4 > 36000) {
+            v4 = DS4424_CAL_POST_TARGET_MV;
+            s_flash_cal.default_voltage_mv[2] = v4;
+            // persist task not yet running; will be saved on next explicit set_rail_voltage
+        }
         float volts4 = (float)v4 / 1000.0f;
         int8_t code4 = 0;
         if (ds4424_voltage_to_code(2, volts4, &code4)) {
@@ -1167,26 +1175,29 @@ void handle_get_rail_status(void)
         if (i4 < 0.0f) i4 = 0.0f;
     }
 
-    uint8_t rsp[1 + HAT_RAIL_COUNT * 7];
+    uint8_t rsp[1 + HAT_RAIL_COUNT * 9];
     size_t p = 0;
     rsp[p++] = HAT_RAIL_COUNT;
 
     append_rail_status(rsp, &p, HAT_RAIL_3V3_ADJ,
                        bb_power_get_3v3_adj_enabled(),
                        bb_hat_v2_get_io_voltage(), 0,
-                       s_flash_cal.cal[0].valid ? 1 : 0);
+                       s_flash_cal.cal[0].valid ? 1 : 0,
+                       s_flash_cal.default_voltage_mv[0]);
 
     append_rail_status(rsp, &p, HAT_RAIL_VADJ3,
                        bb_power_get_enabled(0),
                        clamp_u16_from_float(v3),
                        clamp_u16_from_float(i3),
-                       s_flash_cal.cal[1].valid ? 1 : 0);
+                       s_flash_cal.cal[1].valid ? 1 : 0,
+                       s_flash_cal.default_voltage_mv[1]);
 
     append_rail_status(rsp, &p, HAT_RAIL_VADJ4,
                        bb_power_get_enabled(1),
                        clamp_u16_from_float(v4),
                        clamp_u16_from_float(i4),
-                       s_flash_cal.cal[2].valid ? 1 : 0);
+                       s_flash_cal.cal[2].valid ? 1 : 0,
+                       s_flash_cal.default_voltage_mv[2]);
 
     send_response(HAT_RSP_RAIL_STATUS, rsp, (uint8_t)p);
 }

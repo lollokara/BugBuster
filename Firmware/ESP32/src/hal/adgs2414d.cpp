@@ -16,9 +16,10 @@
 #include <string.h>
 
 #if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
-// Tracks the single "active" switch per main device (0xFF = none).
-// Only main devices (0..ADGS_MAIN_DEVICES-1) are tracked; ADGS_SELFTEST_DEV is exempt.
-static uint8_t s_active_sw[ADGS_MAIN_DEVICES];  // initialised to 0xFF in adgs_init()
+// Tracks the active switch per main-device group (0xFF = none).
+// Groups are independent physical IOs: S1-S4, S5-S6, and S7-S8. Only switches
+// in the same group are mutually exclusive.
+static uint8_t s_active_sw[ADGS_MAIN_DEVICES][3];  // initialised to 0xFF in adgs_init()
 #define ADGS_NO_ACTIVE_SW 0xFF
 #endif
 
@@ -121,7 +122,9 @@ static void adgs_enter_daisy_chain(void)
 }
 
 // Send switch bytes in daisy-chain mode.
-// The first byte sent reaches the last device in the chain.
+// The chain is a shift register: each SDO is an 8-clock delayed SDI, and each
+// device latches the last 8 bits it received when CS rises. Therefore the byte
+// for the last physical device (U23) must be clocked first.
 static void adgs_daisy_chain_write(const uint8_t states[ADGS_NUM_DEVICES])
 {
     uint8_t tx[ADGS_NUM_DEVICES];
@@ -229,8 +232,8 @@ static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
 }
 
 // Write switch states with verification and retry.
-// Sets fault flag if all retries fail.
-static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
+// Returns false and sets the fault flag if all retries fail.
+static bool adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
 {
     for (int attempt = 0; attempt < ADGS_MAX_RETRIES; attempt++) {
         if (adgs_write_and_verify(states)) {
@@ -238,7 +241,7 @@ static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
                 ESP_LOGI(TAG, "MUX write succeeded on retry %d", attempt);
             }
             s_mux_faulted = false;
-            return;  // success
+            return true;
         }
         ESP_LOGW(TAG, "MUX write-verify failed (attempt %d/%d)", attempt + 1, ADGS_MAX_RETRIES);
         delay_ms(5);
@@ -280,7 +283,7 @@ static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
     if (adgs_write_and_verify(states)) {
         ESP_LOGI(TAG, "MUX recovered after software reset!");
         s_mux_faulted = false;
-        return;
+        return true;
     }
 #endif
 
@@ -301,6 +304,7 @@ static void adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
     memset(s_active_sw, ADGS_NO_ACTIVE_SW, sizeof(s_active_sw));
 #endif
     portEXIT_CRITICAL(&s_adgs_mux);
+    return false;
 }
 
 // Get the group mask for a switch index
@@ -309,6 +313,13 @@ static uint8_t get_group_mask(uint8_t sw)
     if (sw < 4) return ADGS_GROUP_A_MASK;
     if (sw < 6) return ADGS_GROUP_B_MASK;
     return ADGS_GROUP_C_MASK;
+}
+
+static uint8_t get_group_index(uint8_t sw)
+{
+    if (sw < 4) return 0;
+    if (sw < 6) return 1;
+    return 2;
 }
 
 // -----------------------------------------------------------------------------
@@ -429,31 +440,11 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 #endif
 
     uint8_t group_mask = get_group_mask(sw);
+    uint8_t group_idx = get_group_index(sw);
     uint8_t new_state;
     uint8_t write_snap[ADGS_NUM_DEVICES];
 
     if (closed) {
-#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
-        // Mutual exclusion: at most one switch closed per non-selftest device.
-        // Auto-open the previous active switch before closing a new one.
-        portENTER_CRITICAL(&s_adgs_mux);
-        bool need_preopen = (device < ADGS_MAIN_DEVICES &&
-                             s_active_sw[device] != ADGS_NO_ACTIVE_SW &&
-                             s_active_sw[device] != sw);
-        uint8_t prev_sw = s_active_sw[device];
-        if (need_preopen) {
-            s_mux_state[device] &= ~(1u << prev_sw);
-            memcpy(write_snap, s_mux_state, sizeof(s_mux_state));
-        }
-        portEXIT_CRITICAL(&s_adgs_mux);
-
-        if (need_preopen) {
-            ESP_LOGD(TAG, "ADGS dev=%d auto-opened switch %d before closing %d",
-                     device, prev_sw, sw);
-            adgs_write_states(write_snap);
-            delay_ms(ADGS_DEAD_TIME_MS);
-        }
-#endif
         // Closing a switch: break-before-make — first open all switches in the
         // same group to prevent momentary shorts, then close the requested one.
         portENTER_CRITICAL(&s_adgs_mux);
@@ -490,7 +481,18 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 #if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
     // Update active-switch tracker for non-selftest devices
     if (device < ADGS_MAIN_DEVICES) {
-        s_active_sw[device] = closed ? sw : ADGS_NO_ACTIVE_SW;
+        if (closed) {
+            s_active_sw[device][group_idx] = sw;
+        } else if (s_active_sw[device][group_idx] == sw) {
+            uint8_t remaining = s_mux_state[device] & group_mask;
+            s_active_sw[device][group_idx] = ADGS_NO_ACTIVE_SW;
+            for (uint8_t bit = 0; bit < ADGS_NUM_SWITCHES; bit++) {
+                if (remaining & (1u << bit)) {
+                    s_active_sw[device][group_idx] = bit;
+                    break;
+                }
+            }
+        }
     }
 #endif
     portEXIT_CRITICAL(&s_adgs_mux);
@@ -685,14 +687,23 @@ bool adgs_set_selftest(uint8_t sw_byte)
     if (sw_byte == 0) {
         // Opening all — just write directly
         s_mux_state[ADGS_SELFTEST_DEV] = 0;
-        adgs_write_states(s_mux_state);
+        if (!adgs_write_states(s_mux_state)) {
+            ESP_LOGE(TAG, "U23 selftest open failed");
+            return false;
+        }
     } else {
         // Break-before-make: open U23 first, wait dead time, then close new switches
         s_mux_state[ADGS_SELFTEST_DEV] = 0;
-        adgs_write_states(s_mux_state);
+        if (!adgs_write_states(s_mux_state)) {
+            ESP_LOGE(TAG, "U23 selftest pre-open failed");
+            return false;
+        }
         delay_ms(ADGS_DEAD_TIME_MS);
         s_mux_state[ADGS_SELFTEST_DEV] = sw_byte;
-        adgs_write_states(s_mux_state);
+        if (!adgs_write_states(s_mux_state)) {
+            ESP_LOGE(TAG, "U23 selftest close failed: 0x%02X", sw_byte);
+            return false;
+        }
     }
 
     ESP_LOGD(TAG, "U23 selftest: 0x%02X -> 0x%02X", old, sw_byte);

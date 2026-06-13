@@ -376,18 +376,25 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
                 device.adgs_active = [None, None, None, None]
             if 0 <= dev_idx < 4 and 0 <= sw_idx < 8:
                 if closed:
-                    if dev_idx != 3:  # non-selftest: enforce one-switch-at-a-time
-                        device.mux_states[dev_idx] = 0
+                    if sw_idx < 4:
+                        group_mask = 0x0F
+                    elif sw_idx < 6:
+                        group_mask = 0x30
+                    else:
+                        group_mask = 0xC0
+                    device.mux_states[dev_idx] &= ~group_mask & 0xFF
                     device.mux_states[dev_idx] |= (1 << sw_idx)
-                    device.adgs_active[dev_idx] = sw_idx
+                    remaining = device.mux_states[dev_idx]
+                    device.adgs_active[dev_idx] = (
+                        (remaining & -remaining).bit_length() - 1 if remaining else None
+                    )
                 else:
                     device.mux_states[dev_idx] &= ~(1 << sw_idx)
                     device.mux_states[dev_idx] &= 0xFF
-                    if dev_idx != 3:
-                        remaining = device.mux_states[dev_idx]
-                        device.adgs_active[dev_idx] = (
-                            (remaining & -remaining).bit_length() - 1 if remaining else None
-                        )
+                    remaining = device.mux_states[dev_idx]
+                    device.adgs_active[dev_idx] = (
+                        (remaining & -remaining).bit_length() - 1 if remaining else None
+                    )
             return {"ok": True}
         except ValueError:
             return {"error": "invalid value"}

@@ -34,6 +34,7 @@ static const char *TAG = "selftest";
 
 static SelftestBootResult    s_boot_result   = {};
 static SelftestSupplyVoltages s_supply_volt  = {};
+static SelftestSupplyDebug   s_supply_debug = {};
 static SelftestCalResult     s_cal_result   = {};
 static SelftestCalResult     s_cal_result_snapshot = {};
 static bool                  s_initialized  = false;
@@ -81,10 +82,68 @@ static constexpr int CAL_STABLE_SAMPLE_COUNT = 5;
 static constexpr int CAL_STABLE_SETTLE_EXTRA_MS = 350;
 static constexpr int CAL_STABLE_INTER_SAMPLE_MS = 30;
 static constexpr float CAL_STABLE_MAX_DEV_MV = 50.0f;
+static constexpr int SELFTEST_U23_SOURCE_SETTLE_MS = 500;
+static constexpr int SELFTEST_U23_SOURCE_SETTLE_FAST_MS = 250;
+static constexpr int SELFTEST_ADC_FUNC_SETTLE_MS = 100;
+static constexpr int SELFTEST_ADC_FUNC_SETTLE_FAST_MS = 50;
+static constexpr int SELFTEST_ADC_INPUT_SETTLE_MS = 600;
+static constexpr int SELFTEST_ADC_INPUT_SETTLE_FAST_MS = 250;
+static constexpr uint32_t SELFTEST_ADC_READY_TIMEOUT_MS = 600;
+
+static void selftest_debug_begin(uint8_t rail, uint8_t u23_mask)
+{
+    s_supply_debug = {};
+    s_supply_debug.rail = rail;
+    s_supply_debug.u23_mask = u23_mask;
+    s_supply_debug.mux_faulted = adgs_is_faulted();
+}
+
+static void selftest_debug_record_adc_config(AD74416H *dev,
+                                             uint8_t requested_mux,
+                                             uint8_t requested_range)
+{
+    s_supply_debug.requested_mux = requested_mux;
+    s_supply_debug.requested_range = requested_range;
+    if (dev) {
+        dev->readAdcConfig(SELFTEST_PHYSICAL_CH, &s_supply_debug.adc_config);
+    }
+}
+
+static void selftest_debug_record_sample(AD74416H *dev,
+                                         uint32_t raw,
+                                         uint16_t upr,
+                                         bool read_ok,
+                                         bool adc_ready,
+                                         float raw_voltage)
+{
+    s_supply_debug.raw_code = raw;
+    s_supply_debug.adc_upr = upr;
+    s_supply_debug.read_ok = read_ok;
+    s_supply_debug.adc_ready = adc_ready;
+    s_supply_debug.raw_voltage_v = raw_voltage;
+    s_supply_debug.mux_faulted = adgs_is_faulted();
+    if (dev) {
+        dev->readLiveStatus(&s_supply_debug.live_status);
+        dev->readChannelAlertStatus(SELFTEST_PHYSICAL_CH, &s_supply_debug.channel_alert);
+        dev->readAlertStatus(&s_supply_debug.alert_status);
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Internal helpers
 // -----------------------------------------------------------------------------
+
+static bool selftest_wait_adc_ready(AD74416H *dev, uint32_t timeout_ms)
+{
+    const int64_t deadline_us = esp_timer_get_time() + ((int64_t)timeout_ms * 1000LL);
+    while (esp_timer_get_time() < deadline_us) {
+        if (dev->isAdcReady()) {
+            return true;
+        }
+        delay_us(500);
+    }
+    return dev->isAdcReady();
+}
 
 // Configure AD74416H physical Channel D as voltage input and read it.
 // Returns the ADC reading in volts, or -1 on error.
@@ -107,7 +166,8 @@ static float read_channel_d(uint8_t adc_range,
                              AdcConvMux      *out_prev_mux,
                              AdcRange        *out_prev_range,
                              AdcRate         *out_prev_rate,
-                             bool            *out_have_prev_cfg)
+                             bool            *out_have_prev_cfg,
+                             bool            fast)
 {
     // We directly access the device through the tasks module extern. This is
     // intentionally physical-channel based because U23 is wired to AD74416H
@@ -155,46 +215,63 @@ static float read_channel_d(uint8_t adc_range,
     // (auto-closing U17 S3 -> IO9 terminal) while U23 switches are closed.
     // Mirror into the logical channel owning physical D so the chMask loop below sets the
     // correct swapped physical conversion bit.
+    dev->startAdcConversion(false, 0, 0);
+    delay_ms(5);
+
+    // Datasheet sequence: enter Hi-Z as an intermediate function before VIN.
+    // This also lets the U23 S4+source path settle without the ADC front-end
+    // transitioning at the same time.
+    dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
+    delay_ms(fast ? SELFTEST_ADC_FUNC_SETTLE_FAST_MS : SELFTEST_ADC_FUNC_SETTLE_MS);
+
     dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_VIN);
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_VIN;
         xSemaphoreGive(g_stateMutex);
     }
+    delay_ms(fast ? SELFTEST_ADC_FUNC_SETTLE_FAST_MS : SELFTEST_ADC_FUNC_SETTLE_MS);
+
     dev->configureAdc(SELFTEST_PHYSICAL_CH,
                       ADC_MUX_LF_TO_AGND,
                       (AdcRange)adc_range,
                       ADC_RATE_200SPS_H);
+    selftest_debug_record_adc_config(dev, ADC_MUX_LF_TO_AGND, adc_range);
 
-    // Rebuild ADC conversion mask using physical channel indices so physical D's
-    // conversion bit is set during the measurement window.
+    // Start continuous conversions ONLY for SELFTEST_PHYSICAL_CH (Channel D) during
+    // measurement. This ensures a fast, dedicated conversion cycle (5 ms per sample
+    // at 200 SPS) and prevents other slower active channels (e.g. at 20 SPS / 50 ms)
+    // from bloating the sequencer cycle time and starving our read delays.
     {
-        uint8_t chMask = 0;
-        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-            for (uint8_t logical = 0; logical < 4; logical++) {
-                ChannelFunction f = (ChannelFunction)g_deviceState.channels[logical].function;
-                if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP) {
-                    chMask |= (1u << tasks_logical_to_physical(logical));
-                }
-            }
-            xSemaphoreGive(g_stateMutex);
-        }
-        dev->startAdcConversion(true, chMask, 0x0F);
+        uint8_t chMask = (1u << SELFTEST_PHYSICAL_CH);
+        dev->startAdcConversion(true, chMask, 0);
+        dev->clearAdcDataReady();
     }
 
     // DCDC output + divider node settle time before sampling.
-    delay_ms(200);
+    delay_ms(fast ? SELFTEST_ADC_INPUT_SETTLE_FAST_MS : SELFTEST_ADC_INPUT_SETTLE_MS);
 
-    // Take 5 readings and use median to reject transients.
+    // Clear any transient alerts triggered during the switch/divider settling time
+    // so we start our measurements with a clean slate.
+    dev->clearChannelAlert(SELFTEST_PHYSICAL_CH);
+    dev->clearAllAlerts();
+
+    // Take readings. Fast path takes 1 sample; normal path takes 5 and uses median.
+    int sample_count = fast ? 1 : 5;
     float samples[5] = {0};
-    for (int i = 0; i < 5; i++) {
-        uint32_t raw = 0;
-        if (!dev->readAdcResult(SELFTEST_PHYSICAL_CH, &raw)) {
+    for (int i = 0; i < sample_count; i++) {
+        if (!selftest_wait_adc_ready(dev, SELFTEST_ADC_READY_TIMEOUT_MS)) {
+            selftest_debug_record_sample(dev, 0, 0, false, false, -1.0f);
             // Force physical Channel D to HIGH_IMP before releasing mutex — do not leave it
             // in VIN mode with the U23 path still closed.
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
                 g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_HIGH_IMP;
                 xSemaphoreGive(g_stateMutex);
             }
+            dev->startAdcConversion(false, 0, 0);
+            delay_ms(5);
+            dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
+            dev->clearChannelAlert(SELFTEST_PHYSICAL_CH);
+            dev->clearAllAlerts();
             {
                 uint8_t chMask = 0;
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -208,24 +285,63 @@ static float read_channel_d(uint8_t adc_range,
                 }
                 dev->startAdcConversion(true, chMask, 0x0F);
             }
+            if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
+            return -1.0f;
+        }
+
+        uint32_t raw = 0;
+        uint16_t upr = 0;
+        bool read_ok = dev->readAdcResultDetailed(SELFTEST_PHYSICAL_CH, &raw, &upr);
+
+        if (!read_ok) {
+            selftest_debug_record_sample(dev, raw, upr, false, true, -1.0f);
+            // Force physical Channel D to HIGH_IMP before releasing mutex — do not leave it
+            // in VIN mode with the U23 path still closed.
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_HIGH_IMP;
+                xSemaphoreGive(g_stateMutex);
+            }
+            dev->startAdcConversion(false, 0, 0);
+            delay_ms(5);
             dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
+            dev->clearChannelAlert(SELFTEST_PHYSICAL_CH);
+            dev->clearAllAlerts();
+            {
+                uint8_t chMask = 0;
+                if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                    for (uint8_t logical = 0; logical < 4; logical++) {
+                        ChannelFunction f = (ChannelFunction)g_deviceState.channels[logical].function;
+                        if (f != CH_FUNC_HIGH_IMP && f != CH_FUNC_DIN_LOGIC && f != CH_FUNC_DIN_LOOP) {
+                            chMask |= (1u << tasks_logical_to_physical(logical));
+                        }
+                    }
+                    xSemaphoreGive(g_stateMutex);
+                }
+                dev->startAdcConversion(true, chMask, 0x0F);
+            }
             if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
             return -1.0f;
         }
         samples[i] = dev->adcCodeToVoltage(raw, (AdcRange)adc_range);
-        delay_ms(40);
+        selftest_debug_record_sample(dev, raw, upr, true, true, samples[i]);
+        dev->clearAdcDataReady();
+        if (!fast) delay_ms(40);
     }
-    // Insertion sort (N=5) then take median.
-    for (int i = 1; i < 5; i++) {
-        float key = samples[i];
-        int j = i - 1;
-        while (j >= 0 && samples[j] > key) {
-            samples[j + 1] = samples[j];
-            j--;
+
+    float voltage = samples[0];
+    if (!fast) {
+        // Insertion sort (N=5) then take median.
+        for (int i = 1; i < 5; i++) {
+            float key = samples[i];
+            int j = i - 1;
+            while (j >= 0 && samples[j] > key) {
+                samples[j + 1] = samples[j];
+                j--;
+            }
+            samples[j + 1] = key;
         }
-        samples[j + 1] = key;
+        voltage = samples[2];
     }
-    float voltage = samples[2];
 
     // Force physical Channel D back to HIGH_IMP via direct SPI before the caller opens U23.
     // This ensures no driving function is active on HW D when the caller then
@@ -234,6 +350,11 @@ static float read_channel_d(uint8_t adc_range,
         g_deviceState.channels[SELFTEST_LOGICAL_CH].function = CH_FUNC_HIGH_IMP;
         xSemaphoreGive(g_stateMutex);
     }
+    dev->startAdcConversion(false, 0, 0);
+    delay_ms(5);
+    dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
+    dev->clearChannelAlert(SELFTEST_PHYSICAL_CH);
+    dev->clearAllAlerts();
     {
         uint8_t chMask = 0;
         if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -247,7 +368,6 @@ static float read_channel_d(uint8_t adc_range,
         }
         dev->startAdcConversion(true, chMask, 0x0F);
     }
-    dev->setChannelFunction(SELFTEST_PHYSICAL_CH, CH_FUNC_HIGH_IMP);
 
     if (s_selftest_mutex) xSemaphoreGive(s_selftest_mutex);
     return voltage;
@@ -318,7 +438,7 @@ static void selftest_restore_ch_slot(const io_owner_slot_t *prev)
     }
 }
 
-static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
+static float measure_via_u23(uint8_t source_sw, uint8_t adc_range, bool fast)
 {
     // Claim the logical channel whose physical AD74416H register is D.
     // Phase 2 Lane A2: yield to active client claims — return early so the
@@ -335,24 +455,24 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     // read via the 0.7418 divider) from being dumped into the next source's
     // op-amp output on the next measurement path.
     if (!adgs_set_selftest(U23_SW_ADC_CH_D)) {
-        ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S3 active?)");
+        ESP_LOGE(TAG, "U23 precharge route setup failed (interlock or write-verify)");
         // Phase 2 Lane A2 (2026-05-12): restore prior owner before bailing,
         // else slot 14 stays held by IO_OWNER_INTERNAL forever and every
         // subsequent client claim 409s.
         selftest_restore_ch_slot(&prev_owner);
         return -1.0f;
     }
-    delay_ms(50);
+    delay_ms(fast ? 10 : 50);
 
     // Measurement: close S4 + source switch
     uint8_t sw_byte = U23_SW_ADC_CH_D | source_sw;
     if (!adgs_set_selftest(sw_byte)) {
-        ESP_LOGE(TAG, "U23 interlock prevented measurement (U17 S3 active?)");
+        ESP_LOGE(TAG, "U23 measurement route setup failed (interlock or write-verify)");
         selftest_restore_ch_slot(&prev_owner);
         return -1.0f;
     }
 
-    delay_ms(100);  // allow MUX, divider, and ADC front-end to settle
+    delay_ms(fast ? SELFTEST_U23_SOURCE_SETTLE_FAST_MS : SELFTEST_U23_SOURCE_SETTLE_MS);
 
     // Snapshot of the user's previous logical owner of physical D, captured
     // inside read_channel_d under s_selftest_mutex. Used to restore after U23 cleanup.
@@ -367,7 +487,8 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range)
     // U23 switches are still closed at this point.
     float v = read_channel_d(adc_range,
                              &prev_func, &prev_mux, &prev_range, &prev_rate,
-                             &have_prev_cfg);
+                             &have_prev_cfg,
+                             fast);
 
     // Open U23 switches FIRST — now safe to restore arbitrary user function
     // because the supply path to HW D is broken.
@@ -607,16 +728,26 @@ const SelftestBootResult* selftest_get_boot_result(void)
     return &s_boot_result;
 }
 
-float selftest_measure_supply(uint8_t rail)
+float selftest_measure_supply(uint8_t rail, bool fast)
 {
     if (rail >= SELFTEST_RAIL_COUNT) return -1.0f;
 
-    // Use 0-12V ADC range for supply measurements
-    float raw_v = measure_via_u23(RAIL_SW[rail], 0 /* V_0_12 */);
+    // Use the bipolar range for U23 supply measurements. The U23 path shares a
+    // high-impedance measurement rail and can sit a few LSB below AGND during
+    // settling; the 0..12 V range reports that as ADC_ERR + 0x000000. Bipolar
+    // mode still covers all expected positive rail voltages after the VADJ
+    // divider while avoiding false under-range zeros.
+    selftest_debug_begin(rail, U23_SW_ADC_CH_D | RAIL_SW[rail]);
+    float raw_v = measure_via_u23(RAIL_SW[rail], ADC_RNG_NEG12_12V, fast);
     if (raw_v < 0) return -1.0f;
 
     // Apply voltage divider correction
     return raw_v * RAIL_CORRECTION[rail];
+}
+
+const SelftestSupplyDebug* selftest_get_last_supply_debug(void)
+{
+    return &s_supply_debug;
 }
 
 const SelftestSupplyVoltages* selftest_get_supply_voltages(void)
@@ -722,7 +853,7 @@ void selftest_monitor_step(void)
         s_supply_volt.timestamp_ms = now_ms;
         s_supply_volt.available = true;
     } else if (should_sample) {
-        float v = selftest_measure_supply((uint8_t)s_monitor_idx);
+        float v = selftest_measure_supply((uint8_t)s_monitor_idx, true);
         s_supply_volt.voltage[s_monitor_idx] = v;
         s_supply_volt.timestamp_ms = now_ms;
         s_supply_volt.available = true;
