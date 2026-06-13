@@ -307,10 +307,10 @@ struct ScopeTab: View {
                             }
                             .padding(8)
                             .glassEffect(.regular.tint(ACCENTS[info.channelIndex]), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            // Position bubble near the touch/point, keeping it within bounds
+                            // Position bubble near the touch/point, clamped within graph bounds
                             .position(
-                                x: max(60, min(geometry.size.width - 60, info.x + (info.x > geometry.size.width / 2 ? -70 : 70))),
-                                y: max(40, min(geometry.size.height - 40, info.y + (info.y > geometry.size.height / 2 ? -50 : 50)))
+                                x: min(max(info.x + (info.x > geometry.size.width / 2 ? -70 : 70), 60), geometry.size.width - 60),
+                                y: min(max(info.y + (info.y > geometry.size.height / 2 ? -50 : 50), 30), geometry.size.height - 30)
                             )
                         }
                     }
@@ -389,14 +389,10 @@ struct ScopeTab: View {
             
             // Channel legend selector
             GlassEffectContainer(spacing: 8) {
-<<<<<<< Updated upstream
-                HStack(spacing: 12) {
-=======
                 let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
                 let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
                 
                 LazyVGrid(columns: columns, spacing: 10) {
->>>>>>> Stashed changes
                     ForEach(0..<4) { ch in
                         let isChannelCGreyed = ch == 2 && workerEnabled
                         let accent = isChannelCGreyed ? Color.gray : ACCENTS[ch]
@@ -801,6 +797,36 @@ struct ScopeSettingsView: View {
                                     onApply: onApply
                                 )
                             }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("ADC CONFIGURATION")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+
+                                ForEach(0..<4, id: \.self) { ch in
+                                    if activeChannels[ch] {
+                                        HStack {
+                                            Text("CH \(ch)")
+                                                .font(.system(size: 13, weight: .bold))
+                                                .frame(width: 40)
+                                            Picker("Rate", selection: scopeRateBinding(for: ch)) {
+                                                Text("10 SPS").tag(0)
+                                                Text("20 SPS").tag(1)
+                                                Text("1.2k").tag(2)
+                                                Text("4.8k").tag(3)
+                                            }
+                                            .pickerStyle(.menu)
+                                            Picker("Range", selection: scopeRangeBinding(for: ch)) {
+                                                Text("0-12V").tag(0)
+                                                Text("\u{00B1}12V").tag(1)
+                                            }
+                                            .pickerStyle(.menu)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding()
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                         .padding()
                     }
@@ -819,5 +845,26 @@ struct ScopeSettingsView: View {
             }
             .preferredColorScheme(.dark)
         }
+    }
+
+    private func scopeRateBinding(for ch: Int) -> Binding<Int> {
+        let rateMap = [0, 1, 8, 12]
+        return Binding(
+            get: { rateMap.firstIndex(of: configs[ch].rate) ?? 1 },
+            set: { newIdx in
+                configs[ch].rate = rateMap[newIdx]
+                onApply(ch, configs[ch])
+            }
+        )
+    }
+
+    private func scopeRangeBinding(for ch: Int) -> Binding<Int> {
+        return Binding(
+            get: { min(configs[ch].range, 1) },
+            set: { newVal in
+                configs[ch].range = newVal
+                onApply(ch, configs[ch])
+            }
+        )
     }
 }

@@ -51,22 +51,23 @@ typedef struct {
     bool     available;                     // false if U17 S3 interlock closed
 } SelftestSupplyVoltages;
 
-typedef struct {
-    uint8_t  rail;
-    uint8_t  u23_mask;
-    uint32_t raw_code;
-    uint16_t adc_upr;
-    uint16_t adc_config;
-    uint8_t  requested_range;
-    uint8_t  requested_mux;
-    uint16_t live_status;
-    uint16_t channel_alert;
-    uint16_t alert_status;
-    float    raw_voltage_v;
-    bool     read_ok;
-    bool     adc_ready;
-    bool     mux_faulted;
-} SelftestSupplyDebug;
+// Debug struct — commented out, kept for future diagnostics
+// typedef struct {
+//     uint8_t  rail;
+//     uint8_t  u23_mask;
+//     uint32_t raw_code;
+//     uint16_t adc_upr;
+//     uint16_t adc_config;
+//     uint8_t  requested_range;
+//     uint8_t  requested_mux;
+//     uint16_t live_status;
+//     uint16_t channel_alert;
+//     uint16_t alert_status;
+//     float    raw_voltage_v;
+//     bool     read_ok;
+//     bool     adc_ready;
+//     bool     mux_faulted;
+// } SelftestSupplyDebug;
 
 // Calibration result
 typedef struct {
@@ -118,7 +119,7 @@ const SelftestBootResult* selftest_get_boot_result(void);
  */
 float selftest_measure_supply(uint8_t rail, bool fast = false);
 
-const SelftestSupplyDebug* selftest_get_last_supply_debug(void);
+// const SelftestSupplyDebug* selftest_get_last_supply_debug(void);
 
 /**
  * @brief  Get the cached supply rail voltages (from background monitoring).

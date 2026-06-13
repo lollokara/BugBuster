@@ -2130,30 +2130,31 @@ static esp_err_t handle_get_selftest_supply(httpd_req_t *req)
     cJSON_AddStringToObject(resp, "rail", (rail < 3) ? names[rail] : "unknown");
     cJSON_AddNumberToObject(resp, "voltage", voltage);
     cJSON_AddBoolToObject(resp, "ok", voltage >= 0);
-    const SelftestSupplyDebug *dbg = selftest_get_last_supply_debug();
-    if (dbg) {
-        cJSON *debug = cJSON_AddObjectToObject(resp, "debug");
-        cJSON_AddNumberToObject(debug, "rail", dbg->rail);
-        cJSON_AddNumberToObject(debug, "u23Mask", dbg->u23_mask);
-        cJSON_AddNumberToObject(debug, "rawCode", dbg->raw_code);
-        cJSON_AddNumberToObject(debug, "adcUpr", dbg->adc_upr);
-        cJSON_AddNumberToObject(debug, "adcConfig", dbg->adc_config);
-        cJSON_AddNumberToObject(debug, "requestedMux", dbg->requested_mux);
-        cJSON_AddNumberToObject(debug, "requestedRange", dbg->requested_range);
-        cJSON_AddNumberToObject(debug, "configuredMux", (dbg->adc_config & ADC_CONFIG_CONV_MUX_MASK) >> ADC_CONFIG_CONV_MUX_SHIFT);
-        cJSON_AddNumberToObject(debug, "configuredRange", (dbg->adc_config & ADC_CONFIG_CONV_RANGE_MASK) >> ADC_CONFIG_CONV_RANGE_SHIFT);
-        cJSON_AddNumberToObject(debug, "configuredRate", (dbg->adc_config & ADC_CONFIG_CONV_RATE_MASK) >> ADC_CONFIG_CONV_RATE_SHIFT);
-        cJSON_AddNumberToObject(debug, "adcMux", (dbg->adc_upr & ADC_RESULT_UPR_CONV_RES_MUX_MASK) >> ADC_RESULT_UPR_CONV_RES_MUX_SHIFT);
-        cJSON_AddNumberToObject(debug, "adcRange", (dbg->adc_upr & ADC_RESULT_UPR_CONV_RES_RANGE_MASK) >> ADC_RESULT_UPR_CONV_RES_RANGE_SHIFT);
-        cJSON_AddNumberToObject(debug, "adcSeqCount", (dbg->adc_upr & ADC_RESULT_UPR_CONV_SEQ_COUNT_MASK) >> ADC_RESULT_UPR_CONV_SEQ_COUNT_SHIFT);
-        cJSON_AddNumberToObject(debug, "liveStatus", dbg->live_status);
-        cJSON_AddNumberToObject(debug, "channelAlert", dbg->channel_alert);
-        cJSON_AddNumberToObject(debug, "alertStatus", dbg->alert_status);
-        cJSON_AddNumberToObject(debug, "rawVoltage", dbg->raw_voltage_v);
-        cJSON_AddBoolToObject(debug, "readOk", dbg->read_ok);
-        cJSON_AddBoolToObject(debug, "adcReady", dbg->adc_ready);
-        cJSON_AddBoolToObject(debug, "muxFaulted", dbg->mux_faulted);
-    }
+    // Debug block — commented out, kept for future diagnostics
+    // const SelftestSupplyDebug *dbg = selftest_get_last_supply_debug();
+    // if (dbg) {
+    //     cJSON *debug = cJSON_AddObjectToObject(resp, "debug");
+    //     cJSON_AddNumberToObject(debug, "rail", dbg->rail);
+    //     cJSON_AddNumberToObject(debug, "u23Mask", dbg->u23_mask);
+    //     cJSON_AddNumberToObject(debug, "rawCode", dbg->raw_code);
+    //     cJSON_AddNumberToObject(debug, "adcUpr", dbg->adc_upr);
+    //     cJSON_AddNumberToObject(debug, "adcConfig", dbg->adc_config);
+    //     cJSON_AddNumberToObject(debug, "requestedMux", dbg->requested_mux);
+    //     cJSON_AddNumberToObject(debug, "requestedRange", dbg->requested_range);
+    //     cJSON_AddNumberToObject(debug, "configuredMux", (dbg->adc_config & ADC_CONFIG_CONV_MUX_MASK) >> ADC_CONFIG_CONV_MUX_SHIFT);
+    //     cJSON_AddNumberToObject(debug, "configuredRange", (dbg->adc_config & ADC_CONFIG_CONV_RANGE_MASK) >> ADC_CONFIG_CONV_RANGE_SHIFT);
+    //     cJSON_AddNumberToObject(debug, "configuredRate", (dbg->adc_config & ADC_CONFIG_CONV_RATE_MASK) >> ADC_CONFIG_CONV_RATE_SHIFT);
+    //     cJSON_AddNumberToObject(debug, "adcMux", (dbg->adc_upr & ADC_RESULT_UPR_CONV_RES_MUX_MASK) >> ADC_RESULT_UPR_CONV_RES_MUX_SHIFT);
+    //     cJSON_AddNumberToObject(debug, "adcRange", (dbg->adc_upr & ADC_RESULT_UPR_CONV_RES_RANGE_MASK) >> ADC_RESULT_UPR_CONV_RES_RANGE_SHIFT);
+    //     cJSON_AddNumberToObject(debug, "adcSeqCount", (dbg->adc_upr & ADC_RESULT_UPR_CONV_SEQ_COUNT_MASK) >> ADC_RESULT_UPR_CONV_SEQ_COUNT_SHIFT);
+    //     cJSON_AddNumberToObject(debug, "liveStatus", dbg->live_status);
+    //     cJSON_AddNumberToObject(debug, "channelAlert", dbg->channel_alert);
+    //     cJSON_AddNumberToObject(debug, "alertStatus", dbg->alert_status);
+    //     cJSON_AddNumberToObject(debug, "rawVoltage", dbg->raw_voltage_v);
+    //     cJSON_AddBoolToObject(debug, "readOk", dbg->read_ok);
+    //     cJSON_AddBoolToObject(debug, "adcReady", dbg->adc_ready);
+    //     cJSON_AddBoolToObject(debug, "muxFaulted", dbg->mux_faulted);
+    // }
     return send_json(req, resp);
 }
 

@@ -69,16 +69,10 @@ struct OverviewTab: View {
 
                 // AFE at top
                 channelsGrid
-<<<<<<< Updated upstream
-
-=======
                 ivPlotSection
->>>>>>> Stashed changes
                 suppliesCard
 
                 presetsCard
-
-                Spacer(minLength: 100)
             }
             .padding()
         }
@@ -166,12 +160,9 @@ struct OverviewTab: View {
                     let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
                     
                     ForEach(channels) { ch in
-<<<<<<< Updated upstream
-=======
                         let isChannelCGreyed = ch.id == 2 && workerEnabled
                         let accent = isChannelCGreyed ? Color.gray : channelAccentColor(for: ch.id)
                         
->>>>>>> Stashed changes
                         Button(action: { selectedChannel = ch }) {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
@@ -221,17 +212,13 @@ struct OverviewTab: View {
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
-<<<<<<< Updated upstream
-                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-=======
-                            .glassEffect(.regular.tint(accent.opacity(0.12)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .glassEffect(.regular.tint(accent.opacity(0.35)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(accent.opacity(0.32), lineWidth: 1)
+                                    .stroke(accent.opacity(0.6), lineWidth: 1.5)
                             )
                             .opacity(isChannelCGreyed ? 0.4 : 1.0)
                             .grayscale(isChannelCGreyed ? 1.0 : 0)
->>>>>>> Stashed changes
                         }
                         .disabled(isChannelCGreyed)
                     }
@@ -281,7 +268,8 @@ struct OverviewTab: View {
                     let enables = connectionManager.lastOverview?.ioexp.enables
 
                     let railNames = ["VADJ1", "VADJ2", "3V3_ADJ"]
-                    let railEnabled = [enables?.vadj1 ?? false, enables?.vadj2 ?? false, false]
+                    // 3V3_ADJ (VLOGIC) is always on — it has no enable control
+                    let railEnabled = [enables?.vadj1 ?? false, enables?.vadj2 ?? false, true]
 
                     ForEach(0..<3, id: \.self) { i in
                         let measuredV = rails.first(where: { $0.rail == i })?.voltage
@@ -579,6 +567,16 @@ struct OverviewTab: View {
                          doState: false, alert: 0, alertMask: 0, rtdExcitationUa: 500)
         }
     }
+
+    private func channelAccentColor(for id: Int) -> Color {
+        let colors: [Color] = [
+            Color(red: 0.23, green: 0.51, blue: 0.96), // Blue
+            Color(red: 0.06, green: 0.73, blue: 0.51), // Emerald
+            Color(red: 0.96, green: 0.62, blue: 0.04), // Amber
+            Color(red: 0.66, green: 0.33, blue: 0.97)  // Purple
+        ]
+        return id < colors.count ? colors[id] : .secondary
+    }
 }
 
 // MARK: - Voltage Slider Row with animated confirm button
@@ -702,40 +700,211 @@ struct ChannelConfigSheet: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @State private var selectedFuncIndex = 0
     @State private var targetVal = ""
+    @State private var voutRange = 0
+    @State private var adcRange = 0
+    @State private var adcRate = 0
+    @State private var rtdExcitation = 500
+    @State private var isSaving = false
+
+    let adcRangeOptions = [(0, "0–12 V"), (1, "±12 V"), (5, "0–2.5 V Diag")]
+    let adcRateOptions  = [(0, "10 SPS"), (1, "20 SPS"), (2, "1200 SPS"), (3, "4800 SPS")]
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Channel Information") {
-                    LabeledContent("Channel ID", value: "\(channel.id)")
-                    LabeledContent("Current Function", value: channel.function.replacingOccurrences(of: "CH_FUNC_", with: ""))
-                    LabeledContent("ADC Value", value: String(format: "%.4f", channel.adcValue))
-                }
+            ZStack {
+                Color(red: 0.03, green: 0.05, blue: 0.10).ignoresSafeArea()
 
-                Section("Function Mode Setup") {
-                    Picker("Function Mode", selection: $selectedFuncIndex) {
-                        ForEach(availableFunctions) { item in
-                            Text(item.name).tag(item.id)
+                ScrollView {
+                    VStack(spacing: 16) {
+                        // ── Channel Info ──
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("CH \(channel.id)")
+                                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                                Spacer()
+                                Text(channel.function.replacingOccurrences(of: "CH_FUNC_", with: ""))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.cyan)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .glassEffect(.regular.tint(.cyan), in: Capsule())
+                            }
+                            HStack(spacing: 20) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("ADC").font(.system(size: 10)).foregroundColor(.secondary)
+                                    Text(String(format: "%.4f V", channel.adcValue))
+                                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("RAW").font(.system(size: 10)).foregroundColor(.secondary)
+                                    Text("\(channel.adcRaw)")
+                                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("DAC").font(.system(size: 10)).foregroundColor(.secondary)
+                                    Text(String(format: "%.3f V", channel.dacValue))
+                                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                }
+                                Spacer()
+                            }
+                            if channel.alert != 0 {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.red)
+                                    Text("Alert: 0x\(String(channel.alert, radix: 16, uppercase: true))")
+                                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.red)
+                                }
+                            }
                         }
-                    }
-                    .pickerStyle(.menu)
-                }
+                        .padding()
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                if selectedFuncIndex == 1 || selectedFuncIndex == 2 || selectedFuncIndex == 10 {
-                    Section("DAC Output Settings") {
-                        TextField(selectedFuncIndex == 1 ? "Target Voltage (V)" : "Target Current (mA)", text: $targetVal)
-                            .keyboardType(.decimalPad)
-                    }
-                }
+                        // ── Function Mode ──
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("FUNCTION MODE")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.secondary)
+                            Picker("Function", selection: $selectedFuncIndex) {
+                                ForEach(availableFunctions) { item in
+                                    Text(item.name).tag(item.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .accentColor(.cyan)
+                        }
+                        .padding()
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                Section {
-                    Button(action: { saveSettings() }) {
-                        Text("Apply Configurations")
-                            .bold()
+                        // ── VOUT Settings ──
+                        if selectedFuncIndex == 1 {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("VOLTAGE OUTPUT")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                HStack {
+                                    Text("Target Voltage")
+                                        .font(.system(size: 14, weight: .medium))
+                                    Spacer()
+                                    TextField("0.000", text: $targetVal)
+                                        .keyboardType(.decimalPad)
+                                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width: 100)
+                                    Text("V")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
+                                }
+                                Divider().background(Color.white.opacity(0.1))
+                                Text("OUTPUT RANGE")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                Picker("Range", selection: $voutRange) {
+                                    Text("0–12 V Unipolar").tag(0)
+                                    Text("±12 V Bipolar").tag(1)
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            .padding()
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+
+                        // ── IOUT Settings ──
+                        if selectedFuncIndex == 2 {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("CURRENT OUTPUT")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                HStack {
+                                    Text("Target Current")
+                                        .font(.system(size: 14, weight: .medium))
+                                    Spacer()
+                                    TextField("0.00", text: $targetVal)
+                                        .keyboardType(.decimalPad)
+                                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width: 100)
+                                    Text("mA")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding()
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+
+                        // ── VIN / ADC Config ──
+                        if selectedFuncIndex == 3 || selectedFuncIndex == 4 || selectedFuncIndex == 5 {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("ADC CONFIGURATION")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                HStack {
+                                    Text("Range")
+                                        .font(.system(size: 14, weight: .medium))
+                                    Spacer()
+                                    Picker("Range", selection: $adcRange) {
+                                        ForEach(adcRangeOptions, id: \.0) { opt in
+                                            Text(opt.1).tag(opt.0)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .accentColor(.cyan)
+                                }
+                                HStack {
+                                    Text("Sample Rate")
+                                        .font(.system(size: 14, weight: .medium))
+                                    Spacer()
+                                    Picker("Rate", selection: $adcRate) {
+                                        ForEach(adcRateOptions, id: \.0) { opt in
+                                            Text(opt.1).tag(opt.0)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .accentColor(.cyan)
+                                }
+                            }
+                            .padding()
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+
+                        // ── RTD Config ──
+                        if selectedFuncIndex == 7 {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("RTD CONFIGURATION")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                Text("Excitation Current")
+                                    .font(.system(size: 14, weight: .medium))
+                                Picker("Excitation", selection: $rtdExcitation) {
+                                    Text("500 µA").tag(500)
+                                    Text("1000 µA").tag(1000)
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            .padding()
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+
+                        // ── Apply Button ──
+                        Button(action: { saveSettings() }) {
+                            HStack {
+                                if isSaving {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
+                                Text(isSaving ? "Applying…" : "Apply Configuration")
+                                    .fontWeight(.bold)
+                            }
                             .foregroundColor(.white)
-                            .frame(maxWidth: .infinity, alignment: .center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .disabled(isSaving)
                     }
-                    .listRowBackground(Color.blue)
+                    .padding()
                 }
             }
             .navigationTitle("Configure CH \(channel.id)")
@@ -747,31 +916,76 @@ struct ChannelConfigSheet: View {
             }
             .onAppear {
                 selectedFuncIndex = channel.functionCode
-                if selectedFuncIndex == 1 || selectedFuncIndex == 2 || selectedFuncIndex == 10 {
+                voutRange = channel.adcRange > 0 ? 1 : 0
+                adcRange = channel.adcRange
+                adcRate = channel.adcRate
+                rtdExcitation = channel.rtdExcitationUa ?? 500
+                if selectedFuncIndex == 1 {
+                    targetVal = String(format: "%.3f", channel.dacValue)
+                } else if selectedFuncIndex == 2 {
                     targetVal = String(format: "%.2f", channel.dacValue)
                 }
             }
         }
+        .preferredColorScheme(.dark)
     }
 
     private func saveSettings() {
         let funcIndex = selectedFuncIndex
         let valString = targetVal
         let chId = channel.id
-        onDismiss() // Dismiss sheet immediately for snappy UI feel
-        
+        let vRange = voutRange
+        let aRange = adcRange
+        let aRate = adcRate
+        let rtdUa = rtdExcitation
+        isSaving = true
+
         Task {
-            _ = try? await connectionManager.postAction(
+            // 1. Set function mode
+            let funcOk = try? await connectionManager.postAction(
                 path: "/api/channel/\(chId)/function",
                 json: ["function": funcIndex]
             )
-            if (funcIndex == 1 || funcIndex == 2 || funcIndex == 10),
-               let val = Double(valString) {
-                let key = funcIndex == 1 ? "voltage" : "current_mA"
+
+            // 2. Sub-configurations
+            if funcIndex == 1 {
+                // VOUT: set range, then DAC voltage
                 _ = try? await connectionManager.postAction(
-                    path: "/api/channel/\(chId)/dac",
-                    json: [key: val]
+                    path: "/api/channel/\(chId)/vout/range",
+                    json: ["range": vRange]
                 )
+                if let val = Double(valString) {
+                    _ = try? await connectionManager.postAction(
+                        path: "/api/channel/\(chId)/dac",
+                        json: ["voltage": val]
+                    )
+                }
+            } else if funcIndex == 2 {
+                // IOUT: set DAC current
+                if let val = Double(valString) {
+                    _ = try? await connectionManager.postAction(
+                        path: "/api/channel/\(chId)/dac",
+                        json: ["current_mA": val]
+                    )
+                }
+            } else if funcIndex == 3 || funcIndex == 4 || funcIndex == 5 {
+                // VIN / Current Input: set ADC config
+                _ = try? await connectionManager.postAction(
+                    path: "/api/channel/\(chId)/adc/config",
+                    json: ["range": aRange, "rate": aRate]
+                )
+            } else if funcIndex == 7 {
+                // RTD: set excitation
+                _ = try? await connectionManager.postAction(
+                    path: "/api/channel/\(chId)/rtd/config",
+                    json: ["excitationUa": rtdUa]
+                )
+            }
+
+            await MainActor.run {
+                isSaving = false
+                connectionManager.showToast(funcOk == true ? "CH \(chId) configured" : "Configuration failed", type: funcOk == true ? .success : .error)
+                onDismiss()
             }
         }
     }

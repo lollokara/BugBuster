@@ -76,8 +76,11 @@
 #define U23_SW_VADJ1        0x40   // S7 (bit 6): VADJ1_BUCK (via R107/R109 divider)
 #define U23_SW_VADJ2        0x80   // S8 (bit 7): VADJ2_BUCK (via R108/R110 divider)
 
-// VADJ voltage divider ratio: R_bottom / (R_top + R_bottom) = 100k / (34.8k + 100k)
-#define VADJ_DIVIDER_RATIO  0.7418f
+// VADJ voltage divider effective ratio under load.
+// Nominal R_bottom/(R_top+R_bottom) = 100k/(34.8k+100k) = 0.7418, but the
+// divider draws current through the regulator feedback network, lowering the
+// effective ratio to 0.7222 (measured 2026-06-13, 4-point mean 3–15 V span).
+#define VADJ_DIVIDER_RATIO  0.7222f
 
 // E-fuse IMON scaling: V_IMON = I_OUT × G_IMON × R_IOCP
 // G_IMON = 50 µA/A (typ), R_IOCP = 11 kΩ → 550 mV per amp

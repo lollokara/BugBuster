@@ -69,10 +69,11 @@ export function Overview() {
         if (!status || !Array.isArray(status.channels))
             return;
         const arr = status.channels;
+        const monActive = supplyMonitorActive.value;
         const vals = [
             displayValueFromChannel(arr[0], functionCodeFromChannel(arr[0])),
             displayValueFromChannel(arr[1], functionCodeFromChannel(arr[1])),
-            displayValueFromChannel(arr[2], functionCodeFromChannel(arr[2])),
+            monActive ? NaN : displayValueFromChannel(arr[2], functionCodeFromChannel(arr[2])),
             displayValueFromChannel(arr[3], functionCodeFromChannel(arr[3])),
         ];
         pushChannelSamples(vals);
@@ -219,7 +220,7 @@ export function Overview() {
                 </div>
                 <div class="analog-row" style={{ marginTop: "6px" }}>
                   <label class="uppercase-tag">Function</label>
-                  <select class="input" value={String(Number.isFinite(funcCode) ? funcCode : 0)} disabled={!mac || busyChannel === chIndex || (chIndex === 3 && supplyMonitorActive.value)} onChange={(e) => setFunction(chIndex, parseInt(e.currentTarget.value, 10))}>
+                  <select class="input" value={String(Number.isFinite(funcCode) ? funcCode : 0)} disabled={!mac || busyChannel === chIndex || (chIndex === 2 && supplyMonitorActive.value)} onChange={(e) => setFunction(chIndex, parseInt(e.currentTarget.value, 10))}>
                     {CHANNEL_FUNCTION_OPTIONS.map((opt) => (<option key={opt.code} value={String(opt.code)}>
                         {opt.label}
                       </option>))}
@@ -230,7 +231,7 @@ export function Overview() {
                   <Sparkline values={sparks[chIndex] ?? []} color={CH_COLORS[chIndex]} height={56}/>
                 </div>
               </GlassCard>);
-            return (<ChDOverlay key={chIndex} active={chIndex === 3 && supplyMonitorActive.value}>
+            return (<ChDOverlay key={chIndex} active={chIndex === 2 && supplyMonitorActive.value}>
                 {card}
               </ChDOverlay>);
         })}

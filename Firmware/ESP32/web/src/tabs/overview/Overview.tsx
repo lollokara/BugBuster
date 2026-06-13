@@ -85,10 +85,11 @@ export function Overview() {
   useEffect(() => {
     if (!status || !Array.isArray(status.channels)) return;
     const arr = status.channels;
+    const monActive = supplyMonitorActive.value;
     const vals: [number, number, number, number] = [
       displayValueFromChannel(arr[0], functionCodeFromChannel(arr[0])),
       displayValueFromChannel(arr[1], functionCodeFromChannel(arr[1])),
-      displayValueFromChannel(arr[2], functionCodeFromChannel(arr[2])),
+      monActive ? NaN : displayValueFromChannel(arr[2], functionCodeFromChannel(arr[2])),
       displayValueFromChannel(arr[3], functionCodeFromChannel(arr[3])),
     ];
     pushChannelSamples(vals);
@@ -234,7 +235,7 @@ export function Overview() {
                   <select
                     class="input"
                     value={String(Number.isFinite(funcCode) ? funcCode : 0)}
-                    disabled={!mac || busyChannel === chIndex || (chIndex === 3 && supplyMonitorActive.value)}
+                    disabled={!mac || busyChannel === chIndex || (chIndex === 2 && supplyMonitorActive.value)}
                     onChange={(e) =>
                       setFunction(chIndex, parseInt((e.currentTarget as HTMLSelectElement).value, 10))
                     }
@@ -253,7 +254,7 @@ export function Overview() {
               </GlassCard>
             );
             return (
-              <ChDOverlay key={chIndex} active={chIndex === 3 && supplyMonitorActive.value}>
+              <ChDOverlay key={chIndex} active={chIndex === 2 && supplyMonitorActive.value}>
                 {card}
               </ChDOverlay>
             );

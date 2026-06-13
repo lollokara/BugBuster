@@ -53,14 +53,6 @@ struct SignalPathTab: View {
                 }
 
                 ScrollView {
-<<<<<<< Updated upstream
-                    GlassEffectContainer(spacing: 16) {
-                        VStack(spacing: 16) {
-                            ForEach(0..<4) { ch in
-                                let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
-                                let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
-                                    ? connectionManager.lastStatus!.muxStates[muxDev] : 0
-=======
                     VStack(spacing: 0) {
                         GlassEffectContainer(spacing: 16) {
                             VStack(spacing: 16) {
@@ -73,7 +65,6 @@ struct SignalPathTab: View {
                                     let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
                                     let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
                                         ? connectionManager.lastStatus!.muxStates[muxDev] : 0
->>>>>>> Stashed changes
 
                                 let isPsuOn = ch < 2
                                     ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
@@ -87,25 +78,6 @@ struct SignalPathTab: View {
                                 let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
                                 let vAdjIndex  = ch < 2 ? 0 : 1
 
-<<<<<<< Updated upstream
-                                BlockTile(
-                                    blockIndex: ch,
-                                    muxDevice: muxDev,
-                                    muxRef: MUX_REF[ch],
-                                    muxState: muxState,
-                                    ioLabels: GPIO_PAIR_LABELS[ch],
-                                    accentColor: ACCENTS[ch],
-                                    isPsuActive: isPsuOn,
-                                    isEfuseActive: isEfOn,
-                                    isEfuseFault: isEfFault,
-                                    isOeActive: isOeActive,
-                                    vAdjLabel: vAdjLabel,
-                                    onApplyMuxStates: { states in applyPreset(states) },
-                                    onToggleOe:     { toggleOe() },
-                                    onToggleVAdj:   { togglePsu(vAdjIndex) },
-                                    onToggleEfuse:  { toggleEfuse(ch) }
-                                )
-=======
                                     BlockTile(
                                         blockIndex: ch,
                                         muxDevice: muxDev,
@@ -127,11 +99,14 @@ struct SignalPathTab: View {
                                     .grayscale(isChannelCGreyed ? 1.0 : 0)
                                     .disabled(isChannelCGreyed)
                                 }
->>>>>>> Stashed changes
                             }
                         }
                     }
                     .padding()
+
+                    GPIOControlCard()
+                        .padding(.horizontal)
+                        .padding(.bottom)
                 }
             }
         }
@@ -475,5 +450,117 @@ struct ControlPill: View {
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                 )
         }
+    }
+}
+
+// MARK: - GPIO Control Section
+
+struct GPIOControlCard: View {
+    @EnvironmentObject var connectionManager: ConnectionManager
+
+    let modeNames = ["Disabled", "Input", "Output", "In+PD", "Out+OD"]
+    let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("GPIO Direct Control")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.blue)
+                Spacer()
+                Button(action: { connectionManager.fetchGpios() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14))
+                }
+                .padding(8)
+                .glassEffect(.regular, in: Circle())
+            }
+
+            if connectionManager.lastGpios.isEmpty {
+                Text("Loading GPIO states…")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            } else {
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(connectionManager.lastGpios) { gpio in
+                        GPIOPinTile(gpio: gpio)
+                    }
+                }
+            }
+        }
+        .padding()
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onAppear { connectionManager.fetchGpios() }
+    }
+}
+
+struct GPIOPinTile: View {
+    let gpio: GPIOPin
+    @EnvironmentObject var connectionManager: ConnectionManager
+
+    let modeNames = ["Disabled", "Input", "Output", "In+PD", "Out+OD"]
+
+    var isOutput: Bool { gpio.mode == 2 || gpio.mode == 4 }
+    var isInput: Bool { gpio.mode == 1 || gpio.mode == 3 }
+
+    var stateColor: Color {
+        if gpio.mode == 0 { return .secondary }
+        if isOutput { return gpio.output ? .green : .red.opacity(0.6) }
+        if isInput { return gpio.input ? .cyan : .secondary }
+        return .secondary
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text("IO \(gpio.id)")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                Spacer()
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: stateColor.opacity(0.5), radius: 3)
+            }
+
+            Menu {
+                ForEach(0..<5) { mode in
+                    Button(modeNames[mode]) {
+                        Task { _ = await connectionManager.configureGpio(pin: gpio.id, mode: mode) }
+                    }
+                }
+            } label: {
+                Text(gpio.mode < modeNames.count ? modeNames[gpio.mode] : "?")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.cyan)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+
+            if isOutput {
+                Button(action: {
+                    Task { _ = await connectionManager.setGpioOutput(pin: gpio.id, value: !gpio.output) }
+                }) {
+                    Text(gpio.output ? "HIGH" : "LOW")
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundColor(gpio.output ? .black : .white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .glassEffect(
+                            gpio.output ? .regular.tint(.green) : .regular,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                }
+            } else if isInput {
+                Text(gpio.input ? "HIGH" : "LOW")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(gpio.input ? .cyan : .secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            }
+        }
+        .padding(8)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }

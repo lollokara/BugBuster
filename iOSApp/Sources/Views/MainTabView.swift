@@ -84,6 +84,7 @@ struct CustomTabBar: View {
 
 struct MainTabView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var selectedTab = 0
     @State private var showingScanSheet = false
     @State private var manualIp = ""
@@ -115,13 +116,35 @@ struct MainTabView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    // Toast overlay
+                    if let toast = connectionManager.toastMessage {
+                        VStack {
+                            HStack(spacing: 8) {
+                                Image(systemName: toast.type == .success ? "checkmark.circle.fill" : toast.type == .error ? "xmark.circle.fill" : "info.circle.fill")
+                                    .foregroundColor(toast.type == .success ? .green : toast.type == .error ? .red : .blue)
+                                Text(toast.text)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.white)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .glassEffect(.regular, in: Capsule())
+                            .shadow(color: .black.opacity(0.3), radius: 10)
+                            .padding(.top, 60)
+                            Spacer()
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(.spring(response: 0.3), value: connectionManager.toastMessage)
+                        .allowsHitTesting(false)
+                    }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     CustomTabBar(
                         selectedTab: $selectedTab,
                         tabs: tabs
                     )
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, sizeClass == .regular ? 80 : 16)
                     .padding(.top, 6)
                     // Sit closer to the home indicator: shrink the measured
                     // inset so the pill shifts down into the bottom safe area.
@@ -131,6 +154,9 @@ struct MainTabView: View {
                 // without this the system also squeezes content and the tab bar
                 // rides up above the keyboard.
                 .ignoresSafeArea(.keyboard)
+                .onChange(of: selectedTab) { _ in
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
             } else {
                 connectionDashboard
             }

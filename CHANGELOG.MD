@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-<<<<<<< Updated upstream
-=======
 ### Notebooks
 - **RP2040 firmware build notebook — OTA flash section**: Added section 3 "OTA Flash via ESP32 (WiFi)" with three cells: (A) auto-discovery via mDNS/zeroconf with subnet-scan fallback probing `/api/device/info`, (B) binary upload to `POST /api/ota/upload_rp2040` with KB/s rate display, (C) flash trigger via `POST /api/update/apply` with live progress bar polling `GET /api/update/status` (`state`/`step`/`progressDone`/`progressTotal`). Existing picotool and HAT-demo sections renumbered to 4 and 5.
 
@@ -15,9 +13,13 @@
 - **Removed controls**: "Enable Analog 15V", "Enable Signal Mux", and "Enable USB Hub Controller" toggles removed from the supply tab (not user-facing)
 - **Fixed duplicate `onAppear`**: removed duplicate quicksetups load call; HAT sliders now also sync on first appear
 
-## [1.4.1] — 2026-06-12
+### ESP32 Firmware
+- **Self-test supply rail monitoring fix**: Restored unipolar ADC range (`ADC_RNG_0_12V`) for U23 supply measurements — the bipolar workaround is no longer needed after the hardware PCB trace fix on S4 (ADC_OUT_4). Commented out the `SelftestSupplyDebug` diagnostic struct, its recording functions, and the debug JSON block in `GET /api/selftest/supply/{rail}` (kept as comments for future use).
+- **VADJ load compensation**: Added `VADJ_LOAD_COMPENSATION` factor (1.0272) in `config.h` to correct the ~2.7% voltage lift on VADJ1/VADJ2 caused by the U23 measurement divider (R107/R109, R108/R110) loading the regulator feedback node. The correction is applied only in the formula-based fallback path of `ds4424_voltage_to_code()` — when calibration data is present, the cal table handles the mapping directly without extra correction.
+- **Auto-calibration 10× speedup**: Reduced per-point measurement from ~8.2 s to ~0.7 s by switching from the 5-sample-median `measure_supply_stable_for_cal()` to a single fast-path `selftest_measure_supply(fast=true)` during calibration sweeps. The MUX path stays constant between points, and the DCDC loop settles within ~5 ms for a 35 mV DAC step, making the full MUX open/close/settle cycle unnecessary. DAC settle reduced from 200 ms to 100 ms (20× margin over the DCDC loop BW), midpoint soak from 10 s to 3 s. Total calibration time drops from ~5 min to ~1.3 min per channel.
 
-*(no changes yet)*
+### ESP32 Web UI
+- **Supply monitor overlay on correct channel**: Fixed the on-device web UI to grey out and disable Channel C (logical index 2, physical AD74416H D) instead of Channel D (logical index 3) when the self-test supply monitor worker is active. Applies to Overview, Analog (ADC/VDAC/IIN cards), and Signal Path tabs. Channel C sparkline now stops updating (pushes NaN) while the monitor is active, preventing stale histogram data.
 
 ## [1.4.1] — 2026-06-12
 
@@ -36,7 +38,6 @@
 
 ## [1.4.0] — 2026-06-12
 
->>>>>>> Stashed changes
 ### Added
 - **iOS Oscilloscope Scope Tab**: Added a new "Scope" tab (waveform icon) to the iOS app bottom navigation. It features a real-time waveform display rendering active channels with distinct colors, a configuration settings modal sheet (for selecting MUX inputs, voltage ranges, and sample rates per channel), pinch-to-zoom scaling for the timebase using magnification gestures, and auto-fit Y-axis scaling. Implemented URLSession response disposition handling to enable chunked stream delivery, added Play/Pause toolbar buttons, and added connection error state overlays with retry flows.
 - **iOS Oscilloscope sample counter**: Displays the count of all received samples next to the streaming state in the header.

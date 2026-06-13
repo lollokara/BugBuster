@@ -67,7 +67,7 @@ function AdcCard() {
             rate: Number.isFinite(c.rateCode) ? c.rateCode : 0,
           };
           return (
-            <ChDOverlay key={ch} active={ch === 3 && supplyMonitorActive.value}>
+            <ChDOverlay key={ch} active={ch === 2 && supplyMonitorActive.value}>
               <div class="analog-item">
                 <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
                 <BigValue value={Number(c.adcValue ?? NaN)} unit="V" precision={3} />
@@ -193,7 +193,7 @@ function VdacCard() {
           const voltage = pendingVoltage[ch] ?? (recentlyEdited ? (pendingVoltage[ch] ?? 0) : (Number.isFinite(c.dacValue) ? c.dacValue : 0));
           const isBipolar = !!bipolar[ch];
           return (
-            <ChDOverlay key={ch} active={ch === 3 && supplyMonitorActive.value}>
+            <ChDOverlay key={ch} active={ch === 2 && supplyMonitorActive.value}>
             <div class="analog-item">
               <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
               <BigValue value={Number(c.dacValue ?? NaN)} unit="V" precision={3} />
@@ -371,7 +371,7 @@ function IinCard() {
         {[0, 1, 2, 3].map((ch) => {
           const c = readChannel(status, ch);
           return (
-            <ChDOverlay key={ch} active={ch === 3 && supplyMonitorActive.value}>
+            <ChDOverlay key={ch} active={ch === 2 && supplyMonitorActive.value}>
             <div class="analog-item">
               <div class="uppercase-tag">CH {CH_NAMES[ch]}</div>
               <BigValue value={Number(c.iinValue ?? NaN)} unit="mA" precision={2} />

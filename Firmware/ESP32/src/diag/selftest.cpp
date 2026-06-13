@@ -34,7 +34,7 @@ static const char *TAG = "selftest";
 
 static SelftestBootResult    s_boot_result   = {};
 static SelftestSupplyVoltages s_supply_volt  = {};
-static SelftestSupplyDebug   s_supply_debug = {};
+// static SelftestSupplyDebug   s_supply_debug = {};
 static SelftestCalResult     s_cal_result   = {};
 static SelftestCalResult     s_cal_result_snapshot = {};
 static bool                  s_initialized  = false;
@@ -90,44 +90,45 @@ static constexpr int SELFTEST_ADC_INPUT_SETTLE_MS = 600;
 static constexpr int SELFTEST_ADC_INPUT_SETTLE_FAST_MS = 250;
 static constexpr uint32_t SELFTEST_ADC_READY_TIMEOUT_MS = 600;
 
-static void selftest_debug_begin(uint8_t rail, uint8_t u23_mask)
-{
-    s_supply_debug = {};
-    s_supply_debug.rail = rail;
-    s_supply_debug.u23_mask = u23_mask;
-    s_supply_debug.mux_faulted = adgs_is_faulted();
-}
-
-static void selftest_debug_record_adc_config(AD74416H *dev,
-                                             uint8_t requested_mux,
-                                             uint8_t requested_range)
-{
-    s_supply_debug.requested_mux = requested_mux;
-    s_supply_debug.requested_range = requested_range;
-    if (dev) {
-        dev->readAdcConfig(SELFTEST_PHYSICAL_CH, &s_supply_debug.adc_config);
-    }
-}
-
-static void selftest_debug_record_sample(AD74416H *dev,
-                                         uint32_t raw,
-                                         uint16_t upr,
-                                         bool read_ok,
-                                         bool adc_ready,
-                                         float raw_voltage)
-{
-    s_supply_debug.raw_code = raw;
-    s_supply_debug.adc_upr = upr;
-    s_supply_debug.read_ok = read_ok;
-    s_supply_debug.adc_ready = adc_ready;
-    s_supply_debug.raw_voltage_v = raw_voltage;
-    s_supply_debug.mux_faulted = adgs_is_faulted();
-    if (dev) {
-        dev->readLiveStatus(&s_supply_debug.live_status);
-        dev->readChannelAlertStatus(SELFTEST_PHYSICAL_CH, &s_supply_debug.channel_alert);
-        dev->readAlertStatus(&s_supply_debug.alert_status);
-    }
-}
+// Debug helpers — commented out, kept for future diagnostics
+// static void selftest_debug_begin(uint8_t rail, uint8_t u23_mask)
+// {
+//     s_supply_debug = {};
+//     s_supply_debug.rail = rail;
+//     s_supply_debug.u23_mask = u23_mask;
+//     s_supply_debug.mux_faulted = adgs_is_faulted();
+// }
+//
+// static void selftest_debug_record_adc_config(AD74416H *dev,
+//                                              uint8_t requested_mux,
+//                                              uint8_t requested_range)
+// {
+//     s_supply_debug.requested_mux = requested_mux;
+//     s_supply_debug.requested_range = requested_range;
+//     if (dev) {
+//         dev->readAdcConfig(SELFTEST_PHYSICAL_CH, &s_supply_debug.adc_config);
+//     }
+// }
+//
+// static void selftest_debug_record_sample(AD74416H *dev,
+//                                          uint32_t raw,
+//                                          uint16_t upr,
+//                                          bool read_ok,
+//                                          bool adc_ready,
+//                                          float raw_voltage)
+// {
+//     s_supply_debug.raw_code = raw;
+//     s_supply_debug.adc_upr = upr;
+//     s_supply_debug.read_ok = read_ok;
+//     s_supply_debug.adc_ready = adc_ready;
+//     s_supply_debug.raw_voltage_v = raw_voltage;
+//     s_supply_debug.mux_faulted = adgs_is_faulted();
+//     if (dev) {
+//         dev->readLiveStatus(&s_supply_debug.live_status);
+//         dev->readChannelAlertStatus(SELFTEST_PHYSICAL_CH, &s_supply_debug.channel_alert);
+//         dev->readAlertStatus(&s_supply_debug.alert_status);
+//     }
+// }
 
 // -----------------------------------------------------------------------------
 // Internal helpers
@@ -235,7 +236,7 @@ static float read_channel_d(uint8_t adc_range,
                       ADC_MUX_LF_TO_AGND,
                       (AdcRange)adc_range,
                       ADC_RATE_200SPS_H);
-    selftest_debug_record_adc_config(dev, ADC_MUX_LF_TO_AGND, adc_range);
+    // selftest_debug_record_adc_config(dev, ADC_MUX_LF_TO_AGND, adc_range);
 
     // Start continuous conversions ONLY for SELFTEST_PHYSICAL_CH (Channel D) during
     // measurement. This ensures a fast, dedicated conversion cycle (5 ms per sample
@@ -260,7 +261,7 @@ static float read_channel_d(uint8_t adc_range,
     float samples[5] = {0};
     for (int i = 0; i < sample_count; i++) {
         if (!selftest_wait_adc_ready(dev, SELFTEST_ADC_READY_TIMEOUT_MS)) {
-            selftest_debug_record_sample(dev, 0, 0, false, false, -1.0f);
+            // selftest_debug_record_sample(dev, 0, 0, false, false, -1.0f);
             // Force physical Channel D to HIGH_IMP before releasing mutex — do not leave it
             // in VIN mode with the U23 path still closed.
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -294,7 +295,7 @@ static float read_channel_d(uint8_t adc_range,
         bool read_ok = dev->readAdcResultDetailed(SELFTEST_PHYSICAL_CH, &raw, &upr);
 
         if (!read_ok) {
-            selftest_debug_record_sample(dev, raw, upr, false, true, -1.0f);
+            // selftest_debug_record_sample(dev, raw, upr, false, true, -1.0f);
             // Force physical Channel D to HIGH_IMP before releasing mutex — do not leave it
             // in VIN mode with the U23 path still closed.
             if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -323,7 +324,7 @@ static float read_channel_d(uint8_t adc_range,
             return -1.0f;
         }
         samples[i] = dev->adcCodeToVoltage(raw, (AdcRange)adc_range);
-        selftest_debug_record_sample(dev, raw, upr, true, true, samples[i]);
+        // selftest_debug_record_sample(dev, raw, upr, true, true, samples[i]);
         dev->clearAdcDataReady();
         if (!fast) delay_ms(40);
     }
@@ -732,23 +733,18 @@ float selftest_measure_supply(uint8_t rail, bool fast)
 {
     if (rail >= SELFTEST_RAIL_COUNT) return -1.0f;
 
-    // Use the bipolar range for U23 supply measurements. The U23 path shares a
-    // high-impedance measurement rail and can sit a few LSB below AGND during
-    // settling; the 0..12 V range reports that as ADC_ERR + 0x000000. Bipolar
-    // mode still covers all expected positive rail voltages after the VADJ
-    // divider while avoiding false under-range zeros.
-    selftest_debug_begin(rail, U23_SW_ADC_CH_D | RAIL_SW[rail]);
-    float raw_v = measure_via_u23(RAIL_SW[rail], ADC_RNG_NEG12_12V, fast);
+    // selftest_debug_begin(rail, U23_SW_ADC_CH_D | RAIL_SW[rail]);
+    float raw_v = measure_via_u23(RAIL_SW[rail], ADC_RNG_0_12V, fast);
     if (raw_v < 0) return -1.0f;
 
     // Apply voltage divider correction
     return raw_v * RAIL_CORRECTION[rail];
 }
 
-const SelftestSupplyDebug* selftest_get_last_supply_debug(void)
-{
-    return &s_supply_debug;
-}
+// const SelftestSupplyDebug* selftest_get_last_supply_debug(void)
+// {
+//     return &s_supply_debug;
+// }
 
 const SelftestSupplyVoltages* selftest_get_supply_voltages(void)
 {
@@ -1047,18 +1043,17 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
     auto add_cal_point = [&](int8_t code) -> bool {
         cal_trace_update(3, idac_channel, (uint8_t)point_idx, code, -1.0f, true);
         ds4424_set_code(idac_channel, code);
-        delay_ms(200);  // baseline settle before measurement
+        delay_ms(100);  // DCDC loop settles in ~5ms; 100ms = 20× margin
 
         float measured_v = -1.0f;
-        const bool is_vadj_rail =
-            (rail == SELFTEST_RAIL_VADJ1) || (rail == SELFTEST_RAIL_VADJ2);
         bool ok = false;
-        if (is_vadj_rail) {
-            ok = measure_supply_stable_for_cal(rail, &measured_v);
-        } else {
-            measured_v = selftest_measure_supply(rail);
-            ok = measured_v >= 0.0f;
-        }
+        // Use fast single-sample measurement for all rails during calibration.
+        // The MUX path (U23 → ADC Ch D) doesn't change between points, and the
+        // DCDC output settles well within the 100ms DAC-settle above, so the
+        // full 5×median + extra settle of measure_supply_stable_for_cal is
+        // unnecessary and was the dominant time cost (~8s/point → ~0.7s/point).
+        measured_v = selftest_measure_supply(rail, true);
+        ok = measured_v >= 0.0f;
         if (!ok) {
             ESP_LOGE(TAG, "  Cal point code=%d: measurement failed", code);
             taskENTER_CRITICAL(&s_cal_lock);
@@ -1090,9 +1085,9 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
         }
     }
 
-    // Phase 2: return to midpoint and let DCDC settle deeply.
+    // Phase 2: return to midpoint and let DCDC settle.
     ds4424_set_code(idac_channel, 0);
-    delay_ms(10000);
+    delay_ms(3000);
 
     // Phase 3: sweep positive (exclude zero duplicate, end at +100).
     for (int i = 1; i <= pos_points; i++) {

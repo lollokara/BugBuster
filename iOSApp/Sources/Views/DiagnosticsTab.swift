@@ -61,6 +61,18 @@ struct DiagnosticsTab: View {
     @State private var spiffsStorage: StorageInfoDiag? = nil
     @State private var isLoadingSpiffs = false
 
+    // Auto-Calibration
+    @State private var calChannel = 0
+    @State private var isCalibrating = false
+    @State private var calResult: String? = nil
+
+    // Cached supply voltages from selftest worker
+    @State private var cachedSupplies: SelftestSupplyCached? = nil
+
+    // AD74416H Internal Diagnostics
+    @State private var internalSupplies: [InternalSupplyEntry]? = nil
+    @State private var isLoadingInternalSupplies = false
+
     var hatPresent: Bool { connectionManager.lastHatStatus?.isPresent ?? false }
 
     var body: some View {
@@ -68,6 +80,7 @@ struct DiagnosticsTab: View {
             VStack(spacing: 20) {
                 headerSection
                 selfTestCard
+                internalSuppliesCard
                 registersCard
                 usbPdCard
                 calibrationCard
@@ -93,6 +106,10 @@ struct DiagnosticsTab: View {
         .onAppear {
             fetchGitReleases()
             loadSpiffsStorage()
+            fetchCachedSupplies()
+            fetchInternalSupplies()
+            connectionManager.fetchDeviceVersion()
+            connectionManager.fetchWifiStatus()
         }
     }
 
@@ -106,6 +123,16 @@ struct DiagnosticsTab: View {
                 Text("Monitor hardware alerts and system states")
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
+                if let ver = connectionManager.lastDeviceVersion {
+                    HStack(spacing: 8) {
+                        if let esp = ver.esp32 {
+                            Text("ESP32: \(esp)").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundColor(.cyan)
+                        }
+                        if let hat = ver.hat {
+                            Text("HAT: \(hat)").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundColor(.purple)
+                        }
+                    }
+                }
             }
             Spacer()
         }
@@ -116,12 +143,22 @@ struct DiagnosticsTab: View {
 
     var selfTestCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Self-Test & Calibrations")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(.blue)
+            HStack {
+                Text("Self-Test & Calibration")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.blue)
+                Spacer()
+                Button(action: { fetchCachedSupplies() }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14))
+                }
+                .padding(8)
+                .glassEffect(.regular, in: Circle())
+            }
 
             let selftest = connectionManager.lastSelftest
 
+            // Worker + Supply Monitor controls
             HStack {
                 Text("Worker Thread Monitor")
                     .font(.system(size: 14, weight: .medium))
@@ -134,16 +171,29 @@ struct DiagnosticsTab: View {
                 .labelsHidden()
             }
 
+            HStack(spacing: 8) {
+                StatusPill(title: selftest?.supplyMonitorActive == true ? "Monitor Active" : "Monitor Idle",
+                           ok: selftest?.supplyMonitorActive ?? false)
+                if selftest?.supplyMonitorActive == true {
+                    Text("CH D reserved for supply monitoring")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+
             Divider().background(Color.white.opacity(0.1))
 
+            // ── Boot Self-Test Results ──
             VStack(alignment: .leading, spacing: 8) {
-                Text("BOOT STATE")
+                Text("BOOT SELF-TEST")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.secondary)
 
                 HStack(spacing: 12) {
                     StatusPill(title: "Ran", ok: selftest?.boot.ran ?? false)
-                    StatusPill(title: "Passed", ok: selftest?.boot.passed ?? false)
+                    StatusPill(title: selftest?.boot.passed == true ? "Passed" : "Failed",
+                               ok: selftest?.boot.passed ?? false)
                 }
 
                 HStack(spacing: 12) {
@@ -173,29 +223,183 @@ struct DiagnosticsTab: View {
 
             Divider().background(Color.white.opacity(0.1))
 
-            VStack(alignment: .leading, spacing: 6) {
+            // ── Live Supply Monitor Readings ──
+            VStack(alignment: .leading, spacing: 8) {
+                Text("SUPPLY MONITOR (LIVE)")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.secondary)
+
+                if let supplies = cachedSupplies, supplies.available {
+                    HStack(spacing: 12) {
+                        ForEach(supplies.rails) { rail in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rail.name)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                                Text(String(format: "%.3f V", rail.voltageV))
+                                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                    .foregroundColor(rail.voltageV > 0.5 ? .green : .secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                } else {
+                    Text("Enable the worker thread to start supply monitoring.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .italic()
+                }
+            }
+
+            Divider().background(Color.white.opacity(0.1))
+
+            // ── Calibration Engine ──
+            VStack(alignment: .leading, spacing: 8) {
                 Text("CALIBRATION ENGINE")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.secondary)
 
-                HStack {
-                    Text("Calibration Status Code").font(.system(size: 13))
-                    Spacer()
-                    Text("\(connectionManager.lastSelftest?.calibration.status ?? 0)")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                let cal = selftest?.calibration
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Status").font(.system(size: 10)).foregroundColor(.secondary)
+                        Text(cal?.statusText ?? "Unknown")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundColor(cal?.status == 2 ? .green : (cal?.status == 3 ? .red : .primary))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Channel").font(.system(size: 10)).foregroundColor(.secondary)
+                        Text("CH \(cal?.channel ?? 0)")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Points").font(.system(size: 10)).foregroundColor(.secondary)
+                        Text("\(cal?.points ?? 0)")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Error").font(.system(size: 10)).foregroundColor(.secondary)
+                        Text(String(format: "%.2f mV", cal?.errorMv ?? 0.0))
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundColor((cal?.errorMv ?? 0) > 10 ? .red : .primary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                HStack {
-                    Text("Collected Points").font(.system(size: 13))
-                    Spacer()
-                    Text("\(connectionManager.lastSelftest?.calibration.points ?? 0)")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+
+                if let cal = cal, cal.status == 1 {
+                    HStack(spacing: 8) {
+                        ProgressView().tint(.cyan)
+                        Text(String(format: "Calibrating… Last: %.4f V", cal.lastVoltageV))
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
                 }
+
+                Divider().background(Color.white.opacity(0.06))
+
+                // Auto-calibrate trigger
                 HStack {
-                    Text("Error Value").font(.system(size: 13))
+                    Text("Channel")
+                        .font(.system(size: 13, weight: .medium))
+                    Picker("", selection: $calChannel) {
+                        Text("LevelShift (0)").tag(0)
+                        Text("V_ADJ1 (1)").tag(1)
+                        Text("V_ADJ2 (2)").tag(2)
+                    }
+                    .pickerStyle(.menu)
+                    .accentColor(.cyan)
                     Spacer()
-                    Text(String(format: "%.2f mV", connectionManager.lastSelftest?.calibration.errorMv ?? 0.0))
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
+
+                Button(action: { startAutoCalibrate() }) {
+                    HStack {
+                        if isCalibrating {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "wand.and.stars")
+                        }
+                        Text(isCalibrating ? "Calibrating…" : "Start Auto-Calibration")
+                            .fontWeight(.bold)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular.tint(.blue), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .disabled(isCalibrating)
+
+                if let result = calResult {
+                    Text(result)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(result.contains("Error") || result.contains("blocked") ? .red : .green)
+                }
+            }
+
+            Divider().background(Color.white.opacity(0.1))
+
+            Button(action: { resetAllChannels() }) {
+                HStack {
+                    Image(systemName: "arrow.counterclockwise.circle.fill")
+                    Text("Reset All Channels to High-Z")
+                        .fontWeight(.bold)
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .glassEffect(.regular.tint(.red.opacity(0.6)), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .cardStyle()
+    }
+
+    // MARK: - Internal Supplies Card
+
+    var internalSuppliesCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("AD74416H Internal Diagnostics")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.blue)
+                Spacer()
+                if isLoadingInternalSupplies {
+                    ProgressView().tint(.blue).scaleEffect(0.8)
+                } else {
+                    Button(action: { fetchInternalSupplies() }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14))
+                    }
+                    .padding(8)
+                    .glassEffect(.regular, in: Circle())
+                }
+            }
+
+            if let supplies = internalSupplies {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    ForEach(supplies) { entry in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.name)
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.secondary)
+                            Text(String(format: "%.3f %@", entry.value, entry.unit))
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
+            } else {
+                Text("Tap refresh to read internal diagnostics.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .italic()
             }
         }
         .cardStyle()
@@ -217,7 +421,7 @@ struct DiagnosticsTab: View {
                     .foregroundColor(.secondary)
 
                 let val = status?.alertStatus ?? 0
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                     RegisterBitIndicator(label: "RESET",      active: (val & (1 << 0)) != 0, normalIsOff: true)
                     RegisterBitIndicator(label: "SUPPLY ERR", active: (val & (1 << 2)) != 0, normalIsOff: true)
                     RegisterBitIndicator(label: "SPI ERR",    active: (val & (1 << 3)) != 0, normalIsOff: true)
@@ -234,7 +438,7 @@ struct DiagnosticsTab: View {
                     .foregroundColor(.secondary)
 
                 let val = status?.liveStatus ?? 0
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                     RegisterBitIndicator(label: "SUPPLY PG", active: (val & (1 << 0)) != 0, normalIsOff: false)
                     RegisterBitIndicator(label: "ADC BUSY",  active: (val & (1 << 1)) != 0, normalIsOff: true)
                     RegisterBitIndicator(label: "DATA RDY",  active: (val & (1 << 2)) != 0, normalIsOff: false)
@@ -359,12 +563,19 @@ struct DiagnosticsTab: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.secondary)
 
-                Picker("Supply", selection: $selectedCalSupply) {
-                    ForEach(calSupplies, id: \.id) { supply in
-                        Text(supply.name).tag(supply.id)
+                HStack {
+                    Text("Supply")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Picker("Supply", selection: $selectedCalSupply) {
+                        ForEach(calSupplies, id: \.id) { supply in
+                            Text(supply.name).tag(supply.id)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .accentColor(.cyan)
                 }
-                .pickerStyle(.segmented)
 
                 Button(action: { fetchCalibrationData() }) {
                     HStack {
@@ -404,6 +615,36 @@ struct DiagnosticsTab: View {
                 }
             }
 
+            if let ws = connectionManager.lastWifiStatus {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("CURRENT CONNECTION")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("SSID").font(.system(size: 9)).foregroundColor(.secondary)
+                            Text(ws.connected ? ws.staSSID : "Not connected")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundColor(ws.connected ? .green : .secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("IP").font(.system(size: 9)).foregroundColor(.secondary)
+                            Text(ws.staIP.isEmpty ? "\u{2014}" : ws.staIP)
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Signal").font(.system(size: 9)).foregroundColor(.secondary)
+                            Text("\(ws.rssi) dBm")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundColor(ws.rssi > -60 ? .green : (ws.rssi > -75 ? .yellow : .red))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                Divider().background(Color.white.opacity(0.1))
+            }
             if wifiNetworks.isEmpty {
                 Text("No scanned networks yet. Tap Scan Networks.")
                     .font(.system(size: 13))
@@ -564,6 +805,20 @@ struct DiagnosticsTab: View {
                     }
                     .disabled(!updateEsp32 && !updateHat)
                 }
+
+                Divider().background(Color.white.opacity(0.1))
+
+                Button(action: { performRollback() }) {
+                    HStack {
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                        Text("Rollback to Previous Firmware")
+                            .fontWeight(.bold)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular.tint(.orange), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
             }
         }
         .cardStyle()
@@ -710,6 +965,47 @@ struct DiagnosticsTab: View {
     private func toggleWorkerState(_ enabled: Bool) {
         Task {
             _ = try? await connectionManager.postAction(path: "/api/selftest/worker", json: ["enabled": enabled])
+            // Refresh cached supplies after toggling — the monitor may have new data
+            if enabled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                fetchCachedSupplies()
+            }
+        }
+    }
+
+    private func startAutoCalibrate() {
+        isCalibrating = true
+        calResult = nil
+        Task {
+            do {
+                let ok = try await connectionManager.postAction(
+                    path: "/api/selftest/calibrate",
+                    json: ["channel": calChannel]
+                )
+                DispatchQueue.main.async {
+                    if ok {
+                        self.calResult = "Calibration started on channel \(self.calChannel)"
+                    } else {
+                        self.calResult = "Error: calibration blocked (busy or interlock)"
+                    }
+                    self.isCalibrating = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.calResult = "Error: \(error.localizedDescription)"
+                    self.isCalibrating = false
+                }
+            }
+        }
+    }
+
+    private func fetchCachedSupplies() {
+        Task {
+            if let supplies: SelftestSupplyCached = try? await connectionManager.getRequest(path: "/api/selftest/supplies/cached") {
+                DispatchQueue.main.async {
+                    self.cachedSupplies = supplies
+                }
+            }
         }
     }
 
@@ -922,6 +1218,34 @@ struct DiagnosticsTab: View {
                 }
             }
             DispatchQueue.main.async { self.isLoadingSpiffs = false }
+        }
+    }
+
+    private func resetAllChannels() {
+        Task {
+            let ok = await connectionManager.resetDevice()
+            connectionManager.showToast(ok ? "All channels reset to High-Z" : "Reset failed", type: ok ? .success : .error)
+        }
+    }
+
+    private func performRollback() {
+        Task {
+            let ok = await connectionManager.otaRollback()
+            connectionManager.showToast(ok ? "Rollback initiated \u{2014} device will reboot" : "Rollback failed", type: ok ? .success : .error)
+        }
+    }
+
+    private func fetchInternalSupplies() {
+        isLoadingInternalSupplies = true
+        Task {
+            if let resp: InternalSuppliesResponse = try? await connectionManager.getRequest(path: "/api/selftest/supplies") {
+                DispatchQueue.main.async {
+                    self.internalSupplies = resp.supplies
+                    self.isLoadingInternalSupplies = false
+                }
+            } else {
+                DispatchQueue.main.async { self.isLoadingInternalSupplies = false }
+            }
         }
     }
 }
@@ -1195,9 +1519,13 @@ struct RegisterBitIndicator: View {
             Text(label)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundColor(.primary)
-            Spacer()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Spacer(minLength: 0)
         }
-        .padding(8)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 36)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

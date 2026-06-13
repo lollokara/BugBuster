@@ -68,6 +68,10 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var lastHatStatus: HatStatus? = nil
     @Published public var lastHatRails: [HatRail] = []
     @Published public var lastUsbPd: USBPDStatus? = nil
+    @Published public var lastGpios: [GPIOPin] = []
+    @Published public var lastWifiStatus: WifiStatus? = nil
+    @Published public var lastDeviceVersion: DeviceVersion? = nil
+    @Published public var toastMessage: ToastMessage? = nil
     
     @Published public var isSearching = false
 
@@ -473,6 +477,9 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             self.lastHatStatus = nil
             self.lastHatRails = []
             self.lastUsbPd = nil
+            self.lastGpios = []
+            self.lastWifiStatus = nil
+            self.lastDeviceVersion = nil
             self.lshiftOe = false
         }
         UserDefaults.standard.removeObject(forKey: "bugbuster_ip")
@@ -542,6 +549,9 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                     if let pd: USBPDStatus = await self.fetchDecoded(USBPDStatus.self, ip: ip, path: "/api/usbpd", token: token) {
                         updateOnMain { self.lastUsbPd = pd }
                     }
+                    if let ws: WifiStatus = await self.fetchDecoded(WifiStatus.self, ip: ip, path: "/api/wifi", token: token) {
+                        updateOnMain { self.lastWifiStatus = ws }
+                    }
                 }
 
                 try? await Task.sleep(nanoseconds: 250_000_000)
@@ -593,6 +603,12 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             }
             if let pd: USBPDStatus = await fetchDecoded(USBPDStatus.self, ip: ip, path: "/api/usbpd", token: token) {
                 updateOnMain { self.lastUsbPd = pd }
+            }
+            if let ws: WifiStatus = await fetchDecoded(WifiStatus.self, ip: ip, path: "/api/wifi", token: token) {
+                updateOnMain { self.lastWifiStatus = ws }
+            }
+            if let v: DeviceVersion = await fetchDecoded(DeviceVersion.self, ip: ip, path: "/api/device/version", token: token) {
+                updateOnMain { self.lastDeviceVersion = v }
             }
         }
     }
@@ -872,6 +888,86 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             return res.points
         }
         return []
+    }
+
+    // MARK: - GPIO
+
+    public func fetchGpios() {
+        guard connectionState == .connected, let device = activeDevice else { return }
+        let ip = device.ip; let token = adminToken
+        Task {
+            if let resp: GPIOStatusResponse = await fetchDecoded(GPIOStatusResponse.self, ip: ip, path: "/api/gpio", token: token) {
+                updateOnMain { self.lastGpios = resp.gpios }
+            }
+        }
+    }
+
+    public func configureGpio(pin: Int, mode: Int) async -> Bool {
+        do {
+            let ok = try await postAction(path: "/api/gpio/\(pin)/config", json: ["mode": mode])
+            if ok { fetchGpios() }
+            return ok
+        } catch { return false }
+    }
+
+    public func setGpioOutput(pin: Int, value: Bool) async -> Bool {
+        do {
+            let ok = try await postAction(path: "/api/gpio/\(pin)/set", json: ["value": value])
+            if ok { fetchGpios() }
+            return ok
+        } catch { return false }
+    }
+
+    // MARK: - Device Reset
+
+    public func resetDevice() async -> Bool {
+        do {
+            return try await postAction(path: "/api/device/reset", json: [:])
+        } catch { return false }
+    }
+
+    // MARK: - Device Version
+
+    public func fetchDeviceVersion() {
+        guard connectionState == .connected, let device = activeDevice else { return }
+        let ip = device.ip; let token = adminToken
+        Task {
+            if let v: DeviceVersion = await fetchDecoded(DeviceVersion.self, ip: ip, path: "/api/device/version", token: token) {
+                updateOnMain { self.lastDeviceVersion = v }
+            }
+        }
+    }
+
+    // MARK: - WiFi Status
+
+    public func fetchWifiStatus() {
+        guard connectionState == .connected, let device = activeDevice else { return }
+        let ip = device.ip; let token = adminToken
+        Task {
+            if let ws: WifiStatus = await fetchDecoded(WifiStatus.self, ip: ip, path: "/api/wifi", token: token) {
+                updateOnMain { self.lastWifiStatus = ws }
+            }
+        }
+    }
+
+    // MARK: - OTA Rollback
+
+    public func otaRollback() async -> Bool {
+        do {
+            return try await postAction(path: "/api/ota/rollback", json: [:])
+        } catch { return false }
+    }
+
+    // MARK: - Toast
+
+    public func showToast(_ text: String, type: ToastType = .info) {
+        updateOnMain {
+            self.toastMessage = ToastMessage(text: text, type: type)
+        }
+        // Auto-dismiss after 3 seconds
+        updateOnMain(after: 3_000_000_000) {
+            self.toastMessage = nil
+        }
     }
 }
 

@@ -48,6 +48,13 @@ struct ScriptsTab: View {
     @State private var lintErrorMessage: String? = nil
     @State private var lintSuccess: Bool? = nil
 
+    // Script run status & autorun
+    @State private var autorunEnabled = false
+    @State private var isLoadingAutorun = false
+    @State private var isLoadingFiles = true
+    @State private var scriptRunStatus: String = "idle"
+    @State private var lastScriptOutput: String = ""
+
     var body: some View {
         ZStack {
             // Background
@@ -77,7 +84,7 @@ struct ScriptsTab: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             withAnimation(.easeOut(duration: 0.22)) { keyboardHeight = 0 }
         }
-        .onAppear { loadFiles() }
+        .onAppear { loadFiles(); fetchAutorunStatus() }
         .alert("New Script Name", isPresented: $showingCreateAlert) {
             TextField("script_name.py", text: $newFileName)
                 .textInputAutocapitalization(.never)
@@ -158,7 +165,43 @@ struct ScriptsTab: View {
                 }
             }
 
-            if files.isEmpty {
+            // Autorun card
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Autorun on Boot")
+                        .font(.system(size: 14, weight: .medium))
+                    Text("Run a script automatically when the device powers on")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                if isLoadingAutorun {
+                    ProgressView().tint(.cyan)
+                } else {
+                    Toggle("", isOn: Binding(
+                        get: { autorunEnabled },
+                        set: { toggleAutorun($0) }
+                    ))
+                    .toggleStyle(SwitchToggleStyle(tint: .cyan))
+                    .labelsHidden()
+                }
+            }
+            .padding()
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal)
+
+            if isLoadingFiles {
+                VStack(spacing: 16) {
+                    Spacer()
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .tint(.cyan)
+                    Text("Loading scripts…")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            } else if files.isEmpty {
                 VStack(spacing: 20) {
                     Spacer()
                     Image(systemName: "doc.text.fill")
@@ -246,6 +289,14 @@ struct ScriptsTab: View {
                     }
                     Button(action: { saveAndRunScript() }) {
                         Image(systemName: "play.fill").foregroundColor(.green)
+                    }
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(scriptRunStatus == "running" ? Color.green : (scriptRunStatus == "error" ? Color.red : Color.secondary))
+                            .frame(width: 8, height: 8)
+                        Text(scriptRunStatus.capitalized)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(scriptRunStatus == "running" ? .green : .secondary)
                     }
                 }
             }
@@ -476,6 +527,7 @@ struct ScriptsTab: View {
     }
 
     private func loadFiles() {
+        isLoadingFiles = true
         Task {
             do {
                 let res: ScriptListResponse = try await connectionManager.getRequest(path: "/api/scripts/files")
@@ -484,10 +536,12 @@ struct ScriptsTab: View {
                     self.files = res.files.map { ScriptFile(name: $0) }
                     self.storageInfo = storage
                     self.errorMessage = nil
+                    self.isLoadingFiles = false
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.errorMessage = "Failed loading scripts: \(error.localizedDescription)"
+                    self.isLoadingFiles = false
                 }
             }
         }
@@ -727,6 +781,46 @@ struct ScriptsTab: View {
             }
         }
     }
+
+    private func fetchAutorunStatus() {
+        Task {
+            struct AutorunStatus: Codable { let enabled: Bool }
+            if let status: AutorunStatus = try? await connectionManager.getRequest(path: "/api/scripts/autorun/status") {
+                DispatchQueue.main.async { self.autorunEnabled = status.enabled }
+            }
+        }
+    }
+
+    private func toggleAutorun(_ enabled: Bool) {
+        isLoadingAutorun = true
+        let path = enabled ? "/api/scripts/autorun/enable" : "/api/scripts/autorun/disable"
+        Task {
+            let ok = try? await connectionManager.postAction(path: path, json: [:])
+            DispatchQueue.main.async {
+                if ok == true { self.autorunEnabled = enabled }
+                self.isLoadingAutorun = false
+                connectionManager.showToast(ok == true ? "Autorun \(enabled ? "enabled" : "disabled")" : "Failed to update autorun", type: ok == true ? .success : .error)
+            }
+        }
+    }
+
+    private func pythonHighlightedText(_ code: String) -> AttributedString {
+        var result = AttributedString(code)
+        let keywords = ["def", "class", "import", "from", "return", "if", "else", "elif", "for", "while", "try", "except", "finally", "with", "as", "yield", "lambda", "pass", "break", "continue", "raise", "True", "False", "None", "and", "or", "not", "in", "is", "async", "await"]
+        for keyword in keywords {
+            var searchRange = result.startIndex..<result.endIndex
+            while let range = result[searchRange].range(of: "\\b\(keyword)\\b", options: .regularExpression) {
+                result[range].foregroundColor = .cyan
+                result[range].font = .system(size: 14, weight: .bold, design: .monospaced)
+                if range.upperBound < result.endIndex {
+                    searchRange = range.upperBound..<result.endIndex
+                } else {
+                    break
+                }
+            }
+        }
+        return result
+    }
 }
 
 // MARK: - REPL Terminal Console
@@ -866,8 +960,83 @@ struct SelectableCodeEditor: UIViewRepresentable {
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         if uiView.text != text {
-            uiView.text = text
+            let selectedRange = uiView.selectedRange
+            Self.applySyntaxHighlighting(to: uiView, text: text)
+            uiView.selectedRange = selectedRange
         }
+    }
+
+    static func applySyntaxHighlighting(to textView: UITextView, text: String) {
+        let baseFont = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let baseColor = UIColor.white
+        let attributed = NSMutableAttributedString(string: text, attributes: [
+            .font: baseFont,
+            .foregroundColor: baseColor
+        ])
+
+        let keywords = ["def", "class", "import", "from", "return", "if", "else", "elif",
+                         "for", "while", "try", "except", "finally", "with", "as", "yield",
+                         "lambda", "pass", "break", "continue", "raise", "async", "await",
+                         "and", "or", "not", "in", "is", "del", "global", "nonlocal"]
+        let builtins = ["True", "False", "None", "self", "print", "range", "len", "int",
+                        "float", "str", "list", "dict", "set", "tuple", "type", "isinstance"]
+
+        let keywordColor = UIColor.cyan
+        let builtinColor = UIColor(red: 0.6, green: 0.4, blue: 1.0, alpha: 1.0)
+        let stringColor = UIColor(red: 0.9, green: 0.6, blue: 0.3, alpha: 1.0)
+        let commentColor = UIColor(red: 0.45, green: 0.55, blue: 0.45, alpha: 1.0)
+        let numberColor = UIColor(red: 0.7, green: 0.9, blue: 0.5, alpha: 1.0)
+        let boldFont = UIFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+
+        let nsText = text as NSString
+
+        // Keywords
+        for kw in keywords {
+            let pattern = "\\b\(kw)\\b"
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+                for m in matches {
+                    attributed.addAttributes([.foregroundColor: keywordColor, .font: boldFont], range: m.range)
+                }
+            }
+        }
+
+        // Builtins
+        for bi in builtins {
+            let pattern = "\\b\(bi)\\b"
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+                for m in matches {
+                    attributed.addAttributes([.foregroundColor: builtinColor], range: m.range)
+                }
+            }
+        }
+
+        // Numbers
+        if let regex = try? NSRegularExpression(pattern: "\\b\\d+\\.?\\d*\\b") {
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            for m in matches {
+                attributed.addAttributes([.foregroundColor: numberColor], range: m.range)
+            }
+        }
+
+        // Strings (single and double quoted)
+        if let regex = try? NSRegularExpression(pattern: "(\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?'''|\"[^\"\\n]*\"|'[^'\\n]*')") {
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            for m in matches {
+                attributed.addAttributes([.foregroundColor: stringColor], range: m.range)
+            }
+        }
+
+        // Comments
+        if let regex = try? NSRegularExpression(pattern: "#[^\n]*") {
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            for m in matches {
+                attributed.addAttributes([.foregroundColor: commentColor], range: m.range)
+            }
+        }
+
+        textView.attributedText = attributed
     }
 
     class Coordinator: NSObject, UITextViewDelegate {
@@ -902,6 +1071,10 @@ struct SelectableCodeEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
+            // Re-apply syntax highlighting, preserving cursor
+            let selectedRange = textView.selectedRange
+            SelectableCodeEditor.applySyntaxHighlighting(to: textView, text: textView.text)
+            textView.selectedRange = selectedRange
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {

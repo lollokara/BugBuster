@@ -2,8 +2,6 @@ import Foundation
 
 // MARK: - Core Status Models
 
-<<<<<<< Updated upstream
-=======
 public struct USBPDSourcePDO: Codable, Equatable, Identifiable {
     public var id: String { voltage }
     public let voltage: String
@@ -23,7 +21,7 @@ public struct USBPDStatus: Codable, Equatable {
     public let sourcePdos: [USBPDSourcePDO]
     public let selectedPdo: Int
 }
->>>>>>> Stashed changes
+
 public struct ChannelState: Codable, Identifiable, Equatable {
     public let id: Int
     public let function: String
@@ -200,6 +198,17 @@ public struct SelftestCalibration: Codable, Equatable {
     public let points: Int
     public let lastVoltageV: Double
     public let errorMv: Double
+
+    /// Human-readable calibration state description
+    public var statusText: String {
+        switch status {
+        case 0: return "Idle"
+        case 1: return "Running"
+        case 2: return "Complete"
+        case 3: return "Error"
+        default: return "Unknown (\(status))"
+        }
+    }
 }
 
 public struct SelftestStatus: Codable, Equatable {
@@ -207,6 +216,29 @@ public struct SelftestStatus: Codable, Equatable {
     public let calibration: SelftestCalibration
     public let workerEnabled: Bool
     public let supplyMonitorActive: Bool
+}
+
+// MARK: - Selftest Cached Supply Voltages
+
+public struct SelftestSupplyRail: Codable, Equatable, Identifiable {
+    public var id: Int { rail }
+    public let rail: Int
+    public let name: String
+    public let voltageV: Double
+}
+
+public struct SelftestSupplyCached: Codable, Equatable {
+    public let available: Bool
+    public let timestampMs: Double
+    public let rails: [SelftestSupplyRail]
+}
+
+// MARK: - Calibration Points
+
+public struct CalibrationPoint: Codable, Identifiable, Equatable {
+    public var id: Int { dacCode }
+    public let dacCode: Int
+    public let measuredV: Double
 }
 
 // MARK: - Wi-Fi Management
@@ -287,5 +319,85 @@ public struct DeviceInfo: Codable, Equatable {
         case siliconId1 = "siliconId1"
         case macAddress = "mac_address"
         case spiOk = "spi_ok"
+    }
+}
+
+// MARK: - Device Version
+
+public struct DeviceVersion: Codable, Equatable {
+    public let esp32: String?
+    public let hat: String?
+
+    enum CodingKeys: String, CodingKey {
+        case esp32 = "esp32"
+        case hat = "hat"
+    }
+}
+
+// MARK: - GPIO Models
+
+public struct GPIOPin: Codable, Identifiable, Equatable {
+    public var id: Int { pin }
+    public let pin: Int
+    public let mode: Int       // 0=disabled, 1=input, 2=output, 3=open-drain, 4=input-pulldown
+    public let input: Bool
+    public let output: Bool
+
+    public var modeLabel: String {
+        switch mode {
+        case 0: return "Disabled"
+        case 1: return "Input"
+        case 2: return "Output"
+        case 3: return "Open Drain"
+        case 4: return "Input PD"
+        default: return "Unknown"
+        }
+    }
+}
+
+public struct GPIOStatusResponse: Codable, Equatable {
+    public let gpios: [GPIOPin]
+}
+
+// MARK: - Internal Selftest Supplies (AD74416H diagnostics)
+
+public struct InternalSupplyEntry: Codable, Identifiable, Equatable {
+    public var id: String { name }
+    public let name: String
+    public let value: Double
+    public let unit: String
+}
+
+public struct InternalSuppliesResponse: Codable, Equatable {
+    public let supplies: [InternalSupplyEntry]
+}
+
+// MARK: - Script Autorun
+
+public struct AutorunStatus: Codable, Equatable {
+    public let enabled: Bool
+    public let scriptName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case scriptName = "script_name"
+    }
+}
+
+// MARK: - Toast Message
+
+public enum ToastType {
+    case success
+    case error
+    case info
+}
+
+public struct ToastMessage: Identifiable, Equatable {
+    public let id = UUID()
+    public let text: String
+    public let type: ToastType
+
+    public static func == (lhs: ToastMessage, rhs: ToastMessage) -> Bool {
+        lhs.id == rhs.id
     }
 }

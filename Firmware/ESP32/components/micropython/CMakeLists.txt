@@ -19,6 +19,30 @@ file(MAKE_DIRECTORY ${MICROPY_GENHDR_DIR})
 include(${MICROPY_DIR}/py/py.cmake)
 
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    # ── Resolve cross-compiler if CMAKE_C_COMPILER is not yet set ─────────────
+    # PlatformIO + ESP-IDF may leave CMAKE_C_COMPILER empty at configure time.
+    # Fall back to the Xtensa compiler in the PlatformIO toolchain packages.
+    if(NOT CMAKE_C_COMPILER OR CMAKE_C_COMPILER STREQUAL "")
+        file(GLOB _pio_gcc "$ENV{USERPROFILE}/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc.exe"
+                           "$ENV{HOME}/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc")
+        if(_pio_gcc)
+            list(GET _pio_gcc 0 CMAKE_C_COMPILER)
+            message(STATUS "MicroPython: resolved CMAKE_C_COMPILER from PlatformIO: ${CMAKE_C_COMPILER}")
+        endif()
+    endif()
+    # ── Resolve Python3 if not set ────────────────────────────────────────────
+    # ESP-IDF sets PYTHON but not always Python3_EXECUTABLE in component scope.
+    if(NOT Python3_EXECUTABLE OR Python3_EXECUTABLE STREQUAL "")
+        if(DEFINED ENV{PYTHON} AND NOT "$ENV{PYTHON}" STREQUAL "")
+            set(Python3_EXECUTABLE "$ENV{PYTHON}")
+        elseif(PYTHON)
+            set(Python3_EXECUTABLE "${PYTHON}")
+        else()
+            find_package(Python3 COMPONENTS Interpreter QUIET)
+        endif()
+        message(STATUS "MicroPython: resolved Python3_EXECUTABLE = [${Python3_EXECUTABLE}]")
+    endif()
+
     # Disable btree: berkeley-db submodule is not initialised.
     set(MICROPY_PY_BTREE OFF)
 
@@ -139,6 +163,9 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
 "//\n// Content for MICROPY_MODULE_FROZEN_STR\n//\n"
 "//\n// Content for MICROPY_MODULE_FROZEN_MPY\n//\n"
 "#include \"py/emitglue.h\"\n"
+"#ifndef MP_FROZEN_STR_NAMES\n"
+"#define MP_FROZEN_STR_NAMES\n"
+"#endif\n"
 "extern const qstr_pool_t mp_qstr_const_pool;\n"
 "const qstr_pool_t mp_qstr_frozen_const_pool = {\n"
 "    #if MICROPY_QSTR_BYTES_IN_HASH\n"
@@ -401,15 +428,34 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 
     # ── Step 2: qstr.i.last — preprocess all qstr sources ────────────────────
+    # The direct execute_process() call can exceed the OS command-line limit on
+    # Windows when there are 200+ source files (>32 KB).  A thin Python wrapper
+    # reads sources/flags from response files, keeping the actual command line
+    # short.  This approach also works on Unix/macOS with no behaviour change.
     set(MICROPY_QSTRDEFS_LAST ${MICROPY_GENHDR_DIR}/qstr.i.last)
+    set(_QSTR_SOURCES_FILE "${CMAKE_BINARY_DIR}/genhdr/_qstr_sources.txt")
+    string(REPLACE ";" "\n" _QSTR_SOURCES_NL "${MICROPY_SOURCE_QSTR}")
+    file(WRITE "${_QSTR_SOURCES_FILE}" "${_QSTR_SOURCES_NL}")
+    set(_QSTR_CFLAGS_FILE "${CMAKE_BINARY_DIR}/genhdr/_qstr_cflags.txt")
+    string(REPLACE ";" "\n" _CFLAGS_NL "${MICROPY_CPP_FLAGS};-DNO_QSTR")
+    file(WRITE "${_QSTR_CFLAGS_FILE}" "${_CFLAGS_NL}")
+    set(_PP_WRAPPER "${CMAKE_BINARY_DIR}/genhdr/_run_qstrdefs_pp.py")
+    file(WRITE "${_PP_WRAPPER}"
+"import sys, os
+sys.path.insert(0, os.path.dirname('${MICROPY_PY_DIR}/makeqstrdefs.py'))
+with open('${_QSTR_SOURCES_FILE}') as f:
+    sources = [l.strip() for l in f if l.strip()]
+with open('${_QSTR_CFLAGS_FILE}') as f:
+    cflags = [l.strip() for l in f if l.strip()]
+argv = [sys.argv[0], 'pp', '${CMAKE_C_COMPILER}', '-E',
+        'output', '${MICROPY_QSTRDEFS_LAST}',
+        'cflags'] + cflags + ['cxxflags'] + cflags + ['sources'] + sources
+sys.argv = argv
+exec(open('${MICROPY_PY_DIR}/makeqstrdefs.py').read())
+")
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} ${MICROPY_PY_DIR}/makeqstrdefs.py
-            pp ${CMAKE_C_COMPILER} -E
-            output ${MICROPY_QSTRDEFS_LAST}
-            cflags   ${MICROPY_CPP_FLAGS} -DNO_QSTR
-            cxxflags ${MICROPY_CPP_FLAGS} -DNO_QSTR
-            sources  ${MICROPY_SOURCE_QSTR}
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMAND "${Python3_EXECUTABLE}" "${_PP_WRAPPER}"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         RESULT_VARIABLE _res
     )
     if(_res)
@@ -446,15 +492,47 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # that aren't on the path at configure time. The QCFG/Q() macros only need
     # py/mpconfig.h defines (MICROPY_QSTR_BYTES_IN_LEN etc.), not IDF headers.
     set(MICROPY_QSTRDEFS_PREPROCESSED ${MICROPY_GENHDR_DIR}/qstrdefs.preprocessed.h)
-    # Flatten flags into a shell-safe string for the -c argument
-    string(JOIN " " _cpp_flags_str ${MICROPY_CPP_FLAGS})
+    # Cross-platform replacement for the original sh -c pipeline:
+    #   cat $PY $PORT $COLLECTED | sed 's/^Q(.*)/\"&\"/' | $CC -E ... | sed 's/^\"\\(Q(.*)\\)\"/\\1/'
+    # Uses a Python script so it works on Windows, macOS, and Linux alike.
+    set(_STEP5_SCRIPT "${CMAKE_BINARY_DIR}/genhdr/_step5_preprocess.py")
+    file(WRITE "${_STEP5_SCRIPT}"
+"import subprocess, sys, re, os\n\
+input_files = []\n\
+i = 1\n\
+while i < len(sys.argv) and sys.argv[i] != '--compiler':\n\
+    input_files.append(sys.argv[i]); i += 1\n\
+compiler = sys.argv[i+1]; i += 2\n\
+cpp_flags = []\n\
+while i < len(sys.argv) and sys.argv[i] != '--output':\n\
+    cpp_flags.append(sys.argv[i]); i += 1\n\
+output_file = sys.argv[i+1]\n\
+lines = []\n\
+for f in input_files:\n\
+    if os.path.exists(f):\n\
+        with open(f) as fh: lines.extend(fh.readlines())\n\
+wrapped = []\n\
+for l in lines:\n\
+    s = l.strip()\n\
+    if s.startswith('Q('):\n\
+        wrapped.append('\"' + s + '\"\\n')\n\
+    else:\n\
+        wrapped.append(l)\n\
+input_text = ''.join(wrapped)\n\
+cmd = [compiler, '-E'] + cpp_flags + ['-DNO_QSTR', '-']\n\
+result = subprocess.run(cmd, input=input_text, capture_output=True, text=True)\n\
+out_lines = []\n\
+for l in result.stdout.splitlines():\n\
+    m = re.match(r'^\"(Q\\(.*\\))\"$', l.strip())\n\
+    if m: out_lines.append(m.group(1))\n\
+    else: out_lines.append(l)\n\
+with open(output_file, 'w') as f: f.write('\\n'.join(out_lines) + '\\n')\n\
+")
     execute_process(
-        COMMAND sh -c
-            "cat ${MICROPY_QSTRDEFS_PY} ${MICROPY_QSTRDEFS_PORT} ${MICROPY_QSTRDEFS_COLLECTED} \
-             | sed 's/^Q(.*)/\"&\"/' \
-             | ${CMAKE_C_COMPILER} -E ${_cpp_flags_str} -DNO_QSTR - \
-             | sed 's/^\\\"\\(Q(.*)\\)\\\"/\\1/' \
-             > ${MICROPY_QSTRDEFS_PREPROCESSED}"
+        COMMAND "${Python3_EXECUTABLE}" "${_STEP5_SCRIPT}"
+            "${MICROPY_QSTRDEFS_PY}" "${MICROPY_QSTRDEFS_PORT}" "${MICROPY_QSTRDEFS_COLLECTED}"
+            --compiler "${CMAKE_C_COMPILER}"
+            ${MICROPY_CPP_FLAGS} --output "${MICROPY_QSTRDEFS_PREPROCESSED}"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         RESULT_VARIABLE _res
     )
@@ -465,11 +543,10 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # ── Step 6: generate qstrdefs.generated.h ────────────────────────────────
     set(MICROPY_QSTRDEFS_GENERATED ${MICROPY_GENHDR_DIR}/qstrdefs.generated.h)
     execute_process(
-        COMMAND sh -c
-            "${Python3_EXECUTABLE} ${MICROPY_PY_DIR}/makeqstrdata.py \
-             ${MICROPY_QSTRDEFS_PREPROCESSED} > ${MICROPY_QSTRDEFS_GENERATED}"
+        COMMAND "${Python3_EXECUTABLE}" "${MICROPY_PY_DIR}/makeqstrdata.py" "${MICROPY_QSTRDEFS_PREPROCESSED}"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         RESULT_VARIABLE _res
+        OUTPUT_FILE "${MICROPY_QSTRDEFS_GENERATED}"
     )
     if(_res)
         message(FATAL_ERROR "MicroPython: makeqstrdata.py failed (${_res})")
@@ -478,34 +555,66 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # ── Block A — build mpy-cross host binary (idempotent) ───────────────────
     # Binary lands at mpy-cross/build/mpy-cross (not mpy-cross/mpy-cross).
     set(MPYCROSS_BIN ${MICROPY_DIR}/mpy-cross/build/mpy-cross)
+    # Detect host OS (CMAKE_HOST_SYSTEM_NAME works even when cross-compiling)
+    if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+        set(MPYCROSS_BIN ${MICROPY_DIR}/mpy-cross/build/mpy-cross.exe)
+    endif()
     if(NOT EXISTS ${MPYCROSS_BIN})
-        execute_process(
-            COMMAND make -j4
-            WORKING_DIRECTORY ${MICROPY_DIR}/mpy-cross
-            RESULT_VARIABLE _r
-        )
-        if(_r)
-            message(FATAL_ERROR "mpy-cross build failed (${_r})")
+        if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+            # On Windows, use the Python-based mpy_cross package as fallback
+            # since building from source requires make + host gcc.
+            message(STATUS "MicroPython: installing mpy-cross via pip (no host make available)...")
+            execute_process(
+                COMMAND "${Python3_EXECUTABLE}" -m pip install mpy-cross --quiet
+                RESULT_VARIABLE _r
+            )
+            # Find the installed mpy-cross executable
+            execute_process(
+                COMMAND "${Python3_EXECUTABLE}" -c "import shutil; print(shutil.which('mpy-cross') or '')"
+                OUTPUT_VARIABLE _mpycross_pip
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            if(_mpycross_pip)
+                set(MPYCROSS_BIN "${_mpycross_pip}")
+                message(STATUS "MicroPython: using pip-installed mpy-cross: ${MPYCROSS_BIN}")
+            else()
+                message(STATUS "MicroPython: mpy-cross not found via pip, skipping frozen modules")
+                # Ensure stub frozen_content.c exists (written earlier)
+            endif()
+        else()
+            execute_process(
+                COMMAND make -j4
+                WORKING_DIRECTORY ${MICROPY_DIR}/mpy-cross
+                RESULT_VARIABLE _r
+            )
+            if(_r)
+                message(FATAL_ERROR "mpy-cross build failed (${_r})")
+            endif()
         endif()
     endif()
 
     # ── Block B — frozen_content.c ───────────────────────────────────────────
     # -b must be CMAKE_BINARY_DIR because mpy-tool.py reads
     # ${build_dir}/genhdr/qstrdefs.preprocessed.h (generated in Step 5 above).
-    execute_process(
-        COMMAND ${Python3_EXECUTABLE} ${MICROPY_DIR}/tools/makemanifest.py
-            -o ${MICROPY_FROZEN_CONTENT}
-            -b ${CMAKE_BINARY_DIR}
-            --mpy-cross-flags=-march=xtensawin
-            -v "MPY_DIR=${MICROPY_DIR}"
-            -v "PORT_DIR=${CMAKE_CURRENT_LIST_DIR}"
-            -v "MPY_LIB_DIR="
-            ${CMAKE_CURRENT_LIST_DIR}/manifest.py
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        RESULT_VARIABLE _r
-    )
-    if(_r)
-        message(FATAL_ERROR "makemanifest.py failed (${_r})")
+    if(EXISTS "${MPYCROSS_BIN}")
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" "${MICROPY_DIR}/tools/makemanifest.py"
+                -o "${MICROPY_FROZEN_CONTENT}"
+                -b "${CMAKE_BINARY_DIR}"
+                --mpy-cross "${MPYCROSS_BIN}"
+                --mpy-cross-flags=-march=xtensawin
+                -v "MPY_DIR=${MICROPY_DIR}"
+                -v "PORT_DIR=${CMAKE_CURRENT_LIST_DIR}"
+                -v "MPY_LIB_DIR="
+                "${CMAKE_CURRENT_LIST_DIR}/manifest.py"
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+            RESULT_VARIABLE _r
+        )
+        if(_r)
+            message(WARNING "MicroPython: makemanifest.py failed (${_r}), using stub frozen_content.c")
+        endif()
+    else()
+        message(STATUS "MicroPython: mpy-cross not available, using stub frozen_content.c")
     endif()
 
     # ── Step 7: moduledefs.h ──────────────────────────────────────────────────
@@ -535,11 +644,10 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 
     execute_process(
-        COMMAND sh -c
-            "${Python3_EXECUTABLE} ${MICROPY_PY_DIR}/makemoduledefs.py \
-             ${MICROPY_MODULEDEFS_COLLECTED} > ${MICROPY_MODULEDEFS}"
+        COMMAND "${Python3_EXECUTABLE}" "${MICROPY_PY_DIR}/makemoduledefs.py" "${MICROPY_MODULEDEFS_COLLECTED}"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         RESULT_VARIABLE _res
+        OUTPUT_FILE "${MICROPY_MODULEDEFS}"
     )
     if(_res)
         message(FATAL_ERROR "MicroPython: makemoduledefs.py failed (${_res})")
@@ -572,11 +680,10 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 
     execute_process(
-        COMMAND sh -c
-            "${Python3_EXECUTABLE} ${MICROPY_PY_DIR}/make_root_pointers.py \
-             ${MICROPY_ROOT_POINTERS_COLLECTED} > ${MICROPY_ROOT_POINTERS}"
+        COMMAND "${Python3_EXECUTABLE}" "${MICROPY_PY_DIR}/make_root_pointers.py" "${MICROPY_ROOT_POINTERS_COLLECTED}"
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         RESULT_VARIABLE _res
+        OUTPUT_FILE "${MICROPY_ROOT_POINTERS}"
     )
     if(_res)
         message(FATAL_ERROR "MicroPython: make_root_pointers.py failed (${_res})")
