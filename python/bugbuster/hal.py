@@ -311,8 +311,8 @@ DEFAULT_ROUTING: dict[int, IORouting] = {
                   efuse=PowerControl.EFUSE2, supply=PowerControl.VADJ1,
                   supply_idac=1, valid_modes=ANALOG_IO_MODES),
 
-    # ── BLOCK 2, IO_BLOCK 3 — device 2 (U16), VADJ2, EFUSE3 ─────────────
-    # Logical connector C is public channel 2; firmware maps that logical
+    # ── BLOCK 2, IO_BLOCK 3 — device 2 (U17), VADJ2, EFUSE3 ─────────────
+    # Logical connector C stays with U17; firmware maps only the logical
     # channel to the swapped physical AD74416H register internally.
     7:  IORouting(7,  block=2, io_block=3, position=3, channel=None,
                   mux_device=2, mux_map=_digital_mux_c(), esp_gpio=8,
@@ -327,8 +327,8 @@ DEFAULT_ROUTING: dict[int, IORouting] = {
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=ANALOG_IO_MODES),
 
-    # ── BLOCK 2, IO_BLOCK 4 — device 3 (U17), VADJ2, EFUSE4 ─────────────
-    # Logical connector D is public channel 3; firmware maps that logical
+    # ── BLOCK 2, IO_BLOCK 4 — device 3 (U16), VADJ2, EFUSE4 ─────────────
+    # Logical connector D stays with U16; firmware maps only the logical
     # channel to the swapped physical AD74416H register internally.
     10: IORouting(10, block=2, io_block=4, position=3, channel=None,
                   mux_device=3, mux_map=_digital_mux_c(), esp_gpio=11,

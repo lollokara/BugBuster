@@ -45,5 +45,5 @@ nusb = "0.1"                    # Raw USB for RP2040 LA vendor bulk endpoint
 sha2 = "0.10"
 base64 = "0.22"
 tauri-plugin-updater = "2"
-
+time = "=0.3.47"
 

@@ -1026,13 +1026,14 @@ bool hat_get_rail_status(HatRailStatus rails[HAT_RAIL_COUNT], uint8_t *rail_coun
     uint8_t parsed_count = 0;
 
     for (uint8_t i = 0; i < count && i < HAT_RAIL_COUNT; i++) {
-        if (p + 7 > rsp_len) break;
+        if (p + 9 > rsp_len) break;
         HatRailStatus st = {};
         st.rail_id = rsp[p++];
         st.enabled = rsp[p++] != 0;
         memcpy(&st.voltage_mv, &rsp[p], sizeof(st.voltage_mv)); p += sizeof(st.voltage_mv);
         memcpy(&st.current_ma, &rsp[p], sizeof(st.current_ma)); p += sizeof(st.current_ma);
         st.status = rsp[p++];
+        memcpy(&st.target_mv, &rsp[p], sizeof(st.target_mv)); p += sizeof(st.target_mv);
 
         if (st.rail_id < HAT_RAIL_COUNT) {
             s_state.rail[st.rail_id] = st;
@@ -1072,6 +1073,7 @@ bool hat_set_rail_enable(uint8_t rail_id, bool enable)
         memcpy(&st.voltage_mv, &rsp[p], sizeof(st.voltage_mv)); p += sizeof(st.voltage_mv);
         memcpy(&st.current_ma, &rsp[p], sizeof(st.current_ma)); p += sizeof(st.current_ma);
         st.status = rsp[p++];
+        memcpy(&st.target_mv, &rsp[p], sizeof(st.target_mv)); p += sizeof(st.target_mv);
         if (st.rail_id < HAT_RAIL_COUNT) {
             s_state.rail[st.rail_id] = st;
         }
@@ -1141,12 +1143,12 @@ void hat_update_leds(void)
     // Block 4 (LED 7): EFUSE4 + IO10–IO12.
     //
     // MUX device per logical IO block (matches MUX_DEVICE_BY_LOGICAL in SignalPath.tsx):
-    //   block 0 → ADGS dev 0, block 1 → ADGS dev 1, block 2 → ADGS dev 3, block 3 → ADGS dev 2
+    //   block 0 → ADGS dev 0, block 1 → ADGS dev 1, block 2 → ADGS dev 2, block 3 → ADGS dev 3
     {
         const DioState *dio = dio_get_all();
         const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
         static const uint8_t logical_to_led[4]    = { 4, 5, 6, 7 };
-        static const uint8_t block_to_mux_dev[4]  = { 0, 1, 3, 2 };
+        static const uint8_t block_to_mux_dev[4]  = { 0, 1, 2, 3 };
         for (int j = 0; j < 4; j++) {
             bool fault  = pca && pca->efuse_flt[j];
             bool supply = pca && pca->efuse_en[j];
@@ -1295,6 +1297,7 @@ bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv)
     if (rail_id == HAT_RAIL_3V3_ADJ) {
         if (!hat_set_io_voltage(mv)) return false;
         s_state.rail[HAT_RAIL_3V3_ADJ].voltage_mv = s_state.io_voltage_mv;
+        s_state.rail[HAT_RAIL_3V3_ADJ].target_mv = mv;  // local cache until next full status poll
         return true;
     }
     if (rail_id != HAT_RAIL_VADJ3 && rail_id != HAT_RAIL_VADJ4) {
@@ -1303,7 +1306,7 @@ bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv)
     }
 
     uint8_t payload[3] = { rail_id, (uint8_t)(mv & 0xFF), (uint8_t)(mv >> 8) };
-    uint8_t rsp[8] = {};
+    uint8_t rsp[32] = {};
     uint8_t rsp_len = 0;
 
     uint8_t cmd = hat_command(HAT_CMD_SET_RAIL_VOLTAGE, payload, sizeof(payload),
@@ -1312,13 +1315,14 @@ bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv)
         uint8_t count = rsp[0];
         size_t p = 1;
         for (uint8_t i = 0; i < count && i < HAT_RAIL_COUNT; i++) {
-            if (p + 7 > rsp_len) break;
+            if (p + 9 > rsp_len) break;
             HatRailStatus st = {};
             st.rail_id = rsp[p++];
             st.enabled = rsp[p++] != 0;
             memcpy(&st.voltage_mv, &rsp[p], sizeof(st.voltage_mv)); p += sizeof(st.voltage_mv);
             memcpy(&st.current_ma, &rsp[p], sizeof(st.current_ma)); p += sizeof(st.current_ma);
             st.status = rsp[p++];
+            memcpy(&st.target_mv, &rsp[p], sizeof(st.target_mv)); p += sizeof(st.target_mv);
             if (st.rail_id < HAT_RAIL_COUNT) {
                 s_state.rail[st.rail_id] = st;
             }

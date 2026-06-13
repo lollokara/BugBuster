@@ -242,6 +242,15 @@ void AD74416H::configureAdc(uint8_t ch, AdcConvMux mux, AdcRange range, AdcRate 
     _spi.writeRegister(AD74416H_REG_ADC_CONFIG(ch), reg_val);
 }
 
+bool AD74416H::readAdcConfig(uint8_t ch, uint16_t* val)
+{
+    ch = clampCh(ch);
+    uint16_t tmp = 0;
+    bool ok = _spi.readRegister(AD74416H_REG_ADC_CONFIG(ch), &tmp);
+    if (val) *val = tmp;
+    return ok;
+}
+
 void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagMask)
 {
     // Per datasheet: channels/diagnostics cannot be modified while continuous
@@ -358,6 +367,11 @@ void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
 // ---------------------------------------------------------------------------
 bool AD74416H::readAdcResult(uint8_t ch, uint32_t* result)
 {
+    return readAdcResultDetailed(ch, result, NULL);
+}
+
+bool AD74416H::readAdcResultDetailed(uint8_t ch, uint32_t* result, uint16_t* upr_meta)
+{
     ch = clampCh(ch);
 
     // Hold the bus mutex across both reads so UPR latch + LWR read are atomic.
@@ -380,12 +394,16 @@ bool AD74416H::readAdcResult(uint8_t ch, uint32_t* result)
 
     if (!ok1 || !ok2) {
         if (result) *result = 0;
+        if (upr_meta) *upr_meta = 0;
         return false;
     }
 
     // bits [23:16] are in upr[7:0], bits [15:0] are in lwr
     if (result) {
         *result = (uint32_t)((upr & ADC_RESULT_UPR_CONV_RES_MASK) << 16) | (uint32_t)lwr;
+    }
+    if (upr_meta) {
+        *upr_meta = upr;
     }
     return true;
 }

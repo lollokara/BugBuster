@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 struct ChannelFunctionInfo: Identifiable {
     let id: Int
@@ -47,6 +48,9 @@ struct OverviewTab: View {
 
     @State private var quicksetupSlots: [QuickSetupSlot] = []
 
+    // I/V Plot
+    @State private var showIVPlotConfig = false
+
     struct QuickSetupSlot: Identifiable, Codable {
         var id: Int { index }
         let index: Int
@@ -61,48 +65,22 @@ struct OverviewTab: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
+                headerSection
+
+                // AFE at top
                 channelsGrid
+<<<<<<< Updated upstream
+
+=======
+                ivPlotSection
+>>>>>>> Stashed changes
                 suppliesCard
+
                 presetsCard
+
+                Spacer(minLength: 100)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 12)
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            headerSection
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 10)
-                .background(
-                    // Blurred scrim: material + dark wash, faded out at the
-                    // bottom edge by the mask so there is no visible box line.
-                    ZStack {
-                        Rectangle().fill(.ultraThinMaterial)
-                        LinearGradient(
-                            stops: [
-                                .init(color: Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.92), location: 0.0),
-                                .init(color: Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.78), location: 0.65),
-                                .init(color: Color(red: 0.04, green: 0.06, blue: 0.12).opacity(0.55), location: 1.0)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    }
-                    .compositingGroup()
-                    .mask(
-                        LinearGradient(
-                            stops: [
-                                .init(color: .black, location: 0.0),
-                                .init(color: .black, location: 0.72),
-                                .init(color: .clear, location: 1.0)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .ignoresSafeArea(edges: .top)
-                )
+            .padding()
         }
         .background(
             LinearGradient(
@@ -115,19 +93,22 @@ struct OverviewTab: View {
         .onAppear {
             loadQuicksetups()
             updateSlidersFromModel()
-        }
-        .onChange(of: connectionManager.lastOverview?.idac) { _, _ in
-            updateSlidersFromModel()
-        }
-        .onChange(of: connectionManager.lastHatRails) { _, _ in
             updateHatSlidersFromModel()
         }
-
+        .onChange(of: connectionManager.lastOverview?.idac) { _ in
+            updateSlidersFromModel()
+        }
+        .onChange(of: connectionManager.lastHatRails) { _ in
+            updateHatSlidersFromModel()
+        }
         .sheet(item: $selectedChannel) { channel in
             ChannelConfigSheet(channel: channel) {
                 selectedChannel = nil
             }
-            .environmentObject(connectionManager)
+        }
+        .sheet(isPresented: $showIVPlotConfig) {
+            IVPlotConfigSheet()
+                .environmentObject(connectionManager)
         }
     }
 
@@ -148,15 +129,15 @@ struct OverviewTab: View {
             HStack(spacing: 12) {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(connectionManager.transportDegraded ? Color.orange : Color.green)
+                        .fill(Color.green)
                         .frame(width: 8, height: 8)
-                    Text(connectionManager.transportDegraded ? "Busy" : "Live")
+                    Text("Live")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(.black)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .glassEffect(.regular.tint(connectionManager.transportDegraded ? .orange : .green), in: Capsule())
+                .glassEffect(.regular.tint(.green), in: Capsule())
 
                 Button(action: { connectionManager.disconnect() }) {
                     Image(systemName: "power")
@@ -167,8 +148,7 @@ struct OverviewTab: View {
                 }
             }
         }
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity)
+        .padding(.top, 10)
     }
 
     // MARK: - AFE Channels Grid (with sparklines)
@@ -183,31 +163,47 @@ struct OverviewTab: View {
             GlassEffectContainer(spacing: 12) {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                     let channels = connectionManager.lastStatus?.channels ?? defaultChannels()
+                    let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
+                    
                     ForEach(channels) { ch in
-                        let accent = channelAccentColor(for: ch.id)
+<<<<<<< Updated upstream
+=======
+                        let isChannelCGreyed = ch.id == 2 && workerEnabled
+                        let accent = isChannelCGreyed ? Color.gray : channelAccentColor(for: ch.id)
+                        
+>>>>>>> Stashed changes
                         Button(action: { selectedChannel = ch }) {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Text("CH \(ch.id)")
                                         .font(.system(size: 14, weight: .bold))
-                                        .foregroundColor(accent)
+                                        .foregroundColor(.white)
                                     Spacer()
                                     Image(systemName: "slider.horizontal.3")
                                         .font(.system(size: 12))
-                                        .foregroundColor(accent.opacity(0.75))
+                                        .foregroundColor(.secondary)
                                 }
 
                                 Text(ch.function.replacingOccurrences(of: "CH_FUNC_", with: ""))
                                     .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(accent)
+                                    .foregroundColor(.cyan)
                                     .lineLimit(1)
 
-                                Text(String(format: "%.4f", ch.adcValue))
-                                    .font(.system(size: 18, weight: .bold, design: .monospaced))
-                                    .foregroundColor(.white)
+                                Group {
+                                    if isChannelCGreyed {
+                                        Text("RESERVED")
+                                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                                    } else {
+                                        Text(String(format: "%.4f", ch.adcValue))
+                                            .foregroundColor(.white)
+                                        + Text("V")
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .font(.system(size: 18, weight: .bold, design: .monospaced))
 
                                 // Mini sparkline histogram
-                                MiniSparklineView(values: connectionManager.channelHistory[ch.id] ?? [], tint: accent)
+                                MiniSparklineView(values: connectionManager.channelHistory[ch.id] ?? [])
                                     .frame(height: 28)
 
                                 HStack {
@@ -217,21 +213,54 @@ struct OverviewTab: View {
                                     Spacer()
                                     Text(ch.function.contains("OUT") ? "DAC: \(ch.dacCode)" : "ADC")
                                         .font(.system(size: 9, weight: .bold))
-                                        .foregroundColor(accent.opacity(0.85))
+                                        .foregroundColor(.secondary)
                                         .padding(.horizontal, 4)
                                         .padding(.vertical, 2)
-                                        .glassEffect(.regular.tint(accent.opacity(0.14)), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                                 }
                             }
                             .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
+<<<<<<< Updated upstream
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+=======
                             .glassEffect(.regular.tint(accent.opacity(0.12)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .stroke(accent.opacity(0.32), lineWidth: 1)
                             )
+                            .opacity(isChannelCGreyed ? 0.4 : 1.0)
+                            .grayscale(isChannelCGreyed ? 1.0 : 0)
+>>>>>>> Stashed changes
                         }
+                        .disabled(isChannelCGreyed)
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - I/V Plot Section
+
+    var ivPlotSection: some View {
+        GlassEffectContainer(spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("I/V Characterization")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                    Text("Current source sweep")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button(action: { showIVPlotConfig = true }) {
+                    Text("Configure")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .glassEffect(.regular.tint(.cyan), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
         }
@@ -252,7 +281,7 @@ struct OverviewTab: View {
                     let enables = connectionManager.lastOverview?.ioexp.enables
 
                     let railNames = ["VADJ1", "VADJ2", "3V3_ADJ"]
-                    let railEnabled = [enables?.vadj1 ?? false, enables?.vadj2 ?? false, enables?.analog15v ?? false]
+                    let railEnabled = [enables?.vadj1 ?? false, enables?.vadj2 ?? false, false]
 
                     ForEach(0..<3, id: \.self) { i in
                         let measuredV = rails.first(where: { $0.rail == i })?.voltage
@@ -285,9 +314,11 @@ struct OverviewTab: View {
 
             Divider().background(Color.white.opacity(0.1))
 
-            // Voltage adjustments
-            VStack(spacing: 18) {
-                // VADJ1
+            let enables = connectionManager.lastOverview?.ioexp.enables
+            let pg = connectionManager.lastOverview?.ioexp.powerGood
+
+            // VADJ1: slider + enable
+            VStack(spacing: 8) {
                 VoltageSliderRow(
                     label: "VADJ1 Target",
                     value: $vadj1Value,
@@ -296,8 +327,16 @@ struct OverviewTab: View {
                     isDirty: $vadj1Dirty,
                     onApply: { setRailVoltage(ch: 1, val: vadj1Value); vadj1Dirty = false }
                 )
+                .padding(12)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                // VADJ2
+                ToggleRow(title: "Enable VADJ1 Rail", isOn: enables?.vadj1 ?? false, pg: pg?.vadj1 ?? false) { state in
+                    toggleControl("vadj1", on: state)
+                }
+            }
+
+            // VADJ2: slider + enable
+            VStack(spacing: 8) {
                 VoltageSliderRow(
                     label: "VADJ2 Target",
                     value: $vadj2Value,
@@ -306,17 +345,25 @@ struct OverviewTab: View {
                     isDirty: $vadj2Dirty,
                     onApply: { setRailVoltage(ch: 2, val: vadj2Value); vadj2Dirty = false }
                 )
+                .padding(12)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                // VLOGIC (3V3_ADJ)
-                VoltageSliderRow(
-                    label: "VLOGIC Target",
-                    value: $vlogicValue,
-                    range: 1.7...5.0,
-                    step: 0.05,
-                    isDirty: $vlogicDirty,
-                    onApply: { setRailVoltage(ch: 0, val: vlogicValue); vlogicDirty = false }
-                )
+                ToggleRow(title: "Enable VADJ2 Rail", isOn: enables?.vadj2 ?? false, pg: pg?.vadj2 ?? false) { state in
+                    toggleControl("vadj2", on: state)
+                }
             }
+
+            // VLOGIC (3V3_ADJ) — always on, no separate enable
+            VoltageSliderRow(
+                label: "VLOGIC Target",
+                value: $vlogicValue,
+                range: 1.7...5.0,
+                step: 0.05,
+                isDirty: $vlogicDirty,
+                onApply: { setRailVoltage(ch: 0, val: vlogicValue); vlogicDirty = false }
+            )
+            .padding(12)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             // HAT Rails (only shown when HAT detected)
             if hatPresent {
@@ -327,7 +374,7 @@ struct OverviewTab: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.purple)
 
-                    // Measured voltage + current tiles
+                    // Live HAT rail status tiles
                     let hatRailNames = ["VLOGIC", "VADJ3", "VADJ4"]
                     GlassEffectContainer(spacing: 8) {
                         HStack(spacing: 12) {
@@ -357,57 +404,46 @@ struct OverviewTab: View {
                         }
                     }
 
-                    // Enable toggles
-                    GlassEffectContainer(spacing: 8) {
-                        HStack(spacing: 12) {
-                            ForEach(0..<3, id: \.self) { i in
-                                let rail = connectionManager.lastHatRails.first(where: { $0.railId == i })
-                                ToggleRow(title: "Enable \(hatRailNames[i])", isOn: rail?.enabled ?? false, pg: true) { state in
-                                    toggleHatRailEnable(railId: i, on: state)
-                                }
-                            }
+                    // HAT VLOGIC: slider + enable
+                    let hatVlogicRail = connectionManager.lastHatRails.first(where: { $0.railId == 0 })
+                    VStack(spacing: 8) {
+                        VoltageSliderRow(label: "HAT VLOGIC", value: $hatVlogicValue, range: 1.7...5.0, step: 0.05,
+                            isDirty: $hatVlogicDirty,
+                            onApply: { setHatRailVoltage(railId: 0, val: hatVlogicValue); hatVlogicDirty = false })
+                        .padding(12)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        ToggleRow(title: "Enable HAT VLOGIC", isOn: hatVlogicRail?.enabled ?? false, pg: true) { state in
+                            toggleHatRailEnable(railId: 0, on: state)
                         }
                     }
 
-                    // Voltage sliders
-                    VoltageSliderRow(label: "HAT VLOGIC", value: $hatVlogicValue, range: 1.7...5.0, step: 0.05,
-                        isDirty: $hatVlogicDirty,
-                        onApply: { setHatRailVoltage(railId: 0, val: hatVlogicValue); hatVlogicDirty = false })
-                    VoltageSliderRow(label: "HAT VADJ3", value: $hatVadj3Value, range: 0.0...36.0, step: 0.1,
-                        isDirty: $hatVadj3Dirty,
-                        onApply: { setHatRailVoltage(railId: 1, val: hatVadj3Value); hatVadj3Dirty = false })
-                    VoltageSliderRow(label: "HAT VADJ4", value: $hatVadj4Value, range: 0.0...36.0, step: 0.1,
-                        isDirty: $hatVadj4Dirty,
-                        onApply: { setHatRailVoltage(railId: 2, val: hatVadj4Value); hatVadj4Dirty = false })
-                }
-            }
+                    // HAT VADJ3: slider + enable
+                    let hatVadj3Rail = connectionManager.lastHatRails.first(where: { $0.railId == 1 })
+                    VStack(spacing: 8) {
+                        VoltageSliderRow(label: "HAT VADJ3", value: $hatVadj3Value, range: 0.0...36.0, step: 0.1,
+                            isDirty: $hatVadj3Dirty,
+                            onApply: { setHatRailVoltage(railId: 1, val: hatVadj3Value); hatVadj3Dirty = false })
+                        .padding(12)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            Divider().background(Color.white.opacity(0.1))
-
-            // PCA Enables
-            let enables = connectionManager.lastOverview?.ioexp.enables
-            let pg = connectionManager.lastOverview?.ioexp.powerGood
-
-            GlassEffectContainer(spacing: 8) {
-                VStack(spacing: 12) {
-                    HStack {
-                        ToggleRow(title: "Enable VADJ1 Rail", isOn: enables?.vadj1 ?? false, pg: pg?.vadj1 ?? false) { state in
-                            toggleControl("vadj1", on: state)
-                        }
-                        ToggleRow(title: "Enable VADJ2 Rail", isOn: enables?.vadj2 ?? false, pg: pg?.vadj2 ?? false) { state in
-                            toggleControl("vadj2", on: state)
+                        ToggleRow(title: "Enable HAT VADJ3", isOn: hatVadj3Rail?.enabled ?? false, pg: true) { state in
+                            toggleHatRailEnable(railId: 1, on: state)
                         }
                     }
-                    HStack {
-                        ToggleRow(title: "Enable Analog 15V", isOn: enables?.analog15v ?? false, pg: pg?.logic ?? false) { state in
-                            toggleControl("15v", on: state)
+
+                    // HAT VADJ4: slider + enable
+                    let hatVadj4Rail = connectionManager.lastHatRails.first(where: { $0.railId == 2 })
+                    VStack(spacing: 8) {
+                        VoltageSliderRow(label: "HAT VADJ4", value: $hatVadj4Value, range: 0.0...36.0, step: 0.1,
+                            isDirty: $hatVadj4Dirty,
+                            onApply: { setHatRailVoltage(railId: 2, val: hatVadj4Value); hatVadj4Dirty = false })
+                        .padding(12)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        ToggleRow(title: "Enable HAT VADJ4", isOn: hatVadj4Rail?.enabled ?? false, pg: true) { state in
+                            toggleHatRailEnable(railId: 2, on: state)
                         }
-                        ToggleRow(title: "Enable Signal Mux", isOn: enables?.mux ?? false, pg: true) { state in
-                            toggleControl("mux", on: state)
-                        }
-                    }
-                    ToggleRow(title: "Enable USB Hub Controller", isOn: enables?.usbHub ?? false, pg: true) { state in
-                        toggleControl("usb", on: state)
                     }
                 }
             }
@@ -469,7 +505,8 @@ struct OverviewTab: View {
 
     private func updateHatSlidersFromModel() {
         for rail in connectionManager.lastHatRails {
-            let v = Double(rail.voltageMv) / 1000.0
+            let v = Double(rail.configuredVoltageMv) / 1000.0
+            guard v > 0.1 else { continue }
             switch rail.railId {
             case 0: if !hatVlogicDirty { hatVlogicValue = v }
             case 1: if !hatVadj3Dirty  { hatVadj3Value  = v }
@@ -539,17 +576,7 @@ struct OverviewTab: View {
             ChannelState(id: i, function: "CH_FUNC_HIGH_IMP", functionCode: 0,
                          adcRaw: 0, adcValue: 0.0, adcRange: 0, adcRate: 0, adcMux: 0,
                          dacCode: 0, dacValue: 0.0, dinState: false, dinCounter: 0,
-                         doState: false, channelAlert: 0, channelAlertMask: 0, rtdExcitationUa: 500.0)
-        }
-    }
-
-    private func channelAccentColor(for channelId: Int) -> Color {
-        switch channelId {
-        case 0: return .blue
-        case 1: return .green
-        case 2: return .yellow
-        case 3: return .purple
-        default: return .cyan
+                         doState: false, alert: 0, alertMask: 0, rtdExcitationUa: 500)
         }
     }
 }
@@ -604,12 +631,6 @@ struct VoltageSliderRow: View {
 
 struct MiniSparklineView: View {
     let values: [Double]
-    let tint: Color
-
-    init(values: [Double], tint: Color = .cyan) {
-        self.values = values
-        self.tint = tint
-    }
 
     var body: some View {
         GeometryReader { geo in
@@ -628,7 +649,7 @@ struct MiniSparklineView: View {
                         let normalized = CGFloat((v - minV) / range)
                         let barHeight = max(2, normalized * geo.size.height)
                         Rectangle()
-                            .fill(tint.opacity(0.7))
+                            .fill(Color.cyan.opacity(0.6))
                             .frame(width: max(1, barWidth - 1), height: barHeight)
                     }
                 }
@@ -751,6 +772,245 @@ struct ChannelConfigSheet: View {
                     path: "/api/channel/\(chId)/dac",
                     json: [key: val]
                 )
+            }
+        }
+    }
+}
+
+// MARK: - IV Plot Views
+
+struct IVPoint: Identifiable {
+    let id = UUID()
+    let currentMa: Double
+    let voltageV: Double
+}
+
+struct IVPlotConfigSheet: View {
+    @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var connectionManager: ConnectionManager
+    @State private var selectedChannel = 0
+    @State private var iRangeFrom: Double = 0.0
+    @State private var iRangeTo: Double = 20.0
+    @State private var steps: Double = 20.0
+    @State private var settleTimeMs: Double = 50.0
+    @State private var showingPlot = false
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Source Channel") {
+                    Picker("Channel", selection: $selectedChannel) {
+                        Text("CH 0").tag(0)
+                        Text("CH 1").tag(1)
+                        Text("CH 2").tag(2)
+                        Text("CH 3").tag(3)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                
+                Section("Current Range (mA)") {
+                    VStack(alignment: .leading) {
+                        Text("From: \(String(format: "%.1f mA", iRangeFrom))")
+                        Slider(value: $iRangeFrom, in: 0...25, step: 0.1)
+                    }
+                    VStack(alignment: .leading) {
+                        Text("To: \(String(format: "%.1f mA", iRangeTo))")
+                        Slider(value: $iRangeTo, in: 0...25, step: 0.1)
+                    }
+                }
+                
+                Section("Measurement Settings") {
+                    VStack(alignment: .leading) {
+                        Text("Steps: \(Int(steps))")
+                        Slider(value: $steps, in: 5...5000, step: 1)
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Settle Time: \(Int(settleTimeMs)) ms")
+                        Slider(value: $settleTimeMs, in: 10...500, step: 10)
+                    }
+                }
+                
+                Section {
+                    Button(action: { showingPlot = true }) {
+                        Text("Start Measurement")
+                            .bold()
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    .listRowBackground(Color.cyan)
+                }
+            }
+            .navigationTitle("I/V Plot Configuration")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .navigationDestination(isPresented: $showingPlot) {
+                IVPlotDataView(
+                    channel: selectedChannel,
+                    iRangeFrom: iRangeFrom,
+                    iRangeTo: iRangeTo,
+                    steps: Int(steps),
+                    settleTimeMs: Int(settleTimeMs)
+                )
+            }
+        }
+    }
+}
+
+struct IVPlotDataView: View {
+    @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var connectionManager: ConnectionManager
+    let channel: Int
+    let iRangeFrom: Double
+    let iRangeTo: Double
+    let steps: Int
+    let settleTimeMs: Int
+    
+    @State private var points: [IVPoint] = []
+    @State private var isMeasuring = true
+    
+    var body: some View {
+        ZStack {
+            Color(red: 0.03, green: 0.05, blue: 0.10).ignoresSafeArea()
+            
+            VStack(alignment: .leading, spacing: 20) {
+                if points.isEmpty && isMeasuring {
+                    VStack(spacing: 16) {
+                        ProgressView().scaleEffect(1.5).tint(.cyan)
+                        Text("Initializing I/V Sweep...")
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Text("I/V Characteristic (CH \(channel))")
+                        .font(.title3)
+                        .bold()
+                        .foregroundColor(.white)
+                        .padding(.horizontal)
+                    
+                    Chart {
+                        ForEach(points) { pt in
+                            LineMark(
+                                x: .value("Current (mA)", pt.currentMa),
+                                y: .value("Voltage (V)", pt.voltageV)
+                            )
+                            .foregroundStyle(Color.cyan)
+                            .interpolationMethod(.linear)
+                            
+                            PointMark(
+                                x: .value("Current (mA)", pt.currentMa),
+                                y: .value("Voltage (V)", pt.voltageV)
+                            )
+                            .foregroundStyle(Color.blue)
+                        }
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: .automatic) { _ in
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 4])).foregroundStyle(.white.opacity(0.1))
+                            AxisValueLabel().foregroundStyle(.secondary)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(values: .automatic) { _ in
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 4])).foregroundStyle(.white.opacity(0.1))
+                            AxisValueLabel().foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(height: 300)
+                    .padding()
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.horizontal)
+                    
+                    if isMeasuring {
+                        HStack {
+                            ProgressView().tint(.cyan)
+                            Text("Measuring: \(points.count)/\(steps + 1) points")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Data Points").font(.headline).padding(.horizontal)
+                        ScrollView {
+                            LazyVStack(spacing: 8) {
+                                ForEach(points) { pt in
+                                    HStack {
+                                        Text(String(format: "%.2f mA", pt.currentMa))
+                                            .font(.system(.subheadline, design: .monospaced))
+                                        Spacer()
+                                        Text(String(format: "%.4f V", pt.voltageV))
+                                            .font(.system(.subheadline, design: .monospaced))
+                                            .foregroundColor(.cyan)
+                                    }
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.05))
+                                    .cornerRadius(8)
+                                    .padding(.horizontal)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.vertical)
+        }
+        .navigationTitle("I/V Plot")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            startMeasurement()
+        }
+    }
+    
+    private func startMeasurement() {
+        points = []
+        isMeasuring = true
+        Task {
+            // Set function to Current Output (IOUT = 2)
+            _ = try? await connectionManager.postAction(
+                path: "/api/channel/\(channel)/function",
+                json: ["function": 2]
+            )
+            
+            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms for function setup
+            
+            let stepMa = steps > 0 ? (iRangeTo - iRangeFrom) / Double(steps) : 0
+            
+            for i in 0...steps {
+                guard isMeasuring else { break }
+                let current = iRangeFrom + (stepMa * Double(i))
+                
+                // Set DAC current
+                _ = try? await connectionManager.postAction(
+                    path: "/api/channel/\(channel)/dac",
+                    json: ["current_mA": current]
+                )
+                
+                // Wait for settle
+                try? await Task.sleep(nanoseconds: UInt64(settleTimeMs) * 1_000_000)
+                
+                // Get fresh ADC reading
+                if let adcResp: ChannelAdcResponse = try? await connectionManager.getRequest(path: "/api/channel/\(channel)/adc") {
+                    let point = IVPoint(currentMa: current, voltageV: adcResp.adcValue)
+                    await MainActor.run {
+                        points.append(point)
+                    }
+                }
+            }
+            
+            // Revert channel to High-Z (0) when done
+            _ = try? await connectionManager.postAction(
+                path: "/api/channel/\(channel)/function",
+                json: ["function": 0]
+            )
+            
+            await MainActor.run {
+                isMeasuring = false
             }
         }
     }

@@ -146,6 +146,11 @@ public:
     void configureAdc(uint8_t ch, AdcConvMux mux, AdcRange range, AdcRate rate);
 
     /**
+     * @brief Read back raw ADC_CONFIG register for one channel.
+     */
+    bool readAdcConfig(uint8_t ch, uint16_t* val);
+
+    /**
      * @brief Start ADC conversions with a channel enable mask.
      *
      * @param continuous  true = continuous mode; false = single conversion
@@ -179,6 +184,15 @@ public:
      * @return uint32_t  24-bit ADC code (bits [23:0])
      */
     bool readAdcResult(uint8_t ch, uint32_t* result);
+
+    /**
+     * @brief Read the 24-bit ADC result and return ADC_RESULT_UPR metadata.
+     *
+     * The upper register also reports the conversion mux, range, and sequence
+     * count associated with the latched result. Self-test uses this to reject
+     * stale samples while changing Channel D routing.
+     */
+    bool readAdcResultDetailed(uint8_t ch, uint32_t* result, uint16_t* upr_meta);
 
     /**
      * @brief Read a diagnostic ADC result register.

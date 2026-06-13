@@ -20,7 +20,7 @@ struct SignalPathTab: View {
     ]
     
     let MUX_REF = ["U10", "U11", "U17", "U16"]
-    let MUX_DEVICE_BY_LOGICAL = [0, 1, 3, 2]
+    let MUX_DEVICE_BY_LOGICAL = [0, 1, 2, 3]
     
     let GPIO_PAIR_LABELS = [
         ["IO1", "IO2", "IO3"],
@@ -53,33 +53,66 @@ struct SignalPathTab: View {
                 }
 
                 ScrollView {
+<<<<<<< Updated upstream
+                    GlassEffectContainer(spacing: 16) {
+                        VStack(spacing: 16) {
+                            ForEach(0..<4) { ch in
+                                let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
+                                let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
+                                    ? connectionManager.lastStatus!.muxStates[muxDev] : 0
+=======
                     VStack(spacing: 0) {
                         GlassEffectContainer(spacing: 16) {
                             VStack(spacing: 16) {
+                                let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
+
                                 ForEach(0..<4) { ch in
+                                    let isChannelCGreyed = ch == 2 && workerEnabled
+                                    let accent = isChannelCGreyed ? Color.gray : ACCENTS[ch]
+
                                     let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
                                     let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
                                         ? connectionManager.lastStatus!.muxStates[muxDev] : 0
+>>>>>>> Stashed changes
 
-                                    let isPsuOn = ch < 2
-                                        ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
-                                        : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
+                                let isPsuOn = ch < 2
+                                    ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
+                                    : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
 
-                                    let efuses = connectionManager.lastOverview?.ioexp.efuses
-                                    let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
-                                    let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
+                                let efuses = connectionManager.lastOverview?.ioexp.efuses
+                                let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
+                                let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
 
-                                    let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
-                                    let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
-                                    let vAdjIndex  = ch < 2 ? 0 : 1
+                                let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
+                                let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
+                                let vAdjIndex  = ch < 2 ? 0 : 1
 
+<<<<<<< Updated upstream
+                                BlockTile(
+                                    blockIndex: ch,
+                                    muxDevice: muxDev,
+                                    muxRef: MUX_REF[ch],
+                                    muxState: muxState,
+                                    ioLabels: GPIO_PAIR_LABELS[ch],
+                                    accentColor: ACCENTS[ch],
+                                    isPsuActive: isPsuOn,
+                                    isEfuseActive: isEfOn,
+                                    isEfuseFault: isEfFault,
+                                    isOeActive: isOeActive,
+                                    vAdjLabel: vAdjLabel,
+                                    onApplyMuxStates: { states in applyPreset(states) },
+                                    onToggleOe:     { toggleOe() },
+                                    onToggleVAdj:   { togglePsu(vAdjIndex) },
+                                    onToggleEfuse:  { toggleEfuse(ch) }
+                                )
+=======
                                     BlockTile(
                                         blockIndex: ch,
                                         muxDevice: muxDev,
                                         muxRef: MUX_REF[ch],
                                         muxState: muxState,
                                         ioLabels: GPIO_PAIR_LABELS[ch],
-                                        accentColor: ACCENTS[ch],
+                                        accentColor: accent,
                                         isPsuActive: isPsuOn,
                                         isEfuseActive: isEfOn,
                                         isEfuseFault: isEfFault,
@@ -90,12 +123,15 @@ struct SignalPathTab: View {
                                         onToggleVAdj:   { togglePsu(vAdjIndex) },
                                         onToggleEfuse:  { toggleEfuse(ch) }
                                     )
+                                    .opacity(isChannelCGreyed ? 0.4 : 1.0)
+                                    .grayscale(isChannelCGreyed ? 1.0 : 0)
+                                    .disabled(isChannelCGreyed)
                                 }
+>>>>>>> Stashed changes
                             }
                         }
-                        .padding()
-
                     }
+                    .padding()
                 }
             }
         }

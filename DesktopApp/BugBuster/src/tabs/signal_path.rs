@@ -63,7 +63,7 @@ const C_CHIP_BD: &str = "#1e3050";
 
 const ACCENTS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const MUX_REF: [&str; 4] = ["U10", "U11", "U17", "U16"];
-const MUX_DEVICE_BY_LOGICAL: [usize; 4] = [0, 1, 3, 2];
+const MUX_DEVICE_BY_LOGICAL: [usize; 4] = [0, 1, 2, 3];
 
 // Switch input topology:
 // GPIO pairs: IO goes through level shifter, then SPLITS:

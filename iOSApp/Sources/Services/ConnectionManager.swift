@@ -797,7 +797,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     public func applyOptimisticHatRailEnable(railId: Int, enabled: Bool) {
         updateOnMain {
             self.lastHatRails = self.lastHatRails.map { r in
-                r.railId == railId ? HatRail(railId: r.railId, enabled: enabled, voltageMv: r.voltageMv, currentMa: r.currentMa, status: r.status) : r
+                r.railId == railId ? HatRail(railId: r.railId, enabled: enabled, voltageMv: r.voltageMv, targetVoltageMv: r.targetVoltageMv, currentMa: r.currentMa, status: r.status) : r
             }
         }
     }

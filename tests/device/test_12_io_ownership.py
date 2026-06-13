@@ -210,10 +210,10 @@ def test_force_release_all(usb_client, sim_device):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.sim_only
-def test_adgs_mutual_exclusion_opens_first_before_second(sim_device):
+def test_adgs_group_exclusion_opens_same_group_only(sim_device):
     """
-    FIX 10: Closing switch A on device 0, then switch B on device 0, must
-    auto-open switch A first.  adgs_active[0] tracks the currently-closed switch.
+    ADGS switch exclusivity is per physical IO group, not per whole MUX device.
+    Closing S5 must not open S3 because those are different IOs in the same block.
     """
     t = SimulatedUSBTransport(sim_device)
     client = bb.BugBuster(t)
@@ -228,44 +228,17 @@ def test_adgs_mutual_exclusion_opens_first_before_second(sim_device):
         f"mux_states[0] must have only bit 2 set, got 0b{sim_device.mux_states[0]:08b}"
     )
 
-    # Now close switch 5 on device 0 — must auto-open switch 2 first
+    # Now close switch 5 on device 0. It is in a different group, so S2 stays on.
     sim_device.dispatch(0x92, struct.pack('<BBB', 0, 5, 1))  # MUX_SET_SWITCH dev=0 sw=5 closed=1
-    assert sim_device.adgs_active[0] == 5, (
-        f"After closing sw5, adgs_active[0] must be 5, got {sim_device.adgs_active[0]}"
-    )
-    # Only switch 5 should be set — switch 2 must have been opened
-    assert sim_device.mux_states[0] == (1 << 5), (
-        f"Switch 2 must be auto-opened before switch 5 closes; "
+    assert sim_device.mux_states[0] == ((1 << 2) | (1 << 5)), (
+        f"Switch 2 must remain closed when switch 5 closes; "
         f"mux_states[0]=0b{sim_device.mux_states[0]:08b}"
     )
 
-    try:
-        client.disconnect()
-    except Exception:
-        pass
-
-
-@pytest.mark.sim_only
-def test_adgs_selftest_exempt_from_mutual_exclusion(sim_device):
-    """
-    FIX 10: Device index 3 (U23 selftest) is exempt from mutual exclusion.
-    Closing a U23 switch simultaneously with a real-device switch must NOT
-    open the real-device switch.
-    """
-    t = SimulatedUSBTransport(sim_device)
-    client = bb.BugBuster(t)
-    client.connect()
-
-    # Close switch 1 on device 0 (real device)
+    # Closing another switch in S1-S4 must open only that group.
     sim_device.dispatch(0x92, struct.pack('<BBB', 0, 1, 1))
-    assert sim_device.adgs_active[0] == 1
-
-    # Close switch 3 on device 3 (U23 selftest — exempt)
-    sim_device.dispatch(0x92, struct.pack('<BBB', 3, 3, 1))
-
-    # Real-device switch must still be closed — selftest close must NOT open it
-    assert sim_device.mux_states[0] & (1 << 1), (
-        "Real-device switch 1 must remain closed after U23 selftest closes its own switch"
+    assert sim_device.mux_states[0] == ((1 << 1) | (1 << 5)), (
+        "Switch 1 must replace switch 2, but switch 5 must remain active"
     )
 
     try:

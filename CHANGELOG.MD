@@ -2,7 +2,18 @@
 
 ## [Unreleased]
 
-*(no changes yet)*
+<<<<<<< Updated upstream
+=======
+### Notebooks
+- **RP2040 firmware build notebook — OTA flash section**: Added section 3 "OTA Flash via ESP32 (WiFi)" with three cells: (A) auto-discovery via mDNS/zeroconf with subnet-scan fallback probing `/api/device/info`, (B) binary upload to `POST /api/ota/upload_rp2040` with KB/s rate display, (C) flash trigger via `POST /api/update/apply` with live progress bar polling `GET /api/update/status` (`state`/`step`/`progressDone`/`progressTotal`). Existing picotool and HAT-demo sections renumbered to 4 and 5.
+
+### iOS App
+- **ADC Channel C greying when self-test active**: In the Overview, Scope, and Signal Path tabs, ADC channel C (index 2 / BLOCK 3 / CH3) is now greyed out and disabled when the self-test worker thread is enabled, preventing conflicting configurations.
+- **Supply tab reorganization**: each voltage slider is now paired with its enable toggle directly below it (VADJ1, VADJ2, HAT rails), matching the visual pattern for both main-board and HAT sections
+- **HAT voltage slider — always shows DS4424 target**: RP2040 now includes `target_mv` (the persisted DS4424 set-point from flash) in every `HAT_RSP_RAIL_STATUS` response; ESP32 parses and forwards it as `targetVoltageMv` in `GET /api/hat/v2/rails`; iOS `HatRail.configuredVoltageMv` prefers `targetVoltageMv` over measured `voltageMv` for slider init — works correctly even after RP2040 reboot since the target is restored from flash
+- **HAT VADJ3/VADJ4 boot default**: first-boot default changed from 3.3V to 12V, persisted to flash immediately; rails remain disabled until explicitly enabled
+- **Removed controls**: "Enable Analog 15V", "Enable Signal Mux", and "Enable USB Hub Controller" toggles removed from the supply tab (not user-facing)
+- **Fixed duplicate `onAppear`**: removed duplicate quicksetups load call; HAT sliders now also sync on first appear
 
 ## [1.4.1] — 2026-06-12
 
@@ -25,6 +36,7 @@
 
 ## [1.4.0] — 2026-06-12
 
+>>>>>>> Stashed changes
 ### Added
 - **iOS Oscilloscope Scope Tab**: Added a new "Scope" tab (waveform icon) to the iOS app bottom navigation. It features a real-time waveform display rendering active channels with distinct colors, a configuration settings modal sheet (for selecting MUX inputs, voltage ranges, and sample rates per channel), pinch-to-zoom scaling for the timebase using magnification gestures, and auto-fit Y-axis scaling. Implemented URLSession response disposition handling to enable chunked stream delivery, added Play/Pause toolbar buttons, and added connection error state overlays with retry flows.
 - **iOS Oscilloscope sample counter**: Displays the count of all received samples next to the streaming state in the header.
