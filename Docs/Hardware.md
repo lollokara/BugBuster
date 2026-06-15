@@ -90,10 +90,10 @@ channels in natural order `A/B/C/D`:
 
 | Label | IO_Block | Analog IO | Public ADC channel | MUX device | ESP32 GPIO | E-fuse |
 |-------|----------|-----------|--------------------|------------|------------|--------|
-| A     | 1        | IO3       | 0                  | U10 / 0    | GPIO5      | EFUSE1 |
-| B     | 2        | IO6       | 1                  | U11 / 1    | GPIO7      | EFUSE2 |
-| C     | 3        | IO9       | 2                  | U17 / 3    | GPIO10     | EFUSE3 |
-| D     | 4        | IO12      | 3                  | U16 / 2    | GPIO13     | EFUSE4 |
+| A     | 1        | IO3       | 0                  | U10 / 0    | GPIO1      | EFUSE1 |
+| B     | 2        | IO6       | 1                  | U11 / 1    | GPIO5      | EFUSE2 |
+| C     | 3        | IO9       | 2                  | U17 / 2    | GPIO10     | EFUSE3 |
+| D     | 4        | IO12      | 3                  | U16 / 3    | GPIO13     | EFUSE4 |
 
 The PCB swaps the AD74416H C/D register wiring, so firmware translates public
 channel C to AD74416H physical D and public channel D to AD74416H physical C in
@@ -108,31 +108,34 @@ Channel D and claims the logical owner of that physical register while measuring
 
 ## 4. ESP32-S3 pin assignments
 
+> **Canonical source of truth:** `.mex/context/hardware-pinout.md` (verified against `config.h` 2026-06-15)
+
 ### SPI bus (shared AD74416H + ADGS2414D MUX)
 
 | Signal | GPIO | Notes |
 |---|---|---|
-| MISO (SDO) | 8 | From AD74416H |
-| MOSI (SDI) | 9 | To AD74416H |
-| CS (SYNC) | 10 | AD74416H chip select, active-low |
-| SCLK | 11 | 10 MHz default, up to 20 MHz |
-| MUX_CS | 12 | ADGS2414D chip select |
+| SCLK | 16 | 10 MHz default, up to 20 MHz |
+| MOSI (SDI) | 17 | To AD74416H |
+| MISO (SDO) | 18 | From AD74416H |
+| CS (SYNC) | 40 | AD74416H chip select, active-low |
+| MUX_CS | 21 | ADGS2414D daisy-chain chip select (5 devices) |
 | LSHIFT_OE | 14 | Level-shifter output enable (gates all 12 DIOs) |
 
 ### AD74416H control lines
 
 | Signal | GPIO | Notes |
 |---|---|---|
-| RESET | 5 | Active-low hardware reset |
-| ADC_RDY | 6 | Open-drain — ADC conversion ready |
-| ALERT | 7 | Open-drain — fault output |
+| RESET | 45 | Active-low hardware reset |
+| ADC_RDY | 38 | Open-drain — ADC conversion ready |
+| ALERT | 39 | Open-drain — fault output |
 
 ### I²C bus (shared DS4424 / HUSB238 / PCA9535)
 
-| Signal | GPIO |
-|---|---|
-| SDA | 1 |
-| SCL | 4 |
+| Signal | GPIO | Notes |
+|---|---|---|
+| SDA | 42 | 400 kHz Fast Mode |
+| SCL | 41 | |
+| PCA9535 INT | 3 | PCAL9535A interrupt output |
 
 ### HAT expansion header
 
@@ -140,25 +143,26 @@ Channel D and claims the logical owner of that physical register while measuring
 |---|---|---|
 | HAT_TX (UART0 → RP2040) | 43 | 921600 8N1 |
 | HAT_RX (RP2040 → ESP32) | 44 | 921600 8N1 |
-| HAT_DETECT | 47 | ADC1_CH6 voltage divider (see `HAT_Protocol.md` §2) |
+| HAT_DETECT | 47 | **Digital strap** — HIGH=no HAT, LOW=HAT present (NOT ADC) |
 | HAT_IRQ | 15 | Shared open-drain, pulled by RP2040 GPIO8 |
 
 ---
 
 ## 5. FreeRTOS task layout (ESP32-S3)
 
-| Task | Core | Priority | Purpose |
-|---|---|---|---|
-| `taskAdcPoll` | 1 | 3 | Read ADC results, convert to engineering units, accumulate scope buckets |
-| `taskFaultMonitor` | 1 | 4 | Alert / fault status, DIN counters, GPIO, supply diagnostics |
-| `taskCommandProcessor` | 1 | 2 | Dequeue and execute hardware commands (channel func, DAC, config) |
-| `taskI2cPoll` | 1 | 1 | Poll DS4424 / HUSB238 / PCA9535 state |
-| `taskWavegen` | 1 | 3 | Generate waveform samples, write DAC codes at target frequency |
-| `mainLoopTask` | 0 | 1 | CLI input, BBP handshake, binary protocol, heartbeat |
+| Task | Core | Priority | Stack | Purpose |
+|---|---|---|---|---|
+| `taskMainLoop` | 0 | 5 | 8192 | BBP dispatch, CLI, periodic polls |
+| `taskAdcPoll` | 1 | 4 | 4096 | Read ADC results, scope buckets, DSP streaming |
+| `taskFaultMonitor` | 1 | 3 | 4096 | Alert/fault status, DIN counters, diagnostics |
+| `taskWavegen` | 1 | 3 | 4096 | Waveform output (sine/square/triangle/sawtooth) |
+| `httpd` | 0 | 5 | 8192 | ESP-IDF HTTP server (90+ endpoints, SSE, admin auth) |
+| `mpTask` | 1 | 3 | 16384 | MicroPython VM (1 MB GC heap, PSRAM) |
+| `wifiWorker` | 0 | 2 | 4096 | WiFi STA connect/reconnect, mDNS |
 
-Core 0 is dedicated to USB + Wi-Fi + BBP framing; Core 1 runs the real-time
-analog pipeline.  This split is why the scope / ADC streaming path can keep up
-even while the user hammers the HTTP REST interface concurrently.
+Core 0 runs USB + WiFi + HTTP; Core 1 runs the real-time analog pipeline +
+MicroPython. This split lets the scope/ADC streaming path keep up even while
+the HTTP REST interface is hammered concurrently.
 
 ---
 

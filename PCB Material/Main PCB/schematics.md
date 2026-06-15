@@ -2,11 +2,14 @@
 
 On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`, `USB.SchDoc`, `Power.SchDoc`, `Analog.SchDoc`, `IOs.SchDoc`) and cross-referenced with `config.h` and the BOM.
 
+> **Canonical source of truth for GPIO pins and IC addresses:** `.mex/context/hardware-pinout.md` (verified against `config.h` on 2026-06-15).
+> If anything here conflicts with that file, `hardware-pinout.md` is correct.
+>
 > **Notes on confidence:**
 > - Information confirmed in **both** the schematic images and firmware source is marked as verified.
 > - Connections read from schematic images but not in firmware source are marked **[schematic only]**.
 > - Items that are unclear or partially visible are marked **[UNSURE]**.
-> - `BREADBOARD_MODE 1` is currently set in `config.h`. This changes two GPIO assignments (I2C, MUX_CS). Both the breadboard and PCB assignments are documented.
+> - `BREADBOARD_MODE` is **no longer active** in firmware. All GPIO assignments below reflect the production PCB revision.
 
 ---
 
@@ -33,26 +36,26 @@ On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`
 | `3V3_BUCK` | LTM8078 VOUT2 | 3.3 V regulated rail. Powers ESP32, PCA9535, USB hub VDD, pull-ups. |
 | `+15V_ANA` | LTM8049 VOUT1P | +15 V analog supply for AD74416H AVCC1/AVDD_HI and SI7113 source bias. |
 | `-15V_ANA` | LTM8049 VOUT2N | −15 V analog supply for AD74416H LVIN. |
-| `3V3_ADJ` | TPS74601 OUT | Adjustable ~3.3 V for AD74416H AVDD_LO / DVCC81 [UNSURE exact rail usage]. |
+| `3V3_ADJ` | TPS74601 OUT | Adjustable ~3.3 V for AD74416H AVDD_LO / DVCC81. |
 | `VADJ1_BUCK` | LTM8063 U4 VOUT | Adjustable 3–15 V. Feeds output ports P1 and P2 via e-fuses. |
 | `VADJ2_BUCK` | LTM8063 U6 VOUT | Adjustable 3–15 V. Feeds output ports P3 and P4 via e-fuses. |
 | `2V5_REF` | ADR4525BRZ VOUT | Precision 2.5 V reference for AD74416H REFO. |
 | `5V_BUCK` → `4.7 µF` | — | Input bulk capacitor on 5V rail (C14, C28, C29). |
-| `ESP_SDA` | GPIO42 (PCB) | I2C data — shared bus: DS4424, HUSB238, PCA9535. |
-| `ESP_SCL` | GPIO41 (PCB) | I2C clock — shared bus. |
-| `SPI_SDO` | AD74416H SDO | SPI MISO (data from AD74416H to ESP32 GPIO8). |
-| `SPI_SDI` | ESP32 GPIO9 | SPI MOSI (data to AD74416H). |
-| `SPI_CS_ADC` | ESP32 GPIO10 | AD74416H SYNC (active-low chip select). |
-| `SPI_SCLK` | ESP32 GPIO11 | SPI clock shared by AD74416H and ADGS2414D. |
-| `SPI_CS_MUX` | ESP32 GPIO21 (PCB) | ADGS2414D daisy-chain chip select (via level shifter). |
-| `ADC_RESET` | ESP32 GPIO5 | Active-low hardware reset for AD74416H. |
-| `ADC_RDY` | AD74416H ADC_RDY* | Open-drain, active-low. ESP32 GPIO6, 100 kΩ pull-up. |
-| `ADC_ALRT` | AD74416H ALERT* | Open-drain, active-low. ESP32 GPIO7, 100 kΩ pull-up. |
-| `ANA_PG` | TPS74601 PG | Analog supply power-good. ESP32 GPIO48. R7 pull-up to 3V3_BUCK. [UNSURE — GPIO47 or GPIO48] |
+| `ESP_SDA` | GPIO42 | I2C data — shared bus: DS4424, HUSB238, PCA9535. |
+| `ESP_SCL` | GPIO41 | I2C clock — shared bus. |
+| `SPI_SDO` | AD74416H SDO | SPI MISO (data from AD74416H to ESP32 GPIO18). |
+| `SPI_SDI` | ESP32 GPIO17 | SPI MOSI (data to AD74416H). |
+| `SPI_CS_ADC` | ESP32 GPIO40 | AD74416H SYNC (active-low chip select). |
+| `SPI_SCLK` | ESP32 GPIO16 | SPI clock shared by AD74416H and ADGS2414D. |
+| `SPI_CS_MUX` | ESP32 GPIO21 | ADGS2414D daisy-chain chip select (via level shifter). |
+| `ADC_RESET` | ESP32 GPIO45 | Active-low hardware reset for AD74416H. |
+| `ADC_RDY` | AD74416H ADC_RDY* | Open-drain, active-low. ESP32 GPIO38, 100 kΩ pull-up. |
+| `ADC_ALRT` | AD74416H ALERT* | Open-drain, active-low. ESP32 GPIO39, 100 kΩ pull-up. |
+| `ANA_PG` | TPS74601 PG wire-OR with LTM8049 PG2 | Analog supply power-good. ESP32 GPIO48. R7 (10 kΩ) pull-up to 3V3_BUCK. |
 | `LED_DIN` | ESP32 GPIO0 | WS2812B data-in chain. R5 (10 kΩ) pull-up to 3V3_BUCK. |
 | `LVL_OE` | ESP32 GPIO14 | TXS0108E output-enable (active-high). |
-| `MUX_INT` | PCA9535 INT | GPIO expander interrupt. GPIO4 (PCB). |
-| `EXP_IO2` | ESP32 GPIO (PCB) | Second expander interrupt or secondary power-good signal. [UNSURE — net label appears near ANA_PG and MUX_INT in schematic; may be an alternate label for the same pin or a separate GPIO input] |
+| `MUX_INT` | PCA9535 INT | GPIO expander interrupt. GPIO3. |
+| `EXP_IO2` | ESP32 GPIO48 | Alternate net label for ANA_PG (same pin). |
 | `USB_UP_P/N` | TPD2E1B06DRLR | USB 2.0 upstream differential pair (hub upstream ↔ USB-C J1). |
 | `USB_DF1_P/N` | USB2422 DN1 | USB 2.0 downstream port 1 (hub → ESP32 native USB GPIO19/GPIO20). |
 | `USB_DF2_P/N` | USB2422 DN2 | USB 2.0 downstream port 2 (hub → external connector J5 [UNSURE]). |
@@ -62,9 +65,9 @@ On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`
 | `VADJ2_EN` | PCA9535 port | LTM8063 U6 RUN pin enable. |
 | `VADJ1_PG` | LTM8063 U4 PG | Power-good feedback to PCA9535. |
 | `VADJ2_PG` | LTM8063 U6 PG | Power-good feedback to PCA9535. |
-| `IDAC_OUT0–OUT3` | DS4424 OUT0–OUT3 | Current DAC outputs to LTM8063 FB resistor networks. |
-| `3V3_ADJ_EN` | PCA9535 port | TPS74601 enable pin. |
-| `EXP_TX / EXP_RX` | ESP32 UART | [UNSURE — exact GPIO and destination. Likely UART bridge to external header.] |
+| `IDAC_OUT0–OUT3` | DS4424 OUT0–OUT3 | OUT0 → LTM8078 FB (VLOGIC), OUT1 → LTM8063 U4 FB (VADJ1), OUT2 → LTM8063 U6 FB (VADJ2), OUT3 = NC. |
+| `3V3_ADJ_EN` | PCA9535 P0.6 | TPS74601 enable pin (legacy, bit 6 — `EN_MUX` in firmware, unused on current PCB). |
+| `EXP_TX / EXP_RX` | ESP32 GPIO43/GPIO44 | HAT UART TX/RX (921600 8N1). Also used as UART bridge when HAT not present. |
 
 ---
 
@@ -112,44 +115,32 @@ BOOT button (430473035826): A1/A2 ── GND,  B1/B2 ── LED_DIN net
 
 ### 2.5 GPIO Pin Assignments
 
-Source of truth: `config.h`. PCB net names from schematic.
+Source of truth: `config.h` (verified 2026-06-15). See also `.mex/context/hardware-pinout.md`.
 
 | GPIO | Net / Function | Direction | Pull-up / Notes |
 |------|---------------|-----------|-----------------|
 | GPIO0 | `LED_DIN` | OUT | R5 (10 kΩ) to 3V3_BUCK. WS2812B chain data. Also BOOT strapping pin. |
-| GPIO4 | `MUX_INT` (PCB) / `I2C_SCL` (breadboard) | IN / I2C | PCB: PCA9535 INT. Breadboard: I2C SCL. |
-| GPIO5 | `ADC_RESET` | OUT | Pull-up [UNSURE resistor value — likely 100 kΩ from R56 on Analog sheet]. |
-| GPIO6 | `ADC_RDY` | IN | R63 (100 kΩ) pull-up to 3V3_BUCK on Analog sheet. Open-drain from AD74416H. |
-| GPIO7 | `ADC_ALRT` | IN | R64 (100 kΩ) pull-up to 3V3_BUCK on Analog sheet. Open-drain from AD74416H. |
-| GPIO8 | `SPI_SDO` (MISO) | IN | From AD74416H SDO. |
-| GPIO9 | `SPI_SDI` (MOSI) | OUT | To AD74416H SDI. |
-| GPIO10 | `SPI_CS_ADC` | OUT | AD74416H SYNC (active-low CS). |
-| GPIO11 | `SPI_SCLK` | OUT | Shared SPI clock (AD74416H + ADGS2414D). |
-| GPIO14 | `LVL_OE` | OUT | TXS0108E U13 and U15 output enable. |
+| GPIO3 | `MUX_INT` | IN | PCAL9535A interrupt output (active-low). |
+| GPIO14 | `LVL_OE` | OUT | TXS0108E U13 and U15 output enable (active-high). |
+| GPIO15 | `HAT_IRQ` | IN | Open-drain from RP2040 GPIO8. LA_DONE interrupt. |
+| GPIO16 | `SPI_SCLK` | OUT | Shared SPI clock (AD74416H + ADGS2414D). |
+| GPIO17 | `SPI_SDI` (MOSI) | OUT | To AD74416H SDI. |
+| GPIO18 | `SPI_SDO` (MISO) | IN | From AD74416H SDO. |
 | GPIO19 | `USB_DF1_N` | USB | Native USB D− (from hub downstream port 1). |
 | GPIO20 | `USB_DF1_P` | USB | Native USB D+ (from hub downstream port 1). |
-| GPIO21 | `SPI_CS_MUX` (PCB) | OUT | ADGS2414D daisy-chain CS (via level shifter). |
-| GPIO41 | `ESP_SCL` (PCB) | I2C | PCB I2C clock. 5.1 kΩ pull-up R2 to 3V3_BUCK. 400 kHz fast mode on PCB. |
-| GPIO42 | `ESP_SDA` (PCB) | I2C | PCB I2C data. 5.1 kΩ pull-up R1 to 3V3_BUCK. |
-| GPIO47 or GPIO48 | `EXP_IO2` / `ANA_PG` | IN | R7 (10 kΩ) pull-up to 3V3_BUCK. [UNSURE — exact GPIO; ANA_PG power-good or PCA9535 INT2] |
-
-> **Breadboard mode differences** (`BREADBOARD_MODE 1` in config.h):
-> - I2C SDA → GPIO1, I2C SCL → GPIO4 (instead of GPIO42/GPIO41)
-> - MUX_CS → GPIO12 (instead of GPIO21)
-> - MUX_INT → NC (not connected)
-> - ADGS device count → 1 (instead of 4)
-
-**Nets visible on ESP32 left side but not yet fully traced:**
-
-| Net label | Connected to (best guess) |
-|-----------|--------------------------|
-| `BLOCK1_IO1` – `BLOCK1_IO6` | PCA9535 port 0 or ADGS2414D control [UNSURE] |
-| `BLOCK2_IO1` – `BLOCK2_IO6` | PCA9535 port 1 or ADGS2414D control [UNSURE] |
-| `EXP_RX` / `EXP_TX` | UART bridge / external expansion [UNSURE — exact GPIO] |
+| GPIO21 | `SPI_CS_MUX` | OUT | ADGS2414D daisy-chain CS (via level shifter). |
+| GPIO38 | `ADC_RDY` | IN | R63 (100 kΩ) pull-up to 3V3_BUCK. Open-drain from AD74416H. |
+| GPIO39 | `ADC_ALRT` | IN | R64 (100 kΩ) pull-up to 3V3_BUCK. Open-drain from AD74416H. |
+| GPIO40 | `SPI_CS_ADC` | OUT | AD74416H SYNC (active-low CS). |
+| GPIO41 | `ESP_SCL` | I2C | I2C clock. 5.1 kΩ pull-up R2 to 3V3_BUCK. 400 kHz fast mode. |
+| GPIO42 | `ESP_SDA` | I2C | I2C data. 5.1 kΩ pull-up R1 to 3V3_BUCK. |
+| GPIO43 | `HAT_TX` | OUT | HAT UART TX, 921600 8N1. |
+| GPIO44 | `HAT_RX` | IN | HAT UART RX, 921600 8N1. |
+| GPIO45 | `ADC_RESET` | OUT | R56 (100 kΩ) pull-up to 3V3_BUCK. Active-low reset for AD74416H. |
+| GPIO47 | `HAT_DETECT` | IN | Digital strap: HIGH=no HAT, LOW=HAT present. |
+| GPIO48 | `ANA_PG` | IN | R7 (10 kΩ) pull-up to 3V3_BUCK. Analog supply power-good (TPS74601 PG + LTM8049 PG2 wire-OR). |
 
 ### 2.6 WS2812B RGB LEDs
-
-Three addressable LEDs (D1, D2, D3 = XL-2020RGBC-WS2812B) in daisy-chain.
 Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 
 | Pin | Net |
@@ -374,7 +365,7 @@ Generates ±15 V analog supplies for the AD74416H.
 | A1 | GND via R34 (154 kΩ) | Address bit 1 = 0 |
 | FS0 | R35 (154 kΩ) → GND | Full-scale current range select [UNSURE exact purpose] |
 | FS1–FS3 | R36 (154 kΩ) → GND | Full-scale range [UNSURE] |
-| OUT0 | IDAC_OUT0 | → TPS74601 (VLOGIC / 3V3_ADJ) FB node — adjusts logic-level voltage (1.8–5.0 V) |
+| OUT0 | IDAC_OUT0 | → LTM8078 Out2 (VLOGIC) FB node — adjusts level-shifter voltage (1.7–5.2 V, default 3.3 V) |
 | OUT1 | IDAC_OUT1 | → LTM8063 U4 (VADJ1) FB node — adjusts Block 1 supply (3–15 V) |
 | OUT2 | IDAC_OUT2 | → LTM8063 U6 (VADJ2) FB node — adjusts Block 2 supply (3–15 V) |
 | OUT3 | IDAC_OUT3 | [UNSURE — destination; possibly unused] |
@@ -414,13 +405,13 @@ Generates ±15 V analog supplies for the AD74416H.
 
 | Pin | Net | Notes |
 |-----|-----|-------|
-| SYNC* | SPI_CS_ADC | Chip select, active-low → ESP32 GPIO10 |
-| SCLK | SPI_SCLK | Clock → ESP32 GPIO11 |
-| SDI | SPI_SDI | MOSI from ESP32 GPIO9 |
-| SDO | SPI_SDO | MISO to ESP32 GPIO8 |
-| RESET* | ADC_RESET | Active-low reset → ESP32 GPIO5. R56 (100 kΩ) pull-up to 3V3_BUCK |
-| ADC_RDY* | ADC_RDY | Open-drain, active-low → ESP32 GPIO6. R63 (100 kΩ) pull-up |
-| ALERT* | ADC_ALRT | Open-drain, active-low → ESP32 GPIO7. R64 (100 kΩ) pull-up |
+| SYNC* | SPI_CS_ADC | Chip select, active-low → ESP32 GPIO40 |
+| SCLK | SPI_SCLK | Clock → ESP32 GPIO16 |
+| SDI | SPI_SDI | MOSI from ESP32 GPIO17 |
+| SDO | SPI_SDO | MISO to ESP32 GPIO18 |
+| RESET* | ADC_RESET | Active-low reset → ESP32 GPIO45. R56 (100 kΩ) pull-up to 3V3_BUCK |
+| ADC_RDY* | ADC_RDY | Open-drain, active-low → ESP32 GPIO38. R63 (100 kΩ) pull-up |
+| ALERT* | ADC_ALRT | Open-drain, active-low → ESP32 GPIO39. R64 (100 kΩ) pull-up |
 | AD0 | GND | Device address bit 0 = 0 |
 | AD1 | GND | Device address bit 1 = 0 |
 
@@ -518,7 +509,7 @@ Signals labeled `ADC_OUT_1` through `ADC_OUT_4` connect to J3/J4/J5 headers (M20
 |-----|-----|-------|
 | SDA | ESP_SDA | I2C, pull-up on ESP32 sheet (R1 5.1 kΩ) |
 | SCL | ESP_SCL | I2C, pull-up R2 |
-| INT | MUX_INT / EXP_IO2 | Active-low interrupt → ESP32 GPIO4 (PCB) |
+| INT | MUX_INT | Active-low interrupt → ESP32 GPIO3 |
 | A0 | [pulled to set addr bit 0 = 1] | [UNSURE — resistor to VCC or GND] |
 | A1 | [pulled to set addr bit 1 = 1] | [UNSURE] |
 | A2 | GND (addr bit 2 = 0) | [UNSURE] |
@@ -569,19 +560,30 @@ Four devices daisy-chained for the 32-switch signal routing matrix (U10, U11, U1
 | DOUT | → DIN of next device (daisy-chain) |
 | S1–S8 (A/B pairs) | Routed to IO_Block terminal connectors and AD74416H channels. Per-device switch grouping: Group A (S1–S4 bits 0–3) → analog-capable IO (pos.1), Group B (S5–S6 bits 4–5) → digital IO (pos.2), Group C (S7–S8 bits 6–7) → digital IO (pos.3). See Section 6.5 for full mapping. |
 
-`ADGS_NUM_DEVICES = 4` on PCB. The daisy-chain shift register is 32 bits wide (4 × 8 switches).
+`ADGS_NUM_DEVICES = 4` on PCB, plus U23 self-test = **5 total** in the daisy-chain. The shift register is 40 bits wide (5 × 8 switches), all sharing CS GPIO21.
 
 ### 6.3a U23 — ADGS2414DBCCZ (Self-Test / Monitoring Switch)
 
-**U23 is a dedicated self-test device.** It is **not** part of the main 4-device MUX daisy-chain.
+**U23 is the 5th device in the daisy-chain** (device index 4, same CS pin as the main 4).
 
-Purpose: routes internal power rails and e-fuse IMON (current monitor) pins to **AD74416H channel D** so that the firmware can measure supply voltages and port currents using the on-chip 24-bit ADC without any external measurement instrument.
+Purpose: routes internal power rails and e-fuse IMON (current monitor) pins to a shared measurement rail connected to **AD74416H channel D** via S4.
 
-| U23 Switch | Connected signals (A/B sides) | Measured via |
-|-----------|------------------------------|-------------|
-| S1–S8 | Power rails (VADJ1_BUCK, VADJ2_BUCK, +15V_ANA, -15V_ANA, 3V3_BUCK, 5V_BUCK, 3V3_ADJ) + TPS16410 IMON pins | AD74416H CH_D (VIOUT_3 / VSENS_P_3) |
+**Verified switch map** (from `config.h` and `adgs2414d.h`):
 
-> The exact per-switch assignment (which rail goes to which S1–S8 position) is not fully readable at the available schematic resolution. [UNSURE — exact per-switch mapping]
+| Bit | Switch | Connection |
+|-----|--------|------------|
+| 0 | S1 | EFUSE_MON_3 current sense |
+| 1 | S2 | EFUSE_MON_1 current sense |
+| 2 | S3 | EFUSE_MON_2 current sense |
+| 3 | S4 | AD74416H CH_D → shared measurement rail (R106 = 1 MΩ to GND) |
+| 4 | S5 | EFUSE_MON_4 current sense |
+| 5 | S6 | 3V3_ADJ (VLOGIC, direct — no divider) |
+| 6 | S7 | VADJ1_BUCK (via R107/R109 divider, ratio=0.7222) |
+| 7 | S8 | VADJ2_BUCK (via R108/R110 divider, ratio=0.7222) |
+
+**IMON scaling (TPS1641x):** G_IMON = 50 µA/A, R_IOCP = 11 kΩ → V_IMON = I_OUT × 550 mV/A
+
+**SAFETY INTERLOCK:** U17 S3 (device 2, bit 2) and U23 are **mutually exclusive**. Both route to AD74416H Channel D via a shared measurement rail.
 
 ### 6.4 U12, U14, U18, U19 — TPS16410DRCR (E-Fuse, 2.7–40 V, 1.8 A)
 
@@ -636,22 +638,22 @@ Each IO_Block's VCC pin is only active when ALL of:
 
 | IO | Position | MUX Options |
 |----|----------|-------------|
-| 1, 4, 7, 10 | 1st in each IO_Block | ESP GPIO (high drive) · ESP GPIO (low drive) · AD74416H channel · HAT passthrough |
-| 2, 3, 5, 6, 8, 9, 11, 12 | 2nd/3rd in each IO_Block | ESP GPIO (high drive) · ESP GPIO (low drive) |
+| 3, 6, 9, 12 | 3rd in each IO_Block (analog-capable) | ESP GPIO (high drive) · ESP GPIO (low drive) · AD74416H channel · HAT passthrough |
+| 1, 2, 4, 5, 7, 8, 10, 11 | 1st/2nd in each IO_Block (digital only) | ESP GPIO (high drive) · ESP GPIO (low drive) |
 
 #### AD74416H Channel Mapping
 
-| IO | AD74416H Channel |
-|----|-----------------|
-| 1 | Channel A (0) |
-| 4 | Channel B (1) |
-| 7 | Channel C (2) |
-| 10 | Channel D (3) |
+| Label | IO_Block | Analog IO | Public ADC channel | MUX device | ESP32 GPIO | E-fuse |
+|-------|----------|-----------|--------------------|------------|------------|--------|
+| A     | 1        | IO3       | 0                  | U10 / 0    | GPIO1      | EFUSE1 |
+| B     | 2        | IO6       | 1                  | U11 / 1    | GPIO5      | EFUSE2 |
+| C     | 3        | IO9       | 2                  | U17 / 2    | GPIO10     | EFUSE3 |
+| D     | 4        | IO12      | 3                  | U16 / 3    | GPIO13     | EFUSE4 |
 
 #### VLOGIC — Common Logic Level
 
-All digital IOs are level-shifted to **VLOGIC** (1.8–5.0 V adjustable) via TXS0108E (U13, U15).
-- Controlled by: DS4424 IDAC OUT0 → TPS74601 (3V3_ADJ) feedback
+All digital IOs are level-shifted to **VLOGIC** (1.7–5.2 V adjustable) via TXS0108E (U13, U15).
+- Controlled by: DS4424 IDAC OUT0 → LTM8078 Out2 feedback (NOT TPS74601)
 - Output Enable: ESP32 GPIO14 (LVL_OE) — **must be enabled** for any digital signal to pass
 
 #### Serial Bridge
@@ -663,16 +665,16 @@ Firmware commands: GET_UART_CONFIG (0x50), SET_UART_CONFIG (0x51), GET_UART_PINS
 #### MUX Device-to-IO_Block Mapping
 
 Each ADGS2414D device handles one IO_Block (3 IOs).
-From firmware `MUX_GPIO_MAP` in `adgs2414d.h`:
+**Verified** from firmware `MUX_GPIO_MAP` in `adgs2414d.h` and `bus_planner.cpp IO_ROUTES`:
 
 | Device | Ref  | IO_Block | IOs      | ESP GPIOs     |
 |--------|------|----------|----------|---------------|
-| 0      | U10  | 1        | 1, 2, 3  | 1, 2, 3       |
-| 1      | U11  | 2        | 4, 5, 6  | 5, 6, 7 [!]   |
-| 2      | U16  | 3        | 7, 8, 9  | 13, 12, 11 [!]|
-| 3      | U17  | 4        | 10,11,12 | 10, 9, 8 [!]  |
+| 0      | U10  | 1        | 1, 2, 3  | 4, 2, 1       |
+| 1      | U11  | 2        | 4, 5, 6  | 7, 6, 5       |
+| 2      | U17  | 3        | 7, 8, 9  | 8, 9, 10      |
+| 3      | U16  | 4        | 10,11,12 | 11, 12, 13    |
 
-**[!] GPIO conflict warning:** IOs 4–6 share ESP GPIOs with AD74416H control pins (RESET=5, ADC_RDY=6, ALERT=7), IOs 9–12 share with SPI (SCLK=11, CS=10, SDI=9, SDO=8). The `MUX_GPIO_MAP` in firmware may be preliminary — verify on final PCB.
+Note: The analog-capable IOs (3rd position in each IO_Block) map as IO3→GPIO1, IO6→GPIO5, IO9→GPIO10, IO12→GPIO13. These do NOT conflict with SPI/I2C pins — the SPI bus uses GPIO16-18/40 on the production PCB.
 
 #### Switch Group Structure (per device)
 
@@ -719,8 +721,8 @@ Switch Mapping:
   S3 (bit 2): EFUSE_MON_2     — e-fuse 2 IMON
   S4 (bit 3): ADC_OUT_4       — AD74416H Ch D → shared rail (MUST be closed for any measurement)
   S5 (bit 4): EFUSE_MON_4     — e-fuse 4 IMON
-  S6 (bit 5): VADJ1_BUCK      — via R107(34.8kΩ)/R109(100kΩ) divider, ratio=0.7418
-  S7 (bit 6): VADJ2_BUCK      — via R108(34.8kΩ)/R110(100kΩ) divider, ratio=0.7418
+  S6 (bit 5): VADJ1_BUCK      — via R107(34.8kΩ)/R109(100kΩ) divider, ratio=0.7222 (measured)
+  S7 (bit 6): VADJ2_BUCK      — via R108(34.8kΩ)/R110(100kΩ) divider, ratio=0.7222 (measured)
   S8 (bit 7): 3V3_ADJ         — VLOGIC, direct (no divider)
 
 D-side: all switches share one rail with R106 (1 MΩ) to GND (prevents floating).
@@ -728,7 +730,7 @@ D-side: all switches share one rail with R106 (1 MΩ) to GND (prevents floating)
 
 **IMON scaling (TPS1641x):** G_IMON = 50 µA/A, R_IOCP = 11 kΩ → V_IMON = I_OUT × 550 mV/A
 
-**SAFETY INTERLOCK:** U23 and U17 S2 (IO 10 analog mode) are **mutually exclusive**.
+**SAFETY INTERLOCK:** U23 and U17 S3 (device 2, bit 2 — IO9 analog mode) are **mutually exclusive**.
 Both route to AD74416H Channel D — closing both simultaneously creates a short path.
 
 **Features:**
@@ -751,27 +753,26 @@ Both route to AD74416H Channel D — closing both simultaneously creates a short
 | `2V5_REF` | Power (ADR4525) | ADC (AD74416H REFO) |
 | `VADJ1_BUCK` | Power (LTM8063 U4) | IOs (e-fuse U12/U14 IN, level shifter U13 VCCB) |
 | `VADJ2_BUCK` | Power (LTM8063 U6) | IOs (e-fuse U18/U19 IN, level shifter U15 VCCB) |
-| `ESP_SDA` | ESP32 (GPIO42 PCB) | USB (HUSB238 SDA), Power (DS4424 SDA), IOs (PCA9535 SDA) |
-| `ESP_SCL` | ESP32 (GPIO41 PCB) | USB (HUSB238 SCL), Power (DS4424 SCL), IOs (PCA9535 SCL) |
-| `SPI_SDI` | ESP32 (GPIO9) | ADC (AD74416H SDI) |
-| `SPI_SDO` | ADC (AD74416H SDO) | ESP32 (GPIO8) |
-| `SPI_CS_ADC` | ESP32 (GPIO10) | ADC (AD74416H SYNC*) |
-| `SPI_SCLK` | ESP32 (GPIO11) | ADC (AD74416H SCLK), IOs (ADGS2414D SCLK via level shifter) |
-| `SPI_CS_MUX` | ESP32 (GPIO21 PCB) | IOs (ADGS2414D CS via level shifter) |
-| `ADC_RESET` | ESP32 (GPIO5) | ADC (AD74416H RESET*) |
-| `ADC_RDY` | ADC (AD74416H ADC_RDY*) | ESP32 (GPIO6) |
-| `ADC_ALRT` | ADC (AD74416H ALERT*) | ESP32 (GPIO7) |
+| `ESP_SDA` | ESP32 (GPIO42) | USB (HUSB238 SDA), Power (DS4424 SDA), IOs (PCA9535 SDA) |
+| `ESP_SCL` | ESP32 (GPIO41) | USB (HUSB238 SCL), Power (DS4424 SCL), IOs (PCA9535 SCL) |
+| `SPI_SDI` | ESP32 (GPIO17) | ADC (AD74416H SDI) |
+| `SPI_SDO` | ADC (AD74416H SDO) | ESP32 (GPIO18) |
+| `SPI_CS_ADC` | ESP32 (GPIO40) | ADC (AD74416H SYNC*) |
+| `SPI_SCLK` | ESP32 (GPIO16) | ADC (AD74416H SCLK), IOs (ADGS2414D SCLK via level shifter) |
+| `SPI_CS_MUX` | ESP32 (GPIO21) | IOs (ADGS2414D CS via level shifter) |
+| `ADC_RESET` | ESP32 (GPIO45) | ADC (AD74416H RESET*) |
+| `ADC_RDY` | ADC (AD74416H ADC_RDY*) | ESP32 (GPIO38) |
+| `ADC_ALRT` | ADC (AD74416H ALERT*) | ESP32 (GPIO39) |
 | `LVL_OE` | ESP32 (GPIO14) | IOs (TXS0108E U13/U15 OE) |
-| `MUX_INT` | IOs (PCA9535 INT) | ESP32 (GPIO4 PCB) |
+| `MUX_INT` | IOs (PCA9535 INT) | ESP32 (GPIO3) |
 | `LED_DIN` | ESP32 (GPIO0) | ESP32 sheet (D1 DIN) |
 | `ANA_PG` | Power (TPS74601 PG wire-OR'd with LTM8049 PG2) | ESP32 (GPIO48). R96 (100 kΩ) pull-up to 3V3_BUCK. Both power-good outputs share the same net. |
 | `IDAC_OUT1` | Power (DS4424 OUT1) | Power (LTM8063 U4 FB) |
 | `IDAC_OUT2` | Power (DS4424 OUT2) | Power (LTM8063 U6 FB) |
-| `VADJ_1_EN` | IOs (PCA9535 P0.0) | Power (LTM8063 U4 RUN) |
-| `VADJ_2_EN` | IOs (PCA9535 P0.1) | Power (LTM8063 U6 RUN) |
-| `EN_15V_A` | IOs (PCA9535 P0.2) | Power (LTM8049 RUN) |
-| `EN_USB_HUB` | IOs (PCA9535 P0.3) | USB (USB2422 power enable) |
-| `3V3_ADJ_EN` | IOs (PCA9535 P0.4) | Power (TPS74601 EN) |
+| `VADJ_1_EN` | IOs (PCA9535 P0.2) | Power (LTM8063 U4 RUN) |
+| `VADJ_2_EN` | IOs (PCA9535 P0.3) | Power (LTM8063 U6 RUN) |
+| `EN_15V_A` | IOs (PCA9535 P0.5) | Power (LTM8049 RUN) |
+| `EN_USB_HUB` | IOs (PCA9535 P0.7) | USB (USB2422 power enable) |
 | `USB_DF1_P/N` | USB (USB2422 DN1) | ESP32 (GPIO20/GPIO19 native USB) |
 | `VADJ1_BUCK` / `VADJ2_BUCK` / `+15V_ANA` / `-15V_ANA` / `3V3_BUCK` / `5V_BUCK` / `3V3_ADJ` + IMON | Power rails + IOs (TPS16410 IMON pins) | ADC (AD74416H CH_D via U23 self-test MUX) |
 
@@ -779,7 +780,7 @@ Both route to AD74416H Channel D — closing both simultaneously creates a short
 
 ## 8. I2C Bus Summary
 
-All devices share one I²C bus. PCB GPIO assignment: SDA=GPIO42, SCL=GPIO41 (currently firmware uses breadboard mode: GPIO1/GPIO4).
+All devices share one I²C bus. GPIO assignment: SDA=GPIO42, SCL=GPIO41. 400 kHz Fast Mode.
 
 | Device | Ref | 7-bit Address | Address Pin Config |
 |--------|-----|--------------|-------------------|
@@ -787,7 +788,7 @@ All devices share one I²C bus. PCB GPIO assignment: SDA=GPIO42, SCL=GPIO41 (cur
 | DS4424 | U8 | `0x10` | A0=GND, A1=GND |
 | PCA9535AHF | U20 | `0x23` | A0=1, A1=1, A2=0 |
 
-Pull-ups: R1 (5.1 kΩ) on SDA, R2 (5.1 kΩ) on SCL, both to 3V3_BUCK. PCB uses 400 kHz fast mode; breadboard mode uses 100 kHz.
+Pull-ups: R1 (5.1 kΩ) on SDA, R2 (5.1 kΩ) on SCL, both to 3V3_BUCK.
 
 ---
 
@@ -797,12 +798,12 @@ Single SPI bus shared by AD74416H and ADGS2414D switch matrix. Separate chip sel
 
 | Signal | GPIO | Net | Notes |
 |--------|------|-----|-------|
-| MISO | GPIO8 | SPI_SDO | From AD74416H SDO |
-| MOSI | GPIO9 | SPI_SDI | To AD74416H SDI |
-| CS (AD74416H) | GPIO10 | SPI_CS_ADC | AD74416H SYNC*, active-low |
-| SCLK | GPIO11 | SPI_SCLK | 10 MHz default, up to 20 MHz |
-| CS (MUX) | GPIO21 (PCB) | SPI_CS_MUX | ADGS2414D daisy-chain, via TXS0108E level shifter |
+| SCLK | GPIO16 | SPI_SCLK | 10 MHz default, up to 20 MHz |
+| MOSI | GPIO17 | SPI_SDI | To AD74416H SDI |
+| MISO | GPIO18 | SPI_SDO | From AD74416H SDO |
+| CS (AD74416H) | GPIO40 | SPI_CS_ADC | AD74416H SYNC*, active-low |
+| CS (MUX) | GPIO21 | SPI_CS_MUX | ADGS2414D daisy-chain (5 devices), via TXS0108E level shifter |
 
-The ADGS2414D switches are daisy-chained (4 devices on PCB). Their SPI signals pass through the TXS0108EPWR level translators (U13, U15), OE controlled by GPIO14 (`LVL_OE`). The AD74416H is on the 3.3 V side and does not need level shifting.
+The ADGS2414D switches are daisy-chained (4 main + 1 self-test = 5 devices). Their SPI signals pass through the TXS0108EPWR level translators (U13, U15), OE controlled by GPIO14 (`LVL_OE`). The AD74416H is on the 3.3 V side and does not need level shifting.
 
 **Bus arbitration:** The ADC poll task (Core 1) continuously owns the SPI bus. MUX operations request the bus via atomic flags `g_spi_bus_request` / `g_spi_bus_granted` before performing any ADGS SPI transaction. Dead time between MUX switch transitions: 100 ms (`ADGS_DEAD_TIME_MS`).

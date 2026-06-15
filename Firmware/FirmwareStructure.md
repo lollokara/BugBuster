@@ -19,31 +19,56 @@ Firmware/
 │   └── src/
 │       ├── main.cpp                  # Entry point & init sequence
 │       ├── config.h                  # Pin definitions & constants
-│       ├── ad74416h.h/.cpp           # High-level AD74416H HAL (all features)
-│       ├── ad74416h_regs.h           # Register map, enums, bit fields
-│       ├── ad74416h_spi.h/.cpp       # Low-level SPI driver (CRC-8)
-│       ├── tasks.h/.cpp              # FreeRTOS task management & command processor
-│       ├── bbp.h/.cpp                # Binary protocol (COBS, SPSC ring buffer, streaming)
-│       ├── hat.h/.cpp                # HAT board detection & UART command forwarding
-│       ├── adgs2414d.h/.cpp          # ADGS2414D MUX driver (SPI, daisy-chain, break-before-make)
-│       ├── webserver.h/.cpp          # HTTP API server (20+ endpoints)
-│       ├── serial_io.h/.cpp          # USB CDC interface (TinyUSB)
-│       ├── usb_cdc.h/.cpp            # USB composite device (CLI + UART bridge)
-│       ├── cli.h/.cpp                # Serial CLI menu interface
-│       ├── wifi_manager.h/.cpp       # WiFi AP+STA management
-│       ├── uart_bridge.h/.cpp        # UART-to-USB bridge (for external devices)
-│       └── idf_component.yml         # Component dependencies
+│       ├── tasks.h/.cpp              # FreeRTOS tasks: ADC poll, fault monitor, wavegen, scope mode
+│       ├── io_owner.cpp/h            # IO ownership: 16-slot lease table, session tracking
+│       ├── state_lock.h              # g_stateMutex, g_spi_bus_mutex wrappers
+│       ├── bbp/
+│       │   ├── bbp.h/.cpp            # BBP v9 protocol (COBS, CRC-16, 70+ command IDs)
+│       │   ├── bbp_adapter.cpp       # BBP→function dispatch, event emission
+│       │   ├── cmd_registry.cpp      # Command handler registration
+│       │   ├── cmd_channels.cpp      # Channel config commands
+│       │   ├── cmd_gpio.cpp          # GPIO commands
+│       │   ├── cmd_streaming.cpp     # ADC/scope stream start/stop
+│       │   └── cmd_misc.cpp          # WiFi, watchdog, reset, level shifter
+│       ├── hal/
+│       │   ├── ad74416h.cpp/h        # AD74416H SPI driver (9 CH_FUNC modes, ADC/DAC)
+│       │   ├── adgs2414d.cpp/h       # ADGS2414D MUX SPI (4-device matrix)
+│       │   ├── ds4424.cpp/h          # DS4424 IDAC I2C (4-channel current DAC)
+│       │   ├── husb238.cpp/h         # HUSB238 USB-PD I2C
+│       │   ├── pca9535.cpp/h         # PCA9535 GPIO expander I2C (fault ISR)
+│       │   └── pca_control.h         # PCA control enums
+│       ├── hat/
+│       │   ├── hat.cpp/h             # HAT UART bridge, LA_DONE ISR
+│       │   └── hat_types.h           # HatStatus, HatRailStatus, HatCaps
+│       ├── web/
+│       │   ├── webserver.cpp         # 90+ HTTP endpoints, SSE scope, admin auth
+│       │   ├── auth.cpp/h            # X-BugBuster-Admin-Token validation
+│       │   ├── http_adapter.cpp      # HTTP→tasks bridging
+│       │   └── ws_stream.cpp         # WebSocket ADC/scope streaming
+│       ├── mp/                       # MicroPython runtime (scripting, REPL, autorun)
+│       ├── bus/                      # I2C/SPI bus planning and transactions
+│       ├── update/                   # OTA update manager (GitHub manifest, SHA-256)
+│       ├── dsp/                      # ADC ring buffer, scope downsampling
+│       ├── diag/                     # Selftest, supply measurement
+│       ├── dio/                      # ESP32 GPIO digital IO
+│       ├── net/                      # WiFi manager, mDNS
+│       ├── power/                    # PD/VADJ guard
+│       ├── cli/                      # Serial TUI menu, CLI commands
+│       └── idf_component.yml        # Component dependencies
 ├── RP2040/                           # HAT expansion board firmware (debugprobe fork)
 │   ├── CMakeLists.txt                # Pico SDK build
 │   ├── README.md                     # RP2040 firmware documentation
 │   ├── src/                          # BugBuster HAT extensions
-│   │   ├── bb_main.c                 # Command task, UART dispatcher, IRQ signaling
-│   │   ├── bb_config.h               # Pin definitions, protocol constants
-│   │   ├── bb_protocol.c/h           # HAT UART framing (CRC-8, frame timeout)
-│   │   ├── bb_power.c/h              # Connector power, current sense, fault detection
-│   │   ├── bb_hvpak.c/h              # HVPAK I2C voltage control (STUB)
-│   │   ├── bb_pins.c/h               # EXP_EXT pin routing
-│   │   ├── bb_swd.c/h                # SWD status queries (target detect STUB)
+│   │   ├── bb_main.c                 # Command task (Core 1), UART dispatcher, IRQ signaling
+│   │   ├── bb_main_integrated.c      # Entry point, FreeRTOS task creation, USB fast-path loop
+│   │   ├── bb_config.h               # Pin definitions, protocol constants, buffer sizes
+│   │   ├── bb_protocol.c/h           # HAT UART framing (CRC-8, sync 0xAA, 32B max payload)
+│   │   ├── bb_power.c/h              # VADJ3/VADJ4 enable, current sense, level shifter
+│   │   ├── bb_hvpak.c/h              # HVPAK I2C mailbox (SLG47104, addr 0x48)
+│   │   ├── bb_hat_v2.c/h             # LED state (WS2812B), rail voltage trim, IO bank, calibration
+│   │   ├── bb_pins.c/h               # EXP_EXT pin routing (4 pins, 5 function codes)
+│   │   ├── bb_swd.c/h                # SWD status, clock config, target detection (wraps debugprobe)
+│   │   ├── bb_fw_update.c/h          # OTA staging at flash 0x180000, CRC32 verify, commit+reboot
 │   │   ├── bb_la.c/h                 # Logic analyzer (PIO 1, DMA with IRQ completion)
 │   │   ├── bb_la.pio                 # Capture PIO programs (1/2/4 channel)
 │   │   ├── bb_la_trigger.pio         # Trigger PIO programs (edge/level)
@@ -58,19 +83,27 @@ Firmware/
 ---
 ## 1. ESP32 VARIANT & HARDWARE
 **Device:** ESP32-S3 (DFRobot FireBeetle 2)
-- **Flash:** 4 MB
-- **Framework:** ESP-IDF (native, no Arduino)
-- **SPI Clock:** 1 MHz (safe, max 20 MHz supported)
+- **Flash:** 16 MB (8 MB PSRAM)
+- **Framework:** ESP-IDF 5.3.1 (native, no Arduino)
+- **SPI Clock:** 10 MHz default (safe, max 20 MHz supported)
+
+> **Canonical pin assignments:** See `.mex/context/hardware-pinout.md` (verified against `config.h` 2026-06-15)
+
 **Pin Configuration:**
 | Function        | GPIO Pin | Type |
 |-----------------|----------|------|
-| **SPI MISO**    | GPIO_NUM_8 (SDO)   | Input  |
-| **SPI MOSI**    | GPIO_NUM_9 (SDI)   | Output |
-| **SPI CS**      | GPIO_NUM_10 (SYNC) | Output |
-| **SPI Clock**   | GPIO_NUM_11 (SCLK) | Output |
-| **Reset**       | GPIO_NUM_5         | Output (active-low, high=operating) |
-| **ADC Ready**   | GPIO_NUM_6         | Input (open-drain, active-low) |
-| **Alert**       | GPIO_NUM_7         | Input (open-drain, active-low) |
+| **SPI SCLK**    | GPIO_NUM_16        | Output |
+| **SPI MOSI**    | GPIO_NUM_17 (SDI)  | Output |
+| **SPI MISO**    | GPIO_NUM_18 (SDO)  | Input  |
+| **SPI CS**      | GPIO_NUM_40 (SYNC) | Output |
+| **MUX CS**      | GPIO_NUM_21        | Output |
+| **Reset**       | GPIO_NUM_45        | Output (active-low, high=operating) |
+| **ADC Ready**   | GPIO_NUM_38        | Input (open-drain, active-low) |
+| **Alert**       | GPIO_NUM_39        | Input (open-drain, active-low) |
+| **I2C SDA**     | GPIO_NUM_42        | Bidirectional (400 kHz) |
+| **I2C SCL**     | GPIO_NUM_41        | Output |
+| **PCA INT**     | GPIO_NUM_3         | Input |
+| **LSHIFT_OE**   | GPIO_NUM_14        | Output |
 **AD74416H Device Address:** 0x00 (AD0=AD1=GND)
 ---
 ## 2. ADC CONFIGURATION & DATA ACQUISITION
@@ -198,6 +231,8 @@ Per-channel setup with:
 **Server:** ESP-IDF native `httpd` (port 80)
 **Response Format:** JSON
 **CORS:** Enabled (Access-Control-Allow-Origin: *)
+**Authentication:** `X-BugBuster-Admin-Token` header required for all POST endpoints
+**Total endpoints:** 90+ (see `.mex/context/web-ui.md` for complete catalog)
 ### HTTP Endpoints
 #### **GET Endpoints** (Read-only, fast)
 | Endpoint | Purpose | Response |
@@ -236,13 +271,12 @@ Per-channel setup with:
 | `POST /api/uart/?/config` | Configure UART bridge | `{"uartNum": <0-2>, "txPin": <int>, "rxPin": <int>, "baudrate": <300-3M>, "dataBits": <5-8>, "parity": <0-2>, "stopBits": <0-2>, "enabled": <bool>}` | `{"ok": true, "id": <int>}` |
 #### **OPTIONS /api/*** (CORS Preflight)
 - Returns 204 with CORS headers
-### Data Streaming Method
-**HTTP Polling-based scope data:**
-- Client sends `GET /api/scope?since=<seq>` with last received sequence
-- Server returns new buckets since that sequence (ring buffer)
+### Data Streaming Methods
+**SSE (Server-Sent Events):** `GET /api/scope/stream` — preferred for real-time scope waveform data.
+**HTTP Polling:** `GET /api/scope?since=<seq>` — fallback when SSE is unavailable.
+**WebSocket:** `/api/scripts/repl/ws` — MicroPython REPL. Also used for ADC DSP streaming.
 - Buckets: timestamp_ms, 4× channel avg, 4× channel min, 4× channel max
 - Bucket interval: 10 ms
-- No WebSocket or SSE
 ---
 ## 7. USB/SERIAL CONFIGURATION
 ### USB CDC (TinyUSB Composite Device)

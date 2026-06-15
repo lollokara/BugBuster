@@ -1,9 +1,12 @@
 # IO Ownership
 
-**BBP protocol version 5** introduces a firmware-resident single-owner table that
-covers all 16 controllable IO resources (IO1..IO12 + analog channels CH0..CH3).
-At any instant, each slot has either zero or exactly one owner. A write from a
-non-owner is rejected with a clear error code rather than silently clobbered.
+> **Canonical reference:** `.mex/context/hardware-pinout.md` (IO Ownership section)
+
+The firmware has a **16-slot single-owner table** covering all controllable IO
+resources (IO1..IO12 + analog channels CH0..CH3). Introduced in BBP v5, the
+current protocol version is **v9**. At any instant, each slot has either zero or
+exactly one owner. A write from a non-owner is rejected with
+`ERR_IO_OWNERSHIP_REQUIRED` (0x12).
 
 This document is the canonical reference for the IO ownership system delivered in
 the 2026-05-12 landing (PR-5). For historical context on why this was needed see

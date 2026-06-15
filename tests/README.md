@@ -136,7 +136,7 @@ PYTHONPATH=python:tests pytest tests/device --sim -q            # device suite v
 
 The simulator implements every BBP CmdId handler (see
 `tests/simulator/test_sim_completeness.py`) and mirrors the firmware's `/api`
-schema, including the BBP v4 `macAddress` field on `/api/device/info` and the
+schema, including the BBP v9 `macAddress` field on `/api/device/info` and the
 admin-token pairing flow (injected automatically by `SimulatedHTTPTransport`).
 
 ## Test markers

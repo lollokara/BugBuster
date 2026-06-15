@@ -1,7 +1,7 @@
 # BugBuster HAT Protocol Specification
 
-**Version:** 2.0 (`bb-hat-3.0`)
-**Date:** 2026-06-04
+**Version:** 2.0 (`bb-hat-3.3`)
+**Date:** 2026-06-15
 **Transport:** UART 921600 8N1 (GPIO43 TX, GPIO44 RX)
 **Roles:** BugBuster = Master, HAT = Slave
 
