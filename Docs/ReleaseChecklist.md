@@ -65,7 +65,7 @@ Use `scripts/desktop_version.py X.Y.Z` (positional) to set all three at once
 instead of editing by hand:
 
 ```bash
-python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.7.0
+python3 DesktopApp/BugBuster/scripts/desktop_version.py 1.2.0
 ```
 
 ---
@@ -75,19 +75,19 @@ python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.7.0
 Run from repo root. All three must print the expected version and exit 0:
 
 ```bash
-python Firmware/tools/firmware_version.py rp2040 --expect 3.0
-python Firmware/tools/firmware_version.py esp32  --expect 3.2.0
-python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect 0.7.0
+python Firmware/tools/firmware_version.py rp2040 --expect 3.3
+python Firmware/tools/firmware_version.py esp32  --expect 3.4.0
+python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect 1.2.0
 ```
 
 Only then create and push the tags:
 
 ```bash
-git tag -a hat-fw-v3.0        -m "RP2040 HAT firmware v3.0"       <commit>
-git tag -a esp-fw-v3.2.0      -m "ESP32 BBP firmware v3.2.0"      <commit>
-git tag -a desktop-v0.7.0     -m "BugBuster Desktop v0.7.0"       <commit>
-git tag -a release-v1.1.0     -m "BugBuster v1.1.0"               <commit>
-git push origin hat-fw-v3.0 esp-fw-v3.2.0 desktop-v0.7.0 release-v1.1.0
+git tag -a hat-fw-v3.3        -m "RP2040 HAT firmware v3.3"       <commit>
+git tag -a esp-fw-v3.4.0      -m "ESP32 BBP firmware v3.4.0"      <commit>
+git tag -a desktop-v1.2.0     -m "BugBuster Desktop v1.2.0"       <commit>
+git tag -a release-v1.3.0     -m "BugBuster v1.3.0"               <commit>
+git push origin hat-fw-v3.3 esp-fw-v3.4.0 desktop-v1.2.0 release-v1.3.0
 ```
 
 ---

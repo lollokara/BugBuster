@@ -2,7 +2,7 @@
 
 Tauri v2 + Leptos 0.7 desktop application for controlling the BugBuster hardware.
 
-**Current version:** `0.6.0` — 2026-04-27 (validated across `Cargo.toml`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` by `scripts/desktop_version.py --check`).
+**Current version:** `1.2.0` — managed by `scripts/desktop_version.py` (validates lockstep across `Cargo.toml`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`).
 
 ## Stack
 

@@ -2,9 +2,9 @@
 
 **Subsystem:** RP2040 HAT
 **Firmware module:** `Firmware/RP2040/src/bb_la*.c/.pio/.h`
-**USB interface:** Vendor bulk (interface `BB_LA_VENDOR_ITF = 0`, EP `0x06` OUT / `0x87` IN)
+**USB interface:** Vendor bulk (USB interface **3**, TinyUSB vendor instance `BB_LA_VENDOR_ITF = 0`, EP `0x06` OUT / `0x87` IN)
 **Transport:** Direct host ⇄ RP2040 USB (bypasses the ESP32 entirely)
-**Current version:** `bb-hat-3.0`
+**Current version:** `bb-hat-3.3`
 
 ---
 
@@ -12,9 +12,9 @@
 
 ```mermaid
 flowchart LR
-  TGT["Target DUT\npins"] --> GPIOIN["RP2040 GPIO 14–17\n(PIO 1 inputs)"]
+  TGT["Target DUT\npins"] --> GPIOIN["RP2040 GPIO 2–5\n(PIO 1 inputs)"]
   GPIOIN --> PIO["PIO 1 state machines\ncapture + trigger"]
-  PIO --> DMA["DMA ring buffer\n8 × 2432 B"]
+  PIO --> DMA["DMA ring buffer\n8 × 2432 words (9.7 KB each)"]
   DMA --> LAUSB["bb_la_usb.c\npacketizer + RLE"]
   LAUSB --> EP["USB vendor bulk\nEP 0x06 OUT · 0x87 IN"]
   EP -->|"USB 2.0 Full-Speed\n12 Mbps"| HOST["Host application\n(desktop / pyusb / libusb)"]
@@ -56,15 +56,16 @@ Moving to a dedicated RP2040 vendor-bulk interface eliminates all three. The RP2
 
 ## 3. USB descriptor
 
-The RP2040 HAT enumerates as a composite device with three interfaces:
+The RP2040 HAT enumerates as a composite device with four interfaces:
 
 | Interface | Class | Endpoints | Purpose |
 |---|---|---|---|
-| **0 (Vendor — `BB_LA_VENDOR_ITF`)** | Vendor-specific | `0x06` OUT (64 B), `0x87` IN (64 B) | **LA streaming / readout** |
-| 1 (Vendor — DAP) | Vendor-specific, subclass 0xFF | `0x04` OUT, `0x85` IN | CMSIS-DAP v2 |
-| 2-3 (CDC) | Communications | `0x81` notif, `0x02` OUT, `0x83` IN | Transparent UART bridge to target |
+| 0 (Vendor — CMSIS-DAP) | Vendor-specific | `0x04` OUT, `0x85` IN | CMSIS-DAP v2 SWD debug probe |
+| 1 (CDC) | Communications | `0x81` notif | CDC notification |
+| 2 (CDC) | Communications | `0x02` OUT, `0x83` IN | Transparent UART bridge to target |
+| **3 (Vendor — BB_LA)** | Vendor-specific, subclass `0xFF`, protocol `0xFF` | `0x06` OUT (64 B), `0x87` IN (64 B) | **LA streaming / readout** |
 
-The subclass fix in `bb_usb_descriptors.c` (2026-04) ensures TinyUSB's built-in vendor driver claims interface 0 only, letting the custom CMSIS-DAP driver own interface 1. Before that fix, the BB_LA interface index was 1 — any tooling still holding that constant needs updating.
+The subclass/protocol patch in `bb_usb_descriptors.c` rewrites interface 3 to `0xFF/0xFF` so the CMSIS-DAP custom driver (which iterates vendor interfaces) rejects it and TinyUSB's built-in vendor driver claims it instead. `BB_LA_VENDOR_ITF = 0` is the TinyUSB vendor **driver instance** index, NOT the USB interface number.
 
 VID/PID: inherited from the debugprobe fork. Use `bb-hat-3.0` in the USB product string to disambiguate from upstream probes.
 
@@ -126,8 +127,8 @@ RLE format (applies when `info & 0x01` in a DATA packet): each pair encodes one 
 PIO 1 FIFO  ──DMA──▶  ring[8][2432]  ──packetizer──▶  TinyUSB FIFO  ──▶  EP 0x87 IN
 ```
 
-- **Ring slot size:** 2432 bytes, chosen so a fully packed slot rounds to an integer number of 60-byte bulk payloads (2432 = 60 × 40 + 32, with 32 bytes of slack for partial-packet emission at `PKT_STOP`).
-- **Ring depth:** 8 slots (~19.5 KB). Sized so at 1 MHz × 4 ch × 1 B = 4 MB/s instantaneous, the host has ~5 ms of slack to service `tud_vendor_n_read` before overrun.
+- **Ring slot size:** 2432 **32-bit words** (= 9728 bytes per slot). The unit is words, not bytes — `BB_LA_STREAM_SEGMENT_WORDS` in `bb_la.c`.
+- **Ring depth:** 8 slots (8 × 9728 = ~76 KB total). Sized so at 1 MHz × 4 ch × 1 B = 4 MB/s instantaneous, the host has ~5 ms of slack to service `tud_vendor_n_read` before overrun.
 - **Throughput target:** 1 MHz / 4 ch sustained, which at 8-bit packing is 1 MB/s. USB 2.0 Full-Speed can push ~1.1 MB/s on vendor bulk with low fragmentation, so the link is the bottleneck, not the RP2040.
 - **Practical ceiling:** RLE-friendly signals push past the 1 MHz wall because compression shrinks on-wire volume. For noisy/random inputs, plan around 1 MHz / 4 ch as the ceiling.
 

@@ -28,7 +28,7 @@ Both transports are abstracted behind a `Transport` trait in the Rust backend so
 
 | Component | Role | Bus | Address |
 |-----------|------|-----|---------|
-| **ESP32-S3** (DFRobot FireBeetle 2) | Main MCU, 4 MB flash | -- | -- |
+| **ESP32-S3** (DFRobot FireBeetle 2) | Main MCU, 16 MB flash, 8 MB PSRAM | -- | -- |
 | **AD74416H** | 4-ch software-configurable I/O (24-bit ADC, 16-bit DAC) | SPI (10 MHz default, up to 20 MHz) | Dev addr 0x00 |
 | **ADGS2414D x4** | Octal SPST analog switch matrix (32 switches total) | SPI (shared bus, separate CS) | Daisy-chain |
 | **DS4424** | 4-ch I2C current DAC (adjusts LTM8063/LTM8078 output voltages) | I2C | 0x10 |
@@ -39,44 +39,46 @@ Both transports are abstracted behind a `Transport` trait in the Rust backend so
 
 **SPI Bus (AD74416H + ADGS2414D share MISO/MOSI/SCLK):**
 
+> **Canonical pin reference:** `.mex/context/hardware-pinout.md`
+
 | Signal | GPIO | Notes |
 |--------|------|-------|
-| SDO (MISO) | 8 | From AD74416H |
-| SDI (MOSI) | 9 | To AD74416H |
-| SYNC (CS) | 10 | AD74416H chip select (active-low) |
-| SCLK | 11 | SPI clock, 10 MHz (configurable up to 20 MHz) |
-| MUX_CS | 12 | ADGS2414D chip select |
+| SCLK | 16 | SPI clock, 10 MHz (configurable up to 20 MHz) |
+| SDI (MOSI) | 17 | To AD74416H |
+| SDO (MISO) | 18 | From AD74416H |
+| SYNC (CS) | 40 | AD74416H chip select (active-low) |
+| MUX_CS | 21 | ADGS2414D daisy-chain chip select (via level shifter) |
 | LSHIFT_OE | 14 | Level shifter output enable (TXS0108E) |
 
 **AD74416H Control:**
 
 | Signal | GPIO | Notes |
 |--------|------|-------|
-| RESET | 5 | Active-low hardware reset (held HIGH during operation) |
-| ADC_RDY | 6 | Open-drain, active-low -- ADC conversion ready |
-| ALERT | 7 | Open-drain, active-low -- fault/alert output |
+| RESET | 45 | Active-low hardware reset (held HIGH during operation) |
+| ADC_RDY | 38 | Open-drain, active-low -- ADC conversion ready |
+| ALERT | 39 | Open-drain, active-low -- fault/alert output |
 
 **I2C Bus (shared: DS4424, HUSB238, PCA9535):**
 
 | Signal | GPIO | Notes |
 |--------|------|-------|
-| SDA | 1 | Standard-mode (100 kHz) |
-| SCL | 4 | Standard-mode (100 kHz) |
+| SDA | 42 | 400 kHz Fast Mode |
+| SCL | 41 | 400 kHz Fast Mode |
 
 ### 2.3 Bus Topology
 
 ```
 ESP32-S3
   |
-  +--[SPI @ 10 MHz]-+--[CS GPIO10]--> AD74416H (4-ch I/O)
+  +--[SPI @ 10 MHz]-+--[CS GPIO40]--> AD74416H (4-ch I/O)
   |                  |
-  |                  +--[CS GPIO12]--> ADGS2414D x4 (daisy-chain, via level shifter)
+  |                  +--[CS GPIO21]--> ADGS2414D x5 (daisy-chain, via level shifter)
   |
-  +--[I2C @ 100 kHz]--+--[0x10]--> DS4424 (IDAC, adjusts regulator voltages)
+  +--[I2C @ 400 kHz]--+--[0x10]--> DS4424 (IDAC, adjusts regulator voltages)
   |                    +--[0x08]--> HUSB238 (USB-PD status/control)
   |                    +--[0x23]--> PCA9535 (power enables, e-fuse control)
   |
-  +--[USB CDC #0]--> Host (CLI / BBP binary protocol)
+  +--[USB CDC #0]--> Host (CLI / BBP v9 binary protocol)
   +--[USB CDC #1]--> Host (UART bridge passthrough)
   +--[WiFi AP+STA]--> HTTP REST API (port 80)
 ```

@@ -1,7 +1,7 @@
 # BugBuster Binary Protocol Specification
 
-**Version:** 3.3.0
-**BBP Protocol Version:** 8
+**Version:** 3.4.0
+**BBP Protocol Version:** 9
 **Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
 **Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
 **Status:** Active
@@ -68,9 +68,9 @@ by normal CLI typing. The device scans incoming CLI bytes for this 4-byte sequen
 
 **Device responds** (raw bytes):
 ```
-0xBB 0x42 0x55 0x47 0x04 0x01 0x08 0x00 [MAC_0..5]
+0xBB 0x42 0x55 0x47 0x09 0x03 0x04 0x00 [MAC_0..5]
 ```
-(magic[4] + proto_v[1] + fw_major[1] + fw_minor[1] + fw_patch[1] + mac[6])
+(magic[4] + proto_v[1]=9 + fw_major[1]=3 + fw_minor[1]=4 + fw_patch[1]=0 + mac[6])
 
 After sending this response, the device:
 1. Stops the CLI parser
