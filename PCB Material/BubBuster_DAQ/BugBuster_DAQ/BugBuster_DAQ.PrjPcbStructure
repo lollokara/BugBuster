@@ -1,3 +1,4 @@
 Record=TopLevelDocument|FileName=DAQ.SchDoc|SheetNumber=1
+Record=NoMainPathDocument|SourceDocument=DAQ.SchDoc|FileName=ESP32P4.SchDoc|SheetNumber=4
 Record=NoMainPathDocument|SourceDocument=DAQ.SchDoc|FileName=IOs.SchDoc|SheetNumber=3
 Record=NoMainPathDocument|SourceDocument=DAQ.SchDoc|FileName=Power.SchDoc|SheetNumber=2
