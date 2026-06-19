@@ -2,6 +2,57 @@
 
 ## [Unreleased]
 
+### DAQ HAT (ESP32-P4 IoT Power Analyzer) — NEW
+A new ESP32-P4-based DAQ HAT firmware that implements a 24-bit, nA–3A
+seamless-autoranging precision **power analyzer** + **source-measure unit**
+(Joulescope / Otii / Nordic PPK2 class). Full device documentation in
+`Firmware/DAQ_HAT/README.md`; architecture in `Docs/PowerAnalyzer_Architecture.md`;
+netlist-verified hardware map in `Docs/FIRMWARE_HARDWARE_REFERENCE.md`.
+
+- **ADAQ7769-1 driver suite**: complete register map (`adaq7769_regs.h`), low-level
+  SPI Mode-3 transport with the part's CRC-8 (`adaq7769_ll`), high-level HAL
+  (`adaq7769`) covering clock/power modes, every digital-filter type (Sinc5,
+  Sinc3, wideband FIR) and decimation rate with an ODR solver, PGA gain via the
+  chip's own GPIOs, AAF input scaling, reference buffers, conversion modes,
+  offset/gain calibration, sync, and diagnostics — plus a DRDY-ISR → capture-task
+  → PSRAM ring streaming layer (`adaq7769_stream`). 3 ADAQ across 2 SPI buses
+  (one dedicated FINE, one shared COARSE + VOLTAGE).
+- **Seamless current auto-ranging**: `range_manager` observes the analog SR-latch
+  autorange loop (51/2/0.05 Ω bypass lines), can override it, drives the FINE
+  input mux, and carries per-range calibration. `current_fusion` stitches the
+  FINE and COARSE ADCs into one calibrated, gap-free `i[n]` with a post-switch
+  settle blackout (lean on COARSE), COARSE→FINE cross-fade, and boundary
+  hysteresis.
+- **On-device DSP**: `power_dsp` computes `p = v·i`, accumulates energy (mWh/J)
+  and charge (mAh/C) in double-precision (trapezoidal), and tracks
+  min/max/mean/RMS/std for I, V, P. `multires` provides Joulescope-style
+  multi-resolution min/max/mean zoom tiers. `spectrum` runs a continuous Welch
+  power spectrum via esp-dsp (64–4096-pt real FFT, Hann/Blackman-Harris, 50%
+  overlap) on current or power.
+- **Programmable source / SMU**: `smu` drives the LTM8056 DUT buck-boost via the
+  DS4424 IDAC — 0–20 V output and ≤2.5 A current limit — and reads the LTM8056
+  input/output current monitors on the ESP32-P4 ADC1.
+- **USB High-Speed measurement stream**: a CRC-16-framed vendor-bulk protocol
+  (`usb_proto`) with `WAVEFORM`/`STATS`/`ENERGY`/`FFT`/`MARKER`/`STATUS` records
+  and `START`/`STOP`/`SET_RATE`/`RANGE_LOCK`/`RESET_*`/`FFT_CONFIG`/`SET_SOURCE`
+  control commands. Transport-agnostic framer (`usb_stream`) bound to the
+  ESP32-P4 USB-HS OTG via a TinyUSB vendor backend (`usb_backend`).
+- **ESP32-S3 mainboard link**: `s3_link` implements the existing BugBuster HAT
+  wire protocol (SYNC 0xAA / LEN / CMD / payload / CRC-8) as a slave, so the S3
+  drives the DAQ HAT exactly as it drove the RP2040 HAT and dynamically loads the
+  DAQ resource set at boot (`HAT_TYPE_DAQ_POWER`, no hotswap). Adds DAQ control
+  commands plus a pre/post-acquisition sync epoch for digital-marker correlation.
+- **Firmware versioning + robust split OTA**: central `version.h` (semantic
+  version + product id); dual-slot A/B partition table (`partitions.csv`);
+  streaming OTA (`ota`) that writes each chunk straight to flash (no full-image
+  staging — the S3 only relays), with offset-checked resumable transfer,
+  product-id + size guards, full-image SHA-256 verification, and rollback-safe
+  `PENDING_VERIFY` self-confirmation.
+- **Supporting drivers**: `ad741x` (AD7415 I²C temperature sensors), `ds4424_p4`
+  (DS4424 quad IDAC port). Board integration (`daq_board`) wires the full
+  acquisition → fusion → DSP → USB pipeline and routes S3/USB control commands.
+- Builds clean for ESP-IDF 5.5 on the ESP32-P4 (RAM ~24.7%, Flash ~2.6%).
+
 ### Notebooks
 - **RP2040 firmware build notebook — OTA flash section**: Added section 3 "OTA Flash via ESP32 (WiFi)" with three cells: (A) auto-discovery via mDNS/zeroconf with subnet-scan fallback probing `/api/device/info`, (B) binary upload to `POST /api/ota/upload_rp2040` with KB/s rate display, (C) flash trigger via `POST /api/update/apply` with live progress bar polling `GET /api/update/status` (`state`/`step`/`progressDone`/`progressTotal`). Existing picotool and HAT-demo sections renumbered to 4 and 5.
 

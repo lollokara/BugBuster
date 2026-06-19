@@ -1,0 +1,9 @@
+.pio/
+.vscode/
+sdkconfig
+sdkconfig.esp32p4
+sdkconfig.old
+
+# IDF component manager: downloaded components + lock (re-fetched on build)
+managed_components/
+dependencies.lock

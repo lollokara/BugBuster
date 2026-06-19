@@ -1,0 +1,5 @@
+## IDF component manager manifest for the DAQ HAT (ESP32-P4) firmware.
+dependencies:
+  idf: ">=5.3"
+  espressif/esp_tinyusb: "^2.2"
+  espressif/esp-dsp: "^1.5"

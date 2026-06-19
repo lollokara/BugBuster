@@ -1,0 +1,26 @@
+# Main application component for the DAQ HAT (ESP32-C6) display firmware.
+idf_component_register(
+    SRCS
+        "main.c"
+        "display.c"
+        "gfx.c"
+        "font5x7.c"
+        "font_big.c"
+        "font_jbmono.c"
+        "format.c"
+        "ui.c"
+        "ddp.c"
+        "perf.c"
+        "theme.c"
+        "settings.c"
+        "buttons.c"
+        "menu.c"
+    INCLUDE_DIRS
+        "."
+        "../include"
+    REQUIRES
+        esp_lcd
+        driver
+        esp_timer
+        nvs_flash
+)

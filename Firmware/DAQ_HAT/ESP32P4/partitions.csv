@@ -1,0 +1,11 @@
+# Partition table for the ESP32-P4 DAQ HAT (16 MB flash) with dual-OTA.
+# Two app slots (ota_0 / ota_1) + otadata enable safe A/B OTA with rollback.
+# nvs holds calibration + settings; phy_init is the RF calibration blob.
+#
+# Name,     Type,  SubType,  Offset,    Size,    Flags
+nvs,        data,  nvs,      0x9000,    0x6000,
+otadata,    data,  ota,      0xf000,    0x2000,
+phy_init,   data,  phy,      0x11000,   0x1000,
+ota_0,      app,   ota_0,    0x20000,   0x500000,
+ota_1,      app,   ota_1,    0x520000,  0x500000,
+coredump,   data,  coredump, 0xa20000,  0x10000,

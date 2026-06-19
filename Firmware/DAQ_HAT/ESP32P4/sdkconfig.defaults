@@ -1,0 +1,28 @@
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# Custom dual-OTA partition table (partitions.csv) for safe A/B firmware update.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+# Rollback: a freshly OTA'd app boots PENDING_VERIFY and must self-confirm with
+# esp_ota_mark_app_valid_cancel_rollback(); otherwise the bootloader reverts.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Reject an image whose secure-version is older (anti-downgrade), see version.h.
+CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK=n
+# PSRAM — used for the ADAQ sample ring buffers (DMA-into-PSRAM data path).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=n
+
+# Allow placing the DRDY ISR in IRAM.
+CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
+
+# TinyUSB — USB-HS vendor-bulk endpoint for the measurement data stream (J5).
+# Vendor class enabled by setting the interface count > 0. Large TX FIFO for
+# high-throughput streaming; 512-byte endpoints (HS bulk max packet).
+CONFIG_TINYUSB_VENDOR_COUNT=1
+CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=512
+CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=8192
+CONFIG_TINYUSB_VENDOR_EPSIZE=512
+
+# Keep the serial console on UART0 (GPIO37/38); USB-FS serial-JTAG stays for J1.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

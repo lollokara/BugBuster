@@ -1,0 +1,3 @@
+Place project-specific libraries here. Each library must have its own
+directory with a library.json or library.properties manifest, or be a
+plain source folder that PlatformIO picks up automatically.
