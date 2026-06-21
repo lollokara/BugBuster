@@ -18,7 +18,9 @@ use crate::daq_store::{DaqIntegral, DaqStore, DaqViewData};
 use crate::daq_usb::{daq_usb_present, DaqTransport, DaqUsbConnection, MockDaqTransport};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use tauri::State;
 
 type CmdResult<T> = Result<T, String>;
@@ -43,6 +45,11 @@ pub struct DaqStreamRuntimeStatus {
     pub frame_count: u64,
     pub sample_rate_hz: u32,
     pub overflow: bool,
+    /// Measured ingestion throughput (samples/second folded into the store).
+    pub ingest_sps: f64,
+    /// RAM-adaptive retention cap and current store footprint.
+    pub max_samples: u64,
+    pub mem_used_mb: f64,
     pub last_error: Option<String>,
 }
 
@@ -60,10 +67,11 @@ pub struct DaqSnapshots {
 
 pub struct DaqState {
     pub transport: Arc<Mutex<Option<Box<dyn DaqTransport>>>>,
-    pub store: Arc<Mutex<DaqStore>>,
+    pub store: Arc<RwLock<DaqStore>>,
     pub running: Arc<AtomicBool>,
     pub mock: Arc<AtomicBool>,
-    pub task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Background worker handles (ingest + processor).
+    pub tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     pub status: Arc<Mutex<DaqStreamRuntimeStatus>>,
 }
 
@@ -77,12 +85,25 @@ impl DaqState {
     pub fn new() -> Self {
         Self {
             transport: Arc::new(Mutex::new(None)),
-            store: Arc::new(Mutex::new(DaqStore::new(250_000))),
+            store: Arc::new(RwLock::new(DaqStore::new(250_000))),
             running: Arc::new(AtomicBool::new(false)),
             mock: Arc::new(AtomicBool::new(false)),
-            task: Arc::new(Mutex::new(None)),
+            tasks: Arc::new(Mutex::new(Vec::new())),
             status: Arc::new(Mutex::new(DaqStreamRuntimeStatus::default())),
         }
+    }
+}
+
+/// Stop the worker threads and wait for them to exit.
+async fn stop_workers(daq: &DaqState) {
+    daq.running.store(false, Ordering::SeqCst);
+    let handles: Vec<_> = daq
+        .tasks
+        .lock()
+        .map(|mut t| t.drain(..).collect())
+        .unwrap_or_default();
+    for h in handles {
+        let _ = tokio::time::timeout(Duration::from_secs(1), h).await;
     }
 }
 
@@ -96,11 +117,7 @@ pub fn daq_check_usb() -> bool {
 #[tauri::command]
 pub async fn daq_connect(mock: bool, daq: State<'_, DaqState>) -> CmdResult<bool> {
     // Stop any prior stream and clear state.
-    daq.running.store(false, Ordering::SeqCst);
-    let prior = daq.task.lock().map_err(map_err)?.take();
-    if let Some(handle) = prior {
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
-    }
+    stop_workers(&daq).await;
 
     let transport: Box<dyn DaqTransport> = if mock {
         Box::new(MockDaqTransport::new())
@@ -119,7 +136,7 @@ pub async fn daq_connect(mock: bool, daq: State<'_, DaqState>) -> CmdResult<bool
     *daq.transport.lock().map_err(map_err)? = Some(transport);
     daq.mock.store(mock, Ordering::SeqCst);
     {
-        let mut store = daq.store.lock().map_err(map_err)?;
+        let mut store = daq.store.write().map_err(map_err)?;
         *store = DaqStore::new(250_000);
     }
     {
@@ -135,11 +152,7 @@ pub async fn daq_connect(mock: bool, daq: State<'_, DaqState>) -> CmdResult<bool
 
 #[tauri::command]
 pub async fn daq_disconnect(daq: State<'_, DaqState>) -> CmdResult<()> {
-    daq.running.store(false, Ordering::SeqCst);
-    let prior = daq.task.lock().map_err(map_err)?.take();
-    if let Some(handle) = prior {
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
-    }
+    stop_workers(&daq).await;
     *daq.transport.lock().map_err(map_err)? = None;
     *daq.status.lock().map_err(map_err)? = DaqStreamRuntimeStatus::default();
     Ok(())
@@ -161,18 +174,14 @@ pub async fn daq_stream_start(
     decimation: u16,
     daq: State<'_, DaqState>,
 ) -> CmdResult<()> {
-    // Stop any prior task first.
-    daq.running.store(false, Ordering::SeqCst);
-    let prior = daq.task.lock().map_err(map_err)?.take();
-    if let Some(handle) = prior {
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
-    }
+    // Stop any prior workers first.
+    stop_workers(&daq).await;
 
     let rate = rate_from_idx(sample_rate_idx);
     let dec = decimation.clamp(1, 256) as u8;
 
     {
-        let mut store = daq.store.lock().map_err(map_err)?;
+        let mut store = daq.store.write().map_err(map_err)?;
         *store = DaqStore::new(rate);
         store.decimation = dec;
     }
@@ -191,39 +200,47 @@ pub async fn daq_stream_start(
         st.last_error = None;
     }
 
-    let transport = daq.transport.clone();
-    let store = daq.store.clone();
-    let running = daq.running.clone();
-    let status = daq.status.clone();
-
-    let handle = tokio::task::spawn_blocking(move || {
-        run_stream_loop(&transport, &store, &running, &status);
-    });
-    *daq.task.lock().map_err(map_err)? = Some(handle);
+    // Two-thread pipeline: ingest (transport → channel) and processor
+    // (channel → store + pyramid). A bounded channel applies backpressure.
+    let (tx, rx) = sync_channel::<Vec<DaqRecord>>(512);
+    let ingest = {
+        let transport = daq.transport.clone();
+        let running = daq.running.clone();
+        tokio::task::spawn_blocking(move || ingest_loop(transport, running, tx))
+    };
+    let processor = {
+        let store = daq.store.clone();
+        let running = daq.running.clone();
+        let status = daq.status.clone();
+        tokio::task::spawn_blocking(move || process_loop(rx, store, running, status))
+    };
+    {
+        let mut tasks = daq.tasks.lock().map_err(map_err)?;
+        tasks.clear();
+        tasks.push(ingest);
+        tasks.push(processor);
+    }
     Ok(())
 }
 
-/// Stop streaming (sends STOP, joins the reader task).
+/// Stop streaming (sends STOP, joins both worker threads).
 #[tauri::command]
 pub async fn daq_stream_stop(daq: State<'_, DaqState>) -> CmdResult<()> {
     let _ = send_ctrl(&daq, daq_proto::CMD_STOP, &[]);
-    daq.running.store(false, Ordering::SeqCst);
-    let prior = daq.task.lock().map_err(map_err)?.take();
-    if let Some(handle) = prior {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
-    }
+    stop_workers(&daq).await;
     if let Ok(mut st) = daq.status.lock() {
         st.active = false;
     }
     Ok(())
 }
 
-/// Background reader: pulls decoded records and folds them into the store.
-fn run_stream_loop(
-    transport: &Arc<Mutex<Option<Box<dyn DaqTransport>>>>,
-    store: &Arc<Mutex<DaqStore>>,
-    running: &Arc<AtomicBool>,
-    status: &Arc<Mutex<DaqStreamRuntimeStatus>>,
+/// Ingest thread: read decoded records from the transport and hand them to the
+/// processor over a bounded channel. Does no heavy work so the USB/mock read is
+/// never stalled by store writes or pyramid building.
+fn ingest_loop(
+    transport: Arc<Mutex<Option<Box<dyn DaqTransport>>>>,
+    running: Arc<AtomicBool>,
+    tx: SyncSender<Vec<DaqRecord>>,
 ) {
     while running.load(Ordering::SeqCst) {
         let records = {
@@ -236,41 +253,70 @@ fn run_stream_loop(
                 None => break,
             }
         };
-        let records = match records {
-            Ok(r) => r,
-            Err(e) => {
-                if let Ok(mut st) = status.lock() {
-                    st.last_error = Some(e.to_string());
-                }
-                // Transient read timeout while idle is not fatal for the mock;
-                // for USB a persistent error will keep landing here. Brief nap.
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                continue;
-            }
-        };
-        if records.is_empty() {
-            continue;
-        }
-        let mut frames = 0u64;
-        {
-            let mut s = store.lock().unwrap_or_else(|e| e.into_inner());
-            for rec in records {
-                frames += 1;
-                match rec {
-                    DaqRecord::Waveform(w) => s.append_waveform(&w),
-                    DaqRecord::Stats(st) => s.last_stats = Some(st),
-                    DaqRecord::Energy(en) => s.last_energy = Some(en),
-                    DaqRecord::Fft(f) => s.last_fft = Some(f),
-                    DaqRecord::Status(stt) => s.last_status = Some(stt),
-                    DaqRecord::Other(_) => {}
+        match records {
+            Ok(r) if !r.is_empty() => {
+                // Bounded send applies backpressure if the processor lags.
+                if tx.send(r).is_err() {
+                    break; // receiver gone
                 }
             }
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
         }
-        if let (Ok(mut st), Ok(s)) = (status.lock(), store.lock()) {
-            st.total_samples = s.total_samples();
-            st.sample_rate_hz = s.sample_rate_hz;
-            st.overflow = s.overflow;
-            st.frame_count += frames;
+    }
+}
+
+/// Processor thread: owns the store, folds incoming records into the raw arrays
+/// and the multi-resolution pyramid, and publishes throughput/memory metrics.
+fn process_loop(
+    rx: Receiver<Vec<DaqRecord>>,
+    store: Arc<RwLock<DaqStore>>,
+    running: Arc<AtomicBool>,
+    status: Arc<Mutex<DaqStreamRuntimeStatus>>,
+) {
+    let mut perf_t = Instant::now();
+    let mut perf_last_total = 0u64;
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(records) => {
+                let mut frames = 0u64;
+                {
+                    let mut s = store.write().unwrap_or_else(|e| e.into_inner());
+                    for rec in records {
+                        frames += 1;
+                        match rec {
+                            DaqRecord::Waveform(w) => s.append_waveform(&w),
+                            DaqRecord::Stats(st) => s.last_stats = Some(st),
+                            DaqRecord::Energy(en) => s.last_energy = Some(en),
+                            DaqRecord::Fft(f) => s.last_fft = Some(f),
+                            DaqRecord::Status(stt) => s.last_status = Some(stt),
+                            DaqRecord::Other(_) => {}
+                        }
+                    }
+                }
+                if let (Ok(mut st), Ok(s)) = (status.lock(), store.read()) {
+                    st.total_samples = s.total_samples();
+                    st.sample_rate_hz = s.sample_rate_hz;
+                    st.overflow = s.overflow;
+                    st.frame_count += frames;
+                    st.max_samples = s.max_samples as u64;
+                    st.mem_used_mb = s.mem_used_bytes() as f64 / 1e6;
+                    let now = Instant::now();
+                    let dt = now.duration_since(perf_t).as_secs_f64();
+                    if dt >= 0.5 {
+                        let cur = s.total_samples();
+                        st.ingest_sps = (cur.saturating_sub(perf_last_total)) as f64 / dt;
+                        perf_last_total = cur;
+                        perf_t = now;
+                    }
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 }
@@ -280,9 +326,11 @@ pub fn daq_stream_status(daq: State<'_, DaqState>) -> CmdResult<DaqStreamRuntime
     let mut st = daq.status.lock().map_err(map_err)?.clone();
     st.connected = daq.transport.lock().map_err(map_err)?.is_some();
     st.mock = daq.mock.load(Ordering::SeqCst);
-    if let Ok(s) = daq.store.lock() {
+    if let Ok(s) = daq.store.read() {
         st.total_samples = s.total_samples();
         st.overflow = s.overflow;
+        st.max_samples = s.max_samples as u64;
+        st.mem_used_mb = s.mem_used_bytes() as f64 / 1e6;
     }
     Ok(st)
 }
@@ -292,21 +340,23 @@ pub fn daq_get_view(
     start: u64,
     end: u64,
     max_points: u32,
+    smooth: u32,
+    filter_type: u8,
     daq: State<'_, DaqState>,
 ) -> CmdResult<DaqViewData> {
-    let store = daq.store.lock().map_err(map_err)?;
-    Ok(store.get_view(start, end, max_points))
+    let store = daq.store.read().map_err(map_err)?;
+    Ok(store.get_view(start, end, max_points, smooth, filter_type))
 }
 
 #[tauri::command]
 pub fn daq_get_integral(start: u64, end: u64, daq: State<'_, DaqState>) -> CmdResult<DaqIntegral> {
-    let store = daq.store.lock().map_err(map_err)?;
+    let store = daq.store.read().map_err(map_err)?;
     Ok(store.integrate(start, end))
 }
 
 #[tauri::command]
 pub fn daq_get_snapshots(daq: State<'_, DaqState>) -> CmdResult<DaqSnapshots> {
-    let s = daq.store.lock().map_err(map_err)?;
+    let s = daq.store.read().map_err(map_err)?;
     Ok(DaqSnapshots {
         total_samples: s.total_samples(),
         sample_rate_hz: s.sample_rate_hz,
@@ -320,6 +370,21 @@ pub fn daq_get_snapshots(daq: State<'_, DaqState>) -> CmdResult<DaqSnapshots> {
 #[tauri::command]
 pub fn daq_set_range_lock(range: u8, daq: State<'_, DaqState>) -> CmdResult<()> {
     send_ctrl(&daq, daq_proto::CMD_RANGE_LOCK, &[range])
+}
+
+/// Update the acquisition rate + decimation on a live stream (no restart).
+#[tauri::command]
+pub fn daq_set_rate(sample_rate_idx: u8, decimation: u16, daq: State<'_, DaqState>) -> CmdResult<()> {
+    let rate = rate_from_idx(sample_rate_idx);
+    let dec = decimation.clamp(1, 256) as u8;
+    if let Ok(mut store) = daq.store.write() {
+        store.decimation = dec;
+    }
+    send_ctrl(
+        &daq,
+        daq_proto::CMD_SET_RATE,
+        &daq_proto::rate_payload(rate, 50_000, dec),
+    )
 }
 
 #[tauri::command]

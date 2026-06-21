@@ -125,6 +125,10 @@ pub struct StatusRecord {
     pub source_enabled: bool,
     pub vdut_set: f32,
     pub ilimit_set: f32,
+    /// Supply-input rail sense (P4 ADC). Optional extension: 0 if the device
+    /// firmware does not report it (only present when payload_len >= 28).
+    pub in_voltage: f32,
+    pub in_current: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -314,7 +318,7 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
             if p.len() < 20 {
                 return DaqRecord::Other(rec_type);
             }
-            DaqRecord::Status(StatusRecord {
+            let mut s = StatusRecord {
                 sample_rate: rd_u32(p, 0),
                 overflow_count: rd_u32(p, 4),
                 range: p[8],
@@ -323,7 +327,16 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 source_enabled: p[11] != 0,
                 vdut_set: rd_f32(p, 12),
                 ilimit_set: rd_f32(p, 16),
-            })
+                in_voltage: 0.0,
+                in_current: 0.0,
+            };
+            // Forward-compatible input-rail sense (firmware that supports it
+            // appends two f32; older firmware sends the 20-byte payload).
+            if p.len() >= 28 {
+                s.in_voltage = rd_f32(p, 20);
+                s.in_current = rd_f32(p, 24);
+            }
+            DaqRecord::Status(s)
         }
         other => DaqRecord::Other(other),
     }

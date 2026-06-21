@@ -232,25 +232,33 @@ impl MockDaqTransport {
         }
     }
 
-    /// Effective current at absolute time `t` seconds — a duty-cycled load.
+    /// Effective current at absolute time `t` seconds — a duty-cycled load that
+    /// exercises autoranging (sleep on the Fine/HI path, active bursts on the
+    /// Coarse/LO path) without unrealistic outliers that wreck auto-scaling.
     fn current_at(&self, t: f64) -> f32 {
         if !self.source_enabled {
             return 0.0;
         }
-        // Sleep baseline ~80 µA.
-        let mut i = 80e-6_f64;
-        // Active window: 40 ms burst every 200 ms at ~45 mA with ripple.
-        let phase = (t % 0.200) / 0.200;
-        if phase < 0.20 {
-            let ripple = 1.0 + 0.15 * (2.0 * std::f64::consts::PI * 2_000.0 * t).sin();
-            i = 0.045 * ripple;
+        // Sleep baseline ~120 µA (RANGE_HI / Fine path).
+        let base = 120e-6_f64;
+        let period = 0.200; // 5 Hz activity
+        let ph = t % period;
+        let active_w = 0.040; // 40 ms active window
+        let mut i = base;
+        if ph < active_w {
+            // ~42 mA active (RANGE_LO / Coarse) with a gentle inrush at the
+            // leading edge and a little switching ripple.
+            let active = 0.042;
+            let inrush = if ph < 0.0015 {
+                1.0 + 0.6 * (1.0 - ph / 0.0015)
+            } else {
+                1.0
+            };
+            let ripple = 1.0 + 0.04 * (2.0 * std::f64::consts::PI * 1_500.0 * t).sin();
+            i = active * inrush * ripple;
         }
-        // Inrush spike once every ~2 s, ~1.6 A for 1 ms — pushes into RANGE_LO.
-        if (t % 2.0) < 0.001 {
-            i = 1.6;
-        }
-        // A little broadband noise.
-        let noise = 0.002 * ((t * 91_193.0).sin() + (t * 53_201.0).cos());
+        // Small broadband noise proportional to the sleep floor.
+        let noise = base * 0.4 * ((t * 77_003.0).sin() + (t * 41_117.0).cos());
         (i + noise).max(0.0) as f32
     }
 
@@ -268,7 +276,11 @@ impl MockDaqTransport {
     }
 
     fn synth_waveform(&mut self, count: usize) -> WaveformRecord {
-        let dt = 1.0_f64 / self.sample_rate as f64;
+        // Decimation lowers the effective sample rate (and thus the on-screen
+        // resolution / time density), exactly like the real ODR decimation.
+        let dec = self.decimation.max(1) as f64;
+        let eff_rate = (self.sample_rate as f64 / dec).max(1.0);
+        let dt = 1.0_f64 / eff_rate;
         let start_seq = self.sample_idx as u32;
         let mut samples = Vec::with_capacity(count);
         let mut prev_range = if self.sample_idx == 0 {
@@ -291,8 +303,13 @@ impl MockDaqTransport {
                 SRC_FINE
             };
             prev_range = range;
-            // Voltage droops slightly under load.
-            let v = (self.vdut - (i * 0.05)).max(0.0);
+            // Voltage is sampled at a slower ODR (~250 kSPS) than current, so
+            // hold it on a 250 kSPS grid to emulate the staggered fusion rates
+            // (e.g. 1 MSPS current + 250 kSPS voltage).
+            let v_rate = 250_000.0_f64;
+            let t_v = (t * v_rate).floor() / v_rate;
+            let i_v = self.current_at(t_v);
+            let v = (self.vdut - i_v * 0.05).max(0.0);
             let p = i * v;
             let flags = if i > 2.4 { 1 } else { 0 };
             samples.push(WaveSample {
@@ -310,7 +327,7 @@ impl MockDaqTransport {
         self.sample_idx += count as u64;
         WaveformRecord {
             start_seq,
-            sample_rate: self.sample_rate,
+            sample_rate: eff_rate as u32,
             decimation: self.decimation,
             samples,
         }
@@ -369,15 +386,23 @@ impl MockDaqTransport {
     }
 
     fn synth_status(&self) -> StatusRecord {
+        let i_out = self.current_at(self.started.elapsed().as_secs_f64());
+        let v_out = (self.vdut - i_out * 0.05).max(0.0);
+        // Synthesised input-rail sense: a ~5 V supply feeding the SMU at ~88 %
+        // efficiency plus a small quiescent draw.
+        let v_in = 5.0_f32;
+        let i_in = ((v_out * i_out) / (v_in * 0.88) + 0.004).max(0.0);
         StatusRecord {
             sample_rate: self.sample_rate,
             overflow_count: 0,
-            range: self.range_for(self.current_at(self.started.elapsed().as_secs_f64())),
+            range: self.range_for(i_out),
             streaming: self.running,
             range_locked: self.range_lock != 0xFF,
             source_enabled: self.source_enabled,
             vdut_set: self.vdut,
             ilimit_set: 2.5,
+            in_voltage: if self.source_enabled { v_in } else { 0.0 },
+            in_current: if self.source_enabled { i_in } else { 0.0 },
         }
     }
 }
@@ -391,11 +416,11 @@ impl DaqTransport for MockDaqTransport {
             return Ok(vec![DaqRecord::Status(self.synth_status())]);
         }
         let mut out = Vec::new();
-        // ~30 ms of samples, decimated for the waveform view, capped per frame.
-        let raw = (self.sample_rate as f64 * 0.030) as usize;
-        let dec = self.decimation.max(1) as usize;
-        let count = (raw / dec).clamp(1, 2048);
-        out.push(DaqRecord::Waveform(self.synth_waveform(count * dec)));
+        // ~30 ms of samples at the effective (decimated) rate, capped per frame.
+        let dec = self.decimation.max(1) as f64;
+        let eff_rate = (self.sample_rate as f64 / dec).max(1.0);
+        let count = ((eff_rate * 0.030) as usize).clamp(1, 4096);
+        out.push(DaqRecord::Waveform(self.synth_waveform(count)));
 
         // Aux records ~5 Hz.
         if self.last_aux.elapsed().as_millis() >= 200 {

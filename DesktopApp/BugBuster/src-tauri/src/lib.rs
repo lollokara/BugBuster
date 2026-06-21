@@ -221,6 +221,7 @@ pub fn run() {
             daq_commands::daq_get_integral,
             daq_commands::daq_get_snapshots,
             daq_commands::daq_set_range_lock,
+            daq_commands::daq_set_rate,
             daq_commands::daq_set_source,
             daq_commands::daq_set_fft,
             daq_commands::daq_reset_energy,

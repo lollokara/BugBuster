@@ -35,7 +35,7 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct daq_board {
     adaq7769_t              adaq[ADAQ_COUNT];     // [0]=bus A master, [1..2]=bus B
     ad741x_t                temp[2];
     ds4424_t                idac;

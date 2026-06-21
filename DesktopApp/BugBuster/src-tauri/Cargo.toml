@@ -46,4 +46,5 @@ sha2 = "0.10"
 base64 = "0.22"
 tauri-plugin-updater = "2"
 time = "=0.3.47"
+sysinfo = "0.30"               # Probe system RAM for adaptive capture sizing
 

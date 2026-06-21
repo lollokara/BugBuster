@@ -112,7 +112,10 @@ impl GlRenderer {
         }
         let plot_w = (x1 - x0).max(1.0);
 
-        // Interleaved [x, y, r, g, b] per vertex; 2 vertices per column.
+        // Interleaved [x, y, r, g, b] per vertex. Each column contributes a
+        // vertical min/max envelope segment AND a connector to the previous
+        // column's midpoint, so the trace stays continuous even when fully
+        // zoomed in (where min ≈ max and the envelope alone would vanish).
         let mut verts: Vec<f32> = Vec::new();
         for lane in lanes {
             let n = lane.vmin.len().min(lane.vmax.len());
@@ -121,18 +124,18 @@ impl GlRenderer {
             }
             let span = (lane.hi - lane.lo).abs().max(1e-12);
             let denom = if n > 1 { (n - 1) as f32 } else { 1.0 };
+            let map_y = |v: f32| -> f32 {
+                let t = ((v - lane.lo) / span).clamp(0.0, 1.0);
+                let py = lane.y_bottom - t * (lane.y_bottom - lane.y_top);
+                1.0 - (py / height) * 2.0
+            };
+            let mut prev: Option<(f32, f32)> = None; // (x_ndc, mid_ndc)
             for i in 0..n {
                 let px = x0 + (i as f32 / denom) * plot_w;
                 let x_ndc = (px / width) * 2.0 - 1.0;
-
-                let map_y = |v: f32| -> f32 {
-                    let t = ((v - lane.lo) / span).clamp(0.0, 1.0);
-                    // t=0 -> bottom, t=1 -> top.
-                    let py = lane.y_bottom - t * (lane.y_bottom - lane.y_top);
-                    1.0 - (py / height) * 2.0
-                };
                 let y0 = map_y(lane.vmin[i]);
                 let y1 = map_y(lane.vmax[i]);
+                let mid = (y0 + y1) * 0.5;
 
                 let color = if lane.tint {
                     match lane.source.and_then(|s| s.get(i)).copied().unwrap_or(0) {
@@ -143,9 +146,16 @@ impl GlRenderer {
                 } else {
                     lane.color
                 };
-                // Two vertices → one vertical segment (GL_LINES).
-                verts.extend_from_slice(&[x_ndc, y0, color[0], color[1], color[2]]);
-                verts.extend_from_slice(&[x_ndc, y1, color[0], color[1], color[2]]);
+                let c = color;
+                // Vertical envelope segment for this column.
+                verts.extend_from_slice(&[x_ndc, y0, c[0], c[1], c[2]]);
+                verts.extend_from_slice(&[x_ndc, y1, c[0], c[1], c[2]]);
+                // Connector from the previous column's midpoint to this one.
+                if let Some((px_prev, mid_prev)) = prev {
+                    verts.extend_from_slice(&[px_prev, mid_prev, c[0], c[1], c[2]]);
+                    verts.extend_from_slice(&[x_ndc, mid, c[0], c[1], c[2]]);
+                }
+                prev = Some((x_ndc, mid));
             }
         }
         if verts.is_empty() {

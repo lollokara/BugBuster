@@ -140,9 +140,64 @@
 
 /* ---- Content ---- */
 .tab-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
-/* The HS DAQ tab is a full-bleed instrument view that scales to the viewport. */
-.tab-container:has(> .daq-tab) { padding: 8px 12px; max-width: 100%; margin: 0; }
-.daq-tab { height: calc(100vh - 92px); }
+/* The HS DAQ tab is a full-bleed instrument view that scales to the viewport.
+   The sticky header (42px) + category bar (34px) + tab bar (32px) sit above it,
+   so subtract that chrome plus the container padding to keep the bottom
+   timeline/minimap fully on-screen. */
+.tab-container:has(> .daq-tab) { padding: 6px 12px 8px; max-width: 100%; margin: 0; }
+.daq-tab { height: calc(100vh - 124px); overflow: hidden; }
+
+/* HS DAQ settings panel — compact, neon pill controls */
+.daq-set { display: flex; flex-direction: column; gap: 8px; }
+.daq-card {
+    background: linear-gradient(180deg, #0c1626, #0a1120);
+    border: 1px solid #1b2940; border-radius: 12px; padding: 9px 11px;
+}
+.daq-card h3 {
+    margin: 0 0 8px; font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 1.4px; color: #8aa0c4;
+}
+.daq-field { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 7px; font-size: 12px; color: #cbd5e1; }
+.daq-field:last-child { margin-bottom: 0; }
+.daq-field.col { flex-direction: column; align-items: stretch; gap: 6px; }
+.daq-field.col > span:first-child { font-size: 11px; color: #94a3b8; }
+
+/* Pill segmented control */
+.daq-seg { display: flex; gap: 4px; flex-wrap: nowrap; }
+.daq-seg button {
+    flex: 1 1 0; min-width: 0; padding: 6px 5px;
+    border: 1px solid #233149; background: #0b1426; color: #9fb2cc;
+    font-size: 11px; font-weight: 700; border-radius: 999px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: inherit; transition: all 0.15s;
+}
+.daq-seg button:hover { border-color: #3b82f6; color: #dbe7ff; }
+.daq-seg button.active { color: #fff; }
+.daq-seg.neon-blue  button.active { background: #2563eb; border-color: #60a5fa; box-shadow: 0 0 9px rgba(59,130,246,0.7); }
+.daq-seg.neon-amber button.active { background: #d97706; border-color: #fbbf24; box-shadow: 0 0 9px rgba(245,158,11,0.65); }
+.daq-seg.neon-cyan  button.active { background: #0891b2; border-color: #22d3ee; box-shadow: 0 0 9px rgba(34,211,238,0.65); }
+.daq-seg.neon-green button.active { background: #059669; border-color: #34d399; box-shadow: 0 0 9px rgba(16,185,129,0.65); }
+
+.daq-step { display: flex; align-items: center; gap: 4px; }
+.daq-step button {
+    width: 24px; height: 24px; border: 1px solid #233149; background: #0b1426; color: #cbd5e1;
+    border-radius: 999px; cursor: pointer; font-size: 14px; line-height: 1; font-family: inherit;
+}
+.daq-step button:hover { border-color: #3b82f6; color: #fff; box-shadow: 0 0 8px rgba(59,130,246,0.5); }
+.daq-num {
+    width: 70px; background: #0b1426; border: 1px solid #233149; color: #e2e8f0;
+    border-radius: 8px; padding: 4px 8px; font-size: 12px; font-variant-numeric: tabular-nums;
+    text-align: right; font-family: inherit;
+}
+.daq-unit { color: #64748b; font-size: 11px; min-width: 22px; }
+.daq-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cbd5e1; margin-bottom: 8px; cursor: pointer; }
+.daq-set input[type="range"] { height: 4px; }
+/* Neon readout tiles */
+.daq-tile {
+    background: #0a1322; border: 1px solid #1b2940; border-radius: 10px; padding: 7px 8px;
+    box-shadow: inset 0 0 12px rgba(34,211,238,0.04);
+}
+.daq-tile-title { font-size: 9px; color: #7c8aa5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
 .tab-content { animation: fadeIn 0.25s; }
 .tab-desc {
     font-size: 11px; color: var(--text-dim);

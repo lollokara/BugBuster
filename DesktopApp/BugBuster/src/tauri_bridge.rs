@@ -1825,6 +1825,9 @@ pub struct DaqStreamRuntimeStatus {
     pub frame_count: u64,
     pub sample_rate_hz: u32,
     pub overflow: bool,
+    pub ingest_sps: f64,
+    pub max_samples: u64,
+    pub mem_used_mb: f64,
     pub last_error: Option<String>,
 }
 
@@ -1878,6 +1881,8 @@ pub struct DaqStatus {
     pub source_enabled: bool,
     pub vdut_set: f32,
     pub ilimit_set: f32,
+    pub in_voltage: f32,
+    pub in_current: f32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1970,18 +1975,28 @@ pub async fn daq_stream_status() -> Option<DaqStreamRuntimeStatus> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
-pub async fn daq_get_view(start: u64, end: u64, max_points: u32) -> Option<DaqViewData> {
+pub async fn daq_get_view(
+    start: u64,
+    end: u64,
+    max_points: u32,
+    smooth: u32,
+    filter_type: u8,
+) -> Option<DaqViewData> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Args {
         start: u64,
         end: u64,
         max_points: u32,
+        smooth: u32,
+        filter_type: u8,
     }
     let args = serde_wasm_bindgen::to_value(&Args {
         start,
         end,
         max_points,
+        smooth,
+        filter_type,
     })
     .unwrap();
     let result = try_invoke("daq_get_view", args).await?;
@@ -2043,6 +2058,21 @@ pub async fn daq_set_range_lock(range: u8) {
     }
     let args = serde_wasm_bindgen::to_value(&Args { range }).unwrap();
     try_invoke("daq_set_range_lock", args).await;
+}
+
+pub async fn daq_set_rate(sample_rate_idx: u8, decimation: u16) {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        sample_rate_idx: u8,
+        decimation: u16,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        sample_rate_idx,
+        decimation,
+    })
+    .unwrap();
+    try_invoke("daq_set_rate", args).await;
 }
 
 pub async fn daq_set_source(vdut_mv: u32, ilimit_ma: u32, enable: bool) {
