@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+### DAQ HAT — P4↔S3↔C6 command infrastructure & display co-processor — NEW
+A unified, bidirectional settings/command infrastructure spanning the ESP32-P4
+(acquisition), ESP32-C6 (display/menu/neopixels), and ESP32-S3 mainboard, so any
+DAQ HAT setting can be configured from the on-device menu OR the host
+(desktop/web/mobile/MCP) and stays in sync.
+
+- **Canonical settings registry** (`Firmware/DAQ_HAT/common/daq_config_registry.{h,c}`):
+  single source of truth for every setting (acquisition, SMU, DSP/FFT, display,
+  neopixel, wifi, system) with a key-addressed TLV protocol and a self-describing
+  schema. Shared/compiled into both the P4 and C6 firmwares.
+- **P4 authoritative store** (`config/daq_settings*.c`): NVS-backed, validated,
+  with apply-callbacks into the range manager, SMU (V/I), FFT engine and USB
+  decimation, plus energy/charge/factory-reset actions.
+- **S3↔P4 CONFIG commands** (`link/s3_link.c`): `CONFIG_GET/SET/GET_ALL/SCHEMA/
+  ACTION` (HAT cmds 0x70–0x74) read/write the store with paged GET_ALL.
+- **P4↔C6 link, DDP v3** (`common/ddp_proto.h`, P4 `link/ddp_master.c`): new P4-side
+  DDP master; button-event relay, TLV `CONFIG_PUSH`/`CONFIG_SET`, raised payload
+  cap. Buttons moved to the P4 (UP/DN/OK) and relayed into the existing C6 menu.
+- **C6 config sync + menu expansion** (`c6_config.c`, `menu.c`): the menu now
+  edits HAT/DSP/screen/neopixel/wifi settings; edits sync to the P4 and S3-side
+  edits are pushed back to the menu.
+- **Neopixels** (`npx.c`): 8× WS2812 on C6 IO15 (RMT) with off/solid/status/
+  breathe modes, configurable colour/brightness.
+- **Channel-status LEDs**: a `Channel` neopixel mode (now the default) shows the
+  four mainboard channel statuses on the C6's 8 LEDs in **pairs of 2**, using the
+  **same colour scheme as the RP2040 HAT LEDs** (off/red-fault/green/blue/yellow).
+  The S3 computes the 4 IOBLOCK codes (shared `hat_compute_ch_codes`) and, for a
+  DAQ HAT, batches them via a new `SET_CH_LEDS` HAT command → P4 → C6 (DDP
+  `SET_CH_LEDS`). Shared code→RGB table in `common/daq_led_codes.h`.
+- **Dynamic HAT resources**: the S3 now identifies the HAT type (`HAT_TYPE_DAQ_
+  POWER`, reported via GET_INFO) and allocates the 8 KB RP2040 LA log ring
+  **lazily** — only when an LA-capable HAT actually relays logs (never for the
+  DAQ HAT or with logging off), saving RAM per the connected HAT.
+- **WiFi settings**: relayed for the ESP32-S3 radio (shown/edited on the C6; the
+  C6 has no radio — future BLE autodiscovery).
+- **C6 firmware update via the P4** (`link/c6_flasher.c`): the P4 flashes the C6
+  over UART2 in ROM-download mode (BOOT/RST) using `esp-serial-flasher`; the S3
+  streams the C6 image through the existing OTA commands (target selector on
+  `OTA_BEGIN`).
+- **S3 forwarding + host library**: new `daq_config` BBP command on the S3
+  (`cmd_daq.cpp`) forwards to the P4; Python `bugbuster.daq_config` (`DaqConfig`,
+  `DaqKey`, TLV codec) exposes `bb.daq.get/set/get_all/schema/action`.
+- Builds verified: P4, C6, and ESP32-S3 firmwares link clean; 426 Python unit
+  tests pass (incl. new DAQ config codec tests).
+- Follow-ups (registry/firmware ready, host surface pending): desktop/web/iOS UI,
+  MCP tools, and host-driven C6/P4 OTA streaming.
+
 ### DAQ HAT (ESP32-P4 IoT Power Analyzer) — NEW
 A new ESP32-P4-based DAQ HAT firmware that implements a 24-bit, nA–3A
 seamless-autoranging precision **power analyzer** + **source-measure unit**
@@ -51,6 +98,16 @@ netlist-verified hardware map in `Docs/FIRMWARE_HARDWARE_REFERENCE.md`.
 - **Supporting drivers**: `ad741x` (AD7415 I²C temperature sensors), `ds4424_p4`
   (DS4424 quad IDAC port). Board integration (`daq_board`) wires the full
   acquisition → fusion → DSP → USB pipeline and routes S3/USB control commands.
+- **DRDY-gated fast acquisition path**: the per-bus DRDY-ISR capture tasks are
+  now wired into a live high-priority processor task (`daq_board_run_fast`) that
+  drains the PSRAM rings, pairs the SYNC-aligned FINE and COARSE samples by
+  sequence (with a learned phase offset and drop-resync), routes the slow VOLTAGE
+  channel to the DSP, and runs fusion → power DSP → multi-resolution → spectrum →
+  decimated USB waveform plus a 10 Hz STATS/ENERGY/FFT/STATUS summary — all USB
+  writes on a single task. The VOLTAGE channel runs at a lower ODR
+  (`VOLTAGE_ODR_TARGET_SPS`) so its DRDY de-collides from COARSE on the shared
+  SPI bus (the two share one SYNC line and cannot be phase-staggered). `main`
+  now boots straight into this path, replacing the polled demo loop.
 - Builds clean for ESP-IDF 5.5 on the ESP32-P4 (RAM ~24.7%, Flash ~2.6%).
 
 ### Notebooks

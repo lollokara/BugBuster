@@ -8,12 +8,32 @@
 // Adjust pin assignments to match the final PCB rev.
 
 // ---------------------------------------------------------------------------
-// UART link to the ESP32-P4 application processor
+// UART link to the ESP32-P4 application processor.
+//
+// New PCB rev: the link uses the C6's UART0 (U0RXD/U0TXD), wired to P4 GPIO32/33.
+// UART0 is also the ROM download UART, so the P4 can drop the C6 into download
+// mode (via BOOT/RST it drives) and flash it over this same pair. Because UART0
+// now carries the application DDP link, the C6 console/logs must be routed to
+// USB-Serial-JTAG (set CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y in sdkconfig).
+//
+// NOTE: the P4-side pins (32/33) are confirmed from the wiring note; the C6-side
+// U0 IOMUX pins (16/17) are the ESP32-C6 defaults — confirm against the final
+// schematic. PLACEHOLDER until verified on the bench.
 // ---------------------------------------------------------------------------
-#define DAQ_UART_TX_PIN   21
-#define DAQ_UART_RX_PIN   20
+#define DAQ_UART_TX_PIN   16     // C6 U0TXD -> P4 GPIO33 (PLACEHOLDER, confirm)
+#define DAQ_UART_RX_PIN   17     // C6 U0RXD <- P4 GPIO32 (PLACEHOLDER, confirm)
 #define DAQ_UART_BAUD     921600
-#define DAQ_UART_PORT     1      // UART1 (UART0 = USB-serial console)
+#define DAQ_UART_PORT     0      // UART0 (was UART1; console -> USB-Serial-JTAG)
+
+// ---------------------------------------------------------------------------
+// Neopixels: chain of 8x WS2812 driven from the C6 on IO15. Data only (no
+// clock). NOTE: GPIO15 is a strapping pin on the C6 (JTAG select) but is only
+// sampled at reset; driving it as an RMT output after boot is fine. Keep it
+// released (or pulled to its default) during reset.
+// ---------------------------------------------------------------------------
+#define NPX_PIN           15
+#define NPX_COUNT         8
+
 
 // ---------------------------------------------------------------------------
 // ST7789 display (SPI 4-wire). The silkscreen labels the data lines SCL/SDA
@@ -74,11 +94,14 @@
 #define DISP_SPI_HOST     1     // SPI2_HOST
 
 // ---------------------------------------------------------------------------
-// Front-panel navigation buttons (active-low, internal pull-ups), wired to the
-// ESP32-C6. Avoided strapping pins (GPIO8/9/15) and the display/UART pins.
-//   UP   -> IO5
-//   DOWN -> IO6
-//   OK   -> IO7   (hold = Back)
+// Front-panel navigation buttons.
+//
+// NEW PCB rev: the buttons are wired to the ESP32-P4 (not the C6). The P4
+// debounces them and relays UP/DOWN/OK/BACK events to the C6 over DDP
+// (DDP_CMD_BUTTON_EVENT), which feed straight into menu_update(). The pins
+// below are retained only for legacy/bring-up builds where buttons are still
+// on the C6; buttons_init() is a no-op when DDP supplies events.
+//   UP   -> IO5   DOWN -> IO6   OK -> IO7  (hold = Back)
 // ---------------------------------------------------------------------------
 #define BTN_PIN_UP        5
 #define BTN_PIN_DOWN      6

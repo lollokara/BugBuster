@@ -26,3 +26,11 @@ bool ddp_get_diag(ddp_diag_t *out, uint32_t *age_ms);
 // Send the current device settings upstream to the P4 (C6 -> P4 event). Safe
 // to call when no P4 is attached (bytes are simply not received).
 void ddp_send_config(const ddp_config_t *cfg);
+
+// Send a key-addressed TLV batch upstream to the P4 (DDP_CMD_CONFIG_SET). Used
+// by c6_config_send() when the user commits a menu edit.
+void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len);
+
+// Return (and clear) the button events relayed from the P4 since the last call.
+// Bits are DDP_BTN_* (== BTN_EV_*), so the result feeds menu_update() directly.
+uint8_t ddp_take_buttons(void);

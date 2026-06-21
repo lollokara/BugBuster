@@ -39,6 +39,11 @@ extern "C" {
 // Largest firmware chunk per OTA_DATA frame: payload = offset(u32) + data.
 #define HATP_OTA_CHUNK_MAX   (HATP_MAX_PAYLOAD - 4u)
 
+// OTA target selector (optional trailing byte of OTA_BEGIN; absent => P4 self).
+// When 1, the image is flashed to the on-module ESP32-C6 via the P4 ROM-loader.
+#define HATP_OTA_TARGET_P4   0u
+#define HATP_OTA_TARGET_C6   1u
+
 // Standard commands (master -> slave).
 #define HATP_CMD_PING        0x01u
 #define HATP_CMD_GET_INFO    0x02u
@@ -51,6 +56,13 @@ extern "C" {
 #define HATP_CMD_DAQ_SET_SOURCE  0x52u   // payload: vdut(f32) ilimit(f32) en(u8)
 #define HATP_CMD_DAQ_GET_STATUS  0x53u   // -> range/streaming/energy summary
 #define HATP_CMD_DAQ_SYNC        0x54u   // sync epoch (pre/post acquisition)
+#define HATP_CMD_SET_CH_LEDS     0x55u   // 4x u8 channel colour codes -> C6 neopixels
+
+// SMU factory calibration (vendor sub-range 0x56..0x59).
+#define HATP_CMD_DAQ_CAL_START   0x56u   // payload: mode u8 (0=voltage,1=current)
+#define HATP_CMD_DAQ_CAL_ACK     0x57u   // operator acknowledged the prompt
+#define HATP_CMD_DAQ_CAL_STATUS  0x58u   // -> smu_cal_status_t
+#define HATP_CMD_DAQ_CAL_ABORT   0x59u   // abort + restore safe SMU state
 
 // Version + OTA commands (vendor sub-range 0x60..0x6F).
 #define HATP_CMD_GET_VERSION     0x60u   // -> fw version (u32 + string)
@@ -62,6 +74,19 @@ extern "C" {
 #define HATP_CMD_OTA_CONFIRM     0x66u   // confirm running image (cancel rollback)
 #define HATP_CMD_OTA_ROLLBACK    0x67u   // revert to previous image (reboots)
 
+// Settings/config commands (vendor sub-range 0x70..0x7F). These read/write the
+// authoritative settings store (common/daq_config_registry.h) using key-
+// addressed TLV values, so the S3 (desktop/web/mobile/MCP) can configure every
+// DAQ setting and read it back. Mirrors the C6 DDP config protocol.
+#define HATP_CMD_CONFIG_GET      0x70u   // payload: key u16 LE        -> RSP_CONFIG_VALUE (one TLV)
+#define HATP_CMD_CONFIG_SET      0x71u   // payload: one TLV           -> OK / ERROR
+#define HATP_CMD_CONFIG_GET_ALL  0x72u   // payload: start_idx u8, flags u8 -> RSP_CONFIG_VALUE ([next_idx u8][TLVs])
+#define HATP_CMD_CONFIG_SCHEMA   0x73u   // payload: key u16 LE        -> RSP_CONFIG_SCHEMA
+#define HATP_CMD_CONFIG_ACTION   0x74u   // payload: action_id u8      -> OK / ERROR
+
+// CONFIG_GET_ALL flags.
+#define HATP_CONFIG_FLAG_SECRET  0x01u   // include secret values (e.g. wifi pw)
+
 // Responses (slave -> master).
 #define HATP_RSP_OK          0x80u
 #define HATP_RSP_ERROR       0x81u
@@ -70,6 +95,9 @@ extern "C" {
 #define HATP_RSP_DAQ_STATUS  0x90u   // DAQ status payload
 #define HATP_RSP_VERSION     0x91u   // version payload
 #define HATP_RSP_OTA_STATUS  0x92u   // OTA status payload
+#define HATP_RSP_CONFIG_VALUE  0x93u // TLV value(s); GET_ALL prefixes [next_idx u8]
+#define HATP_RSP_CONFIG_SCHEMA 0x94u // schema descriptor for one key
+#define HATP_RSP_DAQ_CAL_STATUS 0x95u // smu_cal_status_t snapshot
 
 // Firmware version reported in GET_INFO.
 #define S3LINK_FW_MAJOR      1u

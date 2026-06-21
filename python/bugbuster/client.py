@@ -447,6 +447,18 @@ class BugBuster:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @property
+    def daq(self) -> "DaqConfig":  # type: ignore[name-defined]  # noqa: F821
+        """DAQ HAT (ESP32-P4) settings registry accessor (USB transport).
+
+        Example::
+
+            bb.daq.set(DaqKey.DUT_VOLTAGE_MV, 3300)
+            bb.daq.get_all()
+        """
+        from .daq_config import DaqConfig
+        return DaqConfig(self)
+
     def _usb_cmd(self, cmd_id: int, payload: bytes = b'') -> bytes:
         """
         Send a binary command and return the raw response payload.

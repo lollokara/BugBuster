@@ -161,6 +161,7 @@ pub fn ConnectionPanel(
     scanning: Signal<bool>,
     scan_completed: Signal<bool>,
     on_scan: Callback<ev::MouseEvent>,
+    on_mock: Callback<ev::MouseEvent>,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
@@ -284,6 +285,15 @@ pub fn ConnectionPanel(
                                             }
                                         }
                                     />
+                                    // Synthetic device — runs the app with no hardware.
+                                    <button class="device-item" on:click=move |e| on_mock.run(e)>
+                                        <span class="device-icon">"🧪"</span>
+                                        <div class="device-info">
+                                            <span class="device-name">"Demo / Mock device (DAQ)"</span>
+                                            <span class="device-addr">"Synthetic power-analyzer stream"</span>
+                                        </div>
+                                        <span class="device-transport">"DEMO"</span>
+                                    </button>
                                 </div>
                             </div>
                         }.into_any()

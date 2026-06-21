@@ -9,7 +9,7 @@ static const char *TAG = "settings";
 #define NVS_NS   "daqhat"
 #define NVS_KEY  "settings"
 // Bump when the settings_t layout changes so old blobs are discarded.
-#define SETTINGS_VERSION  1
+#define SETTINGS_VERSION  3
 
 settings_t g_settings;
 
@@ -30,8 +30,24 @@ static void load_defaults(void)
     g_settings.sample_rate_idx = 2;     // 100ksps
     g_settings.dut_current_ma  = 1000;  // 1.0 A
     g_settings.dut_voltage_mv  = 5000;  // 5.0 V
+
+    g_settings.fft_enable      = false;
+    g_settings.fft_length_idx  = 4;     // 1024
+    g_settings.fft_window_idx  = 1;     // Hann
+    g_settings.fft_source_idx  = 0;     // Current
+
     g_settings.brightness_pct  = 100;
     g_settings.dark_mode       = false;
+
+    g_settings.npx_mode        = 4;     // Channel (front 4-connector status)
+    g_settings.npx_brightness  = 50;
+    g_settings.npx_color       = 0x0000FF00; // green
+
+    g_settings.wifi_enable     = false;
+    g_settings.wifi_mode       = 0;     // AP
+    g_settings.ssid[0]         = '\0';
+    g_settings.password[0]     = '\0';
+    g_settings.wifi_status     = 0;
 }
 
 void settings_init(void)

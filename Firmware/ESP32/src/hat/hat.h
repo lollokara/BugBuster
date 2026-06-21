@@ -55,6 +55,7 @@ extern "C" {
 typedef enum {
     HAT_TYPE_NONE = 0,      // No HAT detected (GPIO47 high)
     HAT_TYPE_SWD_GPIO,      // HAT detected (GPIO47 low)
+    HAT_TYPE_DAQ_POWER = 0x10, // DAQ HAT (ESP32-P4 power analyzer); reported via GET_INFO
     // Future HAT types:
     // HAT_TYPE_ANALOG,     // e.g. 4.7kΩ pull-down (~1.06V)
     // HAT_TYPE_PROTOCOL,   // e.g. 22kΩ pull-down (~2.27V)
@@ -142,6 +143,8 @@ typedef enum {
 #define HAT_CMD_LA_STREAM_START 0x37  // Start streaming over vendor bulk EP
 #define HAT_CMD_LA_LOG_ENABLE   0x39  // Enable/disable log relay to host
 #define HAT_CMD_LA_USB_RESET    0x3A  // Reinitialize vendor bulk endpoint
+// DAQ HAT (ESP32-P4) — channel-status LEDs (4 colour codes -> C6 neopixels).
+#define HAT_CMD_SET_CH_LEDS     0x55
 #define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
 
 // Commands: HAT v2 Supplies / LEDs (0x40-0x4F)
@@ -447,6 +450,14 @@ bool hat_fw_status(HatFwUpdateStatus *status);
 bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                        uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len);
 uint8_t hat_get_last_error(void);
+
+/**
+ * @brief Raw HAT passthrough returning the actual response command byte (not a
+ *        bool). Lets callers handle non-OK data responses such as the DAQ HAT's
+ *        CONFIG_VALUE (0x93) / CONFIG_SCHEMA (0x94). Returns 0 on timeout.
+ */
+uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                    uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len);
 
 /**
  * @brief One-call SWD setup: set VADJ, I/O voltage, power on, route SWD pins.

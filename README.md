@@ -12,7 +12,8 @@
   <img src="https://img.shields.io/badge/license-AGPL--3.0-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
   <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2059%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
-  <img src="https://img.shields.io/badge/firmware-ESP%203.4.0%20%C2%B7%20HAT%20bb--hat--3.3-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Firmware"/>
+  <img src="https://img.shields.io/badge/mainboard-ESP32--S3%203.4.0-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Mainboard firmware"/>
+  <img src="https://img.shields.io/badge/HATs-Logic%20Analyzer%20%C2%B7%20Power%20Profiler%20Pro-0d1117?style=flat-square&labelColor=161b22&color=e76f51" alt="HATs"/>
   <img src="https://img.shields.io/badge/desktop-Tauri%20v2%20%C2%B7%20Leptos%200.7-0d1117?style=flat-square&labelColor=161b22&color=f4a261" alt="Desktop"/>
   <img src="https://img.shields.io/badge/protocol-BBP%20v9-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
   <img src="https://img.shields.io/badge/python-3.11%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
@@ -26,15 +27,15 @@
 
 <br/>
 
-> BugBuster is an open-source hardware platform that bridges the gap between AI models and the physical world. Through a **Model Context Protocol (MCP) server**, AI assistants like Claude can autonomously measure voltages, drive outputs, capture waveforms, analyze digital signals, and debug embedded targets &mdash; using a single USB-C connection to a purpose-built PCB.
+> BugBuster is an open-source hardware platform that bridges the gap between AI models and the physical world. Through a **Model Context Protocol (MCP) server**, AI assistants like Claude can autonomously measure voltages, drive outputs, capture waveforms, analyze digital signals, and debug embedded targets; using a single USB-C connection to a purpose-built PCB.
 >
-> One board. 59 AI-callable tools. A full electronics bench in your AI's hands.
+> One mainboard, two snap-on specialist HATs, 59 AI-callable tools; a full electronics bench in your AI's hands.
 
 <br/>
 
 ## Why BugBuster?
 
-AI models are exceptionally good at reasoning about electronics &mdash; reading datasheets, interpreting schematics, diagnosing faults. What they lack is the ability to **touch the real world**. BugBuster closes that loop.
+AI models are exceptionally good at reasoning about electronics; reading datasheets, interpreting schematics, diagnosing faults. What they lack is the ability to **touch the real world**. BugBuster closes that loop.
 
 <table>
 <tr>
@@ -88,7 +89,26 @@ If you find BugBuster useful and would like to support its ongoing development, 
 
 <br/>
 
-## What's in the box
+## A modular platform
+
+BugBuster is built around an **ESP32-S3 mainboard** that always provides the
+core bench instruments, plus a **custom HAT expansion bus** that accepts one of
+two purpose-built expansion boards. The mainboard auto-detects the attached HAT
+at boot and dynamically exposes its capabilities.
+
+| | Board | Specialty |
+|:---:|---|---|
+| **Mainboard** | ESP32-S3 | ADC/DAC, waveform gen, 12 digital IOs, MUX routing, adjustable supplies, USB-PD |
+| **HAT** | Logic Analyzer HAT (RP2040) | Logic analyzer + CMSIS-DAP SWD debug probe + level-shifted target rails |
+| **HAT** | Power Profiler Pro HAT (ESP32-P4 + C6) | nA–3 A precision power analyzer & source-measure unit |
+
+> [!NOTE]
+> The two HATs are mutually exclusive &mdash; only one is attached at a time.
+> The mainboard works standalone without any HAT.
+
+<br/>
+
+## Mainboard — ESP32-S3 (always present)
 
 <table>
 <tr><td>
@@ -102,14 +122,9 @@ If you find BugBuster useful and would like to support its ongoing development, 
 | **Route** | 32-switch MUX | 4 × ADGS2414D octal SPST, break-before-make |
 | **Power** | Adjustable supplies | 3–15 V VADJ1/2, USB-PD 5–20 V, 4 e-fuses |
 | **Scope** | ADC streaming | Real-time display, BBSC + CSV export |
-| **Logic Analyzer**† | 4 ch @ up to 1 MHz (USB stream); up to 125 MHz 1-ch offline | PIO capture, RLE, hardware triggers, dual route (low-speed MUX / high-speed level-shifted), **dedicated RP2040 USB vendor-bulk endpoint** |
-| **SWD Probe**† | CMSIS-DAP v2 | OpenOCD / pyOCD / probe-rs / VS Code — dedicated 5-pin connector (VADJ4 · SWCLK · SWDIO · TRACE · GND) |
-| **HAT Power Rails**† | VADJ3 + VADJ4 (adjustable 0V-36V) + 3V3\_ADJ | DS4424-tuned LTM8083 rails, per-rail current monitoring (50 mΩ shunt), auto-calibration |
-| **HAT IO Bank**† | 8 level-shifted IOs | GPIO10–15 + GPIO20–21, direction-controlled, Conn1 + Conn2 headers |
-| **HAT Status LEDs**† | 8× WS2812B | Per-connector status indicators, boot animation |
+| **External I2C/SPI** | Bus transactions | Route any IO as SDA/SCL or MOSI/MISO/SCLK/CS; Python + MCP tools included |
 | **UART Bridge** | Transparent passthrough | Configurable baud + pins |
 | **Quick-setup slots** | Save/restore device state | 5 named snapshots (DAC, channels, routing) — BBP 0xF0–0xF4, `/api/quicksetup/*` HTTP routes |
-| **External I2C/SPI** | Bus transactions | Route any IO as SDA/SCL or MOSI/MISO/SCLK/CS; Python + MCP tools included |
 | **MicroPython runtime** | Script engine | Upload & execute on ESP32, REPL, persistent SPIFFS store, autorun on boot, full API access |
 | **CDC auto-recovery** | Serial fallback | BBP idle for 1 min → CDC #0 returns to CLI; CLI keypress reclaims immediately |
 | **VADJ PD guard** | Voltage negotiation | VADJ1/VADJ2 capped by USB-PD voltage; firmware + Python + MicroPython enforce safe limits |
@@ -117,7 +132,67 @@ If you find BugBuster useful and would like to support its ongoing development, 
 </td></tr>
 </table>
 
-†HAT expansion board required.
+<br/>
+
+## Expansion HATs
+
+Snap-on HATs extend the mainboard with specialist instruments over the custom
+HAT expansion bus. Only one HAT is attached at a time, and the mainboard
+auto-detects which one is present at boot.
+
+### Logic Analyzer HAT — RP2040
+
+A debug-and-capture HAT that adds a high-speed logic analyzer and a fully
+standalone CMSIS-DAP SWD probe, plus extra level-shifted target rails and IO.
+Built on a fork of [raspberrypi/debugprobe](https://github.com/raspberrypi/debugprobe).
+
+<table>
+<tr><td>
+
+| | Capability | Highlights |
+|:---:|---|---|
+| **Logic Analyzer** | 4 ch @ up to 1 MHz (USB stream); up to 125 MHz 1-ch offline | PIO capture, RLE, hardware triggers, dual route (low-speed MUX / high-speed level-shifted), **dedicated RP2040 USB vendor-bulk endpoint** |
+| **SWD Probe** | CMSIS-DAP v2 | OpenOCD / pyOCD / probe-rs / VS Code — dedicated 5-pin connector (VADJ4 · SWCLK · SWDIO · TRACE · GND), zero proxy |
+| **Target UART Bridge** | USB CDC | Dedicated serial bridge to the target under debug |
+| **HAT Power Rails** | VADJ3 + VADJ4 (0–36 V) + 3V3\_ADJ | DS4424-tuned LTM8083 rails, per-rail current monitoring (50 mΩ shunt), auto-calibration |
+| **HAT IO Bank** | 8 level-shifted IOs | GPIO10–15 + GPIO20–21, direction-controlled, Conn1 + Conn2 headers |
+| **HAT Status LEDs** | 8× WS2812B | Per-connector status indicators, boot animation |
+
+</td></tr>
+</table>
+
+Deep dive: [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) ·
+[`Docs/LogicAnalyzer.md`](Docs/LogicAnalyzer.md).
+
+<br/>
+
+### Power Profiler Pro HAT — DAQ (ESP32-P4 + ESP32-C6)
+
+A 24-bit, nA–3 A seamless-autoranging precision **power analyzer** and
+**source-measure unit** in the class of Joulescope, Qoitech Otii, and Nordic
+PPK2. The ESP32-P4 acquires and runs the full DSP pipeline on-device, streaming
+results to the PC over USB High-Speed; an on-module ESP32-C6 drives the local
+display and wireless link.
+
+<table>
+<tr><td>
+
+| | Capability | Highlights |
+|:---:|---|---|
+| **Power Analyzer** | nA – 3 A current, 24-bit | 3× ADAQ7769-1 Σ-Δ, seamless 3-range hardware autorange (51 / 2 / 0.05 Ω), dual-ADC gap-fill |
+| **Voltage** | 4-wire Kelvin sense | True differential `V_DUT`, target 50 kSPS |
+| **Source / SMU** | 0–20 V output, ≤ 2.5 A | LTM8056 buck-boost + DS4424 trim |
+| **On-device DSP** | power · energy · charge · stats · FFT | mWh/J, mAh/C, min/max/mean/RMS/std, multi-resolution zoom, continuous Welch FFT |
+| **Live streaming** | USB 2.0 High-Speed | CRC-framed vendor-bulk measurement stream, target ~250 kSPS |
+| **On-board display** | ESP32-C6 + ST7789 | Live readout, settings & diagnostics menu, 3 nav buttons |
+| **Event markers** | digital, via mainboard | Correlated to P4 samples through a shared sync epoch |
+| **OTA** | dual-slot A/B | SHA-256 verified, streaming from the ESP32-S3, rollback-safe |
+
+</td></tr>
+</table>
+
+Deep dive: [`Firmware/DAQ_HAT/README.md`](Firmware/DAQ_HAT/README.md) ·
+[`Docs/PowerAnalyzer_Architecture.md`](Docs/PowerAnalyzer_Architecture.md).
 
 <br/>
 
@@ -127,7 +202,7 @@ If you find BugBuster useful and would like to support its ongoing development, 
 flowchart TB
   HOST["Host<br/>(Claude / Desktop / Python)"]
 
-  subgraph BB["BugBuster main board"]
+  subgraph BB["BugBuster mainboard"]
     direction TB
     ESP32["ESP32-S3<br/>(dual-core)"]
     SPI["SPI bus<br/>AD74416H · 4× ADGS2414D MUX"]
@@ -136,7 +211,7 @@ flowchart TB
     ESP32 --- I2C
   end
 
-  subgraph HAT["RP2040 HAT (optional)"]
+  subgraph LA["Logic Analyzer HAT — RP2040 (optional)"]
     direction TB
     RP["RP2040<br/>(debugprobe fork + LA)"]
     PIO0["PIO 0 — SWD"]
@@ -145,14 +220,32 @@ flowchart TB
     RP --- PIO1
   end
 
+  subgraph DAQ["Power Profiler Pro HAT — DAQ (optional)"]
+    direction TB
+    P4["ESP32-P4<br/>(acquire + DSP)"]
+    C6["ESP32-C6<br/>(display + wireless)"]
+    AFE["3× ADAQ7769-1 · LTM8056 SMU"]
+    P4 --- AFE
+    P4 -->|DDP UART| C6
+  end
+
   HOST -->|"USB CDC #0 — BBP v9<br/>control plane (MCP / desktop)"| ESP32
   HOST -->|"WiFi HTTP REST<br/>(token-paired)"| ESP32
   ESP32 -->|"HAT UART 921600 8N1<br/>(HAT_Protocol.md)"| RP
+  ESP32 -->|"HAT UART (BBP-compatible)<br/>config / sync / OTA"| P4
 
   HOST -->|"USB vendor bulk<br/>EP 0x06 OUT · 0x87 IN<br/>LA data plane @ ~1 MB/s"| RP
   HOST -->|"USB CMSIS-DAP v2<br/>(direct — no proxy)"| RP
   HOST -->|"USB CDC — target UART bridge"| RP
+
+  HOST -->|"USB High-Speed vendor bulk<br/>measurement stream"| P4
 ```
+
+> [!NOTE]
+> Only one HAT is installed at a time. Both attach to the same custom HAT
+> expansion bus and HAT UART; the mainboard detects the HAT type at boot and
+> loads the matching resource set.
+
 
 ### Host stack
 
@@ -169,7 +262,7 @@ flowchart LR
     HTTP["HTTP REST\nWiFi / USB"]
   end
 
-  subgraph HAT["RP2040 HAT"]
+  subgraph HAT["Active HAT"]
     UART["HAT UART\n0xAA framing"]
   end
 
@@ -184,13 +277,15 @@ flowchart LR
   HTTP --> UART
 ```
 
-**Two independent USB paths** when the HAT is attached:
+**Two independent USB paths** when a HAT is attached:
 
 - **ESP32 USB CDC** — control plane (BBP v9 binary protocol over COBS + CRC-16).
   MCP server, desktop app, and Python library all speak this.
-- **RP2040 USB vendor bulk** — Logic Analyzer data plane. The ESP32 is **not**
-  in the LA data path; this decouples capture throughput from the BBP control
-  stream and is what makes sustained 1 MHz / 4-ch streaming possible.
+- **HAT USB data plane** — the active HAT exposes its own high-throughput USB
+  device. On the **Logic Analyzer HAT** this is the RP2040 vendor-bulk endpoint
+  for capture data; on the **Power Profiler Pro HAT** it is the ESP32-P4
+  USB-HS measurement stream. The ESP32-S3 is **not** in either data path, which
+  decouples capture/measurement throughput from the BBP control stream.
   Details: [`Docs/LogicAnalyzer.md`](Docs/LogicAnalyzer.md).
 
 <details>
@@ -200,9 +295,12 @@ flowchart LR
 |---|---|---|---|---|
 | ESP32 USB CDC #0 | BBP v9 (COBS + CRC-16) | < 1 ms | MCP · desktop · Python | Full control + streaming control plane |
 | ESP32 HTTP REST | JSON over WiFi | ~10 ms | desktop · Python · browser UI | Remote access, OTA |
-| RP2040 USB vendor bulk | 4-byte framed packets | < 1 ms | desktop · Python (libusb) | LA streaming / readout, ~1 MB/s |
-| RP2040 USB CMSIS-DAP v2 | standard DAP | < 1 ms | OpenOCD / pyOCD / probe-rs | SWD debug (zero proxy) |
-| HAT UART | `0xAA` + CRC-8, 921600 | 1-5 ms | ESP32 ↔ RP2040 only | HAT config / status (see `Firmware/HAT_Protocol.md`) |
+| RP2040 USB vendor bulk † | 4-byte framed packets | < 1 ms | desktop · Python (libusb) | LA streaming / readout, ~1 MB/s |
+| RP2040 USB CMSIS-DAP v2 † | standard DAP | < 1 ms | OpenOCD / pyOCD / probe-rs | SWD debug (zero proxy) |
+| ESP32-P4 USB High-Speed ‡ | BB50 framed (CRC-16) | < 1 ms | desktop · Python (libusb) | Power-measurement stream |
+| HAT UART | `0xAA` + CRC-8, 921600 | 1-5 ms | ESP32 ↔ HAT only | HAT config / status (see `Firmware/HAT_Protocol.md`) |
+
+† Logic Analyzer HAT · ‡ Power Profiler Pro HAT.
 
 Full wire format: [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md).
 
@@ -256,24 +354,32 @@ cargo tauri build     # release bundle
 </details>
 
 <details>
-<summary><strong>Flash firmware (ESP32 + RP2040 HAT)</strong></summary>
+<summary><strong>Flash firmware (mainboard + HATs)</strong></summary>
 
 ```bash
-# ESP32-S3
+# ESP32-S3 mainboard
 cd Firmware/ESP32
 pio run -e esp32s3 -t upload
 pio run -e esp32s3 -t uploadfs   # web UI to SPIFFS
 
-# RP2040 HAT
+# Logic Analyzer HAT (RP2040)
 cd Firmware/RP2040
 git submodule update --init --recursive
 mkdir build && cd build
 cmake -DPICO_BOARD=bugbuster_hat .. && make -j
 # hold BOOTSEL, then: cp bugbuster_hat.uf2 /Volumes/RPI-RP2
+
+# Power Profiler Pro HAT (DAQ) — ESP32-P4 acquisition core
+cd Firmware/DAQ_HAT/ESP32P4
+python -m platformio run -e esp32p4 -t upload --upload-port <COMx>
+# ESP32-C6 display co-processor
+cd ../ESP32C6
+python -m platformio run -e esp32c6 -t upload --upload-port <COMx>
 ```
 
-Current versions: ESP `3.4.0`, HAT `bb-hat-3.3`, Desktop `1.2.0`.
-Release workflow + version-sync checklist:
+Current versions: ESP32-S3 `3.4.0`, Logic Analyzer HAT `bb-hat-3.3`,
+Power Profiler Pro HAT `bb-daq-p4` (see [`version.h`](Firmware/DAQ_HAT/ESP32P4/include/version.h)),
+Desktop `1.2.0`. Release workflow + version-sync checklist:
 [`Docs/ReleaseChecklist.md`](Docs/ReleaseChecklist.md).
 
 </details>
@@ -345,10 +451,14 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 | **Python library** (100+ client methods, dual transport) | [`python/README.md`](python/README.md) |
 | **Desktop app** (19 tabs, screenshots, build & release) | [`DesktopApp/BugBuster/README.md`](DesktopApp/BugBuster/README.md) |
 | **ESP32-S3 firmware** (FreeRTOS tasks, BBP, HTTP) | [`Firmware/ESP32/README.md`](Firmware/ESP32/README.md) |
-| **RP2040 HAT firmware** (debugprobe fork, LA, SWD, HVPAK) | [`Firmware/RP2040/README.md`](Firmware/RP2040/README.md) |
+| **Logic Analyzer HAT firmware** (debugprobe fork, LA, SWD, HVPAK) | [`Firmware/RP2040/README.md`](Firmware/RP2040/README.md) |
+| **Power Profiler Pro HAT firmware** (DAQ — ESP32-P4 acquisition + DSP, USB-HS stream, OTA) | [`Firmware/DAQ_HAT/README.md`](Firmware/DAQ_HAT/README.md) |
+| **Power Profiler Pro architecture** (front-end, autorange, fusion, SMU) | [`Docs/PowerAnalyzer_Architecture.md`](Docs/PowerAnalyzer_Architecture.md) |
+| **DAQ HAT display protocol** (P4 ↔ C6, DDP v2) | [`Firmware/DAQ_HAT/DISPLAY_Protocol.md`](Firmware/DAQ_HAT/DISPLAY_Protocol.md) |
+| **DAQ HAT hardware reference** (pinout, ICs, power tree, I²C map) | [`Docs/FIRMWARE_HARDWARE_REFERENCE.md`](Docs/FIRMWARE_HARDWARE_REFERENCE.md) |
 | **BBP v9 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
-| **HAT UART protocol** (ESP32 ↔ RP2040, 921600 8N1) | [`Firmware/HAT_Protocol.md`](Firmware/HAT_Protocol.md) |
-| **HAT architecture** (RP2040, debugprobe, HVPAK, connectors) | [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) |
+| **HAT UART protocol** (ESP32 ↔ HAT, 921600 8N1) | [`Firmware/HAT_Protocol.md`](Firmware/HAT_Protocol.md) |
+| **Logic Analyzer HAT architecture** (RP2040, debugprobe, HVPAK, connectors) | [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) |
 | **External I2C/SPI bus engine** (routed IOs, Python/MCP usage, BBP/HTTP endpoints) | [`Docs/ExternalBus.md`](Docs/ExternalBus.md) |
 | **Logic Analyzer & vendor-bulk streaming** | [`Docs/LogicAnalyzer.md`](Docs/LogicAnalyzer.md) |
 | **Hardware** (ICs, power topology, ESP32 pinout) | [`Docs/Hardware.md`](Docs/Hardware.md) |
@@ -364,11 +474,15 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 ```
 BugBuster/
 ├── Firmware/
-│   ├── ESP32/                   ESP-IDF firmware (PlatformIO) — main controller
-│   ├── RP2040/                  HAT firmware (Pico SDK + debugprobe fork)
+│   ├── ESP32/                   ESP-IDF firmware (PlatformIO) — mainboard controller
+│   ├── RP2040/                  Logic Analyzer HAT (Pico SDK + debugprobe fork)
+│   ├── DAQ_HAT/                 Power Profiler Pro HAT (ESP32-P4 + ESP32-C6)
+│   │   ├── ESP32P4/             Acquisition + DSP core (ESP-IDF 5.5)
+│   │   ├── ESP32C6/             Display + wireless co-processor
+│   │   └── DISPLAY_Protocol.md  P4 ↔ C6 display protocol (DDP v2)
 │   ├── BugBusterProtocol.md     BBP v9 wire format (USB CDC + HTTP REST)
-│   ├── HAT_Protocol.md          ESP32 ↔ RP2040 UART framing
-│   ├── HAT_Architecture.md      HAT board architecture reference
+│   ├── HAT_Protocol.md          ESP32 ↔ HAT UART framing
+│   ├── HAT_Architecture.md      Logic Analyzer HAT architecture reference
 │   └── FirmwareStructure.md     Cross-firmware reference
 │
 ├── DesktopApp/BugBuster/        Tauri v2 + Leptos 0.7 (19 tabs)
@@ -382,7 +496,7 @@ BugBuster/
 │
 ├── tests/                       pytest — unit, simulator, hardware-in-the-loop
 │
-├── Docs/                        Architecture, Scenarios, Hardware, LA, board profiles
+├── Docs/                        Architecture, Scenarios, Hardware, LA, power analyzer
 ├── PCB Material/                Altium schematics + layout
 └── Scripts/                     One-off test and automation scripts
 ```

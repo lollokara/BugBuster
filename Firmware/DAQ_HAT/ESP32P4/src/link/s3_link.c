@@ -8,6 +8,8 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "config.h"
+#include "daq_settings.h"
+#include "daq_config_registry.h"
 
 static const char *TAG = "s3_link";
 
@@ -49,6 +51,91 @@ static void send_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 static void send_ok(void)    { send_frame(HATP_RSP_OK, NULL, 0); }
 static void send_error(void) { send_frame(HATP_RSP_ERROR, NULL, 0); }
 
+// --- Settings/config command handlers (sub-range 0x70..0x7F) ----------------
+// These read/write the global authoritative settings store. Changes made here
+// are tagged DAQ_SRC_S3 so the notify path does not echo back to the S3.
+
+static void handle_config_get(const uint8_t *payload, uint8_t len)
+{
+    if (len < 2) { send_error(); return; }
+    uint16_t key = (uint16_t)(payload[0] | ((uint16_t)payload[1] << 8));
+    uint8_t tlv[DAQ_TLV_HDR_LEN + DAQ_TLV_MAX_VAL];
+    int n = daq_settings_encode_one(key, tlv, sizeof(tlv));
+    if (n < 0) { send_error(); return; }
+    send_frame(HATP_RSP_CONFIG_VALUE, tlv, (uint8_t)n);
+}
+
+static void handle_config_set(const uint8_t *payload, uint8_t len)
+{
+    if (daq_settings_apply_tlv(payload, len, DAQ_SRC_S3)) send_ok();
+    else send_error();
+}
+
+static void handle_config_get_all(const uint8_t *payload, uint8_t len)
+{
+    uint8_t start = (len >= 1) ? payload[0] : 0;
+    bool incl_secret = (len >= 2) && (payload[1] & HATP_CONFIG_FLAG_SECRET);
+
+    size_t count = 0;
+    const daq_setting_schema_t *tbl = daq_config_table(&count);
+
+    uint8_t resp[HATP_MAX_PAYLOAD];
+    size_t off = 1;                 // resp[0] reserved for next_idx
+    size_t i = start;
+    for (; i < count; i++) {
+        const daq_setting_schema_t *sc = &tbl[i];
+        int n;
+        if ((sc->flags & DAQ_F_SECRET) && !incl_secret) {
+            n = daq_tlv_encode(resp + off, sizeof(resp) - off, sc->key, sc->type, NULL, 0);
+        } else {
+            n = daq_settings_encode_one(sc->key, resp + off, sizeof(resp) - off);
+        }
+        if (n < 0) break;           // does not fit; resume here next call
+        off += (size_t)n;
+    }
+    resp[0] = (i >= count) ? 0xFFu : (uint8_t)i;   // 0xFF == complete
+    send_frame(HATP_RSP_CONFIG_VALUE, resp, (uint8_t)off);
+}
+
+static void handle_config_schema(const uint8_t *payload, uint8_t len)
+{
+    if (len < 2) { send_error(); return; }
+    uint16_t key = (uint16_t)(payload[0] | ((uint16_t)payload[1] << 8));
+    const daq_setting_schema_t *sc = daq_config_schema(key);
+    if (!sc) { send_error(); return; }
+
+    // [key u16][type u8][flags u8][min i32][max i32][step i32][def i32]
+    // [label_len u8][label bytes].
+    uint8_t r[HATP_MAX_PAYLOAD];
+    size_t o = 0;
+    r[o++] = (uint8_t)(sc->key & 0xFF);
+    r[o++] = (uint8_t)(sc->key >> 8);
+    r[o++] = sc->type;
+    r[o++] = sc->flags;
+    const int32_t vals[4] = { sc->min, sc->max, sc->step, sc->def };
+    for (int k = 0; k < 4; k++) {
+        uint32_t u = (uint32_t)vals[k];
+        r[o++] = (uint8_t)(u & 0xFF);
+        r[o++] = (uint8_t)((u >> 8) & 0xFF);
+        r[o++] = (uint8_t)((u >> 16) & 0xFF);
+        r[o++] = (uint8_t)((u >> 24) & 0xFF);
+    }
+    const char *label = sc->label ? sc->label : "";
+    size_t llen = strlen(label);
+    if (llen > (size_t)(HATP_MAX_PAYLOAD - o - 1)) llen = HATP_MAX_PAYLOAD - o - 1;
+    r[o++] = (uint8_t)llen;
+    memcpy(&r[o], label, llen);
+    o += llen;
+    send_frame(HATP_RSP_CONFIG_SCHEMA, r, (uint8_t)o);
+}
+
+static void handle_config_action(const uint8_t *payload, uint8_t len)
+{
+    if (len < 1) { send_error(); return; }
+    if (daq_settings_action(payload[0], DAQ_SRC_S3)) send_ok();
+    else send_error();
+}
+
 // Dispatch a fully-received, CRC-checked frame.
 static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
                          uint8_t len)
@@ -77,12 +164,24 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
             // A real reset is handled by the board; ack first.
             break;
 
+        // Settings/config commands -> global settings store.
+        case HATP_CMD_CONFIG_GET:     handle_config_get(payload, len);     break;
+        case HATP_CMD_CONFIG_SET:     handle_config_set(payload, len);     break;
+        case HATP_CMD_CONFIG_GET_ALL: handle_config_get_all(payload, len); break;
+        case HATP_CMD_CONFIG_SCHEMA:  handle_config_schema(payload, len);  break;
+        case HATP_CMD_CONFIG_ACTION:  handle_config_action(payload, len);  break;
+
         // DAQ-specific commands -> board callback.
         case HATP_CMD_DAQ_START:
         case HATP_CMD_DAQ_STOP:
         case HATP_CMD_DAQ_SET_SOURCE:
         case HATP_CMD_DAQ_GET_STATUS:
-        case HATP_CMD_DAQ_SYNC: {
+        case HATP_CMD_DAQ_SYNC:
+        case HATP_CMD_SET_CH_LEDS:
+        case HATP_CMD_DAQ_CAL_START:
+        case HATP_CMD_DAQ_CAL_ACK:
+        case HATP_CMD_DAQ_CAL_STATUS:
+        case HATP_CMD_DAQ_CAL_ABORT: {
             if (!s->cmd_cb) {
                 send_error();
                 break;
@@ -93,6 +192,8 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
                 send_error();
             } else if (cmd == HATP_CMD_DAQ_GET_STATUS) {
                 send_frame(HATP_RSP_DAQ_STATUS, resp, (uint8_t)n);
+            } else if (cmd == HATP_CMD_DAQ_CAL_STATUS) {
+                send_frame(HATP_RSP_DAQ_CAL_STATUS, resp, (uint8_t)n);
             } else {
                 send_ok();
             }

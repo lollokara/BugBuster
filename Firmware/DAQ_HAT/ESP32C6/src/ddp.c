@@ -2,6 +2,8 @@
 #include "ddp_proto.h"
 #include "config.h"
 #include "display.h"
+#include "c6_config.h"
+#include "npx.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -28,6 +30,10 @@ static bool     s_have = false;
 static ddp_diag_t s_diag;
 static int64_t    s_diag_us = 0;
 static bool       s_diag_have = false;
+
+// Button events relayed from the P4 (buttons moved off the C6). OR-accumulated
+// by the RX task; drained by the render loop via ddp_take_buttons().
+static volatile uint8_t s_btn_events = 0;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -98,6 +104,28 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
         taskEXIT_CRITICAL(&s_mux);
         send_frame(DDP_RSP_OK, NULL, 0);
         break;
+    case DDP_CMD_BUTTON_EVENT:
+        // Front-panel buttons live on the P4 now and are relayed here; OR the
+        // bitmask into the accumulator for the render loop to consume.
+        if (len >= 1) {
+            taskENTER_CRITICAL(&s_mux);
+            s_btn_events |= payload[0];
+            taskEXIT_CRITICAL(&s_mux);
+        }
+        send_frame(DDP_RSP_OK, NULL, 0);
+        break;
+    case DDP_CMD_CONFIG_PUSH:
+        // The P4 pushes settings changed elsewhere (S3/desktop/web). Fold them
+        // into g_settings + apply local side effects so the menu stays in sync.
+        c6_config_apply_push(payload, len);
+        send_frame(DDP_RSP_OK, NULL, 0);
+        break;
+    case DDP_CMD_SET_CH_LEDS:
+        // 4 channel-status colour codes from the S3 (relayed by the P4): drive
+        // the neopixels in pairs (DAQ_NPX_CHANNEL mode).
+        if (len >= 4) npx_set_channel_codes(payload);
+        send_frame(DDP_RSP_OK, NULL, 0);
+        break;
     default: {
         uint8_t e = 0xFF; send_frame(DDP_RSP_ERR, &e, 1);
         break;
@@ -165,6 +193,21 @@ void ddp_init(void)
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     xTaskCreate(rx_task, "ddp_rx", 4096, NULL, 6, NULL);
     ESP_LOGI(TAG, "DDP slave on UART%d @ %d baud", DAQ_UART_PORT, DAQ_UART_BAUD);
+}
+
+uint8_t ddp_take_buttons(void)
+{
+    uint8_t e;
+    taskENTER_CRITICAL(&s_mux);
+    e = s_btn_events;
+    s_btn_events = 0;
+    taskEXIT_CRITICAL(&s_mux);
+    return e;
+}
+
+void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len)
+{
+    send_frame(DDP_CMD_CONFIG_SET, tlvs, len);
 }
 
 bool ddp_get_latest(float *v, float *i, uint8_t *flags, uint32_t *age_ms)

@@ -22,6 +22,7 @@ extern "C" void register_cmds_idac(void);
 extern "C" void register_cmds_pca(void);
 extern "C" void register_cmds_husb(void);
 extern "C" void register_cmds_hat(void);
+extern "C" void register_cmds_daq(void);
 extern "C" void register_cmds_ext_bus(void);
 extern "C" void register_cmds_wifi(void);
 extern "C" void register_cmds_misc(void);
@@ -75,6 +76,7 @@ void cmd_registry_init(void)
     register_cmds_pca();
     register_cmds_husb();
     register_cmds_hat();
+    register_cmds_daq();
     register_cmds_ext_bus();
     register_cmds_wifi();
     register_cmds_misc();

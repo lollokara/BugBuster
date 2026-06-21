@@ -6,10 +6,13 @@
 #include <string.h>
 #include "esp_rom_sys.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "config.h"
 #include "version.h"
 #include "ota.h"
 #include "usb_backend.h"
+#include "buttons_p4.h"
+#include "c6_flasher.h"
 
 static const char *TAG = "daq_board";
 
@@ -124,6 +127,19 @@ esp_err_t daq_board_init(daq_board_t *b)
         }
     }
 
+    // Slow the VOLTAGE channel relative to the current channels. U22/U23 share
+    // bus B and one SYNC line (cannot be phase-staggered); a lower VOLTAGE ODR
+    // de-collides its DRDY from COARSE so the shared bus stays COARSE-dominated.
+    if (b->adaq_ok[ADAQ_ROLE_VOLTAGE]) {
+        float achieved = 0.0f;
+        if (adaq7769_set_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE],
+                                          VOLTAGE_ODR_TARGET_SPS,
+                                          &achieved) == ESP_OK) {
+            ESP_LOGI(TAG, "VOLTAGE ODR set to %.0f SPS (target %.0f)",
+                     (double)achieved, (double)VOLTAGE_ODR_TARGET_SPS);
+        }
+    }
+
     // --- Current-range manager (observes the analog autorange loop) ---
     range_manager_init(&b->range);
 
@@ -143,6 +159,17 @@ esp_err_t daq_board_init(daq_board_t *b)
 
     // --- Source/SMU (LTM8056 programmed via DS4424) ---
     smu_init(&b->smu, &b->idac);
+
+    // SMU factory calibration: bring up NVS, load any stored cal tables, install
+    // them into the SMU, and spawn the calibration worker task.
+    smu_cal_init(&b->cal, b);
+
+    // Default the U25 voltage mux to the V_DUT (S4) node so the VOLTAGE ADAQ
+    // reads the supply output in normal operation as well as during cal.
+    gpio_set_direction(VOLT_MUX_A0_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_direction(VOLT_MUX_A1_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(VOLT_MUX_A0_PIN, VOLT_MUX_ADDR_VDUT & 1);
+    gpio_set_level(VOLT_MUX_A1_PIN, (VOLT_MUX_ADDR_VDUT >> 1) & 1);
 
     // --- Fusion + power DSP (driven by the FINE current ODR) ---
     float current_odr = b->adaq_ok[ADAQ_ROLE_FINE]
@@ -387,6 +414,18 @@ typedef struct __attribute__((packed)) {
     uint8_t enable;
 } s3_set_source_t;
 
+// Active OTA target (set on OTA_BEGIN): HATP_OTA_TARGET_P4 / _C6.
+static uint8_t  s_ota_target = HATP_OTA_TARGET_P4;
+static uint32_t s_c6_ota_size = 0;
+
+// Bring the C6 display link (DDP master) back up after a C6 flash hands UART2
+// back. ddp_master_deinit() released the driver; init+start re-acquire it.
+static void c6_link_restart(daq_board_t *b)
+{
+    ddp_master_init(&b->ddp);
+    ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+}
+
 static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                           uint8_t *resp, void *user)
 {
@@ -414,6 +453,34 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // S3 timestamps its digital markers against this sample index.
             b->sync_epoch = b->usb.sample_seq;
             return 0;
+
+        case HATP_CMD_SET_CH_LEDS:
+            // 4 channel-status colour codes from the S3 -> relay to the C6
+            // neopixels (rendered in pairs, DAQ_NPX_CHANNEL mode).
+            if (len < 4) return -1;
+            if (b->ddp.running) ddp_master_set_ch_leds(&b->ddp, payload);
+            return 0;
+
+        // ---- SMU factory calibration ----
+        case HATP_CMD_DAQ_CAL_START: {
+            if (len < 1) return -1;
+            smu_cal_mode_t mode = (payload[0] == SMU_CAL_MODE_CURRENT)
+                                      ? SMU_CAL_MODE_CURRENT
+                                      : SMU_CAL_MODE_VOLTAGE;
+            return (smu_cal_start(&b->cal, mode) == ESP_OK) ? 0 : -1;
+        }
+        case HATP_CMD_DAQ_CAL_ACK:
+            smu_cal_ack(&b->cal);
+            return 0;
+        case HATP_CMD_DAQ_CAL_ABORT:
+            smu_cal_abort(&b->cal);
+            return 0;
+        case HATP_CMD_DAQ_CAL_STATUS: {
+            smu_cal_status_t st;
+            smu_cal_get_status(&b->cal, &st);
+            memcpy(resp, &st, sizeof(st));
+            return (int)sizeof(st);
+        }
 
         case HATP_CMD_DAQ_GET_STATUS: {
             s3link_daq_status_t st = {
@@ -443,10 +510,23 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         }
 
         // ---- OTA (split/streaming: chunks written straight to flash) ----
+        // OTA_BEGIN carries an optional trailing target byte: P4 self (default)
+        // or C6 (flash the on-module display co-processor over UART2).
         case HATP_CMD_OTA_BEGIN: {
             if (len < sizeof(ota_meta_t)) return -1;
             ota_meta_t meta;
             memcpy(&meta, payload, sizeof(meta));
+            s_ota_target = (len > sizeof(ota_meta_t)) ? payload[sizeof(ota_meta_t)]
+                                                      : HATP_OTA_TARGET_P4;
+            if (s_ota_target == HATP_OTA_TARGET_C6) {
+                ddp_master_deinit(&b->ddp);          // hand UART2 to the flasher
+                if (c6_flasher_begin(meta.image_size) != ESP_OK) {
+                    c6_link_restart(b);
+                    return -1;
+                }
+                s_c6_ota_size = meta.image_size;
+                return 0;
+            }
             return (ota_begin(&meta) == ESP_OK) ? 0 : -1;
         }
         case HATP_CMD_OTA_DATA: {
@@ -455,14 +535,36 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             memcpy(&offset, payload, sizeof(offset));
             const uint8_t *fw = payload + sizeof(s3link_ota_data_hdr_t);
             uint8_t fw_len = (uint8_t)(len - sizeof(s3link_ota_data_hdr_t));
+            if (s_ota_target == HATP_OTA_TARGET_C6) {
+                return (c6_flasher_write(fw, fw_len) == ESP_OK) ? 0 : -1;
+            }
             return (ota_write(offset, fw, fw_len) == ESP_OK) ? 0 : -1;
         }
         case HATP_CMD_OTA_END:
+            if (s_ota_target == HATP_OTA_TARGET_C6) {
+                esp_err_t rc = c6_flasher_finish();
+                c6_link_restart(b);                  // C6 now runs the new image
+                return (rc == ESP_OK) ? 0 : -1;
+            }
             return (ota_end() == ESP_OK) ? 0 : -1;
         case HATP_CMD_OTA_ABORT:
+            if (s_ota_target == HATP_OTA_TARGET_C6) {
+                c6_flasher_abort();
+                c6_link_restart(b);
+                s_ota_target = HATP_OTA_TARGET_P4;
+                return 0;
+            }
             ota_abort();
             return 0;
         case HATP_CMD_OTA_STATUS: {
+            if (s_ota_target == HATP_OTA_TARGET_C6) {
+                uint32_t recv = c6_flasher_received();
+                resp[0] = OTA_RECEIVING;            // C6 path has no PENDING_VERIFY
+                resp[1] = 0;
+                memcpy(resp + 2, &recv, 4);
+                memcpy(resp + 6, &s_c6_ota_size, 4);
+                return 10;
+            }
             ota_status_t st;
             ota_get_status(&st);
             // Compact wire status: state, pending_verify, received, image_size.
@@ -473,8 +575,11 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             return 10;
         }
         case HATP_CMD_OTA_CONFIRM:
+            // The C6 ROM-flash path has no A/B rollback; confirm is a no-op for it.
+            if (s_ota_target == HATP_OTA_TARGET_C6) return 0;
             return (ota_confirm() == ESP_OK) ? 0 : -1;
         case HATP_CMD_OTA_ROLLBACK:
+            if (s_ota_target == HATP_OTA_TARGET_C6) return -1;   // unsupported for C6
             ota_rollback();   // reboots on success
             return -1;        // if it returns, it failed
 
@@ -491,6 +596,50 @@ esp_err_t daq_board_s3_start(daq_board_t *b)
         return err;
     }
     return s3_link_start(&b->s3, /*core=*/0, /*prio=*/10);
+}
+
+// UI task: relay front-panel buttons to the C6 and push the latest measurement
+// for the on-screen readout. Low priority, ~20 ms cadence.
+static void daq_ui_task(void *arg)
+{
+    daq_board_t *b = (daq_board_t *)arg;
+    uint32_t last_meas = 0;
+    for (;;) {
+        uint32_t t = (uint32_t)(esp_timer_get_time() / 1000);
+
+        // The C6 link (UART2) is handed to the flasher during a C6 firmware
+        // update; skip all DDP traffic while it is down.
+        if (b->ddp.running) {
+            uint8_t ev = buttons_p4_poll(t);
+            if (ev) ddp_master_button_event(&b->ddp, ev);
+
+            if ((t - last_meas) >= 100) {
+                last_meas = t;
+                ddp_master_set_measurement(&b->ddp,
+                                           power_dsp_last_v(&b->dsp),
+                                           power_dsp_last_i(&b->dsp),
+                                           DDP_FLAG_V_VALID | DDP_FLAG_I_VALID);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+esp_err_t daq_board_c6_start(daq_board_t *b)
+{
+    esp_err_t err = ddp_master_init(&b->ddp);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "DDP master init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+    if (err != ESP_OK) return err;
+
+    buttons_p4_init();
+
+    BaseType_t ok = xTaskCreatePinnedToCore(daq_ui_task, "daq_ui", 4096, b,
+                                             /*prio=*/5, NULL, /*core=*/0);
+    return (ok == pdPASS) ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 esp_err_t daq_board_start_streaming(daq_board_t *b, size_t ring_capacity)
@@ -524,4 +673,184 @@ esp_err_t daq_board_stop_streaming(daq_board_t *b)
     adaq_stream_deinit(&b->stream_a);
     adaq_stream_deinit(&b->stream_b);
     return ESP_OK;
+}
+
+// -----------------------------------------------------------------------------
+// DRDY-gated fast path: drain the per-bus rings, pair FINE+COARSE, run the
+// fusion -> power DSP -> multires -> spectrum -> USB pipeline at full ODR.
+// -----------------------------------------------------------------------------
+
+// VOLTAGE is the 2nd device in the bus-B capture group {COARSE, VOLTAGE}.
+#define FASTB_COARSE_LOCAL   0
+#define FASTB_VOLTAGE_LOCAL  1
+
+static inline bool fast_sample_good(const adaq_sample_t *s)
+{
+    return (s->flags & (ADAQ_SAMPLE_FLAG_STATUS_ERR |
+                        ADAQ_SAMPLE_FLAG_CRC_ERR)) == 0;
+}
+
+// Fuse one (optional) FINE + (optional) COARSE pair and push it downstream.
+static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
+                      const adaq_sample_t *coarse)
+{
+    fusion_input_t in = {
+        .range        = range_manager_poll(&b->range),
+        .fine_valid   = false,
+        .coarse_valid = false,
+        .fine_v       = 0.0f,
+        .coarse_v     = 0.0f,
+    };
+    if (fine && b->adaq_ok[ADAQ_ROLE_FINE]) {
+        in.fine_v     = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_FINE],
+                                               fine->value);
+        in.fine_valid = fast_sample_good(fine);
+    }
+    if (coarse && b->adaq_ok[ADAQ_ROLE_COARSE]) {
+        in.coarse_v     = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_COARSE],
+                                                 coarse->value);
+        in.coarse_valid = fast_sample_good(coarse);
+    }
+
+    fusion_output_t fo;
+    current_fusion_step(&b->fusion, &in, &fo);
+    power_dsp_push_current(&b->dsp, fo.amps);
+    float p = power_dsp_last_p(&b->dsp);
+    float v = power_dsp_last_v(&b->dsp);
+
+    // Full-rate reduction + spectrum (FFT runs inline only when enabled).
+    multires_push(&b->multires, fo.amps);
+    spectrum_push(&b->spectrum, (b->fft_source == 1) ? p : fo.amps);
+
+    // Decimated raw waveform for USB transport.
+    if (++b->wave_count >= b->wave_decim) {
+        b->wave_count = 0;
+        uint32_t rate = (uint32_t)adaq7769_output_data_rate(
+                            &b->adaq[ADAQ_ROLE_FINE]);
+        usb_stream_push_sample(&b->usb, &fo, v, p, rate, b->wave_decim);
+    }
+}
+
+static void daq_fast_task(void *arg)
+{
+    daq_board_t *b = (daq_board_t *)arg;
+    const bool fine_ok   = b->adaq_ok[ADAQ_ROLE_FINE];
+    const bool coarse_ok = b->adaq_ok[ADAQ_ROLE_COARSE];
+
+    // 10 Hz STATS/ENERGY/FFT/STATUS summary, driven off the emit count so all
+    // USB writes stay on this single task (no cross-task contention on b->usb).
+    float rate0 = fine_ok ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE])
+                          : 256000.0f;
+    uint32_t summary_interval = (uint32_t)(rate0 / 10.0f);
+    if (summary_interval == 0) summary_interval = 1;
+    uint32_t summary_count = 0;
+
+    adaq_sample_t fine = {0}, coarse = {0}, sb = {0};
+    bool have_fine = false, have_coarse = false, have_offset = false;
+    int64_t seq_offset = 0;   // (coarse.seq - fine.seq) learned at first pairing
+
+    while (b->fast_running) {
+        bool progress = false;
+
+        // Refill a FINE sample (bus A).
+        if (fine_ok && !have_fine) {
+            have_fine = (adaq_stream_read(&b->stream_a, &fine, 1) == 1);
+            if (have_fine) progress = true;
+        }
+
+        // Drain bus B: route VOLTAGE straight to the DSP, hold the next COARSE.
+        while (!have_coarse && adaq_stream_read(&b->stream_b, &sb, 1) == 1) {
+            progress = true;
+            if (sb.device_id == FASTB_VOLTAGE_LOCAL) {
+                if (b->adaq_ok[ADAQ_ROLE_VOLTAGE] && fast_sample_good(&sb)) {
+                    float vv = adaq7769_code_to_volts(
+                                   &b->adaq[ADAQ_ROLE_VOLTAGE], sb.value);
+                    power_dsp_set_voltage(&b->dsp, vv * V_DUT_SENSE_SCALE);
+                }
+            } else {
+                coarse = sb;
+                have_coarse = true;
+            }
+        }
+
+        bool emitted = false;
+        if (fine_ok && coarse_ok) {
+            if (have_fine && have_coarse) {
+                if (!have_offset) {
+                    seq_offset  = (int64_t)coarse.seq - (int64_t)fine.seq;
+                    have_offset = true;
+                }
+                int64_t fadj = (int64_t)fine.seq + seq_offset;
+                int64_t cadj = (int64_t)coarse.seq;
+                if (fadj == cadj) {
+                    fast_emit(b, &fine, &coarse);
+                    have_fine = have_coarse = false;
+                    emitted = true;
+                } else if (fadj < cadj) {
+                    have_fine = false;   // FINE fell behind -> drop to resync
+                    b->drop_fine++;
+                } else {
+                    have_coarse = false; // COARSE fell behind -> drop to resync
+                    b->drop_coarse++;
+                }
+                progress = true;
+            }
+        } else if (fine_ok && have_fine) {
+            fast_emit(b, &fine, NULL);   // COARSE absent -> FINE only
+            have_fine = false;
+            emitted = progress = true;
+        } else if (coarse_ok && have_coarse) {
+            fast_emit(b, NULL, &coarse); // FINE absent -> COARSE only
+            have_coarse = false;
+            emitted = progress = true;
+        }
+
+        if (emitted && ++summary_count >= summary_interval) {
+            summary_count = 0;
+            daq_board_stream_summary(b);
+        }
+
+        if (!progress) {
+            vTaskDelay(1);   // rings drained; yield ~1 tick
+        }
+    }
+    vTaskDelete(NULL);
+}
+
+esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
+{
+    if (b->fast_running) return ESP_OK;
+
+    esp_err_t err = daq_board_start_streaming(b, ring_capacity);
+    if (err != ESP_OK) return err;
+
+    if (b->wave_decim == 0) b->wave_decim = WAVE_STREAM_DECIM_DEFAULT;
+    b->wave_count   = 0;
+    b->drop_fine    = 0;
+    b->drop_coarse  = 0;
+    b->fast_running = true;
+
+    // Pin the processor to core 0 (alongside FINE capture). It runs below the
+    // prio-20 capture tasks, so DRDY reads always pre-empt the pipeline.
+    BaseType_t ok = xTaskCreatePinnedToCore(daq_fast_task, "daq_fast", 8192, b,
+                                            /*prio=*/12, &b->fast_task,
+                                            /*core=*/0);
+    if (ok != pdPASS) {
+        b->fast_running = false;
+        daq_board_stop_streaming(b);
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "fast path running (ring=%u, wave_decim=%u)",
+             (unsigned)ring_capacity, b->wave_decim);
+    return ESP_OK;
+}
+
+esp_err_t daq_board_stop_fast(daq_board_t *b)
+{
+    if (b->fast_running) {
+        b->fast_running = false;
+        vTaskDelay(pdMS_TO_TICKS(20));   // let the task observe + self-delete
+        b->fast_task = NULL;
+    }
+    return daq_board_stop_streaming(b);
 }

@@ -5,6 +5,10 @@
 mod bbp;
 mod commands;
 mod connection_manager;
+mod daq_commands;
+mod daq_proto;
+mod daq_store;
+mod daq_usb;
 mod discovery;
 mod http_transport;
 mod la_commands;
@@ -21,6 +25,7 @@ mod transport;
 mod usb_transport;
 
 use connection_manager::ConnectionManager;
+use daq_commands::DaqState;
 use la_commands::LaState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -36,6 +41,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ConnectionManager::new())
         .manage(LaState::new())
+        .manage(DaqState::new())
         .invoke_handler(tauri::generate_handler![
             // Discovery & Connection
             commands::js_log,
@@ -204,6 +210,29 @@ pub fn run() {
             la_commands::la_export_vcd_file,
             la_commands::la_export_json,
             la_commands::la_import_json,
+            // High-speed DAQ (ESP32-P4)
+            daq_commands::daq_check_usb,
+            daq_commands::daq_connect,
+            daq_commands::daq_disconnect,
+            daq_commands::daq_stream_start,
+            daq_commands::daq_stream_stop,
+            daq_commands::daq_stream_status,
+            daq_commands::daq_get_view,
+            daq_commands::daq_get_integral,
+            daq_commands::daq_get_snapshots,
+            daq_commands::daq_set_range_lock,
+            daq_commands::daq_set_source,
+            daq_commands::daq_set_fft,
+            daq_commands::daq_reset_energy,
+            daq_commands::daq_reset_stats,
+            daq_commands::daq_cfg_set,
+            daq_commands::daq_cfg_get,
+            daq_commands::daq_cfg_action,
+            daq_commands::daq_cal_start,
+            daq_commands::daq_cal_ack,
+            daq_commands::daq_cal_abort,
+            daq_commands::daq_cal_status,
+            daq_commands::daq_measure,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

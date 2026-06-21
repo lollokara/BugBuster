@@ -1,34 +1,38 @@
 #pragma once
 
 // ===========================================================================
-// DAQ HAT Display Protocol (DDP)  -  ESP32-P4  ->  ESP32-C6
+// DAQ HAT Display Protocol (DDP)  -  ESP32-P4  <->  ESP32-C6   (SHARED HEADER)
 // ===========================================================================
-// The ESP32-P4 ("application processor") is the bus master. The ESP32-C6
-// ("display co-processor") is the slave: it only renders what it is told and
-// answers PING / GET_INFO. The framing intentionally mirrors the RP2040 HAT
-// protocol (see Firmware/HAT_Protocol.md) so tooling and CRC code can be
-// shared.
+// Single source of truth for the P4<->C6 link, included by BOTH firmwares (the
+// P4 acts as bus master / DDP sender, the C6 as slave / renderer). It lives in
+// Firmware/DAQ_HAT/common so the two chips never drift. The framing mirrors the
+// RP2040 HAT protocol so CRC code is shared.
 //
 //   +------+-----+-----+------------------+------+
 //   | SYNC | LEN | CMD |     PAYLOAD      | CRC  |
-//   | 1B   | 1B  | 1B  |     0..32 B      | 1B   |
+//   | 1B   | 1B  | 1B  |     0..240 B     | 1B   |
 //   +------+-----+-----+------------------+------+
 //
 //   SYNC = 0xAA
-//   LEN  = payload length (0..32)
+//   LEN  = payload length (0..DDP_MAX_PAYLOAD)
 //   CMD  = command id (master->slave) or response id (slave->master)
 //   CRC  = CRC-8 (poly 0x07, init 0x00) over CMD + PAYLOAD
 //   Multi-byte fields are little-endian.
+//
+// v3 (2026-06-21): buttons moved to the P4 and are relayed to the C6
+// (DDP_CMD_BUTTON_EVENT); full bidirectional settings sync via key-addressed
+// TLV (DDP_CMD_CONFIG_PUSH P4->C6, DDP_CMD_CONFIG_SET C6->P4); neopixels and
+// wifi added as TLV settings. Payload cap raised 32 -> 240 for TLV batches.
 // ===========================================================================
 
 #include <stdint.h>
 #include <stddef.h>
 
 #define DDP_SYNC            0xAAu
-#define DDP_MAX_PAYLOAD     32u
-#define DDP_PROTO_VERSION   2u
+#define DDP_MAX_PAYLOAD     240u
+#define DDP_PROTO_VERSION   3u
 
-// --- Commands (master -> slave), 0x01..0x7F --------------------------------
+// --- Commands (master P4 -> slave C6), 0x01..0x5F --------------------------
 #define DDP_CMD_PING            0x01u  // -> RSP_OK
 #define DDP_CMD_GET_INFO        0x02u  // -> RSP_INFO
 #define DDP_CMD_SET_MEASUREMENT 0x10u  // float voltage_v, float current_a, u8 flags
@@ -36,16 +40,26 @@
 #define DDP_CMD_SET_BACKLIGHT   0x12u  // u8 brightness 0..255
 #define DDP_CMD_CLEAR           0x13u  // blank readouts / show "no data"
 #define DDP_CMD_SET_DIAGNOSTICS 0x14u  // ddp_diag_t — full diagnostics snapshot
+#define DDP_CMD_BUTTON_EVENT    0x15u  // u8 events bitmask (DDP_BTN_*) — P4 buttons
+#define DDP_CMD_CONFIG_PUSH     0x16u  // one or more TLVs — P4 pushes current/changed settings
+#define DDP_CMD_SET_CH_LEDS     0x18u  // 4x u8 channel colour codes (front 4-connector, pairs)
 
 // --- Events (C6 -> P4), 0x60..0x7F -----------------------------------------
-// The C6 emits these unsolicited when the user changes settings on-device, so
-// the P4 can apply them. (The half-duplex link is otherwise master-polled.)
-#define DDP_CMD_SET_CONFIG      0x60u  // ddp_config_t — current device settings
+// Emitted unsolicited by the C6 when the user changes settings on-device, so
+// the P4 (the authoritative store) can apply + re-broadcast them.
+#define DDP_CMD_SET_CONFIG      0x60u  // ddp_config_t — legacy fixed snapshot (deprecated)
+#define DDP_CMD_CONFIG_SET      0x61u  // one or more TLVs — preferred key-addressed event
 
 // --- Responses (slave -> master), 0x80..0xFF -------------------------------
 #define DDP_RSP_OK              0x80u
 #define DDP_RSP_INFO            0x82u  // u8 hat_type, u8 fw_major, u8 fw_minor, u8 proto
 #define DDP_RSP_ERR             0xFFu  // u8 error code
+
+// --- Button event bits (must match ESP32C6 buttons.h BTN_EV_*) --------------
+#define DDP_BTN_UP              0x01u
+#define DDP_BTN_DOWN            0x02u
+#define DDP_BTN_OK             0x04u
+#define DDP_BTN_BACK           0x08u
 
 // --- SET_MEASUREMENT flag bits ---------------------------------------------
 #define DDP_FLAG_V_VALID        0x01u  // voltage field holds live data
@@ -83,8 +97,9 @@ typedef struct __attribute__((packed)) {
     uint16_t mb_avcc_mv;       // AVCC rail, mV
 } ddp_diag_t;
 
-// Payload of DDP_CMD_SET_CONFIG (little-endian, 10 bytes). Mirrors the on-
-// device settings the user can edit through the menu.
+// Payload of the legacy DDP_CMD_SET_CONFIG (little-endian, 10 bytes). Retained
+// for backward compatibility; new code uses the TLV config path (CONFIG_SET /
+// CONFIG_PUSH) which covers every setting in daq_config_registry.h.
 typedef struct __attribute__((packed)) {
     uint8_t  autoranging;      // 0/1
     uint8_t  range_idx;        // 0=A, 1=mA, 2=uA

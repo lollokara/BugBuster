@@ -4,6 +4,7 @@
 #include "esp_log.h"
 
 #include "daq_board.h"
+#include "daq_settings_glue.h"
 
 static const char *TAG = "daq_hat_p4";
 
@@ -18,6 +19,11 @@ void app_main(void)
         ESP_LOGE(TAG, "board init failed: %s", esp_err_to_name(err));
     }
 
+    // Bind the authoritative settings store to the subsystems and apply every
+    // persisted/default value (range, SMU, FFT, decimation). Must run after
+    // daq_board_init() (subsystems exist) and before the fast path starts.
+    daq_board_bind_settings(&s_board);
+
     // Bring up the USB-HS measurement stream to the PC.
     if (daq_board_usb_start(&s_board) == ESP_OK) {
         ESP_LOGI(TAG, "USB stream ready");
@@ -29,33 +35,42 @@ void app_main(void)
         ESP_LOGI(TAG, "S3 link ready");
     }
 
-    // Demo processing loop: acquire -> fuse -> DSP -> stream, with a periodic
-    // STATS/ENERGY summary and a console heartbeat.
-    uint32_t tick = 0;
-    while (1) {
-        fusion_output_t fo;
-        if (daq_board_stream_step(&s_board, &fo) == ESP_OK) {
-            // streaming handled inside stream_step
-        }
+    // Bring up the ESP32-C6 display link (DDP master) + front-panel buttons:
+    // relays button presses to the C6 menu and pushes live measurements.
+    if (daq_board_c6_start(&s_board) == ESP_OK) {
+        ESP_LOGI(TAG, "C6 display link ready");
+    }
 
-        if (++tick >= 1000) {
-            tick = 0;
-            daq_board_stream_summary(&s_board);
-            ESP_LOGI(TAG, "I=%.6g A  V=%.4f V  P=%.6g W  E=%.4f mWh  Q=%.4f mAh",
-                     power_dsp_last_i(&s_board.dsp),
-                     power_dsp_last_v(&s_board.dsp),
-                     power_dsp_last_p(&s_board.dsp),
-                     power_dsp_energy_mwh(&s_board.dsp),
-                     power_dsp_charge_mah(&s_board.dsp));
-            for (int i = 0; i < 2; ++i) {
-                if (s_board.temp_ok[i]) {
-                    float c = 0.0f;
-                    if (ad741x_read_celsius(&s_board.temp[i], &c) == ESP_OK) {
-                        ESP_LOGI(TAG, "temp[%d] = %.2f C", i, c);
-                    }
+    // Start the DRDY-gated fast acquisition path: per-bus capture tasks plus the
+    // pairing/fusion/DSP/spectrum/stream processor. The PSRAM ring gives tens of
+    // ms of slack so FFT spikes and USB back-pressure never drop samples.
+    esp_err_t ferr = daq_board_run_fast(&s_board, 8192);
+    if (ferr != ESP_OK) {
+        ESP_LOGE(TAG, "fast path start failed: %s", esp_err_to_name(ferr));
+    } else {
+        ESP_LOGI(TAG, "fast acquisition running");
+    }
+
+    // Low-rate housekeeping only: the fast task owns the acquisition + USB
+    // pipeline. Here we just log a heartbeat and read the board temperatures.
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "I=%.6g A  V=%.4f V  P=%.6g W  E=%.4f mWh  Q=%.4f mAh  "
+                      "drop F/C=%u/%u",
+                 power_dsp_last_i(&s_board.dsp),
+                 power_dsp_last_v(&s_board.dsp),
+                 power_dsp_last_p(&s_board.dsp),
+                 power_dsp_energy_mwh(&s_board.dsp),
+                 power_dsp_charge_mah(&s_board.dsp),
+                 (unsigned)s_board.drop_fine,
+                 (unsigned)s_board.drop_coarse);
+        for (int i = 0; i < 2; ++i) {
+            if (s_board.temp_ok[i]) {
+                float c = 0.0f;
+                if (ad741x_read_celsius(&s_board.temp[i], &c) == ESP_OK) {
+                    ESP_LOGI(TAG, "temp[%d] = %.2f C", i, c);
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

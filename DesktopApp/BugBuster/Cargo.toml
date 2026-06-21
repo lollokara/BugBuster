@@ -27,6 +27,7 @@ web-sys = { version = "0.3", features = [
     "CanvasRenderingContext2d",
     "HtmlSelectElement",
     "HtmlInputElement",
+    "HtmlElement",
     "Window",
     "Document",
     "DomRect",
@@ -37,10 +38,19 @@ web-sys = { version = "0.3", features = [
     "Navigator",
     "Clipboard",
     "KeyboardEvent",
+    "MouseEvent",
+    "WheelEvent",
     "FileList",
     "FileReader",
     "File",
     "Blob",
+    "WebGl2RenderingContext",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlBuffer",
+    "WebGlUniformLocation",
+    "WebGlVertexArrayObject",
+    "WebGlContextAttributes",
 ] }
 console_error_panic_hook = "0.1.7"
 

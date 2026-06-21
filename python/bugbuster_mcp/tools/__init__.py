@@ -21,6 +21,8 @@ def register_all(mcp) -> None:
     from .ota        import register as reg_ota
     from .io_owner   import register as reg_io_owner
     from .hat        import register as reg_hat
+    from .daq        import register as reg_daq
+    from .daq_cal    import register as reg_daq_cal
 
     reg_discovery(mcp)
     reg_io_config(mcp)
@@ -36,3 +38,5 @@ def register_all(mcp) -> None:
     reg_ota(mcp)
     reg_io_owner(mcp)
     reg_hat(mcp)
+    reg_daq(mcp)
+    reg_daq_cal(mcp)

@@ -15,12 +15,17 @@ idf_component_register(
         "settings.c"
         "buttons.c"
         "menu.c"
+        "c6_config.c"
+        "npx.c"
+        "../../common/daq_config_registry.c"
     INCLUDE_DIRS
         "."
         "../include"
+        "../../common"
     REQUIRES
         esp_lcd
         driver
+        esp_driver_rmt
         esp_timer
         nvs_flash
 )

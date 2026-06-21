@@ -22,6 +22,7 @@
 #include "esp_adc/adc_oneshot.h"
 
 #include "ds4424_p4.h"
+#include "smu_cal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,8 @@ typedef struct {
     float               ilimit_set;  // last programmed current limit (A)
     int8_t              v_code;      // DS4424 ch1 code
     int8_t              i_code;      // DS4424 ch0 code
+
+    const smu_cal_t    *cal;         // factory cal tables (NULL = formula only)
 } smu_t;
 
 /**
@@ -62,6 +65,13 @@ esp_err_t smu_read_output_current(smu_t *s, float *amps);
 
 /** @brief Convert a target V_DUT to the DS4424 ch1 code (no I2C write). */
 int8_t smu_voltage_to_code(float volts);
+
+/**
+ * @brief Install the factory calibration tables. When present, smu_set_voltage
+ *        and smu_set_current_limit interpolate the DS4424 code from the cal
+ *        table instead of the theoretical formula.
+ */
+void smu_set_cal(smu_t *s, const smu_cal_t *cal);
 
 #ifdef __cplusplus
 }

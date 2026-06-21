@@ -1,5 +1,8 @@
 pub mod adc;
 pub mod board;
+pub mod daq;
+pub mod daq_cal;
+pub mod daq_gl;
 pub mod diag;
 pub mod din;
 pub mod dout;

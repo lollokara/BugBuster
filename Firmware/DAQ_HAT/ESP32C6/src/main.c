@@ -16,6 +16,7 @@
 #include "settings.h"
 #include "buttons.h"
 #include "menu.h"
+#include "npx.h"
 
 static const char *TAG = "daq_hat";
 
@@ -54,6 +55,7 @@ void app_main(void)
     ddp_init();
     buttons_init();
     menu_init();
+    npx_init();
 
     // Apply persisted brightness now that the backlight PWM is up.
     {
@@ -68,7 +70,7 @@ void app_main(void)
 
     while (1) {
         uint32_t t = now_ms();
-        uint32_t ev = buttons_poll(t);
+        uint32_t ev = buttons_poll(t) | ddp_take_buttons();
 
         if (!in_menu) {
             // --- Main readout screen ---

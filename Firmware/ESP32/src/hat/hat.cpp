@@ -473,9 +473,9 @@ bool hat_init(void)
     if (s_log_mutex == NULL) {
         s_log_mutex = xSemaphoreCreateMutex();
     }
-    if (s_log_ring == nullptr) {
-        s_log_ring = (HatLogRing *)heap_caps_calloc(1, sizeof(HatLogRing), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
+    // The 8 KB RP2040 LA log ring is allocated lazily on the first relayed log
+    // line (see hat_log_ring_ensure) so it costs nothing unless an LA-capable
+    // HAT actually streams logs — e.g. never for the DAQ HAT or with logs off.
 
     // Initialize detect pin as a binary strap:
     // HIGH = no HAT, LOW = HAT present.
@@ -874,6 +874,7 @@ const char* hat_type_name(HatType type)
     switch (type) {
         case HAT_TYPE_NONE:      return "None";
         case HAT_TYPE_SWD_GPIO:  return "HAT";
+        case HAT_TYPE_DAQ_POWER: return "DAQ";
         case HAT_TYPE_UNKNOWN:   return "Unknown";
         default:                 return "Unknown";
     }
@@ -1104,9 +1105,46 @@ bool hat_set_led_state(uint8_t led_index, uint8_t color_code)
     return ok;
 }
 
+// Compute the 4 mainboard IOBLOCK status colour codes (fault/supply/io). Shared
+// by the RP2040 per-LED update and the DAQ HAT channel neopixels.
+static void hat_compute_ch_codes(uint8_t out[4])
+{
+    const DioState *dio = dio_get_all();
+    const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
+    static const uint8_t block_to_mux_dev[4] = { 0, 1, 2, 3 };
+    for (int j = 0; j < 4; j++) {
+        bool fault  = pca && pca->efuse_flt[j];
+        bool supply = pca && pca->efuse_en[j];
+        bool mux_active = (g_deviceState.muxState[block_to_mux_dev[j]] != 0);
+        bool io = (dio[3 * j].mode     != DIO_MODE_DISABLED) ||
+                  (dio[3 * j + 1].mode != DIO_MODE_DISABLED) ||
+                  (dio[3 * j + 2].mode != DIO_MODE_DISABLED) ||
+                  (g_deviceState.channels[j].function != CH_FUNC_HIGH_IMP) ||
+                  mux_active;
+        out[j] = fault ? 1 : (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
+    }
+}
+
 void hat_update_leds(void)
 {
     if (!s_state.connected) return;
+
+    // DAQ HAT: the 8 C6 neopixels show the 4 mainboard channel statuses in pairs
+    // (front 4-connector), using the same colour scheme as the RP2040 HAT LEDs.
+    // Send the 4 colour codes as one batch (only on change).
+    if (s_state.type == HAT_TYPE_DAQ_POWER) {
+        uint8_t codes[4];
+        hat_compute_ch_codes(codes);
+        static uint8_t last_daq[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+        if (memcmp(last_daq, codes, 4) != 0) {
+            uint8_t rsp[4]; uint8_t rsp_len = 0;
+            if (hat_command(HAT_CMD_SET_CH_LEDS, codes, 4, rsp, &rsp_len, 200,
+                            sizeof(rsp)) == HAT_RSP_OK) {
+                memcpy(last_daq, codes, 4);
+            }
+        }
+        return;
+    }
 
     // Color legend (applies to all LEDs below):
     //   0 = Off     — no supply, no IO
@@ -1145,21 +1183,11 @@ void hat_update_leds(void)
     // MUX device per logical IO block (matches MUX_DEVICE_BY_LOGICAL in SignalPath.tsx):
     //   block 0 → ADGS dev 0, block 1 → ADGS dev 1, block 2 → ADGS dev 2, block 3 → ADGS dev 3
     {
-        const DioState *dio = dio_get_all();
-        const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
-        static const uint8_t logical_to_led[4]    = { 4, 5, 6, 7 };
-        static const uint8_t block_to_mux_dev[4]  = { 0, 1, 2, 3 };
+        uint8_t codes[4];
+        hat_compute_ch_codes(codes);
+        static const uint8_t logical_to_led[4] = { 4, 5, 6, 7 };
         for (int j = 0; j < 4; j++) {
-            bool fault  = pca && pca->efuse_flt[j];
-            bool supply = pca && pca->efuse_en[j];
-            bool mux_active = (g_deviceState.muxState[block_to_mux_dev[j]] != 0);
-            bool io     = (dio[3*j].mode     != DIO_MODE_DISABLED) ||
-                          (dio[3*j + 1].mode != DIO_MODE_DISABLED) ||
-                          (dio[3*j + 2].mode != DIO_MODE_DISABLED) ||
-                          (g_deviceState.channels[j].function != CH_FUNC_HIGH_IMP) ||
-                          mux_active;
-            uint8_t c = fault ? 1 : (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
-            hat_set_led_state(logical_to_led[j], c);
+            hat_set_led_state(logical_to_led[j], codes[j]);
         }
     }
 
@@ -1441,6 +1469,17 @@ bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
 {
     if (!s_state.connected) return false;
     return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len) == HAT_RSP_OK;
+}
+
+uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                    uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+{
+    // Raw HAT passthrough that returns the actual response command byte (not a
+    // bool), so callers can handle data responses (e.g. the DAQ HAT's
+    // CONFIG_VALUE 0x93 / CONFIG_SCHEMA 0x94) and not just OK/ERROR. Returns 0
+    // on timeout.
+    if (!s_state.connected) return 0;
+    return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
 }
 
 uint8_t hat_get_last_error(void)
@@ -1758,7 +1797,14 @@ bool hat_la_done_consume(void)
 
 void hat_log_ring_push(const char *line)
 {
-    if (!line || !s_log_mutex || !s_log_ring) return;
+    if (!line || !s_log_mutex) return;
+    // Lazy alloc: only LA-capable HATs (RP2040) ever relay logs; the DAQ HAT
+    // never does, so its 8 KB is never spent. Allocated on first log line.
+    if (!s_log_ring && s_state.type != HAT_TYPE_DAQ_POWER) {
+        s_log_ring = (HatLogRing *)heap_caps_calloc(1, sizeof(HatLogRing),
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!s_log_ring) return;
     if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         char *slot = s_log_ring->lines[s_log_ring->head];
         strncpy(slot, line, HAT_LOG_LINE_MAX - 1);

@@ -191,6 +191,18 @@ pub const CMD_SET_SPI_CLOCK: u8 = 0xE3;
 pub const CMD_WIFI_SCAN: u8 = 0xE4;
 pub const CMD_WIFI_FORGET: u8 = 0x0A;
 
+/// DAQ HAT (ESP32-P4) settings — sub-op multiplexed, forwarded to the P4.
+/// payload[0] selects the op (0=get,1=set,2=get_all,3=schema,4=action).
+pub const CMD_DAQ_CONFIG: u8 = 0xB6;
+
+/// DAQ HAT SMU factory calibration — sub-op multiplexed, forwarded to the P4.
+/// payload[0] selects the op (0=start,1=ack,2=status,3=abort).
+pub const CMD_DAQ_CAL: u8 = 0xB7;
+
+/// DAQ HAT live measurement readback (I/V/P/energy) — forwarded to the P4.
+/// No payload; returns s3link_daq_status_t.
+pub const CMD_DAQ_MEASURE: u8 = 0xBF;
+
 // HAT HVPAK extended
 pub const CMD_HAT_GET_HVPAK_ANALOG: u8 = 0xE5;
 pub const CMD_HAT_SET_HVPAK_ANALOG: u8 = 0xE6;

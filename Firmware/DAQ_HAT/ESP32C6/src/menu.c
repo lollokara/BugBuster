@@ -7,6 +7,8 @@
 #include "display.h"
 #include "ui.h"
 #include "ddp.h"
+#include "c6_config.h"
+#include "daq_config_registry.h"
 
 #include <math.h>
 #include <string.h>
@@ -58,21 +60,12 @@ struct menu {
 // ===========================================================================
 static void v_onoff(char *b, int n, bool on) { snprintf(b, n, "%s", on ? "ON" : "OFF"); }
 
-// Persist locally and push the full settings set to the P4 (C6 -> P4 event).
+// Persist locally and push the changed settings to the P4 (C6 -> P4 event) as a
+// key-addressed TLV batch (covers HAT/DSP/screen/neopixel/wifi scalars).
 static void settings_commit(void)
 {
     settings_save();
-    ddp_config_t cfg = {
-        .autoranging     = g_settings.autoranging ? 1 : 0,
-        .range_idx       = (uint8_t)g_settings.range_idx,
-        .sample_rate_idx = (uint8_t)g_settings.sample_rate_idx,
-        .reserved        = 0,
-        .dut_current_ma  = (uint16_t)g_settings.dut_current_ma,
-        .dut_voltage_mv  = (uint16_t)g_settings.dut_voltage_mv,
-        .brightness_pct  = (uint8_t)g_settings.brightness_pct,
-        .dark_mode       = g_settings.dark_mode ? 1 : 0,
-    };
-    ddp_send_config(&cfg);
+    c6_config_send();
 }
 
 static void val_autorange(char *b, int n) { v_onoff(b, n, g_settings.autoranging); }
@@ -81,11 +74,24 @@ static void ok_autorange(void)            { g_settings.autoranging = !g_settings
 static bool vis_manual(void) { return !g_settings.autoranging; }
 static bool warn_manual(void){ return !g_settings.autoranging; }
 
+static bool vis_fft(void) { return g_settings.fft_enable; }
+static bool vis_wifi(void) { return g_settings.wifi_enable; }
+
 static void val_range(char *b, int n) { snprintf(b, n, "%s", SETTINGS_RANGE[g_settings.range_idx]); }
 static void ok_range(void)            { g_settings.range_idx = (g_settings.range_idx + 1) % 3; settings_commit(); }
 
 static void val_srate(char *b, int n) { snprintf(b, n, "%s", SETTINGS_SAMPLERATE[g_settings.sample_rate_idx]); }
 static void ok_srate(void)            { g_settings.sample_rate_idx = (g_settings.sample_rate_idx + 1) % 5; settings_commit(); }
+
+// FFT (P4 DSP) — labels read from the registry schema (single source of truth).
+static void val_fft(char *b, int n)    { v_onoff(b, n, g_settings.fft_enable); }
+static void ok_fft(void)               { g_settings.fft_enable = !g_settings.fft_enable; settings_commit(); }
+static void val_fftlen(char *b, int n) { snprintf(b, n, "%s", daq_config_schema(DAQ_K_FFT_LENGTH)->options[g_settings.fft_length_idx]); }
+static void ok_fftlen(void)            { g_settings.fft_length_idx = (g_settings.fft_length_idx + 1) % DAQ_FFT_LEN_COUNT; settings_commit(); }
+static void val_fftwin(char *b, int n) { snprintf(b, n, "%s", daq_config_schema(DAQ_K_FFT_WINDOW)->options[g_settings.fft_window_idx]); }
+static void ok_fftwin(void)            { g_settings.fft_window_idx = (g_settings.fft_window_idx + 1) % DAQ_WIN_COUNT; settings_commit(); }
+static void val_fftsrc(char *b, int n) { snprintf(b, n, "%s", daq_config_schema(DAQ_K_FFT_SOURCE)->options[g_settings.fft_source_idx]); }
+static void ok_fftsrc(void)            { g_settings.fft_source_idx = (g_settings.fft_source_idx + 1) % DAQ_FFTSRC_COUNT; settings_commit(); }
 
 static void fmt_current(char *b, int n, int ma)
 {
@@ -117,6 +123,43 @@ static void ok_dark(void)
     theme_set_dark(g_settings.dark_mode);
     ui_refresh_theme();
     settings_commit();
+}
+
+// Neopixels (C6). Color is chosen from a small preset palette (3 buttons make
+// freeform RGB editing impractical; the app can set any 24-bit colour).
+static const uint32_t NPX_PRESETS[] = {
+    0x00FF0000, 0x0000FF00, 0x000000FF, 0x00FFFF00,
+    0x0000FFFF, 0x00FF00FF, 0x00FFFFFF, 0x00FF6000,
+};
+static const char *const NPX_PRESET_NAMES[] = {
+    "Red", "Green", "Blue", "Yellow", "Cyan", "Magenta", "White", "Orange",
+};
+#define NPX_PRESET_COUNT ((int)(sizeof(NPX_PRESETS) / sizeof(NPX_PRESETS[0])))
+
+static int npx_color_idx(void)
+{
+    for (int i = 0; i < NPX_PRESET_COUNT; i++)
+        if (NPX_PRESETS[i] == g_settings.npx_color) return i;
+    return 0;
+}
+static void val_npxmode(char *b, int n) { snprintf(b, n, "%s", daq_config_schema(DAQ_K_NPX_MODE)->options[g_settings.npx_mode]); }
+static void ok_npxmode(void)            { g_settings.npx_mode = (g_settings.npx_mode + 1) % DAQ_NPX_MODE_COUNT; settings_commit(); }
+static void val_npxcol(char *b, int n)  { snprintf(b, n, "%s", NPX_PRESET_NAMES[npx_color_idx()]); }
+static void ok_npxcol(void)             { g_settings.npx_color = NPX_PRESETS[(npx_color_idx() + 1) % NPX_PRESET_COUNT]; settings_commit(); }
+static void val_npxbright(char *b, int n) { fmt_pct(b, n, g_settings.npx_brightness); }
+
+// WiFi (S3 mainboard radio, relayed). Enable/mode are editable on the C6; SSID
+// and password are set from the app (text entry on 3 buttons is impractical).
+static void val_wifi(char *b, int n)     { v_onoff(b, n, g_settings.wifi_enable); }
+static void ok_wifi(void)                { g_settings.wifi_enable = !g_settings.wifi_enable; settings_commit(); }
+static void val_wifimode(char *b, int n) { snprintf(b, n, "%s", daq_config_schema(DAQ_K_WIFI_MODE)->options[g_settings.wifi_mode]); }
+static void ok_wifimode(void)            { g_settings.wifi_mode = (g_settings.wifi_mode + 1) % DAQ_WIFI_MODE_COUNT; settings_commit(); }
+static void val_ssid(char *b, int n)     { snprintf(b, n, "%s", g_settings.ssid[0] ? g_settings.ssid : "(set via app)"); }
+static void val_wifistatus(char *b, int n)
+{
+    const char *s = (g_settings.wifi_status == 2) ? "Connected" :
+                    (g_settings.wifi_status == 1) ? "Connecting" : "Offline";
+    snprintf(b, n, "%s", s);
 }
 
 // ===========================================================================
@@ -195,19 +238,38 @@ static const menu_item_t hat_items[] = {
     { .label = "DUT Voltage",      .type = IT_BARGRAPH, .value = val_voltage,
       .bar_ref = &g_settings.dut_voltage_mv, .bar_min = 1800, .bar_max = 20000,
       .bar_step = 100, .bar_fmt = fmt_voltage },
+    { .label = "FFT",              .type = IT_TOGGLE, .value = val_fft,    .ok = ok_fft },
+    { .label = "FFT Length",       .type = IT_CYCLE,  .value = val_fftlen, .ok = ok_fftlen,
+      .visible = vis_fft },
+    { .label = "FFT Window",       .type = IT_CYCLE,  .value = val_fftwin, .ok = ok_fftwin,
+      .visible = vis_fft },
+    { .label = "FFT Source",       .type = IT_CYCLE,  .value = val_fftsrc, .ok = ok_fftsrc,
+      .visible = vis_fft },
 };
-static const menu_t m_hat = { "HAT Settings", hat_items, 5 };
+static const menu_t m_hat = { "HAT Settings", hat_items, 9 };
 
 static const menu_item_t screen_items[] = {
     { .label = "Brightness", .type = IT_BARGRAPH, .value = val_bright,
       .bar_ref = &g_settings.brightness_pct, .bar_min = 10, .bar_max = 100,
       .bar_step = 10, .bar_fmt = fmt_pct, .bar_change = apply_brightness },
     { .label = "Dark Mode",  .type = IT_TOGGLE, .value = val_dark, .ok = ok_dark },
+    { .label = "LED Mode",       .type = IT_CYCLE, .value = val_npxmode, .ok = ok_npxmode },
+    { .label = "LED Color",      .type = IT_CYCLE, .value = val_npxcol,  .ok = ok_npxcol },
+    { .label = "LED Brightness", .type = IT_BARGRAPH, .value = val_npxbright,
+      .bar_ref = &g_settings.npx_brightness, .bar_min = 0, .bar_max = 100,
+      .bar_step = 5, .bar_fmt = fmt_pct },
 };
-static const menu_t m_screen = { "Screen Settings", screen_items, 2 };
+static const menu_t m_screen = { "Screen Settings", screen_items, 5 };
 
 static const menu_t m_mainboard = { "Main Board Settings", NULL, 0 };
-static const menu_t m_wifi      = { "WiFi Settings", NULL, 0 };
+
+static const menu_item_t wifi_items[] = {
+    { .label = "WiFi",   .type = IT_TOGGLE, .value = val_wifi,     .ok = ok_wifi },
+    { .label = "Mode",   .type = IT_CYCLE,  .value = val_wifimode, .ok = ok_wifimode, .visible = vis_wifi },
+    { .label = "SSID",   .type = IT_INFO,   .value = val_ssid,       .visible = vis_wifi },
+    { .label = "Status", .type = IT_INFO,   .value = val_wifistatus, .visible = vis_wifi },
+};
+static const menu_t m_wifi = { "WiFi Settings", wifi_items, 4 };
 
 static const menu_item_t diag_items[] = {
     { .label = "ADC Temp.",          .type = IT_INFO, .value = d_adc_temp },

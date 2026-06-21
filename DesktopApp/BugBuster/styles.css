@@ -140,6 +140,9 @@
 
 /* ---- Content ---- */
 .tab-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
+/* The HS DAQ tab is a full-bleed instrument view that scales to the viewport. */
+.tab-container:has(> .daq-tab) { padding: 8px 12px; max-width: 100%; margin: 0; }
+.daq-tab { height: calc(100vh - 92px); }
 .tab-content { animation: fadeIn 0.25s; }
 .tab-desc {
     font-size: 11px; color: var(--text-dim);

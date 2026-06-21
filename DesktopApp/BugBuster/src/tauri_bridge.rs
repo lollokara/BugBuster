@@ -1769,3 +1769,321 @@ pub async fn start_desktop_spiffs_ota(
         None => Err("start_desktop_spiffs_ota command failed".to_string()),
     }
 }
+
+// -----------------------------------------------------------------------------
+// High-speed DAQ (ESP32-P4) types & helpers
+// Mirror src-tauri/src/daq_store.rs, daq_commands.rs, daq_proto.rs (camelCase).
+// -----------------------------------------------------------------------------
+
+/// Sample-rate enum index → samples/second (mirror SAMPLE_RATES).
+pub const DAQ_SAMPLE_RATES: [u32; 5] = [10_000, 50_000, 100_000, 250_000, 1_000_000];
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqViewData {
+    pub sample_rate_hz: u32,
+    pub total_samples: u64,
+    pub view_start: u64,
+    pub view_end: u64,
+    pub decimated: bool,
+    pub overflow: bool,
+    pub i_min: Vec<f32>,
+    pub i_max: Vec<f32>,
+    pub v_min: Vec<f32>,
+    pub v_max: Vec<f32>,
+    pub p_min: Vec<f32>,
+    pub p_max: Vec<f32>,
+    pub source: Vec<u8>,
+    pub didt: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqIntegral {
+    pub start: u64,
+    pub end: u64,
+    pub duration_s: f64,
+    pub charge_c: f64,
+    pub charge_mah: f64,
+    pub energy_j: f64,
+    pub energy_mwh: f64,
+    pub avg_i: f64,
+    pub avg_v: f64,
+    pub avg_p: f64,
+    pub min_i: f64,
+    pub max_i: f64,
+    pub projected_mwh_per_hour: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqStreamRuntimeStatus {
+    pub connected: bool,
+    pub mock: bool,
+    pub active: bool,
+    pub total_samples: u64,
+    pub frame_count: u64,
+    pub sample_rate_hz: u32,
+    pub overflow: bool,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct DaqStatBlock {
+    pub min: f32,
+    pub max: f32,
+    pub mean: f32,
+    pub rms: f32,
+    pub std: f32,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct DaqStats {
+    pub i: DaqStatBlock,
+    pub v: DaqStatBlock,
+    pub p: DaqStatBlock,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqEnergy {
+    pub energy_mwh: f64,
+    pub energy_j: f64,
+    pub charge_mah: f64,
+    pub charge_c: f64,
+    pub elapsed_s: f64,
+    pub last_i: f32,
+    pub last_v: f32,
+    pub last_p: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqFft {
+    pub sample_rate: u32,
+    pub source: u8,
+    pub window: u8,
+    pub bins: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqStatus {
+    pub sample_rate: u32,
+    pub overflow_count: u32,
+    pub range: u8,
+    pub streaming: bool,
+    pub range_locked: bool,
+    pub source_enabled: bool,
+    pub vdut_set: f32,
+    pub ilimit_set: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqSnapshots {
+    pub total_samples: u64,
+    pub sample_rate_hz: u32,
+    pub stats: Option<DaqStats>,
+    pub energy: Option<DaqEnergy>,
+    pub fft: Option<DaqFft>,
+    pub status: Option<DaqStatus>,
+}
+
+/// SMU calibration status (mirror daq_commands::DaqCalStatus).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqCalStatus {
+    pub phase: u8,      // 0 idle,1 prompt,2 running,3 success,4 failed
+    pub prompt: u8,     // 0 none,1 disconnect_load,2 short_output
+    pub mode: u8,       // 0 voltage,1 current
+    pub progress: u8,   // 0..100
+    pub point: u8,
+    pub code: i8,
+    pub persist: u8,    // 0 ram,1 saving,2 saved,3 failed
+    pub measured: f32,
+    pub min: f32,
+    pub max: f32,
+    pub flags: u16,
+    pub vcount: u8,
+    pub icount: u8,
+}
+
+/// Live fused measurement (mirror daq_commands::DaqMeasure).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqMeasure {
+    pub range: u8,
+    pub streaming: bool,
+    pub source_enabled: bool,
+    pub current_a: f32,
+    pub voltage_v: f32,
+    pub power_w: f32,
+    pub energy_mwh: f32,
+}
+
+pub async fn daq_check_usb() -> bool {
+    try_invoke("daq_check_usb", JsValue::NULL)
+        .await
+        .and_then(|v| serde_wasm_bindgen::from_value::<bool>(v).ok())
+        .unwrap_or(false)
+}
+
+pub async fn daq_connect(mock: bool) -> bool {
+    #[derive(Serialize)]
+    struct Args {
+        mock: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { mock }).unwrap();
+    try_invoke("daq_connect", args)
+        .await
+        .and_then(|v| serde_wasm_bindgen::from_value::<bool>(v).ok())
+        .unwrap_or(false)
+}
+
+pub async fn daq_disconnect() {
+    try_invoke("daq_disconnect", JsValue::NULL).await;
+}
+
+pub async fn daq_stream_start(sample_rate_idx: u8, decimation: u16) {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        sample_rate_idx: u8,
+        decimation: u16,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        sample_rate_idx,
+        decimation,
+    })
+    .unwrap();
+    try_invoke("daq_stream_start", args).await;
+}
+
+pub async fn daq_stream_stop() {
+    try_invoke("daq_stream_stop", JsValue::NULL).await;
+}
+
+pub async fn daq_stream_status() -> Option<DaqStreamRuntimeStatus> {
+    let result = try_invoke("daq_stream_status", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn daq_get_view(start: u64, end: u64, max_points: u32) -> Option<DaqViewData> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        start: u64,
+        end: u64,
+        max_points: u32,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        start,
+        end,
+        max_points,
+    })
+    .unwrap();
+    let result = try_invoke("daq_get_view", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn daq_get_integral(start: u64, end: u64) -> Option<DaqIntegral> {
+    #[derive(Serialize)]
+    struct Args {
+        start: u64,
+        end: u64,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { start, end }).unwrap();
+    let result = try_invoke("daq_get_integral", args).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn daq_get_snapshots() -> Option<DaqSnapshots> {
+    let result = try_invoke("daq_get_snapshots", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+/// Start an SMU calibration run (mode: 0=voltage, 1=current).
+pub async fn daq_cal_start(mode: u8) {
+    #[derive(Serialize)]
+    struct Args {
+        mode: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { mode }).unwrap();
+    try_invoke("daq_cal_start", args).await;
+}
+
+/// Acknowledge the current calibration prompt so the run proceeds.
+pub async fn daq_cal_ack() {
+    try_invoke("daq_cal_ack", JsValue::NULL).await;
+}
+
+/// Abort the in-progress calibration and restore a safe SMU state.
+pub async fn daq_cal_abort() {
+    try_invoke("daq_cal_abort", JsValue::NULL).await;
+}
+
+/// Poll the live SMU calibration status.
+pub async fn daq_cal_status() -> Option<DaqCalStatus> {
+    let result = try_invoke("daq_cal_status", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+/// Read the DAQ HAT's latest fused measurement (I/V/P/energy).
+pub async fn daq_measure() -> Option<DaqMeasure> {
+    let result = try_invoke("daq_measure", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn daq_set_range_lock(range: u8) {
+    #[derive(Serialize)]
+    struct Args {
+        range: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { range }).unwrap();
+    try_invoke("daq_set_range_lock", args).await;
+}
+
+pub async fn daq_set_source(vdut_mv: u32, ilimit_ma: u32, enable: bool) {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        vdut_mv: u32,
+        ilimit_ma: u32,
+        enable: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        vdut_mv,
+        ilimit_ma,
+        enable,
+    })
+    .unwrap();
+    try_invoke("daq_set_source", args).await;
+}
+
+pub async fn daq_set_fft(nbins: u16, source: u8, window: u8, enabled: bool) {
+    #[derive(Serialize)]
+    struct Args {
+        nbins: u16,
+        source: u8,
+        window: u8,
+        enabled: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        nbins,
+        source,
+        window,
+        enabled,
+    })
+    .unwrap();
+    try_invoke("daq_set_fft", args).await;
+}
+
+pub async fn daq_reset_energy() {
+    try_invoke("daq_reset_energy", JsValue::NULL).await;
+}
+
+pub async fn daq_reset_stats() {
+    try_invoke("daq_reset_stats", JsValue::NULL).await;
+}

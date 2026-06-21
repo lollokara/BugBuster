@@ -94,7 +94,10 @@ esp_err_t smu_set_voltage(smu_t *s, float volts)
     if (!s->idac || !s->idac->present) {
         return ESP_ERR_INVALID_STATE;
     }
-    int8_t code = smu_voltage_to_code(volts);
+    int8_t code;
+    if (!(s->cal && smu_cal_voltage_to_code(s->cal, volts, &code))) {
+        code = smu_voltage_to_code(volts);
+    }
     esp_err_t err = ds4424_set_code(s->idac, DS4424_CH_VDUT, code);
     if (err == ESP_OK) {
         s->v_code   = code;
@@ -108,13 +111,21 @@ esp_err_t smu_set_current_limit(smu_t *s, float amps)
     if (!s->idac || !s->idac->present) {
         return ESP_ERR_INVALID_STATE;
     }
-    int8_t code = current_limit_to_code(amps);
+    int8_t code;
+    if (!(s->cal && smu_cal_current_to_code(s->cal, amps, &code))) {
+        code = current_limit_to_code(amps);
+    }
     esp_err_t err = ds4424_set_code(s->idac, DS4424_CH_ILIMIT, code);
     if (err == ESP_OK) {
         s->i_code     = code;
         s->ilimit_set = clampf(amps, SMU_ILIMIT_MIN_A, SMU_ILIMIT_FULLSCALE_A);
     }
     return err;
+}
+
+void smu_set_cal(smu_t *s, const smu_cal_t *cal)
+{
+    s->cal = cal;
 }
 
 static esp_err_t read_mon(smu_t *s, adc_channel_t ch, float fs_v, float fs_a,

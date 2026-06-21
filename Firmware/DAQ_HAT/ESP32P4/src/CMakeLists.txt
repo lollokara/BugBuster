@@ -13,14 +13,22 @@ idf_component_register(
         "dsp/multires.c"
         "dsp/spectrum.c"
         "smu/smu.c"
+        "cal/smu_cal.c"
         "link/s3_link.c"
+        "link/ddp_master.c"
+        "link/c6_flasher.c"
         "ota/ota.c"
         "stream/usb_stream.c"
         "stream/usb_backend.c"
         "board/daq_board.c"
+        "board/buttons_p4.c"
+        "config/daq_settings.c"
+        "config/daq_settings_glue.c"
+        "../../common/daq_config_registry.c"
     INCLUDE_DIRS
         "."
         "../include"
+        "../../common"
         "adaq7769"
         "ad741x"
         "ds4424"
@@ -28,10 +36,12 @@ idf_component_register(
         "fusion"
         "dsp"
         "smu"
+        "cal"
         "link"
         "ota"
         "stream"
         "board"
+        "config"
     REQUIRES
         driver
         esp_driver_spi
@@ -47,4 +57,5 @@ idf_component_register(
         esp_partition
         bootloader_support
         mbedtls
+        nvs_flash
 )

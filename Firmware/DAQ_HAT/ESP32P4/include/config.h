@@ -32,12 +32,51 @@
 #include "hal/spi_types.h"
 
 // -----------------------------------------------------------------------------
-// Inter-processor UART to the on-module ESP32-C6 (GPIO32 TX, GPIO33 RX).
-// UART0 console is on GPIO37/38 (do not reuse). See FIRMWARE_HARDWARE_REFERENCE.
+// Inter-processor UART to the on-module ESP32-C6 (P4 GPIO32 -> C6 U0RXD,
+// P4 GPIO33 <- C6 U0TXD). This is the C6's UART0, which doubles as the ROM
+// download UART used to flash the C6 from the P4 (see C6 boot/reset control
+// below). UART0 console is on GPIO37/38 (do not reuse).
 // -----------------------------------------------------------------------------
-#define DAQ_UART_TX_PIN   32
-#define DAQ_UART_RX_PIN   33
+#define DAQ_UART_TX_PIN   32      // P4 TX -> C6 U0RXD
+#define DAQ_UART_RX_PIN   33      // P4 RX <- C6 U0TXD
 #define DAQ_UART_BAUD     921600
+#define DAQ_UART_PORT     2       // P4 UART2 (0=console, 1=S3 link)
+
+// -----------------------------------------------------------------------------
+// ESP32-C6 boot/reset control. The P4 owns the C6's strapping/reset so it can
+// drop the C6 into ROM download mode (BOOT held low across a reset pulse) and
+// flash it over DAQ_UART (C6 UART0). Idle: RST released (high), BOOT released
+// (high) = normal boot. Both active-low.
+// -----------------------------------------------------------------------------
+#define C6_BOOT_PIN       ((gpio_num_t)44)   // C6 GPIO9 strap (LOW = download)
+#define C6_RST_PIN        ((gpio_num_t)43)   // C6 EN/CHIP_PU (LOW = reset)
+
+// -----------------------------------------------------------------------------
+// Front-panel navigation buttons (active-low, internal pull-ups), wired to the
+// P4 and relayed to the C6 over DDP (the C6 has no local buttons). OK long-press
+// = Back, mirroring the previous on-C6 button behaviour.
+//   UP   -> IO46
+//   DOWN -> IO45
+//   OK   -> IO26  (hold = Back)
+// -----------------------------------------------------------------------------
+#define BTN_PIN_UP        ((gpio_num_t)46)
+#define BTN_PIN_DOWN      ((gpio_num_t)45)
+#define BTN_PIN_OK        ((gpio_num_t)26)
+
+// -----------------------------------------------------------------------------
+// SDIO link to the ESP32-C6 (RESERVED — not used by firmware yet). Wired on the
+// PCB for a possible future WiFi-offload path (C6 as esp-hosted radio for the
+// P4). Today all P4<->C6 traffic + flashing goes over DAQ_UART, which is ample
+// for the small measurement/diagnostics/config/button payloads. Keep these pins
+// free of other functions so the option stays open.
+//   CMD/CLK/DAT0..3 — confirm against final schematic before enabling.
+// -----------------------------------------------------------------------------
+// #define C6_SDIO_CMD_PIN   ...
+// #define C6_SDIO_CLK_PIN   ...
+// #define C6_SDIO_DAT0_PIN  ...
+// #define C6_SDIO_DAT1_PIN  ...
+// #define C6_SDIO_DAT2_PIN  ...
+// #define C6_SDIO_DAT3_PIN  ...
 
 // -----------------------------------------------------------------------------
 // Link to the ESP32-S3 mainboard (HAT control plane).
@@ -182,11 +221,32 @@
 // Voltage input mux U25 (ADG5204): A0=GPIO48, A1=GPIO47, EN shared (GPIO49).
 #define VOLT_MUX_A0_PIN           ((gpio_num_t)48)
 #define VOLT_MUX_A1_PIN           ((gpio_num_t)47)
+// U25 channel addresses (2-bit, A1:A0). S4 carries V_DUT taken directly off the
+// LTM8056 output and is the node read during SMU voltage calibration.
+// TODO: confirm S4 = 0b11 against the ADG5204 channel numbering on the bench.
+#define VOLT_MUX_ADDR_VDUT        0x3    // S4 = V_DUT direct off DCDC output
 
 // Which ADAQ index plays each measurement role (see daq_board topology).
 #define ADAQ_ROLE_FINE            0
 #define ADAQ_ROLE_COARSE          1
 #define ADAQ_ROLE_VOLTAGE         2
+
+// V_DUT sense-path scaling. The VOLTAGE ADAQ reads V_DUT via mux U25 on IN3_AAF;
+// adaq7769_code_to_volts() already removes the AAF attenuation, so this is the
+// residual external divider ratio (1.0 if V_DUT connects straight to the AAF
+// input). TODO: set to the measured ratio during factory calibration.
+#define V_DUT_SENSE_SCALE         1.0f
+
+// Target ODR for the slow VOLTAGE channel. U22 (COARSE) and U23 (VOLTAGE) share
+// SPI bus B and one common SYNC line, so they cannot be phase-staggered. Running
+// VOLTAGE well below the current ODR de-collides their DRDY: the shared bus is
+// dominated by COARSE reads with only an occasional VOLTAGE read, so COARSE never
+// misses its conversion deadline.
+#define VOLTAGE_ODR_TARGET_SPS    50000.0f
+
+// Default USB waveform-stream decimation. Full-rate samples still feed the
+// DSP/energy/stats/FFT; only the raw waveform batch is decimated for transport.
+#define WAVE_STREAM_DECIM_DEFAULT 1
 
 // -----------------------------------------------------------------------------
 // Power-rail enable / monitor GPIOs (all HV rails OFF at boot via pull-downs).
@@ -234,5 +294,33 @@
 #define SMU_IINMON_FS_A           2.5f
 #define SMU_IOUTMON_FS_V          1.2f       // 1.2 V  == 2.636 A output
 #define SMU_IOUTMON_FS_A          2.636f
+
+// -----------------------------------------------------------------------------
+// SMU factory calibration (smu_cal.c) — persisted to ESP32-P4 NVS.
+//
+// Voltage cal sweeps DS4424 ch1 with the load disconnected, reading V_DUT off
+// the U25 S4 node (VOLTAGE ADAQ). Current-limit cal sweeps DS4424 ch0 into a
+// shorted output with the autorange forced to the 50 mohm (LO) shunt, reading
+// the COARSE ADAQ as the primary reference and IOUTMON as a cross-check.
+// -----------------------------------------------------------------------------
+#define SMU_CAL_NVS_NS            "smu_cal"  // NVS namespace
+#define SMU_CAL_NVS_KEY           "blob"     // NVS blob key
+#define SMU_CAL_MAGIC             0x534D5543u // "SMUC"
+#define SMU_CAL_VERSION           1u
+#define SMU_CAL_MAX_POINTS        128        // per channel (DS4424 code span)
+
+// Stability gate for one calibration point (mirrors RP2040 HAT cal).
+#define SMU_CAL_SAMPLES_PER_PT    64         // raw reads per measurement
+#define SMU_CAL_MEDIAN_WINDOW     16         // central samples kept after sort
+#define SMU_CAL_SETTLE_WINDOW     5          // consecutive stable measurements
+#define SMU_CAL_SETTLE_ITERS_MAX  100        // ~1.5 s/point timeout
+#define SMU_CAL_SETTLE_MS         15         // delay between measurements (ms)
+#define SMU_CAL_V_NOISE_V         0.030f     // V_DUT settle threshold (V)
+#define SMU_CAL_I_NOISE_A         0.005f     // current settle threshold (A)
+
+// Current-limit cal sequence parameters.
+#define SMU_CAL_ICAL_VSET_V       1.8f       // V_DUT set during current cal
+#define SMU_CAL_ICAL_ENABLE_MS    100        // wait after MIN code before RUN on
+#define SMU_CAL_ICAL_TARGET_A     2.5f       // sweep until output reaches this
 
 

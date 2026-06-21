@@ -6,11 +6,32 @@ use wasm_bindgen::prelude::*;
 use crate::components::connection::ConnectionPanel;
 use crate::components::io_blocked_banner::IoBlockedBanner;
 use crate::tabs::{
-    adc::*, board::*, diag::*, din::*, dout::*, faults::*, gpio::*, hat::*, hv_io::*, idac::*,
-    iin::*, ioexp::*, la::*, overview::*, scope::*, signal_path::*, uart::*, usbpd::*, vdac::*,
-    voltages::*, wavegen::*,
+    adc::*, board::*, daq::*, diag::*, din::*, dout::*, faults::*, gpio::*, hat::*, hv_io::*,
+    idac::*, iin::*, ioexp::*, la::*, overview::*, scope::*, signal_path::*, uart::*, usbpd::*,
+    vdac::*, voltages::*, wavegen::*,
 };
 use crate::tauri_bridge::*;
+
+/// Which expansion HAT is currently attached. Drives tab visibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HatKind {
+    #[default]
+    None,
+    La,
+    Daq,
+}
+
+/// Whether a tab should be shown for the connected device. Overview / System /
+/// mainboard tabs are always available; LA and DAQ are gated on their HAT, and
+/// the HAT tab only appears when some HAT is attached.
+fn tab_visible(tab_id: &str, kind: HatKind) -> bool {
+    match tab_id {
+        "la" => kind == HatKind::La,
+        "daq" => kind == HatKind::Daq,
+        "hat" => kind != HatKind::None,
+        _ => true,
+    }
+}
 
 /// Map a tab id to its IO slot footprint. Returns an empty slice if the tab does not claim IOs.
 fn tab_slots(tab_id: &str) -> &'static [u8] {
@@ -67,6 +88,7 @@ const CATEGORIES: &[(&str, &str, &[(&str, &str)])] = &[
         &[
             ("scope", "Scope"),
             ("la", "Logic Analyzer"),
+            ("daq", "HS DAQ"),
             ("wavegen", "WaveGen"),
             ("sigpath", "Signal Path"),
         ],
@@ -191,6 +213,40 @@ pub fn App() -> impl IntoView {
     let (scan_completed, set_scan_completed) = signal(false);
     let (device_state, set_device_state) = signal(DeviceState::default());
     let (active_tab, set_active_tab) = signal("overview".to_string());
+    // Which HAT is attached — drives which instrument tabs are visible.
+    let (hat_kind, set_hat_kind) = signal(HatKind::None);
+
+    // Detect the attached HAT on connect so tabs gate themselves.
+    Effect::new(move |_| {
+        let mode = conn_mode.get();
+        if mode == "Disconnected" {
+            set_hat_kind.set(HatKind::None);
+            return;
+        }
+        // The Demo / Mock device pins itself to the DAQ HAT.
+        if mode == "Mock" {
+            set_hat_kind.set(HatKind::Daq);
+            return;
+        }
+        spawn_local(async move {
+            if daq_check_usb().await {
+                set_hat_kind.set(HatKind::Daq);
+            } else if hat_get_caps().await.is_some() {
+                set_hat_kind.set(HatKind::La);
+            } else {
+                set_hat_kind.set(HatKind::None);
+            }
+        });
+    });
+
+    // If the active tab becomes hidden (e.g. HAT swapped), fall back to Overview.
+    Effect::new(move |_| {
+        let kind = hat_kind.get();
+        let tab = active_tab.get();
+        if !tab_visible(&tab, kind) {
+            set_active_tab.set("overview".to_string());
+        }
+    });
     let active_category = move || {
         let tab = active_tab.get();
         for (cat_id, _, tabs) in CATEGORIES {
@@ -337,6 +393,7 @@ pub fn App() -> impl IntoView {
     let disconnect = move |_: ev::MouseEvent| {
         spawn_local(async move {
             try_invoke("disconnect_device", JsValue::NULL).await;
+            daq_disconnect().await;
         });
         set_conn_mode.set("Disconnected".to_string());
         set_conn_addr.set(String::new());
@@ -628,6 +685,16 @@ pub fn App() -> impl IntoView {
                     scanning=scanning.into()
                     scan_completed=scan_completed.into()
                     on_scan=Callback::new(scan)
+                    on_mock=Callback::new(move |_| {
+                        set_conn_mode.set("Mock".to_string());
+                        set_conn_addr.set("Demo (synthetic DAQ)".to_string());
+                        set_hat_kind.set(HatKind::Daq);
+                        set_active_tab.set("daq".to_string());
+                        spawn_local(async move {
+                            daq_connect(true).await;
+                            daq_stream_start(3, 1).await;
+                        });
+                    })
                 />
             </Show>
 
@@ -635,37 +702,48 @@ pub fn App() -> impl IntoView {
             <Show when=move || conn_mode.get() != "Disconnected">
                 // Category bar
                 <nav class="category-bar">
-                    {CATEGORIES.iter().map(|(cat_id, label, tabs)| {
-                        let cat_id_str = cat_id.to_string();
-                        let first_tab_id = tabs[0].0.to_string();
-                        view! {
-                            <button class="category-item"
-                                class:active=move || active_category() == cat_id_str
-                                on:click=move |_| set_active_tab.set(first_tab_id.clone())
-                            >{*label}</button>
-                        }
-                    }).collect::<Vec<_>>()}
+                    {move || {
+                        let kind = hat_kind.get();
+                        CATEGORIES.iter()
+                            .filter(|(_, _, tabs)| tabs.iter().any(|(t, _)| tab_visible(t, kind)))
+                            .map(|(cat_id, label, tabs)| {
+                                let cat_id_str = cat_id.to_string();
+                                let first_tab_id = tabs.iter()
+                                    .find(|(t, _)| tab_visible(t, kind))
+                                    .map(|(t, _)| t.to_string())
+                                    .unwrap_or_default();
+                                view! {
+                                    <button class="category-item"
+                                        class:active=move || active_category() == cat_id_str
+                                        on:click=move |_| set_active_tab.set(first_tab_id.clone())
+                                    >{*label}</button>
+                                }
+                            }).collect::<Vec<_>>()
+                    }}
                 </nav>
 
                 // Tab bar
                 <nav class="tab-bar">
                     {move || {
                         let cat = active_category();
+                        let kind = hat_kind.get();
                         let tabs = CATEGORIES.iter()
                             .find(|(cat_id, _, _)| **cat_id == cat)
                             .map(|(_, _, t)| *t)
                             .unwrap_or(&[]);
 
-                        tabs.iter().map(|(id, label)| {
-                            let id_str = id.to_string();
-                            let id_click = id_str.clone();
-                            view! {
-                                <button class="tab-item"
-                                    class:active=move || active_tab.get() == id_str
-                                    on:click=move |_| set_active_tab.set(id_click.clone())
-                                >{*label}</button>
-                            }
-                        }).collect::<Vec<_>>()
+                        tabs.iter()
+                            .filter(|(id, _)| tab_visible(id, kind))
+                            .map(|(id, label)| {
+                                let id_str = id.to_string();
+                                let id_click = id_str.clone();
+                                view! {
+                                    <button class="tab-item"
+                                        class:active=move || active_tab.get() == id_str
+                                        on:click=move |_| set_active_tab.set(id_click.clone())
+                                    >{*label}</button>
+                                }
+                            }).collect::<Vec<_>>()
                     }}
                 </nav>
 
@@ -709,6 +787,7 @@ pub fn App() -> impl IntoView {
                         "ioexp" => view! { <IoExpTab state=device_state /> }.into_any(),
                         "hat" => view! { <HatTab state=device_state /> }.into_any(),
                         "la" => view! { <LaTab state=device_state /> }.into_any(),
+                        "daq" => view! { <DaqTab state=device_state /> }.into_any(),
                         _ => view! { <div>"Unknown tab"</div> }.into_any(),
                     }}
                 </div>

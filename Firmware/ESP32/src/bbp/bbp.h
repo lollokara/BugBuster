@@ -247,6 +247,29 @@ extern "C" {
 // SPI Clock
 #define BBP_CMD_SET_SPI_CLOCK    0xE3  // Set SPI clock speed (Hz, u32)
 
+// DAQ HAT (ESP32-P4) settings — forwarded to the P4 over the HAT UART bridge.
+// One multiplexed opcode (opcode space is full); payload[0] selects the sub-op,
+// which maps to the P4 HAT CONFIG command 0x70 + sub-op. See cmd_daq.cpp.
+#define BBP_CMD_DAQ_CONFIG       0xB6  // sub-op multiplexed (see BBP_DAQ_CFG_*)
+#define BBP_DAQ_CFG_GET          0x00  // payload: [op][key u16]      -> TLV value
+#define BBP_DAQ_CFG_SET          0x01  // payload: [op][TLV]          -> OK
+#define BBP_DAQ_CFG_GET_ALL      0x02  // payload: [op][start][flags] -> [next_idx][TLVs]
+#define BBP_DAQ_CFG_SCHEMA       0x03  // payload: [op][key u16]      -> schema blob
+#define BBP_DAQ_CFG_ACTION       0x04  // payload: [op][action_id u8] -> OK
+
+// DAQ HAT SMU factory calibration — forwarded to the P4 over the HAT UART.
+// One multiplexed opcode; payload[0] selects the sub-op, which maps to the P4
+// HAT calibration command 0x56 + sub-op. See cmd_daq.cpp.
+#define BBP_CMD_DAQ_CAL          0xB7  // sub-op multiplexed (see BBP_DAQ_CAL_*)
+#define BBP_DAQ_CAL_START        0x00  // payload: [op][mode u8]  -> OK
+#define BBP_DAQ_CAL_ACK          0x01  // payload: [op]           -> OK
+#define BBP_DAQ_CAL_STATUS       0x02  // payload: [op]           -> smu_cal_status_t
+#define BBP_DAQ_CAL_ABORT        0x03  // payload: [op]           -> OK
+
+// DAQ HAT live measurement readback — forwarded to the P4 HAT GET_STATUS (0x53).
+// Returns s3link_daq_status_t {range,streaming,source_enabled,_pad, I,V,P,Wh}.
+#define BBP_CMD_DAQ_MEASURE      0xBF  // no payload -> s3link_daq_status_t
+
 // System
 #define BBP_CMD_DEVICE_RESET    0x70
 #define BBP_CMD_REG_READ        0x71

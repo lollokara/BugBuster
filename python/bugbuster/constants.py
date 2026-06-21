@@ -458,6 +458,13 @@ class CmdId(IntEnum):
     WIFI_SET_AP_PASSWORD  = 0xEF  # Set SoftAP password (persist NVS, apply live)
     OTA                   = 0x77  # USB OTA info/upload/rollback control
 
+    # DAQ HAT (ESP32-P4) settings — sub-op multiplexed, forwarded to the P4.
+    DAQ_CONFIG            = 0xB6
+    # DAQ HAT SMU factory calibration — sub-op multiplexed, forwarded to the P4.
+    DAQ_CAL               = 0xB7
+    # DAQ HAT live measurement readback (I/V/P/energy) — forwarded to the P4.
+    DAQ_MEASURE           = 0xBF
+
     # Quick Setup slots (NVS-backed snapshot store, 4 slots: 0..3)
     QS_LIST          = 0xF0  # list slots (returns occupied bitmap + per-slot summary hash)
     QS_GET           = 0xF1  # read slot JSON

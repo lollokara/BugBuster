@@ -3,3 +3,6 @@ dependencies:
   idf: ">=5.3"
   espressif/esp_tinyusb: "^2.2"
   espressif/esp-dsp: "^1.5"
+  # Host-side ESP ROM bootloader flasher: lets the P4 flash the on-module C6
+  # over UART2 (BOOT/RST controlled), used by link/c6_flasher.c.
+  espressif/esp-serial-flasher: "^2.0"

@@ -27,7 +27,9 @@
 #include "spectrum.h"
 #include "usb_stream.h"
 #include "smu.h"
+#include "smu_cal.h"
 #include "s3_link.h"
+#include "ddp_master.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +40,7 @@ typedef struct {
     ad741x_t                temp[2];
     ds4424_t                idac;
     smu_t                   smu;
+    smu_cal_t               cal;
     range_manager_t         range;
     current_fusion_t        fusion;
     power_dsp_t             dsp;
@@ -45,6 +48,7 @@ typedef struct {
     spectrum_t              spectrum;
     usb_stream_t            usb;
     s3_link_t               s3;
+    ddp_master_t            ddp;          // C6 display link (DDP master)
     i2c_master_bus_handle_t i2c_bus;
 
     adaq_stream_t           stream_a;   // ADAQ #0
@@ -56,6 +60,15 @@ typedef struct {
     bool                    usb_ok;
     uint8_t                 fft_source;   // 0 = current, 1 = power
     uint32_t                sync_epoch;   // sample index at the last S3 sync
+
+    // Fast path (DRDY-gated streaming): a processor task drains the per-bus
+    // capture rings, pairs FINE+COARSE by sequence, and runs the full pipeline.
+    TaskHandle_t            fast_task;
+    volatile bool           fast_running;
+    uint8_t                 wave_decim;   // USB waveform decimation (>=1)
+    uint8_t                 wave_count;   // running decimation counter
+    uint32_t                drop_fine;    // paired-stream resync drops (diag)
+    uint32_t                drop_coarse;
 } daq_board_t;
 
 /**
@@ -121,9 +134,34 @@ esp_err_t daq_board_set_source(daq_board_t *b, float vdut, float ilimit,
  */
 esp_err_t daq_board_s3_start(daq_board_t *b);
 
+/**
+ * @brief Start the ESP32-C6 display link (DDP master) + front-panel buttons.
+ *
+ * Brings up the DDP master transport (UART2) and its RX service task, the P4
+ * button driver, and a UI task that relays button presses to the C6 and pushes
+ * the latest measurement for the on-screen readout.
+ */
+esp_err_t daq_board_c6_start(daq_board_t *b);
+
 /** @brief Start streaming capture on both bus groups. */
 esp_err_t daq_board_start_streaming(daq_board_t *b, size_t ring_capacity);
 
 /** @brief Stop streaming on both bus groups. */
 esp_err_t daq_board_stop_streaming(daq_board_t *b);
+
+/**
+ * @brief Start the DRDY-gated fast acquisition path.
+ *
+ * Brings up the per-bus capture tasks (start_streaming) and a high-priority
+ * processor task that drains the PSRAM rings, pairs the SYNC-aligned FINE and
+ * COARSE samples by sequence, fuses the seamless current, runs the power DSP /
+ * multi-resolution / spectrum stages, decimates the USB waveform, and emits a
+ * periodic STATS/ENERGY/FFT/STATUS summary. Replaces the polled demo loop.
+ *
+ * @param ring_capacity  per-bus PSRAM ring depth (records, rounded to pow2).
+ */
+esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity);
+
+/** @brief Stop the fast acquisition path (processor task + capture tasks). */
+esp_err_t daq_board_stop_fast(daq_board_t *b);
 
