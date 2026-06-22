@@ -320,6 +320,12 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
                 daq_board_set_source(b, c->vdut, c->ilimit, c->enable != 0);
             }
             break;
+        case USB_CMD_ARM:
+            if (len >= sizeof(usb_cmd_arm_t)) {
+                const usb_cmd_arm_t *c = (const usb_cmd_arm_t *)payload;
+                usb_stream_set_arm(&b->usb, c->armed != 0, c->pre_samples);
+            }
+            break;
         default:
             // SET_RATE / FFT_CONFIG / SET_SOURCE handled in later phases.
             break;
@@ -453,6 +459,29 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // S3 timestamps its digital markers against this sample index.
             b->sync_epoch = b->usb.sample_seq;
             return 0;
+
+        case HATP_CMD_DAQ_ARM:
+            // Arm/disarm the trigger latch + record the pre-roll depth. The S3
+            // evaluates the OR/AND IO logic; the P4 only annotates semantics
+            // (the PC keeps the actual pre-trigger window from the live stream).
+            if (len >= sizeof(s3link_daq_arm_t)) {
+                const s3link_daq_arm_t *a = (const s3link_daq_arm_t *)payload;
+                usb_stream_set_arm(&b->usb, a->armed != 0, a->pre_samples);
+                return 0;
+            }
+            return -1;
+
+        case HATP_CMD_DAQ_MARK:
+            // A digital event fired on an S3 IO. Emit a MARKER aligned to the
+            // live sample index (sub-sample HW timestamping refines this via the
+            // shared IRQ line; here we use the UART-arrival sample index).
+            if (len >= sizeof(s3link_daq_mark_t)) {
+                const s3link_daq_mark_t *m = (const s3link_daq_mark_t *)payload;
+                usb_stream_send_marker(&b->usb, m->channel, m->edge, m->kind,
+                                       0xFFFFFFFFu);
+                return 0;
+            }
+            return -1;
 
         case HATP_CMD_SET_CH_LEDS:
             // 4 channel-status colour codes from the S3 -> relay to the C6

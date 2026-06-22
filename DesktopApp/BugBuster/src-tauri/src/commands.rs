@@ -1644,7 +1644,6 @@ pub struct HatCaps {
     pub la_route_count: u8,
     pub fw_major: u8,
     pub fw_minor: u8,
-    pub hvpak_present: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1663,7 +1662,7 @@ pub async fn hat_get_caps(mgr: State<'_, ConnectionManager>) -> CmdResult<HatCap
         .send_command(bbp::CMD_HAT_GET_CAPS, &[])
         .await
         .map_err(map_err)?;
-    if rsp.len() < 12 {
+    if rsp.len() < 11 {
         return Err("Invalid caps response from HAT".into());
     }
     let mut r = bbp::PayloadReader::new(&rsp);
@@ -1675,7 +1674,6 @@ pub async fn hat_get_caps(mgr: State<'_, ConnectionManager>) -> CmdResult<HatCap
     let la_route_count = r.get_u8().unwrap_or(0);
     let fw_major = r.get_u8().unwrap_or(0);
     let fw_minor = r.get_u8().unwrap_or(0);
-    let hvpak_present = r.get_bool().unwrap_or(false);
     Ok(HatCaps {
         hw_revision,
         flags,
@@ -1685,7 +1683,6 @@ pub async fn hat_get_caps(mgr: State<'_, ConnectionManager>) -> CmdResult<HatCap
         la_route_count,
         fw_major,
         fw_minor,
-        hvpak_present,
     })
 }
 
@@ -3015,13 +3012,6 @@ pub fn parse_hat_status(data: &[u8]) -> HatStatus {
         c.fault = r.get_bool().unwrap_or(false);
     }
     let io_voltage_mv = r.get_u16().unwrap_or(0);
-    // Newer firmware inserts 3 bytes of HVPAK metadata here
-    // (part, ready, last_error) before the SWD fields.
-    if r.remaining() >= 3 {
-        let _ = r.get_u8();
-        let _ = r.get_u8();
-        let _ = r.get_u8();
-    }
     let dap_connected = r.get_bool().unwrap_or(false);
     let target_detected = r.get_bool().unwrap_or(false);
     let target_dpidr = r.get_u32().unwrap_or(0);
@@ -5268,9 +5258,6 @@ mod tests {
             w.put_f32(0.0);
             w.put_bool(false);
             w.put_u16(3300); // io_voltage_mv
-            w.put_u8(2); // hvpak_part
-            w.put_bool(true); // hvpak_ready
-            w.put_u8(0); // hvpak_last_error
             w.put_bool(true); // dap_connected
             w.put_bool(false); // target_detected
             w.put_u32(0); // target_dpidr

@@ -210,9 +210,6 @@ extern "C" bool bugbuster_mp_hat_status(bugbuster_mp_hat_status_t *out)
     out->fw_minor = st->fw_version_minor;
     out->config_confirmed = st->config_confirmed;
     out->io_voltage_mv = st->io_voltage_mv;
-    out->hvpak_part = st->hvpak_part;
-    out->hvpak_ready = st->hvpak_ready;
-    out->hvpak_last_error = st->hvpak_last_error;
     out->caps_valid = st->caps_valid;
     out->la_route = st->la_route;
     out->dap_connected = st->dap_connected;
@@ -239,7 +236,6 @@ extern "C" bool bugbuster_mp_hat_caps(bugbuster_mp_hat_caps_t *out)
     out->la_routes = caps.la_routes;
     out->fw_major = caps.fw_major;
     out->fw_minor = caps.fw_minor;
-    out->hvpak_present = caps.hvpak_present;
     return true;
 }
 

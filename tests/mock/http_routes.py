@@ -467,7 +467,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
 
     # HAT v2 capabilities
     if key == ("GET", "/hat/v2/caps"):
-        flags = 0x37  # RAILS|LEDS|LA_LOW_SPEED|SHIFTED_IO|HVPAK_UNSUPPORTED
+        flags = 0x17  # RAILS|LEDS|LA_LOW_SPEED|SHIFTED_IO
         return {
             "hwRevision": 2,
             "flags": flags,
@@ -477,7 +477,6 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             "laRouteCount": 2,
             "fwMajor": 2,
             "fwMinor": 1,
-            "hvpakPresent": False,
         }
 
     # HAT v2 rails status

@@ -5,6 +5,7 @@
 #include "usb_stream.h"
 #include <string.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char *TAG = "usb_stream";
 
@@ -206,6 +207,32 @@ esp_err_t usb_stream_send_energy(usb_stream_t *s, const power_dsp_t *d)
 esp_err_t usb_stream_send_status(usb_stream_t *s, const usb_status_payload_t *st)
 {
     return emit_frame(s, USB_REC_STATUS, st, sizeof(*st));
+}
+
+esp_err_t usb_stream_send_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
+                                 uint8_t kind, uint32_t sample_index)
+{
+    usb_marker_payload_t m = {
+        .sample_index = (sample_index == 0xFFFFFFFFu) ? s->sample_seq
+                                                       : sample_index,
+        .timestamp_us = (uint64_t)esp_timer_get_time(),
+        .channel      = channel,
+        .edge         = edge ? 1u : 0u,
+        .kind         = kind,
+        ._pad         = 0,
+    };
+    return emit_frame(s, USB_REC_MARKER, &m, sizeof(m));
+}
+
+void usb_stream_set_arm(usb_stream_t *s, bool armed, uint32_t pre_samples)
+{
+    s->armed       = armed;
+    s->pre_samples = pre_samples;
+}
+
+uint32_t usb_stream_sample_seq(const usb_stream_t *s)
+{
+    return s->sample_seq;
 }
 
 esp_err_t usb_stream_send_fft(usb_stream_t *s, const float *mags, uint16_t nbins,

@@ -421,18 +421,18 @@ static int ds4424_write_raw(uint8_t reg, uint8_t value)
 {
     uint8_t frame[2] = { reg, value };
     return i2c_write_timeout_us(
-        BB_HVPAK_I2C, DS4424_I2C_ADDR, frame, sizeof(frame), false, BB_HVPAK_I2C_TIMEOUT_US
+        BB_HAT_I2C, DS4424_I2C_ADDR, frame, sizeof(frame), false, BB_HAT_I2C_TIMEOUT_US
     );
 }
 
 static int ds4424_read_raw(uint8_t reg, uint8_t *value)
 {
     int rc = i2c_write_timeout_us(
-        BB_HVPAK_I2C, DS4424_I2C_ADDR, &reg, 1, true, BB_HVPAK_I2C_TIMEOUT_US
+        BB_HAT_I2C, DS4424_I2C_ADDR, &reg, 1, true, BB_HAT_I2C_TIMEOUT_US
     );
     if (rc != 1) return rc;
     return i2c_read_timeout_us(
-        BB_HVPAK_I2C, DS4424_I2C_ADDR, value, 1, false, BB_HVPAK_I2C_TIMEOUT_US
+        BB_HAT_I2C, DS4424_I2C_ADDR, value, 1, false, BB_HAT_I2C_TIMEOUT_US
     );
 }
 
@@ -572,11 +572,11 @@ static bool ds4424_voltage_to_code(uint8_t ch, float volts, int8_t *code_out)
 
 static void ds4424_init(void)
 {
-    i2c_init(BB_HVPAK_I2C, BB_HVPAK_I2C_FREQ);
-    gpio_set_function(BB_HVPAK_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(BB_HVPAK_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(BB_HVPAK_SDA_PIN);
-    gpio_pull_up(BB_HVPAK_SCL_PIN);
+    i2c_init(BB_HAT_I2C, BB_HAT_I2C_FREQ);
+    gpio_set_function(BB_HAT_I2C_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(BB_HAT_I2C_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(BB_HAT_I2C_SDA_PIN);
+    gpio_pull_up(BB_HAT_I2C_SCL_PIN);
 
     s_ds4424_present = ds4424_set_code(0, 0);
     if (s_ds4424_present) {
@@ -1132,9 +1132,8 @@ void handle_get_caps(void)
     uint32_t flags = HAT_CAP_RAILS |
                      HAT_CAP_LEDS |
                      HAT_CAP_LA_LOW_SPEED |
-                     HAT_CAP_SHIFTED_IO |
-                     HAT_CAP_HVPAK_UNSUPPORTED;
-    uint8_t rsp[12];
+                     HAT_CAP_SHIFTED_IO;
+    uint8_t rsp[11];
     size_t p = 0;
 
     rsp[p++] = 2; // HW Revision
@@ -1145,7 +1144,6 @@ void handle_get_caps(void)
     rsp[p++] = (1u << HAT_LA_ROUTE_LOW_SPEED) | (1u << HAT_LA_ROUTE_HIGH_SPEED);
     rsp[p++] = BB_HAT_FW_MAJOR;
     rsp[p++] = BB_HAT_FW_MINOR;
-    rsp[p++] = BB_HVPAK_PRESENT ? 1 : 0;
 
     send_response(HAT_RSP_CAPS, rsp, (uint8_t)p);
 }

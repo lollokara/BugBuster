@@ -3,6 +3,7 @@ pub mod board;
 pub mod daq;
 pub mod daq_cal;
 pub mod daq_gl;
+pub mod daq_trigger_panel;
 pub mod diag;
 pub mod din;
 pub mod dout;

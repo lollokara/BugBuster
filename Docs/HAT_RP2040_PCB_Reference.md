@@ -152,7 +152,6 @@ The exact runtime LED schema can be refined later, but firmware should expose HA
 
 - `Firmware/RP2040/src/bb_config.h` still maps SWD to GPIO2/3/29, connector power to GPIO4/5, LA to GPIO14-GPIO17, and current sense as 100 milliohm shunts.
 - `Firmware/RP2040/src/bb_power.c` currently models only two connector enables/currents and averages four ADC samples.
-- `Firmware/RP2040/src/bb_hvpak.c` implements the old HVPAK/GreenPAK backend. This PCB does not implement HVPAK hardware; disable this feature surface and replace voltage work with DS4424-backed HAT rails.
 - `Firmware/ESP32/src/hat/hat.h` mirrors older HAT function slots and two-connector power state.
 - `DesktopApp/BugBuster/src/tabs/hat.rs` presents four EXP_EXT functions and old connector A/B power controls.
 - `DesktopApp/BugBuster/src/tabs/la.rs` has LA channel controls but no route selector.

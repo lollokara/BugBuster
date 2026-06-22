@@ -24,25 +24,7 @@ _EVENT_ONLY = {
     "HAT_LA_LOG_EVT",
 }
 
-# HVPAK is intentionally deferred for the current HAT parity work.  It remains
-# supported through existing USB/simulator paths, but should not force HTTP/UI
-# parity until the feature becomes a release target again.
-_HVPAK_DEFERRED = {
-    "HAT_GET_HVPAK_INFO",
-    "HAT_GET_HVPAK_CAPS",
-    "HAT_GET_HVPAK_LUT",
-    "HAT_SET_HVPAK_LUT",
-    "HAT_GET_HVPAK_BRIDGE",
-    "HAT_SET_HVPAK_BRIDGE",
-    "HAT_GET_HVPAK_ANALOG",
-    "HAT_SET_HVPAK_ANALOG",
-    "HAT_GET_HVPAK_PWM",
-    "HAT_SET_HVPAK_PWM",
-    "HAT_HVPAK_REG_READ",
-    "HAT_HVPAK_REG_WRITE_MASKED",
-}
-
-# Known non-HVPAK desktop HTTP gaps owned by the parallel agent or explicitly
+# Known desktop HTTP gaps owned by the parallel agent or explicitly
 # USB-only bulk-stream operations.  If a command is removed from this set, the
 # desktop HTTP transport must contain a `bbp::CMD_<name>` match arm.
 _DESKTOP_HTTP_ALLOWED_GAPS = {
@@ -56,7 +38,7 @@ _DESKTOP_HTTP_ALLOWED_GAPS = {
     "HAT_LA_TRIGGER",     # USB capture control
     "HAT_LA_USB_RESET",   # USB-only endpoint recovery
     "HAT_LA_STREAM_START",# USB bulk stream start
-} | _HVPAK_DEFERRED
+}
 
 
 def _canonical(name: str) -> str:
@@ -103,7 +85,7 @@ def test_hat_cmd_ids_are_in_lockstep_across_host_layers():
 
     missing_in_esp = sorted(set(py) - set(esp))
     missing_in_py = sorted(set(esp) - set(py))
-    missing_in_desktop = sorted(set(py) - set(desktop) - _HVPAK_DEFERRED)
+    missing_in_desktop = sorted(set(py) - set(desktop))
 
     assert not missing_in_esp, f"Python HAT commands missing in ESP32 bbp.h: {missing_in_esp}"
     assert not missing_in_py, f"ESP32 HAT commands missing in Python CmdId: {missing_in_py}"
@@ -133,10 +115,3 @@ def test_desktop_http_hat_commands_are_mapped_or_explicitly_classified():
         f"them from _DESKTOP_HTTP_ALLOWED_GAPS: {stale_allowlist}"
     )
 
-
-def test_hvpak_deferred_commands_are_the_only_deferred_hat_feature_group():
-    """Keep the HVPAK deferral explicit and bounded."""
-    py = _python_hat_cmds()
-    missing_from_python = sorted(_HVPAK_DEFERRED - set(py))
-    assert not missing_from_python, f"Stale HVPAK deferral names: {missing_from_python}"
-    assert all("HVPAK" in name for name in _HVPAK_DEFERRED)

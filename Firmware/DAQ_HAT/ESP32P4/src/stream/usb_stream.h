@@ -68,6 +68,10 @@ typedef struct {
 
     volatile bool   streaming;
     volatile uint32_t dropped_frames;
+
+    // Trigger latch (S3 owns the IO event logic; the PC keeps the pre-roll).
+    volatile bool     armed;        // trigger latch armed
+    uint32_t          pre_samples;  // requested pre-trigger depth (samples)
 } usb_stream_t;
 
 /** @brief Initialise the stream manager (no transport yet). */
@@ -110,6 +114,26 @@ esp_err_t usb_stream_send_energy(usb_stream_t *s, const power_dsp_t *d);
 
 /** @brief Send a STATUS heartbeat frame. */
 esp_err_t usb_stream_send_status(usb_stream_t *s, const usb_status_payload_t *st);
+
+/**
+ * @brief Send a MARKER frame (digital event flag / acquisition trigger).
+ * @param channel  S3 IO number (1..12) that fired.
+ * @param edge     0 = falling, 1 = rising.
+ * @param kind     USB_MARK_KIND_FLAG or USB_MARK_KIND_TRIGGER.
+ * @param sample_index  fused-sample index the event aligns to (0xFFFFFFFF =
+ *                      use the current live sample sequence).
+ */
+esp_err_t usb_stream_send_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
+                                 uint8_t kind, uint32_t sample_index);
+
+/**
+ * @brief Arm / disarm the trigger latch and record the pre-trigger depth.
+ *        Streaming is unaffected; this only annotates trigger semantics.
+ */
+void usb_stream_set_arm(usb_stream_t *s, bool armed, uint32_t pre_samples);
+
+/** @brief Current live fused-sample sequence (next index to be pushed). */
+uint32_t usb_stream_sample_seq(const usb_stream_t *s);
 
 /**
  * @brief Send an FFT frame: header + @p nbins magnitude floats.

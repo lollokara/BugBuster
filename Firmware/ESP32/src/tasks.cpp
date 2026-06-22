@@ -7,6 +7,7 @@
 #include "bbp.h"
 #include "adc_dsp.h"
 #include "dio.h"
+#include "daq_trigger.h"
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
@@ -28,6 +29,7 @@
 // -----------------------------------------------------------------------------
 
 DeviceState        g_deviceState  = {};
+EXT_RAM_BSS_ATTR ScopeBuffer g_scopeBuf;
 SemaphoreHandle_t  g_stateMutex   = nullptr;
 QueueHandle_t      g_cmdQueue     = nullptr;
 TaskHandle_t       g_adcTaskHandle = nullptr;
@@ -289,6 +291,17 @@ static void taskAdcPoll(void* /*pvParameters*/)
                 s_device->clearAdcDataReady();
             }
 
+            // ---- DAQ trigger/flag: analog threshold feed ---------------------
+            // Feed the fresh per-channel voltages to the trigger engine for the
+            // 4 analog-capable HV IOs (3,6,9,12 -> AD74416H channels A..D). The
+            // engine no-ops unless the IO is configured as an analog source.
+            if (adcReady) {
+                daq_trigger_feed_analog(3,  eng[0]);
+                daq_trigger_feed_analog(6,  eng[1]);
+                daq_trigger_feed_analog(9,  eng[2]);
+                daq_trigger_feed_analog(12, eng[3]);
+            }
+
             // ---- Auto-ranging -----------------------------------------------
             // If a channel's raw code is near positive or negative saturation,
             // switch to the next wider range.  A 500 ms debounce per channel
@@ -344,7 +357,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
                         g_deviceState.channels[ch].adcValue   = eng[ch];
                     }
 
-                    ScopeBuffer& sb = g_deviceState.scope;
+                    ScopeBuffer& sb = *g_deviceState.scope;
 
                     // Initialise first bucket if needed
                     if (sb.curStart == 0) {
@@ -403,6 +416,14 @@ static void taskAdcPoll(void* /*pvParameters*/)
                     }
                 }
             }
+
+            // ---- DAQ trigger/flag: digital edge detection -------------------
+            // Sample the ESP32 GPIO levels for all 12 IOs and emit flag/trigger
+            // markers on matching edges. Runs every poll iteration so digital
+            // detection tracks the ADC poll rate (the P4 stamps the precise
+            // sample index when the marker arrives).
+            dio_poll_inputs();
+            daq_trigger_poll_digital(dio_get_all());
         }
 
         // Add a small micro-delay even at high rates to relieve SPI bus pressure.
@@ -1661,6 +1682,7 @@ AD74416H* tasks_get_device(void)
 void initTasks(AD74416H& device)
 {
     s_device = &device;
+    g_deviceState.scope = &g_scopeBuf;
 
     // Initialise channel/diag defaults. Do NOT memset the whole struct —
     // i2cOk/muxOk/spiOk are set by main.cpp BEFORE initTasks() runs and

@@ -400,7 +400,6 @@ class CmdId(IntEnum):
     HAT_GET_POWER    = 0xCB
     HAT_SET_IO_VOLT  = 0xCC
     HAT_SETUP_SWD    = 0xCD
-    HAT_GET_HVPAK_INFO = 0xCE
     # HAT — Logic Analyzer
     HAT_LA_CONFIG    = 0xCF
     HAT_LA_ARM       = 0xD5
@@ -409,11 +408,6 @@ class CmdId(IntEnum):
     HAT_LA_READ      = 0xD8
     HAT_LA_STOP      = 0xD9
     HAT_LA_TRIGGER   = 0xDA
-    HAT_GET_HVPAK_CAPS   = 0xDB
-    HAT_GET_HVPAK_LUT    = 0xDC
-    HAT_SET_HVPAK_LUT    = 0xDD
-    HAT_GET_HVPAK_BRIDGE = 0xDE
-    HAT_SET_HVPAK_BRIDGE = 0xDF
 
     # USB PD
     USBPD_GET_STATUS = 0xC0
@@ -434,14 +428,6 @@ class CmdId(IntEnum):
     HAT_SET_IO_BANK      = 0xAE
     HAT_SET_LEVEL_SHIFT  = 0xAF
     HAT_SET_RAIL_VOLTAGE = 0xB5
-
-    # HVPAK advanced backend
-    HAT_GET_HVPAK_ANALOG = 0xE5
-    HAT_SET_HVPAK_ANALOG = 0xE6
-    HAT_GET_HVPAK_PWM    = 0xE7
-    HAT_SET_HVPAK_PWM    = 0xE8
-    HAT_HVPAK_REG_READ   = 0xE9
-    HAT_HVPAK_REG_WRITE_MASKED = 0xEA
 
     # HAT — LA Log Relay
     HAT_LA_LOG_ENABLE    = 0xEB
@@ -464,6 +450,9 @@ class CmdId(IntEnum):
     DAQ_CAL               = 0xB7
     # DAQ HAT live measurement readback (I/V/P/energy) — forwarded to the P4.
     DAQ_MEASURE           = 0xBF
+    # DAQ trigger / flag configuration — handled locally on the S3 (the 12 IO
+    # event sources live on the mainboard). Sub-op multiplexed; payload[0] = op.
+    DAQ_TRIG              = 0xCE
 
     # Quick Setup slots (NVS-backed snapshot store, 4 slots: 0..3)
     QS_LIST          = 0xF0  # list slots (returns occupied bitmap + per-slot summary hash)
@@ -503,12 +492,6 @@ class ErrorCode(IntEnum):
     CRC_FAIL        = 0x08
     FRAME_TOO_LARGE = 0x09
     STREAM_ACTIVE   = 0x0A
-    HVPAK_NO_DEVICE = 0x0B
-    HVPAK_TIMEOUT   = 0x0C
-    HVPAK_UNKNOWN_IDENTITY = 0x0D
-    HVPAK_UNSUPPORTED_CAP  = 0x0E
-    HVPAK_INVALID_INDEX    = 0x0F
-    HVPAK_UNSAFE_REGISTER  = 0x10
     # ERR_TIMEOUT            = 0x11  (firmware/Tauri only — not surfaced in Python)
     IO_OWNERSHIP_REQUIRED  = 0x12
     CAL_INVALID            = 0x13

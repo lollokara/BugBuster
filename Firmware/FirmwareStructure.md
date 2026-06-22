@@ -64,7 +64,6 @@ Firmware/
 │   │   ├── bb_config.h               # Pin definitions, protocol constants, buffer sizes
 │   │   ├── bb_protocol.c/h           # HAT UART framing (CRC-8, sync 0xAA, 32B max payload)
 │   │   ├── bb_power.c/h              # VADJ3/VADJ4 enable, current sense, level shifter
-│   │   ├── bb_hvpak.c/h              # HVPAK I2C mailbox (SLG47104, addr 0x48)
 │   │   ├── bb_hat_v2.c/h             # LED state (WS2812B), rail voltage trim, IO bank, calibration
 │   │   ├── bb_pins.c/h               # EXP_EXT pin routing (4 pins, 5 function codes)
 │   │   ├── bb_swd.c/h                # SWD status, clock config, target detection (wraps debugprobe)

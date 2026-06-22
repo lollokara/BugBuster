@@ -55,6 +55,7 @@ typedef enum {
     USB_CMD_RESET_STATS  = 0x85,
     USB_CMD_FFT_CONFIG   = 0x86,   // payload: usb_cmd_fft_t
     USB_CMD_SET_SOURCE   = 0x87,   // payload: usb_cmd_source_t (SMU)
+    USB_CMD_ARM          = 0x88,   // payload: usb_cmd_arm_t (trigger pre-roll)
 } usb_rec_type_t;
 
 // ---- WAVEFORM record --------------------------------------------------------
@@ -115,10 +116,15 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint32_t sample_index;   // fused-sample index this marker aligns to
     uint64_t timestamp_us;   // shared sync-epoch timestamp
-    uint8_t  channel;        // digital marker channel
+    uint8_t  channel;        // digital marker channel (S3 IO number, 1..12)
     uint8_t  edge;           // 0 = falling, 1 = rising
-    uint16_t _pad;
+    uint8_t  kind;           // USB_MARK_KIND_* (flag / trigger)
+    uint8_t  _pad;
 } usb_marker_payload_t;
+
+// MARKER kind codes (usb_marker_payload_t.kind).
+#define USB_MARK_KIND_FLAG     0u   // informational event flag (vertical line)
+#define USB_MARK_KIND_TRIGGER  1u   // acquisition trigger fired (defines t=0)
 
 // ---- STATUS record ----------------------------------------------------------
 typedef struct __attribute__((packed)) {
@@ -154,6 +160,17 @@ typedef struct __attribute__((packed)) {
     uint8_t  enable;        // SMU output enable
     uint8_t  _pad[3];
 } usb_cmd_source_t;
+
+// Trigger / pre-roll arming. The S3 owns the IO event logic; the P4 streams
+// continuously and the PC keeps the pre-trigger window, so this just records
+// the requested pre-roll depth and arms the trigger latch. A trigger MARKER
+// (kind = USB_MARK_KIND_TRIGGER) defines t=0 for the captured window.
+typedef struct __attribute__((packed)) {
+    uint8_t  armed;         // 1 = arm trigger latch, 0 = free-run/disarm
+    uint8_t  trig_logic;    // 0 = none, 1 = OR, 2 = AND (informational)
+    uint16_t _pad;
+    uint32_t pre_samples;   // requested pre-trigger depth (fused samples)
+} usb_cmd_arm_t;
 
 // CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
 uint16_t usb_proto_crc16(const uint8_t *data, uint32_t len, uint16_t init);

@@ -123,6 +123,25 @@ typedef struct __attribute__((packed)) {
     uint8_t  flags;          // HAT_DAQ_TLM_F_*
 } hat_daq_telemetry_t;       // 13 bytes
 
+// HAT_CMD_DAQ_ARM (0x5B) payload — MUST stay byte-for-byte identical to the
+// P4-side mirror s3link_daq_arm_t in Firmware/DAQ_HAT/.../link/s3_link.h.
+typedef struct __attribute__((packed)) {
+    uint8_t  armed;          // 1 = arm trigger latch, 0 = free-run/disarm
+    uint8_t  trig_logic;     // 0 = none, 1 = OR, 2 = AND (info only; S3 evaluates)
+    uint16_t _pad;
+    uint32_t pre_samples;    // requested pre-trigger depth (fused samples)
+} hat_daq_arm_t;
+
+// HAT_CMD_DAQ_MARK (0x5C) payload — MUST stay byte-for-byte identical to the
+// P4-side mirror s3link_daq_mark_t. Sent when an S3 IO edge event fires.
+#define HAT_DAQ_MARK_KIND_FLAG     0u  // informational flag (vertical line)
+#define HAT_DAQ_MARK_KIND_TRIGGER  1u  // acquisition trigger fired (defines t=0)
+typedef struct __attribute__((packed)) {
+    uint8_t  channel;        // S3 IO number (1..12)
+    uint8_t  edge;           // 0 = falling, 1 = rising
+    uint8_t  kind;           // HAT_DAQ_MARK_KIND_*
+    uint8_t  _pad;
+} hat_daq_mark_t;
 
 // Commands (master → slave): Core (0x01–0x0F)
 #define HAT_CMD_PING            0x01
@@ -135,20 +154,8 @@ typedef struct __attribute__((packed)) {
 // Commands: Power Management (0x10–0x1F)
 #define HAT_CMD_SET_POWER       0x10  // Enable/disable connector power
 #define HAT_CMD_GET_POWER_STATUS 0x11 // Read power state + current
-#define HAT_CMD_SET_IO_VOLTAGE  0x12  // Set HVPAK I/O level (mV)
+#define HAT_CMD_SET_IO_VOLTAGE  0x12  // Set IO level (mV)
 #define HAT_CMD_GET_IO_VOLTAGE  0x13  // Read current I/O voltage setting
-#define HAT_CMD_GET_HVPAK_INFO  0x14  // Get HVPAK identity/status summary
-#define HAT_CMD_GET_HVPAK_CAPS  0x15  // Get HVPAK capability profile
-#define HAT_CMD_GET_HVPAK_LUT   0x16  // Get LUT truth table
-#define HAT_CMD_SET_HVPAK_LUT   0x17  // Set LUT truth table
-#define HAT_CMD_GET_HVPAK_BRIDGE 0x18 // Get bridge config
-#define HAT_CMD_SET_HVPAK_BRIDGE 0x19 // Set bridge config
-#define HAT_CMD_GET_HVPAK_ANALOG 0x1A // Get analog config
-#define HAT_CMD_SET_HVPAK_ANALOG 0x1B // Set analog config
-#define HAT_CMD_GET_HVPAK_PWM   0x1C  // Get PWM config
-#define HAT_CMD_SET_HVPAK_PWM   0x1D  // Set PWM config
-#define HAT_CMD_HVPAK_REG_READ  0x1E  // Raw register read
-#define HAT_CMD_HVPAK_REG_WRITE_MASKED 0x1F // Raw masked register write
 
 // Commands: SWD Management (0x20–0x2F)
 #define HAT_CMD_GET_DAP_STATUS  0x20  // Is debugprobe USB connected? Target detected?
@@ -172,6 +179,11 @@ typedef struct __attribute__((packed)) {
 // (die temp, USB-PD contract, VADJ/VLOGIC rails). Fire-and-forget; P4 caches it
 // and relays it to the C6 inside ddp_diag_t. Payload = hat_daq_telemetry_t.
 #define HAT_CMD_DAQ_TELEMETRY   0x5A
+// DAQ HAT (ESP32-P4) — trigger / flag marker support. The S3 owns the 12
+// mainboard IOs and detects edge events; the P4 owns the sample clock and emits
+// USB MARKER records aligned to the live sample index.
+#define HAT_CMD_DAQ_ARM         0x5B  // arm/disarm pre-roll latch (hat_daq_arm_t)
+#define HAT_CMD_DAQ_MARK        0x5C  // IO event -> emit MARKER (hat_daq_mark_t)
 #define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
 
 // Commands: HAT v2 Supplies / LEDs (0x40-0x4F)
@@ -211,15 +223,6 @@ typedef struct __attribute__((packed)) {
 #define HAT_ERR_FRAME           0x06
 #define HAT_ERR_NOT_CONNECTED   0x07
 #define HAT_ERR_POWER_FAULT     0x08
-#define HAT_ERR_HVPAK_NO_DEVICE        0x09
-#define HAT_ERR_HVPAK_TIMEOUT          0x0A
-#define HAT_ERR_HVPAK_UNKNOWN_IDENTITY 0x0B
-#define HAT_ERR_HVPAK_UNSUPPORTED_VOLT 0x0C
-#define HAT_ERR_HVPAK_WRITE_FAILED     0x0D
-#define HAT_ERR_HVPAK_INVALID_INDEX    0x0E
-#define HAT_ERR_HVPAK_UNSUPPORTED_CAP  0x0F
-#define HAT_ERR_HVPAK_INVALID_ARG      0x10
-#define HAT_ERR_HVPAK_UNSAFE_REG       0x11
 #define HAT_ERR_UNSUPPORTED            0x12
 #define HAT_ERR_CAL_INVALID            0x13
 
@@ -229,7 +232,6 @@ typedef struct __attribute__((packed)) {
 #define HAT_CAP_LA_LOW_SPEED      (1u << 2)
 #define HAT_CAP_LA_HIGH_SPEED     (1u << 3)
 #define HAT_CAP_SHIFTED_IO        (1u << 4)
-#define HAT_CAP_HVPAK_UNSUPPORTED (1u << 5)
 
 // HAT v2 rail IDs
 #define HAT_RAIL_3V3_ADJ        0
@@ -250,12 +252,6 @@ typedef enum {
     HAT_CONNECTOR_B = 1,    // Target 2: powered by VADJ2
 } HatConnector;
 
-typedef enum {
-    HAT_HVPAK_PART_UNKNOWN = 0,
-    HAT_HVPAK_PART_SLG47104 = 1,
-    HAT_HVPAK_PART_SLG47115_E = 2,
-} HatHvpakPart;
-
 typedef struct {
     bool     enabled;           // Connector power is on
     float    current_ma;        // Measured current (if shunt present)
@@ -271,7 +267,6 @@ typedef struct {
     uint8_t  la_routes;
     uint8_t  fw_major;
     uint8_t  fw_minor;
-    bool     hvpak_present;
 } HatCaps;
 
 typedef struct {
@@ -302,10 +297,7 @@ typedef struct {
 
     // Power management
     HatConnectorStatus connector[2];                // Connector A and B status
-    uint16_t     io_voltage_mv;                     // HVPAK I/O voltage (mV)
-    uint8_t      hvpak_part;                        // See HatHvpakPart
-    bool         hvpak_ready;                       // true when identity is resolved
-    uint8_t      hvpak_last_error;                  // Last RP2040-side HVPAK error
+    uint16_t     io_voltage_mv;                     // I/O voltage (mV)
     HatCaps      caps;
     bool         caps_valid;
     HatRailStatus rail[HAT_RAIL_COUNT];
@@ -430,8 +422,8 @@ bool hat_set_power(HatConnector conn, bool on);
 bool hat_get_power_status(void);
 
 /**
- * @brief Set the HVPAK I/O level translation voltage.
- * @param mv  Target I/O voltage in millivolts (1200–5500)
+ * @brief Set the I/O level translation voltage.
+ * @param mv  Target I/O voltage in millivolts
  * @return true if HAT acknowledged
  */
 bool hat_set_io_voltage(uint16_t mv);
@@ -464,18 +456,6 @@ typedef struct {
     uint32_t actual_crc32;
 } HatFwUpdateStatus;
 
-bool hat_fw_begin(uint32_t image_size, uint32_t expected_crc32);
-bool hat_fw_chunk(uint32_t offset, const uint8_t *data, uint8_t len, uint32_t *ack_offset);
-bool hat_fw_commit(void);
-bool hat_fw_status(HatFwUpdateStatus *status);
-
-/**
- * @brief Send an advanced HVPAK command to the RP2040 HAT and return the raw
- *        response payload. Used by BBP passthrough handlers for the typed
- *        HVPAK backend surface.
- */
-bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                       uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len);
 uint8_t hat_get_last_error(void);
 
 /**
@@ -486,6 +466,11 @@ uint8_t hat_get_last_error(void);
 uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len);
 
+bool hat_fw_begin(uint32_t image_size, uint32_t expected_crc32);
+bool hat_fw_chunk(uint32_t offset, const uint8_t *data, uint8_t len, uint32_t *ack_offset);
+bool hat_fw_commit(void);
+bool hat_fw_status(HatFwUpdateStatus *status);
+
 /**
  * @brief Gather S3 mainboard telemetry (die temp, USB-PD contract, VADJ/VLOGIC
  *        rails) and push it to the DAQ HAT for relay to the C6 Diagnostics menu.
@@ -493,6 +478,21 @@ uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
  *        forget — call periodically (~1 Hz) from the main loop.
  */
 void hat_daq_push_telemetry(void);
+
+/**
+ * @brief Send a digital event MARKER to the DAQ HAT (P4) for the live stream.
+ *        No-op unless a DAQ HAT is connected. Fire-and-forget.
+ * @param io    S3 IO number (1..12) that fired.
+ * @param edge  0 = falling, 1 = rising.
+ * @param kind  HAT_DAQ_MARK_KIND_FLAG or HAT_DAQ_MARK_KIND_TRIGGER.
+ */
+void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind);
+
+/**
+ * @brief Arm/disarm the DAQ HAT trigger latch and record the pre-roll depth.
+ *        No-op unless a DAQ HAT is connected.
+ */
+void hat_daq_send_arm(bool armed, uint8_t trig_logic, uint32_t pre_samples);
 
 
 /**

@@ -16,6 +16,7 @@
 #include "cmd_errors.h"
 #include "bbp.h"
 #include "hat.h"
+#include "daq_trigger.h"
 
 // The DAQ HAT's CONFIG responses (mirror Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h).
 #define DAQ_HAT_RSP_CONFIG_VALUE   0x93
@@ -130,6 +131,82 @@ static int handler_daq_measure(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// DAQ trigger / flag configuration (sub-op multiplexed). Handled locally on the
+// S3: the 12 IO event sources live on the mainboard. Edge events are forwarded
+// to the P4 by the trigger engine (HAT_CMD_DAQ_MARK); arming via HAT_CMD_DAQ_ARM.
+//   payload[0] = sub-op (BBP_DAQ_TRIG_*)
+// ---------------------------------------------------------------------------
+static int handler_daq_trig(const uint8_t *payload, size_t len,
+                            uint8_t *resp, size_t *resp_len)
+{
+    if (len < 1) return -CMD_ERR_BAD_ARG;
+    const uint8_t subop = payload[0];
+
+    switch (subop) {
+        case BBP_DAQ_TRIG_SET_IO: {
+            // [op][io u8][role][edge][src][_pad][thr f32]
+            if (len < 2 + sizeof(daq_trig_io_cfg_t)) return -CMD_ERR_BAD_ARG;
+            uint8_t io = payload[1];
+            daq_trig_io_cfg_t cfg;
+            memcpy(&cfg, payload + 2, sizeof(cfg));
+            if (!daq_trigger_set_io(io, &cfg)) return -CMD_ERR_BAD_ARG;
+            *resp_len = 0;
+            return 0;
+        }
+        case BBP_DAQ_TRIG_GET_IO: {
+            if (len < 2) return -CMD_ERR_BAD_ARG;
+            daq_trig_io_cfg_t cfg;
+            if (!daq_trigger_get_io(payload[1], &cfg)) return -CMD_ERR_BAD_ARG;
+            memcpy(resp, &cfg, sizeof(cfg));
+            *resp_len = sizeof(cfg);
+            return (int)sizeof(cfg);
+        }
+        case BBP_DAQ_TRIG_SET_LOGIC: {
+            if (len < 2) return -CMD_ERR_BAD_ARG;
+            daq_trigger_set_logic(payload[1]);
+            *resp_len = 0;
+            return 0;
+        }
+        case BBP_DAQ_TRIG_ARM: {
+            // [op][armed u8][_pad u8][pre_samples u32 LE]
+            if (len < 7) return -CMD_ERR_BAD_ARG;
+            bool armed = payload[1] != 0;
+            uint32_t pre = (uint32_t)payload[3] | ((uint32_t)payload[4] << 8) |
+                           ((uint32_t)payload[5] << 16) | ((uint32_t)payload[6] << 24);
+            daq_trigger_arm(armed, pre);
+            *resp_len = 0;
+            return 0;
+        }
+        case BBP_DAQ_TRIG_STATUS: {
+            resp[0] = daq_trigger_get_logic();
+            resp[1] = daq_trigger_is_armed() ? 1 : 0;
+            resp[2] = daq_trigger_has_fired() ? 1 : 0;
+            resp[3] = 0;
+            *resp_len = 4;
+            return 4;
+        }
+        case BBP_DAQ_TRIG_GET_ALL: {
+            // [logic][armed][fired][_pad] + 12 * daq_trig_io_cfg_t
+            size_t off = 0;
+            resp[off++] = daq_trigger_get_logic();
+            resp[off++] = daq_trigger_is_armed() ? 1 : 0;
+            resp[off++] = daq_trigger_has_fired() ? 1 : 0;
+            resp[off++] = 0;
+            for (uint8_t io = 1; io <= 12; io++) {
+                daq_trig_io_cfg_t cfg;
+                daq_trigger_get_io(io, &cfg);
+                memcpy(resp + off, &cfg, sizeof(cfg));
+                off += sizeof(cfg);
+            }
+            *resp_len = off;
+            return (int)off;
+        }
+        default:
+            return -CMD_ERR_BAD_ARG;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 static const CmdDescriptor s_daq_cmds[] = {
@@ -139,6 +216,8 @@ static const CmdDescriptor s_daq_cmds[] = {
       NULL, 0, NULL, 0, handler_daq_cal, CMD_FLAG_READS_STATE },
     { BBP_CMD_DAQ_MEASURE, "daq_measure",
       NULL, 0, NULL, 0, handler_daq_measure, CMD_FLAG_READS_STATE },
+    { BBP_CMD_DAQ_TRIG, "daq_trig",
+      NULL, 0, NULL, 0, handler_daq_trig, 0 },
 };
 
 extern "C" void register_cmds_daq(void)

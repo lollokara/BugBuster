@@ -451,19 +451,18 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 | **Python library** (100+ client methods, dual transport) | [`python/README.md`](python/README.md) |
 | **Desktop app** (19 tabs, screenshots, build & release) | [`DesktopApp/BugBuster/README.md`](DesktopApp/BugBuster/README.md) |
 | **ESP32-S3 firmware** (FreeRTOS tasks, BBP, HTTP) | [`Firmware/ESP32/README.md`](Firmware/ESP32/README.md) |
-| **Logic Analyzer HAT firmware** (debugprobe fork, LA, SWD, HVPAK) | [`Firmware/RP2040/README.md`](Firmware/RP2040/README.md) |
+| **Logic Analyzer HAT firmware** (debugprobe fork, LA, SWD) | [`Firmware/RP2040/README.md`](Firmware/RP2040/README.md) |
 | **Power Profiler Pro HAT firmware** (DAQ — ESP32-P4 acquisition + DSP, USB-HS stream, OTA) | [`Firmware/DAQ_HAT/README.md`](Firmware/DAQ_HAT/README.md) |
 | **Power Profiler Pro architecture** (front-end, autorange, fusion, SMU) | [`Docs/PowerAnalyzer_Architecture.md`](Docs/PowerAnalyzer_Architecture.md) |
 | **DAQ HAT display protocol** (P4 ↔ C6, DDP v2) | [`Firmware/DAQ_HAT/DISPLAY_Protocol.md`](Firmware/DAQ_HAT/DISPLAY_Protocol.md) |
 | **DAQ HAT hardware reference** (pinout, ICs, power tree, I²C map) | [`Docs/FIRMWARE_HARDWARE_REFERENCE.md`](Docs/FIRMWARE_HARDWARE_REFERENCE.md) |
-| **BBP v9 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
+| **BBP v10 wire format** (handshake, frames, opcodes, events) | [`Firmware/BugBusterProtocol.md`](Firmware/BugBusterProtocol.md) |
 | **HAT UART protocol** (ESP32 ↔ HAT, 921600 8N1) | [`Firmware/HAT_Protocol.md`](Firmware/HAT_Protocol.md) |
-| **Logic Analyzer HAT architecture** (RP2040, debugprobe, HVPAK, connectors) | [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) |
+| **Logic Analyzer HAT architecture** (RP2040, debugprobe, connectors) | [`Firmware/HAT_Architecture.md`](Firmware/HAT_Architecture.md) |
 | **External I2C/SPI bus engine** (routed IOs, Python/MCP usage, BBP/HTTP endpoints) | [`Docs/ExternalBus.md`](Docs/ExternalBus.md) |
 | **Logic Analyzer & vendor-bulk streaming** | [`Docs/LogicAnalyzer.md`](Docs/LogicAnalyzer.md) |
 | **Hardware** (ICs, power topology, ESP32 pinout) | [`Docs/Hardware.md`](Docs/Hardware.md) |
 | **Board profiles** (schema, rail lock, MCP integration) | [`Docs/board_profiles.md`](Docs/board_profiles.md) |
-| **HVPAK descriptor validation** | [`Docs/hvpak-descriptor-validation.md`](Docs/hvpak-descriptor-validation.md) |
 | **Real-world scenarios** | [`Docs/Scenarios.md`](Docs/Scenarios.md) |
 | **Test suite** (unit, simulator, device) | [`tests/README.md`](tests/README.md) |
 

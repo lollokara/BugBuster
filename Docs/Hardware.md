@@ -175,4 +175,4 @@ the HTTP REST interface is hammered concurrently.
 - [`../Firmware/BugBusterProtocol.md`](../Firmware/BugBusterProtocol.md) — wire
   format the host uses to drive all of the above.
 - [`../Firmware/HAT_Architecture.md`](../Firmware/HAT_Architecture.md) — HAT
-  board design (RP2040, debugprobe fork, HVPAK).
+  board design (RP2040, debugprobe fork).

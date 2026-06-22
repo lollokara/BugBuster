@@ -103,7 +103,6 @@ def build_hat_health_summary(
             "led_count": caps.get("led_count", caps.get("ledCount")),
             "shifted_io_count": caps.get("shifted_io_count", caps.get("shiftedIoCount")),
             "la_routes": caps.get("la_routes", caps.get("laRouteCount")),
-            "hvpak_present": bool(caps.get("hvpak_present", caps.get("hvpakPresent", False))),
         },
         "rails": rails,
         "faulted_rails": faulted_rails,
@@ -182,7 +181,7 @@ def register(mcp) -> None:
         LED count, logical shifted IO count, and logic analyzer routes.
 
         Returns: hw_revision, flags, rail_count, led_count, shifted_io_count,
-                 la_routes, fw_version, hvpak_present.
+                 la_routes, fw_version.
         """
         bb = session.get_client()
         require_hat(bb)
@@ -208,8 +207,7 @@ def register(mcp) -> None:
         Return a compact HAT health summary for agents and automation.
 
         Combines HAT presence, capabilities, rail status, calibration state, and
-        logic-analyzer status when available. HVPAK is only reported as a
-        presence capability because HVPAK controls are currently deferred.
+        logic-analyzer status when available.
         """
         bb = session.get_client()
         require_hat(bb)

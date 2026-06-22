@@ -1,4 +1,4 @@
-# BugBuster HAT Protocol Specification
+﻿# BugBuster HAT Protocol Specification
 
 **Version:** 2.0 (`bb-hat-3.3`)
 **Date:** 2026-06-15
@@ -16,7 +16,7 @@ BugBuster is always the bus master — it initiates all transactions.
 ### 1.0 Scope — what this UART carries (and doesn't)
 
 This UART protocol is the **HAT control plane**: configuration, status polling,
-power management, pin routing, HVPAK access, and Logic Analyzer arming.
+power management, pin routing, and Logic Analyzer arming.
 Frames are small (≤ 32-byte payload) and master-polled.
 
 **High-bandwidth data does NOT flow over this UART.** The RP2040 HAT exposes
@@ -352,7 +352,6 @@ Query HAT hardware capabilities and firmware version. Must be called after
 | 8 | la_routes | u8 | Available LA route bitmask (bit0=low-speed, bit1=high-speed) |
 | 9 | fw_major | u8 | Firmware major version |
 | 10 | fw_minor | u8 | Firmware minor version |
-| 11 | hvpak_present | bool | GreenPAK detected on RP2040 I2C |
 
 **Capability flags (`flags` field):**
 
@@ -363,9 +362,8 @@ Query HAT hardware capabilities and firmware version. Must be called after
 | 2 | `HAT_CAP_LA_LOW_SPEED` | Low-speed LA route via EXP_EXT pins |
 | 3 | `HAT_CAP_LA_HIGH_SPEED` | High-speed LA route via direct PIO GPIOs |
 | 4 | `HAT_CAP_SHIFTED_IO` | Level-shifted IO bank present |
-| 5 | `HAT_CAP_HVPAK_UNSUPPORTED` | GreenPAK present but not programmed / unsupported |
 
-`bb-hat-3.0` reports `flags = 0x37` (bits 0, 1, 2, 4, 5) and `la_routes = 0x03`.
+`bb-hat-3.0` reports `flags = 0x17` (bits 0, 1, 2, 4) and `la_routes = 0x03`.
 
 **Timeout:** 200 ms
 
@@ -411,7 +409,7 @@ Read power status for both connectors.
 
 #### 0x12 SET_IO_VOLTAGE
 
-Set the HVPAK IO voltage level via the GreenPAK mailbox.
+Set the IO voltage level.
 
 **Request payload:**
 
@@ -421,7 +419,7 @@ Set the HVPAK IO voltage level via the GreenPAK mailbox.
 
 **Supported preset voltages:** `1200`, `1800`, `2500`, `3300`, `5000`
 
-**Response:** RSP_OK (0x80) + `[actual_mv:u16, hvpak_part:u8, hvpak_ready:bool, hvpak_last_error:u8]`
+**Response:** RSP_OK (0x80) + `[actual_mv:u16]`
 
 **Timeout:** 300 ms
 
@@ -429,7 +427,7 @@ Set the HVPAK IO voltage level via the GreenPAK mailbox.
 
 #### 0x13 GET_IO_VOLTAGE
 
-Read the currently applied IO voltage and HVPAK status.
+Read the currently applied IO voltage.
 
 **Request payload:** Empty
 
@@ -439,54 +437,7 @@ Read the currently applied IO voltage and HVPAK status.
 
 ---
 
-### Group 3 — HVPAK Backend (0x14–0x1F)
-
-Fine-grained access to the Renesas GreenPAK (SLG47104 / SLG47115-E) mailbox.
-The RP2040 is the capability authority — it validates every request against
-the detected part profile before forwarding to I2C.
-
-All responses include a trailing `error(u8)` byte; `0x00` = success.
-Unsafe registers (identity `0x48`, command `0x4C`, service `0xF5/0xFD/0xFE`)
-return `HAT_ERR_UNSAFE_REGISTER` (0x07).
-
-| Cmd | Name | Request payload | Response payload |
-|-----|------|-----------------|------------------|
-| 0x14 | HVPAK_GET_INFO | — | `part_id(u8)`, `identity(u8)`, `ready(u8)`, `last_error(u8)`, `factory_virgin(u8)` |
-| 0x15 | HVPAK_SET_VOLTAGE | `voltage_mv(u16)` | `ok(u8)`, `actual_mv(u16)` |
-| 0x16 | HVPAK_GET_VOLTAGE | — | `voltage_mv(u16)`, `preset_index(u8)` |
-| 0x17 | HVPAK_GET_CAPS | — | `flags(u32)` — bitmask of `CAP_LUT2/3/4`, `CAP_BRIDGE`, `CAP_PWM0/1`, `CAP_ANALOG`, `CAP_ACMP1`, `CAP_REG_RW` |
-| 0x18 | HVPAK_GET_LUT | `lut_index(u8)` | `truth_table(u16)` |
-| 0x19 | HVPAK_SET_LUT | `lut_index(u8)`, `truth_table(u16)` | `ok(u8)` |
-| 0x1A | HVPAK_GET_BRIDGE | — | `output_mode[2](u8)`, `ocp_retry[2](u8)`, `predriver(u8)`, `full_bridge(u8)`, `control_sel(u8)`, `uvlo(u8)` |
-| 0x1B | HVPAK_SET_BRIDGE | bridge config struct (same layout as GET) | `ok(u8)` |
-| 0x1C | HVPAK_GET_ANALOG | — | `vref_mode(u8)`, `vref_power(u8)`, `acmp0_gain(u8)`, `acmp0_vref(u8)`, `cs_vref(u8)`, `cs_gain(u8)`, `cs_enable(u8)` |
-| 0x1D | HVPAK_SET_ANALOG | analog config struct (same layout as GET) | `ok(u8)` |
-| 0x1E | HVPAK_GET_PWM | `pwm_index(u8)` | `period_source(u8)`, `duty_source(u8)`, `deadband(u8)` |
-| 0x1F | HVPAK_SET_PWM | `pwm_index(u8)`, PWM config struct | `ok(u8)` |
-
-**GreenPAK mailbox contract:**
-- I2C address `0x48`
-- Register `0x48`: read-only OTP identity byte (`0x04` = SLG47104, `0x15` = SLG47115-E)
-- Register `0x4C`: writable command byte (virtual input mailbox)
-
-`factory_virgin` in `HVPAK_GET_INFO` is set when mailbox identity is absent
-and service registers `F5`, `FD`, `FE` are still `0x00` — indicates an
-unprovisioned GreenPAK that needs programming.
-
-**HVPAK error codes (trailing `error` byte):**
-
-| Code | Name | Description |
-|------|------|-------------|
-| 0x00 | OK | Success |
-| 0x01 | NO_DEVICE | GreenPAK not detected on I2C |
-| 0x02 | TIMEOUT | Mailbox operation timeout |
-| 0x03 | UNKNOWN_IDENTITY | Identity byte does not match a known part |
-| 0x04 | UNSUPPORTED_CAP | Requested capability not present on this part |
-| 0x05 | INVALID_INDEX | LUT/PWM index out of range |
-| 0x06 | INVALID_ARG | Malformed payload / out-of-range parameter |
-| 0x07 | UNSAFE_REGISTER | Register address is blocked (identity/command/service) |
-
----
+### Group 3 — DAP / SWD Debug (0x20–0x22)
 
 ### Group 4 — DAP / SWD Debug (0x20–0x22)
 
@@ -735,7 +686,7 @@ HAT_CAP_SHIFTED_IO` flags in GET_CAPS response.
 
 | ID | Name | Voltage Range | Notes |
 |----|------|---------------|-------|
-| 0 | 3V3_ADJ | 1.2 – 5.5 V | VLOGIC/level-shifter reference; set via HVPAK SET_IO_VOLTAGE |
+| 0 | 3V3_ADJ | 1.2 – 5.5 V | VLOGIC/level-shifter reference; set  SET_IO_VOLTAGE |
 | 1 | VADJ3 | 1.8 – 36 V | Connector 1 HV rail (DS4424 + LTM8083) |
 | 2 | VADJ4 | 1.8 – 36 V | Connector 2 / SWD rail (DS4424 + LTM8083) |
 
@@ -990,7 +941,7 @@ Response IDs use the range **0x80–0xFF**.
 | 0x05 | CAL_INVALID | No valid calibration; voltage set/enable rejected |
 | 0x06 | CRC_ERROR | CRC check failed on received frame |
 | 0x07 | FRAME_ERROR | Malformed frame (bad LEN, missing bytes) |
-| 0x08 | UNSAFE_REGISTER | HVPAK register access blocked |
+| 0x08 | UNSAFE_REGISTER | Register access blocked |
 | 0x09 | INVALID_ARG | Parameter out of allowed range |
 
 ---

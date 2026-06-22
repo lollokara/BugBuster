@@ -72,9 +72,6 @@ typedef struct {
     uint8_t fw_minor;
     bool config_confirmed;
     uint16_t io_voltage_mv;
-    uint8_t hvpak_part;
-    bool hvpak_ready;
-    uint8_t hvpak_last_error;
     bool caps_valid;
     uint8_t la_route;
     bool dap_connected;
@@ -96,7 +93,6 @@ typedef struct {
     uint8_t la_routes;
     uint8_t fw_major;
     uint8_t fw_minor;
-    bool hvpak_present;
 } bugbuster_mp_hat_caps_t;
 
 typedef struct {

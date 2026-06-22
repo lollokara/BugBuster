@@ -69,6 +69,12 @@ extern "C" {
 // relays it to the C6 inside ddp_diag_t. Fire-and-forget (-> RSP_OK).
 #define HATP_CMD_DAQ_TELEMETRY   0x5Au
 
+// Trigger / flag support. The S3 owns the 12 mainboard IOs and detects edge
+// events (digital GPIO ISR or AD74416H analog/comparator); the P4 owns the
+// sample clock and emits USB MARKER records aligned to the live sample index.
+#define HATP_CMD_DAQ_ARM         0x5Bu   // payload: s3link_daq_arm_t (arm/disarm pre-roll latch)
+#define HATP_CMD_DAQ_MARK        0x5Cu   // payload: s3link_daq_mark_t (IO event -> emit MARKER)
+
 // Version + OTA commands (vendor sub-range 0x60..0x6F).
 #define HATP_CMD_GET_VERSION     0x60u   // -> fw version (u32 + string)
 #define HATP_CMD_OTA_BEGIN       0x61u   // payload: ota_meta (size,ver,sha,prod)
@@ -137,6 +143,25 @@ typedef struct __attribute__((packed)) {
     uint16_t vlogic_mv;      // 3V3_ADJ / VLOGIC rail, mV
     uint8_t  flags;          // S3LINK_TLM_F_*
 } s3link_telemetry_t;        // 13 bytes
+
+// HATP_CMD_DAQ_ARM (0x5B) payload: arm/disarm the trigger latch + pre-roll.
+typedef struct __attribute__((packed)) {
+    uint8_t  armed;          // 1 = arm trigger latch, 0 = free-run/disarm
+    uint8_t  trig_logic;     // 0 = none, 1 = OR, 2 = AND (S3 evaluates; info only)
+    uint16_t _pad;
+    uint32_t pre_samples;    // requested pre-trigger depth (fused samples)
+} s3link_daq_arm_t;
+
+// HATP_CMD_DAQ_MARK (0x5C) payload: a digital event detected on an S3 IO. The
+// P4 stamps it with the live sample index and emits a USB MARKER record.
+#define S3LINK_MARK_KIND_FLAG     0u  // informational flag (vertical line)
+#define S3LINK_MARK_KIND_TRIGGER  1u  // acquisition trigger fired (defines t=0)
+typedef struct __attribute__((packed)) {
+    uint8_t  channel;        // S3 IO number (1..12)
+    uint8_t  edge;           // 0 = falling, 1 = rising
+    uint8_t  kind;           // S3LINK_MARK_KIND_*
+    uint8_t  _pad;
+} s3link_daq_mark_t;
 
 // OTA_DATA payload: a firmware chunk at a given byte offset (for ordered,
 // resumable streaming so the S3 never stages the whole image). The image is

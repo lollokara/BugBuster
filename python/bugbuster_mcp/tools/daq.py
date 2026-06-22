@@ -10,7 +10,8 @@ data plane, not this control link. A single-shot snapshot of the latest fused
 reading is available via daq_measure.
 
 Tools: daq_get_settings, daq_get_setting, daq_set_setting, daq_set_source,
-       daq_measure, daq_energy_reset, daq_charge_reset
+       daq_measure, daq_energy_reset, daq_charge_reset,
+       daq_set_io_role, daq_set_trigger_logic, daq_arm, daq_get_trigger_state
 """
 
 from __future__ import annotations
@@ -172,3 +173,82 @@ def register(mcp) -> None:
         require_hat(bb)
         bb.daq.action(DaqAction.CHARGE_RESET)
         return {"success": True, "message": "Charge accumulator reset."}
+
+    # ---- Trigger / flag engine ------------------------------------------
+
+    @mcp.tool()
+    def daq_set_io_role(
+        io: int,
+        role: str = "off",
+        edge: str = "rising",
+        source: str = "digital",
+        threshold_v: float = 1.5,
+    ) -> dict:
+        """
+        Tag a mainboard IO (1..12) as a DAQ flag or trigger source.
+
+        role:   "off" | "flag" | "trigger"
+                - flag    = each matching edge drops a vertical marker line on
+                            the acquisition + timeline (kept through every zoom).
+                - trigger = matching edge(s) start the acquisition window (t=0).
+        edge:   "rising" | "falling" | "any"
+        source: "digital" | "analog"  (analog only on HV IOs 3/6/9/12).
+        threshold_v: analog voltage threshold (V) when source="analog".
+
+        Returns: the IO's resulting configuration.
+        """
+        from bugbuster.daq_config import DaqTrigRole, DaqTrigEdge, DaqTrigSource
+        bb = session.get_client()
+        require_hat(bb)
+        r = DaqTrigRole[role.strip().upper()]
+        e = DaqTrigEdge[edge.strip().upper()]
+        s = DaqTrigSource[source.strip().upper()]
+        bb.daq_trigger.set_io(io, r, e, s, threshold_v)
+        cfg = bb.daq_trigger.get_io(io)
+        cfg["role"] = cfg["role"].name.lower()
+        cfg["edge"] = cfg["edge"].name.lower()
+        cfg["source"] = cfg["source"].name.lower()
+        return cfg
+
+    @mcp.tool()
+    def daq_set_trigger_logic(logic: str = "or") -> dict:
+        """
+        Set how multiple trigger IOs combine: "or" (first fires) or "and"
+        (all must fire). Returns: the active logic.
+        """
+        from bugbuster.daq_config import DaqTrigLogic
+        bb = session.get_client()
+        require_hat(bb)
+        lg = DaqTrigLogic[logic.strip().upper()]
+        bb.daq_trigger.set_logic(lg)
+        return {"logic": lg.name.lower()}
+
+    @mcp.tool()
+    def daq_arm(armed: bool = True, pre_samples: int = 0) -> dict:
+        """
+        Arm or disarm the DAQ trigger latch. ``pre_samples`` is the pre-trigger
+        depth (fused samples) the host keeps before t=0. Returns: trigger state.
+        """
+        bb = session.get_client()
+        require_hat(bb)
+        bb.daq_trigger.arm(armed, pre_samples)
+        st = bb.daq_trigger.status()
+        st["logic"] = st["logic"].name.lower()
+        return st
+
+    @mcp.tool()
+    def daq_get_trigger_state() -> dict:
+        """
+        Read the whole trigger/flag engine state: combination logic, armed/fired
+        flags, and the role/edge/source/threshold of all 12 IOs.
+        """
+        bb = session.get_client()
+        require_hat(bb)
+        st = bb.daq_trigger.get_all()
+        st["logic"] = st["logic"].name.lower()
+        for io in st["ios"]:
+            io["role"] = io["role"].name.lower()
+            io["edge"] = io["edge"].name.lower()
+            io["source"] = io["source"].name.lower()
+        return st
+

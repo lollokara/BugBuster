@@ -23,7 +23,7 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       9
+#define BBP_PROTO_VERSION       10
 
 #define BBP_FW_VERSION_MAJOR    3
 #define BBP_FW_VERSION_MINOR    6
@@ -175,7 +175,7 @@ extern "C" {
 // HAT — Power Management
 #define BBP_CMD_HAT_SET_POWER       0xCA  // Enable/disable connector (A/B)
 #define BBP_CMD_HAT_GET_POWER       0xCB  // Get power status (both connectors)
-#define BBP_CMD_HAT_SET_IO_VOLTAGE  0xCC  // Set HVPAK I/O voltage (mV)
+#define BBP_CMD_HAT_SET_IO_VOLTAGE  0xCC  // Set I/O voltage (mV)
 #define BBP_CMD_HAT_SETUP_SWD       0xCD  // One-call SWD quick-setup
 #define BBP_CMD_HAT_GET_CAPS        0xC3
 #define BBP_CMD_HAT_GET_RAIL_STATUS 0xC4
@@ -187,7 +187,6 @@ extern "C" {
 #define BBP_CMD_HAT_CALIBRATE_IMPORT 0xAD
 #define BBP_CMD_HAT_SET_IO_BANK      0xAE
 #define BBP_CMD_HAT_SET_LEVEL_SHIFT  0xAF
-#define BBP_CMD_HAT_GET_HVPAK_INFO  0xCE  // Get HVPAK identity/status summary
 // HAT — Logic Analyzer
 #define BBP_CMD_HAT_LA_CONFIG       0xCF  // Configure LA capture
 #define BBP_CMD_HAT_LA_ARM          0xD5  // Arm trigger / start capture
@@ -197,11 +196,6 @@ extern "C" {
 #define BBP_CMD_HAT_LA_SET_ROUTE    0xD4
 #define BBP_CMD_HAT_LA_STOP         0xD9  // Stop capture
 #define BBP_CMD_HAT_LA_TRIGGER      0xDA  // Set trigger condition
-#define BBP_CMD_HAT_GET_HVPAK_CAPS   0xDB // Get HVPAK capability profile
-#define BBP_CMD_HAT_GET_HVPAK_LUT    0xDC // Get LUT truth table
-#define BBP_CMD_HAT_SET_HVPAK_LUT    0xDD // Set LUT truth table
-#define BBP_CMD_HAT_GET_HVPAK_BRIDGE 0xDE // Get bridge config
-#define BBP_CMD_HAT_SET_HVPAK_BRIDGE 0xDF // Set bridge config
 
 // HUSB238 USB PD
 #define BBP_CMD_USBPD_GET_STATUS    0xC0  // Get USB PD contract status
@@ -216,12 +210,6 @@ extern "C" {
 #define BBP_CMD_WIFI_CONNECT          0xE2  // Connect to WiFi network
 #define BBP_CMD_WIFI_SCAN             0xE4  // Scan for WiFi networks
 #define BBP_CMD_WIFI_SET_AP_PASSWORD  0xEF  // Set SoftAP password (persist to NVS, apply live)
-#define BBP_CMD_HAT_GET_HVPAK_ANALOG 0xE5 // Get analog config
-#define BBP_CMD_HAT_SET_HVPAK_ANALOG 0xE6 // Set analog config
-#define BBP_CMD_HAT_GET_HVPAK_PWM    0xE7 // Get PWM config
-#define BBP_CMD_HAT_SET_HVPAK_PWM    0xE8 // Set PWM config
-#define BBP_CMD_HAT_HVPAK_REG_READ   0xE9 // Raw register read
-#define BBP_CMD_HAT_HVPAK_REG_WRITE_MASKED 0xEA // Raw masked register write
 #define BBP_CMD_HAT_LA_LOG_ENABLE          0xEB // Enable/disable RP2040 log relay
 #define BBP_CMD_HAT_LA_USB_RESET           0xED // Reinitialize vendor bulk endpoint
 #define BBP_CMD_HAT_LA_STREAM_START        0xEE // Start LA streaming over vendor bulk
@@ -270,6 +258,17 @@ extern "C" {
 // Returns s3link_daq_status_t {range,streaming,source_enabled,_pad, I,V,P,Wh}.
 #define BBP_CMD_DAQ_MEASURE      0xBF  // no payload -> s3link_daq_status_t
 
+// DAQ trigger / flag configuration — handled LOCALLY on the S3 (the 12 IO event
+// sources live on the mainboard). One multiplexed opcode; payload[0] = sub-op.
+// Events are forwarded to the P4 as HAT_CMD_DAQ_MARK; arming as HAT_CMD_DAQ_ARM.
+#define BBP_CMD_DAQ_TRIG         0xCE  // sub-op multiplexed (see BBP_DAQ_TRIG_*)
+#define BBP_DAQ_TRIG_SET_IO      0x00  // payload: [op][io u8][role][edge][src][_pad][thr f32] -> OK
+#define BBP_DAQ_TRIG_GET_IO      0x01  // payload: [op][io u8] -> [role][edge][src][_pad][thr f32]
+#define BBP_DAQ_TRIG_SET_LOGIC   0x02  // payload: [op][logic u8] -> OK
+#define BBP_DAQ_TRIG_ARM         0x03  // payload: [op][armed u8][_pad u8][pre_samples u32] -> OK
+#define BBP_DAQ_TRIG_STATUS      0x04  // payload: [op] -> [logic][armed][fired][_pad]
+#define BBP_DAQ_TRIG_GET_ALL     0x05  // payload: [op] -> [logic][armed][fired][_pad] + 12 * io-cfg
+
 // System
 #define BBP_CMD_DEVICE_RESET    0x70
 #define BBP_CMD_REG_READ        0x71
@@ -311,12 +310,6 @@ extern "C" {
 #define BBP_ERR_CRC_FAIL        0x08
 #define BBP_ERR_FRAME_TOO_LARGE 0x09
 #define BBP_ERR_STREAM_ACTIVE   0x0A
-#define BBP_ERR_HVPAK_NO_DEVICE        0x0B
-#define BBP_ERR_HVPAK_TIMEOUT          0x0C
-#define BBP_ERR_HVPAK_UNKNOWN_IDENTITY 0x0D
-#define BBP_ERR_HVPAK_UNSUPPORTED_CAP  0x0E
-#define BBP_ERR_HVPAK_INVALID_INDEX    0x0F
-#define BBP_ERR_HVPAK_UNSAFE_REGISTER  0x10
 #define BBP_ERR_TIMEOUT                0x11
 #define BBP_ERR_IO_OWNERSHIP_REQUIRED  0x12  // IO slot owned by another session
 #define BBP_ERR_ADGS_ROUTE_REJECTED    0x13  // MUX mutual-exclusion rejected route

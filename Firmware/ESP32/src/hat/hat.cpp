@@ -925,15 +925,6 @@ static bool hat_get_io_voltage(void)
             actual_mv = (uint16_t)rsp[2] | ((uint16_t)rsp[3] << 8);
         }
         s_state.io_voltage_mv = actual_mv;
-        if (rsp_len >= 5) {
-            s_state.hvpak_part = rsp[4];
-        }
-        if (rsp_len >= 6) {
-            s_state.hvpak_ready = rsp[5] != 0;
-        }
-        if (rsp_len >= 7) {
-            s_state.hvpak_last_error = rsp[6];
-        }
         return true;
     }
     return false;
@@ -1005,7 +996,6 @@ bool hat_get_caps(HatCaps *caps)
     parsed.la_routes = rsp[p++];
     parsed.fw_major = rsp[p++];
     parsed.fw_minor = rsp[p++];
-    parsed.hvpak_present = rsp[p++] != 0;
 
     s_state.caps = parsed;
     s_state.caps_valid = true;
@@ -1172,6 +1162,31 @@ void hat_daq_push_telemetry(void)
                 rsp, &rsp_len, 200, sizeof(rsp));
 }
 
+void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;
+    hat_daq_mark_t m = {};
+    m.channel = io;
+    m.edge    = edge ? 1u : 0u;
+    m.kind    = kind;
+    uint8_t rsp[4]; uint8_t rsp_len = 0;
+    // Fire-and-forget: short timeout, marker latency dominated by UART.
+    hat_command(HAT_CMD_DAQ_MARK, (const uint8_t *)&m, sizeof(m),
+                rsp, &rsp_len, 50, sizeof(rsp));
+}
+
+void hat_daq_send_arm(bool armed, uint8_t trig_logic, uint32_t pre_samples)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;
+    hat_daq_arm_t a = {};
+    a.armed       = armed ? 1u : 0u;
+    a.trig_logic  = trig_logic;
+    a.pre_samples = pre_samples;
+    uint8_t rsp[4]; uint8_t rsp_len = 0;
+    hat_command(HAT_CMD_DAQ_ARM, (const uint8_t *)&a, sizeof(a),
+                rsp, &rsp_len, 200, sizeof(rsp));
+}
+
 void hat_update_leds(void)
 {
     if (!s_state.connected) return;
@@ -1266,15 +1281,6 @@ bool hat_set_io_voltage(uint16_t mv)
             actual_mv = (uint16_t)rsp[2] | ((uint16_t)rsp[3] << 8);
         }
         s_state.io_voltage_mv = actual_mv;
-        if (rsp_len >= 5) {
-            s_state.hvpak_part = rsp[4];
-        }
-        if (rsp_len >= 6) {
-            s_state.hvpak_ready = rsp[5] != 0;
-        }
-        if (rsp_len >= 7) {
-            s_state.hvpak_last_error = rsp[6];
-        }
         ESP_LOGI(TAG, "I/O voltage set to %u mV (actual %u mV)", mv, actual_mv);
         return true;
     }
@@ -1511,13 +1517,6 @@ bool hat_fw_status(HatFwUpdateStatus *status)
     return true;
 }
 
-bool hat_hvpak_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                       uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
-{
-    if (!s_state.connected) return false;
-    return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len) == HAT_RSP_OK;
-}
-
 uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
 {
@@ -1540,13 +1539,13 @@ bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)
 
     ESP_LOGI(TAG, "SWD quick-setup: %umV on connector %c", target_voltage_mv, 'A' + connector);
 
-    // 1. Set HVPAK I/O voltage to match target
+    // 1. Set I/O voltage to match target
     if (!hat_set_io_voltage(target_voltage_mv)) {
-        ESP_LOGW(TAG, "SWD setup: failed to set I/O voltage (hat err=0x%02X, hvpak err=0x%02X). "
+        ESP_LOGW(TAG, "SWD setup: failed to set I/O voltage (hat err=0x%02X). "
                       "Proceeding anyway (breadboard mode?)",
-                 s_last_error, s_state.hvpak_last_error);
+                 s_last_error);
     }
-    delay_ms(50);  // HVPAK stabilization (was 5ms)
+    delay_ms(50);  // I/O level shifter stabilization
 
     // 2. Enable connector power
     if (!hat_set_power(connector, true)) {

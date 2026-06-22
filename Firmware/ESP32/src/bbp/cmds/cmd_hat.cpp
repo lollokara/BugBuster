@@ -13,7 +13,6 @@
 //   BBP_CMD_HAT_GET_POWER       (0xCB)
 //   BBP_CMD_HAT_SET_IO_VOLTAGE  (0xCC)
 //   BBP_CMD_HAT_SETUP_SWD       (0xCD)
-//   BBP_CMD_HAT_GET_HVPAK_INFO  (0xCE) — passthrough
 //   BBP_CMD_HAT_LA_CONFIG       (0xCF)
 //   BBP_CMD_HAT_LA_ARM          (0xD5)
 //   BBP_CMD_HAT_LA_FORCE        (0xD6)
@@ -21,17 +20,6 @@
 //   BBP_CMD_HAT_LA_READ         (0xD8)
 //   BBP_CMD_HAT_LA_STOP         (0xD9)
 //   BBP_CMD_HAT_LA_TRIGGER      (0xDA)
-//   BBP_CMD_HAT_GET_HVPAK_CAPS  (0xDB) — passthrough
-//   BBP_CMD_HAT_GET_HVPAK_LUT   (0xDC) — passthrough
-//   BBP_CMD_HAT_SET_HVPAK_LUT   (0xDD) — passthrough
-//   BBP_CMD_HAT_GET_HVPAK_BRIDGE(0xDE) — passthrough
-//   BBP_CMD_HAT_SET_HVPAK_BRIDGE(0xDF) — passthrough
-//   BBP_CMD_HAT_GET_HVPAK_ANALOG(0xE5) — passthrough
-//   BBP_CMD_HAT_SET_HVPAK_ANALOG(0xE6) — passthrough
-//   BBP_CMD_HAT_GET_HVPAK_PWM   (0xE7) — passthrough
-//   BBP_CMD_HAT_SET_HVPAK_PWM   (0xE8) — passthrough
-//   BBP_CMD_HAT_HVPAK_REG_READ  (0xE9) — passthrough
-//   BBP_CMD_HAT_HVPAK_REG_WRITE_MASKED (0xEA) — passthrough
 //   BBP_CMD_HAT_LA_LOG_ENABLE   (0xEB)
 //   BBP_CMD_HAT_LA_USB_RESET    (0xED)
 //   BBP_CMD_HAT_LA_STREAM_START (0xEE)
@@ -47,18 +35,10 @@
 
 // ---------------------------------------------------------------------------
 // Helper: translate HAT error code to CMD error code.
-// Mirrors the switch in legacy handleHatHvpakPassthrough (bbp.cpp:1766-1793).
 // ---------------------------------------------------------------------------
 static int hat_err_to_cmd_err(uint8_t hat_err)
 {
     switch (hat_err) {
-        case HAT_ERR_HVPAK_NO_DEVICE:        return -CMD_ERR_HARDWARE;
-        case HAT_ERR_HVPAK_TIMEOUT:          return -CMD_ERR_TIMEOUT;
-        case HAT_ERR_HVPAK_UNKNOWN_IDENTITY: return -CMD_ERR_INVALID_STATE;
-        case HAT_ERR_HVPAK_UNSUPPORTED_CAP:  return -CMD_ERR_INVALID_STATE;
-        case HAT_ERR_HVPAK_INVALID_INDEX:    return -CMD_ERR_OUT_OF_RANGE;
-        case HAT_ERR_HVPAK_UNSAFE_REG:       return -CMD_ERR_OUT_OF_RANGE;
-        case HAT_ERR_HVPAK_INVALID_ARG:      return -CMD_ERR_BAD_ARG;
         case HAT_ERR_UNSUPPORTED:            return -CMD_ERR_INVALID_STATE;
         case HAT_ERR_CAL_INVALID:            return -CMD_ERR_INVALID_STATE;
         case HAT_ERR_BUSY:                   return -CMD_ERR_BUSY;
@@ -67,35 +47,12 @@ static int hat_err_to_cmd_err(uint8_t hat_err)
 }
 
 // ---------------------------------------------------------------------------
-// Helper: generic HVPAK passthrough.
-// Mirrors legacy handleHatHvpakPassthrough (bbp.cpp:1756-1798).
-// Response is memcpy of rsp[rsp_len] — preserving raw HAT bytes.
-// ---------------------------------------------------------------------------
-static int hvpak_passthrough(uint8_t hat_cmd,
-                             const uint8_t *payload, size_t len,
-                             uint8_t *resp, size_t *resp_len,
-                             uint32_t timeout_ms)
-{
-    uint8_t rsp[32] = {};
-    uint8_t rsp_len = 0;
-
-    if (!hat_hvpak_request(hat_cmd, payload, (uint8_t)len, rsp, &rsp_len, timeout_ms, sizeof(rsp))) {
-        return hat_err_to_cmd_err(hat_get_last_error());
-    }
-
-    // memcpy echo — raw HAT response bytes (bbp.cpp:1797)
-    memcpy(resp, rsp, rsp_len);
-    *resp_len = (size_t)rsp_len;
-    return (int)rsp_len;
-}
-
-// ---------------------------------------------------------------------------
 // HAT_GET_STATUS  payload: (none)
 // resp: bool detected, bool connected, u8 type, f32 detect_voltage,
 //       u8 fw_major, u8 fw_minor, bool config_confirmed,
 //       HAT_NUM_EXT_PINS u8 pin_config[],
 //       2x (bool enabled, f32 current_ma, bool fault),
-//       u16 io_voltage_mv, u8 hvpak_part, bool hvpak_ready, u8 hvpak_last_error,
+//       u16 io_voltage_mv,
 //       bool dap_connected, bool target_detected, u32 target_dpidr
 // Wire format matches legacy handleHatGetStatus (bbp.cpp:1578-1613).
 // Calls hat_get_dap_status() if connected, matching legacy.
@@ -128,9 +85,6 @@ static int handler_hat_get_status(const uint8_t *payload, size_t len,
         bbp_put_bool(resp, &pos, hs->connector[i].fault);
     }
     bbp_put_u16(resp, &pos, hs->io_voltage_mv);
-    bbp_put_u8(resp, &pos, hs->hvpak_part);
-    bbp_put_bool(resp, &pos, hs->hvpak_ready);
-    bbp_put_u8(resp, &pos, hs->hvpak_last_error);
     bbp_put_bool(resp, &pos, hs->dap_connected);
     bbp_put_bool(resp, &pos, hs->target_detected);
     bbp_put_u32(resp, &pos, hs->target_dpidr);
@@ -255,8 +209,7 @@ static int handler_hat_set_power(const uint8_t *payload, size_t len,
 
 // ---------------------------------------------------------------------------
 // HAT_GET_POWER  payload: (none)
-// resp: 2x (bool enabled, f32 current_ma, bool fault),
-//       u16 io_voltage_mv, u8 hvpak_part, bool hvpak_ready, u8 hvpak_last_error
+// resp: 2x (bool enabled, f32 current_ma, bool fault), u16 io_voltage_mv
 // Wire format matches legacy handleHatGetPower (bbp.cpp:1719-1734).
 // Calls hat_get_power_status() to refresh, matching legacy.
 // ---------------------------------------------------------------------------
@@ -275,17 +228,13 @@ static int handler_hat_get_power(const uint8_t *payload, size_t len,
         bbp_put_bool(resp, &pos, hs->connector[i].fault);
     }
     bbp_put_u16(resp, &pos, hs->io_voltage_mv);
-    bbp_put_u8(resp, &pos, hs->hvpak_part);
-    bbp_put_bool(resp, &pos, hs->hvpak_ready);
-    bbp_put_u8(resp, &pos, hs->hvpak_last_error);
     *resp_len = pos;
     return (int)pos;
 }
 
 // ---------------------------------------------------------------------------
 // HAT_SET_IO_VOLTAGE  payload: u16 mv
-// resp: u16 mv_requested, u16 io_voltage_mv, u8 hvpak_part, bool hvpak_ready,
-//       u8 hvpak_last_error
+// resp: u16 mv_requested, u16 io_voltage_mv
 // Wire format matches legacy handleHatSetIoVoltage (bbp.cpp:1737-1753).
 // ---------------------------------------------------------------------------
 static int handler_hat_set_io_voltage(const uint8_t *payload, size_t len,
@@ -300,9 +249,6 @@ static int handler_hat_set_io_voltage(const uint8_t *payload, size_t len,
     size_t pos = 0;
     bbp_put_u16(resp, &pos, mv);
     bbp_put_u16(resp, &pos, hat_get_state()->io_voltage_mv);
-    bbp_put_u8(resp, &pos, hat_get_state()->hvpak_part);
-    bbp_put_bool(resp, &pos, hat_get_state()->hvpak_ready);
-    bbp_put_u8(resp, &pos, hat_get_state()->hvpak_last_error);
     *resp_len = pos;
     return (int)pos;
 }
@@ -324,7 +270,6 @@ static int handler_hat_get_caps(const uint8_t *payload, size_t len,
     bbp_put_u8(resp, &pos, caps.la_routes);
     bbp_put_u8(resp, &pos, caps.fw_major);
     bbp_put_u8(resp, &pos, caps.fw_minor);
-    bbp_put_bool(resp, &pos, caps.hvpak_present);
     *resp_len = pos;
     return (int)pos;
 }
@@ -751,50 +696,9 @@ static int handler_hat_la_stream_start(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
-// HVPAK passthrough handlers (all delegate to hvpak_passthrough helper).
-// Wire format: raw bytes from HAT UART (memcpy echo from rsp buffer).
-// Legacy: handleHatHvpakPassthrough (bbp.cpp:1756-1798).
-// ---------------------------------------------------------------------------
-static int handler_hat_get_hvpak_info(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_GET_HVPAK_INFO, p, l, r, rl, 200); }
-
-static int handler_hat_get_hvpak_caps(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_GET_HVPAK_CAPS, p, l, r, rl, 200); }
-
-static int handler_hat_get_hvpak_lut(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_GET_HVPAK_LUT, p, l, r, rl, 200); }
-
-static int handler_hat_set_hvpak_lut(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_SET_HVPAK_LUT, p, l, r, rl, 200); }
-
-static int handler_hat_get_hvpak_bridge(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_GET_HVPAK_BRIDGE, p, l, r, rl, 200); }
-
-static int handler_hat_set_hvpak_bridge(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_SET_HVPAK_BRIDGE, p, l, r, rl, 200); }
-
-static int handler_hat_get_hvpak_analog(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_GET_HVPAK_ANALOG, p, l, r, rl, 200); }
-
-static int handler_hat_set_hvpak_analog(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_SET_HVPAK_ANALOG, p, l, r, rl, 200); }
-
-static int handler_hat_get_hvpak_pwm(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_GET_HVPAK_PWM, p, l, r, rl, 200); }
-
-static int handler_hat_set_hvpak_pwm(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_SET_HVPAK_PWM, p, l, r, rl, 200); }
-
-static int handler_hat_hvpak_reg_read(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_HVPAK_REG_READ, p, l, r, rl, 200); }
-
-static int handler_hat_hvpak_reg_write_masked(const uint8_t *p, size_t l, uint8_t *r, size_t *rl)
-{ return hvpak_passthrough(HAT_CMD_HVPAK_REG_WRITE_MASKED, p, l, r, rl, 200); }
-
-// ---------------------------------------------------------------------------
 // ArgSpec tables
 // ---------------------------------------------------------------------------
-// hat_get_status, hat_get_power, hat_la_status, hat_la_read, hvpak passthroughs:
+// hat_get_status, hat_get_power, hat_la_status, hat_la_read:
 // complex/variable/opaque responses — rsp=NULL.
 // hat_set_all_pins: variable-length (HAT_NUM_EXT_PINS bytes) — args=NULL.
 
@@ -954,8 +858,6 @@ static const CmdDescriptor s_hat_cmds[] = {
       s_hat_set_led_state_args, 2, NULL,                  0, handler_hat_set_led_state,         0                   },
     { BBP_CMD_HAT_SETUP_SWD,             "hat_setup_swd",
       s_hat_setup_swd_args,    2, s_hat_setup_swd_rsp,   3, handler_hat_setup_swd,             0                   },
-    { BBP_CMD_HAT_GET_HVPAK_INFO,        "hat_get_hvpak_info",
-      NULL,                    0, NULL,                   0, handler_hat_get_hvpak_info,        CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_LA_CONFIG,             "hat_la_config",
       s_hat_la_config_args,    3, s_hat_la_config_rsp,   3, handler_hat_la_config,             0                   },
     { BBP_CMD_HAT_LA_ARM,                "hat_la_arm",
@@ -972,28 +874,6 @@ static const CmdDescriptor s_hat_cmds[] = {
       NULL,                    0, NULL,                   0, handler_hat_la_stop,               0                   },
     { BBP_CMD_HAT_LA_TRIGGER,            "hat_la_trigger",
       s_hat_la_trigger_args,   2, NULL,                   0, handler_hat_la_trigger,            0                   },
-    { BBP_CMD_HAT_GET_HVPAK_CAPS,        "hat_get_hvpak_caps",
-      NULL,                    0, NULL,                   0, handler_hat_get_hvpak_caps,        CMD_FLAG_READS_STATE },
-    { BBP_CMD_HAT_GET_HVPAK_LUT,         "hat_get_hvpak_lut",
-      NULL,                    0, NULL,                   0, handler_hat_get_hvpak_lut,         CMD_FLAG_READS_STATE },
-    { BBP_CMD_HAT_SET_HVPAK_LUT,         "hat_set_hvpak_lut",
-      NULL,                    0, NULL,                   0, handler_hat_set_hvpak_lut,         0                   },
-    { BBP_CMD_HAT_GET_HVPAK_BRIDGE,      "hat_get_hvpak_bridge",
-      NULL,                    0, NULL,                   0, handler_hat_get_hvpak_bridge,      CMD_FLAG_READS_STATE },
-    { BBP_CMD_HAT_SET_HVPAK_BRIDGE,      "hat_set_hvpak_bridge",
-      NULL,                    0, NULL,                   0, handler_hat_set_hvpak_bridge,      0                   },
-    { BBP_CMD_HAT_GET_HVPAK_ANALOG,      "hat_get_hvpak_analog",
-      NULL,                    0, NULL,                   0, handler_hat_get_hvpak_analog,      CMD_FLAG_READS_STATE },
-    { BBP_CMD_HAT_SET_HVPAK_ANALOG,      "hat_set_hvpak_analog",
-      NULL,                    0, NULL,                   0, handler_hat_set_hvpak_analog,      0                   },
-    { BBP_CMD_HAT_GET_HVPAK_PWM,         "hat_get_hvpak_pwm",
-      NULL,                    0, NULL,                   0, handler_hat_get_hvpak_pwm,         CMD_FLAG_READS_STATE },
-    { BBP_CMD_HAT_SET_HVPAK_PWM,         "hat_set_hvpak_pwm",
-      NULL,                    0, NULL,                   0, handler_hat_set_hvpak_pwm,         0                   },
-    { BBP_CMD_HAT_HVPAK_REG_READ,        "hat_hvpak_reg_read",
-      NULL,                    0, NULL,                   0, handler_hat_hvpak_reg_read,        CMD_FLAG_READS_STATE },
-    { BBP_CMD_HAT_HVPAK_REG_WRITE_MASKED,"hat_hvpak_reg_write_masked",
-      NULL,                    0, NULL,                   0, handler_hat_hvpak_reg_write_masked, 0                  },
     { BBP_CMD_HAT_LA_LOG_ENABLE,         "hat_la_log_enable",
       s_hat_la_log_enable_args, 1, NULL,                  0, handler_hat_la_log_enable,         0                   },
     { BBP_CMD_HAT_LA_USB_RESET,          "hat_la_usb_reset",

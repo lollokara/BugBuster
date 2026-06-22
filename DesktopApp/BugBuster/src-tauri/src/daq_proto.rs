@@ -45,6 +45,11 @@ pub const CMD_RESET_ENERGY: u8 = 0x84;
 pub const CMD_RESET_STATS: u8 = 0x85;
 pub const CMD_FFT_CONFIG: u8 = 0x86;
 pub const CMD_SET_SOURCE: u8 = 0x87;
+pub const CMD_ARM: u8 = 0x88;
+
+// MARKER kind codes (usb_marker_payload_t.kind).
+pub const MARK_KIND_FLAG: u8 = 0;
+pub const MARK_KIND_TRIGGER: u8 = 1;
 
 // Current-range codes (current_range_t).
 pub const RANGE_HI: u8 = 0; // 51 Ω shunt — FINE, nA..~1.4 mA
@@ -131,6 +136,19 @@ pub struct StatusRecord {
     pub in_current: f32,
 }
 
+/// One digital event marker (flag or trigger), decoded from the 16-byte wire
+/// struct usb_marker_payload_t. Markers carry the fused-sample index the event
+/// aligns to, so they survive the host's multi-resolution decimation untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkerRecord {
+    pub sample_index: u32,
+    pub timestamp_us: u64,
+    pub channel: u8, // S3 IO number (1..12)
+    pub edge: u8,    // 0 = falling, 1 = rising
+    pub kind: u8,    // MARK_KIND_FLAG / MARK_KIND_TRIGGER
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DaqRecord {
     Waveform(WaveformRecord),
@@ -138,7 +156,8 @@ pub enum DaqRecord {
     Energy(EnergyRecord),
     Fft(FftRecord),
     Status(StatusRecord),
-    /// A record type we recognised but do not decode (e.g. MARKER).
+    Marker(MarkerRecord),
+    /// A record type we recognised but do not decode.
     Other(u8),
 }
 
@@ -212,6 +231,11 @@ fn rd_u16(p: &[u8], o: usize) -> u16 {
 }
 fn rd_u32(p: &[u8], o: usize) -> u32 {
     u32::from_le_bytes([p[o], p[o + 1], p[o + 2], p[o + 3]])
+}
+fn rd_u64(p: &[u8], o: usize) -> u64 {
+    u64::from_le_bytes([
+        p[o], p[o + 1], p[o + 2], p[o + 3], p[o + 4], p[o + 5], p[o + 6], p[o + 7],
+    ])
 }
 fn rd_f32(p: &[u8], o: usize) -> f32 {
     f32::from_le_bytes([p[o], p[o + 1], p[o + 2], p[o + 3]])
@@ -337,6 +361,20 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 s.in_current = rd_f32(p, 24);
             }
             DaqRecord::Status(s)
+        }
+        REC_MARKER => {
+            // usb_marker_payload_t: sample_index u32, timestamp_us u64,
+            // channel u8, edge u8, kind u8, _pad u8 (16 bytes).
+            if p.len() < 15 {
+                return DaqRecord::Other(rec_type);
+            }
+            DaqRecord::Marker(MarkerRecord {
+                sample_index: rd_u32(p, 0),
+                timestamp_us: rd_u64(p, 4),
+                channel: p[12],
+                edge: p[13],
+                kind: p[14],
+            })
         }
         other => DaqRecord::Other(other),
     }
@@ -476,5 +514,29 @@ mod tests {
         let last = frame.len() - 1;
         frame[last] ^= 0xFF;
         assert!(matches!(parse_frame(&frame), Err(FrameError::BadCrc { .. })));
+    }
+
+    #[test]
+    fn parse_marker_flag_and_trigger() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&1234u32.to_le_bytes()); // sample_index
+        p.extend_from_slice(&987_654u64.to_le_bytes()); // timestamp_us
+        p.push(6); // channel = IO6
+        p.push(1); // edge = rising
+        p.push(MARK_KIND_TRIGGER); // kind
+        p.push(0); // pad
+        let frame = frame_record(REC_MARKER, &p);
+        let (rec, n) = parse_frame(&frame).unwrap();
+        assert_eq!(n, frame.len());
+        match rec {
+            DaqRecord::Marker(m) => {
+                assert_eq!(m.sample_index, 1234);
+                assert_eq!(m.timestamp_us, 987_654);
+                assert_eq!(m.channel, 6);
+                assert_eq!(m.edge, 1);
+                assert_eq!(m.kind, MARK_KIND_TRIGGER);
+            }
+            _ => panic!("wrong record"),
+        }
     }
 }

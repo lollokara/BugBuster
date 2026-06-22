@@ -9,8 +9,8 @@
 // =============================================================================
 
 use crate::daq_proto::{
-    EnergyRecord, FftRecord, StatsRecord, StatusRecord, WaveformRecord, SRC_BLEND, SRC_COARSE,
-    SRC_FINE,
+    EnergyRecord, FftRecord, MarkerRecord, StatsRecord, StatusRecord, WaveformRecord, SRC_BLEND,
+    SRC_COARSE, SRC_FINE,
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +54,18 @@ fn adaptive_budget() -> (usize, usize) {
     (raw_cap, total_cap)
 }
 
+/// One digital event marker held by the store / returned in a view. Absolute
+/// `sample_index` is in `total` space (never decimated).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqMarker {
+    pub sample_index: u64,
+    pub timestamp_us: u64,
+    pub channel: u8,
+    pub edge: u8,
+    pub kind: u8,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DaqStore {
     pub sample_rate_hz: u32,
@@ -73,6 +85,11 @@ pub struct DaqStore {
     pub source: Vec<u8>,
     pub flags: Vec<u8>,
     pub overflow: bool,
+    /// Digital event markers (flags + triggers). Stored as discrete events with
+    /// their absolute sample index, so they are NEVER decimated away — they
+    /// survive every zoom level untouched (requirement: flags preserved through
+    /// compression). Kept sorted by `sample_index`.
+    pub markers: Vec<DaqMarker>,
     /// Latest device-pushed aggregate snapshots.
     pub last_stats: Option<StatsRecord>,
     pub last_energy: Option<EnergyRecord>,
@@ -106,6 +123,9 @@ pub struct DaqViewData {
     pub source: Vec<u8>,
     /// Per-bucket peak |dI/dt| in A/s for the bottom heatmap.
     pub didt: Vec<f32>,
+    /// Event markers whose absolute sample index falls inside the view window.
+    /// Always sent at full fidelity regardless of decimation.
+    pub markers: Vec<DaqMarker>,
 }
 
 /// Exact integrals over a selected sample range, for the shift-select panel.
@@ -360,12 +380,43 @@ impl DaqStore {
         self.flags.clear();
         self.overflow = false;
         self.total = 0;
+        self.markers.clear();
         for lvl in self.levels.iter_mut() {
             lvl.clear();
         }
         for b in self.built.iter_mut() {
             *b = 0;
         }
+    }
+
+    /// Record a digital event marker (flag / trigger). Kept sorted by absolute
+    /// sample index and never decimated, so it survives every zoom level.
+    pub fn push_marker(&mut self, m: &MarkerRecord) {
+        let dm = DaqMarker {
+            sample_index: m.sample_index as u64,
+            timestamp_us: m.timestamp_us,
+            channel: m.channel,
+            edge: m.edge,
+            kind: m.kind,
+        };
+        // Markers usually arrive in order; binary-search keeps the vec sorted.
+        let pos = self
+            .markers
+            .partition_point(|x| x.sample_index <= dm.sample_index);
+        self.markers.insert(pos, dm);
+        // Bound memory: keep at most the most recent 100k markers.
+        const MAX_MARKERS: usize = 100_000;
+        if self.markers.len() > MAX_MARKERS {
+            let drop = self.markers.len() - MAX_MARKERS;
+            self.markers.drain(0..drop);
+        }
+    }
+
+    /// Markers whose absolute sample index falls within `[start, end)`.
+    fn markers_in_range(&self, start: u64, end: u64) -> Vec<DaqMarker> {
+        let lo = self.markers.partition_point(|m| m.sample_index < start);
+        let hi = self.markers.partition_point(|m| m.sample_index < end);
+        self.markers[lo..hi].to_vec()
     }
 
     /// Evict the oldest raw samples once the recent window exceeds `raw_cap`.
@@ -503,6 +554,9 @@ impl DaqStore {
             overflow: self.overflow,
             ..Default::default()
         };
+        // Markers are independent of the decimation path — always attach the
+        // full set within the window so flags/triggers render at every zoom.
+        view.markers = self.markers_in_range(start, end);
         if span == 0 {
             return view;
         }
@@ -754,7 +808,6 @@ mod tests {
 
     #[test]
     fn integrate_constant_load() {
-        // 1 A, 1 V, 1 W for 1 s at 1 kSPS.
         let mut store = DaqStore::new(1000);
         push_constant(&mut store, 1.0, 1.0, 1000);
         let r = store.integrate(0, 1000);
@@ -873,5 +926,42 @@ mod tests {
 
         // Integral clamps to the resident window without panicking.
         let _ = store.integrate(0, n as u64);
+    }
+
+    #[test]
+    fn markers_survive_decimation() {
+        use crate::daq_proto::{MarkerRecord, MARK_KIND_FLAG, MARK_KIND_TRIGGER};
+        let mut store = DaqStore::new(1_000_000);
+        push_constant(&mut store, 0.5, 3.3, 100_000);
+        // A flag at sample 1000 and a trigger at 50_000.
+        store.push_marker(&MarkerRecord {
+            sample_index: 1_000,
+            timestamp_us: 4_000,
+            channel: 2,
+            edge: 1,
+            kind: MARK_KIND_FLAG,
+        });
+        store.push_marker(&MarkerRecord {
+            sample_index: 50_000,
+            timestamp_us: 200_000,
+            channel: 6,
+            edge: 0,
+            kind: MARK_KIND_TRIGGER,
+        });
+
+        // Heavily decimated overview (200 columns over 100k samples) must still
+        // carry both markers untouched.
+        let view = store.get_view(0, 100_000, 200, 1, 0);
+        assert!(view.decimated);
+        assert_eq!(view.markers.len(), 2);
+        assert_eq!(view.markers[0].sample_index, 1_000);
+        assert_eq!(view.markers[0].kind, MARK_KIND_FLAG);
+        assert_eq!(view.markers[1].sample_index, 50_000);
+        assert_eq!(view.markers[1].kind, MARK_KIND_TRIGGER);
+
+        // A narrow window only returns the markers inside it.
+        let zoom = store.get_view(0, 2_000, 800, 1, 0);
+        assert_eq!(zoom.markers.len(), 1);
+        assert_eq!(zoom.markers[0].channel, 2);
     }
 }

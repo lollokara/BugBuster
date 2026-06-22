@@ -69,34 +69,11 @@
 // -----------------------------------------------------------------------------
 // HAT I2C — DS4424 adjustable rail trim
 // -----------------------------------------------------------------------------
-#define BB_HVPAK_I2C        i2c1
-#define BB_HVPAK_SDA_PIN    6       // GPIO6
-#define BB_HVPAK_SCL_PIN    7       // GPIO7
-#define BB_HVPAK_I2C_FREQ   400000  // 400 kHz
-#define BB_HVPAK_PRESENT    0       // GreenPAK/HVPAK is not populated on this PCB
-#define BB_HVPAK_I2C_ADDR   0x48    // Documented HVPAK mailbox address
-#define BB_HVPAK_I2C_TIMEOUT_US 5000
-#define BB_HVPAK_IDENTITY_REG 0x48  // Read-only identity byte (virtual output mailbox)
-#define BB_HVPAK_COMMAND_REG  0x4C  // Writable command byte (virtual input mailbox)
-#define BB_HVPAK_ID_SLG47104   0x04
-#define BB_HVPAK_ID_SLG47115_E 0x15
-
-// HVPAK voltage range
-#define BB_HVPAK_MIN_MV     1200    // 1.2V minimum
-#define BB_HVPAK_MAX_MV     5500    // 5.5V maximum
-#define BB_HVPAK_DEFAULT_MV 3300    // Default 3.3V
-
-// HVPAK-specific HAT errors (wire protocol is not released yet, so extending the
-// error space is acceptable as long as it is documented alongside the change).
-#define HAT_ERR_HVPAK_NO_DEVICE        0x09
-#define HAT_ERR_HVPAK_TIMEOUT          0x0A
-#define HAT_ERR_HVPAK_UNKNOWN_IDENTITY 0x0B
-#define HAT_ERR_HVPAK_UNSUPPORTED_VOLT 0x0C
-#define HAT_ERR_HVPAK_WRITE_FAILED     0x0D
-#define HAT_ERR_HVPAK_INVALID_INDEX    0x0E
-#define HAT_ERR_HVPAK_UNSUPPORTED_CAP  0x0F
-#define HAT_ERR_HVPAK_INVALID_ARG      0x10
-#define HAT_ERR_HVPAK_UNSAFE_REG       0x11
+#define BB_HAT_I2C          i2c1
+#define BB_HAT_I2C_SDA_PIN  6       // GPIO6
+#define BB_HAT_I2C_SCL_PIN  7       // GPIO7
+#define BB_HAT_I2C_FREQ     400000  // 400 kHz
+#define BB_HAT_I2C_TIMEOUT_US 5000
 
 // -----------------------------------------------------------------------------
 // IRQ — Shared interrupt line with BugBuster
@@ -166,18 +143,6 @@
 #define HAT_CMD_GET_POWER_STATUS 0x11
 #define HAT_CMD_SET_IO_VOLTAGE  0x12
 #define HAT_CMD_GET_IO_VOLTAGE  0x13
-#define HAT_CMD_GET_HVPAK_INFO   0x14
-#define HAT_CMD_GET_HVPAK_CAPS   0x15
-#define HAT_CMD_GET_HVPAK_LUT    0x16
-#define HAT_CMD_SET_HVPAK_LUT    0x17
-#define HAT_CMD_GET_HVPAK_BRIDGE 0x18
-#define HAT_CMD_SET_HVPAK_BRIDGE 0x19
-#define HAT_CMD_GET_HVPAK_ANALOG 0x1A
-#define HAT_CMD_SET_HVPAK_ANALOG 0x1B
-#define HAT_CMD_GET_HVPAK_PWM    0x1C
-#define HAT_CMD_SET_HVPAK_PWM    0x1D
-#define HAT_CMD_HVPAK_REG_READ   0x1E
-#define HAT_CMD_HVPAK_REG_WRITE_MASKED 0x1F
 
 // SWD management
 #define HAT_CMD_GET_DAP_STATUS  0x20
@@ -251,7 +216,6 @@
 #define HAT_CAP_LA_LOW_SPEED      (1u << 2)
 #define HAT_CAP_LA_HIGH_SPEED     (1u << 3)
 #define HAT_CAP_SHIFTED_IO        (1u << 4)
-#define HAT_CAP_HVPAK_UNSUPPORTED (1u << 5)
 
 // HAT v2 rail IDs
 #define HAT_RAIL_3V3_ADJ        0

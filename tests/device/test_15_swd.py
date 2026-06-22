@@ -50,15 +50,6 @@ def _safe_hat_setup_swd(usb_device, *, target_voltage_mv: int = 3300, connector:
     reason pointing at the wiring.
     """
     from bugbuster.transport.usb import DeviceError
-    status = usb_device.hat_get_status()
-    if not status.get("hvpak_ready", False):
-        hvpak_part = status.get("hvpak_part", 0)
-        hvpak_err = status.get("hvpak_last_error", 0)
-        pytest.skip(
-            "HVPAK image not ready for programmable voltage control "
-            f"(part={hvpak_part}, err={hvpak_err}). Program a supported "
-            "SLG47104/SLG47115-E mailbox image and retry."
-        )
     try:
         return usb_device.hat_setup_swd(
             target_voltage_mv=target_voltage_mv, connector=connector
@@ -223,17 +214,14 @@ def test_hat_swd_target_detected(usb_device, request):
 @pytest.mark.usb_only
 def test_hat_setup_swd_multiple_voltages(usb_device):
     """
-    With a programmed HVPAK image present, hat_setup_swd should succeed on
-    every documented preset voltage and should not rely on the old stub
-    "BUSY means unsupported" path.
+    hat_setup_swd should succeed on every documented preset voltage.
     """
     for voltage_mv in (1800, 2500, 3300, 5000):
         result = _safe_hat_setup_swd(
             usb_device, target_voltage_mv=voltage_mv, connector=0
         )
         assert result is True, (
-            f"hat_setup_swd({voltage_mv}, 0) should return True when "
-            "HVPAK metadata reports ready"
+            f"hat_setup_swd({voltage_mv}, 0) should return True"
         )
         time.sleep(0.05)
     assert_no_faults(usb_device)

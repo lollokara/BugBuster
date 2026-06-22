@@ -19,6 +19,7 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
 use crate::tabs::daq_gl::{GlRenderer, Lane};
 use crate::tabs::daq_cal::CalibrationWizard;
+use crate::tabs::daq_trigger_panel::TriggerPanel;
 use crate::tauri_bridge::*;
 
 const LABEL_W: f64 = 70.0;
@@ -154,6 +155,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let fps = RwSignal::new(0.0f64);
     let fetch_ms = RwSignal::new(0.0f64);
     let cal_open = RwSignal::new(false);
+    let trig_open = RwSignal::new(false);
 
     // ---- Acquisition / source settings -------------------------------------
     let sample_rate_idx = RwSignal::new(3u8);
@@ -846,6 +848,9 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                 <button class="btn btn-ghost btn-sm" on:click=move |_| settings_open.update(|o| *o = !*o)>
                     {move || if settings_open.get() { "⚙ Hide" } else { "⚙ Settings" }}
                 </button>
+                <button class="btn btn-ghost btn-sm" on:click=move |_| trig_open.update(|o| *o = !*o)>
+                    {move || if trig_open.get() { "⚑ Triggers ◀" } else { "⚑ Triggers ▶" }}
+                </button>
                 <button class="btn btn-ghost btn-sm" on:click=move |_| cal_open.set(true)>
                     "🔧 Calibrate"
                 </button>
@@ -965,6 +970,9 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
 
                 // SMU calibration wizard (modal; control plane via S3 BBP).
                 <CalibrationWizard open=cal_open/>
+
+                // Trigger / flag configuration slide-in panel.
+                <TriggerPanel open=trig_open/>
             </div>
         </div>
     }
@@ -1294,6 +1302,34 @@ fn draw_overlay(
         ctx.stroke();
         ctx.set_fill_style_str("#94a3b8");
         let _ = ctx.fill_text(&fmt_time(t), x + 2.0, trace_bottom + 14.0);
+    }
+
+    // Event markers (flags + triggers) — vertical lines at exact sample
+    // positions, drawn at full fidelity regardless of decimation. Flags are
+    // amber, triggers cyan; a small tick + IO label sits in the timeline strip.
+    for m in &vd.markers {
+        if m.sample_index < vs || m.sample_index > ve {
+            continue;
+        }
+        let x = sample_to_x(m.sample_index);
+        let is_trig = m.kind == 1;
+        let color = if is_trig { "#22d3ee" } else { "#f59e0b" };
+        ctx.set_stroke_style_str(color);
+        ctx.set_line_width(if is_trig { 1.6 } else { 1.0 });
+        ctx.begin_path();
+        ctx.move_to(x, trace_top);
+        ctx.line_to(x, trace_bottom);
+        ctx.stroke();
+        // Timeline tick + IO label.
+        ctx.set_fill_style_str(color);
+        ctx.fill_rect(x - 1.0, trace_bottom, 2.0, RULER_H);
+        ctx.set_font("9px sans-serif");
+        let _ = ctx.fill_text(
+            &format!("{}{}", if is_trig { "▶" } else { "⚑" }, m.channel),
+            x + 2.0,
+            trace_top + 9.0,
+        );
+        ctx.set_font("10px sans-serif");
     }
 
     // Hover guide + per-track readout tooltip.

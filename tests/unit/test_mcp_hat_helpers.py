@@ -4,7 +4,7 @@ from bugbuster_mcp.tools.hat import build_hat_health_summary, build_hat_rail_pre
 def test_hat_health_summary_marks_faulted_rail_degraded():
     summary = build_hat_health_summary(
         status={"detected": True, "connected": True, "fw_version": "3.0", "la_route": 1},
-        caps={"rail_count": 3, "led_count": 8, "la_routes": 2, "hvpak_present": False},
+        caps={"rail_count": 3, "led_count": 8, "la_routes": 2},
         rail_status={
             "rails": [
                 {"rail_id": 0, "enabled": True, "voltage_mv": 3300, "current_ma": 10, "status": 0},

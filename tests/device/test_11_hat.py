@@ -35,16 +35,6 @@ def require_hat(request):
         pytest.skip("HAT tests require --hat flag")
 
 
-def _require_hvpak_ready(usb_device):
-    info = usb_device.hat_get_hvpak_info()
-    if not info.get("ready", False):
-        pytest.skip(
-            f"HVPAK backend not ready on this hardware "
-            f"(part={info.get('part')}, err={info.get('last_error')})"
-        )
-    return info, usb_device.hat_get_hvpak_caps()
-
-
 # ---------------------------------------------------------------------------
 # HAT status
 # ---------------------------------------------------------------------------
@@ -75,26 +65,6 @@ def test_hat_status_has_pin_config(device):
         assert len(pins) == 4, f"Expected 4 EXP_EXT pins, got {len(pins)}"
     assert_no_faults(device)
 
-
-def test_hat_status_optional_hvpak_metadata(device):
-    """
-    Newer firmware may surface HVPAK metadata in hat_get_status().
-    If present, the fields must be well-typed and internally consistent.
-    """
-    status = device.hat_get_status()
-
-    if "hvpak_part" in status:
-        assert isinstance(status["hvpak_part"], int)
-    if "hvpak_ready" in status:
-        assert isinstance(status["hvpak_ready"], bool)
-    if "hvpak_last_error" in status:
-        assert isinstance(status["hvpak_last_error"], int)
-    assert_no_faults(device)
-
-
-# ---------------------------------------------------------------------------
-# HAT detect
-# ---------------------------------------------------------------------------
 
 def test_hat_detect(device):
     """
@@ -192,12 +162,6 @@ def test_hat_get_power_usb(usb_device):
         assert "enabled" in conn, f"Connector {i} missing 'enabled'"
         assert "current_ma" in conn, f"Connector {i} missing 'current_ma'"
         assert "fault" in conn, f"Connector {i} missing 'fault'"
-    if "hvpak_part" in result:
-        assert isinstance(result["hvpak_part"], int)
-    if "hvpak_ready" in result:
-        assert isinstance(result["hvpak_ready"], bool)
-    if "hvpak_last_error" in result:
-        assert isinstance(result["hvpak_last_error"], int)
     assert_no_faults(usb_device)
 
 
@@ -209,121 +173,6 @@ def test_hat_get_power_http_raises(http_device):
     with pytest.raises(NotImplementedError):
         http_device.hat_get_power()
     assert_no_faults(http_device)
-
-
-@pytest.mark.usb_only
-def test_hat_get_hvpak_info_usb(usb_device):
-    """
-    Advanced HVPAK backend should at least surface part/ready/error/voltage info.
-    """
-    result = usb_device.hat_get_hvpak_info()
-    assert isinstance(result, dict)
-    assert "part" in result
-    assert "ready" in result
-    assert "last_error" in result
-    assert "requested_mv" in result
-    assert "applied_mv" in result
-    assert_no_faults(usb_device)
-
-
-@pytest.mark.usb_only
-def test_hat_get_hvpak_caps_usb_if_ready(usb_device):
-    """
-    If the programmed HVPAK image is detected and ready, the capability
-    profile should be readable over USB.
-    """
-    _, caps = _require_hvpak_ready(usb_device)
-    assert isinstance(caps, dict)
-    assert "flags" in caps
-    assert "pwm_count" in caps
-    assert "bridge_count" in caps
-    assert_no_faults(usb_device)
-
-
-@pytest.mark.usb_only
-def test_hat_hvpak_lut_roundtrip_usb_if_supported(usb_device):
-    _, caps = _require_hvpak_ready(usb_device)
-    candidates = [
-        ("lut2_count", 0),
-        ("lut3_count", 1),
-        ("lut4_count", 2),
-    ]
-    for count_key, kind in candidates:
-        if caps.get(count_key, 0) > 0:
-            before = usb_device.hat_get_hvpak_lut(kind, 0)
-            after = usb_device.hat_set_hvpak_lut(kind, 0, before["truth_table"])
-            assert after["truth_table"] == before["truth_table"]
-            assert_no_faults(usb_device)
-            return
-    pytest.skip("No LUT capability exposed by this programmed HVPAK image")
-
-
-@pytest.mark.usb_only
-def test_hat_hvpak_bridge_roundtrip_usb_if_supported(usb_device):
-    _, caps = _require_hvpak_ready(usb_device)
-    if caps.get("bridge_count", 0) == 0:
-        pytest.skip("No bridge capability exposed by this programmed HVPAK image")
-    before = usb_device.hat_get_hvpak_bridge()
-    after = usb_device.hat_set_hvpak_bridge(
-        output_mode_0=before["output_mode"][0],
-        ocp_retry_0=before["ocp_retry"][0],
-        output_mode_1=before["output_mode"][1],
-        ocp_retry_1=before["ocp_retry"][1],
-        predriver_enabled=before["predriver_enabled"],
-        full_bridge_enabled=before["full_bridge_enabled"],
-        control_selection_ph_en=before["control_selection_ph_en"],
-        ocp_deglitch_enabled=before["ocp_deglitch_enabled"],
-        uvlo_enabled=before["uvlo_enabled"],
-    )
-    assert after == before
-    assert_no_faults(usb_device)
-
-
-@pytest.mark.usb_only
-def test_hat_hvpak_analog_roundtrip_usb_if_supported(usb_device):
-    _, caps = _require_hvpak_ready(usb_device)
-    if caps.get("comparator_count", 0) == 0:
-        pytest.skip("No analog capability exposed by this programmed HVPAK image")
-    before = usb_device.hat_get_hvpak_analog()
-    after = usb_device.hat_set_hvpak_analog(**before)
-    assert after == before
-    assert_no_faults(usb_device)
-
-
-@pytest.mark.usb_only
-def test_hat_hvpak_pwm_roundtrip_usb_if_supported(usb_device):
-    _, caps = _require_hvpak_ready(usb_device)
-    if caps.get("pwm_count", 0) == 0:
-        pytest.skip("No PWM capability exposed by this programmed HVPAK image")
-    before = usb_device.hat_get_hvpak_pwm(0)
-    after = usb_device.hat_set_hvpak_pwm(
-        0,
-        initial_value=before["initial_value"],
-        resolution_7bit=before["resolution_7bit"],
-        out_plus_inverted=before["out_plus_inverted"],
-        out_minus_inverted=before["out_minus_inverted"],
-        async_powerdown=before["async_powerdown"],
-        autostop_mode=before["autostop_mode"],
-        boundary_osc_disable=before["boundary_osc_disable"],
-        phase_correct=before["phase_correct"],
-        deadband=before["deadband"],
-        stop_mode=before["stop_mode"],
-        i2c_trigger=before["i2c_trigger"],
-        duty_source=before["duty_source"],
-        period_clock_source=before["period_clock_source"],
-        duty_clock_source=before["duty_clock_source"],
-    )
-    assert after["index"] == before["index"]
-    assert after["initial_value"] == before["initial_value"]
-    assert_no_faults(usb_device)
-
-
-@pytest.mark.usb_only
-def test_hat_hvpak_reg_write_masked_rejects_unsafe_register(usb_device):
-    _require_hvpak_ready(usb_device)
-    with pytest.raises(DeviceError) as exc_info:
-        usb_device.hat_hvpak_reg_write_masked(0x48, 0x01, 0x01)
-    assert "HVPAK_UNSAFE_REGISTER" in str(exc_info.value)
 
 
 @pytest.mark.usb_only

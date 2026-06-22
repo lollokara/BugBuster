@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-pub const PROTO_VERSION: u8 = 9;
+pub const PROTO_VERSION: u8 = 10;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
 pub const HANDSHAKE_RSP_LEN: usize = 14;
@@ -148,7 +148,6 @@ pub const CMD_HAT_SET_POWER: u8 = 0xCA;
 pub const CMD_HAT_GET_POWER: u8 = 0xCB;
 pub const CMD_HAT_SET_IO_VOLTAGE: u8 = 0xCC;
 pub const CMD_HAT_SETUP_SWD: u8 = 0xCD;
-pub const CMD_HAT_GET_HVPAK_INFO: u8 = 0xCE;
 // HAT Logic Analyzer
 pub const CMD_HAT_LA_CONFIG: u8 = 0xCF;
 pub const CMD_HAT_SET_RAIL_ENABLE: u8 = 0xD2;
@@ -165,12 +164,6 @@ pub const CMD_HAT_LA_STATUS: u8 = 0xD7;
 pub const CMD_HAT_LA_READ: u8 = 0xD8;
 pub const CMD_HAT_LA_STOP: u8 = 0xD9;
 pub const CMD_HAT_LA_TRIGGER: u8 = 0xDA;
-// HAT HVPAK
-pub const CMD_HAT_GET_HVPAK_CAPS: u8 = 0xDB;
-pub const CMD_HAT_GET_HVPAK_LUT: u8 = 0xDC;
-pub const CMD_HAT_SET_HVPAK_LUT: u8 = 0xDD;
-pub const CMD_HAT_GET_HVPAK_BRIDGE: u8 = 0xDE;
-pub const CMD_HAT_SET_HVPAK_BRIDGE: u8 = 0xDF;
 
 // Waveform Generator
 pub const CMD_START_WAVEGEN: u8 = 0xD0;
@@ -203,13 +196,15 @@ pub const CMD_DAQ_CAL: u8 = 0xB7;
 /// No payload; returns s3link_daq_status_t.
 pub const CMD_DAQ_MEASURE: u8 = 0xBF;
 
-// HAT HVPAK extended
-pub const CMD_HAT_GET_HVPAK_ANALOG: u8 = 0xE5;
-pub const CMD_HAT_SET_HVPAK_ANALOG: u8 = 0xE6;
-pub const CMD_HAT_GET_HVPAK_PWM: u8 = 0xE7;
-pub const CMD_HAT_SET_HVPAK_PWM: u8 = 0xE8;
-pub const CMD_HAT_HVPAK_REG_READ: u8 = 0xE9;
-pub const CMD_HAT_HVPAK_REG_WRITE_MASKED: u8 = 0xEA;
+/// DAQ trigger / flag configuration — handled locally on the S3 (the 12 IO
+/// event sources live on the mainboard). Sub-op multiplexed; payload[0] = op.
+pub const CMD_DAQ_TRIG: u8 = 0xCE;
+pub const DAQ_TRIG_SET_IO: u8 = 0x00;
+pub const DAQ_TRIG_GET_IO: u8 = 0x01;
+pub const DAQ_TRIG_SET_LOGIC: u8 = 0x02;
+pub const DAQ_TRIG_ARM: u8 = 0x03;
+pub const DAQ_TRIG_STATUS: u8 = 0x04;
+pub const DAQ_TRIG_GET_ALL: u8 = 0x05;
 
 // HAT LA extended
 pub const CMD_HAT_LA_LOG_ENABLE: u8 = 0xEB;
@@ -272,12 +267,6 @@ pub const ERR_INVALID_STATE: u8 = 0x07;
 pub const ERR_CRC_FAIL: u8 = 0x08;
 pub const ERR_FRAME_TOO_LARGE: u8 = 0x09;
 pub const ERR_STREAM_ACTIVE: u8 = 0x0A;
-pub const ERR_HVPAK_NO_DEVICE: u8 = 0x0B;
-pub const ERR_HVPAK_TIMEOUT: u8 = 0x0C;
-pub const ERR_HVPAK_UNKNOWN_IDENTITY: u8 = 0x0D;
-pub const ERR_HVPAK_UNSUPPORTED_CAP: u8 = 0x0E;
-pub const ERR_HVPAK_INVALID_INDEX: u8 = 0x0F;
-pub const ERR_HVPAK_UNSAFE_REGISTER: u8 = 0x10;
 pub const ERR_TIMEOUT: u8 = 0x11;
 pub const ERR_IO_OWNERSHIP_REQUIRED: u8 = 0x12;
 

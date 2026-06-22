@@ -1626,10 +1626,6 @@ impl Transport for HttpTransport {
                     j.get("laRouteCount").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let fw_major = j.get("fwMajor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 let fw_minor = j.get("fwMinor").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let hvpak_present = j
-                    .get("hvpakPresent")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
                 let mut buf = Vec::new();
                 buf.push(hw_revision);
                 buf.extend_from_slice(&flags.to_le_bytes());
@@ -1639,7 +1635,6 @@ impl Transport for HttpTransport {
                 buf.push(la_route_count);
                 buf.push(fw_major);
                 buf.push(fw_minor);
-                buf.push(hvpak_present as u8);
                 Ok(buf)
             }
 

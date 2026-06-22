@@ -28,7 +28,6 @@ Scope: `Firmware/ESP32/web`
 | Fault clear/mask (global+channel) | System | Full | `/api/faults/clear*`, `/api/faults/mask*` |
 | HAT detect/reset/pin config | System | Full | `/api/hat/*` wired |
 | HAT v2 rails/calibration/LA route/logs | System HAT card | Full | `/api/hat/v2/*` + `/api/hat/la/status`; web shows rail status, calibration persist/validation, and RP2040 log relay state |
-| HAT HVPAK controls | N/A | Deferred | Feature currently not used; keep HTTP/Desktop/MCP parity deferred until HVPAK is a release target |
 | Scope view controls | Scope | Partial | UI controls present; not all desktop streaming/recording semantics |
 | Wavegen advanced controls | Scope | Full | Channel/mode/waveform/freq/amplitude/offset + start/stop wired |
 | Logic Analyzer stream | N/A | Deferred | USB vendor-bulk desktop path; no HTTP stream parity |
@@ -37,7 +36,7 @@ Scope: `Firmware/ESP32/web`
 
 ## Next closure targets
 1. Keep HAT command parity allowlists current via `tests/unit/test_hat_parity.py`.
-2. Explicit deferred messaging blocks for LA/USB-only and HVPAK-deferred surfaces.
+2. Explicit deferred messaging blocks for LA/USB-only surfaces.
 3. Browser parity smoke checklist per row (set/read roundtrip evidence).
 
 ## Verification Commands

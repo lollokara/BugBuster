@@ -8,7 +8,7 @@ Firmware for the BugBuster HAT expansion board, based on a fork of
 ## Architecture
 
 - **debugprobe core** (unmodified): CMSIS-DAP v2, SWD via PIO 0, CDC UART bridge, SWO
-- **BugBuster extensions** (this code): UART command handler, power management, HVPAK, logic analyzer
+- **BugBuster extensions** (this code): UART command handler, power management, logic analyzer
 
 ### Module Structure
 
@@ -19,7 +19,6 @@ src/
 ├── bb_config.h            — Pin definitions, protocol constants, command IDs
 ├── bb_protocol.c/h        — HAT UART framing (CRC-8, sync byte 0xAA, frame timeout)
 ├── bb_power.c/h           — Connector power enable/disable, ADC current sense, fault detection
-├── bb_hvpak.c/h           — HVPAK I2C backend (identity, preset voltage, LUT/bridge/analog/PWM, guarded raw register access)
 ├── bb_pins.c/h            — EXP_EXT pin routing (SWDIO/SWCLK/GPIO/TRACE)
 ├── bb_swd.c/h             — SWD status queries + target detect (line-reset + DPIDR read; bench validation pending)
 ├── bb_la.c/h              — Logic analyzer engine: PIO 1 capture, DMA with IRQ completion
@@ -63,15 +62,15 @@ make -j$(nproc)
 |-----|----------|-----------|
 | GPIO0 | UART0 TX (to BugBuster) | Output |
 | GPIO1 | UART0 RX (from BugBuster) | Input |
-| GPIO2 | SWCLK (to target via HVPAK) | Output |
-| GPIO3 | SWDIO (to target via HVPAK) | Bidirectional |
+| GPIO2 | SWCLK (to target) | Output |
+| GPIO3 | SWDIO (to target) | Bidirectional |
 | GPIO4 | EN_A (connector A power) | Output |
 | GPIO5 | EN_B (connector B power) | Output |
-| GPIO6 | HVPAK_SDA (I2C to HVPAK) | Bidirectional |
-| GPIO7 | HVPAK_SCL (I2C to HVPAK) | Output |
+| GPIO6 | I2C1 SDA (DS4424 DAC) | Bidirectional |
+| GPIO7 | I2C1 SCL (DS4424 DAC) | Output |
 | GPIO8 | IRQ (shared with BugBuster) | Open-drain (active low, 2ms pulse) |
 | GPIO9 | LED_STATUS | Output |
-| GPIO10-13 | EXP_EXT_1-4 (to HVPAK) | Configurable |
+| GPIO10-13 | EXP_EXT_1-4 | Configurable |
 | GPIO14-17 | LA capture inputs | Input (PIO 1) |
 | GPIO20 | FAULT_A (overcurrent) | Input (active low) |
 | GPIO21 | FAULT_B (overcurrent) | Input (active low) |
@@ -83,15 +82,7 @@ make -j$(nproc)
 
 ## Known Limitations
 
-1. **HVPAK depends on the programmed GreenPAK image contract** — the RP2040 now expects:
-   - I2C address `0x48`
-   - register `0x48` = read-only OTP identity byte (`0x04` = `SLG47104`, `0x15` = `SLG47115-E`)
-   - register `0x4C` = writable command mailbox
-   - preset voltages only: `1200`, `1800`, `2500`, `3300`, `5000` mV
-   If the image does not implement that contract, `SET_IO_VOLTAGE` fails closed and
-   reports HVPAK metadata/error codes up to the host.
-2. **Advanced HVPAK backend is capability-gated** — LUT, bridge, analog, PWM, and raw-register requests are validated against the detected part (`SLG47104` vs `SLG47115-E`).
-3. **SWD target detection implemented, bench validation pending** — `bb_swd_detect_target()` sends a SWD line-reset + JTAG-to-SWD switch sequence and reads DPIDR via `probe_write_bits`/`probe_read_bits` from debugprobe. ACK check and DPIDR capture are in place. Result has not yet been validated against real hardware.
+1. **SWD target detection implemented, bench validation pending** — `bb_swd_detect_target()` sends a SWD line-reset + JTAG-to-SWD switch sequence and reads DPIDR via `probe_write_bits`/`probe_read_bits` from debugprobe. ACK check and DPIDR capture are in place. Result has not yet been validated against real hardware.
 4. **Power fault pin polarity assumed active-low** — Needs confirmation from HAT schematic.
 5. **ADC current sense has no calibration** — Readings may be 5-10% off without offset/gain compensation.
 6. **GPIO8 IRQ signaling** — Firmware-wired: power fault and LA-done events trigger a 2 ms active-low pulse on GPIO8. Bench validation against real hardware is pending.

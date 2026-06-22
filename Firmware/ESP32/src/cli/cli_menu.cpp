@@ -4051,7 +4051,7 @@ static void render_field_hint(int row) {
             case HAT_FIELD_CONN_B:
                 hint = "Hint: power must be off before changing pin functions or VADJ."; break;
             case HAT_FIELD_IO_VOLT:
-                hint = "Hint: HVPAK level translation; range 1.2V to 5.5V."; break;
+                hint = "Hint: IO level translation; range 1.2V to 5.5V."; break;
             case HAT_FIELD_DETECT:
                 hint = "Hint: re-reads HAT detect pin and queries UART for type identification."; break;
             case HAT_FIELD_RESET:

@@ -128,6 +128,39 @@ class DaqCalPersist(IntEnum):
     FAILED = 3
 
 
+# --- Trigger / flag config (CmdId.DAQ_TRIG sub-ops, handled on the S3) ---------
+class DaqTrigOp(IntEnum):
+    SET_IO    = 0x00  # payload: [op][io u8][role][edge][src][_pad][thr f32]
+    GET_IO    = 0x01  # payload: [op][io u8] -> [role][edge][src][_pad][thr f32]
+    SET_LOGIC = 0x02  # payload: [op][logic u8]
+    ARM       = 0x03  # payload: [op][armed u8][_pad u8][pre_samples u32]
+    STATUS    = 0x04  # payload: [op] -> [logic][armed][fired][_pad]
+    GET_ALL   = 0x05  # payload: [op] -> [logic][armed][fired][_pad] + 12*io-cfg
+
+
+class DaqTrigRole(IntEnum):
+    OFF     = 0
+    FLAG    = 1  # every matching edge emits a USB MARKER (vertical line)
+    TRIGGER = 2  # matching edge(s) start the acquisition window (t=0)
+
+
+class DaqTrigEdge(IntEnum):
+    RISING  = 0
+    FALLING = 1
+    ANY     = 2
+
+
+class DaqTrigSource(IntEnum):
+    DIGITAL = 0  # ESP32 GPIO level (LV) or AD74416H DIN comparator (HV)
+    ANALOG  = 1  # AD74416H ADC voltage vs threshold (HV IOs 3/6/9/12 only)
+
+
+class DaqTrigLogic(IntEnum):
+    NONE = 0
+    OR   = 1  # first matching trigger IO fires the run
+    AND  = 2  # all trigger IOs must match before firing
+
+
 # Validation flag bits (mirror smu_cal.h SMU_CAL_FLAG_*).
 class DaqCalFlag(IntEnum):
     TOO_FEW_POINTS   = 0x0001
@@ -381,3 +414,99 @@ class DaqConfig:
         :func:`parse_measure`)."""
         resp = self._c._usb_cmd(CmdId.DAQ_MEASURE)
         return parse_measure(resp)
+
+
+# IOs that are analog-capable (position 3 of each connector block -> AD74416H).
+DAQ_HV_IOS = (3, 6, 9, 12)
+
+
+def daq_io_is_analog_capable(io: int) -> bool:
+    """True if ``io`` (1..12) is an HV / analog-capable IO (AD74416H channel)."""
+    return io in DAQ_HV_IOS
+
+
+class DaqTrigger:
+    """Bound accessor for the DAQ trigger / flag engine (S3 mainboard side).
+
+    The 12 mainboard IOs can each be tagged OFF / FLAG / TRIGGER. Flag edges
+    emit USB MARKER records (rendered as vertical lines on the host); trigger
+    edges start the acquisition window. HV IOs (3/6/9/12) may use an analog
+    voltage threshold instead of a digital level. Triggers combine with OR / AND.
+    """
+
+    def __init__(self, client) -> None:
+        self._c = client
+
+    def set_io(
+        self,
+        io: int,
+        role: DaqTrigRole,
+        edge: DaqTrigEdge = DaqTrigEdge.RISING,
+        source: DaqTrigSource = DaqTrigSource.DIGITAL,
+        threshold_v: float = 1.5,
+    ) -> None:
+        """Configure one IO (1..12). ``source``/``threshold_v`` only apply to
+        the analog-capable HV IOs (3/6/9/12)."""
+        if not (1 <= io <= 12):
+            raise ValueError(f"io must be 1..12, got {io}")
+        if source == DaqTrigSource.ANALOG and not daq_io_is_analog_capable(io):
+            raise ValueError(f"IO{io} is digital-only; analog source needs IO 3/6/9/12")
+        payload = bytes([DaqTrigOp.SET_IO, io, int(role), int(edge), int(source), 0])
+        payload += struct.pack("<f", float(threshold_v))
+        self._c._usb_cmd(CmdId.DAQ_TRIG, payload)
+
+    def get_io(self, io: int) -> Dict[str, Any]:
+        """Read one IO's trigger/flag configuration."""
+        if not (1 <= io <= 12):
+            raise ValueError(f"io must be 1..12, got {io}")
+        resp = self._c._usb_cmd(CmdId.DAQ_TRIG, bytes([DaqTrigOp.GET_IO, io]))
+        role, edge, source, _pad, thr = struct.unpack_from("<BBBBf", resp, 0)
+        return {
+            "io": io,
+            "role": DaqTrigRole(role),
+            "edge": DaqTrigEdge(edge),
+            "source": DaqTrigSource(source),
+            "threshold_v": thr,
+        }
+
+    def set_logic(self, logic: DaqTrigLogic) -> None:
+        """Set the trigger-group combination logic (OR / AND)."""
+        self._c._usb_cmd(CmdId.DAQ_TRIG, bytes([DaqTrigOp.SET_LOGIC, int(logic)]))
+
+    def arm(self, armed: bool = True, pre_samples: int = 0) -> None:
+        """Arm or disarm the trigger latch with a pre-trigger depth in samples."""
+        payload = bytes([DaqTrigOp.ARM, 1 if armed else 0, 0])
+        payload += struct.pack("<I", int(pre_samples) & 0xFFFFFFFF)
+        self._c._usb_cmd(CmdId.DAQ_TRIG, payload)
+
+    def status(self) -> Dict[str, Any]:
+        """Return {logic, armed, fired}."""
+        resp = self._c._usb_cmd(CmdId.DAQ_TRIG, bytes([DaqTrigOp.STATUS]))
+        return {
+            "logic": DaqTrigLogic(resp[0]),
+            "armed": bool(resp[1]),
+            "fired": bool(resp[2]),
+        }
+
+    def get_all(self) -> Dict[str, Any]:
+        """Return {logic, armed, fired, ios:[12 configs]}."""
+        resp = self._c._usb_cmd(CmdId.DAQ_TRIG, bytes([DaqTrigOp.GET_ALL]))
+        out: Dict[str, Any] = {
+            "logic": DaqTrigLogic(resp[0]),
+            "armed": bool(resp[1]),
+            "fired": bool(resp[2]),
+            "ios": [],
+        }
+        off = 4
+        for io in range(1, 13):
+            role, edge, source, _pad, thr = struct.unpack_from("<BBBBf", resp, off)
+            out["ios"].append({
+                "io": io,
+                "role": DaqTrigRole(role),
+                "edge": DaqTrigEdge(edge),
+                "source": DaqTrigSource(source),
+                "threshold_v": thr,
+            })
+            off += 8
+        return out
+

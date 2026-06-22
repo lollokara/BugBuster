@@ -35,7 +35,6 @@ def test_hat_get_caps():
     payload.append(2)                        # la_routes = 2
     payload.append(2)                        # fw_major = 2
     payload.append(1)                        # fw_minor = 1
-    payload.append(0)                        # hvpak_present = False
 
     client = BugBuster(_make_usb_transport({
         CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
@@ -50,7 +49,6 @@ def test_hat_get_caps():
     assert result["shifted_io_count"] == 8
     assert result["la_routes"] == 2
     assert result["fw_version"] == "2.1"
-    assert result["hvpak_present"] is False
 
 
 def test_hat_get_rail_status():

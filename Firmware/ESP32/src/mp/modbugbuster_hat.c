@@ -18,7 +18,7 @@ static void raise_hat_error(void)
 
 static mp_obj_t dict_from_status(const bugbuster_mp_hat_status_t *st)
 {
-    mp_obj_t d = mp_obj_new_dict(24);
+    mp_obj_t d = mp_obj_new_dict(21);
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_detected), mp_obj_new_bool(st->detected));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_connected), mp_obj_new_bool(st->connected));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_type), mp_obj_new_int(st->type));
@@ -27,9 +27,6 @@ static mp_obj_t dict_from_status(const bugbuster_mp_hat_status_t *st)
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_fw_minor), mp_obj_new_int(st->fw_minor));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_config_confirmed), mp_obj_new_bool(st->config_confirmed));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_io_voltage_mv), mp_obj_new_int(st->io_voltage_mv));
-    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_hvpak_part), mp_obj_new_int(st->hvpak_part));
-    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_hvpak_ready), mp_obj_new_bool(st->hvpak_ready));
-    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_hvpak_last_error), mp_obj_new_int(st->hvpak_last_error));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_caps_valid), mp_obj_new_bool(st->caps_valid));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_la_route), mp_obj_new_int(st->la_route));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_dap_connected), mp_obj_new_bool(st->dap_connected));
@@ -58,7 +55,7 @@ static mp_obj_t bugbuster_hat_caps(void)
 {
     bugbuster_mp_hat_caps_t caps = {0};
     if (!bugbuster_mp_hat_caps(&caps)) raise_hat_error();
-    mp_obj_t d = mp_obj_new_dict(10);
+    mp_obj_t d = mp_obj_new_dict(9);
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_hw_revision), mp_obj_new_int(caps.hw_revision));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_flags), mp_obj_new_int_from_uint(caps.flags));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_rail_count), mp_obj_new_int(caps.rail_count));
@@ -67,7 +64,6 @@ static mp_obj_t bugbuster_hat_caps(void)
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_la_routes), mp_obj_new_int(caps.la_routes));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_fw_major), mp_obj_new_int(caps.fw_major));
     mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_fw_minor), mp_obj_new_int(caps.fw_minor));
-    mp_obj_dict_store(d, MP_OBJ_NEW_QSTR(MP_QSTR_hvpak_present), mp_obj_new_bool(caps.hvpak_present));
     return d;
 }
 MP_DEFINE_CONST_FUN_OBJ_0(bugbuster_hat_caps_obj, bugbuster_hat_caps);

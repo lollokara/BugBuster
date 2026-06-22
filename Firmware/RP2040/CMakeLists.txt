@@ -50,7 +50,6 @@ add_executable(bugbuster_hat
     src/bb_main.c
     src/bb_protocol.c
     src/bb_power.c
-    src/bb_hvpak.c
     src/bb_pins.c
     src/bb_swd.c
     src/bb_la.c

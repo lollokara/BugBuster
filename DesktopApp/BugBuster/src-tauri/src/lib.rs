@@ -234,6 +234,11 @@ pub fn run() {
             daq_commands::daq_cal_abort,
             daq_commands::daq_cal_status,
             daq_commands::daq_measure,
+            daq_commands::daq_set_io_role,
+            daq_commands::daq_set_trig_logic,
+            daq_commands::daq_arm,
+            daq_commands::daq_get_trig_state,
+            daq_commands::daq_get_markers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

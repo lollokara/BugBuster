@@ -28,6 +28,7 @@
 #include "bbp.h"
 #include "adgs2414d.h"
 #include "dio.h"
+#include "daq_trigger.h"
 #include "selftest.h"
 #include "diag/clkgen.h"
 #include "status_led.h"
@@ -377,6 +378,9 @@ extern "C" void app_main(void)
     // 12a. Digital IO (ESP32 GPIO-based, 12 logical IOs)
     dio_init();
     serial_println("[BugBuster] Digital IO initialized");
+
+    // 12a'. DAQ trigger/flag event engine (per-IO flag/trigger roles).
+    daq_trigger_init();
 
     // 12b. Bench clock generator (CLI-only, no peripheral enabled at boot)
     clkgen_init();

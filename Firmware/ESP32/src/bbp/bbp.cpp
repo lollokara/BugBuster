@@ -424,7 +424,7 @@ static void processScopeStream(void)
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) != pdTRUE) return;
 
-    uint16_t currentSeq = g_deviceState.scope.seq;
+    uint16_t currentSeq = g_deviceState.scope->seq;
     if (currentSeq == s_scopeLastSeq) {
         xSemaphoreGive(g_stateMutex);
         return;
@@ -437,11 +437,11 @@ static void processScopeStream(void)
     // Send each new bucket as a SCOPE_DATA event
     for (uint16_t i = 0; i < newBuckets; i++) {
         uint16_t bucketSeq = s_scopeLastSeq + i + 1;
-        uint16_t idx = (g_deviceState.scope.head - (currentSeq - bucketSeq) + SCOPE_BUF_SIZE)
+        uint16_t idx = (g_deviceState.scope->head - (currentSeq - bucketSeq) + SCOPE_BUF_SIZE)
                        % SCOPE_BUF_SIZE;
         // Avoid sending partially-written data: only send if this index is valid
         if (idx >= SCOPE_BUF_SIZE) continue;
-        const ScopeBucket &b = g_deviceState.scope.buckets[idx];
+        const ScopeBucket &b = g_deviceState.scope->buckets[idx];
 
         uint8_t evtBuf[64];
         size_t pos = 0;
@@ -903,7 +903,7 @@ void bbpStartScopeStream(void)
 {
     // Sync to current scope sequence so we don't re-send stale frames
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        s_scopeLastSeq = g_deviceState.scope.seq;
+        s_scopeLastSeq = g_deviceState.scope->seq;
         xSemaphoreGive(g_stateMutex);
     }
     s_scopeStreamActive = true;

@@ -115,7 +115,7 @@ struct DeviceState {
     GpioState        gpio[6];           // 6 AD74416H GPIOs (A-F) for status LEDs
     GpioState        dio[12];           // 12 ESP32 GPIOs for user Digital IO
     uint8_t          muxState[ADGS_NUM_DEVICES]; // ADGS2414D switch states (main devices + self-test when present)
-    ScopeBuffer      scope;             // ring buffer for batched scope data
+    ScopeBuffer      *scope;            // points to g_scopeBuf in PSRAM (set by initTasks)
     WavegenState     wavegen;           // waveform generator state
 
     // I2C device states (updated by i2c poll task)

@@ -891,7 +891,6 @@ pub struct HatCaps {
     pub la_route_count: u8,
     pub fw_major: u8,
     pub fw_minor: u8,
-    pub hvpak_present: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1795,6 +1794,19 @@ pub struct DaqViewData {
     pub p_max: Vec<f32>,
     pub source: Vec<u8>,
     pub didt: Vec<f32>,
+    #[serde(default)]
+    pub markers: Vec<DaqMarker>,
+}
+
+/// One digital event marker (flag or trigger) aligned to an absolute sample.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqMarker {
+    pub sample_index: u64,
+    pub timestamp_us: u64,
+    pub channel: u8, // S3 IO number (1..12)
+    pub edge: u8,    // 0 falling, 1 rising
+    pub kind: u8,    // 0 flag, 1 trigger
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2050,6 +2062,92 @@ pub async fn daq_cal_status() -> Option<DaqCalStatus> {
 pub async fn daq_measure() -> Option<DaqMeasure> {
     let result = try_invoke("daq_measure", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
+}
+
+// ---- Trigger / flag panel -------------------------------------------------
+
+/// Per-IO trigger/flag configuration (mirrors the backend DaqTrigIoCfg).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqTrigIoCfg {
+    pub role: u8,        // 0 off, 1 flag, 2 trigger
+    pub edge: u8,        // 0 rising, 1 falling, 2 any
+    pub source: u8,      // 0 digital, 1 analog
+    pub threshold_v: f32,
+}
+
+/// Whole trigger-engine state + all 12 IO configs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqTrigState {
+    pub logic: u8,
+    pub armed: bool,
+    pub fired: bool,
+    pub ios: Vec<DaqTrigIoCfg>,
+}
+
+/// Configure one IO (1..12) as off / flag / trigger.
+pub async fn daq_set_io_role(io: u8, role: u8, edge: u8, source: u8, threshold_v: f32) {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        io: u8,
+        role: u8,
+        edge: u8,
+        source: u8,
+        threshold_v: f32,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        io,
+        role,
+        edge,
+        source,
+        threshold_v,
+    })
+    .unwrap();
+    try_invoke("daq_set_io_role", args).await;
+}
+
+/// Set the trigger-group combination logic (0 none, 1 OR, 2 AND).
+pub async fn daq_set_trig_logic(logic: u8) {
+    #[derive(Serialize)]
+    struct Args {
+        logic: u8,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { logic }).unwrap();
+    try_invoke("daq_set_trig_logic", args).await;
+}
+
+/// Arm / disarm the trigger latch with a pre-trigger depth (fused samples).
+pub async fn daq_arm(armed: bool, pre_samples: u32) {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        armed: bool,
+        pre_samples: u32,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { armed, pre_samples }).unwrap();
+    try_invoke("daq_arm", args).await;
+}
+
+/// Read the whole trigger engine state + all 12 IO configs.
+pub async fn daq_get_trig_state() -> Option<DaqTrigState> {
+    let result = try_invoke("daq_get_trig_state", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+/// Return all event markers within an absolute sample range.
+pub async fn daq_get_markers(start: u64, end: u64) -> Vec<DaqMarker> {
+    #[derive(Serialize)]
+    struct Args {
+        start: u64,
+        end: u64,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { start, end }).unwrap();
+    match try_invoke("daq_get_markers", args).await {
+        Some(v) => serde_wasm_bindgen::from_value(v).unwrap_or_default(),
+        None => Vec::new(),
+    }
 }
 
 pub async fn daq_set_range_lock(range: u8) {

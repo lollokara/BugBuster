@@ -291,6 +291,7 @@ fn process_loop(
                             DaqRecord::Energy(en) => s.last_energy = Some(en),
                             DaqRecord::Fft(f) => s.last_fft = Some(f),
                             DaqRecord::Status(stt) => s.last_status = Some(stt),
+                            DaqRecord::Marker(m) => s.push_marker(&m),
                             DaqRecord::Other(_) => {}
                         }
                     }
@@ -473,6 +474,125 @@ pub async fn daq_cfg_action(action: u8, mgr: State<'_, ConnectionManager>) -> Cm
         .await
         .map(|_| ())
         .map_err(map_err)
+}
+
+// ---- Trigger / flag configuration via the S3 BBP control plane (CMD_DAQ_TRIG) ┐
+// The 12 IO event sources live on the S3 mainboard; the engine forwards edge
+// events to the P4 as digital MARKERs (rendered as vertical lines), and trigger
+// edges anchor t=0 for the acquisition window.
+
+/// Per-IO trigger/flag configuration (mirrors daq_trig_io_cfg_t on the S3).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqTrigIoCfg {
+    pub role: u8,        // 0 off, 1 flag, 2 trigger
+    pub edge: u8,        // 0 rising, 1 falling, 2 any
+    pub source: u8,      // 0 digital, 1 analog (HV IOs 3/6/9/12 only)
+    pub threshold_v: f32, // analog threshold (V) when source == analog
+}
+
+/// Whole-engine status + all 12 IO configs (mirrors BBP_DAQ_TRIG_GET_ALL).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaqTrigState {
+    pub logic: u8,  // 0 none, 1 OR, 2 AND
+    pub armed: bool,
+    pub fired: bool,
+    pub ios: Vec<DaqTrigIoCfg>, // index 0 = IO1 .. index 11 = IO12
+}
+
+/// Configure one IO (1..12) as off / flag / trigger.
+#[tauri::command]
+pub async fn daq_set_io_role(
+    io: u8,
+    role: u8,
+    edge: u8,
+    source: u8,
+    threshold_v: f32,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    // [op][io][role][edge][src][_pad][thr f32 LE]
+    let mut payload = vec![bbp::DAQ_TRIG_SET_IO, io, role, edge, source, 0];
+    payload.extend_from_slice(&threshold_v.to_le_bytes());
+    mgr.send_command(bbp::CMD_DAQ_TRIG, &payload)
+        .await
+        .map(|_| ())
+        .map_err(map_err)
+}
+
+/// Set the trigger-group combination logic (0 none, 1 OR, 2 AND).
+#[tauri::command]
+pub async fn daq_set_trig_logic(logic: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
+    mgr.send_command(bbp::CMD_DAQ_TRIG, &[bbp::DAQ_TRIG_SET_LOGIC, logic])
+        .await
+        .map(|_| ())
+        .map_err(map_err)
+}
+
+/// Arm / disarm the trigger latch with a pre-trigger depth (fused samples).
+#[tauri::command]
+pub async fn daq_arm(
+    armed: bool,
+    pre_samples: u32,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    // [op][armed][_pad][pre_samples u32 LE]
+    let mut payload = vec![bbp::DAQ_TRIG_ARM, armed as u8, 0];
+    payload.extend_from_slice(&pre_samples.to_le_bytes());
+    mgr.send_command(bbp::CMD_DAQ_TRIG, &payload)
+        .await
+        .map(|_| ())
+        .map_err(map_err)
+}
+
+/// Read the whole trigger engine state + all 12 IO configs.
+#[tauri::command]
+pub async fn daq_get_trig_state(mgr: State<'_, ConnectionManager>) -> CmdResult<DaqTrigState> {
+    let resp = mgr
+        .send_command(bbp::CMD_DAQ_TRIG, &[bbp::DAQ_TRIG_GET_ALL])
+        .await
+        .map_err(map_err)?;
+    // [logic][armed][fired][_pad] + 12 * {role,edge,src,_pad,thr f32} (8 bytes)
+    if resp.len() < 4 {
+        return Err(format!("short trig state: {} bytes", resp.len()));
+    }
+    let mut st = DaqTrigState {
+        logic: resp[0],
+        armed: resp[1] != 0,
+        fired: resp[2] != 0,
+        ios: Vec::with_capacity(12),
+    };
+    let mut o = 4;
+    for _ in 0..12 {
+        if o + 8 > resp.len() {
+            break;
+        }
+        st.ios.push(DaqTrigIoCfg {
+            role: resp[o],
+            edge: resp[o + 1],
+            source: resp[o + 2],
+            threshold_v: f32::from_le_bytes([
+                resp[o + 4],
+                resp[o + 5],
+                resp[o + 6],
+                resp[o + 7],
+            ]),
+        });
+        o += 8;
+    }
+    Ok(st)
+}
+
+/// Return all event markers within an absolute sample range (never decimated).
+#[tauri::command]
+pub fn daq_get_markers(
+    start: u64,
+    end: u64,
+    daq: State<'_, DaqState>,
+) -> CmdResult<Vec<crate::daq_store::DaqMarker>> {
+    let store = daq.store.read().map_err(map_err)?;
+    let view = store.get_view(start, end.max(start + 1), 1, 0, 0);
+    Ok(view.markers)
 }
 
 // ---- SMU factory calibration via the S3 BBP control plane (CMD_DAQ_CAL) ------

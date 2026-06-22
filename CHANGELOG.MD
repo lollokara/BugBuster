@@ -288,7 +288,6 @@ netlist-verified hardware map in `Docs/FIRMWARE_HARDWARE_REFERENCE.md`.
 - **0x07 self-test alignment**: `SELFTEST_SUPPLY_VOLTAGES_CACHED` is now the canonical BBP name for command `0x07`; the Python client exposes `selftest_supplies_cached()` and keeps `selftest_efuse_currents()` as a compatibility alias. The simulator and HTTP mock now return cached rail voltages from `/api/selftest/supplies/cached`, and the MCP discovery tool reports the cached supply snapshot under `supply_voltages_cached`. (`python/bugbuster/constants.py`, `python/bugbuster/client.py`, `tests/mock/*`, `python/bugbuster_mcp/tools/discovery.py`)
 
 #### Desktop app
-- **HAT status SWD parsing**: `parse_hat_status()` now skips the 3 inserted HVPAK metadata bytes (`hvpak_part`, `hvpak_ready`, `hvpak_last_error`) before reading the SWD fields, so `dap_connected`, `target_detected`, and `target_dpidr` stay aligned. (`commands.rs`)
 - **GPIO HTTP transport framing**: `CMD_GET_GPIO_STATUS` now serializes all 12 logical GPIOs as full 5-byte records (`id`, `mode`, `output`, `input`, `pulldown`) instead of the legacy 6-pin layout. (`http_transport.rs`)
 
 ### Changed
@@ -665,11 +664,8 @@ ring-overflow path, ESP32 AP-password live change, and SWD detect.
 - `Firmware/ESP32/README.md` gained MicroPython Scripting, Board Profiles,
   and External Bus subsections; `README_CALIBRATION.md` notes board-profile
   scoping and on-device script access.
-- `Firmware/HAT_Architecture.md` §6 BBP table extended with HVPAK advanced
-  range `0xDB–0xDF` / `0xE5–0xEA`. `Firmware/HAT_Protocol.md` gained
-  §5.4 covering HVPAK backend commands `0x14–0x1F`.
-- `Firmware/BugBusterProtocol.md` Appendix A: HVPAK advanced `0xDB–0xEA`,
-  ext-bus `0x75/0x76` and `0xB8–0xBE`, QuickSetup `0xF0–0xF4`,
+- `Firmware/HAT_Architecture.md` §6 BBP table extended.
+- `Firmware/BugBusterProtocol.md` Appendix A: ext-bus `0x75/0x76` and `0xB8–0xBE`, QuickSetup `0xF0–0xF4`,
   `WIFI_SET_AP_PASSWORD 0xEF`.
 - `Firmware/FirmwareStructure.md` updated for Vite/Preact `web/` build,
   MicroPython component, `bus/ext_bus`, `quicksetup` modules.
@@ -811,7 +807,7 @@ firmware artifacts, alongside a top-level `SHA256SUMS.txt`.
 - Final IO mapping for the 12-IO ESP32 surface; PCB-only hardware path
   (`BREADBOARD_MODE` removed — see Removed).
 - I²C and SPI wrappers exposed in both Python client and device.
-- Dual-HVPAK / MUX / EFUSE refinements; PCA9535 fault-response path
+- MUX / EFUSE refinements; PCA9535 fault-response path
   applies the EFUSE3/4 silkscreen swap.
 - HUSB238: corrected `PD_STATUS0` / `STATUS1` section comment labels.
 
@@ -931,8 +927,7 @@ v4. Tags: `esp-fw-v3.0.0`, `hat-fw-v2.0`, `desktop-v0.5.0`.
 - `HAT_LA_LOG_ENABLE` (0xEB), `HAT_LA_LOG_EVT` (0xEC),
   `HAT_LA_USB_RESET` (0xED), `HAT_LA_STREAM_START` (0xEE) — LA streaming
   control and unsolicited log-relay events.
-- Error codes `0x0B`..`0x11` — HVPAK diagnostics, `ERR_TIMEOUT`,
-  `ERR_UNSAFE_REGISTER`.
+- Error codes `0x0B`..`0x11` — `ERR_TIMEOUT`, `ERR_UNSAFE_REGISTER`.
 - `channel_alert_mask` (u16) per channel; `mux_states[4]` trailer.
 
 #### Logic Analyzer (RP2040 HAT)
@@ -948,14 +943,6 @@ v4. Tags: `esp-fw-v3.0.0`, `hat-fw-v2.0`, `desktop-v0.5.0`.
   wire pending).
 - Log relay: `bb_la_log()` messages forwarded as `0xEC LA_LOG` events.
 - Rendering optimizations (dense mode), E2E tests.
-
-#### HVPAK backend
-- Dual-HVPAK mailbox contract: I2C `0x48`, identity register `0x48`
-  (`0x04` = SLG47104, `0x15` = SLG47115-E), command register `0x4C`, preset
-  voltages `1200/1800/2500/3300/5000 mV`.
-- Capability-gated LUT / bridge / analog / PWM / raw-register access;
-  descriptor validation per `Docs/hvpak-descriptor-validation.md`.
-- HVPAK-specific error codes with host-side decoding.
 
 #### Board profiles
 - JSON schema (`Docs/board_profiles.md`) with nested `{value, locked}` for

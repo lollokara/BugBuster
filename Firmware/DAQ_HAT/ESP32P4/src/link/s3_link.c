@@ -177,6 +177,8 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
         case HATP_CMD_DAQ_SET_SOURCE:
         case HATP_CMD_DAQ_GET_STATUS:
         case HATP_CMD_DAQ_SYNC:
+        case HATP_CMD_DAQ_ARM:
+        case HATP_CMD_DAQ_MARK:
         case HATP_CMD_SET_CH_LEDS:
         case HATP_CMD_DAQ_CAL_START:
         case HATP_CMD_DAQ_CAL_ACK:

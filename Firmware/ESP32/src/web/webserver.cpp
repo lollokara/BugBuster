@@ -804,7 +804,7 @@ static esp_err_t handle_get_scope(httpd_req_t *req)
     cJSON_AddItemReferenceToObject(root, "s", samples);
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        const ScopeBuffer& sb = g_deviceState.scope;
+        const ScopeBuffer& sb = *g_deviceState.scope;
         uint16_t cur_seq = sb.seq;
         uint16_t head    = sb.head;
 
@@ -883,7 +883,7 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
         bool sent_data = false;
 
         if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            const ScopeBuffer& sb = g_deviceState.scope;
+            const ScopeBuffer& sb = *g_deviceState.scope;
             uint16_t cur_seq = sb.seq;
             uint16_t head    = sb.head;
 
@@ -3132,7 +3132,6 @@ static esp_err_t handle_get_hat_v2_caps(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "laRouteCount", caps->la_routes);
     cJSON_AddNumberToObject(root, "fwMajor", caps->fw_major);
     cJSON_AddNumberToObject(root, "fwMinor", caps->fw_minor);
-    cJSON_AddBoolToObject(root, "hvpakPresent", caps->hvpak_present);
     return send_json(req, root);
 }
 
@@ -5234,7 +5233,7 @@ static esp_err_t handle_get_scripts_files(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
 
-    static char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
+    static EXT_RAM_BSS_ATTR char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
     int count = script_storage_list(s_names, SCRIPT_LIST_MAX);
 
     cJSON *root = cJSON_CreateObject();
@@ -5258,7 +5257,7 @@ static esp_err_t handle_get_scripts_storage(httpd_req_t *req)
         return send_error(req, 500, "SPIFFS info unavailable");
     }
 
-    static char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
+    static EXT_RAM_BSS_ATTR char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
     int count = script_storage_list(s_names, SCRIPT_LIST_MAX);
 
     cJSON *root = cJSON_CreateObject();

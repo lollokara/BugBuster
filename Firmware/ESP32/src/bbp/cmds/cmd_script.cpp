@@ -183,8 +183,8 @@ static int handler_script_list(const uint8_t *payload, size_t len,
 {
     (void)payload; (void)len;
 
-    // Use a static buffer to avoid stack pressure.
-    static char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
+    // Use a static buffer to avoid stack pressure (PSRAM to save internal DRAM).
+    static EXT_RAM_BSS_ATTR char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
     int count = script_storage_list(s_names, SCRIPT_LIST_MAX);
 
     size_t pos = 0;
