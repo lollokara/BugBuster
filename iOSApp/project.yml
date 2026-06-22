@@ -2,7 +2,7 @@ name: bugbuster
 options:
   bundleIdPrefix: com.lorenzo.bugbuster
   deploymentTarget:
-    iOS: 16.0
+    iOS: 26.0
 fileGroups: []
 configs:
   debug: debug
@@ -35,6 +35,8 @@ targets:
         CFBundleVersion: "1"
         NSCameraUsageDescription: "Scan QR code to connect to the BugBuster hardware device over Wi-Fi."
         NSLocalNetworkUsageDescription: "Access BugBuster hardware devices on your local network."
+        NSBluetoothAlwaysUsageDescription: "Discover and control nearby BugBuster hardware over Bluetooth Low Energy."
+        NSBluetoothPeripheralUsageDescription: "Connect to BugBuster hardware over Bluetooth Low Energy."
         NSBonjourServices:
           - _bugbuster._tcp
           - _http._tcp
@@ -47,3 +49,4 @@ targets:
       - sdk: UIKit.framework
       - sdk: SwiftUI.framework
       - sdk: Combine.framework
+      - sdk: CoreBluetooth.framework

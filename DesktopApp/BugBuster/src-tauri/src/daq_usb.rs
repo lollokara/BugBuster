@@ -11,8 +11,9 @@
 // =============================================================================
 
 use crate::daq_proto::{
-    self, DaqRecord, EnergyRecord, FftRecord, StatBlock, StatsRecord, StatusRecord, WaveSample,
-    WaveformRecord, RANGE_HI, RANGE_LO, RANGE_MID, SRC_BLEND, SRC_COARSE, SRC_FINE,
+    self, DaqRecord, EnergyRecord, FftRecord, MarkerRecord, StatBlock, StatsRecord, StatusRecord,
+    WaveSample, WaveformRecord, MARK_KIND_FLAG, MARK_KIND_TRIGGER, RANGE_HI, RANGE_LO, RANGE_MID,
+    SRC_BLEND, SRC_COARSE, SRC_FINE,
 };
 use anyhow::{anyhow, Result};
 use nusb::transfer::RequestBuffer;
@@ -405,6 +406,52 @@ impl MockDaqTransport {
             in_current: if self.source_enabled { i_in } else { 0.0 },
         }
     }
+    /// Emit synthetic event markers for any 5 Hz burst edge that falls inside
+    /// the sample window `[start, start+count)`. Each burst start raises a FLAG
+    /// on IO1; its end raises a FLAG on IO2; every 5th burst also fires a
+    /// TRIGGER on IO3. Aligned to `current_at`'s 0.200 s period / 0.040 s active
+    /// window so the lines land on the rising/falling edges of the load.
+    fn synth_markers(&self, start: u64, count: usize, eff_rate: f64) -> Vec<DaqRecord> {
+        if count == 0 {
+            return Vec::new();
+        }
+        let dt = 1.0_f64 / eff_rate;
+        let period = 0.200_f64;
+        let active_w = 0.040_f64;
+        let t0 = start as f64 * dt;
+        let t1 = (start + count as u64) as f64 * dt;
+        let mk = |idx: u64, ch: u8, edge: u8, kind: u8| {
+            DaqRecord::Marker(MarkerRecord {
+                sample_index: idx as u32,
+                timestamp_us: (idx as f64 * dt * 1e6) as u64,
+                channel: ch,
+                edge,
+                kind,
+            })
+        };
+        let mut out = Vec::new();
+        let first = (t0 / period).floor() as i64;
+        let last = (t1 / period).ceil() as i64;
+        for b in first..=last {
+            if b < 0 {
+                continue;
+            }
+            let t_rise = b as f64 * period;
+            let t_fall = t_rise + active_w;
+            if t_rise >= t0 && t_rise < t1 {
+                let idx = (t_rise / dt).round() as u64;
+                out.push(mk(idx, 1, 1, MARK_KIND_FLAG));
+                if b % 5 == 0 {
+                    out.push(mk(idx, 3, 1, MARK_KIND_TRIGGER));
+                }
+            }
+            if t_fall >= t0 && t_fall < t1 {
+                let idx = (t_fall / dt).round() as u64;
+                out.push(mk(idx, 2, 0, MARK_KIND_FLAG));
+            }
+        }
+        out
+    }
 }
 
 impl DaqTransport for MockDaqTransport {
@@ -420,7 +467,12 @@ impl DaqTransport for MockDaqTransport {
         let dec = self.decimation.max(1) as f64;
         let eff_rate = (self.sample_rate as f64 / dec).max(1.0);
         let count = ((eff_rate * 0.030) as usize).clamp(1, 4096);
+        let win_start = self.sample_idx;
         out.push(DaqRecord::Waveform(self.synth_waveform(count)));
+
+        // Synthetic event markers aligned to the 5 Hz activity bursts so the
+        // flag/trigger overlay has something to render in mock mode.
+        out.extend(self.synth_markers(win_start, count, eff_rate));
 
         // Aux records ~5 Hz.
         if self.last_aux.elapsed().as_millis() >= 200 {

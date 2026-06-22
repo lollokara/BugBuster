@@ -177,6 +177,49 @@
 .daq-seg.neon-amber button.active { background: #d97706; border-color: #fbbf24; box-shadow: 0 0 9px rgba(245,158,11,0.65); }
 .daq-seg.neon-cyan  button.active { background: #0891b2; border-color: #22d3ee; box-shadow: 0 0 9px rgba(34,211,238,0.65); }
 .daq-seg.neon-green button.active { background: #059669; border-color: #34d399; box-shadow: 0 0 9px rgba(16,185,129,0.65); }
+.daq-seg.neon-purple button.active { background: #7c3aed; border-color: #a855f7; box-shadow: 0 0 9px rgba(168,85,247,0.6); }
+.daq-seg.neon-pink  button.active { background: #db2777; border-color: #f472b6; box-shadow: 0 0 9px rgba(236,72,153,0.6); }
+.daq-seg.neon-slate button.active { background: #475569; border-color: #94a3b8; box-shadow: 0 0 9px rgba(148,163,184,0.45); }
+
+/* Shared slide-in / docked panel chrome so the FFT, Settings and Triggers
+   panels read as one family. */
+.daq-panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid #1b2940;
+}
+.daq-panel-title {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.6px;
+    display: flex; align-items: center; gap: 7px;
+}
+.daq-panel-title::before {
+    content: ''; width: 8px; height: 8px; border-radius: 2px; background: currentColor;
+    box-shadow: 0 0 8px currentColor;
+}
+.daq-panel-close {
+    width: 24px; height: 24px; border-radius: 8px; border: 1px solid #233149;
+    background: #0b1426; color: #94a3b8; cursor: pointer; font-size: 13px; line-height: 1;
+    font-family: inherit; transition: all 0.15s;
+}
+.daq-panel-close:hover { border-color: #ef4444; color: #f87171; }
+
+/* Glowing on/off power button (red = off, green = on). */
+.daq-power-btn {
+    width: 100%; display: flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 9px; margin-bottom: 9px; border-radius: 10px; cursor: pointer;
+    font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.2px;
+    border: 1px solid; font-family: inherit; transition: all 0.2s;
+}
+.daq-power-btn .dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.daq-power-btn.on {
+    background: rgba(16,185,129,0.14); border-color: #10b981; color: #34d399;
+    box-shadow: 0 0 14px rgba(16,185,129,0.45), inset 0 0 12px rgba(16,185,129,0.12);
+}
+.daq-power-btn.on:hover { background: rgba(16,185,129,0.22); }
+.daq-power-btn.off {
+    background: rgba(239,68,68,0.12); border-color: #ef4444; color: #f87171;
+    box-shadow: 0 0 14px rgba(239,68,68,0.4), inset 0 0 12px rgba(239,68,68,0.10);
+}
+.daq-power-btn.off:hover { background: rgba(239,68,68,0.2); }
 
 .daq-step { display: flex; align-items: center; gap: 4px; }
 .daq-step button {

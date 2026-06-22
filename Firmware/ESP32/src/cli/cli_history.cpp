@@ -4,13 +4,14 @@
 
 #include "cli_history.h"
 #include "cli_term.h"
+#include "esp_attr.h"
 
 #include <string.h>
 
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
-static char s_ring[CLI_HISTORY_DEPTH][CLI_HISTORY_LINE_BUF];
+static EXT_RAM_BSS_ATTR char s_ring[CLI_HISTORY_DEPTH][CLI_HISTORY_LINE_BUF];
 static int  s_count    = 0;   // number of valid entries (0..CLI_HISTORY_DEPTH)
 static int  s_head     = 0;   // next write slot (ring index)
 static char s_scratch[CLI_HISTORY_LINE_BUF];

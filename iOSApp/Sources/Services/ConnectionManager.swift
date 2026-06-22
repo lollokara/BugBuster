@@ -11,22 +11,32 @@ public enum ConnectionState: String, Codable {
     case error
 }
 
+/// Which physical transport the active connection uses.
+public enum TransportKind: String, Codable {
+    case wifi
+    case ble
+}
+
 public struct DiscoveredDevice: Identifiable, Hashable, Codable {
-    public var id: String { mac.isEmpty ? hostname : mac }
+    public var id: String { isBle ? "ble:\(bleId?.uuidString ?? hostname)" : (mac.isEmpty ? hostname : mac) }
     public let hostname: String
     public let ip: String
     public let port: Int
     public let firmware: String
     public let mac: String
     public let model: String
-    
-    public init(hostname: String, ip: String, port: Int, firmware: String = "", mac: String = "", model: String = "") {
+    public let isBle: Bool
+    public let bleId: UUID?
+
+    public init(hostname: String, ip: String, port: Int, firmware: String = "", mac: String = "", model: String = "", isBle: Bool = false, bleId: UUID? = nil) {
         self.hostname = hostname
         self.ip = ip
         self.port = port
         self.firmware = firmware
         self.mac = mac
         self.model = model
+        self.isBle = isBle
+        self.bleId = bleId
     }
 }
 
@@ -36,6 +46,22 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var activeDevice: DiscoveredDevice? = nil
     @Published public var adminToken: String = ""
     @Published public var lshiftOe: Bool = false
+
+    /// Transport backing the current/last connection. Selected when the user
+    /// taps a discovered device (Bonjour = .wifi, BLE peripheral = .ble).
+    @Published public var transport: TransportKind = .wifi
+
+    // MARK: - BLE
+    /// CoreBluetooth control plane mirroring the WiFi API surface.
+    public let ble = BLETransport()
+    /// BugBuster peripherals seen over BLE (separate list from Bonjour results).
+    @Published public var bleDevices: [DiscoveredDevice] = []
+    /// True once CoreBluetooth is powered on and authorised.
+    @Published public var bleAvailable: Bool = false
+    /// True while a BLE scan is active (mirrors BLETransport.isScanning).
+    @Published public var bleScanning: Bool = false
+    private var cancellables: Set<AnyCancellable> = []
+    private var blePollTask: Task<Void, Never>? = nil
     
     // Saved tokens: [MAC: Token]
     public var savedTokens: [String: String] {
@@ -147,6 +173,62 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         }
         
         startDiscovery()
+        setupBLE()
+    }
+
+    // MARK: - BLE wiring
+
+    private func setupBLE() {
+        // Mirror the transport's discovered peripherals into our own list,
+        // adapting BLEDevice -> DiscoveredDevice (marked isBle).
+        ble.$devices
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] devs in
+                self?.bleDevices = devs.map { d in
+                    DiscoveredDevice(hostname: d.name, ip: "", port: 0, firmware: "",
+                                     mac: "", model: "bugbuster-s3", isBle: true, bleId: d.id)
+                }
+            }
+            .store(in: &cancellables)
+
+        ble.$poweredOn
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] on in
+                guard let self = self else { return }
+                self.bleAvailable = on
+                // Begin discovery as soon as the radio is ready, while idle.
+                if on && self.connectionState != .connected {
+                    self.ble.startScan()
+                }
+            }
+            .store(in: &cancellables)
+
+        ble.$isScanning
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] s in self?.bleScanning = s }
+            .store(in: &cancellables)
+
+        ble.onDisconnect = { [weak self] in
+            guard let self = self else { return }
+            if self.transport == .ble {
+                self.blePollTask?.cancel()
+                self.blePollTask = nil
+                self.updateOnMain {
+                    if self.connectionState == .connected {
+                        self.connectionState = .disconnected
+                    }
+                }
+            }
+        }
+    }
+
+    /// Begin scanning for BugBuster peripherals over BLE.
+    public func startBLEScan() {
+        ble.startScan()
+    }
+
+    public func stopBLEScan() {
+        ble.stopScan()
     }
     
     public func startDiscovery() {
@@ -287,7 +369,8 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             self.discoveredDevices = devices
             
             // Auto-reconnect to the last connected device if its IP has changed and Bonjour found it
-            if self.connectionState == .disconnected || self.connectionState == .error || self.connectionState == .unauthorized {
+            if self.transport == .wifi,
+               self.connectionState == .disconnected || self.connectionState == .error || self.connectionState == .unauthorized {
                 let lastMac = UserDefaults.standard.string(forKey: "bugbuster_last_mac") ?? ""
                 let normLastMac = lastMac.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
                 if !normLastMac.isEmpty {
@@ -319,8 +402,12 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     public func connect(ip: String, token: String) async -> Bool {
+        // Guard against the BLE path leaking through with an empty IP (which
+        // URLSession resolves to localhost, spamming connection-refused errors).
+        guard !ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         stopDiscovery()
         updateOnMain {
+            self.transport = .wifi
             self.connectionState = .connecting
         }
         
@@ -337,6 +424,81 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         }
         
         return success
+    }
+
+    // MARK: - BLE connection
+
+    /// Connect to a BugBuster peripheral over BLE: open the GATT link, read the
+    /// device identity, present the admin token, and (on success) start the BLE
+    /// poll loop. Mirrors `connect(ip:token:)` for the WiFi path.
+    public func connectBLE(_ device: DiscoveredDevice, token: String) async -> Bool {
+        guard let bleId = device.bleId else { return false }
+        let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        stopDiscovery()
+        ble.stopScan()
+        updateOnMain {
+            self.transport = .ble
+            self.connectionState = .connecting
+        }
+
+        let linked = await ble.connect(id: bleId)
+        guard linked else {
+            NSLog("[BLE] connectBLE: GATT link/discovery failed")
+            updateOnMain { self.connectionState = .error }
+            return false
+        }
+
+        // Read identity (pre-auth) to learn the MAC for token bookkeeping.
+        var deviceMac = ""
+        if let infoData = await ble.readInfo(),
+           let info = try? JSONSerialization.jsonObject(with: infoData) as? [String: Any] {
+            deviceMac = (info["mac"] as? String) ?? ""
+        }
+        NSLog("[BLE] connectBLE: linked OK, mac=%@", deviceMac.isEmpty ? "(none)" : deviceMac)
+        let normMac = deviceMac.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Resolve a token: explicit > saved-by-MAC.
+        var useToken = cleanToken
+        if useToken.isEmpty, !normMac.isEmpty, let saved = savedTokens[normMac] {
+            useToken = saved
+        }
+        if useToken.isEmpty {
+            updateOnMain {
+                self.connectionState = .unauthorized
+                self.adminToken = ""
+                self.activeDevice = device
+            }
+            return false
+        }
+
+        let authed = await ble.authenticate(token: useToken)
+        NSLog("[BLE] connectBLE: authenticate -> %@", authed ? "OK" : "REJECTED")
+        if !authed {
+            updateOnMain {
+                self.connectionState = .unauthorized
+                self.adminToken = useToken
+                self.activeDevice = device
+            }
+            return false
+        }
+
+        updateOnMain {
+            self.adminToken = useToken
+            self.activeDevice = DiscoveredDevice(hostname: device.hostname, ip: "", port: 0,
+                                                 firmware: device.firmware, mac: deviceMac,
+                                                 model: device.model, isBle: true, bleId: bleId)
+            self.connectionState = .connected
+
+            if !normMac.isEmpty {
+                var tokens = self.savedTokens
+                tokens[normMac] = useToken
+                self.savedTokens = tokens
+                UserDefaults.standard.set(deviceMac, forKey: "bugbuster_last_mac")
+            }
+        }
+
+        startBLEPolling()
+        return true
     }
     
     @discardableResult
@@ -466,7 +628,12 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     public func disconnect() {
         pollTask?.cancel()
         pollTask = nil
+        blePollTask?.cancel()
+        blePollTask = nil
         stopPolling()
+        if transport == .ble {
+            ble.disconnect()
+        }
         updateOnMain {
             self.activeDevice = nil
             self.connectionState = .disconnected
@@ -481,6 +648,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             self.lastWifiStatus = nil
             self.lastDeviceVersion = nil
             self.lshiftOe = false
+            self.transport = .wifi
         }
         UserDefaults.standard.removeObject(forKey: "bugbuster_ip")
         UserDefaults.standard.removeObject(forKey: "bugbuster_token")
@@ -495,6 +663,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             while !Task.isCancelled {
                 guard let self = self,
                       self.connectionState == .connected,
+                      self.transport == .wifi,
                       let device = self.activeDevice else {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     continue
@@ -580,10 +749,154 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         pollTask = nil
     }
 
+    // MARK: - BLE polling + response adapters
+
+    /// Poll the device over the BLE control plane. Mirrors `startPolling()` but
+    /// uses the API tunnel; cadence is gentler since BLE round-trips are slower.
+    public func startBLEPolling() {
+        blePollTask?.cancel()
+        blePollTask = Task { [weak self] in
+            var cycle = 0
+            while !Task.isCancelled {
+                guard let self = self, self.connectionState == .connected, self.transport == .ble else {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
+                cycle += 1
+
+                if let status = await self.bleFetchStatus() {
+                    updateOnMain { self.updateStatus(status) }
+                }
+                // Slower multi-endpoint cycle every ~4 status polls.
+                if cycle % 4 == 0 {
+                    await self.bleFetchHat()
+                    await self.bleFetchUsbPd()
+                    await self.bleFetchWifi()
+                    if let ov: OverviewSnapshot = await self.bleDecoded(OverviewSnapshot.self, path: "/api/overview") {
+                        updateOnMain { self.updateLastOverview(ov) }
+                    }
+                    if let gpios: [GPIOPin] = await self.bleDecoded([GPIOPin].self, path: "/api/gpio") {
+                        updateOnMain { self.lastGpios = gpios }
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+        }
+    }
+
+    /// Issue a JSON request over the BLE API tunnel and decode the `{...}` body.
+    private func bleJSON(_ path: String, body: [String: Any]? = nil) async -> [String: Any]? {
+        guard let data = await ble.apiRequest(path: path, body: body) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    /// Issue a BLE API tunnel request and decode the JSON directly into `T`.
+    /// Used for endpoints whose BLE payload mirrors the HTTP shape 1:1
+    /// (e.g. /api/overview, /api/gpio).
+    private func bleDecoded<T: Decodable>(_ type: T.Type, path: String, body: [String: Any]? = nil) async -> T? {
+        guard let data = await ble.apiRequest(path: path, body: body) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    /// Map the compact BLE `/api/status` payload onto the rich `DeviceStatus`
+    /// model the UI binds to (absent fields default to neutral values).
+    private func bleFetchStatus() async -> DeviceStatus? {
+        guard let obj = await bleJSON("/api/status"), (obj["ok"] as? Bool) ?? false else { return nil }
+        let rawChannels = (obj["channels"] as? [[String: Any]]) ?? []
+        let channels: [ChannelState] = rawChannels.map { c in
+            ChannelState(
+                id: (c["id"] as? Int) ?? 0,
+                function: "",
+                functionCode: (c["fn"] as? Int) ?? 0,
+                adcRaw: 0,
+                adcValue: (c["adc"] as? Double) ?? Double((c["adc"] as? Int) ?? 0),
+                adcRange: 0, adcRate: 0, adcMux: 0,
+                dacCode: 0, dacValue: 0,
+                dinState: (c["din"] as? Bool) ?? false,
+                dinCounter: 0, doState: false,
+                alert: 0, alertMask: 0, rtdExcitationUa: nil
+            )
+        }
+        return DeviceStatus(
+            spiOk: (obj["spiOk"] as? Bool) ?? false,
+            i2cOk: (obj["i2cOk"] as? Bool) ?? false,
+            muxOk: false,
+            dieTemp: (obj["dieTemp"] as? Double) ?? 0,
+            alertStatus: 0, alertMask: 0,
+            supplyAlertStatus: 0, supplyAlertMask: 0,
+            liveStatus: 0,
+            channels: channels,
+            diagnostics: [], muxStates: [],
+            freeHeap: 0, minFreeHeap: 0, uptimeMs: 0
+        )
+    }
+
+    /// Map BLE `/api/hat` onto `HatStatus` + the `[HatRail]` list.
+    private func bleFetchHat() async {
+        guard let obj = await bleJSON("/api/hat"), (obj["ok"] as? Bool) ?? false else { return }
+        let detected = (obj["detected"] as? Bool) ?? false
+        let rawRails = (obj["rails"] as? [[String: Any]]) ?? []
+        let rails: [HatRail] = rawRails.map { r in
+            HatRail(
+                railId: (r["id"] as? Int) ?? 0,
+                enabled: (r["en"] as? Bool) ?? false,
+                voltageMv: (r["mv"] as? Int) ?? 0,
+                targetVoltageMv: nil,
+                currentMa: (r["ma"] as? Int) ?? 0,
+                status: (r["st"] as? Int) ?? 0
+            )
+        }
+        updateOnMain {
+            self.lastHatStatus = HatStatus(detected: detected, present: detected)
+            self.lastHatRails = rails
+        }
+    }
+
+    /// Map BLE `/api/usbpd` onto `USBPDStatus`.
+    private func bleFetchUsbPd() async {
+        guard let obj = await bleJSON("/api/usbpd"), (obj["ok"] as? Bool) ?? false else { return }
+        let attached = (obj["attached"] as? Bool) ?? false
+        let v = (obj["voltage"] as? Double) ?? Double((obj["voltage"] as? Int) ?? 0)
+        let a = (obj["current"] as? Double) ?? Double((obj["current"] as? Int) ?? 0)
+        let pd = USBPDStatus(present: attached, attached: attached, cc: "",
+                             voltageV: v, currentA: a, powerW: v * a,
+                             pdResponse: 0, sourcePdos: [], selectedPdo: 0)
+        updateOnMain { self.lastUsbPd = pd }
+    }
+
+    /// Map BLE `/api/wifi` onto `WifiStatus`.
+    private func bleFetchWifi() async {
+        guard let obj = await bleJSON("/api/wifi"), (obj["ok"] as? Bool) ?? false else { return }
+        let ws = WifiStatus(
+            connected: (obj["connected"] as? Bool) ?? false,
+            staSSID: (obj["ssid"] as? String) ?? "",
+            staIP: (obj["staIp"] as? String) ?? "",
+            rssi: (obj["rssi"] as? Int) ?? 0,
+            apSSID: "",
+            apIP: (obj["apIp"] as? String) ?? "",
+            apMAC: ""
+        )
+        updateOnMain { self.lastWifiStatus = ws }
+    }
+
     /// Fetch slow endpoints once (on connect or pull-to-refresh). Sequential,
     /// reuses self.session — no throwaway URLSession objects.
     public func fetchOverviewOnce() {
         guard connectionState == .connected, let device = activeDevice else { return }
+        if transport == .ble {
+            Task {
+                if let ov: OverviewSnapshot = await self.bleDecoded(OverviewSnapshot.self, path: "/api/overview") {
+                    updateOnMain { self.updateLastOverview(ov) }
+                }
+                if let gpios: [GPIOPin] = await self.bleDecoded([GPIOPin].self, path: "/api/gpio") {
+                    updateOnMain { self.lastGpios = gpios }
+                }
+                await self.bleFetchHat()
+                await self.bleFetchUsbPd()
+                await self.bleFetchWifi()
+            }
+            return
+        }
         let ip = device.ip
         let token = adminToken
         Task {
@@ -679,6 +992,9 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
 
     private func fetchDecoded<T: Decodable>(_ type: T.Type, ip: String, path: String, token: String, timeout: TimeInterval = 5.0) async -> T? {
+        // BLE sessions carry an empty IP; never fall back to HTTP (empty host
+        // resolves to localhost and floods connection-refused errors).
+        guard !ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         var urlStr = ip
         if !urlStr.lowercased().hasPrefix("http://") { urlStr = "http://\(urlStr)" }
         guard let url = URL(string: "\(urlStr)\(path)") else { return nil }
@@ -691,6 +1007,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
 
     private func performRequest<T: Decodable>(ip: String, path: String, token: String) async throws -> T {
+        guard !ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw URLError(.badURL) }
         var urlStr = ip
         if !urlStr.lowercased().hasPrefix("http://") && !urlStr.lowercased().hasPrefix("https://") {
             urlStr = "http://\(urlStr)"
@@ -716,6 +1033,14 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     
     public func postAction(path: String, json: [String: Any]) async throws -> Bool {
         guard let device = activeDevice else { return false }
+
+        // BLE control plane: tunnel the request and read back the {"ok":...} flag.
+        // Paths the firmware tunnel doesn't implement return ok:false gracefully.
+        if transport == .ble {
+            guard let obj = await bleJSON(path, body: json) else { return false }
+            return (obj["ok"] as? Bool) ?? false
+        }
+
         var urlStr = device.ip
         if !urlStr.lowercased().hasPrefix("http://") && !urlStr.lowercased().hasPrefix("https://") {
             urlStr = "http://\(urlStr)"
@@ -820,6 +1145,10 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
     public func fetchHatRailsQuick() {
         guard connectionState == .connected, let device = activeDevice else { return }
+        if transport == .ble {
+            Task { await self.bleFetchHat() }
+            return
+        }
         let ip = device.ip; let token = adminToken
         Task {
             if let rr: HatRailsResponse = await fetchDecoded(HatRailsResponse.self, ip: ip, path: "/api/hat/v2/rails", token: token) {
@@ -831,6 +1160,14 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     /// Lightweight post-action refresh: single /api/overview via self.session.
     public func fetchOverviewQuick() {
         guard connectionState == .connected, let device = activeDevice else { return }
+        if transport == .ble {
+            Task {
+                if let ov: OverviewSnapshot = await self.bleDecoded(OverviewSnapshot.self, path: "/api/overview") {
+                    updateOnMain { self.updateLastOverview(ov) }
+                }
+            }
+            return
+        }
         let ip = device.ip
         let token = adminToken
         Task {
@@ -842,6 +1179,10 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
     public func fetchUsbPdQuick() {
         guard connectionState == .connected, let device = activeDevice else { return }
+        if transport == .ble {
+            Task { await self.bleFetchUsbPd() }
+            return
+        }
         let ip = device.ip; let token = adminToken
         Task {
             if let pd: USBPDStatus = await fetchDecoded(USBPDStatus.self, ip: ip, path: "/api/usbpd", token: token) {
@@ -894,10 +1235,19 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
     public func fetchGpios() {
         guard connectionState == .connected, let device = activeDevice else { return }
+        if transport == .ble {
+            Task {
+                if let gpios: [GPIOPin] = await self.bleDecoded([GPIOPin].self, path: "/api/gpio") {
+                    updateOnMain { self.lastGpios = gpios }
+                }
+            }
+            return
+        }
         let ip = device.ip; let token = adminToken
         Task {
-            if let resp: GPIOStatusResponse = await fetchDecoded(GPIOStatusResponse.self, ip: ip, path: "/api/gpio", token: token) {
-                updateOnMain { self.lastGpios = resp.gpios }
+            // /api/gpio returns a bare JSON array of GPIO objects.
+            if let gpios: [GPIOPin] = await fetchDecoded([GPIOPin].self, ip: ip, path: "/api/gpio", token: token) {
+                updateOnMain { self.lastGpios = gpios }
             }
         }
     }
@@ -942,6 +1292,10 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
     public func fetchWifiStatus() {
         guard connectionState == .connected, let device = activeDevice else { return }
+        if transport == .ble {
+            Task { await self.bleFetchWifi() }
+            return
+        }
         let ip = device.ip; let token = adminToken
         Task {
             if let ws: WifiStatus = await fetchDecoded(WifiStatus.self, ip: ip, path: "/api/wifi", token: token) {

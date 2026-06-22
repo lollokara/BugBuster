@@ -2881,6 +2881,116 @@ Delete a named slot from NVS.
 
 ---
 
+## 6.20 DAQ Trigger / Flag Sub-Protocol
+
+The DAQ HAT (ESP32-P4) streams power measurements at up to 250 kSPS, but the 12
+expansion **IOs live on the ESP32-S3 mainboard**. Trigger/flag support therefore
+spans three surfaces:
+
+```
+PC ──BBP CMD_DAQ_TRIG(0xCE)──▶ ESP32-S3 (IO event engine, owns IOs 1..12)
+                                   │  edge detected (GPIO ISR / AD74416H)
+                                   ▼
+                          HAT link: HATP_CMD_DAQ_MARK(0x5C) / DAQ_ARM(0x5B)
+                                   ▼
+                              ESP32-P4 (owns the sample clock)
+                                   │  stamps the live fused-sample index
+                                   ▼
+                   USB-HS stream: USB_REC_MARKER(0x05)  ──▶ PC (host keeps
+                                   the pre-roll window; markers never decimated)
+```
+
+Each IO can be tagged **Off**, **Flag** (every matching edge emits a marker
+vertical line), or **Trigger** (the matching edge starts the capture window /
+defines t=0). HV/analog-capable IOs (3, 6, 9, 12 → AD74416H A..D) may use a
+digital level or an analog voltage threshold. Multiple triggers combine with OR
+(first fires) or AND (all must fire) logic.
+
+### 6.20.1 BBP CMD_DAQ_TRIG (0xCE) — host → S3
+
+Sub-op multiplexed; `payload[0]` selects the operation. Handled **locally on the
+S3** (it owns the IO event engine); edge events are forwarded to the P4 by the
+engine.
+
+| Sub-op | Name | Request payload (after op byte) | Response |
+|--------|------|----------------------------------|----------|
+| 0x00 | SET_IO | `io(u8)`, then `io_cfg` (8 B, see below) | -- |
+| 0x01 | GET_IO | `io(u8)` | `io_cfg` (8 B) |
+| 0x02 | SET_LOGIC | `logic(u8)` 0=none,1=OR,2=AND | -- |
+| 0x03 | ARM | `armed(u8)`, `_pad(u8)`, `pre_samples(u32 LE)` | -- |
+| 0x04 | STATUS | -- | `logic(u8)`, `armed(u8)`, `fired(u8)`, `_pad(u8)` |
+| 0x05 | GET_ALL | -- | `logic`,`armed`,`fired`,`_pad` + 12 × `io_cfg` |
+
+**`io_cfg` (8 bytes, packed LE)** — wire-identical to `daq_trig_io_cfg_t`:
+```
+0       role            u8      0=Off, 1=Flag, 2=Trigger
+1       edge            u8      0=rising, 1=falling, 2=any
+2       source          u8      0=digital, 1=analog (HV IOs only)
+3       _pad            u8
+4..7    threshold_v     f32     analog threshold in volts (source=analog)
+```
+
+`io` is the 1-based IO number (1..12). Analog `source` is ignored (forced to
+digital) for the eight digital-only IOs. `pre_samples` is the requested
+pre-trigger depth; the host keeps the actual pre-roll from the continuous
+stream, so the P4 only records it for annotation.
+
+### 6.20.2 HAT-link forwarding (S3 → P4)
+
+The S3 IO engine forwards events and arming to the P4 over the existing HAT UART
+(SYNC 0xAA / LEN / CMD / PAYLOAD / CRC-8). Both payloads are byte-for-byte
+mirrored on the P4 side (`s3link_daq_arm_t` / `s3link_daq_mark_t`).
+
+**HATP_CMD_DAQ_ARM (0x5B)** — arm/disarm the trigger latch:
+```
+0       armed           u8      1 = arm, 0 = free-run/disarm
+1       trig_logic      u8      0=none, 1=OR, 2=AND (informational)
+2..3    _pad            u16
+4..7    pre_samples     u32 LE  requested pre-trigger depth (samples)
+```
+
+**HATP_CMD_DAQ_MARK (0x5C)** — a digital event fired on an S3 IO:
+```
+0       channel         u8      S3 IO number (1..12)
+1       edge            u8      0 = falling, 1 = rising
+2       kind            u8      0 = FLAG, 1 = TRIGGER
+3       _pad            u8
+```
+
+### 6.20.3 USB-HS stream additions (P4 → PC, and PC → P4)
+
+On the P4 vendor-bulk measurement stream (`BB 50` framing, see §7), the P4
+emits a **MARKER** record for every flag/trigger and accepts an **ARM** control
+command. Markers carry the fused-sample index they align to, so the host renders
+them at full fidelity through every multi-resolution zoom level (flags are
+preserved through compression).
+
+**USB_REC_MARKER (0x05)** record payload — `usb_marker_payload_t` (16 B):
+```
+0..3    sample_index    u32 LE  fused-sample index this marker aligns to
+4..11   timestamp_us    u64 LE  shared sync-epoch timestamp (µs)
+12      channel         u8      S3 IO number (1..12)
+13      edge            u8      0 = falling, 1 = rising
+14      kind            u8      0 = FLAG, 1 = TRIGGER
+15      _pad            u8
+```
+
+**USB_CMD_ARM (0x88)** control command — `usb_cmd_arm_t` (8 B):
+```
+0       armed           u8      1 = arm trigger latch, 0 = free-run/disarm
+1       trig_logic      u8      0=none, 1=OR, 2=AND (informational)
+2..3    _pad            u16
+4..7    pre_samples     u32 LE  requested pre-trigger depth (fused samples)
+```
+
+The existing **HATP_CMD_DAQ_SYNC (0x54)** establishes the shared sample-index
+epoch the S3 timestamps its markers against. Precise (sub-sample) alignment is
+refined on the P4 using the shared, pulled-up bidirectional IRQ line between the
+S3 and P4 as a hardware event-capture edge; the UART `DAQ_MARK` delivers the
+channel/edge/kind metadata that the P4 pairs to the captured edge.
+
+---
+
 ## 7. Streaming Protocol
 
 The primary advantage of BBP over HTTP: continuous, push-based data delivery
@@ -3349,6 +3459,7 @@ Host                                    Device
 | 2.1 | 2026-05-15 | HAT calibration subsystem: HAT_CALIBRATE_START (0xAB), HAT_CALIBRATE_STATUS (0xAC, 30-byte response with transactional candidate table fields), HAT_CALIBRATE_IMPORT (0xAD) for DS4424 IDAC curve fitting; HAT shifted IO bank: HAT_SET_IO_BANK (0xAE), HAT_SET_LEVEL_SHIFT (0xAF). BBP proto bumped to 6 |
 | 2.2 | 2026-06-04 | IO Ownership system: IO_CLAIM (0xA7), IO_RELEASE (0xA8), IO_OWNER_STATUS (0xA9), IO_FORCE_RELEASE (0xAA) â€” 16-slot lease table with kind/session/token/expiry; EVT_IO_PREEMPTED (0x86), EVT_IO_OWNER_REJECT (0x87) events; ERR_IO_OWNERSHIP_REQUIRED (0x12), ERR_ADGS_ROUTE_REJECTED (0x13) error codes; HAT_LA_SET_ROUTE (0xD4) with ADGS MUX mutual-exclusion enforcement; ADC_LEDS_SET_MODE (0x47) for manual LED control; SELFTEST_EFUSE_CURRENTS (0x07) replaced by SELFTEST_SUPPLY_VOLTAGES_CACHED returning 3-rail voltage cache; HAT detection updated to binary GPIO47 mode (bb-hat-3.0); UART baud corrected to 921600. BBP proto bumped to 7 (firmware 3.2.0 / Desktop 0.7.0) |
 | 3.3 | 2026-06-04 | ADC DSP streaming: START_ADC_DSP_STREAM (0x64), STOP_ADC_DSP_STREAM (0x65), BBP_EVT_ADC_DSP (0x88) â€” on-device Hann-windowed 256-point FFT + spike detection + running stats; FreeRTOS DSP task on Core 0 with ping-pong double buffers; WiFi delivery via WebSocket stream type 0x03 ("adc-dsp") on /api/ws/stream; HTTP control via POST /api/adc/dsp/start|stop; Python API start_adc_dsp_stream() / stop_adc_dsp_stream() transport-agnostic. BBP proto bumped to 8 (firmware 3.3.0) |
+| 3.4 | 2026-06-23 | DAQ trigger/flag subsystem (Section 6.20): DAQ_TRIG (0xCE) host→S3 sub-op multiplexed IO config (SET_IO/GET_IO/SET_LOGIC/ARM/STATUS/GET_ALL) with 8-byte `daq_trig_io_cfg_t` (role/edge/source/threshold). S3 IO event engine forwards events to the P4 over the HAT link via HATP_CMD_DAQ_ARM (0x5B) and HATP_CMD_DAQ_MARK (0x5C). P4 USB-HS stream gains USB_REC_MARKER (0x05, `usb_marker_payload_t` with sample_index/timestamp_us/channel/edge/kind) and USB_CMD_ARM (0x88) control; markers carry the fused-sample index so flags survive multi-resolution decimation. Flags = pink event lines, triggers = cyan, rendered in the desktop DAQ tab + timeline |
 
 ---
 

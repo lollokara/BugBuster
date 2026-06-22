@@ -1,10 +1,25 @@
 // =============================================================================
 // ble_api.cpp — JSON request dispatcher for the BLE API tunnel.
 //
-// Mirrors the small-data subset of the HTTP API for the iOS app over BLE:
-//   GET-style : /api/device/info, /api/status, /api/hat, /api/usbpd,
-//               /api/wifi, /api/daq
-//   POST-style: /api/idac/voltage, /api/hat/rail/enable, /api/hat/rail/voltage
+// Mirrors the low-rate control/read subset of the HTTP API for the iOS app over
+// BLE. SUPPORTED endpoints:
+//   GET  : /api/device/info, /api/status, /api/hat, /api/usbpd, /api/wifi,
+//          /api/daq, /api/overview (idac+ioexp+rails), /api/gpio
+//   POST : /api/idac/voltage,
+//          /api/hat/rail/{enable,voltage} (+ /api/hat/v2/... aliases),
+//          /api/ioexp/control, /api/usbpd/select, /api/lshift/oe,
+//          /api/gpio/<pin>/{config,set}, /api/device/reset
+//
+// NOT supported over BLE (USB/WiFi only — too high-rate or out of scope):
+//   - Scope waveform streaming (/api/scope/*)
+//   - Logic analyzer / DAQ power-analyzer streaming
+//   - Scripts + Python REPL (/api/scripts/*, WebSocket)
+//   - IDAC calibration (/api/idac/cal/*) and channel signal-path config
+//     (/api/channel/*), self-test run/worker toggles
+//   - QuickSetup presets (/api/quicksetup/*)
+//   - OTA firmware/SPIFFS (/api/ota/*)
+//   - Live supply-rail voltage measurement (rails reported as not-measured in
+//     /api/overview to avoid blocking the NimBLE host task on the ADC).
 //
 // Add new endpoints in ble_api_dispatch(). Responses are kept compact because
 // the BLE tunnel chunks them over notifications.
@@ -14,8 +29,12 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "esp_mac.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "tasks.h"
 #include "config.h"
@@ -23,6 +42,8 @@
 #include "wifi_manager.h"
 #include "ds4424.h"
 #include "hat.h"
+#include "pca9535.h"
+#include "husb238.h"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -265,6 +286,215 @@ static char *api_rail_voltage(const cJSON *body)
     return json_take(r);
 }
 
+// IO-expander power control (mirrors HTTP /api/ioexp/control).
+//   {"control":"vadj1|vadj2|15v|mux|usb|efuse1..4","on":true}
+static char *api_ioexp_control(const cJSON *body)
+{
+    cJSON *jctrl = body_get(body, "control");
+    cJSON *jon   = body_get(body, "on");
+    const char *name = cJSON_IsString(jctrl) ? jctrl->valuestring : NULL;
+    bool on = cJSON_IsBool(jon) ? cJSON_IsTrue(jon) : false;
+    if (name == NULL) return api_error("control required");
+
+    PcaControl ctrl;
+    if (strcmp(name, "vadj1") == 0)       ctrl = PCA_CTRL_VADJ1_EN;
+    else if (strcmp(name, "vadj2") == 0)  ctrl = PCA_CTRL_VADJ2_EN;
+    else if (strcmp(name, "15v") == 0)    ctrl = PCA_CTRL_15V_EN;
+    else if (strcmp(name, "mux") == 0)    ctrl = PCA_CTRL_MUX_EN;
+    else if (strcmp(name, "usb") == 0)    ctrl = PCA_CTRL_USB_HUB_EN;
+    else if (strcmp(name, "efuse1") == 0) ctrl = PCA_CTRL_EFUSE1_EN;
+    else if (strcmp(name, "efuse2") == 0) ctrl = PCA_CTRL_EFUSE2_EN;
+    else if (strcmp(name, "efuse3") == 0) ctrl = PCA_CTRL_EFUSE3_EN;
+    else if (strcmp(name, "efuse4") == 0) ctrl = PCA_CTRL_EFUSE4_EN;
+    else return api_error("unknown control");
+
+    bool ok;
+    if (ctrl >= PCA_CTRL_EFUSE1_EN && ctrl <= PCA_CTRL_EFUSE4_EN) {
+        ok = pca9535_user_arm_efuse((uint8_t)(ctrl - PCA_CTRL_EFUSE1_EN), on);
+    } else {
+        ok = pca9535_set_control(ctrl, on);
+    }
+    if (!ok) return api_error("i2c write failed");
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddStringToObject(r, "control", pca9535_control_name(ctrl));
+    cJSON_AddBoolToObject(r, "on", on);
+    return json_take(r);
+}
+
+// USB-PD source selection (mirrors HTTP /api/usbpd/select). {"voltage":20}
+static char *api_usbpd_select(const cJSON *body)
+{
+    cJSON *jv = body_get(body, "voltage");
+    int v = cJSON_IsNumber(jv) ? jv->valueint : 0;
+    Husb238Voltage volt;
+    switch (v) {
+        case 5:  volt = HUSB238_V_5V;  break;
+        case 9:  volt = HUSB238_V_9V;  break;
+        case 12: volt = HUSB238_V_12V; break;
+        case 15: volt = HUSB238_V_15V; break;
+        case 18: volt = HUSB238_V_18V; break;
+        case 20: volt = HUSB238_V_20V; break;
+        default: return api_error("invalid voltage (5/9/12/15/18/20)");
+    }
+    husb238_select_pdo(volt);
+    husb238_go_command(HUSB238_GO_SELECT_PDO);
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddNumberToObject(r, "selectedVoltage", v);
+    return json_take(r);
+}
+
+// Level-shifter output-enable (mirrors HTTP /api/lshift/oe). {"on":true}
+static char *api_lshift_oe(const cJSON *body)
+{
+    cJSON *jon = body_get(body, "on");
+    bool on = cJSON_IsBool(jon) ? cJSON_IsTrue(jon) : false;
+    pin_write(PIN_LSHIFT_OE, on ? 1 : 0);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddBoolToObject(r, "on", on);
+    return json_take(r);
+}
+
+// GPIO configure (mirrors HTTP /api/gpio/<pin>/config). {"mode":N,"pulldown":bool}
+static char *api_gpio_config(int pin, const cJSON *body)
+{
+    if (pin < 0 || pin > 11) return api_error("gpio must be 0-11");
+    cJSON *jmode = body_get(body, "mode");
+    if (!cJSON_IsNumber(jmode)) return api_error("mode required");
+    bool pulldown = cJSON_IsTrue(body_get(body, "pulldown"));
+    if (!tasks_apply_gpio_config((uint8_t)pin, (GpioSelect)jmode->valueint, pulldown)) {
+        return api_error("invalid gpio config");
+    }
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddNumberToObject(r, "gpio", pin);
+    cJSON_AddNumberToObject(r, "mode", jmode->valueint);
+    return json_take(r);
+}
+
+// GPIO output set (mirrors HTTP /api/gpio/<pin>/set). {"value":bool}
+static char *api_gpio_set(int pin, const cJSON *body)
+{
+    if (pin < 0 || pin > 11) return api_error("gpio must be 0-11");
+    bool value = cJSON_IsTrue(body_get(body, "value"));
+    if (!tasks_apply_gpio_output((uint8_t)pin, value)) {
+        return api_error("invalid gpio value");
+    }
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON_AddNumberToObject(r, "gpio", pin);
+    cJSON_AddBoolToObject(r, "value", value);
+    return json_take(r);
+}
+
+// Coalesced Overview snapshot (mirrors HTTP /api/overview): IDAC + IOExp + rails.
+// Note: live supply-rail measurement is NOT run from the BLE host task (it would
+// block the NimBLE stack on the ADC), so rail voltages are reported as -1/ok:false
+// ("not measured over BLE"). IDAC and IOExp state are live.
+static char *api_overview(void)
+{
+    cJSON *root = cJSON_CreateObject();
+
+    const DS4424State *st = ds4424_get_state();
+    cJSON *idac = cJSON_AddObjectToObject(root, "idac");
+    cJSON_AddBoolToObject(idac, "present", st->present);
+    cJSON *channels = cJSON_AddArrayToObject(idac, "channels");
+    static const char *idac_names[] = {"LevelShift", "V_ADJ1", "V_ADJ2"};
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id", ch);
+        cJSON_AddNumberToObject(o, "code", st->state[ch].dac_code);
+        cJSON_AddNumberToObject(o, "targetV", st->state[ch].target_v);
+        cJSON_AddNumberToObject(o, "midpointV", st->config[ch].midpoint_v);
+        cJSON_AddNumberToObject(o, "vMin", st->config[ch].v_min);
+        cJSON_AddNumberToObject(o, "vMax", st->config[ch].v_max);
+        cJSON_AddNumberToObject(o, "stepMv", ds4424_step_mv(ch));
+        cJSON_AddBoolToObject(o, "calibrated", st->cal[ch].valid);
+        cJSON_AddStringToObject(o, "name", idac_names[ch]);
+        float poly[4] = {0};
+        bool have_poly = ds4424_cal_fit_cubic(ch, poly);
+        cJSON_AddBoolToObject(o, "polyValid", have_poly);
+        cJSON *pa = cJSON_AddArrayToObject(o, "calPoly");
+        for (int i = 0; i < 4; i++) cJSON_AddNumberToObject(pa, NULL, (double)poly[i]);
+        cJSON_AddItemToArray(channels, o);
+    }
+
+    pca9535_update();
+    const PCA9535State *ps = pca9535_get_state();
+    cJSON *ioexp = cJSON_AddObjectToObject(root, "ioexp");
+    cJSON_AddBoolToObject(ioexp, "present", ps->present);
+    cJSON *en = cJSON_AddObjectToObject(ioexp, "enables");
+    cJSON_AddBoolToObject(en, "vadj1", ps->vadj1_en);
+    cJSON_AddBoolToObject(en, "vadj2", ps->vadj2_en);
+    cJSON_AddBoolToObject(en, "analog15v", ps->en_15v);
+    cJSON_AddBoolToObject(en, "mux", ps->en_mux);
+    cJSON_AddBoolToObject(en, "usbHub", ps->en_usb_hub);
+    cJSON *pg = cJSON_AddObjectToObject(ioexp, "powerGood");
+    cJSON_AddBoolToObject(pg, "logic", ps->logic_pg);
+    cJSON_AddBoolToObject(pg, "vadj1", ps->vadj1_pg);
+    cJSON_AddBoolToObject(pg, "vadj2", ps->vadj2_pg);
+    cJSON *efuses = cJSON_AddArrayToObject(ioexp, "efuses");
+    for (int i = 0; i < 4; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id", i + 1);
+        cJSON_AddBoolToObject(o, "enabled", ps->efuse_en[i]);
+        cJSON_AddBoolToObject(o, "fault", ps->efuse_flt[i]);
+        cJSON_AddItemToArray(efuses, o);
+    }
+
+    cJSON *rails = cJSON_AddArrayToObject(root, "rails");
+    static const char *rail_names[] = {"VADJ1", "VADJ2", "3V3_ADJ"};
+    for (uint8_t i = 0; i < 3; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "rail", i);
+        cJSON_AddStringToObject(o, "name", rail_names[i]);
+        cJSON_AddNumberToObject(o, "voltage", -1.0);
+        cJSON_AddBoolToObject(o, "ok", false);
+        cJSON_AddItemToArray(rails, o);
+    }
+    return json_take(root);
+}
+
+// GPIO list (mirrors HTTP /api/gpio — a bare array of {pin,mode,input,output}).
+static char *api_gpio_list(void)
+{
+    cJSON *root = cJSON_CreateArray();
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (uint8_t g = 0; g < 12; g++) {
+            const GpioState &gs = g_deviceState.dio[g];
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "id", g);
+            cJSON_AddNumberToObject(o, "pin", g);
+            cJSON_AddNumberToObject(o, "mode", gs.mode);
+            cJSON_AddBoolToObject(o, "input", gs.inputVal);
+            cJSON_AddBoolToObject(o, "output", gs.outputVal);
+            cJSON_AddItemToArray(root, o);
+        }
+        xSemaphoreGive(g_stateMutex);
+    }
+    return json_take(root);
+}
+
+// Deferred reboot so the {"ok":true} response can flush over BLE first.
+static void ble_reset_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(600));
+    esp_restart();
+}
+
+static char *api_device_reset(void)
+{
+    xTaskCreate(ble_reset_task, "ble_reset", 2048, NULL, 5, NULL);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", true);
+    return json_take(r);
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -279,11 +509,26 @@ char *ble_api_dispatch(const char *path, const cJSON *body)
     if (strcmp(path, "/api/usbpd") == 0)       return api_usbpd();
     if (strcmp(path, "/api/wifi") == 0)        return api_wifi();
     if (strcmp(path, "/api/daq") == 0)         return api_daq();
+    if (strcmp(path, "/api/overview") == 0)    return api_overview();
+    if (strcmp(path, "/api/gpio") == 0)        return api_gpio_list();
 
     // POST-style
     if (strcmp(path, "/api/idac/voltage") == 0)     return api_idac_voltage(body);
     if (strcmp(path, "/api/hat/rail/enable") == 0)  return api_rail_enable(body);
     if (strcmp(path, "/api/hat/rail/voltage") == 0) return api_rail_voltage(body);
+    // HAT v2 aliases (the desktop/iOS clients use the /v2/ paths).
+    if (strcmp(path, "/api/hat/v2/rail/enable") == 0)  return api_rail_enable(body);
+    if (strcmp(path, "/api/hat/v2/rail/voltage") == 0) return api_rail_voltage(body);
+    if (strcmp(path, "/api/ioexp/control") == 0)    return api_ioexp_control(body);
+    if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
+    if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);
+    if (strcmp(path, "/api/device/reset") == 0)     return api_device_reset();
+    // GPIO: /api/gpio/<pin>/config and /api/gpio/<pin>/set
+    if (strncmp(path, "/api/gpio/", 10) == 0) {
+        int pin = atoi(path + 10);
+        if (strstr(path, "/config") != NULL) return api_gpio_config(pin, body);
+        if (strstr(path, "/set") != NULL)    return api_gpio_set(pin, body);
+    }
 
     return api_error("unknown path");
 }

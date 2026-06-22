@@ -1212,7 +1212,7 @@ extern "C" void cli_cmd_heap(const char* args)
 {
     (void)args;
     uint32_t free_int  = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    uint32_t min_int   = esp_get_minimum_free_heap_size();
+    uint32_t min_int   = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
     uint32_t blk_int   = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     uint32_t free_spi  = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     uint32_t blk_spi   = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);

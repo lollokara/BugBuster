@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### DAQ trigger / flag system (ESP32-S3 + ESP32-P4 + Desktop) — NEW
+End-to-end trigger and flag support for the high-speed DAQ. The 12 mainboard IOs
+(8 LV-digital, 4 HV/analog via the AD74416H) can each be tagged **Off / Flag /
+Trigger**; flags drop a vertical marker line at the exact event time, triggers
+start the capture window (with pre-trigger). Markers carry the fused-sample index
+so they survive multi-resolution decimation untouched (flags preserved through
+compression).
+- **S3 IO event engine** (`Firmware/ESP32/src/dio/daq_trigger.{cpp,h}`): per-IO
+  role/edge (rising/falling/any)/source; digital edges via the ESP32 GPIO poll,
+  analog HV thresholds fed from the AD74416H ADC poll (DIN-comparator option);
+  OR/AND trigger grouping. Hooked into the ADC poll task in `tasks.cpp`.
+- **BBP `DAQ_TRIG` (0xCE)** sub-op multiplexed (`SET_IO`/`GET_IO`/`SET_LOGIC`/
+  `ARM`/`STATUS`/`GET_ALL`) in `Firmware/ESP32/src/bbp/cmds/cmd_daq.cpp`; handled
+  locally on the S3. Events forwarded to the P4 over the HAT link as
+  `HAT_CMD_DAQ_MARK (0x5C)` / `DAQ_ARM (0x5B)`.
+- **P4 stream**: new `USB_REC_MARKER (0x05)` (`usb_marker_payload_t`:
+  sample_index/timestamp_us/channel/edge/kind) and `USB_CMD_ARM (0x88)`; the P4
+  stamps each marker with the live fused-sample index. Precise alignment uses the
+  shared bidirectional IRQ line as a hardware event-capture edge.
+- **Desktop**: `REC_MARKER` decode (`daq_proto.rs`), non-decimated marker list in
+  `daq_store.rs`, Tauri commands `daq_set_io_role`/`daq_set_trig_logic`/`daq_arm`/
+  `daq_get_trig_state`/`daq_get_markers`. New **Trigger / Flag panel**
+  (`src/tabs/daq_trigger_panel.rs`): 4×3 IO-block layout, HV/LV badges, per-IO
+  edge + analog-threshold slider, VLOGIC slider, OR/AND + arm controls. Markers
+  render as **pink flag lines / cyan trigger lines** in the plot and timeline.
+  The mock DAQ generator emits synthetic flags/triggers for offline preview.
+  The FFT, Settings and Trigger side-panels were harmonized to one card/segment
+  design; the SMU "Output enabled" is now a glowing red/green toggle.
+- **Python / MCP**: `bb.daq_trigger` accessor (`python/bugbuster/daq_config.py`,
+  `CmdId.DAQ_TRIG = 0xCE`) with `set_io`/`get_io`/`set_logic`/`arm`/`status`/
+  `get_all`; MCP tools `daq_set_io_role`, `daq_set_trigger_logic`, `daq_arm`,
+  `daq_get_trigger_state`. BBP wire history → 3.4 (see `Firmware/BugBusterProtocol.md` §6.20).
+
 ### BLE control plane (ESP32-S3 + iOS) — NEW (in progress)
 A low-rate Bluetooth LE control plane on the ESP32-S3 mainboard so a phone can
 configure and monitor the device without first being on the LAN. NimBLE
@@ -47,6 +80,50 @@ deliberately not a streaming path (scope/LA/DAQ stay on WiFi/USB).
   only the never-implemented `Timer`/`RTC`/`TouchPad` machine classes are dropped.
 - Status: firmware builds clean (Flash ~49%, NimBLE ~+230 KB). Pending on-device
   WiFi+BLE coexistence/heap verification and the iOS CoreBluetooth transport.
+
+### iOS app — BLE transport (NEW)
+The iOS app now mirrors its Wi-Fi control plane over Bluetooth LE, talking to the
+ESP32-S3 NimBLE peripheral above. The phone can discover, pair, and control a
+BugBuster without first being on the LAN; the same admin token gates both paths.
+- **CoreBluetooth client** (`iOSApp/Sources/Services/BLETransport.swift`): scans
+  for the BugBuster service UUID, connects, discovers the GATT layout, reads the
+  pre-auth Device Info characteristic, writes the admin token to the Auth
+  characteristic, and drives the generic API tunnel — writing `{id,path,body}`
+  requests and reassembling the chunked `[reqId][seq][last]` notification frames
+  back into JSON. Also exposes the Sensor, Supply, and WiFi-provision
+  characteristics. GATT operations are serialised and the device-discovery list
+  is published for the UI.
+- **ConnectionManager integration** (`iOSApp/Sources/Services/ConnectionManager.swift`):
+  added a `TransportKind` (`wifi`/`ble`) and a `connectBLE(_:token:)` flow that
+  resolves the per-MAC saved token (same store as Wi-Fi), authenticates, and
+  starts a BLE poll loop. `postAction` and the quick-refresh helpers route through
+  the BLE API tunnel when connected over BLE; the compact BLE JSON for
+  `/api/status`, `/api/hat`, `/api/usbpd`, `/api/wifi` is adapted onto the existing
+  view models so the UI is unchanged. Endpoints the firmware tunnel doesn't expose
+  degrade gracefully.
+- **Discovery UI** (`iOSApp/Sources/Views/MainTabView.swift`): a new "Bluetooth
+  Devices" card on the connection screen lists nearby peripherals (triggering the
+  CoreBluetooth permission prompt) and connects on tap, alongside the existing
+  Bonjour/Wi-Fi list.
+- **Build**: added `CoreBluetooth.framework` and `NSBluetoothAlwaysUsageDescription`
+  /`NSBluetoothPeripheralUsageDescription` to `project.yml`/`Info.plist`. Builds
+  clean for the iOS Simulator (deployment target iOS 26.0).
+- **BLE control/read surface** (firmware `ble_api.cpp` tunnel + iOS routing).
+  SUPPORTED over BLE: device info, status, HAT + rails, USB-PD, WiFi, DAQ,
+  coalesced Overview (IDAC + IOExp enables/efuses), GPIO list; and writes for
+  IDAC voltage, HAT rail enable/voltage, IOExp control (vadj/15v/mux/usb/efuse),
+  USB-PD select, level-shifter OE, GPIO config/set, and device reset.
+  NOT supported over BLE (USB/WiFi only): scope/LA/DAQ streaming, scripts/REPL,
+  IDAC calibration, channel signal-path config, QuickSetup presets, OTA, and
+  live supply-rail voltage measurement (rails shown as not-measured).
+- **Fixes found during bring-up**: (1) firmware BLE init failed
+  (`gatts_count_cfg rc=3`) because the notify-only API-response characteristic had
+  a NULL `access_cb` — ESP-IDF NimBLE rejects that; added a stub callback.
+  (2) iOS GATT UUIDs were wrong — NimBLE stores `BB_UUID128` little-endian, so the
+  device advertises `42756742-7573-7465-7200-0000000000<disc>`; corrected all
+  eight. (3) BLE auth/control no longer falls back to the Wi-Fi/`localhost` HTTP
+  path. (4) `/api/gpio` decodes as a bare array (was `{gpios:[…]}`, which never
+  matched). (5) NimBLE host log level dropped to WARN to stop notify-spam.
 
 ### DAQ HAT (ESP32-P4 IoT Power Analyzer) — NEW
 A new ESP32-P4-based DAQ HAT firmware that implements a 24-bit, nA–3A

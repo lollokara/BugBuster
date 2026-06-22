@@ -25,6 +25,10 @@
 		<string>_bugbuster._tcp</string>
 		<string>_http._tcp</string>
 	</array>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Discover and control nearby BugBuster hardware over Bluetooth Low Energy.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Connect to BugBuster hardware over Bluetooth Low Energy.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan QR code to connect to the BugBuster hardware device over Wi-Fi.</string>
 	<key>NSLocalNetworkUsageDescription</key>

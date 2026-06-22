@@ -2,6 +2,7 @@
 // cmd_registry.cpp — Unified command registry implementation
 // =============================================================================
 #include "cmd_registry.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>

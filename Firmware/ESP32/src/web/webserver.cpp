@@ -47,6 +47,12 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "autorun.h"
+
+// Shared buffer for script-name listing handlers. Declared at file scope so that
+// EXT_RAM_BSS_ATTR actually takes effect (the attribute is silently ignored on
+// function-scope statics by the Xtensa toolchain). HTTP handlers are serialised
+// by the httpd task pool, so a single buffer is safe.
+static EXT_RAM_BSS_ATTR char s_script_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
 #include "repl_ws.h"
 #include "serial_io.h"
 #include "cli/cli_term.h"
@@ -5233,13 +5239,12 @@ static esp_err_t handle_get_scripts_files(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
 
-    static EXT_RAM_BSS_ATTR char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
-    int count = script_storage_list(s_names, SCRIPT_LIST_MAX);
+    int count = script_storage_list(s_script_names, SCRIPT_LIST_MAX);
 
     cJSON *root = cJSON_CreateObject();
     cJSON *arr  = cJSON_CreateArray();
     for (int i = 0; i < count; i++) {
-        cJSON_AddItemToArray(arr, cJSON_CreateString(s_names[i]));
+        cJSON_AddItemToArray(arr, cJSON_CreateString(s_script_names[i]));
     }
     cJSON_AddItemToObject(root, "files", arr);
     return send_json(req, root);
@@ -5257,8 +5262,7 @@ static esp_err_t handle_get_scripts_storage(httpd_req_t *req)
         return send_error(req, 500, "SPIFFS info unavailable");
     }
 
-    static EXT_RAM_BSS_ATTR char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
-    int count = script_storage_list(s_names, SCRIPT_LIST_MAX);
+    int count = script_storage_list(s_script_names, SCRIPT_LIST_MAX);
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "totalBytes", (double)total);

@@ -12,6 +12,7 @@
 #include "auth.h"
 #include "tasks.h"
 #include "cJSON.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -49,7 +50,7 @@ static volatile bool    s_authenticated   = false;
 static volatile uint8_t s_subscriptions   = 0;   // bitmask of WS_SUB_*
 
 // Outbound ring (byte stream of length-prefixed frames).
-static uint8_t           s_tx_ring[WS_TX_RING_SIZE];
+static EXT_RAM_BSS_ATTR uint8_t s_tx_ring[WS_TX_RING_SIZE];
 static size_t            s_tx_head  = 0;
 static size_t            s_tx_used  = 0;
 static SemaphoreHandle_t s_tx_mutex = NULL;

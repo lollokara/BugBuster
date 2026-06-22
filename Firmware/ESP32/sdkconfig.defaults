@@ -49,6 +49,10 @@ CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_MEMTEST=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# Enable the .ext_ram.bss linker section so that EXT_RAM_BSS_ATTR on
+# file-scope variables actually places them in PSRAM (without this, the
+# section size stays 0 even when the attribute is applied correctly).
+CONFIG_SPIRAM_ALLOW_BSS_SEG=y
 # Internal-heap budgeting (root-cause fix for `mainLoopTask creation failed`
 # / `Failed to start HTTP server: ESP_ERR_HTTPD_TASK` crashes seen 2026-05-07):
 # the previous 16384 threshold meant every cJSON node, http buffer, and
@@ -155,3 +159,9 @@ CONFIG_BT_NIMBLE_MAX_BONDS=1
 CONFIG_BT_NIMBLE_MAX_CCCDS=4
 # Host task stack — keep modest; GATT callbacks here are short.
 CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
+# Allocate NimBLE host memory pools (mbufs, GATT tables) from PSRAM rather than
+# internal DRAM. The BLE controller layer still claims ~60 KB of internal heap
+# (unavoidable on S3), but the host layer (~8-15 KB) moves to PSRAM.
+# Requires CONFIG_SPIRAM_USE_MALLOC=y (already set above).
+# CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL is not set
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y

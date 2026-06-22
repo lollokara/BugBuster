@@ -20,6 +20,10 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "autorun.h"
+
+// File-scope buffer — EXT_RAM_BSS_ATTR has no effect on function-scope statics
+// in the Xtensa toolchain; must be at file scope to land in .ext_ram.bss.
+static EXT_RAM_BSS_ATTR char s_script_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
 #include "esp_log.h"
 
 static const char *TAG = "cmd_script";
@@ -183,16 +187,15 @@ static int handler_script_list(const uint8_t *payload, size_t len,
 {
     (void)payload; (void)len;
 
-    // Use a static buffer to avoid stack pressure (PSRAM to save internal DRAM).
-    static EXT_RAM_BSS_ATTR char s_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
-    int count = script_storage_list(s_names, SCRIPT_LIST_MAX);
+    // Use a file-scope buffer to avoid stack pressure (PSRAM to save internal DRAM).
+    int count = script_storage_list(s_script_names, SCRIPT_LIST_MAX);
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, (uint8_t)count);
     for (int i = 0; i < count; i++) {
-        uint8_t nl = (uint8_t)strnlen(s_names[i], SCRIPT_NAME_MAX);
+        uint8_t nl = (uint8_t)strnlen(s_script_names[i], SCRIPT_NAME_MAX);
         bbp_put_u8(resp, &pos, nl);
-        memcpy(resp + pos, s_names[i], nl);
+        memcpy(resp + pos, s_script_names[i], nl);
         pos += nl;
     }
     *resp_len = pos;

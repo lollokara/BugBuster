@@ -14,6 +14,7 @@
 #include "config.h"
 #include "repl_ws.h"
 #include "tasks.h"
+#include "esp_attr.h"
 
 // MicroPython core headers — must be wrapped in extern "C" because MP is
 // compiled as C, and its headers don't include their own extern "C" guards.
@@ -73,7 +74,7 @@ static SemaphoreHandle_t    s_log_mutex      = NULL;
 static SemaphoreHandle_t    s_status_mutex   = NULL;
 
 // Log ring
-static char     s_log_ring[MP_LOG_RING_SIZE];
+static EXT_RAM_BSS_ATTR char s_log_ring[MP_LOG_RING_SIZE];
 static size_t   s_log_head = 0;   // write position
 static size_t   s_log_used = 0;   // bytes in ring
 static uint64_t s_log_total = 0;  // absolute bytes accepted into the ring

@@ -350,8 +350,13 @@ struct MainTabView: View {
                                     
                                     Button(action: {
                                         Task {
-                                            let ip = connectionManager.activeDevice?.ip ?? manualIp
-                                            let success = await connectionManager.connect(ip: ip, token: manualToken)
+                                            let success: Bool
+                                            if connectionManager.transport == .ble, let dev = connectionManager.activeDevice {
+                                                success = await connectionManager.connectBLE(dev, token: manualToken)
+                                            } else {
+                                                let ip = connectionManager.activeDevice?.ip ?? manualIp
+                                                success = await connectionManager.connect(ip: ip, token: manualToken)
+                                            }
                                             if !success {
                                                 errorMessage = "Authentication failed. Invalid token."
                                             } else {
@@ -486,6 +491,9 @@ struct MainTabView: View {
                                         .fill(Color.white.opacity(0.03))
                                         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.06), lineWidth: 1))
                                 )
+
+                                // Bluetooth (BLE) Devices Section
+                                BLEDevicesCard(manualToken: $manualToken, errorMessage: $errorMessage)
                                 
                                 // Manual Entry Form
                                 VStack(alignment: .leading, spacing: 14) {
@@ -770,6 +778,120 @@ class ScannerViewController: UIViewController {
     }
 }
 #endif
+
+// MARK: - Bluetooth (BLE) Devices Card
+
+/// Discovery + connect UI for BugBuster peripherals over Bluetooth Low Energy.
+/// Mirrors the Wi-Fi "Discovered Devices" card; uses the same admin token.
+struct BLEDevicesCard: View {
+    @EnvironmentObject var connectionManager: ConnectionManager
+    @Binding var manualToken: String
+    @Binding var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Bluetooth Devices", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.white)
+                Spacer()
+                if connectionManager.bleScanning {
+                    ProgressView().tint(.cyan)
+                } else {
+                    Button(action: { connectionManager.startBLEScan() }) {
+                        Text("Scan")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Capsule().stroke(Color.cyan.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if !connectionManager.bleAvailable {
+                infoRow(icon: "antenna.radiowaves.left.and.right.slash",
+                        title: "Bluetooth unavailable",
+                        subtitle: "Enable Bluetooth and grant permission to scan.")
+            } else if connectionManager.bleDevices.isEmpty {
+                infoRow(icon: "dot.radiowaves.left.and.right",
+                        title: "Searching for devices...",
+                        subtitle: "Ensure the BugBuster hardware is powered on and nearby.")
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(connectionManager.bleDevices) { device in
+                        Button(action: { connectBLE(device) }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(device.hostname)
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundColor(.white)
+                                    Text("Bluetooth LE")
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundColor(.cyan)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(Color.white.opacity(0.05))
+                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color.white.opacity(0.03))
+                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.06), lineWidth: 1))
+        )
+        .onAppear { connectionManager.startBLEScan() }
+    }
+
+    private func infoRow(icon: String, title: String, subtitle: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 26))
+                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.primary)
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.04)))
+    }
+
+    private func connectBLE(_ device: DiscoveredDevice) {
+        Task {
+            let token = manualToken
+            let success = await connectionManager.connectBLE(device, token: token)
+            if !success {
+                if connectionManager.connectionState == .unauthorized {
+                    errorMessage = "Token Required: Enter admin access token."
+                } else {
+                    errorMessage = "Failed to connect to \(device.hostname) over Bluetooth."
+                }
+            } else {
+                errorMessage = nil
+            }
+        }
+    }
+}
 
 // MARK: - Premium Glass UI Helpers
 extension View {

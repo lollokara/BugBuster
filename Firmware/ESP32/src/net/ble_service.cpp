@@ -428,6 +428,18 @@ static int chr_apireq_access(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+// Notify-only characteristic stub. ESP-IDF NimBLE's ble_gatts_chr_is_sane()
+// rejects ANY characteristic whose access_cb is NULL (even notify-only ones),
+// failing ble_gatts_count_cfg() with BLE_HS_EINVAL. The API Response
+// characteristic is delivered exclusively via ble_gatts_notify_custom(), so this
+// callback should never run for a direct read/write — reject if it ever does.
+static int chr_notify_only_access(uint16_t conn_handle, uint16_t attr_handle,
+                                  struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)conn_handle; (void)attr_handle; (void)ctxt; (void)arg;
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
 // ---------------------------------------------------------------------------
 // GATT service table
 // ---------------------------------------------------------------------------
@@ -465,7 +477,7 @@ static const struct ble_gatt_chr_def bb_chars[] = {
     },
     {
         .uuid       = &BB_CHR_APIRESP_UUID.u,
-        .access_cb  = NULL,
+        .access_cb  = chr_notify_only_access,
         .flags      = BLE_GATT_CHR_F_NOTIFY,
         .val_handle = &s_apiresp_val_handle,
     },
@@ -586,6 +598,10 @@ static void host_task(void *param)
 // ---------------------------------------------------------------------------
 bool ble_service_init(void)
 {
+    // NimBLE's host logs every GATT notify/indicate at INFO level, which floods
+    // the console during normal operation. Drop its runtime level to WARN.
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+
     // Device name "BugBuster-XXYYZZ" from the last 3 station-MAC bytes.
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);

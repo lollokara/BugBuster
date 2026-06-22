@@ -1798,7 +1798,7 @@ void tasks_log_stack_hwm(void)
     }
     ESP_LOGI("tasks", "Heap internal free: %lu KB  min-ever: %lu KB  largest block: %lu KB",
         (unsigned long)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
-        (unsigned long)(esp_get_minimum_free_heap_size() / 1024),
+        (unsigned long)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
         (unsigned long)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
 }
 

@@ -60,6 +60,20 @@ fn fmt_time(s: f64) -> String {
     }
 }
 
+/// Style for a collapsible-menu toggle button. Each panel toggle carries a
+/// distinct accent contour so it's clear which panel it opens; when the panel
+/// is open the button is filled with a tint of that accent and highlighted.
+fn menu_btn_style(open: bool, accent: &str) -> String {
+    if open {
+        format!(
+            "border:1px solid {a};background:{a}26;color:{a};font-weight:700;box-shadow:0 0 0 1px {a}40 inset;",
+            a = accent
+        )
+    } else {
+        format!("border:1px solid {a}59;color:{a};background:transparent;", a = accent)
+    }
+}
+
 fn nice_range(lo: f32, hi: f32) -> (f32, f32) {
     let mut lo = lo;
     let mut hi = hi;
@@ -782,7 +796,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     view! {
         <div class="daq-tab" style="display:flex;flex-direction:column;gap:8px;">
             // Toolbar
-            <div class="daq-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 8px;background:#0f172a;border-radius:8px;">
+            <div class="daq-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:nowrap;overflow-x:auto;padding:6px 8px;background:#0f172a;border-radius:8px;">
                 {move || if streaming.get() {
                     view!{ <button class="btn btn-danger btn-sm" on:click=stop_stream>"■ Stop"</button> }.into_any()
                 } else {
@@ -833,27 +847,38 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     on:click=move |_| combined.update(|c| *c = !*c)>
                     {move || if combined.get() { "⊞ Stacked" } else { "⊟ Combined" }}
                 </button>
-                <span style="flex:1;"></span>
-                <span style="font-size:11px;color:#64748b;">"Drag: select · Wheel: zoom · Drag timeline: navigate"</span>
-                <button class="btn btn-ghost btn-sm" title="Toggle performance metrics overlay"
-                    on:click=move |_| perf_open.update(|o| *o = !*o)>
-                    {move || if perf_open.get() { "⏱ Perf ✓" } else { "⏱ Perf" }}
-                </button>
-                <button class="btn btn-ghost btn-sm" on:click=move |_| {
-                    let open = !fft_open.get_untracked();
-                    fft_open.set(open);
-                    let (n,w,s) = (fft_nbins.get_untracked(), fft_window.get_untracked(), fft_source.get_untracked());
-                    spawn_local(async move { daq_set_fft(n, s, w, open).await; });
-                }>{move || if fft_open.get() { "FFT ◀" } else { "FFT ▶" }}</button>
-                <button class="btn btn-ghost btn-sm" on:click=move |_| settings_open.update(|o| *o = !*o)>
-                    {move || if settings_open.get() { "⚙ Hide" } else { "⚙ Settings" }}
-                </button>
-                <button class="btn btn-ghost btn-sm" on:click=move |_| trig_open.update(|o| *o = !*o)>
-                    {move || if trig_open.get() { "⚑ Triggers ◀" } else { "⚑ Triggers ▶" }}
-                </button>
-                <button class="btn btn-ghost btn-sm" on:click=move |_| cal_open.set(true)>
-                    "🔧 Calibrate"
-                </button>
+                <span style="flex:1;min-width:8px;"></span>
+                <span style="font-size:11px;color:#64748b;flex-shrink:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">"Drag: select · Wheel: zoom · Drag timeline: navigate"</span>
+                <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                    <button class="btn btn-ghost btn-sm" title="Toggle performance metrics overlay"
+                        style=move || menu_btn_style(perf_open.get(), "#f59e0b")
+                        on:click=move |_| perf_open.update(|o| *o = !*o)>
+                        {move || if perf_open.get() { "⏱ Perf ✓" } else { "⏱ Perf" }}
+                    </button>
+                    <button class="btn btn-ghost btn-sm" title="Continuous FFT spectrum panel"
+                        style=move || menu_btn_style(fft_open.get(), "#a855f7")
+                        on:click=move |_| {
+                            let open = !fft_open.get_untracked();
+                            fft_open.set(open);
+                            let (n,w,s) = (fft_nbins.get_untracked(), fft_window.get_untracked(), fft_source.get_untracked());
+                            spawn_local(async move { daq_set_fft(n, s, w, open).await; });
+                        }>{move || if fft_open.get() { "📈 FFT ◀" } else { "📈 FFT ▶" }}</button>
+                    <button class="btn btn-ghost btn-sm" title="Acquisition + source settings"
+                        style=move || menu_btn_style(settings_open.get(), "#38bdf8")
+                        on:click=move |_| settings_open.update(|o| *o = !*o)>
+                        {move || if settings_open.get() { "⚙ Settings ◀" } else { "⚙ Settings ▶" }}
+                    </button>
+                    <button class="btn btn-ghost btn-sm" title="Trigger / flag IO configuration"
+                        style=move || menu_btn_style(trig_open.get(), "#22d3ee")
+                        on:click=move |_| trig_open.update(|o| *o = !*o)>
+                        {move || if trig_open.get() { "⚑ Triggers ◀" } else { "⚑ Triggers ▶" }}
+                    </button>
+                    <button class="btn btn-ghost btn-sm" title="SMU calibration wizard"
+                        style=move || menu_btn_style(cal_open.get(), "#34d399")
+                        on:click=move |_| cal_open.set(true)>
+                        "🔧 Calibrate"
+                    </button>
+                </div>
             </div>
 
             // Live readouts
@@ -948,7 +973,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                         "width:{};min-width:0;overflow:hidden;transition:width 0.3s ease;background:#0f172a;border-radius:8px;",
                         if fft_open.get() { "320px" } else { "0px" })
                 >
-                    <div style="padding:10px;width:320px;">
+                    <div style="padding:12px;width:320px;font-size:13px;">
                         <FftPanel snapshots=snapshots fft_nbins=fft_nbins fft_window=fft_window fft_source=fft_source apply=Rc::new(apply_fft.clone())/>
                     </div>
                 </div>
@@ -1306,14 +1331,14 @@ fn draw_overlay(
 
     // Event markers (flags + triggers) — vertical lines at exact sample
     // positions, drawn at full fidelity regardless of decimation. Flags are
-    // amber, triggers cyan; a small tick + IO label sits in the timeline strip.
+    // pink, triggers cyan; a small tick + IO label sits in the timeline strip.
     for m in &vd.markers {
         if m.sample_index < vs || m.sample_index > ve {
             continue;
         }
         let x = sample_to_x(m.sample_index);
         let is_trig = m.kind == 1;
-        let color = if is_trig { "#22d3ee" } else { "#f59e0b" };
+        let color = if is_trig { "#22d3ee" } else { "#ec4899" };
         ctx.set_stroke_style_str(color);
         ctx.set_line_width(if is_trig { 1.6 } else { 1.0 });
         ctx.begin_path();
@@ -1518,44 +1543,54 @@ fn FftPanel(
     let apply2 = apply.clone();
     let apply3 = apply.clone();
     view! {
-        <div>
-            <h3 style="margin:0 0 8px;font-size:14px;">"Spectrum (FFT)"</h3>
-            <canvas node_ref=canvas style="width:100%;height:220px;border-radius:6px;"></canvas>
-            <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
-                <label style="display:flex;justify-content:space-between;align-items:center;font-size:12px;">
-                    "Length"
-                    <select class="select select-sm" on:change=move |ev| {
-                        fft_nbins.set(event_target_value(&ev).parse().unwrap_or(256));
-                        apply();
-                    }>
+        <div class="daq-set">
+            <div class="daq-panel-head" style="color:#a855f7;">
+                <span class="daq-panel-title">"Spectrum"</span>
+            </div>
+            <section class="daq-card">
+                <canvas node_ref=canvas style="width:100%;height:220px;border-radius:8px;background:#0a1322;"></canvas>
+            </section>
+            <section class="daq-card">
+                <div class="daq-field col">
+                    <span>"Length"</span>
+                    <div class="daq-seg neon-purple">
                         {[64u16,128,256,512,1024,2048,4096].iter().map(|n| {
                             let n=*n;
-                            view!{ <option value=n.to_string() selected=move || fft_nbins.get()==n>{format!("{n}")}</option> }
+                            let a = apply.clone();
+                            view!{
+                                <button class:active=move || fft_nbins.get()==n
+                                    on:click=move |_| { fft_nbins.set(n); a(); }>{format!("{n}")}</button>
+                            }
                         }).collect::<Vec<_>>()}
-                    </select>
-                </label>
-                <label style="display:flex;justify-content:space-between;align-items:center;font-size:12px;">
-                    "Window"
-                    <select class="select select-sm" on:change=move |ev| {
-                        fft_window.set(event_target_value(&ev).parse().unwrap_or(1));
-                        apply2();
-                    }>
-                        <option value="0" selected=move || fft_window.get()==0>"Rectangular"</option>
-                        <option value="1" selected=move || fft_window.get()==1>"Hann"</option>
-                        <option value="2" selected=move || fft_window.get()==2>"Blackman-Harris"</option>
-                    </select>
-                </label>
-                <label style="display:flex;justify-content:space-between;align-items:center;font-size:12px;">
-                    "Source"
-                    <select class="select select-sm" on:change=move |ev| {
-                        fft_source.set(event_target_value(&ev).parse().unwrap_or(0));
-                        apply3();
-                    }>
-                        <option value="0" selected=move || fft_source.get()==0>"Current"</option>
-                        <option value="1" selected=move || fft_source.get()==1>"Power"</option>
-                    </select>
-                </label>
-            </div>
+                    </div>
+                </div>
+                <div class="daq-field col">
+                    <span>"Window"</span>
+                    <div class="daq-seg neon-purple">
+                        {[("Rect",0u8),("Hann",1),("Blk-H",2)].iter().map(|(l,w)| {
+                            let w=*w;
+                            let a = apply2.clone();
+                            view!{
+                                <button class:active=move || fft_window.get()==w
+                                    on:click=move |_| { fft_window.set(w); a(); }>{*l}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+                <div class="daq-field col">
+                    <span>"Source"</span>
+                    <div class="daq-seg neon-purple">
+                        {[("Current",0u8),("Power",1)].iter().map(|(l,s)| {
+                            let s=*s;
+                            let a = apply3.clone();
+                            view!{
+                                <button class:active=move || fft_source.get()==s
+                                    on:click=move |_| { fft_source.set(s); a(); }>{*l}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+            </section>
         </div>
     }
 }
@@ -1585,6 +1620,9 @@ fn SettingsPanel(
     let filter_labels = [("Off", 0u8), ("Avg", 1), ("EMA", 2), ("Median", 3), ("HPF", 4)];
     view! {
         <div class="daq-set">
+            <div class="daq-panel-head" style="color:#38bdf8;">
+                <span class="daq-panel-title">"Settings"</span>
+            </div>
             <section class="daq-card">
                 <h3>"Acquisition"</h3>
                 <div class="daq-field col">
@@ -1687,11 +1725,12 @@ fn SettingsPanel(
                         }
                     }}
                 </div>
-                <label class="daq-toggle">
-                    <input type="checkbox" prop:checked=move || source_enable.get()
-                        on:change=move |ev| { source_enable.set(event_target_checked(&ev)); apply_source(); } />
-                    <span>"Output enabled"</span>
-                </label>
+                <button
+                    class=move || if source_enable.get() { "daq-power-btn on" } else { "daq-power-btn off" }
+                    on:click=move |_| { source_enable.update(|e| *e = !*e); apply_source(); }>
+                    <span class="dot"></span>
+                    {move || if source_enable.get() { "Output ON" } else { "Output OFF" }}
+                </button>
                 <div class="daq-field col">
                     <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
                         <span>"V_DUT"</span>
