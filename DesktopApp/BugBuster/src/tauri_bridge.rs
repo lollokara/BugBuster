@@ -1827,6 +1827,7 @@ pub struct DaqStreamRuntimeStatus {
     pub overflow: bool,
     pub ingest_sps: f64,
     pub max_samples: u64,
+    pub raw_cap: u64,
     pub mem_used_mb: f64,
     pub last_error: Option<String>,
 }

@@ -47,8 +47,9 @@ pub struct DaqStreamRuntimeStatus {
     pub overflow: bool,
     /// Measured ingestion throughput (samples/second folded into the store).
     pub ingest_sps: f64,
-    /// RAM-adaptive retention cap and current store footprint.
+    /// RAM-adaptive caps and current store footprint.
     pub max_samples: u64,
+    pub raw_cap: u64,
     pub mem_used_mb: f64,
     pub last_error: Option<String>,
 }
@@ -300,6 +301,7 @@ fn process_loop(
                     st.overflow = s.overflow;
                     st.frame_count += frames;
                     st.max_samples = s.max_samples as u64;
+                    st.raw_cap = s.raw_cap as u64;
                     st.mem_used_mb = s.mem_used_bytes() as f64 / 1e6;
                     let now = Instant::now();
                     let dt = now.duration_since(perf_t).as_secs_f64();
@@ -330,6 +332,7 @@ pub fn daq_stream_status(daq: State<'_, DaqState>) -> CmdResult<DaqStreamRuntime
         st.total_samples = s.total_samples();
         st.overflow = s.overflow;
         st.max_samples = s.max_samples as u64;
+        st.raw_cap = s.raw_cap as u64;
         st.mem_used_mb = s.mem_used_bytes() as f64 / 1e6;
     }
     Ok(st)

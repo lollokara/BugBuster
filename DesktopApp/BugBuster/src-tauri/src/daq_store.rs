@@ -14,16 +14,17 @@ use crate::daq_proto::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Absolute hard ceiling on stored samples (RAM safety net). The actual cap is
-/// chosen adaptively from available memory (see `adaptive_max_samples`). ~400 M
-/// samples ≈ 7 GB of raw arrays; only reached on a large machine.
+/// Absolute hard ceiling on the recent raw window (RAM safety net). The actual
+/// caps are chosen adaptively from available memory (see `adaptive_budget`).
 pub const DAQ_STORE_MAX_SAMPLES: usize = 400_000_000;
+/// Ceiling on total pyramid-covered samples (history length).
+pub const DAQ_TOTAL_MAX_SAMPLES: usize = 2_000_000_000;
 
-/// Approximate bytes per stored sample: raw i/v/p (3×f32 = 12) + range/source/
-/// flags (3) + amortised pyramid (~3) + slack.
-const BYTES_PER_SAMPLE: u64 = 18;
-
-/// Bytes available for the OS/UI to keep free regardless of capture size.
+/// Bytes per raw sample: i/v/p (3×f32 = 12) + range/source/flags (3).
+const RAW_BYTES_PER_SAMPLE: u64 = 15;
+/// Amortised pyramid bytes per covered sample (all levels, ~size_of::<Bin>/15).
+const PYR_BYTES_PER_SAMPLE: u64 = 3;
+/// Memory kept free for the OS/UI regardless of capture size.
 const RESERVED_BYTES: u64 = 1536 * 1024 * 1024; // 1.5 GB
 
 fn available_memory_bytes() -> u64 {
@@ -37,25 +38,34 @@ fn available_memory_bytes() -> u64 {
     }
 }
 
-/// Choose the capture sample cap from available RAM: use the smaller of ~55 %
-/// of available memory or (available − reserved), then clamp. This squeezes as
-/// much raw resolution as the host can hold while leaving headroom.
-fn adaptive_max_samples() -> usize {
+/// Choose `(raw_cap, total_cap)` from available RAM. The capture keeps the most
+/// recent `raw_cap` samples at full resolution (zoom-in detail) and a
+/// full-length min/max pyramid up to `total_cap` samples (overview + coarse
+/// zoom). ~60 % of the budget goes to the raw window, ~40 % to pyramid history.
+fn adaptive_budget() -> (usize, usize) {
     let avail = available_memory_bytes();
     let half = avail / 100 * 55;
     let after_reserve = avail.saturating_sub(RESERVED_BYTES);
     let budget = half.min(after_reserve).max(256 * 1024 * 1024); // ≥ 256 MB
-    let n = (budget / BYTES_PER_SAMPLE) as usize;
-    n.clamp(2_000_000, DAQ_STORE_MAX_SAMPLES)
+    let raw_cap = ((budget * 60 / 100) / RAW_BYTES_PER_SAMPLE) as usize;
+    let raw_cap = raw_cap.clamp(1_000_000, DAQ_STORE_MAX_SAMPLES);
+    let total_cap = ((budget * 40 / 100) / PYR_BYTES_PER_SAMPLE) as usize;
+    let total_cap = total_cap.clamp(raw_cap, DAQ_TOTAL_MAX_SAMPLES);
+    (raw_cap, total_cap)
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct DaqStore {
     pub sample_rate_hz: u32,
     pub decimation: u8,
-    /// RAM-adaptive retention cap (samples), chosen from available memory.
+    /// Total samples ever appended (== pyramid coverage). Raw arrays hold only
+    /// the most recent window; older raw is evicted but stays in the pyramid.
+    pub total: u64,
+    /// Recent raw window cap (samples kept at full resolution).
+    pub raw_cap: usize,
+    /// Pyramid history cap (`max_samples`): appending stops past this.
     pub max_samples: usize,
-    /// Parallel per-sample arrays.
+    /// Parallel per-sample arrays (most recent `raw_cap` samples).
     pub i: Vec<f32>,
     pub v: Vec<f32>,
     pub p: Vec<f32>,
@@ -253,9 +263,22 @@ impl Bin {
     }
 }
 
-/// Build a bin directly from raw sample arrays over [a, b).
-fn build_bin_raw(i: &[f32], v: &[f32], p: &[f32], src: &[u8], a: usize, b: usize, dt: f32) -> Bin {
+/// Build a bin from raw sample arrays over the absolute range [a_abs, b_abs),
+/// where the raw arrays start at absolute index `raw_start` (older samples may
+/// have been evicted).
+fn build_bin_raw(
+    i: &[f32],
+    v: &[f32],
+    p: &[f32],
+    src: &[u8],
+    a_abs: usize,
+    b_abs: usize,
+    raw_start: usize,
+    dt: f32,
+) -> Bin {
     let mut bin = Bin::empty();
+    let a = a_abs.saturating_sub(raw_start);
+    let b = b_abs.saturating_sub(raw_start).min(i.len());
     if a >= b {
         return bin;
     }
@@ -296,19 +319,22 @@ fn build_bin_merge(lower: &[Bin], a: usize, b: usize) -> Bin {
 
 impl DaqStore {
     pub fn new(sample_rate_hz: u32) -> Self {
+        let (raw_cap, total_cap) = adaptive_budget();
         Self {
             sample_rate_hz: sample_rate_hz.max(1),
             decimation: 1,
-            max_samples: adaptive_max_samples(),
+            total: 0,
+            raw_cap,
+            max_samples: total_cap,
             levels: vec![Vec::new(); PYR_MAX_LEVELS],
             built: vec![0; PYR_MAX_LEVELS],
             ..Default::default()
         }
     }
 
-    /// Estimated resident bytes of the stored capture (raw + pyramid).
+    /// Estimated resident bytes of the stored capture (raw window + pyramid).
     pub fn mem_used_bytes(&self) -> u64 {
-        let raw = self.i.len() as u64 * 15;
+        let raw = self.i.len() as u64 * RAW_BYTES_PER_SAMPLE;
         let pyr: u64 = self
             .levels
             .iter()
@@ -317,8 +343,13 @@ impl DaqStore {
         raw + pyr
     }
 
+    /// Absolute index of the oldest sample still held in the raw arrays.
+    fn raw_start(&self) -> usize {
+        self.total as usize - self.i.len()
+    }
+
     pub fn total_samples(&self) -> u64 {
-        self.i.len() as u64
+        self.total
     }
 
     pub fn clear(&mut self) {
@@ -329,11 +360,29 @@ impl DaqStore {
         self.source.clear();
         self.flags.clear();
         self.overflow = false;
+        self.total = 0;
         for lvl in self.levels.iter_mut() {
             lvl.clear();
         }
         for b in self.built.iter_mut() {
             *b = 0;
+        }
+    }
+
+    /// Evict the oldest raw samples once the recent window exceeds `raw_cap`.
+    /// The pyramid still covers them, so overview/coarse zoom is unaffected;
+    /// only full-resolution zoom into the evicted region degrades to the finest
+    /// pyramid level. Eviction happens in chunks to amortise the front-drain.
+    fn evict_raw(&mut self) {
+        let margin = self.raw_cap / 4 + 1;
+        if self.i.len() >= self.raw_cap + margin {
+            let evict = self.i.len() - self.raw_cap;
+            self.i.drain(0..evict);
+            self.v.drain(0..evict);
+            self.p.drain(0..evict);
+            self.range.drain(0..evict);
+            self.source.drain(0..evict);
+            self.flags.drain(0..evict);
         }
     }
 
@@ -343,28 +392,37 @@ impl DaqStore {
             self.levels = vec![Vec::new(); PYR_MAX_LEVELS];
             self.built = vec![0; PYR_MAX_LEVELS];
         }
-        let n = self.i.len();
+        let total = self.total as usize;
+        let raw_start = total - self.i.len();
         let dt = 1.0_f32 / self.sample_rate_hz.max(1) as f32;
-        // Level 0 from raw samples.
+        // Level 0 from raw samples (absolute indices, offset by raw_start).
         {
-            let complete = n / PYR_FACTOR;
+            let complete = total / PYR_FACTOR;
             let lvl = &mut self.levels[0];
             lvl.truncate(self.built[0]); // drop the old partial tail
             while self.built[0] < complete {
                 let a = self.built[0] * PYR_FACTOR;
                 lvl.push(build_bin_raw(
-                    &self.i, &self.v, &self.p, &self.source, a, a + PYR_FACTOR, dt,
+                    &self.i,
+                    &self.v,
+                    &self.p,
+                    &self.source,
+                    a,
+                    a + PYR_FACTOR,
+                    raw_start,
+                    dt,
                 ));
                 self.built[0] += 1;
             }
-            if n > complete * PYR_FACTOR {
+            if total > complete * PYR_FACTOR {
                 lvl.push(build_bin_raw(
                     &self.i,
                     &self.v,
                     &self.p,
                     &self.source,
                     complete * PYR_FACTOR,
-                    n,
+                    total,
+                    raw_start,
                     dt,
                 ));
             }
@@ -396,11 +454,11 @@ impl DaqStore {
             self.decimation = rec.decimation;
         }
         for s in &rec.samples {
-            if self.i.len() >= self.max_samples.max(1) {
+            if self.total as usize >= self.max_samples.max(1) {
                 if !self.overflow {
                     self.overflow = true;
                     log::warn!(
-                        "daq_store: adaptive cap ({}) reached — capture truncated",
+                        "daq_store: history cap ({}) reached — capture truncated",
                         self.max_samples
                     );
                 }
@@ -412,8 +470,10 @@ impl DaqStore {
             self.range.push(s.range);
             self.source.push(s.source);
             self.flags.push(s.flags);
+            self.total += 1;
         }
         self.update_pyramid();
+        self.evict_raw();
     }
 
     /// Extract a decimated view between [start, end) sample indices, at most
@@ -449,12 +509,13 @@ impl DaqStore {
 
         let s0 = start as usize;
         let s1 = end as usize;
+        let raw_start = self.raw_start();
         let columns = span.min(max_points);
         let raw_per_col = (span / columns).max(1) as u64;
         let dt = 1.0_f32 / self.sample_rate_hz.max(1) as f32;
 
         // Pick the coarsest pyramid level whose bins are still finer than a
-        // column. m == 0 means read raw samples (full detail + filtering).
+        // column. m == 0 means read raw samples (full detail).
         let mut m = 0usize;
         let mut f_pow: u64 = 1;
         while m < PYR_MAX_LEVELS
@@ -465,16 +526,13 @@ impl DaqStore {
             m += 1;
         }
 
-        if m == 0 {
-            // Raw path — bounded span (< columns * PYR_FACTOR), full detail.
-            let win = smooth.clamp(1, 8192) as usize;
-            let active = filter_type != 0 && win > 1;
-            let sm_i = active.then(|| apply_filter(&self.i[s0..s1], win, filter_type));
-            let sm_v = active.then(|| apply_filter(&self.v[s0..s1], win, filter_type));
-            let sm_p = active.then(|| apply_filter(&self.p[s0..s1], win, filter_type));
-            let gi = |k: usize| sm_i.as_ref().map(|a| a[k]).unwrap_or(self.i[s0 + k]);
-            let gv = |k: usize| sm_v.as_ref().map(|a| a[k]).unwrap_or(self.v[s0 + k]);
-            let gp = |k: usize| sm_p.as_ref().map(|a| a[k]).unwrap_or(self.p[s0 + k]);
+        // The raw path is only usable when the requested range is still resident
+        // (not evicted); otherwise drop to the finest pyramid level.
+        let raw_ok = s0 >= raw_start;
+        let mut cols_out = columns;
+
+        if m == 0 && raw_ok {
+            let lo = s0 - raw_start; // local index of the view start
             view.decimated = span > columns;
             for col in 0..columns {
                 let b0 = (col * span) / columns;
@@ -491,15 +549,20 @@ impl DaqStore {
                 let mut pmax = f32::NEG_INFINITY;
                 let mut peak_didt = 0.0_f32;
                 let mut src_counts = [0u32; 3];
-                let mut prev_i = if b0 > 0 { gi(b0 - 1) } else { gi(b0) };
+                let mut prev_i = if lo + b0 > 0 {
+                    self.i[lo + b0 - 1]
+                } else {
+                    self.i[lo + b0]
+                };
                 for k in b0..b1 {
-                    let iv = gi(k);
+                    let idx = lo + k;
+                    let iv = self.i[idx];
                     imin = imin.min(iv);
                     imax = imax.max(iv);
-                    let vv = gv(k);
+                    let vv = self.v[idx];
                     vmin = vmin.min(vv);
                     vmax = vmax.max(vv);
-                    let pv = gp(k);
+                    let pv = self.p[idx];
                     pmin = pmin.min(pv);
                     pmax = pmax.max(pv);
                     let d = ((iv - prev_i) / dt).abs();
@@ -507,7 +570,7 @@ impl DaqStore {
                         peak_didt = d;
                     }
                     prev_i = iv;
-                    match self.source[s0 + k] {
+                    match self.source[idx] {
                         SRC_FINE => src_counts[0] += 1,
                         SRC_COARSE => src_counts[1] += 1,
                         SRC_BLEND => src_counts[2] += 1,
@@ -534,6 +597,11 @@ impl DaqStore {
             }
         } else {
             // Pyramid path — O(columns) bin decimation, scales to any capture.
+            // Evicted raw regions also land here at the finest pyramid level.
+            if m == 0 {
+                m = 1;
+                f_pow = PYR_FACTOR as u64;
+            }
             let lvl = &self.levels[m - 1];
             let fp = f_pow as usize;
             let e0 = s0 / fp;
@@ -543,6 +611,7 @@ impl DaqStore {
                 return view;
             }
             let cols = ecount.min(max_points);
+            cols_out = cols;
             view.decimated = true;
             for col in 0..cols {
                 let b0 = e0 + (col * ecount) / cols;
@@ -568,13 +637,33 @@ impl DaqStore {
                 view.didt.push(bin.didt);
             }
         }
+
+        // Display filter applied to the per-column output so it works at every
+        // zoom level (window scaled from samples to columns).
+        let win = smooth.clamp(1, 8192) as u64;
+        if filter_type != 0 && win > 1 && cols_out > 1 {
+            let samples_per_col = (span as u64 / cols_out as u64).max(1);
+            let win_cols = ((win + samples_per_col / 2) / samples_per_col).max(1) as usize;
+            if win_cols > 1 {
+                view.i_min = apply_filter(&view.i_min, win_cols, filter_type);
+                view.i_max = apply_filter(&view.i_max, win_cols, filter_type);
+                view.v_min = apply_filter(&view.v_min, win_cols, filter_type);
+                view.v_max = apply_filter(&view.v_max, win_cols, filter_type);
+                view.p_min = apply_filter(&view.p_min, win_cols, filter_type);
+                view.p_max = apply_filter(&view.p_max, win_cols, filter_type);
+            }
+        }
         view
     }
 
-    /// Exact trapezoidal integrals over [start, end) at full sample resolution.
+    /// Exact trapezoidal integrals over [start, end). Only the resident raw
+    /// window can be integrated exactly, so the range is clamped to it; a
+    /// selection that reaches into evicted history integrates the available
+    /// (most recent) portion.
     pub fn integrate(&self, start: u64, end: u64) -> DaqIntegral {
         let total = self.total_samples();
-        let start = start.min(total);
+        let raw_start = self.raw_start() as u64;
+        let start = start.clamp(raw_start, total);
         let end = end.clamp(start, total);
         let n = (end - start) as usize;
         let mut out = DaqIntegral {
@@ -585,9 +674,9 @@ impl DaqStore {
         if n == 0 {
             return out;
         }
-        let dt = 1.0_f64 / self.sample_rate_hz as f64;
-        let s0 = start as usize;
-        let s1 = end as usize;
+        let dt = 1.0_f64 / self.sample_rate_hz.max(1) as f64;
+        let s0 = (start - raw_start) as usize; // local index
+        let s1 = (end - raw_start) as usize;
 
         let mut sum_i = 0.0_f64;
         let mut sum_v = 0.0_f64;
@@ -726,5 +815,56 @@ mod tests {
         // returns full per-sample detail.
         let zoom = store.get_view(1000, 2000, 800, 1, 0);
         assert!(zoom.i_max.iter().cloned().fold(0.0, f32::max) > 0.95);
+    }
+
+    #[test]
+    fn compaction_evicts_raw_keeps_overview() {
+        let mut store = DaqStore::new(1_000_000);
+        store.raw_cap = 50_000; // force a small raw window to trigger eviction
+        let n = 400_000usize;
+        let mut k = 0usize;
+        while k < n {
+            let end = (k + 20_000).min(n);
+            let samples: Vec<WaveSample> = (k..end)
+                .map(|j| {
+                    let ph = (j % 1000) as f32 / 1000.0;
+                    WaveSample {
+                        i: ph,
+                        v: 3.3,
+                        p: ph * 3.3,
+                        range: 1,
+                        source: SRC_FINE,
+                        flags: 0,
+                    }
+                })
+                .collect();
+            store.append_waveform(&WaveformRecord {
+                start_seq: 0,
+                sample_rate: 1_000_000,
+                decimation: 1,
+                samples,
+            });
+            k = end;
+        }
+        // Full history is still counted, but the raw window is bounded.
+        assert_eq!(store.total_samples(), n as u64);
+        assert!(store.i.len() < n, "raw should have been evicted");
+        assert!(store.i.len() <= store.raw_cap + store.raw_cap / 4 + 1);
+
+        // Overview across the whole capture still brackets the range.
+        let view = store.get_view(0, n as u64, 500, 1, 0);
+        assert!(view.i_max.iter().cloned().fold(f32::NEG_INFINITY, f32::max) > 0.95);
+
+        // Zoom into an EVICTED region (near the start) still returns data from
+        // the finest pyramid level.
+        let zoom = store.get_view(0, 2_000, 800, 1, 0);
+        assert!(!zoom.i_max.is_empty());
+        assert!(
+            zoom.i_max.iter().cloned().fold(f32::NEG_INFINITY, f32::max) > 0.9,
+            "evicted-region zoom should still show the sawtooth"
+        );
+
+        // Integral clamps to the resident window without panicking.
+        let _ = store.integrate(0, n as u64);
     }
 }

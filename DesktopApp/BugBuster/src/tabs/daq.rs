@@ -496,7 +496,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     }
                 }
                 tick = tick.wrapping_add(1);
-                slp(45).await;
+                slp(33).await;
             }
         });
     }
@@ -835,14 +835,19 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                             let ing = st.as_ref().map(|s| s.ingest_sps).unwrap_or(0.0);
                             let tot = st.as_ref().map(|s| s.total_samples).unwrap_or(0);
                             let active = st.as_ref().map(|s| s.active).unwrap_or(false);
+                            let overflow = st.as_ref().map(|s| s.overflow).unwrap_or(false);
                             let mem = st.as_ref().map(|s| s.mem_used_mb).unwrap_or(0.0);
                             let cap = st.as_ref().map(|s| s.max_samples).unwrap_or(0);
+                            let raw_cap = st.as_ref().map(|s| s.raw_cap).unwrap_or(0);
                             let f = fps.get();
                             let fm = fetch_ms.get();
-                            let keepup = !active || (fm < 120.0 && f >= 20.0);
+                            // "Keeping up" = data not dropped and the backend serves
+                            // views fast; render fps is informational.
+                            let keepup = !active || (!overflow && fm < 60.0);
                             let fill = if cap > 0 { (tot as f64 / cap as f64 * 100.0).min(100.0) } else { 0.0 };
+                            let raw_held = tot.min(raw_cap);
                             view!{
-                                <div style="position:absolute;top:8px;right:8px;z-index:6;background:rgba(2,6,23,0.88);border:1px solid #1e293b;border-radius:8px;padding:8px 10px;font-size:11px;font-variant-numeric:tabular-nums;color:#cbd5e1;min-width:182px;pointer-events:none;">
+                                <div style="position:absolute;top:8px;right:8px;z-index:6;background:rgba(2,6,23,0.88);border:1px solid #1e293b;border-radius:8px;padding:8px 10px;font-size:11px;font-variant-numeric:tabular-nums;color:#cbd5e1;min-width:198px;pointer-events:none;">
                                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;gap:12px;">
                                         <strong style="color:#22d3ee;letter-spacing:0.5px;">"PERFORMANCE"</strong>
                                         <span style=format!("font-size:9px;font-weight:800;padding:1px 7px;border-radius:8px;color:{c};border:1px solid {c}66;background:{c}1a;", c = if keepup { "#10b981" } else { "#ef4444" })>
@@ -854,7 +859,8 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                                     <PerfRow label="View fetch" value=format!("{:.1} ms", fm)/>
                                     <PerfRow label="Samples" value=format!("{:.2} M", tot as f64 / 1e6)/>
                                     <PerfRow label="Store" value=format!("{:.0} MB", mem)/>
-                                    <PerfRow label="RAM budget" value=format!("{} M ({:.0}%)", cap / 1_000_000, fill)/>
+                                    <PerfRow label="Raw window" value=format!("{:.1} M", raw_held as f64 / 1e6)/>
+                                    <PerfRow label="History cap" value=format!("{} M ({:.0}%)", cap / 1_000_000, fill)/>
                                 </div>
                             }
                         })}
