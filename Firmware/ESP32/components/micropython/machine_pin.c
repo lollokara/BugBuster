@@ -4,11 +4,16 @@
 #include "extmod/virtpin.h"
 #include "mphalport.h"
 
-// Forward declarations for standard ESP-IDF GPIO functions
+// Forward declarations for standard ESP-IDF GPIO functions. Real builds get
+// these from driver/gpio.h (pulled in via mphalport.h); only the NO_QSTR
+// qstr-extraction pass, which is preprocessed without the IDF include paths,
+// needs these minimal stubs.
+#ifdef NO_QSTR
 void gpio_pullup_en(int gpio_num);
 void gpio_pullup_dis(int gpio_num);
 void gpio_pulldown_en(int gpio_num);
 void gpio_pulldown_dis(int gpio_num);
+#endif
 
 typedef struct _machine_pin_obj_t {
     mp_obj_base_t base;

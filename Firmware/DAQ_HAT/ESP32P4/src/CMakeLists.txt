@@ -22,6 +22,7 @@ idf_component_register(
         "stream/usb_backend.c"
         "board/daq_board.c"
         "board/buttons_p4.c"
+        "diag/diagnostics.c"
         "config/daq_settings.c"
         "config/daq_settings_glue.c"
         "../../common/daq_config_registry.c"
@@ -41,6 +42,7 @@ idf_component_register(
         "ota"
         "stream"
         "board"
+        "diag"
         "config"
     REQUIRES
         driver
@@ -48,6 +50,7 @@ idf_component_register(
         esp_driver_i2c
         esp_driver_gpio
         esp_adc
+        esp_driver_tsens
         esp_psram
         esp_timer
         freertos

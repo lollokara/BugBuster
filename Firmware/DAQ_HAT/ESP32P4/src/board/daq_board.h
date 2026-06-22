@@ -61,6 +61,11 @@ typedef struct daq_board {
     uint8_t                 fft_source;   // 0 = current, 1 = power
     uint32_t                sync_epoch;   // sample index at the last S3 sync
 
+    // S3 mainboard telemetry (die temp, USB-PD, VADJ/VLOGIC rails) pushed over
+    // the HAT link (HATP_CMD_DAQ_TELEMETRY) and relayed to the C6 diagnostics.
+    s3link_telemetry_t      s3_telem;
+    uint32_t                s3_telem_ms;  // esp_timer ms at last telemetry push (0=never)
+
     // Fast path (DRDY-gated streaming): a processor task drains the per-bus
     // capture rings, pairs FINE+COARSE by sequence, and runs the full pipeline.
     TaskHandle_t            fast_task;

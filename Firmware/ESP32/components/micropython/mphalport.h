@@ -51,6 +51,17 @@ __attribute__((always_inline)) static inline mp_uint_t mp_hal_ticks_cpu_impl(voi
 #define MP_HAL_PIN_FMT "%u"
 #define mp_hal_pin_obj_t int
 #define mp_hal_pin_name(pin) (pin)
+// Real compilation uses the genuine ESP-IDF gpio types/prototypes. The old
+// hand-rolled `typedef int gpio_num_t` stubs collided with the real enums in
+// any translation unit that also pulls in driver/gpio.h — e.g.
+// extmod/modmachine.c, which includes the esp32 port's lightsleep code (and
+// hence soc/gpio_num.h + hal/gpio_types.h) once Bluetooth/coexistence is in
+// the sdkconfig. Including driver/gpio.h here gives every micropython TU the
+// same real types; the int stubs survive only for the NO_QSTR qstr-extraction
+// pass, which is preprocessed without the IDF include paths. The Python-facing
+// GPIO_MODE_* values are identical (INPUT=1, INPUT_OUTPUT=3, OUTPUT_OD=6,
+// INPUT_OUTPUT_OD=7), so machine.Pin behaviour is unchanged.
+#ifdef NO_QSTR
 typedef int gpio_num_t;
 typedef int gpio_mode_t;
 enum {
@@ -61,12 +72,17 @@ enum {
     GPIO_MODE_OUTPUT_OD = 6,
     GPIO_MODE_INPUT_OUTPUT_OD = 7,
 };
-gpio_num_t machine_pin_get_id(mp_obj_t pin_in);
-#define mp_hal_get_pin_obj(o) machine_pin_get_id(o)
-void esp_rom_gpio_pad_select_gpio(uint32_t gpio_num);
 void gpio_set_direction(gpio_num_t gpio_num, gpio_mode_t mode);
 void gpio_set_level(gpio_num_t gpio_num, int level);
 int gpio_get_level(gpio_num_t gpio_num);
+#else
+#include "driver/gpio.h"
+#endif
+// esp_rom_gpio_pad_select_gpio has the same signature in esp_rom_gpio.h; declare
+// it directly so we don't have to add the esp_rom include path to this component.
+void esp_rom_gpio_pad_select_gpio(uint32_t gpio_num);
+gpio_num_t machine_pin_get_id(mp_obj_t pin_in);
+#define mp_hal_get_pin_obj(o) machine_pin_get_id(o)
 
 static inline void mp_hal_pin_input(mp_hal_pin_obj_t pin) {
     esp_rom_gpio_pad_select_gpio(pin);

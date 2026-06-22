@@ -86,7 +86,10 @@
 // ── Disable modules that require port-specific C source files ─────────────────
 // These are enabled in the official ESP32 port but we don't include those files.
 #define MICROPY_PY_MACHINE                  (1)
-#define MICROPY_PY_MACHINE_INCLUDEFILE      "ports/esp32/modmachine.c"
+// Custom minimal machine port (component-dir file, survives micropython submodule
+// resets — see modmachine_bugbuster.c header). Replaces ports/esp32/modmachine.c,
+// which references machine types this minimal port does not implement.
+#define MICROPY_PY_MACHINE_INCLUDEFILE      "modmachine_bugbuster.c"
 #define MICROPY_PY_SYS_EXIT                 (1)
 #define MICROPY_PY_MACHINE_CAN              (0)
 #define MICROPY_PY_MACHINE_ADC              (0)

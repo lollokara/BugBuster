@@ -461,6 +461,14 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (b->ddp.running) ddp_master_set_ch_leds(&b->ddp, payload);
             return 0;
 
+        case HATP_CMD_DAQ_TELEMETRY:
+            // S3 mainboard telemetry snapshot (die temp, USB-PD, VADJ/VLOGIC
+            // rails) -> cache + timestamp for relay to the C6 diagnostics menu.
+            if (len < sizeof(s3link_telemetry_t)) return -1;
+            memcpy(&b->s3_telem, payload, sizeof(b->s3_telem));
+            b->s3_telem_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            return 0;
+
         // ---- SMU factory calibration ----
         case HATP_CMD_DAQ_CAL_START: {
             if (len < 1) return -1;

@@ -131,6 +131,11 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let smooth_window = RwSignal::new(1u32);
     // Display filter type: 0=none, 1=moving avg, 2=EMA, 3=median, 4=high-pass.
     let filter_type = RwSignal::new(1u8);
+    // Hi-res filter: when on, the backend filters the raw signal before
+    // decimation (zoom-stable, undistorted) for viewports in the raw path; when
+    // off, a lightweight filter is applied to the decimated envelope in the
+    // frontend (cheaper, but smooths the min/max band rather than the signal).
+    let raw_filter = RwSignal::new(true);
 
     // ---- Selection / hover --------------------------------------------------
     let sel_anchor = RwSignal::new(Option::<u64>::None);
@@ -217,11 +222,23 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             }
             let x0 = (LABEL_W * dpr) as f32;
             let x1 = (css_w * dpr) as f32;
-            let Some(vd) = view_data.get_untracked() else {
+            let Some(raw) = view_data.get_untracked() else {
                 if let Some(rr) = renderer.borrow().as_ref() {
                     rr.render(pw as f32, ph as f32, x0, x1, &[]);
                 }
                 return;
+            };
+            // When hi-res is off the backend returned the raw envelope, so we
+            // apply the lightweight envelope filter here; when on, the backend
+            // already filtered the raw signal — draw it as-is.
+            let vd = if raw_filter.get_untracked() {
+                raw
+            } else {
+                apply_display_filter(
+                    raw,
+                    smooth_window.get_untracked(),
+                    filter_type.get_untracked(),
+                )
             };
             let tracks = visible_tracks(
                 show_i.get_untracked(),
@@ -285,7 +302,17 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
         );
         let comb = combined.get_untracked();
         let regions = lane_regions(TOP_PAD, css_h - RULER_H - HEATMAP_H, tracks.len(), comb);
-        let vd = view_data.get_untracked();
+        let vd = view_data.get_untracked().map(|raw| {
+            if raw_filter.get_untracked() {
+                raw
+            } else {
+                apply_display_filter(
+                    raw,
+                    smooth_window.get_untracked(),
+                    filter_type.get_untracked(),
+                )
+            }
+        });
         let ov = overview_data.get_untracked();
         draw_overlay(
             &ov_canvas,
@@ -315,11 +342,19 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
         })
     };
 
-    // Effect A: full repaint when data / tracks / layout change.
+    // Derive the display-filtered view from the raw envelope. Re-runs only when
+    // the raw data, filter type, or window changes — never on the live polling
+    // path unless `view_data` actually changed — and only touches ~1800 columns.
+    // Effect A: full repaint when data / filter / tracks / layout change. The
+    // filter itself is applied inside `render_gl` / `paint_overlay`, so tracking
+    // `filter_type` + `smooth_window` here is what makes a filter change repaint.
     {
         let render_all = render_all.clone();
         Effect::new(move |_| {
             view_data.track();
+            filter_type.track();
+            smooth_window.track();
+            raw_filter.track();
             combined.track();
             show_i.track();
             show_v.track();
@@ -352,8 +387,14 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
 
     // ---- Data refresh helpers (drop overlapping fetches for smoothness) -----
     let view_inflight = Rc::new(Cell::new(false));
+    // Last fetched view key (start, end, backend-smooth, backend-filter). The
+    // backend only filters when the hi-res toggle is on (else it returns the raw
+    // envelope and the frontend filters cheaply). Skipping identical keys stops
+    // the backend re-decimating the same viewport ~30×/s while paused or idle.
+    let view_key = Rc::new(Cell::new((u64::MAX, u64::MAX, u32::MAX, u8::MAX)));
     let refresh_view = {
         let g = view_inflight.clone();
+        let key = view_key.clone();
         Rc::new(move || {
             if g.get() {
                 return;
@@ -363,14 +404,25 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             if ve <= vs {
                 return;
             }
+            // Only ask the backend to filter when hi-res is on; otherwise fetch
+            // the raw envelope and let the frontend apply the display filter.
+            let (bs, bf) = if raw_filter.get_untracked() {
+                (smooth_window.get_untracked(), filter_type.get_untracked())
+            } else {
+                (1u32, 0u8)
+            };
+            let k = (vs, ve, bs, bf);
+            if key.get() == k {
+                return;
+            }
             g.set(true);
             let g2 = g.clone();
-            let smooth = smooth_window.get_untracked();
-            let ftype = filter_type.get_untracked();
+            let key2 = key.clone();
             let t0 = js_sys::Date::now();
             spawn_local(async move {
-                if let Some(vd) = daq_get_view(vs, ve, 1800, smooth, ftype).await {
+                if let Some(vd) = daq_get_view(vs, ve, 1800, bs, bf).await {
                     view_data.set(Some(vd));
+                    key2.set(k);
                 }
                 fetch_ms.set(js_sys::Date::now() - t0);
                 g2.set(false);
@@ -902,6 +954,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                         <SettingsPanel
                             sample_rate_idx=sample_rate_idx decimation=decimation
                             range_lock_idx=range_lock_idx smooth_window=smooth_window filter_type=filter_type
+                            raw_filter=raw_filter
                             vdut_mv=vdut_mv ilimit_ma=ilimit_ma source_enable=source_enable
                             snapshots=snapshots
                             apply_source=Rc::new(apply_source.clone()) apply_range=Rc::new(apply_range.clone())
@@ -982,6 +1035,154 @@ fn col_range(vmin: &[f32], vmax: &[f32]) -> (f32, f32) {
     let lo = vmin.iter().cloned().fold(f32::INFINITY, f32::min);
     let hi = vmax.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     nice_range(lo, hi)
+}
+
+// ── Display filtering (client-side, over the visible envelope) ───────────────
+// Applied to the ~1800-column min/max envelope returned by the backend rather
+// than the raw capture: cost is independent of capture length and off the live
+// append path. The filter runs once on each column *midline* and the band
+// half-width is filtered alongside (except high-pass, which keeps the true
+// spread), so the envelope stays meaningful instead of collapsing the way
+// independently filtering min and max did.
+
+/// Centered box moving-average low-pass (window in columns), O(n) via prefix sum.
+fn flt_moving_avg(x: &[f32], win: usize) -> Vec<f32> {
+    let n = x.len();
+    if n == 0 || win <= 1 {
+        return x.to_vec();
+    }
+    let half = (win / 2).max(1);
+    let mut pref = vec![0.0f64; n + 1];
+    for i in 0..n {
+        pref[i + 1] = pref[i] + x[i] as f64;
+    }
+    let mut out = vec![0.0f32; n];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let a = i.saturating_sub(half);
+        let b = (i + half + 1).min(n);
+        *slot = ((pref[b] - pref[a]) / (b - a) as f64) as f32;
+    }
+    out
+}
+
+/// Zero-phase exponential moving average (forward + backward pass).
+fn flt_ema(x: &[f32], win: usize) -> Vec<f32> {
+    let n = x.len();
+    if n == 0 || win <= 1 {
+        return x.to_vec();
+    }
+    let alpha = 2.0 / (win as f64 + 1.0);
+    let mut fwd = vec![0.0f32; n];
+    let mut acc = x[0] as f64;
+    for i in 0..n {
+        acc += alpha * (x[i] as f64 - acc);
+        fwd[i] = acc as f32;
+    }
+    let mut out = vec![0.0f32; n];
+    let mut acc2 = fwd[n - 1] as f64;
+    for i in (0..n).rev() {
+        acc2 += alpha * (fwd[i] as f64 - acc2);
+        out[i] = acc2 as f32;
+    }
+    out
+}
+
+/// Windowed median (spike rejection); window capped for cost.
+fn flt_median(x: &[f32], win: usize) -> Vec<f32> {
+    let n = x.len();
+    if n == 0 || win <= 1 {
+        return x.to_vec();
+    }
+    let w = win.clamp(1, 63);
+    let half = w / 2;
+    let mut out = vec![0.0f32; n];
+    let mut buf: Vec<f32> = Vec::with_capacity(w);
+    for i in 0..n {
+        buf.clear();
+        let a = i.saturating_sub(half);
+        let b = (i + half + 1).min(n);
+        buf.extend_from_slice(&x[a..b]);
+        buf.sort_by(|p, q| p.partial_cmp(q).unwrap_or(std::cmp::Ordering::Equal));
+        out[i] = buf[buf.len() / 2];
+    }
+    out
+}
+
+/// Dispatch one base filter. `kind`: 1=avg, 2=EMA, 3=median (else identity).
+fn flt_apply(x: &[f32], win: usize, kind: u8) -> Vec<f32> {
+    match kind {
+        1 => flt_moving_avg(x, win),
+        2 => flt_ema(x, win),
+        3 => flt_median(x, win),
+        _ => x.to_vec(),
+    }
+}
+
+/// Window in columns for the selected `smooth` setting, expressed in **raw
+/// samples** so the filter cutoff is a fixed real timescale and does not change
+/// as you zoom (scope-like behaviour). `win_cols = smooth / samples_per_col`:
+/// when zoomed in enough that the window spans several columns the smoothing is
+/// visible; when zoomed out so far that the window is finer than one column it
+/// collapses to 1 (no extra smoothing — the min/max decimation already
+/// aggregates beyond the window, so anything still visible is real signal, not
+/// sub-window noise the filter should remove).
+fn flt_win_cols(span: u64, cols: usize, smooth: u32) -> usize {
+    if cols <= 1 || smooth <= 1 {
+        return 1;
+    }
+    let spc = (span / cols as u64).max(1);
+    (((smooth as u64) + spc / 2) / spc).max(1) as usize
+}
+
+/// Filter a single min/max envelope in place. The midline is filtered with the
+/// selected kind; the half-width is smoothed too for avg/EMA/median, or kept as
+/// the true spread for high-pass (kind 4), which only removes DC from the line.
+fn flt_band(lo: &mut [f32], hi: &mut [f32], win: usize, kind: u8) {
+    let n = lo.len();
+    if n == 0 || n != hi.len() || win <= 1 || kind == 0 {
+        return;
+    }
+    let mut mid = vec![0.0f32; n];
+    let mut half = vec![0.0f32; n];
+    for k in 0..n {
+        mid[k] = 0.5 * (lo[k] + hi[k]);
+        half[k] = 0.5 * (hi[k] - lo[k]);
+    }
+    let midf = if kind == 4 {
+        // High-pass = midline minus its moving average (AC ripple around zero).
+        let lp = flt_moving_avg(&mid, win);
+        mid.iter().zip(lp.iter()).map(|(a, b)| a - b).collect()
+    } else {
+        flt_apply(&mid, win, kind)
+    };
+    let halff = if kind == 4 {
+        half // keep the true min/max spread around the AC line
+    } else {
+        flt_apply(&half, win, kind)
+    };
+    for k in 0..n {
+        let h = halff[k].max(0.0);
+        lo[k] = midf[k] - h;
+        hi[k] = midf[k] + h;
+    }
+}
+
+/// Return a display-filtered copy of `vd`. `kind`: 0=off, 1=avg, 2=EMA,
+/// 3=median, 4=high-pass; `smooth` is the window in raw samples.
+fn apply_display_filter(vd: DaqViewData, smooth: u32, kind: u8) -> DaqViewData {
+    let mut out = vd;
+    if kind == 0 || smooth <= 1 {
+        return out;
+    }
+    let span = out.view_end.saturating_sub(out.view_start);
+    let win = flt_win_cols(span, out.i_min.len(), smooth);
+    if win <= 1 {
+        return out;
+    }
+    flt_band(&mut out.i_min, &mut out.i_max, win, kind);
+    flt_band(&mut out.v_min, &mut out.v_max, win, kind);
+    flt_band(&mut out.p_min, &mut out.p_max, win, kind);
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1331,6 +1532,7 @@ fn SettingsPanel(
     range_lock_idx: RwSignal<u8>,
     smooth_window: RwSignal<u32>,
     filter_type: RwSignal<u8>,
+    raw_filter: RwSignal<bool>,
     vdut_mv: RwSignal<u32>,
     ilimit_ma: RwSignal<u32>,
     source_enable: RwSignal<bool>,
@@ -1425,6 +1627,12 @@ fn SettingsPanel(
                         }).collect::<Vec<_>>()}
                     </div>
                 </div>
+                <label class="daq-toggle">
+                    <input type="checkbox" prop:checked=move || raw_filter.get()
+                        prop:disabled=move || filter_type.get() == 0
+                        on:change=move |ev| raw_filter.set(event_target_checked(&ev)) />
+                    <span>"Hi-res (filter raw signal)"</span>
+                </label>
             </section>
 
             <section class="daq-card">

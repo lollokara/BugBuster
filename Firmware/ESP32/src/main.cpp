@@ -18,6 +18,7 @@
 #include "cli/cli_term.h"
 #include "wifi_manager.h"
 #include "mdns_responder.h"
+#include "ble_service.h"
 #include "ad74416h_spi.h"
 #include "ad74416h.h"
 #include "tasks.h"
@@ -117,6 +118,7 @@ static void mainLoopTask(void* pvParam)
 {
     uint32_t lastLedUpdate = 0;
     uint32_t lastSelftestPoll = 0;
+    uint32_t lastDaqTelemetry = 0;
 
     for (;;) {
         // USB hub enumeration recovery watchdog (no-op once mounted or budget exhausted)
@@ -145,6 +147,13 @@ static void mainLoopTask(void* pvParam)
 
         // HAT background polling for unsolicited messages (e.g. LA done)
         hat_poll();
+
+        // DAQ HAT: push S3 mainboard telemetry (die temp, USB-PD, rails) to the
+        // P4 (~1 Hz) for the C6 Diagnostics menu. No-op without a DAQ HAT.
+        if (now - lastDaqTelemetry >= 1000) {
+            lastDaqTelemetry = now;
+            hat_daq_push_telemetry();
+        }
 
         // IO ownership lease tick — expire timed leases
         io_owner_tick((uint64_t)(esp_timer_get_time() / 1000LL));
@@ -221,6 +230,15 @@ extern "C" void app_main(void)
         serial_printf("[BugBuster] mDNS: %s.local\r\n", hn);
     } else {
         serial_println("[BugBuster] WARN: mDNS init failed");
+    }
+
+    // 4c. BLE — low-rate control plane for the iOS app (WiFi provisioning,
+    //     supply control, sensor readout). Independent of the LAN; needs the
+    //     admin token (auth_init, step 0) and the station MAC (wifi_init).
+    if (ble_service_init()) {
+        serial_println("[BugBuster] BLE: advertising");
+    } else {
+        serial_println("[BugBuster] WARN: BLE init failed");
     }
 
     // 5. SPIFFS — web partition

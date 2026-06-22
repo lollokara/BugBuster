@@ -5,6 +5,7 @@
 
 #include "daq_board.h"
 #include "daq_settings_glue.h"
+#include "diagnostics.h"
 
 static const char *TAG = "daq_hat_p4";
 
@@ -41,6 +42,12 @@ void app_main(void)
         ESP_LOGI(TAG, "C6 display link ready");
     }
 
+    // Internal die-temperature sensor for the Diagnostics menu. Optional — a
+    // failure here only blanks the "ESP32-P4 Temp" row.
+    if (diagnostics_init() != ESP_OK) {
+        ESP_LOGW(TAG, "internal temperature sensor unavailable");
+    }
+
     // Start the DRDY-gated fast acquisition path: per-bus capture tasks plus the
     // pairing/fusion/DSP/spectrum/stream processor. The PSRAM ring gives tens of
     // ms of slack so FFT spikes and USB back-pressure never drop samples.
@@ -52,7 +59,8 @@ void app_main(void)
     }
 
     // Low-rate housekeeping only: the fast task owns the acquisition + USB
-    // pipeline. Here we just log a heartbeat and read the board temperatures.
+    // pipeline. Here we log a heartbeat and push the full onboard-device
+    // diagnostics snapshot to the C6 Diagnostics menu (~1 Hz).
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         ESP_LOGI(TAG, "I=%.6g A  V=%.4f V  P=%.6g W  E=%.4f mWh  Q=%.4f mAh  "
@@ -64,13 +72,6 @@ void app_main(void)
                  power_dsp_charge_mah(&s_board.dsp),
                  (unsigned)s_board.drop_fine,
                  (unsigned)s_board.drop_coarse);
-        for (int i = 0; i < 2; ++i) {
-            if (s_board.temp_ok[i]) {
-                float c = 0.0f;
-                if (ad741x_read_celsius(&s_board.temp[i], &c) == ESP_OK) {
-                    ESP_LOGI(TAG, "temp[%d] = %.2f C", i, c);
-                }
-            }
-        }
+        diagnostics_push(&s_board);
     }
 }

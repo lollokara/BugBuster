@@ -14,6 +14,8 @@
 #include "bbp.h"
 #include "ds4424.h"
 #include "ws_stream.h"
+#include "selftest.h"
+#include "husb238.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -23,6 +25,7 @@
 #include "esp_timer.h"
 #include <string.h>
 #include <inttypes.h>
+#include <math.h>
 
 static const char *TAG = "hat";
 
@@ -1123,6 +1126,50 @@ static void hat_compute_ch_codes(uint8_t out[4])
                   mux_active;
         out[j] = fault ? 1 : (supply && io) ? 2 : supply ? 3 : io ? 4 : 0;
     }
+}
+
+void hat_daq_push_telemetry(void)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;
+
+    hat_daq_telemetry_t tlm = {};
+    tlm.die_temp_c10 = HAT_DAQ_TLM_NA;
+    tlm.flags = 0;
+
+    // S3 die temperature (cached by the ADC service task in g_deviceState).
+    float die_c = g_deviceState.dieTemperature;
+    if (die_c > -100.0f && die_c < 200.0f) {
+        tlm.die_temp_c10 = (int16_t)lroundf(die_c * 10.0f);
+        tlm.flags |= HAT_DAQ_TLM_F_DIE;
+    }
+
+    // USB-PD negotiated contract (HUSB238). Refresh then read the snapshot.
+    husb238_update();
+    const Husb238State *pd = husb238_get_state();
+    if (pd && pd->present && pd->attached) {
+        tlm.pd_mv = (uint16_t)lroundf(pd->voltage_v * 1000.0f);
+        tlm.pd_ma = (uint16_t)lroundf(pd->current_a * 1000.0f);
+        tlm.flags |= HAT_DAQ_TLM_F_PD;
+    }
+
+    // Supply rails from the background self-test monitor (cached; -1 when the
+    // monitor is disabled or blocked by the Channel-D interlock).
+    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
+    if (sv && sv->available) {
+        float v1 = sv->voltage[SELFTEST_RAIL_VADJ1];
+        float v2 = sv->voltage[SELFTEST_RAIL_VADJ2];
+        float vl = sv->voltage[SELFTEST_RAIL_3V3_ADJ];
+        if (v1 >= 0.0f || v2 >= 0.0f || vl >= 0.0f) {
+            tlm.vadj1_mv  = (v1 >= 0.0f) ? (uint16_t)lroundf(v1 * 1000.0f) : 0;
+            tlm.vadj2_mv  = (v2 >= 0.0f) ? (uint16_t)lroundf(v2 * 1000.0f) : 0;
+            tlm.vlogic_mv = (vl >= 0.0f) ? (uint16_t)lroundf(vl * 1000.0f) : 0;
+            tlm.flags |= HAT_DAQ_TLM_F_RAILS;
+        }
+    }
+
+    uint8_t rsp[4]; uint8_t rsp_len = 0;
+    hat_command(HAT_CMD_DAQ_TELEMETRY, (const uint8_t *)&tlm, sizeof(tlm),
+                rsp, &rsp_len, 200, sizeof(rsp));
 }
 
 void hat_update_leds(void)

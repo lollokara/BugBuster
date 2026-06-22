@@ -101,6 +101,29 @@ typedef enum {
 #define HAT_FRAME_SYNC      0xAA
 #define HAT_FRAME_MAX_LEN   32      // Max payload length
 
+// -----------------------------------------------------------------------------
+// DAQ HAT telemetry push (HAT_CMD_DAQ_TELEMETRY 0x5A)
+// -----------------------------------------------------------------------------
+// S3 mainboard telemetry forwarded to the DAQ HAT (ESP32-P4) once per second so
+// the P4 can relay it to the C6 Diagnostics menu. Compact fixed-point, little-
+// endian, <= HAT_FRAME_MAX_LEN bytes. MUST stay byte-for-byte identical to the
+// P4-side mirror in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
+#define HAT_DAQ_TLM_NA      ((int16_t)0x7FFF)  // sentinel: value unreadable
+#define HAT_DAQ_TLM_F_PD    0x01u  // USB-PD attached / contract valid
+#define HAT_DAQ_TLM_F_RAILS 0x02u  // VADJ1/VADJ2/VLOGIC fields valid
+#define HAT_DAQ_TLM_F_DIE   0x04u  // die_temp_c10 valid
+
+typedef struct __attribute__((packed)) {
+    int16_t  die_temp_c10;   // AD74416H die temp, 0.1 C (HAT_DAQ_TLM_NA if invalid)
+    uint16_t pd_mv;          // USB-PD negotiated voltage, mV (0 if unattached)
+    uint16_t pd_ma;          // USB-PD negotiated current cap, mA
+    uint16_t vadj1_mv;       // VADJ1_BUCK rail, mV (0 if unavailable)
+    uint16_t vadj2_mv;       // VADJ2_BUCK rail, mV
+    uint16_t vlogic_mv;      // 3V3_ADJ / VLOGIC rail, mV
+    uint8_t  flags;          // HAT_DAQ_TLM_F_*
+} hat_daq_telemetry_t;       // 13 bytes
+
+
 // Commands (master → slave): Core (0x01–0x0F)
 #define HAT_CMD_PING            0x01
 #define HAT_CMD_GET_INFO        0x02
@@ -145,6 +168,10 @@ typedef enum {
 #define HAT_CMD_LA_USB_RESET    0x3A  // Reinitialize vendor bulk endpoint
 // DAQ HAT (ESP32-P4) — channel-status LEDs (4 colour codes -> C6 neopixels).
 #define HAT_CMD_SET_CH_LEDS     0x55
+// DAQ HAT (ESP32-P4) — S3 mainboard telemetry push for the C6 Diagnostics menu
+// (die temp, USB-PD contract, VADJ/VLOGIC rails). Fire-and-forget; P4 caches it
+// and relays it to the C6 inside ddp_diag_t. Payload = hat_daq_telemetry_t.
+#define HAT_CMD_DAQ_TELEMETRY   0x5A
 #define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
 
 // Commands: HAT v2 Supplies / LEDs (0x40-0x4F)
@@ -458,6 +485,15 @@ uint8_t hat_get_last_error(void);
  */
 uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len);
+
+/**
+ * @brief Gather S3 mainboard telemetry (die temp, USB-PD contract, VADJ/VLOGIC
+ *        rails) and push it to the DAQ HAT for relay to the C6 Diagnostics menu.
+ *        No-op unless a DAQ HAT (HAT_TYPE_DAQ_POWER) is connected. Fire-and-
+ *        forget — call periodically (~1 Hz) from the main loop.
+ */
+void hat_daq_push_telemetry(void);
+
 
 /**
  * @brief One-call SWD setup: set VADJ, I/O voltage, power on, route SWD pins.

@@ -128,8 +128,12 @@ pub struct DaqIntegral {
     pub projected_mwh_per_hour: f64,
 }
 
-/// Centered box (moving-average) low-pass over `x` with the given window in
-/// samples. Returns a vector the same length as `x`.
+// ── Display filters (raw-domain, applied before min/max decimation) ──────────
+// Used only when the "hi-res" filter toggle is on and the viewport is in the
+// raw path (span small enough that raw samples back every column). Filtering the
+// true signal before decimation gives zoom-stable, undistorted smoothing.
+
+/// Centered box (moving-average) low-pass; O(n) via prefix sum.
 fn moving_avg(x: &[f32], win: usize) -> Vec<f32> {
     let n = x.len();
     if n == 0 || win <= 1 {
@@ -171,17 +175,13 @@ fn ema(x: &[f32], win: usize) -> Vec<f32> {
     out
 }
 
-/// Windowed median (spike/impulse rejection). Cost-bounded: the window is
-/// capped and very large views fall back to the moving average.
+/// Windowed median (spike rejection); window capped for cost.
 fn median_filter(x: &[f32], win: usize) -> Vec<f32> {
     let n = x.len();
     if n == 0 || win <= 1 {
         return x.to_vec();
     }
-    if n > 300_000 {
-        return moving_avg(x, win);
-    }
-    let w = win.clamp(1, 63);
+    let w = win.clamp(1, 127);
     let half = w / 2;
     let mut out = vec![0.0f32; n];
     let mut buf: Vec<f32> = Vec::with_capacity(w);
@@ -196,14 +196,13 @@ fn median_filter(x: &[f32], win: usize) -> Vec<f32> {
     out
 }
 
-/// High-pass = signal minus its moving average (shows AC / ripple, removes DC).
+/// High-pass = signal minus its moving average (AC ripple, removes DC).
 fn highpass(x: &[f32], win: usize) -> Vec<f32> {
     let lp = moving_avg(x, win);
     x.iter().zip(lp.iter()).map(|(a, b)| a - b).collect()
 }
 
-/// Apply the selected display filter. `kind`: 0=none, 1=moving avg, 2=EMA,
-/// 3=median, 4=high-pass.
+/// Dispatch one filter. `kind`: 1=avg, 2=EMA, 3=median, 4=high-pass.
 fn apply_filter(x: &[f32], win: usize, kind: u8) -> Vec<f32> {
     match kind {
         1 => moving_avg(x, win),
@@ -477,10 +476,11 @@ impl DaqStore {
     }
 
     /// Extract a decimated view between [start, end) sample indices, at most
-    /// `max_points` columns wide. Uses min/max envelope decimation. When a
-    /// `filter_type` (1=avg, 2=EMA, 3=median, 4=high-pass) is selected with a
-    /// `smooth` window > 1, that filter is applied to the visible I/V/P before
-    /// decimation.
+    /// `max_points` columns wide. Uses min/max envelope decimation. When
+    /// `filter_type != 0` and `smooth > 1` and the viewport is in the raw path,
+    /// the selected filter is applied to the raw signal before decimation
+    /// ("hi-res" smoothing); otherwise the raw envelope is returned and any
+    /// client-side display filter is applied in the frontend.
     pub fn get_view(
         &self,
         start: u64,
@@ -529,11 +529,26 @@ impl DaqStore {
         // The raw path is only usable when the requested range is still resident
         // (not evicted); otherwise drop to the finest pyramid level.
         let raw_ok = s0 >= raw_start;
-        let mut cols_out = columns;
 
         if m == 0 && raw_ok {
             let lo = s0 - raw_start; // local index of the view start
             view.decimated = span > columns;
+            // Optional raw-domain pre-filter over the visible window. The raw
+            // path is only chosen for small spans (each column backed by < ~16
+            // samples), so filtering `span` samples here is cheap. Min/max is
+            // taken from the filtered signal; dI/dt and source stay on the raw
+            // signal so the heatmap and tint reflect the true device behaviour.
+            let win = smooth.clamp(1, 8192) as usize;
+            let (fi, fv, fp) = if filter_type != 0 && win > 1 {
+                let end = (lo + span).min(self.i.len());
+                (
+                    Some(apply_filter(&self.i[lo..end], win, filter_type)),
+                    Some(apply_filter(&self.v[lo..end], win, filter_type)),
+                    Some(apply_filter(&self.p[lo..end], win, filter_type)),
+                )
+            } else {
+                (None, None, None)
+            };
             for col in 0..columns {
                 let b0 = (col * span) / columns;
                 let mut b1 = ((col + 1) * span) / columns;
@@ -556,20 +571,23 @@ impl DaqStore {
                 };
                 for k in b0..b1 {
                     let idx = lo + k;
-                    let iv = self.i[idx];
+                    let raw_i = self.i[idx];
+                    let iv = fi.as_ref().map_or(raw_i, |a| a[k]);
                     imin = imin.min(iv);
                     imax = imax.max(iv);
-                    let vv = self.v[idx];
+                    let vv = fv.as_ref().map_or(self.v[idx], |a| a[k]);
                     vmin = vmin.min(vv);
                     vmax = vmax.max(vv);
-                    let pv = self.p[idx];
+                    let pv = fp.as_ref().map_or(self.p[idx], |a| a[k]);
                     pmin = pmin.min(pv);
                     pmax = pmax.max(pv);
-                    let d = ((iv - prev_i) / dt).abs();
+                    // dI/dt is computed on the raw signal (the heatmap should
+                    // reflect true slew, not the smoothed trace).
+                    let d = ((raw_i - prev_i) / dt).abs();
                     if d > peak_didt {
                         peak_didt = d;
                     }
-                    prev_i = iv;
+                    prev_i = raw_i;
                     match self.source[idx] {
                         SRC_FINE => src_counts[0] += 1,
                         SRC_COARSE => src_counts[1] += 1,
@@ -611,7 +629,6 @@ impl DaqStore {
                 return view;
             }
             let cols = ecount.min(max_points);
-            cols_out = cols;
             view.decimated = true;
             for col in 0..cols {
                 let b0 = e0 + (col * ecount) / cols;
@@ -638,21 +655,11 @@ impl DaqStore {
             }
         }
 
-        // Display filter applied to the per-column output so it works at every
-        // zoom level (window scaled from samples to columns).
-        let win = smooth.clamp(1, 8192) as u64;
-        if filter_type != 0 && win > 1 && cols_out > 1 {
-            let samples_per_col = (span as u64 / cols_out as u64).max(1);
-            let win_cols = ((win + samples_per_col / 2) / samples_per_col).max(1) as usize;
-            if win_cols > 1 {
-                view.i_min = apply_filter(&view.i_min, win_cols, filter_type);
-                view.i_max = apply_filter(&view.i_max, win_cols, filter_type);
-                view.v_min = apply_filter(&view.v_min, win_cols, filter_type);
-                view.v_max = apply_filter(&view.v_max, win_cols, filter_type);
-                view.p_min = apply_filter(&view.p_min, win_cols, filter_type);
-                view.p_max = apply_filter(&view.p_max, win_cols, filter_type);
-            }
-        }
+        // Display filtering: when a filter is requested it is applied in the
+        // raw path above (pre-decimation, hi-res). The pyramid path leaves the
+        // envelope unfiltered — there the window is finer than one bin, so there
+        // is nothing extra to smooth. The lightweight client-side envelope
+        // filter (used when the hi-res toggle is off) runs in the frontend.
         view
     }
 

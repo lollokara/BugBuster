@@ -26,6 +26,7 @@ idf_component_register(
         esp_lcd
         driver
         esp_driver_rmt
+        esp_driver_tsens
         esp_timer
         nvs_flash
 )

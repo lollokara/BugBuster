@@ -64,6 +64,11 @@ extern "C" {
 #define HATP_CMD_DAQ_CAL_STATUS  0x58u   // -> smu_cal_status_t
 #define HATP_CMD_DAQ_CAL_ABORT   0x59u   // abort + restore safe SMU state
 
+// S3 mainboard telemetry push for the C6 Diagnostics menu (die temp, USB-PD
+// contract, VADJ/VLOGIC rails). Payload = s3link_telemetry_t; P4 caches it and
+// relays it to the C6 inside ddp_diag_t. Fire-and-forget (-> RSP_OK).
+#define HATP_CMD_DAQ_TELEMETRY   0x5Au
+
 // Version + OTA commands (vendor sub-range 0x60..0x6F).
 #define HATP_CMD_GET_VERSION     0x60u   // -> fw version (u32 + string)
 #define HATP_CMD_OTA_BEGIN       0x61u   // payload: ota_meta (size,ver,sha,prod)
@@ -114,6 +119,24 @@ typedef struct __attribute__((packed)) {
     float    last_p;
     float    energy_mwh;
 } s3link_daq_status_t;
+
+// HATP_CMD_DAQ_TELEMETRY (0x5A) payload: S3 mainboard telemetry relayed to the
+// C6 Diagnostics menu. MUST stay byte-for-byte identical to the S3-side mirror
+// hat_daq_telemetry_t in Firmware/ESP32/src/hat/hat.h.
+#define S3LINK_TLM_NA      ((int16_t)0x7FFF)  // sentinel: value unreadable
+#define S3LINK_TLM_F_PD    0x01u  // USB-PD attached / contract valid
+#define S3LINK_TLM_F_RAILS 0x02u  // VADJ1/VADJ2/VLOGIC fields valid
+#define S3LINK_TLM_F_DIE   0x04u  // die_temp_c10 valid
+
+typedef struct __attribute__((packed)) {
+    int16_t  die_temp_c10;   // AD74416H die temp, 0.1 C (S3LINK_TLM_NA if invalid)
+    uint16_t pd_mv;          // USB-PD negotiated voltage, mV (0 if unattached)
+    uint16_t pd_ma;          // USB-PD negotiated current cap, mA
+    uint16_t vadj1_mv;       // VADJ1_BUCK rail, mV (0 if unavailable)
+    uint16_t vadj2_mv;       // VADJ2_BUCK rail, mV
+    uint16_t vlogic_mv;      // 3V3_ADJ / VLOGIC rail, mV
+    uint8_t  flags;          // S3LINK_TLM_F_*
+} s3link_telemetry_t;        // 13 bytes
 
 // OTA_DATA payload: a firmware chunk at a given byte offset (for ordered,
 // resumable streaming so the S3 never stages the whole image). The image is

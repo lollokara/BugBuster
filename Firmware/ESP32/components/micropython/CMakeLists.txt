@@ -241,6 +241,7 @@ idf_component_register(
         ${MICROPY_GENHDR_DIR}
         ${_IDF_COMP}/esp_driver_i2c/include
         ${_IDF_COMP}/esp_driver_i2s/include
+        ${_IDF_COMP}/esp_driver_gpio/include
         ${_IDF_COMP}/esp_driver_ledc/include
         ${_IDF_COMP}/esp_driver_uart/include
         ${_IDF_COMP}/esp_pm/include

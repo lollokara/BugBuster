@@ -124,3 +124,34 @@ CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=32
 # stack and validates them on every context switch. Overflow triggers abort()
 # which saves a core dump to flash (see CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH).
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+
+# =============================================================================
+# Bluetooth LE (NimBLE) — low-rate control plane for the iOS app.
+#
+# Purpose: out-of-box WiFi provisioning + supply control + sensor readout over
+# BLE, so a phone can talk to the device before it is on the LAN. This is NOT a
+# streaming path (no scope/LA/DAQ over BLE) — payloads are tiny, so we keep the
+# stack lean to protect the already-tight internal DMA SRAM reserve documented
+# above (the httpd start-up failure mode).
+#
+# S3 = BLE 5.0 peripheral only. NimBLE host (smaller than Bluedroid), single
+# connection (the product pairs to exactly one phone), peripheral role only —
+# no central/observer/scan code linked in.
+# =============================================================================
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+# Single bonded central — the device is paired to one phone.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Peripheral + broadcaster only; drop central/observer to save flash + RAM.
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+# CONFIG_BT_NIMBLE_ROLE_CENTRAL is not set
+# CONFIG_BT_NIMBLE_ROLE_OBSERVER is not set
+# Bonding/LE Secure Connections so the pairing token isn't re-sent every session.
+CONFIG_BT_NIMBLE_SM_LEGACY=y
+CONFIG_BT_NIMBLE_SM_SC=y
+# One bond record is enough for a single-phone product.
+CONFIG_BT_NIMBLE_MAX_BONDS=1
+CONFIG_BT_NIMBLE_MAX_CCCDS=4
+# Host task stack — keep modest; GATT callbacks here are short.
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
