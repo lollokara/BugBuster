@@ -798,85 +798,36 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    /// Map the compact BLE `/api/status` payload onto the rich `DeviceStatus`
-    /// model the UI binds to (absent fields default to neutral values).
+    /// Decode `/api/status` over BLE. Since api_core now returns the rich,
+    /// HTTP-identical shape on every transport, the BLE path decodes the very
+    /// same `DeviceStatus` model the HTTP path uses — no compact mapper.
     private func bleFetchStatus() async -> DeviceStatus? {
-        guard let obj = await bleJSON("/api/status"), (obj["ok"] as? Bool) ?? false else { return nil }
-        let rawChannels = (obj["channels"] as? [[String: Any]]) ?? []
-        let channels: [ChannelState] = rawChannels.map { c in
-            ChannelState(
-                id: (c["id"] as? Int) ?? 0,
-                function: "",
-                functionCode: (c["fn"] as? Int) ?? 0,
-                adcRaw: 0,
-                adcValue: (c["adc"] as? Double) ?? Double((c["adc"] as? Int) ?? 0),
-                adcRange: 0, adcRate: 0, adcMux: 0,
-                dacCode: 0, dacValue: 0,
-                dinState: (c["din"] as? Bool) ?? false,
-                dinCounter: 0, doState: false,
-                alert: 0, alertMask: 0, rtdExcitationUa: nil
-            )
-        }
-        return DeviceStatus(
-            spiOk: (obj["spiOk"] as? Bool) ?? false,
-            i2cOk: (obj["i2cOk"] as? Bool) ?? false,
-            muxOk: false,
-            dieTemp: (obj["dieTemp"] as? Double) ?? 0,
-            alertStatus: 0, alertMask: 0,
-            supplyAlertStatus: 0, supplyAlertMask: 0,
-            liveStatus: 0,
-            channels: channels,
-            diagnostics: [], muxStates: [],
-            freeHeap: 0, minFreeHeap: 0, uptimeMs: 0
-        )
+        return await bleDecoded(DeviceStatus.self, path: "/api/status")
     }
 
-    /// Map BLE `/api/hat` onto `HatStatus` + the `[HatRail]` list.
+    /// Decode `/api/hat` (HatStatus) + `/api/hat/v2/rails` (HatRailsResponse) over BLE.
     private func bleFetchHat() async {
-        guard let obj = await bleJSON("/api/hat"), (obj["ok"] as? Bool) ?? false else { return }
-        let detected = (obj["detected"] as? Bool) ?? false
-        let rawRails = (obj["rails"] as? [[String: Any]]) ?? []
-        let rails: [HatRail] = rawRails.map { r in
-            HatRail(
-                railId: (r["id"] as? Int) ?? 0,
-                enabled: (r["en"] as? Bool) ?? false,
-                voltageMv: (r["mv"] as? Int) ?? 0,
-                targetVoltageMv: nil,
-                currentMa: (r["ma"] as? Int) ?? 0,
-                status: (r["st"] as? Int) ?? 0
-            )
-        }
-        updateOnMain {
-            self.lastHatStatus = HatStatus(detected: detected, present: detected)
-            self.lastHatRails = rails
+        guard let ht: HatStatus = await bleDecoded(HatStatus.self, path: "/api/hat") else { return }
+        updateOnMain { self.lastHatStatus = ht }
+        if ht.isPresent {
+            if let rr: HatRailsResponse = await bleDecoded(HatRailsResponse.self, path: "/api/hat/v2/rails") {
+                updateOnMain { self.lastHatRails = rr.rails }
+            }
         }
     }
 
-    /// Map BLE `/api/usbpd` onto `USBPDStatus`.
+    /// Decode `/api/usbpd` (rich USBPDStatus) over BLE.
     private func bleFetchUsbPd() async {
-        guard let obj = await bleJSON("/api/usbpd"), (obj["ok"] as? Bool) ?? false else { return }
-        let attached = (obj["attached"] as? Bool) ?? false
-        let v = (obj["voltage"] as? Double) ?? Double((obj["voltage"] as? Int) ?? 0)
-        let a = (obj["current"] as? Double) ?? Double((obj["current"] as? Int) ?? 0)
-        let pd = USBPDStatus(present: attached, attached: attached, cc: "",
-                             voltageV: v, currentA: a, powerW: v * a,
-                             pdResponse: 0, sourcePdos: [], selectedPdo: 0)
-        updateOnMain { self.lastUsbPd = pd }
+        if let pd: USBPDStatus = await bleDecoded(USBPDStatus.self, path: "/api/usbpd") {
+            updateOnMain { self.lastUsbPd = pd }
+        }
     }
 
-    /// Map BLE `/api/wifi` onto `WifiStatus`.
+    /// Decode `/api/wifi` (rich WifiStatus) over BLE.
     private func bleFetchWifi() async {
-        guard let obj = await bleJSON("/api/wifi"), (obj["ok"] as? Bool) ?? false else { return }
-        let ws = WifiStatus(
-            connected: (obj["connected"] as? Bool) ?? false,
-            staSSID: (obj["ssid"] as? String) ?? "",
-            staIP: (obj["staIp"] as? String) ?? "",
-            rssi: (obj["rssi"] as? Int) ?? 0,
-            apSSID: "",
-            apIP: (obj["apIp"] as? String) ?? "",
-            apMAC: ""
-        )
-        updateOnMain { self.lastWifiStatus = ws }
+        if let ws: WifiStatus = await bleDecoded(WifiStatus.self, path: "/api/wifi") {
+            updateOnMain { self.lastWifiStatus = ws }
+        }
     }
 
     /// Fetch slow endpoints once (on connect or pull-to-refresh). Sequential,
@@ -1224,6 +1175,14 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
     public func fetchCalibrationPoints(ch: Int) async -> [CalibrationPoint] {
         guard connectionState == .connected, let device = activeDevice else { return [] }
+        if transport == .ble {
+            // Firmware also attaches HAT calibration data under "hat" (ignored by
+            // CalibrationPointsResponse; available for future UI).
+            if let res: CalibrationPointsResponse = await bleDecoded(CalibrationPointsResponse.self, path: "/api/idac/cal/points?ch=\(ch)") {
+                return res.points
+            }
+            return []
+        }
         let ip = device.ip; let token = adminToken
         if let res: CalibrationPointsResponse = await fetchDecoded(CalibrationPointsResponse.self, ip: ip, path: "/api/idac/cal/points?ch=\(ch)", token: token) {
             return res.points

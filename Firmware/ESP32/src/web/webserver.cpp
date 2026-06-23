@@ -58,6 +58,7 @@ static EXT_RAM_BSS_ATTR char s_script_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1
 #include "cli/cli_term.h"
 #include "pd_vadj_guard.h"
 #include "update_manager.h"
+#include "api_core.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -74,34 +75,6 @@ static httpd_handle_t s_server = NULL;
 static portMUX_TYPE s_server_mux = portMUX_INITIALIZER_UNLOCKED;
 
 #define BUGBUSTER_WEB_BUILD_MARKER "scripts-fix-20260427-1150"
-
-static bool is_valid_adc_mux(int value)
-{
-    return value >= ADC_MUX_LF_TO_AGND && value <= ADC_MUX_AGND_TO_AGND;
-}
-
-static bool is_valid_adc_range(int value)
-{
-    return value >= ADC_RNG_0_12V && value <= ADC_RNG_NEG2_5_2_5V;
-}
-
-static bool is_valid_adc_rate(int value)
-{
-    switch (value) {
-        case ADC_RATE_10SPS_H:
-        case ADC_RATE_20SPS:
-        case ADC_RATE_20SPS_H:
-        case ADC_RATE_200SPS_H1:
-        case ADC_RATE_200SPS_H:
-        case ADC_RATE_1_2KSPS:
-        case ADC_RATE_1_2KSPS_H:
-        case ADC_RATE_4_8KSPS:
-        case ADC_RATE_9_6KSPS:
-            return true;
-        default:
-            return false;
-    }
-}
 
 #ifndef BUGBUSTER_TRACE_URI_REGISTRATION
 #define BUGBUSTER_TRACE_URI_REGISTRATION 0
@@ -139,27 +112,6 @@ static const char* http_status_string(int code)
         case 500: return "500 Internal Server Error";
         case 503: return "503 Service Unavailable";
         default:  return NULL;
-    }
-}
-
-static bool is_valid_channel_function(int func)
-{
-    switch (func) {
-        case CH_FUNC_HIGH_IMP:
-        case CH_FUNC_VOUT:
-        case CH_FUNC_IOUT:
-        case CH_FUNC_VIN:
-        case CH_FUNC_IIN_EXT_PWR:
-        case CH_FUNC_IIN_LOOP_PWR:
-        case CH_FUNC_RES_MEAS:
-        case CH_FUNC_DIN_LOGIC:
-        case CH_FUNC_DIN_LOOP:
-        case CH_FUNC_IOUT_HART:
-        case CH_FUNC_IIN_EXT_PWR_HART:
-        case CH_FUNC_IIN_LOOP_PWR_HART:
-            return true;
-        default:
-            return false;
     }
 }
 
@@ -363,19 +315,6 @@ static int extract_channel(const char* uri)
     p += strlen(prefix);
     if (*p >= '0' && *p <= '3') return *p - '0';
     return -1;
-}
-
-// -----------------------------------------------------------------------------
-// Helper: extract GPIO number from URI   /api/gpio/X/...
-// -----------------------------------------------------------------------------
-
-static int extract_gpio(const char* uri)
-{
-    const char *prefix = "/api/gpio/";
-    const char *p = strstr(uri, prefix);
-    if (!p) return -1;
-    p += strlen(prefix);
-    return atoi(p);
 }
 
 // -----------------------------------------------------------------------------
@@ -664,104 +603,21 @@ static esp_err_t handle_static_asset(httpd_req_t *req)
 // GET /api/status
 static esp_err_t handle_get_status(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
-
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        add_bool_alias(root, "spiOk", "spi_ok", g_deviceState.spiOk);
-        add_bool_alias(root, "i2cOk", "i2c_ok", g_deviceState.i2cOk);
-        add_bool_alias(root, "muxOk", "mux_ok", g_deviceState.muxOk);
-        add_bool_alias(root, "muxFaulted", "mux_faulted", adgs_is_faulted());
-        cJSON_AddNumberToObject(root, "dieTemp", g_deviceState.dieTemperature);
-        cJSON_AddNumberToObject(root, "die_temp_c", g_deviceState.dieTemperature);
-        add_number_alias(root, "alertStatus", "alert_status", g_deviceState.alertStatus);
-        add_number_alias(root, "alertMask", "alert_mask", g_deviceState.alertMask);
-        add_number_alias(root, "supplyAlertStatus", "supply_alert_status", g_deviceState.supplyAlertStatus);
-        add_number_alias(root, "supplyAlertMask", "supply_alert_mask", g_deviceState.supplyAlertMask);
-        add_number_alias(root, "liveStatus", "live_status", g_deviceState.liveStatus);
-
-        cJSON *channels = cJSON_AddArrayToObject(root, "channels");
-        for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-            const ChannelState& cs = g_deviceState.channels[ch];
-            cJSON *obj = cJSON_CreateObject();
-            cJSON_AddNumberToObject(obj, "id", ch);
-            cJSON_AddStringToObject(obj, "function", channelFunctionToString(cs.function));
-            add_number_alias(obj, "functionCode", "function_code", (int)cs.function);
-            add_number_alias(obj, "adcRaw", "adc_raw", cs.adcRawCode);
-            add_number_alias(obj, "adcValue", "adc_value", cs.adcValue);
-            add_number_alias(obj, "adcRange", "adc_range", (int)cs.adcRange);
-            add_number_alias(obj, "adcRate", "adc_rate", (int)cs.adcRate);
-            add_number_alias(obj, "adcMux", "adc_mux", (int)cs.adcMux);
-            add_number_alias(obj, "dacCode", "dac_code", cs.dacCode);
-            add_number_alias(obj, "dacValue", "dac_value", cs.dacValue);
-            add_bool_alias(obj, "dinState", "din_state", cs.dinState);
-            add_number_alias(obj, "dinCounter", "din_counter", cs.dinCounter);
-            add_bool_alias(obj, "doState", "do_state", cs.doState);
-            add_number_alias(obj, "channelAlert", "channel_alert", cs.channelAlertStatus);
-            add_number_alias(obj, "channelAlertMask", "channel_alert_mask", cs.channelAlertMask);
-            add_number_alias(obj, "rtdExcitationUa", "rtd_excitation_ua", cs.rtdExcitationUa);
-            cJSON_AddItemToArray(channels, obj);
-        }
-
-        // Diagnostic slots (sync with BBP GET_STATUS)
-        cJSON *diagnostics = cJSON_AddArrayToObject(root, "diagnostics");
-        for (uint8_t d = 0; d < 4; d++) {
-            cJSON *dobj = cJSON_CreateObject();
-            cJSON_AddNumberToObject(dobj, "source", g_deviceState.diag[d].source);
-            cJSON_AddNumberToObject(dobj, "rawCode", g_deviceState.diag[d].rawCode);
-            cJSON_AddNumberToObject(dobj, "value", g_deviceState.diag[d].value);
-            cJSON_AddItemToArray(diagnostics, dobj);
-        }
-
-        // MUX switch states (sync with BBP GET_STATUS)
-        cJSON *muxStates = cJSON_AddArrayToObject(root, "muxStates");
-        uint8_t muxApiStates[ADGS_API_MAIN_DEVICES] = {};
-        adgs_get_api_states(muxApiStates);
-        for (uint8_t m = 0; m < ADGS_API_MAIN_DEVICES; m++) {
-            cJSON_AddItemToArray(muxStates, cJSON_CreateNumber(muxApiStates[m]));
-        }
-
-        xSemaphoreGive(g_stateMutex);
-    } else {
-        cJSON_Delete(root);
-        return send_error(req, 503, "State mutex timeout");
-    }
-
-    // Heap telemetry — cheap to compute, free to ship, makes leaks obvious
-    // in the desktop status bar / web overview without needing a CLI shell.
-    cJSON_AddNumberToObject(root, "freeHeap", (double)esp_get_free_heap_size());
-    cJSON_AddNumberToObject(root, "minFreeHeap", (double)esp_get_minimum_free_heap_size());
-    cJSON_AddNumberToObject(root, "uptimeMs", (double)millis_now());
-
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/status", NULL);
+    if (!resp) return send_error(req, 503, "State mutex timeout");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/channel/?/adc
 static esp_err_t handle_get_channel_adc(httpd_req_t *req)
 {
-    int ch = extract_channel(req->uri);
-    if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
-
-    cJSON *root = cJSON_CreateObject();
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        const ChannelState& cs = g_deviceState.channels[ch];
-        cJSON_AddNumberToObject(root, "id", ch);
-        cJSON_AddNumberToObject(root, "adcRaw", cs.adcRawCode);
-        cJSON_AddNumberToObject(root, "adcValue", cs.adcValue);
-        cJSON_AddNumberToObject(root, "adcRange", (int)cs.adcRange);
-        cJSON_AddNumberToObject(root, "adcRate", (int)cs.adcRate);
-        cJSON_AddNumberToObject(root, "adcMux", (int)cs.adcMux);
-        cJSON_AddNumberToObject(root, "raw_code", cs.adcRawCode);
-        cJSON_AddNumberToObject(root, "value", cs.adcValue);
-        cJSON_AddNumberToObject(root, "range", (int)cs.adcRange);
-        cJSON_AddNumberToObject(root, "rate", (int)cs.adcRate);
-        cJSON_AddNumberToObject(root, "mux", (int)cs.adcMux);
-        xSemaphoreGive(g_stateMutex);
-    } else {
-        cJSON_Delete(root);
-        return send_error(req, 503, "State mutex timeout");
-    }
-
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", req->uri, NULL);
+    if (!resp) return send_error(req, 500, "channel adc failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/faults
@@ -1014,43 +870,11 @@ static esp_err_t handle_get_diagnostics(httpd_req_t *req)
 // GET /api/device/info
 static esp_err_t handle_get_device_info(httpd_req_t *req)
 {
-    uint16_t rev = 0, id0 = 0, id1 = 0;
-    spiDriver.readRegister(REG_SILICON_REV, &rev);
-    spiDriver.readRegister(REG_SILICON_ID0, &id0);
-    spiDriver.readRegister(REG_SILICON_ID1, &id1);
-
-    bool spiOk = false;
-    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        spiOk = g_deviceState.spiOk;
-        xSemaphoreGive(g_stateMutex);
-    }
-
-    char id0Str[8], id1Str[8];
-    snprintf(id0Str, sizeof(id0Str), "0x%04X", id0);
-    snprintf(id1Str, sizeof(id1Str), "0x%04X", id1);
-
-    // Expose the primary station MAC so HTTP clients can key their pairing
-    // store on the same identifier the USB handshake provides (BBP v4 §3.1).
-    // Without this field the desktop app keyed pairing on "00:00:00:00:00:00"
-    // and demanded USB re-authorisation on every HTTP connect.
-    uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "siliconRev", (int)rev);
-    cJSON_AddNumberToObject(root, "silicon_rev", (int)rev);
-    cJSON_AddStringToObject(root, "siliconId0", id0Str);
-    cJSON_AddStringToObject(root, "siliconId1", id1Str);
-    cJSON_AddNumberToObject(root, "silicon_id0", (int)id0);
-    cJSON_AddNumberToObject(root, "silicon_id1", (int)id1);
-    cJSON_AddStringToObject(root, "macAddress", macStr);
-    cJSON_AddStringToObject(root, "mac_address", macStr);
-    add_bool_alias(root, "spiOk", "spi_ok", spiOk);
-
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/device/info", NULL);
+    if (!resp) return send_error(req, 500, "device info failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/gpio
@@ -1106,115 +930,37 @@ static esp_err_t handle_get_dac_readback(httpd_req_t *req)
 // POST /api/channel/?/function
 static esp_err_t handle_post_channel_function(httpd_req_t *req)
 {
-    int ch = extract_channel(req->uri);
-    if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    VALIDATE_JSON_FIELD(doc, "function", Number, "Missing field 'function'");
-
-    int func = cJSON_GetObjectItem(doc, "function")->valueint;
-    if (!is_valid_channel_function(func)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Invalid function");
-    }
-
-    tasks_apply_channel_function((uint8_t)ch, (ChannelFunction)func);
-    cJSON_Delete(doc);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddNumberToObject(resp, "channel", ch);
-    cJSON_AddNumberToObject(resp, "function", func);
-    return send_json(req, resp);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "channel function failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/channel/?/dac
 static esp_err_t handle_post_dac(httpd_req_t *req)
 {
-    int ch = extract_channel(req->uri);
-    if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    cJSON *codeItem      = cJSON_GetObjectItem(doc, "code");
-    cJSON *voltageItem   = cJSON_GetObjectItem(doc, "voltage");
-    cJSON *currentItem   = cJSON_GetObjectItem(doc, "current_mA");
-
-    if (codeItem && cJSON_IsNumber(codeItem)) {
-        if (!tasks_apply_dac_code((uint8_t)ch, (uint16_t)codeItem->valueint)) {
-            cJSON_Delete(doc);
-            return send_error(req, 400, "Failed to set DAC code");
-        }
-    } else if (voltageItem && cJSON_IsNumber(voltageItem)) {
-        cJSON *bipolarItem = cJSON_GetObjectItem(doc, "bipolar");
-        bool bipolar = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
-        if (!tasks_apply_dac_voltage((uint8_t)ch, (float)voltageItem->valuedouble, bipolar)) {
-            cJSON_Delete(doc);
-            return send_error(req, 400, "Failed to set DAC voltage");
-        }
-    } else if (currentItem && cJSON_IsNumber(currentItem)) {
-        if (!tasks_apply_dac_current((uint8_t)ch, (float)currentItem->valuedouble)) {
-            cJSON_Delete(doc);
-            return send_error(req, 400, "Failed to set DAC current");
-        }
-    } else {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Missing field 'code', 'voltage' or 'current_mA' as number");
-    }
-
-    cJSON_Delete(doc);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddNumberToObject(resp, "channel", ch);
-    return send_json(req, resp);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "dac failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/channel/?/adc/config
 static esp_err_t handle_post_adc_config(httpd_req_t *req)
 {
-    int ch = extract_channel(req->uri);
-    if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    VALIDATE_JSON_FIELD(doc, "mux", Number, "Missing field 'mux'");
-    VALIDATE_JSON_FIELD(doc, "range", Number, "Missing field 'range'");
-    VALIDATE_JSON_FIELD(doc, "rate", Number, "Missing field 'rate'");
-
-    int mux = cJSON_GetObjectItem(doc, "mux")->valueint;
-    int range = cJSON_GetObjectItem(doc, "range")->valueint;
-    int rate = cJSON_GetObjectItem(doc, "rate")->valueint;
-    if (!is_valid_adc_mux(mux)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Invalid ADC mux");
-    }
-    if (!is_valid_adc_range(range)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Invalid ADC range");
-    }
-    if (!is_valid_adc_rate(rate)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Invalid ADC rate");
-    }
-
-    Command cmd{};
-    cmd.type           = CMD_ADC_CONFIG;
-    cmd.channel        = (uint8_t)ch;
-    cmd.adcCfg.mux     = (AdcConvMux)mux;
-    cmd.adcCfg.range   = (AdcRange)range;
-    cmd.adcCfg.rate    = (AdcRate)rate;
-    sendCommand(cmd);
-    cJSON_Delete(doc);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddNumberToObject(resp, "channel", ch);
-    return send_json(req, resp);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "adc config failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/adc/dsp/start  — body: {channel, rate, windowSamples, spikeThreshold, nFftPeaks}
@@ -1366,25 +1112,13 @@ static esp_err_t handle_post_do_set(httpd_req_t *req)
 // POST /api/channel/?/vout/range
 static esp_err_t handle_post_vout_range(httpd_req_t *req)
 {
-    int ch = extract_channel(req->uri);
-    if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    cJSON *bipolarItem = cJSON_GetObjectItem(doc, "bipolar");
-    bool bipolar = bipolarItem ? cJSON_IsTrue(bipolarItem) : false;
-    if (!tasks_apply_vout_range((uint8_t)ch, bipolar)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Failed to set VOUT range");
-    }
-    cJSON_Delete(doc);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddNumberToObject(resp, "channel", ch);
-    cJSON_AddBoolToObject(resp, "bipolar", bipolar);
-    return send_json(req, resp);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "vout range failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/channel/?/ilimit
@@ -1450,28 +1184,13 @@ static esp_err_t handle_post_avdd_select(httpd_req_t *req)
 static esp_err_t handle_post_device_reset(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    // Consume body (may be empty)
     cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/device/reset", body);
     if (body) cJSON_Delete(body);
-
-    bbpStopWavegen();
-
-    Command cmd{};
-    cmd.type = CMD_CLEAR_ALERTS;
-    sendCommand(cmd);
-
-    for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
-        Command funcCmd{};
-        funcCmd.type    = CMD_SET_CHANNEL_FUNC;
-        funcCmd.channel = ch;
-        funcCmd.func    = CH_FUNC_HIGH_IMP;
-        sendCommand(funcCmd);
-    }
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    return send_json(req, resp);
+    if (!resp) return send_error(req, 500, "reset failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/faults/clear
@@ -1612,58 +1331,25 @@ static esp_err_t handle_post_diag_config(httpd_req_t *req)
 // POST /api/gpio/?/config
 static esp_err_t handle_post_gpio_config(httpd_req_t *req)
 {
-    int g = extract_gpio(req->uri);
-    if (g < 0 || g > 11) return send_error(req, 400, "GPIO must be 0-11");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    cJSON *modeItem = cJSON_GetObjectItem(doc, "mode");
-    if (!modeItem || !cJSON_IsNumber(modeItem)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Missing 'mode' field");
-    }
-
-    cJSON *pulldownItem = cJSON_GetObjectItem(doc, "pulldown");
-
-    int mode = modeItem->valueint;
-    bool pulldown = pulldownItem ? cJSON_IsTrue(pulldownItem) : false;
-    if (!tasks_apply_gpio_config((uint8_t)g, (GpioSelect)mode, pulldown)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Invalid GPIO config");
-    }
-    cJSON_Delete(doc);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddNumberToObject(resp, "gpio", g);
-    cJSON_AddNumberToObject(resp, "mode", mode);
-    cJSON_AddBoolToObject(resp, "pulldown", pulldown);
-    return send_json(req, resp);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "gpio config failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/gpio/?/set
 static esp_err_t handle_post_gpio_set(httpd_req_t *req)
 {
-    int g = extract_gpio(req->uri);
-    if (g < 0 || g > 11) return send_error(req, 400, "GPIO must be 0-11");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    cJSON *valueItem = cJSON_GetObjectItem(doc, "value");
-    bool value = valueItem ? cJSON_IsTrue(valueItem) : false;
-    if (!tasks_apply_gpio_output((uint8_t)g, value)) {
-        cJSON_Delete(doc);
-        return send_error(req, 400, "Invalid GPIO value");
-    }
-    cJSON_Delete(doc);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddNumberToObject(resp, "gpio", g);
-    cJSON_AddBoolToObject(resp, "value", value);
-    return send_json(req, resp);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "gpio set failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // =============================================================================
@@ -1697,41 +1383,13 @@ static esp_err_t handle_channel_get_dispatch(httpd_req_t *req)
 // POST /api/channel/?/rtd/config
 static esp_err_t handle_post_rtd_config(httpd_req_t *req)
 {
-    int ch = extract_channel(req->uri);
-    if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    // 2-wire RTD only. RTD_CURRENT bit maps to 0 = 500 µA, 1 = 1 mA.
-    // Keep a tolerant excitation_ua parser so stale callers that still send
-    // legacy low-current values (125/250) resolve to the 500 µA setting.
-    cJSON *curItem = cJSON_GetObjectItem(doc, "current");
-    cJSON *uaItem  = cJSON_GetObjectItem(doc, "excitation_ua");
-
-    uint8_t current = 1; // default 1 mA (RTD_CURRENT bit set)
-    if (curItem && cJSON_IsNumber(curItem)) {
-        // Accept either the raw bit value (0/1) or stale µA-style values.
-        int cur = curItem->valueint;
-        current = (cur == 0 || cur == 1) ? ((cur != 0) ? 1 : 0)
-                                         : ((cur >= 750) ? 1 : 0);
-    } else if (uaItem && cJSON_IsNumber(uaItem)) {
-        current = (uaItem->valueint >= 750) ? 1 : 0;
-    }
-    cJSON_Delete(doc);
-
-    Command cmd{};
-    cmd.type          = CMD_SET_RTD_CONFIG;
-    cmd.channel       = (uint8_t)ch;
-    cmd.rtdCfg.current = current;
-    if (!sendCommand(cmd)) return send_error(req, 503, "Command queue full");
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddNumberToObject(resp, "channel", ch);
-    cJSON_AddNumberToObject(resp, "current", current);
-    cJSON_AddNumberToObject(resp, "excitation_ua", current ? 1000 : 500);
-    return send_json(req, resp);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "rtd config failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/channel/* dispatcher
@@ -2098,28 +1756,11 @@ static esp_err_t handle_get_adgs_routes(httpd_req_t *req)
 // GET /api/selftest — boot result + cal status
 static esp_err_t handle_get_selftest(httpd_req_t *req)
 {
-    const SelftestBootResult *boot = selftest_get_boot_result();
-    const SelftestCalResult  *cal  = selftest_get_cal_result();
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON *b = cJSON_AddObjectToObject(root, "boot");
-    cJSON_AddBoolToObject(b, "ran", boot->ran);
-    cJSON_AddBoolToObject(b, "passed", boot->passed);
-    cJSON_AddNumberToObject(b, "vadj1V", boot->vadj1_v);
-    cJSON_AddNumberToObject(b, "vadj2V", boot->vadj2_v);
-    cJSON_AddNumberToObject(b, "vlogicV", boot->vlogic_v);
-
-    cJSON *c = cJSON_AddObjectToObject(root, "calibration");
-    cJSON_AddNumberToObject(c, "status", cal->status);
-    cJSON_AddNumberToObject(c, "channel", cal->channel);
-    cJSON_AddNumberToObject(c, "points", cal->points_collected);
-    cJSON_AddNumberToObject(c, "lastVoltageV", cal->last_measured_v);
-    cJSON_AddNumberToObject(c, "errorMv", cal->error_mv);
-
-    cJSON_AddBoolToObject(root, "workerEnabled", selftest_worker_enabled());
-    cJSON_AddBoolToObject(root, "supplyMonitorActive", selftest_is_supply_monitor_active());
-
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/selftest", NULL);
+    if (!resp) return send_error(req, 500, "selftest failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/selftest/supply/{rail} — measure a supply rail (0=VADJ1, 1=VADJ2, 2=3V3_ADJ)
@@ -2195,169 +1836,39 @@ static esp_err_t handle_get_selftest_supplies_cached(httpd_req_t *req)
 // flat — older clients can keep using the per-resource endpoints.
 static esp_err_t handle_get_overview(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
-
-    // ---- IDAC: { present, channels:[{id,code,targetV,...}, ...] } ----
-    {
-        const DS4424State *st = ds4424_get_state();
-        cJSON *idac = cJSON_AddObjectToObject(root, "idac");
-        cJSON_AddBoolToObject(idac, "present", st->present);
-        cJSON *channels = cJSON_AddArrayToObject(idac, "channels");
-        for (uint8_t ch = 0; ch < 3; ch++) {
-            cJSON *obj = cJSON_CreateObject();
-            cJSON_AddNumberToObject(obj, "id", ch);
-            cJSON_AddNumberToObject(obj, "code", st->state[ch].dac_code);
-            cJSON_AddNumberToObject(obj, "targetV", st->state[ch].target_v);
-            cJSON_AddNumberToObject(obj, "midpointV", st->config[ch].midpoint_v);
-            cJSON_AddNumberToObject(obj, "vMin", st->config[ch].v_min);
-            cJSON_AddNumberToObject(obj, "vMax", st->config[ch].v_max);
-            cJSON_AddNumberToObject(obj, "stepMv", ds4424_step_mv(ch));
-            cJSON_AddBoolToObject(obj, "calibrated", st->cal[ch].valid);
-            const char *names[] = {"LevelShift", "V_ADJ1", "V_ADJ2"};
-            cJSON_AddStringToObject(obj, "name", names[ch]);
-            float poly[4] = {0};
-            bool have_poly = ds4424_cal_fit_cubic(ch, poly);
-            cJSON_AddBoolToObject(obj, "polyValid", have_poly);
-            cJSON *poly_arr = cJSON_AddArrayToObject(obj, "calPoly");
-            for (int i = 0; i < 4; i++) cJSON_AddNumberToObject(poly_arr, NULL, (double)poly[i]);
-            cJSON_AddItemToArray(channels, obj);
-        }
-    }
-
-    // ---- IOExp: enables + powerGood (no need for raw input/output regs
-    // here; Overview only consumes `enables`). ----
-    {
-        pca9535_update();
-        const PCA9535State *st = pca9535_get_state();
-        cJSON *ioexp = cJSON_AddObjectToObject(root, "ioexp");
-        cJSON_AddBoolToObject(ioexp, "present", st->present);
-        cJSON *en = cJSON_AddObjectToObject(ioexp, "enables");
-        cJSON_AddBoolToObject(en, "vadj1", st->vadj1_en);
-        cJSON_AddBoolToObject(en, "vadj2", st->vadj2_en);
-        cJSON_AddBoolToObject(en, "analog15v", st->en_15v);
-        cJSON_AddBoolToObject(en, "mux", st->en_mux);
-        cJSON_AddBoolToObject(en, "usbHub", st->en_usb_hub);
-        cJSON *pg = cJSON_AddObjectToObject(ioexp, "powerGood");
-        cJSON_AddBoolToObject(pg, "logic", st->logic_pg);
-        cJSON_AddBoolToObject(pg, "vadj1", st->vadj1_pg);
-        cJSON_AddBoolToObject(pg, "vadj2", st->vadj2_pg);
-
-        cJSON *efuses = cJSON_AddArrayToObject(ioexp, "efuses");
-        for (int i = 0; i < 4; i++) {
-            cJSON *obj = cJSON_CreateObject();
-            cJSON_AddNumberToObject(obj, "id", i + 1);
-            cJSON_AddBoolToObject(obj, "enabled", st->efuse_en[i]);
-            cJSON_AddBoolToObject(obj, "fault", st->efuse_flt[i]);
-            cJSON_AddItemToArray(efuses, obj);
-        }
-    }
-
-    // ---- Supplies: rails 0..2 measured voltages. Mirrors the wire format
-    // of /api/selftest/supply/{rail} so the UI can fall back to the legacy
-    // 3-call path for older firmware. ----
-    // Only measure a rail when its enable bit is set — measuring a disabled
-    // supply faults the ADC. Rail 2 (3V3_ADJ) is always-on and measured
-    // unconditionally. Returns -1.0 for disabled/skipped rails; the web tier
-    // maps <0 → NaN so stale readings are cleared.
-    {
-        cJSON *rails = cJSON_AddArrayToObject(root, "rails");
-        static const char *names[] = {"VADJ1", "VADJ2", "3V3_ADJ"};
-        bool worker_enabled = selftest_worker_enabled();
-
-        if (worker_enabled) {
-            selftest_monitor_step();
-        }
-        const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
-
-        const PCA9535State *pca = pca9535_get_state();
-        for (uint8_t i = 0; i < 3; i++) {
-            float voltage = -1.0f;
-            // Determine if this rail is eligible for measurement.
-            bool rail_on = false;
-            if (i == 2) {
-                // 3V3_ADJ is always-on.
-                rail_on = true;
-            } else if (!pca || !pca->present) {
-                // PCA not present — cannot check enable bits; skip to avoid fault.
-                rail_on = false;
-            } else if (i == 0) {
-                rail_on = pca->vadj1_en;
-            } else {
-                rail_on = pca->vadj2_en;
-            }
-            if (worker_enabled && rail_on && sv->available) {
-                voltage = sv->voltage[i];
-            }
-            cJSON *obj = cJSON_CreateObject();
-            cJSON_AddNumberToObject(obj, "rail", i);
-            cJSON_AddStringToObject(obj, "name", names[i]);
-            cJSON_AddNumberToObject(obj, "voltage", voltage);
-            cJSON_AddBoolToObject(obj, "ok", voltage >= 0);
-            cJSON_AddItemToArray(rails, obj);
-        }
-    }
-
-    return send_json(req, root);
+    // Delegates to the shared, transport-agnostic api_core so HTTP and BLE
+    // return the identical snapshot from a single implementation.
+    char *resp = api_core_handle("GET", "/api/overview", NULL);
+    if (!resp) return send_error(req, 500, "overview failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/selftest/worker body: {"enabled": true}
 static esp_err_t handle_post_selftest_worker(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-
-    cJSON *enabled_item = cJSON_GetObjectItem(body, "enabled");
-    if (!enabled_item || !cJSON_IsBool(enabled_item)) {
-        cJSON_Delete(body);
-        return send_error(req, 400, "Missing boolean field: enabled");
-    }
-
-    bool enabled = cJSON_IsTrue(enabled_item);
-    cJSON_Delete(body);
-
-    if (!selftest_set_worker_enabled(enabled)) {
-        return send_error(req, 500, "Failed to persist worker state");
-    }
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddBoolToObject(resp, "workerEnabled", selftest_worker_enabled());
-    cJSON_AddBoolToObject(resp, "supplyMonitorActive", selftest_is_supply_monitor_active());
-    return send_json(req, resp);
+    char *resp = api_core_handle("POST", "/api/selftest/worker", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "selftest worker failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/selftest/calibrate body: {"channel": 1}
 static esp_err_t handle_post_selftest_calibrate(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-
-    cJSON *channel_item = cJSON_GetObjectItem(body, "channel");
-    if (!channel_item || !cJSON_IsNumber(channel_item)) {
-        cJSON_Delete(body);
-        return send_error(req, 400, "Missing numeric field: channel");
-    }
-    int ch = channel_item->valueint;
-    cJSON_Delete(body);
-
-    bool ok = selftest_start_auto_calibrate((uint8_t)ch);
-    if (!ok) {
-        return send_error(req, 409, "Calibration blocked (busy or interlock)");
-    }
-
-    const SelftestCalResult *cal = selftest_get_cal_result();
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddNumberToObject(resp, "status", cal->status);
-    cJSON_AddNumberToObject(resp, "channel", cal->channel);
-    cJSON_AddNumberToObject(resp, "points", cal->points_collected);
-    cJSON_AddNumberToObject(resp, "lastVoltageV", cal->last_measured_v);
-    cJSON_AddNumberToObject(resp, "errorMv", cal->error_mv);
-    cJSON_AddBoolToObject(resp, "ok", true);
-    return send_json(req, resp);
+    char *resp = api_core_handle("POST", "/api/selftest/calibrate", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "calibrate failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/selftest/supplies — measure internal ADC supplies
@@ -2380,119 +1891,37 @@ static esp_err_t handle_get_selftest_supplies(httpd_req_t *req)
 // Quick Setup endpoints
 // =============================================================================
 
-static int extract_quicksetup_slot(const char *uri, const char **suffix)
-{
-    const char *prefix = "/api/quicksetup/";
-    const char *p = strstr(uri, prefix);
-    if (!p) return -1;
-    p += strlen(prefix);
-    if (*p < '0' || *p > '3') return -1;
-    int slot = *p - '0';
-    p++;
-    if (*p == '/') p++;
-    if (suffix) *suffix = p;
-    return slot;
-}
-
 // GET /api/quicksetup
 static esp_err_t handle_get_quicksetup_list(httpd_req_t *req)
 {
-    QuickSetupSlotInfo slots[QUICKSETUP_SLOT_COUNT];
-    QuickSetupStatus st = quicksetup_list(slots);
-    if (st != QUICKSETUP_OK) {
-        return send_error(req, 500, "Quick setup storage unavailable");
-    }
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr = cJSON_AddArrayToObject(root, "slots");
-    for (uint8_t i = 0; i < QUICKSETUP_SLOT_COUNT; i++) {
-        cJSON *obj = cJSON_CreateObject();
-        cJSON_AddNumberToObject(obj, "index", slots[i].index);
-        cJSON_AddBoolToObject(obj, "occupied", slots[i].occupied);
-        if (slots[i].occupied) {
-            cJSON *summary = cJSON_CreateObject();
-            cJSON_AddStringToObject(summary, "name", slots[i].name);
-            cJSON_AddNumberToObject(summary, "ts", slots[i].ts);
-            cJSON_AddNumberToObject(summary, "size", slots[i].size);
-            cJSON_AddNumberToObject(summary, "hash", slots[i].summary_hash);
-            cJSON_AddItemToObject(obj, "summary", summary);
-        } else {
-            cJSON_AddItemToObject(obj, "summary", cJSON_CreateNull());
-        }
-        cJSON_AddItemToArray(arr, obj);
-    }
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/quicksetup", NULL);
+    if (!resp) return send_error(req, 500, "quick setup list failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/quicksetup/{0-3}
 static esp_err_t handle_get_quicksetup_slot(httpd_req_t *req)
 {
-    const char *suffix = NULL;
-    int slot = extract_quicksetup_slot(req->uri, &suffix);
-    if (slot < 0 || (suffix && *suffix != '\0')) {
-        return send_error(req, 400, "Invalid quick setup slot");
-    }
-
-    char json[QUICKSETUP_MAX_JSON_BYTES + 1];
-    size_t len = 0;
-    QuickSetupStatus st = quicksetup_get((uint8_t)slot, json, sizeof(json), &len);
-    if (st == QUICKSETUP_NOT_FOUND) return send_error(req, 404, "Quick setup slot empty");
-    if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
-    if (st != QUICKSETUP_OK) return send_error(req, 500, "Quick setup storage unavailable");
-    return send_raw_json(req, json);
+    char *resp = api_core_handle("GET", req->uri, NULL);
+    if (!resp) return send_error(req, 500, "quick setup slot failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/quicksetup/{0-3}[/{apply|delete}]
 static esp_err_t handle_quicksetup_post_dispatch(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    const char *suffix = NULL;
-    int slot = extract_quicksetup_slot(req->uri, &suffix);
-    if (slot < 0) return send_error(req, 400, "Invalid quick setup slot");
-
-    if (!suffix || *suffix == '\0') {
-        char json[QUICKSETUP_MAX_JSON_BYTES + 1];
-        size_t len = 0;
-        QuickSetupStatus st = quicksetup_save((uint8_t)slot, json, sizeof(json), &len);
-        if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
-        if (st == QUICKSETUP_TOO_LARGE) return send_error(req, 500, "Quick setup snapshot too large");
-        if (st != QUICKSETUP_OK) return send_error(req, 500, "Quick setup save failed");
-        return send_raw_json(req, json);
-    }
-
-    if (strcmp(suffix, "apply") == 0) {
-        QuickSetupApplyReport report;
-        QuickSetupStatus st = quicksetup_apply((uint8_t)slot, &report);
-        if (st == QUICKSETUP_NOT_FOUND) return send_error(req, 404, "Quick setup slot empty");
-        if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
-
-        cJSON *root = cJSON_CreateObject();
-        cJSON_AddBoolToObject(root, "ok", st == QUICKSETUP_OK);
-        cJSON_AddBoolToObject(root, "applied", st == QUICKSETUP_OK);
-        if (st != QUICKSETUP_OK) {
-            cJSON *failed = cJSON_AddArrayToObject(root, "failed");
-            for (uint8_t i = 0; i < report.failed_count; i++) {
-                cJSON_AddItemToArray(failed, cJSON_CreateString(report.failed[i]));
-            }
-        }
-        return send_json(req, root, st == QUICKSETUP_OK ? 200 : 409);
-    }
-
-    if (strcmp(suffix, "delete") == 0) {
-        bool existed = false;
-        QuickSetupStatus st = quicksetup_delete((uint8_t)slot, &existed);
-        if (st == QUICKSETUP_INVALID_SLOT) return send_error(req, 400, "Invalid quick setup slot");
-        if (st != QUICKSETUP_OK && st != QUICKSETUP_NOT_FOUND) {
-            return send_error(req, 500, "Quick setup delete failed");
-        }
-        cJSON *root = cJSON_CreateObject();
-        cJSON_AddBoolToObject(root, "ok", true);
-        cJSON_AddBoolToObject(root, "deleted", existed);
-        return send_json(req, root);
-    }
-
-    return send_error(req, 404, "Unknown quick setup endpoint");
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "quick setup failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // =============================================================================
@@ -2693,28 +2122,12 @@ static esp_err_t handle_post_idac_code(httpd_req_t *req)
 static esp_err_t handle_post_idac_voltage(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-
-    int ch = cJSON_GetObjectItem(body, "ch") ? cJSON_GetObjectItem(body, "ch")->valueint : -1;
-    double voltage = cJSON_GetObjectItem(body, "voltage") ? cJSON_GetObjectItem(body, "voltage")->valuedouble : 0;
-    cJSON_Delete(body);
-
-    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
-
-    if (!ds4424_set_voltage(ch, (float)voltage)) return send_error(req, 500, "Failed to set voltage");
-
-    const DS4424State *st = ds4424_get_state();
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "ch", ch);
-    cJSON_AddNumberToObject(root, "code", st->state[ch].dac_code);
-    cJSON_AddNumberToObject(root, "voltage", st->state[ch].target_v);
-    char warning[384] = {0};
-    if (pd_vadj_guard_warning((uint8_t)ch, (float)voltage, warning, sizeof(warning))) {
-        cJSON_AddStringToObject(root, "warning", warning);
-        cJSON *warnings = cJSON_AddArrayToObject(root, "warnings");
-        cJSON_AddItemToArray(warnings, cJSON_CreateString(warning));
-    }
-    return send_json(req, root);
+    char *resp = api_core_handle("POST", "/api/idac/voltage", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "idac voltage failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // Forward decl — handle_cal_post_dispatch is defined later but referenced here.
@@ -2739,61 +2152,23 @@ static esp_err_t handle_idac_post_dispatch(httpd_req_t *req)
 // GET /api/usbpd - Get USB PD status
 static esp_err_t handle_get_usbpd(httpd_req_t *req)
 {
-    husb238_update();
-    const Husb238State *st = husb238_get_state();
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "present", st->present);
-    cJSON_AddBoolToObject(root, "attached", st->attached);
-    cJSON_AddStringToObject(root, "cc", st->cc_direction ? "CC2" : "CC1");
-    cJSON_AddNumberToObject(root, "voltageV", st->voltage_v);
-    cJSON_AddNumberToObject(root, "currentA", st->current_a);
-    cJSON_AddNumberToObject(root, "powerW", st->power_w);
-    cJSON_AddNumberToObject(root, "pdResponse", st->pd_response);
-
-    cJSON *pdos = cJSON_AddArrayToObject(root, "sourcePdos");
-    struct { const char *name; float v; Husb238PdoInfo pdo; } list[] = {
-        {"5V",  5.0f,  st->pdo_5v},  {"9V",  9.0f,  st->pdo_9v},
-        {"12V", 12.0f, st->pdo_12v}, {"15V", 15.0f, st->pdo_15v},
-        {"18V", 18.0f, st->pdo_18v}, {"20V", 20.0f, st->pdo_20v}
-    };
-    for (int i = 0; i < 6; i++) {
-        cJSON *obj = cJSON_CreateObject();
-        cJSON_AddStringToObject(obj, "voltage", list[i].name);
-        cJSON_AddBoolToObject(obj, "detected", list[i].pdo.detected);
-        cJSON_AddNumberToObject(obj, "maxCurrentA", husb238_decode_current(list[i].pdo.max_current));
-        cJSON_AddNumberToObject(obj, "maxPowerW", list[i].v * husb238_decode_current(list[i].pdo.max_current));
-        cJSON_AddItemToArray(pdos, obj);
-    }
-    cJSON_AddNumberToObject(root, "selectedPdo", st->selected_pdo);
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/usbpd", NULL);
+    if (!resp) return send_error(req, 500, "usbpd failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/usbpd/select  body: {"voltage": 20}
 static esp_err_t handle_post_usbpd_select(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-    int v = cJSON_GetObjectItem(body, "voltage") ? cJSON_GetObjectItem(body, "voltage")->valueint : 0;
-    cJSON_Delete(body);
-
-    Husb238Voltage voltage;
-    switch (v) {
-        case 5: voltage = HUSB238_V_5V; break;
-        case 9: voltage = HUSB238_V_9V; break;
-        case 12: voltage = HUSB238_V_12V; break;
-        case 15: voltage = HUSB238_V_15V; break;
-        case 18: voltage = HUSB238_V_18V; break;
-        case 20: voltage = HUSB238_V_20V; break;
-        default: return send_error(req, 400, "Invalid voltage (5/9/12/15/18/20)");
-    }
-
-    husb238_select_pdo(voltage);
-    husb238_go_command(HUSB238_GO_SELECT_PDO);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "selectedVoltage", v);
-    cJSON_AddStringToObject(root, "status", "negotiating");
-    return send_json(req, root);
+    char *resp = api_core_handle("POST", "/api/usbpd/select", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "usbpd select failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/usbpd dispatch
@@ -2855,43 +2230,12 @@ static esp_err_t handle_get_ioexp(httpd_req_t *req)
 static esp_err_t handle_post_ioexp_control(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-
-    cJSON *ctrl_item = cJSON_GetObjectItem(body, "control");
-    const char *ctrl_name = (ctrl_item && cJSON_IsString(ctrl_item)) ? ctrl_item->valuestring : NULL;
-    cJSON *on_item = cJSON_GetObjectItem(body, "on");
-    bool on = on_item ? cJSON_IsTrue(on_item) : false;
-
-    if (!ctrl_name) { cJSON_Delete(body); return send_error(req, 400, "Missing 'control' field"); }
-
-    PcaControl ctrl;
-    if (strcmp(ctrl_name, "vadj1") == 0)       ctrl = PCA_CTRL_VADJ1_EN;
-    else if (strcmp(ctrl_name, "vadj2") == 0)  ctrl = PCA_CTRL_VADJ2_EN;
-    else if (strcmp(ctrl_name, "15v") == 0)     ctrl = PCA_CTRL_15V_EN;
-    else if (strcmp(ctrl_name, "mux") == 0)     ctrl = PCA_CTRL_MUX_EN;
-    else if (strcmp(ctrl_name, "usb") == 0)     ctrl = PCA_CTRL_USB_HUB_EN;
-    else if (strcmp(ctrl_name, "efuse1") == 0)  ctrl = PCA_CTRL_EFUSE1_EN;
-    else if (strcmp(ctrl_name, "efuse2") == 0)  ctrl = PCA_CTRL_EFUSE2_EN;
-    else if (strcmp(ctrl_name, "efuse3") == 0)  ctrl = PCA_CTRL_EFUSE3_EN;
-    else if (strcmp(ctrl_name, "efuse4") == 0)  ctrl = PCA_CTRL_EFUSE4_EN;
-    else { cJSON_Delete(body); return send_error(req, 400, "Unknown control name"); }
-    cJSON_Delete(body);
-
-    bool ok;
-    if (ctrl >= PCA_CTRL_EFUSE1_EN && ctrl <= PCA_CTRL_EFUSE4_EN) {
-        // Explicit user-action gate for EFUSE channels — records soft-start
-        // blackout timestamp so check_changes() ignores the ramp-up FLT.
-        uint8_t logical = (uint8_t)(ctrl - PCA_CTRL_EFUSE1_EN);
-        ok = pca9535_user_arm_efuse(logical, on);
-    } else {
-        ok = pca9535_set_control(ctrl, on);
-    }
-    if (!ok) return send_error(req, 500, "I2C write failed");
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "control", pca9535_control_name(ctrl));
-    cJSON_AddBoolToObject(root, "on", on);
-    return send_json(req, root);
+    char *resp = api_core_handle("POST", "/api/ioexp/control", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "ioexp control failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/ioexp/faults - Get PCA9535 fault log
@@ -2962,40 +2306,11 @@ static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
 // GET /api/hat - Get HAT status
 static esp_err_t handle_get_hat(httpd_req_t *req)
 {
-    const HatState *hs = hat_get_state();
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "detected", hs->detected);
-    cJSON_AddBoolToObject(root, "connected", hs->connected);
-    cJSON_AddBoolToObject(root, "degraded", hs->degraded);
-    cJSON_AddBoolToObject(root, "responsive", hs->connected && !hs->degraded);
-    cJSON_AddNumberToObject(root, "consecutiveTimeouts", hs->consecutive_timeouts);
-    cJSON_AddNumberToObject(root, "lastOkMs", hs->last_ok_ms);
-    cJSON_AddNumberToObject(root, "lastTimeoutMs", hs->last_timeout_ms);
-    cJSON_AddNumberToObject(root, "type", hs->type);
-    cJSON_AddStringToObject(root, "typeName", hat_type_name(hs->type));
-    cJSON_AddNumberToObject(root, "detectVoltage", hs->detect_voltage);
-    cJSON_AddNumberToObject(root, "detect_voltage", hs->detect_voltage);
-    cJSON_AddNumberToObject(root, "fwMajor", hs->fw_version_major);
-    cJSON_AddNumberToObject(root, "fwMinor", hs->fw_version_minor);
-    cJSON_AddBoolToObject(root, "configConfirmed", hs->config_confirmed);
-    cJSON_AddBoolToObject(root, "config_confirmed", hs->config_confirmed);
-    cJSON_AddBoolToObject(root, "dapConnected", hs->dap_connected);
-    cJSON_AddBoolToObject(root, "targetDetected", hs->target_detected);
-    cJSON_AddNumberToObject(root, "targetDpidr", hs->target_dpidr);
-    cJSON_AddNumberToObject(root, "laRoute", hs->la_route);
-
-    cJSON *pins = cJSON_AddArrayToObject(root, "pinConfig");
-    cJSON *pin_config = cJSON_AddArrayToObject(root, "pin_config");
-    for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
-        cJSON *pin = cJSON_CreateObject();
-        cJSON_AddNumberToObject(pin, "pin", i);
-        cJSON_AddNumberToObject(pin, "function", hs->pin_config[i]);
-        cJSON_AddStringToObject(pin, "functionName", hat_func_name(hs->pin_config[i]));
-        cJSON_AddItemToArray(pins, pin);
-        cJSON_AddItemToArray(pin_config, cJSON_CreateNumber(hs->pin_config[i]));
-    }
-
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/hat", NULL);
+    if (!resp) return send_error(req, 500, "hat failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/hat/la/status
@@ -3144,102 +2459,37 @@ static esp_err_t handle_get_hat_v2_caps(httpd_req_t *req)
 // GET /api/hat/v2/rails
 static esp_err_t handle_get_hat_v2_rails(httpd_req_t *req)
 {
-    if (!hat_detected()) {
-        return send_error(req, 404, "HAT not detected");
-    }
-
-    HatRailStatus rails[HAT_RAIL_COUNT] = {};
-    uint8_t rail_count = 0;
-    if (!hat_get_rail_status(rails, &rail_count)) {
-        return send_error(req, 503, "HAT not responding");
-    }
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "railCount", rail_count);
-    cJSON *arr = cJSON_AddArrayToObject(root, "rails");
-    for (uint8_t i = 0; i < rail_count && i < HAT_RAIL_COUNT; i++) {
-        cJSON *obj = cJSON_CreateObject();
-        cJSON_AddNumberToObject(obj, "railId", rails[i].rail_id);
-        cJSON_AddBoolToObject(obj, "enabled", rails[i].enabled);
-        cJSON_AddNumberToObject(obj, "voltageMv", rails[i].voltage_mv);
-        cJSON_AddNumberToObject(obj, "targetVoltageMv", rails[i].target_mv);
-        cJSON_AddNumberToObject(obj, "currentMa", rails[i].current_ma);
-        cJSON_AddNumberToObject(obj, "status", rails[i].status);
-        cJSON_AddItemToArray(arr, obj);
-    }
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/hat/v2/rails", NULL);
+    if (!resp) return send_error(req, 500, "hat rails failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/hat/v2/rail/enable
 static esp_err_t handle_post_hat_v2_rail_enable(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    VALIDATE_JSON_FIELD(doc, "railId", Number, "Field 'railId' must be a number");
-    VALIDATE_JSON_FIELD(doc, "enable", Bool, "Field 'enable' must be a boolean");
-
-    uint8_t rail_id = (uint8_t)cJSON_GetObjectItem(doc, "railId")->valueint;
-    bool enable = cJSON_IsTrue(cJSON_GetObjectItem(doc, "enable"));
-    cJSON_Delete(doc);
-
-    if (rail_id >= HAT_RAIL_COUNT) {
-        return send_error(req, 400, "railId out of range (0-2)");
-    }
-
-    if (!hat_set_rail_enable(rail_id, enable)) {
-        return send_error(req, 503, "HAT rail command failed");
-    }
-
-    // Return updated rail status
-    const HatState *hs = hat_get_state();
-    const HatRailStatus *rs = &hs->rail[rail_id];
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddNumberToObject(root, "railId", rs->rail_id);
-    cJSON_AddBoolToObject(root, "enabled", rs->enabled);
-    cJSON_AddNumberToObject(root, "voltageMv", rs->voltage_mv);
-    cJSON_AddNumberToObject(root, "currentMa", rs->current_ma);
-    cJSON_AddNumberToObject(root, "status", rs->status);
-    return send_json(req, root);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/hat/v2/rail/enable", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "rail enable failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/hat/v2/rail/voltage
 static esp_err_t handle_post_hat_v2_rail_voltage(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-    if (!hat_detected()) return send_error(req, 404, "HAT not detected");
-
-    cJSON *doc = recv_json_body(req);
-    if (!doc) return send_error(req, 400, "Invalid JSON");
-
-    VALIDATE_JSON_FIELD(doc, "railId", Number, "Field 'railId' must be a number");
-    VALIDATE_JSON_FIELD(doc, "voltageMv", Number, "Field 'voltageMv' must be a number");
-
-    uint8_t rail_id = (uint8_t)cJSON_GetObjectItem(doc, "railId")->valueint;
-    uint16_t mv = (uint16_t)cJSON_GetObjectItem(doc, "voltageMv")->valueint;
-    cJSON_Delete(doc);
-
-    if (rail_id > HAT_RAIL_VADJ4) {
-        return send_error(req, 400, "railId out of range (0-2)");
-    }
-
-    if (!hat_set_rail_voltage(rail_id, mv)) {
-        return send_error(req, 503, "HAT rail voltage command failed");
-    }
-
-    const HatState *hs = hat_get_state();
-    const HatRailStatus *rs = &hs->rail[rail_id];
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddNumberToObject(root, "railId", rs->rail_id);
-    cJSON_AddNumberToObject(root, "voltageMv", rs->voltage_mv);
-    cJSON_AddNumberToObject(root, "currentMa", rs->current_ma);
-    cJSON_AddNumberToObject(root, "status", rs->status);
-    return send_json(req, root);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/hat/v2/rail/voltage", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "rail voltage failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/hat/power
@@ -3823,41 +3073,34 @@ static esp_err_t handle_mux_post_dispatch(httpd_req_t *req)
 static esp_err_t handle_post_cal_point(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-    int ch = cJSON_GetObjectItem(body, "ch") ? cJSON_GetObjectItem(body, "ch")->valueint : -1;
-    int code = cJSON_GetObjectItem(body, "code") ? cJSON_GetObjectItem(body, "code")->valueint : 0;
-    double v = cJSON_GetObjectItem(body, "measuredV") ? cJSON_GetObjectItem(body, "measuredV")->valuedouble : 0;
-    cJSON_Delete(body);
-    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
-    ds4424_cal_add_point(ch, (int8_t)code, (float)v);
-    const DS4424State *st = ds4424_get_state();
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "count", st->cal[ch].count);
-    cJSON_AddBoolToObject(root, "valid", st->cal[ch].valid);
-    return send_json(req, root);
+    char *resp = api_core_handle("POST", "/api/idac/cal/point", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "cal point failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/idac/cal/clear  body: {"ch":0}
 static esp_err_t handle_post_cal_clear(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-    int ch = cJSON_GetObjectItem(body, "ch") ? cJSON_GetObjectItem(body, "ch")->valueint : -1;
-    cJSON_Delete(body);
-    if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
-    ds4424_cal_clear(ch);
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "status", "cleared");
-    return send_json(req, root);
+    char *resp = api_core_handle("POST", "/api/idac/cal/clear", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "cal clear failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/idac/cal/save
 static esp_err_t handle_post_cal_save(httpd_req_t *req)
 {
-    bool ok = ds4424_cal_save();
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "success", ok);
-    return send_json(req, root);
+    char *resp = api_core_handle("POST", "/api/idac/cal/save", NULL);
+    if (!resp) return send_error(req, 500, "cal save failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 static esp_err_t handle_cal_post_dispatch(httpd_req_t *req)
@@ -4128,15 +3371,13 @@ static esp_err_t handle_bus_post_dispatch(httpd_req_t *req)
 static esp_err_t handle_post_lshift_oe(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
     cJSON *body = recv_json_body(req);
-    if (!body) return send_error(req, 400, "Invalid JSON");
-    bool on = cJSON_GetObjectItem(body, "on") ? cJSON_IsTrue(cJSON_GetObjectItem(body, "on")) : false;
-    cJSON_Delete(body);
-    pin_write(PIN_LSHIFT_OE, on ? 1 : 0);
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "on", on);
-    return send_json(req, root);
+    char *resp = api_core_handle("POST", "/api/lshift/oe", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "lshift failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // =============================================================================
@@ -4146,26 +3387,11 @@ static esp_err_t handle_post_lshift_oe(httpd_req_t *req)
 // GET /api/wifi
 static esp_err_t handle_get_wifi(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
-
-    cJSON_AddBoolToObject(root, "connected", wifi_is_connected());
-    cJSON_AddStringToObject(root, "staSSID", wifi_get_sta_ssid());
-    cJSON_AddStringToObject(root, "sta_ssid", wifi_get_sta_ssid());
-    cJSON_AddStringToObject(root, "staIP", wifi_get_sta_ip());
-    cJSON_AddStringToObject(root, "sta_ip", wifi_get_sta_ip());
-    cJSON_AddNumberToObject(root, "rssi", wifi_get_rssi());
-
-    // Get AP SSID from ESP-IDF config
-    wifi_config_t ap_cfg = {};
-    esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
-    cJSON_AddStringToObject(root, "apSSID", (const char *)ap_cfg.ap.ssid);
-    cJSON_AddStringToObject(root, "ap_ssid", (const char *)ap_cfg.ap.ssid);
-    cJSON_AddStringToObject(root, "apIP", wifi_get_ap_ip());
-    cJSON_AddStringToObject(root, "ap_ip", wifi_get_ap_ip());
-    cJSON_AddStringToObject(root, "apMAC", wifi_get_ap_mac());
-    cJSON_AddStringToObject(root, "ap_mac", wifi_get_ap_mac());
-
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/wifi", NULL);
+    if (!resp) return send_error(req, 500, "wifi failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // POST /api/wifi/connect  body: {"ssid":"...", "password":"..."}

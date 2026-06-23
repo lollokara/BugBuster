@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### BLE control + unified `api_core` surface (ESP32-S3 + iOS) — NEW
+The iOS app can now discover, pair with, and fully control the device over
+**Bluetooth LE** in addition to WiFi, and the firmware serves one
+transport-agnostic JSON API to both transports.
+- **Unified `api_core`** (`Firmware/ESP32/src/net/api_core.cpp`): a single
+  `api_core_handle(method, path, body)` dispatcher returns the canonical JSON for
+  every REST endpoint. The HTTP webserver handlers and the BLE GATT tunnel both
+  delegate to it, eliminating duplicated handler logic (firmware flash shrank as
+  endpoints were de-duplicated). Streaming/binary surfaces (scope SSE, scripts
+  WS, static files, OTA binary upload) intentionally remain HTTP-only.
+- **BLE GATT tunnel** (`Firmware/ESP32/src/net/ble_service.cpp`, NimBLE):
+  `BugBuster-XXYYZZ` peripheral with token auth and a chunked APIREQ/APIRESP JSON
+  tunnel. Endpoints reachable over BLE include device/status/hat/usbpd/wifi,
+  overview (live rails), GPIO config/set, IDAC voltage + calibration
+  (read/point/clear/save, incl. HAT calibration data), HAT rail enable/voltage,
+  IO-expander, USB-PD select, level-shift OE, soft device reset, selftest
+  run/worker/calibrate, channel signal-path config (function/dac/adc-config/
+  vout-range/rtd-config), QuickSetup list/apply/save/delete, and the on-device
+  OTA git-release worker (status/releases/check/apply).
+- **iOS BLE client** (`iOSApp/Sources/Services/BLETransport.swift`): CoreBluetooth
+  scan/connect/auth and a chunk-reassembling JSON tunnel that decodes the **same**
+  Codable models as the HTTP path, so every WiFi control is available over BLE.
+
 ### DAQ trigger / flag system (ESP32-S3 + ESP32-P4 + Desktop) — NEW
 End-to-end trigger and flag support for the high-speed DAQ. The 12 mainboard IOs
 (8 LV-digital, 4 HV/analog via the AD74416H) can each be tagged **Off / Flag /
@@ -124,6 +147,21 @@ BugBuster without first being on the LAN; the same admin token gates both paths.
   eight. (3) BLE auth/control no longer falls back to the Wi-Fi/`localhost` HTTP
   path. (4) `/api/gpio` decodes as a bare array (was `{gpios:[…]}`, which never
   matched). (5) NimBLE host log level dropped to WARN to stop notify-spam.
+- **Unified API core (`Firmware/ESP32/src/net/api_core.{h,cpp}`)** — began folding
+  the HTTP and BLE control planes onto one transport-agnostic dispatcher
+  `api_core_handle(method, path, body) -> JSON`, so the two surfaces share a
+  single implementation and can't drift (the root cause of the `/v2/rail` and
+  GPIO-shape mismatches found during bring-up). The BLE tunnel now routes
+  through it; `/api/overview` is the first HTTP endpoint converted to delegate
+  (its duplicated handler body removed — firmware flash shrank). `update_manager`
+  (returns cJSON, already used by both transports) is the model. Remaining
+  endpoints migrate in green batches; streaming/binary/WS surfaces stay
+  transport-specific.
+- **BLE control/read surface (expanded)**: added over BLE — IDAC cal points
+  WITH HAT calibration data (`/api/idac/cal/points` → `hat` block via
+  `hat_calibrate_status`), live supply-rail measurement in `/api/overview`, and
+  the on-device git-release OTA updater (`/api/ota/{status,releases,check,apply}`,
+  small JSON — no binary transfer over BLE).
 
 ### DAQ HAT (ESP32-P4 IoT Power Analyzer) — NEW
 A new ESP32-P4-based DAQ HAT firmware that implements a 24-bit, nA–3A

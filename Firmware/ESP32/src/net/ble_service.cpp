@@ -36,7 +36,7 @@
 
 #include "auth.h"
 #include "bbp.h"
-#include "ble_api.h"
+#include "api_core.h"
 #include "tasks.h"
 #include "config.h"
 #include "wifi_manager.h"
@@ -419,7 +419,7 @@ static int chr_apireq_access(uint16_t conn_handle, uint16_t attr_handle,
     const char *path = cJSON_IsString(jpath) ? jpath->valuestring : NULL;
     cJSON *jbody = cJSON_GetObjectItem(root, "body");  // may be NULL
 
-    char *resp = ble_api_dispatch(path, jbody);
+    char *resp = api_core_handle(NULL, path, jbody);
     if (resp != NULL) {
         ble_api_send_response(req_id, resp, (int)strlen(resp));
         cJSON_free(resp);
