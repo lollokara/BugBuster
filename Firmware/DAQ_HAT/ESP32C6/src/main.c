@@ -55,7 +55,9 @@ void app_main(void)
     ddp_init();
     buttons_init();
     menu_init();
+#ifndef TARGET_C3
     npx_init();
+#endif
 
     // Apply persisted brightness now that the backlight PWM is up.
     {

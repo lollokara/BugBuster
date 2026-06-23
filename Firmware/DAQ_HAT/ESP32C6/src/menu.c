@@ -498,6 +498,9 @@ static const menu_item_t *vis_item(const menu_t *m, int vis_idx)
 void menu_init(void)
 {
     s_active = false; s_depth = 0;
+#ifdef TARGET_C6
+    /* C3 tsens HAL asserts on any range whose upper bound exceeds 80°C;
+     * guard so the test board (TARGET_C3) doesn't panic here. */
     if (!s_c6_tsens) {
         temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 110);
         if (temperature_sensor_install(&tcfg, &s_c6_tsens) == ESP_OK)
@@ -505,6 +508,7 @@ void menu_init(void)
         else
             s_c6_tsens = NULL;
     }
+#endif
 }
 
 bool menu_active(void) { return s_active; }

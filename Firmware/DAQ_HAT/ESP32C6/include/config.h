@@ -19,9 +19,18 @@
 // NOTE: the P4-side pins (32/33) are confirmed from the wiring note; the C6-side
 // U0 IOMUX pins (16/17) are the ESP32-C6 defaults — confirm against the final
 // schematic. PLACEHOLDER until verified on the bench.
+//
+// On ESP32-C3 (test board only), GPIO16 = SPIHD and GPIO17 = VDD_SPI —
+// both are reserved SPI-flash lines. The C3 has no P4 connected, so keep
+// UART0 on its default pins (GPIO20/21) by passing UART_PIN_NO_CHANGE (-1).
 // ---------------------------------------------------------------------------
+#ifdef TARGET_C3
+#define DAQ_UART_TX_PIN   (-1)   // C3: no pin remap; GPIO16/17 are QSPI flash pins
+#define DAQ_UART_RX_PIN   (-1)
+#else
 #define DAQ_UART_TX_PIN   16     // C6 U0TXD -> P4 GPIO33 (PLACEHOLDER, confirm)
 #define DAQ_UART_RX_PIN   17     // C6 U0RXD <- P4 GPIO32 (PLACEHOLDER, confirm)
+#endif
 #define DAQ_UART_BAUD     921600
 #define DAQ_UART_PORT     0      // UART0 (was UART1; console -> USB-Serial-JTAG)
 
