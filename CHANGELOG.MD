@@ -26,6 +26,7 @@
   autodiscovery replaces it.
 
 ### Fixed
+- **RP2040 CMSIS-DAP SWD probe — PIO never drove GPIO16/18.** Three stacked firmware bugs prevented any output on the SWD connector pins: (1) `probe_config.h` included `board_pico_config.h` (SWCLK=2, SWDIO=3) instead of the BugBuster config (SWCLK=18, SWDIO=16) because `DEBUG_ON_PICO=1` is defined in CMakeLists — fixed by checking `BB_HAT_FIRMWARE` first; (2) `board_bugbuster_hat_config.h` was missing `#define PROBE_IO_RAW` and `#define PROBE_SM 0`, so `probe.h` never included `probe.pio.h` and `probe_program`/`probe_gpio_init` were undefined; (3) `probe_sm_init()` in `probe.pio` used `PROBE_PIN_OFFSET` (= 12 from upstream defaults) for `pio_sm_set_consecutive_pindirs` instead of the actual SWDIO/SWCLK pins — fixed by using explicit per-pin calls. After all three fixes, OpenOCD reads `SWD DPIDR 0x2BA01477` (Cortex-M4) and halts the STM32F429 target correctly.
 - **GPIO 10/11 unreachable over HTTP (single-digit pin assumption).** `gpio_suffix()`
   in `webserver.cpp` used a hardcoded `p += 11` (skip `/api/gpio/` + one digit), so
   two-digit pins 10 and 11 fell through to `return NULL` → HTTP 400 (USB/BBP parsed

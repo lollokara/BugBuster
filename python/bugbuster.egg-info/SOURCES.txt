@@ -4,6 +4,7 @@ bugbuster/__init__.py
 bugbuster/bus.py
 bugbuster/client.py
 bugbuster/constants.py
+bugbuster/daq_config.py
 bugbuster/discovery.py
 bugbuster/hal.py
 bugbuster/ota.py
@@ -32,6 +33,8 @@ bugbuster_mcp/tools/__init__.py
 bugbuster_mcp/tools/advanced.py
 bugbuster_mcp/tools/analog.py
 bugbuster_mcp/tools/bus.py
+bugbuster_mcp/tools/daq.py
+bugbuster_mcp/tools/daq_cal.py
 bugbuster_mcp/tools/debug.py
 bugbuster_mcp/tools/digital.py
 bugbuster_mcp/tools/discovery.py

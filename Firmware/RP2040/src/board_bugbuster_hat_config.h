@@ -6,6 +6,12 @@
 // Defines SWD pin assignments matching the HAT PCB layout
 // =============================================================================
 
+// PIO mode — use probe.pio.h (bidirectional single SWDIO pin)
+#define PROBE_IO_RAW
+
+// PIO state machine 0 for SWD
+#define PROBE_SM            0
+
 // SWD pins — match bb_config.h definitions.
 #define PROBE_PIN_SWCLK     18
 #define PROBE_PIN_SWDIO     16
