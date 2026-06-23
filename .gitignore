@@ -54,7 +54,6 @@ test-results/
 
 # AI / Tooling state
 .omc/
-.mex/
 .omx/
 .omg/
 CLAUDE.md
@@ -71,7 +70,6 @@ scratch/
 Scripts/scratch_*
 Diag/repro_*
 
-/.mex
 /DesktopApp/BugBuster/.omc
 /Firmware/RP2040/.omc
 /DesktopApp/BugBuster/src-tauri/.omc
