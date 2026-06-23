@@ -2,6 +2,115 @@
 
 ## [Unreleased]
 
+### Added
+- **HAT rail auto-calibration from the iOS app (over BLE + WiFi).** The iOS
+  Diagnostics calibration pickers now list the HAT power rails (VADJ3, VADJ4)
+  whenever a HAT is detected, in addition to the mainboard IDAC channels.
+  Selecting a HAT rail and starting auto-calibration kicks off the RP2040
+  cal-engine sweep; viewing its data shows the stored per-rail points. To make
+  this reachable over BLE, `api_core` now dispatches
+  `POST /api/hat/v2/calibrate/start` (`{railId}`) — previously only the HTTP
+  webserver handled it, so BLE clients could not trigger HAT-rail calibration.
+  HAT rail entries are hidden when no HAT is present.
+- **RP2040 cal-point export → `GET /api/hat/calibration`.** New HAT UART command
+  `HAT_CMD_CALIBRATE_EXPORT (0x4D)` / `HAT_RSP_CALIBRATE_EXPORT (0x8B)` reads the
+  stored per-rail calibration points back from the RP2040 (paginated, since a
+  full table exceeds the 255-byte HAT frame). The ESP32 (`hat_calibrate_export`)
+  gathers all pages and `api_core` exposes them on `GET /api/hat/calibration`
+  (optional `?rail=N`) alongside the live cal-engine state/validation metrics —
+  `points:[{dacCode,measuredV}]`, `pointsCount`, `pointsValid`, `pointsRail`.
+  Works over HTTP and BLE; the iOS app shows it in the Calibration data sheet
+  (`fetchHatCalibration()`). HAT firmware bumped to **bb-hat-3.4**.
+- **iOS:** removed the manual IP/token connection form — Bonjour + BLE
+  autodiscovery replaces it.
+
+### Fixed
+- **GPIO 10/11 unreachable over HTTP (single-digit pin assumption).** `gpio_suffix()`
+  in `webserver.cpp` used a hardcoded `p += 11` (skip `/api/gpio/` + one digit), so
+  two-digit pins 10 and 11 fell through to `return NULL` → HTTP 400 (USB/BBP parsed
+  them fine). Replaced with a digit-skipping loop. Fixes
+  `test_gpio_all_pins_output_mode[http]`.
+- **Bad JSON POST bodies returned HTTP 200 with an error payload instead of 400.**
+  Body-required POST handlers that delegate to `api_core_handle` (channel function,
+  dac, adc/config, vout/range, gpio/config, gpio/set, rtd/config) passed a NULL body
+  from `recv_json_body` straight through, yielding `{"ok":false,...}` at HTTP 200.
+  Added an `if (!body) return send_error(req, 400, "Invalid JSON")` guard to each.
+  Fixes `test_bad_json_returns_400`.
+- **`device.reset()` state not visible to the host on return (async SPI race).**
+  Both reset paths (`handler_device_reset`, `api_device_reset`) enqueued the four
+  HIGH_IMP channel writes + clear-alerts via the async command queue and returned
+  before the SPI writes to the AD74416H committed. Added an internal
+  `CMD_SYNC_BARRIER` queue command and `tasks_drain_command_queue()` helper; the
+  reset handlers now block until the queue drains before responding. Fixes
+  `test_reset_clears_state[usb]`.
+- **Streaming reader thread crashed on Windows disconnect (pyserial ctypes race).**
+  `_reader_loop` in `transport/usb.py` read `self._serial` without a local snapshot;
+  when `disconnect()` NULLed it mid-read, Windows pyserial raised
+  `TypeError: byref() argument must be a ctypes instance` and killed the reader
+  thread, leaving subsequent streaming tests with zero events. Now snapshots
+  `self._serial` at the top of the loop (breaks if `None`) and treats `TypeError`
+  as a fatal read error. Fixes the ADC/scope streaming suite on Windows.
+- **HAT cal-point export returned 0 points (frame-size overflow).** The HAT-UART
+  frame payload is capped at `HAT_FRAME_MAX_LEN = 32` bytes on **both** MCUs, but
+  the RP2040 `handle_calibrate_export` built a 244-byte response (48 points × 5 +
+  4). `hat_build_frame` silently truncated it to 32 bytes while still reporting
+  `n = 48`, so the ESP32 saw `4 + 48*5 > rsp_len` and rejected every export frame
+  → `pointsCount: 0` for every rail even right after a successful sweep. Reduced
+  the export chunk to **5 points/frame** (29 bytes, within the cap) and raised the
+  ESP32 page-loop guard so a full 168-point table reassembles across ~34 frames.
+  HAT firmware bumped to **bb-hat-3.5**. iOS now feeds HAT cal points into the
+  same linearity chart + analysis used by the mainboard supplies.
+  every channel's ADC range to `1` = ±12 V bipolar. For a single-ended VIN at
+  0 V the AD74416H sits at code ≈ 0, which the bipolar conversion
+  (`v_offset=-12 + code/FS·24`) maps to −12 V. Defaulted to `0` = 0–12 V
+  unipolar (code 0 → 0 V); ±12 V remains selectable in the per-channel dropdown
+  (`src/tabs/scope.rs`).
+- **Desktop Scope never started (stalled on every channel).** The frontend
+  invoked the `start_scope_stream` Tauri command with a snake_case `ch_mask`
+  argument, but Tauri v2 expects camelCase `chMask`, so the command was rejected
+  (`missing required key chMask`, `result=None`) and the backend stream task was
+  never launched → 0 SPS → "Scope stalled / VIN can't be streamed". Added
+  `#[serde(rename_all = "camelCase")]` to both `StartScopeArgs` in
+  `src/tabs/scope.rs`. Also fixed a 20–30 Hz console-spam warning from a
+  `canvas_ref.get()` read in the render loop (now `.get_untracked()`).
+- **Scope socket starvation over HTTP.** `webserver.cpp` set
+  `max_open_sockets = 7` while `sdkconfig.defaults` had already raised
+  `CONFIG_LWIP_MAX_SOCKETS=16` "so the httpd can open max_open_sockets=10". With
+  only 7, the scope SSE connection plus the desktop's concurrent status/overview/
+  hat/rails polls overflowed the budget and `lru_purge_enable` evicted the scope
+  connection (`httpd_sock_err send : 104` → scope mode exit → reconnect loop).
+  Raised to the intended `10`.
+- **Desktop HTTP scope now consumes the `/api/scope/stream` SSE** (the same path
+  the on-device web UI uses) instead of 10 Hz `/api/scope` polling, so it enters
+  firmware scope-sampling mode over a single long-lived connection
+  (`http_transport.rs`).
+- **BLE large API responses were truncated → iOS showed stale/empty data.** The
+  BLE API tunnel (`ble_service.cpp`) ran the whole dispatch *and* blasted every
+  MTU-sized notify frame on the NimBLE host task. For multi-frame responses
+  (e.g. `/api/status` ~2.3 KB) the mbuf pool filled, `ble_gatts_notify_custom`
+  returned `ENOMEM`, and the send bailed mid-stream — so the client never saw
+  the final frame and timed out, falling back to defaults (channels showed
+  `HIGH_IMP`, Overview blank). Now the request is dispatched on a worker task
+  (off the host task, like the WiFi-provision path) and the chunked notify has
+  backpressure (retry-on-`ENOMEM` with a short yield) so the full JSON always
+  arrives. Single-frame writes/reads were unaffected, which is why controls
+  worked but reads didn't.
+- **Desktop HTTP scope showed 0 SPS / `httpd recv 104`.** The desktop polled
+  `/api/scope` at 10 Hz with fresh connections, churning the ESP's small httpd
+  socket pool. It now consumes the `/api/scope/stream` SSE (the same path the
+  on-device web UI uses) over a single long-lived connection, which also makes
+  the firmware enter scope-sampling mode (`http_transport.rs`).
+- **IDAC `calPoly` shipped empty over HTTP/BLE JSON.** `/api/idac` and
+  `/api/overview` built the `calPoly` array with `cJSON_AddNumberToObject(arr,
+  NULL, ...)` (the object API), which silently no-ops on a JSON array — so the
+  response carried `"polyValid":true,"calPoly":[]`. The desktop app then decoded
+  4 zero coefficients, computed 0 V, and clamped to vMin (showed a flat 3 V for
+  every IDAC code). Switched to `cJSON_AddItemToArray(arr, cJSON_CreateNumber())`
+  in `webserver.cpp` (`handle_get_idac`) and `api_core.cpp` (`api_overview`).
+  Pre-existing bug; only visible over HTTP/BLE (USB sends the poly as binary).
+  The desktop HTTP transport now also treats a short/empty `calPoly` as
+  poly-invalid and falls back to the linear code→voltage estimate.
+
 ### BLE control + unified `api_core` surface (ESP32-S3 + iOS) — NEW
 The iOS app can now discover, pair with, and fully control the device over
 **Bluetooth LE** in addition to WiFi, and the firmware serves one

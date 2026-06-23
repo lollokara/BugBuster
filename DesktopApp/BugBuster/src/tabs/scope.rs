@@ -285,7 +285,7 @@ impl ScopeUiState {
             recording_freeze_label: RwSignal::new(None),
             recording_bucket_count: RwSignal::new(0u64),
             adc_rate: std::array::from_fn(|_| RwSignal::new(3u8)), // 20 SPS HR
-            adc_range: std::array::from_fn(|_| RwSignal::new(1u8)), // ±12V
+            adc_range: std::array::from_fn(|_| RwSignal::new(0u8)), // 0..12V unipolar (ch0=code0 → 0V; ±12V via dropdown when needed)
             adc_mux: std::array::from_fn(|_| RwSignal::new(0u8)),  // LF to AGND
             channel_labels: std::array::from_fn(|i| RwSignal::new(format!("CH {}", CH_NAMES[i]))),
             y_offset: std::array::from_fn(|_| RwSignal::new(0.0f64)),
@@ -517,6 +517,7 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
                     .enumerate()
                     .fold(0u8, |m, (i, &en)| if en { m | (1 << i) } else { m });
                 #[derive(serde::Serialize)]
+                #[serde(rename_all = "camelCase")]
                 struct StartScopeArgs {
                     ch_mask: u8,
                 }
@@ -579,6 +580,7 @@ pub fn install_scope_lifetime_manager(ui: ScopeUiState, device_state: ReadSignal
             sleep_ms(150).await;
 
             #[derive(serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
             struct StartScopeArgs {
                 ch_mask: u8,
             }
@@ -809,7 +811,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             last_draw_counter.set(sc);
 
             let draw_start = js_sys::Date::now();
-            let Some(canvas) = canvas_ref.get() else {
+            let Some(canvas) = canvas_ref.get_untracked() else {
                 continue;
             };
             let canvas: HtmlCanvasElement = canvas;

@@ -165,13 +165,14 @@ def test_hat_get_power_usb(usb_device):
     assert_no_faults(usb_device)
 
 
-def test_hat_get_power_http_raises(http_device):
+def test_hat_get_power_http(http_device):
     """
-    hat_get_power() over HTTP should raise NotImplementedError since
-    the firmware does not expose a /api/hat/power endpoint.
+    hat_get_power() over HTTP is served by api_core and returns power status
+    for both HAT connectors.
     """
-    with pytest.raises(NotImplementedError):
-        http_device.hat_get_power()
+    result = http_device.hat_get_power()
+    assert "connectors" in result
+    assert len(result["connectors"]) == 2
     assert_no_faults(http_device)
 
 
@@ -189,12 +190,12 @@ def test_hat_set_power_usb(usb_device):
     assert_no_faults(usb_device)
 
 
-def test_hat_set_io_voltage_http_raises(http_device):
+def test_hat_set_io_voltage_http(http_device):
     """
-    hat_set_io_voltage() over HTTP should raise NotImplementedError.
+    hat_set_io_voltage() over HTTP is served by api_core and returns success.
     """
-    with pytest.raises(NotImplementedError):
-        http_device.hat_set_io_voltage(3300)
+    ok = http_device.hat_set_io_voltage(3300)
+    assert ok is True
     assert_no_faults(http_device)
 
 

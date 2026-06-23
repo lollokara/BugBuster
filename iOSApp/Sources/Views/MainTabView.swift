@@ -494,61 +494,6 @@ struct MainTabView: View {
 
                                 // Bluetooth (BLE) Devices Section
                                 BLEDevicesCard(manualToken: $manualToken, errorMessage: $errorMessage)
-                                
-                                // Manual Entry Form
-                                VStack(alignment: .leading, spacing: 14) {
-                                    Text("Manual Connection")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.white)
-                                    
-                                    VStack(spacing: 16) {
-                                        TextField("IP Address or Hostname", text: $manualIp)
-                                            .keyboardType(.numbersAndPunctuation)
-                                            .autocorrectionDisabled()
-                                            .textInputAutocapitalization(.never)
-                                            .premiumGlassInput()
-                                        
-                                        SecureField("Admin Access Token", text: $manualToken)
-                                            .autocorrectionDisabled()
-                                            .textInputAutocapitalization(.never)
-                                            .premiumGlassInput()
-                                        
-                                        Button(action: {
-                                            guard !manualIp.isEmpty else {
-                                                errorMessage = "Please enter an IP address"
-                                                return
-                                            }
-                                            Task {
-                                                let success = await connectionManager.connect(ip: manualIp, token: manualToken)
-                                                if !success {
-                                                    errorMessage = "Failed to connect. Verify IP & Token."
-                                                }
-                                            }
-                                        }) {
-                                            Text("Connect")
-                                                .font(.system(size: 16, weight: .bold))
-                                                .foregroundColor(.black)
-                                                .frame(maxWidth: .infinity)
-                                                .padding()
-                                                .background(
-                                                    LinearGradient(
-                                                        colors: [Color.cyan, Color.blue],
-                                                        startPoint: .top,
-                                                        endPoint: .bottom
-                                                    )
-                                                )
-                                                .cornerRadius(12)
-                                                .shadow(color: .cyan.opacity(0.3), radius: 6, x: 0, y: 2)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                                .padding()
-                                .background(
-                                    RoundedRectangle(cornerRadius: 18)
-                                        .fill(Color.white.opacity(0.03))
-                                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.06), lineWidth: 1))
-                                )
                             }
                             .premiumGlassCard()
                             .padding(.horizontal)

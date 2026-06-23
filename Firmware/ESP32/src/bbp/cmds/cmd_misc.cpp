@@ -123,6 +123,10 @@ static int handler_device_reset(const uint8_t *payload, size_t len,
     clr.type = CMD_CLEAR_ALERTS;
     sendCommand(clr);
 
+    // Wait for the SPI writes to the AD74416H to actually commit before
+    // returning the BBP response, so reset state is visible to the host.
+    tasks_drain_command_queue(500);
+
     *resp_len = 0;
     return 0;
 }

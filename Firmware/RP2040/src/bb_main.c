@@ -46,7 +46,7 @@ extern TaskHandle_t tud_taskhandle;
 #define BB_HAT_FW_MAJOR  3  /* 0 = sentinel: CMake -D flags were not provided */
 #endif
 #ifndef BB_HAT_FW_MINOR
-#define BB_HAT_FW_MINOR  3  /* 0 = sentinel: CMake -D flags were not provided */
+#define BB_HAT_FW_MINOR  5  /* 0 = sentinel: CMake -D flags were not provided */
 #endif
 // L02: opt-in loud failure for builds that omit the CMake -D version flags.
 // Define BB_HAT_REQUIRE_VERSION to turn the silent 0.0 sentinel into a hard
@@ -607,6 +607,9 @@ static void dispatch_command(const HatFrame *frame)
         break;
     case HAT_CMD_CALIBRATE_IMPORT:
         handle_calibrate_import(frame->payload, frame->payload_len);
+        break;
+    case HAT_CMD_CALIBRATE_EXPORT:
+        handle_calibrate_export(frame->payload, frame->payload_len);
         break;
     case HAT_CMD_SET_IO_BANK:
         handle_set_io_bank(frame->payload, frame->payload_len);

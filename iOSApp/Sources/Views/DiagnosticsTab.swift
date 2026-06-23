@@ -50,12 +50,23 @@ struct DiagnosticsTab: View {
     @State private var selectedCalSupply = 1
     @State private var showingCalData = false
     @State private var loadedCalPoints: [CalibrationPoint] = []
+    @State private var loadedHatCal: HatCalibration? = nil
     @State private var isLoadingCalData = false
-    let calSupplies = [
-        (id: 0, name: "LevelShift (IDAC0)"),
-        (id: 1, name: "V_ADJ1 (IDAC1)"),
-        (id: 2, name: "V_ADJ2 (IDAC2)")
-    ]
+    // Mainboard IDAC channels are tagged 0-2; HAT rails use a 100+railId offset
+    // so a single picker can drive both calibration backends.
+    static let hatRailTagOffset = 100
+    var calSupplies: [(id: Int, name: String)] {
+        var opts: [(id: Int, name: String)] = [
+            (id: 0, name: "LevelShift (IDAC0)"),
+            (id: 1, name: "V_ADJ1 (IDAC1)"),
+            (id: 2, name: "V_ADJ2 (IDAC2)")
+        ]
+        if hatPresent {
+            opts.append((id: Self.hatRailTagOffset + 1, name: "HAT VADJ3"))
+            opts.append((id: Self.hatRailTagOffset + 2, name: "HAT VADJ4"))
+        }
+        return opts
+    }
 
     // SPIFFS
     @State private var spiffsStorage: StorageInfoDiag? = nil
@@ -101,7 +112,7 @@ struct DiagnosticsTab: View {
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showWifiSheet) { wifiConnectionSheet }
         .sheet(isPresented: $showingCalData) {
-            CalibrationDataView(supplyName: calSupplies.first(where: { $0.id == selectedCalSupply })?.name ?? "Unknown", points: loadedCalPoints)
+            CalibrationDataView(supplyName: calSupplies.first(where: { $0.id == selectedCalSupply })?.name ?? "Unknown", points: loadedCalPoints, hatCal: loadedHatCal)
         }
         .onAppear {
             fetchGitReleases()
@@ -309,9 +320,9 @@ struct DiagnosticsTab: View {
                     Text("Channel")
                         .font(.system(size: 13, weight: .medium))
                     Picker("", selection: $calChannel) {
-                        Text("LevelShift (0)").tag(0)
-                        Text("V_ADJ1 (1)").tag(1)
-                        Text("V_ADJ2 (2)").tag(2)
+                        ForEach(calSupplies, id: \.id) { supply in
+                            Text(supply.name).tag(supply.id)
+                        }
                     }
                     .pickerStyle(.menu)
                     .accentColor(.cyan)
@@ -976,15 +987,26 @@ struct DiagnosticsTab: View {
     private func startAutoCalibrate() {
         isCalibrating = true
         calResult = nil
+        let isHatRail = calChannel >= Self.hatRailTagOffset
+        let railId = calChannel - Self.hatRailTagOffset
         Task {
             do {
-                let ok = try await connectionManager.postAction(
-                    path: "/api/selftest/calibrate",
-                    json: ["channel": calChannel]
-                )
+                let ok: Bool
+                if isHatRail {
+                    ok = await connectionManager.startHatCalibration(rail: railId)
+                } else {
+                    ok = try await connectionManager.postAction(
+                        path: "/api/selftest/calibrate",
+                        json: ["channel": calChannel]
+                    )
+                }
                 DispatchQueue.main.async {
                     if ok {
-                        self.calResult = "Calibration started on channel \(self.calChannel)"
+                        if isHatRail {
+                            self.calResult = "HAT calibration started on rail \(railId)"
+                        } else {
+                            self.calResult = "Calibration started on channel \(self.calChannel)"
+                        }
                     } else {
                         self.calResult = "Error: calibration blocked (busy or interlock)"
                     }
@@ -1011,12 +1033,29 @@ struct DiagnosticsTab: View {
 
     private func fetchCalibrationData() {
         isLoadingCalData = true
+        let isHatRail = selectedCalSupply >= Self.hatRailTagOffset
+        let railId = selectedCalSupply - Self.hatRailTagOffset
         Task {
-            let pts = await connectionManager.fetchCalibrationPoints(ch: selectedCalSupply)
-            DispatchQueue.main.async {
-                self.loadedCalPoints = pts
-                self.isLoadingCalData = false
-                self.showingCalData = true
+            if isHatRail {
+                // HAT rail: the RP2040 stores the cal points. Feed them into the
+                // same chart/analysis path used by the mainboard supplies so the
+                // linearity graph + metrics render identically.
+                let hat = await connectionManager.fetchHatCalibration(rail: railId)
+                DispatchQueue.main.async {
+                    self.loadedCalPoints = hat?.points ?? []
+                    self.loadedHatCal = hat
+                    self.isLoadingCalData = false
+                    self.showingCalData = true
+                }
+            } else {
+                let pts = await connectionManager.fetchCalibrationPoints(ch: selectedCalSupply)
+                let hat = await connectionManager.fetchHatCalibration()
+                DispatchQueue.main.async {
+                    self.loadedCalPoints = pts
+                    self.loadedHatCal = hat
+                    self.isLoadingCalData = false
+                    self.showingCalData = true
+                }
             }
         }
     }
@@ -1310,8 +1349,42 @@ struct CalibrationDataView: View {
     @Environment(\.dismiss) var dismiss
     let supplyName: String
     let points: [CalibrationPoint]
-    
+    var hatCal: HatCalibration? = nil
+
     var analysis: CalibrationAnalysis { CalibrationAnalysis(points: points) }
+
+    private func hatRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).font(.system(size: 13)).foregroundColor(.secondary)
+            Spacer()
+            Text(value).font(.system(size: 13, design: .monospaced)).foregroundColor(.cyan)
+        }
+    }
+
+    @ViewBuilder private var hatCalSection: some View {
+        if let h = hatCal, h.hatPresent {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("RP2040 HAT Calibration")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                hatRow("State", h.state.map(String.init) ?? "—")
+                hatRow("Rail", h.railId.map(String.init) ?? "—")
+                hatRow("Progress", h.progress.map { "\($0)%" } ?? "—")
+                hatRow("Last code", h.code.map(String.init) ?? "—")
+                hatRow("Measured", h.measuredMv.map { String(format: "%.3f V", Double($0) / 1000.0) } ?? "—")
+                hatRow("Max error", h.maxErrorMv.map { "\($0) mV" } ?? "—")
+                hatRow("Max gap", h.maxGapMv.map { "\($0) mV" } ?? "—")
+                hatRow("Validation", h.validationFlags.map { String(format: "0x%04X", $0) } ?? "—")
+                if let count = h.pointsCount {
+                    hatRow("Stored points", "\(count)\(h.pointsValid == true ? " · valid" : "")")
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
+            .padding()
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -1320,7 +1393,13 @@ struct CalibrationDataView: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: 0) {
+                    hatCalSection
                     if points.isEmpty {
+                        if hatCal?.hatPresent == true {
+                            // HAT rail view: hatCalSection already shows the stored
+                            // points / live status, so no mainboard placeholder.
+                            Spacer()
+                        } else {
                         VStack(spacing: 12) {
                             Image(systemName: "chart.bar.xaxis")
                                 .font(.system(size: 50))
@@ -1335,6 +1414,7 @@ struct CalibrationDataView: View {
                                 .padding(.horizontal, 40)
                         }
                         .frame(maxHeight: .infinity)
+                        }
                     } else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 20) {

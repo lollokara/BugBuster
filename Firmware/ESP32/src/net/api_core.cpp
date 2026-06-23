@@ -612,7 +612,7 @@ static char *api_overview(void)
         bool have_poly = ds4424_cal_fit_cubic(ch, poly);
         cJSON_AddBoolToObject(o, "polyValid", have_poly);
         cJSON *pa = cJSON_AddArrayToObject(o, "calPoly");
-        for (int i = 0; i < 4; i++) cJSON_AddNumberToObject(pa, NULL, (double)poly[i]);
+        for (int i = 0; i < 4; i++) cJSON_AddItemToArray(pa, cJSON_CreateNumber((double)poly[i]));
         cJSON_AddItemToArray(channels, o);
     }
 
@@ -697,6 +697,9 @@ static char *api_device_reset(void)
         funcCmd.func    = CH_FUNC_HIGH_IMP;
         sendCommand(funcCmd);
     }
+    // Wait for the SPI writes to the AD74416H to actually commit before
+    // returning, so reset state is visible to the host immediately.
+    tasks_drain_command_queue(500);
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", true);
     return json_take(r);
@@ -746,6 +749,106 @@ static char *api_idac_cal_points(int ch)
             cJSON_AddNumberToObject(h, "validationFlags", hvalid);
         }
     }
+    return json_take(root);
+}
+
+// ---------------------------------------------------------------------------
+// HAT (RP2040) calibration snapshot — live cal-engine state + validation
+// metrics, plus the stored per-rail cal points (read back over the HAT UART,
+// paginated). Transport-agnostic (HTTP + BLE) so the iOS app can display it.
+// Optional ?rail=N selects which rail's stored points to export (default: the
+// rail the live status refers to).
+// ---------------------------------------------------------------------------
+static char *api_hat_calibration(const char *path)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "hatPresent", hat_detected());
+    if (!hat_detected()) {
+        cJSON_AddBoolToObject(root, "ok", false);
+        return json_take(root);
+    }
+
+    uint8_t hstate = 0, hprogress = 0, hrail = 0, hlast_err = 0, hpersist = 0, hstage = 0, hpoint = 0;
+    int8_t hcode = 0;
+    int32_t hmeas = 0, hmin = 0, hmax = 0, hgap = 0, herr = 0;
+    uint16_t hvalid = 0;
+    if (hat_calibrate_status(&hstate, &hprogress, &hrail, &hlast_err, &hpersist,
+                             &hstage, &hpoint, &hcode, &hmeas, &hmin, &hmax,
+                             &hgap, &herr, &hvalid)) {
+        cJSON_AddBoolToObject(root, "ok", true);
+        cJSON_AddNumberToObject(root, "state", hstate);
+        cJSON_AddNumberToObject(root, "progress", hprogress);
+        cJSON_AddNumberToObject(root, "railId", hrail);
+        cJSON_AddNumberToObject(root, "lastError", hlast_err);
+        cJSON_AddNumberToObject(root, "persistState", hpersist);
+        cJSON_AddNumberToObject(root, "stage", hstage);
+        cJSON_AddNumberToObject(root, "point", hpoint);
+        cJSON_AddNumberToObject(root, "code", hcode);
+        cJSON_AddNumberToObject(root, "measuredMv", hmeas);
+        cJSON_AddNumberToObject(root, "minMv", hmin);
+        cJSON_AddNumberToObject(root, "maxMv", hmax);
+        cJSON_AddNumberToObject(root, "maxGapMv", hgap);
+        cJSON_AddNumberToObject(root, "maxErrorMv", herr);
+        cJSON_AddNumberToObject(root, "validationFlags", hvalid);
+    } else {
+        cJSON_AddBoolToObject(root, "ok", false);
+    }
+
+    // Stored cal points for the target rail, exported page-by-page.
+    int target_rail = hrail;
+    const char *q = path ? strstr(path, "rail=") : NULL;
+    if (q) target_rail = atoi(q + 5);
+    if (target_rail >= 0 && target_rail < 3) {
+        cJSON_AddNumberToObject(root, "pointsRail", target_rail);
+        cJSON *pts = cJSON_AddArrayToObject(root, "points");
+        int8_t codes[48];
+        float  volts[48];
+        uint8_t total = 0, returned = 0;
+        bool valid = false;
+        uint8_t start = 0;
+        int guard = 0;
+        do {
+            if (!hat_calibrate_export((uint8_t)target_rail, start, &total, &valid, &returned,
+                                      codes, volts, 48)) {
+                break;
+            }
+            for (uint8_t i = 0; i < returned && i < 48; i++) {
+                cJSON *p = cJSON_CreateObject();
+                cJSON_AddNumberToObject(p, "dacCode", codes[i]);
+                cJSON_AddNumberToObject(p, "measuredV", (double)volts[i]);
+                cJSON_AddItemToArray(pts, p);
+            }
+            if (returned == 0) break;
+            start = (uint8_t)(start + returned);
+            // HAT UART frames carry at most 5 points each, so a full table
+            // (up to DS4424_CAL_MAX_POINTS=168) needs ~34 round-trips.
+        } while (start < total && ++guard < 48);
+        cJSON_AddNumberToObject(root, "pointsCount", total);
+        cJSON_AddBoolToObject(root, "pointsValid", valid);
+    }
+    return json_take(root);
+}
+
+// POST /api/hat/v2/calibrate/start — kick off the RP2040 auto-cal sweep for a
+// HAT rail. Mirrors the HTTP handler so the iOS app can trigger HAT-rail
+// calibration over BLE (the HTTP-only handler is not reachable on that path).
+// Only VADJ3 (rail 1) and VADJ4 (rail 2) are calibratable; the RP2040 rejects
+// rail 0 (3V3_ADJ).
+static char *api_hat_calibrate_start(const cJSON *body)
+{
+    if (!hat_detected()) return api_error("HAT not detected");
+    const cJSON *rail = body ? cJSON_GetObjectItem(body, "railId") : NULL;
+    if (!rail || !cJSON_IsNumber(rail)) return api_error("railId required");
+    int rail_id = rail->valueint;
+    if (rail_id < 0 || rail_id >= HAT_RAIL_COUNT) return api_error("railId out of range");
+    uint8_t status = 0;
+    if (!hat_calibrate_start((uint8_t)rail_id, &status)) {
+        return api_error("HAT calibration start failed");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "railId", rail_id);
+    cJSON_AddNumberToObject(root, "status", status);
     return json_take(root);
 }
 
@@ -1111,6 +1214,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/status") == 0)      return api_status();
     if (strcmp(path, "/api/hat") == 0)         return api_hat();
     if (strcmp(path, "/api/hat/v2/rails") == 0) return api_hat_v2_rails();
+    if (strncmp(path, "/api/hat/calibration", 20) == 0) return api_hat_calibration(path);
     if (strcmp(path, "/api/usbpd") == 0)       return api_usbpd();
     if (strcmp(path, "/api/wifi") == 0)        return api_wifi();
     if (strcmp(path, "/api/daq") == 0)         return api_daq();
@@ -1141,6 +1245,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/ota/apply") == 0)        return api_ota_apply(body);
     if (strcmp(path, "/api/selftest/worker") == 0)    return api_selftest_worker(body);
     if (strcmp(path, "/api/selftest/calibrate") == 0) return api_selftest_calibrate(body);
+    if (strcmp(path, "/api/hat/v2/calibrate/start") == 0) return api_hat_calibrate_start(body);
     if (strcmp(path, "/api/idac/cal/point") == 0)   return api_cal_point(body);
     if (strcmp(path, "/api/idac/cal/clear") == 0)   return api_cal_clear(body);
     if (strcmp(path, "/api/idac/cal/save") == 0)    return api_cal_save();

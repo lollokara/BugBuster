@@ -304,7 +304,7 @@ def test_gpio_get(base_url, session):
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
     data = resp.json()
     assert isinstance(data, list), f"GPIO response must be a list, got {type(data)}"
-    assert len(data) == 6, f"Expected 6 GPIO pins, got {len(data)}"
+    assert len(data) == 12, f"Expected 12 GPIO pins, got {len(data)}"
 
 
 # ---------------------------------------------------------------------------

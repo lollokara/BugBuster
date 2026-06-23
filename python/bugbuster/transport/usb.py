@@ -333,14 +333,19 @@ class USBTransport:
         """
         buf = bytearray()
         while self._running:
+            serial_port = self._serial  # local snapshot — may be set to None by disconnect()
+            if serial_port is None:
+                break
             try:
-                chunk = self._serial.read(self.READ_CHUNK)
+                chunk = serial_port.read(self.READ_CHUNK)
             except serial.SerialException as exc:
                 # Spurious macOS "no data" exception — keep going
                 log.debug("Serial transient: %s", exc)
                 __import__('time').sleep(0.01)
                 continue
-            except (OSError, serial.SerialException) as exc:
+            except (OSError, serial.SerialException, TypeError) as exc:
+                # TypeError: Windows pyserial ctypes race when the port is closed
+                # (self._serial NULLed) mid-read — byref() on a freed OVERLAPPED.
                 log.error("Serial read error: %s", exc, exc_info=True)
                 break
 

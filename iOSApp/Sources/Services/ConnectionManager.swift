@@ -1190,6 +1190,30 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return []
     }
 
+    /// RP2040 HAT calibration data (state + validation metrics), read back by
+    /// the ESP32 over the HAT UART. Works over both BLE and WiFi/HTTP.
+    /// Pass `rail` to select which rail's stored points are exported (default:
+    /// whatever rail the live cal-engine status refers to).
+    public func fetchHatCalibration(rail: Int? = nil) async -> HatCalibration? {
+        guard connectionState == .connected, let device = activeDevice else { return nil }
+        let path = rail.map { "/api/hat/calibration?rail=\($0)" } ?? "/api/hat/calibration"
+        if transport == .ble {
+            return await bleDecoded(HatCalibration.self, path: path)
+        }
+        let ip = device.ip; let token = adminToken
+        return await fetchDecoded(HatCalibration.self, ip: ip, path: path, token: token)
+    }
+
+    /// Start the RP2040 HAT auto-calibration sweep for a given rail (1=VADJ3,
+    /// 2=VADJ4). Routed through api_core so it works over BLE and WiFi.
+    public func startHatCalibration(rail: Int) async -> Bool {
+        do {
+            return try await postAction(path: "/api/hat/v2/calibrate/start", json: ["railId": rail])
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - GPIO
 
     public func fetchGpios() {
@@ -1289,5 +1313,31 @@ public struct CalibrationPointsResponse: Codable {
     public let count: Int
     public let valid: Bool
     public let points: [CalibrationPoint]
+}
+
+/// RP2040 HAT calibration snapshot from GET /api/hat/calibration
+/// (live cal-engine state + validation metrics for the selected rail).
+public struct HatCalibration: Codable {
+    public let hatPresent: Bool
+    public let ok: Bool
+    public let state: Int?
+    public let progress: Int?
+    public let railId: Int?
+    public let lastError: Int?
+    public let persistState: Int?
+    public let stage: Int?
+    public let point: Int?
+    public let code: Int?
+    public let measuredMv: Int?
+    public let minMv: Int?
+    public let maxMv: Int?
+    public let maxGapMv: Int?
+    public let maxErrorMv: Int?
+    public let validationFlags: Int?
+    // Stored cal points exported from the RP2040 (paginated server-side).
+    public let pointsRail: Int?
+    public let pointsCount: Int?
+    public let pointsValid: Bool?
+    public let points: [CalibrationPoint]?
 }
 

@@ -174,6 +174,7 @@ enum CommandType {
     CMD_PCA_SET_CONTROL,    // Set PCA9535 output control
     CMD_PCA_SET_PORT,       // Set PCA9535 raw port value
     CMD_SET_RTD_CONFIG,     // Set RTD excitation current (0=500µA, 1=1mA)
+    CMD_SYNC_BARRIER,       // No-op barrier: signals syncSem once processed (queue-drain sync)
 };
 
 struct Command {
@@ -248,6 +249,7 @@ struct Command {
         struct {
             uint8_t current;    // 0 = 500 µA, 1 = 1000 µA (1 mA)
         } rtdCfg;
+        SemaphoreHandle_t syncSem;  // CMD_SYNC_BARRIER: given once this command is processed
     };
 };
 
@@ -277,6 +279,17 @@ void initTasks(AD74416H& device);
  * @return true if enqueued, false if queue was full.
  */
 bool sendCommand(const Command& cmd);
+
+/**
+ * @brief Block until all commands currently queued have been processed.
+ *        Enqueues a CMD_SYNC_BARRIER and waits for the command-processor task
+ *        to reach it. Because the queue is processed strictly in order, when
+ *        the barrier is reached every prior command (and its SPI writes) is
+ *        complete.
+ * @param timeout_ms Maximum time to wait for the queue to drain.
+ * @return true if the queue drained within the timeout, false otherwise.
+ */
+bool tasks_drain_command_queue(uint32_t timeout_ms);
 
 /**
  * @brief Reset the entire board signal path to a safe state.

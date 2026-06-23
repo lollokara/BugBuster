@@ -1481,6 +1481,15 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 break;
             }
 
+            // -----------------------------------------------------------------
+            case CMD_SYNC_BARRIER: {
+                // No hardware action. Signal the waiting caller that the queue
+                // has drained up to and including this barrier. All prior
+                // commands (and their SPI writes) are now committed.
+                if (cmd.syncSem) xSemaphoreGive(cmd.syncSem);
+                break;
+            }
+
             default:
                 ESP_LOGW("cmdProc", "Unknown command type: %d", cmd.type);
                 break;
@@ -1840,3 +1849,24 @@ bool sendCommand(const Command& cmd)
     }
     return false;
 }
+
+bool tasks_drain_command_queue(uint32_t timeout_ms)
+{
+    if (!g_cmdQueue) return false;
+
+    static SemaphoreHandle_t s_syncSem = nullptr;
+    if (s_syncSem == nullptr) {
+        s_syncSem = xSemaphoreCreateBinary();
+        if (s_syncSem == nullptr) return false;
+    }
+    // Drain any stale signal from a previous (timed-out) drain.
+    xSemaphoreTake(s_syncSem, 0);
+
+    Command barrier{};
+    barrier.type    = CMD_SYNC_BARRIER;
+    barrier.syncSem = s_syncSem;
+    if (!sendCommand(barrier)) return false;
+
+    return xSemaphoreTake(s_syncSem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+

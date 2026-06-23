@@ -121,6 +121,9 @@ pub struct HttpTransport {
     // existing frontend listener (parse_scope_event) works unchanged.
     scope_polling: Arc<AtomicBool>,
     app_handle: Option<AppHandle>,
+    // Stored admin token so the long-lived scope SSE client can carry the
+    // auth header (the per-request `client` headers aren't otherwise reused).
+    admin_token: Option<String>,
 }
 
 impl HttpTransport {
@@ -216,6 +219,7 @@ impl HttpTransport {
             connected: AtomicBool::new(true),
             scope_polling: Arc::new(AtomicBool::new(false)),
             app_handle: None,
+            admin_token: None,
         };
 
         Ok((transport, mac))
@@ -227,8 +231,15 @@ impl HttpTransport {
         self.app_handle = Some(app);
     }
 
-    /// Start the background scope polling task. Idempotent — repeat calls
-    /// while polling is active are a no-op (Bug 2).
+    /// Start the background scope streaming task. Idempotent — repeat calls
+    /// while it is active are a no-op (Bug 2).
+    ///
+    /// Consumes the firmware Server-Sent-Events stream `/api/scope/stream` —
+    /// the same path the on-device web UI uses. This is preferred over polling
+    /// `/api/scope` because (a) opening the stream makes the firmware enter
+    /// scope-sampling mode, and (b) it is a single long-lived connection rather
+    /// than 10 Hz fresh GETs that churned the ESP's tiny httpd socket pool and
+    /// produced `httpd_sock_err recv 104` resets / 0 SPS.
     fn start_scope_polling(&self) -> Result<()> {
         if self.scope_polling.swap(true, Ordering::AcqRel) {
             return Ok(()); // already running
@@ -237,89 +248,134 @@ impl HttpTransport {
             .app_handle
             .clone()
             .ok_or_else(|| anyhow!("HttpTransport missing AppHandle for scope streaming"))?;
-        let client = self.client.clone();
         let base_url = self.base_url.clone();
         let polling = self.scope_polling.clone();
+        let token = self.admin_token.clone();
 
         tokio::spawn(async move {
-            let mut last_seq: i64 = -1;
-            while polling.load(Ordering::Acquire) {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if !polling.load(Ordering::Acquire) {
-                    break;
-                }
-
-                let since_param = if last_seq < 0 {
-                    String::new()
-                } else {
-                    format!("?since={}", last_seq)
-                };
-                let url = format!("{}/api/scope{}", base_url, since_param);
-                let resp = match client.get(&url).send().await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        log::warn!("scope poll request failed: {}", e);
-                        continue;
-                    }
-                };
-                if !resp.status().is_success() {
-                    log::warn!("scope poll HTTP {}", resp.status());
-                    continue;
-                }
-                let json: Value = match resp.json().await {
-                    Ok(j) => j,
-                    Err(e) => {
-                        log::warn!("scope poll JSON parse failed: {}", e);
-                        continue;
-                    }
-                };
-
-                if let Some(seq) = json.get("seq").and_then(|v| v.as_i64()) {
-                    last_seq = seq;
-                }
-                let samples = match json.get("samples").and_then(|v| v.as_array()) {
-                    Some(s) => s,
-                    None => continue,
-                };
-
-                let first_seq = last_seq.saturating_sub(samples.len() as i64 - 1).max(0) as u32;
-                for (i, bucket) in samples.iter().enumerate() {
-                    let arr = match bucket.as_array() {
-                        Some(a) if a.len() >= 13 => a,
-                        _ => continue,
-                    };
-                    // Format: [t, ch0avg..ch3avg, ch0min,ch0max,ch1min,ch1max,...]
-                    let t_ms = arr[0].as_f64().unwrap_or(0.0) as u32;
-                    let avg = [
-                        arr[1].as_f64().unwrap_or(0.0) as f32,
-                        arr[2].as_f64().unwrap_or(0.0) as f32,
-                        arr[3].as_f64().unwrap_or(0.0) as f32,
-                        arr[4].as_f64().unwrap_or(0.0) as f32,
-                    ];
-                    let mut min = [0f32; 4];
-                    let mut max = [0f32; 4];
-                    for ch in 0..4 {
-                        min[ch] = arr[5 + ch * 2].as_f64().unwrap_or(0.0) as f32;
-                        max[ch] = arr[5 + ch * 2 + 1].as_f64().unwrap_or(0.0) as f32;
-                    }
-
-                    // Build EVT_SCOPE_DATA-compatible payload (parse_scope_event
-                    // requires >=58 bytes; reads avg at pos 10/22/34/46 in
-                    // 12-byte channel blocks of [avg f32, min f32, max f32]).
-                    let mut payload = Vec::with_capacity(58);
-                    let bucket_seq = first_seq + i as u32;
-                    payload.extend_from_slice(&bucket_seq.to_le_bytes()); // 0..4
-                    payload.extend_from_slice(&t_ms.to_le_bytes()); // 4..8
-                    payload.extend_from_slice(&1u16.to_le_bytes()); // 8..10  count placeholder
-                    for ch in 0..4 {
-                        payload.extend_from_slice(&avg[ch].to_le_bytes()); // pos+0..pos+4
-                        payload.extend_from_slice(&min[ch].to_le_bytes()); // pos+4..pos+8
-                        payload.extend_from_slice(&max[ch].to_le_bytes()); // pos+8..pos+12
-                    }
-                    let _ = app.emit("scope-data", &payload);
+            // Dedicated client with NO overall timeout (SSE is long-lived).
+            let mut builder =
+                Client::builder().connect_timeout(std::time::Duration::from_secs(5));
+            if let Some(tok) = token.as_ref() {
+                if let Ok(val) = reqwest::header::HeaderValue::from_str(tok) {
+                    let mut h = reqwest::header::HeaderMap::new();
+                    h.insert("X-BugBuster-Admin-Token", val);
+                    builder = builder.default_headers(h);
                 }
             }
-            log::info!("scope polling task exited");
+            let client = match builder.build() {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("scope SSE client build failed: {}", e);
+                    polling.store(false, Ordering::Release);
+                    return;
+                }
+            };
+            let url = format!("{}/api/scope/stream", base_url);
+            let mut seq_counter: u32 = 0;
+            log::info!("scope SSE task starting, url={}", url);
+
+            // Reconnect loop: if the stream drops while still requested, retry.
+            while polling.load(Ordering::Acquire) {
+                let mut resp = match client.get(&url).send().await {
+                    Ok(r) if r.status().is_success() => {
+                        log::info!("scope SSE connected ({})", r.status());
+                        r
+                    }
+                    Ok(r) => {
+                        log::warn!("scope SSE HTTP {}", r.status());
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        log::warn!("scope SSE connect failed: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                        continue;
+                    }
+                };
+
+                let mut buf = String::new();
+                loop {
+                    if !polling.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let chunk = match resp.chunk().await {
+                        Ok(Some(c)) => c,
+                        Ok(None) => break, // server closed the stream — reconnect
+                        Err(e) => {
+                            log::warn!("scope SSE read error: {}", e);
+                            break;
+                        }
+                    };
+                    buf.push_str(&String::from_utf8_lossy(&chunk));
+
+                    // SSE frames are delimited by a blank line ("\n\n").
+                    while let Some(idx) = buf.find("\n\n") {
+                        let frame: String = buf.drain(..idx + 2).collect();
+                        for line in frame.lines() {
+                            let Some(data) = line.trim().strip_prefix("data:") else {
+                                continue;
+                            };
+                            let json: Value = match serde_json::from_str(data.trim()) {
+                                Ok(j) => j,
+                                Err(_) => continue,
+                            };
+                            let Some(samples) = json.get("samples").and_then(|v| v.as_array())
+                            else {
+                                continue;
+                            };
+                            for bucket in samples {
+                                let Some(arr) =
+                                    bucket.as_array().filter(|a| a.len() >= 13)
+                                else {
+                                    continue;
+                                };
+                                // [t, ch0avg..ch3avg, ch0min,ch0max,ch1min,ch1max,...]
+                                let t_ms = arr[0].as_f64().unwrap_or(0.0) as u32;
+                                let avg = [
+                                    arr[1].as_f64().unwrap_or(0.0) as f32,
+                                    arr[2].as_f64().unwrap_or(0.0) as f32,
+                                    arr[3].as_f64().unwrap_or(0.0) as f32,
+                                    arr[4].as_f64().unwrap_or(0.0) as f32,
+                                ];
+                                let mut min = [0f32; 4];
+                                let mut max = [0f32; 4];
+                                for ch in 0..4 {
+                                    min[ch] = arr[5 + ch * 2].as_f64().unwrap_or(0.0) as f32;
+                                    max[ch] = arr[5 + ch * 2 + 1].as_f64().unwrap_or(0.0) as f32;
+                                }
+
+                                // EVT_SCOPE_DATA-compatible payload (parse_scope_event
+                                // needs >=58 bytes; avg at pos 10/22/34/46 in 12-byte
+                                // [avg f32, min f32, max f32] blocks).
+                                let mut payload = Vec::with_capacity(58);
+                                payload.extend_from_slice(&seq_counter.to_le_bytes());
+                                seq_counter = seq_counter.wrapping_add(1);
+                                payload.extend_from_slice(&t_ms.to_le_bytes());
+                                payload.extend_from_slice(&1u16.to_le_bytes());
+                                for ch in 0..4 {
+                                    payload.extend_from_slice(&avg[ch].to_le_bytes());
+                                    payload.extend_from_slice(&min[ch].to_le_bytes());
+                                    payload.extend_from_slice(&max[ch].to_le_bytes());
+                                }
+                                let _ = app.emit("scope-data", &payload);
+                                if seq_counter % 50 == 1 {
+                                    log::info!("scope SSE emitted {} buckets", seq_counter);
+                                }
+                            }
+                        }
+                    }
+                    // Defend against a malformed stream that never yields "\n\n".
+                    if buf.len() > 65536 {
+                        buf.clear();
+                    }
+                }
+
+                if polling.load(Ordering::Acquire) {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+            log::info!("scope SSE task exited");
         });
         Ok(())
     }
@@ -330,6 +386,7 @@ impl HttpTransport {
 
     /// Set the admin token for future POST requests.
     pub fn set_admin_token(&mut self, token: &str) -> Result<()> {
+        self.admin_token = Some(token.to_string());
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "X-BugBuster-Admin-Token",
@@ -896,9 +953,13 @@ impl Transport for HttpTransport {
                     // Polynomial fit (firmware /api/idac exposes polyValid + calPoly[4]).
                     // Match USB framing in commands.rs::parse_idac_status.
                     let poly = ch.and_then(|c| c.get("calPoly").and_then(|v| v.as_array()));
+                    // Only trust polyValid when calPoly actually carries 4 coefficients —
+                    // some firmware revisions ship `polyValid:true` with an empty calPoly,
+                    // which would otherwise decode to a 0 V (vMin-clamped) reading.
                     let poly_valid = ch
                         .and_then(|c| c.get("polyValid").and_then(|v| v.as_bool()))
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        && poly.map(|a| a.len() >= 4).unwrap_or(false);
                     pw.put_bool(poly_valid);
                     for j in 0..4 {
                         let v = poly

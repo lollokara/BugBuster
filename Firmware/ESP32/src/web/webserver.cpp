@@ -931,6 +931,7 @@ static esp_err_t handle_get_dac_readback(httpd_req_t *req)
 static esp_err_t handle_post_channel_function(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
     char *resp = api_core_handle("POST", req->uri, body);
     if (body) cJSON_Delete(body);
     if (!resp) return send_error(req, 500, "channel function failed");
@@ -943,6 +944,7 @@ static esp_err_t handle_post_channel_function(httpd_req_t *req)
 static esp_err_t handle_post_dac(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
     char *resp = api_core_handle("POST", req->uri, body);
     if (body) cJSON_Delete(body);
     if (!resp) return send_error(req, 500, "dac failed");
@@ -955,6 +957,7 @@ static esp_err_t handle_post_dac(httpd_req_t *req)
 static esp_err_t handle_post_adc_config(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
     char *resp = api_core_handle("POST", req->uri, body);
     if (body) cJSON_Delete(body);
     if (!resp) return send_error(req, 500, "adc config failed");
@@ -1113,6 +1116,7 @@ static esp_err_t handle_post_do_set(httpd_req_t *req)
 static esp_err_t handle_post_vout_range(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
     char *resp = api_core_handle("POST", req->uri, body);
     if (body) cJSON_Delete(body);
     if (!resp) return send_error(req, 500, "vout range failed");
@@ -1332,6 +1336,7 @@ static esp_err_t handle_post_diag_config(httpd_req_t *req)
 static esp_err_t handle_post_gpio_config(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
     char *resp = api_core_handle("POST", req->uri, body);
     if (body) cJSON_Delete(body);
     if (!resp) return send_error(req, 500, "gpio config failed");
@@ -1344,6 +1349,7 @@ static esp_err_t handle_post_gpio_config(httpd_req_t *req)
 static esp_err_t handle_post_gpio_set(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
     char *resp = api_core_handle("POST", req->uri, body);
     if (body) cJSON_Delete(body);
     if (!resp) return send_error(req, 500, "gpio set failed");
@@ -1384,6 +1390,7 @@ static esp_err_t handle_channel_get_dispatch(httpd_req_t *req)
 static esp_err_t handle_post_rtd_config(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
     char *resp = api_core_handle("POST", req->uri, body);
     if (body) cJSON_Delete(body);
     if (!resp) return send_error(req, 500, "rtd config failed");
@@ -1438,7 +1445,8 @@ static const char* gpio_suffix(const char* uri)
 {
     const char *p = strstr(uri, "/api/gpio/");
     if (!p) return NULL;
-    p += 11; // skip past "/api/gpio/X"
+    p += 10; // skip past "/api/gpio/"
+    while (*p >= '0' && *p <= '9') p++; // skip pin digits (1 or 2)
     if (*p == '/') return p + 1;
     if (*p == '\0') return "";
     return NULL;
@@ -2060,7 +2068,7 @@ static esp_err_t handle_get_idac(httpd_req_t *req)
         bool have_poly = ds4424_cal_fit_cubic(ch, poly);
         cJSON_AddBoolToObject(obj, "polyValid", have_poly);
         cJSON *poly_arr = cJSON_AddArrayToObject(obj, "calPoly");
-        for (int i = 0; i < 4; i++) cJSON_AddNumberToObject(poly_arr, NULL, (double)poly[i]);
+        for (int i = 0; i < 4; i++) cJSON_AddItemToArray(poly_arr, cJSON_CreateNumber((double)poly[i]));
         cJSON_AddItemToArray(channels, obj);
     }
     return send_json(req, root);
@@ -2461,6 +2469,16 @@ static esp_err_t handle_get_hat_v2_rails(httpd_req_t *req)
 {
     char *resp = api_core_handle("GET", "/api/hat/v2/rails", NULL);
     if (!resp) return send_error(req, 500, "hat rails failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// GET /api/hat/calibration[?rail=N] — RP2040 HAT calibration snapshot + points.
+static esp_err_t handle_get_hat_calibration(httpd_req_t *req)
+{
+    char *resp = api_core_handle("GET", req->uri, NULL);
+    if (!resp) return send_error(req, 500, "hat calibration failed");
     esp_err_t rc = send_raw_json(req, resp);
     cJSON_free(resp);
     return rc;
@@ -4696,9 +4714,15 @@ bool initWebServer(void)
     // evict the least-recently-used connection when a new one arrives, so
     // a forgotten tab can't permanently starve other clients.
     config.lru_purge_enable = true;
-    // Keep the default socket budget. Raising this reserves more HTTPD-side
-    // resources during a boot path that is already internal-heap constrained.
-    config.max_open_sockets = 7;
+    // Socket budget. The scope SSE stream holds one socket open for its whole
+    // lifetime; the desktop app simultaneously polls status/overview/hat/rails.
+    // At the ESP-IDF default of 7 those concurrent polls overflow the budget and
+    // lru_purge_enable evicts the (briefly idle) SSE connection — the firmware
+    // logs `httpd_sock_err send : 104`, scope mode exits, and the client must
+    // reconnect, which stalls the scope. CONFIG_LWIP_MAX_SOCKETS is raised to 16
+    // in sdkconfig.defaults precisely to allow this; 10 gives the SSE headroom
+    // alongside the REST poll connections while leaving margin for mDNS/etc.
+    config.max_open_sockets = 10;
 
     // M06: start into a local, then publish under the mux so concurrent readers
     // always see either NULL or a fully-started handle, never a partial write.
@@ -4975,6 +4999,11 @@ bool initWebServer(void)
         .uri = "/api/hat/v2/rails", .method = HTTP_GET, .handler = handle_get_hat_v2_rails, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_v2_rails);
+
+    httpd_uri_t uri_hat_calibration = {
+        .uri = "/api/hat/calibration", .method = HTTP_GET, .handler = handle_get_hat_calibration, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hat_calibration);
 
     httpd_uri_t uri_hat_v2_rail_enable = {
         .uri = "/api/hat/v2/rail/enable", .method = HTTP_POST, .handler = handle_post_hat_v2_rail_enable, .user_ctx = NULL

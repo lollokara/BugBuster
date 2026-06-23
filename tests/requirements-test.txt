@@ -5,6 +5,7 @@ pytest-xdist>=3.5
 pytest-json-report>=1.5
 rich>=13.0
 pyserial>=3.5
+pyusb>=1.2
 requests>=2.31
 ipykernel>=6.0
 ipywidgets>=8.0

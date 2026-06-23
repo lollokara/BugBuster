@@ -200,6 +200,7 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_FW_CHUNK         0x4A
 #define HAT_CMD_FW_COMMIT        0x4B
 #define HAT_CMD_FW_STATUS        0x4C
+#define HAT_CMD_CALIBRATE_EXPORT 0x4D  // Read back stored cal points (paginated)
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -213,6 +214,7 @@ typedef struct __attribute__((packed)) {
 #define HAT_RSP_RAIL_STATUS     0x88
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 #define HAT_RSP_CALIBRATE_STATUS 0x8A
+#define HAT_RSP_CALIBRATE_EXPORT 0x8B  // Paginated stored cal points
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
@@ -443,6 +445,13 @@ bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
                           int32_t *max_mv, int32_t *max_gap_mv,
                           int32_t *max_error_mv, uint16_t *validation_flags);
 bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_data, size_t data_len);
+// Read back one page of stored cal points for a rail (paginated; the HAT frame
+// caps a response at 255 bytes). On success: *out_total = total points stored,
+// *out_valid = cal-valid flag, *out_returned = points in THIS page; codes_out/
+// volts_out receive up to max_out points. Advance `start` by *out_returned.
+bool hat_calibrate_export(uint8_t rail_id, uint8_t start,
+                          uint8_t *out_total, bool *out_valid, uint8_t *out_returned,
+                          int8_t *codes_out, float *volts_out, uint8_t max_out);
 bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals);
 bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out);
 bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv);

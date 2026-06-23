@@ -1421,6 +1421,44 @@ void handle_calibrate_import(const uint8_t *payload, uint8_t len)
               rail_id, count, queued ? "queued" : "queue-failed");
 }
 
+// Read back the stored cal points for a rail. Paginated because a full table
+// (up to DS4424_CAL_MAX_POINTS points x 5 bytes) far exceeds the 255-byte
+// send_response() frame. Request: [rail_id, start_index]. Response:
+// [rail_id, total_count, valid, returned_count] + returned_count x (int8 code,
+// f32 measured_v). The host advances start_index by returned_count until it has
+// gathered total_count points.
+void handle_calibrate_export(const uint8_t *payload, uint8_t len)
+{
+    if (len < 1) { send_error(HAT_ERR_FRAME); return; }
+    uint8_t rail_id = payload[0];
+    uint8_t start   = (len >= 2) ? payload[1] : 0;
+    if (rail_id >= 3) { send_error(HAT_ERR_INVALID_PIN); return; }
+
+    const DS4424CalData *cal = &s_flash_cal.cal[rail_id];
+    uint8_t total = cal->count;
+
+    // The HAT UART frame payload is capped at HAT_FRAME_MAX_LEN (32 bytes) on
+    // both MCUs. Header is 4 bytes, each point is 5 bytes (int8 code + f32 V),
+    // so at most (32-4)/5 = 5 points fit per frame. The host re-requests with
+    // an advancing start index until it has gathered `total` points.
+    const uint8_t MAX_CHUNK = 5;
+    uint8_t avail = (start < total) ? (uint8_t)(total - start) : 0;
+    uint8_t n = (avail > MAX_CHUNK) ? MAX_CHUNK : avail;
+
+    uint8_t rsp[4 + MAX_CHUNK * 5];  // 29 bytes, within the 32-byte frame cap
+    rsp[0] = rail_id;
+    rsp[1] = total;
+    rsp[2] = cal->valid ? 1 : 0;
+    rsp[3] = n;
+    size_t pos = 4;
+    for (uint8_t i = 0; i < n; i++) {
+        rsp[pos++] = (uint8_t)cal->points[start + i].dac_code;
+        memcpy(&rsp[pos], &cal->points[start + i].measured_v, 4);
+        pos += 4;
+    }
+    send_response(HAT_RSP_CALIBRATE_EXPORT, rsp, (uint8_t)pos);
+}
+
 void handle_set_io_bank(const uint8_t *payload, uint8_t len)
 {
     if (len < 3) { send_error(HAT_ERR_FRAME); return; }

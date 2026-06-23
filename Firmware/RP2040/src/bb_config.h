@@ -179,6 +179,7 @@
 #define HAT_CMD_FW_CHUNK        0x4A
 #define HAT_CMD_FW_COMMIT       0x4B
 #define HAT_CMD_FW_STATUS       0x4C
+#define HAT_CMD_CALIBRATE_EXPORT 0x4D  // Read back stored cal points (paginated)
 
 // Responses
 #define HAT_RSP_OK              0x80
@@ -192,6 +193,7 @@
 #define HAT_RSP_RAIL_STATUS     0x88
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 #define HAT_RSP_CALIBRATE_STATUS 0x8A
+#define HAT_RSP_CALIBRATE_EXPORT 0x8B  // Paginated stored cal points
 
 
 // Error codes

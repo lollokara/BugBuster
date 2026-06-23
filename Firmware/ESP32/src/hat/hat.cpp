@@ -1430,6 +1430,41 @@ bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_
     return cmd == HAT_RSP_OK;
 }
 
+bool hat_calibrate_export(uint8_t rail_id, uint8_t start,
+                          uint8_t *out_total, bool *out_valid, uint8_t *out_returned,
+                          int8_t *codes_out, float *volts_out, uint8_t max_out)
+{
+    if (!s_state.connected) return false;
+    uint8_t payload[2] = { rail_id, start };
+    uint8_t rsp[4 + 48 * 5] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_CALIBRATE_EXPORT, payload, sizeof(payload),
+                              rsp, &rsp_len, 500, sizeof(rsp));
+    if (cmd != HAT_RSP_CALIBRATE_EXPORT || rsp_len < 4) return false;
+
+    uint8_t total = rsp[1];
+    bool    valid = rsp[2] != 0;
+    uint8_t n     = rsp[3];
+    if ((size_t)4 + (size_t)n * 5 > rsp_len) return false;
+
+    if (out_total)    *out_total    = total;
+    if (out_valid)    *out_valid    = valid;
+    if (out_returned) *out_returned = n;
+
+    size_t pos = 4;
+    for (uint8_t i = 0; i < n; i++) {
+        int8_t code = (int8_t)rsp[pos++];
+        float v = 0.0f;
+        memcpy(&v, &rsp[pos], 4);
+        pos += 4;
+        if (i < max_out) {
+            if (codes_out) codes_out[i] = code;
+            if (volts_out) volts_out[i] = v;
+        }
+    }
+    return true;
+}
+
 bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals)
 {
     if (!s_state.connected) return false;

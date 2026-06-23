@@ -63,6 +63,9 @@ static volatile bool s_wifi_busy  = false;
 
 // API tunnel response notify handle.
 static uint16_t s_apiresp_val_handle = 0;
+// API tunnel request is dispatched off the NimBLE host task (see api_req_task).
+static char s_api_req_buf[256];
+static volatile bool s_api_busy = false;
 
 // A control write/read is only honoured once the central has presented a valid
 // admin token on this connection.
@@ -378,22 +381,68 @@ static void ble_api_send_response(uint8_t req_id, const char *json, int len)
         bool last = (off + n >= len);
         uint8_t hdr[3] = { req_id, seq, (uint8_t)(last ? 0x01 : 0x00) };
 
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(hdr, sizeof(hdr));
-        if (om == NULL) return;
-        if (n > 0 && os_mbuf_append(om, json + off, n) != 0) {
-            os_mbuf_free_chain(om);
-            return;
-        }
-        if (ble_gatts_notify_custom(s_conn_handle, s_apiresp_val_handle, om) != 0) {
-            return;  // central likely not subscribed / disconnected
+        // Backpressure: NimBLE has a finite mbuf/ACL pool. A large multi-frame
+        // response can momentarily exhaust it; retry the same frame after a
+        // short yield rather than dropping the tail (which truncates the JSON
+        // and breaks the client decode). Safe because this runs on a worker
+        // task, not the host task, so the delay lets TX drain.
+        int attempts = 0;
+        for (;;) {
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(hdr, sizeof(hdr));
+            if (om != NULL && n > 0 && os_mbuf_append(om, json + off, n) != 0) {
+                os_mbuf_free_chain(om);
+                om = NULL;
+            }
+            // ble_gatts_notify_custom takes ownership of om (frees it even on
+            // error), so each attempt allocates a fresh mbuf.
+            int rc = (om != NULL)
+                         ? ble_gatts_notify_custom(s_conn_handle, s_apiresp_val_handle, om)
+                         : BLE_HS_ENOMEM;
+            if (rc == 0) {
+                break;  // frame queued for TX
+            }
+            if (++attempts > 100) {
+                return;  // ~1 s of backpressure — give up, link is wedged
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+            if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+                return;  // disconnected mid-stream
+            }
         }
         off += n;
         seq++;
     } while (off < len);
 }
 
-// API request (write): {"id":N,"path":"/api/...","body":{...}}. Dispatches to
-// ble_api and streams the JSON response over the API response characteristic.
+// API request worker. Runs OFF the NimBLE host task because api_core_handle()
+// touches I2C/SPI and the response is streamed as many MTU-sized notify frames;
+// doing either inline on the host task starves notify TX (the mbuf pool fills
+// and large responses like /api/status get truncated).
+static void api_req_task(void *arg)
+{
+    (void)arg;
+    cJSON *root = cJSON_Parse(s_api_req_buf);
+    if (root != NULL) {
+        cJSON *jid   = cJSON_GetObjectItem(root, "id");
+        cJSON *jpath = cJSON_GetObjectItem(root, "path");
+        cJSON *jbody = cJSON_GetObjectItem(root, "body");  // may be NULL
+        uint8_t req_id = cJSON_IsNumber(jid) ? (uint8_t)jid->valueint : 0;
+        const char *path = cJSON_IsString(jpath) ? jpath->valuestring : NULL;
+
+        char *resp = api_core_handle(NULL, path, jbody);
+        if (resp != NULL) {
+            ble_api_send_response(req_id, resp, (int)strlen(resp));
+            cJSON_free(resp);
+        }
+        cJSON_Delete(root);
+    }
+    s_api_busy = false;
+    vTaskDelete(NULL);
+}
+
+// API request (write): {"id":N,"path":"/api/...","body":{...}}. Copies the
+// request and hands it to api_req_task; the JSON response is streamed back over
+// the API response notify characteristic.
 static int chr_apireq_access(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -404,27 +453,18 @@ static int chr_apireq_access(uint16_t conn_handle, uint16_t attr_handle,
     if (!ble_conn_authed(conn_handle)) {
         return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
     }
-
-    char buf[256];
-    if (ble_write_to_buf(ctxt, buf, sizeof(buf)) < 0) {
+    if (s_api_busy) {
+        return BLE_ATT_ERR_UNLIKELY;  // a request is already in flight
+    }
+    if (ble_write_to_buf(ctxt, s_api_req_buf, sizeof(s_api_req_buf)) < 0) {
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     }
-    cJSON *root = cJSON_Parse(buf);
-    if (root == NULL) {
-        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    }
-    cJSON *jid   = cJSON_GetObjectItem(root, "id");
-    cJSON *jpath = cJSON_GetObjectItem(root, "path");
-    uint8_t req_id = cJSON_IsNumber(jid) ? (uint8_t)jid->valueint : 0;
-    const char *path = cJSON_IsString(jpath) ? jpath->valuestring : NULL;
-    cJSON *jbody = cJSON_GetObjectItem(root, "body");  // may be NULL
 
-    char *resp = api_core_handle(NULL, path, jbody);
-    if (resp != NULL) {
-        ble_api_send_response(req_id, resp, (int)strlen(resp));
-        cJSON_free(resp);
+    s_api_busy = true;
+    if (xTaskCreate(api_req_task, "ble_api", 8192, NULL, 5, NULL) != pdPASS) {
+        s_api_busy = false;
+        return BLE_ATT_ERR_UNLIKELY;
     }
-    cJSON_Delete(root);
     return 0;
 }
 

@@ -19,6 +19,7 @@ void handle_la_set_route(const uint8_t *payload, uint8_t len);
 void handle_calibrate_start(const uint8_t *payload, uint8_t len);
 void handle_calibrate_status(void);
 void handle_calibrate_import(const uint8_t *payload, uint8_t len);
+void handle_calibrate_export(const uint8_t *payload, uint8_t len);
 void handle_set_io_bank(const uint8_t *payload, uint8_t len);
 void handle_set_level_shift(const uint8_t *payload, uint8_t len);
 void handle_set_rail_voltage(const uint8_t *payload, uint8_t len);
