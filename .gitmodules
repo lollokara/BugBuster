@@ -3,7 +3,8 @@
 	url = https://github.com/raspberrypi/pico-sdk.git
 [submodule "Firmware/RP2040/lib/debugprobe"]
 	path = Firmware/RP2040/lib/debugprobe
-	url = https://github.com/raspberrypi/debugprobe.git
+	url = https://github.com/lollokara/debugprobe.git
+	branch = bugbuster
 [submodule "Firmware/RP2040/lib/tinyusb"]
 	path = Firmware/RP2040/lib/tinyusb
 	url = https://github.com/lollokara/tinyusb.git
