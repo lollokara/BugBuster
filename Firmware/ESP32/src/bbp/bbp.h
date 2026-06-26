@@ -196,6 +196,8 @@ extern "C" {
 #define BBP_CMD_HAT_LA_SET_ROUTE    0xD4
 #define BBP_CMD_HAT_LA_STOP         0xD9  // Stop capture
 #define BBP_CMD_HAT_LA_TRIGGER      0xDA  // Set trigger condition
+// HAT — SWD target detection
+#define BBP_CMD_HAT_DETECT_TARGET   0xDB  // Actively probe SWD DPIDR (target detect)
 
 // HUSB238 USB PD
 #define BBP_CMD_USBPD_GET_STATUS    0xC0  // Get USB PD contract status

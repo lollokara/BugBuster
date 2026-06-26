@@ -61,6 +61,7 @@ def test_hat_get_rail_status():
     payload += struct.pack('<H', 3300)       # voltage_mv = 3300
     payload += struct.pack('<H', 150)        # current_ma = 150
     payload.append(0)                        # status = 0
+    payload += struct.pack('<H', 3300)       # target_mv = 3300
     
     # Rail 1: VADJ3
     payload.append(1)                        # rail_id = 1 (VADJ3)
@@ -68,6 +69,7 @@ def test_hat_get_rail_status():
     payload += struct.pack('<H', 0)          # voltage_mv = 0
     payload += struct.pack('<H', 0)          # current_ma = 0
     payload.append(0)                        # status = 0
+    payload += struct.pack('<H', 12000)      # target_mv = 12000
     
     # Rail 2: VADJ4
     payload.append(2)                        # rail_id = 2 (VADJ4)
@@ -75,6 +77,7 @@ def test_hat_get_rail_status():
     payload += struct.pack('<H', 5000)       # voltage_mv = 5000
     payload += struct.pack('<H', 200)        # current_ma = 200
     payload.append(0)                        # status = 0
+    payload += struct.pack('<H', 5000)       # target_mv = 5000
 
     client = BugBuster(_make_usb_transport({
         CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
@@ -89,18 +92,21 @@ def test_hat_get_rail_status():
     assert result["rails"][0]["enabled"] is True
     assert result["rails"][0]["voltage_mv"] == 3300
     assert result["rails"][0]["current_ma"] == 150
+    assert result["rails"][0]["target_mv"] == 3300
 
     assert result["rails"][1]["rail_id"] == 1
     assert result["rails"][1]["enabled"] is False
+    assert result["rails"][1]["target_mv"] == 12000
 
     assert result["rails"][2]["rail_id"] == 2
     assert result["rails"][2]["enabled"] is True
     assert result["rails"][2]["voltage_mv"] == 5000
     assert result["rails"][2]["current_ma"] == 200
+    assert result["rails"][2]["target_mv"] == 5000
 
 
 def test_hat_set_rail_enable():
-    get_payload = bytearray([1, 1, 1]) + struct.pack('<H', 3300) + struct.pack('<H', 100) + bytes([0])
+    get_payload = bytearray([1, 1, 1]) + struct.pack('<H', 3300) + struct.pack('<H', 100) + bytes([0]) + struct.pack('<H', 3300)
     
     usb_mock = _make_usb_transport({
         CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
@@ -117,6 +123,17 @@ def test_hat_set_rail_enable():
     )
     assert result["count"] == 1
     assert result["rails"][0]["enabled"] is True
+
+
+def test_hat_detect_target():
+    resp = struct.pack('<BI', 1, 0x2BA01477)
+    client = BugBuster(_make_usb_transport({
+        CmdId.HAT_GET_STATUS: _hat_status_payload(detected=True),
+        CmdId.HAT_DETECT_TARGET: resp,
+    }))
+    result = client.hat_detect_target()
+    assert result["detected"] is True
+    assert result["dpidr"] == 0x2BA01477
 
 
 def test_hat_set_led_state():

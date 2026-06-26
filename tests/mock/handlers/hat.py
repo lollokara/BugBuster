@@ -39,9 +39,9 @@ def _ensure_hat_state(device) -> None:
         device.hat_led_states = [[0, 0, 0, 0] for _ in range(8)]
     if not hasattr(device, "hat_rails"):
         device.hat_rails = [
-            {"rail_id": 0, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0},
-            {"rail_id": 1, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0},
-            {"rail_id": 2, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0},
+            {"rail_id": 0, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0, "target_mv": 3300},
+            {"rail_id": 1, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0, "target_mv": 12000},
+            {"rail_id": 2, "enabled": False, "voltage_mv": 0, "current_ma": 0, "status": 0, "target_mv": 12000},
         ]
     if not hasattr(device, "hat_cal_state"):
         device.hat_cal_state = 0
@@ -90,6 +90,7 @@ def register(device) -> None:
     device.register_handler(CmdId.HAT_GET_POWER,    _hat_get_power(device))
     device.register_handler(CmdId.HAT_SET_IO_VOLT,  _hat_set_io_volt(device))
     device.register_handler(CmdId.HAT_SETUP_SWD,    _hat_setup_swd(device))
+    device.register_handler(CmdId.HAT_DETECT_TARGET, _hat_detect_target(device))
 
     # LA handlers
     device.register_handler(CmdId.HAT_LA_CONFIG,  _hat_la_config(device))
@@ -269,6 +270,22 @@ def _hat_setup_swd(device):
 
 
 # ---------------------------------------------------------------------------
+# HAT_DETECT_TARGET (0xDB)
+# resp: detected(B), dpidr(I). Simulated: a target is "present" once VADJ4 and
+# the level-shifter OE are enabled (mirrors a real SWD bring-up).
+# ---------------------------------------------------------------------------
+
+def _hat_detect_target(device):
+    def handler(payload: bytes) -> bytes:
+        oe = device.hat_level_shift.get('oe', False)
+        vadj4_on = device.hat_rails[2]['enabled'] if len(device.hat_rails) > 2 else False
+        detected = bool(oe and vadj4_on)
+        dpidr = 0x2BA01477 if detected else 0
+        return struct.pack('<BI', int(detected), dpidr)
+    return handler
+
+
+# ---------------------------------------------------------------------------
 # HAT LA handlers
 # ---------------------------------------------------------------------------
 
@@ -389,12 +406,13 @@ def _hat_get_rail_status(device):
         rails = device.hat_rails
         result = struct.pack('B', len(rails))
         for i, rail in enumerate(rails):
-            result += struct.pack('<BBHHB',
+            result += struct.pack('<BBHHBH',
                 i,
                 1 if rail['enabled'] else 0,
                 rail['voltage_mv'],
                 rail['current_ma'],
                 rail['status'],
+                rail.get('target_mv', rail['voltage_mv']),
             )
         return result
     return handler
@@ -435,6 +453,7 @@ def _hat_set_rail_voltage(device):
         if rail_id >= len(device.hat_rails):
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
         device.hat_rails[rail_id]['voltage_mv'] = voltage_mv
+        device.hat_rails[rail_id]['target_mv'] = voltage_mv
         if device.hat_rails[rail_id]['enabled']:
             device.hat_rails[rail_id]['current_ma'] = 150 if rail_id == 0 else 100
         return _hat_get_rail_status(device)(b"")

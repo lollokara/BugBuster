@@ -1719,11 +1719,16 @@ impl Transport for HttpTransport {
                     let current_ma =
                         rail.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                     let status = rail.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    let target_mv = rail
+                        .get("targetVoltageMv")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(voltage_mv as u64) as u16;
                     buf.push(rail_id);
                     buf.push(enabled as u8);
                     buf.extend_from_slice(&voltage_mv.to_le_bytes());
                     buf.extend_from_slice(&current_ma.to_le_bytes());
                     buf.push(status);
+                    buf.extend_from_slice(&target_mv.to_le_bytes());
                 }
                 Ok(buf)
             }
@@ -1751,12 +1756,17 @@ impl Transport for HttpTransport {
                 let r_voltage_mv = j.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                 let r_current_ma = j.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                 let r_status = j.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let r_target_mv = j
+                    .get("targetVoltageMv")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(r_voltage_mv as u64) as u16;
                 let mut buf = vec![1u8]; // count = 1
                 buf.push(r_rail_id);
                 buf.push(r_enabled as u8);
                 buf.extend_from_slice(&r_voltage_mv.to_le_bytes());
                 buf.extend_from_slice(&r_current_ma.to_le_bytes());
                 buf.push(r_status);
+                buf.extend_from_slice(&r_target_mv.to_le_bytes());
                 Ok(buf)
             }
 
@@ -1783,12 +1793,17 @@ impl Transport for HttpTransport {
                 let r_voltage_mv = j.get("voltageMv").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                 let r_current_ma = j.get("currentMa").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
                 let r_status = j.get("status").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let r_target_mv = j
+                    .get("targetVoltageMv")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(voltage_mv as u64) as u16;
                 let mut buf = vec![1u8]; // count = 1
                 buf.push(r_rail_id);
                 buf.push(r_enabled as u8);
                 buf.extend_from_slice(&r_voltage_mv.to_le_bytes());
                 buf.extend_from_slice(&r_current_ma.to_le_bytes());
                 buf.push(r_status);
+                buf.extend_from_slice(&r_target_mv.to_le_bytes());
                 Ok(buf)
             }
 
@@ -1947,6 +1962,17 @@ impl Transport for HttpTransport {
                 )
                 .await?;
                 Ok(vec![])
+            }
+
+            bbp::CMD_HAT_DETECT_TARGET => {
+                let j = self
+                    .post_json("/api/hat/v2/swd/detect", &serde_json::json!({}))
+                    .await?;
+                let detected = j.get("detected").and_then(|v| v.as_bool()).unwrap_or(false);
+                let dpidr = j.get("dpidr").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let mut buf = vec![detected as u8];
+                buf.extend_from_slice(&dpidr.to_le_bytes());
+                Ok(buf)
             }
 
             bbp::CMD_HAT_SET_LED_STATE => {

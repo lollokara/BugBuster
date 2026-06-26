@@ -1625,6 +1625,25 @@ bool hat_get_dap_status(void)
     return false;
 }
 
+bool hat_detect_target(void)
+{
+    if (!s_state.connected) return false;
+
+    // HAT_CMD_GET_TARGET_INFO actively performs the SWD line-reset + DPIDR read
+    // on the RP2040 and replies HAT_RSP_OK with [target_detected(1), dpidr(4)].
+    uint8_t rsp[8] = {};
+    uint8_t rsp_len = 0;
+
+    uint8_t cmd = hat_command(HAT_CMD_GET_TARGET_INFO, NULL, 0, rsp, &rsp_len, 300, sizeof(rsp));
+    if (cmd == HAT_RSP_OK && rsp_len >= 5) {
+        s_state.target_detected = rsp[0] != 0;
+        memcpy(&s_state.target_dpidr, &rsp[1], 4);
+        hat_update_leds();
+        return true;
+    }
+    return false;
+}
+
 bool hat_set_swd_clock(uint16_t khz)
 {
     if (!s_state.connected) return false;

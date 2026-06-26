@@ -521,6 +521,14 @@ bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector);
 bool hat_get_dap_status(void);
 
 /**
+ * @brief Actively probe the SWD target (line reset + DPIDR read) and cache the
+ *        result in HatState (target_detected, target_dpidr).
+ * @return true if the HAT responded (check HatState.target_detected for the
+ *         actual presence of a target).
+ */
+bool hat_detect_target(void);
+
+/**
  * @brief Set SWD clock speed on the HAT debugprobe.
  * @param khz  Clock speed in kHz (100–50000)
  * @return true if HAT acknowledged

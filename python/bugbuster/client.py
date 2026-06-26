@@ -2572,6 +2572,7 @@ class BugBuster:
                     "voltage_mv": r.get("voltageMv", 0),
                     "current_ma": r.get("currentMa", 0),
                     "status": r.get("status", 0),
+                    "target_mv": r.get("targetVoltageMv", r.get("voltageMv", 0)),
                 }
                 for i, r in enumerate(j.get("rails", []))
             ]
@@ -2583,18 +2584,20 @@ class BugBuster:
         count = resp[off]; off += 1
         rails = []
         for _ in range(count):
-            _require_resp_len(resp[off:], 7, "HAT_GET_RAIL_STATUS rail")
+            _require_resp_len(resp[off:], 9, "HAT_GET_RAIL_STATUS rail")
             rail_id = resp[off]; off += 1
             enabled = bool(resp[off]); off += 1
             voltage_mv = struct.unpack_from('<H', resp, off)[0]; off += 2
             current_ma = struct.unpack_from('<H', resp, off)[0]; off += 2
             status = resp[off]; off += 1
+            target_mv = struct.unpack_from('<H', resp, off)[0]; off += 2
             rails.append({
                 "rail_id": rail_id,
                 "enabled": enabled,
                 "voltage_mv": voltage_mv,
                 "current_ma": current_ma,
                 "status": status,
+                "target_mv": target_mv,
             })
         return {"count": count, "rails": rails}
 
@@ -2669,6 +2672,28 @@ class BugBuster:
                 "targetVoltageMv": target_voltage_mv,
                 "connector": connector,
             }).get("ok", False)
+
+    def hat_detect_target(self) -> dict:
+        """Actively probe the SWD target (line reset + DPIDR read).
+
+        Enable the target rail (VADJ4), VLOGIC, and the level-shifter OE first.
+
+        :return: ``{"detected": bool, "dpidr": int}``.
+        :raises HatNotPresentError: If no HAT is detected on this device.
+        """
+        self._require_hat_present()
+        if self._usb:
+            resp = self._usb_cmd(CmdId.HAT_DETECT_TARGET)
+            _require_resp_len(resp, 5, "HAT_DETECT_TARGET")
+            detected = bool(resp[0])
+            dpidr = struct.unpack_from('<I', resp, 1)[0]
+            return {"detected": detected, "dpidr": dpidr}
+        else:
+            j = self._http_post("/hat/v2/swd/detect", {})
+            return {
+                "detected": bool(j.get("detected", False)),
+                "dpidr": int(j.get("dpidr", 0)),
+            }
 
     # ------------------------------------------------------------------
     # ── HAT Logic Analyzer ───────────────────────────────────────────

@@ -291,6 +291,7 @@ static int handler_hat_get_rail_status(const uint8_t *payload, size_t len,
         bbp_put_u16(resp, &pos, rails[i].voltage_mv);
         bbp_put_u16(resp, &pos, rails[i].current_ma);
         bbp_put_u8(resp, &pos, rails[i].status);
+        bbp_put_u16(resp, &pos, rails[i].target_mv);
     }
     *resp_len = pos;
     return (int)pos;
@@ -497,6 +498,28 @@ static int handler_hat_setup_swd(const uint8_t *payload, size_t len,
     bbp_put_bool(resp, &pos, true);
     bbp_put_u16(resp, &pos, voltage_mv);
     bbp_put_u8(resp, &pos, conn);
+    *resp_len = pos;
+    return (int)pos;
+}
+
+// ---------------------------------------------------------------------------
+// HAT_DETECT_TARGET  payload: (none)
+// resp: bool detected, u32 dpidr
+// Actively probes the SWD line (line reset + DPIDR read on the RP2040) and
+// returns the result. Requires the target rail, VLOGIC, and level-shifter OE
+// to be enabled by the caller first.
+// ---------------------------------------------------------------------------
+static int handler_hat_detect_target(const uint8_t *payload, size_t len,
+                                     uint8_t *resp, size_t *resp_len)
+{
+    (void)payload; (void)len;
+
+    if (!hat_detect_target()) return -CMD_ERR_TIMEOUT;
+
+    const HatState *hs = hat_get_state();
+    size_t pos = 0;
+    bbp_put_bool(resp, &pos, hs->target_detected);
+    bbp_put_u32(resp, &pos, hs->target_dpidr);
     *resp_len = pos;
     return (int)pos;
 }
@@ -764,6 +787,11 @@ static const ArgSpec s_hat_setup_swd_rsp[] = {
     { "conn",       ARG_U8,   true, 0, 0 },
 };
 
+static const ArgSpec s_hat_detect_target_rsp[] = {
+    { "detected", ARG_BOOL, true, 0, 0 },
+    { "dpidr",    ARG_U32,  true, 0, 0 },
+};
+
 static const ArgSpec s_hat_la_config_args[] = {
     { "channels", ARG_U8,  true, 0, 255 },
     { "rate_hz",  ARG_U32, true, 0, 0 },
@@ -858,6 +886,8 @@ static const CmdDescriptor s_hat_cmds[] = {
       s_hat_set_led_state_args, 2, NULL,                  0, handler_hat_set_led_state,         0                   },
     { BBP_CMD_HAT_SETUP_SWD,             "hat_setup_swd",
       s_hat_setup_swd_args,    2, s_hat_setup_swd_rsp,   3, handler_hat_setup_swd,             0                   },
+    { BBP_CMD_HAT_DETECT_TARGET,         "hat_detect_target",
+      NULL,                    0, s_hat_detect_target_rsp, 2, handler_hat_detect_target,       CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_LA_CONFIG,             "hat_la_config",
       s_hat_la_config_args,    3, s_hat_la_config_rsp,   3, handler_hat_la_config,             0                   },
     { BBP_CMD_HAT_LA_ARM,                "hat_la_arm",

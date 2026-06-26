@@ -148,6 +148,7 @@ pub const CMD_HAT_SET_POWER: u8 = 0xCA;
 pub const CMD_HAT_GET_POWER: u8 = 0xCB;
 pub const CMD_HAT_SET_IO_VOLTAGE: u8 = 0xCC;
 pub const CMD_HAT_SETUP_SWD: u8 = 0xCD;
+pub const CMD_HAT_DETECT_TARGET: u8 = 0xDB;
 // HAT Logic Analyzer
 pub const CMD_HAT_LA_CONFIG: u8 = 0xCF;
 pub const CMD_HAT_SET_RAIL_ENABLE: u8 = 0xD2;

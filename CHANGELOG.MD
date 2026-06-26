@@ -3,6 +3,47 @@
 ## [Unreleased]
 
 ### Added
+- **Desktop HAT tab — professional refactor of target power & SWD bring-up.** The HAT tab now
+  exposes direct per-rail control for **VLOGIC** (level-shifter reference, 1.7–5.0 V), **VADJ3**
+  and **VADJ4** (0–36 V target supplies) — each with a voltage entry box, an **Apply** button with
+  a live preview of the pending setpoint, and a discrete **Enable** toggle. Enabling VADJ3 or VADJ4
+  above **3.4 V** now pops a confirmation dialog warning that the level can damage a 3.3 V target.
+  A new **SWD Target** panel actively probes the target and shows the **DPIDR**, plus one-click
+  "Prep 3.3 V / 1.8 V" helpers that set VADJ4 + VLOGIC, enable the level-shifter OE, and run
+  detection in sequence (this replaces the old "Setup 3.3 V" buttons that only set I/O voltage and
+  connector power and never actually connected SWD). Rail voltage control stays available in the
+  Voltages tab as before.
+- **Active SWD target detection across the stack.** New BBP command **`HAT_DETECT_TARGET` (0xDB)**
+  forwards to the RP2040's `HAT_CMD_GET_TARGET_INFO (0x21)` to perform a live SWD line-reset + DPIDR
+  read and returns `{detected, dpidr}`. Wired end-to-end: ESP32 `hat_detect_target()` +
+  `POST /api/hat/v2/swd/detect` (HTTP/BLE via `api_core`), Python `BugBuster.hat_detect_target()`,
+  and desktop `hat_detect_target` Tauri command. Previously the desktop only read *cached* DAP
+  status, which was never refreshed, so a connected target always showed as "No target".
+- **HAT rail setpoint (`target_mv`) exposed to hosts.** `hat_get_rail_status` /
+  `hat_set_rail_enable` / `hat_set_rail_voltage` responses now carry the DS4424 configured setpoint
+  per rail (9 bytes/rail on the wire; `targetVoltageMv` over HTTP/BLE), so the UI can show the
+  requested VADJ voltage even while a rail is disabled. The RP2040 already sent this field; the
+  ESP32 BBP handler was dropping it before forwarding to the host.
+
+### Fixed
+- **SWD "Detect Target" reported no target on working parts (e.g. STM32F4).** The RP2040's
+  `bb_swd_detect_target()` hand-rolled the SWD line-reset + DPIDR read with raw
+  `probe_write_bits`/`probe_read_bits` and mishandled the SWD turnaround, so it returned "No target"
+  even for parts that program fine over OpenOCD. It now drives the **CMSIS-DAP SWD engine**
+  (`SWJ_Sequence` + `SWD_Transfer` from `sw_dp_pio.c`) — the same proven path OpenOCD/pyOCD use —
+  performing a proper line-reset/JTAG-to-SWD switch and reading DPIDR with retries. (Requires
+  reflashing the RP2040 HAT firmware.)
+- **Desktop LA / HAT tabs hidden even with a HAT connected, and "Prep SWD" freezing the UI.**
+  HAT detection in `app.rs` probed the device exactly once when the connection came up; because the
+  ESP32↔RP2040 HAT handshake lags the host connection by a second or two, that single probe often
+  missed the HAT and latched `HatKind::None` for the whole session, hiding the **Logic Analyzer**
+  and **HAT** tabs. Detection now retries every 3 s using the lightweight `detected` status and
+  **latches** once a HAT is found (it then stops issuing detection commands). The earlier interim
+  fix polled `hat_get_caps` continuously, which flooded the single-client BBP/CDC0 link with
+  `0xC3` timeouts (`0x11`) and, combined with the SWD bring-up sequence, stalled the UI — that flood
+  is removed. The **Prep 3.3/1.8 V** helper now awaits each step in order (so commands don't pile
+  onto the HAT-UART bridge), only enables the level-shifter **OE** if VLOGIC actually came up
+  (avoids the `0x03 INVALID_PARAM` OE rejection), and drops redundant post-detect round-trips.
 - **DAQ HAT display firmware — full diagnostics deep-dive (ESP32-C6 + C3).** `Firmware/DAQ_HAT/ESP32C6/` now has a full 5-submenu diagnostics system: Temperatures (die temps from all 4 ADAQ7769-1 pairs, ESP32-P4 tsens, C6 tsens), Power (VADJ, USB-PD bus), Power Rails (VREF, 5 V, 3.3 V sense), ESP32-P4 (P4 die temps, SPI activity), ESP32-C6 (C6 tsens, UART DDP stats). A sparkline detail view (`menu_detail_view()`) shows a 130-sample history for any selected metric. P4→S3 telemetry relay added: new HAT command `HAT_CMD_DAQ_TELEMETRY 0x5A` (`hat.h/hat.cpp` in S3 mainboard firmware) lets P4 push its diagnostics blob to S3, which then forwards it to C6 via DDP `DDP_CMD_SET_DIAGNOSTICS 0x14` (expanded `ddp_diag_t` struct). USB-JTAG set as primary console on both C6 and C3 (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` in `sdkconfig.defaults`; frozen per-chip sdkconfig files deleted and regenerated). **ESP32-C3 test board compatibility:** three hardware incompatibilities fixed — (1) `DAQ_UART_TX/RX_PIN = -1` in `config.h` (GPIO16 = `SPIHD`, GPIO17 = `VDD_SPI` on C3 are QSPI flash hold lines; any `uart_set_pin` remap corrupts flash and causes a boot loop), (2) `#ifndef TARGET_C3` guard around `npx_init()` in `main.c` (no WS2812B chain on C3; RMT init panics), (3) `#ifdef TARGET_C6` guard around `temperature_sensor_install(-10, 110)` in `menu.c` (C3 tsens HAL asserts on max > 80 °C). C3 test board (`esp32-c3-devkitm-1`, COM9) now boots stably into the display firmware with no watchdog resets.
 - **HAT rail auto-calibration from the iOS app (over BLE + WiFi).** The iOS
   Diagnostics calibration pickers now list the HAT power rails (VADJ3, VADJ4)

@@ -310,6 +310,18 @@ static char *api_hat_v2_rails(void)
     return json_take(root);
 }
 
+// POST /api/hat/v2/swd/detect — actively probe the SWD target (DPIDR read).
+static char *api_hat_swd_detect(void)
+{
+    if (!hat_detected()) return api_error("HAT not detected");
+    if (!hat_detect_target()) return api_error("HAT not responding");
+    const HatState *hs = hat_get_state();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "detected", hs->target_detected);
+    cJSON_AddNumberToObject(root, "dpidr", hs->target_dpidr);
+    return json_take(root);
+}
+
 static char *api_usbpd(void)
 {
     husb238_update();
@@ -1237,6 +1249,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     // HAT v2 aliases (the desktop/iOS clients use the /v2/ paths).
     if (strcmp(path, "/api/hat/v2/rail/enable") == 0)  return api_rail_enable(body);
     if (strcmp(path, "/api/hat/v2/rail/voltage") == 0) return api_rail_voltage(body);
+    if (strcmp(path, "/api/hat/v2/swd/detect") == 0)   return api_hat_swd_detect();
     if (strcmp(path, "/api/ioexp/control") == 0)    return api_ioexp_control(body);
     if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
     if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);

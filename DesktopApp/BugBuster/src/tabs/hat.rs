@@ -39,6 +39,17 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (uart_errors, _set_uart_errors) = signal(0u8);
     let (is_usb, set_is_usb) = signal(true);
 
+    // ── Target power rails ─────────────────────────────────────────────────────
+    let (rails, set_rails) = signal(Vec::<HatRailStatus>::new());
+    // Per-rail voltage entry box (volts as text), keyed by rail_id 0=VLOGIC, 1=VADJ3, 2=VADJ4.
+    let v_in: [RwSignal<String>; 3] = std::array::from_fn(|_| RwSignal::new(String::new()));
+    let v_dirty: [RwSignal<bool>; 3] = std::array::from_fn(|_| RwSignal::new(false));
+    // Pending high-voltage enable confirmation: Some((rail_id, setpoint_mv)).
+    let confirm = RwSignal::new(None::<(u8, u16)>);
+    // SWD target detection result + in-flight flag.
+    let (target, set_target) = signal(None::<HatTargetInfo>);
+    let detect_busy = RwSignal::new(false);
+
     // Alive flag — flips false on tab unmount so background tasks stop safely.
     let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let alive_clean = alive.clone();
@@ -109,6 +120,11 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     set_caps.set(Some(cp));
                 }
             }
+            if let Some(rl) = hat_get_rail_status().await {
+                if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    set_rails.set(rl);
+                }
+            }
         });
     });
 
@@ -125,6 +141,11 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             set_hat.set(st);
                         }
                     }
+                    if let Some(rl) = hat_get_rail_status().await {
+                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
+                            set_rails.set(rl);
+                        }
+                    }
                 });
             },
             Duration::from_secs(1),
@@ -137,10 +158,202 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     });
 
+    // ── Rail control helpers ───────────────────────────────────────────────────
+    let apply_voltage = move |id: u8| {
+        let raw = v_in[id as usize].get_untracked();
+        let volts: f64 = raw.trim().parse().unwrap_or(-1.0);
+        if !(0.0..=40.0).contains(&volts) {
+            show_toast("Enter a valid voltage", "err");
+            return;
+        }
+        let mv = (volts * 1000.0).round() as u16;
+        spawn_local(async move {
+            if let Some(r) = hat_set_rail_voltage(id, mv).await {
+                set_rails.set(r);
+                v_dirty[id as usize].set(false);
+                show_toast("Voltage applied", "ok");
+            } else {
+                show_toast("Failed to set voltage", "err");
+            }
+        });
+    };
+
+    let do_enable = move |id: u8, en: bool| {
+        spawn_local(async move {
+            if let Some(r) = hat_set_rail_enable(id, en).await {
+                set_rails.set(r);
+                show_toast(if en { "Rail enabled" } else { "Rail disabled" }, "ok");
+            } else {
+                show_toast("Failed to toggle rail", "err");
+            }
+        });
+    };
+
+    let toggle_rail = move |id: u8, currently_on: bool, setpoint_mv: u16, confirmable: bool| {
+        if !currently_on && confirmable && setpoint_mv > 3400 {
+            confirm.set(Some((id, setpoint_mv)));
+        } else {
+            do_enable(id, !currently_on);
+        }
+    };
+
+    let detect = move || {
+        spawn_local(async move {
+            detect_busy.set(true);
+            match hat_detect_target().await {
+                Some(t) => {
+                    show_toast(
+                        if t.detected { "SWD target detected" } else { "No SWD target found" },
+                        if t.detected { "ok" } else { "err" },
+                    );
+                    set_target.set(Some(t));
+                }
+                None => show_toast("Target detect failed", "err"),
+            }
+            detect_busy.set(false);
+            if let Some(s) = fetch_hat_status().await {
+                set_hat.set(s);
+            }
+        });
+    };
+
+    let prepare_swd = move |mv: u16| {
+        spawn_local(async move {
+            detect_busy.set(true);
+            // Match the level-shifter reference and target supply to the target
+            // voltage, then bring the rails up. Each call is awaited so the
+            // sequence stays ordered on the single-client BBP link — firing them
+            // concurrently floods the HAT UART bridge and causes 0x11 timeouts.
+            let _ = hat_set_rail_voltage(2, mv).await; // VADJ4 — SWD target power
+            let _ = hat_set_rail_voltage(0, mv).await; // VLOGIC — level-shifter reference
+            // VLOGIC must be enabled before the level-shifter OE (the firmware
+            // rejects OE otherwise with INVALID_PARAM). Only proceed to OE if it
+            // actually came up.
+            let vlogic_ok = hat_set_rail_enable(0, true).await.is_some();
+            if let Some(r) = hat_set_rail_enable(2, true).await {
+                set_rails.set(r);
+            }
+            if vlogic_ok {
+                if let Some(s) = hat_set_level_shift(true, false).await {
+                    set_ls_oe.set(s.oe);
+                    set_ls_dir.set(s.dir);
+                }
+            } else {
+                show_toast("VLOGIC enable timed out — skipping OE", "err");
+            }
+            match hat_detect_target().await {
+                Some(t) => {
+                    show_toast(
+                        if t.detected { "SWD target detected" } else { "SWD ready — no target found" },
+                        if t.detected { "ok" } else { "err" },
+                    );
+                    set_target.set(Some(t));
+                }
+                None => show_toast("SWD setup failed", "err"),
+            }
+            // The 1 s status/rail poll refreshes the rest of the UI; avoid extra
+            // round-trips here that would pile onto the link right after detect.
+            detect_busy.set(false);
+        });
+    };
+
+    // One reusable rail control card (set voltage · Apply · Enable).
+    let rail_card = move |id: u8,
+                          name: &'static str,
+                          role: &'static str,
+                          color: &'static str,
+                          vmin: f64,
+                          vmax: f64,
+                          confirmable: bool| {
+        let find = move || rails.get().into_iter().find(|x| x.rail_id == id);
+        let idx = id as usize;
+        view! {
+            <div style=format!("border-radius: 10px; background: var(--bg-secondary); padding: 12px; border-top: 2px solid {color}")>
+                <div style=format!("font-size: 11px; font-weight: 700; color: {color}; text-transform: uppercase; letter-spacing: 0.05em")>{name}</div>
+                <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 8px; height: 24px">{role}</div>
+
+                <div style=format!("text-align: center; font-size: 30px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {color}; letter-spacing: -1px")>
+                    {move || {
+                        let r = find();
+                        let en = r.as_ref().map(|x| x.enabled).unwrap_or(false);
+                        let mv = if en {
+                            r.as_ref().map(|x| x.voltage_mv).unwrap_or(0)
+                        } else {
+                            r.as_ref().map(|x| x.target_mv).unwrap_or(0)
+                        };
+                        format!("{:.2}V", mv as f64 / 1000.0)
+                    }}
+                </div>
+                <div style="text-align: center; font-size: 9px; color: var(--text-dim); margin-bottom: 8px; font-family: 'JetBrains Mono', monospace">
+                    {move || {
+                        let r = find();
+                        let en = r.as_ref().map(|x| x.enabled).unwrap_or(false);
+                        let sp = r.as_ref().map(|x| x.target_mv).unwrap_or(0);
+                        let ma = r.as_ref().map(|x| x.current_ma).unwrap_or(0);
+                        if en {
+                            format!("set {:.2}V · {} mA", sp as f64 / 1000.0, ma)
+                        } else {
+                            format!("set {:.2}V · off", sp as f64 / 1000.0)
+                        }
+                    }}
+                </div>
+
+                <div style="display: flex; gap: 5px; align-items: center; margin-bottom: 4px">
+                    <input type="number" class="number-input" style="flex: 1; font-size: 12px"
+                        min=vmin max=vmax step="0.05"
+                        prop:value=move || {
+                            if v_dirty[idx].get() {
+                                v_in[idx].get()
+                            } else {
+                                format!("{:.3}", find().map(|x| x.target_mv).unwrap_or(0) as f64 / 1000.0)
+                            }
+                        }
+                        on:input=move |e| {
+                            v_in[idx].set(event_target_value(&e));
+                            v_dirty[idx].set(true);
+                        }
+                    />
+                    <button class="btn btn-sm"
+                        style=format!("font-size: 10px; padding: 4px 12px; background: {color}20; color: {color}; border: 1px solid {color}50")
+                        on:click=move |_| apply_voltage(id)
+                    >"Apply"</button>
+                </div>
+                <div style="font-size: 9px; height: 13px; color: #f59e0b; margin-bottom: 8px">
+                    {move || if v_dirty[idx].get() {
+                        let v: f64 = v_in[idx].get().trim().parse().unwrap_or(-1.0);
+                        if (0.0..=40.0).contains(&v) {
+                            format!("→ press Apply to set {:.2} V", v)
+                        } else {
+                            "enter 0–36 V".to_string()
+                        }
+                    } else {
+                        String::new()
+                    }}
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center">
+                    <span style="font-size: 10px; color: var(--text-dim)">
+                        {move || if find().map(|x| x.enabled).unwrap_or(false) { "Enabled" } else { "Disabled" }}
+                    </span>
+                    <label class="toggle-wrap">
+                        <div class="toggle" class:active=move || find().map(|x| x.enabled).unwrap_or(false)
+                            on:click=move |_| {
+                                let r = find();
+                                let cur = r.as_ref().map(|x| x.enabled).unwrap_or(false);
+                                let sp = r.as_ref().map(|x| x.target_mv).unwrap_or(0);
+                                toggle_rail(id, cur, sp, confirmable);
+                            }
+                        ><div class="toggle-thumb"></div></div>
+                    </label>
+                </div>
+            </div>
+        }
+    };
+
     view! {
         <div class="tab-content">
             <div class="tab-desc">
-                "HAT Expansion Board v2 — Routing, SWD, shifted I/O, and debug logs. Voltage rail control is in the Voltages tab."
+                "HAT Expansion Board v2 — Target power rails, SWD target detection, routing, shifted I/O, and debug logs."
             </div>
 
             // ── Summary Banner ────────────────────────────────────────────────
@@ -225,6 +438,45 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     } else { ().into_any() }
                 }}
 
+                // ── Target Power Rails ──────────────────────────────────────────────
+                <div class="card" style="margin-bottom: 16px">
+                    <div class="card-header">
+                        <span>"Target Power Rails"</span>
+                        <span style="font-size: 10px; color: var(--text-dim)">"Set voltage · Apply · Enable"</span>
+                    </div>
+                    <div class="card-body" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px">
+                        {rail_card(0, "VLOGIC", "Logic rail · level-shifter reference · 1.7–5.0 V", "#10b981", 1.7, 5.0, false)}
+                        {rail_card(1, "VADJ3", "Target A power · 0–36 V", "#06b6d4", 1.8, 36.0, true)}
+                        {rail_card(2, "VADJ4", "Target B · SWD target power · 0–36 V", "#f59e0b", 1.8, 36.0, true)}
+                    </div>
+                </div>
+
+                // High-voltage enable confirmation modal
+                {move || confirm.get().map(|(cid, cmv)| {
+                    let cname = match cid { 1 => "VADJ3", 2 => "VADJ4", _ => "rail" };
+                    view! {
+                        <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000"
+                            on:click=move |_| confirm.set(None)
+                        >
+                            <div style="background: var(--bg-secondary); border: 1px solid #f59e0b60; border-radius: 14px; padding: 20px; max-width: 380px; box-shadow: 0 0 40px rgba(0,0,0,0.6)"
+                                on:click=move |e| e.stop_propagation()
+                            >
+                                <div style="font-size: 13px; font-weight: 700; color: #f59e0b; margin-bottom: 8px">"⚠ High-voltage enable"</div>
+                                <div style="font-size: 12px; margin-bottom: 6px">{format!("Enable {} at {:.2} V?", cname, cmv as f64 / 1000.0)}</div>
+                                <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5">"Voltages above 3.4 V can permanently damage a 3.3 V target. Confirm the connected device tolerates this level before continuing."</div>
+                                <div style="display: flex; gap: 8px; justify-content: flex-end">
+                                    <button class="btn btn-sm" style="font-size: 11px; padding: 5px 14px"
+                                        on:click=move |_| confirm.set(None)
+                                    >"Cancel"</button>
+                                    <button class="btn btn-sm" style="font-size: 11px; padding: 5px 14px; background: #f59e0b25; color: #f59e0b; border: 1px solid #f59e0b60"
+                                        on:click=move |_| { confirm.set(None); do_enable(cid, true); }
+                                    >"Enable anyway"</button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                })}
+
                 // ── Routing & SWD + Level Shifter (full width) ────────────────
                 <div class="card" style="margin-bottom: 16px">
                     <div class="card-header"><span>"Routing & SWD"</span></div>
@@ -301,14 +553,15 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px">"SWD Target"</div>
                             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
                                 {move || {
-                                    let st = hat.get();
-                                    let dot_style = if st.target_detected {
-                                        "width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#f59e0b;box-shadow:0 0 6px #f59e0b"
+                                    let det = target.get().map(|t| t.detected).unwrap_or_else(|| hat.get().target_detected);
+                                    let dpidr = target.get().map(|t| t.dpidr).unwrap_or_else(|| hat.get().target_dpidr);
+                                    let dot_style = if det {
+                                        "width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#10b981;box-shadow:0 0 6px #10b981"
                                     } else {
                                         "width:9px;height:9px;border-radius:50%;flex-shrink:0;background:var(--text-dim)"
                                     };
-                                    let label = if st.target_detected {
-                                        format!("DPIDR 0x{:08X}", st.target_dpidr)
+                                    let label = if det {
+                                        format!("DPIDR 0x{:08X}", dpidr)
                                     } else {
                                         "No target".into()
                                     };
@@ -318,13 +571,20 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     }
                                 }}
                             </div>
+                            <button class="btn" style="width: 100%; font-size: 10px; padding: 5px; margin-bottom: 8px; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
+                                disabled=move || detect_busy.get()
+                                on:click=move |_| detect()
+                            >{move || if detect_busy.get() { "Detecting…" } else { "Detect Target" }}</button>
+                            <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 6px">"Quick setup — sets VADJ4 + VLOGIC, enables OE, detects:"</div>
                             <div style="display: flex; gap: 6px">
-                                <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
-                                    on:click=move |_| { send_hat_setup_swd(3300, 0); }
-                                >"Setup 3.3 V"</button>
-                                <button class="btn" style="font-size: 10px; padding: 4px 10px; flex: 1; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
-                                    on:click=move |_| { send_hat_setup_swd(1800, 0); }
-                                >"Setup 1.8 V"</button>
+                                <button class="btn btn-sm" style="flex: 1; font-size: 10px; padding: 4px"
+                                    disabled=move || detect_busy.get()
+                                    on:click=move |_| prepare_swd(3300)
+                                >"Prep 3.3 V"</button>
+                                <button class="btn btn-sm" style="flex: 1; font-size: 10px; padding: 4px"
+                                    disabled=move || detect_busy.get()
+                                    on:click=move |_| prepare_swd(1800)
+                                >"Prep 1.8 V"</button>
                             </div>
                         </div>
 

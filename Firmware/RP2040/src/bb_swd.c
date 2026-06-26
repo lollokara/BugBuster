@@ -26,6 +26,7 @@
 // When integrated with debugprobe, include its headers
 #include "tusb.h"        // tud_mounted()
 #include "probe.h"       // probe_set_swclk_freq()
+#include "DAP.h"         // SWJ_Sequence(), SWD_Transfer(), DAP_TRANSFER_*
 #endif
 
 // bb_swd.c provides status queries and clock configuration for the debugprobe 
@@ -69,60 +70,52 @@ bool bb_swd_set_clock(uint32_t khz)
 }
 
 /**
- * @brief Helper to perform a full SWD line reset and JTAG-to-SWD switch.
+ * @brief Line reset + JTAG-to-SWD switch using the CMSIS-DAP SWD engine.
+ *
+ * Uses SWJ_Sequence() from sw_dp_pio.c — the *same* proven code path the USB
+ * CMSIS-DAP host (OpenOCD / pyOCD) drives. The previous hand-rolled bit-bang
+ * reset mishandled the SWD turnaround and reported "no target" on parts (e.g.
+ * STM32F4) that program fine over OpenOCD.
  */
 #ifdef DEBUGPROBE_INTEGRATION
-static void swd_line_reset_sequence(void)
+static void swd_switch_to_swd(void)
 {
-    // 1. Line Reset: 50+ clocks with SWDIO=1
-    for (int i = 0; i < 8; i++) {
-        probe_write_bits(8, 0xFF);
-    }
-    
-    // 2. JTAG-to-SWD switching sequence (0x79, 0xE7 -> 0xE779 LSB first)
-    probe_write_bits(16, 0xE779);
-    
-    // 3. Line Reset: 50+ clocks with SWDIO=1
-    for (int i = 0; i < 8; i++) {
-        probe_write_bits(8, 0xFF);
-    }
-    
-    // 4. At least 2 idle cycles (SWDIO=0)
-    probe_write_bits(8, 0x00);
+    static const uint8_t ones[]  = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    static const uint8_t j2s[]   = { 0x9E, 0xE7 };  // JTAG-to-SWD switch, LSB-first
+    static const uint8_t zeros[] = { 0x00 };
+
+    SWJ_Sequence(51, ones);   // line reset: >= 50 clocks with SWDIO high
+    SWJ_Sequence(16, j2s);    // JTAG-to-SWD switch sequence
+    SWJ_Sequence(51, ones);   // line reset again (required before first DPIDR read)
+    SWJ_Sequence(8,  zeros);  // >= 2 idle cycles
 }
 #endif
 
 bool bb_swd_detect_target(void)
 {
 #ifdef DEBUGPROBE_INTEGRATION
-    // 1. Ensure PIO is initted
+    // Configure the SWD pins / PIO (same setup the USB DAP path performs via
+    // PORT_SWD_SETUP()). DAP_Setup() ran at boot, so DAP_Data (turnaround,
+    // retry counts) is already initialised.
     probe_init();
-    
-    // 2. Perform reset/switch sequence
-    swd_line_reset_sequence();
-    
-    // 3. Request DPIDR read (DP register 0)
-    // Start(1) | APnDP(0) | RnW(1) | A[2:3](00) | Parity(1) | Stop(0) | Park(1) = 0xA5
-    probe_write_bits(8, 0xA5);
-    
-    // 4. Read Turnaround(1) + ACK(3)
-    // We expect ACK=OK (001 binary, LSB first)
-    uint32_t ack_raw = probe_read_bits(4);
-    uint8_t ack = (ack_raw >> 1) & 0x07;
-    
-    if (ack == 1) { // OK
-        uint32_t idcode = probe_read_bits(32);
-        probe_read_bits(1); // Parity (ignore)
-        probe_read_bits(1); // Turnaround
-        
-        s_status.target_detected = true;
-        s_status.dpidr = idcode;
-        return true;
-    } else {
-        s_status.target_detected = false;
-        s_status.dpidr = 0;
-        return false;
+
+    // The first DPIDR read after a cold line reset can return WAIT/FAULT before
+    // the DP wakes up, so retry the whole connect a few times.
+    for (int attempt = 0; attempt < 3; attempt++) {
+        swd_switch_to_swd();
+
+        uint32_t dpidr = 0;
+        uint8_t ack = SWD_Transfer(DAP_TRANSFER_RnW, &dpidr);  // read DP reg 0 = DPIDR
+        if ((ack & 0x7u) == DAP_TRANSFER_OK && dpidr != 0u && dpidr != 0xFFFFFFFFu) {
+            s_status.target_detected = true;
+            s_status.dpidr = dpidr;
+            return true;
+        }
     }
+
+    s_status.target_detected = false;
+    s_status.dpidr = 0;
+    return false;
 #else
     // Standalone fallback: Line-level presence check (check for pull-up)
     // Most SWD targets have a 10k-100k pull-up on SWDIO.

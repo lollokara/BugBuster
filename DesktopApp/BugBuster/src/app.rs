@@ -216,7 +216,15 @@ pub fn App() -> impl IntoView {
     // Which HAT is attached — drives which instrument tabs are visible.
     let (hat_kind, set_hat_kind) = signal(HatKind::None);
 
-    // Detect the attached HAT on connect so tabs gate themselves.
+    // Detect the attached HAT on connect so tabs gate themselves. This retries
+    // (the ESP32↔RP2040 HAT handshake can lag the host connection by a second or
+    // two, so a single probe right after connect often misses it and would
+    // wrongly hide the LA / HAT tabs), but it LATCHES: once a HAT is found it
+    // stops issuing detection commands. This matters because the BBP/CDC0 link
+    // is single-client — steady-state polling here (esp. GET_CAPS) competes with
+    // the active tab's own polls and the SWD bring-up flow, causing 0x11
+    // timeouts and UI stalls. Detection uses the lightweight `detected` status
+    // only; the heavier GET_CAPS is left to the HAT tab.
     Effect::new(move |_| {
         let mode = conn_mode.get();
         if mode == "Disconnected" {
@@ -228,13 +236,45 @@ pub fn App() -> impl IntoView {
             set_hat_kind.set(HatKind::Daq);
             return;
         }
-        spawn_local(async move {
-            if daq_check_usb().await {
-                set_hat_kind.set(HatKind::Daq);
-            } else if hat_get_caps().await.is_some() {
-                set_hat_kind.set(HatKind::La);
-            } else {
-                set_hat_kind.set(HatKind::None);
+
+        // Once a HAT is found we stop probing to keep the single-client BBP link
+        // free; the interval keeps firing but no-ops.
+        let latched = std::rc::Rc::new(std::cell::Cell::new(false));
+        let probe = {
+            let latched = latched.clone();
+            move || {
+                if latched.get() {
+                    return;
+                }
+                let latched = latched.clone();
+                spawn_local(async move {
+                    if latched.get() {
+                        return;
+                    }
+                    let kind = if daq_check_usb().await {
+                        HatKind::Daq
+                    } else if fetch_hat_status().await.map(|s| s.detected).unwrap_or(false) {
+                        HatKind::La
+                    } else {
+                        HatKind::None
+                    };
+                    if kind != HatKind::None {
+                        latched.set(true);
+                        set_hat_kind.set(kind);
+                    }
+                });
+            }
+        };
+
+        // Probe immediately, then keep retrying every 3 s until a HAT latches
+        // (also picks up a HAT plugged in shortly after connect).
+        probe();
+        let handle =
+            leptos::prelude::set_interval_with_handle(probe, std::time::Duration::from_secs(3))
+                .ok();
+        on_cleanup(move || {
+            if let Some(h) = handle {
+                h.clear();
             }
         });
     });

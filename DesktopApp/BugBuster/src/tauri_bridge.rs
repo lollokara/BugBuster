@@ -901,6 +901,17 @@ pub struct HatRailStatus {
     pub voltage_mv: u16,
     pub current_ma: u16,
     pub status: u8,
+    /// Configured DS4424 setpoint (mV). For VADJ rails this is the requested
+    /// voltage even while the rail is disabled; `voltage_mv` is the measured ADC.
+    #[serde(default)]
+    pub target_mv: u16,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatTargetInfo {
+    pub detected: bool,
+    pub dpidr: u32,
 }
 
 pub async fn hat_get_caps() -> Option<HatCaps> {
@@ -910,6 +921,13 @@ pub async fn hat_get_caps() -> Option<HatCaps> {
 
 pub async fn hat_get_rail_status() -> Option<Vec<HatRailStatus>> {
     let result = try_invoke("hat_get_rail_status", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+/// Actively probe the SWD target (line reset + DPIDR read). The caller must
+/// first enable the target rail (VADJ4), VLOGIC, and the level-shifter OE.
+pub async fn hat_detect_target() -> Option<HatTargetInfo> {
+    let result = try_invoke("hat_detect_target", JsValue::NULL).await?;
     serde_wasm_bindgen::from_value(result).ok()
 }
 

@@ -1507,12 +1507,14 @@ pub async fn hat_set_rail_voltage(
         let voltage_mv = r.get_u16().unwrap_or(0);
         let current_ma = r.get_u16().unwrap_or(0);
         let status = r.get_u8().unwrap_or(0);
+        let target_mv = r.get_u16().unwrap_or(0);
         rails.push(HatRailStatus {
             rail_id,
             enabled,
             voltage_mv,
             current_ma,
             status,
+            target_mv,
         });
     }
     Ok(rails)
@@ -1531,6 +1533,28 @@ pub async fn hat_setup_swd(
         .await
         .map_err(map_err)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HatTargetInfo {
+    pub detected: bool,
+    pub dpidr: u32,
+}
+
+/// Actively probe the SWD target (line reset + DPIDR read on the RP2040).
+/// The caller must first enable the target rail (VADJ4), VLOGIC, and the
+/// level-shifter OE.
+#[tauri::command]
+pub async fn hat_detect_target(mgr: State<'_, ConnectionManager>) -> CmdResult<HatTargetInfo> {
+    let rsp = mgr
+        .send_command(bbp::CMD_HAT_DETECT_TARGET, &[])
+        .await
+        .map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let detected = r.get_bool().unwrap_or(false);
+    let dpidr = r.get_u32().unwrap_or(0);
+    Ok(HatTargetInfo { detected, dpidr })
 }
 
 #[tauri::command]
@@ -1654,6 +1678,7 @@ pub struct HatRailStatus {
     pub voltage_mv: u16,
     pub current_ma: u16,
     pub status: u8,
+    pub target_mv: u16,
 }
 
 #[tauri::command]
@@ -1706,12 +1731,14 @@ pub async fn hat_get_rail_status(
         let voltage_mv = r.get_u16().unwrap_or(0);
         let current_ma = r.get_u16().unwrap_or(0);
         let status = r.get_u8().unwrap_or(0);
+        let target_mv = r.get_u16().unwrap_or(0);
         rails.push(HatRailStatus {
             rail_id,
             enabled,
             voltage_mv,
             current_ma,
             status,
+            target_mv,
         });
     }
     Ok(rails)
@@ -1742,12 +1769,14 @@ pub async fn hat_set_rail_enable(
         let voltage_mv = r.get_u16().unwrap_or(0);
         let current_ma = r.get_u16().unwrap_or(0);
         let status = r.get_u8().unwrap_or(0);
+        let target_mv = r.get_u16().unwrap_or(0);
         rails.push(HatRailStatus {
             rail_id,
             enabled,
             voltage_mv,
             current_ma,
             status,
+            target_mv,
         });
     }
     Ok(rails)

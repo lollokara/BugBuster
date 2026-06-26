@@ -137,6 +137,7 @@ pub fn run() {
             commands::hat_set_power,
             commands::hat_set_io_voltage,
             commands::hat_setup_swd,
+            commands::hat_detect_target,
             commands::hat_calibrate_start,
             commands::hat_calibrate_status,
             commands::hat_calibrate_import,

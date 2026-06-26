@@ -465,6 +465,13 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     if key == ("POST", "/hat/setup_swd"):
         return {"ok": True}
 
+    # HAT v2 SWD target detect
+    if key == ("POST", "/hat/v2/swd/detect"):
+        oe = device.hat_level_shift.get("oe", False)
+        vadj4_on = device.hat_rails[2]["enabled"] if len(device.hat_rails) > 2 else False
+        detected = bool(oe and vadj4_on)
+        return {"detected": detected, "dpidr": 0x2BA01477 if detected else 0}
+
     # HAT v2 capabilities
     if key == ("GET", "/hat/v2/caps"):
         flags = 0x17  # RAILS|LEDS|LA_LOW_SPEED|SHIFTED_IO
@@ -488,6 +495,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
                     "railId": r["rail_id"],
                     "enabled": r["enabled"],
                     "voltageMv": r["voltage_mv"],
+                    "targetVoltageMv": r.get("target_mv", r["voltage_mv"]),
                     "currentMa": r["current_ma"],
                     "status": r["status"]
                 }
@@ -520,6 +528,7 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             "railId": r["rail_id"],
             "enabled": r["enabled"],
             "voltageMv": r["voltage_mv"],
+            "targetVoltageMv": r.get("target_mv", r["voltage_mv"]),
             "currentMa": r["current_ma"],
             "status": r["status"]
         }

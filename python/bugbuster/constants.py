@@ -400,6 +400,7 @@ class CmdId(IntEnum):
     HAT_GET_POWER    = 0xCB
     HAT_SET_IO_VOLT  = 0xCC
     HAT_SETUP_SWD    = 0xCD
+    HAT_DETECT_TARGET = 0xDB
     # HAT — Logic Analyzer
     HAT_LA_CONFIG    = 0xCF
     HAT_LA_ARM       = 0xD5
