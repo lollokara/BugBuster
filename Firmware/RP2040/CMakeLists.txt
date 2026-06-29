@@ -92,7 +92,7 @@ pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/bb_ws2812.p
 # PROBE_VERSION format: "bb-hat-MAJOR.MINOR"
 # CMake extracts MAJOR/MINOR and injects them as compile definitions so that
 # bb_main.c (BB_HAT_FW_MAJOR/MINOR) no longer needs manual edits on release.
-set(PROBE_VERSION "bb-hat-3.5")
+set(PROBE_VERSION "bb-hat-4.0")
 string(REGEX MATCH "bb-hat-([0-9]+)\\.([0-9]+)" _ver_match "${PROBE_VERSION}")
 if(NOT _ver_match)
     message(FATAL_ERROR "PROBE_VERSION '${PROBE_VERSION}' does not match expected format 'bb-hat-MAJOR.MINOR'")
