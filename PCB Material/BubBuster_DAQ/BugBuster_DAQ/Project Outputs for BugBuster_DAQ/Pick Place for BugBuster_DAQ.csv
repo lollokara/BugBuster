@@ -4,13 +4,14 @@ C:\Users\Lorenzo\Documents\Progetti\BugBuster\PCB Material\BubBuster_DAQ\BugBust
 ========================================================================================================================
 File Design Information:
 
-Date:       23/06/26
-Time:       13:12
-Revision:   00d940012eac22729fdbea2fed9ffc8351e4261c
+Date:       29/06/26
+Time:       19:26
+Revision:   73cff5640823e274818ede5ac6fcbbabdceb86cb
 Variant:    No variations
 Units used: mil
 
 "Designator","Comment","Layer","Footprint","Center-X(mil)","Center-Y(mil)","Rotation","Description"
+"FB12","470 Ohms @ 100 MHz","TopLayer","FER_1206_3216","1742.126","334.639","0","FERRITE BEAD 470 OHM 1206 1LN"
 "U31","ADP7182ACPZN-R7","TopLayer","FP-CP-6-3-IPC_B","3422.244","2532.480","180","IC REG LIN NEG ADJ 200MA 6LFCSP"
 "U29","ADP7142ACPZN-R7","TopLayer","FP-CP-6-3-IPC_B","3426.181","2777.559","180","IC REG LIN POS ADJ 200MA 6LFCSP"
 "R77","243 kOhms","TopLayer","RES_0603_1608","3482.283","2610.236","0","RES SMD 243K OHM 1% 1/10W 0603"
@@ -52,7 +53,7 @@ Units used: mil
 "R74","10 kOhms","TopLayer","RES_0603_1608","1279.528","1933.071","270","RES SMD 10K OHM 1% 1/3W 0603"
 "R73","1 kOhms","TopLayer","RES_0603_1608","4049.213","314.961","180","RES SMD 1K OHM 1% 1/3W 0603"
 "R72","100 Ohms","TopLayer","RES_0603_1608","3413.386","440.945","180","RES SMD 100 OHM 1% 1/3W 0603"
-"R71","100 Ohms","TopLayer","RES_0603_1608","3610.236","440.945","0","RES SMD 100 OHM 1% 1/3W 0603"
+"R71","100 Ohms","TopLayer","RES_0603_1608","3612.205","452.756","0","RES SMD 100 OHM 1% 1/3W 0603"
 "R70","0 Ohms","TopLayer","RES_0603_1608","3791.339","334.646","270","RES 0 OHM JUMPER 0603"
 "P1","691382010004","TopLayer","691382010004","3511.811","360.236","0","Terminal Block, R/A Header, 4Pos, Th Rohs Compliant: Yes"
 "D11","XL-2020RGBC-WS2812B","TopLayer","LED_XL-2020RGBC-WS2812B","4173.228","2755.905","270","2020 RGB LED(BUILT-IN IC)"
@@ -187,7 +188,7 @@ Units used: mil
 "C72","0.1 µF","TopLayer","CAP_0603_1608","1657.480","2917.323","180","SMT Capacitor"
 "C69","22µF","TopLayer","CAP_2220_5650_3.0MM","1645.669","523.622","270","CAP 2220 X7R 50V 22UF 20% 2.50MM"
 "C68","10 µF","TopLayer","CAP_1210_3225_-_1MM","759.842","732.284","270","CAP CER 10UF 50V X7R 1210"
-"C70","22µF","TopLayer","CAP_2220_5650_3.0MM","1740.158","234.252","90","CAP 2220 X7R 50V 22UF 20% 2.50MM"
+"C70","22µF","TopLayer","CAP_2220_5650_3.0MM","1978.347","236.220","90","CAP 2220 X7R 50V 22UF 20% 2.50MM"
 "C10","0.1 µF","TopLayer","CAP_0603_1608","2511.811","1444.882","90","SMT Capacitor"
 "C65","22µF","TopLayer","CAP_2220_5650_3.0MM","574.803","303.150","90","CAP 2220 X7R 50V 22UF 20% 2.50MM"
 "C66","22µF","TopLayer","CAP_2220_5650_3.0MM","803.150","385.827","90","CAP 2220 X7R 50V 22UF 20% 2.50MM"
