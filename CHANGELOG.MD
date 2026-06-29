@@ -6,6 +6,10 @@
 
 ## [1.5.0] — 2026-06-29
 
+*(no changes yet)*
+
+## [1.5.0] — 2026-06-29
+
 ### Added
 - **Desktop HAT tab — professional refactor of target power & SWD bring-up.** The HAT tab now
   exposes direct per-rail control for **VLOGIC** (level-shifter reference, 1.7–5.0 V), **VADJ3**
