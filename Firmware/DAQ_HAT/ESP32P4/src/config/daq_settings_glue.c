@@ -166,5 +166,12 @@ void daq_board_bind_settings(daq_board_t *b)
     daq_settings_init();
     daq_settings_set_callbacks(on_apply, on_notify, on_action, b);
     daq_settings_apply_all();
-    ESP_LOGI(TAG, "settings store bound + applied");
+
+    // Safety: the DUT supply (V_DUT) must NEVER come up enabled on boot, even if
+    // a previous session persisted SOURCE_ENABLE=1. It is gated on an explicit
+    // command (CLI 'vdut on', or a host/C6 SOURCE_ENABLE write) only.
+    daq_settings_set_i32(DAQ_K_SOURCE_ENABLE, 0, DAQ_SRC_BOOT);
+    smu_enable(&b->smu, false);
+
+    ESP_LOGI(TAG, "settings store bound + applied (V_DUT forced OFF)");
 }

@@ -53,6 +53,13 @@ typedef struct {
 #define ADAQ_SAMPLE_FLAG_CRC_ERR     (1u << 0)
 #define ADAQ_SAMPLE_FLAG_STATUS_ERR  (1u << 1)
 
+// DRDY ISR context: one per device in a stream (kept per-stream so two streams
+// never share/overwrite a slot).
+typedef struct {
+    void   *stream;       // adaq_stream_t* (void to avoid a self-reference)
+    uint8_t index;        // device index within the stream
+} adaq_drdy_ctx_t;
+
 typedef struct {
     // Configuration
     adaq7769_t *devices[ADAQ_STREAM_MAX_DEVICES];
@@ -67,12 +74,14 @@ typedef struct {
     volatile size_t tail;             // consumer (drain)
     volatile uint32_t overflow_count;
     volatile uint32_t sample_count;
+    volatile uint32_t isr_count;      // raw DRDY ISR triggers (flood detector)
+    volatile uint32_t read_ns_avg;    // EMA of one contread SPI read (ns)
 
     // Runtime
-    QueueHandle_t drdy_queue;         // device indices posted from DRDY ISR
     TaskHandle_t  capture_task;
     volatile bool running;
     uint32_t      seq[ADAQ_STREAM_MAX_DEVICES];
+    adaq_drdy_ctx_t drdy_ctx[ADAQ_STREAM_MAX_DEVICES];
 } adaq_stream_t;
 
 /**
@@ -101,6 +110,35 @@ esp_err_t adaq_stream_start(adaq_stream_t *s, int task_core, int task_prio);
 
 /** @brief Stop capture, exit continuous-read mode and remove DRDY ISRs. */
 esp_err_t adaq_stream_stop(adaq_stream_t *s);
+
+// -----------------------------------------------------------------------------
+// Combined capture: ONE task services multiple streams (all buses). The per-bus
+// tasks otherwise time-slice a single core, and at high ODR the off-slice DRDYs
+// coalesce and drop samples. One task has no time-slicing and reads the
+// independent SPI hosts back-to-back. Each stream keeps its own ring, so the
+// consumer is unchanged.
+// -----------------------------------------------------------------------------
+typedef struct adaq_stream_comb {
+    adaq_stream_t *streams[ADAQ_STREAM_MAX_DEVICES];
+    uint8_t        n_streams;
+    TaskHandle_t   task;
+    volatile bool  running;
+    volatile uint32_t pending;            // lock-free per-device ready bitmask
+    uint8_t        n_dev;                 // total devices across all streams
+    struct adaq_comb_dev {
+        void          *comb;              // back-ptr to this struct (for ISR)
+        adaq_stream_t *stream;            // owning stream
+        uint8_t        local;             // device index within that stream
+        uint8_t        bit;               // global notification bit
+    } dev[ADAQ_STREAM_MAX_DEVICES * 2];
+} adaq_stream_comb_t;
+
+/** @brief Start ONE capture task for all devices in the given streams. */
+esp_err_t adaq_stream_comb_start(adaq_stream_comb_t *c,
+                                 adaq_stream_t *const *streams, uint8_t n_streams,
+                                 int core, int prio);
+/** @brief Stop the combined capture task and exit continuous-read on all. */
+esp_err_t adaq_stream_comb_stop(adaq_stream_comb_t *c);
 
 /**
  * @brief Drain up to @p max records from the ring into @p out.

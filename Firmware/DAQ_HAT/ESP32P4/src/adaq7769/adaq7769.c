@@ -178,6 +178,19 @@ esp_err_t adaq7769_soft_reset(adaq7769_t *dev)
 esp_err_t adaq7769_identify(adaq7769_t *dev)
 {
     uint8_t chip = 0, pid_l = 0, pid_h = 0, ven_l = 0, ven_h = 0;
+
+    // ESP32-P4 SPI reads drop the final bit at the ADAQ interface-reset edge, so
+    // a plain 8-bit register read loses its LSB (CHIP_TYPE 0x07 -> 0x06, and the
+    // device reads as absent). Enabling EN_SPI_CRC makes the ADAQ drive a CRC
+    // byte AFTER the data byte, so the data byte is no longer the final driven
+    // bit and is captured intact. The device clears this on reset (POR) and
+    // identify always runs post-reset, so (re)enable it here first. The enable
+    // frame is a plain write (CRC still off); afterwards every register frame
+    // carries a trailing CRC byte.
+    adaq_ll_set_crc(&dev->ll, false, false);
+    adaq_ll_write_reg(&dev->ll, ADAQ_REG_INTERFACE_FORMAT, ADAQ_IF_EN_SPI_CRC);
+    adaq_ll_set_crc(&dev->ll, true, false);
+
     esp_err_t err = adaq_ll_read_reg(&dev->ll, ADAQ_REG_CHIP_TYPE, &chip);
     if (err != ESP_OK) return err;
     adaq_ll_read_reg(&dev->ll, ADAQ_REG_PRODUCT_ID_L, &pid_l);
@@ -212,7 +225,13 @@ esp_err_t adaq7769_begin(adaq7769_t *dev)
     dev->cfg.mclk_div    = ADAQ_MCLK_DIV_2;     // fMOD = MCLK/2 = 8.192 MHz
     dev->cfg.adc_mode    = ADAQ_ADC_MODE_FAST;
     dev->cfg.filter      = ADAQ_FILTER_WIDEBAND;
-    dev->cfg.dec_rate    = ADAQ_DEC_X32;        // 256 kSPS @ fMOD/32
+    // Default ODR = the measured end-to-end LOSSLESS ceiling for the current
+    // pipeline (per-sample GPIO-ISR capture + FINE/COARSE sequence-fusion + DSP
+    // + USB). At 8 kSPS/channel the whole chain keeps up with ZERO drops
+    // (verified: BusA 7994/7996, BusB 15994/15992, 0 overflow). 16 kSPS already
+    // overflows the consumer. Raise at runtime with `odr` once the fusion/read
+    // fast-path work lifts the ceiling.
+    dev->cfg.dec_rate    = ADAQ_DEC_X1024;      // 8 kSPS @ fMOD/1024
     dev->cfg.sinc3_dec   = 0;
     dev->cfg.reject_50_60 = false;
     dev->cfg.conv_mode   = ADAQ_CONVMODE_CONTINUOUS;
@@ -223,7 +242,11 @@ esp_err_t adaq7769_begin(adaq7769_t *dev)
     dev->cfg.lin_boost   = true;
     dev->cfg.cont_read   = false;
     dev->cfg.status_append = false;
-    dev->cfg.crc_append  = false;
+    // Keep EN_SPI_CRC on for register access: the trailing CRC byte is what lets
+    // the ESP32-P4 capture each register's LSB (identify enabled it above). The
+    // high-speed sample stream uses continuous-read mode, where the datasheet
+    // holds the LSB until the next DRDY, so adaq_stream sets its own format.
+    dev->cfg.crc_append  = true;
     dev->cfg.crc_xor     = false;
     dev->cfg.conv16      = false;
 

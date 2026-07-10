@@ -92,7 +92,7 @@
 // -----------------------------------------------------------------------------
 #define S3LINK_UART_NUM   1                 // UART1 (UART0 = console)
 #define S3LINK_TX_PIN     ((gpio_num_t)27)  // P4 TX -> S3 RX
-#define S3LINK_RX_PIN     ((gpio_num_t)29)  // S3 TX -> P4 RX   (CHECK: vs ADAQ3 DRDY)
+#define S3LINK_RX_PIN     ((gpio_num_t)28)  // S3 TX -> P4 RX (schematic-confirmed; ADAQ3 DRDY is on 29)
 #define S3LINK_INT_PIN    ((gpio_num_t)6)   // open-drain IRQ to S3 (pulled up)
 #define S3LINK_BAUD       921600
 
@@ -107,10 +107,23 @@
 #define ADAQ_MCLK_HZ              16384000UL     // SiT8208 Y1 -> CDCLVC1104 fan-out
 #define ADAQ_SYNC_MASTER_INDEX    0              // ADAQ1 (U1) is the SYNC master
 
-// SPI clock for ADAQ register access (slow, safe) vs. data readout (fast).
-// Datasheet max SCLK = 20 MHz. Keep config transfers conservative.
-#define ADAQ_SCLK_CFG_HZ          1000000UL      // 1 MHz for register config
+// SPI clock for ADAQ register access vs. data readout. Datasheet max SCLK = 20 MHz.
+// Register access runs FULL-DUPLEX (like the ADC-data stream) with a trailing
+// dummy byte on reads to avoid the ESP32 last-bit loss; kept modest (8 MHz) as
+// it's not throughput-critical. The ADC-data stream (dev_data) runs at 20 MHz.
+#define ADAQ_SCLK_CFG_HZ          8000000UL      // 8 MHz register access (full-duplex)
 #define ADAQ_SCLK_DATA_HZ         20000000UL     // 20 MHz for sample readout
+// Slave DOUT valid delay + P4 input path. The ESP-IDF SPI driver uses this to
+// place the MISO sample point AFTER DOUT settles; without it the final bit of a
+// register read is sampled too early and reads back as 0 (value & 0xFE), and
+// high-speed (>~4 MHz) reads corrupt. Tune on the bench if reads misbehave.
+#define ADAQ_SPI_INPUT_DELAY_NS   30
+
+// Extra SCLK cycles CS is held low after the last data bit of a register read.
+// A normal ADAQ read frames the data LSB on the final rising edge and holds it
+// only until CS rises; holding CS a few cycles keeps DOUT = D0 long enough for
+// the ESP32-P4 to latch it (otherwise the LSB reads 0 -> value & 0xFE).
+#define ADAQ_CS_POSTTRANS_CYCLES  4
 
 // -----------------------------------------------------------------------------
 // SPI bus A — GP-SPI3, dedicated to ADAQ #0 = ADAQ1/U1 = FINE current.

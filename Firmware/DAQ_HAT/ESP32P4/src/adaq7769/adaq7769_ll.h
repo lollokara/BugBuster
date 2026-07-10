@@ -64,6 +64,20 @@ esp_err_t adaq_ll_bus_init(spi_host_device_t host,
 esp_err_t adaq_ll_add_device(adaq_ll_t *ll, spi_host_device_t host,
                              gpio_num_t cs_pin, uint32_t cfg_hz, uint32_t data_hz);
 
+/**
+ * @brief Re-create both device handles at a new SPI mode (0..3). Bring-up aid
+ *        for sweeping CPOL/CPHA from the console without reflashing.
+ */
+esp_err_t adaq_ll_set_mode(adaq_ll_t *ll, uint8_t mode);
+
+/**
+ * @brief Re-create both handles at a given mode, register clock, and MISO input
+ *        delay. Bring-up aid for sweeping input_delay_ns / cfg clock to place
+ *        the sample point correctly. @p cfg_hz of 0 keeps the current value.
+ */
+esp_err_t adaq_ll_reconfig(adaq_ll_t *ll, uint8_t mode, uint32_t cfg_hz,
+                           int input_delay_ns);
+
 // -----------------------------------------------------------------------------
 // Register access (uses the cfg handle, blocking/polling)
 // -----------------------------------------------------------------------------
@@ -73,6 +87,9 @@ esp_err_t adaq_ll_write_reg(adaq_ll_t *ll, uint8_t addr, uint8_t val);
 
 /** @brief Read one 8-bit register. *val unchanged on error. */
 esp_err_t adaq_ll_read_reg(adaq_ll_t *ll, uint8_t addr, uint8_t *val);
+
+/** @brief Bring-up diagnostic: read instr + 2 data bytes (see LSB placement). */
+esp_err_t adaq_ll_read_reg2(adaq_ll_t *ll, uint8_t addr, uint8_t *b1, uint8_t *b2);
 
 /** @brief Read the 24-bit ADC_DATA register as a single (instructed) read. */
 esp_err_t adaq_ll_read_adc24(adaq_ll_t *ll, int32_t *sample);
@@ -88,6 +105,26 @@ esp_err_t adaq_ll_write_raw(adaq_ll_t *ll, const uint8_t *tx, size_t len);
  * payload length (3, 4 or 5). @p tx may be NULL (idle high recommended).
  */
 esp_err_t adaq_ll_contread_word(adaq_ll_t *ll, uint8_t *rx, size_t len_bytes);
+
+/** @brief Hold/release the SPI bus around a streaming session (single-device
+ *         bus only) so repeated contreads skip the per-call bus-lock acquire. */
+esp_err_t adaq_ll_bus_acquire(adaq_ll_t *ll);
+void      adaq_ll_bus_release(adaq_ll_t *ll);
+
+/** @brief Direct SPI-FIFO fast read (bus must be held + primed). Configure once
+ *         with adaq_ll_fifo_setup(), then adaq_ll_fifo_read() per sample. */
+void      adaq_ll_fifo_setup(adaq_ll_t *ll, size_t n_bytes);
+esp_err_t adaq_ll_fifo_read(adaq_ll_t *ll, uint8_t *rx, size_t n_bytes);
+
+/** @brief Manual chip-select for the streaming/FIFO fast path. The FIFO read
+ *         drives no CS and dev_data owns none, so begin() takes the CS pin from
+ *         the SPI peripheral to drive it as a GPIO (idle high); assert/deassert
+ *         wrap each FIFO read; end() hands the pin back to the SPI CS0 signal so
+ *         register access (dev_cfg) works again. */
+void      adaq_ll_cs_manual_begin(adaq_ll_t *ll);
+void      adaq_ll_cs_manual_end(adaq_ll_t *ll);
+static inline void adaq_ll_cs_assert(adaq_ll_t *ll)   { gpio_set_level(ll->cs_pin, 0); }
+static inline void adaq_ll_cs_deassert(adaq_ll_t *ll) { gpio_set_level(ll->cs_pin, 1); }
 
 // -----------------------------------------------------------------------------
 // CRC helpers

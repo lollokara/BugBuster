@@ -1,4 +1,12 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# SILICON REVISION — the fabricated DAQ HAT uses ESP32-P4 rev v1.3 (esp32p4-eco2),
+# which is PRE-rev3 and uses the SPLIT SRAM layout (sram_low/sram_high). Select the
+# rev<3.0 support branch with a v1.0 minimum (covers v1.3). This MUST stay in
+# lockstep with board_build.chip_variant = esp32p4_es in platformio.ini (the
+# builder's split sections.ld.in). Using REV_MIN_301 (rev3 contiguous) here
+# crashes v1.3 silicon with an illegal-instruction Guru Meditation at boot.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
 # Custom dual-OTA partition table (partitions.csv) for safe A/B firmware update.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
@@ -16,6 +24,15 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=n
 # Allow placing the DRDY ISR in IRAM.
 CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
 
+# The DRDY-gated ADAQ capture tasks are pinned to CPU1 (dedicated acquisition
+# core). Under load they legitimately run at 100% and starve CPU1's IDLE task;
+# that is expected here, so do NOT let it trip the task watchdog and reboot.
+# (CPU0 IDLE stays watched — it runs USB/DSP/links and must stay responsive.)
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+# Finer scheduler granularity (1 ms tick) so a brief capture-task yield doesn't
+# cost 10 ms of throughput at 100 Hz.
+CONFIG_FREERTOS_HZ=1000
+
 # TinyUSB — USB-HS vendor-bulk endpoint for the measurement data stream (J5).
 # Vendor class enabled by setting the interface count > 0. Large TX FIFO for
 # high-throughput streaming; 512-byte endpoints (HS bulk max packet).
@@ -24,5 +41,9 @@ CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=512
 CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=8192
 CONFIG_TINYUSB_VENDOR_EPSIZE=512
 
-# Keep the serial console on UART0 (GPIO37/38); USB-FS serial-JTAG stays for J1.
-CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# Console routing. During bring-up, route the P4 log console to the built-in
+# USB-Serial-JTAG (J1, COM port) so the full boot log is visible over USB without
+# a UART adapter. This is a SEPARATE USB controller from the TinyUSB-HS
+# measurement stream on J5 (PID 4001), so the two do not conflict. Switch back to
+# CONFIG_ESP_CONSOLE_UART_DEFAULT=y (UART0, GPIO37/38) for production if desired.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

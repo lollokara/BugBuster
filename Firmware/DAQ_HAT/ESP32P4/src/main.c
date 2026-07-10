@@ -6,6 +6,7 @@
 #include "daq_board.h"
 #include "daq_settings_glue.h"
 #include "diagnostics.h"
+#include "cli.h"
 
 static const char *TAG = "daq_hat_p4";
 
@@ -48,14 +49,22 @@ void app_main(void)
         ESP_LOGW(TAG, "internal temperature sensor unavailable");
     }
 
-    // Start the DRDY-gated fast acquisition path: per-bus capture tasks plus the
-    // pairing/fusion/DSP/spectrum/stream processor. The PSRAM ring gives tens of
-    // ms of slack so FFT spikes and USB back-pressure never drop samples.
+    // DRDY-gated fast acquisition path (per-bus capture + fusion/DSP/USB stream).
+    // Auto-starts at the default 8 kSPS/channel ODR, which is the measured
+    // end-to-end lossless ceiling (raise at runtime with `odr`; toggle with
+    // `fast on|off`). Higher ODRs are available but currently overflow the
+    // FINE/COARSE fusion consumer — see the capture/fusion fast-path work.
     esp_err_t ferr = daq_board_run_fast(&s_board, 8192);
     if (ferr != ESP_OK) {
         ESP_LOGE(TAG, "fast path start failed: %s", esp_err_to_name(ferr));
     } else {
-        ESP_LOGI(TAG, "fast acquisition running");
+        ESP_LOGI(TAG, "fast acquisition running (8 kSPS/ch, use 'fast'/'odr' to change)");
+    }
+
+    // Interactive bring-up console on the USB-Serial-JTAG debug port (J1).
+    // Type 'help' for commands (status/read/adaq/temp/rail/vdut/ilimit).
+    if (daq_cli_start(&s_board) != ESP_OK) {
+        ESP_LOGW(TAG, "bring-up console unavailable");
     }
 
     // Low-rate housekeeping only: the fast task owns the acquisition + USB
@@ -63,7 +72,7 @@ void app_main(void)
     // diagnostics snapshot to the C6 Diagnostics menu (~1 Hz).
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
-        ESP_LOGI(TAG, "I=%.6g A  V=%.4f V  P=%.6g W  E=%.4f mWh  Q=%.4f mAh  "
+        ESP_LOGD(TAG, "I=%.6g A  V=%.4f V  P=%.6g W  E=%.4f mWh  Q=%.4f mAh  "
                       "drop F/C=%u/%u",
                  power_dsp_last_i(&s_board.dsp),
                  power_dsp_last_v(&s_board.dsp),

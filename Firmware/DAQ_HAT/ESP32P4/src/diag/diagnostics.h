@@ -25,6 +25,13 @@ extern "C" {
 esp_err_t diagnostics_init(void);
 
 /**
+ * @brief Read the ESP32-P4 internal die temperature (deg C) from the sensor
+ *        installed by diagnostics_init(). Returns ESP_ERR_INVALID_STATE if the
+ *        sensor is unavailable. Used by the bring-up TUI live temperature panel.
+ */
+esp_err_t diagnostics_p4_temp_celsius(float *out_c);
+
+/**
  * @brief Gather every readable onboard device and push the snapshot to the C6.
  *        Call periodically (~1 Hz) from the housekeeping loop. ADAQ die temps
  *        are only read while acquisition is stopped (the diagnostic mux shares

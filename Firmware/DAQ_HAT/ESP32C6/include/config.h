@@ -50,19 +50,19 @@
 //
 //   Panel pin   Net      ESP32-C6 GPIO
 //   ---------   ------   -------------
-//   SCL         SCLK     IO4
-//   SDA         MOSI     IO3
-//   RST         RESET    IO2
-//   DC          D/CX     IO1
-//   CS          CS       IO0
-//   BL          BACKLT   IO10
+//   SCL         SCLK     IO5
+//   SDA         MOSI     IO6
+//   RST         RESET    IO13
+//   DC          D/CX     IO7
+//   CS          CS       IO4
+//   BL          BACKLT   IO14
 // ---------------------------------------------------------------------------
-#define DISP_PIN_SCLK     4
-#define DISP_PIN_MOSI     3
-#define DISP_PIN_RST      2
-#define DISP_PIN_DC       1
-#define DISP_PIN_CS       0
-#define DISP_PIN_BL       10
+#define DISP_PIN_SCLK     5
+#define DISP_PIN_MOSI     6
+#define DISP_PIN_RST      13
+#define DISP_PIN_DC       7
+#define DISP_PIN_CS       4
+#define DISP_PIN_BL       14
 
 // ST7789 panel geometry for the ER-TFTM2.25-1 (240x320 controller windowed
 // down to a 76x284 visible glass). The controller RAM is offset, so the
@@ -87,7 +87,7 @@
 #define DISP_GAP_X        DISP_ROW_OFFSET
 #define DISP_GAP_Y        DISP_COL_OFFSET
 
-// Backlight (IO10) is ACTIVE LOW: the panel LED is on when the pin is driven
+// Backlight (IO14) is ACTIVE LOW: the panel LED is on when the pin is driven
 // LOW. display_set_backlight() inverts internally, so level 255 == full
 // brightness (pin held low).
 #define DISP_BL_ACTIVE_LOW  1

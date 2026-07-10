@@ -13,12 +13,16 @@
 #include <stdint.h>
 
 // -----------------------------------------------------------------------------
-// SPI instruction byte
-//   bit7      = R/W   (1 = read, 0 = write)
+// SPI instruction byte (datasheet "SPI Reading and Writing", Fig 159):
+//   bit7      = FS    frame-start, ACTIVE LOW -> must be 0 to begin a transaction
+//   bit6      = R/W   (1 = read, 0 = write)
 //   bits[5:0] = register address
-// (The frame-start is asserted by CS; bit6 is unused/0.)
+// e.g. read ADC_DATA (0x2C) -> 0b0_1_101100 = 0x6C (matches the datasheet CRC
+// example). Read = 0x40 | addr, Write = 0x00 | addr. NOTE: the read bit is bit6
+// (0x40), NOT bit7 — putting R/W in bit7 leaves FS high so the device ignores
+// the frame entirely and every read returns 0x00.
 // -----------------------------------------------------------------------------
-#define ADAQ_SPI_READ_BIT          0x80u
+#define ADAQ_SPI_READ_BIT          0x40u
 #define ADAQ_SPI_ADDR_MASK         0x3Fu
 #define ADAQ_INSTR_WRITE(addr)     ((uint8_t)((addr) & ADAQ_SPI_ADDR_MASK))
 #define ADAQ_INSTR_READ(addr)      ((uint8_t)(ADAQ_SPI_READ_BIT | ((addr) & ADAQ_SPI_ADDR_MASK)))

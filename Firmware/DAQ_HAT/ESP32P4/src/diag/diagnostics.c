@@ -26,6 +26,13 @@ esp_err_t diagnostics_init(void)
     return err;
 }
 
+esp_err_t diagnostics_p4_temp_celsius(float *out_c)
+{
+    if (!s_tsens) return ESP_ERR_INVALID_STATE;
+    if (!out_c)   return ESP_ERR_INVALID_ARG;
+    return temperature_sensor_get_celsius(s_tsens, out_c);
+}
+
 // ADAQ7769-1 internal die temperature via the diagnostic mux. This re-routes the
 // converter and would corrupt the gapless capture, so it is ONLY read when the
 // fast acquisition path is idle; while streaming it reports DDP_DIAG_TEMP_NA.

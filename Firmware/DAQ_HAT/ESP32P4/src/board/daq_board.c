@@ -20,6 +20,53 @@ static const char *TAG = "daq_board";
 // comfortable margin for future block transfers.
 #define DAQ_SPI_MAX_XFER   64
 
+// -----------------------------------------------------------------------------
+// Analog power-rail bring-up. The 3x ADAQ7769-1 are powered from the analog 3V3
+// rail (TPS74601, EN=PWR_3V3_EN_PIN, PG=PWR_3V3_PG_PIN); the front-end amps need
+// the +/-26V and +/-24V rails. All are OFF at boot (board pull-downs). They MUST
+// be enabled here BEFORE the shared ADAQ reset/probe — otherwise every SPI read
+// returns 0x00 and all three ADAQs identify as absent ("ADAQ 0/3").
+// Sequence per config.h: EN 3V3 -> wait PG -> EN +/-26V -> EN +/-24V -> settle.
+static void power_rails_up(void)
+{
+    gpio_config_t en = {
+        .pin_bit_mask = (1ULL << PWR_3V3_EN_PIN) |
+                        (1ULL << PWR_26V_EN_PIN) |
+                        (1ULL << PWR_24V_EN_PIN),
+        .mode         = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&en);
+
+    gpio_config_t pg = {
+        .pin_bit_mask = 1ULL << PWR_3V3_PG_PIN,
+        .mode         = GPIO_MODE_INPUT,
+    };
+    gpio_config(&pg);
+
+    // 1) Analog 3V3 LDO — powers the ADAQs.
+    gpio_set_level(PWR_3V3_EN_PIN, 1);
+
+    // 2) Wait for power-good (up to 50 ms). Proceed on timeout so a board whose
+    //    PG strap is absent/unrouted still boots (the settle delay covers it).
+    bool pg_ok = false;
+    for (int i = 0; i < 50; ++i) {
+        if (gpio_get_level(PWR_3V3_PG_PIN)) { pg_ok = true; break; }
+        esp_rom_delay_us(1000);
+    }
+    if (!pg_ok) {
+        ESP_LOGW(TAG, "3V3 analog rail PG not asserted after 50ms (continuing)");
+    }
+
+    // 3) Front-end +/-26V then +/-24V supplies.
+    gpio_set_level(PWR_26V_EN_PIN, 1);
+    esp_rom_delay_us(2000);
+    gpio_set_level(PWR_24V_EN_PIN, 1);
+
+    // 4) Settle before the shared ADAQ reset / first SPI access.
+    esp_rom_delay_us(5000);
+    ESP_LOGI(TAG, "analog rails up (3V3 EN + PG=%d, +/-26V, +/-24V)", (int)pg_ok);
+}
+
 // All three ADAQ *RST are tied to one GPIO. Pulse it once for a clean POR; the
 // per-device begin() then uses a SPI soft reset (reset_pin == GPIO_NUM_NC).
 static void shared_adaq_reset(void)
@@ -69,6 +116,10 @@ esp_err_t daq_board_init(daq_board_t *b)
     // caller can run a self-test and confirm (or let the bootloader roll back).
     ota_init();
 
+    // Bring up the analog power rails BEFORE any ADAQ access — the ADAQs are
+    // unpowered (and read 0x00) until the 3V3 analog LDO is enabled.
+    power_rails_up();
+
     esp_err_t err = init_spi_buses();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(err));
@@ -87,13 +138,13 @@ esp_err_t daq_board_init(daq_board_t *b)
         .is_sync_master = (ADAQ_SYNC_MASTER_INDEX == 0),
     };
     // --- ADAQ #1 : ADAQ2/U22, bus B, COARSE current (50 mohm) ---
-    // Wide-swing 50 mohm path -> IN3_AAF (gain 0.143, +/-28.7 V span).
+    // COARSE CSA output is gain 1 -> wired to IN1_AAF (+/-4.096 V).
     adaq7769_params_t p1 = {
         .host           = ADAQ_BUSB_HOST,
         .cs_pin         = ADAQ1_CS_PIN,
         .reset_pin      = ADAQ1_RESET_PIN,
         .drdy_pin       = ADAQ1_DRDY_PIN,
-        .aaf_input      = ADAQ_AAF_IN3,
+        .aaf_input      = ADAQ_AAF_IN1,
         .is_sync_master = (ADAQ_SYNC_MASTER_INDEX == 1),
     };
     // --- ADAQ #2 : ADAQ3/U23, bus B, VOLTAGE (V_DUT via mux U25) ---
@@ -696,17 +747,20 @@ esp_err_t daq_board_start_streaming(daq_board_t *b, size_t ring_capacity)
         return err;
     }
 
-    // Pin the two capture tasks to different cores to spread the load.
-    err = adaq_stream_start(&b->stream_a, /*core=*/0, /*prio=*/20);
-    if (err != ESP_OK) return err;
-    err = adaq_stream_start(&b->stream_b, /*core=*/1, /*prio=*/20);
+    // ONE capture task services BOTH buses (all 3 devices). Two per-bus tasks
+    // pinned to the same core time-slice and, at high ODR, drop samples on the
+    // off-slice (DRDY notifications coalesce). A single task reads the two
+    // independent SPI hosts back-to-back with no time-slicing. Each stream
+    // keeps its own ring, so the fusion consumer is unchanged. Pinned to core 1
+    // (dedicated acquisition core); core 0 runs USB/DSP/links/UI.
+    adaq_stream_t *streams[2] = { &b->stream_a, &b->stream_b };
+    err = adaq_stream_comb_start(&b->capture, streams, 2, /*core=*/1, /*prio=*/20);
     return err;
 }
 
 esp_err_t daq_board_stop_streaming(daq_board_t *b)
 {
-    adaq_stream_stop(&b->stream_a);
-    adaq_stream_stop(&b->stream_b);
+    adaq_stream_comb_stop(&b->capture);
     adaq_stream_deinit(&b->stream_a);
     adaq_stream_deinit(&b->stream_b);
     return ESP_OK;
@@ -857,6 +911,21 @@ static void daq_fast_task(void *arg)
 esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
 {
     if (b->fast_running) return ESP_OK;
+
+    // If no ADAQ front-end responded (e.g. analog rails not yet enabled, or the
+    // ADCs are unpopulated/held in reset), do NOT start the acquisition path.
+    // The prio-20 DRDY capture tasks would otherwise spin on floating DRDY lines
+    // (spurious edge-ISR flood) and starve IDLE0 -> task watchdog reset every
+    // ~5 s, which also tears down the USB-HS stream before it can enumerate.
+    // Stay alive in link-only mode: USB (PID 0x4001), S3 and C6 links keep
+    // running so the board is reachable for bring-up and rail control.
+    int adaq_ok_count = b->adaq_ok[0] + b->adaq_ok[1] + b->adaq_ok[2];
+    if (adaq_ok_count == 0) {
+        ESP_LOGW(TAG, "no ADAQ front-end detected (0/%d) — acquisition idle; "
+                      "USB/S3/C6 links stay up. Enable analog rails and reset "
+                      "to bring up the ADCs.", ADAQ_COUNT);
+        return ESP_OK;
+    }
 
     esp_err_t err = daq_board_start_streaming(b, ring_capacity);
     if (err != ESP_OK) return err;

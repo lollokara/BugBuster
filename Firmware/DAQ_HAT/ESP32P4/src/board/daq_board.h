@@ -53,6 +53,7 @@ typedef struct daq_board {
 
     adaq_stream_t           stream_a;   // ADAQ #0
     adaq_stream_t           stream_b;   // ADAQ #1 + #2
+    adaq_stream_comb_t      capture;    // ONE task servicing both streams
 
     bool                    adaq_ok[ADAQ_COUNT];
     bool                    temp_ok[2];
