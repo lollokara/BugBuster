@@ -20,6 +20,8 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_err.h"
+#include "soc/soc.h"
+#include "soc/gpio_reg.h"
 
 #include "adaq7769_regs.h"
 
@@ -116,6 +118,13 @@ void      adaq_ll_bus_release(adaq_ll_t *ll);
 void      adaq_ll_fifo_setup(adaq_ll_t *ll, size_t n_bytes);
 esp_err_t adaq_ll_fifo_read(adaq_ll_t *ll, uint8_t *rx, size_t n_bytes);
 
+/** @brief Split-phase FIFO read: start() triggers the transfer (non-blocking),
+ *         wait() spins until it completes, drain() copies the RX FIFO out. Start
+ *         two hosts back-to-back to overlap their SCLKs, then wait+drain each. */
+void      adaq_ll_fifo_start(adaq_ll_t *ll);
+void      adaq_ll_fifo_wait(adaq_ll_t *ll);
+void      adaq_ll_fifo_drain(adaq_ll_t *ll, uint8_t *rx, size_t n_bytes);
+
 /** @brief Manual chip-select for the streaming/FIFO fast path. The FIFO read
  *         drives no CS and dev_data owns none, so begin() takes the CS pin from
  *         the SPI peripheral to drive it as a GPIO (idle high); assert/deassert
@@ -123,8 +132,19 @@ esp_err_t adaq_ll_fifo_read(adaq_ll_t *ll, uint8_t *rx, size_t n_bytes);
  *         register access (dev_cfg) works again. */
 void      adaq_ll_cs_manual_begin(adaq_ll_t *ll);
 void      adaq_ll_cs_manual_end(adaq_ll_t *ll);
-static inline void adaq_ll_cs_assert(adaq_ll_t *ll)   { gpio_set_level(ll->cs_pin, 0); }
-static inline void adaq_ll_cs_deassert(adaq_ll_t *ll) { gpio_set_level(ll->cs_pin, 1); }
+// Fast CS toggle on the streaming hot path: write the GPIO set/clear registers
+// directly (active-low CS -> W1TC asserts, W1TS deasserts). This skips the
+// gpio_set_level() argument checks / dispatch (~0.5 us/read saved at 300k+
+// reads/s). Valid only after cs_manual_begin() has routed the pin to GPIO. All
+// ADAQ CS pins are < 32, so the low OUT_W1T{S,C} register suffices.
+static inline void adaq_ll_cs_assert(adaq_ll_t *ll)
+{
+    REG_WRITE(GPIO_OUT_W1TC_REG, 1u << ll->cs_pin);
+}
+static inline void adaq_ll_cs_deassert(adaq_ll_t *ll)
+{
+    REG_WRITE(GPIO_OUT_W1TS_REG, 1u << ll->cs_pin);
+}
 
 // -----------------------------------------------------------------------------
 // CRC helpers

@@ -79,8 +79,12 @@
 #define DISP_WIDTH        284          // landscape width  (along native rows)
 #define DISP_HEIGHT       76           // landscape height (along native cols)
 #define DISP_SWAP_XY      true
-#define DISP_MIRROR_X     false
-#define DISP_MIRROR_Y     true
+// Rotated 180° vs the original bring-up orientation: both mirror axes toggled
+// (was MIRROR_X=false, MIRROR_Y=true). The visible window is centred on both
+// controller axes (82 px margins on the 240 col axis, 18 px on the 320 row
+// axis), so the RAM gap offsets are unchanged by the flip.
+#define DISP_MIRROR_X     true
+#define DISP_MIRROR_Y     false
 // Gaps in the swapped (landscape) frame: X runs along the native row axis,
 // Y along the native column axis. Flip these if the image is shifted on the
 // real glass.
@@ -97,9 +101,11 @@
 // inverted on a different panel batch.
 #define DISP_INVERT  0
 
-// SPI clock for the panel. ST7789 tolerates ~40-62 MHz; stay conservative
-// for the flex cable.
-#define DISP_SPI_HZ       (40 * 1000 * 1000)
+// SPI clock for the panel. ST7789 tolerates ~40-62 MHz, but 40 MHz over the
+// ER-TFTM2.25-1 flex cable showed random-noise/flicker corruption on the
+// bench — signal integrity. 20 MHz is a stable, conservative value; raise
+// again only if a shorter/better-shielded cable is used.
+#define DISP_SPI_HZ       (20 * 1000 * 1000)
 #define DISP_SPI_HOST     1     // SPI2_HOST
 
 // ---------------------------------------------------------------------------

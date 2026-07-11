@@ -73,6 +73,8 @@ typedef struct daq_board {
     volatile bool           fast_running;
     uint8_t                 wave_decim;   // USB waveform decimation (>=1)
     uint8_t                 wave_count;   // running decimation counter
+    uint8_t                 dsp_decim;    // DSP-tail decimation (power/multires/FFT)
+    uint8_t                 dsp_count;    // running DSP-tail counter
     uint32_t                drop_fine;    // paired-stream resync drops (diag)
     uint32_t                drop_coarse;
 } daq_board_t;

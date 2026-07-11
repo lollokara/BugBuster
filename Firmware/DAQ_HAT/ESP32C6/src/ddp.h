@@ -31,6 +31,11 @@ void ddp_send_config(const ddp_config_t *cfg);
 // by c6_config_send() when the user commits a menu edit.
 void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len);
 
+// Announce our presence to the P4 (unsolicited RSP_INFO). Called periodically
+// so the C6 and P4 discover each other regardless of boot order / a transient
+// link drop. Safe to call when no P4 is attached (bytes are simply dropped).
+void ddp_announce_presence(void);
+
 // Return (and clear) the button events relayed from the P4 since the last call.
 // Bits are DDP_BTN_* (== BTN_EV_*), so the result feeds menu_update() directly.
 uint8_t ddp_take_buttons(void);

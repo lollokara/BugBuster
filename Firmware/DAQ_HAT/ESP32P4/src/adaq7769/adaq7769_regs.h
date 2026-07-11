@@ -236,6 +236,13 @@
 #define ADAQ_ST_SPI_ERROR          (1u << 1)
 #define ADAQ_ST_POR_FLAG           (1u << 0)
 
+// Real fault bits worth acting on. Deliberately EXCLUDES MASTER_ERROR (bit7 is
+// only the aggregate — it is also asserted by the benign POR_FLAG until cleared)
+// and POR_FLAG itself (informational after a reset).
+#define ADAQ_ST_ERR_MASK  (ADAQ_ST_ADC_ERROR | ADAQ_ST_DIG_ERROR |          \
+                           ADAQ_ST_ERR_EXT_CLK_QUAL | ADAQ_ST_FILT_SATURATED |\
+                           ADAQ_ST_FILT_NOT_SETTLED | ADAQ_ST_SPI_ERROR)
+
 // -----------------------------------------------------------------------------
 // 0x2E SPI_DIAG_STATUS (W1C)
 // -----------------------------------------------------------------------------

@@ -9,6 +9,8 @@
 #include "esp_attr.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "soc/soc.h"
+#include "soc/gpio_reg.h"
 
 static const char *TAG = "adaq_stream";
 
@@ -89,13 +91,17 @@ static inline void capture_one(adaq_stream_t *s, uint8_t idx, size_t plen, uint8
     rec.device_id = idx;
     uint32_t raw = ((uint32_t)buf[0] << 16) | ((uint32_t)buf[1] << 8) | buf[2];
     rec.value = adaq_sign_extend24(raw);
+    dev->last_raw = rec.value;
 
     size_t off = 3;
     if (s->append_status) {
         rec.status = buf[off++];
-        if (rec.status & (ADAQ_ST_MASTER_ERROR | ADAQ_ST_FILT_SATURATED |
-                          ADAQ_ST_FILT_NOT_SETTLED)) {
+        dev->diag_last_status = rec.status;
+        dev->diag_sticky     |= rec.status;
+        dev->diag_status_reads++;
+        if (rec.status & ADAQ_ST_ERR_MASK) {
             rec.flags |= ADAQ_SAMPLE_FLAG_STATUS_ERR;
+            dev->diag_err_count++;
         }
     }
     if (s->append_crc) {
@@ -276,82 +282,148 @@ esp_err_t adaq_stream_stop(adaq_stream_t *s)
 }
 
 // -----------------------------------------------------------------------------
-// Combined capture — one task, all buses.
+// Combined capture — one task, all buses, with cross-peripheral overlap.
 // -----------------------------------------------------------------------------
-static void IRAM_ATTR comb_drdy_isr(void *arg)
+// Split-phase capture so two SPI hosts clock CONCURRENTLY. FINE is alone on SPI3
+// and COARSE/VOLTAGE share SPI2; at synced ODR their DRDYs fire together, so we
+// trigger one read on each host, let both SCLKs overlap, then drain both. That
+// pays the ~1.2 us SCLK once per FINE+COARSE pair instead of twice — the single
+// capture core can then sustain 256 kSPS on both channels.
+//
+// Phase 1 (begin): pick the read length (data-only 3 bytes, or 4 every
+// ADAQ_STATUS_SAMPLE_DIV-th sample to grab the status header), assert CS, and
+// START the transfer (non-blocking). *cur_len tracks the host's FIFO length so
+// shared-bus devices don't re-setup needlessly.
+static inline void capture_begin(adaq_stream_t *s, uint8_t local, bool want_status,
+                                 uint8_t *cur_len)
 {
-    struct adaq_comb_dev *d  = (struct adaq_comb_dev *)arg;
-    adaq_stream_comb_t   *c  = (adaq_stream_comb_t *)d->comb;
-    d->stream->isr_count++;
-    // Set this device's ready bit. Only wake the task on the idle->busy edge
-    // (mask was empty): while it's actively draining, no notification is sent,
-    // so the per-sample interrupt cost collapses to a single atomic OR.
-    uint32_t prev = __atomic_fetch_or(&c->pending, (1u << d->bit), __ATOMIC_RELAXED);
-    if (prev == 0) {
-        BaseType_t hp = pdFALSE;
-        vTaskNotifyGiveFromISR(c->task, &hp);
-        if (hp == pdTRUE) {
-            portYIELD_FROM_ISR();
+    adaq7769_t *dev = s->devices[local];
+    uint8_t n = want_status ? 4 : 3;
+    if (*cur_len != n) {
+        adaq_ll_fifo_setup(&dev->ll, n);
+        *cur_len = n;
+    }
+    adaq_ll_cs_assert(&dev->ll);
+    adaq_ll_fifo_start(&dev->ll);
+}
+
+// Phase 2 (end): wait for the transfer, drain the FIFO, deassert CS, parse and
+// push. When overlapped, the other host's SCLK finished during this one's wait,
+// so its end() barely blocks.
+static inline void capture_end(adaq_stream_t *s, uint8_t local, bool want_status,
+                               uint8_t *buf)
+{
+    adaq7769_t *dev = s->devices[local];
+    uint8_t n = want_status ? 4 : 3;
+    adaq_ll_fifo_wait(&dev->ll);
+    adaq_ll_fifo_drain(&dev->ll, buf, n);
+    adaq_ll_cs_deassert(&dev->ll);
+
+    adaq_sample_t rec = {0};
+    rec.device_id = local;
+    uint32_t raw = ((uint32_t)buf[0] << 16) | ((uint32_t)buf[1] << 8) | buf[2];
+    rec.value = adaq_sign_extend24(raw);
+    dev->last_raw = rec.value;
+    if (want_status) {
+        rec.status = buf[3];
+        // Aggregate per-device diagnostics (surfaced by TUI / adaqdiag).
+        dev->diag_last_status = rec.status;
+        dev->diag_sticky     |= rec.status;
+        dev->diag_status_reads++;
+        if (rec.status & ADAQ_ST_ERR_MASK) {
+            rec.flags |= ADAQ_SAMPLE_FLAG_STATUS_ERR;
+            dev->diag_err_count++;
         }
     }
+    rec.seq = s->seq[local]++;
+    ring_push(s, &rec);
 }
 
 static void capture_task_comb(void *arg)
 {
     adaq_stream_comb_t *c = (adaq_stream_comb_t *)arg;
-    uint8_t buf[5];
+    uint8_t buf[8];
 
-    // Store our own handle BEFORE installing ISRs (first DRDY needs a target).
     c->task = xTaskGetCurrentTaskHandle();
 
-    gpio_install_isr_service(0);   // idempotent
+    // Configure every DRDY pin for POSEDGE edge-latch WITHOUT a CPU interrupt:
+    // the edge detector still sets the pin's GPIO_STATUS bit, which we poll and
+    // W1TC-clear below — no per-sample ISR dispatch (the ~1 us/sample interrupt
+    // was the throughput ceiling above ~200 kSPS). Core 1 is dedicated to
+    // acquisition (IDLE1 WDT disabled), so a 100% busy-poll is acceptable.
+    uint32_t mask = 0;
     for (uint8_t i = 0; i < c->n_dev; ++i) {
         gpio_num_t pin = c->dev[i].stream->devices[c->dev[i].local]->drdy_pin;
+        c->dev[i].drdy_pin   = (uint8_t)pin;
+        c->dev[i].status_ctr = 0;
         if (pin == GPIO_NUM_NC) continue;
         gpio_set_intr_type(pin, GPIO_INTR_POSEDGE);
-        gpio_isr_handler_add(pin, comb_drdy_isr, &c->dev[i]);
+        gpio_intr_disable(pin);           // ensure no CPU interrupt is routed
+        mask |= (1u << (uint32_t)pin);
     }
+    c->drdy_mask = mask;
+    REG_WRITE(GPIO_STATUS_W1TC_REG, mask);   // clear any stale latched edges
 
-    // Hold each host's bus and prime it (one driver read sets clock/mode), then
-    // configure the direct SPI-FIFO fast read. All devices on a host share the
-    // same 20 MHz Mode-3 config, so priming/setup on the first device of each
-    // stream serves the rest; the other devices' fifo_read()s poke the FIFO
-    // directly (no bus lock needed). Held for the whole session.
+    // Hold + prime each host; default to data-only 3-byte fast reads. cur_len
+    // is indexed by stream (= host), tracking the FIFO length so a status read
+    // (4 bytes) re-runs fifo_setup only on transitions.
+    uint8_t cur_len[ADAQ_STREAM_MAX_DEVICES];
     for (uint8_t si = 0; si < c->n_streams; ++si) {
         adaq7769_t *d0 = c->streams[si]->devices[0];
-        uint8_t tmp[5];
+        uint8_t tmp[8];
         adaq_ll_bus_acquire(&d0->ll);
         adaq_ll_contread_word(&d0->ll, tmp, payload_len(c->streams[si]));
-        adaq_ll_fifo_setup(&d0->ll, payload_len(c->streams[si]));
+        adaq_ll_fifo_setup(&d0->ll, 3);
+        cur_len[si] = 3;
     }
-
-    // Take every device's CS pin away from the SPI peripheral and drive it
-    // manually for the session (the FIFO fast-read path asserts no CS on its
-    // own). Done per device so a shared bus's two devices each get their own CS.
     for (uint8_t i = 0; i < c->n_dev; ++i) {
         adaq7769_t *dev = c->dev[i].stream->devices[c->dev[i].local];
         adaq_ll_cs_manual_begin(&dev->ll);
     }
 
+    // Poll the DRDY edge-status latch and overlap one read per SPI host: trigger
+    // (begin) at most one ready device on each stream so their SCLKs clock in
+    // parallel, then drain (end) them. Extra ready devices on a shared bus keep
+    // their latched status bit and are serviced on the next pass.
+    int8_t   trig[ADAQ_STREAM_MAX_DEVICES];
+    bool     trig_ws[ADAQ_STREAM_MAX_DEVICES];
     while (c->running) {
-        // Grab and clear the ready mask in one atomic op. If empty, block on the
-        // notification (so CPU1 IDLE runs); otherwise drain every ready device.
-        uint32_t bits = __atomic_exchange_n(&c->pending, 0u, __ATOMIC_RELAXED);
-        if (bits == 0) {
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
-            continue;
+        uint32_t st = REG_READ(GPIO_STATUS_REG) & mask;
+        if (st == 0) {
+            continue;                          // tight spin until a DRDY edge
         }
+        for (uint8_t si = 0; si < c->n_streams; ++si) trig[si] = -1;
+        uint32_t serviced = 0;
+        uint8_t  ntrig    = 0;
+
+        // Phase 1: trigger one read per stream (concurrent SCLKs).
         for (uint8_t i = 0; i < c->n_dev; ++i) {
-            if (bits & (1u << c->dev[i].bit)) {
-                adaq_stream_t *s = c->dev[i].stream;
-                capture_one(s, c->dev[i].local, payload_len(s), buf);
-            }
+            if (!(st & (1u << (uint32_t)c->dev[i].drdy_pin))) continue;
+            uint8_t si = c->dev[i].stream_idx;
+            if (trig[si] >= 0) continue;       // this host already busy this pass
+            adaq_stream_t *s = c->dev[i].stream;
+            s->isr_count++;                    // DRDY edges detected
+            bool ws = (++c->dev[i].status_ctr >= ADAQ_STATUS_SAMPLE_DIV);
+            if (ws) c->dev[i].status_ctr = 0;
+            capture_begin(s, c->dev[i].local, ws, &cur_len[si]);
+            trig[si]    = (int8_t)i;
+            trig_ws[si] = ws;
+            serviced   |= (1u << (uint32_t)c->dev[i].drdy_pin);
+            ntrig++;
+        }
+        if (ntrig >= 2) c->overlap_hits++;     // both hosts clocked in parallel
+        // Clear the edges we claimed now (before draining) so a fresh edge during
+        // the drain re-latches and is caught next pass.
+        REG_WRITE(GPIO_STATUS_W1TC_REG, serviced);
+
+        // Phase 2: drain the overlapped transfers.
+        for (uint8_t si = 0; si < c->n_streams; ++si) {
+            if (trig[si] < 0) continue;
+            uint8_t i = (uint8_t)trig[si];
+            capture_end(c->dev[i].stream, c->dev[i].local, trig_ws[si], buf);
         }
     }
-    for (uint8_t i = 0; i < c->n_dev; ++i) {
-        gpio_num_t pin = c->dev[i].stream->devices[c->dev[i].local]->drdy_pin;
-        if (pin != GPIO_NUM_NC) gpio_isr_handler_remove(pin);
-    }
+
     // Release the held buses first (so no device holds the bus lock), then hand
     // every device's CS pin back to the SPI peripheral (rebuilds dev_cfg) so
     // register access works again after the stream stops.
@@ -381,10 +453,11 @@ esp_err_t adaq_stream_comb_start(adaq_stream_comb_t *c,
         esp_err_t err = stream_arm(s);
         if (err != ESP_OK) return err;
         for (uint8_t d = 0; d < s->device_count; ++d) {
-            c->dev[c->n_dev].comb   = c;
-            c->dev[c->n_dev].stream = s;
-            c->dev[c->n_dev].local  = d;
-            c->dev[c->n_dev].bit    = bit++;
+            c->dev[c->n_dev].comb       = c;
+            c->dev[c->n_dev].stream     = s;
+            c->dev[c->n_dev].local      = d;
+            c->dev[c->n_dev].bit        = bit++;
+            c->dev[c->n_dev].stream_idx = si;
             c->n_dev++;
         }
     }

@@ -9,7 +9,7 @@ static const char *TAG = "settings";
 #define NVS_NS   "daqhat"
 #define NVS_KEY  "settings"
 // Bump when the settings_t layout changes so old blobs are discarded.
-#define SETTINGS_VERSION  3
+#define SETTINGS_VERSION  4
 
 settings_t g_settings;
 
@@ -39,7 +39,7 @@ static void load_defaults(void)
     g_settings.brightness_pct  = 100;
     g_settings.dark_mode       = false;
 
-    g_settings.npx_mode        = 4;     // Channel (front 4-connector status)
+    g_settings.npx_mode        = 1;     // Solid (lit on boot; P4/S3 can switch to Channel)
     g_settings.npx_brightness  = 50;
     g_settings.npx_color       = 0x0000FF00; // green
 

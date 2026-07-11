@@ -71,6 +71,7 @@
 #define DDP_FLAG_I_VALID        0x02u  // current field holds live data
 #define DDP_FLAG_V_OVERRANGE    0x04u
 #define DDP_FLAG_I_OVERRANGE    0x08u
+#define DDP_FLAG_SRC_ON         0x10u  // DUT supply (SMU) output is enabled
 
 // --- Link / connection state ------------------------------------------------
 #define DDP_STATE_BOOT          0u

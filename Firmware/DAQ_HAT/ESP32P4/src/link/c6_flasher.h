@@ -23,10 +23,21 @@
 extern "C" {
 #endif
 
-// Enter the C6 ROM bootloader, connect (with stub), and begin a flash of
-// @p image_size bytes at offset 0 (full image: bootloader + partitions + app).
-// @p image_size must be 4-byte aligned (esptool images are).
-esp_err_t c6_flasher_begin(uint32_t image_size);
+// Configure C6 RST, BOOT and BOOT_EN pins as push-pull outputs via GPIO matrix.
+// Call this after any library init that calls gpio_reset_pin on these pads.
+void c6_gpio_init_output(void);
+
+// Enter the C6 ROM bootloader via UART and begin a flash of @p image_size bytes
+// at @p flash_offset. GPIO8 (BOOT_EN) must be driven LOW by the caller before
+// this is called to select UART sub-mode (vs SDIO).
+esp_err_t c6_flasher_begin(uint32_t image_size, uint32_t flash_offset);
+
+// Enter the C6 ROM bootloader via SDIO and begin a flash of @p image_size bytes.
+// Use this on hardware where the SDIO bus is wired (GPIO14-19 on P4).
+// GPIO9 LOW at EN release → C6 SDIO download mode.
+// Enter the C6 SDIO ROM bootloader and begin a flash of @p image_size bytes
+// starting at @p flash_offset. Use offset=0 for full image, 0x10000 for app-only.
+esp_err_t c6_flasher_begin_sdio(uint32_t image_size, uint32_t flash_offset);
 
 // Stream the next image bytes (in order). Internally buffered into blocks.
 esp_err_t c6_flasher_write(const uint8_t *data, size_t len);

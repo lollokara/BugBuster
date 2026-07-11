@@ -191,6 +191,25 @@ esp_err_t daq_board_init(daq_board_t *b)
         }
     }
 
+    // U25 voltage mux address pins (GPIO47/48) must be driven as outputs and
+    // pre-set BEFORE range_manager_init() asserts MUX_EN (GPIO49 HIGH), which
+    // is shared between U24 and U25. Without this, U25 is live with floating
+    // A0/A1 lines from the moment MUX_EN goes high.
+    // Pre-load the output latch first so the pin never glitches LOW when the
+    // output driver is enabled.
+    gpio_set_level(VOLT_MUX_A0_PIN, VOLT_MUX_ADDR_VDUT & 1);
+    gpio_set_level(VOLT_MUX_A1_PIN, (VOLT_MUX_ADDR_VDUT >> 1) & 1);
+    {
+        gpio_config_t volt_mux_cfg = {
+            .pin_bit_mask = (1ULL << VOLT_MUX_A0_PIN) | (1ULL << VOLT_MUX_A1_PIN),
+            .mode         = GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&volt_mux_cfg);
+    }
+
     // --- Current-range manager (observes the analog autorange loop) ---
     range_manager_init(&b->range);
 
@@ -214,13 +233,6 @@ esp_err_t daq_board_init(daq_board_t *b)
     // SMU factory calibration: bring up NVS, load any stored cal tables, install
     // them into the SMU, and spawn the calibration worker task.
     smu_cal_init(&b->cal, b);
-
-    // Default the U25 voltage mux to the V_DUT (S4) node so the VOLTAGE ADAQ
-    // reads the supply output in normal operation as well as during cal.
-    gpio_set_direction(VOLT_MUX_A0_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_direction(VOLT_MUX_A1_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(VOLT_MUX_A0_PIN, VOLT_MUX_ADDR_VDUT & 1);
-    gpio_set_level(VOLT_MUX_A1_PIN, (VOLT_MUX_ADDR_VDUT >> 1) & 1);
 
     // --- Fusion + power DSP (driven by the FINE current ODR) ---
     float current_odr = b->adaq_ok[ADAQ_ROLE_FINE]
@@ -428,7 +440,11 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     static float mags[SPECTRUM_MAX_BINS];
     uint16_t nb = spectrum_get_magnitude(&b->spectrum, mags, SPECTRUM_MAX_BINS);
     if (nb > 0) {
-        uint32_t rate = (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
+        // Spectrum is fed the DECIMATED tap, so its sample rate (and thus the
+        // FFT frequency axis) is the fused ODR / dsp_decim.
+        uint8_t dd = b->dsp_decim ? b->dsp_decim : 1;
+        uint32_t rate =
+            (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]) / dd;
         usb_stream_send_fft(&b->usb, mags, nb, rate, b->fft_source,
                             (uint8_t)SPEC_WIN_HANN);
     }
@@ -457,7 +473,8 @@ esp_err_t daq_board_set_source(daq_board_t *b, float vdut, float ilimit,
     if (vdut > 0.0f) {
         smu_set_voltage(&b->smu, vdut);
     }
-    return smu_enable(&b->smu, enable);
+    esp_err_t err = smu_enable(&b->smu, enable);
+    return err;
 }
 
 // -----------------------------------------------------------------------------
@@ -608,7 +625,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                                                       : HATP_OTA_TARGET_P4;
             if (s_ota_target == HATP_OTA_TARGET_C6) {
                 ddp_master_deinit(&b->ddp);          // hand UART2 to the flasher
-                if (c6_flasher_begin(meta.image_size) != ESP_OK) {
+                if (c6_flasher_begin(meta.image_size, 0) != ESP_OK) {
                     c6_link_restart(b);
                     return -1;
                 }
@@ -692,6 +709,7 @@ static void daq_ui_task(void *arg)
 {
     daq_board_t *b = (daq_board_t *)arg;
     uint32_t last_meas = 0;
+    uint32_t last_hello = 0;
     for (;;) {
         uint32_t t = (uint32_t)(esp_timer_get_time() / 1000);
 
@@ -703,10 +721,20 @@ static void daq_ui_task(void *arg)
 
             if ((t - last_meas) >= 100) {
                 last_meas = t;
+                uint8_t mflags = DDP_FLAG_V_VALID | DDP_FLAG_I_VALID;
+                if (b->smu.enabled) mflags |= DDP_FLAG_SRC_ON;
                 ddp_master_set_measurement(&b->ddp,
                                            power_dsp_last_v(&b->dsp),
                                            power_dsp_last_i(&b->dsp),
-                                           DDP_FLAG_V_VALID | DDP_FLAG_I_VALID);
+                                           mflags);
+            }
+
+            // Periodic presence probe: prompt the C6 to reply with RSP_INFO so
+            // the two discover each other regardless of boot order / a transient
+            // link drop (the C6 also announces itself at 1 Hz). Cheap keepalive.
+            if ((t - last_hello) >= 1000) {
+                last_hello = t;
+                ddp_master_send(&b->ddp, DDP_CMD_GET_INFO, NULL, 0);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -781,6 +809,17 @@ static inline bool fast_sample_good(const adaq_sample_t *s)
                         ADAQ_SAMPLE_FLAG_CRC_ERR)) == 0;
 }
 
+// Open-circuit baseline (raw ADC_DATA) for a current range at the live V_DUT
+// code, subtracted in software from each sample. Returns 0 when no baseline is
+// stored for that range/code. HI and MID use the FINE ADC but have distinct
+// baselines, so the subtraction is keyed on the live (autoranged) range.
+static inline int32_t base_offset_adc(daq_board_t *b, uint8_t range)
+{
+    int32_t off = 0;
+    smu_base_offset(&b->cal, range, b->smu.v_code, &off);
+    return off;
+}
+
 // Fuse one (optional) FINE + (optional) COARSE pair and push it downstream.
 static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
                       const adaq_sample_t *coarse)
@@ -793,27 +832,41 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
         .coarse_v     = 0.0f,
     };
     if (fine && b->adaq_ok[ADAQ_ROLE_FINE]) {
-        in.fine_v     = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_FINE],
-                                               fine->value);
+        int32_t fv = fine->value;
+        if (in.range == RANGE_HI || in.range == RANGE_MID)
+            fv -= base_offset_adc(b, (uint8_t)in.range);
+        in.fine_v     = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_FINE], fv);
         in.fine_valid = fast_sample_good(fine);
     }
     if (coarse && b->adaq_ok[ADAQ_ROLE_COARSE]) {
-        in.coarse_v     = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_COARSE],
-                                                 coarse->value);
+        int32_t cv = coarse->value - base_offset_adc(b, (uint8_t)RANGE_LO);
+        in.coarse_v     = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_COARSE], cv);
         in.coarse_valid = fast_sample_good(coarse);
     }
 
     fusion_output_t fo;
     current_fusion_step(&b->fusion, &in, &fo);
-    power_dsp_push_current(&b->dsp, fo.amps);
-    float p = power_dsp_last_p(&b->dsp);
-    float v = power_dsp_last_v(&b->dsp);
 
-    // Full-rate reduction + spectrum (FFT runs inline only when enabled).
-    multires_push(&b->multires, fo.amps);
-    spectrum_push(&b->spectrum, (b->fft_source == 1) ? p : fo.amps);
+    // Instantaneous power for the full-rate PC stream: p = v_held * i. Computed
+    // inline (cheap) so the heavy power DSP need not run every sample. v is the
+    // held voltage from the slower VOLTAGE ADC.
+    float v = power_dsp_voltage(&b->dsp);
+    float p = v * fo.amps;
 
-    // Decimated raw waveform for USB transport.
+    // DSP TAIL (energy/charge/stats + multires + spectrum) runs DECIMATED: it
+    // doesn't need the full per-channel rate, and decimating frees core-0 budget
+    // so the full-rate fused stream to the PC keeps flowing. power_dsp's dt is
+    // set to the decimated period in daq_board_run_fast so energy/charge stay
+    // correct. The PC still gets every fused sample below.
+    if (++b->dsp_count >= b->dsp_decim) {
+        b->dsp_count = 0;
+        power_dsp_push_current(&b->dsp, fo.amps);
+        multires_push(&b->multires, fo.amps);
+        spectrum_push(&b->spectrum,
+                      (b->fft_source == 1) ? power_dsp_last_p(&b->dsp) : fo.amps);
+    }
+
+    // Full-rate fused waveform to the PC (decimated only by wave_decim, def 1).
     if (++b->wave_count >= b->wave_decim) {
         b->wave_count = 0;
         uint32_t rate = (uint32_t)adaq7769_output_data_rate(
@@ -927,14 +980,36 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
         return ESP_OK;
     }
 
+    // Set fast_running BEFORE bringing up the capture task. The capture task
+    // holds the SPI bus with an explicit spi_device_acquire_bus() for the whole
+    // session; other tasks (main housekeeping diagnostics_push, TUI status poll)
+    // do ADAQ register access guarded on !fast_running. If the flag were set
+    // only AFTER start_streaming, a concurrent register poll could fire while
+    // the capture task already owns the bus -> spi_device_polling_end assert
+    // (handle != acquiring_dev). Setting it first locks those pollers out.
+    b->fast_running = true;
+
     esp_err_t err = daq_board_start_streaming(b, ring_capacity);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        b->fast_running = false;
+        return err;
+    }
 
     if (b->wave_decim == 0) b->wave_decim = WAVE_STREAM_DECIM_DEFAULT;
     b->wave_count   = 0;
+    if (b->dsp_decim == 0) b->dsp_decim = DAQ_DSP_DECIM_DEFAULT;
+    b->dsp_count    = 0;
+    // The DSP tail runs every dsp_decim-th fused sample, so set the power-DSP
+    // timebase to the decimated rate — otherwise energy/charge integrate with
+    // the wrong dt (off by dsp_decim).
+    {
+        float odr = b->adaq_ok[ADAQ_ROLE_FINE]
+                        ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE])
+                        : 256000.0f;
+        power_dsp_set_rate(&b->dsp, odr / (float)b->dsp_decim);
+    }
     b->drop_fine    = 0;
     b->drop_coarse  = 0;
-    b->fast_running = true;
 
     // Pin the processor to core 0 (alongside FINE capture). It runs below the
     // prio-20 capture tasks, so DRDY reads always pre-empt the pipeline.
@@ -953,10 +1028,26 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
 
 esp_err_t daq_board_stop_fast(daq_board_t *b)
 {
-    if (b->fast_running) {
-        b->fast_running = false;
-        vTaskDelay(pdMS_TO_TICKS(20));   // let the task observe + self-delete
-        b->fast_task = NULL;
+    if (!b->fast_running) {
+        // Not running: just make sure any partial capture state is torn down.
+        return daq_board_stop_streaming(b);
     }
-    return daq_board_stop_streaming(b);
+
+    // Order matters to avoid an SPI bus-ownership assert. The capture task holds
+    // the bus via spi_device_acquire_bus(); main/TUI register pollers guard on
+    // !fast_running.
+    //   1. Stop the capture task and release the bus WHILE fast_running is still
+    //      set, so those pollers stay locked out during teardown.
+    adaq_stream_comb_stop(&b->capture);
+    //   2. The bus is now free — clear the flag (register access is safe again)
+    //      and let the processor task, which only touches the sample rings (not
+    //      SPI), observe it and self-delete.
+    b->fast_running = false;
+    vTaskDelay(pdMS_TO_TICKS(20));
+    b->fast_task = NULL;
+    //   3. Free the rings only AFTER the processor has stopped reading them
+    //      (adaq_stream_read is not NULL-safe against a freed ring).
+    adaq_stream_deinit(&b->stream_a);
+    adaq_stream_deinit(&b->stream_b);
+    return ESP_OK;
 }

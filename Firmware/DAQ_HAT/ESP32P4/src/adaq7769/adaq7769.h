@@ -67,6 +67,16 @@ typedef struct {
     uint8_t          gpio_write_shadow;
     adaq_config_t    cfg;
     bool             present;
+
+    // Streaming diagnostics, updated from the periodic status header (0x2D) the
+    // capture task samples every ADAQ_STATUS_SAMPLE_DIV-th read. Surfaced by the
+    // TUI / `adaqdiag` so ADC errors (saturation, not-settled, clock, SPI) are
+    // visible live without stopping acquisition.
+    volatile uint8_t  diag_last_status;   // most recent MASTER_STATUS byte
+    volatile uint8_t  diag_sticky;        // OR of all status bits seen (latched)
+    volatile uint32_t diag_err_count;     // status samples carrying an error bit
+    volatile uint32_t diag_status_reads;  // status headers sampled
+    volatile int32_t  last_raw;           // most recent raw sample (from streaming)
 } adaq7769_t;
 
 // Optional construction parameters; defaults are applied for any zero field.

@@ -113,6 +113,17 @@ static void draw_header(uint32_t t_ms)
     int tw = gfx_text_w(st, 1);
     int pill_left = DISP_WIDTH - tw - 18;   // left edge of the status pill
 
+    // Supply-active badge: a green "SRC" pill just left of the status pill,
+    // shown while the DUT supply (SMU) output is on. Reserve its width first so
+    // the scrolling bolts never overlap it.
+    bool src_on = (s_flags & DDP_FLAG_SRC_ON) != 0;
+    int src_badge_x = 0, src_tw = 0;
+    if (src_on) {
+        src_tw = gfx_text_w("SRC", 1);
+        src_badge_x = pill_left - src_tw - 9;   // dot + gap allowance
+        pill_left = src_badge_x - 4;            // bolts stop left of the badge
+    }
+
     // Bolts scroll left toward the mouth, then get "eaten" (alpha fade). They
     // spawn just left of the status pill so they never draw over it.
     const int N = 5;
@@ -144,6 +155,10 @@ static void draw_header(uint32_t t_ms)
     }
 
     // Status pill (drawn last so it's always on top of the bolt stream).
+    if (src_on) {
+        gfx_fill_circle(src_badge_x, 9, 2.2f, C_GREEN);
+        gfx_text(src_badge_x + 5, 6, "SRC", 1, C_GREEN);
+    }
     gfx_fill_circle(DISP_WIDTH - tw - 14, 9, 2.2f, sc);
     gfx_text(DISP_WIDTH - tw - 8, 6, st, 1, sc);
 }

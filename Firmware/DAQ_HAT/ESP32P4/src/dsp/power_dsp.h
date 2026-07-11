@@ -126,6 +126,10 @@ static inline float power_dsp_last_i(const power_dsp_t *d) { return d->last_i; }
 static inline float power_dsp_last_v(const power_dsp_t *d) { return d->last_v; }
 static inline float power_dsp_last_p(const power_dsp_t *d) { return d->last_p; }
 
+/** @brief The held voltage (set by power_dsp_set_voltage), for computing an
+ *         instantaneous p = v*i per sample without running the full DSP. */
+static inline float power_dsp_voltage(const power_dsp_t *d) { return d->voltage; }
+
 #ifdef __cplusplus
 }
 #endif

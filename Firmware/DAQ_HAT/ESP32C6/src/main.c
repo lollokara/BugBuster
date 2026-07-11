@@ -17,6 +17,7 @@
 #include "buttons.h"
 #include "menu.h"
 #include "npx.h"
+#include "c6_config.h"
 
 static const char *TAG = "daq_hat";
 
@@ -69,14 +70,32 @@ void app_main(void)
 
     const TickType_t min_yield = pdMS_TO_TICKS(10);  // always let IDLE run
     bool in_menu = false;
+    uint32_t last_hello = 0;
 
     while (1) {
         uint32_t t = now_ms();
+
+        // 1 Hz presence announce so the C6 and P4 discover each other
+        // regardless of boot order / a transient link drop (the P4 also probes
+        // us with GET_INFO). Cheap keepalive; dropped if no P4 is attached.
+        if ((uint32_t)(t - last_hello) >= 1000) {
+            last_hello = t;
+            ddp_announce_presence();
+        }
+
         uint32_t ev = buttons_poll(t) | ddp_take_buttons();
 
         if (!in_menu) {
             // --- Main readout screen ---
-            if (ev) {                          // any key opens the menu
+            // OK long-press (BACK) on the main screen enables the DUT supply.
+            // The supply is a P4-local resource, so request it over DDP and
+            // consume the event so it does not also open the menu. (Inside a
+            // menu, BACK still navigates back — handled by menu_update().)
+            if (ev & BTN_EV_BACK) {
+                c6_config_send_source_enable(true);
+                ev &= ~BTN_EV_BACK;
+            }
+            if (ev) {                          // any other key opens the menu
                 menu_open(t);
                 in_menu = true;
                 continue;

@@ -43,40 +43,45 @@
 #define DAQ_UART_PORT     2       // P4 UART2 (0=console, 1=S3 link)
 
 // -----------------------------------------------------------------------------
-// ESP32-C6 boot/reset control. The P4 owns the C6's strapping/reset so it can
-// drop the C6 into ROM download mode (BOOT held low across a reset pulse) and
-// flash it over DAQ_UART (C6 UART0). Idle: RST released (high), BOOT released
-// (high) = normal boot. Both active-low.
+// ESP32-C6 boot/reset control.
+//   C6 CHIP_PU (EN/RST)  → P4 GPIO54  (LOW = reset, active-LOW)
+//   C6 GPIO9  (BOOT strap) → P4 GPIO43  (LOW at EN release = download mode)
+//   C6 GPIO8  (BOOT_EN)   → P4 GPIO44  (0=UART download, 1=SDIO download)
+//   C6 GPIO2  (IO2)       → P4 GPIO6   (reserved)
+//
+// SDIO download mode : GPIO9=0 (GPIO43 LOW) + GPIO8=1 (GPIO44 HIGH / float)
+// UART download mode : GPIO9=0 (GPIO43 LOW) + GPIO8=0 (GPIO44 LOW)
+// Normal boot        : GPIO9=1 (GPIO43 HIGH / float)
 // -----------------------------------------------------------------------------
-#define C6_BOOT_PIN       ((gpio_num_t)44)   // C6 GPIO9 strap (LOW = download)
-#define C6_RST_PIN        ((gpio_num_t)43)   // C6 EN/CHIP_PU (LOW = reset)
+#define C6_RST_PIN        ((gpio_num_t)54)   // C6 CHIP_PU  (LOW = reset)
+#define C6_BOOT_PIN       ((gpio_num_t)44)   // C6 GPIO9 strap (LOW = download mode)
+#define C6_BOOT_EN_PIN    ((gpio_num_t)43)   // C6 GPIO8 (0=UART dl, 1=SDIO dl)
+#define C6_IO2_PIN        ((gpio_num_t) 6)   // C6 GPIO2  (reserved)
 
 // -----------------------------------------------------------------------------
 // Front-panel navigation buttons (active-low, internal pull-ups), wired to the
 // P4 and relayed to the C6 over DDP (the C6 has no local buttons). OK long-press
 // = Back, mirroring the previous on-C6 button behaviour.
-//   UP   -> IO46
-//   DOWN -> IO45
-//   OK   -> IO26  (hold = Back)
+//   UP   -> IO26
+//   DOWN -> IO46
+//   OK   -> IO45  (hold = Back)
 // -----------------------------------------------------------------------------
-#define BTN_PIN_UP        ((gpio_num_t)46)
-#define BTN_PIN_DOWN      ((gpio_num_t)45)
-#define BTN_PIN_OK        ((gpio_num_t)26)
+#define BTN_PIN_UP        ((gpio_num_t)26)
+#define BTN_PIN_DOWN      ((gpio_num_t)46)
+#define BTN_PIN_OK        ((gpio_num_t)45)
 
 // -----------------------------------------------------------------------------
-// SDIO link to the ESP32-C6 (RESERVED — not used by firmware yet). Wired on the
-// PCB for a possible future WiFi-offload path (C6 as esp-hosted radio for the
-// P4). Today all P4<->C6 traffic + flashing goes over DAQ_UART, which is ample
-// for the small measurement/diagnostics/config/button payloads. Keep these pins
-// free of other functions so the option stays open.
-//   CMD/CLK/DAT0..3 — confirm against final schematic before enabling.
+// SDIO link to the ESP32-C6 (P4 = SDIO host, C6 = SDIO slave / ESP-Hosted).
+// Used for both normal WiFi offload and SDIO ROM download mode flashing.
+// GPIO9 LOW at EN release → C6 enters SDIO ROM download mode.
+// Uses SDMMC_HOST_SLOT_1 (slot 0 is the eMMC-oriented slot on P4).
 // -----------------------------------------------------------------------------
-// #define C6_SDIO_CMD_PIN   ...
-// #define C6_SDIO_CLK_PIN   ...
-// #define C6_SDIO_DAT0_PIN  ...
-// #define C6_SDIO_DAT1_PIN  ...
-// #define C6_SDIO_DAT2_PIN  ...
-// #define C6_SDIO_DAT3_PIN  ...
+#define C6_SDIO_CLK_PIN   ((gpio_num_t)18)   // P4 SDIO CLK  → C6 GPIO18
+#define C6_SDIO_CMD_PIN   ((gpio_num_t)19)   // P4 SDIO CMD  → C6 GPIO19
+#define C6_SDIO_DAT0_PIN  ((gpio_num_t)14)   // P4 SDIO DAT0 → C6 GPIO20
+#define C6_SDIO_DAT1_PIN  ((gpio_num_t)15)   // P4 SDIO DAT1 → C6 GPIO21
+#define C6_SDIO_DAT2_PIN  ((gpio_num_t)16)   // P4 SDIO DAT2 → C6 GPIO22
+#define C6_SDIO_DAT3_PIN  ((gpio_num_t)17)   // P4 SDIO DAT3 → C6 GPIO23
 
 // -----------------------------------------------------------------------------
 // Link to the ESP32-S3 mainboard (HAT control plane).
@@ -112,7 +117,10 @@
 // dummy byte on reads to avoid the ESP32 last-bit loss; kept modest (8 MHz) as
 // it's not throughput-critical. The ADC-data stream (dev_data) runs at 20 MHz.
 #define ADAQ_SCLK_CFG_HZ          8000000UL      // 8 MHz register access (full-duplex)
-#define ADAQ_SCLK_DATA_HZ         20000000UL     // 20 MHz for sample readout
+// Data-readout clock. Datasheet max SCLK = 20 MHz. A 30 MHz experiment (2026-07-11)
+// corrupted ADC data reads (ESP_ERR_INVALID_CRC on adaq/streaming) — reverted.
+// Stay at the rated 20 MHz.
+#define ADAQ_SCLK_DATA_HZ         20000000UL     // 20 MHz for sample readout (spec max)
 // Slave DOUT valid delay + P4 input path. The ESP-IDF SPI driver uses this to
 // place the MISO sample point AFTER DOUT settles; without it the final bit of a
 // register read is sampled too early and reads back as 0 (value & 0xFE), and
@@ -124,6 +132,13 @@
 // only until CS rises; holding CS a few cycles keeps DOUT = D0 long enough for
 // the ESP32-P4 to latch it (otherwise the LSB reads 0 -> value & 0xFE).
 #define ADAQ_CS_POSTTRANS_CYCLES  4
+
+// Streaming: read the 8-bit status header only every Nth sample per device
+// (data-only 24-bit / 3-byte reads otherwise). The status header (saturation /
+// not-settled / master-error flags) changes slowly, so sampling it periodically
+// keeps the per-sample SPI frame at 24 bits (~1.8 us) instead of 32 (~2.2 us)
+// while still surfacing fault flags. 1 = every sample.
+#define ADAQ_STATUS_SAMPLE_DIV    256
 
 // -----------------------------------------------------------------------------
 // SPI bus A — GP-SPI3, dedicated to ADAQ #0 = ADAQ1/U1 = FINE current.
@@ -257,9 +272,16 @@
 // misses its conversion deadline.
 #define VOLTAGE_ODR_TARGET_SPS    50000.0f
 
-// Default USB waveform-stream decimation. Full-rate samples still feed the
-// DSP/energy/stats/FFT; only the raw waveform batch is decimated for transport.
+// Default USB waveform-stream decimation. The full-rate fused stream to the PC
+// is gated only by this (default 1 = every sample).
 #define WAVE_STREAM_DECIM_DEFAULT 1
+
+// Default DSP-tail decimation: the on-device power/energy/stats/multires/FFT run
+// on every Nth fused sample, NOT the full per-channel rate. They don't need the
+// full 256k/ch rate, and decimating frees core-0 CPU so the full-rate fused
+// stream to the PC keeps flowing. At FINE 256k -> 32k DSP; at 128k -> 16k. The
+// PC still receives every fused sample (that path is gated by wave_decim only).
+#define DAQ_DSP_DECIM_DEFAULT     8
 
 // -----------------------------------------------------------------------------
 // Power-rail enable / monitor GPIOs (all HV rails OFF at boot via pull-downs).
@@ -318,12 +340,13 @@
 // -----------------------------------------------------------------------------
 #define SMU_CAL_NVS_NS            "smu_cal"  // NVS namespace
 #define SMU_CAL_NVS_KEY           "blob"     // NVS blob key
+#define SMU_BASE_NVS_KEY          "base"     // NVS baseline-offset blob key
 #define SMU_CAL_MAGIC             0x534D5543u // "SMUC"
-#define SMU_CAL_VERSION           1u
-#define SMU_CAL_MAX_POINTS        128        // per channel (DS4424 code span)
+#define SMU_CAL_VERSION           2u
+#define SMU_CAL_MAX_POINTS        255        // per channel (full DS4424 code span -127..+127)
 
 // Stability gate for one calibration point (mirrors RP2040 HAT cal).
-#define SMU_CAL_SAMPLES_PER_PT    64         // raw reads per measurement
+#define SMU_CAL_SAMPLES_PER_PT    100        // raw reads per measurement (averaged)
 #define SMU_CAL_MEDIAN_WINDOW     16         // central samples kept after sort
 #define SMU_CAL_SETTLE_WINDOW     5          // consecutive stable measurements
 #define SMU_CAL_SETTLE_ITERS_MAX  100        // ~1.5 s/point timeout
@@ -332,8 +355,21 @@
 #define SMU_CAL_I_NOISE_A         0.005f     // current settle threshold (A)
 
 // Current-limit cal sequence parameters.
-#define SMU_CAL_ICAL_VSET_V       1.8f       // V_DUT set during current cal
+#define SMU_CAL_ICAL_VSET_V       3.0f       // V_DUT set during current cal (headroom to reach 2 A)
 #define SMU_CAL_ICAL_ENABLE_MS    100        // wait after MIN code before RUN on
-#define SMU_CAL_ICAL_TARGET_A     2.5f       // sweep until output reaches this
+#define SMU_CAL_ICAL_TARGET_A     2.0f       // sweep until output reaches this
+
+// Baseline (open-circuit offset) calibration. With the output OPEN, sweep V_DUT
+// across every DS4424 code, settle, average many raw current reads, and store
+// the resulting ADC offset code per (range, V_DUT code). At runtime the offset
+// for the active range + V_DUT is loaded straight into the ADAQ OFFSET register
+// (hardware auto-subtract) whenever V_DUT or the range changes — no software math.
+#define SMU_BASE_MAGIC            0x53424153u // "SBAS"
+#define SMU_BASE_VERSION          3u
+#define SMU_BASE_RANGES           3          // HI / MID / LO  (== RANGE_COUNT)
+#define SMU_BASE_CODES            255        // V_DUT DAC codes -127..+127
+#define SMU_BASE_SETTLE_MS        200        // settle after each V_DUT step (ms)
+#define SMU_BASE_SAMPLES_PER_PT   1000       // raw current reads averaged per code
+#define SMU_BASE_TEMP_NA          (-32768)   // sentinel: temperature unavailable
 
 

@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_ldo_regulator.h"
 
 #include "daq_board.h"
 #include "daq_settings_glue.h"
@@ -14,6 +15,17 @@ static daq_board_t s_board;
 
 void app_main(void)
 {
+    // LDO channel 4 (VO4) supplies GPIO47/48 via VDD_IO_5. Must be set to 3.3V
+    // before any GPIO on that domain is driven; default after reset is ~1.2V.
+    static esp_ldo_channel_handle_t s_ldo4_handle;
+    esp_ldo_channel_config_t ldo4_cfg = {
+        .chan_id    = 4,
+        .voltage_mv = 3300,
+    };
+    if (esp_ldo_acquire_channel(&ldo4_cfg, &s_ldo4_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "LDO_VO4 init failed — GPIO47/48 domain may be at wrong voltage");
+    }
+
     ESP_LOGI(TAG, "DAQ HAT P4 firmware starting...");
 
     esp_err_t err = daq_board_init(&s_board);

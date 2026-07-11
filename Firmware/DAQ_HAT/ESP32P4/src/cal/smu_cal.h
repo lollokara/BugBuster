@@ -7,7 +7,7 @@
 //   1. Voltage cal  (DS4424 ch1 / V_FB): with the DUT load DISCONNECTED, sweep
 //      the DAC and read V_DUT off the U25 S4 node (VOLTAGE ADAQ). Builds a
 //      code -> volts table.
-//   2. Current cal  (DS4424 ch0 / I_FB / CTL): set V_DUT = 1.8 V, disable the
+//   2. Current cal  (DS4424 ch0 / I_FB / CTL): set V_DUT = 3.0 V, disable the
 //      DCDC, ask the user to SHORT the output, force the autorange to the
 //      50 mohm (LO) shunt (both bypass switches closed), set the DAC to the
 //      minimum-current code, wait 100 ms, enable the DCDC, then sweep the DAC
@@ -41,8 +41,9 @@ extern "C" {
 #endif
 
 typedef enum {
-    SMU_CAL_MODE_VOLTAGE = 0,   // DS4424 ch1 -> V_DUT
-    SMU_CAL_MODE_CURRENT = 1,   // DS4424 ch0 -> current limit
+    SMU_CAL_MODE_VOLTAGE  = 0,   // DS4424 ch1 -> V_DUT
+    SMU_CAL_MODE_CURRENT  = 1,   // DS4424 ch0 -> current limit
+    SMU_CAL_MODE_BASELINE = 2,   // open-circuit ADC offset per range vs V_DUT
 } smu_cal_mode_t;
 
 // State-machine phase, surfaced over the wire.
@@ -59,6 +60,7 @@ typedef enum {
     SMU_CAL_PROMPT_NONE = 0,
     SMU_CAL_PROMPT_DISCONNECT_LOAD = 1,  // voltage cal: remove the DUT load
     SMU_CAL_PROMPT_SHORT_OUTPUT    = 2,  // current cal: short the output
+    SMU_CAL_PROMPT_OPEN_CIRCUIT    = 3,  // baseline cal: leave the output open
 } smu_cal_prompt_t;
 
 // Validation flag bitfield (0 = clean cal).
@@ -88,6 +90,18 @@ typedef struct __attribute__((packed)) {
     smu_cal_point_t vpoints[SMU_CAL_MAX_POINTS];  // voltage cal (code -> V)
     smu_cal_point_t ipoints[SMU_CAL_MAX_POINTS];  // current cal (code -> A)
 } smu_cal_blob_t;
+
+// Persisted baseline (open-circuit) offset blob. For each current range and each
+// V_DUT DS4424 code, the ADC offset code to load into the ADAQ OFFSET register.
+// crc covers everything from `version` onward.
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint32_t crc;
+    uint8_t  version;
+    uint8_t  have[SMU_BASE_RANGES];                     // 1 = range calibrated
+    int16_t  temp_c10[SMU_BASE_RANGES];                 // board temp x10 at cal time
+    int32_t  offset[SMU_BASE_RANGES][SMU_BASE_CODES];   // per (range, code+127)
+} smu_base_blob_t;
 
 // Persist state for the wire status.
 typedef enum {
@@ -119,6 +133,11 @@ typedef struct {
     smu_cal_blob_t    blob;           // committed tables (loaded + written)
     bool              have_vcal;
     bool              have_ical;
+
+    // Baseline (open-circuit) offset cal.
+    smu_base_blob_t   base;           // committed offset tables (loaded + written)
+    bool              have_base;
+    volatile uint8_t  base_range;     // range being swept (0..2) during baseline run
 } smu_cal_t;
 
 // Wire status snapshot (response to the CAL_STATUS command).
@@ -159,6 +178,14 @@ bool smu_cal_voltage_to_code(const smu_cal_t *c, float volts, int8_t *code);
 
 /** @brief True + *code if a current cal table maps `amps`. */
 bool smu_cal_current_to_code(const smu_cal_t *c, float amps, int8_t *code);
+
+/**
+ * @brief Look up the baseline ADC offset code for a range + V_DUT DS4424 code.
+ * @param range  current_range_t as a uint8_t (RANGE_HI/MID/LO, 0..2).
+ * @return true + *offset_out if that range has a baseline cal; false otherwise.
+ */
+bool smu_base_offset(const smu_cal_t *c, uint8_t range, int8_t vdut_code,
+                     int32_t *offset_out);
 
 #ifdef __cplusplus
 }

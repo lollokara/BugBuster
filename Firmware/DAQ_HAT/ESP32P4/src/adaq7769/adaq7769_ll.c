@@ -300,12 +300,19 @@ esp_err_t adaq_ll_read_adc24(adaq_ll_t *ll, int32_t *sample)
     if (ll->crc_enabled) {
         n = 5;
     }
-    spi_transaction_t t = {0};
-    t.length    = (size_t)n * 8;
-    t.rxlength  = (size_t)n * 8;
-    t.tx_buffer = tx;
-    t.rx_buffer = rx;
-    esp_err_t err = spi_device_polling_transmit(ll->dev_data, &t);
+    // Use the register-access handle (dev_cfg): it owns the hardware CS. The
+    // streaming data handle (dev_data) has spics_io_num = -1, so a single-shot
+    // read on it leaves CS deasserted and returns all-zeros. Send zero command
+    // bits (raw byte stream) via the extended transaction, like read_reg. The
+    // fast streaming path uses the FIFO route (with manual CS), not this.
+    spi_transaction_ext_t te = {0};
+    te.base.flags     = SPI_TRANS_VARIABLE_CMD;
+    te.command_bits   = 0;
+    te.base.length    = (size_t)n * 8;
+    te.base.rxlength  = (size_t)n * 8;
+    te.base.tx_buffer = tx;
+    te.base.rx_buffer = rx;
+    esp_err_t err = spi_device_polling_transmit(ll->dev_cfg, (spi_transaction_t *)&te);
     if (err != ESP_OK) {
         return err;
     }
@@ -386,11 +393,31 @@ void adaq_ll_fifo_setup(adaq_ll_t *ll, size_t n_bytes)
 
 esp_err_t adaq_ll_fifo_read(adaq_ll_t *ll, uint8_t *rx, size_t n_bytes)
 {
-    spi_dev_t *hw = SPI_LL_GET_HW(ll->host);
-    spi_ll_user_start(hw);
-    while (spi_ll_get_running_cmd(hw)) { /* poll ~1.6 us */ }
-    spi_ll_read_buffer(hw, rx, n_bytes * 8);
+    adaq_ll_fifo_start(ll);
+    adaq_ll_fifo_wait(ll);
+    adaq_ll_fifo_drain(ll, rx, n_bytes);
     return ESP_OK;
+}
+
+// Split-phase FIFO read for overlapping two SPI peripherals. Trigger both hosts
+// (adaq_ll_fifo_start) so their SCLKs clock CONCURRENTLY, then wait+drain each.
+// FINE lives on SPI3 and COARSE/VOLTAGE on SPI2, so a FINE+COARSE pair costs one
+// ~1.2 us SCLK instead of two — the single capture core can then sustain
+// 256 kSPS on both channels.
+void adaq_ll_fifo_start(adaq_ll_t *ll)
+{
+    spi_ll_user_start(SPI_LL_GET_HW(ll->host));
+}
+
+void adaq_ll_fifo_wait(adaq_ll_t *ll)
+{
+    spi_dev_t *hw = SPI_LL_GET_HW(ll->host);
+    while (spi_ll_get_running_cmd(hw)) { /* poll ~1.2 us (or ~0 if overlapped) */ }
+}
+
+void adaq_ll_fifo_drain(adaq_ll_t *ll, uint8_t *rx, size_t n_bytes)
+{
+    spi_ll_read_buffer(SPI_LL_GET_HW(ll->host), rx, n_bytes * 8);
 }
 
 // -----------------------------------------------------------------------------

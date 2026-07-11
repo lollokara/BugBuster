@@ -12,6 +12,7 @@
 // =============================================================================
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,6 +22,11 @@ extern "C" {
 // the P4 (C6 -> P4 CONFIG_SET event). Strings (ssid/password) are not sent from
 // the C6 (they are app-set and only received).
 void c6_config_send(void);
+
+// Request the P4 to enable/disable the DUT supply (SOURCE_ENABLE). The supply
+// is a P4-local resource, so this sends a single SOURCE_ENABLE TLV over DDP;
+// the P4 applies it via smu_enable(). Used by the main-screen OK long-press.
+void c6_config_send_source_enable(bool on);
 
 // Apply one or more TLVs pushed by the P4 (CONFIG_PUSH) into g_settings, run
 // side effects, and persist. @len is the payload byte count.

@@ -124,12 +124,17 @@ typedef struct adaq_stream_comb {
     TaskHandle_t   task;
     volatile bool  running;
     volatile uint32_t pending;            // lock-free per-device ready bitmask
+    uint32_t       drdy_mask;             // GPIO status mask of all DRDY pins
+    volatile uint32_t overlap_hits;       // passes that triggered >=2 hosts (overlap)
     uint8_t        n_dev;                 // total devices across all streams
     struct adaq_comb_dev {
         void          *comb;              // back-ptr to this struct (for ISR)
         adaq_stream_t *stream;            // owning stream
         uint8_t        local;             // device index within that stream
         uint8_t        bit;               // global notification bit
+        uint8_t        drdy_pin;          // cached DRDY GPIO (edge-status poll)
+        uint8_t        stream_idx;        // index into streams[] (host len slot)
+        uint32_t       status_ctr;        // per-device status-cadence counter
     } dev[ADAQ_STREAM_MAX_DEVICES * 2];
 } adaq_stream_comb_t;
 

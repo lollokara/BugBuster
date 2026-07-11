@@ -1,5 +1,16 @@
 #include "buttons.h"
 #include "config.h"
+
+// On the production DAQ HAT the front-panel buttons are wired to the ESP32-P4,
+// which debounces them and relays UP/DOWN/OK/BACK events to the C6 over DDP
+// (see main.c: ddp_take_buttons()). On this PCB the legacy C6 button pins
+// (IO5/6/7) ARE the display SPI SCLK/MOSI/DC — if the C6 reconfigures them as
+// GPIO inputs it tears those lines away from the SPI peripheral, so there is no
+// SPI output at all and the panel stays blank. The C6 must therefore NOT touch
+// them. Define BUTTONS_LOCAL_GPIO only for legacy bring-up boards whose buttons
+// were on the C6 and did not overlap the display pins.
+#ifdef BUTTONS_LOCAL_GPIO
+
 #include "driver/gpio.h"
 
 #define DEBOUNCE_MS    25
@@ -106,3 +117,17 @@ uint32_t buttons_poll(uint32_t now_ms)
 
     return ev;
 }
+
+#else  // !BUTTONS_LOCAL_GPIO
+
+// Production build: button events are delivered by the P4 over DDP. These are
+// no-ops so the C6 never reconfigures the display SPI pins (IO5/6/7).
+void buttons_init(void) { }
+
+uint32_t buttons_poll(uint32_t now_ms)
+{
+    (void)now_ms;
+    return 0;
+}
+
+#endif  // BUTTONS_LOCAL_GPIO

@@ -2,7 +2,38 @@
 
 ## [Unreleased]
 
-*(no changes yet)*
+### Added
+- **DAQ HAT TUI — voltage calibration hotkey.** The ESP32-P4 bring-up TUI (`tui` command)
+  gains a **`k` "cal V"** hotkey that opens a modal yes/no confirmation popup. Choosing **Yes**
+  runs the onboard V_DUT voltage calibration: it enables V_DUT at its minimum, steps the DS4424
+  IDAC through **all 255 codes** (`-127..+127`, step 1), averages **100 ADC readouts** per code
+  off the VOLTAGE ADAQ, and saves the resulting 255-point table to NVM. A live progress panel
+  (bar + code/measured-voltage readout) is shown while it runs, and **ESC** aborts. The stored
+  table is then consumed on every `smu_set_voltage()` call. Cal blob format bumped to v2
+  (`SMU_CAL_MAX_POINTS` 128→255, `SMU_CAL_SAMPLES_PER_PT` 64→100).
+- **DAQ HAT TUI — current calibration hotkey.** New **`j` "cal I"** hotkey with its own confirm
+  popup runs the current-limit calibration: it sets V_DUT to **3 V** (headroom to reach the
+  target), prompts the operator to **short the output**, forces the **50 mΩ (LO)** shunt, and
+  steps the DS4424 current-limit code up until the output reaches **2 A**, saving the code→amps
+  table to NVM. Live progress + ESC-to-abort.
+- **DAQ HAT — open-circuit baseline (current offset) calibration.** New **`b` "cal base"** TUI hotkey
+  + confirm popup runs a baseline sweep with the output **open**: for each current range
+  (**HI / MID / COARSE**) it forces that range, then steps V_DUT across all **255 DAC codes**,
+  settling **200 ms** and averaging **1000 current readings** per code, recording the raw
+  open-circuit ADC code (and the **board temperature** at cal time) per range. The tables are
+  persisted to a dedicated NVM blob (`SMU_BASE_*`). At runtime the stored baseline is subtracted
+  **in software**, per sample, in the fusion path (`daq_board` `fast_emit`), keyed on the **live
+  autoranged range** and current V_DUT code — so it tracks HI↔MID autoranging (the two share the
+  FINE ADC but have different baselines) and needs no mid-stream register writes. (An earlier
+  attempt used the ADAQ hardware `OFFSET` register, but a single per-ADC register cannot hold two
+  range baselines nor be rewritten during continuous-read streaming, so open-circuit current did
+  not null under autoranging; the software subtraction fixes this.) Bench-verified nulling to
+  <16 µA open-circuit across 3–12 V. Baseline blob format is v3.
+- **DAQ HAT — scriptable `cal` REPL command.** `cal <status|v|i|base|clroff>` drives the same
+  calibration engine from the serial console with plain-text progress (prompts auto-acked), plus a
+  `status` view of stored tables, per-range temps, and the live applied ADC offset — usable for
+  bench automation without the full-screen TUI.
+
 
 ## [1.5.0] — 2026-06-29
 

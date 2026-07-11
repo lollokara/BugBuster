@@ -108,6 +108,19 @@ void c6_config_send(void)
     if (off) ddp_send_config_tlv(buf, (uint8_t)off);
 }
 
+void c6_config_send_source_enable(bool on)
+{
+    // SOURCE_ENABLE is a P4-local key (not in SEND_KEYS / g_settings): encode it
+    // directly and send as a one-TLV CONFIG_SET. The P4 applies it via
+    // smu_enable() in its on_apply() callback.
+    uint8_t buf[8];
+    const daq_setting_schema_t *sc = daq_config_schema(DAQ_K_SOURCE_ENABLE);
+    uint8_t type = sc ? sc->type : DAQ_T_BOOL;
+    int n = daq_tlv_encode_i32(buf, sizeof(buf), DAQ_K_SOURCE_ENABLE, type,
+                               on ? 1 : 0);
+    if (n > 0) ddp_send_config_tlv(buf, (uint8_t)n);
+}
+
 void c6_config_apply_push(const uint8_t *tlvs, uint16_t len)
 {
     size_t off = 0;

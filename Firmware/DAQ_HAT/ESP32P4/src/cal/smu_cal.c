@@ -40,12 +40,13 @@ static int cmp_float(const void *a, const void *b)
 // Drive the U25 voltage mux to a 2-bit channel address (and keep it enabled).
 static void volt_mux_select(uint8_t addr)
 {
-    gpio_set_direction(VOLT_MUX_A0_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_direction(VOLT_MUX_A1_PIN, GPIO_MODE_OUTPUT);
+    // Set levels before enabling output direction to avoid a LOW glitch.
     gpio_set_level(VOLT_MUX_A0_PIN, addr & 1);
     gpio_set_level(VOLT_MUX_A1_PIN, (addr >> 1) & 1);
-    gpio_set_direction(MUX_EN_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_direction(VOLT_MUX_A0_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_direction(VOLT_MUX_A1_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level(MUX_EN_PIN, 1);
+    gpio_set_direction(MUX_EN_PIN, GPIO_MODE_OUTPUT);
 }
 
 // DS4424 code that programs the minimum DUT current limit. The current-limit
@@ -187,6 +188,61 @@ static esp_err_t blob_load(smu_cal_t *c)
     c->have_vcal = (c->blob.vcount > 1);
     c->have_ical = (c->blob.icount > 1);
     return ESP_OK;
+}
+
+// -----------------------------------------------------------------------------
+// Baseline (open-circuit offset) NVS persistence
+// -----------------------------------------------------------------------------
+
+static uint32_t base_crc(const smu_base_blob_t *bl)
+{
+    const uint8_t *p = (const uint8_t *)&bl->version;
+    size_t len = sizeof(*bl) - offsetof(smu_base_blob_t, version);
+    return esp_rom_crc32_le(0, p, len);
+}
+
+static esp_err_t base_save(smu_cal_t *c)
+{
+    c->base.magic   = SMU_BASE_MAGIC;
+    c->base.version = SMU_BASE_VERSION;
+    c->base.crc     = base_crc(&c->base);
+
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(SMU_CAL_NVS_NS, NVS_READWRITE, &h);
+    if (e != ESP_OK) return e;
+    e = nvs_set_blob(h, SMU_BASE_NVS_KEY, &c->base, sizeof(c->base));
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e;
+}
+
+static esp_err_t base_load(smu_cal_t *c)
+{
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(SMU_CAL_NVS_NS, NVS_READONLY, &h);
+    if (e != ESP_OK) return e;
+    size_t sz = sizeof(c->base);
+    e = nvs_get_blob(h, SMU_BASE_NVS_KEY, &c->base, &sz);
+    nvs_close(h);
+    if (e != ESP_OK || sz != sizeof(c->base)) return ESP_ERR_NOT_FOUND;
+    if (c->base.magic != SMU_BASE_MAGIC)       return ESP_ERR_INVALID_CRC;
+    if (c->base.version != SMU_BASE_VERSION)   return ESP_ERR_INVALID_VERSION;
+    if (c->base.crc != base_crc(&c->base))     return ESP_ERR_INVALID_CRC;
+    c->have_base = (c->base.have[RANGE_HI] || c->base.have[RANGE_MID] ||
+                    c->base.have[RANGE_LO]);
+    return ESP_OK;
+}
+
+bool smu_base_offset(const smu_cal_t *c, uint8_t range, int8_t vdut_code,
+                     int32_t *offset_out)
+{
+    if (!c || !c->have_base || range >= SMU_BASE_RANGES) return false;
+    if (!c->base.have[range]) return false;
+    int idx = (int)vdut_code + 127;
+    if (idx < 0) idx = 0;
+    if (idx >= SMU_BASE_CODES) idx = SMU_BASE_CODES - 1;
+    *offset_out = c->base.offset[range][idx];
+    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -349,10 +405,11 @@ static void run_voltage_cal(smu_cal_t *c)
     smu_enable(&b->smu, true);
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    // 3) Sweep the DS4424 ch1 code across its span (-127..+127 step 2).
+    // 3) Sweep the DS4424 ch1 code across its full span (-127..+127 step 1),
+    //    recording one calibration point per code (up to 255 points).
     uint8_t cnt = 0;
     float vmin = 1e30f, vmax = -1e30f;
-    for (int code = -127; code <= 127 && cnt < SMU_CAL_MAX_POINTS; code += 2) {
+    for (int code = -127; code <= 127 && cnt < SMU_CAL_MAX_POINTS; code += 1) {
         if (c->abort_req) { safe_restore(c); c->phase = SMU_CAL_FAILED; return; }
 
         c->code = (int8_t)code;
@@ -416,7 +473,7 @@ static void run_current_cal(smu_cal_t *c)
         return;
     }
 
-    // 1) Set V_DUT = 1.8 V (formula path) and disable the DCDC.
+    // 1) Set V_DUT = 3.0 V (formula path) and disable the DCDC.
     ds4424_set_code(&b->idac, DS4424_CH_VDUT,
                     smu_voltage_to_code(SMU_CAL_ICAL_VSET_V));
     smu_enable(&b->smu, false);
@@ -502,6 +559,112 @@ static void run_current_cal(smu_cal_t *c)
 }
 
 // -----------------------------------------------------------------------------
+// Baseline (open-circuit offset) calibration
+// -----------------------------------------------------------------------------
+
+// Map a current range to the ADAQ that measures it (HI/MID -> FINE, LO -> COARSE).
+static uint8_t base_role_for_range(uint8_t range)
+{
+    return (range == RANGE_LO) ? (uint8_t)ADAQ_ROLE_COARSE
+                               : (uint8_t)ADAQ_ROLE_FINE;
+}
+
+// With the output OPEN, sweep V_DUT across every DS4424 code for each range and
+// record the averaged open-circuit ADC code. That code is later loaded straight
+// into the ADAQ OFFSET register so the hardware auto-subtracts the baseline.
+static void run_baseline_cal(smu_cal_t *c)
+{
+    daq_board_t *b = c->board;
+
+    if (!b->idac_ok || !b->adaq_ok[ADAQ_ROLE_FINE] || !b->adaq_ok[ADAQ_ROLE_COARSE]) {
+        c->flags |= SMU_CAL_FLAG_HARDWARE;
+        c->phase  = SMU_CAL_FAILED;
+        return;
+    }
+
+    // 1) Ask the operator to leave the DUT output OPEN (no load / open circuit).
+    c->prompt = SMU_CAL_PROMPT_OPEN_CIRCUIT;
+    c->phase  = SMU_CAL_PROMPT;
+    if (!wait_for_ack(c)) { safe_restore(c); c->phase = SMU_CAL_FAILED; return; }
+
+    c->prompt = SMU_CAL_PROMPT_NONE;
+    c->phase  = SMU_CAL_RUNNING;
+
+    memset(&c->base, 0, sizeof(c->base));
+
+    const uint8_t ranges[SMU_BASE_RANGES] = { RANGE_HI, RANGE_MID, RANGE_LO };
+    const int total = SMU_BASE_RANGES * SMU_BASE_CODES;
+    int done = 0;
+
+    for (int ri = 0; ri < SMU_BASE_RANGES; ++ri) {
+        uint8_t r    = ranges[ri];
+        uint8_t role = base_role_for_range(r);
+        c->base_range = r;
+
+        // Force the range (bypass switches + FINE mux) and zero the OFFSET reg so
+        // we measure the true raw open-circuit code, then enable the supply.
+        range_manager_force(&b->range, r);
+        adaq7769_set_offset_cal(&b->adaq[role], 0);
+        smu_enable(&b->smu, true);
+        vTaskDelay(pdMS_TO_TICKS(SMU_BASE_SETTLE_MS));
+
+        // Record the board temperature at which this range was calibrated.
+        float tc = 0.0f;
+        c->base.temp_c10[r] =
+            (b->temp_ok[0] && ad741x_read_celsius(&b->temp[0], &tc) == ESP_OK)
+                ? (int16_t)lroundf(tc * 10.0f)
+                : (int16_t)SMU_BASE_TEMP_NA;
+
+        // Sweep every V_DUT code: settle 200 ms, average 1000 raw reads.
+        for (int code = -127; code <= 127; ++code) {
+            if (c->abort_req) { safe_restore(c); c->phase = SMU_CAL_FAILED; return; }
+
+            c->code = (int8_t)code;
+            ds4424_set_code(&b->idac, DS4424_CH_VDUT, (int8_t)code);
+            vTaskDelay(pdMS_TO_TICKS(SMU_BASE_SETTLE_MS));
+
+            double acc = 0.0;
+            int    n   = 0;
+            for (int s = 0; s < SMU_BASE_SAMPLES_PER_PT; ++s) {
+                int32_t raw = 0;
+                if (adaq7769_read_sample(&b->adaq[role], &raw) == ESP_OK) {
+                    acc += raw;
+                    n++;
+                }
+            }
+            // Store the raw open-circuit ADC_DATA average. It is subtracted in
+            // SOFTWARE from each live sample (daq_board fast_emit) before the
+            // code->amps conversion. Software subtraction tracks autoranging
+            // (HI and MID share the FINE ADC but have different baselines) and
+            // needs no mid-stream register writes, unlike the single ADAQ
+            // hardware OFFSET register which cannot do either.
+            int32_t off_adc = (n > 0) ? (int32_t)llround(acc / (double)n) : 0;
+            c->base.offset[r][code + 127] = off_adc;
+
+            c->measured = (float)off_adc;
+            c->point    = (uint8_t)(code + 127);
+            done++;
+            c->progress = (uint8_t)((done * 100) / total);
+        }
+        c->base.have[r] = 1;
+    }
+
+    smu_enable(&b->smu, false);
+    range_manager_force(&b->range, RANGE_UNKNOWN);   // release override
+
+    c->have_base = true;
+    c->persist   = SMU_CAL_PERSIST_SAVING;
+    c->persist   = (base_save(c) == ESP_OK) ? SMU_CAL_PERSIST_SAVED
+                                            : SMU_CAL_PERSIST_FAILED;
+    c->progress  = 100;
+    c->phase     = SMU_CAL_SUCCESS;
+    ESP_LOGI(TAG, "baseline cal OK: HI %.1fC / MID %.1fC / LO %.1fC",
+             c->base.temp_c10[RANGE_HI] / 10.0, c->base.temp_c10[RANGE_MID] / 10.0,
+             c->base.temp_c10[RANGE_LO] / 10.0);
+    safe_restore(c);
+}
+
+// -----------------------------------------------------------------------------
 // Worker task + public API
 // -----------------------------------------------------------------------------
 
@@ -511,8 +674,9 @@ static void cal_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (c->abort_req) { c->abort_req = false; continue; }
-        if (c->mode == SMU_CAL_MODE_VOLTAGE) run_voltage_cal(c);
-        else                                  run_current_cal(c);
+        if      (c->mode == SMU_CAL_MODE_VOLTAGE) run_voltage_cal(c);
+        else if (c->mode == SMU_CAL_MODE_CURRENT) run_current_cal(c);
+        else                                      run_baseline_cal(c);
     }
 }
 
@@ -538,7 +702,17 @@ esp_err_t smu_cal_init(smu_cal_t *c, struct daq_board *board)
         ESP_LOGI(TAG, "no stored cal; using formula defaults");
     }
 
-    if (xTaskCreatePinnedToCore(cal_task, "smu_cal", 6144, c, 5, &c->task, 0)
+    if (base_load(c) == ESP_OK) {
+        ESP_LOGI(TAG, "loaded baseline offsets: HI=%u MID=%u LO=%u",
+                 c->base.have[RANGE_HI], c->base.have[RANGE_MID],
+                 c->base.have[RANGE_LO]);
+    } else {
+        memset(&c->base, 0, sizeof(c->base));
+        c->have_base = false;
+        ESP_LOGI(TAG, "no stored baseline offsets");
+    }
+
+    if (xTaskCreatePinnedToCore(cal_task, "smu_cal", 8192, c, 5, &c->task, 0)
         != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

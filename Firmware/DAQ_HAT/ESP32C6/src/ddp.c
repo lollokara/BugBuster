@@ -210,6 +210,12 @@ void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len)
     send_frame(DDP_CMD_CONFIG_SET, tlvs, len);
 }
 
+void ddp_announce_presence(void)
+{
+    uint8_t info[4] = { DDP_HAT_TYPE, DDP_FW_MAJOR, DDP_FW_MINOR, DDP_PROTO_VERSION };
+    send_frame(DDP_RSP_INFO, info, sizeof(info));
+}
+
 bool ddp_get_latest(float *v, float *i, uint8_t *flags, uint32_t *age_ms)
 {
     bool have;
