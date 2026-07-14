@@ -8,15 +8,6 @@ from __future__ import annotations
 from .. import session
 from ..safety import check_faults_post
 from ..config import USBPD_ALLOWED_VOLTAGES
-from bugbuster.pd_manager import (
-    ensure_pd_for_output,
-    downgrade_pd_if_possible,
-    select_pd_profile,
-    ConverterTopology,
-    PD_PROFILES_V,
-    BUCK_HEADROOM_V,
-    BUCK_BOOST_HEADROOM_V,
-)
 
 
 _USBPD_VOLTAGE_MAP = {5: 1, 9: 2, 12: 3, 15: 4, 18: 5, 20: 6}

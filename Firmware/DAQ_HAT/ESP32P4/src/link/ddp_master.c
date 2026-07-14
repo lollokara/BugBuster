@@ -9,6 +9,7 @@
 #include "config.h"
 #include "daq_settings.h"
 #include "daq_config_registry.h"
+#include "smu_cal.h"
 
 static const char *TAG = "ddp_master";
 
@@ -40,6 +41,21 @@ void ddp_master_send(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
     if (m->tx_lock) xSemaphoreGive(m->tx_lock);
 }
 
+uint8_t ddp_master_take_mb_request(ddp_master_t *m, uint8_t *buf, uint8_t cap)
+{
+    if (!m->mb_req_pending) return 0;
+    uint8_t n = m->mb_req_len;
+    if (n > cap) n = cap;
+    if (n && buf) memcpy(buf, m->mb_req, n);
+    m->mb_req_pending = false;   // benign race with handle_rx; re-sent on miss
+    return n;
+}
+
+uint8_t ddp_master_peek_mb_type(const ddp_master_t *m)
+{
+    return (m->mb_req_pending && m->mb_req_len >= 1) ? m->mb_req[0] : 0;
+}
+
 // ---------------------------------------------------------------------------
 // Convenience senders.
 // ---------------------------------------------------------------------------
@@ -48,7 +64,6 @@ void ddp_master_button_event(ddp_master_t *m, uint8_t events)
     if (!events) return;
     ddp_master_send(m, DDP_CMD_BUTTON_EVENT, &events, 1);
 }
-
 void ddp_master_set_measurement(ddp_master_t *m, float v, float i, uint8_t flags)
 {
     ddp_measurement_t meas = { .voltage_v = v, .current_a = i, .flags = flags };
@@ -78,6 +93,14 @@ void ddp_master_config_push(ddp_master_t *m, const uint8_t *tlvs, uint8_t len)
 // ---------------------------------------------------------------------------
 // RX: handle C6 -> P4 frames (unsolicited config events + responses).
 // ---------------------------------------------------------------------------
+// A mainboard request is a "write" (must not be dropped) vs a periodic "read".
+static inline bool mb_req_is_write(uint8_t type)
+{
+    return type == DDP_MB_SET_RAIL || type == DDP_MB_SET_EFUSE ||
+           type == DDP_MB_SET_RAIL_EN || type == DDP_MB_SCRIPT_RUN ||
+           type == DDP_MB_SCRIPT_STOP;
+}
+
 static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
                       uint8_t len)
 {
@@ -114,6 +137,42 @@ static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
                 m->c6_present  = true;
                 m->c6_fw_major = payload[1];
                 m->c6_fw_minor = payload[2];
+            }
+            break;
+        case DDP_CMD_MB_REQUEST:
+            // The C6 Main Board Settings menu wants to read/write an S3 resource.
+            // Cache it for the S3 poll (HATP_CMD_MB_POLL); one-deep overwrite.
+            // The Power menu also issues periodic POWER *reads*; never let one of
+            // those clobber a not-yet-claimed *write* (SET_*), or the user's
+            // toggle would be silently dropped.
+            if (len > 0 && len <= sizeof(m->mb_req)) {
+                bool new_is_write = mb_req_is_write(payload[0]);
+                bool pending_write = m->mb_req_pending && mb_req_is_write(m->mb_req[0]);
+                if (!(pending_write && !new_is_write)) {
+                    memcpy(m->mb_req, payload, len);
+                    m->mb_req_len = len;
+                    m->mb_req_pending = true;
+                }
+            }
+            break;
+        case DDP_CMD_CAL_CTRL:
+            // DUT source calibration control from the C6 wizard. Acts directly
+            // on the P4's background cal engine and answers STATUS requests.
+            if (m->cal && len >= 1) {
+                smu_cal_t *c = (smu_cal_t *)m->cal;
+                uint8_t op  = payload[0];
+                uint8_t arg = (len >= 2) ? payload[1] : 0;
+                switch (op) {
+                    case DDP_CAL_OP_START: smu_cal_start(c, (smu_cal_mode_t)arg); break;
+                    case DDP_CAL_OP_ACK:   smu_cal_ack(c);   break;
+                    case DDP_CAL_OP_ABORT: smu_cal_abort(c); break;
+                    default: break;
+                }
+                // Always answer with a fresh status snapshot.
+                smu_cal_status_t st;
+                smu_cal_get_status(c, &st);
+                ddp_master_send(m, DDP_CMD_CAL_STATUS,
+                                (const uint8_t *)&st, sizeof(st));
             }
             break;
         case DDP_RSP_OK:

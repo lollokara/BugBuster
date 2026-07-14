@@ -143,6 +143,46 @@ typedef struct __attribute__((packed)) {
     uint8_t  _pad;
 } hat_daq_mark_t;
 
+// -----------------------------------------------------------------------------
+// Mainboard settings tunnel (HAT_CMD_MB_POLL / HAT_CMD_MB_RESULT)
+// -----------------------------------------------------------------------------
+// The C6 Main Board Settings menu reads/writes S3 rails/efuses through the P4.
+// The S3 polls the P4 for a pending C6 request and returns the result. Request
+// types + the power struct MUST match ddp_proto.h (DDP_MB_* / ddp_mb_power_t).
+#define HAT_MB_POWER        0x01u  // read rail setpoints + efuse status
+#define HAT_MB_SET_RAIL     0x02u  // args: u8 rail (0=VLOGIC,1=VADJ1,2=VADJ2), u16 mv
+#define HAT_MB_SET_EFUSE    0x03u  // args: u8 idx (0..3), u8 on
+#define HAT_MB_SCRIPTS      0x04u  // (increment 2) script list + status
+#define HAT_MB_SCRIPT_RUN   0x05u
+#define HAT_MB_SCRIPT_STOP  0x06u
+#define HAT_MB_SET_RAIL_EN  0x07u  // args: u8 rail (0=VLOGIC/lshift,1=VADJ1,2=VADJ2), u8 on
+#define HAT_MB_ST_OK        0x00u
+#define HAT_MB_ST_BUSY      0x01u
+#define HAT_MB_ST_ERR       0x02u
+
+// MicroPython engine states (first byte of the scripts result blob). MUST match
+// ddp_proto.h DDP_MB_SCR_*.
+#define HAT_MB_SCR_IDLE     0u
+#define HAT_MB_SCR_RUNNING  1u
+#define HAT_MB_SCR_CRASHED  2u
+#define HAT_MB_SCR_EXITED   3u
+
+// HAT_CMD_MB_RESULT chunk framing: [u8 type][u8 status][u8 seq][u8 flags][data].
+// The result blob is split into <=(HAT_FRAME_MAX_LEN-4)-byte chunks over the
+// 32-byte HAT link; the P4 reassembles them before relaying to the C6.
+#define HAT_MB_RSLT_HDR     4u
+#define HAT_MB_RSLT_LAST    0x01u   // flags bit: final chunk
+
+typedef struct __attribute__((packed)) {
+    uint16_t vlogic_mv;      // VLOGIC setpoint (DS4424 ch0), mV
+    uint16_t vadj1_mv;       // VADJ1 setpoint  (DS4424 ch1), mV
+    uint16_t vadj2_mv;       // VADJ2 setpoint  (DS4424 ch2), mV
+    uint8_t  efuse_en;       // bit i (0..3) = e-fuse (i+1) enabled
+    uint8_t  efuse_flt;      // bit i (0..3) = e-fuse (i+1) fault active
+    uint8_t  rail_en;        // bit0=VLOGIC/level-shifter OE, bit1=VADJ1_EN, bit2=VADJ2_EN
+    uint8_t  rail_pg;        // bit1=VADJ1 power-good, bit2=VADJ2 power-good
+} hat_mb_power_t;
+
 // Commands (master → slave): Core (0x01–0x0F)
 #define HAT_CMD_PING            0x01
 #define HAT_CMD_GET_INFO        0x02
@@ -184,6 +224,8 @@ typedef struct __attribute__((packed)) {
 // USB MARKER records aligned to the live sample index.
 #define HAT_CMD_DAQ_ARM         0x5B  // arm/disarm pre-roll latch (hat_daq_arm_t)
 #define HAT_CMD_DAQ_MARK        0x5C  // IO event -> emit MARKER (hat_daq_mark_t)
+#define HAT_CMD_MB_POLL         0x5D  // poll P4 for a pending C6 mainboard request -> RSP_MB_REQ
+#define HAT_CMD_MB_RESULT       0x5E  // [req_type][status][data] result -> P4 relays to C6
 #define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
 
 // Commands: HAT v2 Supplies / LEDs (0x40-0x4F)
@@ -215,6 +257,7 @@ typedef struct __attribute__((packed)) {
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 #define HAT_RSP_CALIBRATE_STATUS 0x8A
 #define HAT_RSP_CALIBRATE_EXPORT 0x8B  // Paginated stored cal points
+#define HAT_RSP_MB_REQ          0x96  // Pending C6 mainboard request from the P4
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
@@ -487,7 +530,13 @@ bool hat_fw_status(HatFwUpdateStatus *status);
  *        forget — call periodically (~1 Hz) from the main loop.
  */
 void hat_daq_push_telemetry(void);
-
+/**
+ * @brief Poll the DAQ HAT (P4) for a pending C6 "Main Board Settings" request
+ *        and execute it on the S3 (rail setpoints, e-fuse enables), returning
+ *        the result for relay to the C6. No-op unless a DAQ HAT is connected;
+ *        the P4 defers the request while streaming to the PC. Call ~1 Hz.
+ */
+void hat_daq_poll_mb(void);
 /**
  * @brief Send a digital event MARKER to the DAQ HAT (P4) for the live stream.
  *        No-op unless a DAQ HAT is connected. Fire-and-forget.

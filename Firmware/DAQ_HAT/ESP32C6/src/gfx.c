@@ -368,6 +368,24 @@ void gfx_sprite_punch_circle(gfx_sprite_t *sp, float cx, float cy, float r)
         }
 }
 
+void gfx_sprite_circle(gfx_sprite_t *sp, float cx, float cy, float r)
+{
+    float rsq = r * r;
+    int x0 = (int)floorf(cx - r) - 1, x1 = (int)ceilf(cx + r) + 1;
+    int y0 = (int)floorf(cy - r) - 1, y1 = (int)ceilf(cy + r) + 1;
+    for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++) {
+            int hits = 0;
+            for (int sy = 0; sy < 3; sy++)
+                for (int sx = 0; sx < 3; sx++) {
+                    float dx = (x + (sx + 0.5f) / 3.0f) - cx;
+                    float dy = (y + (sy + 0.5f) / 3.0f) - cy;
+                    if (dx * dx + dy * dy <= rsq) hits++;
+                }
+            if (hits) sp_set(sp, x, y, (uint8_t)(hits * 255 / 9));
+        }
+}
+
 void gfx_blit(const gfx_sprite_t *sp, int x, int y, uint8_t gain)
 {
     if (!sp->alpha) return;

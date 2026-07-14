@@ -41,12 +41,18 @@ CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=512
 CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=8192
 CONFIG_TINYUSB_VENDOR_EPSIZE=512
 
-# Console routing. During bring-up, route the P4 log console to the built-in
-# USB-Serial-JTAG (J1, COM port) so the full boot log is visible over USB without
-# a UART adapter. This is a SEPARATE USB controller from the TinyUSB-HS
-# measurement stream on J5 (PID 4001), so the two do not conflict. Switch back to
-# CONFIG_ESP_CONSOLE_UART_DEFAULT=y (UART0, GPIO37/38) for production if desired.
+# Console routing. The P4 MUST boot independently of any USB connection. The
+# empirically-confirmed blocking stage is the 2nd-stage BOOTLOADER: when its
+# console is the USB-Serial-JTAG, its early writes spin on the TX FIFO until a
+# host drains it, so the chip hangs in the bootloader until the debug port is
+# plugged. The APP-level USB-JTAG console is already non-blocking (drops after
+# ~50 ms when no host), so silencing just the bootloader lets the device boot
+# with nothing attached while keeping the interactive REPL + all logs on the
+# convenient USB debug port (COMxx). See daq_cli_start.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# Silence the 2nd-stage bootloader so it never blocks on an unplugged USB-JTAG.
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+CONFIG_BOOTLOADER_LOG_LEVEL=0
 # Enable the SDIO port in esp-serial-flasher for C6 in-system programming.
 CONFIG_SERIAL_FLASHER_PORT_SDIO=y
 # Give the C6 SDIO slave 800 ms to initialize after RST release before the

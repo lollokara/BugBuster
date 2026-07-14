@@ -19,7 +19,10 @@ static temperature_sensor_handle_t s_tsens = NULL;
 
 esp_err_t diagnostics_init(void)
 {
-    temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 110);
+    // Range must map to a single HW measurement range; (-10,110) spans two and
+    // makes temperature_sensor_install() fail (blanking the P4 die-temp row).
+    // (-10,80) covers the realistic ESP32-P4 die range.
+    temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
     esp_err_t err = temperature_sensor_install(&tcfg, &s_tsens);
     if (err == ESP_OK) err = temperature_sensor_enable(s_tsens);
     if (err != ESP_OK) s_tsens = NULL;

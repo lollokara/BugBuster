@@ -75,6 +75,17 @@ extern "C" {
 #define HATP_CMD_DAQ_ARM         0x5Bu   // payload: s3link_daq_arm_t (arm/disarm pre-roll latch)
 #define HATP_CMD_DAQ_MARK        0x5Cu   // payload: s3link_daq_mark_t (IO event -> emit MARKER)
 
+// Mainboard settings tunnel (C6 <-> P4 <-> S3). The S3 polls the P4 for a
+// pending C6 request (MB_POLL) and returns execution results (MB_RESULT). The
+// P4 defers MB_POLL (returns an empty RSP_MB_REQ) while it is streaming to the
+// PC, so the tunnel never runs during acquisition.
+#define HATP_CMD_MB_POLL         0x5Du   // S3->P4: fetch pending C6 request -> RSP_MB_REQ (or 0-len)
+#define HATP_CMD_MB_RESULT       0x5Eu   // S3->P4: [type][status][seq][flags][data] chunk -> reassemble+relay to C6
+
+// HATP_CMD_MB_RESULT chunk framing (MUST match ESP32 hat.h HAT_MB_RSLT_*).
+#define HATP_MB_RSLT_HDR         4u      // [type][status][seq][flags]
+#define HATP_MB_RSLT_LAST        0x01u   // flags bit: final chunk
+
 // Version + OTA commands (vendor sub-range 0x60..0x6F).
 #define HATP_CMD_GET_VERSION     0x60u   // -> fw version (u32 + string)
 #define HATP_CMD_OTA_BEGIN       0x61u   // payload: ota_meta (size,ver,sha,prod)
@@ -109,6 +120,7 @@ extern "C" {
 #define HATP_RSP_CONFIG_VALUE  0x93u // TLV value(s); GET_ALL prefixes [next_idx u8]
 #define HATP_RSP_CONFIG_SCHEMA 0x94u // schema descriptor for one key
 #define HATP_RSP_DAQ_CAL_STATUS 0x95u // smu_cal_status_t snapshot
+#define HATP_RSP_MB_REQ        0x96u // pending C6 mainboard request ([req_type][args]); 0-len = none
 
 // Firmware version reported in GET_INFO.
 #define S3LINK_FW_MAJOR      1u

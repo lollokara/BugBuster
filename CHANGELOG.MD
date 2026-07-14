@@ -2,7 +2,60 @@
 
 ## [Unreleased]
 
+### Fixed
+- **DAQ HAT (ESP32-P4) USB-HS bring-up — the P4 now enumerates, streams, and auto-binds
+  WinUSB on Windows.** A chain of four defects kept the high-speed measurement port
+  (`303A:4001`) from working:
+  1. **Boot order** — `app_main()` started the USB-HS stack *before* the S3/C6 inter-processor
+     links, so a stalled USB bring-up left the C6 stuck showing "simulation". The S3 and C6
+     links now come up first; USB-HS bring-up can never gate live telemetry.
+  2. **TinyUSB task starvation** — the device task defaulted to core 1, the dedicated
+     acquisition core where the DRDY capture task runs at priority 20 / ~100% CPU. The
+     priority-5 usbd task never drained its event queue, so `osal_queue_send()` failed
+     (`queue_event 382: ASSERT FAILED`) and every USB event was dropped — enumeration never
+     completed. The USB task is now pinned to core 0 at priority 13 (above the fast-path
+     consumer) so it always drains the queue.
+  3. **Re-enumeration watchdog fighting a valid link** — with no VBUS-sense line, the
+     software re-plug watchdog keyed off `tud_mounted()`; a driverless (Windows "Code 28")
+     device enumerates but never gets `SET_CONFIGURATION`, so it looped connect/disconnect
+     every few seconds. The watchdog now also honours `tud_connected()` and only forces a
+     re-plug when the bus is genuinely idle.
+  4. **WinUSB never auto-bound (Code 28)** — added a WCID / Microsoft OS 2.0 descriptor
+     (`bcdUSB` → `0x0210`, BOS + MS OS 2.0 set with the `WINUSB` compatible ID and a
+     `DeviceInterfaceGUID`). Crucially, because this is a **single-function / non-composite**
+     device, the compatible ID must sit at the **device level** (directly under the set
+     header) — Windows does not load the composite parent driver that would process a
+     configuration/function subset, so a nested subset is read but never applied. Windows
+     now auto-installs WinUSB with no Zadig. (`bcdDevice`/serial were also bumped to escape a
+     cached `CONFIGFLAG_FAILEDINSTALL` from the pre-WCID firmware.)
+
 ### Added
+- **DAQ HAT — `c6logs` CLI command.** Bridges the C6 UART2 to the P4 debug console and resets
+  the C6 into normal boot so its boot + runtime log streams to the operator (companion to
+  `c6boot`, which forces ROM download for esptool). Exit with Ctrl-] or 30 s idle; the DDP
+  display link is restored on exit.
+- **DAQ HAT — `flash_via_p4.py` builds before flashing.** The C6 flasher now runs
+  `pio run -e esp32c6` first so it always programs a fresh image (`--no-build` to skip).
+- **`Notebooks/flash_DAQ.ipynb`.** One-stop build+flash notebook: a single setup cell
+  (auto-detects the P4 USB-Serial-JTAG port by VID/PID `303A:1001`), a Build+Flash P4 cell,
+  and a Build+Flash C6-via-P4 cell.
+- **DAQ HAT C6 display + mainboard tunnel — feature set.** Home screen: **hold OK toggles the
+  DUT supply** (off when on, on when off); the Pac-Man header is trimmed to fit a **temperature
+  indicator** (highest of the two AD7415 board sensors); the current tile shows **"OFF"** while
+  the supply is off; and both tiles gain an **accent glow** while the supply is on. Diagnostics:
+  the root **Settings screen now shows S3/P4/ADAQ1-3 health bubbles** (green/red from the DDP
+  diagnostics snapshot + over-temp guard), and the S3 telemetry push now **measures the VADJ1/
+  VADJ2/VLOGIC rails on demand** when the background self-test monitor is disabled (rails were
+  reading `--`). New **Main Board Settings** menu: a **Power** submenu with VLOGIC/VADJ1/VADJ2
+  voltage **setpoints** (DS4424 IDAC) + four **e-fuse** enable toggles, and a **Scripts** submenu
+  that lists the S3 MicroPython scripts and can **run/stop** them with live **RUNNING/CRASHED/
+  EXITED/IDLE** status. These tunnel C6→P4→S3 over a new DDP `MB_REQUEST/MB_RESPONSE` (0x19/0x1A,
+  `DDP_PROTO_VERSION` 5) + HAT `MB_POLL/MB_RESULT` (0x5D/0x5E, chunked over the 32-byte link); the
+  P4 **guards the tunnel off during PC acquisition** (`fast_running`), so the full device
+  bandwidth is preserved while streaming.
+- **Desktop — DAQ HAT detection fix.** The app now resolves `HatKind` from the reported
+  `hat_type` byte (`0x10` → DAQ, else LA) instead of assuming any detected HAT is the RP2040 LA
+  HAT, so the DAQ HAT surfaces its own interface instead of the LA tabs.
 - **DAQ HAT TUI — voltage calibration hotkey.** The ESP32-P4 bring-up TUI (`tui` command)
   gains a **`k` "cal V"** hotkey that opens a modal yes/no confirmation popup. Choosing **Yes**
   runs the onboard V_DUT voltage calibration: it enables V_DUT at its minimum, steps the DS4424

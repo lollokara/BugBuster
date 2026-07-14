@@ -35,6 +35,7 @@
 #include "i2c_bus.h"
 #include "ds4424.h"
 #include "husb238.h"
+#include "power/pd_manager.h"
 #include "pca9535.h"
 #include "hat.h"
 #include "auth.h"
@@ -120,6 +121,7 @@ static void mainLoopTask(void* pvParam)
     uint32_t lastLedUpdate = 0;
     uint32_t lastSelftestPoll = 0;
     uint32_t lastDaqTelemetry = 0;
+    uint32_t lastMbPoll = 0;
 
     for (;;) {
         // USB hub enumeration recovery watchdog (no-op once mounted or budget exhausted)
@@ -154,6 +156,15 @@ static void mainLoopTask(void* pvParam)
         if (now - lastDaqTelemetry >= 1000) {
             lastDaqTelemetry = now;
             hat_daq_push_telemetry();
+        }
+
+        // Service any pending C6 "Main Board Settings" request (rail/e-fuse
+        // writes + reads) at ~4 Hz so a toggle applies promptly. The P4 defers
+        // heavier script requests while streaming, so this stays cheap during
+        // acquisition.
+        if (now - lastMbPoll >= 250) {
+            lastMbPoll = now;
+            hat_daq_poll_mb();
         }
 
         // IO ownership lease tick — expire timed leases
@@ -304,6 +315,7 @@ extern "C" void app_main(void)
         } else {
             serial_println("[BugBuster] HUSB238 USB-PD: NOT FOUND (0x08)");
         }
+        pd_manager_init();
 
         // PCA9535 GPIO Expander (supply enables)
         bool pca_ok = false;

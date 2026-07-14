@@ -32,6 +32,10 @@
 #include "bbp_codec.h"
 #include "bbp.h"
 #include "hat.h"
+#include "power/pd_manager.h"
+#include "esp_log.h"
+
+static const char *TAG = "cmd_hat";
 
 // ---------------------------------------------------------------------------
 // Helper: translate HAT error code to CMD error code.
@@ -322,8 +326,34 @@ static int handler_hat_set_rail_voltage(const uint8_t *payload, size_t len,
     uint8_t rail = bbp_get_u8(payload, &rpos);
     uint16_t mv = bbp_get_u16(payload, &rpos);
 
-    if (!hat_set_rail_voltage(rail, mv)) {
-        return hat_err_to_cmd_err(hat_get_last_error());
+    // HAT rails are buck-boost: negotiate the minimum PD profile that keeps
+    // the converter in or near buck mode (pd_v >= out_v) for best efficiency.
+    // Going up   → ensure PD BEFORE commanding the HAT rail (input ready).
+    // Going down → ensure PD AFTER  commanding the HAT rail (release headroom).
+    if (rail < HAT_RAIL_COUNT) {
+        PdConsumerId pd_cid = (PdConsumerId)((int)PD_CONSUMER_HAT_RAIL0 + rail);
+        float out_v    = (float)mv / 1000.0f;
+        float old_v    = pd_manager_consumer_v(pd_cid);
+        bool  going_up = (out_v >= old_v);
+
+        char pd_warn[192] = {0};
+        if (going_up) {
+            pd_manager_ensure(pd_cid, out_v, PD_TYPE_BUCK_BOOST, pd_warn, sizeof(pd_warn));
+            if (pd_warn[0]) ESP_LOGW(TAG, "HAT rail %u: %s", (unsigned)rail, pd_warn);
+        }
+
+        if (!hat_set_rail_voltage(rail, mv)) {
+            return hat_err_to_cmd_err(hat_get_last_error());
+        }
+
+        if (!going_up) {
+            pd_manager_ensure(pd_cid, out_v, PD_TYPE_BUCK_BOOST, pd_warn, sizeof(pd_warn));
+            if (pd_warn[0]) ESP_LOGW(TAG, "HAT rail %u: %s", (unsigned)rail, pd_warn);
+        }
+    } else {
+        if (!hat_set_rail_voltage(rail, mv)) {
+            return hat_err_to_cmd_err(hat_get_last_error());
+        }
     }
 
     return handler_hat_get_rail_status(NULL, 0, resp, resp_len);

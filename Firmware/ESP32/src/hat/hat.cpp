@@ -16,6 +16,8 @@
 #include "ws_stream.h"
 #include "selftest.h"
 #include "husb238.h"
+#include "scripting.h"
+#include "script_storage.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -1171,6 +1173,194 @@ void hat_daq_push_telemetry(void)
     hat_command(HAT_CMD_DAQ_TELEMETRY, (const uint8_t *)&tlm, sizeof(tlm),
                 rsp, &rsp_len, 200, sizeof(rsp));
 }
+
+// Fill the current mainboard power snapshot (rail setpoints + e-fuse status).
+static void hat_fill_mb_power(hat_mb_power_t *p)
+{
+    memset(p, 0, sizeof(*p));
+    const DS4424State *idac = ds4424_get_state();
+    if (idac) {
+        p->vlogic_mv = (uint16_t)lroundf(idac->state[0].target_v * 1000.0f);
+        p->vadj1_mv  = (uint16_t)lroundf(idac->state[1].target_v * 1000.0f);
+        p->vadj2_mv  = (uint16_t)lroundf(idac->state[2].target_v * 1000.0f);
+    }
+    const PCA9535State *pca = pca9535_get_state();
+    if (pca) {
+        for (int i = 0; i < 4; ++i) {
+            if (pca->efuse_en[i])  p->efuse_en  |= (uint8_t)(1u << i);
+            if (pca->efuse_flt[i]) p->efuse_flt |= (uint8_t)(1u << i);
+        }
+        if (pca->vadj1_en) p->rail_en |= (1u << 1);
+        if (pca->vadj2_en) p->rail_en |= (1u << 2);
+        if (pca->vadj1_pg) p->rail_pg |= (1u << 1);
+        if (pca->vadj2_pg) p->rail_pg |= (1u << 2);
+    }
+    // VLOGIC enable == level-shifter output-enable (TXS0108E), driven directly
+    // on PIN_LSHIFT_OE rather than through the PCA9535.
+    if (gpio_get_level(PIN_LSHIFT_OE)) p->rail_en |= (1u << 0);
+}
+
+// Send an assembled Main Board result blob back to the P4, chunked over the
+// 32-byte HAT link: [type][status][seq][flags][<=28 data]. The P4 reassembles
+// the chunks and relays the whole blob to the C6 as DDP_CMD_MB_RESPONSE.
+static void hat_mb_result_send(uint8_t type, uint8_t status,
+                               const uint8_t *data, uint16_t len)
+{
+    const int maxch = HAT_FRAME_MAX_LEN - HAT_MB_RSLT_HDR;   // 28
+    uint16_t off = 0; uint8_t seq = 0;
+    do {
+        int n = (int)len - (int)off;
+        if (n > maxch) n = maxch;
+        uint8_t frame[HAT_FRAME_MAX_LEN];
+        frame[0] = type;
+        frame[1] = status;
+        frame[2] = seq;
+        frame[3] = ((uint16_t)(off + n) >= len) ? HAT_MB_RSLT_LAST : 0u;
+        if (n > 0) memcpy(&frame[HAT_MB_RSLT_HDR], &data[off], n);
+        uint8_t rsp[4]; uint8_t rsp_len = 0;
+        hat_command(HAT_CMD_MB_RESULT, frame, (uint8_t)(HAT_MB_RSLT_HDR + n),
+                    rsp, &rsp_len, 100, sizeof(rsp));
+        off += (uint16_t)n; seq++;
+    } while (off < len);
+}
+
+// Build the MicroPython snapshot blob consumed by the C6 Scripts screen:
+//   [u8 state][u8 err_len][err][u8 count]{u8 name_len, name}*
+// Bounded to `cap` bytes and 12 names so the assembled DDP response fits one
+// frame. Returns the number of bytes written.
+static uint16_t hat_build_scripts_blob(uint8_t *buf, uint16_t cap)
+{
+    ScriptStatus st;
+    scripting_get_status(&st);
+
+    uint8_t state;
+    if (st.is_running)              state = HAT_MB_SCR_RUNNING;
+    else if (st.last_error_msg[0])  state = HAT_MB_SCR_CRASHED;
+    else if (st.last_script_id)     state = HAT_MB_SCR_EXITED;
+    else                            state = HAT_MB_SCR_IDLE;
+
+    uint16_t o = 0;
+    if (o < cap) buf[o++] = state;
+
+    // Last error message (truncated to 32 bytes).
+    size_t el = strnlen(st.last_error_msg, sizeof(st.last_error_msg));
+    if (el > 32) el = 32;
+    if (o + 1 + el > cap) el = (o + 1 <= cap) ? (cap - o - 1) : 0;
+    buf[o++] = (uint8_t)el;
+    if (el) { memcpy(&buf[o], st.last_error_msg, el); o += (uint16_t)el; }
+
+    // Script list (bounded by byte budget and 12-name display cap).
+    static char names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
+    int cnt = script_storage_list(names, SCRIPT_LIST_MAX);
+    uint16_t count_pos = o;
+    if (o < cap) buf[o++] = 0;   // placeholder for count
+    int written = 0;
+    for (int i = 0; i < cnt && written < 12; ++i) {
+        size_t nl = strnlen(names[i], SCRIPT_NAME_MAX);
+        if (o + 1 + nl > cap) break;
+        buf[o++] = (uint8_t)nl;
+        memcpy(&buf[o], names[i], nl); o += (uint16_t)nl;
+        written++;
+    }
+    buf[count_pos] = (uint8_t)written;
+    return o;
+}
+
+void hat_daq_poll_mb(void)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;
+
+    // Ask the P4 for a pending C6 Main Board Settings request. The P4 returns an
+    // empty RSP_MB_REQ (req_len == 0) when nothing is pending or while streaming
+    // to the PC (the tunnel is guarded off during acquisition).
+    uint8_t req[32]; uint8_t req_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_MB_POLL, NULL, 0, req, &req_len, 100, sizeof(req));
+    if (cmd != HAT_RSP_MB_REQ || req_len < 1) return;
+
+    uint8_t type = req[0];
+
+    // -------- Script requests: execute, then return the engine snapshot ------
+    if (type == HAT_MB_SCRIPTS || type == HAT_MB_SCRIPT_RUN ||
+        type == HAT_MB_SCRIPT_STOP) {
+        uint8_t status = HAT_MB_ST_OK;
+        if (type == HAT_MB_SCRIPT_RUN) {
+            // [type][name_len][name...]
+            if (req_len >= 2) {
+                uint8_t nl = req[1];
+                if ((size_t)(2 + nl) <= req_len) {
+                    if (nl > SCRIPT_NAME_MAX) nl = SCRIPT_NAME_MAX;
+                    char name[SCRIPT_NAME_MAX + 1];
+                    memcpy(name, &req[2], nl); name[nl] = 0;
+                    if (!scripting_run_file(name, NULL)) status = HAT_MB_ST_ERR;
+                } else {
+                    status = HAT_MB_ST_ERR;
+                }
+            } else {
+                status = HAT_MB_ST_ERR;
+            }
+        } else if (type == HAT_MB_SCRIPT_STOP) {
+            scripting_stop();
+        }
+        uint8_t blob[210];
+        uint16_t blen = hat_build_scripts_blob(blob, sizeof(blob));
+        hat_mb_result_send(type, status, blob, blen);
+        return;
+    }
+
+    // -------- Power requests: report/write, then return the power snapshot ----
+    uint8_t status = HAT_MB_ST_OK;
+    switch (type) {
+        case HAT_MB_POWER:
+            break;   // report only
+
+        case HAT_MB_SET_RAIL:
+            // [type][rail u8][mv u16 LE]
+            if (req_len >= 4) {
+                uint8_t rail = req[1];
+                uint16_t mv  = (uint16_t)(req[2] | (req[3] << 8));
+                if (!(rail <= 2 && ds4424_set_voltage(rail, mv / 1000.0f)))
+                    status = HAT_MB_ST_ERR;
+            } else {
+                status = HAT_MB_ST_ERR;
+            }
+            break;
+
+        case HAT_MB_SET_EFUSE:
+            // [type][idx u8][on u8]
+            if (req_len >= 3 && req[1] < 4) {
+                PcaControl ctrl = (PcaControl)(PCA_CTRL_EFUSE1_EN + req[1]);
+                if (!pca9535_set_control(ctrl, req[2] != 0))
+                    status = HAT_MB_ST_ERR;
+            } else {
+                status = HAT_MB_ST_ERR;
+            }
+            break;
+
+        case HAT_MB_SET_RAIL_EN:
+            // [type][rail u8][on u8] — rail 0=VLOGIC/level-shifter OE, 1=VADJ1, 2=VADJ2
+            if (req_len >= 3) {
+                bool on = req[2] != 0;
+                switch (req[1]) {
+                    case 0: pin_write(PIN_LSHIFT_OE, on ? 1 : 0); break;
+                    case 1: if (!pca9535_set_control(PCA_CTRL_VADJ1_EN, on)) status = HAT_MB_ST_ERR; break;
+                    case 2: if (!pca9535_set_control(PCA_CTRL_VADJ2_EN, on)) status = HAT_MB_ST_ERR; break;
+                    default: status = HAT_MB_ST_ERR; break;
+                }
+            } else {
+                status = HAT_MB_ST_ERR;
+            }
+            break;
+
+        default:
+            status = HAT_MB_ST_ERR;
+            break;
+    }
+
+    hat_mb_power_t p;
+    hat_fill_mb_power(&p);
+    hat_mb_result_send(type, status, (const uint8_t *)&p, sizeof(p));
+}
+
 
 void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind)
 {

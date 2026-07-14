@@ -39,6 +39,12 @@ static uint16_t mix565(uint16_t a, uint16_t b, uint8_t t)
     return (uint16_t)((r << 11) | (g << 5) | bl);
 }
 
+// Small filled up-triangle (apex at top), used as the range marker.
+static void draw_tri(int cx, int y, int s, uint16_t c)
+{
+    for (int r = 0; r <= s; r++) gfx_hline(cx - r, y + r, 2 * r + 1, c);
+}
+
 static float   s_v = 0.0f, s_i = 0.0f;
 static uint8_t s_flags = 0;
 static uint8_t s_state = DDP_STATE_BOOT;
@@ -60,12 +66,21 @@ static uint8_t s_state = DDP_STATE_BOOT;
 
 static gfx_sprite_t s_pac[PAC_FRAMES];
 static gfx_sprite_t s_bolt;
+static gfx_sprite_t s_dot;              // pre-rendered status dot (tinted per blit)
 static bool s_sprites_ready = false;
+
+// Cell for the shared status dot. Odd size so the AA circle centers cleanly;
+// blit offset is -DOT_HALF so ui_draw_dot() takes the visual center.
+#define DOT_CELL 9
+#define DOT_HALF 4
 
 static void build_sprites(void)
 {
     if (!gfx_sprite_alloc(&s_bolt, BOLT_CELL_W, BOLT_CELL_H, C_CYAN)) return;
     gfx_sprite_bolt(&s_bolt, BOLT_CX, BOLT_CY, BOLT_H);
+
+    if (!gfx_sprite_alloc(&s_dot, DOT_CELL, DOT_CELL, C_GREEN)) return;
+    gfx_sprite_circle(&s_dot, 4.5f, 4.5f, 2.4f);
 
     for (int f = 0; f < PAC_FRAMES; f++) {
         if (!gfx_sprite_alloc(&s_pac[f], PAC_CELL, PAC_CELL, C_AMBER)) return;
@@ -98,6 +113,15 @@ void ui_set_data(float v, float i, uint8_t flags, uint8_t state)
 bool ui_source_on(void)
 {
     return (s_flags & DDP_FLAG_SRC_ON) != 0;
+}
+
+// Blit the pre-rendered status dot centered at (cx,cy) in `color`. Cheap alpha
+// blend — no per-frame anti-aliased circle math (the C6 has no FPU).
+void ui_draw_dot(int cx, int cy, uint16_t color)
+{
+    if (!s_sprites_ready) return;
+    s_dot.color = color;
+    gfx_blit(&s_dot, cx - DOT_HALF, cy - DOT_HALF, 255);
 }
 
 // ---- Header: Pac-Man chomping a stream of lightning bolts -------------------
@@ -206,19 +230,20 @@ static void draw_header(uint32_t t_ms)
         gfx_text(temp_x, 6, temp_s, 1, C_DIM);
     }
     if (src_on) {
-        gfx_fill_circle(src_badge_x, 9, 2.2f, C_GREEN);
+        ui_draw_dot(src_badge_x, 9, C_GREEN);
         gfx_text(src_badge_x + 5, 6, "SRC", 1, C_GREEN);
     }
-    gfx_fill_circle(DISP_WIDTH - tw - 14, 9, 2.2f, sc);
+    ui_draw_dot(DISP_WIDTH - tw - 14, 9, sc);
     gfx_text(DISP_WIDTH - tw - 8, 6, st, 1, sc);
 }
 
 // ---- A single hero value card ----------------------------------------------
 // glow: draw a soft accent ring outside the tile (supply on).
 // show_off: render "OFF" instead of the value (supply off).
+// range_badge: optional short current-range label (triangle + text) in the top row.
 static void draw_card(int x, int y, int w, int h, const char *label,
                       uint16_t accent, float value, char base_unit, bool over,
-                      bool glow, bool show_off)
+                      bool glow, bool show_off, const char *range_badge)
 {
     if (over) accent = C_ROSE;
 
@@ -256,6 +281,15 @@ static void draw_card(int x, int y, int w, int h, const char *label,
     if (us[0]) {
         int uw = gfx_text_w(us, 1);
         gfx_text(x + w - uw - 8, y + 5, us, 1, over ? C_ROSE : C_DIM);
+    }
+    // Current range marker (triangle + shunt label), tucked left of the unit.
+    if (range_badge && range_badge[0]) {
+        int uw = us[0] ? gfx_text_w(us, 1) : 0;
+        int unit_x = x + w - uw - 8;
+        int rbw = gfx_text_w(range_badge, 1);
+        int tx = unit_x - 5 - rbw;
+        draw_tri(tx - 6, y + 6, 3, accent);
+        gfx_text(tx, y + 5, range_badge, 1, accent);
     }
     gfx_hline(x + 8, y + 14, w - 16, C_BORDER);   // thin divider under the row
 
@@ -302,13 +336,24 @@ void ui_render(uint32_t t_ms)
     // sweep never asserts SRC_ON and should keep animating.
     bool cur_off = !src_on && s_state == DDP_STATE_LIVE;
 
+    // Decode the live current range for the badge (LIVE data only).
+    const char *rbadge = NULL;
+    if (s_state == DDP_STATE_LIVE && !cur_off) {
+        switch ((s_flags & DDP_FLAG_RANGE_MASK) >> DDP_FLAG_RANGE_SHIFT) {
+            case DDP_RANGE_HI:  rbadge = "51R"; break;
+            case DDP_RANGE_MID: rbadge = "2R";  break;
+            case DDP_RANGE_LO:  rbadge = "50m"; break;
+            default:            rbadge = NULL;  break;
+        }
+    }
+
     draw_card(x0, top, cardw, cardh, "VOLTAGE", C_BLUE,
               s_v, 'V', (s_flags & DDP_FLAG_V_OVERRANGE) != 0,
-              src_on, false);
+              src_on, false, NULL);
     PERF_MARK("cardV");
 
     draw_card(x1, top, cardw, cardh, "CURRENT", C_GREEN,
               s_i, 'A', (s_flags & DDP_FLAG_I_OVERRANGE) != 0,
-              src_on, cur_off);
+              src_on, cur_off, rbadge);
     PERF_MARK("cardI");
 }

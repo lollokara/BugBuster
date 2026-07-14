@@ -674,9 +674,18 @@ static void cal_task(void *arg)
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (c->abort_req) { c->abort_req = false; continue; }
+        daq_board_t *b = (daq_board_t *)c->board;
+        // The cal routines do single-shot ADAQ reads, which fight the
+        // continuous-read DMA. Pause the fast acquisition for the run and
+        // resume it after — but only if it was running AND we are the one who
+        // stopped it, so a TUI-driven cal (which pauses/resumes itself) is not
+        // double-restarted.
+        bool resume_fast = b->fast_running;
+        if (resume_fast) daq_board_stop_fast(b);
         if      (c->mode == SMU_CAL_MODE_VOLTAGE) run_voltage_cal(c);
         else if (c->mode == SMU_CAL_MODE_CURRENT) run_current_cal(c);
         else                                      run_baseline_cal(c);
+        if (resume_fast) daq_board_run_fast(b, 8192);
     }
 }
 

@@ -31,6 +31,19 @@ static ddp_diag_t s_diag;
 static int64_t    s_diag_us = 0;
 static bool       s_diag_have = false;
 
+// Latest mainboard power snapshot returned by the S3 via the settings tunnel.
+static ddp_mb_power_t s_mb_power;
+static int64_t        s_mb_us = 0;
+static bool           s_mb_have = false;
+
+static ddp_mb_scripts_t s_mb_scr;
+static int64_t          s_mb_scr_us = 0;
+static bool             s_mb_scr_have = false;
+
+static ddp_cal_status_t s_cal;
+static int64_t          s_cal_us = 0;
+static bool             s_cal_have = false;
+
 // Button events relayed from the P4 (buttons moved off the C6). OR-accumulated
 // by the RX task; drained by the render loop via ddp_take_buttons().
 static volatile uint8_t s_btn_events = 0;
@@ -126,6 +139,70 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
         if (len >= 4) npx_set_channel_codes(payload);
         send_frame(DDP_RSP_OK, NULL, 0);
         break;
+    case DDP_CMD_MB_RESPONSE:
+        // Result of a Main Board Settings request. Power reads/writes carry a
+        // ddp_mb_power_t snapshot after [req_type][status].
+        if (len >= 2) {
+            uint8_t req_type = payload[0];
+            if ((req_type == DDP_MB_POWER || req_type == DDP_MB_SET_RAIL ||
+                 req_type == DDP_MB_SET_EFUSE || req_type == DDP_MB_SET_RAIL_EN) &&
+                len >= 2 + sizeof(ddp_mb_power_t)) {
+                taskENTER_CRITICAL(&s_mux);
+                memcpy(&s_mb_power, &payload[2], sizeof(s_mb_power));
+                s_mb_us = esp_timer_get_time();
+                s_mb_have = true;
+                taskEXIT_CRITICAL(&s_mux);
+            } else if (req_type == DDP_MB_SCRIPTS ||
+                       req_type == DDP_MB_SCRIPT_RUN ||
+                       req_type == DDP_MB_SCRIPT_STOP) {
+                // Variable-length script snapshot: [state][err_len,err]
+                // [count]{name_len,name}*. Decode defensively into the cache.
+                ddp_mb_scripts_t s = {0};
+                const uint8_t *p = &payload[2];
+                int rem = (int)len - 2;
+                if (rem >= 1) { s.state = *p++; rem--; }
+                if (rem >= 1) {
+                    int el = *p++; rem--;
+                    if (el > rem) el = rem;
+                    int cpy = el < (int)sizeof(s.err) - 1 ? el : (int)sizeof(s.err) - 1;
+                    memcpy(s.err, p, cpy); s.err[cpy] = 0;
+                    p += el; rem -= el;
+                }
+                if (rem >= 1) {
+                    int cnt = *p++; rem--;
+                    int slot = 0;
+                    for (int i = 0; i < cnt && rem >= 1; i++) {
+                        int nl = *p++; rem--;
+                        if (nl > rem) nl = rem;
+                        if (slot < MB_SCRIPTS_MAX) {
+                            int cpy = nl < MB_SCR_NAME_MAX ? nl : MB_SCR_NAME_MAX;
+                            memcpy(s.name[slot], p, cpy); s.name[slot][cpy] = 0;
+                            slot++;
+                        }
+                        p += nl; rem -= nl;
+                    }
+                    s.count = (uint8_t)slot;
+                }
+                taskENTER_CRITICAL(&s_mux);
+                s_mb_scr = s;
+                s_mb_scr_us = esp_timer_get_time();
+                s_mb_scr_have = true;
+                taskEXIT_CRITICAL(&s_mux);
+            }
+        }
+        send_frame(DDP_RSP_OK, NULL, 0);
+        break;
+    case DDP_CMD_CAL_STATUS:
+        // Live DUT-source calibration status from the P4 cal engine.
+        if (len >= sizeof(ddp_cal_status_t)) {
+            taskENTER_CRITICAL(&s_mux);
+            memcpy(&s_cal, payload, sizeof(s_cal));
+            s_cal_us = esp_timer_get_time();
+            s_cal_have = true;
+            taskEXIT_CRITICAL(&s_mux);
+        }
+        send_frame(DDP_RSP_OK, NULL, 0);
+        break;
     default: {
         uint8_t e = 0xFF; send_frame(DDP_RSP_ERR, &e, 1);
         break;
@@ -208,6 +285,57 @@ uint8_t ddp_take_buttons(void)
 void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len)
 {
     send_frame(DDP_CMD_CONFIG_SET, tlvs, len);
+}
+
+void ddp_send_mb_request(uint8_t req_type, const uint8_t *args, uint8_t args_len)
+{
+    uint8_t buf[1 + 30];
+    buf[0] = req_type;
+    if (args_len > sizeof(buf) - 1) args_len = sizeof(buf) - 1;
+    if (args && args_len) memcpy(&buf[1], args, args_len);
+    send_frame(DDP_CMD_MB_REQUEST, buf, (uint8_t)(1 + args_len));
+}
+
+bool ddp_get_mb_power(ddp_mb_power_t *out, uint32_t *age_ms)
+{
+    bool have;
+    taskENTER_CRITICAL(&s_mux);
+    have = s_mb_have;
+    if (out) *out = s_mb_power;
+    int64_t rx = s_mb_us;
+    taskEXIT_CRITICAL(&s_mux);
+    if (age_ms) *age_ms = have ? (uint32_t)((esp_timer_get_time() - rx) / 1000) : 0xFFFFFFFFu;
+    return have;
+}
+
+bool ddp_get_mb_scripts(ddp_mb_scripts_t *out, uint32_t *age_ms)
+{
+    bool have;
+    taskENTER_CRITICAL(&s_mux);
+    have = s_mb_scr_have;
+    if (out) *out = s_mb_scr;
+    int64_t rx = s_mb_scr_us;
+    taskEXIT_CRITICAL(&s_mux);
+    if (age_ms) *age_ms = have ? (uint32_t)((esp_timer_get_time() - rx) / 1000) : 0xFFFFFFFFu;
+    return have;
+}
+
+void ddp_send_cal_ctrl(uint8_t op, uint8_t arg)
+{
+    uint8_t p[2] = { op, arg };
+    send_frame(DDP_CMD_CAL_CTRL, p, sizeof(p));
+}
+
+bool ddp_get_cal_status(ddp_cal_status_t *out, uint32_t *age_ms)
+{
+    bool have;
+    taskENTER_CRITICAL(&s_mux);
+    have = s_cal_have;
+    if (out) *out = s_cal;
+    int64_t rx = s_cal_us;
+    taskEXIT_CRITICAL(&s_mux);
+    if (age_ms) *age_ms = have ? (uint32_t)((esp_timer_get_time() - rx) / 1000) : 0xFFFFFFFFu;
+    return have;
 }
 
 void ddp_announce_presence(void)

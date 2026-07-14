@@ -16,7 +16,7 @@
 #include "tasks.h"
 #include "state_lock.h"
 #include "ds4424.h"
-#include "pd_vadj_guard.h"
+#include "power/pd_manager.h"
 #include "esp_log.h"
 
 static const char *TAG = "cmd_idac";
@@ -111,12 +111,27 @@ static int handler_idac_set_voltage(const uint8_t *payload, size_t len,
     float   voltage = bbp_get_f32(payload, &rpos);
     if (ch >= 3) return -CMD_ERR_OUT_OF_RANGE;  // legacy uses ch >= 3
 
-    char warning[384] = {0};
-    if (pd_vadj_guard_warning(ch, voltage, warning, sizeof(warning))) {
-        ESP_LOGW(TAG, "%s", warning);
+    // Channels 1 (VADJ1) and 2 (VADJ2) are buck rails that depend on USB-C PD input.
+    // Negotiate the minimum sufficient PD profile before raising the DCDC output;
+    // release excess PD headroom after lowering it.
+    bool is_vadj = (ch == 1 || ch == 2);
+    PdConsumerId pd_cid = (ch == 1) ? PD_CONSUMER_VADJ1 : PD_CONSUMER_VADJ2;
+    float old_demand = is_vadj ? pd_manager_consumer_v(pd_cid) : 0.0f;
+    bool going_up    = is_vadj && (voltage >= old_demand);
+
+    if (is_vadj && going_up) {
+        char pd_warn[256] = {0};
+        pd_manager_ensure(pd_cid, voltage, PD_TYPE_BUCK, pd_warn, sizeof(pd_warn));
+        if (pd_warn[0]) ESP_LOGW(TAG, "%s", pd_warn);
     }
 
     if (!ds4424_set_voltage(ch, voltage)) return -CMD_ERR_HARDWARE;
+
+    if (is_vadj && !going_up) {
+        char pd_warn[256] = {0};
+        pd_manager_ensure(pd_cid, voltage, PD_TYPE_BUCK, pd_warn, sizeof(pd_warn));
+        if (pd_warn[0]) ESP_LOGW(TAG, "%s", pd_warn);
+    }
 
     const DS4424State *st = ds4424_get_state();
     size_t pos = 0;

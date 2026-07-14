@@ -43,6 +43,7 @@ typedef struct {
     void (*ok)(void);                        // IT_TOGGLE / IT_CYCLE action
     bool (*visible)(void);                   // NULL => always visible
     bool (*warn)(void);                      // NULL => no warning icon
+    bool (*value_alert)(void);               // NULL => normal; true => value in red
 
     // IT_INFO live-preview: when non-NULL, OK opens a detail screen that plots
     // a scrolling sparkline of this sampler's return value.
@@ -329,10 +330,104 @@ static float s_c6_mem(void)  { return esp_get_free_heap_size() / 1024.0f; }
 
 
 // ===========================================================================
+// Main Board Settings — S3 rails + e-fuses over the DDP settings tunnel.
+// The C6 pulls the power snapshot only while the Power menu is open; writes go
+// C6 -> P4 -> S3. The P4 defers the tunnel while streaming to the PC, so this
+// is inert during acquisition. Rapid rail edits coalesce into the P4's one-deep
+// pending request and apply at the next ~1 s S3 poll.
+// ===========================================================================
+static ddp_mb_power_t s_mbp;            // last power snapshot from the S3
+static bool           s_mbp_valid = false;
+static int  s_vlogic_mv = 3300;         // IT_BARGRAPH refs (seeded from snapshot)
+static int  s_vadj1_mv  = 5000;
+static int  s_vadj2_mv  = 5000;
+static uint32_t s_mb_last_req = 0;
+
+static void fmt_mv_volts(char *b, int n, int mv)
+{
+    if (mv < 0) mv = 0;
+    snprintf(b, n, "%d.%02d V", mv / 1000, (mv % 1000) / 10);
+}
+static void val_vlogic(char *b, int n) { fmt_mv_volts(b, n, s_vlogic_mv); }
+static void val_vadj1(char *b, int n)  { fmt_mv_volts(b, n, s_vadj1_mv); }
+static void val_vadj2(char *b, int n)  { fmt_mv_volts(b, n, s_vadj2_mv); }
+
+static void send_set_rail(uint8_t rail, int mv)
+{
+    if (mv < 0) mv = 0;
+    uint8_t args[3] = { rail, (uint8_t)(mv & 0xFF), (uint8_t)((mv >> 8) & 0xFF) };
+    ddp_send_mb_request(DDP_MB_SET_RAIL, args, sizeof(args));
+}
+static void ch_vlogic(int mv) { send_set_rail(DDP_MB_RAIL_VLOGIC, mv); }
+static void ch_vadj1(int mv)  { send_set_rail(DDP_MB_RAIL_VADJ1,  mv); }
+static void ch_vadj2(int mv)  { send_set_rail(DDP_MB_RAIL_VADJ2,  mv); }
+
+static void efuse_toggle(int idx)
+{
+    bool on = s_mbp_valid && (s_mbp.efuse_en & (1u << idx));
+    uint8_t args[2] = { (uint8_t)idx, (uint8_t)(on ? 0 : 1) };
+    ddp_send_mb_request(DDP_MB_SET_EFUSE, args, sizeof(args));
+}
+static void ok_efuse0(void) { efuse_toggle(0); }
+static void ok_efuse1(void) { efuse_toggle(1); }
+static void ok_efuse2(void) { efuse_toggle(2); }
+static void ok_efuse3(void) { efuse_toggle(3); }
+
+static void val_efuse(char *b, int n, int idx)
+{
+    if (!s_mbp_valid) { snprintf(b, n, "--"); return; }
+    bool on  = s_mbp.efuse_en  & (1u << idx);
+    bool flt = s_mbp.efuse_flt & (1u << idx);
+    snprintf(b, n, "%s", flt ? "FAULT" : (on ? "ON" : "OFF"));
+}
+static void val_efuse0(char *b, int n) { val_efuse(b, n, 0); }
+static void val_efuse1(char *b, int n) { val_efuse(b, n, 1); }
+static void val_efuse2(char *b, int n) { val_efuse(b, n, 2); }
+static void val_efuse3(char *b, int n) { val_efuse(b, n, 3); }
+static bool warn_efuse0(void) { return s_mbp_valid && (s_mbp.efuse_flt & 1u); }
+static bool warn_efuse1(void) { return s_mbp_valid && (s_mbp.efuse_flt & 2u); }
+static bool warn_efuse2(void) { return s_mbp_valid && (s_mbp.efuse_flt & 4u); }
+static bool warn_efuse3(void) { return s_mbp_valid && (s_mbp.efuse_flt & 8u); }
+
+// --- Rail enables (VLOGIC/level-shifter OE + VADJ1/VADJ2) -------------------
+static void send_set_rail_en(uint8_t rail, bool on)
+{
+    uint8_t args[2] = { rail, (uint8_t)(on ? 1 : 0) };
+    ddp_send_mb_request(DDP_MB_SET_RAIL_EN, args, sizeof(args));
+}
+static void ok_vlogic_en(void) { send_set_rail_en(0, !(s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VLOGIC))); }
+static void ok_vadj1_en(void)  { send_set_rail_en(1, !(s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VADJ1))); }
+static void ok_vadj2_en(void)  { send_set_rail_en(2, !(s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VADJ2))); }
+
+static void val_vlogic_en(char *b, int n)
+{
+    if (!s_mbp_valid) { snprintf(b, n, "--"); return; }
+    snprintf(b, n, "%s", (s_mbp.rail_en & DDP_MB_RAILEN_VLOGIC) ? "ON" : "OFF");
+}
+static void val_vadj_en(char *b, int n, uint8_t bit)
+{
+    if (!s_mbp_valid) { snprintf(b, n, "--"); return; }
+    bool on = s_mbp.rail_en & bit;
+    bool pg = s_mbp.rail_pg & bit;
+    if (!on) snprintf(b, n, "OFF");
+    else     snprintf(b, n, pg ? "ON" : "NO PG");
+}
+static void val_vadj1_en(char *b, int n) { val_vadj_en(b, n, DDP_MB_RAILEN_VADJ1); }
+static void val_vadj2_en(char *b, int n) { val_vadj_en(b, n, DDP_MB_RAILEN_VADJ2); }
+// Enabled but power-good is missing -> flag the status in red.
+static bool alert_vadj1_en(void) { return s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VADJ1) && !(s_mbp.rail_pg & DDP_MB_RAILEN_VADJ1); }
+static bool alert_vadj2_en(void) { return s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VADJ2) && !(s_mbp.rail_pg & DDP_MB_RAILEN_VADJ2); }
+
+
+// ===========================================================================
 // Menu tree
 // ===========================================================================
-static const menu_t m_hat, m_screen, m_mainboard, m_wifi, m_diag;
+static const menu_t m_hat, m_screen, m_mainboard, m_wifi, m_diag, m_cal;
 static const menu_t m_diag_temp, m_diag_power, m_diag_rails, m_diag_p4, m_diag_c6;
+static void scripts_open(void);   // opens the custom MicroPython Scripts screen
+static void cal_open_volt(void);  // DUT source calibration wizard entry points
+static void cal_open_curr(void);
+static void cal_open_base(void);
 
 static const menu_item_t root_items[] = {
     { .label = "HAT Settings",        .type = IT_SUBMENU, .sub = &m_hat },
@@ -361,8 +456,9 @@ static const menu_item_t hat_items[] = {
       .visible = vis_fft },
     { .label = "FFT Source",       .type = IT_CYCLE,  .value = val_fftsrc, .ok = ok_fftsrc,
       .visible = vis_fft },
+    { .label = "Calibration",      .type = IT_SUBMENU, .sub = &m_cal },
 };
-static const menu_t m_hat = { "HAT Settings", hat_items, 9 };
+static const menu_t m_hat = { "HAT Settings", hat_items, 10 };
 
 static const menu_item_t screen_items[] = {
     { .label = "Brightness", .type = IT_BARGRAPH, .value = val_bright,
@@ -377,7 +473,40 @@ static const menu_item_t screen_items[] = {
 };
 static const menu_t m_screen = { "Screen Settings", screen_items, 5 };
 
-static const menu_t m_mainboard = { "Main Board Settings", NULL, 0 };
+static const menu_item_t power_items[] = {
+    { .label = "VLOGIC", .type = IT_BARGRAPH, .value = val_vlogic,
+      .bar_ref = &s_vlogic_mv, .bar_min = 1800, .bar_max = 5000,
+      .bar_step = 100, .bar_fmt = fmt_mv_volts, .bar_change = ch_vlogic },
+    { .label = "  LShift OE", .type = IT_TOGGLE, .value = val_vlogic_en, .ok = ok_vlogic_en },
+    { .label = "VADJ1",  .type = IT_BARGRAPH, .value = val_vadj1,
+      .bar_ref = &s_vadj1_mv, .bar_min = 2000, .bar_max = 20000,
+      .bar_step = 250, .bar_fmt = fmt_mv_volts, .bar_change = ch_vadj1 },
+    { .label = "  Enable", .type = IT_TOGGLE, .value = val_vadj1_en, .ok = ok_vadj1_en,
+      .value_alert = alert_vadj1_en },
+    { .label = "VADJ2",  .type = IT_BARGRAPH, .value = val_vadj2,
+      .bar_ref = &s_vadj2_mv, .bar_min = 2000, .bar_max = 20000,
+      .bar_step = 250, .bar_fmt = fmt_mv_volts, .bar_change = ch_vadj2 },
+    { .label = "  Enable", .type = IT_TOGGLE, .value = val_vadj2_en, .ok = ok_vadj2_en,
+      .value_alert = alert_vadj2_en },
+    { .label = "E-Fuse 1", .type = IT_TOGGLE, .value = val_efuse0, .ok = ok_efuse0, .warn = warn_efuse0, .value_alert = warn_efuse0 },
+    { .label = "E-Fuse 2", .type = IT_TOGGLE, .value = val_efuse1, .ok = ok_efuse1, .warn = warn_efuse1, .value_alert = warn_efuse1 },
+    { .label = "E-Fuse 3", .type = IT_TOGGLE, .value = val_efuse2, .ok = ok_efuse2, .warn = warn_efuse2, .value_alert = warn_efuse2 },
+    { .label = "E-Fuse 4", .type = IT_TOGGLE, .value = val_efuse3, .ok = ok_efuse3, .warn = warn_efuse3, .value_alert = warn_efuse3 },
+};
+static const menu_t m_power = { "Power", power_items, 10 };
+
+static const menu_item_t cal_items[] = {
+    { .label = "Baseline",    .type = IT_CYCLE, .ok = cal_open_base },
+    { .label = "Voltage Out", .type = IT_CYCLE, .ok = cal_open_volt },
+    { .label = "Current Out", .type = IT_CYCLE, .ok = cal_open_curr },
+};
+static const menu_t m_cal = { "Calibration", cal_items, 3 };
+
+static const menu_item_t mainboard_items[] = {
+    { .label = "Power",   .type = IT_SUBMENU, .sub = &m_power },
+    { .label = "Scripts", .type = IT_CYCLE,   .ok = scripts_open },
+};
+static const menu_t m_mainboard = { "Main Board Settings", mainboard_items, 2 };
 
 static const menu_item_t wifi_items[] = {
     { .label = "WiFi",   .type = IT_TOGGLE, .value = val_wifi,     .ok = ok_wifi },
@@ -472,7 +601,17 @@ static const menu_item_t *s_detail = NULL;
 static float s_hist[HIST_N];
 static int   s_hist_count = 0;
 static uint32_t s_hist_last = 0;
+// Custom MicroPython Scripts screen (dynamic list, tunneled from the S3).
+static bool             s_in_scripts = false;
+static ddp_mb_scripts_t s_scr;             // last script snapshot from the S3
+static int              s_scr_sel = 0;     // selection over [Stop?]+scripts
+static uint32_t         s_scr_last_req = 0;
 
+// DUT source calibration wizard (driven on the P4 over DDP).
+static bool             s_in_cal = false;
+static uint8_t          s_cal_mode = 0;    // DDP_CAL_MODE_*
+static ddp_cal_status_t s_calst;           // latest status from the P4
+static uint32_t         s_cal_last_req = 0;
 static const menu_t *cur_menu(void) { return s_stack[s_depth].menu; }
 static int          *cur_sel(void)  { return &s_stack[s_depth].sel; }
 
@@ -500,9 +639,11 @@ void menu_init(void)
     s_active = false; s_depth = 0;
 #ifdef TARGET_C6
     /* C3 tsens HAL asserts on any range whose upper bound exceeds 80°C;
-     * guard so the test board (TARGET_C3) doesn't panic here. */
+     * guard so the test board (TARGET_C3) doesn't panic here. The range must
+     * also map to a single HW range — (-10,110) spans two and makes install
+     * fail (blanking the C6 die-temp row), so use (-10,80). */
     if (!s_c6_tsens) {
-        temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 110);
+        temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
         if (temperature_sensor_install(&tcfg, &s_c6_tsens) == ESP_OK)
             temperature_sensor_enable(s_c6_tsens);
         else
@@ -517,6 +658,9 @@ void menu_open(uint32_t now_ms)
 {
     s_active = true;
     s_in_editor = false;
+    s_in_detail = false;
+    s_in_scripts = false;
+    s_in_cal = false;
     s_depth = 0;
     s_stack[0].menu = &m_root;
     s_stack[0].sel = 0;
@@ -623,15 +767,149 @@ static void handle_editor_event(uint32_t ev)
     }
 }
 
+// Refresh the mainboard power snapshot. Pulls from the S3 only while the Power
+// menu is open (on-demand), and folds the latest returned snapshot into the
+// e-fuse status + rail setpoint displays.
+static void mb_refresh(uint32_t now_ms)
+{
+    if (s_active && cur_menu() == &m_power) {
+        if (now_ms - s_mb_last_req >= 500) {
+            s_mb_last_req = now_ms;
+            ddp_send_mb_request(DDP_MB_POWER, NULL, 0);
+        }
+    }
+    ddp_mb_power_t p; uint32_t age;
+    if (ddp_get_mb_power(&p, &age) && age < 5000) {
+        s_mbp = p;
+        s_mbp_valid = true;
+        if (!s_in_editor) {            // don't fight an in-progress rail edit
+            if (p.vlogic_mv) s_vlogic_mv = p.vlogic_mv;
+            if (p.vadj1_mv)  s_vadj1_mv  = p.vadj1_mv;
+            if (p.vadj2_mv)  s_vadj2_mv  = p.vadj2_mv;
+        }
+    }
+}
+
+// ---- Custom Scripts screen -------------------------------------------------
+// Number of selectable rows: the script list, plus a leading "Stop" row while a
+// script is running.
+static int scr_total(void)
+{
+    bool running = (s_scr.state == DDP_MB_SCR_RUNNING);
+    return s_scr.count + (running ? 1 : 0);
+}
+
+static void scripts_open(void)
+{
+    s_in_scripts = true;
+    s_scr_sel = 0;
+    s_scr_last_req = 0;   // request the list immediately in scr_refresh()
+}
+
+// Pull the script list + engine status from the S3 while the screen is open.
+static void scr_refresh(uint32_t now_ms)
+{
+    if (!s_in_scripts) return;
+    if (now_ms - s_scr_last_req >= 1200) {
+        s_scr_last_req = now_ms;
+        ddp_send_mb_request(DDP_MB_SCRIPTS, NULL, 0);
+    }
+    ddp_mb_scripts_t s; uint32_t age;
+    if (ddp_get_mb_scripts(&s, &age) && age < 5000) {
+        s_scr = s;
+        int total = scr_total();
+        if (s_scr_sel >= total) s_scr_sel = total > 0 ? total - 1 : 0;
+    }
+}
+
+static void handle_scripts_event(uint32_t ev)
+{
+    bool running = (s_scr.state == DDP_MB_SCR_RUNNING);
+    int total = scr_total();
+    if (ev & BTN_EV_UP)   { if (s_scr_sel > 0) s_scr_sel--; }
+    if (ev & BTN_EV_DOWN) { if (s_scr_sel < total - 1) s_scr_sel++; }
+    if (ev & BTN_EV_BACK) { s_in_scripts = false; return; }
+    if (ev & BTN_EV_OK) {
+        if (running && s_scr_sel == 0) {
+            ddp_send_mb_request(DDP_MB_SCRIPT_STOP, NULL, 0);
+        } else {
+            int si = running ? s_scr_sel - 1 : s_scr_sel;
+            if (si >= 0 && si < s_scr.count) {
+                const char *nm = s_scr.name[si];
+                int nl = (int)strlen(nm);
+                if (nl > MB_SCR_NAME_MAX) nl = MB_SCR_NAME_MAX;
+                uint8_t args[1 + MB_SCR_NAME_MAX];
+                args[0] = (uint8_t)nl;
+                memcpy(&args[1], nm, nl);
+                ddp_send_mb_request(DDP_MB_SCRIPT_RUN, args, (uint8_t)(1 + nl));
+            }
+        }
+        s_scr_last_req = 0;   // refresh status promptly after the action
+    }
+}
+
+// ---- DUT source calibration wizard ----------------------------------------
+static void cal_open(uint8_t mode)
+{
+    s_in_cal = true;
+    s_cal_mode = mode;
+    memset(&s_calst, 0, sizeof(s_calst));
+    s_cal_last_req = 0;
+    ddp_send_cal_ctrl(DDP_CAL_OP_START, mode);   // kick off; P4 -> PROMPT
+}
+static void cal_open_volt(void) { cal_open(DDP_CAL_MODE_VOLTAGE); }
+static void cal_open_curr(void) { cal_open(DDP_CAL_MODE_CURRENT); }
+static void cal_open_base(void) { cal_open(DDP_CAL_MODE_BASELINE); }
+
+// Poll the live calibration status from the P4 while the wizard is open.
+static void cal_refresh(uint32_t now_ms)
+{
+    if (!s_in_cal) return;
+    if (now_ms - s_cal_last_req >= 200) {
+        s_cal_last_req = now_ms;
+        ddp_send_cal_ctrl(DDP_CAL_OP_STATUS, 0);
+    }
+    ddp_cal_status_t st; uint32_t age;
+    if (ddp_get_cal_status(&st, &age) && age < 3000) s_calst = st;
+    // A running sweep takes far longer than the 30 s idle timeout with no key
+    // presses, so keep the menu alive while the P4 is actively calibrating.
+    if (s_calst.phase == DDP_CAL_PH_RUNNING || s_calst.phase == DDP_CAL_PH_PROMPT)
+        s_last_input = now_ms;
+}
+
+static void handle_cal_event(uint32_t ev)
+{
+    if (ev & BTN_EV_BACK) {
+        ddp_send_cal_ctrl(DDP_CAL_OP_ABORT, 0);
+        s_in_cal = false;
+        return;
+    }
+    if (ev & BTN_EV_OK) {
+        if (s_calst.phase == DDP_CAL_PH_PROMPT) {
+            ddp_send_cal_ctrl(DDP_CAL_OP_ACK, 0);         // operator ready
+        } else if (s_calst.phase == DDP_CAL_PH_IDLE ||
+                   s_calst.phase == DDP_CAL_PH_SUCCESS ||
+                   s_calst.phase == DDP_CAL_PH_FAILED) {
+            ddp_send_cal_ctrl(DDP_CAL_OP_START, s_cal_mode);  // (re)run
+        }
+        s_cal_last_req = 0;   // fetch fresh status promptly
+    }
+}
+
 menu_status_t menu_update(uint32_t events, uint32_t now_ms, bool *need_render)
 {
     s_anim_ms = now_ms;
     diag_refresh();
+    mb_refresh(now_ms);
+    scr_refresh(now_ms);
+    cal_refresh(now_ms);
     bool render = false;
 
     if (events) {
         s_last_input = now_ms;
-        if (s_in_detail)      handle_detail_event(events);
+        if (s_in_cal)         handle_cal_event(events);
+        else if (s_in_scripts) handle_scripts_event(events);
+        else if (s_in_detail) handle_detail_event(events);
         else if (s_in_editor) handle_editor_event(events);
         else                  handle_menu_event(events);
         render = true;
@@ -738,7 +1016,7 @@ static void draw_status_bubbles(void)
 
     int x = 84;
     for (int i = 0; i < 5; i++) {
-        gfx_fill_circle(x + 2, 8, 2.2f, ok[i] ? g_theme.green : g_theme.rose);
+        ui_draw_dot(x + 2, 8, ok[i] ? g_theme.green : g_theme.rose);
         gfx_text(x + 6, 5, lbl[i], 1, g_theme.dim);
         x += 6 + gfx_text_w(lbl[i], 1) + 7;
     }
@@ -785,7 +1063,9 @@ static void render_menu(void)
                 char buf[20];
                 it->value(buf, sizeof(buf));
                 int vw = gfx_text_w(buf, 1);
-                gfx_text(rx - vw, ty, buf, 1, vc);
+                uint16_t val_c = (it->value_alert && it->value_alert())
+                                     ? g_theme.rose : vc;
+                gfx_text(rx - vw, ty, buf, 1, val_c);
                 if (it->warn && it->warn())
                     draw_warning(rx - vw - 14, row_cy - 4, g_theme.amber);
             }
@@ -883,10 +1163,145 @@ static void render_detail(void)
     }
 }
 
+// DUT source calibration wizard screen: mode title + phase pill, the operator
+// prompt ("short/disconnect/leave open the output"), the live measured value,
+// and a progress bar. OK acks the prompt or (re)starts; BACK aborts + exits.
+static void render_cal(void)
+{
+    gfx_clear(g_theme.bg);
+
+    gfx_fill_rect(0, 0, DISP_WIDTH, TITLE_H, g_theme.header);
+    gfx_hline(0, TITLE_H, DISP_WIDTH, g_theme.border);
+    const char *mname = s_cal_mode == DDP_CAL_MODE_VOLTAGE ? "Cal: Voltage" :
+                        s_cal_mode == DDP_CAL_MODE_CURRENT ? "Cal: Current" :
+                                                             "Cal: Baseline";
+    gfx_text(6, 5, mname, 1, g_theme.dim);
+
+    const char *ph; uint16_t pc;
+    switch (s_calst.phase) {
+        case DDP_CAL_PH_PROMPT:  ph = "WAIT"; pc = g_theme.amber; break;
+        case DDP_CAL_PH_RUNNING: ph = "RUN";  pc = g_theme.green; break;
+        case DDP_CAL_PH_SUCCESS: ph = "DONE"; pc = g_theme.green; break;
+        case DDP_CAL_PH_FAILED:  ph = "FAIL"; pc = g_theme.rose;  break;
+        default:                 ph = "IDLE"; pc = g_theme.muted; break;
+    }
+    int pw = gfx_text_w(ph, 1);
+    ui_draw_dot(DISP_WIDTH - pw - 12, 9, pc);
+    gfx_text(DISP_WIDTH - pw - 6, 5, ph, 1, pc);
+
+    int y = TITLE_H + 6;
+    if (s_calst.phase == DDP_CAL_PH_PROMPT) {
+        const char *msg = s_calst.prompt == DDP_CAL_PR_SHORT      ? "SHORT the output" :
+                          s_calst.prompt == DDP_CAL_PR_DISCONNECT ? "DISCONNECT the load" :
+                          s_calst.prompt == DDP_CAL_PR_OPEN       ? "Leave output OPEN" :
+                                                                    "Prepare the output";
+        gfx_text(6, y, msg, 1, g_theme.amber);
+        gfx_text(6, y + 12, "then press OK", 1, g_theme.dim);
+    } else if (s_calst.phase == DDP_CAL_PH_SUCCESS) {
+        const char *ps = s_calst.persist == DDP_CAL_PERSIST_SAVED  ? "Saved to NVS" :
+                         s_calst.persist == DDP_CAL_PERSIST_FAILED ? "Save FAILED" : "Complete";
+        gfx_text(6, y, "Calibration complete", 1, g_theme.green);
+        gfx_text(6, y + 12, ps, 1, g_theme.dim);
+    } else if (s_calst.phase == DDP_CAL_PH_FAILED) {
+        char fb[24];
+        gfx_text(6, y, "Calibration failed", 1, g_theme.rose);
+        snprintf(fb, sizeof(fb), "flags 0x%04X", s_calst.flags);
+        gfx_text(6, y + 12, fb, 1, g_theme.dim);
+    } else if (s_calst.phase == DDP_CAL_PH_RUNNING) {
+        char mb[28];
+        const char *unit = s_cal_mode == DDP_CAL_MODE_CURRENT ? "A" : "V";
+        int mu = (int)lroundf(s_calst.measured * 1000.0f);
+        int neg = mu < 0; if (neg) mu = -mu;
+        snprintf(mb, sizeof(mb), "%s%d.%03d %s  c%d", neg ? "-" : "",
+                 mu / 1000, mu % 1000, unit, s_calst.code);
+        gfx_text(6, y, mb, 1, g_theme.text);
+        char pt[20];
+        snprintf(pt, sizeof(pt), "point %u", (unsigned)s_calst.point);
+        gfx_text(6, y + 12, pt, 1, g_theme.dim);
+    } else {
+        gfx_text(6, y, "Press OK to start", 1, g_theme.dim);
+    }
+
+    // Progress bar along the bottom.
+    int bx = 6, bw = DISP_WIDTH - 12, by = DISP_HEIGHT - 12, bh = 9;
+    int frac = s_calst.progress > 100 ? 100 : s_calst.progress;
+    char pb[8];
+    snprintf(pb, sizeof(pb), "%d%%", frac);
+    gfx_text(DISP_WIDTH - gfx_text_w(pb, 1) - 6, by - 10, pb, 1, g_theme.muted);
+    gfx_round_rect_border(bx, by, bw, bh, 3, g_theme.border);
+    int fillw = frac * (bw - 4) / 100;
+    if (fillw > 0) gfx_round_rect(bx + 2, by + 2, fillw, bh - 4, 2, g_theme.sel);
+}
+
+// MicroPython Scripts screen: engine status pill + a scrollable list of stored
+// scripts. OK runs the selected script (or stops the running one via the "Stop"
+// row); BACK returns to the menu. Data is tunneled from the S3 on demand.
+static void render_scripts(void)
+{
+    gfx_clear(g_theme.bg);
+
+    // Title strip + engine-state pill on the right.
+    gfx_fill_rect(0, 0, DISP_WIDTH, TITLE_H, g_theme.header);
+    gfx_hline(0, TITLE_H, DISP_WIDTH, g_theme.border);
+    gfx_text(6, 5, "Scripts", 1, g_theme.dim);
+
+    const char *sstate; uint16_t scol;
+    switch (s_scr.state) {
+        case DDP_MB_SCR_RUNNING: sstate = "RUNNING"; scol = g_theme.green; break;
+        case DDP_MB_SCR_CRASHED: sstate = "CRASHED"; scol = g_theme.rose;  break;
+        case DDP_MB_SCR_EXITED:  sstate = "EXITED";  scol = g_theme.amber; break;
+        default:                 sstate = "IDLE";    scol = g_theme.muted; break;
+    }
+    int stw = gfx_text_w(sstate, 1);
+    ui_draw_dot(DISP_WIDTH - stw - 12, 9, scol);
+    gfx_text(DISP_WIDTH - stw - 6, 5, sstate, 1, scol);
+
+    bool running = (s_scr.state == DDP_MB_SCR_RUNNING);
+    int total = scr_total();
+
+    // Crash detail line (truncated) just under the title.
+    int list_top = TITLE_H + 2;
+    if (s_scr.state == DDP_MB_SCR_CRASHED && s_scr.err[0]) {
+        gfx_text(6, list_top, s_scr.err, 1, g_theme.rose);
+        list_top += 10;
+    }
+
+    if (total == 0) {
+        gfx_text(8, list_top + 6, "(no scripts)", 1, g_theme.muted);
+        return;
+    }
+
+    // Windowed, scrolling list keeping the selection visible.
+    const int RH = 11;
+    int rows_vis = (DISP_HEIGHT - list_top) / RH;
+    if (rows_vis < 1) rows_vis = 1;
+    int first = s_scr_sel - rows_vis / 2;
+    if (first > total - rows_vis) first = total - rows_vis;
+    if (first < 0) first = 0;
+
+    for (int r = 0; r < rows_vis && (first + r) < total; r++) {
+        int idx = first + r;
+        int y = list_top + r * RH;
+        bool sel = (idx == s_scr_sel);
+        if (sel) gfx_round_rect(3, y - 1, DISP_WIDTH - 6, RH, 3, g_theme.sel);
+        uint16_t tc = sel ? g_theme.sel_text : g_theme.text;
+
+        if (running && idx == 0) {
+            gfx_text(8, y + 1, "Stop", 1, sel ? g_theme.sel_text : g_theme.rose);
+        } else {
+            int si = running ? idx - 1 : idx;
+            if (si >= 0 && si < s_scr.count)
+                gfx_text(8, y + 1, s_scr.name[si], 1, tc);
+        }
+    }
+}
+
 void menu_render(uint32_t now_ms)
 {
     s_last_paint = now_ms;
     if (s_in_detail)      render_detail();
     else if (s_in_editor) render_editor();
+    else if (s_in_scripts) render_scripts();
+    else if (s_in_cal)    render_cal();
     else                  render_menu();
 }

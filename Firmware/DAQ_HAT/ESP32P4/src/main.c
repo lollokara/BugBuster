@@ -108,10 +108,5 @@ void app_main(void)
                  (unsigned)s_board.drop_fine,
                  (unsigned)s_board.drop_coarse);
         diagnostics_push(&s_board);
-
-        // No VBUS-sense line on this board: poll the USB stack and force a
-        // virtual re-plug if the host never completed enumeration (e.g. it
-        // probed the HS port before our stack was ready). No-op when mounted.
-        usb_backend_poll();
     }
 }

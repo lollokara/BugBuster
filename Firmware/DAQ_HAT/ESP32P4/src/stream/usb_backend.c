@@ -83,7 +83,12 @@ static const char *s_str_desc[] = {
     (const char[]){ 0x09, 0x04 },   // 0: English (US)
     "BugBuster",                    // 1: Manufacturer
     "BugBuster Power Analyzer",     // 2: Product
-    "BBPA-0001",                    // 3: Serial
+    // Serial bumped 0001 -> 0002: Windows keys the devnode (and its cached
+    // CONFIGFLAG_FAILEDINSTALL / "Code 28" verdict) by VID+PID+serial. The old
+    // BBPA-0001 node had a failed-install flag from the pre-WCID firmware and
+    // Windows never retries it; a new serial forces a fresh install that picks
+    // up the MS OS 2.0 (WinUSB) descriptor.
+    "BBPA-0004",                    // 3: Serial
     "BugBuster Stream",             // 4: Vendor interface
 };
 
@@ -94,7 +99,7 @@ static const char *s_str_desc[] = {
 // DeviceInterfaceGUID, so Windows auto-loads WinUSB and binds it on plug-in.
 // Requires bcdUSB >= 0x0210 (set above) so the host fetches the BOS descriptor.
 #define VENDOR_REQUEST_MICROSOFT   0x20
-#define MS_OS_20_DESC_LEN          0xB2
+#define MS_OS_20_DESC_LEN          0xA2   // 162 = 10 (header) + 20 (compat id) + 132 (reg property)
 
 // BOS descriptor: one device capability (the MS OS 2.0 platform descriptor).
 static const uint8_t s_desc_bos[] = {
@@ -102,28 +107,25 @@ static const uint8_t s_desc_bos[] = {
     TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT),
 };
 
-// MS OS 2.0 descriptor set: header -> config subset -> function subset ->
-// WINUSB compatible ID -> DeviceInterfaceGUID registry property.
+// MS OS 2.0 descriptor set. This is a SINGLE-FUNCTION (non-composite) device
+// (bDeviceClass=0, one vendor interface), so Windows does not load the composite
+// parent driver (usbccgp) that would process a configuration/function subset.
+// The WINUSB compatible ID and the DeviceInterfaceGUID must therefore be placed
+// at the DEVICE level, directly under the set header — nesting them in a
+// function subset (as composite-device examples do) makes Windows read the
+// descriptor but never apply MS_COMP_WINUSB, leaving the device at "Code 28".
 static const uint8_t s_desc_ms_os_20[] = {
     // Set header: length, type, windows version (8.1+), total length
     U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR),
     U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(MS_OS_20_DESC_LEN),
 
-    // Configuration subset header: length, type, config index, reserved, total length
-    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION),
-    0, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A),
-
-    // Function subset header: length, type, first interface, reserved, subset length
-    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
-    ITF_NUM_VENDOR, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A - 0x08),
-
-    // Compatible ID feature: length, type, compatible ID ("WINUSB"), sub-ID
+    // Device-level Compatible ID feature: length, type, compatible ID ("WINUSB"), sub-ID
     U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
     'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
-    // Registry property feature: length, type
-    U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A - 0x08 - 0x08 - 0x14),
+    // Device-level Registry property: length, type
+    U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A - 0x14),
     U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
     U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A), // wPropertyDataType=REG_MULTI_SZ, wPropertyNameLength
     'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00, 'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,

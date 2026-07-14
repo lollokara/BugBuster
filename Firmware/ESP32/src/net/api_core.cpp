@@ -59,7 +59,7 @@
 #include "adgs2414d.h"
 #include "esp_heap_caps.h"
 #include "esp_wifi.h"
-#include "pd_vadj_guard.h"
+#include "power/pd_manager.h"
 #include "quicksetup.h"
 
 // Drivers/symbols shared with the HTTP layer (defined elsewhere, linked in).
@@ -420,20 +420,39 @@ static char *api_idac_voltage(const cJSON *body)
     if (jch->valueint < 0 || jch->valueint > 2) {
         return api_error("ch must be 0-2");
     }
-    if (!ds4424_set_voltage((uint8_t)jch->valueint, (float)jv->valuedouble)) {
+
+    // Channels 1 (VADJ1) and 2 (VADJ2) are buck rails driven by the USB-C input.
+    // Negotiate the minimum PD profile before raising the output; release excess
+    // headroom after lowering it.
+    bool is_vadj = (jch->valueint == 1 || jch->valueint == 2);
+    PdConsumerId pd_cid = (jch->valueint == 1) ? PD_CONSUMER_VADJ1 : PD_CONSUMER_VADJ2;
+    float new_v      = (float)jv->valuedouble;
+    float old_demand = is_vadj ? pd_manager_consumer_v(pd_cid) : 0.0f;
+    bool  going_up   = is_vadj && (new_v >= old_demand);
+
+    char pd_warn[256] = {0};
+    if (is_vadj && going_up) {
+        pd_manager_ensure(pd_cid, new_v, PD_TYPE_BUCK, pd_warn, sizeof(pd_warn));
+    }
+
+    if (!ds4424_set_voltage((uint8_t)jch->valueint, new_v)) {
         return api_error("set voltage failed");
     }
+
+    if (is_vadj && !going_up) {
+        pd_manager_ensure(pd_cid, new_v, PD_TYPE_BUCK, pd_warn, sizeof(pd_warn));
+    }
+
     const DS4424State *st = ds4424_get_state();
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", true);
     cJSON_AddNumberToObject(r, "ch", jch->valueint);
     cJSON_AddNumberToObject(r, "code", st->state[jch->valueint].dac_code);
     cJSON_AddNumberToObject(r, "voltage", st->state[jch->valueint].target_v);
-    char warning[384] = {0};
-    if (pd_vadj_guard_warning((uint8_t)jch->valueint, (float)jv->valuedouble, warning, sizeof(warning))) {
-        cJSON_AddStringToObject(r, "warning", warning);
+    if (pd_warn[0]) {
+        cJSON_AddStringToObject(r, "warning", pd_warn);
         cJSON *warnings = cJSON_AddArrayToObject(r, "warnings");
-        cJSON_AddItemToArray(warnings, cJSON_CreateString(warning));
+        cJSON_AddItemToArray(warnings, cJSON_CreateString(pd_warn));
     }
     return json_take(r);
 }
@@ -475,9 +494,29 @@ static char *api_rail_voltage(const cJSON *body)
     if (jrail->valueint < 0 || jrail->valueint >= HAT_RAIL_COUNT) {
         return api_error("railId out of range");
     }
-    if (!hat_set_rail_voltage((uint8_t)jrail->valueint, (uint16_t)jmv->valueint)) {
+
+    // HAT rails are buck-boost. Negotiate PD before raising the output voltage;
+    // release excess headroom after lowering it.
+    uint8_t rail   = (uint8_t)jrail->valueint;
+    uint16_t mv    = (uint16_t)jmv->valueint;
+    PdConsumerId pd_cid = (PdConsumerId)((int)PD_CONSUMER_HAT_RAIL0 + rail);
+    float out_v    = (float)mv / 1000.0f;
+    float old_v    = pd_manager_consumer_v(pd_cid);
+    bool  going_up = (out_v >= old_v);
+
+    char pd_warn[192] = {0};
+    if (going_up) {
+        pd_manager_ensure(pd_cid, out_v, PD_TYPE_BUCK_BOOST, pd_warn, sizeof(pd_warn));
+    }
+
+    if (!hat_set_rail_voltage(rail, mv)) {
         return api_error("rail voltage command failed");
     }
+
+    if (!going_up) {
+        pd_manager_ensure(pd_cid, out_v, PD_TYPE_BUCK_BOOST, pd_warn, sizeof(pd_warn));
+    }
+
     const HatState *hs = hat_get_state();
     const HatRailStatus *rs = &hs->rail[jrail->valueint];
     cJSON *r = cJSON_CreateObject();
@@ -486,6 +525,7 @@ static char *api_rail_voltage(const cJSON *body)
     cJSON_AddNumberToObject(r, "voltageMv", rs->voltage_mv);
     cJSON_AddNumberToObject(r, "currentMa", rs->current_ma);
     cJSON_AddNumberToObject(r, "status", rs->status);
+    if (pd_warn[0]) cJSON_AddStringToObject(r, "pdWarning", pd_warn);
     return json_take(r);
 }
 

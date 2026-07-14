@@ -30,7 +30,18 @@
 
 #define DDP_SYNC            0xAAu
 #define DDP_MAX_PAYLOAD     240u
-#define DDP_PROTO_VERSION   4u
+#define DDP_PROTO_VERSION   7u
+// v7 (2026-07-14): DUT source calibration wizard over DDP (DDP_CMD_CAL_CTRL /
+// _CAL_STATUS) — the C6 drives the P4's smu_cal engine (voltage/current/
+// baseline) with live phase + operator prompt + progress.
+// v6 (2026-07-14): mainboard power tunnel carries rail enable + power-good state
+// (ddp_mb_power_t.rail_en/rail_pg) and gains DDP_MB_SET_RAIL_EN so the C6 can
+// toggle VLOGIC/level-shifter OE + VADJ1/VADJ2 enables. Additive; both chips
+// flashed together.
+// v5 (2026-07-14): mainboard settings tunnel (DDP_CMD_MB_REQUEST / _RESPONSE) —
+// the C6 Mainboard menu drives S3 rails/efuses/scripts through the P4, which
+// forwards to the S3 over the HAT link (guarded: deferred while the P4 streams
+// to the PC). Additive; both chips are flashed together so no compat window.
 // v4 (2026-06-22): ddp_diag_t expanded into a full onboard-device snapshot
 // (board + ADAQ + P4 + S3 die temperatures, fused I/V/P, SMU monitor currents,
 // USB-PD + VADJ rails relayed from the S3, P4 runtime stats, validity flags).
@@ -48,6 +59,8 @@
 #define DDP_CMD_BUTTON_EVENT    0x15u  // u8 events bitmask (DDP_BTN_*) — P4 buttons
 #define DDP_CMD_CONFIG_PUSH     0x16u  // one or more TLVs — P4 pushes current/changed settings
 #define DDP_CMD_SET_CH_LEDS     0x18u  // 4x u8 channel colour codes (front 4-connector, pairs)
+#define DDP_CMD_MB_REQUEST      0x19u  // C6 -> P4: u8 req_type, then req args (mainboard tunnel)
+#define DDP_CMD_MB_RESPONSE     0x1Au  // P4 -> C6: u8 req_type, u8 status, then result data
 
 // --- Events (C6 -> P4), 0x60..0x7F -----------------------------------------
 // Emitted unsolicited by the C6 when the user changes settings on-device, so
@@ -72,6 +85,15 @@
 #define DDP_FLAG_V_OVERRANGE    0x04u
 #define DDP_FLAG_I_OVERRANGE    0x08u
 #define DDP_FLAG_SRC_ON         0x10u  // DUT supply (SMU) output is enabled
+
+// Live current range packed into SET_MEASUREMENT flags bits 5-6, so the C6 home
+// screen can show a range badge/triangle without an extra frame.
+#define DDP_FLAG_RANGE_SHIFT    5u
+#define DDP_FLAG_RANGE_MASK     (3u << 5)
+#define DDP_RANGE_HI            0u   // 51 ohm
+#define DDP_RANGE_MID           1u   // 2 ohm
+#define DDP_RANGE_LO            2u   // 50 mohm
+#define DDP_RANGE_UNKNOWN       3u   // auto-searching / unknown
 
 // --- Link / connection state ------------------------------------------------
 #define DDP_STATE_BOOT          0u
@@ -156,6 +178,119 @@ typedef struct __attribute__((packed)) {
     uint8_t  brightness_pct;   // 10..100
     uint8_t  dark_mode;        // 0/1
 } ddp_config_t;
+
+// ---------------------------------------------------------------------------
+// Mainboard settings tunnel (DDP_CMD_MB_REQUEST / DDP_CMD_MB_RESPONSE).
+// ---------------------------------------------------------------------------
+// The C6 "Main Board Settings" menu reads/writes S3-mainboard resources (VLOGIC/
+// VADJ1/VADJ2 rail setpoints, per-efuse enable + fault, MicroPython scripts).
+// The C6 has no path to the S3, so it tunnels: C6 -> P4 (this DDP command) ->
+// S3 (HAT link). The P4 caches the request, the S3 polls for it (only while NOT
+// streaming to the PC), executes it, and returns the result which the P4 relays
+// back as DDP_CMD_MB_RESPONSE. Requests are only issued while the relevant menu
+// is open, keeping the HAT link idle the rest of the time.
+
+// DDP_CMD_MB_REQUEST payload: [u8 req_type][args...]
+#define DDP_MB_POWER        0x01u  // read rail setpoints + efuse status (no args)
+#define DDP_MB_SET_RAIL     0x02u  // args: u8 rail (0=VLOGIC,1=VADJ1,2=VADJ2), u16 mv
+#define DDP_MB_SET_EFUSE    0x03u  // args: u8 idx (0..3), u8 on
+#define DDP_MB_SCRIPTS      0x04u  // read script list + engine status (no args)
+#define DDP_MB_SCRIPT_RUN   0x05u  // args: u8 name_len, char[name_len]
+#define DDP_MB_SCRIPT_STOP  0x06u  // stop the running script (no args)
+#define DDP_MB_SET_RAIL_EN  0x07u  // args: u8 rail (0=VLOGIC/lshift,1=VADJ1,2=VADJ2), u8 on
+
+// DDP_CMD_MB_RESPONSE payload: [u8 req_type][u8 status][data...]
+#define DDP_MB_ST_OK        0x00u
+#define DDP_MB_ST_BUSY      0x01u  // deferred: the P4 is streaming (acquisition)
+#define DDP_MB_ST_ERR       0x02u
+
+// Rail selectors for DDP_MB_SET_RAIL (index into the DS4424 IDAC channels).
+#define DDP_MB_RAIL_VLOGIC  0u
+#define DDP_MB_RAIL_VADJ1   1u
+#define DDP_MB_RAIL_VADJ2   2u
+
+// DDP_MB_POWER result data (follows [req_type][status]).
+typedef struct __attribute__((packed)) {
+    uint16_t vlogic_mv;   // VLOGIC setpoint (DS4424 ch0), mV
+    uint16_t vadj1_mv;    // VADJ1 setpoint  (DS4424 ch1), mV
+    uint16_t vadj2_mv;    // VADJ2 setpoint  (DS4424 ch2), mV
+    uint8_t  efuse_en;    // bit i (0..3) = e-fuse (i+1) enabled
+    uint8_t  efuse_flt;   // bit i (0..3) = e-fuse (i+1) fault active
+    uint8_t  rail_en;     // bit0=VLOGIC/level-shifter OE, bit1=VADJ1_EN, bit2=VADJ2_EN
+    uint8_t  rail_pg;     // bit1=VADJ1 power-good, bit2=VADJ2 power-good
+} ddp_mb_power_t;
+
+// Rail-enable bit positions for ddp_mb_power_t.rail_en / rail_pg (index by rail).
+#define DDP_MB_RAILEN_VLOGIC  (1u << 0)   // level-shifter OE
+#define DDP_MB_RAILEN_VADJ1   (1u << 1)
+#define DDP_MB_RAILEN_VADJ2   (1u << 2)
+
+// ---------------------------------------------------------------------------
+// DUT source (SMU) calibration wizard (C6 <-> P4 direct; no S3 involvement).
+// ---------------------------------------------------------------------------
+// The P4 runs the calibration on a background task (see ESP32P4/src/cal/smu_cal).
+// The C6 drives it: START a mode, poll STATUS while the wizard screen is open,
+// ACK the operator prompt ("short/disconnect/leave open the output"), or ABORT.
+// ddp_cal_status_t MUST stay byte-identical to smu_cal_status_t.
+#define DDP_CMD_CAL_CTRL     0x1Bu  // C6 -> P4: [u8 op][u8 arg]
+#define DDP_CMD_CAL_STATUS   0x1Cu  // P4 -> C6: ddp_cal_status_t
+
+#define DDP_CAL_OP_START     0x00u  // arg = mode (DDP_CAL_MODE_*)
+#define DDP_CAL_OP_ACK       0x01u  // acknowledge the operator prompt
+#define DDP_CAL_OP_ABORT     0x02u  // abort + restore safe SMU state
+#define DDP_CAL_OP_STATUS    0x03u  // request a CAL_STATUS push
+
+#define DDP_CAL_MODE_VOLTAGE   0u   // sweep V_FB, output DISCONNECTED
+#define DDP_CAL_MODE_CURRENT   1u   // sweep I_FB, output SHORTED
+#define DDP_CAL_MODE_BASELINE  2u   // open-circuit offset per range, output OPEN
+
+#define DDP_CAL_PH_IDLE     0u
+#define DDP_CAL_PH_PROMPT   1u      // blocked on operator action (see prompt)
+#define DDP_CAL_PH_RUNNING  2u
+#define DDP_CAL_PH_SUCCESS  3u
+#define DDP_CAL_PH_FAILED   4u
+
+#define DDP_CAL_PR_NONE        0u
+#define DDP_CAL_PR_DISCONNECT  1u   // remove the DUT load
+#define DDP_CAL_PR_SHORT       2u   // short the output
+#define DDP_CAL_PR_OPEN        3u   // leave the output open
+
+#define DDP_CAL_PERSIST_RAM     0u
+#define DDP_CAL_PERSIST_SAVING  1u
+#define DDP_CAL_PERSIST_SAVED   2u
+#define DDP_CAL_PERSIST_FAILED  3u
+
+typedef struct __attribute__((packed)) {
+    uint8_t  phase;      // DDP_CAL_PH_*
+    uint8_t  prompt;     // DDP_CAL_PR_*
+    uint8_t  mode;       // DDP_CAL_MODE_*
+    uint8_t  progress;   // 0..100
+    uint8_t  point;      // current point index
+    int8_t   code;       // current DS4424 code
+    uint8_t  persist;    // DDP_CAL_PERSIST_*
+    uint8_t  _unused;
+    float    measured;   // last stable measurement (V or A)
+    float    min_v;      // min across the sweep
+    float    max_v;      // max across the sweep
+    uint16_t flags;      // validation bitfield (SMU_CAL_FLAG_*)
+    uint8_t  vcount;     // stored voltage points
+    uint8_t  icount;     // stored current points
+} ddp_cal_status_t;
+
+// DDP_MB_SCRIPTS / _SCRIPT_RUN / _SCRIPT_STOP result data (follows
+// [req_type][status]), a variable-length blob describing the S3 MicroPython
+// engine and stored scripts:
+//   [u8 engine_state]                       DDP_MB_SCR_*
+//   [u8 err_len][char err[err_len]]         last error message (may be empty)
+//   [u8 count]                              number of script names that follow
+//   count x { u8 name_len, char name[name_len] }
+// The whole blob is capped so the assembled DDP_CMD_MB_RESPONSE stays within a
+// single DDP frame; the S3 chunks it over the 32-byte HAT link and the P4
+// reassembles before relaying.
+#define DDP_MB_SCR_IDLE     0u   // never ran / nothing loaded
+#define DDP_MB_SCR_RUNNING  1u   // a script is executing
+#define DDP_MB_SCR_CRASHED  2u   // last run ended with an error
+#define DDP_MB_SCR_EXITED   3u   // last run completed cleanly
 
 // CRC-8, poly 0x07, init 0x00 (matches RP2040 HAT protocol).
 static inline uint8_t ddp_crc8(const uint8_t *data, size_t len)

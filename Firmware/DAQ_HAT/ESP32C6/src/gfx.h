@@ -74,6 +74,9 @@ void gfx_sprite_pacman(gfx_sprite_t *sp, float cx, float cy, float r,
                        float mouth_deg, float facing_deg);
 void gfx_sprite_bolt(gfx_sprite_t *sp, float cx, float cy, float h);
 void gfx_sprite_punch_circle(gfx_sprite_t *sp, float cx, float cy, float r); // zero alpha
+// Rasterize a filled anti-aliased circle into the sprite alpha (pre-render once,
+// then blit cheaply as a tinted status dot).
+void gfx_sprite_circle(gfx_sprite_t *sp, float cx, float cy, float r);
 // Blit a sprite at (x,y). `gain` (0..255) scales the stored alpha for fading.
 void gfx_blit(const gfx_sprite_t *sp, int x, int y, uint8_t gain);
 

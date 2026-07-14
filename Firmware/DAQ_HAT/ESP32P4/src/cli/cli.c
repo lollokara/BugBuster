@@ -30,6 +30,7 @@
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "driver/sdmmc_host.h"
 #include "sdmmc_cmd.h"
 #include "freertos/FreeRTOS.h"
@@ -2697,38 +2698,100 @@ static void reg(const char *cmd, const char *help, esp_console_cmd_func_t fn)
     ESP_ERROR_CHECK(esp_console_cmd_register(&c));
 }
 
+// Interactive REPL loop for the USB-Serial-JTAG debug port. We deliberately do
+// NOT use the stock esp_console REPL task: its loop does `linenoise() -> if
+// NULL continue;`, and on this port linenoise returns NULL immediately once the
+// debug host (COMxx) disconnects (read hits EOF). That busy-spins at the REPL
+// priority, starves core 0, and stalls the DDP telemetry so the C6 drops to
+// "simulation" until the port is plugged back in. Here we read with a timeout
+// and yield when there is no input, so an unplugged debug port costs ~nothing.
+static void daq_repl_task(void *arg)
+{
+    (void)arg;
+    char line[160];
+    size_t len = 0;
+    bool last_was_cr = false;
+    printf("\ndaq> ");
+    fflush(stdout);
+    for (;;) {
+        uint8_t ch;
+        int n = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(100));
+        if (n <= 0) {
+            // No byte (idle, or the debug host is unplugged). Yield and retry —
+            // never busy-spin. This is the whole fix for the "freeze into
+            // simulation when the USB cable is out" bug.
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (ch == '\r' || ch == '\n') {
+            // Accept CR, LF, or CRLF as the line terminator (terminals send CR
+            // on Enter; flash_via_p4.py sends CRLF). Swallow the LF of a CRLF so
+            // we don't run/prompt twice.
+            if (ch == '\n' && last_was_cr) {
+                last_was_cr = false;
+                continue;
+            }
+            last_was_cr = (ch == '\r');
+            printf("\r\n");
+            line[len] = '\0';
+            if (len > 0) {
+                int cmd_ret = 0;
+                esp_err_t e = esp_console_run(line, &cmd_ret);
+                if (e == ESP_ERR_NOT_FOUND) {
+                    printf("Unrecognized command: %s\n", line);
+                } else if (e != ESP_OK && e != ESP_ERR_INVALID_ARG) {
+                    printf("Command error: %s\n", esp_err_to_name(e));
+                }
+            }
+            len = 0;
+            printf("daq> ");
+            fflush(stdout);
+            continue;
+        }
+        last_was_cr = false;
+        if (ch == 0x08 || ch == 0x7f) {          // backspace / DEL
+            if (len > 0) {
+                len--;
+                printf("\b \b");                 // erase the char on screen
+                fflush(stdout);
+            }
+        } else if (ch >= 0x20 && ch < 0x7f && len < sizeof(line) - 1) {
+            line[len++] = (char)ch;
+            fputc((int)ch, stdout);              // echo so typing is visible
+            fflush(stdout);
+        }
+    }
+}
+
 esp_err_t daq_cli_start(daq_board_t *board)
 {
     s_board = board;
 
-    esp_console_repl_t *repl = NULL;
-    esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    repl_cfg.prompt = "daq>";
-    repl_cfg.max_cmdline_length = 128;
-    // Run the console ABOVE the fast-path consumer (daq_fast_task, prio 12 on
-    // core 0). At high ODR the consumer processes 300k+ samples/s and otherwise
-    // starves the default low-prio REPL, making the serial console unresponsive.
-    // The REPL is normally blocked on USB-Serial-JTAG RX, so a higher priority
-    // only lets it preempt briefly to read input / run a command, then it yields
-    // back. Stack bumped for the float-heavy diagnostic commands.
-    repl_cfg.task_priority   = 15;   // > consumer (12), < capture (20, core 1)
-    repl_cfg.task_stack_size = 8192;
-
-#if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
-    esp_console_dev_usb_serial_jtag_config_t hw_cfg =
-        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
-    esp_err_t err = esp_console_new_repl_usb_serial_jtag(&hw_cfg, &repl_cfg, &repl);
-#else
-    // UART console (e.g. the temporary GPIO-UART0 debug routing): run the REPL
-    // on the configured console UART instead of the USB-Serial-JTAG so the build
-    // matches whichever console is selected in sdkconfig.
-    esp_console_dev_uart_config_t hw_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    esp_err_t err = esp_console_new_repl_uart(&hw_cfg, &repl_cfg, &repl);
-#endif
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "REPL init failed: %s", esp_err_to_name(err));
+    // Console lives on the USB-Serial-JTAG debug port. Install the driver (for
+    // usb_serial_jtag_read_bytes) and route the console VFS through it. Order
+    // matches the stock esp_console helper (install -> console_init ->
+    // use_driver); doing use_driver before esp_console_init, or reopening stdout
+    // with freopen(), trips a spinlock assert, so we avoid both.
+    usb_serial_jtag_driver_config_t usj_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    esp_err_t err = usb_serial_jtag_driver_install(&usj_cfg);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {   // INVALID_STATE = already installed
+        ESP_LOGE(TAG, "USB-JTAG driver install failed: %s", esp_err_to_name(err));
         return err;
     }
+
+    esp_console_config_t console_config = {
+        .max_cmdline_length = 128,
+        .max_cmdline_args   = 16,
+    };
+    err = esp_console_init(&console_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_console_init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    usb_serial_jtag_vfs_use_driver();
+    usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+    usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
 
     esp_console_register_help_command();
     reg("status", "Full system status snapshot", cmd_status);
@@ -2766,10 +2829,13 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("c6flash", "Flash C6 via staged binary: c6flash <bytes>  (use flash_via_p4.py)", cmd_c6flash);
     reg("c6diag",  "GPIO/SDIO diagnostics: c6diag <gpio|sdio>", cmd_c6diag);
 
-    err = esp_console_start_repl(repl);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "REPL start failed: %s", esp_err_to_name(err));
-        return err;
+    // Priority 15 keeps command input responsive even at high ODR (consumer is
+    // prio 12), but the timeout+yield read loop means it never busy-spins when
+    // the debug host is disconnected — so it cannot starve the telemetry tasks.
+    if (xTaskCreatePinnedToCore(daq_repl_task, "daq_repl", 8192, NULL,
+                                15, NULL, 0) != pdPASS) {
+        ESP_LOGE(TAG, "failed to create REPL task");
+        return ESP_FAIL;
     }
     ESP_LOGI(TAG, "bring-up console ready on USB-Serial-JTAG (type 'help')");
     return ESP_OK;

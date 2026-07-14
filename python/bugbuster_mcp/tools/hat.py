@@ -327,10 +327,8 @@ def register(mcp) -> None:
           27000 for 27 V).  Maximum is ~30000 mV; minimum ~1200 mV.
         - confirm: Must be True when voltage_mv > 15000 mV (15 V).
 
-        Returns: pd_voltage_v, rail_id, voltage_mv, success, rail_status.
+        Returns: rail_id, voltage_mv, success, rail_status.
         """
-        from bugbuster.pd_manager import ensure_pd_for_output, ConverterTopology
-
         if rail_id not in (1, 2):
             raise ValueError(
                 f"Invalid rail_id {rail_id}. Valid values: 1 (VADJ3), 2 (VADJ4)."
@@ -361,18 +359,14 @@ def register(mcp) -> None:
 
         target_v = voltage_mv / 1000.0
 
-        # Negotiate the minimum PD profile before touching the DCDC.
-        # VADJ3/4 are buck-boost — headroom logic differs from pure-buck rails.
-        pd_v = ensure_pd_for_output(bb, target_v=target_v, topology=ConverterTopology.BUCK_BOOST)
-
-        # Program the rail voltage after the supply is ready.
+        # Program the rail voltage. The device firmware automatically negotiates
+        # the minimum USB-C PD profile before setting the DC-DC converter.
         rail_status = bb.hat_set_rail_voltage(rail_id, voltage_mv)
 
         return {
             "success":    True,
             "rail_id":    rail_id,
             "voltage_mv": voltage_mv,
-            "pd_voltage_v": pd_v,
             "rail_status": rail_status,
         }
 

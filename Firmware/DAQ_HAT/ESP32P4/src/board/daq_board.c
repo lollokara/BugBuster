@@ -497,6 +497,7 @@ static uint32_t s_c6_ota_size = 0;
 static void c6_link_restart(daq_board_t *b)
 {
     ddp_master_init(&b->ddp);
+    b->ddp.cal = &b->cal;   // rebind after init memset (CAL_CTRL handling)
     ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
 }
 
@@ -565,6 +566,55 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             memcpy(&b->s3_telem, payload, sizeof(b->s3_telem));
             b->s3_telem_ms = (uint32_t)(esp_timer_get_time() / 1000);
             return 0;
+
+        case HATP_CMD_MB_POLL:
+            // The S3 is polling for a pending C6 "Main Board Settings" request.
+            // While streaming to the PC, defer only the heavier *script*
+            // requests (list/run/stop) so they never contend with acquisition;
+            // the tiny power reads/writes (rail + e-fuse status/toggle) stay
+            // live so the Power menu keeps working during a capture.
+            if (b->fast_running) {
+                uint8_t t = ddp_master_peek_mb_type(&b->ddp);
+                if (t == DDP_MB_SCRIPTS || t == DDP_MB_SCRIPT_RUN ||
+                    t == DDP_MB_SCRIPT_STOP)
+                    return 0;
+            }
+            return (int)ddp_master_take_mb_request(&b->ddp, resp, HATP_MAX_PAYLOAD);
+
+        case HATP_CMD_MB_RESULT: {
+            // Reassemble the chunked execution result from the S3:
+            // [type][status][seq][flags][data]. Concatenate the data across
+            // chunks; on the final chunk relay [type][status][all-data] to the
+            // C6 as DDP_CMD_MB_RESPONSE. Single-link, so static state is safe.
+            static uint8_t  asm_buf[248];
+            static uint16_t asm_len = 0;
+            static uint8_t  asm_seq = 0;
+            static bool     asm_active = false;
+            if (len < HATP_MB_RSLT_HDR) return -1;
+            uint8_t seq = payload[2];
+            uint8_t flags = payload[3];
+            const uint8_t *chunk = &payload[HATP_MB_RSLT_HDR];
+            int chunk_len = (int)len - HATP_MB_RSLT_HDR;
+            if (seq == 0) {
+                asm_buf[0] = payload[0];   // req_type
+                asm_buf[1] = payload[1];   // status
+                asm_len = 2;
+                asm_seq = 0;
+                asm_active = true;
+            }
+            if (!asm_active || seq != asm_seq) { asm_active = false; return -1; }
+            if (chunk_len > 0 &&
+                asm_len + chunk_len <= (int)sizeof(asm_buf)) {
+                memcpy(&asm_buf[asm_len], chunk, chunk_len);
+                asm_len += (uint16_t)chunk_len;
+            }
+            asm_seq++;
+            if (flags & HATP_MB_RSLT_LAST) {
+                ddp_master_send(&b->ddp, DDP_CMD_MB_RESPONSE, asm_buf, asm_len);
+                asm_active = false;
+            }
+            return 0;
+        }
 
         // ---- SMU factory calibration ----
         case HATP_CMD_DAQ_CAL_START: {
@@ -723,6 +773,12 @@ static void daq_ui_task(void *arg)
                 last_meas = t;
                 uint8_t mflags = DDP_FLAG_V_VALID | DDP_FLAG_I_VALID;
                 if (b->smu.enabled) mflags |= DDP_FLAG_SRC_ON;
+                // Pack the live current range (for the C6 home-screen badge).
+                current_range_t rng = range_manager_current(&b->range);
+                uint8_t rc = (rng == RANGE_HI)  ? DDP_RANGE_HI  :
+                             (rng == RANGE_MID) ? DDP_RANGE_MID :
+                             (rng == RANGE_LO)  ? DDP_RANGE_LO  : DDP_RANGE_UNKNOWN;
+                mflags |= (uint8_t)(rc << DDP_FLAG_RANGE_SHIFT);
                 ddp_master_set_measurement(&b->ddp,
                                            power_dsp_last_v(&b->dsp),
                                            power_dsp_last_i(&b->dsp),
@@ -748,6 +804,7 @@ esp_err_t daq_board_c6_start(daq_board_t *b)
         ESP_LOGE(TAG, "DDP master init failed: %s", esp_err_to_name(err));
         return err;
     }
+    b->ddp.cal = &b->cal;   // bind the cal engine for DDP_CMD_CAL_CTRL handling
     err = ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
     if (err != ESP_OK) return err;
 

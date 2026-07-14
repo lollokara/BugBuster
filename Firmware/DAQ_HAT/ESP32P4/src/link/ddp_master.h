@@ -32,6 +32,15 @@ typedef struct {
     bool              c6_present;  // a GET_INFO reply was seen
     uint8_t           c6_fw_major;
     uint8_t           c6_fw_minor;
+    // Pending C6 "Main Board Settings" request (DDP_CMD_MB_REQUEST). Cached here
+    // until the S3 polls for it (HATP_CMD_MB_POLL) and executes it. One-deep: a
+    // newer request overwrites an unclaimed one.
+    volatile bool     mb_req_pending;
+    uint8_t           mb_req[32];
+    uint8_t           mb_req_len;
+    // DUT source calibration engine (smu_cal_t*) for DDP_CMD_CAL_CTRL. Bound by
+    // daq_board after both the calibration engine and this link are up.
+    void             *cal;
 } ddp_master_t;
 
 // Initialise UART2 + the TX mutex.
@@ -49,6 +58,15 @@ void ddp_master_deinit(ddp_master_t *m);
 // Low-level: send one DDP frame (SYNC/LEN/CMD/PAYLOAD/CRC). Thread-safe.
 void ddp_master_send(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
                      uint8_t len);
+
+// Consume the pending C6 mainboard request (DDP_CMD_MB_REQUEST) into buf for
+// forwarding to the S3. Returns the length copied (<= cap), or 0 if none.
+uint8_t ddp_master_take_mb_request(ddp_master_t *m, uint8_t *buf, uint8_t cap);
+
+// Peek the pending request's type byte (DDP_MB_*) without consuming it; 0 if
+// none pending. Used to keep serving lightweight power requests during
+// acquisition while deferring heavier script requests.
+uint8_t ddp_master_peek_mb_type(const ddp_master_t *m);
 
 // --- Convenience senders (P4 -> C6) ----------------------------------------
 void ddp_master_button_event(ddp_master_t *m, uint8_t events);   // DDP_BTN_*
