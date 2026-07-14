@@ -5,6 +5,8 @@
 #include "daq_settings_glue.h"
 #include "daq_settings.h"
 #include "daq_config_registry.h"
+#include "adaq7769.h"
+#include "adaq7769_regs.h"
 
 #include "esp_log.h"
 
@@ -60,11 +62,60 @@ static void apply_spectrum(daq_board_t *b)
                        win_idx_to_hw(win_idx));
 }
 
-// ---------------------------------------------------------------------------
-// Apply callback: one freshly-changed (or boot-seeded) value -> subsystem.
-// C6-local keys (display/neopixel/wifi) have no P4 subsystem and are skipped
-// here; they are forwarded to the C6 by the notify path (Phase 4).
-// ---------------------------------------------------------------------------
+// Apply the current Filter / Decimation / 50-60 reject settings to the two
+// current ADAQs (FINE + COARSE; VOLTAGE unchanged). ADAQ config registers are
+// inaccessible during continuous-read capture, so bracket with a fast-acq
+// pause/resume, mirroring the TUI 'f'/'d'/'r' hotkeys.
+static void apply_adaq_filter(daq_board_t *b)
+{
+    int32_t f = DAQ_FILT_WIDEBAND, d = DAQ_DEC_256, rej = 0;
+    daq_settings_get_i32(DAQ_K_FILTER, &f);
+    daq_settings_get_i32(DAQ_K_DECIMATION, &d);
+    daq_settings_get_i32(DAQ_K_REJECT_5060, &rej);
+    if (d < 0) d = 0;
+    if (d > ADAQ_DEC_X1024) d = ADAQ_DEC_X1024;
+    uint8_t filt = (f == DAQ_FILT_SINC5) ? ADAQ_FILTER_SINC5 :
+                   (f == DAQ_FILT_SINC3) ? ADAQ_FILTER_SINC3 : ADAQ_FILTER_WIDEBAND;
+
+    bool was = b->fast_running;
+    if (was) daq_board_stop_fast(b);
+    for (int i = 0; i <= 1; ++i) {           // FINE + COARSE current ADAQs
+        if (!b->adaq_ok[i]) continue;
+        if (filt == ADAQ_FILTER_SINC3) {
+            uint32_t dec = 32u << (uint8_t)d;   // x32..x1024
+            adaq7769_set_sinc3(&b->adaq[i], dec, rej != 0);
+        } else {
+            adaq7769_set_filter(&b->adaq[i], filt, (uint8_t)d);
+        }
+    }
+    if (was) daq_board_run_fast(b, 8192);
+}
+
+// Apply the top-level Sample Rate: pick the ADAQ filter+decimation that hits the
+// target SPS on the two current ADAQs, sync the DSP integration rate to the new
+// FINE ODR, and reset the energy accumulator so the rate change doesn't skew
+// the running energy/charge/time. Pause/resume the fast acquisition around it.
+static void apply_sample_rate(daq_board_t *b)
+{
+    int32_t idx = DAQ_SR_100K;
+    daq_settings_get_i32(DAQ_K_SAMPLE_RATE_IDX, &idx);
+    if (idx < 0) idx = 0;
+    if (idx >= DAQ_SR_COUNT) idx = DAQ_SR_COUNT - 1;
+    float target = (float)DAQ_SAMPLE_RATE_SPS[idx];
+
+    bool was = b->fast_running;
+    if (was) daq_board_stop_fast(b);
+    float achieved = target;
+    for (int i = 0; i <= 1; ++i) {           // FINE + COARSE current ADAQs
+        if (!b->adaq_ok[i]) continue;
+        float a = target;
+        if (adaq7769_set_output_data_rate(&b->adaq[i], target, &a) == ESP_OK && i == 0)
+            achieved = a;
+    }
+    power_dsp_set_rate(&b->dsp, achieved);
+    power_dsp_reset_energy(&b->dsp);
+    if (was) daq_board_run_fast(b, 8192);
+}
 static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
 {
     daq_board_t *b = (daq_board_t *)user;
@@ -80,7 +131,14 @@ static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
         break;
 
     case DAQ_K_SOURCE_ENABLE:
-        smu_enable(&b->smu, ival != 0);
+        // Hard guard (no override): the DUT output may only be enabled with a
+        // USB-PD contract of at least 9 V / 3 A negotiated on the S3.
+        if (ival != 0 && !daq_board_pd_ok(b, 9000, 3000)) {
+            ESP_LOGW(TAG, "DUT enable BLOCKED: USB-PD contract < 9 V / 3 A");
+            smu_enable(&b->smu, false);
+        } else {
+            smu_enable(&b->smu, ival != 0);
+        }
         break;
     case DAQ_K_DUT_VOLTAGE_MV:
         smu_set_voltage(&b->smu, (float)ival / 1000.0f);
@@ -104,10 +162,19 @@ static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
         b->wave_decim = (uint8_t)((ival < 1) ? 1 : (ival > 255 ? 255 : ival));
         break;
 
+    case DAQ_K_FILTER:
+    case DAQ_K_DECIMATION:
+    case DAQ_K_REJECT_5060:
+        apply_adaq_filter(b);
+        break;
+
+    case DAQ_K_SAMPLE_RATE_IDX:
+        apply_sample_rate(b);
+        break;
+
     // TODO(phase-follow-up): these need a coordinated ADAQ ODR reprogram +
     // stream restart; applying power_dsp_set_rate alone would skew energy
     // integration, so they are store-only for now.
-    case DAQ_K_SAMPLE_RATE_IDX:
     case DAQ_K_MULTIRES_TIERS:
     case DAQ_K_STATS_WINDOW_MS:
     case DAQ_K_STREAMING:

@@ -72,6 +72,7 @@ typedef enum {
 #define SMU_CAL_FLAG_NO_SETTLE         0x0020u
 #define SMU_CAL_FLAG_TARGET_UNREACHED  0x0040u
 #define SMU_CAL_FLAG_HARDWARE          0x0080u  // ADAQ/IDAC unavailable
+#define SMU_CAL_FLAG_NO_PD             0x0100u  // USB-PD below the cal requirement
 
 // One calibration point: DS4424 code -> measured value (volts or amps).
 typedef struct __attribute__((packed)) {
@@ -102,6 +103,32 @@ typedef struct __attribute__((packed)) {
     int16_t  temp_c10[SMU_BASE_RANGES];                 // board temp x10 at cal time
     int32_t  offset[SMU_BASE_RANGES][SMU_BASE_CODES];   // per (range, code+127)
 } smu_base_blob_t;
+
+// Persisted per-range current-measurement cal (interactive reference-meter cal).
+// For each current range the fitted zero-current offset and gain correction that
+// range_manager applies: I = (v_adc - offset_v) / (shunt_ohm * amp_gain) * gain_corr.
+// The raw (v_adc, amps) points are kept so successive runs (with different series
+// resistors covering different sub-ranges) accumulate and refit over the union.
+// crc covers everything from `version` onward.
+typedef struct __attribute__((packed)) {
+    float v_adc;    // averaged ADAQ voltage at this point (V)
+    float amps;     // operator-entered reference-meter current (A)
+} smu_range_pt_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint32_t crc;
+    uint8_t  version;
+    uint8_t  have[SMU_BASE_RANGES];         // 1 = range calibrated
+    float    offset_v[SMU_BASE_RANGES];     // fitted zero-current offset (V)
+    float    gain_corr[SMU_BASE_RANGES];    // fitted gain correction (1.0 = ideal)
+    float    shunt_ohm[SMU_BASE_RANGES];    // shunt used at cal time (ohm)
+    float    amp_gain[SMU_BASE_RANGES];     // CSA gain used at cal time (V/V)
+    uint8_t  npts[SMU_BASE_RANGES];         // accumulated point count per range
+    smu_range_pt_t pts[SMU_BASE_RANGES][SMU_RANGE_CAL_MAX_PTS];
+} smu_range_cal_blob_t;
+
+
 
 // Persist state for the wire status.
 typedef enum {
@@ -138,6 +165,10 @@ typedef struct {
     smu_base_blob_t   base;           // committed offset tables (loaded + written)
     bool              have_base;
     volatile uint8_t  base_range;     // range being swept (0..2) during baseline run
+
+    // Per-range current-measurement cal (interactive reference-meter cal).
+    smu_range_cal_blob_t rcal;        // committed per-range offset/gain (loaded + written)
+    bool              have_rcal;
 } smu_cal_t;
 
 // Wire status snapshot (response to the CAL_STATUS command).
@@ -186,6 +217,57 @@ bool smu_cal_current_to_code(const smu_cal_t *c, float amps, int8_t *code);
  */
 bool smu_base_offset(const smu_cal_t *c, uint8_t range, int8_t vdut_code,
                      int32_t *offset_out);
+
+/**
+ * @brief Clear the accumulated reference-meter points for one range (start a
+ *        fresh cal). Leaves the currently-applied offset/gain in force until the
+ *        next successful fit. Persisted immediately.
+ * @param range  current_range_t as a uint8_t (RANGE_HI/MID/LO, 0..2).
+ */
+void smu_cal_range_reset(smu_cal_t *c, uint8_t range);
+
+/** @brief Number of accumulated reference-meter points stored for a range. */
+uint8_t smu_cal_range_count(const smu_cal_t *c, uint8_t range);
+
+/**
+ * @brief Append new reference-meter points to a range's accumulated set, refit
+ *        offset_v / gain_corr over the whole set, apply to range_manager, and
+ *        persist. Successive calls accumulate (e.g. one series resistor per
+ *        sub-decade); the oldest points are dropped once the buffer is full.
+ * @param range      current_range_t as a uint8_t (RANGE_HI/MID/LO, 0..2).
+ * @param new_pts    points captured this run (v_adc in volts, amps in A).
+ * @param n_new      number of new points.
+ * @param shunt_ohm  shunt resistance for the fit (ohm).
+ * @param amp_gain   CSA gain for the fit (V/V).
+ * @return total points fitted (>=2) on success; 0 if too few points to fit yet;
+ *         -1 singular/no-response fit; -2 bad args; -3 NVS save failed.
+ *         (Points are still accumulated + persisted on 0 / -1.)
+ */
+int smu_cal_range_fit(smu_cal_t *c, uint8_t range,
+                      const smu_range_pt_t *new_pts, uint8_t n_new,
+                      float shunt_ohm, float amp_gain);
+
+/** @brief Pointer to a range's accumulated points; *count_out gets the count. */
+const smu_range_pt_t *smu_cal_range_points(const smu_cal_t *c, uint8_t range,
+                                           uint8_t *count_out);
+
+/**
+ * @brief Read a range's current fit (offset/gain/shunt/amp_gain). Any out-param
+ *        may be NULL. Returns true if the range is calibrated (have set).
+ */
+bool smu_cal_range_info(const smu_cal_t *c, uint8_t range, float *offset_v,
+                        float *gain_corr, float *shunt_ohm, float *amp_gain);
+
+/**
+ * @brief Remove a single accumulated point (by index) from a range and refit
+ *        over the rest, applying + persisting the result.
+ * @return remaining points fitted (>=2); 0 too few to fit; -1 flat; -2 bad
+ *         index/args; -3 NVS save failed.
+ */
+int smu_cal_range_delete(smu_cal_t *c, uint8_t range, uint8_t idx);
+
+
+
 
 #ifdef __cplusplus
 }

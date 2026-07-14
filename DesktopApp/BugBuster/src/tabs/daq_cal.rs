@@ -64,7 +64,7 @@ fn persist_name(p: u8) -> &'static str {
 }
 
 fn flag_names(f: u16) -> Vec<&'static str> {
-    const BITS: [(u16, &str); 8] = [
+    const BITS: [(u16, &str); 9] = [
         (0x0001, "too few points"),
         (0x0002, "low coverage"),
         (0x0004, "high coverage"),
@@ -73,6 +73,7 @@ fn flag_names(f: u16) -> Vec<&'static str> {
         (0x0020, "did not settle"),
         (0x0040, "target unreached"),
         (0x0080, "hardware unavailable"),
+        (0x0100, "USB-PD too low — current cal needs 20 V / 3 A"),
     ];
     BITS.iter()
         .filter(|(b, _)| f & b != 0)

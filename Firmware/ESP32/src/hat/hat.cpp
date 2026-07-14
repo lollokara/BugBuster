@@ -1326,10 +1326,11 @@ void hat_daq_poll_mb(void)
             break;
 
         case HAT_MB_SET_EFUSE:
-            // [type][idx u8][on u8]
+            // [type][idx u8][on u8]. E-fuses MUST arm through the user-action
+            // gate (records the soft-start FLT blackout); pca9535_set_control
+            // rejects them.
             if (req_len >= 3 && req[1] < 4) {
-                PcaControl ctrl = (PcaControl)(PCA_CTRL_EFUSE1_EN + req[1]);
-                if (!pca9535_set_control(ctrl, req[2] != 0))
+                if (!pca9535_user_arm_efuse(req[1], req[2] != 0))
                     status = HAT_MB_ST_ERR;
             } else {
                 status = HAT_MB_ST_ERR;

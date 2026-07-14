@@ -372,4 +372,21 @@
 #define SMU_BASE_SAMPLES_PER_PT   1000       // raw current reads averaged per code
 #define SMU_BASE_TEMP_NA          (-32768)   // sentinel: temperature unavailable
 
+// -----------------------------------------------------------------------------
+// Per-range current-measurement calibration (interactive "meter" cal). For each
+// current range the operator wires a series resistor + reference DMM in the DUT
+// path, the P4 sweeps SMU_METER_CAL_POINTS output voltages, reads its own ADAQ
+// voltage per point, and the operator types the DMM current. A least-squares fit
+// of (v_adc -> true amps) yields the range's offset_v + gain_corr, which are
+// applied to range_manager and persisted here.
+// -----------------------------------------------------------------------------
+#define SMU_RANGE_NVS_KEY         "rngcal"    // NVS per-range cal blob key
+#define SMU_RANGE_MAGIC           0x53524E47u // "SRNG"
+#define SMU_RANGE_VERSION         2u
+#define SMU_RANGE_CAL_MAX_PTS     64          // accumulated (v_adc,amps) points per range
+#define SMU_METER_CAL_POINTS      10          // reference-meter points per range
+#define SMU_METER_CAL_SETTLE_MS   400         // V_DUT settle before each reading
+#define SMU_METER_CAL_SAMPLES     200         // ADAQ reads averaged per point
+
+
 

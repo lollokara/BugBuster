@@ -9,7 +9,7 @@ static const char *TAG = "settings";
 #define NVS_NS   "daqhat"
 #define NVS_KEY  "settings"
 // Bump when the settings_t layout changes so old blobs are discarded.
-#define SETTINGS_VERSION  4
+#define SETTINGS_VERSION  5
 
 settings_t g_settings;
 
@@ -30,6 +30,10 @@ static void load_defaults(void)
     g_settings.sample_rate_idx = 2;     // 100ksps
     g_settings.dut_current_ma  = 1000;  // 1.0 A
     g_settings.dut_voltage_mv  = 5000;  // 5.0 V
+
+    g_settings.filter_idx      = 0;     // Wideband
+    g_settings.decim_idx       = 3;     // x256
+    g_settings.reject_5060     = false;
 
     g_settings.fft_enable      = false;
     g_settings.fft_length_idx  = 4;     // 1024

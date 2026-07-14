@@ -797,6 +797,14 @@ static void daq_ui_task(void *arg)
     }
 }
 
+bool daq_board_pd_ok(const daq_board_t *b, uint16_t min_mv, uint16_t min_ma)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (b->s3_telem_ms == 0 || (now - b->s3_telem_ms) > 5000) return false;
+    if (!(b->s3_telem.flags & S3LINK_TLM_F_PD)) return false;
+    return b->s3_telem.pd_mv >= min_mv && b->s3_telem.pd_ma >= min_ma;
+}
+
 esp_err_t daq_board_c6_start(daq_board_t *b)
 {
     esp_err_t err = ddp_master_init(&b->ddp);

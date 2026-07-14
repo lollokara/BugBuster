@@ -260,6 +260,10 @@ typedef struct __attribute__((packed)) {
 #define DDP_CAL_PERSIST_SAVED   2u
 #define DDP_CAL_PERSIST_FAILED  3u
 
+// ddp_cal_status_t.flags bit: cal aborted because the USB-PD contract was below
+// the requirement (20 V / 3 A for current cal). Mirrors SMU_CAL_FLAG_NO_PD.
+#define DDP_CAL_FLAG_NO_PD      0x0100u
+
 typedef struct __attribute__((packed)) {
     uint8_t  phase;      // DDP_CAL_PH_*
     uint8_t  prompt;     // DDP_CAL_PR_*

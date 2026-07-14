@@ -366,7 +366,12 @@ static int cmd_vdut(int argc, char **argv)
     }
     if (strcmp(argv[1], "on") == 0) {
         daq_settings_set_i32(DAQ_K_SOURCE_ENABLE, 1, DAQ_SRC_LOCAL);
-        printf("V_DUT ENABLED (%.3f V)\n", (double)b->smu.vdut_set);
+        if (!b->smu.enabled)
+            printf("BLOCKED: DUT enable requires USB-PD >= 9 V / 3 A "
+                   "(have %u mV / %u mA)\n",
+                   b->s3_telem.pd_mv, b->s3_telem.pd_ma);
+        else
+            printf("V_DUT ENABLED (%.3f V)\n", (double)b->smu.vdut_set);
         return 0;
     }
     if (strcmp(argv[1], "off") == 0) {
@@ -778,6 +783,40 @@ static bool tui_prompt_int(const char *label, long *out)
     return true;
 }
 
+// Blocking inline decimal prompt on the status row. Returns true + *out on
+// Enter, false on ESC / empty / 60 s timeout. Echoes as the user types. Accepts
+// digits, sign, decimal point and exponent so a reference-meter reading can be
+// typed exactly (e.g. "12.34", "-0.5", "1.2e-3"). The long timeout gives the
+// operator time to read the bench meter.
+static bool tui_prompt_float(const char *label, double *out)
+{
+    char buf[24];
+    int len = 0;
+    printf(TUI_SHOW "\033[24;1H" TUI_EL TUI_BCY "\u276f " TUI_R TUI_B "%s" TUI_R, label);
+    fflush(stdout);
+    uint32_t start = tui_now_ms();
+    for (;;) {
+        int c = tui_getch(100);
+        if (c < 0) {
+            if ((tui_now_ms() - start) > 60000) { printf(TUI_HIDE); return false; }
+            continue;
+        }
+        if (c == 27) { printf(TUI_HIDE); return false; }       // ESC cancels
+        if (c == '\r' || c == '\n') break;
+        if ((c == 8 || c == 127) && len > 0) { len--; printf("\b \b"); fflush(stdout); continue; }
+        if (len < (int)sizeof(buf) - 1 &&
+            ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' ||
+             c == 'e' || c == 'E')) {
+            buf[len++] = (char)c; putchar(c); fflush(stdout);
+        }
+    }
+    buf[len] = '\0';
+    printf(TUI_HIDE);
+    if (len == 0) return false;
+    *out = strtod(buf, NULL);
+    return true;
+}
+
 // Pause fast acquisition (if running) so ADAQ registers can be written. Returns
 // true if it was running (the caller must resume). ADAQ config registers are
 // inaccessible while the capture path holds the devices in continuous-read mode,
@@ -949,6 +988,15 @@ static void tui_run_current_cal(daq_board_t *b)
         return;
     }
 
+    // Current cal sources up to the target amps: require a stiff USB-PD contract
+    // (>= 20 V / 3 A). No override.
+    if (!daq_board_pd_ok(b, 20000, 3000)) {
+        printf(TUI_CLR);
+        tui_msg_err("Current cal BLOCKED: needs USB-PD >= 20 V / 3 A "
+                    "(have %u mV / %u mA)", b->s3_telem.pd_mv, b->s3_telem.pd_ma);
+        return;
+    }
+
     // The cal engine reads the COARSE ADAQ over SPI; pause the capture path so
     // it does not fight the continuous-read DMA, and resume it afterwards.
     bool was = tui_acq_pause(b);
@@ -1076,8 +1124,280 @@ static void tui_run_baseline_cal(daq_board_t *b)
         tui_msg_err("Baseline cal failed (flags 0x%04X)", st.flags);
 }
 
+// ---------------------------------------------------------------------------
+// Interactive reference-meter current calibration (per range: LOW/MID/HIGH).
+//
+// The operator wires a series resistor + reference DMM into the DUT path. For
+// the chosen range the P4 forces that shunt, sweeps SMU_METER_CAL_POINTS output
+// voltages, averages its own ADAQ voltage per point, and asks the operator to
+// type the DMM current. A least-squares fit of (v_adc -> true amps) gives the
+// range's zero-current offset and gain correction, which are applied to the
+// range manager live and persisted to NVS.
+// ---------------------------------------------------------------------------
+
+// qsort comparator for floats (median of the live capture window).
+static int cli_cmp_float(const void *a, const void *b)
+{
+    float fa = *(const float *)a, fb = *(const float *)b;
+    return (fa > fb) - (fa < fb);
+}
+
+// Reference-meter input unit per range. The 51R (HI) range reads sub-mA, so the
+// operator enters microamps; MID/LO enter milliamps.
+static const char *meter_unit(current_range_t range)
+{
+    return (range == RANGE_HI) ? "uA" : "mA";
+}
+// Amps per one operator-entered unit (1 uA = 1e-6 A, 1 mA = 1e-3 A).
+static double meter_unit_amps(current_range_t range)
+{
+    return (range == RANGE_HI) ? 1e-6 : 1e-3;
+}
+
+// Confirm dialog for the reference-meter cal of one range. Returns 0 = cancel,
+// 1 = add points to the existing accumulated set, 2 = clear then capture fresh.
+static int tui_confirm_meter_cal(daq_board_t *b, current_range_t range)
+{
+    uint8_t have = smu_cal_range_count(&b->cal, (uint8_t)range);
+    printf(TUI_CLR TUI_HOME TUI_HIDE "\n\n\n");
+    tui_panel_top(TUI_BYL, "Reference-Meter Current Calibration");
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_B "Calibrate the " TUI_BGN "%s" TUI_R TUI_B
+           " range against a reference meter?" TUI_R TUI_EL "\n",
+           range_manager_name(range));
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_D "Wire a series resistor + reference DMM into the DUT" TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_D "path. Pick the resistor for the sub-range you want; the" TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_D "P4 sweeps %d output voltages and you type the DMM" TUI_R TUI_EL "\n",
+           SMU_METER_CAL_POINTS);
+    printf(TUI_ROW TUI_D "current (in " TUI_R TUI_B "%s" TUI_R TUI_D ") at each step." TUI_R TUI_EL "\n",
+           meter_unit(range));
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_D "Stored points for this range: " TUI_R TUI_B "%u" TUI_R
+           TUI_D "  \u2014 add more with" TUI_R TUI_EL "\n", have);
+    printf(TUI_ROW TUI_D "different resistors to cover the whole range, then refit." TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_BYL "Connect the resistor + DMM before continuing." TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_BGN TUI_B "  [A] Add points  " TUI_R " "
+                  TUI_BYL TUI_B "  [C] Clear+restart  " TUI_R " "
+                  TUI_BRD TUI_B "  [N] Cancel  " TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_EL "\n");
+    tui_panel_bottom();
+    printf(TUI_ED);
+    fflush(stdout);
+
+    for (;;) {
+        int c = tui_getch(200);
+        if (c == 'a' || c == 'A' || c == 'y' || c == 'Y') return 1;   // append
+        if (c == 'c' || c == 'C')                          return 2;   // clear
+        if (c == 'n' || c == 'N' || c == 27)               return 0;   // cancel
+    }
+}
+
+// Live panel for one meter-cal point: shows the rolling median of the last 100
+// readings while the operator dials the DMM in, plus the window fill level.
+static void tui_meter_live_draw(current_range_t range, int idx, int total,
+                                float vset, float med_a, int filled, int win)
+{
+    char dev_s[20];
+    fmt_current(dev_s, sizeof dev_s, med_a);
+    int bar = (win > 0) ? (filled * 20) / win : 0;
+    if (bar > 20) bar = 20;
+
+    printf(TUI_HOME "\n\n\n");
+    tui_panel_top(TUI_BCY, "Reference-Meter Current Calibration \u00b7 live");
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_D "range " TUI_R TUI_B "%-9s" TUI_R
+           TUI_D "   point " TUI_R TUI_B "%d/%d" TUI_R
+           TUI_D "   V_DUT set " TUI_R TUI_B "%6.2f V" TUI_R TUI_EL "\n",
+           range_manager_name(range), idx, total, (double)vset);
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_D "median(last %d) " TUI_R TUI_B TUI_BGN "%-13s" TUI_R
+           TUI_D " [" TUI_R, win, dev_s);
+    for (int i = 0; i < 20; ++i) fputs(i < bar ? "\u2588" : TUI_D " ", stdout);
+    printf(TUI_R TUI_D "]" TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_D "Let it settle, then press " TUI_R TUI_BGN "ENTER" TUI_R
+           TUI_D " to capture." TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_D "Press " TUI_R TUI_BRD "ESC" TUI_R TUI_D " to abort" TUI_R TUI_EL "\n");
+    tui_panel_bottom();
+    printf(TUI_ED);
+    fflush(stdout);
+}
+
+// Live-capture one point: continuously read the ADAQ, keep a rolling median of
+// the last 100 raw voltages, and lock that median when the operator presses
+// ENTER. Returns false on ESC (abort). On success *v_adc_out is the median ADC
+// voltage and *amps_out the current the device computes from it.
+static bool tui_meter_live_capture(daq_board_t *b, current_range_t range,
+                                   float vset, int idx, int total,
+                                   float *v_adc_out, float *amps_out)
+{
+    const int WIN = 100;
+    uint8_t role = (range == RANGE_LO) ? (uint8_t)ADAQ_ROLE_COARSE
+                                       : (uint8_t)ADAQ_ROLE_FINE;
+    if (!b->adaq_ok[role]) return false;
+
+    float ring[100];
+    int   rn = 0, rpos = 0;
+    float med_v = 0.0f, med_a = 0.0f;
+    uint32_t last_draw = 0;
+
+    for (;;) {
+        // Pull a small batch of fresh samples into the rolling window.
+        for (int s = 0; s < 16; ++s) {
+            int32_t raw = 0;
+            if (adaq7769_read_sample(&b->adaq[role], &raw) == ESP_OK) {
+                ring[rpos] = adaq7769_code_to_volts(&b->adaq[role], raw);
+                rpos = (rpos + 1) % WIN;
+                if (rn < WIN) rn++;
+            }
+        }
+        if (rn > 0) {
+            float tmp[100];
+            memcpy(tmp, ring, (size_t)rn * sizeof(float));
+            qsort(tmp, rn, sizeof(float), cli_cmp_float);
+            med_v = tmp[rn / 2];
+            med_a = range_manager_volts_to_amps(&b->range, range, med_v);
+        }
+
+        uint32_t now = tui_now_ms();
+        if (now - last_draw >= 100) {           // ~10 Hz redraw
+            last_draw = now;
+            tui_meter_live_draw(range, idx, total, vset, med_a, rn, WIN);
+        }
+
+        int c = tui_getch(2);                    // brief key poll / CPU yield
+        if (c == '\r' || c == '\n') { *v_adc_out = med_v; *amps_out = med_a; return true; }
+        if (c == 27) return false;               // ESC aborts
+    }
+}
+
+// Drive the interactive reference-meter cal for one range to completion.
+static void tui_run_meter_cal(daq_board_t *b, current_range_t range)
+{
+    int mode = tui_confirm_meter_cal(b, range);
+    if (mode == 0) {
+        printf(TUI_CLR);
+        tui_msg("Meter calibration cancelled");
+        return;
+    }
+    if (!b->idac_ok) {
+        printf(TUI_CLR);
+        tui_msg_err("Meter cal: IDAC unavailable");
+        return;
+    }
+    uint8_t role = (range == RANGE_LO) ? (uint8_t)ADAQ_ROLE_COARSE
+                                       : (uint8_t)ADAQ_ROLE_FINE;
+    if (!b->adaq_ok[role]) {
+        printf(TUI_CLR);
+        tui_msg_err("Meter cal: ADAQ (%s) unavailable",
+                    range == RANGE_LO ? "COARSE" : "FINE");
+        return;
+    }
+
+    if (mode == 2) smu_cal_range_reset(&b->cal, (uint8_t)range);   // clear first
+
+    // Single-shot ADAQ reads fight the continuous-read DMA; pause the fast path.
+    bool was = tui_acq_pause(b);
+    range_manager_force(&b->range, range);
+    smu_enable(&b->smu, true);
+    vTaskDelay(pdMS_TO_TICKS(SMU_METER_CAL_SETTLE_MS));
+
+    const int    N      = SMU_METER_CAL_POINTS;
+    const char  *unit   = meter_unit(range);
+    const double unit_a = meter_unit_amps(range);
+    smu_range_pt_t new_pts[SMU_METER_CAL_POINTS];
+    int  npts    = 0;
+    bool aborted = false;
+
+    for (int i = 0; i < N; ++i) {
+        float vset = SMU_VDUT_MIN +
+                     (SMU_VDUT_MAX - SMU_VDUT_MIN) * (float)i / (float)(N - 1);
+        smu_set_voltage(&b->smu, vset);
+        vTaskDelay(pdMS_TO_TICKS(SMU_METER_CAL_SETTLE_MS));
+
+        // Live rolling-median view; ENTER locks the reading, ESC aborts.
+        float v_adc = 0.0f, amps = 0.0f;
+        if (!tui_meter_live_capture(b, range, vset, i + 1, N, &v_adc, &amps)) {
+            aborted = true;
+            break;
+        }
+
+        char lbl[96];
+        snprintf(lbl, sizeof lbl,
+                 "Captured %.3f %s (device) \u2014 enter DMM %s for pt %d/%d: ",
+                 (double)amps / unit_a, unit, unit, i + 1, N);
+        double meter_val = 0.0;
+        if (!tui_prompt_float(lbl, &meter_val)) { aborted = true; break; }
+
+        new_pts[npts].v_adc = v_adc;
+        new_pts[npts].amps  = (float)(meter_val * unit_a);   // -> amps
+        npts++;
+    }
+
+    smu_enable(&b->smu, false);
+    range_manager_force(&b->range, RANGE_UNKNOWN);   // release override
+    tui_acq_resume(b, was);
+    printf(TUI_CLR);                                 // clean full redraw
+
+    if (aborted) {
+        tui_msg_err("Meter cal aborted (%d/%d captured, not saved)", npts, N);
+        return;
+    }
+
+    // Append this run's points and refit over the whole accumulated set.
+    float shunt    = range_manager_shunt_ohm(&b->range, range);
+    float amp_gain = ISENSE_AMP_GAIN;
+    int   total    = smu_cal_range_fit(&b->cal, (uint8_t)range,
+                                       new_pts, (uint8_t)npts, shunt, amp_gain);
+
+    if (total >= 2) {
+        const range_cal_t *rc = range_manager_get_cal(&b->range, range);
+        tui_msg("%s cal saved: %d pts total, gain %.4f, offset %.3f mV",
+                range_manager_name(range), total,
+                rc ? (double)rc->gain_corr : 0.0,
+                rc ? (double)rc->offset_v * 1000.0 : 0.0);
+    } else if (total == 0) {
+        tui_msg("%s: %d pts stored \u2014 add another resistor (need \u2265 2 to fit)",
+                range_manager_name(range), npts);
+    } else if (total == -1) {
+        tui_msg_err("%s cal: no response in the data (check wiring / resistor)",
+                    range_manager_name(range));
+    } else {
+        tui_msg_err("%s cal: NVM save failed", range_manager_name(range));
+    }
+}
+
+// Small submenu: pick which range to run the reference-meter cal on.
+static void tui_run_meter_cal_menu(daq_board_t *b)
+{
+    printf(TUI_CLR TUI_HOME TUI_HIDE "\n\n\n");
+    tui_panel_top(TUI_BYL, "Reference-Meter Current Calibration");
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_B "Which range?" TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_BCY "  [L]" TUI_R TUI_D " LOW  (50 m\u2126, ~37 mA .. 3 A)" TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_BCY "  [M]" TUI_R TUI_D " MID  (2 \u2126, ~1.4 .. 37 mA)" TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_BCY "  [H]" TUI_R TUI_D " HIGH (51 \u2126, nA .. ~1.4 mA)" TUI_R TUI_EL "\n");
+    printf(TUI_ROW TUI_EL "\n");
+    printf(TUI_ROW TUI_D "Press " TUI_R TUI_BRD "ESC" TUI_R TUI_D " to cancel" TUI_R TUI_EL "\n");
+    tui_panel_bottom();
+    printf(TUI_ED);
+    fflush(stdout);
+
+    for (;;) {
+        int c = tui_getch(200);
+        if (c == 'l' || c == 'L') { tui_run_meter_cal(b, RANGE_LO);  return; }
+        if (c == 'm' || c == 'M') { tui_run_meter_cal(b, RANGE_MID); return; }
+        if (c == 'h' || c == 'H') { tui_run_meter_cal(b, RANGE_HI);  return; }
+        if (c == 27)              { printf(TUI_CLR); tui_msg("Meter calibration cancelled"); return; }
+    }
+}
+
 // Render one full frame from the home position.
 static void tui_draw(daq_board_t *b)
+
 {
     current_range_t rng = range_manager_current(&b->range);
     bool ovr = b->range.override_active;
@@ -1260,7 +1580,8 @@ static void tui_draw(daq_board_t *b)
     printf(TUI_ROW TUI_D "cal  " TUI_R
            TUI_BCY "k" TUI_R TUI_D " voltage  " TUI_R
            TUI_BCY "j" TUI_R TUI_D " current  " TUI_R
-           TUI_BCY "b" TUI_R TUI_D " baseline" TUI_R TUI_EL "\n");
+           TUI_BCY "b" TUI_R TUI_D " baseline  " TUI_R
+           TUI_BCY "m" TUI_R TUI_D " meter (L/M/H)" TUI_R TUI_EL "\n");
     tui_panel_bottom();
 
     // === Transient action message ==========================================
@@ -1287,10 +1608,15 @@ static bool tui_handle_key(daq_board_t *b, int key)
     switch (key) {
     case 'q': case 'Q': case 27:
         return false;
-    case 'v': case 'V':
-        daq_settings_set_i32(DAQ_K_SOURCE_ENABLE, b->smu.enabled ? 0 : 1, DAQ_SRC_LOCAL);
-        tui_msg("V_DUT %s", b->smu.enabled ? "ON" : "OFF");
+    case 'v': case 'V': {
+        bool was = b->smu.enabled;
+        daq_settings_set_i32(DAQ_K_SOURCE_ENABLE, was ? 0 : 1, DAQ_SRC_LOCAL);
+        if (!was && !b->smu.enabled)
+            tui_msg_err("DUT BLOCKED: needs USB-PD >= 9 V / 3 A");
+        else
+            tui_msg("V_DUT %s", b->smu.enabled ? "ON" : "OFF");
         break;
+    }
     case 'o': case 'O':
         if (tui_prompt_int("Set V_DUT (millivolts): ", &v)) {
             daq_settings_set_i32(DAQ_K_DUT_VOLTAGE_MV, (int32_t)v, DAQ_SRC_LOCAL);
@@ -1326,6 +1652,9 @@ static bool tui_handle_key(daq_board_t *b, int key)
         break;
     case 'b': case 'B':
         tui_run_baseline_cal(b);
+        break;
+    case 'm': case 'M':
+        tui_run_meter_cal_menu(b);
         break;
     case 'z': case 'Z':
         power_dsp_reset_energy(&b->dsp);
@@ -2592,11 +2921,55 @@ static const char *cal_phase_name(uint8_t ph)
     }
 }
 
+// Parse a range token (lo/low, mid, hi/high; case-insensitive) into a range.
+static bool cli_parse_range(const char *s, current_range_t *out)
+{
+    char t[8];
+    int i = 0;
+    for (; s[i] && i < 7; ++i) t[i] = (s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i];
+    t[i] = '\0';
+    if (!strcmp(t, "lo") || !strcmp(t, "low"))   { *out = RANGE_LO;  return true; }
+    if (!strcmp(t, "mid"))                       { *out = RANGE_MID; return true; }
+    if (!strcmp(t, "hi") || !strcmp(t, "high"))  { *out = RANGE_HI;  return true; }
+    return false;
+}
+
+// Print the accumulated reference-meter cal points + fit for one range, with the
+// fitted (applied) current and per-point residual so bad points are obvious.
+static void cli_print_range_points(daq_board_t *b, current_range_t range)
+{
+    float offv = 0, gain = 0, shunt = 0, ampg = 0;
+    bool have = smu_cal_range_info(&b->cal, (uint8_t)range, &offv, &gain, &shunt, &ampg);
+    uint8_t n = 0;
+    const smu_range_pt_t *pts = smu_cal_range_points(&b->cal, (uint8_t)range, &n);
+
+    // When uncalibrated, the range_manager applies the nominal transfer (unity
+    // gain, zero offset) regardless of any stale stored coefficients.
+    if (!have) { gain = 1.0f; offv = 0.0f; }
+
+    printf("== %-9s calibrated=%-3s pts=%2u  gain=%.5f  offset=%.4f mV  shunt=%.5f ohm  ampg=%.2f\n",
+           range_manager_name(range), have ? "yes" : "no", n,
+           (double)gain, (double)offv * 1000.0, (double)shunt, (double)ampg);
+    if (!pts || n == 0) { printf("   (no points)\n"); return; }
+
+    printf("  idx      v_adc[V]        entered          fitted           resid\n");
+    for (uint8_t i = 0; i < n; ++i) {
+        float pred  = range_manager_volts_to_amps(&b->range, range, pts[i].v_adc);
+        float resid = pred - pts[i].amps;
+        char es[20], fs[20], rs[20];
+        fmt_current(es, sizeof es, pts[i].amps);
+        fmt_current(fs, sizeof fs, pred);
+        fmt_current(rs, sizeof rs, resid);
+        printf("  %3u  %+.7f   %13s   %13s   %13s\n",
+               i, (double)pts[i].v_adc, es, fs, rs);
+    }
+}
+
 static int cmd_cal(int argc, char **argv)
 {
     daq_board_t *b = s_board;
     if (argc < 2) {
-        printf("usage: cal <status|v|i|base|clroff>\n");
+        printf("usage: cal <status|v|i|base|clroff|points [range]|del <range> <idx>|clear <range>>\n");
         return 1;
     }
 
@@ -2645,6 +3018,68 @@ static int cmd_cal(int argc, char **argv)
             if (b->adaq_ok[i]) adaq7769_set_offset_cal(&b->adaq[i], 0);
         if (was) daq_board_run_fast(b, 8192);
         printf("cal: cleared ADC OFFSET registers (write 0)\n");
+        return 0;
+    }
+
+    // Per-range reference-meter cal: list accumulated points + fit.
+    if (!strcmp(argv[1], "points") || !strcmp(argv[1], "pts")) {
+        if (argc >= 3) {
+            current_range_t r;
+            if (!cli_parse_range(argv[2], &r)) {
+                printf("cal: bad range '%s' (lo|mid|hi)\n", argv[2]);
+                return 1;
+            }
+            cli_print_range_points(b, r);
+        } else {
+            cli_print_range_points(b, RANGE_HI);
+            cli_print_range_points(b, RANGE_MID);
+            cli_print_range_points(b, RANGE_LO);
+        }
+        return 0;
+    }
+
+    // Per-range reference-meter cal: clear ALL points and revert to nominal.
+    if (!strcmp(argv[1], "clear") || !strcmp(argv[1], "clrpts")) {
+        if (argc < 3) { printf("usage: cal clear <lo|mid|hi>\n"); return 1; }
+        current_range_t r;
+        if (!cli_parse_range(argv[2], &r)) {
+            printf("cal: bad range '%s' (lo|mid|hi)\n", argv[2]);
+            return 1;
+        }
+        smu_cal_range_reset(&b->cal, (uint8_t)r);
+        printf("cal: %s cleared (0 pts, reverted to nominal gain=1 offset=0)\n",
+               range_manager_name(r));
+        return 0;
+    }
+
+    // Per-range reference-meter cal: delete one point by index and refit.
+    if (!strcmp(argv[1], "del") || !strcmp(argv[1], "rmpt")) {
+        if (argc < 4) {
+            printf("usage: cal del <lo|mid|hi> <index>   (see 'cal points')\n");
+            return 1;
+        }
+        current_range_t r;
+        if (!cli_parse_range(argv[2], &r)) {
+            printf("cal: bad range '%s' (lo|mid|hi)\n", argv[2]);
+            return 1;
+        }
+        int idx = atoi(argv[3]);
+        if (idx < 0) { printf("cal: bad index\n"); return 1; }
+        int ret = smu_cal_range_delete(&b->cal, (uint8_t)r, (uint8_t)idx);
+        if (ret >= 2)
+            printf("cal: deleted %s[%d]; refit over %d pts\n",
+                   range_manager_name(r), idx, ret);
+        else if (ret == 0)
+            printf("cal: deleted %s[%d]; %u pts left (need >=2 to fit)\n",
+                   range_manager_name(r), idx,
+                   smu_cal_range_count(&b->cal, (uint8_t)r));
+        else if (ret == -1)
+            printf("cal: deleted %s[%d]; remaining points are flat (no fit)\n",
+                   range_manager_name(r), idx);
+        else if (ret == -2)
+            printf("cal: %s has no point at index %d\n", range_manager_name(r), idx);
+        else
+            printf("cal: delete failed (NVM save error)\n");
         return 0;
     }
 
@@ -2822,7 +3257,7 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("rail",    "Control analog rails: rail <3v3|26v|24v|all> <on|off>", cmd_rail);
     reg("vdut",    "DUT supply: vdut <on|off|millivolts> (OFF at boot)", cmd_vdut);
     reg("ilimit",  "DUT supply current limit: ilimit <milliamps>", cmd_ilimit);
-    reg("cal",     "Calibration (scriptable): cal <status|v|i|base|clroff>", cmd_cal);
+    reg("cal",     "Calibration: cal <status|v|i|base|clroff|points [range]|del <range> <idx>|clear <range>>", cmd_cal);
     reg("c6reset", "Pulse C6 RST (normal restart)", cmd_c6reset);
     reg("c6boot",  "Enter C6 ROM download mode + bridge UART2 to console for esptool", cmd_c6boot);
     reg("c6logs",  "Bridge C6 UART2 to console + reset C6 into normal boot (view its log)", cmd_c6logs);

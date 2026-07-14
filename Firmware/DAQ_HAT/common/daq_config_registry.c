@@ -29,6 +29,9 @@ static const char *const OPT_FFTSRC[]  = { "Current", "Power" };
 static const char *const OPT_NPX[]     = { "Off", "Solid", "Status", "Breathe",
                                            "Channel" };
 static const char *const OPT_WIFI[]    = { "Access Point", "Station" };
+static const char *const OPT_FILTER[]  = { "Wideband", "Sinc5", "Sinc3" };
+static const char *const OPT_DECIM[]   = { "x32", "x64", "x128", "x256",
+                                           "x512", "x1024" };
 
 // ---------------------------------------------------------------------------
 // Schema table — the canonical list of every configurable setting.
@@ -41,6 +44,9 @@ static const daq_setting_schema_t s_table[] = {
     { DAQ_K_SAMPLE_RATE_IDX, DAQ_T_ENUM, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   4,    1,    2,    "Sample Rate",        OPT_SR },
     { DAQ_K_STREAMING,       DAQ_T_BOOL, DAQ_F_P4_LOCAL,                       0,   1,    1,    0,    "Streaming",          NULL },
     { DAQ_K_USB_DECIMATION,  DAQ_T_U16,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         1,   256,  1,    1,    "USB Decimation",     NULL },
+    { DAQ_K_FILTER,          DAQ_T_ENUM, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   2,    1,    0,    "Filter",             OPT_FILTER },
+    { DAQ_K_DECIMATION,      DAQ_T_ENUM, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   5,    1,    3,    "Decimation",         OPT_DECIM },
+    { DAQ_K_REJECT_5060,     DAQ_T_BOOL, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   1,    1,    0,    "50/60Hz Reject",     NULL },
     // --- Source / SMU ---
     { DAQ_K_SOURCE_ENABLE,   DAQ_T_BOOL, DAQ_F_P4_LOCAL,                       0,   1,    1,    0,    "Source Enable",      NULL },
     { DAQ_K_DUT_VOLTAGE_MV,  DAQ_T_U16,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         1800,20000,100,  5000, "DUT Voltage",        NULL },

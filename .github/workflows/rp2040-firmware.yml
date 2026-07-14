@@ -38,7 +38,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
         with:
-          submodules: recursive
+          fetch-depth: 0
+
+      - name: Init required submodules (RP2040 only)
+        shell: bash
+        run: |
+          # Initialize only the submodules required for the RP2040 firmware build
+          git submodule update --init --depth 1 Firmware/RP2040/lib/pico-sdk || true
+          git submodule update --init --depth 1 Firmware/RP2040/lib/debugprobe || true
+          git submodule update --init --depth 1 Firmware/RP2040/lib/tinyusb || true
 
       - name: Setup Python
         uses: actions/setup-python@v6.2.0

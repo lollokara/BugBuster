@@ -38,7 +38,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
         with:
-          submodules: recursive
+          fetch-depth: 0
+
+      - name: Init required submodules (ESP32 only)
+        shell: bash
+        run: |
+          # Initialize only the submodules required for the ESP32 firmware build
+          git submodule update --init --depth 1 Firmware/ESP32/components/micropython/micropython || true
+          git submodule update --init --depth 1 Firmware/ESP32/components/esp-dsp || true
 
       - name: Setup Python
         uses: actions/setup-python@v6.2.0

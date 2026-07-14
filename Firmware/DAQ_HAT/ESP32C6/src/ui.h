@@ -25,3 +25,7 @@ bool ui_source_on(void);
 // Cheaper than gfx_fill_circle (no per-frame AA math); used for header/menu
 // status bubbles.
 void ui_draw_dot(int cx, int cy, uint16_t color);
+
+// Show a transient warning banner on the home screen for a few seconds (e.g.
+// the USB-PD guard blocking DUT enable).
+void ui_show_warning(const char *msg);

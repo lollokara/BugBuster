@@ -49,6 +49,10 @@ static float   s_v = 0.0f, s_i = 0.0f;
 static uint8_t s_flags = 0;
 static uint8_t s_state = DDP_STATE_BOOT;
 
+// Transient warning banner (e.g. USB-PD guard). Shown for a few render frames.
+static char     s_warn[40] = {0};
+static uint16_t s_warn_ttl = 0;
+
 // ---- Cached header sprites (rasterized once) -------------------------------
 // Pac-Man geometry inside its sprite cell.
 #define PAC_R       7.0f
@@ -113,6 +117,14 @@ void ui_set_data(float v, float i, uint8_t flags, uint8_t state)
 bool ui_source_on(void)
 {
     return (s_flags & DDP_FLAG_SRC_ON) != 0;
+}
+
+void ui_show_warning(const char *msg)
+{
+    if (!msg) return;
+    strncpy(s_warn, msg, sizeof(s_warn) - 1);
+    s_warn[sizeof(s_warn) - 1] = '\0';
+    s_warn_ttl = 180;   // ~ a few seconds of render frames
 }
 
 // Blit the pre-rendered status dot centered at (cx,cy) in `color`. Cheap alpha
@@ -356,4 +368,14 @@ void ui_render(uint32_t t_ms)
               s_i, 'A', (s_flags & DDP_FLAG_I_OVERRANGE) != 0,
               src_on, cur_off, rbadge);
     PERF_MARK("cardI");
+
+    // Transient warning banner over the tiles (drawn last, on top).
+    if (s_warn_ttl > 0) {
+        s_warn_ttl--;
+        int bh = 22, by = (DISP_HEIGHT - bh) / 2 + 6;
+        gfx_round_rect(6, by, DISP_WIDTH - 12, bh, 5, C_ROSE);
+        gfx_round_rect_border(6, by, DISP_WIDTH - 12, bh, 5, C_TEXT);
+        int tw = gfx_text_w(s_warn, 1);
+        gfx_text((DISP_WIDTH - tw) / 2, by + (bh - 7) / 2, s_warn, 1, C_BG0);
+    }
 }

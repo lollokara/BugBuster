@@ -111,6 +111,14 @@ esp_err_t daq_board_read_current(daq_board_t *b, float *amps,
 esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out);
 
 /**
+ * @brief True if the S3 reports a fresh USB-PD contract of at least min_mv /
+ *        min_ma. Used to gate DUT source-enable (>=9 V/3 A) and current
+ *        calibration (>=20 V/3 A). Returns false if the S3 telemetry is stale
+ *        or no PD contract is negotiated.
+ */
+bool daq_board_pd_ok(const daq_board_t *b, uint16_t min_mv, uint16_t min_ma);
+
+/**
  * @brief Start the USB-HS measurement stream: install the TinyUSB vendor
  *        backend, register the control-command handler, and enable streaming.
  */

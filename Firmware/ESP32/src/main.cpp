@@ -159,10 +159,10 @@ static void mainLoopTask(void* pvParam)
         }
 
         // Service any pending C6 "Main Board Settings" request (rail/e-fuse
-        // writes + reads) at ~4 Hz so a toggle applies promptly. The P4 defers
-        // heavier script requests while streaming, so this stays cheap during
-        // acquisition.
-        if (now - lastMbPoll >= 250) {
+        // writes + reads) at ~10 Hz so a toggle applies well under a second.
+        // The P4 defers heavier script requests while streaming, so this stays
+        // cheap during acquisition.
+        if (now - lastMbPoll >= 100) {
             lastMbPoll = now;
             hat_daq_poll_mb();
         }

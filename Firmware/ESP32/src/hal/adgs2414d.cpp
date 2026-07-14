@@ -336,7 +336,9 @@ bool adgs_init(void)
 
     // Enable level shifters
     gpio_reset_pin(PIN_LSHIFT_OE);
-    gpio_set_direction(PIN_LSHIFT_OE, GPIO_MODE_OUTPUT);
+    // INPUT_OUTPUT (not OUTPUT) so the OE level can be read back via
+    // gpio_get_level() for status reporting (e.g. the C6 Power menu).
+    gpio_set_direction(PIN_LSHIFT_OE, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_level(PIN_LSHIFT_OE, 1);  // OE active high
 
     // Add SPI device with hardware CS (spics_io_num = PIN_MUX_CS).

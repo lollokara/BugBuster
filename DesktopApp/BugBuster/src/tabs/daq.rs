@@ -181,6 +181,8 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let fft_nbins = RwSignal::new(256u16);
     let fft_window = RwSignal::new(1u8);
     let fft_source = RwSignal::new(0u8);
+    // Non-overridable USB-PD guard warning (DUT enable / current cal).
+    let pd_warn = RwSignal::new(String::new());
 
     // ---- Canvas + renderer --------------------------------------------------
     let gl_canvas = NodeRef::<leptos::html::Canvas>::new();
@@ -613,6 +615,28 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             source_enable.get_untracked(),
         );
         spawn_local(async move {
+            if en {
+                // Guard (no override): the DUT output requires a USB-PD contract
+                // of at least 9 V / 3 A. The firmware enforces the same.
+                let pd = fetch_usbpd_status().await;
+                let ok = pd
+                    .as_ref()
+                    .map(|s| s.attached && s.voltage_v >= 9.0 && s.current_a >= 3.0)
+                    .unwrap_or(false);
+                if !ok {
+                    let (vv, aa) = pd
+                        .as_ref()
+                        .map(|s| (s.voltage_v, s.current_a))
+                        .unwrap_or((0.0, 0.0));
+                    pd_warn.set(format!(
+                        "Blocked: DUT enable needs USB-PD \u{2265} 9 V / 3 A (have {:.1} V / {:.1} A)",
+                        vv, aa
+                    ));
+                    source_enable.set(false);
+                    return;
+                }
+            }
+            pd_warn.set(String::new());
             daq_set_source(v, il, en).await;
         });
     };
@@ -986,7 +1010,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                             range_lock_idx=range_lock_idx smooth_window=smooth_window filter_type=filter_type
                             raw_filter=raw_filter
                             vdut_mv=vdut_mv ilimit_ma=ilimit_ma source_enable=source_enable
-                            snapshots=snapshots
+                            snapshots=snapshots pd_warn=pd_warn
                             apply_source=Rc::new(apply_source.clone()) apply_range=Rc::new(apply_range.clone())
                             apply_rate=Rc::new(apply_rate.clone())
                         />
@@ -1608,6 +1632,7 @@ fn SettingsPanel(
     ilimit_ma: RwSignal<u32>,
     source_enable: RwSignal<bool>,
     snapshots: RwSignal<Option<DaqSnapshots>>,
+    pd_warn: RwSignal<String>,
     apply_source: Rc<dyn Fn()>,
     apply_range: Rc<dyn Fn()>,
     apply_rate: Rc<dyn Fn()>,
@@ -1731,6 +1756,11 @@ fn SettingsPanel(
                     <span class="dot"></span>
                     {move || if source_enable.get() { "Output ON" } else { "Output OFF" }}
                 </button>
+                {move || (!pd_warn.get().is_empty()).then(|| view!{
+                    <div style="font-size:11px;font-weight:600;color:#fca5a5;background:#7f1d1d33;border:1px solid #ef444488;border-radius:6px;padding:4px 8px;margin:2px 0;">
+                        {move || pd_warn.get()}
+                    </div>
+                })}
                 <div class="daq-field col">
                     <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
                         <span>"V_DUT"</span>

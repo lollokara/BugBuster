@@ -44,6 +44,9 @@ typedef struct {
     bool (*visible)(void);                   // NULL => always visible
     bool (*warn)(void);                      // NULL => no warning icon
     bool (*value_alert)(void);               // NULL => normal; true => value in red
+    void (*ok_arg)(int);                     // radio-list: OK sets .arg
+    int  arg;                                // value for ok_arg / sel_ref match
+    const int *sel_ref;                      // radio-list: mark when *sel_ref==arg
 
     // IT_INFO live-preview: when non-NULL, OK opens a detail screen that plots
     // a scrolling sparkline of this sampler's return value.
@@ -88,7 +91,16 @@ static void val_range(char *b, int n) { snprintf(b, n, "%s", SETTINGS_RANGE[g_se
 static void ok_range(void)            { g_settings.range_idx = (g_settings.range_idx + 1) % 3; settings_commit(); }
 
 static void val_srate(char *b, int n) { snprintf(b, n, "%s", SETTINGS_SAMPLERATE[g_settings.sample_rate_idx]); }
-static void ok_srate(void)            { g_settings.sample_rate_idx = (g_settings.sample_rate_idx + 1) % 5; settings_commit(); }
+static void pick_srate(int v)         { g_settings.sample_rate_idx = v; settings_commit(); }
+
+// Digital filter + decimation (P4 ADAQ FINE+COARSE) — labels from the registry.
+static void val_filter(char *b, int n) { snprintf(b, n, "%s", daq_config_schema(DAQ_K_FILTER)->options[g_settings.filter_idx % DAQ_FILT_COUNT]); }
+static void pick_filter(int v)         { g_settings.filter_idx = v; settings_commit(); }
+static void val_decim(char *b, int n)  { snprintf(b, n, "%s", daq_config_schema(DAQ_K_DECIMATION)->options[g_settings.decim_idx % DAQ_DEC_COUNT]); }
+static void pick_decim(int v)          { g_settings.decim_idx = v; settings_commit(); }
+static void val_reject(char *b, int n) { v_onoff(b, n, g_settings.reject_5060); }
+static void ok_reject(void)            { g_settings.reject_5060 = !g_settings.reject_5060; settings_commit(); }
+static bool vis_sinc3(void)            { return g_settings.filter_idx == DAQ_FILT_SINC3; }
 
 // FFT (P4 DSP) — labels read from the registry schema (single source of truth).
 static void val_fft(char *b, int n)    { v_onoff(b, n, g_settings.fft_enable); }
@@ -343,6 +355,14 @@ static int  s_vadj1_mv  = 5000;
 static int  s_vadj2_mv  = 5000;
 static uint32_t s_mb_last_req = 0;
 
+// Converging power-write retry: keep re-sending the desired e-fuse / rail state
+// until the reported snapshot matches (bounded window), so a dropped DDP frame
+// can't silently lose a toggle.
+static uint8_t  s_want_efuse_mask = 0, s_want_efuse_val = 0;  // bit i per e-fuse
+static uint8_t  s_want_rail_mask  = 0, s_want_rail_val  = 0;  // bit r per rail
+static uint32_t s_want_last = 0;      // last (re)send time
+static uint32_t s_want_until = 0;     // give-up deadline (handles e-fuse trip)
+
 static void fmt_mv_volts(char *b, int n, int mv)
 {
     if (mv < 0) mv = 0;
@@ -364,8 +384,13 @@ static void ch_vadj2(int mv)  { send_set_rail(DDP_MB_RAIL_VADJ2,  mv); }
 
 static void efuse_toggle(int idx)
 {
-    bool on = s_mbp_valid && (s_mbp.efuse_en & (1u << idx));
-    uint8_t args[2] = { (uint8_t)idx, (uint8_t)(on ? 0 : 1) };
+    bool want = !(s_mbp_valid && (s_mbp.efuse_en & (1u << idx)));
+    s_want_efuse_mask |= (uint8_t)(1u << idx);
+    if (want) s_want_efuse_val |=  (uint8_t)(1u << idx);
+    else      s_want_efuse_val &= (uint8_t)~(1u << idx);
+    s_want_last  = 0;
+    s_want_until = s_anim_ms + 2500;
+    uint8_t args[2] = { (uint8_t)idx, (uint8_t)(want ? 1 : 0) };
     ddp_send_mb_request(DDP_MB_SET_EFUSE, args, sizeof(args));
 }
 static void ok_efuse0(void) { efuse_toggle(0); }
@@ -390,14 +415,21 @@ static bool warn_efuse2(void) { return s_mbp_valid && (s_mbp.efuse_flt & 4u); }
 static bool warn_efuse3(void) { return s_mbp_valid && (s_mbp.efuse_flt & 8u); }
 
 // --- Rail enables (VLOGIC/level-shifter OE + VADJ1/VADJ2) -------------------
-static void send_set_rail_en(uint8_t rail, bool on)
+static void rail_en_toggle(uint8_t rail)
 {
-    uint8_t args[2] = { rail, (uint8_t)(on ? 1 : 0) };
+    uint8_t bit = (uint8_t)(1u << rail);
+    bool want = !(s_mbp_valid && (s_mbp.rail_en & bit));
+    s_want_rail_mask |= bit;
+    if (want) s_want_rail_val |=  bit;
+    else      s_want_rail_val &= (uint8_t)~bit;
+    s_want_last  = 0;
+    s_want_until = s_anim_ms + 2500;
+    uint8_t args[2] = { rail, (uint8_t)(want ? 1 : 0) };
     ddp_send_mb_request(DDP_MB_SET_RAIL_EN, args, sizeof(args));
 }
-static void ok_vlogic_en(void) { send_set_rail_en(0, !(s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VLOGIC))); }
-static void ok_vadj1_en(void)  { send_set_rail_en(1, !(s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VADJ1))); }
-static void ok_vadj2_en(void)  { send_set_rail_en(2, !(s_mbp_valid && (s_mbp.rail_en & DDP_MB_RAILEN_VADJ2))); }
+static void ok_vlogic_en(void) { rail_en_toggle(0); }
+static void ok_vadj1_en(void)  { rail_en_toggle(1); }
+static void ok_vadj2_en(void)  { rail_en_toggle(2); }
 
 static void val_vlogic_en(char *b, int n)
 {
@@ -424,6 +456,7 @@ static bool alert_vadj2_en(void) { return s_mbp_valid && (s_mbp.rail_en & DDP_MB
 // ===========================================================================
 static const menu_t m_hat, m_screen, m_mainboard, m_wifi, m_diag, m_cal;
 static const menu_t m_diag_temp, m_diag_power, m_diag_rails, m_diag_p4, m_diag_c6;
+static const menu_t m_srate, m_filter, m_decim;
 static void scripts_open(void);   // opens the custom MicroPython Scripts screen
 static void cal_open_volt(void);  // DUT source calibration wizard entry points
 static void cal_open_curr(void);
@@ -442,7 +475,11 @@ static const menu_item_t hat_items[] = {
     { .label = "Autoranging",      .type = IT_TOGGLE, .value = val_autorange, .ok = ok_autorange },
     { .label = "Range Setting",    .type = IT_CYCLE,  .value = val_range, .ok = ok_range,
       .visible = vis_manual, .warn = warn_manual },
-    { .label = "Sample Rate",      .type = IT_CYCLE,  .value = val_srate, .ok = ok_srate },
+    { .label = "Sample Rate",      .type = IT_SUBMENU, .sub = &m_srate,  .value = val_srate },
+    { .label = "Filter",           .type = IT_SUBMENU, .sub = &m_filter, .value = val_filter },
+    { .label = "Decimation",       .type = IT_SUBMENU, .sub = &m_decim,  .value = val_decim },
+    { .label = "50/60Hz Reject",   .type = IT_TOGGLE, .value = val_reject, .ok = ok_reject,
+      .visible = vis_sinc3 },
     { .label = "DUT Current Limit",.type = IT_BARGRAPH, .value = val_current,
       .bar_ref = &g_settings.dut_current_ma, .bar_min = 100, .bar_max = 2500,
       .bar_step = 100, .bar_fmt = fmt_current },
@@ -458,7 +495,7 @@ static const menu_item_t hat_items[] = {
       .visible = vis_fft },
     { .label = "Calibration",      .type = IT_SUBMENU, .sub = &m_cal },
 };
-static const menu_t m_hat = { "HAT Settings", hat_items, 10 };
+static const menu_t m_hat = { "HAT Settings", hat_items, 13 };
 
 static const menu_item_t screen_items[] = {
     { .label = "Brightness", .type = IT_BARGRAPH, .value = val_bright,
@@ -501,6 +538,33 @@ static const menu_item_t cal_items[] = {
     { .label = "Current Out", .type = IT_CYCLE, .ok = cal_open_curr },
 };
 static const menu_t m_cal = { "Calibration", cal_items, 3 };
+
+// Radio pick-lists for the acquisition enums (selected row shows a dot).
+static const menu_item_t srate_items[] = {
+    { .label = "10 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 0, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "50 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 1, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "100 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 2, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "250 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 3, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "1 Msps",   .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 4, .sel_ref = &g_settings.sample_rate_idx },
+};
+static const menu_t m_srate = { "Sample Rate", srate_items, 5 };
+
+static const menu_item_t filter_items[] = {
+    { .label = "Wideband", .type = IT_TOGGLE, .ok_arg = pick_filter, .arg = 0, .sel_ref = &g_settings.filter_idx },
+    { .label = "Sinc5",    .type = IT_TOGGLE, .ok_arg = pick_filter, .arg = 1, .sel_ref = &g_settings.filter_idx },
+    { .label = "Sinc3",    .type = IT_TOGGLE, .ok_arg = pick_filter, .arg = 2, .sel_ref = &g_settings.filter_idx },
+};
+static const menu_t m_filter = { "Filter", filter_items, 3 };
+
+static const menu_item_t decim_items[] = {
+    { .label = "x32",   .type = IT_TOGGLE, .ok_arg = pick_decim, .arg = 0, .sel_ref = &g_settings.decim_idx },
+    { .label = "x64",   .type = IT_TOGGLE, .ok_arg = pick_decim, .arg = 1, .sel_ref = &g_settings.decim_idx },
+    { .label = "x128",  .type = IT_TOGGLE, .ok_arg = pick_decim, .arg = 2, .sel_ref = &g_settings.decim_idx },
+    { .label = "x256",  .type = IT_TOGGLE, .ok_arg = pick_decim, .arg = 3, .sel_ref = &g_settings.decim_idx },
+    { .label = "x512",  .type = IT_TOGGLE, .ok_arg = pick_decim, .arg = 4, .sel_ref = &g_settings.decim_idx },
+    { .label = "x1024", .type = IT_TOGGLE, .ok_arg = pick_decim, .arg = 5, .sel_ref = &g_settings.decim_idx },
+};
+static const menu_t m_decim = { "Decimation", decim_items, 6 };
 
 static const menu_item_t mainboard_items[] = {
     { .label = "Power",   .type = IT_SUBMENU, .sub = &m_power },
@@ -733,6 +797,7 @@ static void handle_menu_event(uint32_t ev)
         case IT_TOGGLE:
         case IT_CYCLE:
             if (it->ok) it->ok();
+            if (it->ok_arg) it->ok_arg(it->arg);
             clamp_sel();
             break;
         case IT_BARGRAPH:
@@ -786,6 +851,37 @@ static void mb_refresh(uint32_t now_ms)
             if (p.vlogic_mv) s_vlogic_mv = p.vlogic_mv;
             if (p.vadj1_mv)  s_vadj1_mv  = p.vadj1_mv;
             if (p.vadj2_mv)  s_vadj2_mv  = p.vadj2_mv;
+        }
+    }
+
+    // Converge pending power writes: drop satisfied bits, re-drive the rest so a
+    // dropped DDP frame can't lose a toggle. Bounded so a genuinely stuck write
+    // (e.g. an e-fuse that trips right back off) stops retrying.
+    if (s_mbp_valid) {
+        for (int i = 0; i < 4; i++)
+            if ((s_want_efuse_mask & (1u << i)) &&
+                (!!(s_mbp.efuse_en & (1u << i)) == !!(s_want_efuse_val & (1u << i))))
+                s_want_efuse_mask &= (uint8_t)~(1u << i);
+        for (int r = 0; r < 3; r++)
+            if ((s_want_rail_mask & (1u << r)) &&
+                (!!(s_mbp.rail_en & (1u << r)) == !!(s_want_rail_val & (1u << r))))
+                s_want_rail_mask &= (uint8_t)~(1u << r);
+    }
+    if (s_want_efuse_mask || s_want_rail_mask) {
+        if ((int32_t)(now_ms - s_want_until) >= 0) {
+            s_want_efuse_mask = 0;
+            s_want_rail_mask  = 0;
+        } else if (now_ms - s_want_last >= 300) {
+            s_want_last = now_ms;
+            if (s_want_efuse_mask) {
+                int i = __builtin_ctz(s_want_efuse_mask);
+                uint8_t a[2] = { (uint8_t)i, (uint8_t)((s_want_efuse_val >> i) & 1) };
+                ddp_send_mb_request(DDP_MB_SET_EFUSE, a, sizeof(a));
+            } else {
+                int r = __builtin_ctz(s_want_rail_mask);
+                uint8_t a[2] = { (uint8_t)r, (uint8_t)((s_want_rail_val >> r) & 1) };
+                ddp_send_mb_request(DDP_MB_SET_RAIL_EN, a, sizeof(a));
+            }
         }
     }
 }
@@ -1058,6 +1154,12 @@ static void render_menu(void)
 
             int rx = DISP_WIDTH - 10;
             if (it->type == IT_SUBMENU) {
+                if (it->value) {
+                    char buf[20];
+                    it->value(buf, sizeof(buf));
+                    int vw = gfx_text_w(buf, 1);
+                    gfx_text(rx - 8 - vw, ty, buf, 1, vc);
+                }
                 draw_chevron(rx - 4, row_cy - 4, lc);
             } else if (it->value) {
                 char buf[20];
@@ -1069,6 +1171,9 @@ static void render_menu(void)
                 if (it->warn && it->warn())
                     draw_warning(rx - vw - 14, row_cy - 4, g_theme.amber);
             }
+            // Radio-list selected marker.
+            if (it->sel_ref && *it->sel_ref == it->arg)
+                ui_draw_dot(rx - 2, row_cy, lc);
         }
     }
 
@@ -1191,22 +1296,33 @@ static void render_cal(void)
 
     int y = TITLE_H + 6;
     if (s_calst.phase == DDP_CAL_PH_PROMPT) {
-        const char *msg = s_calst.prompt == DDP_CAL_PR_SHORT      ? "SHORT the output" :
-                          s_calst.prompt == DDP_CAL_PR_DISCONNECT ? "DISCONNECT the load" :
-                          s_calst.prompt == DDP_CAL_PR_OPEN       ? "Leave output OPEN" :
-                                                                    "Prepare the output";
-        gfx_text(6, y, msg, 1, g_theme.amber);
-        gfx_text(6, y + 12, "then press OK", 1, g_theme.dim);
+        // Big, bold, centered operator prompt.
+        const char *msg = s_calst.prompt == DDP_CAL_PR_SHORT      ? "SHORT OUTPUT" :
+                          s_calst.prompt == DDP_CAL_PR_DISCONNECT ? "REMOVE LOAD"  :
+                          s_calst.prompt == DDP_CAL_PR_OPEN       ? "LEAVE OPEN"   :
+                                                                    "PREP OUTPUT";
+        int tw = gfx_text_w(msg, 2);
+        int mx = (DISP_WIDTH - tw) / 2; if (mx < 2) mx = 2;
+        int my = TITLE_H + 12;
+        gfx_text(mx,     my, msg, 2, g_theme.amber);   // draw twice (+1px) for a
+        gfx_text(mx + 1, my, msg, 2, g_theme.amber);   // faux-bold weight
+        const char *hint = "then press OK";
+        gfx_text((DISP_WIDTH - gfx_text_w(hint, 1)) / 2, my + 20, hint, 1, g_theme.dim);
     } else if (s_calst.phase == DDP_CAL_PH_SUCCESS) {
         const char *ps = s_calst.persist == DDP_CAL_PERSIST_SAVED  ? "Saved to NVS" :
                          s_calst.persist == DDP_CAL_PERSIST_FAILED ? "Save FAILED" : "Complete";
         gfx_text(6, y, "Calibration complete", 1, g_theme.green);
         gfx_text(6, y + 12, ps, 1, g_theme.dim);
     } else if (s_calst.phase == DDP_CAL_PH_FAILED) {
-        char fb[24];
-        gfx_text(6, y, "Calibration failed", 1, g_theme.rose);
-        snprintf(fb, sizeof(fb), "flags 0x%04X", s_calst.flags);
-        gfx_text(6, y + 12, fb, 1, g_theme.dim);
+        if (s_calst.flags & DDP_CAL_FLAG_NO_PD) {
+            gfx_text(6, y, "Need USB-PD 20V/3A", 1, g_theme.rose);
+            gfx_text(6, y + 12, "connect a PD source", 1, g_theme.dim);
+        } else {
+            char fb[24];
+            gfx_text(6, y, "Calibration failed", 1, g_theme.rose);
+            snprintf(fb, sizeof(fb), "flags 0x%04X", s_calst.flags);
+            gfx_text(6, y + 12, fb, 1, g_theme.dim);
+        }
     } else if (s_calst.phase == DDP_CAL_PH_RUNNING) {
         char mb[28];
         const char *unit = s_cal_mode == DDP_CAL_MODE_CURRENT ? "A" : "V";

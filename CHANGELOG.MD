@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
+- **DAQ HAT (ESP32-P4) current-limit calibration no longer fails on the hard current ceiling
+  (was `flags 0x0046`).** The onboard supply can only source so much current, so the low end of
+  the IDAC sweep pins the output at a flat plateau where the reading does not respond to code
+  changes ("the needle doesn't move"). The sweep previously flagged `TARGET_UNREACHED` (2 A never
+  reached) plus low/high coverage and aborted. `run_current_cal()` now prunes those
+  non-responsive codes (`prune_stuck_points()`), keeps only the responsive ramp, validates
+  coverage against the span actually achieved, and treats an unreached 2 A target as expected
+  rather than a failure.
 - **DAQ HAT (ESP32-P4) USB-HS bring-up — the P4 now enumerates, streams, and auto-binds
   WinUSB on Windows.** A chain of four defects kept the high-speed measurement port
   (`303A:4001`) from working:
@@ -30,6 +38,16 @@
      cached `CONFIGFLAG_FAILEDINSTALL` from the pre-WCID firmware.)
 
 ### Added
+- **DAQ HAT (ESP32-P4) — interactive per-range reference-meter current calibration (TUI).**
+  New `tui` action `m` opens a LOW / MID / HIGH range picker. For the chosen range the P4 forces
+  that shunt, sweeps 10 output voltages, averages its own ADAQ reading per step, and prompts the
+  operator to type the series-connected reference DMM's current — in **µA on the 51 Ω (HIGH)
+  range** and mA on MID/LOW. Successive runs **accumulate** their raw points (Add vs
+  Clear+restart), so several series resistors can each cover a sub-decade (e.g. 0.1–20 µA, then
+  20–100 µA, …) and the fit is refit over the whole accumulated set. A least-squares fit of
+  (ADC volts → true amps) yields the range's zero-current offset and gain correction, which are
+  applied to `range_manager` live and persisted to NVS (`rngcal` blob, incl. the raw points,
+  loaded on boot). Setup: a series resistor + reference DMM in the DUT path, sized per sub-range.
 - **DAQ HAT — `c6logs` CLI command.** Bridges the C6 UART2 to the P4 debug console and resets
   the C6 into normal boot so its boot + runtime log streams to the operator (companion to
   `c6boot`, which forces ROM download for esptool). Exit with Ctrl-] or 30 s idle; the DDP

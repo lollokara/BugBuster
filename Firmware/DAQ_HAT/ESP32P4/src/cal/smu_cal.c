@@ -246,6 +246,203 @@ bool smu_base_offset(const smu_cal_t *c, uint8_t range, int8_t vdut_code,
 }
 
 // -----------------------------------------------------------------------------
+// Per-range current-measurement cal (interactive reference-meter cal)
+// -----------------------------------------------------------------------------
+
+static uint32_t rcal_crc(const smu_range_cal_blob_t *bl)
+{
+    const uint8_t *p = (const uint8_t *)&bl->version;
+    size_t len = sizeof(*bl) - offsetof(smu_range_cal_blob_t, version);
+    return esp_rom_crc32_le(0, p, len);
+}
+
+static esp_err_t rcal_save(smu_cal_t *c)
+{
+    c->rcal.magic   = SMU_RANGE_MAGIC;
+    c->rcal.version = SMU_RANGE_VERSION;
+    c->rcal.crc     = rcal_crc(&c->rcal);
+
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(SMU_CAL_NVS_NS, NVS_READWRITE, &h);
+    if (e != ESP_OK) return e;
+    e = nvs_set_blob(h, SMU_RANGE_NVS_KEY, &c->rcal, sizeof(c->rcal));
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e;
+}
+
+static esp_err_t rcal_load(smu_cal_t *c)
+{
+    nvs_handle_t h;
+    esp_err_t e = nvs_open(SMU_CAL_NVS_NS, NVS_READONLY, &h);
+    if (e != ESP_OK) return e;
+    size_t sz = sizeof(c->rcal);
+    e = nvs_get_blob(h, SMU_RANGE_NVS_KEY, &c->rcal, &sz);
+    nvs_close(h);
+    if (e != ESP_OK || sz != sizeof(c->rcal)) return ESP_ERR_NOT_FOUND;
+    if (c->rcal.magic != SMU_RANGE_MAGIC)      return ESP_ERR_INVALID_CRC;
+    if (c->rcal.version != SMU_RANGE_VERSION)  return ESP_ERR_INVALID_VERSION;
+    if (c->rcal.crc != rcal_crc(&c->rcal))     return ESP_ERR_INVALID_CRC;
+    c->have_rcal = (c->rcal.have[RANGE_HI] || c->rcal.have[RANGE_MID] ||
+                    c->rcal.have[RANGE_LO]);
+    return ESP_OK;
+}
+
+// Push a calibrated range into the live range_manager so it takes effect now.
+static void rcal_apply(smu_cal_t *c, uint8_t range)
+{
+    if (range >= SMU_BASE_RANGES || !c->rcal.have[range]) return;
+    daq_board_t *b = (daq_board_t *)c->board;
+    range_cal_t rc = {
+        .shunt_ohm = c->rcal.shunt_ohm[range],
+        .amp_gain  = c->rcal.amp_gain[range],
+        .offset_v  = c->rcal.offset_v[range],
+        .gain_corr = c->rcal.gain_corr[range],
+    };
+    range_manager_set_cal(&b->range, (current_range_t)range, &rc);
+}
+
+// Least-squares fit amps = slope*v_adc + intercept over the stored points.
+static bool rcal_fit(const smu_range_pt_t *pts, uint8_t n,
+                     double *slope, double *intercept)
+{
+    if (n < 2) return false;
+    double sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (uint8_t i = 0; i < n; ++i) {
+        double x = pts[i].v_adc, y = pts[i].amps;
+        sx += x; sy += y; sxx += x * x; sxy += x * y;
+    }
+    double det = (double)n * sxx - sx * sx;
+    if (fabs(det) < 1e-18) return false;       // v_adc did not vary
+    double s = ((double)n * sxy - sx * sy) / det;
+    if (fabs(s) < 1e-12) return false;         // no response (flat)
+    *slope     = s;
+    *intercept = (sy - s * sx) / (double)n;
+    return true;
+}
+
+// Refit offset/gain over the currently stored points for a range, apply to the
+// live range_manager, and update the have flag. Returns the point count on a
+// good fit, 0 if too few points, -1 if the fit is singular/flat. When the set
+// is emptied the range reverts to its nominal (uncalibrated) conversion.
+static int rcal_recompute(smu_cal_t *c, uint8_t range)
+{
+    daq_board_t *b = (daq_board_t *)c->board;
+    uint8_t n = c->rcal.npts[range];
+    double slope, intercept;
+
+    if (rcal_fit(c->rcal.pts[range], n, &slope, &intercept)) {
+        // range_manager: I = (v_adc - offset_v)/(shunt*amp_gain) * gain_corr
+        //   amps = slope*v_adc + intercept
+        //   => gain_corr = slope*shunt*amp_gain, offset_v = -intercept/slope.
+        c->rcal.gain_corr[range] = (float)(slope * (double)c->rcal.shunt_ohm[range]
+                                                 * (double)c->rcal.amp_gain[range]);
+        c->rcal.offset_v[range]  = (float)(-intercept / slope);
+        c->rcal.have[range]      = 1;
+        c->have_rcal             = true;
+        rcal_apply(c, range);
+        return (int)n;
+    }
+
+    // Not enough usable points. If the set is now empty, revert to nominal.
+    if (n == 0) {
+        c->rcal.have[range] = 0;
+        const range_cal_t *cur = range_manager_get_cal(&b->range, (current_range_t)range);
+        if (cur) {
+            range_cal_t rc = *cur;
+            rc.offset_v  = 0.0f;
+            rc.gain_corr = 1.0f;
+            range_manager_set_cal(&b->range, (current_range_t)range, &rc);
+        }
+    }
+    return (n < 2) ? 0 : -1;
+}
+
+void smu_cal_range_reset(smu_cal_t *c, uint8_t range)
+{
+    if (!c || range >= SMU_BASE_RANGES) return;
+    c->rcal.npts[range]      = 0;
+    c->rcal.offset_v[range]  = 0.0f;
+    c->rcal.gain_corr[range] = 1.0f;
+    rcal_recompute(c, range);   // n==0 -> clears have + reverts range_manager to nominal
+    rcal_save(c);
+}
+
+uint8_t smu_cal_range_count(const smu_cal_t *c, uint8_t range)
+{
+    if (!c || range >= SMU_BASE_RANGES) return 0;
+    return c->rcal.npts[range];
+}
+
+const smu_range_pt_t *smu_cal_range_points(const smu_cal_t *c, uint8_t range,
+                                           uint8_t *count_out)
+{
+    if (!c || range >= SMU_BASE_RANGES) {
+        if (count_out) *count_out = 0;
+        return NULL;
+    }
+    if (count_out) *count_out = c->rcal.npts[range];
+    return c->rcal.pts[range];
+}
+
+bool smu_cal_range_info(const smu_cal_t *c, uint8_t range, float *offset_v,
+                        float *gain_corr, float *shunt_ohm, float *amp_gain)
+{
+    if (!c || range >= SMU_BASE_RANGES) return false;
+    if (offset_v)  *offset_v  = c->rcal.offset_v[range];
+    if (gain_corr) *gain_corr = c->rcal.gain_corr[range];
+    if (shunt_ohm) *shunt_ohm = c->rcal.shunt_ohm[range];
+    if (amp_gain)  *amp_gain  = c->rcal.amp_gain[range];
+    return c->rcal.have[range] != 0;
+}
+
+int smu_cal_range_delete(smu_cal_t *c, uint8_t range, uint8_t idx)
+{
+    if (!c || range >= SMU_BASE_RANGES) return -2;
+    uint8_t n = c->rcal.npts[range];
+    if (idx >= n) return -2;
+
+    // Remove the point by shifting the tail down, then refit over the rest.
+    memmove(&c->rcal.pts[range][idx], &c->rcal.pts[range][idx + 1],
+            (size_t)(n - idx - 1) * sizeof(smu_range_pt_t));
+    c->rcal.npts[range] = n - 1;
+
+    int ret = rcal_recompute(c, range);
+    if (rcal_save(c) != ESP_OK) return -3;
+    return ret;
+}
+
+int smu_cal_range_fit(smu_cal_t *c, uint8_t range,
+                      const smu_range_pt_t *new_pts, uint8_t n_new,
+                      float shunt_ohm, float amp_gain)
+{
+    if (!c || range >= SMU_BASE_RANGES || (!new_pts && n_new)) return -2;
+
+    // Append the new points, dropping the oldest once the buffer is full so a
+    // long multi-resistor accumulation keeps the most recent coverage.
+    for (uint8_t i = 0; i < n_new; ++i) {
+        if (c->rcal.npts[range] < SMU_RANGE_CAL_MAX_PTS) {
+            c->rcal.pts[range][c->rcal.npts[range]++] = new_pts[i];
+        } else {
+            memmove(&c->rcal.pts[range][0], &c->rcal.pts[range][1],
+                    (SMU_RANGE_CAL_MAX_PTS - 1) * sizeof(smu_range_pt_t));
+            c->rcal.pts[range][SMU_RANGE_CAL_MAX_PTS - 1] = new_pts[i];
+        }
+    }
+    c->rcal.shunt_ohm[range] = shunt_ohm;
+    c->rcal.amp_gain[range]  = amp_gain;
+
+    int ret = rcal_recompute(c, range);   // 0 = too few, -1 = flat, >=2 = fitted
+
+    // Persist the accumulated points (and any updated coefficients) so the set
+    // survives across runs and reboots.
+    if (rcal_save(c) != ESP_OK) return -3;
+    return ret;
+}
+
+
+
+// -----------------------------------------------------------------------------
 // Validation
 // -----------------------------------------------------------------------------
 
@@ -287,6 +484,38 @@ static uint16_t validate_table(const smu_cal_point_t *pts, uint8_t count,
         if (minor > count / 10) flags |= SMU_CAL_FLAG_NON_MONOTONIC;
     }
     return flags;
+}
+
+// Remove calibration points the DAC could not actually address: a flat plateau
+// where the measured value is pinned at the supply's hard limit and does not
+// respond to code changes ("the needle doesn't move"). Keeps only the
+// responsive ramp — the codes that moved the needle. Points are compacted in
+// place; returns the new count.
+static uint8_t prune_stuck_points(smu_cal_point_t *pts, uint8_t count, float noise)
+{
+    if (count < 2) return count;
+
+    // Responsive span [first,last]: adjacent measurements differ by > noise.
+    int first = -1, last = -1;
+    for (int i = 1; i < count; ++i) {
+        if (fabsf(pts[i].value - pts[i - 1].value) > noise) {
+            if (first < 0) first = i - 1;   // include the knee before the move
+            last = i;
+        }
+    }
+    if (first < 0) return 0;   // never moved: nothing addressable
+
+    // Compact the responsive span, dropping interior duplicates that did not
+    // move the needle relative to the last kept point.
+    smu_cal_point_t keep[SMU_CAL_MAX_POINTS];
+    uint8_t n = 0;
+    keep[n++] = pts[first];
+    for (int i = first + 1; i <= last; ++i) {
+        if (fabsf(pts[i].value - keep[n - 1].value) > noise)
+            keep[n++] = pts[i];
+    }
+    memcpy(pts, keep, (size_t)n * sizeof(pts[0]));
+    return n;
 }
 
 // -----------------------------------------------------------------------------
@@ -473,6 +702,14 @@ static void run_current_cal(smu_cal_t *c)
         return;
     }
 
+    // Current cal sources up to the target amps, so it needs a stiff supply:
+    // require a USB-PD contract of at least 20 V / 3 A (no override).
+    if (!daq_board_pd_ok(b, 20000, 3000)) {
+        c->flags |= SMU_CAL_FLAG_NO_PD;
+        c->phase  = SMU_CAL_FAILED;
+        return;
+    }
+
     // 1) Set V_DUT = 3.0 V (formula path) and disable the DCDC.
     ds4424_set_code(&b->idac, DS4424_CH_VDUT,
                     smu_voltage_to_code(SMU_CAL_ICAL_VSET_V));
@@ -530,16 +767,42 @@ static void run_current_cal(smu_cal_t *c)
 
     smu_enable(&b->smu, false);
     range_manager_force(&b->range, RANGE_UNKNOWN);   // release override
+
+    // Drop the codes the DAC could not actually address. The onboard supply has
+    // a hard current ceiling, so the sweep legitimately pins the output at a
+    // flat plateau over a large span of codes ("the needle doesn't move"). Those
+    // points are not a calibration failure: prune them and keep only the
+    // responsive ramp. Because of the hard limit the fixed SMU_CAL_ICAL_TARGET_A
+    // may be unreachable — that is expected and no longer fails the run.
+    cnt = prune_stuck_points(c->blob.ipoints, cnt, SMU_CAL_I_NOISE_A);
     c->blob.icount = cnt;
 
-    if (!reached) c->flags |= SMU_CAL_FLAG_TARGET_UNREACHED;
+    imin = 1e30f;
+    imax = -1e30f;
+    for (int i = 0; i < cnt; ++i) {
+        if (c->blob.ipoints[i].value < imin) imin = c->blob.ipoints[i].value;
+        if (c->blob.ipoints[i].value > imax) imax = c->blob.ipoints[i].value;
+    }
+    if (cnt > 0) {
+        c->min_v = imin;
+        c->max_v = imax;
+        c->point = cnt;
+    } else {
+        imin = imax = 0.0f;
+    }
+
+    // Validate coverage only against the span the hardware could actually reach
+    // (imin..imax): the hard current limit means the 2 A target may be out of
+    // reach, which is acceptable. We still require enough responsive points, a
+    // monotonic ramp, and no large gaps.
     c->flags |= validate_table(c->blob.ipoints, cnt,
-                               /*lo_target=*/0.10f,
-                               /*hi_target=*/SMU_CAL_ICAL_TARGET_A * 0.95f,
+                               /*lo_target=*/imin,
+                               /*hi_target=*/imax,
                                /*max_gap=*/0.30f, /*min_points=*/8);
-    bool ok = !(c->flags & (SMU_CAL_FLAG_TOO_FEW_POINTS |
-                            SMU_CAL_FLAG_TARGET_UNREACHED |
+    bool ok = (cnt >= 2) &&
+              !(c->flags & (SMU_CAL_FLAG_TOO_FEW_POINTS |
                             SMU_CAL_FLAG_NON_MONOTONIC));
+
 
     if (ok) {
         c->have_ical = true;
@@ -549,8 +812,9 @@ static void run_current_cal(smu_cal_t *c)
         smu_set_cal(&b->smu, c);
         c->progress = 100;
         c->phase    = SMU_CAL_SUCCESS;
-        ESP_LOGI(TAG, "current cal OK: %u points, %.3f..%.3f A", cnt,
-                 (double)imin, (double)imax);
+        ESP_LOGI(TAG, "current cal OK: %u points, %.3f..%.3f A (target %s)", cnt,
+                 (double)imin, (double)imax,
+                 reached ? "reached" : "hard-limited");
     } else {
         c->phase = SMU_CAL_FAILED;
         ESP_LOGW(TAG, "current cal failed: flags=0x%04x, %u points", c->flags, cnt);
@@ -719,6 +983,19 @@ esp_err_t smu_cal_init(smu_cal_t *c, struct daq_board *board)
         memset(&c->base, 0, sizeof(c->base));
         c->have_base = false;
         ESP_LOGI(TAG, "no stored baseline offsets");
+    }
+
+    if (rcal_load(c) == ESP_OK) {
+        for (int r = 0; r < SMU_BASE_RANGES; ++r) {
+            if (c->rcal.have[r]) rcal_apply(c, r);
+        }
+        ESP_LOGI(TAG, "loaded per-range meter cal: HI=%u MID=%u LO=%u",
+                 c->rcal.have[RANGE_HI], c->rcal.have[RANGE_MID],
+                 c->rcal.have[RANGE_LO]);
+    } else {
+        memset(&c->rcal, 0, sizeof(c->rcal));
+        c->have_rcal = false;
+        ESP_LOGI(TAG, "no stored per-range meter cal");
     }
 
     if (xTaskCreatePinnedToCore(cal_task, "smu_cal", 8192, c, 5, &c->task, 0)

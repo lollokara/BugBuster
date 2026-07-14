@@ -23,6 +23,16 @@ static const char *TAG = "daq_hat";
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
+// True if the S3 reports a fresh USB-PD contract of at least min_mv / min_ma.
+// Gates DUT enable from the home screen (the P4 enforces the same guard).
+static bool home_pd_ok(uint16_t min_mv, uint16_t min_ma)
+{
+    ddp_diag_t dg; uint32_t age;
+    if (!ddp_get_diag(&dg, &age) || age > 5000) return false;
+    if (!(dg.valid & DDP_DIAG_V_S3PD)) return false;
+    return dg.pd_mv >= min_mv && dg.pd_ma >= min_ma;
+}
+
 // Local demo data generator. No ESP32-P4 exists yet, so synthesize voltage and
 // current that sweep across many decades to exercise the autoscaling readout.
 static void sim_data(uint32_t t_ms, float *v, float *i, uint8_t *flags)
@@ -93,7 +103,14 @@ void app_main(void)
             // so it does not also open the menu. (Inside a menu, BACK still
             // navigates back — handled by menu_update().)
             if (ev & BTN_EV_BACK) {
-                c6_config_send_source_enable(!ui_source_on());
+                bool want_on = !ui_source_on();
+                // Guard (no override): the DUT may only be enabled with a USB-PD
+                // contract of at least 9 V / 3 A. The P4 enforces this too.
+                if (want_on && !home_pd_ok(9000, 3000)) {
+                    ui_show_warning("Need USB-PD 9V/3A");
+                } else {
+                    c6_config_send_source_enable(want_on);
+                }
                 ev &= ~BTN_EV_BACK;
             }
             if (ev) {                          // any other key opens the menu

@@ -17,6 +17,9 @@ typedef struct {
     int  sample_rate_idx;   // 0..4 (10k/50k/100k/250k/1M sps)
     int  dut_current_ma;    // 100..2500, step 100
     int  dut_voltage_mv;    // 1800..20000, step 100
+    int  filter_idx;        // 0=Wideband,1=Sinc5,2=Sinc3 (FINE+COARSE ADAQs)
+    int  decim_idx;         // 0..5 (x32..x1024)
+    bool reject_5060;       // Sinc3 50/60 Hz rejection
 
     // --- DSP / FFT (P4-owned, mirrored) ---
     bool fft_enable;

@@ -74,6 +74,9 @@ typedef enum {
     DAQ_K_SAMPLE_RATE_IDX = DAQ_KEY(DAQ_GRP_ACQ, 0x03),  // enum 0..4
     DAQ_K_STREAMING       = DAQ_KEY(DAQ_GRP_ACQ, 0x04),  // bool
     DAQ_K_USB_DECIMATION  = DAQ_KEY(DAQ_GRP_ACQ, 0x05),  // u16 1..256
+    DAQ_K_FILTER          = DAQ_KEY(DAQ_GRP_ACQ, 0x06),  // enum wideband/sinc5/sinc3 (FINE+COARSE)
+    DAQ_K_DECIMATION      = DAQ_KEY(DAQ_GRP_ACQ, 0x07),  // enum x32..x1024
+    DAQ_K_REJECT_5060     = DAQ_KEY(DAQ_GRP_ACQ, 0x08),  // bool (Sinc3 50/60 Hz reject)
 
     // --- Source / SMU ---
     DAQ_K_SOURCE_ENABLE   = DAQ_KEY(DAQ_GRP_SMU, 0x01),  // bool
@@ -128,6 +131,9 @@ enum { DAQ_FFTSRC_CURRENT = 0, DAQ_FFTSRC_POWER, DAQ_FFTSRC_COUNT };
 enum { DAQ_NPX_OFF = 0, DAQ_NPX_SOLID, DAQ_NPX_STATUS, DAQ_NPX_BREATHE,
        DAQ_NPX_CHANNEL, DAQ_NPX_MODE_COUNT };
 enum { DAQ_WIFI_AP = 0, DAQ_WIFI_STA = 1, DAQ_WIFI_MODE_COUNT };
+enum { DAQ_FILT_WIDEBAND = 0, DAQ_FILT_SINC5, DAQ_FILT_SINC3, DAQ_FILT_COUNT };
+enum { DAQ_DEC_32 = 0, DAQ_DEC_64, DAQ_DEC_128, DAQ_DEC_256, DAQ_DEC_512,
+       DAQ_DEC_1024, DAQ_DEC_COUNT };
 
 // Sample-rate index -> samples per second.
 extern const uint32_t DAQ_SAMPLE_RATE_SPS[DAQ_SR_COUNT];
