@@ -8,6 +8,7 @@
 #include "daq_settings_glue.h"
 #include "diagnostics.h"
 #include "cli.h"
+#include "usb_backend.h"
 
 static const char *TAG = "daq_hat_p4";
 
@@ -38,10 +39,14 @@ void app_main(void)
     // daq_board_init() (subsystems exist) and before the fast path starts.
     daq_board_bind_settings(&s_board);
 
-    // Bring up the USB-HS measurement stream to the PC.
-    if (daq_board_usb_start(&s_board) == ESP_OK) {
-        ESP_LOGI(TAG, "USB stream ready");
-    }
+    // Bring up the inter-processor links (S3 mainboard + C6 display) BEFORE the
+    // USB-HS stream. These carry the control plane and the DDP diagnostics the
+    // C6 uses to leave "simulation mode", and they must never be gated by the
+    // USB-HS bring-up: on this board the USB-HS PHY (dedicated USB_DM/USB_DP,
+    // J5) can be actively driven/enumerated by the host while VBUS state is not
+    // monitored (see daq_board_usb_start), and if that bring-up stalls it must
+    // not prevent the S3/C6 links — and therefore live telemetry — from coming
+    // up. Ordering: S3 -> C6 -> (diagnostics) -> USB. See PowerAnalyzer §1.
 
     // Bring up the ESP32-S3 mainboard link (HAT-protocol slave). The S3 detects
     // the HAT, reads HAT_TYPE_DAQ_POWER via GET_INFO, and loads DAQ resources.
@@ -59,6 +64,15 @@ void app_main(void)
     // failure here only blanks the "ESP32-P4 Temp" row.
     if (diagnostics_init() != ESP_OK) {
         ESP_LOGW(TAG, "internal temperature sensor unavailable");
+    }
+
+    // Bring up the USB-HS measurement stream to the PC. Done AFTER the S3/C6
+    // links so a USB-HS enumeration issue can never keep the P4 from pushing
+    // DDP telemetry (which would leave the C6 stuck showing "simulation").
+    // The acquisition path below tolerates the stream not being mounted yet
+    // (frames are dropped until a host attaches — see usb_stream emit_frame).
+    if (daq_board_usb_start(&s_board) == ESP_OK) {
+        ESP_LOGI(TAG, "USB stream ready");
     }
 
     // DRDY-gated fast acquisition path (per-bus capture + fusion/DSP/USB stream).
@@ -94,5 +108,10 @@ void app_main(void)
                  (unsigned)s_board.drop_fine,
                  (unsigned)s_board.drop_coarse);
         diagnostics_push(&s_board);
+
+        // No VBUS-sense line on this board: poll the USB stack and force a
+        // virtual re-plug if the host never completed enumeration (e.g. it
+        // probed the HS port before our stack was ready). No-op when mounted.
+        usb_backend_poll();
     }
 }

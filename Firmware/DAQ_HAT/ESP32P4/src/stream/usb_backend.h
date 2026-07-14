@@ -30,6 +30,19 @@ esp_err_t usb_backend_start(usb_stream_t *stream);
 /** @brief True once the USB host has mounted the device. */
 bool usb_backend_mounted(void);
 
+/**
+ * @brief Periodic USB enumeration watchdog. Call at ~1 Hz.
+ *
+ * This board has no VBUS-sense line, so the HS PHY runs bus-powered (the D+
+ * pull-up is always asserted) and firmware cannot distinguish "no cable" from
+ * "cable present but host gave up". If the device stays unmounted for a few
+ * seconds, this forces a virtual re-plug (drop + re-assert the pull-up) so the
+ * host restarts enumeration — the software substitute for a VBUS-triggered
+ * reconnect. It is a no-op while the device is mounted and harmless when no
+ * host is attached.
+ */
+void usb_backend_poll(void);
+
 #ifdef __cplusplus
 }
 #endif

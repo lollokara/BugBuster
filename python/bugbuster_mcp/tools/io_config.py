@@ -12,6 +12,7 @@ from ..safety import (
     validate_vadj_voltage,
 )
 from .io_owner import _verify_lease_covers
+from bugbuster.pd_manager import ensure_pd_for_output, ConverterTopology
 
 log = logging.getLogger(__name__)
 
@@ -143,12 +144,17 @@ def register(mcp) -> None:
         elif rail in (1, 2):
             validate_vadj_voltage(voltage, index=rail, confirm=confirm)
             warnings = []
+            # Negotiate the minimum PD profile before touching the DCDC.
+            # VADJ1/2 are LTM8063 buck regulators — 2 V headroom required.
             try:
-                pd_warning = session.get_client().check_vadj_pd_limit(rail, voltage)
-                if pd_warning:
-                    warnings.append(pd_warning)
+                pd_v = ensure_pd_for_output(
+                    session.get_client(), target_v=voltage,
+                    topology=ConverterTopology.BUCK,
+                )
+                log.debug("set_supply_voltage: PD negotiated to %d V for %.2f V output", pd_v, voltage)
             except Exception as e:
-                log.warning("PD limit check failed before set_supply_voltage: %s", e)
+                log.warning("PD negotiation failed before set_supply_voltage: %s", e)
+                warnings.append(f"PD negotiation warning: {e}")
             hal = session.get_hal()
             hal.set_voltage(rail=rail, voltage=voltage)
             try:

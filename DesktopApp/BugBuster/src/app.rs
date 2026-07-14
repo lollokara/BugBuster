@@ -253,8 +253,16 @@ pub fn App() -> impl IntoView {
                     }
                     let kind = if daq_check_usb().await {
                         HatKind::Daq
-                    } else if fetch_hat_status().await.map(|s| s.detected).unwrap_or(false) {
-                        HatKind::La
+                    } else if let Some(status) = fetch_hat_status().await.filter(|s| s.detected) {
+                        // Distinguish HAT models by the identity byte the HAT
+                        // reports over GET_INFO (see ESP32 hat.h HAT_TYPE_*):
+                        // the RP2040 LA HAT reports 0x01, the ESP32-P4 DAQ HAT
+                        // reports 0x10. Previously any detected HAT was assumed
+                        // to be the LA HAT, so a DAQ HAT showed the LA tabs.
+                        match status.hat_type {
+                            0x10 => HatKind::Daq,
+                            _ => HatKind::La,
+                        }
                     } else {
                         HatKind::None
                     };

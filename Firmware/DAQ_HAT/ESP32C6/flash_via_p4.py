@@ -7,7 +7,7 @@ This script merges the three build artefacts into one image and streams
 it to the P4's 'c6flash' CLI command over the USB-Serial-JTAG port.
 
 Usage:
-    python flash_via_p4.py <PORT>  [BUILD_DIR]  [--full]  [--attempts N]
+    python flash_via_p4.py <PORT>  [BUILD_DIR]  [--full]  [--attempts N]  [--no-build]
 
     PORT      — P4 REPL serial port  (e.g. COM15 or /dev/ttyACM0)
     BUILD_DIR — PlatformIO build output directory
@@ -19,16 +19,21 @@ Usage:
                    retry RESUMES from the last 4 KB-aligned point the C6
                    confirmed programming, so a mid-transfer stall does not
                    re-send the whole image.
+    --no-build — Skip the PlatformIO build step and flash whatever is already
+                 in BUILD_DIR. By default the C6 firmware is rebuilt first so
+                 the flashed image is always fresh.
 
 Example:
     python flash_via_p4.py COM15 --full
     python flash_via_p4.py COM15 --full --attempts 5
+    python flash_via_p4.py COM15 --no-build
     python flash_via_p4.py /dev/ttyACM0 /path/to/esp32c6/build
 
 Requires: pyserial  (pip install pyserial)
 """
 
 import os
+import subprocess
 import sys
 import time
 
@@ -290,6 +295,27 @@ def flash_once(port: str, image: bytes, flash_offset: int, base_off: int,
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def build_c6(project_dir: str, env: str = "esp32c6") -> None:
+    """Rebuild the C6 firmware with PlatformIO so the flashed image is fresh.
+
+    Runs `pio run -e <env>` in *project_dir*. Aborts the script on any build
+    error (never flash a stale image after a failed build).
+    """
+    print("=" * 60)
+    print(f"  Building ESP32-C6 firmware  (pio run -e {env})")
+    print("=" * 60)
+    try:
+        rc = subprocess.call(["pio", "run", "-e", env], cwd=project_dir)
+    except FileNotFoundError:
+        print("ERROR: 'pio' (PlatformIO CLI) not found on PATH — cannot build.")
+        print("       Install it or re-run with --no-build to flash an existing image.")
+        sys.exit(1)
+    if rc != 0:
+        print(f"ERROR: PlatformIO build failed (exit {rc}) — not flashing.")
+        sys.exit(rc)
+    print("Build OK.\n")
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -300,6 +326,7 @@ def main() -> None:
     default_build = os.path.join(script_dir, ".pio", "build", "esp32c6")
     build_dir = default_build
     full_flash = False
+    do_build = True
     attempts = 6
     args = sys.argv[2:]
     i = 0
@@ -307,6 +334,8 @@ def main() -> None:
         arg = args[i]
         if arg == "--full":
             full_flash = True
+        elif arg == "--no-build":
+            do_build = False
         elif arg == "--attempts":
             i += 1
             attempts = max(1, int(args[i]))
@@ -320,7 +349,17 @@ def main() -> None:
     print(f"Port      : {port}")
     print(f"Build dir : {build_dir}")
     print(f"Attempts  : {attempts}")
+    print(f"Build     : {'yes' if do_build else 'skipped (--no-build)'}")
     print()
+
+    # Rebuild first so we always flash a fresh image. Only meaningful for the
+    # default build dir (a custom BUILD_DIR is assumed to be pre-built).
+    if do_build:
+        if build_dir == default_build:
+            build_c6(script_dir)
+        else:
+            print("NOTE: custom BUILD_DIR given — skipping build (use the default "
+                  "dir to auto-build, or pre-build that env yourself).\n")
 
     image, flash_offset = make_merged_image(build_dir, app_only=not full_flash)
 

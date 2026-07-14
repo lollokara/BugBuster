@@ -3,6 +3,7 @@
 #include "format.h"
 #include "config.h"
 #include "ddp_proto.h"
+#include "ddp.h"
 #include "perf.h"
 #include "theme.h"
 
@@ -25,6 +26,18 @@
 #define C_DIM     (g_theme.dim)
 #define C_MUTED   (g_theme.muted)
 #define C_HEADER  (g_theme.header)
+
+// Linear blend of two logical RGB565 colors. t=0 -> a, t=255 -> b. Used to fade
+// an accent toward the background for the soft tile glow.
+static uint16_t mix565(uint16_t a, uint16_t b, uint8_t t)
+{
+    int ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
+    int br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
+    int r = ar + ((br - ar) * t) / 255;
+    int g = ag + ((bg - ag) * t) / 255;
+    int bl = ab + ((bb - ab) * t) / 255;
+    return (uint16_t)((r << 11) | (g << 5) | bl);
+}
 
 static float   s_v = 0.0f, s_i = 0.0f;
 static uint8_t s_flags = 0;
@@ -82,6 +95,11 @@ void ui_set_data(float v, float i, uint8_t flags, uint8_t state)
     s_v = v; s_i = i; s_flags = flags; s_state = state;
 }
 
+bool ui_source_on(void)
+{
+    return (s_flags & DDP_FLAG_SRC_ON) != 0;
+}
+
 // ---- Header: Pac-Man chomping a stream of lightning bolts -------------------
 // Slim landscape top bar spanning the full width. The Pac-Man and bolts are
 // pre-rasterized sprites (see build_sprites); each frame we only redraw the
@@ -124,6 +142,35 @@ static void draw_header(uint32_t t_ms)
         pill_left = src_badge_x - 4;            // bolts stop left of the badge
     }
 
+    // Temperature indicator: highest of the two AD7415 board sensors, shown as
+    // a small readout in the header. Reserving its width here shortens the bolt
+    // travel, trading Pac-Man animation space for the temp readout.
+    char temp_s[12];
+    int  temp_x = 0, temp_w = 0;
+    bool temp_valid = false;
+    {
+        ddp_diag_t dg; uint32_t age;
+        if (ddp_get_diag(&dg, &age) && age < 3000) {
+            int16_t t0 = dg.t_board0_c10, t1 = dg.t_board1_c10;
+            bool v0 = (dg.valid & DDP_DIAG_V_BOARD0) && t0 != DDP_DIAG_TEMP_NA;
+            bool v1 = (dg.valid & DDP_DIAG_V_BOARD1) && t1 != DDP_DIAG_TEMP_NA;
+            int16_t tmax = 0;
+            if (v0 && v1)  { tmax = (t0 > t1) ? t0 : t1; temp_valid = true; }
+            else if (v0)   { tmax = t0; temp_valid = true; }
+            else if (v1)   { tmax = t1; temp_valid = true; }
+            if (temp_valid) {
+                int t = tmax, neg = (t < 0); if (neg) t = -t;
+                snprintf(temp_s, sizeof(temp_s), "%s%d.%dC", neg ? "-" : "",
+                         t / 10, t % 10);
+            }
+        }
+    }
+    if (temp_valid) {
+        temp_w = gfx_text_w(temp_s, 1);
+        temp_x = pill_left - temp_w - 6;
+        pill_left = temp_x - 4;                 // bolts stop left of the readout
+    }
+
     // Bolts scroll left toward the mouth, then get "eaten" (alpha fade). They
     // spawn just left of the status pill so they never draw over it.
     const int N = 5;
@@ -155,6 +202,9 @@ static void draw_header(uint32_t t_ms)
     }
 
     // Status pill (drawn last so it's always on top of the bolt stream).
+    if (temp_valid) {
+        gfx_text(temp_x, 6, temp_s, 1, C_DIM);
+    }
     if (src_on) {
         gfx_fill_circle(src_badge_x, 9, 2.2f, C_GREEN);
         gfx_text(src_badge_x + 5, 6, "SRC", 1, C_GREEN);
@@ -164,39 +214,70 @@ static void draw_header(uint32_t t_ms)
 }
 
 // ---- A single hero value card ----------------------------------------------
+// glow: draw a soft accent ring outside the tile (supply on).
+// show_off: render "OFF" instead of the value (supply off).
 static void draw_card(int x, int y, int w, int h, const char *label,
-                      uint16_t accent, float value, char base_unit, bool over)
+                      uint16_t accent, float value, char base_unit, bool over,
+                      bool glow, bool show_off)
 {
     if (over) accent = C_ROSE;
+
+    // Optional outer glow ring, brightest next to the tile and fading outward.
+    if (glow) {
+        uint16_t g_in  = mix565(accent, C_BG0, 110);
+        uint16_t g_out = mix565(accent, C_BG0, 185);
+        gfx_round_rect_border(x - 2, y - 2, w + 4, h + 4, 10, g_out);
+        gfx_round_rect_border(x - 1, y - 1, w + 2, h + 2, 9,  g_in);
+    }
 
     gfx_round_rect(x, y, w, h, 8, C_CARD_B);
     gfx_round_rect_border(x, y, w, h, 8, C_BORDER);
 
-    fmt_value_t fv;
-    fmt_si(value, base_unit, &fv);
-
     char num[14];
-    if (fv.negative) snprintf(num, sizeof(num), "-%s", fv.mantissa);
-    else             snprintf(num, sizeof(num), "%s", fv.mantissa);
-
-    const char *us = over ? "OVER" : fv.unit;
+    const char *us;
+    uint16_t num_color;
+    if (show_off) {
+        // No baked-font glyphs for letters, so "OFF" uses the 5x7 font below.
+        us = "";
+        num_color = C_MUTED;
+        num[0] = '\0';
+    } else {
+        fmt_value_t fv;
+        fmt_si(value, base_unit, &fv);
+        if (fv.negative) snprintf(num, sizeof(num), "-%s", fv.mantissa);
+        else             snprintf(num, sizeof(num), "%s", fv.mantissa);
+        us = over ? "OVER" : fv.unit;
+        num_color = over ? C_ROSE : C_TEXT;
+    }
 
     // Top row: label on the left, unit on the right — keeps them clear of the
     // big number entirely.
     gfx_text(x + 8, y + 5, label, 1, accent);
-    int uw = gfx_text_w(us, 1);
-    gfx_text(x + w - uw - 8, y + 5, us, 1, over ? C_ROSE : C_DIM);
+    if (us[0]) {
+        int uw = gfx_text_w(us, 1);
+        gfx_text(x + w - uw - 8, y + 5, us, 1, over ? C_ROSE : C_DIM);
+    }
     gfx_hline(x + 8, y + 14, w - 16, C_BORDER);   // thin divider under the row
 
-    // Big baked-font number fills the band below the divider, centered.
-    int numw = gfx_jbtext_w(num);
-    int numh = gfx_jbtext_h();
     int band_top = y + 16;
     int band_bot = y + h - 3;
-    int nx = x + (w - numw) / 2;
-    if (nx < x + 3) nx = x + 3;                    // never clip the left edge
-    int ny = band_top + ((band_bot - band_top) - numh) / 2;
-    gfx_jbtext(nx, ny, num, over ? C_ROSE : C_TEXT);
+    if (show_off) {
+        // "OFF" rendered with the scalable 5x7 font, centered in the band.
+        const int sz = 3;
+        int tw = gfx_text_w("OFF", sz);
+        int th = 7 * sz;
+        int ox = x + (w - tw) / 2;
+        int oy = band_top + ((band_bot - band_top) - th) / 2;
+        gfx_text(ox, oy, "OFF", sz, num_color);
+    } else {
+        // Big baked-font number fills the band below the divider, centered.
+        int numw = gfx_jbtext_w(num);
+        int numh = gfx_jbtext_h();
+        int nx = x + (w - numw) / 2;
+        if (nx < x + 3) nx = x + 3;                // never clip the left edge
+        int ny = band_top + ((band_bot - band_top) - numh) / 2;
+        gfx_jbtext(nx, ny, num, num_color);
+    }
 }
 
 void ui_render(uint32_t t_ms)
@@ -216,11 +297,18 @@ void ui_render(uint32_t t_ms)
     int x0 = 4;
     int x1 = x0 + cardw + gap;
 
+    bool src_on = (s_flags & DDP_FLAG_SRC_ON) != 0;
+    // Only blank the current readout to "OFF" for real (LIVE) data; the demo
+    // sweep never asserts SRC_ON and should keep animating.
+    bool cur_off = !src_on && s_state == DDP_STATE_LIVE;
+
     draw_card(x0, top, cardw, cardh, "VOLTAGE", C_BLUE,
-              s_v, 'V', (s_flags & DDP_FLAG_V_OVERRANGE) != 0);
+              s_v, 'V', (s_flags & DDP_FLAG_V_OVERRANGE) != 0,
+              src_on, false);
     PERF_MARK("cardV");
 
     draw_card(x1, top, cardw, cardh, "CURRENT", C_GREEN,
-              s_i, 'A', (s_flags & DDP_FLAG_I_OVERRANGE) != 0);
+              s_i, 'A', (s_flags & DDP_FLAG_I_OVERRANGE) != 0,
+              src_on, cur_off);
     PERF_MARK("cardI");
 }

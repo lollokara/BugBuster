@@ -302,6 +302,81 @@ def register(mcp) -> None:
         return bb.hat_set_rail_enable(rail_id, enable)
 
     @mcp.tool()
+    def hat_set_rail_voltage(
+        rail_id: int,
+        voltage_mv: int,
+        confirm: bool = False,
+    ) -> dict:
+        """
+        Set the voltage of a HAT v2 adjustable rail (VADJ3 or VADJ4).
+
+        Automatically negotiates the appropriate USB-C PD profile *before*
+        programming the DC-DC converter, ensuring the supply is always set
+        first.
+
+        VADJ3 and VADJ4 are LTM8083 buck-boost regulators fed from the
+        USB-C PD bus.  They can step up (boost) or step down (buck) relative
+        to the PD input voltage, and can produce up to ~30 V.  For targets
+        above 20 V the manager uses the 20 V PD profile and lets the
+        converter boost.  For lower targets it selects the smallest PD
+        profile that keeps the converter in a comfortable buck-down region.
+
+        Parameters:
+        - rail_id: HAT rail ID. 1 = VADJ3, 2 = VADJ4.
+        - voltage_mv: Target voltage in millivolts (e.g. 12000 for 12 V,
+          27000 for 27 V).  Maximum is ~30000 mV; minimum ~1200 mV.
+        - confirm: Must be True when voltage_mv > 15000 mV (15 V).
+
+        Returns: pd_voltage_v, rail_id, voltage_mv, success, rail_status.
+        """
+        from bugbuster.pd_manager import ensure_pd_for_output, ConverterTopology
+
+        if rail_id not in (1, 2):
+            raise ValueError(
+                f"Invalid rail_id {rail_id}. Valid values: 1 (VADJ3), 2 (VADJ4)."
+            )
+        if voltage_mv <= 0:
+            raise ValueError(f"voltage_mv must be positive, got {voltage_mv}.")
+        if voltage_mv > 15_000 and not confirm:
+            raise ValueError(
+                f"Requested {voltage_mv} mV ({voltage_mv / 1000:.2f} V) exceeds 15 V. "
+                "Set confirm=True to acknowledge the high-voltage operation."
+            )
+
+        bb = session.get_client()
+        require_hat(bb)
+
+        # Preflight check
+        preflight = build_hat_rail_preflight(
+            rail_id,
+            target_voltage_mv=voltage_mv,
+            rail_status=bb.hat_get_rail_status(),
+            cal_status=bb.hat_calibrate_status(),
+            caps=bb.hat_get_caps(),
+        )
+        if not preflight["ok"]:
+            raise RuntimeError(
+                "HAT rail preflight failed: " + "; ".join(preflight["reasons"])
+            )
+
+        target_v = voltage_mv / 1000.0
+
+        # Negotiate the minimum PD profile before touching the DCDC.
+        # VADJ3/4 are buck-boost — headroom logic differs from pure-buck rails.
+        pd_v = ensure_pd_for_output(bb, target_v=target_v, topology=ConverterTopology.BUCK_BOOST)
+
+        # Program the rail voltage after the supply is ready.
+        rail_status = bb.hat_set_rail_voltage(rail_id, voltage_mv)
+
+        return {
+            "success":    True,
+            "rail_id":    rail_id,
+            "voltage_mv": voltage_mv,
+            "pd_voltage_v": pd_v,
+            "rail_status": rail_status,
+        }
+
+    @mcp.tool()
     def hat_set_led_state(
         led_id: int,
         color_code: int,

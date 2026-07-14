@@ -87,12 +87,13 @@ void app_main(void)
 
         if (!in_menu) {
             // --- Main readout screen ---
-            // OK long-press (BACK) on the main screen enables the DUT supply.
-            // The supply is a P4-local resource, so request it over DDP and
-            // consume the event so it does not also open the menu. (Inside a
-            // menu, BACK still navigates back — handled by menu_update().)
+            // OK long-press (BACK) on the main screen TOGGLES the DUT supply:
+            // turn it on when off, and off when already on. The supply is a
+            // P4-local resource, so request it over DDP and consume the event
+            // so it does not also open the menu. (Inside a menu, BACK still
+            // navigates back — handled by menu_update().)
             if (ev & BTN_EV_BACK) {
-                c6_config_send_source_enable(true);
+                c6_config_send_source_enable(!ui_source_on());
                 ev &= ~BTN_EV_BACK;
             }
             if (ev) {                          // any other key opens the menu

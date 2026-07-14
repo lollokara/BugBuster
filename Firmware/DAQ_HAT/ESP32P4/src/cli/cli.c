@@ -2382,6 +2382,108 @@ static int cmd_c6boot(int argc, char **argv)
 }
 
 // ---------------------------------------------------------------------------
+// c6logs — bridge the C6 UART to this console, then reset the C6 into NORMAL
+// boot so its boot + runtime log streams here. Unlike c6boot (which forces ROM
+// download mode for esptool), this leaves the C6 running its firmware.
+//
+// The UART2 driver is installed BEFORE the reset so the first ROM boot bytes
+// are not missed. P4 ESP_LOG is suppressed for the duration so only the C6's
+// output shows. Exit with Ctrl-] or after 30 s idle; the DDP display link is
+// restored on exit. (The C6 must emit on its UART0 for anything to appear — the
+// ROM + 2nd-stage bootloader always do; app logs only if the C6 console is on
+// UART rather than its own USB-Serial-JTAG.)
+static int cmd_c6logs(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    daq_board_t *b = s_board;
+
+    // 1. Release UART2 from the DDP master and clear the pin routing so the
+    //    fresh uart_set_pin() below cleanly owns the pads.
+    ESP_LOGI(TAG, "c6logs: stopping DDP master");
+    ddp_master_deinit(&b->ddp);
+    gpio_reset_pin((gpio_num_t)DAQ_UART_TX_PIN);
+    gpio_reset_pin((gpio_num_t)DAQ_UART_RX_PIN);
+
+    // 2. C6 straps for NORMAL boot: BOOT(GPIO9)=1, BOOT_EN(GPIO8)=1. Configure
+    //    BOOT before RST so the strap is stable at the reset edge the C6 samples.
+    //    c6_gpio_init_output() leaves RST as an OUTPUT (held low = in reset)
+    //    until we pulse it in step 5.
+    c6_gpio_init_output();
+    gpio_set_level((gpio_num_t)C6_BOOT_PIN,    1);  // GPIO9=1 → normal (run) boot
+    gpio_set_level((gpio_num_t)C6_BOOT_EN_PIN, 1);  // GPIO8=1 → not UART/SDIO DL
+
+    // 3. Install the UART2 driver at the C6 log baud (115200) BEFORE resetting,
+    //    so we capture the very first ROM boot bytes. Boost TX drive to 40 mA.
+    gpio_set_drive_capability((gpio_num_t)DAQ_UART_TX_PIN, GPIO_DRIVE_CAP_3);
+    const uart_config_t uart_cfg = {
+        .baud_rate  = 115200,
+        .data_bits  = UART_DATA_8_BITS,
+        .parity     = UART_PARITY_DISABLE,
+        .stop_bits  = UART_STOP_BITS_1,
+        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    ESP_ERROR_CHECK(uart_driver_install((uart_port_t)DAQ_UART_PORT,
+                                        4096, 0, 0, NULL, 0));
+    ESP_ERROR_CHECK(uart_param_config((uart_port_t)DAQ_UART_PORT, &uart_cfg));
+    ESP_ERROR_CHECK(uart_set_pin((uart_port_t)DAQ_UART_PORT,
+                                 DAQ_UART_TX_PIN, DAQ_UART_RX_PIN,
+                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+
+    printf("\nc6logs: UART2 bridged (115200 8N1). Resetting C6 into normal boot...\n");
+    printf("Press Ctrl-] to exit (auto-exits after 30 s idle).\n\n");
+    fflush(stdout);
+
+    // 4. Suppress P4 ESP_LOG so only the C6's output reaches the console.
+    vprintf_like_t prev_log = esp_log_set_vprintf(null_vprintf);
+
+    // 5. Pulse RST now that the bridge is listening → C6 boots and logs.
+    gpio_set_direction(C6_RST_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(C6_RST_PIN, 0);            // hold in reset
+    vTaskDelay(pdMS_TO_TICKS(50));
+    uart_flush_input((uart_port_t)DAQ_UART_PORT);
+    gpio_set_level(C6_RST_PIN, 1);            // release → normal boot
+
+    // 6. Transparent passthrough: C6 UART2 -> console, console -> C6 UART2.
+    uint32_t last_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    const uint32_t IDLE_TIMEOUT_MS = 30000;
+    for (;;) {
+        bool traffic = false;
+
+        uint8_t ch;
+        if (usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(5)) == 1) {
+            if (ch == 0x1D) break;            // Ctrl-] = manual exit
+            uart_write_bytes((uart_port_t)DAQ_UART_PORT, (const char *)&ch, 1);
+            traffic = true;
+        }
+
+        uint8_t rxbuf[128];
+        int rn = uart_read_bytes((uart_port_t)DAQ_UART_PORT, rxbuf,
+                                  sizeof(rxbuf), pdMS_TO_TICKS(2));
+        if (rn > 0) {
+            usb_serial_jtag_write_bytes(rxbuf, (size_t)rn, pdMS_TO_TICKS(20));
+            traffic = true;
+        }
+
+        if (traffic) {
+            last_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        } else if (((uint32_t)(esp_timer_get_time() / 1000) - last_ms) >= IDLE_TIMEOUT_MS) {
+            printf("\nc6logs: idle timeout (30 s). Exiting.\n");
+            break;
+        }
+    }
+
+    // 7. Restore logs, tear down the bridge UART, restart the DDP display link.
+    esp_log_set_vprintf(prev_log);
+    uart_driver_delete((uart_port_t)DAQ_UART_PORT);
+    esp_err_t err = ddp_master_init(&b->ddp);
+    if (err == ESP_OK) err = ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+    c6_rst_drive_high();   // never leave RST floating
+    printf("c6logs: exited; DDP master restarted: %s\n", esp_err_to_name(err));
+    return (err == ESP_OK) ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
 // Diagnose the C6 RST/BOOT GPIO control and SDIO bus in one shot.
 //
 // c6diag gpio   — toggle RST and BOOT, readback levels, 2-second LOW pulse
@@ -2612,10 +2714,17 @@ esp_err_t daq_cli_start(daq_board_t *board)
     repl_cfg.task_priority   = 15;   // > consumer (12), < capture (20, core 1)
     repl_cfg.task_stack_size = 8192;
 
+#if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
     esp_console_dev_usb_serial_jtag_config_t hw_cfg =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
-
     esp_err_t err = esp_console_new_repl_usb_serial_jtag(&hw_cfg, &repl_cfg, &repl);
+#else
+    // UART console (e.g. the temporary GPIO-UART0 debug routing): run the REPL
+    // on the configured console UART instead of the USB-Serial-JTAG so the build
+    // matches whichever console is selected in sdkconfig.
+    esp_console_dev_uart_config_t hw_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    esp_err_t err = esp_console_new_repl_uart(&hw_cfg, &repl_cfg, &repl);
+#endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "REPL init failed: %s", esp_err_to_name(err));
         return err;
@@ -2653,6 +2762,7 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("cal",     "Calibration (scriptable): cal <status|v|i|base|clroff>", cmd_cal);
     reg("c6reset", "Pulse C6 RST (normal restart)", cmd_c6reset);
     reg("c6boot",  "Enter C6 ROM download mode + bridge UART2 to console for esptool", cmd_c6boot);
+    reg("c6logs",  "Bridge C6 UART2 to console + reset C6 into normal boot (view its log)", cmd_c6logs);
     reg("c6flash", "Flash C6 via staged binary: c6flash <bytes>  (use flash_via_p4.py)", cmd_c6flash);
     reg("c6diag",  "GPIO/SDIO diagnostics: c6diag <gpio|sdio>", cmd_c6diag);
 

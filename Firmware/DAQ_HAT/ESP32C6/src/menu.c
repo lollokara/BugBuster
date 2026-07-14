@@ -709,6 +709,41 @@ static void draw_chevron(int x, int y, uint16_t color)
     gfx_thick_line(x, y + 8, x + 4, y + 4, 1.4f, color);
 }
 
+// Device health bubbles for the root Settings title strip (mirrors the home
+// screen). Green = the device is reporting and within limits, red = missing/
+// stale telemetry or an over-temperature reading. Derived from the latest DDP
+// diagnostics snapshot pushed by the P4.
+static void draw_status_bubbles(void)
+{
+    ddp_diag_t dg; uint32_t age;
+    bool live = ddp_get_diag(&dg, &age) && age < 3000;
+    const int16_t T_HOT = 900;   // 90.0 C over-temp threshold
+    const int16_t T_NA  = (int16_t)DDP_DIAG_TEMP_NA;
+
+    const char *lbl[5] = { "S3", "P4", "A1", "A2", "A3" };
+    bool ok[5];
+    // S3 is remote: it must be relaying fresh telemetry to count as good.
+    ok[0] = live && (dg.valid & DDP_DIAG_V_S3) &&
+            (dg.t_s3_c10 == T_NA || dg.t_s3_c10 < T_HOT);
+    // P4 is the sender: a live frame implies it is alive; flag red only when
+    // its own die sensor reads over-temp.
+    ok[1] = live && !((dg.valid & DDP_DIAG_V_P4TEMP) &&
+                      dg.t_p4_c10 != T_NA && dg.t_p4_c10 >= T_HOT);
+    // ADAQ die temps read NA while streaming (that is normal, not a fault), so
+    // treat NA as good and only flag a genuine over-temp reading.
+    int16_t  at[3] = { dg.t_adaq0_c10, dg.t_adaq1_c10, dg.t_adaq2_c10 };
+    uint16_t av[3] = { DDP_DIAG_V_ADAQ0, DDP_DIAG_V_ADAQ1, DDP_DIAG_V_ADAQ2 };
+    for (int i = 0; i < 3; i++)
+        ok[2 + i] = live && !((dg.valid & av[i]) && at[i] != T_NA && at[i] >= T_HOT);
+
+    int x = 84;
+    for (int i = 0; i < 5; i++) {
+        gfx_fill_circle(x + 2, 8, 2.2f, ok[i] ? g_theme.green : g_theme.rose);
+        gfx_text(x + 6, 5, lbl[i], 1, g_theme.dim);
+        x += 6 + gfx_text_w(lbl[i], 1) + 7;
+    }
+}
+
 static void render_menu(void)
 {
     const menu_t *m = cur_menu();
@@ -768,6 +803,9 @@ static void render_menu(void)
         snprintf(pos, sizeof(pos), "%d/%d", *cur_sel() + 1, n);
         gfx_text(DISP_WIDTH - gfx_text_w(pos, 1) - 6, 5, pos, 1, g_theme.muted);
     }
+
+    // Root Settings screen: show the device health bubbles in the title strip.
+    if (m == &m_root) draw_status_bubbles();
 }
 
 static void render_editor(void)

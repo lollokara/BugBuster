@@ -1143,18 +1143,28 @@ void hat_daq_push_telemetry(void)
     }
 
     // Supply rails from the background self-test monitor (cached; -1 when the
-    // monitor is disabled or blocked by the Channel-D interlock).
+    // monitor is disabled or blocked by the Channel-D interlock). The monitor
+    // is off by default, so when its cache is unavailable we measure the three
+    // rails on demand here — this is the only rail source the C6 Diagnostics
+    // menu has. selftest_measure_supply() routes through U23 and safely returns
+    // -1 when a client owns the mux path, so the on-demand read never disturbs
+    // an active measurement.
     const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
+    float v1, v2, vl;
     if (sv && sv->available) {
-        float v1 = sv->voltage[SELFTEST_RAIL_VADJ1];
-        float v2 = sv->voltage[SELFTEST_RAIL_VADJ2];
-        float vl = sv->voltage[SELFTEST_RAIL_3V3_ADJ];
-        if (v1 >= 0.0f || v2 >= 0.0f || vl >= 0.0f) {
-            tlm.vadj1_mv  = (v1 >= 0.0f) ? (uint16_t)lroundf(v1 * 1000.0f) : 0;
-            tlm.vadj2_mv  = (v2 >= 0.0f) ? (uint16_t)lroundf(v2 * 1000.0f) : 0;
-            tlm.vlogic_mv = (vl >= 0.0f) ? (uint16_t)lroundf(vl * 1000.0f) : 0;
-            tlm.flags |= HAT_DAQ_TLM_F_RAILS;
-        }
+        v1 = sv->voltage[SELFTEST_RAIL_VADJ1];
+        v2 = sv->voltage[SELFTEST_RAIL_VADJ2];
+        vl = sv->voltage[SELFTEST_RAIL_3V3_ADJ];
+    } else {
+        v1 = selftest_measure_supply(SELFTEST_RAIL_VADJ1, true);
+        v2 = selftest_measure_supply(SELFTEST_RAIL_VADJ2, true);
+        vl = selftest_measure_supply(SELFTEST_RAIL_3V3_ADJ, true);
+    }
+    if (v1 >= 0.0f || v2 >= 0.0f || vl >= 0.0f) {
+        tlm.vadj1_mv  = (v1 >= 0.0f) ? (uint16_t)lroundf(v1 * 1000.0f) : 0;
+        tlm.vadj2_mv  = (v2 >= 0.0f) ? (uint16_t)lroundf(v2 * 1000.0f) : 0;
+        tlm.vlogic_mv = (vl >= 0.0f) ? (uint16_t)lroundf(vl * 1000.0f) : 0;
+        tlm.flags |= HAT_DAQ_TLM_F_RAILS;
     }
 
     uint8_t rsp[4]; uint8_t rsp_len = 0;
