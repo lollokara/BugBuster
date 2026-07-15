@@ -4,6 +4,8 @@
 
 #include "daq_board.h"
 #include <string.h>
+#include "freertos/queue.h"
+#include "usb_proto.h"
 #include "esp_rom_sys.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -338,6 +340,57 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out)
 // USB streaming integration
 // -----------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Deferred control task — processes heavy USB commands off the TinyUSB stack.
+// CMD_SET_RATE calls daq_board_stop_fast (which has a vTaskDelay) + 3× SPI
+// writes + daq_board_run_fast; running that chain inline on the 4096-byte
+// TinyUSB task overflows its stack (Stack protection fault, MCAUSE=0x1b).
+// ---------------------------------------------------------------------------
+typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE } ctrl_msg_type_t;
+
+typedef struct {
+    ctrl_msg_type_t type;
+    union {
+        usb_cmd_rate_t   rate;
+        usb_cmd_source_t source;
+    };
+} ctrl_msg_t;
+
+static void daq_ctrl_task(void *arg)
+{
+    daq_board_t *b = (daq_board_t *)arg;
+    ctrl_msg_t msg;
+    while (1) {
+        if (xQueueReceive(b->ctrl_queue, &msg, portMAX_DELAY) != pdTRUE) continue;
+        switch (msg.type) {
+
+            case CTRL_MSG_SET_RATE: {
+                const usb_cmd_rate_t *c = &msg.rate;
+                // ADAQ hardware ODR (current_sps, voltage_sps) is applied
+                // exclusively by the BBP settings path:
+                //   desktop daq_cfg_set_enum → S3 link → apply_sample_rate
+                //                           → daq_board_stop_fast/run_fast
+                // Re-applying the same stop/run here races with that path and
+                // double-frees the PSRAM ring buffers, causing "one batch then
+                // nothing" after the first CMD_START.
+                // Only the USB stream decimation is safe to update here; it is
+                // not covered by BBP and requires no SPI bus access.
+                if (c->decimation >= 1) {
+                    b->wave_decim = c->decimation;
+                    b->wave_count = 0;
+                }
+                break;
+            }
+
+            case CTRL_MSG_SET_SOURCE: {
+                const usb_cmd_source_t *c = &msg.source;
+                daq_board_set_source(b, c->vdut, c->ilimit, c->enable != 0);
+                break;
+            }
+        }
+    }
+}
+
 // Control commands from the PC. Bound to b->usb via usb_stream_set_cmd_cb.
 static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
                             uint16_t len, void *user)
@@ -346,9 +399,12 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
     switch (cmd) {
         case USB_CMD_START:
             usb_stream_set_streaming(&b->usb, true);
+            ESP_LOGI(TAG, "CMD_START: streaming on (mounted=%d, fast=%d)",
+                     usb_backend_mounted(), b->fast_running);
             break;
         case USB_CMD_STOP:
             usb_stream_set_streaming(&b->usb, false);
+            ESP_LOGI(TAG, "CMD_STOP: streaming off");
             usb_stream_flush_waveform(&b->usb);
             break;
         case USB_CMD_RESET_ENERGY:
@@ -378,9 +434,12 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
             }
             break;
         case USB_CMD_SET_SOURCE:
-            if (len >= sizeof(usb_cmd_source_t)) {
-                const usb_cmd_source_t *c = (const usb_cmd_source_t *)payload;
-                daq_board_set_source(b, c->vdut, c->ilimit, c->enable != 0);
+            // Deferred to ctrl task — SMU I2C writes must not run on the
+            // 4096-byte TinyUSB stack.
+            if (len >= sizeof(usb_cmd_source_t) && b->ctrl_queue) {
+                ctrl_msg_t msg = { .type = CTRL_MSG_SET_SOURCE };
+                memcpy(&msg.source, payload, sizeof(usb_cmd_source_t));
+                xQueueSend(b->ctrl_queue, &msg, 0); // non-blocking; drop if queue full
             }
             break;
         case USB_CMD_ARM:
@@ -389,14 +448,41 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
                 usb_stream_set_arm(&b->usb, c->armed != 0, c->pre_samples);
             }
             break;
+        case USB_CMD_SET_RATE:
+            // Deferred to ctrl task: stop_fast has vTaskDelay + SPI writes +
+            // run_fast, which overflows the 4096-byte TinyUSB task stack
+            // (Stack protection fault, MCAUSE=0x1b, Core 0 panic).
+            if (len >= sizeof(usb_cmd_rate_t) && b->ctrl_queue) {
+                ctrl_msg_t msg = { .type = CTRL_MSG_SET_RATE };
+                memcpy(&msg.rate, payload, sizeof(usb_cmd_rate_t));
+                xQueueSend(b->ctrl_queue, &msg, 0); // non-blocking; drop if queue full
+            }
+            break;
         default:
-            // SET_RATE / FFT_CONFIG / SET_SOURCE handled in later phases.
             break;
     }
 }
 
 esp_err_t daq_board_usb_start(daq_board_t *b)
 {
+    // Create the deferred control queue and task BEFORE starting TinyUSB so
+    // the queue exists as soon as the first USB command could arrive.
+    if (b->ctrl_queue == NULL) {
+        b->ctrl_queue = xQueueCreate(4, sizeof(ctrl_msg_t));
+        if (b->ctrl_queue == NULL) {
+            ESP_LOGE(TAG, "ctrl_queue create failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (b->ctrl_task == NULL) {
+        BaseType_t ok = xTaskCreatePinnedToCore(
+            daq_ctrl_task, "daq_ctrl", 4096, b,
+            /*prio=*/8, &b->ctrl_task, /*core=*/0);
+        if (ok != pdPASS) {
+            ESP_LOGE(TAG, "daq_ctrl_task create failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
     usb_stream_set_cmd_cb(&b->usb, usb_cmd_handler, b);
     esp_err_t err = usb_backend_start(&b->usb);
     b->usb_ok = (err == ESP_OK);
@@ -432,6 +518,16 @@ esp_err_t daq_board_stream_step(daq_board_t *b, fusion_output_t *out)
 
 esp_err_t daq_board_stream_summary(daq_board_t *b)
 {
+    // Summary frames (Stats/Energy/Status/FFT) go through the same vendor bulk-IN
+    // TX FIFO as waveform frames (8192 bytes). When not streaming, no host is
+    // reading the FIFO, so summary frames accumulate unread. By the time the user
+    // starts a capture the FIFO is full (~8 s of summary at 10 Hz) and the first
+    // waveform frames (4118 bytes each) are dropped immediately because only 16
+    // bytes are available. Gate all summary output on streaming to keep the FIFO
+    // empty when idle and ready for waveform bursts when streaming starts.
+    if (!b->usb.streaming) {
+        return ESP_OK;
+    }
     usb_stream_flush_waveform(&b->usb);
     usb_stream_send_stats(&b->usb, &b->dsp);
     usb_stream_send_energy(&b->usb, &b->dsp);

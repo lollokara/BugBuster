@@ -93,6 +93,12 @@ static esp_err_t emit_frame(usb_stream_t *s, usb_rec_type_t type,
     if (s->transport.writable &&
         s->transport.writable(s->transport.ctx) < total) {
         s->dropped_frames++;
+        if (s->dropped_frames <= 5 || s->dropped_frames % 1000 == 0) {
+            ESP_LOGW(TAG, "frame drop #%lu: need=%lu avail=%lu",
+                     (unsigned long)s->dropped_frames,
+                     (unsigned long)total,
+                     (unsigned long)s->transport.writable(s->transport.ctx));
+        }
         return ESP_ERR_NO_MEM;
     }
     uint32_t wrote = s->transport.write(f, total, s->transport.ctx);

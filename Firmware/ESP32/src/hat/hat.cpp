@@ -160,23 +160,32 @@ static uint8_t hat_recv_frame(uint8_t *payload, uint8_t *payload_len, uint32_t t
     size_t pos = 0;
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
 
-    // 1. SYNC search: read byte-by-byte until SYNC found or timeout
+    // 1. SYNC search: block the task for the full remaining window until a byte
+    //    arrives, instead of polling at 1 ms granularity.  uart_read_bytes with
+    //    a non-zero ticks_to_wait already uses the UART ring-buffer semaphore
+    //    (filled by the UART ISR), so this is effectively interrupt-driven: the
+    //    FreeRTOS scheduler can run other tasks while the HAT prepares its
+    //    response, and returns the instant a byte is available.
     while (true) {
         TickType_t now = xTaskGetTickCount();
         if (now >= deadline) {
             ESP_LOGD(TAG, "RX timeout: no SYNC (%" PRIu64 " us)", esp_timer_get_time());
             return 0;
         }
+        TickType_t remaining = deadline - now;
         uint8_t b;
-        if (uart_read_bytes(HAT_UART_NUM, &b, 1, 1) == 1) {
-            if (b == HAT_FRAME_SYNC) {
-                buf[pos++] = b;
-                ESP_LOGV(TAG, "RX SYNC (0x%02X) @ %" PRIu64 " us", b, esp_timer_get_time());
-                break;
-            } else {
-                ESP_LOGV(TAG, "RX junk (0x%02X) @ %" PRIu64 " us", b, esp_timer_get_time());
-            }
+        if (uart_read_bytes(HAT_UART_NUM, &b, 1, remaining) != 1) {
+            ESP_LOGD(TAG, "RX timeout: no SYNC (%" PRIu64 " us)", esp_timer_get_time());
+            return 0;
         }
+        if (b == HAT_FRAME_SYNC) {
+            buf[pos++] = b;
+            ESP_LOGV(TAG, "RX SYNC (0x%02X) @ %" PRIu64 " us", b, esp_timer_get_time());
+            break;
+        }
+        // Non-SYNC byte — loop immediately; the task will sleep again on the
+        // next uart_read_bytes call until the next byte arrives.
+        ESP_LOGV(TAG, "RX junk (0x%02X) @ %" PRIu64 " us", b, esp_timer_get_time());
     }
 
     // 2. Header chunk: read LEN + CMD (2 bytes)

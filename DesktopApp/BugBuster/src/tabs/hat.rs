@@ -128,7 +128,10 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     });
 
-    // ── 1 s status poll ───────────────────────────────────────────────────────
+    // ── 3 s status poll ────────────────────────────────────────────────────────
+    // Reduced from 1 s to 3 s: each cycle issues two BBP commands (hat_get_status
+    // + hat_get_rail_status) that share the single-client CDC0 link with the
+    // overview poll and the connection manager status poll.
     let alive_poll = alive.clone();
     Effect::new(move |_| {
         let alive = alive_poll.clone();
@@ -148,7 +151,7 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     }
                 });
             },
-            Duration::from_secs(1),
+            Duration::from_secs(3),
         )
         .ok();
         on_cleanup(move || {

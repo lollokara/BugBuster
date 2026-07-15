@@ -415,26 +415,14 @@ pub fn App() -> impl IntoView {
         closure.forget();
     });
 
-    // Scan for devices
+    // Scan for devices (results stream in via device-found events)
     let scan = move |_: ev::MouseEvent| {
+        // Clear stale entries so each manual rescan starts fresh.
+        set_devices.set(Vec::new());
         set_scanning.set(true);
         spawn_local(async move {
-            let result = try_invoke("discover_devices", JsValue::NULL).await;
-            if let Some(devs) =
-                result.and_then(|r| serde_wasm_bindgen::from_value::<Vec<DiscoveredDevice>>(r).ok())
-            {
-                set_devices.set(devs);
-            }
+            try_invoke("discover_devices", JsValue::NULL).await;
             set_scanning.set(false);
-            set_scan_completed.set(true);
-            if let Some(window) = web_sys::window() {
-                let update_fn = js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
-                if update_fn.is_function() {
-                    let _ = update_fn
-                        .unchecked_into::<js_sys::Function>()
-                        .call1(&window, &true.into());
-                }
-            }
         });
     };
 
@@ -622,15 +610,32 @@ pub fn App() -> impl IntoView {
         closure.forget();
     });
 
-    // Auto-scan
+    // Listen for streaming device discoveries: USB watcher + active scan both
+    // emit this event, so the list updates incrementally without waiting for
+    // the full scan to finish.
     spawn_local(async move {
-        slp(2000).await;
-        let result = try_invoke("discover_devices", JsValue::NULL).await;
-        if let Some(devs) =
-            result.and_then(|r| serde_wasm_bindgen::from_value::<Vec<DiscoveredDevice>>(r).ok())
-        {
-            set_devices.set(devs);
-        }
+        let closure = Closure::new(move |event: JsValue| {
+            if let Ok(evt) =
+                serde_wasm_bindgen::from_value::<TauriEvent<DiscoveredDevice>>(event)
+            {
+                let new_dev = evt.payload;
+                set_devices.update(|devs| {
+                    if !devs.iter().any(|d| d.id == new_dev.id) {
+                        devs.push(new_dev);
+                    }
+                });
+            }
+        });
+        listen("device-found", &closure).await;
+        // INTENTIONAL: app-lifetime listener — do not cleanup
+        closure.forget();
+    });
+
+    // Auto-scan: open the connection panel immediately, trigger the background
+    // scan, and let device-found events populate the list as ports are probed.
+    spawn_local(async move {
+        slp(500).await;
+        // Show the panel right away — no need to wait for results.
         set_scan_completed.set(true);
         if let Some(window) = web_sys::window() {
             let update_fn = js_sys::Reflect::get(&window, &"updateScanStatus".into()).unwrap();
@@ -640,6 +645,10 @@ pub fn App() -> impl IntoView {
                     .call1(&window, &true.into());
             }
         }
+        // Kick off the scan — results arrive via device-found events.
+        set_scanning.set(true);
+        try_invoke("discover_devices", JsValue::NULL).await;
+        set_scanning.set(false);
     });
 
     view! {
@@ -740,7 +749,7 @@ pub fn App() -> impl IntoView {
                         set_active_tab.set("daq".to_string());
                         spawn_local(async move {
                             daq_connect(true).await;
-                            daq_stream_start(3, 1).await;
+                            daq_stream_start(3, 1, 1).await;
                         });
                     })
                 />

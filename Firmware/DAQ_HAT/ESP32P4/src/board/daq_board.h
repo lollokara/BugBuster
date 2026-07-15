@@ -25,6 +25,7 @@
 #include "power_dsp.h"
 #include "multires.h"
 #include "spectrum.h"
+#include "freertos/queue.h"
 #include "usb_stream.h"
 #include "smu.h"
 #include "smu_cal.h"
@@ -77,6 +78,12 @@ typedef struct daq_board {
     uint8_t                 dsp_count;    // running DSP-tail counter
     uint32_t                drop_fine;    // paired-stream resync drops (diag)
     uint32_t                drop_coarse;
+
+    // Control command queue: heavy USB commands (SET_RATE, SET_SOURCE) are
+    // posted here by the TinyUSB callback and executed by ctrl_task so the
+    // 4 kB TinyUSB stack is never burdened with stop/SPI/start sequences.
+    QueueHandle_t           ctrl_queue;
+    TaskHandle_t            ctrl_task;
 } daq_board_t;
 
 /**

@@ -143,12 +143,17 @@ impl DaqTransport for DaqUsbConnection {
             if !ready.is_empty() {
                 return Ok(ready);
             }
+            // 400 ms: short enough that stop_workers()'s 1-second join can
+            // reliably collect the old ingest_loop before daq_stream_start
+            // resets running=true (a 5-second timeout left zombie loops that
+            // never exited, causing two loops to fight over the transport mutex
+            // and starving the new stream of data after the first batch).
             let completion = rt
                 .block_on(tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    std::time::Duration::from_millis(400),
                     iface.bulk_in(DAQ_EP_IN, RequestBuffer::new(16384)),
                 ))
-                .map_err(|_| anyhow!("DAQ USB read timed out (5 s)"))?;
+                .map_err(|_| anyhow!("DAQ USB read timed out"))?;
             let data = completion
                 .into_result()
                 .map_err(|e| anyhow!("DAQ bulk IN failed: {}", e))?;
@@ -160,18 +165,48 @@ impl DaqTransport for DaqUsbConnection {
     }
 
     fn send(&mut self, cmd_type: u8, payload: &[u8]) -> Result<()> {
-        let iface = self
-            .interface
-            .as_ref()
-            .ok_or_else(|| anyhow!("DAQ USB not connected"))?
-            .clone();
         let frame = daq_proto::encode_command(self.out_seq, cmd_type, payload);
         self.out_seq = self.out_seq.wrapping_add(1);
         let rt = tokio::runtime::Handle::current();
-        let completion = rt.block_on(iface.bulk_out(DAQ_EP_OUT, frame));
-        completion
-            .into_result()
-            .map_err(|e| anyhow!("DAQ bulk OUT failed: {}", e))?;
+
+        // First attempt — use the current interface handle.
+        let first_err = {
+            let iface = self
+                .interface
+                .as_ref()
+                .ok_or_else(|| anyhow!("DAQ USB not connected"))?
+                .clone();
+            let c = tokio::task::block_in_place(|| rt.block_on(iface.bulk_out(DAQ_EP_OUT, frame.clone())));
+            c.into_result().err()
+        };
+
+        if let Some(e) = first_err {
+            // On Windows, WinUsb_WritePipe returns ERROR_BAD_COMMAND (22) when the
+            // WinUSB pipe handle itself is invalid — WinUsb_ResetPipe (clear_halt)
+            // fails with the same error in that state.  The only recovery is a full
+            // USB re-enumerate: drop the old interface, rediscover the P4 device and
+            // claim a fresh handle, then retry the write.
+            log::warn!(
+                "DAQ bulk OUT failed ({}), re-enumerating USB and retrying...",
+                e
+            );
+            self.interface = None;
+            self.connected = false;
+            self.rx.clear();
+            self.connect().map_err(|re| {
+                anyhow!("DAQ bulk OUT failed ({}) and USB re-enumerate failed: {}", e, re)
+            })?;
+
+            // Retry with the fresh interface.
+            let iface2 = self
+                .interface
+                .as_ref()
+                .ok_or_else(|| anyhow!("DAQ USB not connected after re-enumerate"))?
+                .clone();
+            let c2 = tokio::task::block_in_place(|| rt.block_on(iface2.bulk_out(DAQ_EP_OUT, frame)));
+            c2.into_result()
+                .map_err(|e2| anyhow!("DAQ bulk OUT failed after re-enumerate: {}", e2))?;
+        }
         Ok(())
     }
 }

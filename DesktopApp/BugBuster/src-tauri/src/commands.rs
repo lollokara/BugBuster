@@ -46,8 +46,9 @@ fn validate_quicksetup_slot(slot: u8) -> CmdResult<()> {
 #[tauri::command]
 pub async fn discover_devices(
     mgr: State<'_, ConnectionManager>,
+    app: tauri::AppHandle,
 ) -> CmdResult<Vec<DiscoveredDevice>> {
-    Ok(mgr.discover().await)
+    Ok(mgr.discover_streaming(&app).await)
 }
 
 #[tauri::command]

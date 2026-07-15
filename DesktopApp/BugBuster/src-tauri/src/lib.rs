@@ -27,6 +27,7 @@ mod usb_transport;
 use connection_manager::ConnectionManager;
 use daq_commands::DaqState;
 use la_commands::LaState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,6 +43,13 @@ pub fn run() {
         .manage(ConnectionManager::new())
         .manage(LaState::new())
         .manage(DaqState::new())
+        .setup(|app| {
+            // Start the background USB watcher that polls Espressif ports every
+            // 2 s and emits "device-found" events as boards come online.
+            let mgr = app.state::<ConnectionManager>().inner().clone();
+            mgr.start_usb_watcher(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // Discovery & Connection
             commands::js_log,

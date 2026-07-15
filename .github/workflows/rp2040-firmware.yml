@@ -46,6 +46,8 @@ jobs:
           # Initialize only the submodules required for the RP2040 firmware build
           git submodule update --init --depth 1 Firmware/RP2040/lib/pico-sdk || true
           git submodule update --init --depth 1 Firmware/RP2040/lib/debugprobe || true
+          # Initialize nested FreeRTOS submodule inside debugprobe (provides RP2040 port)
+          git -C Firmware/RP2040/lib/debugprobe submodule update --init --depth 1 freertos || true
           git submodule update --init --depth 1 Firmware/RP2040/lib/tinyusb || true
 
       - name: Setup Python

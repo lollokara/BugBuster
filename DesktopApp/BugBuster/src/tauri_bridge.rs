@@ -1854,6 +1854,7 @@ pub struct DaqStreamRuntimeStatus {
     pub total_samples: u64,
     pub frame_count: u64,
     pub sample_rate_hz: u32,
+    pub voltage_sps_hz: u32,
     pub overflow: bool,
     pub ingest_sps: f64,
     pub max_samples: u64,
@@ -1982,15 +1983,17 @@ pub async fn daq_disconnect() {
     try_invoke("daq_disconnect", JsValue::NULL).await;
 }
 
-pub async fn daq_stream_start(sample_rate_idx: u8, decimation: u16) {
+pub async fn daq_stream_start(sample_rate_idx: u8, voltage_rate_idx: u8, decimation: u16) {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Args {
         sample_rate_idx: u8,
+        voltage_rate_idx: u8,
         decimation: u16,
     }
     let args = serde_wasm_bindgen::to_value(&Args {
         sample_rate_idx,
+        voltage_rate_idx,
         decimation,
     })
     .unwrap();
@@ -2177,19 +2180,31 @@ pub async fn daq_set_range_lock(range: u8) {
     try_invoke("daq_set_range_lock", args).await;
 }
 
-pub async fn daq_set_rate(sample_rate_idx: u8, decimation: u16) {
+pub async fn daq_set_rate(sample_rate_idx: u8, voltage_rate_idx: u8, decimation: u16) {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Args {
         sample_rate_idx: u8,
+        voltage_rate_idx: u8,
         decimation: u16,
     }
     let args = serde_wasm_bindgen::to_value(&Args {
         sample_rate_idx,
+        voltage_rate_idx,
         decimation,
     })
     .unwrap();
     try_invoke("daq_set_rate", args).await;
+}
+
+/// Set a DAQ hardware ENUM config key (e.g. filter, decimation) via the BBP config plane.
+/// Returns true on success, false if the command timed out (BBP link busy).
+pub async fn daq_cfg_set_enum(key: u16, idx: u8) -> bool {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { key: u16, type_tag: u8, value: Vec<u8> }
+    let args = serde_wasm_bindgen::to_value(&Args { key, type_tag: 9, value: vec![idx] }).unwrap();
+    try_invoke("daq_cfg_set", args).await.is_some()
 }
 
 pub async fn daq_set_source(vdut_mv: u32, ilimit_ma: u32, enable: bool) {

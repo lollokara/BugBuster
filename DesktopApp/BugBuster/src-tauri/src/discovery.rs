@@ -19,7 +19,21 @@ fn probe_bbp(port_name: &str) -> Option<(u8, u8, u8, u8)> {
         .open()
         .ok()?;
 
-    // Drain any pending data
+    // If the device was left in BBP mode from a previous session (app killed
+    // before CMD_DISCONNECT was sent), the firmware's COBS framer may be mid-
+    // frame (s_rxLen > 0). In that state the firmware's re-handshake guard
+    // (s_rxLen == 0 check) prevents the magic bytes from being recognised.
+    // Sending a proper COBS-encoded CMD_DISCONNECT frame fixes this: the
+    // firmware dispatches it via dispatchMessage → BBP_CMD_DISCONNECT, exits
+    // binary mode cleanly, and restores the CLI regardless of framer state.
+    // In normal CLI mode the frame bytes are just garbage that gets echoed /
+    // discarded; the subsequent handshake magic is then handled by the CLI.
+    let disconnect_frame = bbp::Message::build_frame(1, bbp::CMD_DISCONNECT, &[]);
+    let _ = port.write_all(&disconnect_frame);
+    let _ = port.flush();
+    std::thread::sleep(Duration::from_millis(150));
+
+    // Drain any pending data (CLI restoration message, prompt, etc.)
     let mut drain = [0u8; 512];
     loop {
         match port.read(&mut drain) {
@@ -78,31 +92,25 @@ fn probe_bbp(port_name: &str) -> Option<(u8, u8, u8, u8)> {
     None
 }
 
-/// Enumerate USB serial ports, probe for BugBuster, return only verified CLI ports.
-pub fn discover_usb() -> Vec<DiscoveredDevice> {
-    let mut devices = Vec::new();
-
+/// Return (port_name, serial_number) for all Espressif USB candidates without probing.
+/// Used by both the active scan and the background USB watcher.
+pub fn espressif_port_candidates() -> Vec<(String, Option<String>)> {
     let ports = match serialport::available_ports() {
-        Ok(ports) => ports,
+        Ok(p) => p,
         Err(e) => {
             log::warn!("Failed to enumerate serial ports: {}", e);
-            return devices;
+            return Vec::new();
         }
     };
-
-    // Collect candidate ports, filtering platform-specific duplicates
-    let candidates: Vec<_> = ports
+    ports
         .into_iter()
         .filter(|port| {
-            // macOS: skip tty.* duplicates (cu.* and tty.* are the same device)
             #[cfg(target_os = "macos")]
             if port.port_name.contains("/tty.") {
                 return false;
             }
-
             match &port.port_type {
                 serialport::SerialPortType::UsbPort(usb) => {
-                    // Skip RP2040 BugBuster HAT CDC (used for LA streaming, not BBP)
                     if usb.vid == 0x2E8A && usb.pid == 0x000C {
                         return false;
                     }
@@ -112,53 +120,63 @@ pub fn discover_usb() -> Vec<DiscoveredDevice> {
                             ml.contains("espressif") || ml.contains("bugbuster")
                         })
                 }
-                // macOS: CDC devices may appear as generic types
                 #[cfg(target_os = "macos")]
                 _ => port.port_name.contains("usbmodem"),
-                // Linux: ttyACM devices are CDC/ACM
                 #[cfg(target_os = "linux")]
                 _ => port.port_name.contains("ttyACM"),
-                // Windows: all COM ports with USB info are candidates
                 #[cfg(target_os = "windows")]
-                _ => false, // Only match on UsbPort type
+                _ => false,
                 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
                 _ => false,
             }
         })
-        .collect();
+        .map(|p| {
+            let sn = match &p.port_type {
+                serialport::SerialPortType::UsbPort(usb) => usb.serial_number.clone(),
+                _ => None,
+            };
+            (p.port_name, sn)
+        })
+        .collect()
+}
 
+/// Probe a single port by name. Returns a DiscoveredDevice if it is a BugBuster CLI port.
+/// Used by the background USB watcher to confirm newly-appeared ports.
+pub fn probe_usb_port(port_name: &str, serial_number: Option<String>) -> Option<DiscoveredDevice> {
+    probe_bbp(port_name).map(|(_, fw_maj, fw_min, fw_pat)| DiscoveredDevice {
+        id: format!("usb:{}", port_name),
+        name: format!("BugBuster (fw {}.{}.{})", fw_maj, fw_min, fw_pat),
+        transport: "usb".to_string(),
+        address: port_name.to_string(),
+        serial_number,
+    })
+}
+
+/// Like discover_usb but calls emit_fn immediately for each confirmed device
+/// so results can be streamed to the UI as they arrive.
+pub fn discover_usb_streaming(emit_fn: impl Fn(DiscoveredDevice)) -> Vec<DiscoveredDevice> {
+    let candidates = espressif_port_candidates();
     log::info!("Found {} USB candidates, probing...", candidates.len());
-
-    for port in &candidates {
-        log::info!("Probing {}...", port.port_name);
-        match probe_bbp(&port.port_name) {
-            Some((proto, fw_maj, fw_min, fw_pat)) => {
-                log::info!(
-                    "  ✓ BugBuster detected: proto v{}, fw v{}.{}.{}",
-                    proto,
-                    fw_maj,
-                    fw_min,
-                    fw_pat
-                );
-                let serial_number = match &port.port_type {
-                    serialport::SerialPortType::UsbPort(usb) => usb.serial_number.clone(),
-                    _ => None,
-                };
-                devices.push(DiscoveredDevice {
-                    id: format!("usb:{}", port.port_name),
-                    name: format!("BugBuster (fw {}.{}.{})", fw_maj, fw_min, fw_pat),
-                    transport: "usb".to_string(),
-                    address: port.port_name.clone(),
-                    serial_number,
-                });
+    let mut devices = Vec::new();
+    for (port_name, serial_number) in candidates {
+        log::info!("Probing {}...", port_name);
+        match probe_usb_port(&port_name, serial_number) {
+            Some(dev) => {
+                log::info!("  ✓ BugBuster detected: {}", dev.name);
+                emit_fn(dev.clone());
+                devices.push(dev);
             }
             None => {
                 log::info!("  ✗ Not a BugBuster CLI port");
             }
         }
     }
-
     devices
+}
+
+/// Enumerate USB serial ports, probe for BugBuster, return only verified CLI ports.
+pub fn discover_usb() -> Vec<DiscoveredDevice> {
+    discover_usb_streaming(|_| {})
 }
 
 /// Get local IP addresses to derive subnet scan ranges.
@@ -214,15 +232,15 @@ async fn probe_http(client: &reqwest::Client, addr: &str) -> Option<DiscoveredDe
     })
 }
 
-/// Scan known network addresses for BugBuster HTTP API.
-/// Checks the AP address (192.168.4.1) plus scans local subnets.
-pub async fn discover_http() -> Vec<DiscoveredDevice> {
+/// Like discover_http but calls emit_fn immediately for each found device.
+pub async fn discover_http_streaming(
+    emit_fn: impl Fn(DiscoveredDevice) + Send,
+) -> Vec<DiscoveredDevice> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(800))
         .build()
         .unwrap();
 
-    // Build candidate list: AP address + full local subnet scans
     let mut candidates = vec!["http://192.168.4.1".to_string()];
     for subnet in get_local_subnets() {
         for host in 1..=254u8 {
@@ -235,22 +253,27 @@ pub async fn discover_http() -> Vec<DiscoveredDevice> {
 
     log::info!("HTTP discovery: scanning {} addresses...", candidates.len());
 
-    // Probe in parallel batches of 50 for speed
     let mut devices = Vec::new();
     for chunk in candidates.chunks(50) {
         let futs: Vec<_> = chunk.iter().map(|addr| probe_http(&client, addr)).collect();
         let results = futures::future::join_all(futs).await;
         for dev in results.into_iter().flatten() {
             log::info!("  ✓ Found BugBuster at {}", dev.address);
+            emit_fn(dev.clone());
             devices.push(dev);
         }
-        // Stop early if we found one (no need to scan the rest)
         if !devices.is_empty() {
             break;
         }
     }
 
     devices
+}
+
+/// Scan known network addresses for BugBuster HTTP API.
+/// Checks the AP address (192.168.4.1) plus scans local subnets.
+pub async fn discover_http() -> Vec<DiscoveredDevice> {
+    discover_http_streaming(|_| {}).await
 }
 
 /// Discover all available devices (USB probe + HTTP scan).

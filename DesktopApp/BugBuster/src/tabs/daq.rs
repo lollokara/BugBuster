@@ -172,8 +172,11 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let trig_open = RwSignal::new(false);
 
     // ---- Acquisition / source settings -------------------------------------
-    let sample_rate_idx = RwSignal::new(3u8);
-    let decimation = RwSignal::new(1u16);
+    let sample_rate_idx = RwSignal::new(3u8);    // 250 kSPS default
+    let voltage_rate_idx = RwSignal::new(1u8);   // 50 kSPS default (voltage ADC)
+    let decimation = RwSignal::new(1u16);        // USB decimation 1..256
+    let hw_filter_idx = RwSignal::new(0u8);      // 0=Wideband 1=Sinc5 2=Sinc3
+    let hw_decim_idx = RwSignal::new(3u8);       // 0=×32 .. 5=×1024 (default ×256)
     let range_lock_idx = RwSignal::new(0u8); // 0 = Auto, 1..3 = HI/MID/LO+1
     let vdut_mv = RwSignal::new(3300u32);
     let ilimit_ma = RwSignal::new(500u32);
@@ -588,8 +591,15 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     });
 
     // ---- Control actions ----------------------------------------------------
+    // DAQ_K_SAMPLE_RATE_IDX key = DAQ_KEY(GRP_ACQ=0x01, idx=0x03) = 0x0103.
+    // CMD_SET_RATE (0x82) is currently unimplemented in the P4 firmware; the
+    // only working path to change the ADAQ hardware ODR is via this BBP config
+    // key which triggers apply_sample_rate() on the P4.
+    const DAQ_K_SAMPLE_RATE_IDX: u16 = 0x0103;
+
     let start_stream = move |_| {
         let idx = sample_rate_idx.get_untracked();
+        let vidx = voltage_rate_idx.get_untracked();
         let dec = decimation.get_untracked();
         // Fresh capture — view the whole thing as it grows.
         autofocus.set(-2);
@@ -599,7 +609,13 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
         view_start.set(0);
         view_end.set(0);
         spawn_local(async move {
-            daq_stream_start(idx, dec).await;
+            // Do NOT call daq_cfg_set_enum here. That BBP call triggers
+            // apply_sample_rate → daq_board_stop_fast (170ms!) on the P4
+            // BEFORE streaming starts, racing with USB CMD_START. Users who
+            // need a specific ODR should use the Rate buttons (apply_rate)
+            // which safely reconfigure hardware while the stream is idle.
+            // The P4 boots with bind_settings ODR already applied.
+            daq_stream_start(idx, vidx, dec).await;
         });
     };
     let stop_stream = move |_| {
@@ -616,25 +632,29 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
         );
         spawn_local(async move {
             if en {
-                // Guard (no override): the DUT output requires a USB-PD contract
-                // of at least 9 V / 3 A. The firmware enforces the same.
-                let pd = fetch_usbpd_status().await;
-                let ok = pd
-                    .as_ref()
-                    .map(|s| s.attached && s.voltage_v >= 9.0 && s.current_a >= 3.0)
-                    .unwrap_or(false);
-                if !ok {
-                    let (vv, aa) = pd
-                        .as_ref()
-                        .map(|s| (s.voltage_v, s.current_a))
-                        .unwrap_or((0.0, 0.0));
-                    pd_warn.set(format!(
-                        "Blocked: DUT enable needs USB-PD \u{2265} 9 V / 3 A (have {:.1} V / {:.1} A)",
-                        vv, aa
-                    ));
-                    source_enable.set(false);
-                    return;
+                // Only block if we have a definitive PD status that shows
+                // insufficient power. If the BBP call times out (pd = None),
+                // pass the command to the firmware — it enforces the same PD
+                // requirement and will suppress the output if needed.
+                if let Some(pd) = fetch_usbpd_status().await {
+                    let ok = pd.attached && pd.voltage_v >= 9.0 && pd.current_a >= 3.0;
+                    if !ok {
+                        let msg = if !pd.present {
+                            "\u{26a0} Blocked: USB-PD controller (HUSB238) not detected on I2C".to_string()
+                        } else if !pd.attached {
+                            "\u{26a0} Blocked: No USB-PD source connected \u{2014} plug in a USB-C PD adapter (\u{2265} 9 V / 3 A)".to_string()
+                        } else {
+                            format!(
+                                "\u{26a0} Blocked: USB-PD source too weak ({:.1} V / {:.1} A) \u{2014} need \u{2265} 9 V / 3 A",
+                                pd.voltage_v, pd.current_a
+                            )
+                        };
+                        pd_warn.set(msg);
+                        source_enable.set(false);
+                        return;
+                    }
                 }
+                // BBP timed out (None) — let the firmware decide.
             }
             pd_warn.set(String::new());
             daq_set_source(v, il, en).await;
@@ -643,17 +663,29 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let apply_range = move || {
         let idx = range_lock_idx.get_untracked();
         let range = if idx == 0 { 0xFF } else { idx - 1 };
+        let label = ["Auto", "HI \u{b5}A", "MID mA", "LO A"].get(idx as usize).copied().unwrap_or("Auto");
         spawn_local(async move {
             daq_set_range_lock(range).await;
+            show_toast(&format!("Range lock: {}", label), "ok");
         });
     };
     let apply_rate = move || {
-        let (idx, dec) = (
+        let (idx, vidx, dec) = (
             sample_rate_idx.get_untracked(),
+            voltage_rate_idx.get_untracked(),
             decimation.get_untracked(),
         );
+        let label = ["10k", "50k", "100k", "250k", "1M"].get(idx as usize).copied().unwrap_or("?");
         spawn_local(async move {
-            daq_set_rate(idx, dec).await;
+            // Set hardware sample rate via BBP (the only working path on P4).
+            let cfg_ok = daq_cfg_set_enum(DAQ_K_SAMPLE_RATE_IDX, idx).await;
+            // Also send CMD_SET_RATE for future firmware compatibility.
+            daq_set_rate(idx, vidx, dec).await;
+            if cfg_ok {
+                show_toast(&format!("Rate set: {} SPS (restart stream to apply)", label), "ok");
+            } else {
+                show_toast("Rate: USB command sent; BBP config unavailable — retry", "err");
+            }
         });
     };
     let apply_fft = move || {
@@ -1006,7 +1038,9 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                 <Show when=move || settings_open.get()>
                     <div class="daq-settings" style="width:332px;overflow-y:auto;background:#0f172a;border-radius:8px;padding:12px;font-size:13px;">
                         <SettingsPanel
-                            sample_rate_idx=sample_rate_idx decimation=decimation
+                            sample_rate_idx=sample_rate_idx voltage_rate_idx=voltage_rate_idx
+                            decimation=decimation hw_filter_idx=hw_filter_idx hw_decim_idx=hw_decim_idx
+                            status=status
                             range_lock_idx=range_lock_idx smooth_window=smooth_window filter_type=filter_type
                             raw_filter=raw_filter
                             vdut_mv=vdut_mv ilimit_ma=ilimit_ma source_enable=source_enable
@@ -1623,7 +1657,11 @@ fn FftPanel(
 #[allow(clippy::too_many_arguments)]
 fn SettingsPanel(
     sample_rate_idx: RwSignal<u8>,
+    voltage_rate_idx: RwSignal<u8>,
     decimation: RwSignal<u16>,
+    hw_filter_idx: RwSignal<u8>,
+    hw_decim_idx: RwSignal<u8>,
+    status: RwSignal<Option<DaqStreamRuntimeStatus>>,
     range_lock_idx: RwSignal<u8>,
     smooth_window: RwSignal<u32>,
     filter_type: RwSignal<u8>,
@@ -1643,6 +1681,11 @@ fn SettingsPanel(
     let ar_plus = apply_rate.clone();
     let range_labels = ["Auto", "HI µA", "MID mA", "LO A"];
     let filter_labels = [("Off", 0u8), ("Avg", 1), ("EMA", 2), ("Median", 3), ("HPF", 4)];
+    // Hardware filter / decimation key constants (DAQ_K_FILTER=0x0106, DAQ_K_DECIMATION=0x0107)
+    const HW_FILT_KEY: u16 = 0x0106;
+    const HW_DECIM_KEY: u16 = 0x0107;
+    let hw_filter_labels = [("Wideband", 0u8), ("Sinc5", 1), ("Sinc3", 2)];
+    let hw_decim_labels  = [("x32", 0u8), ("x64", 1), ("x128", 2), ("x256", 3), ("x512", 4), ("x1024", 5)];
     view! {
         <div class="daq-set">
             <div class="daq-panel-head" style="color:#38bdf8;">
@@ -1651,7 +1694,7 @@ fn SettingsPanel(
             <section class="daq-card">
                 <h3>"Acquisition"</h3>
                 <div class="daq-field col">
-                    <span>"Sample rate"</span>
+                    <span>"Current Rate (FINE/COARSE)"</span>
                     <div class="daq-seg neon-blue">
                         {SAMPLE_RATE_SHORT.iter().enumerate().map(|(i, l)| {
                             let i = i as u8;
@@ -1663,14 +1706,105 @@ fn SettingsPanel(
                         }).collect::<Vec<_>>()}
                     </div>
                 </div>
+                <div class="daq-field col">
+                    <span>"Voltage Rate"</span>
+                    <div class="daq-seg neon-blue">
+                        {SAMPLE_RATE_SHORT.iter().enumerate().map(|(i, l)| {
+                            let i = i as u8;
+                            let ar = apply_rate.clone();
+                            view!{
+                                <button class:active=move || voltage_rate_idx.get() == i
+                                    on:click=move |_| { voltage_rate_idx.set(i); ar(); }>{*l}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
                 <div class="daq-field">
-                    <span>"Decimation " <em style="color:#64748b;font-style:normal;">"(every Nth)"</em></span>
+                    <span>"USB Decim " <em style="color:#64748b;font-style:normal;">"(every Nth)"</em></span>
                     <div class="daq-step">
-                        <button on:click=move |_| { decimation.update(|d| *d = (*d / 2).max(1)); ar_minus(); }>"−"</button>
+                        <button on:click=move |_| { decimation.update(|d| *d = (*d / 2).max(1)); ar_minus(); }>"\u{2212}"</button>
                         <input class="daq-num" type="number" min="1" max="256"
                             prop:value=move || decimation.get().to_string()
                             on:change=move |ev| { decimation.set(event_target_value(&ev).parse().unwrap_or(1).clamp(1, 256)); ar_input(); } />
                         <button on:click=move |_| { decimation.update(|d| *d = (*d * 2).min(256)); ar_plus(); }>"+"</button>
+                    </div>
+                </div>
+                <div class="daq-field col">
+                    <span>"HW Filter (ADC)"</span>
+                    <div class="daq-seg neon-amber">
+                        {hw_filter_labels.iter().map(|(l, t)| {
+                            let t = *t;
+                            let lbl = l.to_string();
+                            view!{
+                                <button class:active=move || hw_filter_idx.get() == t
+                                    on:click=move |_| {
+                                        hw_filter_idx.set(t);
+                                        let lbl2 = lbl.clone();
+                                        spawn_local(async move {
+                                            if daq_cfg_set_enum(HW_FILT_KEY, t).await {
+                                                show_toast(&format!("HW filter: {} (restart stream to apply)", lbl2), "ok");
+                                            } else {
+                                                show_toast("HW filter: send failed — BBP busy, retry", "err");
+                                            }
+                                        });
+                                    }>{*l}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+                <div class="daq-field col">
+                    <span>"HW Decimation (ADC)"</span>
+                    <div class="daq-seg neon-amber">
+                        {hw_decim_labels.iter().map(|(l, t)| {
+                            let t = *t;
+                            let lbl = l.to_string();
+                            view!{
+                                <button class:active=move || hw_decim_idx.get() == t
+                                    on:click=move |_| {
+                                        hw_decim_idx.set(t);
+                                        let lbl2 = lbl.clone();
+                                        spawn_local(async move {
+                                            if daq_cfg_set_enum(HW_DECIM_KEY, t).await {
+                                                show_toast(&format!("HW decim: {} (restart stream to apply)", lbl2), "ok");
+                                            } else {
+                                                show_toast("HW decim: send failed — BBP busy, retry", "err");
+                                            }
+                                        });
+                                    }>{*l}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
+                <div class="daq-field" style="flex-direction:column;gap:4px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
+                        <span style="color:#64748b;font-size:11px;">"ODR \u{2022} Current (FINE/COARSE)"</span>
+                        <strong style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#38bdf8;">
+                            {move || {
+                                // sample_rate_hz comes from the device stream (WaveformRecord.sample_rate)
+                                // which reports the actual ADAQ hardware ODR = fMOD / decimation_factor.
+                                // e.g. Wideband + x1024: 8.192 MHz / 1024 = 8 kSPS
+                                let s = status.get();
+                                let hz = s.as_ref().map(|s| s.sample_rate_hz).unwrap_or(0);
+                                if hz == 0 { "\u{2014}".to_string() } else if hz >= 1_000_000 { format!("{} MSPS", hz / 1_000_000) }
+                                else if hz >= 1_000 { format!("{} kSPS", hz / 1_000) } else { format!("{} SPS", hz) }
+                            }}
+                        </strong>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
+                        <span style="color:#64748b;font-size:11px;">"ODR \u{2022} Voltage (requested)"</span>
+                        <strong style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#94a3b8;">
+                            {move || {
+                                // voltage_sps_hz reflects the requested rate; actual voltage ODR
+                                // is the same as current ODR since all ADAQ channels share one clock.
+                                let s = status.get();
+                                let hz = s.as_ref().map(|s| s.voltage_sps_hz).unwrap_or(0);
+                                if hz == 0 { "\u{2014}".to_string() } else if hz >= 1_000_000 { format!("{} MSPS", hz / 1_000_000) }
+                                else if hz >= 1_000 { format!("{} kSPS", hz / 1_000) } else { format!("{} SPS", hz) }
+                            }}
+                        </strong>
+                    </div>
+                    <div style="font-size:10px;color:#475569;line-height:1.3;">
+                        "\u{2139} Actual ODR = fMOD / HW Decimation. Use \u{2018}Current Rate\u{2019} to auto-select filter+decimation."
                     </div>
                 </div>
                 <div class="daq-field col">
@@ -1689,7 +1823,7 @@ fn SettingsPanel(
             </section>
 
             <section class="daq-card">
-                <h3>"Filters"</h3>
+                <h3>"Display Filters"</h3>
                 <div class="daq-field col">
                     <span>"Type"</span>
                     <div class="daq-seg neon-cyan">

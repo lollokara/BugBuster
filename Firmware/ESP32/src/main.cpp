@@ -58,6 +58,26 @@ static AD74416H device(spiDriver, PIN_RESET);
 static StaticTask_t s_mainLoopTcb;
 static StackType_t s_mainLoopStack[8192 / sizeof(StackType_t)];
 
+// Dedicated task for CLI / BBP processing, pinned to Core 1.
+// Separating this from the main loop (Core 0) means a blocking HAT relay in
+// bbpProcess() no longer starves hat_poll(), telemetry, or selftest on Core 0,
+// and vice versa.  Both tasks compete for s_hat_mutex when they need UART
+// access, serialising HAT traffic correctly.
+static StaticTask_t s_bbpTaskTcb;
+static StackType_t  s_bbpTaskStack[8192 / sizeof(StackType_t)];
+
+static void bbpCliTask(void *)
+{
+    for (;;) {
+        // cliProcess() handles both CLI and BBP modes.
+        cliProcess();
+        // Yield briefly to avoid starving lower-priority tasks when there is
+        // nothing to do.  In BBP mode the UART ISR will wake this task almost
+        // immediately when a new frame arrives.
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
 static void log_internal_heap(const char *phase)
 {
     serial_printf("[BugBuster] Heap %s: internal_free=%u largest_internal=%u total_free=%u\r\n",
@@ -127,10 +147,9 @@ static void mainLoopTask(void* pvParam)
         // USB hub enumeration recovery watchdog (no-op once mounted or budget exhausted)
         hub_recovery_tick();
 
-        // cliProcess() handles both CLI and BBP modes:
-        // - In CLI mode: processes text commands, scans for BBP handshake
-        // - In BBP mode: calls bbpProcess() for binary protocol
-        cliProcess();
+        // NOTE: cliProcess() has been moved to bbpCliTask (Core 1) so that
+        // BBP command dispatch and HAT relay do not block the background work
+        // below.  Do NOT add cliProcess() back here.
 
         uint32_t now = millis_now();
 
@@ -159,10 +178,10 @@ static void mainLoopTask(void* pvParam)
         }
 
         // Service any pending C6 "Main Board Settings" request (rail/e-fuse
-        // writes + reads) at ~10 Hz so a toggle applies well under a second.
-        // The P4 defers heavier script requests while streaming, so this stays
-        // cheap during acquisition.
-        if (now - lastMbPoll >= 100) {
+        // writes + reads) at ~4 Hz so a toggle applies promptly. The P4 defers
+        // heavier script requests while streaming, so this stays cheap during
+        // acquisition.
+        if (now - lastMbPoll >= 250) {
             lastMbPoll = now;
             hat_daq_poll_mb();
         }
@@ -170,12 +189,9 @@ static void mainLoopTask(void* pvParam)
         // IO ownership lease tick — expire timed leases
         io_owner_tick((uint64_t)(esp_timer_get_time() / 1000LL));
 
-        // (The legacy 30-second "[Heartbeat]" message was removed during the
-        // CLI rebuild: it corrupted in-progress line edits. Liveness is now
-        // conveyed by the status LED and by the TUI dashboard.)
-
-        // Faster loop in BBP mode for lower streaming latency
-        vTaskDelay(pdMS_TO_TICKS(bbpIsActive() ? 2 : 20));
+        // Background work: 10 ms sleep is fine — BBP/CLI urgency is now
+        // handled entirely by bbpCliTask on Core 1.
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -506,7 +522,26 @@ extern "C" void app_main(void)
         term_println("[BugBuster] ERROR: mainLoopTask creation failed");
         ESP_LOGE("main_task", "mainLoopTask creation failed (static handle=NULL)");
     } else {
-        term_println("[BugBuster] Main loop task started (static stack in INTERNAL RAM)");
+        term_println("[BugBuster] Main loop task started (Core 0, priority 1)");
+    }
+
+    // Dedicated BBP/CLI task on Core 1 (priority 2 > mainLoop).  Running on a
+    // separate core means HAT relay inside bbpProcess() no longer blocks the
+    // main loop background work, and vice versa.
+    TaskHandle_t bbpTaskHandle = xTaskCreateStaticPinnedToCore(
+        bbpCliTask,
+        "bbpCli",
+        sizeof(s_bbpTaskStack) / sizeof(s_bbpTaskStack[0]),
+        NULL,
+        2,
+        s_bbpTaskStack,
+        &s_bbpTaskTcb,
+        1);
+    if (bbpTaskHandle == nullptr) {
+        term_println("[BugBuster] ERROR: bbpCliTask creation failed");
+        ESP_LOGE("main_task", "bbpCliTask creation failed");
+    } else {
+        term_println("[BugBuster] BBP/CLI task started (Core 1, priority 2)");
     }
     log_internal_heap("after mainLoopTask");
 

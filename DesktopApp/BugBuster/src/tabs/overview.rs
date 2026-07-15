@@ -34,6 +34,13 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     let alive_poll = alive.clone();
     spawn_local(async move {
+        // Initial grace period: the S3 firmware shares its UART bus (UART0 @
+        // 921600) between RP2040 HAT commands and P4 DAQ commands. IDAC/PCA
+        // I2C reads fired immediately on mount arrive while the firmware is
+        // still initializing its own bus state, causing 2000ms host-side
+        // timeouts that cascade into status-poll failures. Wait 8 seconds
+        // before the first poll cycle so the firmware can settle.
+        overview_sleep_ms(8000).await;
         loop {
             if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
@@ -114,7 +121,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     <div style="display: flex; align-items: center; gap: 8px">
                         <span class="summary-label">"Supply Monitor"</span>
                         <label class="toggle-wrap">
-                            <div class="toggle" class:active=move || selftest.get().worker_enabled
+                            <div class="toggle" class:active=move || selftest.try_get().map_or(false, |s| s.worker_enabled)
                                 on:click=move |_| {
                                     let enabled = !selftest.get_untracked().worker_enabled;
                                     // Optimistic update
@@ -138,13 +145,13 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 }
                             ><div class="toggle-thumb"></div></div>
                         </label>
-                        <span class="summary-value" class:ok=move || selftest.get().supply_monitor_active>
-                            {move || if selftest.get().supply_monitor_active { "Active" } else if selftest.get().worker_enabled { "Enabled" } else { "Off" }}
+                        <span class="summary-value" class:ok=move || selftest.try_get().map_or(false, |s| s.supply_monitor_active)>
+                            {move || { let st = selftest.try_get().unwrap_or_default(); if st.supply_monitor_active { "Active" } else if st.worker_enabled { "Enabled" } else { "Off" } }}
                         </span>
                     </div>
                     {move || {
-                        let st = selftest.get();
-                        let sup = supplies.get();
+                        let st = selftest.try_get().unwrap_or_default();
+                        let sup = supplies.try_get().unwrap_or_default();
                         if st.worker_enabled && !sup.rails.is_empty() {
                             let chips = sup.rails.iter().map(|r| {
                                 let label = r.name.clone();
@@ -180,7 +187,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             <div class="channel-grid">
                 {move || {
                     let ds = state.get();
-                    let monitor_active = selftest.get().supply_monitor_active;
+                    let monitor_active = selftest.try_get().map_or(false, |s| s.supply_monitor_active);
                     ds.channels.into_iter().enumerate().map(|(i, ch)| {
                         let ch_idx = i as u8;
                         let fn_label = func_name(ch.function);

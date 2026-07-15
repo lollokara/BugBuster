@@ -44,6 +44,8 @@ pub struct DaqStreamRuntimeStatus {
     pub total_samples: u64,
     pub frame_count: u64,
     pub sample_rate_hz: u32,
+    /// USB stream rate for the voltage ADC channel.
+    pub voltage_sps_hz: u32,
     pub overflow: bool,
     /// Measured ingestion throughput (samples/second folded into the store).
     pub ingest_sps: f64,
@@ -172,6 +174,7 @@ fn send_ctrl(daq: &DaqState, cmd_type: u8, payload: &[u8]) -> CmdResult<()> {
 #[tauri::command]
 pub async fn daq_stream_start(
     sample_rate_idx: u8,
+    voltage_rate_idx: u8,
     decimation: u16,
     daq: State<'_, DaqState>,
 ) -> CmdResult<()> {
@@ -179,6 +182,7 @@ pub async fn daq_stream_start(
     stop_workers(&daq).await;
 
     let rate = rate_from_idx(sample_rate_idx);
+    let vrate = rate_from_idx(voltage_rate_idx);
     let dec = decimation.clamp(1, 256) as u8;
 
     {
@@ -189,7 +193,7 @@ pub async fn daq_stream_start(
     send_ctrl(
         &daq,
         daq_proto::CMD_SET_RATE,
-        &daq_proto::rate_payload(rate, 50_000, dec),
+        &daq_proto::rate_payload(rate, vrate, dec),
     )?;
     send_ctrl(&daq, daq_proto::CMD_START, &[])?;
 
@@ -198,6 +202,7 @@ pub async fn daq_stream_start(
         let mut st = daq.status.lock().map_err(map_err)?;
         st.active = true;
         st.sample_rate_hz = rate;
+        st.voltage_sps_hz = vrate;
         st.last_error = None;
     }
 
@@ -372,27 +377,31 @@ pub fn daq_get_snapshots(daq: State<'_, DaqState>) -> CmdResult<DaqSnapshots> {
 }
 
 #[tauri::command]
-pub fn daq_set_range_lock(range: u8, daq: State<'_, DaqState>) -> CmdResult<()> {
+pub async fn daq_set_range_lock(range: u8, daq: State<'_, DaqState>) -> CmdResult<()> {
     send_ctrl(&daq, daq_proto::CMD_RANGE_LOCK, &[range])
 }
 
 /// Update the acquisition rate + decimation on a live stream (no restart).
 #[tauri::command]
-pub fn daq_set_rate(sample_rate_idx: u8, decimation: u16, daq: State<'_, DaqState>) -> CmdResult<()> {
+pub async fn daq_set_rate(sample_rate_idx: u8, voltage_rate_idx: u8, decimation: u16, daq: State<'_, DaqState>) -> CmdResult<()> {
     let rate = rate_from_idx(sample_rate_idx);
+    let vrate = rate_from_idx(voltage_rate_idx);
     let dec = decimation.clamp(1, 256) as u8;
     if let Ok(mut store) = daq.store.write() {
         store.decimation = dec;
     }
+    if let Ok(mut st) = daq.status.lock() {
+        st.voltage_sps_hz = vrate;
+    }
     send_ctrl(
         &daq,
         daq_proto::CMD_SET_RATE,
-        &daq_proto::rate_payload(rate, 50_000, dec),
+        &daq_proto::rate_payload(rate, vrate, dec),
     )
 }
 
 #[tauri::command]
-pub fn daq_set_source(
+pub async fn daq_set_source(
     vdut_mv: u32,
     ilimit_ma: u32,
     enable: bool,
@@ -408,7 +417,7 @@ pub fn daq_set_source(
 }
 
 #[tauri::command]
-pub fn daq_set_fft(
+pub async fn daq_set_fft(
     nbins: u16,
     source: u8,
     window: u8,
@@ -423,12 +432,12 @@ pub fn daq_set_fft(
 }
 
 #[tauri::command]
-pub fn daq_reset_energy(daq: State<'_, DaqState>) -> CmdResult<()> {
+pub async fn daq_reset_energy(daq: State<'_, DaqState>) -> CmdResult<()> {
     send_ctrl(&daq, daq_proto::CMD_RESET_ENERGY, &[])
 }
 
 #[tauri::command]
-pub fn daq_reset_stats(daq: State<'_, DaqState>) -> CmdResult<()> {
+pub async fn daq_reset_stats(daq: State<'_, DaqState>) -> CmdResult<()> {
     send_ctrl(&daq, daq_proto::CMD_RESET_STATS, &[])
 }
 

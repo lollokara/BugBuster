@@ -49,6 +49,13 @@ pub struct ConnectionManager {
     // Flag set during OTA to relax health-check failure thresholds.
     // OTA can take 30-120 s during which /api/status may time out (M19).
     ota_in_progress: Arc<AtomicBool>,
+    // Set for the duration of a connect() call so the USB watcher does not
+    // probe the same port concurrently and corrupt the BBP handshake.
+    connecting: Arc<AtomicBool>,
+    // Set while discover_streaming() is probing USB ports so the watcher does
+    // not probe the same ports at the same time and corrupt the \r\n + MAGIC
+    // byte stream that probe_bbp sends.
+    scanning: Arc<AtomicBool>,
 }
 
 pub struct OtaGuard {
@@ -72,6 +79,8 @@ impl ConnectionManager {
             recent_writes: Arc::new(StdMutex::new([None; 4])),
             active_slots: Arc::new(StdMutex::new(HashSet::new())),
             ota_in_progress: Arc::new(AtomicBool::new(false)),
+            connecting: Arc::new(AtomicBool::new(false)),
+            scanning: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -89,12 +98,28 @@ impl ConnectionManager {
 
     /// Connect to a device by its discovery ID.
     pub async fn connect(&self, device_id: &str, app: &AppHandle) -> Result<()> {
-        // la_selector stays None → DeviceSelector::Any.
-        // The ESP32 CDC port and the RP2040 vendor-bulk interface are separate USB
-        // devices with independent serial numbers; the CDC serial cannot be used to
-        // identify the paired RP2040. Use Any (first matching VID/PID) for now.
+        // Reject concurrent connection attempts — only one can be in flight.
+        // The USB watcher also uses this flag to avoid probing a port while we
+        // are mid-handshake, preventing BBP response corruption.
+        if self
+            .connecting
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(anyhow!("Connection attempt already in progress"));
+        }
         let la_selector: Option<crate::la_usb::DeviceSelector> = None;
+        let result = self._connect(device_id, la_selector, app).await;
+        self.connecting.store(false, Ordering::Release);
+        result
+    }
 
+    async fn _connect(
+        &self,
+        device_id: &str,
+        la_selector: Option<crate::la_usb::DeviceSelector>,
+        app: &AppHandle,
+    ) -> Result<()> {
         self.disconnect(app).await?;
 
         if device_id.starts_with("usb:") {
@@ -641,16 +666,24 @@ impl ConnectionManager {
 
         tokio::spawn(async move {
             // Determine poll interval based on transport type
+            // Determine poll interval based on transport type.
+            // HTTP uses 300 ms (HTTP round-trips are slower but latency tolerance is higher).
+            // USB uses 1000 ms: 200 ms was too aggressive — it competed with HAT/Overview
+            // polls for the single-client BBP mutex and caused spurious disconnects.
             let poll_ms = {
                 let t = transport.lock().await;
                 match t.as_ref() {
                     Some(tr) if tr.transport_name() == "HTTP" => 300,
-                    _ => 200,
+                    _ => 1000,
                 }
             };
 
             let mut consecutive_failures: u32 = 0;
-            const MAX_RETRIES: u32 = 3;
+            // Raised from 3 to 6: a short burst of BBP contention at tab-mount time
+            // could cause 3 consecutive timeouts even with the device fully connected.
+            // 6 consecutive failures (~20-30 s) is still fast enough for genuine
+            // disconnections while surviving a noisy startup.
+            const MAX_RETRIES: u32 = 6;
             // During OTA, the device is extremely busy and may ignore HTTP requests
             // for up to 60-90 seconds. We increase the threshold to prevent
             // dropping the connection UI (M19).
@@ -802,6 +835,116 @@ impl ConnectionManager {
     /// Discover available devices.
     pub async fn discover(&self) -> Vec<DiscoveredDevice> {
         discovery::discover_all().await
+    }
+
+    /// Whether a connection attempt is currently in progress.
+    pub fn is_connecting(&self) -> bool {
+        self.connecting.load(Ordering::Relaxed)
+    }
+
+    /// Whether a transport is currently active.
+    pub fn is_connected(&self) -> bool {
+        self.connection_status
+            .lock()
+            .map_or(false, |s| s.mode != ConnectionMode::Disconnected)
+    }
+
+    /// Discover devices, emitting a "device-found" Tauri event for each one
+    /// as soon as it is confirmed so the UI can update immediately.
+    pub async fn discover_streaming(&self, app: &AppHandle) -> Vec<DiscoveredDevice> {
+        // Hold the scanning flag only for the USB portion — the USB watcher must
+        // not probe the same serial port simultaneously. The HTTP scan doesn't
+        // touch serial ports so the watcher can run freely during it (the HTTP
+        // scan takes ~23 s; suppressing the watcher that long delays USB discovery).
+        self.scanning.store(true, Ordering::Relaxed);
+        let app1 = app.clone();
+        let usb_devices = tokio::task::spawn_blocking(move || {
+            discovery::discover_usb_streaming(move |dev| {
+                let _ = app1.emit("device-found", &dev);
+            })
+        })
+        .await
+        .unwrap_or_default();
+        // USB scan complete — release the lock so the watcher can probe during HTTP.
+        self.scanning.store(false, Ordering::Relaxed);
+
+        let app2 = app.clone();
+        let http_devices =
+            discovery::discover_http_streaming(move |dev| {
+                let _ = app2.emit("device-found", &dev);
+            })
+            .await;
+
+        let mut all = usb_devices;
+        all.extend(http_devices);
+        all
+    }
+
+    /// Spawn a background task that polls Espressif USB ports every 2 s and
+    /// emits "device-found" for each newly confirmed BugBuster port.
+    /// Polling pauses (and the confirmed-port set is cleared) while connected,
+    /// so ports are re-probed cleanly after a disconnect / board reboot.
+    pub fn start_usb_watcher(&self, app: AppHandle) {
+        let mgr = self.clone();
+        // tauri::async_runtime::spawn is used instead of tokio::spawn because
+        // start_usb_watcher is called from the Tauri .setup() hook, which runs on
+        // the main UI thread before the Tokio runtime is active. Tauri's own
+        // runtime handle is always valid at that point.
+        tauri::async_runtime::spawn(async move {
+            let mut confirmed: HashSet<String> = HashSet::new();
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+
+                if mgr.is_connected() {
+                    // Already connected — reset so ports are re-probed after the next disconnect.
+                    confirmed.clear();
+                    continue;
+                }
+                if mgr.is_connecting() {
+                    // A connection attempt is in progress on one of the ports.
+                    // Skip probing to avoid corrupting the BBP handshake.
+                    continue;
+                }
+                if mgr.scanning.load(Ordering::Relaxed) {
+                    // An active scan (discover_streaming) is already probing USB
+                    // ports. Skip this cycle to prevent two concurrent probes on
+                    // the same port from corrupting each other's \r\n + MAGIC stream.
+                    continue;
+                }
+
+                // Enumerate candidates (non-blocking list — no I/O on ports).
+                let candidates = tokio::task::spawn_blocking(|| {
+                    discovery::espressif_port_candidates()
+                })
+                .await
+                .unwrap_or_default();
+
+                // Drop entries for ports that have disappeared.
+                let names: HashSet<_> = candidates.iter().map(|(n, _)| n.clone()).collect();
+                confirmed.retain(|p| names.contains(p));
+
+                // Probe each port not yet confirmed (board may still be booting).
+                for (port_name, serial_number) in candidates {
+                    if confirmed.contains(&port_name) {
+                        continue;
+                    }
+                    log::info!("[USB watcher] probing {} (waiting for board to boot)...", port_name);
+                    let pn = port_name.clone();
+                    let app2 = app.clone();
+                    if let Ok(Some(dev)) = tokio::task::spawn_blocking(move || {
+                        discovery::probe_usb_port(&pn, serial_number)
+                    })
+                    .await
+                    {
+                        log::info!("[USB watcher] ✓ {} confirmed", dev.address);
+                        confirmed.insert(dev.address.clone());
+                        let _ = app2.emit("device-found", &dev);
+                    } else {
+                        log::info!("[USB watcher] {} not ready yet, retrying in 2 s", port_name);
+                    }
+                }
+            }
+        });
     }
 
     /// Get HTTP base URL if connected via HTTP transport.

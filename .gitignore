@@ -83,3 +83,34 @@ Diag/repro_*
 /Firmware/ESP32/src/.omc
 iOSApp/bugbuster.xcodeproj/project.xcworkspace/xcuserdata/lorenzo.xcuserdatad/UserInterfaceState.xcuserstate
 Scripts/clean-appledouble.sh
+
+# -----------------------------------------------------------------------------
+# Additional common build / tool caches to keep out of the repo
+# -----------------------------------------------------------------------------
+
+# PlatformIO global artifacts (catch other firmware folders)
+**/.pio/
+**/.pioenvs/
+
+# Pico/CMake local build directories
+**/build-*/
+**/build/
+
+# Python test / typecheck caches
+.pytest_cache/
+.mypy_cache/
+.cache/
+
+# Node / JS artifacts
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Rust/Cargo workspace target
+/target/
+
+# Misc IDE / editor
+*.code-workspace
+
+# Mex project folder (optional internal tool) — avoid accidentally committing
+.mex/

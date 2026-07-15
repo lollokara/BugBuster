@@ -184,13 +184,18 @@ static void device_event_handler(tinyusb_event_t *event, void *arg)
 }
 
 // Inbound bulk OUT -> feed the control parser.
+// tud_vendor_rx_cb is a NOTIFICATION in esp_tinyusb: the `buffer` pointer
+// points into the internal FIFO but the FIFO is NOT consumed until the app
+// calls tud_vendor_read().  The old code processed `buffer` AND then drained
+// with tud_vendor_read(), causing every command to be dispatched TWICE.
+// Fix: ignore the callback `buffer` argument entirely and only consume data
+// via tud_vendor_read(), which properly advances the FIFO read pointer so
+// TinyUSB can accept the next bulk-OUT from the host.
 void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 {
     (void)itf;
-    if (s_stream && buffer && bufsize) {
-        usb_stream_on_rx(s_stream, buffer, bufsize);
-    }
-    // If buffering is enabled, also drain any FIFO remainder.
+    (void)buffer;
+    (void)bufsize;
     uint8_t buf[256];
     uint32_t n;
     while ((n = tud_vendor_read(buf, sizeof(buf))) > 0) {
@@ -232,6 +237,10 @@ esp_err_t usb_backend_start(usb_stream_t *stream)
     // (12) so it always preempts to drain the event queue promptly.
     tusb_cfg.task.xCoreID  = 0;
     tusb_cfg.task.priority = 13;
+    // Default is 4096 bytes which is too small when CMD_SET_RATE fires
+    // daq_board_stop_fast (vTaskDelay + SPI teardown) + run_fast inline.
+    // The deferred ctrl task handles this now, but keep extra headroom.
+    tusb_cfg.task.size     = 8192;
     tusb_cfg.descriptor.device            = &s_device_desc;
     tusb_cfg.descriptor.string            = s_str_desc;
     tusb_cfg.descriptor.string_count      = sizeof(s_str_desc) / sizeof(s_str_desc[0]);
