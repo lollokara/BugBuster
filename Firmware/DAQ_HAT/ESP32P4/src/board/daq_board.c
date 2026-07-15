@@ -1092,10 +1092,23 @@ static void daq_fast_task(void *arg)
                     have_fine = have_coarse = false;
                     emitted = true;
                 } else if (fadj < cadj) {
-                    have_fine = false;   // FINE fell behind -> drop to resync
+                    // FINE seq fell behind COARSE.  If the gap is large it
+                    // means a FINE ring overflow caused a seq jump — resync
+                    // immediately instead of draining thousands of COARSE
+                    // samples (which would starve the FINE ring further).
+                    if ((cadj - fadj) > 128) {
+                        have_offset = false;
+                        seq_offset  = 0;
+                    }
+                    have_fine = false;
                     b->drop_fine++;
                 } else {
-                    have_coarse = false; // COARSE fell behind -> drop to resync
+                    // COARSE seq fell behind FINE — same overflow guard.
+                    if ((fadj - cadj) > 128) {
+                        have_offset = false;
+                        seq_offset  = 0;
+                    }
+                    have_coarse = false;
                     b->drop_coarse++;
                 }
                 progress = true;

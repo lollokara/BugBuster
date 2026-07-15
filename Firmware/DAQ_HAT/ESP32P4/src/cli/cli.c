@@ -829,7 +829,7 @@ static bool tui_acq_pause(daq_board_t *b)
 }
 static void tui_acq_resume(daq_board_t *b, bool was_running)
 {
-    if (was_running) daq_board_run_fast(b, 8192);
+    if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY);
 }
 
 // Cycle the current-path range override: AUTO -> HI -> MID -> LO -> AUTO. Each
@@ -1886,7 +1886,7 @@ static int cmd_fast(int argc, char **argv)
     }
     bool on = (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0);
     if (on) {
-        esp_err_t e = daq_board_run_fast(b, 8192);
+        esp_err_t e = daq_board_run_fast(b, DAQ_RING_CAPACITY);
         printf("fast start: %s\n", esp_err_to_name(e));
     } else {
         esp_err_t e = daq_board_stop_fast(b);
@@ -2346,7 +2346,7 @@ static int cmd_sweep(int argc, char **argv)
         for (int i = 0; i < ADAQ_COUNT; ++i) {
             adaq7769_set_filter(&b->adaq[i], b->adaq[i].cfg.filter, sels[k]);
         }
-        if (daq_board_run_fast(b, 8192) != ESP_OK) { printf("  start failed\n"); break; }
+        if (daq_board_run_fast(b, DAQ_RING_CAPACITY) != ESP_OK) { printf("  start failed\n"); break; }
         uint32_t a0 = b->stream_a.sample_count, ao0 = b->stream_a.overflow_count;
         uint32_t b0 = b->stream_b.sample_count, bo0 = b->stream_b.overflow_count;
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -3033,7 +3033,7 @@ static int cmd_cal(int argc, char **argv)
         if (was) daq_board_stop_fast(b);
         for (int i = 0; i < ADAQ_COUNT; ++i)
             if (b->adaq_ok[i]) adaq7769_set_offset_cal(&b->adaq[i], 0);
-        if (was) daq_board_run_fast(b, 8192);
+        if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
         printf("cal: cleared ADC OFFSET registers (write 0)\n");
         return 0;
     }
@@ -3111,7 +3111,7 @@ static int cmd_cal(int argc, char **argv)
     if (was) daq_board_stop_fast(b);
 
     if (smu_cal_start(&b->cal, mode) != ESP_OK) {
-        if (was) daq_board_run_fast(b, 8192);
+        if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
         printf("cal: engine busy\n");
         return 1;
     }
@@ -3135,7 +3135,7 @@ static int cmd_cal(int argc, char **argv)
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 
-    if (was) daq_board_run_fast(b, 8192);
+    if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
 
     printf("cal: %s flags=0x%04X vcount=%u icount=%u\n",
            st.phase == SMU_CAL_SUCCESS ? "SUCCESS" : "FAILED",

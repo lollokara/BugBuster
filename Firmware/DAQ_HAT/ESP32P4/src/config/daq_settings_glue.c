@@ -88,7 +88,7 @@ static void apply_adaq_filter(daq_board_t *b)
             adaq7769_set_filter(&b->adaq[i], filt, (uint8_t)d);
         }
     }
-    if (was) daq_board_run_fast(b, 8192);
+    if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
 }
 
 // Apply the top-level Sample Rate: pick the ADAQ filter+decimation that hits the
@@ -114,7 +114,7 @@ static void apply_sample_rate(daq_board_t *b)
     }
     power_dsp_set_rate(&b->dsp, achieved);
     power_dsp_reset_energy(&b->dsp);
-    if (was) daq_board_run_fast(b, 8192);
+    if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
 }
 static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
 {

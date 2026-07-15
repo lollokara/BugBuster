@@ -80,7 +80,7 @@ void app_main(void)
     // end-to-end lossless ceiling (raise at runtime with `odr`; toggle with
     // `fast on|off`). Higher ODRs are available but currently overflow the
     // FINE/COARSE fusion consumer — see the capture/fusion fast-path work.
-    esp_err_t ferr = daq_board_run_fast(&s_board, 8192);
+    esp_err_t ferr = daq_board_run_fast(&s_board, DAQ_RING_CAPACITY);
     if (ferr != ESP_OK) {
         ESP_LOGE(TAG, "fast path start failed: %s", esp_err_to_name(ferr));
     } else {

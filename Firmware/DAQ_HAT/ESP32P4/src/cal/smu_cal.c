@@ -958,7 +958,7 @@ static void cal_task(void *arg)
         if      (c->mode == SMU_CAL_MODE_VOLTAGE) run_voltage_cal(c);
         else if (c->mode == SMU_CAL_MODE_CURRENT) run_current_cal(c);
         else                                      run_baseline_cal(c);
-        if (resume_fast) daq_board_run_fast(b, 8192);
+        if (resume_fast) daq_board_run_fast(b, DAQ_RING_CAPACITY);
     }
 }
 

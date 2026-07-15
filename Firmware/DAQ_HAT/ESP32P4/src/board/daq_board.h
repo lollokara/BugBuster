@@ -12,6 +12,11 @@
 // pair can be captured independently into their own PSRAM ring buffers.
 // =============================================================================
 
+// Ring capacity (samples per bus) for the capture rings allocated in PSRAM.
+// At 256 kSPS the ring survives ~256 ms of daq_fast_task stall before any
+// sample is lost; at 64 kSPS that extends to ~1 s.  PSRAM cost: ~2× 327 KB.
+#define DAQ_RING_CAPACITY  65536u
+
 #include <stdbool.h>
 #include "esp_err.h"
 #include "driver/i2c_master.h"
