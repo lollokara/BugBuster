@@ -385,6 +385,7 @@
 #define SMU_RANGE_VERSION         2u
 #define SMU_RANGE_CAL_MAX_PTS     64          // accumulated (v_adc,amps) points per range
 #define SMU_METER_CAL_POINTS      10          // reference-meter points per range
+#define SMU_METER_CAL_VMIN        2.5f        // sweep start (V); 1.76 V min is too unstable
 #define SMU_METER_CAL_SETTLE_MS   400         // V_DUT settle before each reading
 #define SMU_METER_CAL_SAMPLES     200         // ADAQ reads averaged per point
 

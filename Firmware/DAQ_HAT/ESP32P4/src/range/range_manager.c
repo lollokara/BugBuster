@@ -52,6 +52,7 @@ esp_err_t range_manager_init(range_manager_t *rm)
     rm->mux_en_pin   = MUX_EN_PIN;
     rm->current      = RANGE_UNKNOWN;
     rm->previous     = RANGE_UNKNOWN;
+    rm->fine_mux_addr = 0xFF;   // unknown -> first set_fine_mux always writes
 
     // Default calibration from config constants.
     const float shunts[RANGE_COUNT] = { SHUNT_HI_OHM, SHUNT_MID_OHM, SHUNT_LO_OHM };
@@ -90,25 +91,45 @@ esp_err_t range_manager_set_fine_mux(range_manager_t *rm, current_range_t range)
     } else {
         return ESP_OK;   // LO is read by COARSE; mux is don't-care
     }
+    if (rm->fine_mux_addr == addr) {
+        return ESP_OK;   // already pointed there — skip the redundant GPIO write
+    }
     set_mux_addr(rm, addr);
+    rm->fine_mux_addr = addr;
     return ESP_OK;
 }
 
 current_range_t range_manager_poll(range_manager_t *rm)
 {
-    // In override mode the lines are driven outputs; read back the shadow.
-    int b51 = (rm->bypass51_pin != GPIO_NUM_NC) ? gpio_get_level(rm->bypass51_pin) : 0;
-    int b2  = (rm->bypass2_pin  != GPIO_NUM_NC) ? gpio_get_level(rm->bypass2_pin)  : 0;
-    current_range_t r = decode_bypass(b51, b2);
+    current_range_t r;
+    if (rm->override_active) {
+        // The P4 is driving the bypass lines and has right of way (the analog
+        // latch is tapped through 1k, so a forced range holds). A push-pull
+        // output pin does NOT reliably read back its own driven level, so
+        // decoding gpio_get_level here would misread a forced MID/LO as HI and
+        // strand the FINE mux on the wrong CSA (large phantom current). Trust
+        // the forced range instead.
+        r = rm->current;
+    } else {
+        // Autorange: lines are high-Z inputs; the latch drives them, so the
+        // pin read is the true hardware-selected range.
+        int b51 = (rm->bypass51_pin != GPIO_NUM_NC) ? gpio_get_level(rm->bypass51_pin) : 0;
+        int b2  = (rm->bypass2_pin  != GPIO_NUM_NC) ? gpio_get_level(rm->bypass2_pin)  : 0;
+        r = decode_bypass(b51, b2);
+    }
 
     if (r != rm->current) {
         rm->previous = rm->current;
         rm->current  = r;
         rm->change_count++;
-        // Re-point the FINE mux to the CSA that matches the new range.
-        if (!rm->override_active) {
-            range_manager_set_fine_mux(rm, r);
-        }
+    }
+
+    // Keep the FINE input mux pointed at the CSA for the active HI/MID range on
+    // every poll (set_fine_mux skips redundant GPIO writes via the shadow, so
+    // this is cheap in steady state). This tracks both forced and autoranged
+    // HI/MID and self-heals any stale mux left by a prior force/release.
+    if (r == RANGE_HI || r == RANGE_MID) {
+        range_manager_set_fine_mux(rm, r);
     }
     return r;
 }

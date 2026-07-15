@@ -70,6 +70,7 @@ typedef struct {
     current_range_t previous;
     volatile uint32_t change_count;
     bool override_active;
+    uint8_t fine_mux_addr;     // shadow of the last FINE mux address (0xFF = unknown)
 } range_manager_t;
 
 /**

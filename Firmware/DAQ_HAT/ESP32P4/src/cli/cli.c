@@ -1176,6 +1176,16 @@ static int tui_confirm_meter_cal(daq_board_t *b, current_range_t range)
     printf(TUI_ROW TUI_D "Stored points for this range: " TUI_R TUI_B "%u" TUI_R
            TUI_D "  \u2014 add more with" TUI_R TUI_EL "\n", have);
     printf(TUI_ROW TUI_D "different resistors to cover the whole range, then refit." TUI_R TUI_EL "\n");
+    {
+        int32_t d = 0;
+        bool has_base = smu_base_offset(&b->cal, (uint8_t)range, 0, &d);
+        if (has_base)
+            printf(TUI_ROW TUI_BGN "Open-circuit baseline present" TUI_R
+                   TUI_D " \u2014 leakage will be subtracted." TUI_R TUI_EL "\n");
+        else
+            printf(TUI_ROW TUI_BRD "No baseline for this range" TUI_R
+                   TUI_D " \u2014 run 'cal base' (open circuit) FIRST." TUI_R TUI_EL "\n");
+    }
     printf(TUI_ROW TUI_BYL "Connect the resistor + DMM before continuing." TUI_R TUI_EL "\n");
     printf(TUI_ROW TUI_EL "\n");
     printf(TUI_ROW TUI_BGN TUI_B "  [A] Add points  " TUI_R " "
@@ -1238,6 +1248,13 @@ static bool tui_meter_live_capture(daq_board_t *b, current_range_t range,
                                        : (uint8_t)ADAQ_ROLE_FINE;
     if (!b->adaq_ok[role]) return false;
 
+    // Subtract the open-circuit baseline (leakage-per-V_DUT) in ADC-code space,
+    // exactly like the runtime fast_emit path, so the fit is on the true current
+    // signal and the resulting offset_v/gain_corr match what streaming applies.
+    // V_DUT is fixed for this point, so the baseline code is constant here.
+    int32_t base = 0;
+    smu_base_offset(&b->cal, (uint8_t)range, b->smu.v_code, &base);
+
     float ring[100];
     int   rn = 0, rpos = 0;
     float med_v = 0.0f, med_a = 0.0f;
@@ -1248,7 +1265,7 @@ static bool tui_meter_live_capture(daq_board_t *b, current_range_t range,
         for (int s = 0; s < 16; ++s) {
             int32_t raw = 0;
             if (adaq7769_read_sample(&b->adaq[role], &raw) == ESP_OK) {
-                ring[rpos] = adaq7769_code_to_volts(&b->adaq[role], raw);
+                ring[rpos] = adaq7769_code_to_volts(&b->adaq[role], raw - base);
                 rpos = (rpos + 1) % WIN;
                 if (rn < WIN) rn++;
             }
@@ -1312,8 +1329,8 @@ static void tui_run_meter_cal(daq_board_t *b, current_range_t range)
     bool aborted = false;
 
     for (int i = 0; i < N; ++i) {
-        float vset = SMU_VDUT_MIN +
-                     (SMU_VDUT_MAX - SMU_VDUT_MIN) * (float)i / (float)(N - 1);
+        float vset = SMU_METER_CAL_VMIN +
+                     (SMU_VDUT_MAX - SMU_METER_CAL_VMIN) * (float)i / (float)(N - 1);
         smu_set_voltage(&b->smu, vset);
         vTaskDelay(pdMS_TO_TICKS(SMU_METER_CAL_SETTLE_MS));
 

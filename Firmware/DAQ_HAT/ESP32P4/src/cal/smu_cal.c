@@ -733,9 +733,15 @@ static void run_current_cal(smu_cal_t *c)
     smu_enable(&b->smu, true);
     vTaskDelay(pdMS_TO_TICKS(SMU_CAL_ICAL_ENABLE_MS));
 
-    // 5) Step the current limit up (min_code -> 0) until the output reaches the
-    //    target. min_code has the same sign as the polarity; sweep toward 0.
-    int step = (min_code > 0) ? -1 : +1;
+    // 5) Sweep the current-limit DAC across its FULL signed span (min_code ->
+    //    the opposite extreme, e.g. +127 -> -127). The output current rises to
+    //    full scale near code 0 and then REDUCES again through the negative
+    //    codes as the DS4424 sign flips, so the whole -127..+127 range must be
+    //    captured to build a complete table (127 extra points on the negative
+    //    side). Do not stop early at the 2 A target — just note it and keep
+    //    sweeping so the reducing branch is recorded too.
+    int step     = (min_code > 0) ? -1 : +1;
+    int end_code = (min_code > 0) ? -127 : +127;
     uint8_t cnt = 0;
     float imin = 1e30f, imax = -1e30f;
     bool reached = false;
@@ -756,13 +762,16 @@ static void run_current_cal(smu_cal_t *c)
             c->point = cnt;
             c->min_v = imin;
             c->max_v = imax;
-            c->progress = (uint8_t)((imax / SMU_CAL_ICAL_TARGET_A) * 100.0f);
+            // Progress tracks the code sweep across the full span.
+            int denom = (min_code - end_code);
+            if (denom == 0) denom = 1;
+            c->progress = (uint8_t)(((min_code - code) * 100) / denom);
             if (c->progress > 99) c->progress = 99;
-            if (a >= SMU_CAL_ICAL_TARGET_A) { reached = true; break; }
+            if (a >= SMU_CAL_ICAL_TARGET_A) reached = true;   // note; keep sweeping
         } else {
             c->flags |= SMU_CAL_FLAG_NO_SETTLE;
         }
-        if (code == 0) break;   // reached full-scale limit
+        if (code == end_code) break;   // swept the full signed DAC span
     }
 
     smu_enable(&b->smu, false);
@@ -793,15 +802,15 @@ static void run_current_cal(smu_cal_t *c)
 
     // Validate coverage only against the span the hardware could actually reach
     // (imin..imax): the hard current limit means the 2 A target may be out of
-    // reach, which is acceptable. We still require enough responsive points, a
-    // monotonic ramp, and no large gaps.
+    // reach, which is acceptable. The full signed sweep is intentionally peaked
+    // (current rises to full scale near code 0, then reduces through the
+    // negative codes), so NON_MONOTONIC is expected here and does NOT fail the
+    // run — we only require enough responsive points.
     c->flags |= validate_table(c->blob.ipoints, cnt,
                                /*lo_target=*/imin,
                                /*hi_target=*/imax,
                                /*max_gap=*/0.30f, /*min_points=*/8);
-    bool ok = (cnt >= 2) &&
-              !(c->flags & (SMU_CAL_FLAG_TOO_FEW_POINTS |
-                            SMU_CAL_FLAG_NON_MONOTONIC));
+    bool ok = (cnt >= 2) && !(c->flags & SMU_CAL_FLAG_TOO_FEW_POINTS);
 
 
     if (ok) {

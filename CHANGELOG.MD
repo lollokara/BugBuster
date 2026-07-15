@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Fixed
+- **DAQ HAT (ESP32-P4) reference-meter cal now subtracts the open-circuit baseline.** The
+  meter/readings cal previously fit the raw ADC voltage (leakage-per-V_DUT + signal) against the
+  reference-DMM current, so V_DUT-correlated leakage on the high-impedance 51 Ohm sense node
+  produced a bogus multi-hundred-mV offset. The live-median capture now subtracts the stored
+  open-circuit baseline (`smu_base_offset`, keyed on the live V_DUT DS4424 code) in ADC-code
+  space, exactly like the runtime `fast_emit` path, so the fit is on the true current. The
+  confirm dialog now shows whether a baseline exists and warns to run `cal base` (open circuit)
+  first. Also added `cal clear <lo|mid|hi>` and fixed `smu_cal_range_reset` to revert to the
+  nominal transfer instead of keeping stale coefficients.
 - **DAQ HAT (ESP32-P4) current-limit calibration no longer fails on the hard current ceiling
   (was `flags 0x0046`).** The onboard supply can only source so much current, so the low end of
   the IDAC sweep pins the output at a flat plateau where the reading does not respond to code
