@@ -117,6 +117,7 @@ typedef struct {
 #define RANGE_CAL_ERR_NO_RST_MID  5   // FF_MID never un-triggered during pass B down-sweep
 #define RANGE_CAL_ERR_IMPLAUSIBLE 6   // threshold voltages fail sanity check
 #define RANGE_CAL_ERR_NVS         7   // NVS write failed
+#define RANGE_CAL_ERR_FF_STUCK    8   // FF still asserted after enable-time inrush settle window
 
 // ---- Lifecycle -------------------------------------------------------------
 

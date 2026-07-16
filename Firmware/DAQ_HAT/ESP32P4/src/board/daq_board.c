@@ -521,9 +521,17 @@ esp_err_t daq_board_usb_start(daq_board_t *b)
         }
     }
     if (b->ctrl_task == NULL) {
+        // Must outrank daq_fast_task (prio 12): at full ODR the fast-path
+        // consumer is CPU-bound on core 0 with progress==true almost every
+        // iteration (see daq_fast_task), so it never voluntarily yields.
+        // A ctrl_task priority below that (previously 8) starves forever —
+        // xQueueSend() posts SET_RATE/SET_SOURCE/RANGE_CAL_START but the
+        // handler never runs, so the device looks unresponsive to commands.
+        // Same class of bug already fixed once for the TinyUSB task, see the
+        // priority=13 comment in usb_backend.c.
         BaseType_t ok = xTaskCreatePinnedToCore(
             daq_ctrl_task, "daq_ctrl", 4096, b,
-            /*prio=*/8, &b->ctrl_task, /*core=*/0);
+            /*prio=*/14, &b->ctrl_task, /*core=*/0);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "daq_ctrl_task create failed");
             return ESP_ERR_NO_MEM;
@@ -555,7 +563,8 @@ esp_err_t daq_board_stream_step(daq_board_t *b, fusion_output_t *out)
     uint32_t rate = (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
     usb_stream_push_sample(&b->usb, &fo,
                            power_dsp_last_v(&b->dsp), p,
-                           rate, /*decimation=*/1);
+                           rate, /*decimation=*/1,
+                           range_manager_settling(&b->range));
     if (out) {
         *out = fo;
     }
@@ -917,7 +926,14 @@ esp_err_t daq_board_s3_start(daq_board_t *b)
         ESP_LOGE(TAG, "S3 link init failed: %s", esp_err_to_name(err));
         return err;
     }
-    return s3_link_start(&b->s3, /*core=*/0, /*prio=*/10);
+    // Must outrank daq_fast_task (prio 12), same starvation class already
+    // fixed for daq_ctrl_task (see the priority=14 comment in
+    // daq_board_usb_start): at high ODR daq_fast_task is CPU-bound on core 0
+    // and rarely yields, so a lower-priority service_task can't drain the S3
+    // UART link in time. That makes CMD_DAQ_CONFIG (0xB6, e.g. daq_cfg_set /
+    // apply_sample_rate) time out on the S3 side (BBP_ERR_TIMEOUT, 0x11)
+    // even though the P4 is alive — it just never got scheduled.
+    return s3_link_start(&b->s3, /*core=*/0, /*prio=*/14);
 }
 
 // UI task: relay front-panel buttons to the C6 and push the latest measurement
@@ -1108,7 +1124,8 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
         b->wave_count = 0;
         uint32_t rate = (uint32_t)adaq7769_output_data_rate(
                             &b->adaq[ADAQ_ROLE_FINE]);
-        usb_stream_push_sample(&b->usb, &fo, v, p, rate, b->wave_decim);
+        usb_stream_push_sample(&b->usb, &fo, v, p, rate, b->wave_decim,
+                               range_manager_settling(&b->range));
     }
 }
 
@@ -1130,6 +1147,7 @@ static void daq_fast_task(void *arg)
     bool have_fine = false, have_coarse = false, have_offset = false;
     int64_t seq_offset = 0;   // (coarse.seq - fine.seq) learned at first pairing
 
+    uint32_t yield_ctr = 0;
     while (b->fast_running) {
         bool progress = false;
 
@@ -1206,6 +1224,16 @@ static void daq_fast_task(void *arg)
 
         if (!progress) {
             vTaskDelay(1);   // rings drained; yield ~1 tick
+        } else if ((++yield_ctr & 0x3FFu) == 0) {
+            // At sustained high ODR, progress is true on almost every
+            // iteration, so the branch above rarely fires. This task (prio
+            // 12) then never blocks, so core 0's IDLE0 task never runs to
+            // reset its own watchdog entry -> TWDT reset ("IDLE0 did not
+            // reset in time"), and daq_ctrl_task/TinyUSB also get starved
+            // (looks like the device is unresponsive to commands). Force a
+            // short real block periodically so core 0 always has scheduling
+            // gaps regardless of how busy the rings are.
+            vTaskDelay(1);
         }
     }
     vTaskDelete(NULL);

@@ -38,6 +38,12 @@ extern "C" {
 #define USB_FRAME_OVERHEAD   (USB_FRAME_HEADER_LEN + USB_FRAME_CRC_LEN)
 #define USB_MAX_PAYLOAD      4096u
 
+// Max WAVEFORM samples per frame such that header + samples fit USB_MAX_PAYLOAD.
+// (usb_wave_header_t is 12 bytes, usb_wave_sample_t is 16 bytes; computed below
+// once both types are declared, see usb_stream.h.)
+#define USB_WAVE_BATCH_MAX \
+    ((USB_MAX_PAYLOAD - 12u) / 16u)
+
 // Record / frame types. 0x00..0x7F = device->PC data, 0x80+ = PC->device control.
 typedef enum {
     USB_REC_WAVEFORM = 0x01,   // block of fused samples
@@ -69,9 +75,12 @@ typedef struct __attribute__((packed)) {
     float    p;        // power (W)
     uint8_t  range;    // current_range_t
     uint8_t  source;   // fuse_source_t
-    uint8_t  flags;    // bit0 saturated
+    uint8_t  flags;    // bit0 saturated, bit1 range-switch settling (transient)
     uint8_t  _pad;
 } usb_wave_sample_t;
+
+#define USB_WAVE_FLAG_SATURATED 0x01u
+#define USB_WAVE_FLAG_SETTLING  0x02u   // sample taken during post-range-switch settle window
 
 // WAVEFORM payload = header + count * usb_wave_sample_t.
 typedef struct __attribute__((packed)) {

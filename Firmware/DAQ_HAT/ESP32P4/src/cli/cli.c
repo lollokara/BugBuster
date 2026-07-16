@@ -3037,7 +3037,8 @@ static int cmd_rangecal(int argc, char **argv)
         return 1;
     }
 
-    if (b->fast_running) {
+    bool was_running = b->fast_running;
+    if (was_running) {
         printf("rangecal: stopping acquisition first...\n");
         daq_board_stop_fast(b);
     }
@@ -3046,6 +3047,7 @@ static int cmd_rangecal(int argc, char **argv)
     b->range_cal.r_cal_b_ohm = r_b;
     if (range_cal_start(&b->range_cal, b) != ESP_OK) {
         printf("rangecal: failed to start (already running? use 'rangecal abort' first)\n");
+        if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY);
         return 1;
     }
     // range_cal_start() now blocks until the task sets PROMPT_A (up to 2 s),
@@ -3065,6 +3067,7 @@ static int cmd_rangecal(int argc, char **argv)
         if (tui_getch(0) == 27) {
             range_cal_abort(&b->range_cal);
             printf("\n[aborted]\n");
+            if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY);
             return 0;
         }
 
@@ -3073,8 +3076,8 @@ static int cmd_rangecal(int argc, char **argv)
                    "then press ENTER (or any key to ack)...", (double)r_a);
             fflush(stdout);
             int ch = tui_getch(30000);
-            if (ch == 27) { range_cal_abort(&b->range_cal); printf("\n[aborted]\n"); return 0; }
-            if (ch < 0)   { range_cal_abort(&b->range_cal); printf("\n[timeout]\n"); return 0; }
+            if (ch == 27) { range_cal_abort(&b->range_cal); printf("\n[aborted]\n"); if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY); return 0; }
+            if (ch < 0)   { range_cal_abort(&b->range_cal); printf("\n[timeout]\n"); if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY); return 0; }
             range_cal_ack(&b->range_cal);
             printf("\n  Pass A running (ramp up/down, watch FF_HI)...\n");
         } else if (phase == RANGE_CAL_PROMPT_B) {
@@ -3082,8 +3085,8 @@ static int cmd_rangecal(int argc, char **argv)
                    "then press ENTER...", (double)r_b);
             fflush(stdout);
             int ch = tui_getch(30000);
-            if (ch == 27) { range_cal_abort(&b->range_cal); printf("\n[aborted]\n"); return 0; }
-            if (ch < 0)   { range_cal_abort(&b->range_cal); printf("\n[timeout]\n"); return 0; }
+            if (ch == 27) { range_cal_abort(&b->range_cal); printf("\n[aborted]\n"); if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY); return 0; }
+            if (ch < 0)   { range_cal_abort(&b->range_cal); printf("\n[timeout]\n"); if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY); return 0; }
             range_cal_ack(&b->range_cal);
             printf("\n  Pass B running (ramp up/down, watch FF_MID)...\n");
         } else if (phase == RANGE_CAL_RUNNING_A || phase == RANGE_CAL_RUNNING_B) {
@@ -3117,6 +3120,7 @@ static int cmd_rangecal(int argc, char **argv)
             vTaskDelay(pdMS_TO_TICKS(200));
         }
     }
+    if (was_running) daq_board_run_fast(b, DAQ_RING_CAPACITY);
     return 0;
 }
 

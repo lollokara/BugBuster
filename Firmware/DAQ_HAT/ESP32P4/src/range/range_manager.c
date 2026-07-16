@@ -218,52 +218,50 @@ current_range_t range_manager_step(range_manager_t *rm)
     // ---- Lock-out timer -------------------------------------------------------
     if (rm->lock_remaining > 0) {
         rm->lock_remaining--;
-        // Absorb any NEGEDGE events during lock into the pending flag so we
-        // don't miss a valid down-event that arrived during lock-out.
-        if (((flags & AR_ISR_DN_HI)  && cur == RANGE_MID) ||
-            ((flags & AR_ISR_DN_MID) && cur == RANGE_LO)) {
-            rm->pending_down  = true;
-            rm->confirm_count = 0;
-        }
         return cur;
     }
 
     // ---- RANGE-DOWN: deferred with confirmation -------------------------------
-    // Arm pending_down on a fresh NEGEDGE (relevant to current range).
-    if (!rm->pending_down) {
-        if ((flags & AR_ISR_DN_HI)  && cur == RANGE_MID) {
-            rm->pending_down  = true;
-            rm->confirm_count = 0;
-        }
-        if ((flags & AR_ISR_DN_MID) && cur == RANGE_LO) {
-            rm->pending_down  = true;
-            rm->confirm_count = 0;
+    // Poll the FF pin's LIVE LEVEL every step rather than relying on ISR edge
+    // flags. Edge-only tracking has two failure modes with a bursty load:
+    //   1. If the pin sits steady-low for a long stretch with no fresh edge,
+    //      pending_down never (re-)arms once cancelled — it can get stuck in
+    //      the coarser range indefinitely even during a long quiet period.
+    //   2. Any burst that pops the pin back high (crossing the *reset*
+    //      threshold, which is much lower than the original SET threshold)
+    //      hits the "cancel" path and wipes confirm_count to 0 — frequent
+    //      mild bursts then never let 8 consecutive quiet samples accumulate.
+    // Level polling fixes (1) directly. For (2), decay confirm_count instead
+    // of zeroing it (leaky bucket) so an occasional burst costs one sample of
+    // progress rather than erasing it all, and it still converges downward
+    // between bursts instead of getting permanently parked.
+    gpio_num_t dn_pin = (cur == RANGE_MID) ? AR_FF_HI_PIN :
+                        (cur == RANGE_LO)  ? AR_FF_MID_PIN : GPIO_NUM_NC;
+
+    if (dn_pin != GPIO_NUM_NC) {
+        if (!gpio_get_level(dn_pin)) {
+            rm->pending_down = true;
+            if (rm->confirm_count < AR_CONFIRM_SAMPLES) rm->confirm_count++;
+        } else if (rm->confirm_count > 0) {
+            rm->confirm_count--;
+        } else {
+            rm->pending_down = false;
         }
     }
 
-    // Cancel if a fresh UP event arrived in the same step (shouldn't normally
-    // happen but guards against simultaneous flag bits).
-    if (flags & (AR_ISR_UP_HI | AR_ISR_UP_MID)) {
+    if (rm->pending_down && rm->confirm_count >= AR_CONFIRM_SAMPLES) {
+        // Confirmed: switch to the finer range.
         rm->pending_down  = false;
         rm->confirm_count = 0;
-    }
-
-    if (rm->pending_down) {
-        rm->confirm_count++;
-        if (rm->confirm_count >= AR_CONFIRM_SAMPLES) {
-            // Confirmed: switch to the finer range.
-            rm->pending_down  = false;
-            rm->confirm_count = 0;
-            // After a downrange switch, use half the lock window so a brief
-            // upward glitch doesn't trigger another full-length confirm cycle.
-            rm->lock_remaining = AR_LOCK_SAMPLES / 2;
-            if (cur == RANGE_MID) {
-                apply_range(rm, RANGE_HI);
-            } else if (cur == RANGE_LO) {
-                apply_range(rm, RANGE_MID);
-            }
-            cur = rm->current;
+        // After a downrange switch, use half the lock window so a brief
+        // upward glitch doesn't trigger another full-length confirm cycle.
+        rm->lock_remaining = AR_LOCK_SAMPLES / 2;
+        if (cur == RANGE_MID) {
+            apply_range(rm, RANGE_HI);
+        } else if (cur == RANGE_LO) {
+            apply_range(rm, RANGE_MID);
         }
+        cur = rm->current;
     }
 
     return cur;
@@ -295,6 +293,11 @@ bool range_manager_changed(range_manager_t *rm)
 bool range_manager_in_transition(const range_manager_t *rm)
 {
     return rm->current == RANGE_UNKNOWN;
+}
+
+bool range_manager_settling(const range_manager_t *rm)
+{
+    return rm->lock_remaining > 0;
 }
 
 // ---------------------------------------------------------------------------

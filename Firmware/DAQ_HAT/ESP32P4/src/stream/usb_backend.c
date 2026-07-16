@@ -220,6 +220,12 @@ static uint32_t backend_writable(void *ctx)
     return tud_vendor_write_available();
 }
 
+static bool backend_connected(void *ctx)
+{
+    (void)ctx;
+    return tud_mounted();
+}
+
 esp_err_t usb_backend_start(usb_stream_t *stream)
 {
     s_stream = stream;
@@ -260,9 +266,10 @@ esp_err_t usb_backend_start(usb_stream_t *stream)
     }
 
     usb_transport_t t = {
-        .write    = backend_write,
-        .writable = backend_writable,
-        .ctx      = NULL,
+        .write     = backend_write,
+        .writable  = backend_writable,
+        .connected = backend_connected,
+        .ctx       = NULL,
     };
     usb_stream_set_transport(stream, &t);
     ESP_LOGI(TAG, "USB-HS vendor backend started");

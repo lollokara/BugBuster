@@ -65,6 +65,9 @@ current_range_t range_manager_poll(range_manager_t *rm);
 current_range_t range_manager_current(const range_manager_t *rm);
 bool            range_manager_changed(range_manager_t *rm);
 bool            range_manager_in_transition(const range_manager_t *rm);
+// True while the post-switch settle lock is running (lock_remaining > 0), i.e.
+// samples in this window may carry a bypass-relay switching transient.
+bool            range_manager_settling(const range_manager_t *rm);
 esp_err_t       range_manager_force(range_manager_t *rm, current_range_t range);
 esp_err_t       range_manager_set_fine_mux(range_manager_t *rm, current_range_t range);
 float           range_manager_volts_to_amps(const range_manager_t *rm, current_range_t range, float v_adc);

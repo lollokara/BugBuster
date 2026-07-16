@@ -10,17 +10,34 @@
 static const char *TAG = "usb_stream";
 
 // -----------------------------------------------------------------------------
-// CRC-16/CCITT-FALSE
+// CRC-16/CCITT-FALSE (table-driven — this runs on every outbound WAVEFORM
+// frame, up to ~1000/s of ~4 KB each at full ODR, so the bit-loop form was a
+// measurable chunk of daq_fast_task's per-sample CPU budget).
 // -----------------------------------------------------------------------------
-uint16_t usb_proto_crc16(const uint8_t *data, uint32_t len, uint16_t init)
+static uint16_t s_crc16_table[256];
+static bool     s_crc16_table_ready;
+
+static void crc16_table_init(void)
 {
-    uint16_t crc = init;
-    for (uint32_t i = 0; i < len; ++i) {
-        crc ^= (uint16_t)data[i] << 8;
+    for (uint32_t i = 0; i < 256; ++i) {
+        uint16_t crc = (uint16_t)(i << 8);
         for (int b = 0; b < 8; ++b) {
             crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
                                  : (uint16_t)(crc << 1);
         }
+        s_crc16_table[i] = crc;
+    }
+    s_crc16_table_ready = true;
+}
+
+uint16_t usb_proto_crc16(const uint8_t *data, uint32_t len, uint16_t init)
+{
+    if (!s_crc16_table_ready) {
+        crc16_table_init();
+    }
+    uint16_t crc = init;
+    for (uint32_t i = 0; i < len; ++i) {
+        crc = (uint16_t)((crc << 8) ^ s_crc16_table[((crc >> 8) ^ data[i]) & 0xFF]);
     }
     return crc;
 }
@@ -32,6 +49,9 @@ void usb_stream_init(usb_stream_t *s)
 {
     memset(s, 0, sizeof(*s));
     s->wave_decim = 1;
+    if (!s_crc16_table_ready) {
+        crc16_table_init();
+    }
 }
 
 void usb_stream_set_transport(usb_stream_t *s, const usb_transport_t *t)
@@ -61,6 +81,11 @@ static esp_err_t emit_frame(usb_stream_t *s, usb_rec_type_t type,
         return ESP_ERR_INVALID_SIZE;
     }
     if (!s->have_transport) {
+        s->dropped_frames++;
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s->transport.connected && !s->transport.connected(s->transport.ctx)) {
+        // No host attached: drop silently, no log spam.
         s->dropped_frames++;
         return ESP_ERR_INVALID_STATE;
     }
@@ -126,7 +151,7 @@ esp_err_t usb_stream_flush_waveform(usb_stream_t *s)
     }
     // Compose payload = header + samples into the frame staging area directly.
     uint8_t pl[sizeof(usb_wave_header_t) +
-               sizeof(usb_wave_sample_t) * 256];
+               sizeof(usb_wave_sample_t) * USB_WAVE_BATCH_MAX];
     usb_wave_header_t hdr = {
         .start_seq   = s->wave_start_seq,
         .sample_rate = s->wave_rate,
@@ -141,13 +166,21 @@ esp_err_t usb_stream_flush_waveform(usb_stream_t *s)
                               (size_t)s->wave_count * sizeof(usb_wave_sample_t));
 
     esp_err_t err = emit_frame(s, USB_REC_WAVEFORM, pl, len);
+    if (err == ESP_ERR_INVALID_SIZE) {
+        // Should be unreachable given USB_WAVE_BATCH_MAX is sized to fit
+        // USB_MAX_PAYLOAD, but log loudly if it ever regresses rather than
+        // silently dropping the batch.
+        ESP_LOGE(TAG, "WAVEFORM payload oversized (len=%u > %u), batch dropped",
+                 (unsigned)len, (unsigned)USB_MAX_PAYLOAD);
+    }
     s->wave_count = 0;
     return err;
 }
 
 void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
                             float v, float p,
-                            uint32_t sample_rate, uint8_t decimation)
+                            uint32_t sample_rate, uint8_t decimation,
+                            bool settling)
 {
     uint32_t idx = s->sample_seq++;
     if (!s->streaming) {
@@ -164,7 +197,8 @@ void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
     w->p      = p;
     w->range  = (uint8_t)fo->range;
     w->source = (uint8_t)fo->source;
-    w->flags  = fo->saturated ? 0x01 : 0x00;
+    w->flags  = (fo->saturated ? USB_WAVE_FLAG_SATURATED : 0)
+              | (settling      ? USB_WAVE_FLAG_SETTLING  : 0);
     w->_pad   = 0;
 
     if (s->wave_count >= (uint16_t)(sizeof(s->wave) / sizeof(s->wave[0]))) {

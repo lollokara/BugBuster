@@ -34,6 +34,12 @@ typedef struct {
     uint32_t (*write)(const uint8_t *data, uint32_t len, void *ctx);
     // Space currently available in the TX FIFO (bytes), for back-pressure.
     uint32_t (*writable)(void *ctx);
+    // Optional: true if a host is actually attached (e.g. tud_mounted()).
+    // NULL means "always connected" (used by tests / no-op transports).
+    // When present and false, frames are dropped without touching write()/
+    // writable() or logging — there is no cable, so "avail=0" is expected,
+    // not a back-pressure condition worth warning about.
+    bool     (*connected)(void *ctx);
     void     *ctx;
 } usb_transport_t;
 
@@ -60,7 +66,7 @@ typedef struct {
     uint8_t         frame_buf[USB_FRAME_OVERHEAD + USB_MAX_PAYLOAD];
 
     // WAVEFORM batching.
-    usb_wave_sample_t wave[256];
+    usb_wave_sample_t wave[USB_WAVE_BATCH_MAX];
     uint16_t          wave_count;
     uint32_t          wave_start_seq;
     uint32_t          wave_rate;
@@ -101,7 +107,8 @@ esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
  */
 void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
                             float v, float p,
-                            uint32_t sample_rate, uint8_t decimation);
+                            uint32_t sample_rate, uint8_t decimation,
+                            bool settling);
 
 /** @brief Flush any partially-filled WAVEFORM batch immediately. */
 esp_err_t usb_stream_flush_waveform(usb_stream_t *s);

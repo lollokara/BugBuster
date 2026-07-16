@@ -1746,9 +1746,26 @@ fn SettingsPanel(
     apply_rate: Rc<dyn Fn()>,
 ) -> impl IntoView {
     let apply_supply = apply_source.clone();
-    let ar_minus = apply_rate.clone();
-    let ar_input = apply_rate.clone();
-    let ar_plus = apply_rate.clone();
+    // USB Decim must NOT go through apply_rate: that also re-issues the BBP
+    // daq_cfg_set_enum(DAQ_K_SAMPLE_RATE_IDX, ...) call, which forces a real
+    // hardware stop/reconfigure/run cycle on the P4 (daq_board_stop_fast +
+    // run_fast) even though the rate index didn't change. Decimation only
+    // needs CMD_SET_RATE (firmware only honors the decimation field there —
+    // see CTRL_MSG_SET_RATE in daq_board.c).
+    let apply_decim = move || {
+        let (idx, vidx, dec) = (
+            sample_rate_idx.get_untracked(),
+            voltage_rate_idx.get_untracked(),
+            decimation.get_untracked(),
+        );
+        spawn_local(async move {
+            daq_set_rate(idx, vidx, dec).await;
+            show_toast(&format!("USB decim: /{}", dec), "ok");
+        });
+    };
+    let ar_minus = apply_decim.clone();
+    let ar_input = apply_decim.clone();
+    let ar_plus = apply_decim.clone();
     let range_labels = ["Auto", "HI µA", "MID mA", "LO A"];
     let filter_labels = [("Off", 0u8), ("Avg", 1), ("EMA", 2), ("Median", 3), ("HPF", 4)];
     // Hardware filter / decimation key constants (DAQ_K_FILTER=0x0106, DAQ_K_DECIMATION=0x0107)
