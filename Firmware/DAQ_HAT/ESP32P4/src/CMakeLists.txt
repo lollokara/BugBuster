@@ -14,6 +14,7 @@ idf_component_register(
         "dsp/spectrum.c"
         "smu/smu.c"
         "cal/smu_cal.c"
+        "cal/range_cal.c"
         "link/s3_link.c"
         "link/ddp_master.c"
         "link/c6_flasher.c"

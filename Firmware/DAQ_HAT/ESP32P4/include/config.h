@@ -35,7 +35,9 @@
 // Inter-processor UART to the on-module ESP32-C6 (P4 GPIO32 -> C6 U0RXD,
 // P4 GPIO33 <- C6 U0TXD). This is the C6's UART0, which doubles as the ROM
 // download UART used to flash the C6 from the P4 (see C6 boot/reset control
-// below). UART0 console is on GPIO37/38 (do not reuse).
+// below). UART0 console was on GPIO37/38 but is REPURPOSED for the software-
+// controlled autorange flip-flop inputs (see AR_FF_HI_PIN / AR_FF_MID_PIN);
+// disable UART0 console in sdkconfig (CONFIG_ESP_CONSOLE_UART_NONE=y).
 // -----------------------------------------------------------------------------
 #define DAQ_UART_TX_PIN   32      // P4 TX -> C6 U0RXD
 #define DAQ_UART_RX_PIN   33      // P4 RX <- C6 U0TXD
@@ -228,13 +230,42 @@
 // AD8411A fixed gain (V/V).
 #define ISENSE_AMP_GAIN           50.0f
 
-// Bidirectional bypass-control lines (read = observe range, drive = override).
-//   GPIO52 -> U9  : 51 ohm bypass. HIGH = 51 ohm shorted out.
-//   GPIO53 -> U13 : 2 ohm bypass (R27). HIGH = 2 ohm shorted out.
-// Range decode from (bypass51, bypass2):
-//   (0,0)=HI 51ohm, (1,0)=MID 2ohm, (1,1)=LO 50mohm, (0,1)=transition.
-#define RANGE_BYPASS51_PIN        ((gpio_num_t)52)   // U9  (51 ohm bypass)
-#define RANGE_BYPASS2_PIN         ((gpio_num_t)53)   // U13 (2 ohm bypass)
+// Autorange flip-flop inputs (new hardware revision).
+// The SR latches are no longer wired directly to the bypass mux; their Q
+// outputs feed these P4 GPIO inputs. The P4 drives the bypass lines (GPIO52/53)
+// entirely in software so it can apply a lock timer and sample-confirmation
+// guard to prevent the oscillation that occurred when the offsets caused a
+// negative hardware hysteresis window.
+//
+//   GPIO37 — HI (51 Ω) SR-latch Q output.
+//     POSEDGE: HI-CSA exceeded V_SET → switch to MID immediately.
+//     NEGEDGE: MID-CSA dropped below AR_V_RESET → consider returning to HI.
+//   GPIO38 — MID (2 Ω) SR-latch Q output.
+//     POSEDGE: MID-CSA exceeded V_SET → switch to LO immediately.
+//     NEGEDGE: LO-CSA dropped below AR_V_RESET → consider returning to MID.
+// Note: these pins were formerly the UART0 console (disabled in sdkconfig).
+#define AR_FF_HI_PIN     ((gpio_num_t)37)  // 51 Ω latch Q
+#define AR_FF_MID_PIN    ((gpio_num_t)38)  // 2 Ω  latch Q
+
+// Autorange voltage thresholds (absolute CSA output voltage, V, incl. offsets).
+#define AR_V_SET          3.90f  // SET comparator threshold (both latches, same)
+#define AR_V_RESET        0.60f  // RESET comparator threshold (raised from 0.345 V)
+                                  // = (0.60 - 0.25) / 100 ≈ 3.5 mA in MID range
+
+// Anti-oscillation parameters.
+// After a range-UP switch, ignore all DOWN events for this many ADAQ samples.
+// At 250 kSPS: 64 samples = 256 µs  (well past any CSA / mux settling).
+// At   4 kSPS: 64 samples =  16 ms  (comfortable).
+#define AR_LOCK_SAMPLES      64
+// Consecutive samples that must sit below the RESET voltage before we
+// commit to a range-DOWN. Guards against brief CSA glitches.
+#define AR_CONFIRM_SAMPLES    8
+
+// Bypass-control outputs (P4 now DRIVES these; no longer observes analog latch).
+//   GPIO52 -> U9  : 51 ohm bypass. HIGH = 51 ohm shorted out (MID or LO range).
+//   GPIO53 -> U13 : 2 ohm bypass. HIGH = 2 ohm shorted out (LO range).
+#define RANGE_BYPASS51_PIN   ((gpio_num_t)52)
+#define RANGE_BYPASS2_PIN    ((gpio_num_t)53)
 
 // FINE input mux U24 (ADG5204): selects which CSA feeds ADAQ1.
 //   A0=GPIO50, A1=GPIO51, EN=GPIO49 (EN is SHARED with the U25 voltage mux).

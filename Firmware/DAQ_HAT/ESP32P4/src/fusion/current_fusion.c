@@ -13,6 +13,15 @@ void current_fusion_set_timing(current_fusion_t *f, uint32_t settle_samples,
     f->blend_samples  = blend_samples;
 }
 
+void current_fusion_set_trust(current_fusion_t *f,
+                              float i_trust_hi, float i_trust_mid)
+{
+    // Clamp to absolute minima: a trust window below 1 µA (HI) or 100 µA (MID)
+    // would prevent FINE from ever being used — likely a calibration error.
+    if (i_trust_hi  > 1e-6f) f->fine_trust_max[RANGE_HI]  = i_trust_hi;
+    if (i_trust_mid > 1e-4f) f->fine_trust_max[RANGE_MID] = i_trust_mid;
+}
+
 void current_fusion_init(current_fusion_t *f, range_manager_t *rm,
                          uint32_t settle_samples, uint32_t blend_samples)
 {

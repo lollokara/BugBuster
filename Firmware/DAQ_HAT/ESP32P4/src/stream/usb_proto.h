@@ -56,6 +56,9 @@ typedef enum {
     USB_CMD_FFT_CONFIG   = 0x86,   // payload: usb_cmd_fft_t
     USB_CMD_SET_SOURCE   = 0x87,   // payload: usb_cmd_source_t (SMU)
     USB_CMD_ARM          = 0x88,   // payload: usb_cmd_arm_t (trigger pre-roll)
+    USB_CMD_RANGE_CAL_START = 0x89, // payload: usb_cmd_range_cal_t (start cal)
+    USB_CMD_RANGE_CAL_ACK   = 0x8A, // no payload (advance past PROMPT)
+    USB_CMD_RANGE_CAL_ABORT = 0x8B, // no payload
 } usb_rec_type_t;
 
 // ---- WAVEFORM record --------------------------------------------------------
@@ -184,6 +187,14 @@ typedef struct __attribute__((packed)) {
     uint16_t _pad;
     uint32_t pre_samples;   // requested pre-trigger depth (fused samples)
 } usb_cmd_arm_t;
+
+// ---- USB_CMD_RANGE_CAL_START payload --------------------------------------
+// Operator supplies the two precision resistor values (Ω). Defaults (5600 / 56)
+// are used if the values are zero.
+typedef struct __attribute__((packed)) {
+    float r_cal_a_ohm;   // Pass A resistor (HI/MID boundary), e.g. 5600.0
+    float r_cal_b_ohm;   // Pass B resistor (MID/LO boundary),  e.g. 56.0
+} usb_cmd_range_cal_t;
 
 // CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
 uint16_t usb_proto_crc16(const uint8_t *data, uint32_t len, uint16_t init);

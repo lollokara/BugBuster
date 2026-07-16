@@ -250,6 +250,16 @@ esp_err_t daq_board_init(daq_board_t *b)
     // already drives fine_valid=false independently; the software settle is a
     // backup guard, so 8 samples is ample margin at any configured rate.
     current_fusion_init(&b->fusion, &b->range, /*settle=*/8, /*blend=*/4);
+
+    // Load per-board range threshold calibration from NVS. If present, apply
+    // the calibrated trust windows to current_fusion so FINE is used up to
+    // the exact hardware SET threshold rather than a conservative estimate.
+    {
+        range_threshold_cal_t thr = {0};
+        if (range_cal_load(&thr) == ESP_OK && thr.magic == RANGE_CAL_MAGIC) {
+            current_fusion_set_trust(&b->fusion, thr.i_trust_hi, thr.i_trust_mid);
+        }
+    }
     power_dsp_init(&b->dsp, current_odr);
     // Multi-resolution zoom tiers (x100 each) and a continuous 1024-pt Hann FFT.
     multires_init(&b->multires, /*tiers=*/4, /*factor=*/100, NULL, NULL);
@@ -352,13 +362,15 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out)
 // writes + daq_board_run_fast; running that chain inline on the 4096-byte
 // TinyUSB task overflows its stack (Stack protection fault, MCAUSE=0x1b).
 // ---------------------------------------------------------------------------
-typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE } ctrl_msg_type_t;
+typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE,
+               CTRL_MSG_RANGE_CAL_START } ctrl_msg_type_t;
 
 typedef struct {
     ctrl_msg_type_t type;
     union {
-        usb_cmd_rate_t   rate;
-        usb_cmd_source_t source;
+        usb_cmd_rate_t      rate;
+        usb_cmd_source_t    source;
+        usb_cmd_range_cal_t range_cal;
     };
 } ctrl_msg_t;
 
@@ -391,6 +403,18 @@ static void daq_ctrl_task(void *arg)
             case CTRL_MSG_SET_SOURCE: {
                 const usb_cmd_source_t *c = &msg.source;
                 daq_board_set_source(b, c->vdut, c->ilimit, c->enable != 0);
+                break;
+            }
+
+            case CTRL_MSG_RANGE_CAL_START: {
+                const usb_cmd_range_cal_t *rc = &msg.range_cal;
+                b->range_cal.r_cal_a_ohm = (rc->r_cal_a_ohm > 0.0f)
+                                           ? rc->r_cal_a_ohm : 5600.0f;
+                b->range_cal.r_cal_b_ohm = (rc->r_cal_b_ohm > 0.0f)
+                                           ? rc->r_cal_b_ohm : 56.0f;
+                if (range_cal_start(&b->range_cal, b) != ESP_OK) {
+                    ESP_LOGE(TAG, "range_cal_start failed");
+                }
                 break;
             }
         }
@@ -453,6 +477,22 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
                 const usb_cmd_arm_t *c = (const usb_cmd_arm_t *)payload;
                 usb_stream_set_arm(&b->usb, c->armed != 0, c->pre_samples);
             }
+            break;
+        case USB_CMD_RANGE_CAL_START:
+            // Deferred to ctrl task: range_cal_start spawns a task which calls
+            // daq_board_stop_fast — must not run on the TinyUSB stack.
+            if (b->ctrl_queue) {
+                ctrl_msg_t msg = { .type = CTRL_MSG_RANGE_CAL_START };
+                if (len >= sizeof(usb_cmd_range_cal_t))
+                    memcpy(&msg.range_cal, payload, sizeof(usb_cmd_range_cal_t));
+                xQueueSend(b->ctrl_queue, &msg, 0);
+            }
+            break;
+        case USB_CMD_RANGE_CAL_ACK:
+            range_cal_ack(&b->range_cal);
+            break;
+        case USB_CMD_RANGE_CAL_ABORT:
+            range_cal_abort(&b->range_cal);
             break;
         case USB_CMD_SET_RATE:
             // Deferred to ctrl task: stop_fast has vTaskDelay + SPI writes +
@@ -1016,8 +1056,13 @@ static inline int32_t base_offset_adc(daq_board_t *b, uint8_t range)
 static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
                       const adaq_sample_t *coarse)
 {
+    // range_manager_step() processes any pending ISR flags from the FF GPIOs
+    // (range-up immediate, range-down deferred with lock + confirmation) and
+    // drives the bypass GPIOs when warranted.  It must be called every sample
+    // so the lock/confirm counters advance correctly even when one of the two
+    // ADC streams is absent.
     fusion_input_t in = {
-        .range        = range_manager_poll(&b->range),
+        .range        = range_manager_step(&b->range),
         .fine_valid   = false,
         .coarse_valid = false,
         .fine_v       = 0.0f,
@@ -1256,3 +1301,4 @@ esp_err_t daq_board_stop_fast(daq_board_t *b)
     adaq_stream_deinit(&b->stream_b);
     return ESP_OK;
 }
+

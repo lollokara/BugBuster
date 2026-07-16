@@ -94,6 +94,16 @@ void current_fusion_step(current_fusion_t *f, const fusion_input_t *in,
 void current_fusion_set_timing(current_fusion_t *f, uint32_t settle_samples,
                                uint32_t blend_samples);
 
+/**
+ * @brief Update the FINE trust windows from calibrated SET threshold currents.
+ *        Call after range calibration to apply per-board thresholds without
+ *        rebooting.  Clamps to sane minima to prevent runaway.
+ * @param i_trust_hi   new fine_trust_max[RANGE_HI] (A)
+ * @param i_trust_mid  new fine_trust_max[RANGE_MID] (A)
+ */
+void current_fusion_set_trust(current_fusion_t *f,
+                              float i_trust_hi, float i_trust_mid);
+
 #ifdef __cplusplus
 }
 #endif

@@ -34,6 +34,7 @@
 #include "usb_stream.h"
 #include "smu.h"
 #include "smu_cal.h"
+#include "range_cal.h"
 #include "s3_link.h"
 #include "ddp_master.h"
 
@@ -47,6 +48,7 @@ typedef struct daq_board {
     ds4424_t                idac;
     smu_t                   smu;
     smu_cal_t               cal;
+    range_cal_engine_t             range_cal;    // autorange threshold calibration
     range_manager_t         range;
     current_fusion_t        fusion;
     power_dsp_t             dsp;
@@ -192,4 +194,5 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity);
 
 /** @brief Stop the fast acquisition path (processor task + capture tasks). */
 esp_err_t daq_board_stop_fast(daq_board_t *b);
+
 

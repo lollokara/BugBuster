@@ -1052,3 +1052,4 @@ void smu_cal_get_status(const smu_cal_t *c, smu_cal_status_t *out)
     out->vcount   = c->blob.vcount;
     out->icount   = c->blob.icount;
 }
+

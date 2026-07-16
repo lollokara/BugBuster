@@ -48,6 +48,7 @@
 #include "smu.h"
 #include "power_dsp.h"
 #include "range_manager.h"
+#include "range_cal.h"
 #include "daq_settings.h"
 #include "daq_config_registry.h"
 #include "diagnostics.h"
@@ -2982,6 +2983,144 @@ static void cli_print_range_points(daq_board_t *b, current_range_t range)
     }
 }
 
+static int cmd_rangecal(int argc, char **argv)
+{
+    daq_board_t *b = s_board;
+
+    if (argc >= 2 && !strcmp(argv[1], "status")) {
+        range_cal_phase_t phase; uint8_t prog, ec;
+        range_cal_get_status(&b->range_cal, &phase, &prog, &ec);
+        const char *pname[] = { "idle", "prompt_A", "running_A",
+                                "prompt_B", "running_B", "success", "failed" };
+        const char *ps = (phase < 7) ? pname[phase] : "?";
+        printf("rangecal status: %s  progress=%d%%", ps, prog);
+        if (phase == RANGE_CAL_FAILED)  printf("  error=%d", ec);
+        printf("\n");
+        // Print stored calibration if any
+        range_threshold_cal_t thr = {0};
+        range_cal_load(&thr);
+        if (thr.magic == RANGE_CAL_MAGIC) {
+            printf("  stored: SET_HI=%.4fV  RST_HI=%.4fV  "
+                   "SET_MID=%.4fV  RST_MID=%.4fV\n",
+                   (double)thr.v_set_hi, (double)thr.v_reset_hi,
+                   (double)thr.v_set_mid, (double)thr.v_reset_mid);
+            printf("  trust:  HI=%.3f mA  MID=%.3f mA\n",
+                   (double)(thr.i_trust_hi  * 1e3f),
+                   (double)(thr.i_trust_mid * 1e3f));
+        } else {
+            printf("  no valid stored calibration (defaults active)\n");
+        }
+        return 0;
+    }
+
+    if (argc >= 2 && !strcmp(argv[1], "ack")) {
+        range_cal_ack(&b->range_cal);
+        printf("rangecal: ACK sent\n");
+        return 0;
+    }
+
+    if (argc >= 2 && !strcmp(argv[1], "abort")) {
+        range_cal_abort(&b->range_cal);
+        printf("rangecal: aborted\n");
+        return 0;
+    }
+
+    // Interactive start: block and draw progress.
+    // Usage: rangecal [r_a_ohm [r_b_ohm]]
+    // Note: argv[1] holds the first number (subcommand checks above return
+    // early, so we know argv[1] is not a keyword at this point).
+    float r_a = (argc >= 2) ? strtof(argv[1], NULL) : 5600.0f;
+    float r_b = (argc >= 3) ? strtof(argv[2], NULL) : 56.0f;
+    if (r_a <= 0.0f || r_b <= 0.0f) {
+        printf("usage: rangecal [status|ack|abort] "
+               "[r_cal_a_ohm [r_cal_b_ohm]]\n");
+        return 1;
+    }
+
+    if (b->fast_running) {
+        printf("rangecal: stopping acquisition first...\n");
+        daq_board_stop_fast(b);
+    }
+
+    b->range_cal.r_cal_a_ohm = r_a;
+    b->range_cal.r_cal_b_ohm = r_b;
+    if (range_cal_start(&b->range_cal, b) != ESP_OK) {
+        printf("rangecal: failed to start (already running? use 'rangecal abort' first)\n");
+        return 1;
+    }
+    // range_cal_start() now blocks until the task sets PROMPT_A (up to 2 s),
+    // so phase is guaranteed to be != IDLE when we reach the poll loop.
+
+    printf("=== Range Threshold Calibration ===\n");
+    printf("R_cal_A = %.0f ohm  (HI/MID boundary)\n", (double)r_a);
+    printf("R_cal_B = %.0f ohm  (MID/LO boundary)\n", (double)r_b);
+    printf("ESC at any time to abort.\n\n");
+
+    // Drive the calibration: wait for prompts, ACK on user key, show progress.
+    for (;;) {
+        range_cal_phase_t phase; uint8_t prog, ec;
+        range_cal_get_status(&b->range_cal, &phase, &prog, &ec);
+
+        // ESC check (non-blocking)
+        if (tui_getch(0) == 27) {
+            range_cal_abort(&b->range_cal);
+            printf("\n[aborted]\n");
+            return 0;
+        }
+
+        if (phase == RANGE_CAL_PROMPT_A) {
+            printf("\n  Connect R_cal_A = %.0f ohm across DUT terminals, "
+                   "then press ENTER (or any key to ack)...", (double)r_a);
+            fflush(stdout);
+            int ch = tui_getch(30000);
+            if (ch == 27) { range_cal_abort(&b->range_cal); printf("\n[aborted]\n"); return 0; }
+            if (ch < 0)   { range_cal_abort(&b->range_cal); printf("\n[timeout]\n"); return 0; }
+            range_cal_ack(&b->range_cal);
+            printf("\n  Pass A running (ramp up/down, watch FF_HI)...\n");
+        } else if (phase == RANGE_CAL_PROMPT_B) {
+            printf("\n  Pass A done. Swap to R_cal_B = %.0f ohm, "
+                   "then press ENTER...", (double)r_b);
+            fflush(stdout);
+            int ch = tui_getch(30000);
+            if (ch == 27) { range_cal_abort(&b->range_cal); printf("\n[aborted]\n"); return 0; }
+            if (ch < 0)   { range_cal_abort(&b->range_cal); printf("\n[timeout]\n"); return 0; }
+            range_cal_ack(&b->range_cal);
+            printf("\n  Pass B running (ramp up/down, watch FF_MID)...\n");
+        } else if (phase == RANGE_CAL_RUNNING_A || phase == RANGE_CAL_RUNNING_B) {
+            printf("  [%3d%%] %s\r", prog,
+                   phase == RANGE_CAL_RUNNING_A ? "Pass A" : "Pass B");
+            fflush(stdout);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        } else if (phase == RANGE_CAL_SUCCESS) {
+            printf("\n\n[OK] Calibration complete.\n");
+            range_threshold_cal_t thr = {0};
+            range_cal_load(&thr);
+            if (thr.magic == RANGE_CAL_MAGIC) {
+                printf("  SET_HI=%.4fV  RST_HI=%.4fV  "
+                       "SET_MID=%.4fV  RST_MID=%.4fV\n",
+                       (double)thr.v_set_hi, (double)thr.v_reset_hi,
+                       (double)thr.v_set_mid, (double)thr.v_reset_mid);
+                printf("  trust: HI=%.3f mA  MID=%.3f mA (live updated)\n",
+                       (double)(thr.i_trust_hi  * 1e3f),
+                       (double)(thr.i_trust_mid * 1e3f));
+            }
+            break;
+        } else if (phase == RANGE_CAL_FAILED) {
+            printf("\n\n[FAIL] error code %d\n", ec);
+            break;
+        } else if (phase == RANGE_CAL_IDLE) {
+            // Only reached if the task exits before setting a terminal phase
+            // (shouldn't happen after the startup wait in range_cal_start).
+            printf("\n[idle / aborted]\n");
+            break;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 static int cmd_cal(int argc, char **argv)
 {
     daq_board_t *b = s_board;
@@ -3275,6 +3414,7 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("vdut",    "DUT supply: vdut <on|off|millivolts> (OFF at boot)", cmd_vdut);
     reg("ilimit",  "DUT supply current limit: ilimit <milliamps>", cmd_ilimit);
     reg("cal",     "Calibration: cal <status|v|i|base|clroff|points [range]|del <range> <idx>|clear <range>>", cmd_cal);
+    reg("rangecal","Range threshold calibration: rangecal [status|ack|abort] [r_a_ohm [r_b_ohm]]", cmd_rangecal);
     reg("c6reset", "Pulse C6 RST (normal restart)", cmd_c6reset);
     reg("c6boot",  "Enter C6 ROM download mode + bridge UART2 to console for esptool", cmd_c6boot);
     reg("c6logs",  "Bridge C6 UART2 to console + reset C6 into normal boot (view its log)", cmd_c6logs);
@@ -3292,3 +3432,5 @@ esp_err_t daq_cli_start(daq_board_t *board)
     ESP_LOGI(TAG, "bring-up console ready on USB-Serial-JTAG (type 'help')");
     return ESP_OK;
 }
+
+

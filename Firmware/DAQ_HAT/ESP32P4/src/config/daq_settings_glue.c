@@ -45,7 +45,7 @@ static void apply_ranging(daq_board_t *b)
     daq_settings_get_i32(DAQ_K_RANGE_IDX, &range_idx);
 
     if (autorange) {
-        range_manager_force(&b->range, RANGE_UNKNOWN);   // release -> analog auto
+        range_manager_force(&b->range, RANGE_UNKNOWN);   // release -> firmware autorange
     } else {
         range_manager_force(&b->range, range_idx_to_hw(range_idx));
     }
