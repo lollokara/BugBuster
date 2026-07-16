@@ -1915,6 +1915,17 @@ pub struct DaqStatus {
     pub ilimit_set: f32,
     pub in_voltage: f32,
     pub in_current: f32,
+    /// bit0=FINE ok, bit1=COARSE ok, bit2=VOLT ok. 0 = old firmware (no v2).
+    pub adaq_ok_bits: u8,
+    /// FINE STATUS_ERR % (0-100). 100 = fused stream is COARSE-only.
+    pub fine_err_pct: u8,
+    /// FINE pairing-resync drops (saturates at 65535).
+    pub drop_fine: u16,
+    /// COARSE pairing-resync drops.
+    pub drop_coarse: u16,
+    /// OR of all MASTER_STATUS bits seen on the FINE ADAQ since boot.
+    /// 0xFF = FINE did not init. Bits: 6=ADC_ERR 4=CLK_QUAL 3=SAT 2=UNSETTLED 1=SPI_ERR.
+    pub fine_diag_sticky: u8,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

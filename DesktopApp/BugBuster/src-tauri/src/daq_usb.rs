@@ -439,6 +439,12 @@ impl MockDaqTransport {
             ilimit_set: 2.5,
             in_voltage: if self.source_enabled { v_in } else { 0.0 },
             in_current: if self.source_enabled { i_in } else { 0.0 },
+            // Simulator: all ADAQs healthy, no errors.
+            adaq_ok_bits: 0b111,
+            fine_err_pct: 0,
+            drop_fine: 0,
+            drop_coarse: 0,
+            fine_diag_sticky: 0,
         }
     }
     /// Emit synthetic event markers for any 5 Hz burst edge that falls inside

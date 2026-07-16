@@ -130,10 +130,23 @@ pub struct StatusRecord {
     pub source_enabled: bool,
     pub vdut_set: f32,
     pub ilimit_set: f32,
-    /// Supply-input rail sense (P4 ADC). Optional extension: 0 if the device
-    /// firmware does not report it (only present when payload_len >= 28).
+    /// Extension v1 (bytes 20-27): SMU input-rail sense. 0 when not reported.
     pub in_voltage: f32,
     pub in_current: f32,
+    /// Extension v2 (bytes 28-35): FINE ADC health.
+    /// `adaq_ok_bits`: bit0=FINE ok, bit1=COARSE ok, bit2=VOLT ok. 0 = old firmware.
+    pub adaq_ok_bits: u8,
+    /// Percentage of FINE samples that carried a STATUS_ERR bit (0-100).
+    /// 100 means the fused stream is running on COARSE only.
+    pub fine_err_pct: u8,
+    /// FINE pairing-resync drop counter (saturates at 65535).
+    pub drop_fine: u16,
+    /// COARSE pairing-resync drop counter (saturates at 65535).
+    pub drop_coarse: u16,
+    /// OR of all MASTER_STATUS (0x2D) bytes seen on the FINE ADAQ since boot.
+    /// 0xFF = FINE ADAQ did not initialise. Bit map: 7=MASTER_ERR 6=ADC_ERR
+    /// 5=DIG_ERR 4=CLK_QUAL 3=FILT_SAT 2=FILT_UNSETTLED 1=SPI_ERR 0=POR.
+    pub fine_diag_sticky: u8,
 }
 
 /// One digital event marker (flag or trigger), decoded from the 16-byte wire
@@ -353,12 +366,24 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 ilimit_set: rd_f32(p, 16),
                 in_voltage: 0.0,
                 in_current: 0.0,
+                adaq_ok_bits: 0,
+                fine_err_pct: 0,
+                drop_fine: 0,
+                drop_coarse: 0,
+                fine_diag_sticky: 0,
             };
-            // Forward-compatible input-rail sense (firmware that supports it
-            // appends two f32; older firmware sends the 20-byte payload).
+            // Extension v1 (bytes 20-27): input-rail sense.
             if p.len() >= 28 {
                 s.in_voltage = rd_f32(p, 20);
                 s.in_current = rd_f32(p, 24);
+            }
+            // Extension v2 (bytes 28-35): FINE ADC health.
+            if p.len() >= 36 {
+                s.adaq_ok_bits     = p[28];
+                s.fine_err_pct     = p[29];
+                s.drop_fine        = rd_u16(p, 30);
+                s.drop_coarse      = rd_u16(p, 32);
+                s.fine_diag_sticky = p[34];
             }
             DaqRecord::Status(s)
         }

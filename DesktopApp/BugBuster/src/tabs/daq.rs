@@ -942,14 +942,84 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                 let snap = snapshots.get();
                 let st = snap.as_ref().and_then(|s| s.status);
                 let en = snap.as_ref().and_then(|s| s.energy);
+                // FINE ADC health badge: only shown when the firmware reports
+                // extension v2 (adaq_ok_bits non-zero = firmware present) and
+                // there is a problem. Three states:
+                //   "FINE N/A"   — FINE ADAQ not initialised or 100% errors
+                //   "FINE ERR X%" — errors detected but < 100% (partial)
+                //   (hidden)      — FINE healthy / old firmware (adaq_ok_bits==0)
+                let fine_badge = st.and_then(|s| {
+                    let has_v2 = s.adaq_ok_bits != 0
+                        || s.fine_err_pct > 0
+                        || s.drop_fine > 0
+                        || s.drop_coarse > 0
+                        || s.fine_diag_sticky != 0;
+                    if !has_v2 {
+                        return None; // old firmware — don't show anything
+                    }
+                    let fine_ok = (s.adaq_ok_bits & 1) != 0;
+                    // Decode diag_sticky bits into a human-readable cause.
+                    // 0xFF = FINE ADAQ never responded to SPI (adaq_ok=false).
+                    let cause = if !fine_ok || s.fine_diag_sticky == 0xFF {
+                        "FINE ADAQ did not respond during init (adaq_ok=0). \
+                         Check SPI3 bus, ADAQ reset line (GPIO2), and analog \
+                         rail power sequence."
+                    } else if s.fine_diag_sticky & (1 << 4) != 0 {
+                        "FINE ADAQ: ERR_EXT_CLK_QUAL — external MCLK absent \
+                         or out of spec. Check SiT8208 oscillator and \
+                         CDCLVC1104 clock distribution (3V3 PG gate)."
+                    } else if s.fine_diag_sticky & (1 << 6) != 0 {
+                        "FINE ADAQ: ADC_ERROR — converter self-test fault. \
+                         May indicate front-end power issue or damaged device."
+                    } else if s.fine_diag_sticky & (1 << 2) != 0 {
+                        "FINE ADAQ: FILT_NOT_SETTLED — filter settling fault. \
+                         Check MCLK continuity and SPI config (MODE 3, \
+                         ≤20 MHz)."
+                    } else if s.fine_diag_sticky & (1 << 1) != 0 {
+                        "FINE ADAQ: SPI_ERROR — communication fault on SPI3 \
+                         bus. Check SCLK20/MOSI13/MISO21/CS12 routing."
+                    } else if s.fine_diag_sticky & (1 << 3) != 0 {
+                        "FINE ADAQ: FILT_SATURATED — input out of range. \
+                         Fine trust window exceeded or shunt mux misconfigured."
+                    } else {
+                        "FINE ADAQ has status errors — fused current is \
+                         COARSE-only."
+                    };
+                    if !fine_ok || s.fine_err_pct >= 90 {
+                        Some(("FINE N/A", "#ef4444", cause))
+                    } else if s.fine_err_pct > 0 {
+                        Some(("FINE ERR", "#f59e0b", cause))
+                    } else {
+                        None
+                    }
+                });
                 view!{
-                    <div class="daq-readouts" style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;padding:4px 8px;">
+                    <div class="daq-readouts" style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;padding:4px 8px;align-items:center;">
                         <Readout label="V" value=en.map(|e| fmt_eng(e.last_v as f64, "V")).unwrap_or("—".into()) color=TRACK_V.color/>
                         <Readout label="I" value=en.map(|e| fmt_eng(e.last_i as f64, "A")).unwrap_or("—".into()) color=TRACK_I.color/>
                         <Readout label="P" value=en.map(|e| fmt_eng(e.last_p as f64, "W")).unwrap_or("—".into()) color=TRACK_P.color/>
                         <Readout label="Energy" value=en.map(|e| format!("{:.3} mWh", e.energy_mwh)).unwrap_or("—".into()) color="#e2e8f0"/>
                         <Readout label="Charge" value=en.map(|e| format!("{:.3} mAh", e.charge_mah)).unwrap_or("—".into()) color="#e2e8f0"/>
                         <Readout label="Range" value=st.map(|s| range_name(s.range)).unwrap_or("—".into()) color="#94a3b8"/>
+                        {fine_badge.map(|(label, color, tip)| view!{
+                            <span
+                                title=tip
+                                style=format!(
+                                    "font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px;\
+                                     color:{c};border:1px solid {c}66;background:{c}1a;cursor:help;",
+                                    c = color
+                                )
+                            >{label}</span>
+                        })}
+                        {st.filter(|s| (s.adaq_ok_bits & 1) != 0 && s.drop_fine > 500).map(|s| view!{
+                            <span
+                                title=format!("Sequence-pairing resync drops — FINE: {}, COARSE: {}. \
+                                    High counts indicate FINE/COARSE ring overflow or ODR mismatch.",
+                                    s.drop_fine, s.drop_coarse)
+                                style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px;\
+                                       color:#f59e0b;border:1px solid #f59e0b66;background:#f59e0b1a;cursor:help;"
+                            >"DROPS"</span>
+                        })}
                     </div>
                 }
             }}

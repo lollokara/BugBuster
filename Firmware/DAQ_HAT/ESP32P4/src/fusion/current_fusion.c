@@ -68,17 +68,29 @@ void current_fusion_step(current_fusion_t *f, const fusion_input_t *in,
     bool  fine_in_window = in->fine_valid &&
                            fabsf(fine_a) <= f->fine_trust_max[in->range];
 
-    // During the post-switch settle blackout, use COARSE regardless of FINE.
+    // During the post-switch settle blackout, prefer COARSE — but exit early
+    // if the hardware confirms FINE is already valid (FILT_NOT_SETTLED cleared,
+    // reading inside window). The hardware status bit is the authoritative
+    // settler indicator; the countdown is just a backup for firmware that does
+    // not append the status byte.
     if (f->settle_remaining > 0) {
-        f->settle_remaining--;
-        out->amps   = coarse_a;
-        out->source = FUSE_SRC_COARSE;
-        // When the blackout ends, arm a cross-fade back to FINE.
-        if (f->settle_remaining == 0 && fine_in_window) {
-            f->blend_remaining = f->blend_samples;
-            f->blend_from      = FUSE_SRC_COARSE;
+        if (fine_in_window) {
+            // Hardware says FINE is settled and reading is trusted — skip the
+            // remaining countdown and go straight to blending.
+            f->settle_remaining = 0;
+            f->blend_remaining  = f->blend_samples;
+            f->blend_from       = FUSE_SRC_COARSE;
+        } else {
+            f->settle_remaining--;
+            out->amps   = coarse_a;
+            out->source = FUSE_SRC_COARSE;
+            // When the blackout ends, arm a cross-fade back to FINE.
+            if (f->settle_remaining == 0 && fine_in_window) {
+                f->blend_remaining = f->blend_samples;
+                f->blend_from      = FUSE_SRC_COARSE;
+            }
+            return;
         }
-        return;
     }
 
     if (!fine_in_window) {

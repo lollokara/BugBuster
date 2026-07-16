@@ -243,7 +243,13 @@ esp_err_t daq_board_init(daq_board_t *b)
     // Lean on COARSE for ~1 filter settle after a range switch, then short blend.
     // 64-sample blackout / 16-sample cross-fade are conservative defaults; tune
     // against the ADAQ settle tables for the active filter/ODR.
-    current_fusion_init(&b->fusion, &b->range, /*settle=*/64, /*blend=*/16);
+    // settle=8: the ADAQ7769-1 filter settles in 3-7 output samples
+    // (SINC3/SINC5/wideband, datasheet Table 5). The old value of 64 caused
+    // COARSE floods during HI<->MID autoranging at low ODR (64 samples at
+    // 4kSPS = 16ms per transition). The hardware FILT_NOT_SETTLED status bit
+    // already drives fine_valid=false independently; the software settle is a
+    // backup guard, so 8 samples is ample margin at any configured rate.
+    current_fusion_init(&b->fusion, &b->range, /*settle=*/8, /*blend=*/4);
     power_dsp_init(&b->dsp, current_odr);
     // Multi-resolution zoom tiers (x100 each) and a continuous 1024-pt Hann FFT.
     multires_init(&b->multires, /*tiers=*/4, /*factor=*/100, NULL, NULL);
@@ -545,7 +551,24 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
                             (uint8_t)SPEC_WIN_HANN);
     }
 
-    // Device status (range, streaming, SMU set-points).
+    // Device status (range, streaming, SMU set-points, FINE ADC health).
+    //
+    // fine_err_pct: ratio of FINE ADAQ status-header reads that carried an
+    // error bit (ADC/DIG/CLK/SAT/UNSETTLED/SPI) since boot/reset, expressed
+    // as 0-100. A persistent 100 means every FINE sample is invalid and the
+    // fused stream is running on COARSE only.
+    const adaq7769_t *fine_dev = &b->adaq[ADAQ_ROLE_FINE];
+    uint8_t fine_err_pct = 0;
+    if (b->adaq_ok[ADAQ_ROLE_FINE] && fine_dev->diag_status_reads > 0) {
+        uint64_t pct = (uint64_t)fine_dev->diag_err_count * 100u
+                     / fine_dev->diag_status_reads;
+        fine_err_pct = (uint8_t)(pct > 100 ? 100 : pct);
+    } else if (!b->adaq_ok[ADAQ_ROLE_FINE]) {
+        fine_err_pct = 100;   // not present = effectively 100% bad
+    }
+    uint8_t adaq_ok_bits = (b->adaq_ok[0] ? 1u : 0u)
+                         | (b->adaq_ok[1] ? 2u : 0u)
+                         | (b->adaq_ok[2] ? 4u : 0u);
     usb_status_payload_t st = {
         .sample_rate    = (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]),
         .overflow_count = 0,
@@ -555,6 +578,14 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         .source_enabled = b->smu.enabled ? 1 : 0,
         .vdut_set       = b->smu.vdut_set,
         .ilimit_set     = b->smu.ilimit_set,
+        .in_voltage     = 0.0f,
+        .in_current     = 0.0f,
+        .adaq_ok_bits     = adaq_ok_bits,
+        .fine_err_pct     = fine_err_pct,
+        .drop_fine        = (uint16_t)(b->drop_fine  > 0xFFFFu ? 0xFFFFu : b->drop_fine),
+        .drop_coarse      = (uint16_t)(b->drop_coarse > 0xFFFFu ? 0xFFFFu : b->drop_coarse),
+        .fine_diag_sticky = b->adaq_ok[ADAQ_ROLE_FINE]
+                                ? fine_dev->diag_sticky : 0xFFu,
     };
     usb_stream_send_status(&b->usb, &st);
     return ESP_OK;

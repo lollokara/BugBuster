@@ -127,16 +127,29 @@ typedef struct __attribute__((packed)) {
 #define USB_MARK_KIND_TRIGGER  1u   // acquisition trigger fired (defines t=0)
 
 // ---- STATUS record ----------------------------------------------------------
+// Extension v1 (bytes 20-27): input-rail sense (in_voltage, in_current).
+// Extension v2 (bytes 28-35): FINE ADC health (adaq_ok_bits, fine_err_pct,
+//   drop_fine, drop_coarse). Older parsers silently ignore trailing bytes.
 typedef struct __attribute__((packed)) {
-    uint32_t sample_rate;
-    uint32_t overflow_count;
-    uint8_t  range;
-    uint8_t  streaming;       // bool
-    uint8_t  range_locked;    // bool
-    uint8_t  source_enabled;  // SMU on
-    float    vdut_set;        // programmed V_DUT (V)
-    float    ilimit_set;      // programmed current limit (A)
-} usb_status_payload_t;
+    uint32_t sample_rate;     // 0
+    uint32_t overflow_count;  // 4
+    uint8_t  range;           // 8  — current_range_t
+    uint8_t  streaming;       // 9  — bool
+    uint8_t  range_locked;    // 10 — bool
+    uint8_t  source_enabled;  // 11 — SMU on
+    float    vdut_set;        // 12 — programmed V_DUT (V)
+    float    ilimit_set;      // 16 — programmed current limit (A)
+    // Extension v1 (bytes 20-27)
+    float    in_voltage;      // 20 — SMU input voltage (V), 0 if N/A
+    float    in_current;      // 24 — SMU input current (A), 0 if N/A
+    // Extension v2 (bytes 28-35)
+    uint8_t  adaq_ok_bits;      // 28 — bit0=FINE ok, bit1=COARSE ok, bit2=VOLT ok
+    uint8_t  fine_err_pct;      // 29 — FINE STATUS_ERR % of last window (0-100)
+    uint16_t drop_fine;         // 30 — FINE pairing-resync drops (saturates 65535)
+    uint16_t drop_coarse;       // 32 — COARSE pairing-resync drops
+    uint8_t  fine_diag_sticky;  // 34 — OR of all MASTER_STATUS bits seen on FINE (ADAQ 0x2D)
+    uint8_t  _pad;              // 35
+} usb_status_payload_t;         // total: 36 bytes
 
 // ---- Control command payloads ----------------------------------------------
 typedef struct __attribute__((packed)) {
