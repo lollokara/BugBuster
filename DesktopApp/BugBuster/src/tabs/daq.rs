@@ -275,7 +275,12 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                 if vmin.is_empty() {
                     continue;
                 }
-                let (lo, hi) = col_range(vmin, vmax);
+                let gap_slice = if vd.gap.len() == vmin.len() {
+                    Some(vd.gap.as_slice())
+                } else {
+                    None
+                };
+                let (lo, hi) = col_range_gapped(t.name, vmin, vmax, gap_slice);
                 let (y_top, y_bottom) = regions[i];
                 let tint = t.name == "Current" && tint_cur;
                 gl_lanes.push(Lane {
@@ -284,11 +289,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     vmin,
                     vmax,
                     source: if tint { src } else { None },
-                    gap: if vd.gap.len() == vmin.len() {
-                        Some(vd.gap.as_slice())
-                    } else {
-                        None
-                    },
+                    gap: gap_slice,
                     lo,
                     hi,
                     color: t.color_gl,
@@ -1207,22 +1208,50 @@ fn track_cols<'a>(
     }
 }
 
-fn col_range(vmin: &[f32], vmax: &[f32]) -> (f32, f32) {
-    // Non-finite entries come from gap-filled buckets (or the hi-res
-    // smoothing filters, which aren't NaN-aware) — exclude them so a single
-    // dropout doesn't collapse the autoranged axis.
-    let lo = vmin
-        .iter()
-        .cloned()
-        .filter(|v| v.is_finite())
-        .fold(f32::INFINITY, f32::min);
-    let hi = vmax
-        .iter()
-        .cloned()
-        .filter(|v| v.is_finite())
-        .fold(f32::NEG_INFINITY, f32::max);
-    nice_range(lo, hi)
+thread_local! {
+    // Last known-good autorange per lane name, kept so that a view where
+    // *every* visible column is a gap bucket (e.g. right after a dropout, at
+    // high refresh rates) doesn't snap the axis to the (0.0, 1.0) default —
+    // it holds the previous scale instead.
+    static LAST_GOOD_RANGE: std::cell::RefCell<std::collections::HashMap<&'static str, (f32, f32)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
+
+/// Compute the autoranged (lo, hi) for one lane's visible min/max envelope
+/// columns, excluding gap-bucket columns (gap[k] == 1) and any non-finite
+/// entries (gap fill values, or hi-res smoothing filters which aren't
+/// NaN-aware) so dropouts and gap buckets don't collapse/pollute the Y
+/// autoscale. If every column is a gap (or `gap` is absent/mismatched and no
+/// finite samples remain), falls back to the previous good range for this
+/// lane rather than the default (0.0, 1.0).
+fn col_range_gapped(lane: &'static str, vmin: &[f32], vmax: &[f32], gap: Option<&[u8]>) -> (f32, f32) {
+    let is_gap = |k: usize| gap.map(|g| g.get(k).copied().unwrap_or(0) == 1).unwrap_or(false);
+    let mut lo = f32::INFINITY;
+    let mut hi = f32::NEG_INFINITY;
+    for k in 0..vmin.len() {
+        if is_gap(k) {
+            continue;
+        }
+        let a = vmin[k];
+        let b = vmax.get(k).copied().unwrap_or(f32::NAN);
+        if a.is_finite() {
+            lo = lo.min(a);
+        }
+        if b.is_finite() {
+            hi = hi.max(b);
+        }
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        // Every column was a gap (or non-finite) — hold the previous scale.
+        return LAST_GOOD_RANGE
+            .with(|m| m.borrow().get(lane).copied())
+            .unwrap_or((0.0, 1.0));
+    }
+    let r = nice_range(lo, hi);
+    LAST_GOOD_RANGE.with(|m| m.borrow_mut().insert(lane, r));
+    r
+}
+
 
 // ── Display filtering (client-side, over the visible envelope) ───────────────
 // Applied to the ~1800-column min/max envelope returned by the backend rather
@@ -1444,7 +1473,12 @@ fn draw_overlay(
             let (lo, hi) = if vmin.is_empty() {
                 (0.0, 1.0)
             } else {
-                col_range(vmin, vmax)
+                let gap_slice = if vd.gap.len() == vmin.len() {
+                    Some(vd.gap.as_slice())
+                } else {
+                    None
+                };
+                col_range_gapped(t.name, vmin, vmax, gap_slice)
             };
             ctx.set_fill_style_str(t.color);
             let _ = ctx.fill_text(t.name, 6.0, y_top + 14.0);
