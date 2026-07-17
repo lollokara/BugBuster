@@ -74,8 +74,14 @@ void usb_stream_set_streaming(usb_stream_t *s, bool on)
 // -----------------------------------------------------------------------------
 // Frame assembly
 // -----------------------------------------------------------------------------
-static esp_err_t emit_frame_ex(usb_stream_t *s, usb_rec_type_t type,
-                               const void *payload, uint16_t len, bool crc)
+// Finalize + send a frame whose payload (len bytes) has ALREADY been composed
+// into s->frame_buf at offset USB_FRAME_HEADER_LEN. Fills header bytes 0..12,
+// writes the CRC slot (0x0000 for data frames, real CRC-16 otherwise), applies
+// back-pressure and transmits. This is the zero-copy path used by the large
+// WAVE_I / WAVE_V / FFT builders so no payload-sized stack or static buffer is
+// needed.
+static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
+                                    uint16_t len, bool crc)
 {
     if (len > USB_MAX_PAYLOAD) {
         return ESP_ERR_INVALID_SIZE;
@@ -103,9 +109,6 @@ static esp_err_t emit_frame_ex(usb_stream_t *s, usb_rec_type_t type,
     f[9] = (uint8_t)(s->tx_seq >> 24);
     f[10] = (uint8_t)(len);
     f[11] = (uint8_t)(len >> 8);
-    if (len && payload) {
-        memcpy(&f[USB_FRAME_HEADER_LEN], payload, len);
-    }
     uint32_t crc_off = USB_FRAME_HEADER_LEN + len;
     if (crc) {
         // CRC over header tail [2 .. 12+len).
@@ -143,11 +146,25 @@ static esp_err_t emit_frame_ex(usb_stream_t *s, usb_rec_type_t type,
     return ESP_OK;
 }
 
+// Copy an external payload into frame_buf, then finalize + send.
+static esp_err_t emit_frame_ex(usb_stream_t *s, usb_rec_type_t type,
+                               const void *payload, uint16_t len, bool crc)
+{
+    if (len > USB_MAX_PAYLOAD) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (len && payload) {
+        memcpy(&s->frame_buf[USB_FRAME_HEADER_LEN], payload, len);
+    }
+    return emit_frame_inplace(s, type, len, crc);
+}
+
 static esp_err_t emit_frame(usb_stream_t *s, usb_rec_type_t type,
                             const void *payload, uint16_t len)
 {
-    // Legacy control/loopback call sites keep CRC verification.
-    return emit_frame_ex(s, type, payload, len, true);
+    // Device->PC data frames (type < 0x80) skip the software CRC; loopback /
+    // control-direction frames keep it (see usb_proto.h).
+    return emit_frame_ex(s, type, payload, len, (uint8_t)type >= 0x80u);
 }
 
 esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
@@ -164,11 +181,10 @@ esp_err_t usb_stream_flush_wave_i(usb_stream_t *s)
     if (s->wi_count == 0) {
         return ESP_OK;
     }
-    // Compose payload = header + f32 array + meta array directly into a
-    // local buffer sized to the worst case (fits USB_MAX_PAYLOAD by design).
-    uint8_t pl[sizeof(usb_wave_hdr_t) +
-               sizeof(float) * USB_WAVE_I_BATCH +
-               sizeof(uint8_t) * USB_WAVE_I_BATCH];
+    // Compose payload = header + f32 array + meta array directly into the
+    // frame staging buffer (no payload-sized stack allocation — this runs on
+    // the daq_fast task, which has a small stack).
+    uint8_t *pl = &s->frame_buf[USB_FRAME_HEADER_LEN];
     usb_wave_hdr_t hdr = {
         .start_index  = s->wi_start_index,
         .timestamp_us = s->wi_timestamp_us,
@@ -184,7 +200,7 @@ esp_err_t usb_stream_flush_wave_i(usb_stream_t *s)
     uint16_t len = (uint16_t)(sizeof(hdr) +
                               (size_t)s->wi_count * (sizeof(float) + sizeof(uint8_t)));
 
-    esp_err_t err = emit_frame_ex(s, USB_REC_WAVE_I, pl, len, false);
+    esp_err_t err = emit_frame_inplace(s, USB_REC_WAVE_I, len, false);
     if (err == ESP_ERR_INVALID_SIZE) {
         // Should be unreachable given USB_WAVE_I_BATCH is sized to fit
         // USB_MAX_PAYLOAD, but log loudly if it ever regresses rather than
@@ -226,7 +242,9 @@ esp_err_t usb_stream_flush_wave_v(usb_stream_t *s)
     if (s->wv_count == 0) {
         return ESP_OK;
     }
-    uint8_t pl[sizeof(usb_wave_hdr_t) + sizeof(float) * USB_WAVE_V_BATCH];
+    // Compose the payload directly into the frame staging buffer (see
+    // flush_wave_i — no payload-sized stack allocation).
+    uint8_t *pl = &s->frame_buf[USB_FRAME_HEADER_LEN];
     usb_wave_hdr_t hdr = {
         .start_index  = s->wv_start_index,
         .timestamp_us = s->wv_timestamp_us,
@@ -239,7 +257,7 @@ esp_err_t usb_stream_flush_wave_v(usb_stream_t *s)
     memcpy(pl + sizeof(hdr), s->wv_v, (size_t)s->wv_count * sizeof(float));
     uint16_t len = (uint16_t)(sizeof(hdr) + (size_t)s->wv_count * sizeof(float));
 
-    esp_err_t err = emit_frame_ex(s, USB_REC_WAVE_V, pl, len, false);
+    esp_err_t err = emit_frame_inplace(s, USB_REC_WAVE_V, len, false);
     if (err == ESP_ERR_INVALID_SIZE) {
         ESP_LOGE(TAG, "WAVE_V payload oversized (len=%u > %u), batch dropped",
                  (unsigned)len, (unsigned)USB_MAX_PAYLOAD);
@@ -362,9 +380,9 @@ esp_err_t usb_stream_send_fft(usb_stream_t *s, const float *mags, uint16_t nbins
                                    / sizeof(float));
     if (nbins > max_bins) nbins = max_bins;
 
-    // Build payload into the frame staging area is not accessible here, so use a
-    // local buffer sized to the protocol maximum.
-    static uint8_t pl[USB_MAX_PAYLOAD];
+    // Compose the payload directly into the frame staging buffer (no static /
+    // stack buffer needed — frame_buf is exactly the right size).
+    uint8_t *pl = &s->frame_buf[USB_FRAME_HEADER_LEN];
     usb_fft_header_t hdr = {
         .sample_rate = sample_rate,
         .nbins       = nbins,
@@ -374,7 +392,7 @@ esp_err_t usb_stream_send_fft(usb_stream_t *s, const float *mags, uint16_t nbins
     memcpy(pl, &hdr, sizeof(hdr));
     memcpy(pl + sizeof(hdr), mags, (size_t)nbins * sizeof(float));
     uint16_t len = (uint16_t)(sizeof(hdr) + (size_t)nbins * sizeof(float));
-    return emit_frame(s, USB_REC_FFT, pl, len);
+    return emit_frame_inplace(s, USB_REC_FFT, len, false);
 }
 
 // -----------------------------------------------------------------------------
