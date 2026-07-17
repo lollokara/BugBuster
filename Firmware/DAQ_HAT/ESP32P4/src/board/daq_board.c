@@ -428,6 +428,7 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
     daq_board_t *b = (daq_board_t *)user;
     switch (cmd) {
         case USB_CMD_START:
+            usb_stream_reset_session(&b->usb);
             usb_stream_set_streaming(&b->usb, true);
             ESP_LOGI(TAG, "CMD_START: streaming on (mounted=%d, fast=%d)",
                      usb_backend_mounted(), b->fast_running);
@@ -542,8 +543,11 @@ esp_err_t daq_board_usb_start(daq_board_t *b)
     esp_err_t err = usb_backend_start(&b->usb);
     b->usb_ok = (err == ESP_OK);
     if (b->usb_ok) {
-        usb_stream_set_streaming(&b->usb, true);
-        ESP_LOGI(TAG, "USB measurement stream started");
+        // Do NOT enable streaming here: at boot there is no host reading yet,
+        // so WAVE frames would flow into the TX FIFO with nobody draining it
+        // (bench: 1989 FIFO frame drops before the host even connected).
+        // Streaming is gated on USB_CMD_START / HATP_CMD_DAQ_START instead.
+        ESP_LOGI(TAG, "USB measurement stream ready (streaming gated on CMD_START)");
     }
     return err;
 }
@@ -698,6 +702,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
     daq_board_t *b = (daq_board_t *)user;
     switch (cmd) {
         case HATP_CMD_DAQ_START:
+            usb_stream_reset_session(&b->usb);
             usb_stream_set_streaming(&b->usb, true);
             return 0;
 

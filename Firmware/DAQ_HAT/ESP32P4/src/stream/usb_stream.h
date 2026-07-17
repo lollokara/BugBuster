@@ -101,6 +101,8 @@ typedef struct {
     uint64_t tx_bytes_window;   // bytes since last perf tick
     uint32_t bytes_per_sec;     // computed by usb_stream_perf_tick()
     int64_t  perf_last_us;
+    uint64_t perf_last_sample_seq; // sample_seq snapshot at last perf tick,
+                                    // for the emitted-rate (Sa/s) log line.
 } usb_stream_t;
 
 /** @brief Initialise the stream manager (no transport yet). */
@@ -114,6 +116,17 @@ void usb_stream_set_cmd_cb(usb_stream_t *s, usb_cmd_cb_t cb, void *user);
 
 /** @brief Enable/disable outbound streaming (data frames dropped when off). */
 void usb_stream_set_streaming(usb_stream_t *s, bool on);
+
+/**
+ * @brief Reset per-session state at the start of a new capture: zeroes
+ *        sample_seq, volt_seq, wi_count, wv_count, dropped_frames, tx_frames,
+ *        and tx_bytes_window. tx_seq (the outbound frame sequence) is left
+ *        monotonic so the host never sees it go backwards mid-stream.
+ *        Call this BEFORE usb_stream_set_streaming(s, true) on every
+ *        CMD_START / HATP_CMD_DAQ_START so the host's sample-index timeline
+ *        starts at 0 instead of jumping from whatever accumulated pre-start.
+ */
+void usb_stream_reset_session(usb_stream_t *s);
 
 // ---- Outbound: build + send a frame -----------------------------------------
 

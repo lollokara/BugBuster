@@ -71,6 +71,22 @@ void usb_stream_set_streaming(usb_stream_t *s, bool on)
     s->streaming = on;
 }
 
+void usb_stream_reset_session(usb_stream_t *s)
+{
+    s->sample_seq          = 0;
+    s->volt_seq            = 0;
+    s->wi_count             = 0;
+    s->wv_count             = 0;
+    s->dropped_frames       = 0;
+    s->tx_frames             = 0;
+    s->tx_bytes_window       = 0;
+    s->bytes_per_sec         = 0;
+    s->perf_last_us          = 0;
+    s->perf_last_sample_seq  = 0;
+    // tx_seq is intentionally left untouched — it is the outbound frame
+    // sequence and must stay monotonic across sessions.
+}
+
 // -----------------------------------------------------------------------------
 // Frame assembly
 // -----------------------------------------------------------------------------
@@ -365,9 +381,15 @@ void usb_stream_perf_tick(usb_stream_t *s)
     }
     s->bytes_per_sec = (uint32_t)((s->tx_bytes_window * 1000000ULL) / (uint64_t)dt_us);
     s->tx_bytes_window = 0;
+
+    uint64_t emitted = s->sample_seq - s->perf_last_sample_seq;
+    uint32_t emit_rate = (uint32_t)((emitted * 1000000ULL) / (uint64_t)dt_us);
+    s->perf_last_sample_seq = s->sample_seq;
+
     s->perf_last_us = now;
-    ESP_LOGI(TAG, "perf: %.2f MB/s frames=%lu drops=%lu",
+    ESP_LOGI(TAG, "perf: %.2f MB/s emit=%lu Sa/s frames=%lu drops=%lu",
              (double)s->bytes_per_sec / (1024.0 * 1024.0),
+             (unsigned long)emit_rate,
              (unsigned long)s->tx_frames,
              (unsigned long)s->dropped_frames);
 }
