@@ -565,12 +565,17 @@ impl DaqStore {
     }
 
     /// Online least-squares fit of `timestamp_us` vs `start_index` over the
-    /// 64-header ring, clamped to ±5% of the nominal rate to reject nonsense
-    /// during startup (too few points / noisy early headers).
+    /// 64-header ring. Accepted whenever the fitted rate is between 1% and
+    /// 120% of the nominal wire rate — wide enough that a device genuinely
+    /// emitting far below nominal (e.g. ~106 kSa/s against a 256 kSa/s
+    /// nominal) still gets its real rate reflected in the time axis, instead
+    /// of being clamped back to nominal and stretching the trace. Only
+    /// rejected for actual nonsense / startup noise: fewer than 8 headers in
+    /// the ring, a non-finite result, or a non-positive slope.
     fn fit_timebase(&mut self) {
         let n = self.timebase_ring.len();
         let nominal = self.sample_rate_hz.max(1) as f64;
-        if n < 2 {
+        if n < 8 {
             self.actual_rate_hz = nominal;
             return;
         }
@@ -593,7 +598,7 @@ impl DaqStore {
             return;
         }
         let rate = 1e6 / slope_us_per_sample;
-        if rate >= nominal * 0.95 && rate <= nominal * 1.05 {
+        if rate.is_finite() && rate >= nominal * 0.01 && rate <= nominal * 1.20 {
             self.actual_rate_hz = rate;
         }
     }
@@ -1211,6 +1216,37 @@ mod tests {
         }
         let r = s.actual_rate_hz();
         assert!((r - 255_000.0).abs() < 500.0, "fitted {r}");
+    }
+
+    #[test]
+    fn timebase_fit_accepts_rate_far_below_nominal() {
+        // Bench scenario: nominal (wire) rate is 256 kSa/s but the device is
+        // actually emitting at ~40% of that. The old ±5% clamp rejected this
+        // and silently fell back to nominal, stretching the time axis. The
+        // widened 1%-120% band must now accept it.
+        let mut s = DaqStore::new(256_000);
+        let actual = 256_000.0 * 0.40; // 102,400 Hz
+        for b in 0..64u64 {
+            let ts = (b * 1000) as f64 * 1e6 / actual;
+            push_wave_i(&mut s, b * 1000, &vec![0.0f32; 1000], 256_000, ts as u64);
+        }
+        let r = s.actual_rate_hz();
+        assert!(
+            (r - actual).abs() < actual * 0.02,
+            "expected fit near {actual}, got {r}"
+        );
+    }
+
+    #[test]
+    fn timebase_fit_falls_back_to_nominal_with_too_few_headers() {
+        // Only 2 headers in the ring: too little data to trust a fit (bench:
+        // early startup noise). Must fall back to the nominal rate rather
+        // than extrapolating from a couple of noisy points.
+        let mut s = DaqStore::new(256_000);
+        push_wave_i(&mut s, 0, &vec![0.0f32; 1000], 256_000, 0);
+        push_wave_i(&mut s, 1000, &vec![0.0f32; 1000], 256_000, 3_906);
+        let r = s.actual_rate_hz();
+        assert_eq!(r, 256_000.0, "expected fallback to nominal, got {r}");
     }
 
     #[test]
