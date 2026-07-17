@@ -23,19 +23,20 @@ use serde::{Deserialize, Serialize};
 
 pub const MAGIC0: u8 = 0xBB;
 pub const MAGIC1: u8 = 0x50;
-pub const PROTO_VERSION: u8 = 1;
+pub const PROTO_VERSION: u8 = 2;
 pub const FRAME_HEADER_LEN: usize = 12;
 pub const FRAME_CRC_LEN: usize = 2;
 pub const FRAME_OVERHEAD: usize = FRAME_HEADER_LEN + FRAME_CRC_LEN;
-pub const MAX_PAYLOAD: usize = 4096;
+pub const MAX_PAYLOAD: usize = 16384;
 
 // Record / frame types. 0x00..0x7F = device->PC data, 0x80+ = PC->device control.
-pub const REC_WAVEFORM: u8 = 0x01;
+pub const REC_WAVE_I: u8 = 0x01;
 pub const REC_STATS: u8 = 0x02;
 pub const REC_ENERGY: u8 = 0x03;
 pub const REC_FFT: u8 = 0x04;
 pub const REC_MARKER: u8 = 0x05;
 pub const REC_STATUS: u8 = 0x06;
+pub const REC_WAVE_V: u8 = 0x07;
 
 pub const CMD_START: u8 = 0x80;
 pub const CMD_STOP: u8 = 0x81;
@@ -61,23 +62,40 @@ pub const SRC_FINE: u8 = 0;
 pub const SRC_COARSE: u8 = 1;
 pub const SRC_BLEND: u8 = 2;
 
-/// One fused waveform sample (decoded from the 16-byte on-wire struct).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WaveSample {
-    pub i: f32,
-    pub v: f32,
-    pub p: f32,
-    pub range: u8,
-    pub source: u8,
-    pub flags: u8,
+/// meta byte accessors (WaveIRecord.meta[i]): bits 0-1 = range, bits 2-3 =
+/// source, bit 4 = saturated, bit 5 = settling.
+pub fn meta_range(m: u8) -> u8 {
+    m & 0x03
 }
+pub fn meta_source(m: u8) -> u8 {
+    (m >> 2) & 0x03
+}
+pub const META_SATURATED: u8 = 0x10;
+pub const META_SETTLING: u8 = 0x20;
 
+/// WAVE_I record: struct-of-arrays fused-current waveform.
+/// Wire payload (24-byte header): u64 start_index | u64 timestamp_us |
+/// u32 sample_rate | u16 count | u8 decimation | u8 pad
+/// | count x f32 i[] | count x u8 meta[]
 #[derive(Debug, Clone, PartialEq)]
-pub struct WaveformRecord {
-    pub start_seq: u32,
+pub struct WaveIRecord {
+    pub start_index: u64,
+    pub timestamp_us: u64,
     pub sample_rate: u32,
     pub decimation: u8,
-    pub samples: Vec<WaveSample>,
+    pub i: Vec<f32>,
+    pub meta: Vec<u8>,
+}
+
+/// WAVE_V record: struct-of-arrays voltage waveform.
+/// Wire payload (24-byte header): u64 start_index | u64 timestamp_us |
+/// u32 sample_rate | u16 count | u16 pad | count x f32 v[]
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaveVRecord {
+    pub start_index: u64,
+    pub timestamp_us: u64,
+    pub sample_rate: u32,
+    pub v: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -147,6 +165,13 @@ pub struct StatusRecord {
     /// 0xFF = FINE ADAQ did not initialise. Bit map: 7=MASTER_ERR 6=ADC_ERR
     /// 5=DIG_ERR 4=CLK_QUAL 3=FILT_SAT 2=FILT_UNSETTLED 1=SPI_ERR 0=POR.
     pub fine_diag_sticky: u8,
+    /// Extension v3 (bytes 36-55): USB streaming performance counters.
+    /// 0 when not reported (payload < 56 bytes).
+    pub frames_tx: u32,
+    pub bytes_per_sec: u32,
+    pub fifo_drop_frames: u32,
+    pub ring_high_water: u32,
+    pub wave_i_index_lo: u32,
 }
 
 /// One digital event marker (flag or trigger), decoded from the 16-byte wire
@@ -155,7 +180,7 @@ pub struct StatusRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarkerRecord {
-    pub sample_index: u32,
+    pub sample_index: u64,
     pub timestamp_us: u64,
     pub channel: u8, // S3 IO number (1..12)
     pub edge: u8,    // 0 = falling, 1 = rising
@@ -164,7 +189,8 @@ pub struct MarkerRecord {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DaqRecord {
-    Waveform(WaveformRecord),
+    WaveI(WaveIRecord),
+    WaveV(WaveVRecord),
     Stats(StatsRecord),
     Energy(EnergyRecord),
     Fft(FftRecord),
@@ -227,13 +253,19 @@ pub fn parse_frame(buf: &[u8]) -> Result<(DaqRecord, usize), FrameError> {
         });
     }
     let payload = &buf[FRAME_HEADER_LEN..FRAME_HEADER_LEN + payload_len];
-    let got_crc = u16::from_le_bytes([buf[total - 2], buf[total - 1]]);
-    let expected = crc16(&buf[2..FRAME_HEADER_LEN + payload_len], 0xFFFF);
-    if got_crc != expected {
-        return Err(FrameError::BadCrc {
-            expected,
-            got: got_crc,
-        });
+    // Data-direction frames (rec_type < 0x80) carry a zeroed CRC slot on the
+    // wire and are not checked. Control-direction frames (>= 0x80, i.e.
+    // PC->device commands, which this parser also validates for loopback /
+    // test purposes) still carry a real CRC and are enforced.
+    if rec_type >= 0x80 {
+        let got_crc = u16::from_le_bytes([buf[total - 2], buf[total - 1]]);
+        let expected = crc16(&buf[2..FRAME_HEADER_LEN + payload_len], 0xFFFF);
+        if got_crc != expected {
+            return Err(FrameError::BadCrc {
+                expected,
+                got: got_crc,
+            });
+        }
     }
     let record = decode_payload(rec_type, payload);
     Ok((record, total))
@@ -261,35 +293,58 @@ fn rd_f64(p: &[u8], o: usize) -> f64 {
 
 fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
     match rec_type {
-        REC_WAVEFORM => {
-            if p.len() < 12 {
+        REC_WAVE_I => {
+            if p.len() < 24 {
                 return DaqRecord::Other(rec_type);
             }
-            let start_seq = rd_u32(p, 0);
-            let sample_rate = rd_u32(p, 4);
-            let count = rd_u16(p, 8) as usize;
-            let decimation = p[10];
-            let mut samples = Vec::with_capacity(count);
-            let mut o = 12;
-            for _ in 0..count {
-                if o + 16 > p.len() {
-                    break;
-                }
-                samples.push(WaveSample {
-                    i: rd_f32(p, o),
-                    v: rd_f32(p, o + 4),
-                    p: rd_f32(p, o + 8),
-                    range: p[o + 12],
-                    source: p[o + 13],
-                    flags: p[o + 14],
-                });
-                o += 16;
+            let start_index = rd_u64(p, 0);
+            let timestamp_us = rd_u64(p, 8);
+            let sample_rate = rd_u32(p, 16);
+            let mut count = rd_u16(p, 20) as usize;
+            let decimation = p[22];
+            // clamp count so the f32 + u8 arrays fit in the payload.
+            while count > 0 && 24 + count * 5 > p.len() {
+                count -= 1;
             }
-            DaqRecord::Waveform(WaveformRecord {
-                start_seq,
+            let mut i = Vec::with_capacity(count);
+            let mut o = 24;
+            for _ in 0..count {
+                i.push(rd_f32(p, o));
+                o += 4;
+            }
+            let meta = p[o..o + count].to_vec();
+            DaqRecord::WaveI(WaveIRecord {
+                start_index,
+                timestamp_us,
                 sample_rate,
                 decimation,
-                samples,
+                i,
+                meta,
+            })
+        }
+        REC_WAVE_V => {
+            if p.len() < 24 {
+                return DaqRecord::Other(rec_type);
+            }
+            let start_index = rd_u64(p, 0);
+            let timestamp_us = rd_u64(p, 8);
+            let sample_rate = rd_u32(p, 16);
+            let mut count = rd_u16(p, 20) as usize;
+            // clamp count so the f32 array fits in the payload.
+            while count > 0 && 24 + count * 4 > p.len() {
+                count -= 1;
+            }
+            let mut v = Vec::with_capacity(count);
+            let mut o = 24;
+            for _ in 0..count {
+                v.push(rd_f32(p, o));
+                o += 4;
+            }
+            DaqRecord::WaveV(WaveVRecord {
+                start_index,
+                timestamp_us,
+                sample_rate,
+                v,
             })
         }
         REC_STATS => {
@@ -371,6 +426,11 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 drop_fine: 0,
                 drop_coarse: 0,
                 fine_diag_sticky: 0,
+                frames_tx: 0,
+                bytes_per_sec: 0,
+                fifo_drop_frames: 0,
+                ring_high_water: 0,
+                wave_i_index_lo: 0,
             };
             // Extension v1 (bytes 20-27): input-rail sense.
             if p.len() >= 28 {
@@ -385,20 +445,28 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 s.drop_coarse      = rd_u16(p, 32);
                 s.fine_diag_sticky = p[34];
             }
+            // Extension v3 (bytes 36-55): USB streaming performance counters.
+            if p.len() >= 56 {
+                s.frames_tx = rd_u32(p, 36);
+                s.bytes_per_sec = rd_u32(p, 40);
+                s.fifo_drop_frames = rd_u32(p, 44);
+                s.ring_high_water = rd_u32(p, 48);
+                s.wave_i_index_lo = rd_u32(p, 52);
+            }
             DaqRecord::Status(s)
         }
         REC_MARKER => {
-            // usb_marker_payload_t: sample_index u32, timestamp_us u64,
-            // channel u8, edge u8, kind u8, _pad u8 (16 bytes).
-            if p.len() < 15 {
+            // usb_marker_payload_t v2: sample_index u64, timestamp_us u64,
+            // channel u8, edge u8, kind u8, _pad u8 (20 bytes).
+            if p.len() < 19 {
                 return DaqRecord::Other(rec_type);
             }
             DaqRecord::Marker(MarkerRecord {
-                sample_index: rd_u32(p, 0),
-                timestamp_us: rd_u64(p, 4),
-                channel: p[12],
-                edge: p[13],
-                kind: p[14],
+                sample_index: rd_u64(p, 0),
+                timestamp_us: rd_u64(p, 8),
+                channel: p[16],
+                edge: p[17],
+                kind: p[18],
             })
         }
         other => DaqRecord::Other(other),
@@ -461,6 +529,156 @@ mod tests {
         encode_command(7, rec_type, payload)
     }
 
+    /// Device->PC data frame: CRC slot is zero and must NOT be checked.
+    fn data_frame(rec_type: u8, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![MAGIC0, MAGIC1, PROTO_VERSION, rec_type, 0, 0];
+        f.extend_from_slice(&7u32.to_le_bytes());
+        f.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        f.extend_from_slice(payload);
+        f.extend_from_slice(&[0, 0]); // zero CRC
+        f
+    }
+
+    #[test]
+    fn parse_wave_i_soa() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&1_000_000u64.to_le_bytes()); // start_index
+        p.extend_from_slice(&123_456_789u64.to_le_bytes()); // timestamp_us
+        p.extend_from_slice(&256_000u32.to_le_bytes());
+        p.extend_from_slice(&3u16.to_le_bytes());
+        p.push(1);
+        p.push(0);
+        for k in 0..3 {
+            p.extend_from_slice(&(k as f32 * 0.001).to_le_bytes());
+        }
+        p.extend_from_slice(&[
+            RANGE_HI, // range=0 source=FINE
+            RANGE_MID | (SRC_BLEND << 2) | META_SETTLING,
+            RANGE_LO | (SRC_COARSE << 2) | META_SATURATED,
+        ]);
+        let (rec, n) = parse_frame(&data_frame(REC_WAVE_I, &p)).unwrap();
+        assert_eq!(n, FRAME_OVERHEAD + p.len());
+        match rec {
+            DaqRecord::WaveI(w) => {
+                assert_eq!(w.start_index, 1_000_000);
+                assert_eq!(w.timestamp_us, 123_456_789);
+                assert_eq!(w.sample_rate, 256_000);
+                assert_eq!(w.i.len(), 3);
+                assert_eq!(meta_range(w.meta[2]), RANGE_LO);
+                assert_eq!(meta_source(w.meta[1]), SRC_BLEND);
+                assert_ne!(w.meta[2] & META_SATURATED, 0);
+            }
+            _ => panic!("wrong record"),
+        }
+    }
+
+    #[test]
+    fn parse_wave_v() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&500u64.to_le_bytes());
+        p.extend_from_slice(&42u64.to_le_bytes());
+        p.extend_from_slice(&64_000u32.to_le_bytes());
+        p.extend_from_slice(&2u16.to_le_bytes());
+        p.extend_from_slice(&0u16.to_le_bytes());
+        p.extend_from_slice(&3.3f32.to_le_bytes());
+        p.extend_from_slice(&3.29f32.to_le_bytes());
+        let (rec, _) = parse_frame(&data_frame(REC_WAVE_V, &p)).unwrap();
+        match rec {
+            DaqRecord::WaveV(w) => {
+                assert_eq!(w.start_index, 500);
+                assert_eq!(w.sample_rate, 64_000);
+                assert_eq!(w.v, vec![3.3, 3.29]);
+            }
+            _ => panic!("wrong record"),
+        }
+    }
+
+    #[test]
+    fn data_frame_crc_ignored_control_crc_enforced() {
+        // Data frame with garbage CRC still parses.
+        let mut f = data_frame(REC_WAVE_V, &{
+            let mut p = Vec::new();
+            p.extend_from_slice(&0u64.to_le_bytes());
+            p.extend_from_slice(&0u64.to_le_bytes());
+            p.extend_from_slice(&64_000u32.to_le_bytes());
+            p.extend_from_slice(&0u16.to_le_bytes());
+            p.extend_from_slice(&0u16.to_le_bytes());
+            p
+        });
+        let last = f.len() - 1;
+        f[last] = 0xAB;
+        assert!(parse_frame(&f).is_ok());
+        // Control-direction frame (encode_command) still carries a valid CRC.
+        let c = encode_command(1, CMD_START, &[]);
+        assert_eq!(
+            u16::from_le_bytes([c[c.len() - 2], c[c.len() - 1]]),
+            crc16(&c[2..c.len() - 2], 0xFFFF)
+        );
+    }
+
+    #[test]
+    fn marker_u64_index() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&5_000_000_000u64.to_le_bytes()); // > u32::MAX
+        p.extend_from_slice(&987_654u64.to_le_bytes());
+        p.push(6);
+        p.push(1);
+        p.push(MARK_KIND_TRIGGER);
+        p.push(0);
+        let (rec, _) = parse_frame(&data_frame(REC_MARKER, &p)).unwrap();
+        match rec {
+            DaqRecord::Marker(m) => assert_eq!(m.sample_index, 5_000_000_000),
+            _ => panic!("wrong record"),
+        }
+    }
+
+    #[test]
+    fn parse_marker_flag_and_trigger() {
+        let mut p = Vec::new();
+        p.extend_from_slice(&1234u64.to_le_bytes()); // sample_index
+        p.extend_from_slice(&987_654u64.to_le_bytes()); // timestamp_us
+        p.push(6); // channel = IO6
+        p.push(1); // edge = rising
+        p.push(MARK_KIND_TRIGGER); // kind
+        p.push(0); // pad
+        let (rec, n) = parse_frame(&data_frame(REC_MARKER, &p)).unwrap();
+        assert_eq!(n, FRAME_OVERHEAD + p.len());
+        match rec {
+            DaqRecord::Marker(m) => {
+                assert_eq!(m.sample_index, 1234);
+                assert_eq!(m.timestamp_us, 987_654);
+                assert_eq!(m.channel, 6);
+                assert_eq!(m.edge, 1);
+                assert_eq!(m.kind, MARK_KIND_TRIGGER);
+            }
+            _ => panic!("wrong record"),
+        }
+    }
+
+    #[test]
+    fn status_perf_extension() {
+        let mut p = vec![0u8; 56];
+        p[36..40].copy_from_slice(&777u32.to_le_bytes()); // frames_tx
+        p[40..44].copy_from_slice(&1_600_000u32.to_le_bytes()); // bytes_per_sec
+        p[44..48].copy_from_slice(&3u32.to_le_bytes()); // fifo_drop_frames
+        let (rec, _) = parse_frame(&data_frame(REC_STATUS, &p)).unwrap();
+        match rec {
+            DaqRecord::Status(s) => {
+                assert_eq!(s.frames_tx, 777);
+                assert_eq!(s.bytes_per_sec, 1_600_000);
+                assert_eq!(s.fifo_drop_frames, 3);
+            }
+            _ => panic!("wrong record"),
+        }
+    }
+
+    #[test]
+    fn version_1_rejected() {
+        let mut f = data_frame(REC_STATUS, &[0u8; 20]);
+        f[2] = 1;
+        assert!(matches!(parse_frame(&f), Err(FrameError::BadVersion(1))));
+    }
+
     #[test]
     fn crc_roundtrip_and_parse_status() {
         let mut p = Vec::new();
@@ -472,7 +690,7 @@ mod tests {
         p.push(1); // source_enabled
         p.extend_from_slice(&3.3f32.to_le_bytes());
         p.extend_from_slice(&0.5f32.to_le_bytes());
-        let frame = frame_record(REC_STATUS, &p);
+        let frame = data_frame(REC_STATUS, &p);
         let (rec, n) = parse_frame(&frame).unwrap();
         assert_eq!(n, frame.len());
         match rec {
@@ -490,37 +708,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_waveform_samples() {
-        let mut p = Vec::new();
-        p.extend_from_slice(&0u32.to_le_bytes()); // start_seq
-        p.extend_from_slice(&250_000u32.to_le_bytes()); // sample_rate
-        p.extend_from_slice(&2u16.to_le_bytes()); // count
-        p.push(1); // decimation
-        p.push(0); // pad
-        for k in 0..2u8 {
-            p.extend_from_slice(&(k as f32).to_le_bytes()); // i
-            p.extend_from_slice(&3.3f32.to_le_bytes()); // v
-            p.extend_from_slice(&(k as f32 * 3.3).to_le_bytes()); // p
-            p.push(RANGE_LO);
-            p.push(SRC_COARSE);
-            p.push(0);
-            p.push(0);
-        }
-        let frame = frame_record(REC_WAVEFORM, &p);
-        let (rec, _n) = parse_frame(&frame).unwrap();
-        match rec {
-            DaqRecord::Waveform(w) => {
-                assert_eq!(w.samples.len(), 2);
-                assert_eq!(w.sample_rate, 250_000);
-                assert_eq!(w.samples[1].source, SRC_COARSE);
-            }
-            _ => panic!("wrong record"),
-        }
-    }
-
-    #[test]
     fn truncated_then_complete() {
-        let frame = frame_record(REC_RESET_MARKER(), &[]);
+        let frame = data_frame(REC_MARKER, &[]);
         let short = &frame[..frame.len() - 1];
         assert!(matches!(
             parse_frame(short),
@@ -528,39 +717,57 @@ mod tests {
         ));
     }
 
-    #[allow(non_snake_case)]
-    fn REC_RESET_MARKER() -> u8 {
-        REC_MARKER
-    }
-
     #[test]
-    fn bad_crc_detected() {
-        let mut frame = frame_record(REC_ENERGY, &[0u8; 52]);
+    fn bad_crc_detected_on_control_frame() {
+        // Control-direction (>= 0x80) frames still enforce CRC.
+        let mut frame = frame_record(CMD_RESET_ENERGY, &[0u8; 4]);
         let last = frame.len() - 1;
         frame[last] ^= 0xFF;
         assert!(matches!(parse_frame(&frame), Err(FrameError::BadCrc { .. })));
     }
 
     #[test]
-    fn parse_marker_flag_and_trigger() {
-        let mut p = Vec::new();
-        p.extend_from_slice(&1234u32.to_le_bytes()); // sample_index
-        p.extend_from_slice(&987_654u64.to_le_bytes()); // timestamp_us
-        p.push(6); // channel = IO6
-        p.push(1); // edge = rising
-        p.push(MARK_KIND_TRIGGER); // kind
-        p.push(0); // pad
-        let frame = frame_record(REC_MARKER, &p);
-        let (rec, n) = parse_frame(&frame).unwrap();
-        assert_eq!(n, frame.len());
+    fn parse_stats_and_energy_and_fft() {
+        let mut sp = Vec::new();
+        for _ in 0..3 {
+            sp.extend_from_slice(&(-1.0f32).to_le_bytes()); // min
+            sp.extend_from_slice(&1.0f32.to_le_bytes()); // max
+            sp.extend_from_slice(&0.0f32.to_le_bytes()); // mean
+            sp.extend_from_slice(&0.5f32.to_le_bytes()); // rms
+            sp.extend_from_slice(&0.1f32.to_le_bytes()); // std
+            sp.extend_from_slice(&100u32.to_le_bytes()); // count
+        }
+        let (rec, _) = parse_frame(&data_frame(REC_STATS, &sp)).unwrap();
         match rec {
-            DaqRecord::Marker(m) => {
-                assert_eq!(m.sample_index, 1234);
-                assert_eq!(m.timestamp_us, 987_654);
-                assert_eq!(m.channel, 6);
-                assert_eq!(m.edge, 1);
-                assert_eq!(m.kind, MARK_KIND_TRIGGER);
-            }
+            DaqRecord::Stats(s) => assert_eq!(s.i.count, 100),
+            _ => panic!("wrong record"),
+        }
+
+        let mut ep = Vec::new();
+        ep.extend_from_slice(&1.0f64.to_le_bytes());
+        ep.extend_from_slice(&3.6f64.to_le_bytes());
+        ep.extend_from_slice(&2.0f64.to_le_bytes());
+        ep.extend_from_slice(&7.2f64.to_le_bytes());
+        ep.extend_from_slice(&10.0f64.to_le_bytes());
+        ep.extend_from_slice(&0.5f32.to_le_bytes());
+        ep.extend_from_slice(&3.3f32.to_le_bytes());
+        ep.extend_from_slice(&1.65f32.to_le_bytes());
+        let (rec, _) = parse_frame(&data_frame(REC_ENERGY, &ep)).unwrap();
+        match rec {
+            DaqRecord::Energy(e) => assert!((e.energy_mwh - 1.0).abs() < 1e-9),
+            _ => panic!("wrong record"),
+        }
+
+        let mut fp = Vec::new();
+        fp.extend_from_slice(&64_000u32.to_le_bytes());
+        fp.extend_from_slice(&2u16.to_le_bytes());
+        fp.push(0); // source
+        fp.push(0); // window
+        fp.extend_from_slice(&1.0f32.to_le_bytes());
+        fp.extend_from_slice(&2.0f32.to_le_bytes());
+        let (rec, _) = parse_frame(&data_frame(REC_FFT, &fp)).unwrap();
+        match rec {
+            DaqRecord::Fft(f) => assert_eq!(f.bins, vec![1.0, 2.0]),
             _ => panic!("wrong record"),
         }
     }
