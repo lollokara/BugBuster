@@ -9,10 +9,11 @@
 // =============================================================================
 
 use crate::daq_proto::{
-    EnergyRecord, FftRecord, MarkerRecord, StatsRecord, StatusRecord, WaveformRecord, SRC_BLEND,
-    SRC_COARSE, SRC_FINE,
+    meta_range, meta_source, EnergyRecord, FftRecord, MarkerRecord, StatsRecord, StatusRecord,
+    WaveIRecord, WaveVRecord, META_SATURATED, META_SETTLING, SRC_BLEND, SRC_COARSE, SRC_FINE,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// Absolute hard ceiling on the recent raw window (RAM safety net). The actual
 /// caps are chosen adaptively from available memory (see `adaptive_budget`).
@@ -100,6 +101,25 @@ pub struct DaqStore {
     /// updates only recompute the small tail on each append.
     levels: Vec<Vec<Bin>>,
     built: Vec<usize>,
+
+    // ── v2 dual-timeline state ──────────────────────────────────────────────
+    /// Absolute device index of raw[0], anchored from the first WAVE_I record.
+    first_index: Option<u64>,
+    /// Cumulative count of index-gap samples that were filled with NaN (or,
+    /// past the fill cap, skipped by re-anchoring `first_index`).
+    dropped_samples: u64,
+    /// Last held voltage sample (device-time hold), NaN until the first
+    /// WAVE_V arrives.
+    last_v: f32,
+    /// Pending voltage samples not yet consumed by the current axis, as
+    /// `(timestamp_us, v)` pairs in device time, oldest first.
+    volt_fifo: VecDeque<(u64, f32)>,
+    /// Ring of the last 64 `(timestamp_us, start_index)` WAVE_I header pairs,
+    /// used for the online least-squares timebase fit.
+    timebase_ring: VecDeque<(u64, u64)>,
+    /// Fitted actual sample rate (Hz), falls back to `sample_rate_hz` until a
+    /// fit is available / while the fit is out of the ±5% sanity band.
+    actual_rate_hz: f64,
 }
 
 /// One decimated column of the trace view: min/max envelope per track.
@@ -112,6 +132,8 @@ pub struct DaqViewData {
     pub view_end: u64,
     pub decimated: bool,
     pub overflow: bool,
+    /// Fitted actual sample rate (Hz); falls back to nominal `sample_rate_hz`.
+    pub actual_rate_hz: f64,
     /// Per-bucket min/max for each analog track. Length = number of columns.
     pub i_min: Vec<f32>,
     pub i_max: Vec<f32>,
@@ -123,6 +145,8 @@ pub struct DaqViewData {
     pub source: Vec<u8>,
     /// Per-bucket peak |dI/dt| in A/s for the bottom heatmap.
     pub didt: Vec<f32>,
+    /// 1 = bucket had no finite sample (index gap / not-yet-held voltage).
+    pub gap: Vec<u8>,
     /// Event markers whose absolute sample index falls inside the view window.
     /// Always sent at full fidelity regardless of decimation.
     pub markers: Vec<DaqMarker>,
@@ -339,16 +363,32 @@ fn build_bin_merge(lower: &[Bin], a: usize, b: usize) -> Bin {
 impl DaqStore {
     pub fn new(sample_rate_hz: u32) -> Self {
         let (raw_cap, total_cap) = adaptive_budget();
+        let rate = sample_rate_hz.max(1);
         Self {
-            sample_rate_hz: sample_rate_hz.max(1),
+            sample_rate_hz: rate,
             decimation: 1,
             total: 0,
             raw_cap,
             max_samples: total_cap,
             levels: vec![Vec::new(); PYR_MAX_LEVELS],
             built: vec![0; PYR_MAX_LEVELS],
+            last_v: f32::NAN,
+            actual_rate_hz: rate as f64,
             ..Default::default()
         }
+    }
+
+    /// Fitted actual sample rate (Hz), from the online least-squares timebase
+    /// fit; falls back to the nominal `sample_rate_hz` until enough headers
+    /// have been seen or the fit falls outside the ±5% sanity band.
+    pub fn actual_rate_hz(&self) -> f64 {
+        self.actual_rate_hz
+    }
+
+    /// Cumulative count of index-gap samples filled with NaN (or skipped past
+    /// the fill cap, in which case `first_index` was advanced instead).
+    pub fn dropped_samples(&self) -> u64 {
+        self.dropped_samples
     }
 
     /// Estimated resident bytes of the stored capture (raw window + pyramid).
@@ -387,6 +427,12 @@ impl DaqStore {
         for b in self.built.iter_mut() {
             *b = 0;
         }
+        self.first_index = None;
+        self.dropped_samples = 0;
+        self.last_v = f32::NAN;
+        self.volt_fifo.clear();
+        self.timebase_ring.clear();
+        self.actual_rate_hz = self.sample_rate_hz.max(1) as f64;
     }
 
     /// Record a digital event marker (flag / trigger). Kept sorted by absolute
@@ -495,32 +541,155 @@ impl DaqStore {
         }
     }
 
-    /// Append a decoded WAVEFORM record to the store.
-    pub fn append_waveform(&mut self, rec: &WaveformRecord) {
+    /// Push one sample onto the fused-current axis, honouring the history
+    /// cap. Returns `false` (and sets `overflow`) once the cap is hit.
+    fn try_push_sample(&mut self, i: f32, v: f32, p: f32, range: u8, source: u8, flags: u8) -> bool {
+        if self.total as usize >= self.max_samples.max(1) {
+            if !self.overflow {
+                self.overflow = true;
+                log::warn!(
+                    "daq_store: history cap ({}) reached — capture truncated",
+                    self.max_samples
+                );
+            }
+            return false;
+        }
+        self.i.push(i);
+        self.v.push(v);
+        self.p.push(p);
+        self.range.push(range);
+        self.source.push(source);
+        self.flags.push(flags);
+        self.total += 1;
+        true
+    }
+
+    /// Online least-squares fit of `timestamp_us` vs `start_index` over the
+    /// 64-header ring, clamped to ±5% of the nominal rate to reject nonsense
+    /// during startup (too few points / noisy early headers).
+    fn fit_timebase(&mut self) {
+        let n = self.timebase_ring.len();
+        let nominal = self.sample_rate_hz.max(1) as f64;
+        if n < 2 {
+            self.actual_rate_hz = nominal;
+            return;
+        }
+        let (mut sx, mut sy, mut sxx, mut sxy) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for &(t_us, idx) in &self.timebase_ring {
+            let x = idx as f64;
+            let y = t_us as f64;
+            sx += x;
+            sy += y;
+            sxx += x * x;
+            sxy += x * y;
+        }
+        let nf = n as f64;
+        let denom = nf * sxx - sx * sx;
+        if denom.abs() < 1e-9 {
+            return;
+        }
+        let slope_us_per_sample = (nf * sxy - sx * sy) / denom;
+        if slope_us_per_sample <= 0.0 {
+            return;
+        }
+        let rate = 1e6 / slope_us_per_sample;
+        if rate >= nominal * 0.95 && rate <= nominal * 1.05 {
+            self.actual_rate_hz = rate;
+        }
+    }
+
+    /// Append a decoded WAVE_V (voltage) record. Voltage samples are held in a
+    /// device-timestamp FIFO and consumed by `append_wave_i` (voltage hold
+    /// onto the current axis), tolerating any current/voltage rate ratio.
+    pub fn append_wave_v(&mut self, rec: &WaveVRecord) {
+        let rate = rec.sample_rate.max(1) as u64;
+        for (k, &vv) in rec.v.iter().enumerate() {
+            let t_us = rec.timestamp_us + (k as u64 * 1_000_000) / rate;
+            self.volt_fifo.push_back((t_us, vv));
+        }
+        // Bound memory in case current samples stop arriving; the FIFO should
+        // normally drain well before this in a healthy stream.
+        const MAX_VOLT_FIFO: usize = 1_000_000;
+        if self.volt_fifo.len() > MAX_VOLT_FIFO {
+            let drop = self.volt_fifo.len() - MAX_VOLT_FIFO;
+            self.volt_fifo.drain(0..drop);
+        }
+    }
+
+    /// Append a decoded WAVE_I (fused current) record. Handles index-gap
+    /// filling/re-anchoring, device-restart detection, voltage hold, and the
+    /// timebase fit before appending the samples themselves.
+    pub fn append_wave_i(&mut self, rec: &WaveIRecord) {
         if rec.sample_rate > 0 {
             self.sample_rate_hz = rec.sample_rate;
         }
         if rec.decimation > 0 {
             self.decimation = rec.decimation;
         }
-        for s in &rec.samples {
-            if self.total as usize >= self.max_samples.max(1) {
-                if !self.overflow {
-                    self.overflow = true;
-                    log::warn!(
-                        "daq_store: history cap ({}) reached — capture truncated",
-                        self.max_samples
-                    );
+        let rate = self.sample_rate_hz.max(1) as u64;
+
+        let expected = match self.first_index {
+            None => {
+                self.first_index = Some(rec.start_index);
+                rec.start_index
+            }
+            Some(fi) => fi + self.total,
+        };
+
+        if rec.start_index > expected {
+            let gap_len = rec.start_index - expected;
+            let cap = 4 * rate; // 4 seconds worth of samples at the nominal rate
+            let fill = gap_len.min(cap);
+            for _ in 0..fill {
+                if !self.try_push_sample(f32::NAN, f32::NAN, f32::NAN, 0, 0, 0) {
+                    break;
                 }
+            }
+            self.dropped_samples += gap_len;
+            if gap_len > cap {
+                if let Some(fi) = self.first_index.as_mut() {
+                    *fi += gap_len - fill;
+                }
+                log::warn!(
+                    "daq_store: index gap of {gap_len} samples exceeds the {cap}-sample fill cap; re-anchoring first_index"
+                );
+            }
+        } else if rec.start_index < expected {
+            // Device restarted mid-stream: indices no longer align with what
+            // we've stored, so drop everything and re-anchor from here.
+            self.clear();
+            self.first_index = Some(rec.start_index);
+        }
+
+        // Timebase fit: keep the last 64 (timestamp_us, start_index) header
+        // pairs and recompute the slope on every append.
+        self.timebase_ring.push_back((rec.timestamp_us, rec.start_index));
+        if self.timebase_ring.len() > 64 {
+            self.timebase_ring.pop_front();
+        }
+        self.fit_timebase();
+
+        for (k, &iv) in rec.i.iter().enumerate() {
+            // Device time of this sample, used to advance the voltage hold
+            // regardless of the current/voltage rate ratio.
+            let t_us = rec.timestamp_us + (k as u64 * 1_000_000) / rate;
+            while let Some(&(vt, vv)) = self.volt_fifo.front() {
+                if vt <= t_us {
+                    self.last_v = vv;
+                    self.volt_fifo.pop_front();
+                } else {
+                    break;
+                }
+            }
+            let vv = self.last_v;
+            let pv = iv * vv;
+            let m = rec.meta.get(k).copied().unwrap_or(0);
+            let range = meta_range(m);
+            let source = meta_source(m);
+            let flags = m & (META_SATURATED | META_SETTLING);
+            if !self.try_push_sample(iv, vv, pv, range, source, flags) {
                 break;
             }
-            self.i.push(s.i);
-            self.v.push(s.v);
-            self.p.push(s.p);
-            self.range.push(s.range);
-            self.source.push(s.source);
-            self.flags.push(s.flags);
-            self.total += 1;
         }
         self.update_pyramid();
         self.evict_raw();
@@ -552,6 +721,7 @@ impl DaqStore {
             view_start: start,
             view_end: end,
             overflow: self.overflow,
+            actual_rate_hz: self.actual_rate_hz(),
             ..Default::default()
         };
         // Markers are independent of the decimation path — always attach the
@@ -618,6 +788,7 @@ impl DaqStore {
                 let mut pmax = f32::NEG_INFINITY;
                 let mut peak_didt = 0.0_f32;
                 let mut src_counts = [0u32; 3];
+                let mut any_finite = false;
                 let mut prev_i = if lo + b0 > 0 {
                     self.i[lo + b0 - 1]
                 } else {
@@ -626,27 +797,41 @@ impl DaqStore {
                 for k in b0..b1 {
                     let idx = lo + k;
                     let raw_i = self.i[idx];
+                    if raw_i.is_finite() {
+                        any_finite = true;
+                    }
                     let iv = fi.as_ref().map_or(raw_i, |a| a[k]);
-                    imin = imin.min(iv);
-                    imax = imax.max(iv);
+                    if iv.is_finite() {
+                        imin = imin.min(iv);
+                        imax = imax.max(iv);
+                    }
                     let vv = fv.as_ref().map_or(self.v[idx], |a| a[k]);
-                    vmin = vmin.min(vv);
-                    vmax = vmax.max(vv);
+                    if vv.is_finite() {
+                        vmin = vmin.min(vv);
+                        vmax = vmax.max(vv);
+                    }
                     let pv = fp.as_ref().map_or(self.p[idx], |a| a[k]);
-                    pmin = pmin.min(pv);
-                    pmax = pmax.max(pv);
+                    if pv.is_finite() {
+                        pmin = pmin.min(pv);
+                        pmax = pmax.max(pv);
+                    }
                     // dI/dt is computed on the raw signal (the heatmap should
-                    // reflect true slew, not the smoothed trace).
-                    let d = ((raw_i - prev_i) / dt).abs();
-                    if d > peak_didt {
-                        peak_didt = d;
+                    // reflect true slew, not the smoothed trace). NaN samples
+                    // (index gaps) never contribute a slew value.
+                    if raw_i.is_finite() && prev_i.is_finite() {
+                        let d = ((raw_i - prev_i) / dt).abs();
+                        if d > peak_didt {
+                            peak_didt = d;
+                        }
                     }
                     prev_i = raw_i;
-                    match self.source[idx] {
-                        SRC_FINE => src_counts[0] += 1,
-                        SRC_COARSE => src_counts[1] += 1,
-                        SRC_BLEND => src_counts[2] += 1,
-                        _ => {}
+                    if raw_i.is_finite() {
+                        match self.source[idx] {
+                            SRC_FINE => src_counts[0] += 1,
+                            SRC_COARSE => src_counts[1] += 1,
+                            SRC_BLEND => src_counts[2] += 1,
+                            _ => {}
+                        }
                     }
                 }
                 let dom = {
@@ -658,14 +843,15 @@ impl DaqStore {
                     }
                     best as u8
                 };
-                view.i_min.push(imin);
-                view.i_max.push(imax);
-                view.v_min.push(vmin);
-                view.v_max.push(vmax);
-                view.p_min.push(pmin);
-                view.p_max.push(pmax);
+                view.i_min.push(if imin.is_finite() { imin } else { 0.0 });
+                view.i_max.push(if imax.is_finite() { imax } else { 0.0 });
+                view.v_min.push(if vmin.is_finite() { vmin } else { 0.0 });
+                view.v_max.push(if vmax.is_finite() { vmax } else { 0.0 });
+                view.p_min.push(if pmin.is_finite() { pmin } else { 0.0 });
+                view.p_max.push(if pmax.is_finite() { pmax } else { 0.0 });
                 view.source.push(dom);
                 view.didt.push(peak_didt);
+                view.gap.push(if any_finite { 0 } else { 1 });
             }
         } else {
             // Pyramid path — O(columns) bin decimation, scales to any capture.
@@ -706,6 +892,7 @@ impl DaqStore {
                 view.p_max.push(if fpp { bin.p_max } else { 0.0 });
                 view.source.push(bin.source);
                 view.didt.push(bin.didt);
+                view.gap.push(if fi { 0 } else { 1 });
             }
         }
 
@@ -746,17 +933,29 @@ impl DaqStore {
         let mut energy_j = 0.0_f64; // ∫ P dt
         let mut min_i = f64::INFINITY;
         let mut max_i = f64::NEG_INFINITY;
+        let mut finite_n: u64 = 0;
 
+        // NaN samples come from index-gap fills (see append_wave_i). They
+        // must not poison the integral: skip them entirely for averages and
+        // for charge/energy contribution (treated as zero span), while
+        // `duration_s` below stays the true wall-clock span of the
+        // selection (gaps still took real time on the device).
         for idx in s0..s1 {
             let iv = self.i[idx] as f64;
+            if !iv.is_finite() {
+                continue;
+            }
             let pv = self.p[idx] as f64;
+            let vv = self.v[idx] as f64;
+            finite_n += 1;
             sum_i += iv;
-            sum_v += self.v[idx] as f64;
-            sum_p += pv;
+            sum_v += if vv.is_finite() { vv } else { 0.0 };
+            sum_p += if pv.is_finite() { pv } else { 0.0 };
             min_i = min_i.min(iv);
             max_i = max_i.max(iv);
-            // Trapezoid with the next sample where available, else rectangle.
-            if idx + 1 < s1 {
+            // Trapezoid with the next sample where available and finite,
+            // else rectangle.
+            if idx + 1 < s1 && self.i[idx + 1].is_finite() {
                 let i_next = self.i[idx + 1] as f64;
                 let p_next = self.p[idx + 1] as f64;
                 charge_c += 0.5 * (iv + i_next) * dt;
@@ -768,11 +967,12 @@ impl DaqStore {
         }
         let nf = n as f64;
         out.duration_s = nf * dt;
-        out.avg_i = sum_i / nf;
-        out.avg_v = sum_v / nf;
-        out.avg_p = sum_p / nf;
-        out.min_i = min_i;
-        out.max_i = max_i;
+        let fc = finite_n.max(1) as f64;
+        out.avg_i = sum_i / fc;
+        out.avg_v = sum_v / fc;
+        out.avg_p = sum_p / fc;
+        out.min_i = if min_i.is_finite() { min_i } else { 0.0 };
+        out.max_i = if max_i.is_finite() { max_i } else { 0.0 };
         out.charge_c = charge_c;
         out.charge_mah = charge_c / 3.6; // C → mAh (1 mAh = 3.6 C)
         out.energy_j = energy_j;
@@ -785,25 +985,36 @@ impl DaqStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daq_proto::{WaveSample, WaveformRecord};
+    use crate::daq_proto::WaveVRecord;
 
-    fn push_constant(store: &mut DaqStore, i: f32, v: f32, n: usize) {
-        let samples: Vec<WaveSample> = (0..n)
-            .map(|_| WaveSample {
-                i,
-                v,
-                p: i * v,
-                range: 1,
-                source: SRC_FINE,
-                flags: 0,
-            })
-            .collect();
-        store.append_waveform(&WaveformRecord {
-            start_seq: 0,
-            sample_rate: store.sample_rate_hz,
+    /// Build a WAVE_I record and append it (as in the brief's Design block).
+    fn push_wave_i(store: &mut DaqStore, start: u64, i_vals: &[f32], rate: u32, ts_us: u64) {
+        store.append_wave_i(&WaveIRecord {
+            start_index: start,
+            timestamp_us: ts_us,
+            sample_rate: rate,
             decimation: 1,
-            samples,
+            i: i_vals.to_vec(),
+            meta: vec![0; i_vals.len()],
         });
+    }
+
+    /// Append `n` contiguous constant-current samples (with a matching
+    /// constant-voltage hold established up front) at the store's current
+    /// rate/index, exactly as the legacy `append_waveform` tests exercised.
+    fn push_constant(store: &mut DaqStore, i: f32, v: f32, n: usize) {
+        if store.total_samples() == 0 {
+            store.append_wave_v(&WaveVRecord {
+                start_index: 0,
+                timestamp_us: 0,
+                sample_rate: 100,
+                v: vec![v],
+            });
+        }
+        let rate = store.sample_rate_hz;
+        let start = store.total_samples();
+        let ts = (start as f64 * 1e6 / rate.max(1) as f64) as u64;
+        push_wave_i(store, start, &vec![i; n], rate, ts);
     }
 
     #[test]
@@ -838,27 +1049,19 @@ mod tests {
         // the incremental pyramid; a coarse full-capture view must still
         // bracket the [0,1) range via the min/max envelope.
         let mut store = DaqStore::new(1_000_000);
+        store.append_wave_v(&WaveVRecord {
+            start_index: 0,
+            timestamp_us: 0,
+            sample_rate: 100,
+            v: vec![3.3],
+        });
         let n = 500_000usize;
-        let all: Vec<WaveSample> = (0..n)
-            .map(|k| {
-                let ph = (k % 1000) as f32 / 1000.0;
-                WaveSample {
-                    i: ph,
-                    v: 3.3,
-                    p: ph * 3.3,
-                    range: 1,
-                    source: SRC_FINE,
-                    flags: 0,
-                }
-            })
-            .collect();
+        let all: Vec<f32> = (0..n).map(|k| (k % 1000) as f32 / 1000.0).collect();
+        let mut start = 0u64;
         for chunk in all.chunks(40_000) {
-            store.append_waveform(&WaveformRecord {
-                start_seq: 0,
-                sample_rate: 1_000_000,
-                decimation: 1,
-                samples: chunk.to_vec(),
-            });
+            let ts = (start as f64 * 1e6 / 1_000_000.0) as u64;
+            push_wave_i(&mut store, start, chunk, 1_000_000, ts);
+            start += chunk.len() as u64;
         }
         assert_eq!(store.total_samples(), n as u64);
 
@@ -881,29 +1084,19 @@ mod tests {
     fn compaction_evicts_raw_keeps_overview() {
         let mut store = DaqStore::new(1_000_000);
         store.raw_cap = 50_000; // force a small raw window to trigger eviction
+        store.append_wave_v(&WaveVRecord {
+            start_index: 0,
+            timestamp_us: 0,
+            sample_rate: 100,
+            v: vec![3.3],
+        });
         let n = 400_000usize;
         let mut k = 0usize;
         while k < n {
             let end = (k + 20_000).min(n);
-            let samples: Vec<WaveSample> = (k..end)
-                .map(|j| {
-                    let ph = (j % 1000) as f32 / 1000.0;
-                    WaveSample {
-                        i: ph,
-                        v: 3.3,
-                        p: ph * 3.3,
-                        range: 1,
-                        source: SRC_FINE,
-                        flags: 0,
-                    }
-                })
-                .collect();
-            store.append_waveform(&WaveformRecord {
-                start_seq: 0,
-                sample_rate: 1_000_000,
-                decimation: 1,
-                samples,
-            });
+            let vals: Vec<f32> = (k..end).map(|j| (j % 1000) as f32 / 1000.0).collect();
+            let ts = (k as f64 * 1e6 / 1_000_000.0) as u64;
+            push_wave_i(&mut store, k as u64, &vals, 1_000_000, ts);
             k = end;
         }
         // Full history is still counted, but the raw window is bounded.
@@ -963,5 +1156,76 @@ mod tests {
         let zoom = store.get_view(0, 2_000, 800, 1, 0);
         assert_eq!(zoom.markers.len(), 1);
         assert_eq!(zoom.markers[0].channel, 2);
+    }
+
+    #[test]
+    fn voltage_held_onto_current_axis() {
+        let mut s = DaqStore::new(1000);
+        s.append_wave_v(&WaveVRecord {
+            start_index: 0,
+            timestamp_us: 0,
+            sample_rate: 100,
+            v: vec![3.3],
+        });
+        s.append_wave_v(&WaveVRecord {
+            start_index: 1,
+            timestamp_us: 500_000,
+            sample_rate: 100,
+            v: vec![2.0],
+        });
+        // 1000 current samples over 1 s: first half sees 3.3 V, second half 2.0 V.
+        let iv: Vec<f32> = vec![1.0; 1000];
+        push_wave_i(&mut s, 0, &iv, 1000, 0);
+        assert!((s.v[100] - 3.3).abs() < 1e-6);
+        assert!((s.v[600] - 2.0).abs() < 1e-6);
+        assert!((s.p[600] - 2.0).abs() < 1e-6); // p = v_held * i
+    }
+
+    #[test]
+    fn index_gap_becomes_nan_and_gap_column() {
+        let mut s = DaqStore::new(1000);
+        s.append_wave_v(&WaveVRecord {
+            start_index: 0,
+            timestamp_us: 0,
+            sample_rate: 100,
+            v: vec![3.3],
+        });
+        push_wave_i(&mut s, 0, &vec![1.0; 500], 1000, 0);
+        push_wave_i(&mut s, 700, &vec![1.0; 300], 1000, 700_000); // 200-sample gap
+        assert_eq!(s.dropped_samples(), 200);
+        assert_eq!(s.total_samples(), 1000);
+        assert!(s.i[600].is_nan());
+        let view = s.get_view(0, 1000, 100, 1, 0);
+        assert!(view.gap.iter().any(|&g| g == 1), "gap column expected");
+        // Non-gap columns keep real data.
+        assert!(view.i_max.iter().cloned().fold(f32::NEG_INFINITY, f32::max) > 0.99);
+    }
+
+    #[test]
+    fn timebase_fit_recovers_actual_rate() {
+        let mut s = DaqStore::new(256_000);
+        // Device actually runs at 255,000 Hz: 1000-sample blocks every 3921.57 µs.
+        for b in 0..64u64 {
+            let ts = (b * 1000) as f64 * 1e6 / 255_000.0;
+            push_wave_i(&mut s, b * 1000, &vec![0.0f32; 1000], 256_000, ts as u64);
+        }
+        let r = s.actual_rate_hz();
+        assert!((r - 255_000.0).abs() < 500.0, "fitted {r}");
+    }
+
+    #[test]
+    fn integrate_skips_gap_samples() {
+        let mut s = DaqStore::new(1000);
+        s.append_wave_v(&WaveVRecord {
+            start_index: 0,
+            timestamp_us: 0,
+            sample_rate: 100,
+            v: vec![1.0],
+        });
+        push_wave_i(&mut s, 0, &vec![1.0; 400], 1000, 0);
+        push_wave_i(&mut s, 600, &vec![1.0; 400], 1000, 600_000);
+        let r = s.integrate(0, 1000);
+        // 800 finite 1 A samples at 1 kHz ≈ 0.8 C, no NaN poisoning.
+        assert!(r.charge_c.is_finite() && (r.charge_c - 0.8).abs() < 0.01);
     }
 }

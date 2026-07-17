@@ -291,7 +291,8 @@ fn process_loop(
                     for rec in records {
                         frames += 1;
                         match rec {
-                            DaqRecord::Waveform(w) => s.append_waveform(&w),
+                            DaqRecord::WaveI(w) => s.append_wave_i(&w),
+                            DaqRecord::WaveV(w) => s.append_wave_v(&w),
                             DaqRecord::Stats(st) => s.last_stats = Some(st),
                             DaqRecord::Energy(en) => s.last_energy = Some(en),
                             DaqRecord::Fft(f) => s.last_fft = Some(f),
