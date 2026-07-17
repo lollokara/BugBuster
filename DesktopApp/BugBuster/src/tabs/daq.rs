@@ -284,6 +284,11 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     vmin,
                     vmax,
                     source: if tint { src } else { None },
+                    gap: if vd.gap.len() == vmin.len() {
+                        Some(vd.gap.as_slice())
+                    } else {
+                        None
+                    },
                     lo,
                     hi,
                     color: t.color_gl,
@@ -1047,6 +1052,12 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                             let mem = st.as_ref().map(|s| s.mem_used_mb).unwrap_or(0.0);
                             let cap = st.as_ref().map(|s| s.max_samples).unwrap_or(0);
                             let raw_cap = st.as_ref().map(|s| s.raw_cap).unwrap_or(0);
+                            let actual_rate = st.as_ref().map(|s| s.actual_rate_hz).unwrap_or(0.0);
+                            let dropped = st.as_ref().map(|s| s.dropped_samples).unwrap_or(0);
+                            let snap = snapshots.get();
+                            let perf = snap.as_ref().and_then(|s| s.status);
+                            let fifo_drops = perf.map(|s| s.fifo_drop_frames).unwrap_or(0);
+                            let bps = perf.map(|s| s.bytes_per_sec).unwrap_or(0);
                             let f = fps.get();
                             let fm = fetch_ms.get();
                             // "Keeping up" = data not dropped and the backend serves
@@ -1069,6 +1080,10 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                                     <PerfRow label="Store" value=format!("{:.0} MB", mem)/>
                                     <PerfRow label="Raw window" value=format!("{:.1} M", raw_held as f64 / 1e6)/>
                                     <PerfRow label="History cap" value=format!("{} M ({:.0}%)", cap / 1_000_000, fill)/>
+                                    <PerfRow label="Actual rate" value={if actual_rate > 0.0 { format!("{:.3} kSPS", actual_rate / 1e3) } else { "\u{2014}".to_string() }}/>
+                                    <PerfRow label="Dropped" value=format!("{}", dropped)/>
+                                    <PerfRow label="USB drops" value=format!("{}", fifo_drops)/>
+                                    <PerfRow label="Throughput" value=format!("{:.2} MB/s", bps as f64 / 1e6)/>
                                 </div>
                             }
                         })}
@@ -1193,8 +1208,19 @@ fn track_cols<'a>(
 }
 
 fn col_range(vmin: &[f32], vmax: &[f32]) -> (f32, f32) {
-    let lo = vmin.iter().cloned().fold(f32::INFINITY, f32::min);
-    let hi = vmax.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    // Non-finite entries come from gap-filled buckets (or the hi-res
+    // smoothing filters, which aren't NaN-aware) — exclude them so a single
+    // dropout doesn't collapse the autoranged axis.
+    let lo = vmin
+        .iter()
+        .cloned()
+        .filter(|v| v.is_finite())
+        .fold(f32::INFINITY, f32::min);
+    let hi = vmax
+        .iter()
+        .cloned()
+        .filter(|v| v.is_finite())
+        .fold(f32::NEG_INFINITY, f32::max);
     nice_range(lo, hi)
 }
 
@@ -1383,7 +1409,11 @@ fn draw_overlay(
     let vs = vd.view_start;
     let ve = vd.view_end.max(vs + 1);
     let span = (ve - vs) as f64;
-    let rate = vd.sample_rate_hz.max(1) as f64;
+    let rate = if vd.actual_rate_hz > 0.0 {
+        vd.actual_rate_hz
+    } else {
+        vd.sample_rate_hz.max(1) as f64
+    };
     let cols = vd.i_min.len();
     let sample_to_x = |s: u64| plot_x0 + ((s.saturating_sub(vs)) as f64 / span) * plot_w;
 

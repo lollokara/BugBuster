@@ -1804,6 +1804,9 @@ pub struct DaqViewData {
     pub view_end: u64,
     pub decimated: bool,
     pub overflow: bool,
+    /// Fitted actual sample rate (Hz); falls back to nominal `sample_rate_hz`.
+    #[serde(default)]
+    pub actual_rate_hz: f64,
     pub i_min: Vec<f32>,
     pub i_max: Vec<f32>,
     pub v_min: Vec<f32>,
@@ -1812,6 +1815,9 @@ pub struct DaqViewData {
     pub p_max: Vec<f32>,
     pub source: Vec<u8>,
     pub didt: Vec<f32>,
+    /// 1 = bucket had no finite sample (index gap / not-yet-held voltage).
+    #[serde(default)]
+    pub gap: Vec<u8>,
     #[serde(default)]
     pub markers: Vec<DaqMarker>,
 }
@@ -1854,6 +1860,12 @@ pub struct DaqStreamRuntimeStatus {
     pub total_samples: u64,
     pub frame_count: u64,
     pub sample_rate_hz: u32,
+    /// Measured effective sample rate, accounting for gaps/drops (Hz).
+    #[serde(default)]
+    pub actual_rate_hz: f64,
+    /// Total samples lost to detected gaps in the stream.
+    #[serde(default)]
+    pub dropped_samples: u64,
     pub voltage_sps_hz: u32,
     pub overflow: bool,
     pub ingest_sps: f64,
@@ -1926,6 +1938,17 @@ pub struct DaqStatus {
     /// OR of all MASTER_STATUS bits seen on the FINE ADAQ since boot.
     /// 0xFF = FINE did not init. Bits: 6=ADC_ERR 4=CLK_QUAL 3=SAT 2=UNSETTLED 1=SPI_ERR.
     pub fine_diag_sticky: u8,
+    /// Extension v3: USB streaming performance counters. 0 when not reported.
+    #[serde(default)]
+    pub frames_tx: u32,
+    #[serde(default)]
+    pub bytes_per_sec: u32,
+    #[serde(default)]
+    pub fifo_drop_frames: u32,
+    #[serde(default)]
+    pub ring_high_water: u32,
+    #[serde(default)]
+    pub wave_i_index_lo: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1933,6 +1956,10 @@ pub struct DaqStatus {
 pub struct DaqSnapshots {
     pub total_samples: u64,
     pub sample_rate_hz: u32,
+    #[serde(default)]
+    pub actual_rate_hz: f64,
+    #[serde(default)]
+    pub dropped_samples: u64,
     pub stats: Option<DaqStats>,
     pub energy: Option<DaqEnergy>,
     pub fft: Option<DaqFft>,

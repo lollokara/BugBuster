@@ -23,6 +23,10 @@ pub struct Lane<'a> {
     pub vmax: &'a [f32],
     /// Optional per-column fusion source for tinting (same length as vmin).
     pub source: Option<&'a [u8]>,
+    /// Optional per-column gap flag (1 = bucket had no finite sample). When
+    /// set (or when vmin/vmax is non-finite regardless of this flag), the
+    /// column is skipped and the trace does not connect across it.
+    pub gap: Option<&'a [u8]>,
     /// Value range mapped to [y_bottom, y_top].
     pub lo: f32,
     pub hi: f32,
@@ -131,6 +135,16 @@ impl GlRenderer {
             };
             let mut prev: Option<(f32, f32)> = None; // (x_ndc, mid_ndc)
             for i in 0..n {
+                // A gap column (explicit flag, or non-finite envelope from an
+                // NaN-blind smoothing pass) contributes no vertices and
+                // breaks the connector so the trace doesn't bridge the drop.
+                let is_gap = lane.gap.and_then(|g| g.get(i)).copied().unwrap_or(0) == 1
+                    || !lane.vmin[i].is_finite()
+                    || !lane.vmax[i].is_finite();
+                if is_gap {
+                    prev = None;
+                    continue;
+                }
                 let px = x0 + (i as f32 / denom) * plot_w;
                 let x_ndc = (px / width) * 2.0 - 1.0;
                 let y0 = map_y(lane.vmin[i]);
