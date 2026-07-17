@@ -48,7 +48,7 @@ uint16_t usb_proto_crc16(const uint8_t *data, uint32_t len, uint16_t init)
 void usb_stream_init(usb_stream_t *s)
 {
     memset(s, 0, sizeof(*s));
-    s->wave_decim = 1;
+    s->wi_decim = 1;
     if (!s_crc16_table_ready) {
         crc16_table_init();
     }
@@ -74,8 +74,8 @@ void usb_stream_set_streaming(usb_stream_t *s, bool on)
 // -----------------------------------------------------------------------------
 // Frame assembly
 // -----------------------------------------------------------------------------
-static esp_err_t emit_frame(usb_stream_t *s, usb_rec_type_t type,
-                            const void *payload, uint16_t len)
+static esp_err_t emit_frame_ex(usb_stream_t *s, usb_rec_type_t type,
+                               const void *payload, uint16_t len, bool crc)
 {
     if (len > USB_MAX_PAYLOAD) {
         return ESP_ERR_INVALID_SIZE;
@@ -106,11 +106,17 @@ static esp_err_t emit_frame(usb_stream_t *s, usb_rec_type_t type,
     if (len && payload) {
         memcpy(&f[USB_FRAME_HEADER_LEN], payload, len);
     }
-    // CRC over header tail [2 .. 12+len).
-    uint16_t crc = usb_proto_crc16(&f[2], (uint32_t)(USB_FRAME_HEADER_LEN - 2) + len, 0xFFFF);
     uint32_t crc_off = USB_FRAME_HEADER_LEN + len;
-    f[crc_off]     = (uint8_t)(crc);
-    f[crc_off + 1] = (uint8_t)(crc >> 8);
+    if (crc) {
+        // CRC over header tail [2 .. 12+len).
+        uint16_t c = usb_proto_crc16(&f[2], (uint32_t)(USB_FRAME_HEADER_LEN - 2) + len, 0xFFFF);
+        f[crc_off]     = (uint8_t)(c);
+        f[crc_off + 1] = (uint8_t)(c >> 8);
+    } else {
+        // Data frames: CRC slot is zeroed and unchecked (see usb_proto.h).
+        f[crc_off]     = 0;
+        f[crc_off + 1] = 0;
+    }
 
     uint32_t total = crc_off + USB_FRAME_CRC_LEN;
 
@@ -132,7 +138,16 @@ static esp_err_t emit_frame(usb_stream_t *s, usb_rec_type_t type,
         s->dropped_frames++;
         return ESP_FAIL;
     }
+    s->tx_frames++;
+    s->tx_bytes_window += total;
     return ESP_OK;
+}
+
+static esp_err_t emit_frame(usb_stream_t *s, usb_rec_type_t type,
+                            const void *payload, uint16_t len)
+{
+    // Legacy control/loopback call sites keep CRC verification.
+    return emit_frame_ex(s, type, payload, len, true);
 }
 
 esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
@@ -142,67 +157,111 @@ esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
 }
 
 // -----------------------------------------------------------------------------
-// WAVEFORM batching
+// WAVE_I / WAVE_V batching (SoA; matches wire layout so flush is two memcpys)
 // -----------------------------------------------------------------------------
-esp_err_t usb_stream_flush_waveform(usb_stream_t *s)
+esp_err_t usb_stream_flush_wave_i(usb_stream_t *s)
 {
-    if (s->wave_count == 0) {
+    if (s->wi_count == 0) {
         return ESP_OK;
     }
-    // Compose payload = header + samples into the frame staging area directly.
-    uint8_t pl[sizeof(usb_wave_header_t) +
-               sizeof(usb_wave_sample_t) * USB_WAVE_BATCH_MAX];
-    usb_wave_header_t hdr = {
-        .start_seq   = s->wave_start_seq,
-        .sample_rate = s->wave_rate,
-        .count       = s->wave_count,
-        .decimation  = s->wave_decim,
-        ._pad        = 0,
+    // Compose payload = header + f32 array + meta array directly into a
+    // local buffer sized to the worst case (fits USB_MAX_PAYLOAD by design).
+    uint8_t pl[sizeof(usb_wave_hdr_t) +
+               sizeof(float) * USB_WAVE_I_BATCH +
+               sizeof(uint8_t) * USB_WAVE_I_BATCH];
+    usb_wave_hdr_t hdr = {
+        .start_index  = s->wi_start_index,
+        .timestamp_us = s->wi_timestamp_us,
+        .sample_rate  = s->wi_rate,
+        .count        = s->wi_count,
+        .decimation   = s->wi_decim,
+        ._pad         = 0,
     };
     memcpy(pl, &hdr, sizeof(hdr));
-    memcpy(pl + sizeof(hdr), s->wave,
-           (size_t)s->wave_count * sizeof(usb_wave_sample_t));
+    memcpy(pl + sizeof(hdr), s->wi_i, (size_t)s->wi_count * sizeof(float));
+    memcpy(pl + sizeof(hdr) + (size_t)s->wi_count * sizeof(float),
+           s->wi_meta, (size_t)s->wi_count * sizeof(uint8_t));
     uint16_t len = (uint16_t)(sizeof(hdr) +
-                              (size_t)s->wave_count * sizeof(usb_wave_sample_t));
+                              (size_t)s->wi_count * (sizeof(float) + sizeof(uint8_t)));
 
-    esp_err_t err = emit_frame(s, USB_REC_WAVEFORM, pl, len);
+    esp_err_t err = emit_frame_ex(s, USB_REC_WAVE_I, pl, len, false);
     if (err == ESP_ERR_INVALID_SIZE) {
-        // Should be unreachable given USB_WAVE_BATCH_MAX is sized to fit
+        // Should be unreachable given USB_WAVE_I_BATCH is sized to fit
         // USB_MAX_PAYLOAD, but log loudly if it ever regresses rather than
         // silently dropping the batch.
-        ESP_LOGE(TAG, "WAVEFORM payload oversized (len=%u > %u), batch dropped",
+        ESP_LOGE(TAG, "WAVE_I payload oversized (len=%u > %u), batch dropped",
                  (unsigned)len, (unsigned)USB_MAX_PAYLOAD);
     }
-    s->wave_count = 0;
+    s->wi_count = 0;
     return err;
 }
 
 void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
-                            float v, float p,
                             uint32_t sample_rate, uint8_t decimation,
                             bool settling)
 {
-    uint32_t idx = s->sample_seq++;
+    uint64_t idx = s->sample_seq++;
     if (!s->streaming) {
         return;
     }
-    if (s->wave_count == 0) {
-        s->wave_start_seq = idx;
-        s->wave_rate      = sample_rate;
-        s->wave_decim     = decimation ? decimation : 1;
+    if (s->wi_count == 0) {
+        s->wi_start_index  = idx;
+        s->wi_timestamp_us = (uint64_t)esp_timer_get_time();
+        s->wi_rate         = sample_rate;
+        s->wi_decim        = decimation ? decimation : 1;
     }
-    usb_wave_sample_t *w = &s->wave[s->wave_count++];
-    w->i      = fo->amps;
-    w->v      = v;
-    w->p      = p;
-    w->range  = (uint8_t)fo->range;
-    w->source = (uint8_t)fo->source;
-    w->flags  = (fo->saturated ? USB_WAVE_FLAG_SATURATED : 0)
-              | (settling      ? USB_WAVE_FLAG_SETTLING  : 0);
-    w->_pad   = 0;
+    s->wi_i[s->wi_count] = fo->amps;
+    s->wi_meta[s->wi_count] =
+          (uint8_t)(fo->range & 0x03)
+        | (uint8_t)((fo->source & 0x03) << 2)
+        | (fo->saturated ? USB_META_SATURATED : 0)
+        | (settling      ? USB_META_SETTLING  : 0);
+    if (++s->wi_count >= USB_WAVE_I_BATCH) {
+        usb_stream_flush_wave_i(s);
+    }
+}
 
-    if (s->wave_count >= (uint16_t)(sizeof(s->wave) / sizeof(s->wave[0]))) {
-        usb_stream_flush_waveform(s);
+esp_err_t usb_stream_flush_wave_v(usb_stream_t *s)
+{
+    if (s->wv_count == 0) {
+        return ESP_OK;
+    }
+    uint8_t pl[sizeof(usb_wave_hdr_t) + sizeof(float) * USB_WAVE_V_BATCH];
+    usb_wave_hdr_t hdr = {
+        .start_index  = s->wv_start_index,
+        .timestamp_us = s->wv_timestamp_us,
+        .sample_rate  = s->wv_rate,
+        .count        = s->wv_count,
+        .decimation   = 1,
+        ._pad         = 0,
+    };
+    memcpy(pl, &hdr, sizeof(hdr));
+    memcpy(pl + sizeof(hdr), s->wv_v, (size_t)s->wv_count * sizeof(float));
+    uint16_t len = (uint16_t)(sizeof(hdr) + (size_t)s->wv_count * sizeof(float));
+
+    esp_err_t err = emit_frame_ex(s, USB_REC_WAVE_V, pl, len, false);
+    if (err == ESP_ERR_INVALID_SIZE) {
+        ESP_LOGE(TAG, "WAVE_V payload oversized (len=%u > %u), batch dropped",
+                 (unsigned)len, (unsigned)USB_MAX_PAYLOAD);
+    }
+    s->wv_count = 0;
+    return err;
+}
+
+void usb_stream_push_voltage(usb_stream_t *s, float v, uint32_t sample_rate)
+{
+    uint64_t idx = s->volt_seq++;
+    if (!s->streaming) {
+        return;
+    }
+    if (s->wv_count == 0) {
+        s->wv_start_index  = idx;
+        s->wv_timestamp_us = (uint64_t)esp_timer_get_time();
+        s->wv_rate         = sample_rate;
+    }
+    s->wv_v[s->wv_count] = v;
+    if (++s->wv_count >= USB_WAVE_V_BATCH) {
+        usb_stream_flush_wave_v(s);
     }
 }
 
@@ -250,10 +309,10 @@ esp_err_t usb_stream_send_status(usb_stream_t *s, const usb_status_payload_t *st
 }
 
 esp_err_t usb_stream_send_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
-                                 uint8_t kind, uint32_t sample_index)
+                                 uint8_t kind, uint64_t sample_index)
 {
     usb_marker_payload_t m = {
-        .sample_index = (sample_index == 0xFFFFFFFFu) ? s->sample_seq
+        .sample_index = (sample_index == UINT64_MAX) ? s->sample_seq
                                                        : sample_index,
         .timestamp_us = (uint64_t)esp_timer_get_time(),
         .channel      = channel,
@@ -261,7 +320,7 @@ esp_err_t usb_stream_send_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
         .kind         = kind,
         ._pad         = 0,
     };
-    return emit_frame(s, USB_REC_MARKER, &m, sizeof(m));
+    return emit_frame_ex(s, USB_REC_MARKER, &m, sizeof(m), false);
 }
 
 void usb_stream_set_arm(usb_stream_t *s, bool armed, uint32_t pre_samples)
@@ -270,9 +329,29 @@ void usb_stream_set_arm(usb_stream_t *s, bool armed, uint32_t pre_samples)
     s->pre_samples = pre_samples;
 }
 
-uint32_t usb_stream_sample_seq(const usb_stream_t *s)
+uint64_t usb_stream_sample_seq(const usb_stream_t *s)
 {
     return s->sample_seq;
+}
+
+void usb_stream_perf_tick(usb_stream_t *s)
+{
+    int64_t now = esp_timer_get_time();
+    if (s->perf_last_us == 0) {
+        s->perf_last_us = now;
+        return;
+    }
+    int64_t dt_us = now - s->perf_last_us;
+    if (dt_us <= 0) {
+        return;
+    }
+    s->bytes_per_sec = (uint32_t)((s->tx_bytes_window * 1000000ULL) / (uint64_t)dt_us);
+    s->tx_bytes_window = 0;
+    s->perf_last_us = now;
+    ESP_LOGI(TAG, "perf: %.2f MB/s frames=%lu drops=%lu",
+             (double)s->bytes_per_sec / (1024.0 * 1024.0),
+             (unsigned long)s->tx_frames,
+             (unsigned long)s->dropped_frames);
 }
 
 esp_err_t usb_stream_send_fft(usb_stream_t *s, const float *mags, uint16_t nbins,

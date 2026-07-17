@@ -3,10 +3,10 @@
 // =============================================================================
 // usb_stream.h — frame builder / transport manager for the measurement stream.
 //
-// Packs measurement records (WAVEFORM / STATS / ENERGY / FFT / MARKER / STATUS)
-// into protocol frames (usb_proto.h) and hands them to a registered transport
-// for transmission over USB-HS. Decodes inbound control frames and reports them
-// via a command callback.
+// Packs measurement records (WAVE_I / WAVE_V / STATS / ENERGY / FFT / MARKER /
+// STATUS) into protocol frames (usb_proto.h) and hands them to a registered
+// transport for transmission over USB-HS. Decodes inbound control frames and
+// reports them via a command callback.
 //
 // The transport is abstracted so the framing/protocol logic is testable without
 // USB hardware. The TinyUSB HS vendor backend registers itself by providing a
@@ -48,12 +48,18 @@ typedef struct {
 typedef void (*usb_cmd_cb_t)(usb_rec_type_t cmd, const uint8_t *payload,
                              uint16_t len, void *user);
 
+// Max WAVE_I / WAVE_V samples per frame such that header + arrays fit
+// USB_MAX_PAYLOAD. 12.5 ms batches at typical ODRs.
+// WAVE_I: 24 + count*(4+1) <= 16384  ->  24 + 3200*5 = 16024 <= 16384
+#define USB_WAVE_I_BATCH   3200u
+// WAVE_V: 24 + count*4 <= 16384
+#define USB_WAVE_V_BATCH    800u
+
 typedef struct {
     usb_transport_t transport;
     bool            have_transport;
 
     uint32_t        tx_seq;          // outbound frame sequence
-    uint32_t        sample_seq;      // running fused-sample index
 
     usb_cmd_cb_t    cmd_cb;
     void           *cmd_user;
@@ -65,12 +71,23 @@ typedef struct {
     // Staging buffer for a frame being built (header + payload + crc).
     uint8_t         frame_buf[USB_FRAME_OVERHEAD + USB_MAX_PAYLOAD];
 
-    // WAVEFORM batching.
-    usb_wave_sample_t wave[USB_WAVE_BATCH_MAX];
-    uint16_t          wave_count;
-    uint32_t          wave_start_seq;
-    uint32_t          wave_rate;
-    uint8_t           wave_decim;
+    // WAVE_I batching (SoA, matches wire layout so flush is two memcpys).
+    float    wi_i[USB_WAVE_I_BATCH];
+    uint8_t  wi_meta[USB_WAVE_I_BATCH];
+    uint16_t wi_count;
+    uint64_t wi_start_index;
+    uint64_t wi_timestamp_us;   // esp_timer at slot 0
+    uint32_t wi_rate;
+    uint8_t  wi_decim;
+    uint64_t sample_seq;        // widened u32 -> u64, running fused-sample index
+
+    // WAVE_V batching.
+    float    wv_v[USB_WAVE_V_BATCH];
+    uint16_t wv_count;
+    uint64_t wv_start_index;
+    uint64_t wv_timestamp_us;
+    uint32_t wv_rate;
+    uint64_t volt_seq;
 
     volatile bool   streaming;
     volatile uint32_t dropped_frames;
@@ -78,6 +95,12 @@ typedef struct {
     // Trigger latch (S3 owns the IO event logic; the PC keeps the pre-roll).
     volatile bool     armed;        // trigger latch armed
     uint32_t          pre_samples;  // requested pre-trigger depth (samples)
+
+    // Perf counters (reported in STATUS perf extension + 1 Hz log).
+    uint32_t tx_frames;
+    uint64_t tx_bytes_window;   // bytes since last perf tick
+    uint32_t bytes_per_sec;     // computed by usb_stream_perf_tick()
+    int64_t  perf_last_us;
 } usb_stream_t;
 
 /** @brief Initialise the stream manager (no transport yet). */
@@ -99,19 +122,25 @@ esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
                                 const void *payload, uint16_t len);
 
 /**
- * @brief Append one fused sample to the WAVEFORM batch; auto-flushes a frame
+ * @brief Append one fused sample to the WAVE_I batch; auto-flushes a frame
  *        when the batch fills. Call at the (decimated) waveform rate.
  * @param fo   fused current result (amps/range/source/saturated).
- * @param v    DUT voltage at this sample (V).
- * @param p    power at this sample (W).
  */
 void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
-                            float v, float p,
                             uint32_t sample_rate, uint8_t decimation,
                             bool settling);
 
-/** @brief Flush any partially-filled WAVEFORM batch immediately. */
-esp_err_t usb_stream_flush_waveform(usb_stream_t *s);
+/** @brief Flush any partially-filled WAVE_I batch immediately. */
+esp_err_t usb_stream_flush_wave_i(usb_stream_t *s);
+
+/**
+ * @brief Append one voltage sample to the WAVE_V batch; auto-flushes a frame
+ *        when the batch fills.
+ */
+void usb_stream_push_voltage(usb_stream_t *s, float v, uint32_t sample_rate);
+
+/** @brief Flush any partially-filled WAVE_V batch immediately. */
+esp_err_t usb_stream_flush_wave_v(usb_stream_t *s);
 
 /** @brief Send a STATS frame from the power DSP. */
 esp_err_t usb_stream_send_stats(usb_stream_t *s, const power_dsp_t *d);
@@ -127,11 +156,11 @@ esp_err_t usb_stream_send_status(usb_stream_t *s, const usb_status_payload_t *st
  * @param channel  S3 IO number (1..12) that fired.
  * @param edge     0 = falling, 1 = rising.
  * @param kind     USB_MARK_KIND_FLAG or USB_MARK_KIND_TRIGGER.
- * @param sample_index  fused-sample index the event aligns to (0xFFFFFFFF =
+ * @param sample_index  fused-sample index the event aligns to (UINT64_MAX =
  *                      use the current live sample sequence).
  */
 esp_err_t usb_stream_send_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
-                                 uint8_t kind, uint32_t sample_index);
+                                 uint8_t kind, uint64_t sample_index);
 
 /**
  * @brief Arm / disarm the trigger latch and record the pre-trigger depth.
@@ -140,7 +169,7 @@ esp_err_t usb_stream_send_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
 void usb_stream_set_arm(usb_stream_t *s, bool armed, uint32_t pre_samples);
 
 /** @brief Current live fused-sample sequence (next index to be pushed). */
-uint32_t usb_stream_sample_seq(const usb_stream_t *s);
+uint64_t usb_stream_sample_seq(const usb_stream_t *s);
 
 /**
  * @brief Send an FFT frame: header + @p nbins magnitude floats.
@@ -152,6 +181,12 @@ uint32_t usb_stream_sample_seq(const usb_stream_t *s);
  */
 esp_err_t usb_stream_send_fft(usb_stream_t *s, const float *mags, uint16_t nbins,
                               uint32_t sample_rate, uint8_t source, uint8_t window);
+
+/**
+ * @brief Update the TX throughput EMA and emit a 1 Hz perf log line. Called
+ *        ~1 Hz by the owning task; reads/resets tx_bytes_window.
+ */
+void usb_stream_perf_tick(usb_stream_t *s);
 
 // ---- Inbound: feed received bytes (called by the transport backend) ---------
 

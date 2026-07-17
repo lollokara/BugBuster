@@ -20,6 +20,12 @@
 //   12      N     payload
 //   12+N    2     crc16-ccitt over bytes [2 .. 12+N) (header tail + payload)
 //
+// Device->PC data frames (type < 0x80) write 0x0000 in the CRC slot and do not
+// compute a CRC — USB bulk transfers already carry hardware CRC/ACK integrity
+// checking, so a software CRC on every high-rate WAVE_I/WAVE_V frame is pure
+// overhead. PC->device control frames (type >= 0x80) still carry a real
+// CRC-16/CCITT-FALSE and are verified on receipt.
+//
 // All multi-byte integers and floats are little-endian (native to the P4).
 // =============================================================================
 
@@ -31,27 +37,22 @@ extern "C" {
 
 #define USB_PROTO_MAGIC0     0xBBu
 #define USB_PROTO_MAGIC1     0x50u
-#define USB_PROTO_VERSION    1u
+#define USB_PROTO_VERSION    2u
 
 #define USB_FRAME_HEADER_LEN 12u   // bytes before payload
 #define USB_FRAME_CRC_LEN    2u
 #define USB_FRAME_OVERHEAD   (USB_FRAME_HEADER_LEN + USB_FRAME_CRC_LEN)
-#define USB_MAX_PAYLOAD      4096u
-
-// Max WAVEFORM samples per frame such that header + samples fit USB_MAX_PAYLOAD.
-// (usb_wave_header_t is 12 bytes, usb_wave_sample_t is 16 bytes; computed below
-// once both types are declared, see usb_stream.h.)
-#define USB_WAVE_BATCH_MAX \
-    ((USB_MAX_PAYLOAD - 12u) / 16u)
+#define USB_MAX_PAYLOAD      16384u
 
 // Record / frame types. 0x00..0x7F = device->PC data, 0x80+ = PC->device control.
 typedef enum {
-    USB_REC_WAVEFORM = 0x01,   // block of fused samples
+    USB_REC_WAVE_I   = 0x01,   // struct-of-arrays fused-current waveform block
     USB_REC_STATS    = 0x02,   // min/max/mean/rms/std for I, V, P
     USB_REC_ENERGY   = 0x03,   // energy + charge accumulators
     USB_REC_FFT      = 0x04,   // spectrum magnitude bins (Phase 5)
     USB_REC_MARKER   = 0x05,   // digital event marker (from S3, later)
     USB_REC_STATUS   = 0x06,   // device status / heartbeat
+    USB_REC_WAVE_V   = 0x07,   // struct-of-arrays voltage waveform block
 
     USB_CMD_START        = 0x80,
     USB_CMD_STOP         = 0x81,
@@ -67,29 +68,25 @@ typedef enum {
     USB_CMD_RANGE_CAL_ABORT = 0x8B, // no payload
 } usb_rec_type_t;
 
-// ---- WAVEFORM record --------------------------------------------------------
-// One fused sample. 16 bytes, naturally aligned.
+// ---- WAVE_I / WAVE_V records -------------------------------------------------
+// Common 24-byte header for both SoA waveform records. WAVE_I payload
+// continues with count * float i[] then count * uint8_t meta[]. WAVE_V
+// payload continues with count * float v[] only (no meta array).
 typedef struct __attribute__((packed)) {
-    float    i;        // fused current (A)
-    float    v;        // DUT voltage (V)
-    float    p;        // power (W)
-    uint8_t  range;    // current_range_t
-    uint8_t  source;   // fuse_source_t
-    uint8_t  flags;    // bit0 saturated, bit1 range-switch settling (transient)
+    uint64_t start_index;    // sequence of the first sample in this block
+    uint64_t timestamp_us;   // shared sync-epoch timestamp at slot 0
+    uint32_t sample_rate;    // samples/second
+    uint16_t count;          // number of samples following
+    uint8_t  decimation;     // 1 = full rate; >1 = decimated view. WAVE_V: always 1
     uint8_t  _pad;
-} usb_wave_sample_t;
+} usb_wave_hdr_t;            // 24 bytes
 
-#define USB_WAVE_FLAG_SATURATED 0x01u
-#define USB_WAVE_FLAG_SETTLING  0x02u   // sample taken during post-range-switch settle window
-
-// WAVEFORM payload = header + count * usb_wave_sample_t.
-typedef struct __attribute__((packed)) {
-    uint32_t start_seq;     // sequence of the first sample in this block
-    uint32_t sample_rate;   // samples/second (fused current ODR)
-    uint16_t count;         // number of samples following
-    uint8_t  decimation;    // 1 = full rate; >1 = decimated waveform view
-    uint8_t  _pad;
-} usb_wave_header_t;
+// meta[i] bit layout (WAVE_I only): bits 0-1 range, bits 2-3 source,
+// bit 4 saturated, bit 5 settling.
+#define USB_META_RANGE(m)    ((m) & 0x03)
+#define USB_META_SOURCE(m)   (((m) >> 2) & 0x03)
+#define USB_META_SATURATED   0x10u
+#define USB_META_SETTLING    0x20u
 
 // ---- STATS record -----------------------------------------------------------
 typedef struct __attribute__((packed)) {
@@ -126,13 +123,13 @@ typedef struct __attribute__((packed)) {
 
 // ---- MARKER record ----------------------------------------------------------
 typedef struct __attribute__((packed)) {
-    uint32_t sample_index;   // fused-sample index this marker aligns to
+    uint64_t sample_index;   // fused-sample index this marker aligns to
     uint64_t timestamp_us;   // shared sync-epoch timestamp
     uint8_t  channel;        // digital marker channel (S3 IO number, 1..12)
     uint8_t  edge;           // 0 = falling, 1 = rising
     uint8_t  kind;           // USB_MARK_KIND_* (flag / trigger)
     uint8_t  _pad;
-} usb_marker_payload_t;
+} usb_marker_payload_t;      // 20 bytes
 
 // MARKER kind codes (usb_marker_payload_t.kind).
 #define USB_MARK_KIND_FLAG     0u   // informational event flag (vertical line)
@@ -141,7 +138,8 @@ typedef struct __attribute__((packed)) {
 // ---- STATUS record ----------------------------------------------------------
 // Extension v1 (bytes 20-27): input-rail sense (in_voltage, in_current).
 // Extension v2 (bytes 28-35): FINE ADC health (adaq_ok_bits, fine_err_pct,
-//   drop_fine, drop_coarse). Older parsers silently ignore trailing bytes.
+//   drop_fine, drop_coarse). Extension v3 (bytes 36-55): USB streaming
+//   performance counters. Older parsers silently ignore trailing bytes.
 typedef struct __attribute__((packed)) {
     uint32_t sample_rate;     // 0
     uint32_t overflow_count;  // 4
@@ -161,7 +159,13 @@ typedef struct __attribute__((packed)) {
     uint16_t drop_coarse;       // 32 — COARSE pairing-resync drops
     uint8_t  fine_diag_sticky;  // 34 — OR of all MASTER_STATUS bits seen on FINE (ADAQ 0x2D)
     uint8_t  _pad;              // 35
-} usb_status_payload_t;         // total: 36 bytes
+    // Extension v3 (bytes 36-55): USB streaming performance counters.
+    uint32_t frames_tx;         // 36 — total data frames transmitted
+    uint32_t bytes_per_sec;     // 40 — EMA of TX throughput
+    uint32_t fifo_drop_frames;  // 44 — frames dropped for back-pressure/no-transport
+    uint32_t ring_high_water;   // 48 — max adaq ring fill seen (samples)
+    uint32_t wave_i_index_lo;   // 52 — low 32 bits of live fused index
+} usb_status_payload_t;         // total: 56 bytes
 
 // ---- Control command payloads ----------------------------------------------
 typedef struct __attribute__((packed)) {
