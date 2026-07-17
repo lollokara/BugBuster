@@ -44,6 +44,10 @@ pub struct DaqStreamRuntimeStatus {
     pub total_samples: u64,
     pub frame_count: u64,
     pub sample_rate_hz: u32,
+    /// Measured effective sample rate, accounting for gaps/drops (Hz).
+    pub actual_rate_hz: f64,
+    /// Total samples lost to detected gaps in the stream.
+    pub dropped_samples: u64,
     /// USB stream rate for the voltage ADC channel.
     pub voltage_sps_hz: u32,
     pub overflow: bool,
@@ -62,6 +66,8 @@ pub struct DaqStreamRuntimeStatus {
 pub struct DaqSnapshots {
     pub total_samples: u64,
     pub sample_rate_hz: u32,
+    pub actual_rate_hz: f64,
+    pub dropped_samples: u64,
     pub stats: Option<StatsRecord>,
     pub energy: Option<EnergyRecord>,
     pub fft: Option<FftRecord>,
@@ -305,6 +311,8 @@ fn process_loop(
                 if let (Ok(mut st), Ok(s)) = (status.lock(), store.read()) {
                     st.total_samples = s.total_samples();
                     st.sample_rate_hz = s.sample_rate_hz;
+                    st.actual_rate_hz = s.actual_rate_hz();
+                    st.dropped_samples = s.dropped_samples();
                     st.overflow = s.overflow;
                     st.frame_count += frames;
                     st.max_samples = s.max_samples as u64;
@@ -337,6 +345,8 @@ pub fn daq_stream_status(daq: State<'_, DaqState>) -> CmdResult<DaqStreamRuntime
     st.mock = daq.mock.load(Ordering::SeqCst);
     if let Ok(s) = daq.store.read() {
         st.total_samples = s.total_samples();
+        st.actual_rate_hz = s.actual_rate_hz();
+        st.dropped_samples = s.dropped_samples();
         st.overflow = s.overflow;
         st.max_samples = s.max_samples as u64;
         st.raw_cap = s.raw_cap as u64;
@@ -370,6 +380,8 @@ pub fn daq_get_snapshots(daq: State<'_, DaqState>) -> CmdResult<DaqSnapshots> {
     Ok(DaqSnapshots {
         total_samples: s.total_samples(),
         sample_rate_hz: s.sample_rate_hz,
+        actual_rate_hz: s.actual_rate_hz(),
+        dropped_samples: s.dropped_samples(),
         stats: s.last_stats,
         energy: s.last_energy,
         fft: s.last_fft.clone(),
