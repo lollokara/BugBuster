@@ -435,7 +435,8 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
         case USB_CMD_STOP:
             usb_stream_set_streaming(&b->usb, false);
             ESP_LOGI(TAG, "CMD_STOP: streaming off");
-            usb_stream_flush_waveform(&b->usb);
+            usb_stream_flush_wave_i(&b->usb);
+            usb_stream_flush_wave_v(&b->usb);
             break;
         case USB_CMD_RESET_ENERGY:
             power_dsp_reset_energy(&b->dsp);
@@ -561,10 +562,11 @@ esp_err_t daq_board_stream_step(daq_board_t *b, fusion_output_t *out)
     spectrum_push(&b->spectrum, (b->fft_source == 1) ? p : fo.amps);
 
     uint32_t rate = (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
-    usb_stream_push_sample(&b->usb, &fo,
-                           power_dsp_last_v(&b->dsp), p,
-                           rate, /*decimation=*/1,
+    usb_stream_push_sample(&b->usb, &fo, rate, /*decimation=*/1,
                            range_manager_settling(&b->range));
+    // Non-fast path has no independent voltage sample cadence here (the VOLTAGE
+    // ADC is only drained on the fast path's bus-B loop) — the current sample
+    // is pushed above; no WAVE_V push is emitted from this path.
     if (out) {
         *out = fo;
     }
@@ -583,7 +585,8 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     if (!b->usb.streaming) {
         return ESP_OK;
     }
-    usb_stream_flush_waveform(&b->usb);
+    usb_stream_flush_wave_i(&b->usb);
+    usb_stream_flush_wave_v(&b->usb);
     usb_stream_send_stats(&b->usb, &b->dsp);
     usb_stream_send_energy(&b->usb, &b->dsp);
 
@@ -635,8 +638,20 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         .drop_coarse      = (uint16_t)(b->drop_coarse > 0xFFFFu ? 0xFFFFu : b->drop_coarse),
         .fine_diag_sticky = b->adaq_ok[ADAQ_ROLE_FINE]
                                 ? fine_dev->diag_sticky : 0xFFu,
+        .frames_tx        = b->usb.tx_frames,
+        .bytes_per_sec    = b->usb.bytes_per_sec,
+        .fifo_drop_frames = b->usb.dropped_frames,
+        .ring_high_water  = 0, // filled if adaq_stream exposes it; else 0 (documented)
+        .wave_i_index_lo  = (uint32_t)b->usb.sample_seq,
     };
     usb_stream_send_status(&b->usb, &st);
+
+    // usb_stream_perf_tick() computes the TX throughput EMA and emits a 1 Hz
+    // perf log; this summary path runs at 10 Hz, so tick every 10th call.
+    if (++b->perf_div >= 10) {
+        b->perf_div = 0;
+        usb_stream_perf_tick(&b->usb);
+    }
     return ESP_OK;
 }
 
@@ -688,7 +703,8 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
 
         case HATP_CMD_DAQ_STOP:
             usb_stream_set_streaming(&b->usb, false);
-            usb_stream_flush_waveform(&b->usb);
+            usb_stream_flush_wave_i(&b->usb);
+            usb_stream_flush_wave_v(&b->usb);
             return 0;
 
         case HATP_CMD_DAQ_SET_SOURCE:
@@ -723,7 +739,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (len >= sizeof(s3link_daq_mark_t)) {
                 const s3link_daq_mark_t *m = (const s3link_daq_mark_t *)payload;
                 usb_stream_send_marker(&b->usb, m->channel, m->edge, m->kind,
-                                       0xFFFFFFFFu);
+                                       UINT64_MAX);
                 return 0;
             }
             return -1;
@@ -1120,11 +1136,12 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     }
 
     // Full-rate fused waveform to the PC (decimated only by wave_decim, def 1).
+    // fine_rate_hz is cached once in daq_board_run_fast (constant while the
+    // fast path runs) to avoid a per-sample adaq7769_output_data_rate() call
+    // at up to 256 ksps.
     if (++b->wave_count >= b->wave_decim) {
         b->wave_count = 0;
-        uint32_t rate = (uint32_t)adaq7769_output_data_rate(
-                            &b->adaq[ADAQ_ROLE_FINE]);
-        usb_stream_push_sample(&b->usb, &fo, v, p, rate, b->wave_decim,
+        usb_stream_push_sample(&b->usb, &fo, b->fine_rate_hz, b->wave_decim,
                                range_manager_settling(&b->range));
     }
 }
@@ -1163,8 +1180,12 @@ static void daq_fast_task(void *arg)
             if (sb.device_id == FASTB_VOLTAGE_LOCAL) {
                 if (b->adaq_ok[ADAQ_ROLE_VOLTAGE] && fast_sample_good(&sb)) {
                     float vv = adaq7769_code_to_volts(
-                                   &b->adaq[ADAQ_ROLE_VOLTAGE], sb.value);
-                    power_dsp_set_voltage(&b->dsp, vv * V_DUT_SENSE_SCALE);
+                                   &b->adaq[ADAQ_ROLE_VOLTAGE], sb.value)
+                               * V_DUT_SENSE_SCALE;
+                    power_dsp_set_voltage(&b->dsp, vv);
+                    usb_stream_push_voltage(&b->usb, vv,
+                        (uint32_t)adaq7769_output_data_rate(
+                            &b->adaq[ADAQ_ROLE_VOLTAGE]));
                 }
             } else {
                 coarse = sb;
@@ -1277,6 +1298,11 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
     b->wave_count   = 0;
     if (b->dsp_decim == 0) b->dsp_decim = DAQ_DSP_DECIM_DEFAULT;
     b->dsp_count    = 0;
+    // Cache the FINE ODR once for fast_emit's per-sample wire push — it's
+    // constant while the fast path runs (measurable saving at 256 ksps).
+    b->fine_rate_hz = (uint32_t)(b->adaq_ok[ADAQ_ROLE_FINE]
+                          ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE])
+                          : 256000.0f);
     // The DSP tail runs every dsp_decim-th fused sample, so set the power-DSP
     // timebase to the decimated rate — otherwise energy/charge integrate with
     // the wrong dt (off by dsp_decim).

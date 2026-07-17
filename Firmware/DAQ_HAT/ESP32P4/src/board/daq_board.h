@@ -68,7 +68,7 @@ typedef struct daq_board {
     bool                    idac_ok;
     bool                    usb_ok;
     uint8_t                 fft_source;   // 0 = current, 1 = power
-    uint32_t                sync_epoch;   // sample index at the last S3 sync
+    uint64_t                sync_epoch;   // sample index at the last S3 sync
 
     // S3 mainboard telemetry (die temp, USB-PD, VADJ/VLOGIC rails) pushed over
     // the HAT link (HATP_CMD_DAQ_TELEMETRY) and relayed to the C6 diagnostics.
@@ -85,6 +85,9 @@ typedef struct daq_board {
     uint8_t                 dsp_count;    // running DSP-tail counter
     uint32_t                drop_fine;    // paired-stream resync drops (diag)
     uint32_t                drop_coarse;
+    uint32_t                fine_rate_hz; // cached FINE ODR for the fast path (avoids
+                                          // a per-sample adaq7769_output_data_rate() call)
+    uint8_t                 perf_div;     // 10 Hz summary calls -> 1 Hz usb_stream_perf_tick
 
     // Control command queue: heavy USB commands (SET_RATE, SET_SOURCE) are
     // posted here by the TinyUSB callback and executed by ctrl_task so the
