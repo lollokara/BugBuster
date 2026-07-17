@@ -90,6 +90,11 @@ typedef struct {
     uint64_t volt_seq;
 
     volatile bool   streaming;
+    // Session-reset handoff: set by usb_stream_reset_session() (any task),
+    // consumed at the top of push_sample/push_voltage by daq_fast_task — the
+    // sole writer of the batch/counter fields — so the reset never tears a
+    // mid-push batch or a non-atomic u64 sequence.
+    volatile bool   reset_pending;
     volatile uint32_t dropped_frames;
 
     // Trigger latch (S3 owns the IO event logic; the PC keeps the pre-roll).
@@ -125,8 +130,24 @@ void usb_stream_set_streaming(usb_stream_t *s, bool on);
  *        Call this BEFORE usb_stream_set_streaming(s, true) on every
  *        CMD_START / HATP_CMD_DAQ_START so the host's sample-index timeline
  *        starts at 0 instead of jumping from whatever accumulated pre-start.
+ *
+ *        Does NOT touch the counters directly — it only sets reset_pending,
+ *        which the producer (daq_fast_task) consumes at the top of its next
+ *        push_sample/push_voltage call. This keeps the reset single-writer:
+ *        the TinyUSB/ctrl task never races daq_fast_task mid-push. When the
+ *        fast path is known to be stopped (no producer), call
+ *        usb_stream_reset_apply() instead for an immediate reset.
  */
 void usb_stream_reset_session(usb_stream_t *s);
+
+/**
+ * @brief Apply the session reset immediately. ONLY safe when the producer
+ *        (daq_fast_task) is not running, or when called from the producer
+ *        task itself. Zeroes sample_seq, volt_seq, wi_count, wv_count,
+ *        dropped_frames, tx_frames, tx_bytes_window and the perf-rate
+ *        snapshot; tx_seq stays monotonic.
+ */
+void usb_stream_reset_apply(usb_stream_t *s);
 
 // ---- Outbound: build + send a frame -----------------------------------------
 

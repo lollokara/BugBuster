@@ -118,8 +118,11 @@ pub struct DaqStore {
     /// used for the online least-squares timebase fit.
     timebase_ring: VecDeque<(u64, u64)>,
     /// Fitted actual sample rate (Hz), falls back to `sample_rate_hz` until a
-    /// fit is available / while the fit is out of the ±5% sanity band.
+    /// fit is available / while the fit is out of the [10%, 120%] sanity band.
     actual_rate_hz: f64,
+    /// True while the accepted fit is below 50% of nominal; used to
+    /// rate-limit the "far below nominal" warning to once per transition.
+    low_rate_warned: bool,
 }
 
 /// One decimated column of the trace view: min/max envelope per track.
@@ -433,6 +436,7 @@ impl DaqStore {
         self.volt_fifo.clear();
         self.timebase_ring.clear();
         self.actual_rate_hz = self.sample_rate_hz.max(1) as f64;
+        self.low_rate_warned = false;
     }
 
     /// Record a digital event marker (flag / trigger). Kept sorted by absolute
@@ -565,13 +569,16 @@ impl DaqStore {
     }
 
     /// Online least-squares fit of `timestamp_us` vs `start_index` over the
-    /// 64-header ring. Accepted whenever the fitted rate is between 1% and
+    /// 64-header ring. Accepted whenever the fitted rate is between 10% and
     /// 120% of the nominal wire rate — wide enough that a device genuinely
     /// emitting far below nominal (e.g. ~106 kSa/s against a 256 kSa/s
     /// nominal) still gets its real rate reflected in the time axis, instead
-    /// of being clamped back to nominal and stretching the trace. Only
-    /// rejected for actual nonsense / startup noise: fewer than 8 headers in
-    /// the ring, a non-finite result, or a non-positive slope.
+    /// of being clamped back to nominal and stretching the trace, but tight
+    /// enough that a spurious slope cannot silently stretch the axis by
+    /// orders of magnitude. Rejected for nonsense / startup noise: fewer
+    /// than 8 headers in the ring, a non-finite result, a non-positive
+    /// slope, or a rate outside the band. Accepting a fit below 50% of
+    /// nominal logs a warning once per transition into the low-rate state.
     fn fit_timebase(&mut self) {
         let n = self.timebase_ring.len();
         let nominal = self.sample_rate_hz.max(1) as f64;
@@ -598,8 +605,18 @@ impl DaqStore {
             return;
         }
         let rate = 1e6 / slope_us_per_sample;
-        if rate.is_finite() && rate >= nominal * 0.01 && rate <= nominal * 1.20 {
+        if rate.is_finite() && rate >= nominal * 0.10 && rate <= nominal * 1.20 {
             self.actual_rate_hz = rate;
+            let low = rate < nominal * 0.50;
+            if low && !self.low_rate_warned {
+                log::warn!(
+                    "daq_store: device emitting far below nominal rate \
+                     (fitted {:.0} Hz vs nominal {:.0} Hz)",
+                    rate,
+                    nominal
+                );
+            }
+            self.low_rate_warned = low;
         }
     }
 
@@ -1223,7 +1240,7 @@ mod tests {
         // Bench scenario: nominal (wire) rate is 256 kSa/s but the device is
         // actually emitting at ~40% of that. The old ±5% clamp rejected this
         // and silently fell back to nominal, stretching the time axis. The
-        // widened 1%-120% band must now accept it.
+        // widened 10%-120% band must now accept it.
         let mut s = DaqStore::new(256_000);
         let actual = 256_000.0 * 0.40; // 102,400 Hz
         for b in 0..64u64 {
@@ -1247,6 +1264,21 @@ mod tests {
         push_wave_i(&mut s, 1000, &vec![0.0f32; 1000], 256_000, 3_906);
         let r = s.actual_rate_hz();
         assert_eq!(r, 256_000.0, "expected fallback to nominal, got {r}");
+    }
+
+    #[test]
+    fn timebase_fit_rejects_rate_below_ten_percent_of_nominal() {
+        // A fit at 5% of nominal is below the 10% floor — treated as a
+        // spurious slope (would stretch the axis 20x) and rejected, keeping
+        // the nominal rate.
+        let mut s = DaqStore::new(256_000);
+        let bogus = 256_000.0 * 0.05; // 12,800 Hz
+        for b in 0..64u64 {
+            let ts = (b * 1000) as f64 * 1e6 / bogus;
+            push_wave_i(&mut s, b * 1000, &vec![0.0f32; 1000], 256_000, ts as u64);
+        }
+        let r = s.actual_rate_hz();
+        assert_eq!(r, 256_000.0, "expected rejection + nominal, got {r}");
     }
 
     #[test]

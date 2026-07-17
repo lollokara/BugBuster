@@ -71,20 +71,30 @@ void usb_stream_set_streaming(usb_stream_t *s, bool on)
     s->streaming = on;
 }
 
-void usb_stream_reset_session(usb_stream_t *s)
+void usb_stream_reset_apply(usb_stream_t *s)
 {
-    s->sample_seq          = 0;
-    s->volt_seq            = 0;
+    s->sample_seq           = 0;
+    s->volt_seq             = 0;
     s->wi_count             = 0;
     s->wv_count             = 0;
     s->dropped_frames       = 0;
-    s->tx_frames             = 0;
-    s->tx_bytes_window       = 0;
-    s->bytes_per_sec         = 0;
-    s->perf_last_us          = 0;
-    s->perf_last_sample_seq  = 0;
+    s->tx_frames            = 0;
+    s->tx_bytes_window      = 0;
+    s->bytes_per_sec        = 0;
+    s->perf_last_us         = 0;
+    s->perf_last_sample_seq = 0;
+    s->reset_pending        = false;
     // tx_seq is intentionally left untouched — it is the outbound frame
     // sequence and must stay monotonic across sessions.
+}
+
+void usb_stream_reset_session(usb_stream_t *s)
+{
+    // Single-writer handoff: only flag the reset here. The producer task
+    // (daq_fast_task) applies it at the top of the next push_sample /
+    // push_voltage, so the TinyUSB/ctrl task never mutates the batch state
+    // or the non-atomic u64 sequences while a push is in flight.
+    s->reset_pending = true;
 }
 
 // -----------------------------------------------------------------------------
@@ -232,6 +242,9 @@ void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
                             uint32_t sample_rate, uint8_t decimation,
                             bool settling)
 {
+    if (s->reset_pending) {
+        usb_stream_reset_apply(s);   // consumed on the sole producer task
+    }
     uint64_t idx = s->sample_seq++;
     if (!s->streaming) {
         return;
@@ -284,6 +297,9 @@ esp_err_t usb_stream_flush_wave_v(usb_stream_t *s)
 
 void usb_stream_push_voltage(usb_stream_t *s, float v, uint32_t sample_rate)
 {
+    if (s->reset_pending) {
+        usb_stream_reset_apply(s);   // consumed on the sole producer task
+    }
     uint64_t idx = s->volt_seq++;
     if (!s->streaming) {
         return;
@@ -382,7 +398,10 @@ void usb_stream_perf_tick(usb_stream_t *s)
     s->bytes_per_sec = (uint32_t)((s->tx_bytes_window * 1000000ULL) / (uint64_t)dt_us);
     s->tx_bytes_window = 0;
 
-    uint64_t emitted = s->sample_seq - s->perf_last_sample_seq;
+    // sample_seq restarts at 0 on a session reset (applied on this same
+    // task); clamp a backwards delta to 0 rather than wrapping huge.
+    uint64_t emitted = (s->sample_seq >= s->perf_last_sample_seq)
+                       ? (s->sample_seq - s->perf_last_sample_seq) : 0;
     uint32_t emit_rate = (uint32_t)((emitted * 1000000ULL) / (uint64_t)dt_us);
     s->perf_last_sample_seq = s->sample_seq;
 

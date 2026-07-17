@@ -428,7 +428,15 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
     daq_board_t *b = (daq_board_t *)user;
     switch (cmd) {
         case USB_CMD_START:
-            usb_stream_reset_session(&b->usb);
+            // Session reset before streaming: with the fast path running the
+            // reset must be deferred to the producer task (single-writer —
+            // see usb_stream_reset_session); with no producer it is safe to
+            // apply immediately so the reset is not left pending forever.
+            if (b->fast_running) {
+                usb_stream_reset_session(&b->usb);
+            } else {
+                usb_stream_reset_apply(&b->usb);
+            }
             usb_stream_set_streaming(&b->usb, true);
             ESP_LOGI(TAG, "CMD_START: streaming on (mounted=%d, fast=%d)",
                      usb_backend_mounted(), b->fast_running);
@@ -702,7 +710,13 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
     daq_board_t *b = (daq_board_t *)user;
     switch (cmd) {
         case HATP_CMD_DAQ_START:
-            usb_stream_reset_session(&b->usb);
+            // Same single-writer handoff as USB_CMD_START: defer to the
+            // producer when it is running, apply directly otherwise.
+            if (b->fast_running) {
+                usb_stream_reset_session(&b->usb);
+            } else {
+                usb_stream_reset_apply(&b->usb);
+            }
             usb_stream_set_streaming(&b->usb, true);
             return 0;
 
