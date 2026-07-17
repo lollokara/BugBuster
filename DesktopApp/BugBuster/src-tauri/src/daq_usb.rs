@@ -12,12 +12,12 @@
 
 use crate::daq_proto::{
     self, DaqRecord, EnergyRecord, FftRecord, MarkerRecord, StatBlock, StatsRecord, StatusRecord,
-    WaveSample, WaveformRecord, MARK_KIND_FLAG, MARK_KIND_TRIGGER, RANGE_HI, RANGE_LO, RANGE_MID,
-    SRC_BLEND, SRC_COARSE, SRC_FINE,
+    WaveIRecord, WaveVRecord, MARK_KIND_FLAG, MARK_KIND_TRIGGER, META_SATURATED, META_SETTLING,
+    RANGE_HI, RANGE_LO, RANGE_MID, SRC_BLEND, SRC_COARSE, SRC_FINE,
 };
 use anyhow::{anyhow, Result};
-use nusb::transfer::RequestBuffer;
-use std::time::Instant;
+use nusb::transfer::{Queue, RequestBuffer};
+use std::time::{Duration, Instant};
 
 pub const DAQ_VID: u16 = 0x303A;
 pub const DAQ_PID: u16 = 0x4001;
@@ -44,11 +44,20 @@ pub fn daq_usb_present() -> bool {
         .unwrap_or(false)
 }
 
+/// Number of RequestBuffers kept in flight on the bulk-IN queue.
+const QUEUE_DEPTH: usize = 4;
+/// Size of each queued IN transfer buffer.
+const QUEUE_BUF_LEN: usize = 65536;
+
 pub struct DaqUsbConnection {
     interface: Option<nusb::Interface>,
+    queue: Option<Queue<RequestBuffer>>,
     connected: bool,
     rx: Vec<u8>,
     out_seq: u32,
+    /// Timestamp of the last "update firmware" warning emitted for a run of
+    /// BadVersion frames, so we don't spam the log every drained byte.
+    last_bad_version_warn: Option<Instant>,
 }
 
 impl Default for DaqUsbConnection {
@@ -61,9 +70,11 @@ impl DaqUsbConnection {
     pub fn new() -> Self {
         Self {
             interface: None,
+            queue: None,
             connected: false,
             rx: Vec::new(),
             out_seq: 0,
+            last_bad_version_warn: None,
         }
     }
 
@@ -79,7 +90,12 @@ impl DaqUsbConnection {
                     .claim_interface(DAQ_IFACE)
                     .map_err(|e| anyhow!("Failed to claim DAQ interface {}: {}", DAQ_IFACE, e))?;
                 log::info!("DAQ USB interface claimed (VID={DAQ_VID:04X} PID={DAQ_PID:04X})");
+                let mut queue = iface.bulk_in_queue(DAQ_EP_IN);
+                for _ in 0..QUEUE_DEPTH {
+                    queue.submit(RequestBuffer::new(QUEUE_BUF_LEN));
+                }
                 self.interface = Some(iface);
+                self.queue = Some(queue);
                 self.connected = true;
                 self.rx.clear();
                 return Ok(());
@@ -98,6 +114,7 @@ impl DaqUsbConnection {
 
     pub fn close(&mut self) {
         self.interface = None;
+        self.queue = None;
         self.connected = false;
         self.rx.clear();
     }
@@ -113,8 +130,29 @@ impl DaqUsbConnection {
                 }
                 Err(daq_proto::FrameError::Truncated { .. })
                 | Err(daq_proto::FrameError::ShortHeader(_)) => break,
+                Err(daq_proto::FrameError::BadVersion(got)) => {
+                    // Rate-limited: repeated BadVersion frames almost always
+                    // mean the firmware and app protocol versions have
+                    // drifted apart, not transient noise on the wire.
+                    let should_warn = match self.last_bad_version_warn {
+                        Some(t) => t.elapsed() >= Duration::from_secs(5),
+                        None => true,
+                    };
+                    if should_warn {
+                        log::warn!(
+                            "DAQ USB: frame version mismatch (got {}, expected {}) — \
+                             update firmware or app to matching protocol versions",
+                            got,
+                            daq_proto::PROTO_VERSION
+                        );
+                        self.last_bad_version_warn = Some(Instant::now());
+                    }
+                    if self.rx.is_empty() {
+                        break;
+                    }
+                    self.rx.remove(0);
+                }
                 Err(daq_proto::FrameError::BadMagic)
-                | Err(daq_proto::FrameError::BadVersion(_))
                 | Err(daq_proto::FrameError::BadCrc { .. })
                 | Err(daq_proto::FrameError::PayloadTooLong(_)) => {
                     // Resync: drop one byte and retry.
@@ -131,11 +169,9 @@ impl DaqUsbConnection {
 
 impl DaqTransport for DaqUsbConnection {
     fn read_records(&mut self) -> Result<Vec<DaqRecord>> {
-        let iface = self
-            .interface
-            .as_ref()
-            .ok_or_else(|| anyhow!("DAQ USB not connected"))?
-            .clone();
+        if self.interface.is_none() {
+            return Err(anyhow!("DAQ USB not connected"));
+        }
         let rt = tokio::runtime::Handle::current();
         loop {
             // Parse anything already buffered first.
@@ -143,6 +179,10 @@ impl DaqTransport for DaqUsbConnection {
             if !ready.is_empty() {
                 return Ok(ready);
             }
+            let queue = self
+                .queue
+                .as_mut()
+                .ok_or_else(|| anyhow!("DAQ USB not connected"))?;
             // 400 ms: short enough that stop_workers()'s 1-second join can
             // reliably collect the old ingest_loop before daq_stream_start
             // resets running=true (a 5-second timeout left zombie loops that
@@ -151,9 +191,12 @@ impl DaqTransport for DaqUsbConnection {
             let completion = rt
                 .block_on(tokio::time::timeout(
                     std::time::Duration::from_millis(400),
-                    iface.bulk_in(DAQ_EP_IN, RequestBuffer::new(16384)),
+                    queue.next_complete(),
                 ))
                 .map_err(|_| anyhow!("DAQ USB read timed out"))?;
+            // Resubmit immediately so the queue stays saturated with
+            // QUEUE_DEPTH buffers in flight.
+            queue.submit(RequestBuffer::new(QUEUE_BUF_LEN));
             let data = completion
                 .into_result()
                 .map_err(|e| anyhow!("DAQ bulk IN failed: {}", e))?;
@@ -191,6 +234,7 @@ impl DaqTransport for DaqUsbConnection {
                 e
             );
             self.interface = None;
+            self.queue = None;
             self.connected = false;
             self.rx.clear();
             self.connect().map_err(|re| {
@@ -220,10 +264,18 @@ impl DaqTransport for DaqUsbConnection {
 /// current range and the FINE/COARSE/BLEND fusion path.
 pub struct MockDaqTransport {
     sample_rate: u32,
+    voltage_rate: u32,
     decimation: u8,
     running: bool,
     started: Instant,
+    /// Current-domain (WAVE_I) sample index.
     sample_idx: u64,
+    /// Voltage-domain (WAVE_V) sample index; runs independently at
+    /// `voltage_rate`.
+    volt_idx: u64,
+    /// Mock time (seconds since start) at which the next synthetic index
+    /// skip should fire, to exercise the gap-handling path end-to-end.
+    next_skip_at: f64,
     seq: u32,
     // SMU / source
     vdut: f32,
@@ -250,10 +302,13 @@ impl MockDaqTransport {
     pub fn new() -> Self {
         Self {
             sample_rate: 250_000,
+            voltage_rate: 64_000,
             decimation: 1,
             running: false,
             started: Instant::now(),
             sample_idx: 0,
+            volt_idx: 0,
+            next_skip_at: 5.0,
             seq: 0,
             vdut: 3.3,
             source_enabled: true,
@@ -311,14 +366,35 @@ impl MockDaqTransport {
         }
     }
 
-    fn synth_waveform(&mut self, count: usize) -> WaveformRecord {
-        // Decimation lowers the effective sample rate (and thus the on-screen
-        // resolution / time density), exactly like the real ODR decimation.
+    /// Pack a WAVE_I meta byte: bits 0-1 range, bits 2-3 source, bit 4
+    /// saturated, bit 5 settling.
+    fn pack_meta(range: u8, source: u8, saturated: bool, settling: bool) -> u8 {
+        (range & 0x03)
+            | ((source & 0x03) << 2)
+            | if saturated { META_SATURATED } else { 0 }
+            | if settling { META_SETTLING } else { 0 }
+    }
+
+    /// Synthesise `count` current-domain samples starting at `self.sample_idx`,
+    /// exercising a synthetic ~5 s-periodic index skip so the gap-handling
+    /// path has something to render in mock mode too.
+    fn synth_wave_i(&mut self, count: usize) -> WaveIRecord {
         let dec = self.decimation.max(1) as f64;
         let eff_rate = (self.sample_rate as f64 / dec).max(1.0);
         let dt = 1.0_f64 / eff_rate;
-        let start_seq = self.sample_idx as u32;
-        let mut samples = Vec::with_capacity(count);
+
+        // Every ~5 s of mock time, drop 10_000 current indexes without
+        // emitting samples for them, simulating a FIFO overrun / drop.
+        let now = self.started.elapsed().as_secs_f64();
+        if now >= self.next_skip_at {
+            self.sample_idx += 10_000;
+            self.next_skip_at = now + 5.0;
+        }
+
+        let timestamp_us = self.started.elapsed().as_micros() as u64;
+        let start_index = self.sample_idx;
+        let mut i_vals = Vec::with_capacity(count);
+        let mut meta = Vec::with_capacity(count);
         let mut prev_range = if self.sample_idx == 0 {
             RANGE_HI
         } else {
@@ -331,41 +407,55 @@ impl MockDaqTransport {
             let range = self.range_for(i);
             // During a range transition the FINE path is settling, so COARSE
             // carries the signal (BLEND at the seams) — gap is filled, never lost.
-            let source = if range != prev_range {
-                SRC_BLEND
+            let (source, settling) = if range != prev_range {
+                (SRC_BLEND, true)
             } else if range == RANGE_LO {
-                SRC_COARSE
+                (SRC_COARSE, false)
             } else {
-                SRC_FINE
+                (SRC_FINE, false)
             };
             prev_range = range;
-            // Voltage is sampled at a slower ODR (~250 kSPS) than current, so
-            // hold it on a 250 kSPS grid to emulate the staggered fusion rates
-            // (e.g. 1 MSPS current + 250 kSPS voltage).
-            let v_rate = 250_000.0_f64;
-            let t_v = (t * v_rate).floor() / v_rate;
-            let i_v = self.current_at(t_v);
-            let v = (self.vdut - i_v * 0.05).max(0.0);
-            let p = i * v;
-            let flags = if i > 2.4 { 1 } else { 0 };
-            samples.push(WaveSample {
-                i,
-                v,
-                p,
-                range,
-                source,
-                flags,
-            });
-            // Accumulate energy / charge.
-            self.energy_j += p as f64 * dt;
+            let saturated = i > 2.4;
+            i_vals.push(i);
+            meta.push(Self::pack_meta(range, source, saturated, settling));
+
+            // Accumulate energy / charge using the same voltage model as
+            // synth_wave_v so the aux records stay consistent.
+            let v = (self.vdut - i * 0.05).max(0.0);
+            self.energy_j += (i * v) as f64 * dt;
             self.charge_c += i as f64 * dt;
         }
         self.sample_idx += count as u64;
-        WaveformRecord {
-            start_seq,
+        WaveIRecord {
+            start_index,
+            timestamp_us,
             sample_rate: eff_rate as u32,
             decimation: self.decimation,
-            samples,
+            i: i_vals,
+            meta,
+        }
+    }
+
+    /// Synthesise `count` voltage-domain samples at `voltage_rate`, running
+    /// independently of the current-domain index.
+    fn synth_wave_v(&mut self, count: usize) -> WaveVRecord {
+        let v_rate = self.voltage_rate.max(1) as f64;
+        let dt = 1.0_f64 / v_rate;
+        let timestamp_us = self.started.elapsed().as_micros() as u64;
+        let start_index = self.volt_idx;
+        let mut v_vals = Vec::with_capacity(count);
+        for k in 0..count {
+            let n = self.volt_idx + k as u64;
+            let t = n as f64 * dt;
+            let i_v = self.current_at(t);
+            v_vals.push((self.vdut - i_v * 0.05).max(0.0));
+        }
+        self.volt_idx += count as u64;
+        WaveVRecord {
+            start_index,
+            timestamp_us,
+            sample_rate: self.voltage_rate,
+            v: v_vals,
         }
     }
 
@@ -445,6 +535,11 @@ impl MockDaqTransport {
             drop_fine: 0,
             drop_coarse: 0,
             fine_diag_sticky: 0,
+            frames_tx: 0,
+            bytes_per_sec: 0,
+            fifo_drop_frames: 0,
+            ring_high_water: 0,
+            wave_i_index_lo: (self.sample_idx & 0xFFFF_FFFF) as u32,
         }
     }
     /// Emit synthetic event markers for any 5 Hz burst edge that falls inside
@@ -463,7 +558,7 @@ impl MockDaqTransport {
         let t1 = (start + count as u64) as f64 * dt;
         let mk = |idx: u64, ch: u8, edge: u8, kind: u8| {
             DaqRecord::Marker(MarkerRecord {
-                sample_index: idx as u32,
+                sample_index: idx,
                 timestamp_us: (idx as f64 * dt * 1e6) as u64,
                 channel: ch,
                 edge,
@@ -509,7 +604,10 @@ impl DaqTransport for MockDaqTransport {
         let eff_rate = (self.sample_rate as f64 / dec).max(1.0);
         let count = ((eff_rate * 0.030) as usize).clamp(1, 4096);
         let win_start = self.sample_idx;
-        out.push(DaqRecord::Waveform(self.synth_waveform(count)));
+        out.push(DaqRecord::WaveI(self.synth_wave_i(count)));
+
+        let v_count = ((self.voltage_rate as f64 * 0.030) as usize).clamp(1, 4096);
+        out.push(DaqRecord::WaveV(self.synth_wave_v(v_count)));
 
         // Synthetic event markers aligned to the 5 Hz activity bursts so the
         // flag/trigger overlay has something to render in mock mode.
@@ -534,6 +632,8 @@ impl DaqTransport for MockDaqTransport {
                 self.running = true;
                 self.started = Instant::now();
                 self.sample_idx = 0;
+                self.volt_idx = 0;
+                self.next_skip_at = 5.0;
                 self.energy_j = 0.0;
                 self.charge_c = 0.0;
             }
@@ -542,6 +642,10 @@ impl DaqTransport for MockDaqTransport {
                 let sps = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
                 if sps > 0 {
                     self.sample_rate = sps;
+                }
+                let vsps = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                if vsps > 0 {
+                    self.voltage_rate = vsps;
                 }
                 self.decimation = payload[8].max(1);
             }
@@ -566,5 +670,63 @@ impl DaqTransport for MockDaqTransport {
         }
         let _ = self.seq.wrapping_add(1);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod mock_tests {
+    use super::*;
+
+    /// After CMD_START, read_records should yield both WaveI and WaveV
+    /// records whose start_index is contiguous with the previous block's end
+    /// index, except across the deliberate synthetic skip.
+    #[test]
+    fn mock_start_yields_contiguous_wave_i_and_wave_v() {
+        let mut mock = MockDaqTransport::new();
+        mock.send(daq_proto::CMD_START, &[]).unwrap();
+
+        let mut prev_i_end: Option<u64> = None;
+        let mut prev_v_end: Option<u64> = None;
+        let mut saw_wave_i = false;
+        let mut saw_wave_v = false;
+        let mut saw_skip = false;
+
+        for _ in 0..20 {
+            let recs = mock.read_records().unwrap();
+            for rec in recs {
+                match rec {
+                    DaqRecord::WaveI(w) => {
+                        saw_wave_i = true;
+                        assert!(!w.i.is_empty());
+                        assert_eq!(w.i.len(), w.meta.len());
+                        if let Some(end) = prev_i_end {
+                            if w.start_index != end {
+                                // Only the deliberate 10_000-index skip
+                                // should break continuity.
+                                assert_eq!(w.start_index, end + 10_000);
+                                saw_skip = true;
+                            }
+                        }
+                        prev_i_end = Some(w.start_index + w.i.len() as u64);
+                    }
+                    DaqRecord::WaveV(w) => {
+                        saw_wave_v = true;
+                        assert!(!w.v.is_empty());
+                        if let Some(end) = prev_v_end {
+                            assert_eq!(w.start_index, end);
+                        }
+                        prev_v_end = Some(w.start_index + w.v.len() as u64);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(saw_wave_i, "expected at least one WaveI record");
+        assert!(saw_wave_v, "expected at least one WaveV record");
+        // The skip is time-gated (~5s of mock time) and this test only runs
+        // a handful of ~30ms iterations, so it isn't expected to fire here;
+        // this just documents the invariant checked above when it does.
+        let _ = saw_skip;
     }
 }
