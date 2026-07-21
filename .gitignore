@@ -114,3 +114,4 @@ yarn-error.log*
 
 # Mex project folder (optional internal tool) — avoid accidentally committing
 .mex/
+.superpowers/
