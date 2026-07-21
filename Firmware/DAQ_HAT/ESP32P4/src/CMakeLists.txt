@@ -19,6 +19,7 @@ idf_component_register(
         "link/ddp_master.c"
         "link/c6_flasher.c"
         "ota/ota.c"
+        "ota/relay_stage.c"
         "stream/usb_stream.c"
         "stream/usb_backend.c"
         "board/daq_board.c"
