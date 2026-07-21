@@ -66,6 +66,12 @@ typedef enum {
     USB_CMD_RANGE_CAL_START = 0x89, // payload: usb_cmd_range_cal_t (start cal)
     USB_CMD_RANGE_CAL_ACK   = 0x8A, // no payload (advance past PROMPT)
     USB_CMD_RANGE_CAL_ABORT = 0x8B, // no payload
+
+    // Direct desktop -> P4 `staging` ingest (bypasses S3/WiFi entirely).
+    USB_CMD_OTA_BEGIN       = 0x8C, // payload: ota_meta_t + target byte (RELAY_TARGET_C6/_S3)
+    USB_CMD_OTA_DATA        = 0x8D, // payload: u32 offset + firmware bytes
+    USB_CMD_OTA_END         = 0x8E, // no payload; finalizes + verifies staged image
+    USB_CMD_OTA_ABORT       = 0x8F, // no payload
 } usb_rec_type_t;
 
 // ---- WAVE_I / WAVE_V records -------------------------------------------------

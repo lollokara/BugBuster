@@ -506,6 +506,49 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
         case USB_CMD_RANGE_CAL_ABORT:
             range_cal_abort(&b->range_cal);
             break;
+        case USB_CMD_OTA_BEGIN: {
+            // Direct desktop->P4 staging ingest (bypasses S3/WiFi entirely).
+            // Trailing byte selects the eventual relay destination
+            // (RELAY_TARGET_C6 / _S3); default to C6 if the host omits it or
+            // sends an unrecognized value.
+            if (len < sizeof(ota_meta_t)) {
+                ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: payload too short");
+                break;
+            }
+            ota_meta_t meta;
+            memcpy(&meta, payload, sizeof(meta));
+            relay_target_t target = RELAY_TARGET_C6;
+            if (len > sizeof(meta)) {
+                uint8_t raw_target = payload[sizeof(meta)];
+                if (raw_target == RELAY_TARGET_C6 || raw_target == RELAY_TARGET_S3) {
+                    target = (relay_target_t)raw_target;
+                }
+            }
+            if (relay_stage_begin(target, &meta) != ESP_OK) {
+                ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: relay_stage_begin failed");
+            }
+            break;
+        }
+        case USB_CMD_OTA_DATA: {
+            if (len < 4) {
+                ESP_LOGE(TAG, "USB_CMD_OTA_DATA: payload too short");
+                break;
+            }
+            uint32_t offset;
+            memcpy(&offset, payload, sizeof(offset));
+            if (relay_stage_write(offset, payload + 4, len - 4) != ESP_OK) {
+                ESP_LOGE(TAG, "USB_CMD_OTA_DATA: relay_stage_write failed");
+            }
+            break;
+        }
+        case USB_CMD_OTA_END:
+            if (relay_stage_end() != ESP_OK) {
+                ESP_LOGE(TAG, "USB_CMD_OTA_END: relay_stage_end/verify failed");
+            }
+            break;
+        case USB_CMD_OTA_ABORT:
+            relay_stage_reset(RELAY_FAILED);
+            break;
         case USB_CMD_SET_RATE:
             // Deferred to ctrl task: stop_fast has vTaskDelay + SPI writes +
             // run_fast, which overflows the 4096-byte TinyUSB task stack
