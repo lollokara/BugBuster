@@ -18,10 +18,13 @@ idf_component_register(
         "link/s3_link.c"
         "link/ddp_master.c"
         "link/c6_flasher.c"
+        "link/wifi_ap.c"
         "ota/ota.c"
         "ota/relay_stage.c"
+        "ota/relay_c6.c"
         "stream/usb_stream.c"
         "stream/usb_backend.c"
+        "stream/tcp_backend.c"
         "board/daq_board.c"
         "board/buttons_p4.c"
         "cli/cli.c"
@@ -68,4 +71,10 @@ idf_component_register(
         bootloader_support
         mbedtls
         nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        lwip
+        espressif__esp_wifi_remote
+        espressif__esp_hosted
 )
