@@ -15,6 +15,7 @@
 #include "usb_backend.h"
 #include "buttons_p4.h"
 #include "c6_flasher.h"
+#include "relay_stage.h"
 
 static const char *TAG = "daq_board";
 
@@ -117,6 +118,7 @@ esp_err_t daq_board_init(daq_board_t *b)
     // OTA bookkeeping: detect a pending-verify boot (post-update) early so the
     // caller can run a self-test and confirm (or let the bootloader roll back).
     ota_init();
+    relay_stage_init();
 
     // Bring up the analog power rails BEFORE any ADAQ access — the ADAQs are
     // unpowered (and read 0x00) until the 3V3 analog LDO is enabled.
@@ -691,9 +693,15 @@ typedef struct __attribute__((packed)) {
     uint8_t enable;
 } s3_set_source_t;
 
-// Active OTA target (set on OTA_BEGIN): HATP_OTA_TARGET_P4 / _C6.
+// Active OTA target (set on OTA_BEGIN): HATP_OTA_TARGET_P4 / _C6 / _STAGE.
 static uint8_t  s_ota_target = HATP_OTA_TARGET_P4;
 static uint32_t s_c6_ota_size = 0;
+
+// When s_ota_target == HATP_OTA_TARGET_STAGE, a second trailing byte on
+// OTA_BEGIN (payload[sizeof(ota_meta_t) + 1]) selects which relay target the
+// staged image is ultimately destined for (RELAY_TARGET_C6 / _S3), since the
+// wire protocol only reserves one generic "stage" target value.
+static relay_target_t s_relay_target = RELAY_TARGET_C6;
 
 // Bring the C6 display link (DDP master) back up after a C6 flash hands UART2
 // back. ddp_master_deinit() released the driver; init+start re-acquire it.
@@ -893,6 +901,14 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 s_c6_ota_size = meta.image_size;
                 return 0;
             }
+            if (s_ota_target == HATP_OTA_TARGET_STAGE) {
+                // Second trailing byte selects the eventual relay destination
+                // (RELAY_TARGET_C6 / _S3); default to C6 if the host omits it.
+                s_relay_target = (len > sizeof(ota_meta_t) + 1)
+                    ? (relay_target_t)payload[sizeof(ota_meta_t) + 1]
+                    : RELAY_TARGET_C6;
+                return (relay_stage_begin(s_relay_target, &meta) == ESP_OK) ? 0 : -1;
+            }
             return (ota_begin(&meta) == ESP_OK) ? 0 : -1;
         }
         case HATP_CMD_OTA_DATA: {
@@ -904,6 +920,9 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (s_ota_target == HATP_OTA_TARGET_C6) {
                 return (c6_flasher_write(fw, fw_len) == ESP_OK) ? 0 : -1;
             }
+            if (s_ota_target == HATP_OTA_TARGET_STAGE) {
+                return (relay_stage_write(offset, fw, fw_len) == ESP_OK) ? 0 : -1;
+            }
             return (ota_write(offset, fw, fw_len) == ESP_OK) ? 0 : -1;
         }
         case HATP_CMD_OTA_END:
@@ -911,6 +930,9 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 esp_err_t rc = c6_flasher_finish();
                 c6_link_restart(b);                  // C6 now runs the new image
                 return (rc == ESP_OK) ? 0 : -1;
+            }
+            if (s_ota_target == HATP_OTA_TARGET_STAGE) {
+                return (relay_stage_end() == ESP_OK) ? 0 : -1;
             }
             return (ota_end() == ESP_OK) ? 0 : -1;
         case HATP_CMD_OTA_ABORT:
@@ -948,6 +970,16 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (s_ota_target == HATP_OTA_TARGET_C6) return -1;   // unsupported for C6
             ota_rollback();   // reboots on success
             return -1;        // if it returns, it failed
+
+        case HATP_CMD_STAGE_READ: {
+            if (len < sizeof(s3link_stage_read_req_t)) return -1;
+            s3link_stage_read_req_t req;
+            memcpy(&req, payload, sizeof(req));
+            if (req.len > HATP_OTA_CHUNK_MAX) req.len = HATP_OTA_CHUNK_MAX;
+            int n = relay_stage_read(req.offset, resp, req.len);
+            if (n < 0) return -1;
+            return n;   // 0 = EOF, caller (s3_link.c) sends it back as HATP_RSP_STAGE_DATA
+        }
 
         default:
             return -1;

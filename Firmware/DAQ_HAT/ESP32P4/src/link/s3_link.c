@@ -215,7 +215,8 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
         case HATP_CMD_OTA_ABORT:
         case HATP_CMD_OTA_STATUS:
         case HATP_CMD_OTA_CONFIRM:
-        case HATP_CMD_OTA_ROLLBACK: {
+        case HATP_CMD_OTA_ROLLBACK:
+        case HATP_CMD_STAGE_READ: {
             if (!s->cmd_cb) {
                 send_error();
                 break;
@@ -228,6 +229,8 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
                 send_frame(HATP_RSP_VERSION, resp, (uint8_t)n);
             } else if (cmd == HATP_CMD_OTA_STATUS) {
                 send_frame(HATP_RSP_OTA_STATUS, resp, (uint8_t)n);
+            } else if (cmd == HATP_CMD_STAGE_READ) {
+                send_frame(HATP_RSP_STAGE_DATA, resp, (uint8_t)n);
             } else {
                 send_ok();
             }
