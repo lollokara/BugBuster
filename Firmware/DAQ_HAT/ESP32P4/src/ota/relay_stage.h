@@ -9,8 +9,12 @@
 //       HATP_CMD_STAGE_READ -> relay_stage_set_pushed_bytes() after each ack.
 //
 // Resume-state (target, expected size/sha256, staged_bytes, pushed_bytes,
-// state) is persisted to NVS namespace "relay" after every acked chunk (not
-// every byte), so a P4 reset mid-transfer resumes instead of restarting.
+// state) is persisted to NVS namespace "relay" periodically (every ~64KB of
+// staging progress, plus always at end/reset) rather than on every chunk, so
+// a P4 reset mid-transfer resumes instead of restarting (a resume may redo
+// up to ~64KB of the current run as a bounded tradeoff against NVS wear).
+// SHA-256 verification in relay_stage_end() re-reads the full staged image
+// from flash, so it is correct even across a resumed/interrupted staging run.
 // =============================================================================
 
 #include <stdint.h>
@@ -57,7 +61,10 @@ esp_err_t relay_stage_write(uint32_t offset, const uint8_t *data, size_t len);
 /** @brief Finalize: verify size + SHA-256 over the staged image. */
 esp_err_t relay_stage_end(void);
 
-/** @brief Read up to @p len bytes from `staging` at @p offset (for C6 push / S3 pull). */
+/** @brief Read up to @p len bytes from `staging` at @p offset (for C6 push / S3 pull).
+ *  Does not itself verify RELAY_STAGED state; callers (e.g. the future
+ *  apply_esp32_ota_from_p4_stage()) are responsible for checking
+ *  relay_stage_get_status() before relying on staged data. */
 int relay_stage_read(uint32_t offset, uint8_t *out, size_t len);
 
 /** @brief Persist push progress (call after every acked chunk to a target). */
