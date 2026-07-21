@@ -715,6 +715,78 @@ static bool apply_esp32_ota(const UpdateComponent *component)
     return true;
 }
 
+// Alternative ESP32 OTA chunk source: pulls the staged image from the DAQ
+// HAT (P4)'s `staging` partition over the S3<->P4 UART link (HAT_CMD_STAGE_READ
+// / HAT_RSP_STAGE_DATA) instead of downloading it over HTTPS. Used when the
+// firmware image arrived at the P4 via the USB protocol path rather than the
+// S3's own network connection. Not yet wired to a caller (source selection is
+// out of scope for this task) — this only adds the capability.
+//
+// NOTE: unlike apply_esp32_ota()'s HTTP path, the P4 link caps each transfer
+// at HAT_FRAME_MAX_LEN (32) bytes per hat_stage_read() call, so this reads in
+// much smaller chunks than the HTTP buffer_size=4096 path above.
+esp_err_t apply_esp32_ota_from_p4_stage(void)
+{
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    if (!part) {
+        set_error("no ESP32 OTA partition available");
+        return ESP_ERR_NOT_FOUND;
+    }
+    esp_ota_handle_t ota = 0;
+    esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &ota);
+    if (err != ESP_OK) {
+        set_error("esp_ota_begin failed");
+        return err;
+    }
+
+    s_update.progress_total = 0; // unknown until EOF from the P4 stage stream
+    s_update.progress_done = 0;
+
+    uint8_t buf[HAT_FRAME_MAX_LEN];
+    uint32_t offset = 0;
+    const int kMaxRetriesPerChunk = 5;
+
+    for (;;) {
+        int n = -1;
+        for (int attempt = 0; attempt < kMaxRetriesPerChunk && n < 0; attempt++) {
+            n = hat_stage_read(offset, buf, sizeof(buf));
+            if (n < 0) {
+                vTaskDelay(pdMS_TO_TICKS(100 * (attempt + 1)));
+            }
+        }
+        if (n < 0) {
+            esp_ota_abort(ota);
+            set_error("P4 stage read failed after retries");
+            return ESP_FAIL;
+        }
+        if (n == 0) break; // end of staged image
+
+        err = esp_ota_write(ota, buf, (size_t)n);
+        if (err != ESP_OK) {
+            esp_ota_abort(ota);
+            set_error("esp_ota_write failed (P4 stage source)");
+            return err;
+        }
+        offset += (uint32_t)n;
+        s_update.progress_done = offset;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    err = esp_ota_end(ota);
+    if (err != ESP_OK) {
+        set_error("ESP32 OTA finalize failed (P4 stage source)");
+        return err;
+    }
+    err = esp_ota_set_boot_partition(part);
+    if (err != ESP_OK) {
+        set_error("ESP32 OTA set boot partition failed (P4 stage source)");
+        return err;
+    }
+    set_state(UPDATE_STATE_REBOOTING, "rebooting");
+    s_reboot_pending = true;
+    return ESP_OK;
+}
+
 void update_manager_init(void)
 {
     s_update.state = UPDATE_STATE_IDLE;

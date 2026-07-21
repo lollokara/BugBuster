@@ -226,6 +226,8 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_DAQ_MARK        0x5C  // IO event -> emit MARKER (hat_daq_mark_t)
 #define HAT_CMD_MB_POLL         0x5D  // poll P4 for a pending C6 mainboard request -> RSP_MB_REQ
 #define HAT_CMD_MB_RESULT       0x5E  // [req_type][status][data] result -> P4 relays to C6
+#define HAT_CMD_STAGE_READ      0x75u // read a chunk from the P4 `staging` partition -> RSP_STAGE_DATA
+                                       // must match P4 HATP_CMD_STAGE_READ (s3_link.h) exactly
 #define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
 
 // Commands: HAT v2 Supplies / LEDs (0x40-0x4F)
@@ -258,6 +260,20 @@ typedef struct __attribute__((packed)) {
 #define HAT_RSP_CALIBRATE_STATUS 0x8A
 #define HAT_RSP_CALIBRATE_EXPORT 0x8B  // Paginated stored cal points
 #define HAT_RSP_MB_REQ          0x96  // Pending C6 mainboard request from the P4
+#define HAT_RSP_STAGE_DATA      0x97u // Response to HAT_CMD_STAGE_READ: firmware bytes read from
+                                       // the P4 `staging` partition (0 bytes = end of staged image).
+                                       // Must match P4 HATP_RSP_STAGE_DATA (s3_link.h) exactly.
+
+// HAT_CMD_STAGE_READ request payload: ask the P4 for up to @len bytes from its
+// `staging` partition at @offset. NOTE: the actual S3<->P4 UART link caps
+// payloads (both directions) at HAT_FRAME_MAX_LEN (32) bytes per frame — see
+// hat_send_command()/hat_command_internal() in hat.cpp. This is smaller than
+// the P4-side HATP_OTA_CHUNK_MAX (236, sized for the P4's larger HATP_MAX_PAYLOAD
+// frame budget), so @len must be capped to HAT_FRAME_MAX_LEN by the caller.
+typedef struct __attribute__((packed)) {
+    uint32_t offset;
+    uint8_t  len;
+} hat_stage_read_req_t;
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
@@ -545,6 +561,16 @@ void hat_daq_poll_mb(void);
  * @param kind  HAT_DAQ_MARK_KIND_FLAG or HAT_DAQ_MARK_KIND_TRIGGER.
  */
 void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind);
+/**
+ * @brief Read one chunk from the P4's `staging` partition (HAT_CMD_STAGE_READ),
+ *        e.g. for pulling an ESP32 OTA image the P4 staged from USB.
+ * @param offset  Byte offset into the staged image.
+ * @param out     Destination buffer, must be >= len bytes.
+ * @param len     Requested chunk length; caller must keep this <= HAT_FRAME_MAX_LEN.
+ * @return Number of bytes read into @p out (<= len), 0 at end-of-image, or
+ *         -1 on a transport error (caller should retry the same offset).
+ */
+int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len);
 
 /**
  * @brief Arm/disarm the DAQ HAT trigger latch and record the pre-roll depth.

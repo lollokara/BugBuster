@@ -1385,6 +1385,25 @@ void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind)
                 rsp, &rsp_len, 50, sizeof(rsp));
 }
 
+int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len)
+{
+    if (!out) return -1;
+    if (len > HAT_FRAME_MAX_LEN) len = HAT_FRAME_MAX_LEN;
+
+    hat_stage_read_req_t req = {};
+    req.offset = offset;
+    req.len    = len;
+
+    uint8_t rsp[HAT_FRAME_MAX_LEN] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_STAGE_READ, (const uint8_t *)&req, sizeof(req),
+                              rsp, &rsp_len, 500, sizeof(rsp));
+    if (cmd != HAT_RSP_STAGE_DATA) return -1;
+
+    memcpy(out, rsp, rsp_len);
+    return (int)rsp_len;
+}
+
 void hat_daq_send_arm(bool armed, uint8_t trig_logic, uint32_t pre_samples)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;
