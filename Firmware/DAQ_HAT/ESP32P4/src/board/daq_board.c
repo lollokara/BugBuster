@@ -904,9 +904,15 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (s_ota_target == HATP_OTA_TARGET_STAGE) {
                 // Second trailing byte selects the eventual relay destination
                 // (RELAY_TARGET_C6 / _S3); default to C6 if the host omits it.
-                s_relay_target = (len > sizeof(ota_meta_t) + 1)
-                    ? (relay_target_t)payload[sizeof(ota_meta_t) + 1]
-                    : RELAY_TARGET_C6;
+                if (len > sizeof(ota_meta_t) + 1) {
+                    uint8_t raw_relay_target = payload[sizeof(ota_meta_t) + 1];
+                    if (raw_relay_target != RELAY_TARGET_C6 && raw_relay_target != RELAY_TARGET_S3) {
+                        return -1;
+                    }
+                    s_relay_target = (relay_target_t)raw_relay_target;
+                } else {
+                    s_relay_target = RELAY_TARGET_C6;
+                }
                 return (relay_stage_begin(s_relay_target, &meta) == ESP_OK) ? 0 : -1;
             }
             return (ota_begin(&meta) == ESP_OK) ? 0 : -1;
