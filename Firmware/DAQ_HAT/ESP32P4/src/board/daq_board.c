@@ -678,6 +678,13 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     uint8_t adaq_ok_bits = (b->adaq_ok[0] ? 1u : 0u)
                          | (b->adaq_ok[1] ? 2u : 0u)
                          | (b->adaq_ok[2] ? 4u : 0u);
+
+    // Direct-USB relay/staging ingest progress (USB_CMD_OTA_*). Exposed here
+    // rather than as a per-command ack since usb_cmd_cb_t has no response
+    // channel; the desktop polls this heartbeat to learn staging state.
+    relay_status_t relay_st;
+    relay_stage_get_status(&relay_st);
+
     usb_status_payload_t st = {
         .sample_rate    = (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]),
         .overflow_count = 0,
@@ -700,6 +707,11 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         .fifo_drop_frames = b->usb.dropped_frames,
         .ring_high_water  = 0, // filled if adaq_stream exposes it; else 0 (documented)
         .wave_i_index_lo  = (uint32_t)b->usb.sample_seq,
+        .relay_target       = (uint8_t)relay_st.target,
+        .relay_state        = (uint8_t)relay_st.state,
+        .relay_image_size   = relay_st.image_size,
+        .relay_staged_bytes = relay_st.staged_bytes,
+        .relay_pushed_bytes = relay_st.pushed_bytes,
     };
     usb_stream_send_status(&b->usb, &st);
 

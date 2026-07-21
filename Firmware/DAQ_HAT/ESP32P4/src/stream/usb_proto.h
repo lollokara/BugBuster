@@ -145,7 +145,9 @@ typedef struct __attribute__((packed)) {
 // Extension v1 (bytes 20-27): input-rail sense (in_voltage, in_current).
 // Extension v2 (bytes 28-35): FINE ADC health (adaq_ok_bits, fine_err_pct,
 //   drop_fine, drop_coarse). Extension v3 (bytes 36-55): USB streaming
-//   performance counters. Older parsers silently ignore trailing bytes.
+//   performance counters. Extension v4 (bytes 56-72): direct-USB relay/
+//   staging ingest progress (see ota/relay_stage.h). Older parsers silently
+//   ignore trailing bytes.
 typedef struct __attribute__((packed)) {
     uint32_t sample_rate;     // 0
     uint32_t overflow_count;  // 4
@@ -171,7 +173,16 @@ typedef struct __attribute__((packed)) {
     uint32_t fifo_drop_frames;  // 44 — frames dropped for back-pressure/no-transport
     uint32_t ring_high_water;   // 48 — max adaq ring fill seen (samples)
     uint32_t wave_i_index_lo;   // 52 — low 32 bits of live fused index
-} usb_status_payload_t;         // total: 56 bytes
+    // Extension v4 (bytes 56-72): direct-USB relay/staging ingest progress.
+    // Sourced from relay_stage_get_status(); sha256 is intentionally omitted
+    // (too large for a 10Hz frame) — desktop only needs progress/state here.
+    uint8_t  relay_target;      // 56 — relay_target_t (0=none, 1=C6, 2=S3)
+    uint8_t  relay_state;       // 57 — relay_state_t (IDLE/STAGING/STAGED/PUSHING/DONE/FAILED)
+    uint16_t _pad2;             // 58
+    uint32_t relay_image_size;  // 60 — total expected image bytes
+    uint32_t relay_staged_bytes;// 64 — bytes written to staging partition so far
+    uint32_t relay_pushed_bytes;// 68 — bytes pushed onward to target so far
+} usb_status_payload_t;         // total: 72 bytes
 
 // ---- Control command payloads ----------------------------------------------
 typedef struct __attribute__((packed)) {
