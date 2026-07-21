@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+- **DAQ HAT (ESP32-P4) staged/resumable relay-update core.** New 5 MB `staging` partition
+  (P4 NVS grown 24 KB → ~988 KB to make room) plus a `relay_stage` module that writes/verifies
+  (SHA-256) a full C6 or S3 firmware image before anything downstream is touched, with NVS-backed
+  resume state so an interrupted stage or push picks up where it left off instead of restarting.
+  A `relay_c6` engine pushes a verified image to the on-module ESP32-C6 over the existing UART
+  bootloader link with retry/backoff and resumes from the last acked offset. The ESP32-S3
+  mainboard can also pull a staged image from the P4 (`HATP_CMD_STAGE_READ`/`hat_stage_read()`,
+  S3 stays master) instead of only fetching over WiFi/HTTPS, feeding the same `esp_ota_write()`
+  path it already uses. Ingest works both over the S3 HAT link and directly from the desktop app
+  over USB (`USB_CMD_OTA_BEGIN/DATA/END/ABORT`); the existing USB status heartbeat now carries
+  staging progress so the desktop can poll for begin/write/verify success. A mutex now guards the
+  shared relay state so the USB, S3-link, and C6-push paths can't clobber each other mid-transfer.
+  Not yet wired: CI/release manifest support for this path, any TUI/Desktop/Web UI trigger
+  surface, and an actual caller for the S3 pull function (deferred pending a safeguard that
+  confirms the P4's image is fully staged and verified before pulling). See
+  `.mex/patterns/daq-hat-relay-update.md`.
+
 ### Fixed
 - **DAQ HAT (ESP32-P4) reference-meter cal now subtracts the open-circuit baseline.** The
   meter/readings cal previously fit the raw ADC voltage (leakage-per-V_DUT + signal) against the
