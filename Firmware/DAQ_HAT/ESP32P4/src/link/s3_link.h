@@ -43,6 +43,10 @@ extern "C" {
 // When 1, the image is flashed to the on-module ESP32-C6 via the P4 ROM-loader.
 #define HATP_OTA_TARGET_P4   0u
 #define HATP_OTA_TARGET_C6   1u
+// When 2, the image is written into the P4 `staging` partition only (no local
+// P4/C6 flash write) so it can later be relayed to C6 (via relay_c6) or pulled
+// by the S3 itself (via HATP_CMD_STAGE_READ) instead of being applied directly.
+#define HATP_OTA_TARGET_STAGE 2u
 
 // Standard commands (master -> slave).
 #define HATP_CMD_PING        0x01u
@@ -96,6 +100,12 @@ extern "C" {
 #define HATP_CMD_OTA_CONFIRM     0x66u   // confirm running image (cancel rollback)
 #define HATP_CMD_OTA_ROLLBACK    0x67u   // revert to previous image (reboots)
 
+// Relay staging: S3 pulls a previously-staged image back out of the P4's
+// `staging` partition (see relay_stage.h) in order to feed its own
+// esp_ota_write() path — the P4 never pushes to the S3 unsolicited, since
+// this link is strictly S3-master/P4-slave.
+#define HATP_CMD_STAGE_READ      0x75u   // payload: s3link_stage_read_req_t
+
 // Settings/config commands (vendor sub-range 0x70..0x7F). These read/write the
 // authoritative settings store (common/daq_config_registry.h) using key-
 // addressed TLV values, so the S3 (desktop/web/mobile/MCP) can configure every
@@ -121,6 +131,7 @@ extern "C" {
 #define HATP_RSP_CONFIG_SCHEMA 0x94u // schema descriptor for one key
 #define HATP_RSP_DAQ_CAL_STATUS 0x95u // smu_cal_status_t snapshot
 #define HATP_RSP_MB_REQ        0x96u // pending C6 mainboard request ([req_type][args]); 0-len = none
+#define HATP_RSP_STAGE_DATA    0x97u // payload: firmware bytes read from `staging` at the requested offset
 
 // Firmware version reported in GET_INFO.
 #define S3LINK_FW_MAJOR      1u
@@ -182,6 +193,15 @@ typedef struct __attribute__((packed)) {
     uint32_t offset;         // byte offset of this chunk within the image
     // followed by up to HATP_OTA_CHUNK_MAX firmware bytes
 } s3link_ota_data_hdr_t;
+
+// HATP_CMD_STAGE_READ payload: request up to @len bytes from `staging` at
+// @offset. Response (HATP_RSP_STAGE_DATA) payload is exactly the requested
+// bytes with no header (offset is implicit — the requester already knows
+// what it asked for); a short response (< len) means end-of-image.
+typedef struct __attribute__((packed)) {
+    uint32_t offset;
+    uint8_t  len;            // <= HATP_OTA_CHUNK_MAX
+} s3link_stage_read_req_t;
 
 // Command callback: the board handles DAQ-specific commands and (optionally)
 // fills a response payload. Return the number of response bytes written into
