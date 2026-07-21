@@ -509,8 +509,8 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
         case USB_CMD_OTA_BEGIN: {
             // Direct desktop->P4 staging ingest (bypasses S3/WiFi entirely).
             // Trailing byte selects the eventual relay destination
-            // (RELAY_TARGET_C6 / _S3); default to C6 if the host omits it or
-            // sends an unrecognized value.
+            // (RELAY_TARGET_C6 / _S3); default to C6 if the host omits it,
+            // reject an unrecognized value (matches the S3-link OTA_BEGIN path).
             if (len < sizeof(ota_meta_t)) {
                 ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: payload too short");
                 break;
@@ -520,9 +520,11 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
             relay_target_t target = RELAY_TARGET_C6;
             if (len > sizeof(meta)) {
                 uint8_t raw_target = payload[sizeof(meta)];
-                if (raw_target == RELAY_TARGET_C6 || raw_target == RELAY_TARGET_S3) {
-                    target = (relay_target_t)raw_target;
+                if (raw_target != RELAY_TARGET_C6 && raw_target != RELAY_TARGET_S3) {
+                    ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: unrecognized relay target %u", raw_target);
+                    break;
                 }
+                target = (relay_target_t)raw_target;
             }
             if (relay_stage_begin(target, &meta) != ESP_OK) {
                 ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: relay_stage_begin failed");
@@ -993,13 +995,20 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 return (rc == ESP_OK) ? 0 : -1;
             }
             if (s_ota_target == HATP_OTA_TARGET_STAGE) {
-                return (relay_stage_end() == ESP_OK) ? 0 : -1;
+                esp_err_t rc = relay_stage_end();
+                s_ota_target = HATP_OTA_TARGET_P4;
+                return (rc == ESP_OK) ? 0 : -1;
             }
             return (ota_end() == ESP_OK) ? 0 : -1;
         case HATP_CMD_OTA_ABORT:
             if (s_ota_target == HATP_OTA_TARGET_C6) {
                 c6_flasher_abort();
                 c6_link_restart(b);
+                s_ota_target = HATP_OTA_TARGET_P4;
+                return 0;
+            }
+            if (s_ota_target == HATP_OTA_TARGET_STAGE) {
+                relay_stage_reset(RELAY_FAILED);
                 s_ota_target = HATP_OTA_TARGET_P4;
                 return 0;
             }
