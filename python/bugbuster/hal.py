@@ -314,32 +314,40 @@ DEFAULT_ROUTING: dict[int, IORouting] = {
     # ── BLOCK 2, IO_BLOCK 3 — device 2 (U17), VADJ2, EFUSE3 ─────────────
     # Logical connector C stays with U17; firmware maps only the logical
     # channel to the swapped physical AD74416H register internally.
+    # The ADGS2414D MUX device index is ALSO physically swapped between
+    # IO_Block 3 and IO_Block 4 (confirmed by hardware probing: IO_Block 3's
+    # switches live on MUX device 3, not device 2, and vice versa for
+    # IO_Block 4) — unlike the AD74416H channel swap noted above, this one
+    # was not being compensated for anywhere, so mux_device values for
+    # blocks 3/4 are swapped here to match the physical wiring.
     7:  IORouting(7,  block=2, io_block=3, position=3, channel=None,
-                  mux_device=2, mux_map=_digital_mux_c(), esp_gpio=8,
+                  mux_device=3, mux_map=_digital_mux_c(), esp_gpio=8,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     8:  IORouting(8,  block=2, io_block=3, position=2, channel=None,
-                  mux_device=2, mux_map=_digital_mux_b(), esp_gpio=9,
+                  mux_device=3, mux_map=_digital_mux_b(), esp_gpio=9,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     9:  IORouting(9,  block=2, io_block=3, position=1, channel=2,
-                  mux_device=2, mux_map=_analog_mux(),    esp_gpio=10,
+                  mux_device=3, mux_map=_analog_mux(),    esp_gpio=10,
                   efuse=PowerControl.EFUSE3, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=ANALOG_IO_MODES),
 
     # ── BLOCK 2, IO_BLOCK 4 — device 3 (U16), VADJ2, EFUSE4 ─────────────
     # Logical connector D stays with U16; firmware maps only the logical
     # channel to the swapped physical AD74416H register internally.
+    # See IO_Block 3 note above — MUX device index swapped to match
+    # confirmed physical wiring.
     10: IORouting(10, block=2, io_block=4, position=3, channel=None,
-                  mux_device=3, mux_map=_digital_mux_c(), esp_gpio=11,
+                  mux_device=2, mux_map=_digital_mux_c(), esp_gpio=11,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     11: IORouting(11, block=2, io_block=4, position=2, channel=None,
-                  mux_device=3, mux_map=_digital_mux_b(), esp_gpio=12,
+                  mux_device=2, mux_map=_digital_mux_b(), esp_gpio=12,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=DIGITAL_IO_MODES),
     12: IORouting(12, block=2, io_block=4, position=1, channel=3,
-                  mux_device=3, mux_map=_analog_mux(),    esp_gpio=13,
+                  mux_device=2, mux_map=_analog_mux(),    esp_gpio=13,
                   efuse=PowerControl.EFUSE4, supply=PowerControl.VADJ2,
                   supply_idac=2, valid_modes=ANALOG_IO_MODES),
 }

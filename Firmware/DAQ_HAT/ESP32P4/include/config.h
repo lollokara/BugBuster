@@ -135,6 +135,46 @@
 // the ESP32-P4 to latch it (otherwise the LSB reads 0 -> value & 0xFE).
 #define ADAQ_CS_POSTTRANS_CYCLES  4
 
+// -----------------------------------------------------------------------------
+// Hardware CS on the ADAQ streaming fast path (bus A / FINE only).
+//
+// HISTORY: an earlier hardware-CS attempt on the streaming fast path corrupted
+// the LAST BIT of every 24-bit sample -- classic CS-deassert-too-close-to-
+// final-SCLK-edge corruption (the peripheral raised CS right as the ESP32-P4's
+// slightly-late MISO sample point was trying to catch the final data bit). The
+// fix at the time was to bit-bang CS as a plain GPIO (adaq_ll_cs_assert() /
+// adaq_ll_cs_deassert() in adaq7769_ll.h, driven from adaq7769_stream.c's
+// capture_begin()/capture_end()), asserting/deasserting well clear of the
+// SCLK edges by construction. That bit-bang path still works and is the
+// fallback here; it costs ~4 us/sample of GPIO toggling + bookkeeping
+// overhead, capping FINE at ~141 kSPS of the 256 kSPS target.
+//
+// This flag re-enables the SPI peripheral's OWN chip-select output on the
+// streaming fast path (adaq_ll_hwcs_begin/adaq_ll_hwcs_end in adaq7769_ll.c),
+// this time with an explicit CS-HOLD phase (ADAQ_HW_CS_HOLD_CYCLES below) so
+// CS is guaranteed to stay asserted for several SCLK cycles after the final
+// clock edge before rising -- the same posttrans-hold fix already proven safe
+// for register access (see ADAQ_CS_POSTTRANS_CYCLES / cs_ena_posttrans in
+// adaq_ll_add_device(), which has run corruption-free since it was added).
+//
+// Only bus A (FINE, the sole device on SPI3) uses HW CS: it is the only bus
+// guaranteed to have exactly one CS id in use on its host, so "which HW CS
+// line is this device's" is unambiguous without depending on the SPI driver's
+// undocumented internal id-assignment order. Bus B (COARSE+VOLTAGE, shared
+// SPI2, two CS pins) keeps bit-banged CS -- see the hw_cs_streaming check in
+// adaq7769_stream.c's capture_task_comb()/capture_begin()/capture_end().
+//
+// Set to 0 to revert FINE to the full bit-banged CS path (pre-existing,
+// proven-safe). Trivially revertible: no code is deleted, only gated.
+// -----------------------------------------------------------------------------
+#define ADAQ_HW_CS                1
+
+// SCLK cycles the SPI peripheral holds CS asserted after the final clock edge
+// on the HW-CS streaming fast path (bus A / FINE). Must be >=2; mirrors the
+// 4 cycles already proven safe for register access (ADAQ_CS_POSTTRANS_CYCLES)
+// so the last data bit is never sampled by the ADAQ right as CS rises.
+#define ADAQ_HW_CS_HOLD_CYCLES    4
+
 // Streaming: read the 8-bit status header only every Nth sample per device
 // (data-only 24-bit / 3-byte reads otherwise). The status header (saturation /
 // not-settled / master-error flags) changes slowly, so sampling it periodically

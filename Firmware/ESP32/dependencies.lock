@@ -12,11 +12,11 @@ dependencies:
       type: service
     version: 1.11.1
   espressif/tinyusb:
-    component_hash: a40b7f67df6ac254a4afd96c6401cc56f2059ae747d6d7e66b568bca53ad0edc
+    component_hash: a72b7d67472914ab76309340fd50d578b31e310963d45ad0f81144bde3314752
     source:
       service_url: https://api.components.espressif.com/
       type: service
-    version: 0.19.0~3
+    version: 0.21.0~1
   idf:
     component_hash: null
     source:

@@ -303,7 +303,12 @@ static inline void capture_begin(adaq_stream_t *s, uint8_t local, bool want_stat
         adaq_ll_fifo_setup(&dev->ll, n);
         *cur_len = n;
     }
-    adaq_ll_cs_assert(&dev->ll);
+    // HW-CS devices (bus A/FINE, see ADAQ_HW_CS in config.h) drive their own CS
+    // via the SPI peripheral around spi_ll_user_start(); only bit-bang CS
+    // (bus B / shared devices) here.
+    if (!dev->ll.hw_cs_streaming) {
+        adaq_ll_cs_assert(&dev->ll);
+    }
     adaq_ll_fifo_start(&dev->ll);
 }
 
@@ -317,7 +322,11 @@ static inline void capture_end(adaq_stream_t *s, uint8_t local, bool want_status
     uint8_t n = want_status ? 4 : 3;
     adaq_ll_fifo_wait(&dev->ll);
     adaq_ll_fifo_drain(&dev->ll, buf, n);
-    adaq_ll_cs_deassert(&dev->ll);
+    // HW-CS devices already auto-deasserted (with a guaranteed post-transfer
+    // hold, see ADAQ_HW_CS_HOLD_CYCLES) as part of the peripheral transaction.
+    if (!dev->ll.hw_cs_streaming) {
+        adaq_ll_cs_deassert(&dev->ll);
+    }
 
     adaq_sample_t rec = {0};
     rec.device_id = local;
@@ -378,7 +387,18 @@ static void capture_task_comb(void *arg)
     }
     for (uint8_t i = 0; i < c->n_dev; ++i) {
         adaq7769_t *dev = c->dev[i].stream->devices[c->dev[i].local];
-        adaq_ll_cs_manual_begin(&dev->ll);
+        // HW CS (ADAQ_HW_CS in config.h) is only safe on a bus with exactly one
+        // CS-owning device -- there we know for certain the SPI driver assigned
+        // it hw CS id 0. That is bus A/FINE (device_count==1). Shared bus B
+        // (COARSE+VOLTAGE) keeps bit-banged CS regardless of the flag.
+#if ADAQ_HW_CS
+        if (c->dev[i].stream->device_count == 1) {
+            adaq_ll_hwcs_begin(&dev->ll);
+        } else
+#endif
+        {
+            adaq_ll_cs_manual_begin(&dev->ll);
+        }
     }
 
     // Poll the DRDY edge-status latch and overlap one read per SPI host: trigger
@@ -432,7 +452,14 @@ static void capture_task_comb(void *arg)
     }
     for (uint8_t i = 0; i < c->n_dev; ++i) {
         adaq7769_t *dev = c->dev[i].stream->devices[c->dev[i].local];
-        adaq_ll_cs_manual_end(&dev->ll);
+#if ADAQ_HW_CS
+        if (dev->ll.hw_cs_streaming) {
+            adaq_ll_hwcs_end(&dev->ll);
+        } else
+#endif
+        {
+            adaq_ll_cs_manual_end(&dev->ll);
+        }
     }
     vTaskDelete(NULL);
 }

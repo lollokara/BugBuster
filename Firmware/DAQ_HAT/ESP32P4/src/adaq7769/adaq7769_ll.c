@@ -442,6 +442,65 @@ void adaq_ll_cs_manual_begin(adaq_ll_t *ll)
     gpio_set_level(ll->cs_pin, 1);
 }
 
+// -----------------------------------------------------------------------------
+// Hardware CS for the streaming fast path (bus A / FINE only). See ADAQ_HW_CS
+// in config.h for full history/rationale. Unlike cs_manual_begin(), the CS pin
+// is NEVER taken over as a GPIO -- it stays routed to the SPI peripheral's own
+// CS output (already wired there by adaq_ll_add_device()'s dev_cfg
+// spics_io_num=cs_pin). The peripheral then asserts/deasserts CS itself around
+// each spi_ll_user_start() transaction, with an explicit CS-hold phase
+// (ADAQ_HW_CS_HOLD_CYCLES SCLK cycles) keeping it low after the final data bit
+// before it rises -- the same posttrans-hold fix already proven safe for
+// register access (cs_ena_posttrans / ADAQ_CS_POSTTRANS_CYCLES above).
+//
+// select_cs(hw, 0) is safe specifically because bus A has exactly one CS-
+// owning device (dev_cfg of the sole FINE ADAQ) registered on that host, so
+// the SPI driver can only have assigned it hw CS id 0 -- there is no second
+// device to contend for a different id. Do NOT reuse this on bus B (two CS-
+// owning devices) without first confirming each device's actual hw CS id.
+#if ADAQ_HW_CS
+void adaq_ll_hwcs_begin(adaq_ll_t *ll)
+{
+    // Release dev_cfg's grip on the peripheral (mirrors cs_manual_begin()) so
+    // the raw spi_ll_* fifo path has sole use of it during streaming. The pin
+    // itself is left alone -- still routed to the SPI peripheral's CS output.
+    if (ll->dev_cfg) {
+        spi_bus_remove_device(ll->dev_cfg);
+        ll->dev_cfg = NULL;
+    }
+    spi_dev_t *hw = SPI_LL_GET_HW(ll->host);
+    spi_ll_master_select_cs(hw, 0);              // bus A: FINE is the sole CS on this host
+    spi_ll_master_keep_cs(hw, 0);                // auto-deassert after each transaction
+    spi_ll_master_set_cs_setup(hw, 1);           // minimal setup phase before first edge
+    spi_ll_master_set_cs_hold(hw, ADAQ_HW_CS_HOLD_CYCLES);  // hold after last edge
+    spi_ll_apply_config(hw);
+    ll->hw_cs_streaming = true;
+}
+
+void adaq_ll_hwcs_end(adaq_ll_t *ll)
+{
+    ll->hw_cs_streaming = false;
+    // Same rebuild as cs_manual_end(): re-create dev_cfg so normal register
+    // access (spi_device_polling_transmit) works after the stream stops. No
+    // gpio_set_level() needed -- the pin was never taken over as a GPIO.
+    spi_device_interface_config_t cfg = {
+        .command_bits      = 8,
+        .mode              = ADAQ_SPI_MODE,
+        .clock_speed_hz    = (int)ll->cfg_hz,
+        .spics_io_num      = ll->cs_pin,
+        .queue_size        = 1,
+        .input_delay_ns    = ADAQ_SPI_INPUT_DELAY_NS,
+        .cs_ena_posttrans  = ADAQ_CS_POSTTRANS_CYCLES,
+        .flags             = 0,
+    };
+    esp_err_t err = spi_bus_add_device(ll->host, &cfg, &ll->dev_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "hwcs_end: re-add dev_cfg (cs=%d) failed: %s",
+                 ll->cs_pin, esp_err_to_name(err));
+    }
+}
+#endif // ADAQ_HW_CS
+
 void adaq_ll_cs_manual_end(adaq_ll_t *ll)
 {
     gpio_set_level(ll->cs_pin, 1);   // leave deasserted

@@ -38,6 +38,14 @@ typedef struct {
     uint32_t            data_hz;
     bool                crc_enabled;  // mirrors INTERFACE_FORMAT.EN_SPI_CRC
     bool                crc_xor;      // mirrors INTERFACE_FORMAT.CRC_TYPE (read XOR)
+    bool                hw_cs_streaming; // true while this device's streaming fast
+                                          // path is using adaq_ll_hwcs_begin() (HW
+                                          // CS) instead of adaq_ll_cs_manual_begin()
+                                          // (bit-banged CS). See ADAQ_HW_CS in
+                                          // config.h. Set/cleared by
+                                          // capture_task_comb(); read by
+                                          // capture_begin()/capture_end() to decide
+                                          // whether to drive CS manually.
 } adaq_ll_t;
 
 // -----------------------------------------------------------------------------
@@ -132,6 +140,17 @@ void      adaq_ll_fifo_drain(adaq_ll_t *ll, uint8_t *rx, size_t n_bytes);
  *         register access (dev_cfg) works again. */
 void      adaq_ll_cs_manual_begin(adaq_ll_t *ll);
 void      adaq_ll_cs_manual_end(adaq_ll_t *ll);
+
+/** @brief Hardware-CS equivalent of cs_manual_begin()/cs_manual_end() for the
+ *         streaming fast path (see ADAQ_HW_CS in config.h — bus A/FINE only).
+ *         Leaves the CS pin routed to the SPI peripheral's own CS output
+ *         (never takes it over as a GPIO) and programs an explicit CS-hold
+ *         phase so CS cannot rise before the last data bit is safely latched.
+ *         begin() releases dev_cfg (like cs_manual_begin) so the fifo path has
+ *         sole use of the peripheral; end() rebuilds dev_cfg (like
+ *         cs_manual_end) so register access works again after streaming. */
+void      adaq_ll_hwcs_begin(adaq_ll_t *ll);
+void      adaq_ll_hwcs_end(adaq_ll_t *ll);
 // Fast CS toggle on the streaming hot path: write the GPIO set/clear registers
 // directly (active-low CS -> W1TC asserts, W1TS deasserts). This skips the
 // gpio_set_level() argument checks / dispatch (~0.5 us/read saved at 300k+
