@@ -20,11 +20,14 @@ esp_err_t relay_c6_push(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = c6_flasher_begin(st.image_size, 0);
-    if (err != ESP_OK) return err;
+    uint32_t offset = st.pushed_bytes;   // resume point (0 on a fresh push)
+    esp_err_t err = c6_flasher_begin(st.image_size - offset, offset);
+    if (err != ESP_OK) {
+        relay_stage_reset(RELAY_FAILED);
+        return err;
+    }
 
     uint8_t buf[RELAY_C6_CHUNK_SIZE];
-    uint32_t offset = st.pushed_bytes;   // resume point
     while (offset < st.image_size) {
         size_t want = st.image_size - offset;
         if (want > RELAY_C6_CHUNK_SIZE) want = RELAY_C6_CHUNK_SIZE;
