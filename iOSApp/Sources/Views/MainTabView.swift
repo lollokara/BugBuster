@@ -85,6 +85,7 @@ struct CustomTabBar: View {
 struct MainTabView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @ObservedObject private var scopeOrientation = ScopeOrientationState.shared
     @State private var selectedTab = 0
     @State private var showingScanSheet = false
     @State private var manualIp = ""
@@ -140,15 +141,21 @@ struct MainTabView: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    CustomTabBar(
-                        selectedTab: $selectedTab,
-                        tabs: tabs
-                    )
-                    .padding(.horizontal, sizeClass == .regular ? 80 : 16)
-                    .padding(.top, 6)
-                    // Sit closer to the home indicator: shrink the measured
-                    // inset so the pill shifts down into the bottom safe area.
-                    .padding(.bottom, -10)
+                    Group {
+                        // Scope tab (index 2) owns its own landscape mode; hide the shared
+                        // tab bar while it's rotated so the scope can use the full screen.
+                        if !(selectedTab == 2 && scopeOrientation.isLandscape) {
+                            CustomTabBar(
+                                selectedTab: $selectedTab,
+                                tabs: tabs
+                            )
+                            .padding(.horizontal, sizeClass == .regular ? 80 : 16)
+                            .padding(.top, 6)
+                            // Sit closer to the home indicator: shrink the measured
+                            // inset so the pill shifts down into the bottom safe area.
+                            .padding(.bottom, -10)
+                        }
+                    }
                 }
                 // Tabs (Scripts editor/REPL) manage keyboard clearance themselves;
                 // without this the system also squeezes content and the tab bar
