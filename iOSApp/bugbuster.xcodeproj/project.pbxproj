@@ -13,15 +13,21 @@
 		161A773C2C0A3B9F851F620F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3E36A75C2AB886192C02B5EB /* Assets.xcassets */; };
 		178DC66E66A8790313840A6D /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */; };
 		181681F2955495F3399D11BD /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */; };
+		1842946A4E6147C93A3D6A36 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 462B823D90AF3666C2F3D27F /* CoreBluetooth.framework */; };
+		3F3C63BF1F58082976E16792 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */; };
 		6498C3E9408B6C044DB34ABC /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1AE837278E0E0BE4E1CC860D /* UIKit.framework */; };
 		781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */; };
+		7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */; };
 		826AE629852D559C3BC11B55 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 875AACD9B934157EF7C7FCFC /* assets */; };
 		92405FDCF7010233990FA901 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */; };
+		98DAC6F355B40F02E13A5F48 /* DaqWifiStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6302CED0D71B8CC93E05F9 /* DaqWifiStreamView.swift */; };
 		99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */; };
 		B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11A9C8116A9BEBC05E47330 /* main.swift */; };
 		B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487F663BDDC3592989BBDD1B /* BugBusterApp.swift */; };
 		B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */; };
 		B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */; };
+		BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */; };
+		E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */; };
 		EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */; };
 		EB728E06F8D482391320DBED /* ScriptsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09B963A369295728D4B4FFF7 /* ScriptsTab.swift */; };
 /* End PBXBuildFile section */
@@ -34,15 +40,21 @@
 		29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketREPL.swift; sourceTree = "<group>"; };
 		354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionManager.swift; sourceTree = "<group>"; };
 		3E36A75C2AB886192C02B5EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		462B823D90AF3666C2F3D27F /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		487F663BDDC3592989BBDD1B /* BugBusterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BugBusterApp.swift; sourceTree = "<group>"; };
 		785535B23A1E3B43FF7EFEB9 /* BugBuster.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BugBuster.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
+		86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		875AACD9B934157EF7C7FCFC /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		8E6302CED0D71B8CC93E05F9 /* DaqWifiStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamView.swift; sourceTree = "<group>"; };
 		8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTab.swift; sourceTree = "<group>"; };
 		96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalPathTab.swift; sourceTree = "<group>"; };
 		A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETransport.swift; sourceTree = "<group>"; };
 		C7BE3A2BF72606706AD83539 /* ScopeTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeTab.swift; sourceTree = "<group>"; };
 		E11A9C8116A9BEBC05E47330 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationLock.swift; sourceTree = "<group>"; };
 		EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Combine.framework; path = System/Library/Frameworks/Combine.framework; sourceTree = SDKROOT; };
 		F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -55,6 +67,7 @@
 				6498C3E9408B6C044DB34ABC /* UIKit.framework in Frameworks */,
 				178DC66E66A8790313840A6D /* SwiftUI.framework in Frameworks */,
 				99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */,
+				1842946A4E6147C93A3D6A36 /* CoreBluetooth.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -66,6 +79,7 @@
 			children = (
 				487F663BDDC3592989BBDD1B /* BugBusterApp.swift */,
 				E11A9C8116A9BEBC05E47330 /* main.swift */,
+				8AE4F76D5B0981AA26E8E603 /* App */,
 				6BD1508825031BCBF7E688C8 /* Models */,
 				F9E2158FB6FD0709ABEA7FD7 /* Services */,
 				DC4E380CFF3E6C32A1114AB0 /* Views */,
@@ -81,6 +95,15 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		8AE4F76D5B0981AA26E8E603 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */,
+				EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
 		9A2F64562D3022BEF7333027 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -93,6 +116,7 @@
 			isa = PBXGroup;
 			children = (
 				EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */,
+				462B823D90AF3666C2F3D27F /* CoreBluetooth.framework */,
 				A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */,
 				1AE837278E0E0BE4E1CC860D /* UIKit.framework */,
 			);
@@ -114,6 +138,7 @@
 		DC4E380CFF3E6C32A1114AB0 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				8E6302CED0D71B8CC93E05F9 /* DaqWifiStreamView.swift */,
 				8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */,
 				96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */,
 				23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */,
@@ -127,7 +152,9 @@
 		F9E2158FB6FD0709ABEA7FD7 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */,
 				354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */,
+				81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */,
 				29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */,
 			);
 			path = Services;
@@ -201,11 +228,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3F3C63BF1F58082976E16792 /* AppDelegate.swift in Sources */,
+				E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */,
 				B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */,
 				08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */,
+				7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */,
+				98DAC6F355B40F02E13A5F48 /* DaqWifiStreamView.swift in Sources */,
 				EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */,
 				B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */,
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,
+				BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */,
 				781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */,
 				0612859A274C667B2908A00F /* ScopeTab.swift in Sources */,
 				EB728E06F8D482391320DBED /* ScriptsTab.swift in Sources */,
@@ -224,7 +256,7 @@
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = WA89J3K5QQ;
+				DEVELOPMENT_TEAM = 6R87YR573L;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -244,7 +276,7 @@
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = WA89J3K5QQ;
+				DEVELOPMENT_TEAM = 6R87YR573L;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

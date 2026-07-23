@@ -144,6 +144,7 @@ struct ScopeTab: View {
     }
     
     @State private var touchLocation: CGPoint? = nil
+    @State private var showDaqStreamView = false
     
     struct TouchInfo {
         let channelIndex: Int
@@ -213,6 +214,19 @@ struct ScopeTab: View {
                             .foregroundColor(.cyan)
                             .padding(10)
                             .glassEffect(.regular, in: Circle())
+                    }
+
+                    if connectionManager.lastHatStatus?.isDaqHat == true {
+                        Button(action: {
+                            showDaqStreamView = true
+                        }) {
+                            Image(systemName: "waveform.path")
+                                .font(.system(size: 16))
+                                .foregroundColor(.purple)
+                                .padding(10)
+                                .glassEffect(.regular, in: Circle())
+                        }
+                        .padding(.leading, 6)
                     }
                 }
             }
@@ -436,6 +450,9 @@ struct ScopeTab: View {
                     applyChannelConfig(ch: ch, config: config)
                 }
             )
+        }
+        .fullScreenCover(isPresented: $showDaqStreamView) {
+            DaqStreamView()
         }
     }
     

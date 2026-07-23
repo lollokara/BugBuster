@@ -20,15 +20,15 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Discover and control nearby BugBuster hardware over Bluetooth Low Energy.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Connect to BugBuster hardware over Bluetooth Low Energy.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_bugbuster._tcp</string>
 		<string>_http._tcp</string>
 	</array>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Discover and control nearby BugBuster hardware over Bluetooth Low Energy.</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Connect to BugBuster hardware over Bluetooth Low Energy.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan QR code to connect to the BugBuster hardware device over Wi-Fi.</string>
 	<key>NSLocalNetworkUsageDescription</key>
@@ -39,8 +39,6 @@
 	<array>
 		<string>arm64</string>
 	</array>
-	<key>UIRequiresFullScreen</key>
-	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

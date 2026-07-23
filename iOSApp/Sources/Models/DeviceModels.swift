@@ -302,7 +302,18 @@ public struct HatRailsResponse: Codable, Equatable {
 public struct HatStatus: Codable, Equatable {
     public let detected: Bool?
     public let present: Bool?
+    public let kind: String?
     public var isPresent: Bool { detected ?? present ?? false }
+    public var isDaqHat: Bool { isPresent && kind == "daq" }
+}
+
+// MARK: - DAQ WiFi Stream Status
+public struct DaqWifiStreamStatus: Codable {
+    public let state: String   // "idle" | "starting" | "ready" | "failed"
+    public let ssid: String?
+    public let password: String?
+    public let host: String?
+    public let port: Int?
 }
 
 // MARK: - Device Info
