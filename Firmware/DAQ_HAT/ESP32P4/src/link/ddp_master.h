@@ -73,6 +73,10 @@ void ddp_master_button_event(ddp_master_t *m, uint8_t events);   // DDP_BTN_*
 void ddp_master_set_measurement(ddp_master_t *m, float v, float i, uint8_t flags);
 void ddp_master_set_diagnostics(ddp_master_t *m, const ddp_diag_t *d);
 void ddp_master_set_backlight(ddp_master_t *m, uint8_t level);
+// Tell the C6 to enter (enable=true) or leave (enable=false) WiFi streaming
+// mode: it stops rendering the normal readout/menu and shows a static "WiFi
+// streaming" screen while the SDIO link is handed to ESP-Hosted.
+void ddp_master_set_wifi_stream_mode(ddp_master_t *m, bool enable);
 // 4 channel-status colour codes (front 4-connector) -> C6 neopixels (pairs).
 void ddp_master_set_ch_leds(ddp_master_t *m, const uint8_t codes[4]);
 // Push one or more pre-encoded TLVs so the C6 menu reflects S3-side edits.

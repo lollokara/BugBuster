@@ -144,6 +144,45 @@ typedef struct __attribute__((packed)) {
 } hat_daq_mark_t;
 
 // -----------------------------------------------------------------------------
+// DAQ WiFi streaming trigger (HAT_CMD_DAQ_WIFI_STREAM_START/STOP/INFO)
+// -----------------------------------------------------------------------------
+// Lets the iOS app (over BLE) trigger the P4 to bring up a softAP for direct
+// WiFi streaming of DAQ data. The S3 relays START/STOP and polls INFO for the
+// resulting connection credentials, chunked over the HAT UART link.
+#define HAT_WIFI_STREAM_INFO_HDR   3u     // [status][seq][flags]
+#define HAT_WIFI_STREAM_LAST       0x01u  // flags bit: final chunk
+
+#define HAT_WIFI_STREAM_STARTING  0u  // softAP not up yet, no data this chunk
+#define HAT_WIFI_STREAM_READY     1u  // this is the final chunk (LAST flag set), data is valid
+#define HAT_WIFI_STREAM_FAILED    2u  // P4 failed to bring up the softAP
+
+// Local S3-side tracking state for hat_daq_wifi_stream_info_t.state (distinct
+// from the HAT_WIFI_STREAM_* wire status byte values above).
+typedef enum {
+    HAT_DAQ_WIFI_STREAM_IDLE = 0,
+    HAT_DAQ_WIFI_STREAM_STARTING,
+    HAT_DAQ_WIFI_STREAM_READY,
+    HAT_DAQ_WIFI_STREAM_FAILED,
+} HatDaqWifiStreamState;
+
+// Wire blob layout for the reassembled HAT_CMD_DAQ_WIFI_STREAM_INFO payload.
+// Fixed-width, 104 bytes total. MUST stay byte-for-byte identical to the
+// P4-side mirror.
+//   offset 0   : ssid[33]      (32 chars + NUL)
+//   offset 33  : password[65]  (64 chars + NUL)
+//   offset 98  : port u16 LE
+//   offset 100 : host[4]       (raw IPv4 octets)
+#define HAT_WIFI_STREAM_BLOB_LEN  104u
+
+typedef struct {
+    HatDaqWifiStreamState state;
+    char    ssid[33];
+    char    password[65];
+    uint16_t port;
+    uint8_t host[4];        // raw IPv4 octets, e.g. {192,168,4,1}
+} hat_daq_wifi_stream_info_t;
+
+// -----------------------------------------------------------------------------
 // Mainboard settings tunnel (HAT_CMD_MB_POLL / HAT_CMD_MB_RESULT)
 // -----------------------------------------------------------------------------
 // The C6 Main Board Settings menu reads/writes S3 rails/efuses through the P4.
@@ -246,6 +285,10 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_FW_STATUS        0x4C
 #define HAT_CMD_CALIBRATE_EXPORT 0x4D  // Read back stored cal points (paginated)
 
+#define HAT_CMD_DAQ_WIFI_STREAM_START  0x5F  // S3->P4: start DAQ WiFi streaming (empty payload) -> 1-byte accept/reject
+#define HAT_CMD_DAQ_WIFI_STREAM_STOP   0x67  // S3->P4: stop DAQ WiFi streaming (empty payload) -> 1-byte ack
+#define HAT_CMD_DAQ_WIFI_STREAM_INFO   0x68  // S3->P4: poll for wifi-stream credentials -> chunked response
+
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
 #define HAT_RSP_ERROR           0x81
@@ -259,6 +302,7 @@ typedef struct __attribute__((packed)) {
 #define HAT_RSP_LA_LOG          0x89  // Log message relay from RP2040
 #define HAT_RSP_CALIBRATE_STATUS 0x8A
 #define HAT_RSP_CALIBRATE_EXPORT 0x8B  // Paginated stored cal points
+#define HAT_RSP_DAQ_WIFI_STREAM_INFO 0x8C  // Response cmd byte for HAT_CMD_DAQ_WIFI_STREAM_INFO poll
 #define HAT_RSP_MB_REQ          0x96  // Pending C6 mainboard request from the P4
 #define HAT_RSP_STAGE_DATA      0x97u // Response to HAT_CMD_STAGE_READ: firmware bytes read from
                                        // the P4 `staging` partition (0 bytes = end of staged image).
@@ -561,6 +605,37 @@ void hat_daq_poll_mb(void);
  * @param kind  HAT_DAQ_MARK_KIND_FLAG or HAT_DAQ_MARK_KIND_TRIGGER.
  */
 void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind);
+/**
+ * @brief Trigger the DAQ HAT (P4) to bring up its WiFi softAP for direct
+ *        streaming to a client (e.g. the iOS app). No-op unless a DAQ HAT is
+ *        connected. On success, resets the tracked stream info to STARTING
+ *        and arms periodic polling (see hat_daq_poll_wifi_stream_info()).
+ * @return true if the P4 accepted the request.
+ */
+bool hat_daq_wifi_stream_start(void);
+/**
+ * @brief Tell the DAQ HAT (P4) to tear down its WiFi softAP stream and stop
+ *        periodic polling. No-op unless a DAQ HAT is connected.
+ * @return true if the P4 acknowledged the request.
+ */
+bool hat_daq_wifi_stream_stop(void);
+/**
+ * @brief Poll the P4 for WiFi-stream credentials while a start is pending.
+ *        No-op unless a poll is currently armed (i.e. between a successful
+ *        hat_daq_wifi_stream_start() and READY/FAILED/stop). Call ~4 Hz from
+ *        the main loop, alongside hat_daq_poll_mb().
+ */
+void hat_daq_poll_wifi_stream_info(void);
+/**
+ * @brief Non-blocking accessor for the current WiFi-stream state/credentials.
+ * @param out Destination struct, copied from the internal tracked state.
+ */
+void hat_daq_wifi_stream_get_status(hat_daq_wifi_stream_info_t *out);
+/**
+ * @brief Human-readable/API-stable string for the connected HAT's type.
+ * @return "daq" for a DAQ HAT, "unknown" otherwise (no HAT / SWD-GPIO HAT).
+ */
+const char *hat_get_type_string(void);
 /**
  * @brief Read one chunk from the P4's `staging` partition (HAT_CMD_STAGE_READ),
  *        e.g. for pulling an ESP32 OTA image the P4 staged from USB.

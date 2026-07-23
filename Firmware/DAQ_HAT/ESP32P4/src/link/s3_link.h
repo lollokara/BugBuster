@@ -90,7 +90,36 @@ extern "C" {
 #define HATP_MB_RSLT_HDR         4u      // [type][status][seq][flags]
 #define HATP_MB_RSLT_LAST        0x01u   // flags bit: final chunk
 
+// DAQ WiFi streaming bring-up (S3->P4). MUST stay byte-for-byte identical to
+// the S3 mainboard's own mirror (HAT_CMD_DAQ_WIFI_STREAM_START/STOP/INFO in
+// Firmware/ESP32/src/hat/hat.h) -- that side is already built and live.
+#define HATP_CMD_DAQ_WIFI_STREAM_START  0x5Fu   // S3->P4: start DAQ WiFi streaming (empty payload) -> 1-byte accept/reject
+#define HATP_CMD_DAQ_WIFI_STREAM_STOP   0x67u   // S3->P4: stop DAQ WiFi streaming (empty payload) -> 1-byte ack
+#define HATP_CMD_DAQ_WIFI_STREAM_INFO   0x68u   // S3->P4: poll for wifi-stream credentials -> chunked RSP_DAQ_WIFI_STREAM_INFO
+
+// HATP_CMD_DAQ_WIFI_STREAM_INFO chunk framing: [u8 status][u8 seq][u8 flags][data...].
+// status: 0=starting (softAP not up yet, empty data), 1=ready (final chunk,
+// flags has LAST set, data is the tail of the blob), 2=failed.
+#define HATP_WIFI_INFO_HDR         3u      // [status][seq][flags]
+#define HATP_WIFI_INFO_LAST        0x01u   // flags bit: final chunk
+#define HATP_WIFI_INFO_ST_STARTING 0u
+#define HATP_WIFI_INFO_ST_READY    1u
+#define HATP_WIFI_INFO_ST_FAILED   2u
+
+// The S3's real per-frame wire limit (MUST match ESP32 hat.h HAT_FRAME_MAX_LEN)
+// -- unlike HATP_MAX_PAYLOAD (this project's own larger local buffer budget),
+// this is what actually fits in one frame to the S3. Chunked P4-initiated
+// responses (this command) must size against this, not HATP_MAX_PAYLOAD.
+#define HAT_WIRE_FRAME_MAX_LEN     32u
+
 // Version + OTA commands (vendor sub-range 0x60..0x6F).
+//
+// NOTE: HATP_CMD_DAQ_WIFI_STREAM_STOP (above) reuses byte 0x67, which used to
+// be HATP_CMD_OTA_ROLLBACK in this file. The S3 mainboard's hat.h already
+// hardcodes 0x67 for WIFI_STREAM_STOP (built/verified independently of this
+// file), and nothing on the S3 side currently sends OTA_ROLLBACK over this
+// link (grepped clean), so OTA_ROLLBACK was moved to the next free byte
+// (0x69) instead of colliding on the wire.
 #define HATP_CMD_GET_VERSION     0x60u   // -> fw version (u32 + string)
 #define HATP_CMD_OTA_BEGIN       0x61u   // payload: ota_meta (size,ver,sha,prod)
 #define HATP_CMD_OTA_DATA        0x62u   // payload: firmware bytes chunk
@@ -98,7 +127,7 @@ extern "C" {
 #define HATP_CMD_OTA_ABORT       0x64u   // abort in-progress update
 #define HATP_CMD_OTA_STATUS      0x65u   // -> ota progress/state
 #define HATP_CMD_OTA_CONFIRM     0x66u   // confirm running image (cancel rollback)
-#define HATP_CMD_OTA_ROLLBACK    0x67u   // revert to previous image (reboots)
+#define HATP_CMD_OTA_ROLLBACK    0x69u   // revert to previous image (reboots) -- moved from 0x67, see note above
 
 // Relay staging: S3 pulls a previously-staged image back out of the P4's
 // `staging` partition (see relay_stage.h) in order to feed its own
@@ -132,6 +161,7 @@ extern "C" {
 #define HATP_RSP_DAQ_CAL_STATUS 0x95u // smu_cal_status_t snapshot
 #define HATP_RSP_MB_REQ        0x96u // pending C6 mainboard request ([req_type][args]); 0-len = none
 #define HATP_RSP_STAGE_DATA    0x97u // payload: firmware bytes read from `staging` at the requested offset
+#define HATP_RSP_DAQ_WIFI_STREAM_INFO 0x8Cu // response to HATP_CMD_DAQ_WIFI_STREAM_INFO (mirrors S3 HAT_RSP_DAQ_WIFI_STREAM_INFO)
 
 // Firmware version reported in GET_INFO.
 #define S3LINK_FW_MAJOR      1u
@@ -202,6 +232,16 @@ typedef struct __attribute__((packed)) {
     uint32_t offset;
     uint8_t  len;            // <= HATP_OTA_CHUNK_MAX
 } s3link_stage_read_req_t;
+
+// Fixed-width blob reassembled from successive HATP_CMD_DAQ_WIFI_STREAM_INFO
+// chunks (once status == HATP_WIFI_INFO_ST_READY). MUST stay byte-for-byte
+// identical to the S3-side mirror in Firmware/ESP32/src/hat/hat.h. 104 bytes.
+typedef struct __attribute__((packed)) {
+    char     ssid[33];       // NUL-terminated, <=32 ASCII chars
+    char     password[65];   // NUL-terminated, <=64 ASCII chars
+    uint16_t port;           // little-endian
+    uint8_t  host[4];        // raw IPv4 octets
+} s3link_wifi_stream_info_t;   // 104 bytes
 
 // Command callback: the board handles DAQ-specific commands and (optionally)
 // fills a response payload. Return the number of response bytes written into

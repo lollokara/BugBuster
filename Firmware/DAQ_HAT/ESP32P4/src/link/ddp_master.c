@@ -80,6 +80,12 @@ void ddp_master_set_backlight(ddp_master_t *m, uint8_t level)
     ddp_master_send(m, DDP_CMD_SET_BACKLIGHT, &level, 1);
 }
 
+void ddp_master_set_wifi_stream_mode(ddp_master_t *m, bool enable)
+{
+    uint8_t v = enable ? 1 : 0;
+    ddp_master_send(m, DDP_CMD_WIFI_STREAM_MODE, &v, 1);
+}
+
 void ddp_master_set_ch_leds(ddp_master_t *m, const uint8_t codes[4])
 {
     ddp_master_send(m, DDP_CMD_SET_CH_LEDS, codes, 4);

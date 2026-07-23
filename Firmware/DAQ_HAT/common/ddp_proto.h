@@ -30,7 +30,12 @@
 
 #define DDP_SYNC            0xAAu
 #define DDP_MAX_PAYLOAD     240u
-#define DDP_PROTO_VERSION   7u
+#define DDP_PROTO_VERSION   8u
+// v8 (2026-07-21): WiFi streaming mode handoff (DDP_CMD_WIFI_STREAM_MODE). The
+// P4 tells the C6 when it is about to hand the shared SDIO link over to
+// ESP-Hosted (iOS DAQ streaming) so the C6 can stop its own display refresh
+// and show a static "WiFi streaming" screen instead of fighting the radio
+// stack for CPU/bus time. The C6 acks with RSP_OK either way.
 // v7 (2026-07-14): DUT source calibration wizard over DDP (DDP_CMD_CAL_CTRL /
 // _CAL_STATUS) — the C6 drives the P4's smu_cal engine (voltage/current/
 // baseline) with live phase + operator prompt + progress.
@@ -61,6 +66,7 @@
 #define DDP_CMD_SET_CH_LEDS     0x18u  // 4x u8 channel colour codes (front 4-connector, pairs)
 #define DDP_CMD_MB_REQUEST      0x19u  // C6 -> P4: u8 req_type, then req args (mainboard tunnel)
 #define DDP_CMD_MB_RESPONSE     0x1Au  // P4 -> C6: u8 req_type, u8 status, then result data
+#define DDP_CMD_WIFI_STREAM_MODE 0x1Du // u8 enable (1=entering WiFi stream mode, 0=leaving)
 
 // --- Events (C6 -> P4), 0x60..0x7F -----------------------------------------
 // Emitted unsolicited by the C6 when the user changes settings on-device, so
