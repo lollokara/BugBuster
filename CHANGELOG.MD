@@ -19,6 +19,18 @@
   surface, and an actual caller for the S3 pull function (deferred pending a safeguard that
   confirms the P4's image is fully staged and verified before pulling). See
   `.mex/patterns/daq-hat-relay-update.md`.
+- **iOS DAQ WiFi streaming.** The P4 can now bring up a WiFi softAP that iOS clients connect to for
+  direct DAQ data streaming, bypassing the S3/mainboard network stack. New HAT protocol commands
+  `HAT_CMD_DAQ_WIFI_STREAM_START/STOP/INFO` (0x5F/0x67/0x68) let the S3 trigger P4 WiFi softAP
+  bring-up, poll for credentials (SSID/password/IPv4 endpoint), and tear down the AP. P4-side WiFi
+  infrastructure: `wifi_ap.c/h` handles softAP bring-up with configurable SSID/password, `daq_wifi_ident.c/h`
+  broadcasts the P4 via mDNS (optional fallback captive DNS in `captive_dns.c/h`), and `tcp_backend.c/h`
+  relays DAQ waveform/status frames over TCP to connected clients in real-time. C6 display (`ESP32C6/`)
+  shows a static "WiFi streaming enabled" screen while active. iOS app (`DaqWifiStreamManager.swift`)
+  opens raw TCP sockets to the P4, decodes full `usb_proto.h` v2 frames (WAVE_I/WAVE_V/MARKER/STATUS),
+  and renders stream health + credentials in a new `DaqWifiStreamView.swift` sheet launched from Diagnostics.
+  Typechecks clean against iphoneos26.5 SDK; hardware bring-up (C6/P4/S3 integration, end-to-end
+  throughput, teardown on connection loss) pending bench verification.
 
 ### Fixed
 - **DAQ HAT (ESP32-P4) reference-meter cal now subtracts the open-circuit baseline.** The
