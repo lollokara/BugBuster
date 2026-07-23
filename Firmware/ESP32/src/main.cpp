@@ -142,6 +142,7 @@ static void mainLoopTask(void* pvParam)
     uint32_t lastSelftestPoll = 0;
     uint32_t lastDaqTelemetry = 0;
     uint32_t lastMbPoll = 0;
+    uint32_t lastWifiStreamPoll = 0;
 
     for (;;) {
         // USB hub enumeration recovery watchdog (no-op once mounted or budget exhausted)
@@ -184,6 +185,14 @@ static void mainLoopTask(void* pvParam)
         if (now - lastMbPoll >= 250) {
             lastMbPoll = now;
             hat_daq_poll_mb();
+        }
+
+        // DAQ HAT WiFi streaming: poll for the P4's generated softAP
+        // credentials while a start is pending. No-op unless armed by a
+        // prior hat_daq_wifi_stream_start() call.
+        if (now - lastWifiStreamPoll >= 250) {
+            lastWifiStreamPoll = now;
+            hat_daq_poll_wifi_stream_info();
         }
 
         // IO ownership lease tick — expire timed leases

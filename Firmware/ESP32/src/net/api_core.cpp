@@ -263,6 +263,9 @@ static char *api_hat(void)
     cJSON_AddNumberToObject(root, "lastTimeoutMs", hs->last_timeout_ms);
     cJSON_AddNumberToObject(root, "type", hs->type);
     cJSON_AddStringToObject(root, "typeName", hat_type_name(hs->type));
+    if (hs->detected) {
+        cJSON_AddStringToObject(root, "kind", hat_get_type_string());
+    }
     cJSON_AddNumberToObject(root, "detectVoltage", hs->detect_voltage);
     cJSON_AddNumberToObject(root, "detect_voltage", hs->detect_voltage);
     cJSON_AddNumberToObject(root, "fwMajor", hs->fw_version_major);
@@ -319,6 +322,51 @@ static char *api_hat_swd_detect(void)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "detected", hs->target_detected);
     cJSON_AddNumberToObject(root, "dpidr", hs->target_dpidr);
+    return json_take(root);
+}
+
+// POST /api/daq/wifi_stream/start — trigger the P4 to bring up its WiFi
+// softAP for direct DAQ streaming (relayed over the HAT UART link).
+static char *api_daq_wifi_stream_start(void)
+{
+    if (!hat_daq_wifi_stream_start()) return api_error("HAT not responding or not a DAQ HAT");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return json_take(root);
+}
+
+// POST /api/daq/wifi_stream/stop — tear down the P4's WiFi streaming softAP.
+static char *api_daq_wifi_stream_stop(void)
+{
+    hat_daq_wifi_stream_stop();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return json_take(root);
+}
+
+// GET /api/daq/wifi_stream/status — poll for the generated softAP credentials.
+static char *api_daq_wifi_stream_status(void)
+{
+    hat_daq_wifi_stream_info_t info;
+    hat_daq_wifi_stream_get_status(&info);
+    cJSON *root = cJSON_CreateObject();
+    const char *state_str = "idle";
+    switch (info.state) {
+        case HAT_DAQ_WIFI_STREAM_IDLE:     state_str = "idle"; break;
+        case HAT_DAQ_WIFI_STREAM_STARTING: state_str = "starting"; break;
+        case HAT_DAQ_WIFI_STREAM_READY:    state_str = "ready"; break;
+        case HAT_DAQ_WIFI_STREAM_FAILED:   state_str = "failed"; break;
+    }
+    cJSON_AddStringToObject(root, "state", state_str);
+    if (info.state == HAT_DAQ_WIFI_STREAM_READY) {
+        cJSON_AddStringToObject(root, "ssid", info.ssid);
+        cJSON_AddStringToObject(root, "password", info.password);
+        char host_str[16];
+        snprintf(host_str, sizeof(host_str), "%u.%u.%u.%u",
+                 info.host[0], info.host[1], info.host[2], info.host[3]);
+        cJSON_AddStringToObject(root, "host", host_str);
+        cJSON_AddNumberToObject(root, "port", info.port);
+    }
     return json_take(root);
 }
 
@@ -1290,6 +1338,9 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/hat/v2/rail/enable") == 0)  return api_rail_enable(body);
     if (strcmp(path, "/api/hat/v2/rail/voltage") == 0) return api_rail_voltage(body);
     if (strcmp(path, "/api/hat/v2/swd/detect") == 0)   return api_hat_swd_detect();
+    if (strcmp(path, "/api/daq/wifi_stream/start") == 0)  return api_daq_wifi_stream_start();
+    if (strcmp(path, "/api/daq/wifi_stream/stop") == 0)   return api_daq_wifi_stream_stop();
+    if (strcmp(path, "/api/daq/wifi_stream/status") == 0) return api_daq_wifi_stream_status();
     if (strcmp(path, "/api/ioexp/control") == 0)    return api_ioexp_control(body);
     if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
     if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);

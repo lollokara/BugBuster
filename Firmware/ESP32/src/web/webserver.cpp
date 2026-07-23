@@ -2321,6 +2321,38 @@ static esp_err_t handle_get_hat(httpd_req_t *req)
     return rc;
 }
 
+// POST /api/daq/wifi_stream/start
+static esp_err_t handle_post_daq_wifi_stream_start(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    char *resp = api_core_handle("POST", "/api/daq/wifi_stream/start", NULL);
+    if (!resp) return send_error(req, 500, "wifi stream start failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// POST /api/daq/wifi_stream/stop
+static esp_err_t handle_post_daq_wifi_stream_stop(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    char *resp = api_core_handle("POST", "/api/daq/wifi_stream/stop", NULL);
+    if (!resp) return send_error(req, 500, "wifi stream stop failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// GET /api/daq/wifi_stream/status
+static esp_err_t handle_get_daq_wifi_stream_status(httpd_req_t *req)
+{
+    char *resp = api_core_handle("GET", "/api/daq/wifi_stream/status", NULL);
+    if (!resp) return send_error(req, 500, "wifi stream status failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
 // GET /api/hat/la/status
 static esp_err_t handle_get_hat_la_status(httpd_req_t *req)
 {
@@ -3598,8 +3630,8 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
 
     ESP_LOGI(TAG, "OTA upload started, content_len=%d", req->content_len);
 
-    if (req->content_len <= 0 || req->content_len > 2 * 1024 * 1024) {
-        return send_error(req, 400, "Invalid firmware size (max 2MB)");
+    if (req->content_len <= 0 || req->content_len > 3584 * 1024) {
+        return send_error(req, 400, "Invalid firmware size (max 3.5MB)");
     }
 
     uint8_t expected_sha[32] = {};
@@ -4987,6 +5019,23 @@ bool initWebServer(void)
         .uri = "/api/hat/la/status", .method = HTTP_GET, .handler = handle_get_hat_la_status, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hat_la_status_get);
+
+    // ----- DAQ HAT WiFi streaming routes -----
+
+    httpd_uri_t uri_daq_wifi_stream_start = {
+        .uri = "/api/daq/wifi_stream/start", .method = HTTP_POST, .handler = handle_post_daq_wifi_stream_start, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_wifi_stream_start);
+
+    httpd_uri_t uri_daq_wifi_stream_stop = {
+        .uri = "/api/daq/wifi_stream/stop", .method = HTTP_POST, .handler = handle_post_daq_wifi_stream_stop, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_wifi_stream_stop);
+
+    httpd_uri_t uri_daq_wifi_stream_status = {
+        .uri = "/api/daq/wifi_stream/status", .method = HTTP_GET, .handler = handle_get_daq_wifi_stream_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_wifi_stream_status);
 
     // ----- HAT v2 routes (registered before the /api/hat/* wildcard) -----
 
