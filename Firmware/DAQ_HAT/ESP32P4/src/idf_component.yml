@@ -6,3 +6,15 @@ dependencies:
   # Host-side ESP ROM bootloader flasher: lets the P4 flash the on-module C6
   # over UART2 (BOOT/RST controlled), used by link/c6_flasher.c.
   espressif/esp-serial-flasher: "^2.0"
+  # ESP-Hosted: makes the standard esp_wifi API work transparently over the
+  # existing C6_SDIO_* pins (config.h), with the on-module C6 acting as the
+  # WiFi radio co-processor (P4 has none). Matches Espressif's own
+  # ESP32-P4-Function-EV-Board reference pinout exactly (CLK18/CMD19/D0-3
+  # 14-17/RST54), so no pin remap is expected. pre_release required: no
+  # stable esp_hosted release supports the P4 host yet. See
+  # .mex/patterns/daq-hat-ios-wifi-streaming.md.
+  espressif/esp_wifi_remote:
+    version: "*"
+  espressif/esp_hosted:
+    version: "*"
+    pre_release: true

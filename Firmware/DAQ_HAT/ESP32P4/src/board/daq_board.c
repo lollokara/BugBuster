@@ -16,6 +16,10 @@
 #include "buttons_p4.h"
 #include "c6_flasher.h"
 #include "relay_stage.h"
+#include "wifi_ap.h"
+#include "tcp_backend.h"
+#include "daq_wifi_ident.h"
+#include "captive_dns.h"
 
 static const char *TAG = "daq_board";
 
@@ -790,6 +794,118 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             usb_stream_flush_wave_i(&b->usb);
             usb_stream_flush_wave_v(&b->usb);
             return 0;
+
+        // ---- DAQ WiFi streaming bring-up (BLE-driven; see daq_wifi_ident.h,
+        // captive_dns.h, tcp_backend.h). Lifted from cmd_wifiap's "on"/"off"
+        // branches (cli.c) minus the CLI printfs, with generated credentials
+        // instead of argv-supplied ones.
+        //
+        // Response convention: like HATP_CMD_DAQ_START/_STOP, this is a
+        // fire-and-forget command -- the "1-byte accept/reject" / "1-byte
+        // ack" the S3 sees is really just which frame comes back
+        // (HATP_RSP_OK vs HATP_RSP_ERROR via s3_link.c's generic dispatch),
+        // not a payload byte (there is no per-cmd response code path for
+        // these two in s3_link.c, same as DAQ_START/STOP today). ----
+        case HATP_CMD_DAQ_WIFI_STREAM_START: {
+            char ssid[33], password[65];
+            daq_wifi_ident_generate(ssid, sizeof(ssid), password, sizeof(password));
+
+            memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
+            b->wifi_stream_info.state = DAQ_WIFI_STREAM_STARTING;
+
+            ddp_master_set_wifi_stream_mode(&b->ddp, true);
+            esp_err_t err = wifi_ap_start(ssid, password);
+            if (err == ESP_OK) err = captive_dns_start();
+            if (err == ESP_OK) err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "wifi stream start failed: %s", esp_err_to_name(err));
+                tcp_backend_stop();
+                captive_dns_stop();
+                wifi_ap_stop();
+                ddp_master_set_wifi_stream_mode(&b->ddp, false);
+                b->wifi_stream_info.state = DAQ_WIFI_STREAM_FAILED;
+                return -1;   // rejected -> HATP_RSP_ERROR
+            }
+            strlcpy(b->wifi_stream_info.ssid, ssid, sizeof(b->wifi_stream_info.ssid));
+            strlcpy(b->wifi_stream_info.password, password, sizeof(b->wifi_stream_info.password));
+            b->wifi_stream_info.port = DAQ_WIFI_STREAM_TCP_PORT;
+            b->wifi_stream_info.host[0] = 192;
+            b->wifi_stream_info.host[1] = 168;
+            b->wifi_stream_info.host[2] = 4;
+            b->wifi_stream_info.host[3] = 1;
+            b->wifi_stream_info.state = DAQ_WIFI_STREAM_READY;
+            return 0;   // accepted -> HATP_RSP_OK
+        }
+
+        case HATP_CMD_DAQ_WIFI_STREAM_STOP:
+            tcp_backend_stop();
+            usb_backend_start(&b->usb);   // re-register the USB transport
+            captive_dns_stop();
+            wifi_ap_stop();
+            ddp_master_set_wifi_stream_mode(&b->ddp, false);
+            memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
+            b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
+            return 0;   // ack -> HATP_RSP_OK
+
+        case HATP_CMD_DAQ_WIFI_STREAM_INFO: {
+            // Chunk b->wifi_stream_info into the wire's [status][seq][flags]
+            // + up to ~29 data bytes framing. While in a terminal state
+            // (READY/FAILED), always re-chunk from the beginning on every
+            // poll -- simpler than tracking cross-poll cursor state, and
+            // re-answering old data repeatedly is harmless.
+            uint8_t status;
+            switch (b->wifi_stream_info.state) {
+                case DAQ_WIFI_STREAM_READY:   status = HATP_WIFI_INFO_ST_READY;   break;
+                case DAQ_WIFI_STREAM_FAILED:  status = HATP_WIFI_INFO_ST_FAILED;  break;
+                default:                      status = HATP_WIFI_INFO_ST_STARTING; break;
+            }
+
+            if (status != HATP_WIFI_INFO_ST_READY) {
+                resp[0] = status;
+                resp[1] = 0;
+                resp[2] = HATP_WIFI_INFO_LAST;   // nothing to chunk; this "is" the final chunk
+                return HATP_WIFI_INFO_HDR;
+            }
+
+            s3link_wifi_stream_info_t blob;
+            memset(&blob, 0, sizeof(blob));
+            strlcpy(blob.ssid, b->wifi_stream_info.ssid, sizeof(blob.ssid));
+            strlcpy(blob.password, b->wifi_stream_info.password, sizeof(blob.password));
+            blob.port = b->wifi_stream_info.port;   // little-endian on this target
+            memcpy(blob.host, b->wifi_stream_info.host, sizeof(blob.host));
+
+            // Static cursor: reset to 0 whenever the caller starts a new
+            // reassembly poll (seq==0 implicitly, since we always start a
+            // fresh generation here -- there is only ever one link/one
+            // connection using this command, so static state is safe).
+            static uint8_t s_seq;
+            static size_t  s_off;
+            // Since we always re-chunk from the start for a terminal state,
+            // detect "new poll cycle" simply by resetting whenever this is
+            // called with s_off already having reached the end last time.
+            if (s_off >= sizeof(blob)) { s_off = 0; s_seq = 0; }
+
+            // Unlike HATP_CMD_STAGE_READ (where the S3 requests a length it
+            // knows fits its own 32-byte HAT_FRAME_MAX_LEN), this response is
+            // sized unilaterally by the P4 -- it must not chunk against the
+            // P4-local HATP_MAX_PAYLOAD budget (240 B), or the frame overflows
+            // the S3's real wire limit and hat_recv_frame() drops it outright.
+            const size_t max_data = (size_t)HAT_WIRE_FRAME_MAX_LEN - HATP_WIFI_INFO_HDR;
+            size_t remaining = sizeof(blob) - s_off;
+            size_t chunk_len = (remaining < max_data) ? remaining : max_data;
+            bool last = (s_off + chunk_len) >= sizeof(blob);
+
+            resp[0] = HATP_WIFI_INFO_ST_READY;
+            resp[1] = s_seq;
+            resp[2] = last ? HATP_WIFI_INFO_LAST : 0;
+            memcpy(resp + HATP_WIFI_INFO_HDR, (const uint8_t *)&blob + s_off, chunk_len);
+
+            s_off += chunk_len;
+            s_seq++;
+            if (last) { s_off = 0; s_seq = 0; }   // rewind so the next poll re-sends from the start
+
+            return (int)(HATP_WIFI_INFO_HDR + chunk_len);
+        }
 
         case HATP_CMD_DAQ_SET_SOURCE:
             if (len >= sizeof(s3_set_source_t)) {

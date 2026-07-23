@@ -186,7 +186,10 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
         case HATP_CMD_DAQ_CAL_STATUS:
         case HATP_CMD_DAQ_CAL_ABORT:
         case HATP_CMD_MB_POLL:
-        case HATP_CMD_MB_RESULT: {
+        case HATP_CMD_MB_RESULT:
+        case HATP_CMD_DAQ_WIFI_STREAM_START:
+        case HATP_CMD_DAQ_WIFI_STREAM_STOP:
+        case HATP_CMD_DAQ_WIFI_STREAM_INFO: {
             if (!s->cmd_cb) {
                 send_error();
                 break;
@@ -201,6 +204,8 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
                 send_frame(HATP_RSP_DAQ_CAL_STATUS, resp, (uint8_t)n);
             } else if (cmd == HATP_CMD_MB_POLL) {
                 send_frame(HATP_RSP_MB_REQ, resp, (uint8_t)n);
+            } else if (cmd == HATP_CMD_DAQ_WIFI_STREAM_INFO) {
+                send_frame(HATP_RSP_DAQ_WIFI_STREAM_INFO, resp, (uint8_t)n);
             } else {
                 send_ok();
             }

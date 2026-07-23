@@ -42,6 +42,26 @@
 extern "C" {
 #endif
 
+// DAQ WiFi streaming bring-up state (HATP_CMD_DAQ_WIFI_STREAM_START/STOP/INFO).
+// Torn down/reset to IDLE on STOP; set to STARTING/READY/FAILED across a
+// START attempt. The HATP_CMD_DAQ_WIFI_STREAM_INFO poll handler chunks
+// whatever's in here (once READY) into the fixed 104-byte wire blob
+// (s3link_wifi_stream_info_t).
+typedef enum {
+    DAQ_WIFI_STREAM_IDLE = 0,     // never started, or cleanly stopped
+    DAQ_WIFI_STREAM_STARTING,     // START accepted, softAP not confirmed up yet
+    DAQ_WIFI_STREAM_READY,        // softAP + fast-fail DNS + TCP backend all up
+    DAQ_WIFI_STREAM_FAILED,       // bring-up failed; everything torn back down
+} daq_wifi_stream_state_t;
+
+typedef struct {
+    daq_wifi_stream_state_t state;
+    char                     ssid[33];
+    char                     password[65];
+    uint16_t                 port;
+    uint8_t                  host[4];
+} daq_wifi_stream_info_t;
+
 typedef struct daq_board {
     adaq7769_t              adaq[ADAQ_COUNT];     // [0]=bus A master, [1..2]=bus B
     ad741x_t                temp[2];
@@ -94,6 +114,9 @@ typedef struct daq_board {
     // 4 kB TinyUSB stack is never burdened with stop/SPI/start sequences.
     QueueHandle_t           ctrl_queue;
     TaskHandle_t            ctrl_task;
+
+    // DAQ WiFi streaming bring-up (see daq_wifi_stream_info_t above).
+    daq_wifi_stream_info_t  wifi_stream_info;
 } daq_board_t;
 
 /**

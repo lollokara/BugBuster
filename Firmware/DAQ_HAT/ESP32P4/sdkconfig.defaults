@@ -58,6 +58,14 @@ CONFIG_SERIAL_FLASHER_PORT_SDIO=y
 # Give the C6 SDIO slave 800 ms to initialize after RST release before the
 # first sdio_card_init attempt (default 50 ms is too short for the ROM slave).
 CONFIG_SERIAL_FLASHER_BOOT_HOLD_TIME_MS=800
+# ESP-Hosted: C6 acts as the WiFi radio co-processor for the P4 (which has no
+# radio of its own) over the existing SDIO pins (config.h C6_SDIO_*). Every
+# other option (SDIO transport, slot 1, 4-bit bus, and per-pin GPIO numbers)
+# already defaults to exactly this board's wiring for a plain ESP32-P4 host
+# (CMD19/CLK18/D0-3=14-17, reset=54 -- verified against
+# managed_components/espressif__esp_hosted/Kconfig) once the co-processor
+# target is picked; only the target itself has no default and must be set.
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
 # Retry a failed flash-data block up to 8 times (default 3) before aborting the
 # whole C6 transfer. The P4<->C6 UART link at 115200 occasionally glitches on a
 # single block; each retry re-syncs SLIP framing and re-sends the block, so more

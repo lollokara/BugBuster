@@ -85,6 +85,10 @@
 #define C6_SDIO_DAT2_PIN  ((gpio_num_t)16)   // P4 SDIO DAT2 → C6 GPIO22
 #define C6_SDIO_DAT3_PIN  ((gpio_num_t)17)   // P4 SDIO DAT3 → C6 GPIO23
 
+// TCP port the iOS app connects to for the WiFi DAQ stream (tcp_backend.c),
+// once the softAP is up (wifi_ap.c). Same v2 wire frames as the USB path.
+#define DAQ_WIFI_STREAM_TCP_PORT  5566
+
 // -----------------------------------------------------------------------------
 // Link to the ESP32-S3 mainboard (HAT control plane).
 //
