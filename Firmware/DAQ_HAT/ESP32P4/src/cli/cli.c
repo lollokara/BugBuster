@@ -38,6 +38,8 @@
 #include "rom/gpio.h"
 #include "ddp_master.h"
 #include "c6_flasher.h"
+#include "wifi_ap.h"
+#include "tcp_backend.h"
 
 #include "config.h"
 #include "version.h"
@@ -3287,6 +3289,42 @@ static int cmd_cal(int argc, char **argv)
 }
 
 // ---------------------------------------------------------------------------
+// Bench bring-up for the iOS DAQ streaming path: bring the P4 softAP up/down
+// over ESP-Hosted (C6 as WiFi radio, SDIO link -- see wifi_ap.h). Also flips
+// the C6 into/out of its static "WiFi streaming" screen over DDP so the two
+// stay in sync from a single command while there is no automatic trigger yet.
+//   wifiap on <ssid> <password>   bring up the softAP (password >= 8 chars)
+//   wifiap off                    tear it down
+static int cmd_wifiap(int argc, char **argv)
+{
+    daq_board_t *b = s_board;
+    if (argc >= 2 && strcmp(argv[1], "on") == 0) {
+        if (argc < 4) { printf("usage: wifiap on <ssid> <password>\n"); return 1; }
+        ddp_master_set_wifi_stream_mode(&b->ddp, true);
+        esp_err_t err = wifi_ap_start(argv[2], argv[3]);
+        if (err == ESP_OK) err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
+        if (err != ESP_OK) {
+            printf("wifiap: start failed: %s\n", esp_err_to_name(err));
+            tcp_backend_stop();
+            wifi_ap_stop();
+            ddp_master_set_wifi_stream_mode(&b->ddp, false);
+            return 1;
+        }
+        printf("wifiap: up (ssid=\"%s\", tcp port %d)\n", argv[2], DAQ_WIFI_STREAM_TCP_PORT);
+    } else if (argc >= 2 && strcmp(argv[1], "off") == 0) {
+        tcp_backend_stop();
+        esp_err_t err = wifi_ap_stop();
+        ddp_master_set_wifi_stream_mode(&b->ddp, false);
+        printf("wifiap: %s\n", err == ESP_OK ? "down" : esp_err_to_name(err));
+    } else {
+        printf("usage: wifiap <on <ssid> <password>|off>  (currently %s)\n",
+               wifi_ap_is_up() ? "up" : "down");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 static void reg(const char *cmd, const char *help, esp_console_cmd_func_t fn)
 {
     const esp_console_cmd_t c = { .command = cmd, .help = help, .hint = NULL, .func = fn };
@@ -3424,6 +3462,7 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("c6logs",  "Bridge C6 UART2 to console + reset C6 into normal boot (view its log)", cmd_c6logs);
     reg("c6flash", "Flash C6 via staged binary: c6flash <bytes>  (use flash_via_p4.py)", cmd_c6flash);
     reg("c6diag",  "GPIO/SDIO diagnostics: c6diag <gpio|sdio>", cmd_c6diag);
+    reg("wifiap",  "iOS DAQ streaming bring-up: wifiap <on <ssid> <password>|off>", cmd_wifiap);
 
     // Priority 15 keeps command input responsive even at high ODR (consumer is
     // prio 12), but the timeout+yield read loop means it never busy-spins when
