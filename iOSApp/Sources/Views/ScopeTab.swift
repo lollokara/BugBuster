@@ -161,31 +161,34 @@ struct ScopeTab: View {
     @State private var showingSettings = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        ZStack {
+            Color.black.ignoresSafeArea()
 
-            if orientation.isLandscape {
-                ScopeCanvasView(
-                    series: currentSeries,
-                    timeScale: $timeScale,
-                    errorMessage: currentErrorMessage,
-                    isWaitingForData: currentIsWaiting,
-                    onRetry: currentRetryAction
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding()
+            VStack(spacing: 0) {
+                header
 
-                if mode == .adc {
-                    channelLegend
-                        .padding(.bottom, 20)
+                if orientation.isLandscape {
+                    ScopeCanvasView(
+                        series: currentSeries,
+                        timeScale: $timeScale,
+                        errorMessage: currentErrorMessage,
+                        isWaitingForData: currentIsWaiting,
+                        onRetry: currentRetryAction
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+
+                    if mode == .adc {
+                        channelLegend
+                            .padding(.bottom, 20)
+                    } else {
+                        daqLegendRow
+                            .padding(.horizontal)
+                            .padding(.bottom, 20)
+                    }
                 } else {
-                    daqLegendRow
-                        .padding(.horizontal)
-                        .padding(.bottom, 20)
+                    RotatePromptView()
                 }
-            } else {
-                RotatePromptView()
             }
         }
         .sheet(isPresented: $showingSettings) {
