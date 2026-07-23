@@ -176,15 +176,16 @@ struct ScopeTab: View {
                         onRetry: currentRetryAction
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
 
                     if mode == .adc {
                         channelLegend
-                            .padding(.bottom, 20)
+                            .padding(.bottom, 8)
                     } else {
                         daqLegendRow
                             .padding(.horizontal)
-                            .padding(.bottom, 20)
+                            .padding(.bottom, 8)
                     }
                 } else {
                     RotatePromptView()
@@ -268,7 +269,8 @@ struct ScopeTab: View {
             }
         }
         .padding(.horizontal)
-        .padding(.top, 16)
+        .padding(.top, orientation.isLandscape ? 8 : 16)
+        .padding(.bottom, orientation.isLandscape ? 4 : 0)
     }
 
     private var streamStatusText: String {
