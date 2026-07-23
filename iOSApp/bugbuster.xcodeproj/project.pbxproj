@@ -24,7 +24,6 @@
 		7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */; };
 		826AE629852D559C3BC11B55 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 875AACD9B934157EF7C7FCFC /* assets */; };
 		92405FDCF7010233990FA901 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */; };
-		98DAC6F355B40F02E13A5F48 /* DaqWifiStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6302CED0D71B8CC93E05F9 /* DaqWifiStreamView.swift */; };
 		99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */; };
 		B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11A9C8116A9BEBC05E47330 /* main.swift */; };
 		B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487F663BDDC3592989BBDD1B /* BugBusterApp.swift */; };
@@ -50,7 +49,6 @@
 		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
 		86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		875AACD9B934157EF7C7FCFC /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
-		8E6302CED0D71B8CC93E05F9 /* DaqWifiStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamView.swift; sourceTree = "<group>"; };
 		8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTab.swift; sourceTree = "<group>"; };
 		96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalPathTab.swift; sourceTree = "<group>"; };
@@ -148,7 +146,6 @@
 		DC4E380CFF3E6C32A1114AB0 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				8E6302CED0D71B8CC93E05F9 /* DaqWifiStreamView.swift */,
 				8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */,
 				96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */,
 				23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */,
@@ -245,7 +242,6 @@
 				B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */,
 				08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */,
 				7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */,
-				98DAC6F355B40F02E13A5F48 /* DaqWifiStreamView.swift in Sources */,
 				EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */,
 				B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */,
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,
