@@ -423,6 +423,9 @@ struct ScopeTab: View {
     private func setupOrientation() {
         ScopeOrientationState.shared.beginTracking()
         OrientationLock.shared.mask = [.portrait, .landscapeLeft, .landscapeRight]
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            windowScene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
     }
 
     private func teardownOrientation() {
