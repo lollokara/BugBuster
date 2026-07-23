@@ -8,6 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		0612859A274C667B2908A00F /* ScopeTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BE3A2BF72606706AD83539 /* ScopeTab.swift */; };
+		D1681D45FF5AD897C4DAABE1 /* ScopeOrientationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A623451080B636951BE66C25 /* ScopeOrientationState.swift */; };
+		E71CF3D641E60C55B945D185 /* ScopeSampleSeries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846CCC1A1F59626C57C162B8 /* ScopeSampleSeries.swift */; };
+		8287FEA9D2F6A99E795C9149 /* RotatePromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04FC5919D1A337642325DB24 /* RotatePromptView.swift */; };
+		81DA66DEE5B40EC56C5A8B75 /* ScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 338E14C2DBD1F6E07460897D /* ScopeCanvasView.swift */; };
 		08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */; };
 		115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */; };
 		161A773C2C0A3B9F851F620F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3E36A75C2AB886192C02B5EB /* Assets.xcassets */; };
@@ -53,6 +57,10 @@
 		A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETransport.swift; sourceTree = "<group>"; };
 		C7BE3A2BF72606706AD83539 /* ScopeTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeTab.swift; sourceTree = "<group>"; };
+		A623451080B636951BE66C25 /* ScopeOrientationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeOrientationState.swift; sourceTree = "<group>"; };
+		846CCC1A1F59626C57C162B8 /* ScopeSampleSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeSampleSeries.swift; sourceTree = "<group>"; };
+		04FC5919D1A337642325DB24 /* RotatePromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatePromptView.swift; sourceTree = "<group>"; };
+		338E14C2DBD1F6E07460897D /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
 		E11A9C8116A9BEBC05E47330 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationLock.swift; sourceTree = "<group>"; };
 		EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Combine.framework; path = System/Library/Frameworks/Combine.framework; sourceTree = SDKROOT; };
@@ -91,6 +99,7 @@
 			isa = PBXGroup;
 			children = (
 				281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */,
+				846CCC1A1F59626C57C162B8 /* ScopeSampleSeries.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -100,6 +109,7 @@
 			children = (
 				86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */,
 				EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */,
+				A623451080B636951BE66C25 /* ScopeOrientationState.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -145,6 +155,8 @@
 				C7BE3A2BF72606706AD83539 /* ScopeTab.swift */,
 				09B963A369295728D4B4FFF7 /* ScriptsTab.swift */,
 				9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */,
+				04FC5919D1A337642325DB24 /* RotatePromptView.swift */,
+				338E14C2DBD1F6E07460897D /* ScopeCanvasView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -244,6 +256,10 @@
 				115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */,
 				B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */,
 				B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */,
+				D1681D45FF5AD897C4DAABE1 /* ScopeOrientationState.swift in Sources */,
+				E71CF3D641E60C55B945D185 /* ScopeSampleSeries.swift in Sources */,
+				8287FEA9D2F6A99E795C9149 /* RotatePromptView.swift in Sources */,
+				81DA66DEE5B40EC56C5A8B75 /* ScopeCanvasView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

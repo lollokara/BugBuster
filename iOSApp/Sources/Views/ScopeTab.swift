@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import UIKit
 
 struct ADCChannelConfig: Identifiable, Equatable {
     var id: Int { channel }
@@ -128,440 +129,312 @@ class ScopeStreamManager: NSObject, ObservableObject, URLSessionDataDelegate {
     }
 }
 
+enum ScopeMode: Hashable {
+    case adc, daq
+}
+
 struct ScopeTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
-    @ObservedObject private var streamManager = ScopeStreamManager.shared
-    
-    // Zoom timebase gesture states
+    @ObservedObject private var adcStream = ScopeStreamManager.shared
+    @ObservedObject private var daqStream = DaqWifiStreamManager.shared
+    @ObservedObject private var orientation = ScopeOrientationState.shared
+
+    @State private var mode: ScopeMode = .adc
+    @State private var lastAutoDetectedDaq: Bool? = nil
+
+    // Zoom timebase (shared across modes via ScopeCanvasView)
     @State private var timeScale: CGFloat = 1.0
-    @GestureState private var gestureScale: CGFloat = 1.0
-    
-    // Settings configuration
+
+    // ADC settings
     @State private var activeChannels = [true, true, false, false]
-    @State private var showingSettings = false
     @State private var channelConfigs: [ADCChannelConfig] = (0..<4).map {
         ADCChannelConfig(channel: $0, mux: 0, range: 0, rate: 1)
     }
-    
-    @State private var touchLocation: CGPoint? = nil
-    @State private var showDaqStreamView = false
-    
-    struct TouchInfo {
-        let channelIndex: Int
-        let voltage: Double
-        let time: Double
-        let x: CGFloat
-        let y: CGFloat
-    }
-    
-    let ACCENTS = [
-        Color(red: 0.23, green: 0.51, blue: 0.96), // Blue
-        Color(red: 0.06, green: 0.73, blue: 0.51), // Emerald
-        Color(red: 0.96, green: 0.62, blue: 0.04), // Amber
-        Color(red: 0.66, green: 0.33, blue: 0.97)  // Purple
-    ]
-    
-    var activeScale: CGFloat {
-        max(0.2, min(5.0, timeScale * gestureScale))
-    }
-    
+
+    // DAQ settings
+    @State private var sampleRateIndex = 1 // default: 10 kSps
+    @State private var showVoltage = true
+    @State private var showCurrent = true
+    @State private var showPower = true
+    @State private var autoscale = true
+
+    @State private var showingSettings = false
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header toolbar
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Oscilloscope")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(streamManager.isStreaming ? Color.green : Color.secondary)
-                            .frame(width: 6, height: 6)
-                        Text(streamManager.isStreaming ? "Streaming (\(streamManager.totalSamplesReceived) samples)" : "Stopped")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                Spacer()
-                
-                // Play / Pause + Settings buttons wrapped in GlassEffectContainer
-                GlassEffectContainer(spacing: 8) {
-                    // Play / Pause button
-                    Button(action: {
-                        if streamManager.isStreaming {
-                            streamManager.stopStream()
-                        } else {
-                            streamManager.startStream(
-                                ip: connectionManager.activeDevice?.ip ?? "",
-                                token: connectionManager.adminToken
-                            )
-                        }
-                    }) {
-                        Image(systemName: streamManager.isStreaming ? "pause.fill" : "play.fill")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(streamManager.isStreaming ? .orange : .green)
-                            .padding(10)
-                            .glassEffect(.regular, in: Circle())
-                    }
-                    .padding(.trailing, 6)
-                    
-                    Button(action: {
-                        showingSettings = true
-                    }) {
-                        Image(systemName: "gearshape.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(.cyan)
-                            .padding(10)
-                            .glassEffect(.regular, in: Circle())
-                    }
+            header
 
-                    if connectionManager.lastHatStatus?.isDaqHat == true {
-                        Button(action: {
-                            showDaqStreamView = true
-                        }) {
-                            Image(systemName: "waveform.path")
-                                .font(.system(size: 16))
-                                .foregroundColor(.purple)
-                                .padding(10)
-                                .glassEffect(.regular, in: Circle())
-                        }
-                        .padding(.leading, 6)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top, 16)
-            
-            // Scope screen graph
-            GeometryReader { geometry in
-                ZStack {
-                    ScopeGridView()
-                    
-                    let bounds = calculateVisibleBounds(
-                        samples: streamManager.sampleBuffer,
-                        activeChannels: activeChannels,
-                        timeScale: activeScale
-                    )
-                    
-                    // Draw waveforms
-                    ForEach(0..<4) { ch in
-                        if activeChannels[ch] {
-                            ScopeLineShape(
-                                samples: streamManager.sampleBuffer,
-                                channelIndex: ch,
-                                timeScale: activeScale,
-                                minVal: bounds.min,
-                                maxVal: bounds.max
-                            )
-                            .stroke(ACCENTS[ch], lineWidth: 2)
-                        }
-                    }
-                    
-                    // Dynamic labels overlay (Y axis bounds)
-                    VStack {
-                        HStack {
-                            Text(String(format: "%.2f V", bounds.max))
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .padding(4)
-                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                            Spacer()
-                        }
-                        Spacer()
-                        HStack {
-                            Text(String(format: "%.2f V", bounds.min))
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .padding(4)
-                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                            Spacer()
-                        }
-                    }
-                    .padding(8)
-                    
-                    // Touch cursor and tooltip bubble
-                    if let touch = touchLocation {
-                        let info = findClosestSampleInfo(
-                            at: touch,
-                            in: geometry.size,
-                            samples: streamManager.sampleBuffer,
-                            activeChannels: activeChannels,
-                            timeScale: activeScale,
-                            minVal: bounds.min,
-                            maxVal: bounds.max
-                        )
-                        
-                        if let info = info {
-                            // Vertical cursor line
-                            Path { path in
-                                path.move(to: CGPoint(x: info.x, y: 0))
-                                path.addLine(to: CGPoint(x: info.x, y: geometry.size.height))
-                            }
-                            .stroke(Color.white.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                            
-                            // Highlight point on the closest channel
-                            Circle()
-                                .fill(ACCENTS[info.channelIndex])
-                                .frame(width: 8, height: 8)
-                                .position(x: info.x, y: info.y)
-                                .shadow(color: ACCENTS[info.channelIndex], radius: 4)
-                            
-                            // Tooltip bubble
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("CH\(info.channelIndex + 1)")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(ACCENTS[info.channelIndex])
-                                Text(String(format: "%.3f V", info.voltage))
-                                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                    .foregroundColor(.white)
-                                Text(String(format: "T: %.3fs", info.time))
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(8)
-                            .glassEffect(.regular.tint(ACCENTS[info.channelIndex]), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            // Position bubble near the touch/point, clamped within graph bounds
-                            .position(
-                                x: min(max(info.x + (info.x > geometry.size.width / 2 ? -70 : 70), 60), geometry.size.width - 60),
-                                y: min(max(info.y + (info.y > geometry.size.height / 2 ? -50 : 50), 30), geometry.size.height - 30)
-                            )
-                        }
-                    }
-                    
-                    // Error & Empty state overlays
-                    if let error = streamManager.lastError {
-                        VStack(spacing: 12) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 32))
-                                .foregroundColor(.orange)
-                            Text("Connection Error")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                            Text(error)
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 16)
-                            
-                            Button(action: {
-                                streamManager.startStream(
-                                    ip: connectionManager.activeDevice?.ip ?? "",
-                                    token: connectionManager.adminToken
-                                )
-                            }) {
-                                Text("Retry")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.cyan)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 8)
-                                    .glassEffect(.regular.tint(.cyan), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                        }
-                        .padding()
-                        .frame(maxWidth: 280)
-                        .glassEffect(.regular.tint(.red), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    } else if streamManager.isStreaming && streamManager.sampleBuffer.isEmpty {
-                        VStack(spacing: 8) {
-                            ProgressView()
-                                .tint(.cyan)
-                            Text("Waiting for waveform data...")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        .padding()
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                }
-                .contentShape(Rectangle())
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            if gestureScale == 1.0 {
-                                touchLocation = value.location
-                            } else {
-                                touchLocation = nil
-                            }
-                        }
-                        .onEnded { _ in
-                            touchLocation = nil
-                        }
+            if orientation.isLandscape {
+                ScopeCanvasView(
+                    series: currentSeries,
+                    timeScale: $timeScale,
+                    errorMessage: currentErrorMessage,
+                    isWaitingForData: currentIsWaiting,
+                    onRetry: currentRetryAction
                 )
-                .simultaneousGesture(
-                    MagnificationGesture()
-                        .updating($gestureScale) { value, state, _ in
-                            state = value
-                        }
-                        .onEnded { value in
-                            timeScale = max(0.2, min(5.0, timeScale * value))
-                        }
-                )
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .padding()
-            
-            // Channel legend selector
-            GlassEffectContainer(spacing: 8) {
-                let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
-                let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
-                
-                LazyVGrid(columns: columns, spacing: 10) {
-                    ForEach(0..<4) { ch in
-                        let isChannelCGreyed = ch == 2 && workerEnabled
-                        let accent = isChannelCGreyed ? Color.gray : ACCENTS[ch]
-                        
-                        Button(action: {
-                            withAnimation {
-                                activeChannels[ch].toggle()
-                            }
-                        }) {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(accent)
-                                    .frame(width: 8, height: 8)
-                                Text("CH\(ch + 1)")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundColor(activeChannels[ch] ? .white : .secondary)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .glassEffect(
-                                activeChannels[ch]
-                                    ? .regular.tint(accent)
-                                    : .regular,
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            )
-                            .opacity(isChannelCGreyed ? 0.4 : 1.0)
-                            .grayscale(isChannelCGreyed ? 1.0 : 0)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isChannelCGreyed)
-                    }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding()
+
+                if mode == .adc {
+                    channelLegend
+                        .padding(.bottom, 20)
+                } else {
+                    daqLegendRow
+                        .padding(.horizontal)
+                        .padding(.bottom, 20)
                 }
+            } else {
+                RotatePromptView()
             }
-            .padding(.bottom, 20)
         }
         .sheet(isPresented: $showingSettings) {
             ScopeSettingsView(
+                mode: $mode,
                 configs: $channelConfigs,
                 activeChannels: $activeChannels,
-                onApply: { ch, config in
-                    applyChannelConfig(ch: ch, config: config)
+                onApplyADC: applyChannelConfig,
+                sampleRateIndex: $sampleRateIndex,
+                showVoltage: $showVoltage,
+                showCurrent: $showCurrent,
+                showPower: $showPower,
+                autoscale: $autoscale,
+                onDaqRateChange: { rate in
+                    daqStream.sendSetRate(currentSps: rate, voltageSps: rate)
                 }
             )
         }
-        .fullScreenCover(isPresented: $showDaqStreamView) {
-            DaqStreamView()
+        .onAppear {
+            setupOrientation()
+            syncModeToDevice()
+        }
+        .onDisappear {
+            teardownOrientation()
+            stopActiveStream()
+        }
+        .onChange(of: connectionManager.lastHatStatus?.isDaqHat) { _, _ in
+            syncModeToDevice()
         }
     }
-    
-    private func findClosestSampleInfo(
-        at touch: CGPoint,
-        in size: CGSize,
-        samples: [[Double]],
-        activeChannels: [Bool],
-        timeScale: CGFloat,
-        minVal: Double,
-        maxVal: Double
-    ) -> TouchInfo? {
-        guard !samples.isEmpty else { return nil }
-        
-        let maxDisplayCount = max(1, min(samples.count, Int(Double(samples.count) / Double(timeScale))))
-        let startIndex = max(0, samples.count - maxDisplayCount)
-        let displaySamples = Array(samples[startIndex..<samples.count])
-        
-        guard !displaySamples.isEmpty else { return nil }
-        
-        let tStart = displaySamples.first?[0] ?? 0
-        let tEnd = displaySamples.last?[0] ?? tStart
-        let tSpan = tEnd - tStart
-        
-        var closestSampleIndex = 0
-        var minDistanceX: CGFloat = .infinity
-        var closestX: CGFloat = 0
-        
-        for (idx, sample) in displaySamples.enumerated() {
-            let t = sample[0]
-            let x = tSpan > 0 
-                ? CGFloat((t - tStart) / tSpan) * size.width
-                : CGFloat(idx) / CGFloat(displaySamples.count - 1) * size.width
-            
-            let dist = abs(x - touch.x)
-            if dist < minDistanceX {
-                minDistanceX = dist
-                closestSampleIndex = idx
-                closestX = x
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(mode == .adc ? "Oscilloscope" : "DAQ Scope")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
+
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(isCurrentlyStreaming ? Color.green : Color.secondary)
+                        .frame(width: 6, height: 6)
+                    Text(streamStatusText)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondary)
+                }
             }
-        }
-        
-        let sample = displaySamples[closestSampleIndex]
-        let t = sample[0]
-        
-        var closestChannel: Int? = nil
-        var minDistanceY: CGFloat = .infinity
-        var closestY: CGFloat = 0
-        var closestVoltage: Double = 0
-        
-        let valSpan = maxVal - minVal
-        let valSpanSafe = valSpan > 0.001 ? valSpan : 1.0
-        
-        for ch in 0..<4 {
-            if activeChannels[ch] && sample.count > ch + 1 {
-                let val = sample[ch + 1]
-                let y = size.height - CGFloat((val - minVal) / valSpanSafe) * size.height
-                let dist = abs(y - touch.y)
-                if dist < minDistanceY {
-                    minDistanceY = dist
-                    closestChannel = ch
-                    closestY = y
-                    closestVoltage = val
+            Spacer()
+
+            Picker("Mode", selection: $mode) {
+                Text("ADC").tag(ScopeMode.adc)
+                Text("DAQ").tag(ScopeMode.daq)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 140)
+            .padding(.trailing, 8)
+
+            GlassEffectContainer(spacing: 8) {
+                Button(action: togglePlayPause) {
+                    Image(systemName: isCurrentlyStreaming ? "pause.fill" : "play.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(isCurrentlyStreaming ? .orange : .green)
+                        .padding(10)
+                        .glassEffect(.regular, in: Circle())
+                }
+                .padding(.trailing, 6)
+
+                Button(action: { showingSettings = true }) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.cyan)
+                        .padding(10)
+                        .glassEffect(.regular, in: Circle())
                 }
             }
         }
-        
-        if let ch = closestChannel {
-            return TouchInfo(
-                channelIndex: ch,
-                voltage: closestVoltage,
-                time: t,
-                x: closestX,
-                y: closestY
+        .padding(.horizontal)
+        .padding(.top, 16)
+    }
+
+    private var streamStatusText: String {
+        switch mode {
+        case .adc:
+            return adcStream.isStreaming ? "Streaming (\(adcStream.totalSamplesReceived) samples)" : "Stopped"
+        case .daq:
+            return daqStream.isStreaming ? "Streaming (\(daqStream.totalRecordsReceived) frames)" : "Stopped"
+        }
+    }
+
+    // MARK: - Legends
+
+    private var channelLegend: some View {
+        GlassEffectContainer(spacing: 8) {
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+            let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
+
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(0..<4) { ch in
+                    let isChannelCGreyed = ch == 2 && workerEnabled
+                    let accent = isChannelCGreyed ? Color.gray : ScopeColors.accents[ch]
+
+                    Button(action: {
+                        withAnimation { activeChannels[ch].toggle() }
+                    }) {
+                        HStack(spacing: 6) {
+                            Circle().fill(accent).frame(width: 8, height: 8)
+                            Text("CH\(ch + 1)")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundColor(activeChannels[ch] ? .white : .secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .glassEffect(
+                            activeChannels[ch] ? .regular.tint(accent) : .regular,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                        .opacity(isChannelCGreyed ? 0.4 : 1.0)
+                        .grayscale(isChannelCGreyed ? 1.0 : 0)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isChannelCGreyed)
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private var daqLegendRow: some View {
+        HStack(spacing: 16) {
+            if showVoltage {
+                legendDot(color: ScopeColors.daqVoltage, label: "Voltage (V)")
+            }
+            if showCurrent {
+                legendDot(color: ScopeColors.daqCurrentFine, label: "Current (A)")
+            }
+            Spacer()
+            Text("\(daqStream.totalRecordsReceived) frames")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func legendDot(color: Color, label: String) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Mode-derived state for ScopeCanvasView
+
+    private var currentSeries: ScopeSampleSeries {
+        switch mode {
+        case .adc:
+            return ScopeSampleSeries.fromADC(sampleBuffer: adcStream.sampleBuffer, activeChannels: activeChannels)
+        case .daq:
+            return ScopeSampleSeries.fromDAQ(
+                voltageSamples: daqStream.voltageSamples,
+                currentSamples: daqStream.currentSamples,
+                currentSampleSources: daqStream.currentSampleSources,
+                showVoltage: showVoltage,
+                showCurrent: showCurrent
             )
         }
-        
-        return nil
     }
-    
-    private func calculateVisibleBounds(samples: [[Double]], activeChannels: [Bool], timeScale: CGFloat) -> (min: Double, max: Double) {
-        guard !samples.isEmpty else { return (-1.0, 1.0) }
-        
-        let maxDisplayCount = max(1, min(samples.count, Int(Double(samples.count) / Double(timeScale))))
-        let startIndex = max(0, samples.count - maxDisplayCount)
-        let displaySamples = Array(samples[startIndex..<samples.count])
-        
-        var minVal = Double.infinity
-        var maxVal = -Double.infinity
-        
-        for sample in displaySamples {
-            for ch in 0..<4 {
-                if activeChannels[ch] && sample.count > ch + 1 {
-                    let val = sample[ch + 1]
-                    if val < minVal { minVal = val }
-                    if val > maxVal { maxVal = val }
-                }
+
+    private var currentErrorMessage: String? {
+        switch mode {
+        case .adc:
+            return adcStream.lastError
+        case .daq:
+            if case .failed(let msg) = daqStream.provisioningState { return msg }
+            return daqStream.lastError
+        }
+    }
+
+    private var currentIsWaiting: Bool {
+        switch mode {
+        case .adc:
+            return adcStream.isStreaming && adcStream.sampleBuffer.isEmpty
+        case .daq:
+            return daqStream.isStreaming && daqStream.voltageSamples.isEmpty && daqStream.currentSamples.isEmpty
+        }
+    }
+
+    private var currentRetryAction: (() -> Void)? {
+        switch mode {
+        case .adc:
+            return {
+                adcStream.startStream(ip: connectionManager.activeDevice?.ip ?? "", token: connectionManager.adminToken)
+            }
+        case .daq:
+            return nil
+        }
+    }
+
+    private var isCurrentlyStreaming: Bool {
+        mode == .adc ? adcStream.isStreaming : daqStream.isStreaming
+    }
+
+    // MARK: - Actions
+
+    private func togglePlayPause() {
+        switch mode {
+        case .adc:
+            if adcStream.isStreaming {
+                adcStream.stopStream()
+            } else {
+                adcStream.startStream(ip: connectionManager.activeDevice?.ip ?? "", token: connectionManager.adminToken)
+            }
+        case .daq:
+            if daqStream.isStreaming || daqStream.isConnected {
+                Task { await daqStream.requestStreamStop(ble: connectionManager.ble) }
+            } else {
+                Task { await daqStream.startFullStreamFlow(ble: connectionManager.ble) }
             }
         }
-        
-        if minVal == Double.infinity || maxVal == -Double.infinity {
-            return (-1.0, 1.0)
-        }
-        
-        let span = maxVal - minVal
-        let padding = span > 0.001 ? span * 0.1 : 1.0
-        return (minVal - padding, maxVal + padding)
     }
-    
+
+    private func syncModeToDevice() {
+        let isDaq = connectionManager.lastHatStatus?.isDaqHat ?? false
+        if lastAutoDetectedDaq != isDaq {
+            lastAutoDetectedDaq = isDaq
+            mode = isDaq ? .daq : .adc
+        }
+    }
+
+    private func setupOrientation() {
+        ScopeOrientationState.shared.beginTracking()
+        OrientationLock.shared.mask = [.portrait, .landscapeLeft, .landscapeRight]
+    }
+
+    private func teardownOrientation() {
+        OrientationLock.shared.mask = .portrait
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+        }
+        ScopeOrientationState.shared.endTracking()
+    }
+
+    private func stopActiveStream() {
+        adcStream.stopStream()
+        Task { await daqStream.requestStreamStop(ble: connectionManager.ble) }
+    }
+
     private func applyChannelConfig(ch: Int, config: ADCChannelConfig) {
         guard let ip = connectionManager.activeDevice?.ip, !ip.isEmpty else { return }
         Task {
@@ -580,7 +453,7 @@ struct ScopeTab: View {
                     "rate": config.rate
                 ]
                 request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-                
+
                 let (_, response) = try await URLSession.shared.data(for: request)
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if (200...299).contains(code) {
@@ -593,80 +466,12 @@ struct ScopeTab: View {
     }
 }
 
-struct ScopeGridView: View {
-    var body: some View {
-        GeometryReader { geometry in
-            Path { path in
-                let hSpacing = geometry.size.height / 8
-                for i in 1..<8 {
-                    let y = CGFloat(i) * hSpacing
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: geometry.size.width, y: y))
-                }
-                
-                let wSpacing = geometry.size.width / 10
-                for i in 1..<10 {
-                    let x = CGFloat(i) * wSpacing
-                    path.move(to: CGPoint(x: x, y: 0))
-                    path.addLine(to: CGPoint(x: x, y: geometry.size.height))
-                }
-            }
-            .stroke(Color.white.opacity(0.04), lineWidth: 1)
-        }
-    }
-}
-
-struct ScopeLineShape: Shape {
-    let samples: [[Double]]
-    let channelIndex: Int
-    let timeScale: CGFloat
-    let minVal: Double
-    let maxVal: Double
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        guard samples.count >= 2 else { return path }
-
-        let maxDisplayCount = max(1, min(samples.count, Int(Double(samples.count) / Double(timeScale))))
-        let startIndex = max(0, samples.count - maxDisplayCount)
-        let displaySamples = Array(samples[startIndex..<samples.count])
-
-        guard let firstPoint = displaySamples.first else { return path }
-        let tStart = firstPoint[0]
-        let tEnd = displaySamples.last?[0] ?? tStart
-        let tSpan = tEnd - tStart
-
-        let valSpan = maxVal - minVal
-        let valSpanSafe = valSpan > 0.001 ? valSpan : 1.0
-
-        for (idx, sample) in displaySamples.enumerated() {
-            guard sample.count > channelIndex + 1 else { continue }
-            let t = sample[0]
-            let val = sample[channelIndex + 1]
-
-            let x = tSpan > 0 
-                ? CGFloat((t - tStart) / tSpan) * rect.width
-                : CGFloat(idx) / CGFloat(displaySamples.count - 1) * rect.width
-
-            let y = rect.height - CGFloat((val - minVal) / valSpanSafe) * rect.height
-
-            let point = CGPoint(x: x, y: y)
-            if idx == 0 {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
-            }
-        }
-        return path
-    }
-}
-
 struct ChannelConfigRowView: View {
     let ch: Int
     @Binding var config: ADCChannelConfig
     @Binding var isActive: Bool
     let onApply: (Int, ADCChannelConfig) -> Void
-    
+
     let muxOptions = [
         (value: 0, name: "LF -> AGND"),
         (value: 1, name: "HF -> LF (diff)"),
@@ -674,7 +479,7 @@ struct ChannelConfigRowView: View {
         (value: 3, name: "LF -> VSENSE-"),
         (value: 4, name: "AGND -> AGND")
     ]
-    
+
     let rangeOptions = [
         (value: 0, name: "0 V to +12 V"),
         (value: 1, name: "-12 V to +12 V"),
@@ -685,7 +490,7 @@ struct ChannelConfigRowView: View {
         (value: 6, name: "-104 mV to +104 mV"),
         (value: 7, name: "-2.5 V to +2.5 V")
     ]
-    
+
     let rateOptions = [
         (value: 0, name: "10 SPS (HR)"),
         (value: 1, name: "20 SPS"),
@@ -697,17 +502,11 @@ struct ChannelConfigRowView: View {
         (value: 12, name: "4.8 kSPS"),
         (value: 13, name: "9.6 kSPS")
     ]
-    
+
     private var accentColor: Color {
-        let colors = [
-            Color(red: 0.23, green: 0.51, blue: 0.96),
-            Color(red: 0.06, green: 0.73, blue: 0.51),
-            Color(red: 0.96, green: 0.62, blue: 0.04),
-            Color(red: 0.66, green: 0.33, blue: 0.97)
-        ]
-        return colors[ch % 4]
+        ScopeColors.accents[ch % 4]
     }
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -719,7 +518,7 @@ struct ChannelConfigRowView: View {
                     .labelsHidden()
                     .tint(accentColor)
             }
-            
+
             if isActive {
                 VStack(spacing: 12) {
                     HStack {
@@ -740,9 +539,9 @@ struct ChannelConfigRowView: View {
                         }
                         .pickerStyle(.menu)
                     }
-                    
+
                     Divider().background(Color.white.opacity(0.06))
-                    
+
                     HStack {
                         Text("Voltage Range")
                             .font(.system(size: 13, weight: .medium))
@@ -761,9 +560,9 @@ struct ChannelConfigRowView: View {
                         }
                         .pickerStyle(.menu)
                     }
-                    
+
                     Divider().background(Color.white.opacity(0.06))
-                    
+
                     HStack {
                         Text("Sample Rate")
                             .font(.system(size: 13, weight: .medium))
@@ -793,60 +592,46 @@ struct ChannelConfigRowView: View {
 
 struct ScopeSettingsView: View {
     @Environment(\.dismiss) var dismiss
+    @Binding var mode: ScopeMode
     @Binding var configs: [ADCChannelConfig]
     @Binding var activeChannels: [Bool]
-    let onApply: (Int, ADCChannelConfig) -> Void
-    
+    let onApplyADC: (Int, ADCChannelConfig) -> Void
+
+    @Binding var sampleRateIndex: Int
+    @Binding var showVoltage: Bool
+    @Binding var showCurrent: Bool
+    @Binding var showPower: Bool
+    @Binding var autoscale: Bool
+    let onDaqRateChange: (UInt32) -> Void
+
+    private let sampleRateOptions: [(label: String, sps: UInt32)] = [
+        ("1 kSps", 1_000),
+        ("10 kSps", 10_000),
+        ("50 kSps", 50_000),
+        ("250 kSps", 250_000),
+    ]
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color(red: 0.03, green: 0.05, blue: 0.10)
                     .ignoresSafeArea()
-                
+
                 ScrollView {
-                    GlassEffectContainer(spacing: 8) {
-                        VStack(spacing: 20) {
-                            ForEach(0..<4) { ch in
-                                ChannelConfigRowView(
-                                    ch: ch,
-                                    config: $configs[ch],
-                                    isActive: $activeChannels[ch],
-                                    onApply: onApply
-                                )
-                            }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("ADC CONFIGURATION")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundColor(.secondary)
-
-                                ForEach(0..<4, id: \.self) { ch in
-                                    if activeChannels[ch] {
-                                        HStack {
-                                            Text("CH \(ch)")
-                                                .font(.system(size: 13, weight: .bold))
-                                                .frame(width: 40)
-                                            Picker("Rate", selection: scopeRateBinding(for: ch)) {
-                                                Text("10 SPS").tag(0)
-                                                Text("20 SPS").tag(1)
-                                                Text("1.2k").tag(2)
-                                                Text("4.8k").tag(3)
-                                            }
-                                            .pickerStyle(.menu)
-                                            Picker("Range", selection: scopeRangeBinding(for: ch)) {
-                                                Text("0-12V").tag(0)
-                                                Text("\u{00B1}12V").tag(1)
-                                            }
-                                            .pickerStyle(.menu)
-                                        }
-                                    }
-                                }
-                            }
-                            .padding()
-                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    VStack(spacing: 20) {
+                        Picker("Mode", selection: $mode) {
+                            Text("ADC").tag(ScopeMode.adc)
+                            Text("DAQ").tag(ScopeMode.daq)
                         }
-                        .padding()
+                        .pickerStyle(.segmented)
+
+                        if mode == .adc {
+                            adcSection
+                        } else {
+                            daqSection
+                        }
                     }
+                    .padding()
                 }
             }
             .navigationTitle("Scope Settings")
@@ -864,13 +649,89 @@ struct ScopeSettingsView: View {
         }
     }
 
+    private var adcSection: some View {
+        GlassEffectContainer(spacing: 8) {
+            VStack(spacing: 20) {
+                ForEach(0..<4) { ch in
+                    ChannelConfigRowView(
+                        ch: ch,
+                        config: $configs[ch],
+                        isActive: $activeChannels[ch],
+                        onApply: onApplyADC
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("ADC CONFIGURATION")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondary)
+
+                    ForEach(0..<4, id: \.self) { ch in
+                        if activeChannels[ch] {
+                            HStack {
+                                Text("CH \(ch)")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .frame(width: 40)
+                                Picker("Rate", selection: scopeRateBinding(for: ch)) {
+                                    Text("10 SPS").tag(0)
+                                    Text("20 SPS").tag(1)
+                                    Text("1.2k").tag(2)
+                                    Text("4.8k").tag(3)
+                                }
+                                .pickerStyle(.menu)
+                                Picker("Range", selection: scopeRangeBinding(for: ch)) {
+                                    Text("0-12V").tag(0)
+                                    Text("\u{00B1}12V").tag(1)
+                                }
+                                .pickerStyle(.menu)
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
+    private var daqSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SAMPLE RATE")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.secondary)
+            Picker("Sample Rate", selection: $sampleRateIndex) {
+                ForEach(0..<sampleRateOptions.count, id: \.self) { idx in
+                    Text(sampleRateOptions[idx].label).tag(idx)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: sampleRateIndex) { _, newValue in
+                onDaqRateChange(sampleRateOptions[newValue].sps)
+            }
+
+            Divider().background(Color.secondary)
+
+            Toggle("Voltage", isOn: $showVoltage).tint(ScopeColors.daqVoltage)
+            Toggle("Current", isOn: $showCurrent).tint(ScopeColors.daqCurrentFine)
+            Toggle("Power", isOn: $showPower).tint(ScopeColors.daqCurrentCoarse)
+
+            Divider().background(Color.secondary)
+
+            Toggle("Autoscale", isOn: $autoscale).tint(.cyan)
+        }
+        .font(.system(size: 13, weight: .medium))
+        .foregroundColor(.white)
+        .padding(12)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private func scopeRateBinding(for ch: Int) -> Binding<Int> {
         let rateMap = [0, 1, 8, 12]
         return Binding(
             get: { rateMap.firstIndex(of: configs[ch].rate) ?? 1 },
             set: { newIdx in
                 configs[ch].rate = rateMap[newIdx]
-                onApply(ch, configs[ch])
+                onApplyADC(ch, configs[ch])
             }
         )
     }
@@ -880,7 +741,7 @@ struct ScopeSettingsView: View {
             get: { min(configs[ch].range, 1) },
             set: { newVal in
                 configs[ch].range = newVal
-                onApply(ch, configs[ch])
+                onApplyADC(ch, configs[ch])
             }
         )
     }
