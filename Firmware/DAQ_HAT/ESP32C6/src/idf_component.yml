@@ -1,0 +1,9 @@
+## IDF component manager manifest for the DAQ HAT (ESP32-C6) display firmware.
+dependencies:
+  idf: ">=5.3"
+  # Vendored espressif/esp_hosted slave sources (WiFi bridge to the P4 over
+  # SDIO) -- local path dependency rather than components/ auto-discovery,
+  # since that's the already-proven mechanism this repo uses (see the P4
+  # project's idf_component.yml). UNTESTED, see wifi_hosted.h.
+  wifi_hosted:
+    path: ../components/wifi_hosted

@@ -17,6 +17,7 @@ idf_component_register(
         "menu.c"
         "c6_config.c"
         "npx.c"
+        "wifi_hosted.c"
         "../../common/daq_config_registry.c"
     INCLUDE_DIRS
         "."
@@ -29,4 +30,6 @@ idf_component_register(
         esp_driver_tsens
         esp_timer
         nvs_flash
+        console
+        wifi_hosted
 )

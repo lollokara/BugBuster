@@ -91,6 +91,7 @@ Scripts/clean-appledouble.sh
 # PlatformIO global artifacts (catch other firmware folders)
 **/.pio/
 **/.pioenvs/
+**/dependencies.lock
 
 # Pico/CMake local build directories
 **/build-*/

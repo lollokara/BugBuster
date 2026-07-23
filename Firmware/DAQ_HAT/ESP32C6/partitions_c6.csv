@@ -1,0 +1,9 @@
+# ESP32-C6 (production) partition table -- 8 MB flash.
+# Same factory-only scheme as the shared partitions.csv (C6/C3 dev board,
+# 4 MB), just with a much larger factory slot now that the real C6 hardware
+# has 8 MB to spare -- gives the vendored ESP-Hosted wifi_hosted component
+# (and whatever else grows into this image later) plenty of headroom.
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0x600000,

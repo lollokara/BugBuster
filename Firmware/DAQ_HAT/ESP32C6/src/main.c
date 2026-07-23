@@ -18,6 +18,7 @@
 #include "menu.h"
 #include "npx.h"
 #include "c6_config.h"
+#include "wifi_hosted.h"
 
 static const char *TAG = "daq_hat";
 
@@ -52,6 +53,34 @@ static void sim_data(uint32_t t_ms, float *v, float *i, uint8_t *flags)
     *flags = DDP_FLAG_V_VALID | DDP_FLAG_I_VALID;
 }
 
+// Static screen shown while ddp_wifi_stream_mode() is true: the P4 has handed
+// the shared SDIO link to ESP-Hosted for iOS DAQ streaming, so we stop
+// rendering the normal readout/menu (which would otherwise fight the radio
+// stack for CPU and bus time) and just show this once until the P4 signals
+// exit. A classic "WiFi bars" glyph (three concentric arcs + a dot) plus a
+// text label, drawn once per entry -- not refreshed every frame.
+static void draw_wifi_stream_screen(void)
+{
+    gfx_clear(GFX_BLACK);
+
+    // Small landscape panel (DISP_WIDTH x DISP_HEIGHT = 284x76): icon on the
+    // left, label to the right, both vertically centered.
+    int cx = 40;
+    int cy = DISP_HEIGHT / 2 + 6;
+    gfx_fill_circle(cx, cy, 2, GFX_WHITE);
+    gfx_arc(cx, cy, 9,  215, 325, 2, GFX_WHITE);
+    gfx_arc(cx, cy, 17, 215, 325, 2, GFX_WHITE);
+    gfx_arc(cx, cy, 25, 215, 325, 2, GFX_WHITE);
+
+    const char *line1 = "WiFi streaming";
+    const char *line2 = "enabled";
+    int ty = DISP_HEIGHT / 2 - GFX_SMALL_H(2) - 2;
+    gfx_text(80, ty, line1, 2, GFX_WHITE);
+    gfx_text(80, ty + GFX_SMALL_H(2) + 4, line2, 2, GFX_WHITE);
+
+    display_flush();
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "DAQ HAT (C6) display firmware starting...");
@@ -80,10 +109,32 @@ void app_main(void)
 
     const TickType_t min_yield = pdMS_TO_TICKS(10);  // always let IDLE run
     bool in_menu = false;
+    bool wifi_stream_prev = false;
     uint32_t last_hello = 0;
 
     while (1) {
         uint32_t t = now_ms();
+
+        // WiFi streaming handoff: the P4 has (or is about to) hand the shared
+        // SDIO link to ESP-Hosted for iOS DAQ streaming. Stop the normal
+        // readout/menu render -- it would otherwise contend with the radio
+        // stack for CPU and bus time -- and just show a static screen until
+        // the P4 signals exit.
+        bool wifi_stream = ddp_wifi_stream_mode();
+        if (wifi_stream) {
+            if (!wifi_stream_prev) {
+                draw_wifi_stream_screen();
+                // Starts the vendored ESP-Hosted slave bridge (WiFi over
+                // SDIO to the P4) the first time we're told to stream;
+                // idempotent on later entries. UNTESTED -- see
+                // wifi_hosted.h and .mex/patterns/daq-hat-ios-wifi-streaming.md.
+                wifi_hosted_start();
+            }
+            wifi_stream_prev = true;
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        wifi_stream_prev = false;
 
         // 1 Hz presence announce so the C6 and P4 discover each other
         // regardless of boot order / a transient link drop (the P4 also probes

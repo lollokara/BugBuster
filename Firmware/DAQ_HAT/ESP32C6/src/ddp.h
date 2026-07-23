@@ -72,3 +72,8 @@ void ddp_announce_presence(void);
 // Return (and clear) the button events relayed from the P4 since the last call.
 // Bits are DDP_BTN_* (== BTN_EV_*), so the result feeds menu_update() directly.
 uint8_t ddp_take_buttons(void);
+
+// True while the P4 has us in WiFi streaming mode (DDP_CMD_WIFI_STREAM_MODE):
+// app_main should stop the normal readout/menu render and show the static
+// streaming screen instead. Cleared back to false when the P4 signals exit.
+bool ddp_wifi_stream_mode(void);

@@ -1,3 +1,13 @@
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
-CONFIG_PARTITION_TABLE_SINGLE_APP=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# components/wifi_hosted (vendored espressif/esp_hosted slave "main/" sources,
+# UNTESTED -- see .mex/patterns/daq-hat-ios-wifi-streaming.md). C6-only in
+# practice (SDIO transport picks its default from SOC_SDIO_SLAVE_SUPPORTED,
+# true on C6). We call esp_hosted_coprocessor_init() ourselves from our own
+# app_main (main.c) instead of using the vendor's app_main.
+CONFIG_ESP_HOSTED_CP_WIFI=y
+CONFIG_ESP_HOSTED_CP_BT=n
+CONFIG_ESP_HOSTED_COPROCESSOR_APP_MAIN=n

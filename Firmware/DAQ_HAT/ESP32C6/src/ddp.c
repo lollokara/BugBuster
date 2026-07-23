@@ -48,6 +48,9 @@ static bool             s_cal_have = false;
 // by the RX task; drained by the render loop via ddp_take_buttons().
 static volatile uint8_t s_btn_events = 0;
 
+// WiFi streaming mode, set/cleared by DDP_CMD_WIFI_STREAM_MODE from the P4.
+static volatile bool s_wifi_stream_mode = false;
+
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static void send_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
@@ -190,6 +193,10 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
                 taskEXIT_CRITICAL(&s_mux);
             }
         }
+        send_frame(DDP_RSP_OK, NULL, 0);
+        break;
+    case DDP_CMD_WIFI_STREAM_MODE:
+        if (len >= 1) s_wifi_stream_mode = payload[0] != 0;
         send_frame(DDP_RSP_OK, NULL, 0);
         break;
     case DDP_CMD_CAL_STATUS:
@@ -368,6 +375,11 @@ bool ddp_get_diag(ddp_diag_t *out, uint32_t *age_ms)
     taskEXIT_CRITICAL(&s_mux);
     if (age_ms) *age_ms = have ? (uint32_t)((esp_timer_get_time() - rx) / 1000) : 0xFFFFFFFFu;
     return have;
+}
+
+bool ddp_wifi_stream_mode(void)
+{
+    return s_wifi_stream_mode;
 }
 
 void ddp_send_config(const ddp_config_t *cfg)
