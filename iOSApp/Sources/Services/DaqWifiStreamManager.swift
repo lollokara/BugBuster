@@ -375,11 +375,33 @@ final class DaqStreamEngine: @unchecked Sendable {
             // .cancelled/.failed must not clobber the live one's state (this
             // let a stale reconnect kill a just-established stream).
             guard let self, self.connection === conn else { return }
-            if case .ready = state {
+            print("[daq-net] state=\(state)")
+            switch state {
+            case .ready:
                 if self.autoStartOnReady {
                     self.sendControlFrame(type: .start)
                 }
                 self.receiveLoop(conn)
+            case .waiting(let err):
+                // NWConnection parks in .waiting when the path drops (e.g.
+                // "No network route" flaps right after a hotspot join) and
+                // can sit there forever on a no-internet AP. Give it 3 s to
+                // become viable, then fail it over to the reconnect path
+                // instead of silently hanging.
+                print("[daq-net] waiting: \(err)")
+                Self.queue.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                    guard let self, self.connection === conn else { return }
+                    if case .waiting = conn.state {
+                        print("[daq-net] still waiting after 3s — failing over")
+                        conn.cancel()
+                        let cb = self.onConnectionState
+                        DispatchQueue.main.async {
+                            cb?(.failed(NWError.posix(.ETIMEDOUT)))
+                        }
+                    }
+                }
+            default:
+                break
             }
             let cb = self.onConnectionState
             DispatchQueue.main.async { cb?(state) }
