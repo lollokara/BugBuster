@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Combine
 import NetworkExtension
+import UIKit
 
 // =============================================================================
 // DaqWifiStreamManager.swift — iOS client for the DAQ HAT power-analyzer
@@ -361,16 +362,10 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
                 case .invalidSSID: errorCodeName = "invalidSSID"
                 case .invalidWPAPassphrase: errorCodeName = "invalidWPAPassphrase"
                 case .invalidWEPPassphrase: errorCodeName = "invalidWEPPassphrase"
-                case .invalidEAP: errorCodeName = "invalidEAP"
-                case .invalidHS20: errorCodeName = "invalidHS20"
-                case .invalidIKEv2: errorCodeName = "invalidIKEv2"
-                case .invalidWiFiHotspot: errorCodeName = "invalidWiFiHotspot"
-                case .internalError: errorCodeName = "internalError"
                 case .alreadyAssociated: errorCodeName = "alreadyAssociated"
                 case .applicationIsNotInForeground: errorCodeName = "applicationIsNotInForeground"
-                case .invalidNetwork: errorCodeName = "invalidNetwork"
                 case .userDenied: errorCodeName = "userDenied"
-                default: errorCodeName = "unknown(\(error.code))"
+                @unknown default: errorCodeName = "unknown(\(error.code))"
                 }
             } else {
                 errorCodeName = "unknown(\(error.code))"
