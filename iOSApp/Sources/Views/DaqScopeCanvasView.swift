@@ -1,4 +1,64 @@
 import SwiftUI
+import UIKit
+
+/// UIKit-backed two-finger pan catcher. SwiftUI has no native two-touch drag:
+/// MagnificationGesture only activates when the finger DISTANCE changes, so a
+/// parallel-finger horizontal scroll never triggers it. This transparent
+/// overlay hosts a UIPanGestureRecognizer restricted to exactly two touches;
+/// SwiftUI's own gestures (attached on ancestors) still observe the touches,
+/// and the delegate permits simultaneous recognition with the pinch.
+private struct TwoFingerPanOverlay: UIViewRepresentable {
+    let onChanged: (CGFloat, CGFloat) -> Void   // (translation.x, view width)
+    let onEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChanged: onChanged, onEnded: onEnded)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        let pan = UIPanGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.handle(_:)))
+        pan.minimumNumberOfTouches = 2
+        pan.maximumNumberOfTouches = 2
+        pan.delegate = context.coordinator
+        v.addGestureRecognizer(pan)
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGFloat, CGFloat) -> Void
+        var onEnded: () -> Void
+
+        init(onChanged: @escaping (CGFloat, CGFloat) -> Void, onEnded: @escaping () -> Void) {
+            self.onChanged = onChanged
+            self.onEnded = onEnded
+        }
+
+        @objc func handle(_ g: UIPanGestureRecognizer) {
+            let width = max(g.view?.bounds.width ?? 1, 1)
+            switch g.state {
+            case .began, .changed:
+                onChanged(g.translation(in: g.view).x, width)
+            case .ended, .cancelled, .failed:
+                onEnded()
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
+}
 
 /// DAQ-mode oscilloscope canvas. Unlike the ADC-mode ScopeCanvasView, this
 /// view draws ONLY pre-reduced polylines published by ScopeRenderModel — no
@@ -13,9 +73,9 @@ struct DaqScopeCanvasView: View {
 
     // Pinch-zoom scale committed between gestures; live pinch multiplies it.
     @State private var committedScale: CGFloat = 1.0
-    /// True while ANY two-finger gesture is down — a horizontal two-finger
-    /// scroll pans/unanchors even when the finger distance barely changes.
-    @GestureState private var twoFingerActive = false
+    /// True while the UIKit two-finger pan recognizer is active — suppresses
+    /// the single-finger touch cursor for the duration.
+    @State private var panActive = false
     @State private var touchLocation: CGPoint? = nil
 
     /// Dead-band so a two-finger scroll doesn't also zoom: the scale only
@@ -30,11 +90,19 @@ struct DaqScopeCanvasView: View {
 
     private struct TouchInfo {
         let label: String
+        let unit: String
         let color: Color
         let value: Double
         let time: Double
         let x: CGFloat
         let y: CGFloat
+
+        /// SI-autoranged reading (e.g. "52.45 µA") — printing raw base units
+        /// with %.3f showed "-0.000" for µA-scale currents.
+        var valueText: String {
+            let (scale, u) = ScopeColors.autoUnit(abs(value), base: unit)
+            return String(format: "%.3f %@", value * scale, u)
+        }
     }
 
     var body: some View {
@@ -60,6 +128,25 @@ struct DaqScopeCanvasView: View {
                 } else if isWaitingForData {
                     waitingOverlay
                 }
+
+                // Two-finger scroll/pan. SwiftUI alone can't express this: a
+                // pure parallel-finger drag never changes the finger distance,
+                // so MagnificationGesture (the only 2-touch SwiftUI gesture)
+                // never activates and any "pan while pinching" heuristic
+                // stays dead. A UIKit pan recognizer with min/max 2 touches
+                // sees it natively; ancestor SwiftUI gestures still receive
+                // the touches (recognizers observe descendants), and the
+                // delegate allows simultaneous pinch.
+                TwoFingerPanOverlay(
+                    onChanged: { dx, width in
+                        panActive = true
+                        applyPan(translationX: dx, width: width)
+                    },
+                    onEnded: {
+                        panActive = false
+                        committedPanTranslation = 0
+                    }
+                )
             }
             .contentShape(Rectangle())
             // A pinch (2-touch UIPinchGestureRecognizer) and a pan (1-touch
@@ -74,7 +161,6 @@ struct DaqScopeCanvasView: View {
             .gesture(
                 SimultaneousGesture(
                     MagnificationGesture()
-                        .updating($twoFingerActive) { _, state, _ in state = true }
                         .onChanged { value in
                             guard abs(value - 1.0) > pinchDeadBand else { return }
                             let s = clampScale(committedScale * value)
@@ -88,32 +174,12 @@ struct DaqScopeCanvasView: View {
                         },
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            if twoFingerActive {
-                                // Two fingers down: pan/unanchor, regardless
-                                // of whether the distance between them is
-                                // changing (horizontal scroll), not the
-                                // single-finger touch cursor.
-                                touchLocation = nil
-                                followLive = false
-                                let frame = model.frame
-                                let tSpan = max(tSpanOf(frame), 0.001)
-                                let liveEnd = frame?.liveEndT ?? 0
-                                let vp = model.currentViewport()
-                                let baseEnd = vp.anchorEndT ?? liveEnd
-                                let deltaSeconds = Double(value.translation.width - committedPanTranslation)
-                                    / Double(max(geometry.size.width, 1)) * tSpan
-                                model.updateViewport {
-                                    $0.followLive = false
-                                    $0.anchorEndT = baseEnd - deltaSeconds
-                                }
-                                committedPanTranslation = value.translation.width
-                            } else {
-                                touchLocation = value.location
-                            }
+                            // Single-finger measurement cursor; the two-finger
+                            // pan lives in TwoFingerPanOverlay.
+                            if !panActive { touchLocation = value.location }
                         }
                         .onEnded { _ in
                             touchLocation = nil
-                            committedPanTranslation = 0
                         }
                 )
             )
@@ -136,6 +202,21 @@ struct DaqScopeCanvasView: View {
     private func tSpanOf(_ frame: ScopeRenderFrame?) -> Double {
         guard let pts = frame?.traces.first?.points, let first = pts.first, let last = pts.last else { return 1 }
         return last.t - first.t
+    }
+
+    private func applyPan(translationX dx: CGFloat, width: CGFloat) {
+        touchLocation = nil
+        followLive = false
+        let frame = model.frame
+        let tSpan = max(tSpanOf(frame), 0.001)
+        let vp = model.currentViewport()
+        let baseEnd = vp.anchorEndT ?? (frame?.liveEndT ?? 0)
+        let deltaSeconds = Double(dx - committedPanTranslation) / Double(max(width, 1)) * tSpan
+        model.updateViewport {
+            $0.followLive = false
+            $0.anchorEndT = baseEnd - deltaSeconds
+        }
+        committedPanTranslation = dx
     }
 
     private var liveButton: some View {
@@ -223,7 +304,7 @@ struct DaqScopeCanvasView: View {
             .padding(6)
 
             if let touch = touchLocation,
-               let info = closestSampleInfo(points: trace.points, label: trace.label,
+               let info = closestSampleInfo(points: trace.points, label: trace.label, unit: trace.unit,
                                             minVal: trace.minV, maxVal: trace.maxV,
                                             at: touch, in: CGSize(width: 10_000, height: height)) {
                 touchOverlay(info: info, in: CGSize(width: 10_000, height: height))
@@ -270,7 +351,7 @@ struct DaqScopeCanvasView: View {
             Text(info.label)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundColor(info.color)
-            Text(String(format: "%.3f", info.value))
+            Text(info.valueText)
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundColor(.white)
             Text(String(format: "T: %.3fs", info.time))
@@ -303,14 +384,14 @@ struct DaqScopeCanvasView: View {
                 let dist = hypot(pt.x - touch.x, pt.y - touch.y)
                 if dist < minDistance {
                     minDistance = dist
-                    closest = TouchInfo(label: trace.label, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
+                    closest = TouchInfo(label: trace.label, unit: trace.unit, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
                 }
             }
         }
         return closest
     }
 
-    private func closestSampleInfo(points: [ScopeSeriesPoint], label: String,
+    private func closestSampleInfo(points: [ScopeSeriesPoint], label: String, unit: String,
                                    minVal: Double, maxVal: Double,
                                    at touch: CGPoint, in size: CGSize) -> TouchInfo? {
         guard points.count >= 2 else { return nil }
@@ -325,7 +406,7 @@ struct DaqScopeCanvasView: View {
             let dist = abs(pt.x - touch.x)
             if dist < minDistance {
                 minDistance = dist
-                closest = TouchInfo(label: label, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
+                closest = TouchInfo(label: label, unit: unit, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
             }
         }
         return closest

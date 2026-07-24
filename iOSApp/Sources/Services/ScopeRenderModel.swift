@@ -47,7 +47,7 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         var anchorEndT: Double? = nil
         var showVoltage = true
         var showCurrent = true
-        var showPower = true
+        var showPower = false
         /// Max envelope columns per trace; roughly the canvas pixel width.
         var columnBudget = 900
     }

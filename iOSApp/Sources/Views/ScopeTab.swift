@@ -175,15 +175,16 @@ struct ScopeTab: View {
     @State private var sampleRateIndex = 1 // default: 10 kSps
     @State private var showVoltage = true
     @State private var showCurrent = true
-    @State private var showPower = true
+    @State private var showPower = false
     @State private var autoscale = true
-    /// Off = each active trace gets its own stacked lane with independent
-    /// autoscale/autoranged units; on = all traces share one plot (legacy behavior).
+    /// Off (default) = each active trace gets its own stacked lane with
+    /// independent autoscale/autoranged units; on = all traces share one plot
+    /// (legacy behavior, only readable when the traces share a scale).
     @State private var mergedTraces: Bool = {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["BB_MERGED_TRACES"] == "0" { return false }
+        if ProcessInfo.processInfo.environment["BB_MERGED_TRACES"] == "1" { return true }
         #endif
-        return true
+        return false
     }()
 
     @State private var showingSettings = false
