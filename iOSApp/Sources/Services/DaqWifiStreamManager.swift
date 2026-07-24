@@ -274,7 +274,12 @@ private struct DaqStreamClock {
         if refIndex == nil {
             refIndex = startIndex
             refWallUs = wallUs
-            anchorT = Double(wallUs &- sessionT0Us) / 1_000_000.0
+            // SIGNED delta: this stream's first block can be stamped slightly
+            // EARLIER than the other stream's block that set the session zero
+            // (batches flush independently). The unsigned form wrapped to
+            // ~1.8e19 µs and anchored the whole current stream outside every
+            // window — no current/power trace, ever.
+            anchorT = Double(Int64(bitPattern: wallUs &- sessionT0Us)) / 1_000_000.0
         }
         let idxDelta = Double(startIndex &- (refIndex ?? startIndex))
         if !scaleLocked, dtNominal > 0 {
