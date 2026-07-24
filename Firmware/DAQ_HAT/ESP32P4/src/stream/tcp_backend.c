@@ -8,6 +8,7 @@
 #include <errno.h>
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -31,26 +32,42 @@ static uint32_t backend_write(const uint8_t *data, uint32_t len, void *ctx)
     taskEXIT_CRITICAL(&s_mux);
     if (fd < 0) return 0;
 
-    // Send-all loop: a *partial* send is fatal to this protocol -- the peer
-    // resyncs on a 2-byte magic and data frames carry an unchecked CRC, so
-    // half a frame on the wire permanently desyncs the stream and the client
-    // decodes payload float bytes as fake frames (the "spike forest" bug).
-    // lwIP's blocking send() legitimately returns short when the socket
-    // buffer fills (slow phone = closed receive window), so loop until the
-    // whole frame is out. If the client is wedged past SO_SNDTIMEO or send()
-    // hard-fails, the only safe recovery is dropping the client: a frame we
-    // can't finish must never be followed by another frame's bytes.
+    // Frame-atomic, producer-friendly writes on a NON-BLOCKING socket. Two
+    // hard constraints meet here:
+    //  1. A *partial* send is fatal to this protocol -- the peer resyncs on
+    //     a 2-byte magic and data frames carry an unchecked CRC, so half a
+    //     frame on the wire permanently desyncs the stream (the "spike
+    //     forest" bug). A frame we can't finish must never be followed by
+    //     another frame's bytes.
+    //  2. This runs on daq_fast_task, the acquisition producer. A blocking
+    //     send against a slow phone stalled it for seconds, overflowing the
+    //     capture rings (bench faststat: ~50% missed edges, emit 32k->14k
+    //     Sa/s, corrupted samples). The producer must never wait on a frame
+    //     that hasn't started.
+    // So: if the socket can't take the FIRST byte, drop the whole frame
+    // immediately (clean drop, counted by usb_stream -- same semantics as
+    // the USB FIFO writable() check). Only a frame already straddling the
+    // buffer gets a short bounded retry; if it can't be finished, drop the
+    // client (constraint 1).
     uint32_t off = 0;
+    int64_t  give_up_at = 0;
     while (off < len) {
         int wrote = send(fd, data + off, len - off, 0);
         if (wrote > 0) {
             off += (uint32_t)wrote;
+            give_up_at = 0;
             continue;
         }
-        if (wrote < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && off == 0) {
-            // Nothing written yet: safe to report a clean whole-frame drop
-            // and let usb_stream count it.
-            return 0;
+        bool would_block = (wrote < 0) && (errno == EAGAIN || errno == EWOULDBLOCK);
+        if (would_block && off == 0) {
+            return 0;   // whole-frame drop, producer keeps running
+        }
+        if (would_block) {
+            if (give_up_at == 0) give_up_at = esp_timer_get_time() + 500000;
+            if (esp_timer_get_time() < give_up_at) {
+                vTaskDelay(pdMS_TO_TICKS(2));
+                continue;
+            }
         }
         ESP_LOGW(TAG, "send() stalled/failed mid-frame (errno=%d, %lu/%lu); dropping client",
                  errno, (unsigned long)off, (unsigned long)len);
@@ -133,10 +150,10 @@ static void listener_task(void *arg)
         // Frames are already batched (~KB each); don't let Nagle sit on them.
         int nd = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nd, sizeof(nd));
-        // Bound how long backend_write()'s send-all loop can stall the
-        // producer task on a wedged client before we give up and drop it.
-        struct timeval tmo = { .tv_sec = 2, .tv_usec = 0 };
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tmo, sizeof(tmo));
+        // Non-blocking sends: backend_write() must never park the
+        // acquisition producer on a slow phone (see its comment).
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
         // close() must happen OUTSIDE the critical section -- see the
         // matching comment in backend_write() for why (blocking lwIP call
         // + interrupts disabled = WDT timeout / board crash).
