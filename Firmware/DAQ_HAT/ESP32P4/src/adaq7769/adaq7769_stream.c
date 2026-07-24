@@ -294,29 +294,11 @@ esp_err_t adaq_stream_stop(adaq_stream_t *s)
 // ADAQ_STATUS_SAMPLE_DIV-th sample to grab the status header), assert CS, and
 // START the transfer (non-blocking). *cur_len tracks the host's FIFO length so
 // shared-bus devices don't re-setup needlessly.
-// STATUS presence on the wire is governed by s->append_status, a PERSISTENT
-// per-device register bit set once for the whole streaming session -- the
-// ADAQ drives it after every single conversion's data bytes whenever it's
-// on. `want_status` is a separate, per-sample HOST throttle (only bother
-// reading/parsing status every ADAQ_STATUS_SAMPLE_DIV-th sample to save
-// transfer time) — it does NOT mean the device omits status that sample.
-// Once CRC is also enabled, the device's frame is (data [+status] [+crc])
-// every conversion; the CRC byte's wire position depends on append_status,
-// not want_status, and clocking fewer bytes than the device drives puts a
-// short read on the wrong byte. So the throttled short read (3 or 4 bytes)
-// is only safe when CRC is off; with CRC on we must always clock through
-// to status's actual (persistent) position before the CRC byte.
-static inline bool status_on_wire(const adaq_stream_t *s, bool want_status)
-{
-    return s->append_crc ? s->append_status : want_status;
-}
-
 static inline void capture_begin(adaq_stream_t *s, uint8_t local, bool want_status,
                                  uint8_t *cur_len)
 {
     adaq7769_t *dev = s->devices[local];
-    uint8_t n = (uint8_t)(3 + (status_on_wire(s, want_status) ? 1 : 0)
-                            + (s->append_crc ? 1 : 0));
+    uint8_t n = want_status ? 4 : 3;
     if (*cur_len != n) {
         adaq_ll_fifo_setup(&dev->ll, n);
         *cur_len = n;
@@ -337,8 +319,7 @@ static inline void capture_end(adaq_stream_t *s, uint8_t local, bool want_status
                                uint8_t *buf)
 {
     adaq7769_t *dev = s->devices[local];
-    bool status_present = status_on_wire(s, want_status);
-    uint8_t n = (uint8_t)(3 + (status_present ? 1 : 0) + (s->append_crc ? 1 : 0));
+    uint8_t n = want_status ? 4 : 3;
     adaq_ll_fifo_wait(&dev->ll);
     adaq_ll_fifo_drain(&dev->ll, buf, n);
     // HW-CS devices already auto-deasserted (with a guaranteed post-transfer
@@ -352,12 +333,7 @@ static inline void capture_end(adaq_stream_t *s, uint8_t local, bool want_status
     uint32_t raw = ((uint32_t)buf[0] << 16) | ((uint32_t)buf[1] << 8) | buf[2];
     rec.value = adaq_sign_extend24(raw);
     dev->last_raw = rec.value;
-    // Status byte, when present on the wire this sample, always lands at
-    // buf[3] (right after the 3 data bytes) -- but only bother copying it
-    // into rec/diagnostics on the throttled `want_status` samples, matching
-    // the original diagnostic-sampling intent (the byte may be on the wire
-    // more often than that once CRC is on; that's fine, just unused here).
-    if (want_status && status_present) {
+    if (want_status) {
         rec.status = buf[3];
         // Aggregate per-device diagnostics (surfaced by TUI / adaqdiag).
         dev->diag_last_status = rec.status;
@@ -366,22 +342,6 @@ static inline void capture_end(adaq_stream_t *s, uint8_t local, bool want_status
         if (rec.status & ADAQ_ST_ERR_MASK) {
             rec.flags |= ADAQ_SAMPLE_FLAG_STATUS_ERR;
             dev->diag_err_count++;
-        }
-    }
-    if (s->append_crc) {
-        // The single-bus path verified the per-conversion CRC but this
-        // combined-capture path (the one the DAQ fast path actually uses)
-        // only READ the byte — corrupted conversions still slipped through
-        // unflagged. CRC-8 init 0x03 over data(+status), same as
-        // capture_read(); offset uses status_present (this stream's
-        // PERSISTENT append_status config), not want_status -- see
-        // status_on_wire()'s comment for why that distinction is load-
-        // bearing here (using want_status put the CRC check on top of the
-        // status byte on every throttled sample and read current as 0).
-        size_t off = 3 + (status_present ? 1u : 0u);
-        uint8_t crc = adaq_ll_crc8(buf, off, 0x03);
-        if (crc != buf[off]) {
-            rec.flags |= ADAQ_SAMPLE_FLAG_CRC_ERR;
         }
     }
     rec.seq = s->seq[local]++;
