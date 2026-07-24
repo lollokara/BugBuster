@@ -399,11 +399,38 @@ static void daq_ctrl_task(void *arg)
                 // double-frees the PSRAM ring buffers, causing "one batch then
                 // nothing" after the first CMD_START.
                 // Only the USB stream decimation is safe to update here; it is
-                // not covered by BBP and requires no SPI bus access.
-                if (c->decimation >= 1) {
-                    b->wave_decim = c->decimation;
-                    b->wave_count = 0;
+                // not covered by BBP and requires no SPI bus access. Map the
+                // requested SPS onto stream decimation relative to the cached
+                // hardware ODRs, so hosts without a BBP control plane (the
+                // iOS WiFi client) get a real effective-rate change without
+                // touching the ADAQ config.
+                uint32_t decim = (c->decimation >= 1) ? c->decimation : 1;
+                if (c->current_sps > 0 && b->fine_rate_hz > 0) {
+                    uint32_t d = (b->fine_rate_hz + c->current_sps / 2)
+                                 / c->current_sps;
+                    if (d < 1) d = 1;
+                    if (d > 255) d = 255;
+                    if (d > decim) decim = d;
                 }
+                b->wave_decim = (uint8_t)decim;
+                b->wave_count = 0;
+
+                uint32_t vdecim = 1;
+                if (c->voltage_sps > 0 && b->volt_rate_hz > 0) {
+                    vdecim = (b->volt_rate_hz + c->voltage_sps / 2)
+                             / c->voltage_sps;
+                    if (vdecim < 1) vdecim = 1;
+                    if (vdecim > 255) vdecim = 255;
+                }
+                b->volt_decim = (uint8_t)vdecim;
+                b->volt_count = 0;
+                ESP_LOGI(TAG, "SET_RATE: wave_decim=%u volt_decim=%u "
+                         "(req i=%lu v=%lu, odr i=%lu v=%lu)",
+                         (unsigned)b->wave_decim, (unsigned)b->volt_decim,
+                         (unsigned long)c->current_sps,
+                         (unsigned long)c->voltage_sps,
+                         (unsigned long)b->fine_rate_hz,
+                         (unsigned long)b->volt_rate_hz);
                 break;
             }
 
@@ -784,8 +811,26 @@ static void wifi_stream_bringup_task(void *arg)
 {
     daq_board_t *b = (daq_board_t *)arg;
 
-    char ssid[33], password[65];
-    daq_wifi_ident_generate(ssid, sizeof(ssid), password, sizeof(password));
+    // Generated ONCE per boot and cached, not regenerated on every START:
+    // the SSID is MAC-derived (constant per device regardless), but the
+    // password used to be freshly randomized on every single Play press.
+    // iOS keys its saved WiFi credentials by SSID, and repeatedly re-joining
+    // the same SSID with a different password each time is exactly the
+    // pattern that trips its anti-flap protection -- it starts silently
+    // refusing to even attempt association ("Unable to Join Network", no
+    // station-connect event ever reaches the AP side) until the user
+    // manually "Forget This Network"s it. Stable credentials for the life of
+    // the boot avoid that entirely; a real reboot (new random password) is
+    // still fine since that's infrequent, not a per-Play-press event.
+    static char s_ssid[33];
+    static char s_password[65];
+    static bool s_ident_generated;
+    if (!s_ident_generated) {
+        daq_wifi_ident_generate(s_ssid, sizeof(s_ssid), s_password, sizeof(s_password));
+        s_ident_generated = true;
+    }
+    const char *ssid = s_ssid;
+    const char *password = s_password;
 
     ddp_master_set_wifi_stream_mode(&b->ddp, true);
 
@@ -802,6 +847,7 @@ static void wifi_stream_bringup_task(void *arg)
     // hammering the SDIO bus immediately also reset the C6 back to square
     // one every time, wiping the very flag this command just set -- see
     // .mex/patterns/daq-hat-ios-wifi-streaming.md for that whole saga.)
+    b->wifi_stream_info.stage = DAQ_WIFI_STAGE_AP;
     esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < 6; attempt++) {
         if (attempt > 0) vTaskDelay(pdMS_TO_TICKS(500));
@@ -810,8 +856,14 @@ static void wifi_stream_bringup_task(void *arg)
         ESP_LOGW(TAG, "wifi_ap_start attempt %d failed: %s, retrying...",
                  attempt + 1, esp_err_to_name(err));
     }
-    if (err == ESP_OK) err = captive_dns_start();
-    if (err == ESP_OK) err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
+    if (err == ESP_OK) {
+        b->wifi_stream_info.stage = DAQ_WIFI_STAGE_DNS;
+        err = captive_dns_start();
+    }
+    if (err == ESP_OK) {
+        b->wifi_stream_info.stage = DAQ_WIFI_STAGE_TCP;
+        err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
+    }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "wifi stream start failed: %s", esp_err_to_name(err));
         tcp_backend_stop();
@@ -831,6 +883,19 @@ static void wifi_stream_bringup_task(void *arg)
     b->wifi_stream_info.host[3] = 1;
     b->wifi_stream_info.state = DAQ_WIFI_STREAM_READY;
     vTaskDelete(NULL);
+}
+
+// Shared by the explicit HATP_CMD_DAQ_WIFI_STREAM_STOP handler and the idle-
+// timeout auto-teardown in daq_ui_task below -- same sequence either way.
+static void wifi_stream_teardown(daq_board_t *b)
+{
+    tcp_backend_stop();
+    usb_backend_start(&b->usb);   // re-register the USB transport
+    captive_dns_stop();
+    wifi_ap_stop();
+    ddp_master_set_wifi_stream_mode(&b->ddp, false);
+    memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
+    b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
 }
 
 static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
@@ -900,13 +965,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         }
 
         case HATP_CMD_DAQ_WIFI_STREAM_STOP:
-            tcp_backend_stop();
-            usb_backend_start(&b->usb);   // re-register the USB transport
-            captive_dns_stop();
-            wifi_ap_stop();
-            ddp_master_set_wifi_stream_mode(&b->ddp, false);
-            memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
-            b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
+            wifi_stream_teardown(b);
             return 0;   // ack -> HATP_RSP_OK
 
         case HATP_CMD_DAQ_WIFI_STREAM_INFO: {
@@ -925,8 +984,20 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (status != HATP_WIFI_INFO_ST_READY) {
                 resp[0] = status;
                 resp[1] = 0;
-                resp[2] = HATP_WIFI_INFO_LAST;   // nothing to chunk; this "is" the final chunk
-                return HATP_WIFI_INFO_HDR;
+                // Only FAILED is actually a terminal/final chunk. STARTING is
+                // still in progress -- setting LAST here too was a real bug:
+                // the S3 side (hat.cpp) treats LAST as "sequence complete",
+                // so a STARTING poll landing with LAST set got misread as a
+                // finished-but-not-READY sequence and immediately aborted the
+                // whole bring-up as FAILED after just one poll, intermittently
+                // (whenever a poll happened to land during STARTING rather
+                // than after bring-up had already reached READY).
+                resp[2] = (status == HATP_WIFI_INFO_ST_FAILED) ? HATP_WIFI_INFO_LAST : 0;
+                // Extra byte (beyond the shared 3-byte header): coarse
+                // bring-up substage, only meaningful while STARTING -- see
+                // daq_wifi_stage_t.
+                resp[3] = (uint8_t)b->wifi_stream_info.stage;
+                return HATP_WIFI_INFO_HDR + 1;
             }
 
             s3link_wifi_stream_info_t blob;
@@ -1295,15 +1366,38 @@ esp_err_t daq_board_s3_start(daq_board_t *b)
     return s3_link_start(&b->s3, /*core=*/0, /*prio=*/14);
 }
 
+// Client disconnect from the WiFi stream TCP port -> auto-teardown after
+// this long with nobody (re)connected, so the DAQ HAT returns to normal
+// (non-WiFi, USB-backend) operation without a manual stop. Also covers the
+// case where the stream was started but a client never joined at all.
+#define WIFI_STREAM_IDLE_TIMEOUT_MS 60000u
+
 // UI task: relay front-panel buttons to the C6 and push the latest measurement
-// for the on-screen readout. Low priority, ~20 ms cadence.
+// for the on-screen readout. Low priority, ~20 ms cadence. Also owns the WiFi
+// stream idle-timeout check above (same cadence is plenty for a 60s timer).
 static void daq_ui_task(void *arg)
 {
     daq_board_t *b = (daq_board_t *)arg;
     uint32_t last_meas = 0;
     uint32_t last_hello = 0;
+    uint32_t wifi_disconnect_since_ms = 0;   // 0 == "not counting down"
     for (;;) {
         uint32_t t = (uint32_t)(esp_timer_get_time() / 1000);
+
+        if (b->wifi_stream_info.state == DAQ_WIFI_STREAM_READY) {
+            if (tcp_backend_connected()) {
+                wifi_disconnect_since_ms = 0;
+            } else if (wifi_disconnect_since_ms == 0) {
+                wifi_disconnect_since_ms = t;
+            } else if ((t - wifi_disconnect_since_ms) >= WIFI_STREAM_IDLE_TIMEOUT_MS) {
+                ESP_LOGI(TAG, "wifi stream: no client for %u ms, tearing down",
+                         WIFI_STREAM_IDLE_TIMEOUT_MS);
+                wifi_stream_teardown(b);
+                wifi_disconnect_since_ms = 0;
+            }
+        } else {
+            wifi_disconnect_since_ms = 0;
+        }
 
         // The C6 link (UART2) is handed to the flasher during a C6 firmware
         // update; skip all DDP traffic while it is down.
@@ -1526,9 +1620,15 @@ static void daq_fast_task(void *arg)
                                    &b->adaq[ADAQ_ROLE_VOLTAGE], sb.value)
                                * V_DUT_SENSE_SCALE;
                     power_dsp_set_voltage(&b->dsp, vv);
-                    usb_stream_push_voltage(&b->usb, vv,
-                        (uint32_t)adaq7769_output_data_rate(
-                            &b->adaq[ADAQ_ROLE_VOLTAGE]));
+                    // SET_RATE stream decimation. The wave header carries the
+                    // *effective* rate so hosts that ignore the header's
+                    // decimation byte still get a correct timebase.
+                    if (++b->volt_count >= b->volt_decim) {
+                        b->volt_count = 0;
+                        uint32_t vdec = b->volt_decim ? b->volt_decim : 1;
+                        usb_stream_push_voltage(&b->usb, vv,
+                                                b->volt_rate_hz / vdec);
+                    }
                 }
             } else {
                 coarse = sb;
@@ -1639,6 +1739,11 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
 
     if (b->wave_decim == 0) b->wave_decim = WAVE_STREAM_DECIM_DEFAULT;
     b->wave_count   = 0;
+    if (b->volt_decim == 0) b->volt_decim = 1;
+    b->volt_count   = 0;
+    b->volt_rate_hz = (uint32_t)(b->adaq_ok[ADAQ_ROLE_VOLTAGE]
+                          ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE])
+                          : 0);
     if (b->dsp_decim == 0) b->dsp_decim = DAQ_DSP_DECIM_DEFAULT;
     b->dsp_count    = 0;
     // Cache the FINE ODR once for fast_emit's per-sample wire push — it's

@@ -54,8 +54,21 @@ typedef enum {
     DAQ_WIFI_STREAM_FAILED,       // bring-up failed; everything torn back down
 } daq_wifi_stream_state_t;
 
+// Coarse bring-up progress within DAQ_WIFI_STREAM_STARTING, surfaced to the
+// iOS client (via HATP_CMD_DAQ_WIFI_STREAM_INFO's extra stage byte -> S3's
+// hat_daq_wifi_stream_info_t.stage -> /api/daq/wifi_stream/status "stage")
+// so the play-button progress screen can show real bring-up state instead of
+// a generic spinner.
+typedef enum {
+    DAQ_WIFI_STAGE_REQUESTED = 0,  // START accepted, bring-up task not running yet
+    DAQ_WIFI_STAGE_AP,             // bringing up the C6/ESP-Hosted softAP (retry loop)
+    DAQ_WIFI_STAGE_DNS,            // softAP up, starting the fast-fail DNS responder
+    DAQ_WIFI_STAGE_TCP,            // DNS up, starting the TCP stream backend
+} daq_wifi_stage_t;
+
 typedef struct {
     daq_wifi_stream_state_t state;
+    daq_wifi_stage_t         stage;
     char                     ssid[33];
     char                     password[65];
     uint16_t                 port;
@@ -101,6 +114,9 @@ typedef struct daq_board {
     volatile bool           fast_running;
     uint8_t                 wave_decim;   // USB waveform decimation (>=1)
     uint8_t                 wave_count;   // running decimation counter
+    uint8_t                 volt_decim;   // USB voltage-stream decimation (>=1)
+    uint8_t                 volt_count;   // running voltage decimation counter
+    uint32_t                volt_rate_hz; // cached VOLTAGE ODR (set in run_fast)
     uint8_t                 dsp_decim;    // DSP-tail decimation (power/multires/FFT)
     uint8_t                 dsp_count;    // running DSP-tail counter
     uint32_t                drop_fine;    // paired-stream resync drops (diag)
