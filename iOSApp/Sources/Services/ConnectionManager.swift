@@ -113,10 +113,18 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     // Firmware/DAQ_HAT/ESP32P4/src/cal/range_cal.c, "enable the DUT supply
     // at 2V before prompting").
     //
-    // Needed firmware surface (HTTP, mirroring the existing DAQ/HAT JSON
-    // conventions; a BBP command mirror would follow the same pattern as
-    // HAT_CMD_SET_RAIL_EN/HAT_CMD_SET_RAIL_V if a wire-protocol path is
-    // preferred over HTTP-only):
+    // Needed firmware surface: three JSON paths, reachable over BOTH transports
+    // (not HTTP-only). Implement them as `api_core_handle(method,path,body)`
+    // cases in Firmware/ESP32/src/net/api_core.cpp (see the
+    // /api/daq/wifi_stream/{start,stop,status} trio there for the exact
+    // pattern) so the existing HTTP webserver.cpp routes AND the NimBLE GATT
+    // tunnel (net/ble_service.cpp) both get them for free — that shared
+    // dispatcher is exactly why iOS's `postAction`/`bleDecoded` calls below
+    // don't need any transport-specific branching once firmware exists.
+    // The S3 itself doesn't own the DUT supply hardware — it has to relay
+    // to the P4 over the HAT UART link with a new request/response command
+    // pair modeled on HATP_CMD_STAGE_READ (0x75, S3-initiated request + P4
+    // reply), NOT the one-way HAT_CMD_DAQ_TELEMETRY push pattern.
     //
     //   GET  /api/daq/vdut/status
     //     -> { "present": bool, "enabled": bool,
@@ -831,19 +839,29 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         }
     }
 
+    private struct VdutStatus: Decodable {
+        let present: Bool
+        let enabled: Bool
+        let voltageSetpointV: Double
+        let currentLimitMa: Double
+        let measuredVoltageV: Double?
+        let measuredCurrentMa: Double?
+        let fault: Bool
+    }
+
     /// Best-effort refresh; firmware doesn't implement this endpoint yet, so
     /// failures are expected and silently ignored (UI keeps last-known state).
+    /// Works over both transports: BLE tunnels the same `/api/daq/vdut/status`
+    /// path through `api_core_handle` on the device (see `bleDecoded`), same
+    /// as `/api/status`/`/api/hat`/etc — no separate BLE-specific endpoint needed.
     public func refreshVdutStatus() async {
-        struct VdutStatus: Decodable {
-            let present: Bool
-            let enabled: Bool
-            let voltageSetpointV: Double
-            let currentLimitMa: Double
-            let measuredVoltageV: Double?
-            let measuredCurrentMa: Double?
-            let fault: Bool
+        let status: VdutStatus?
+        if transport == .ble {
+            status = await bleDecoded(VdutStatus.self, path: "/api/daq/vdut/status")
+        } else {
+            status = try? await getRequest(path: "/api/daq/vdut/status")
         }
-        guard let status: VdutStatus = try? await getRequest(path: "/api/daq/vdut/status") else { return }
+        guard let status else { return }
         updateOnMain {
             self.vdutPresent = status.present
             self.vdutEnabled = status.enabled
