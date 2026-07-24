@@ -31,21 +31,45 @@ static uint32_t backend_write(const uint8_t *data, uint32_t len, void *ctx)
     taskEXIT_CRITICAL(&s_mux);
     if (fd < 0) return 0;
 
-    // Plain blocking send: the iOS path accepts lower throughput than USB, and
-    // a stalled/slow client is handled the same way a USB back-pressure stall
-    // is -- usb_stream's own drop-frame accounting, not a nonblocking retry
-    // loop here. A send() error (peer gone) drops the client on the next poll.
-    int wrote = send(fd, data, len, 0);
-    if (wrote < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            ESP_LOGW(TAG, "send() failed (errno=%d); dropping client", errno);
-            taskENTER_CRITICAL(&s_mux);
-            if (s_client_fd == fd) { close(fd); s_client_fd = -1; }
-            taskEXIT_CRITICAL(&s_mux);
+    // Send-all loop: a *partial* send is fatal to this protocol -- the peer
+    // resyncs on a 2-byte magic and data frames carry an unchecked CRC, so
+    // half a frame on the wire permanently desyncs the stream and the client
+    // decodes payload float bytes as fake frames (the "spike forest" bug).
+    // lwIP's blocking send() legitimately returns short when the socket
+    // buffer fills (slow phone = closed receive window), so loop until the
+    // whole frame is out. If the client is wedged past SO_SNDTIMEO or send()
+    // hard-fails, the only safe recovery is dropping the client: a frame we
+    // can't finish must never be followed by another frame's bytes.
+    uint32_t off = 0;
+    while (off < len) {
+        int wrote = send(fd, data + off, len - off, 0);
+        if (wrote > 0) {
+            off += (uint32_t)wrote;
+            continue;
         }
+        if (wrote < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && off == 0) {
+            // Nothing written yet: safe to report a clean whole-frame drop
+            // and let usb_stream count it.
+            return 0;
+        }
+        ESP_LOGW(TAG, "send() stalled/failed mid-frame (errno=%d, %lu/%lu); dropping client",
+                 errno, (unsigned long)off, (unsigned long)len);
+        // close() must happen OUTSIDE the critical section: it's a
+        // blocking lwIP socket call that can need to talk to the
+        // TCP/IP task, and taskENTER_CRITICAL disables interrupts on
+        // this core -- doing a blocking call with interrupts off is
+        // exactly what trips "Interrupt wdt timeout" (this crashed the
+        // board for real: pausing mid-stream causes exactly this
+        // send()-fails-then-drop path to run). Only the fd handoff
+        // needs the lock; close() itself doesn't touch s_client_fd.
+        bool should_close = false;
+        taskENTER_CRITICAL(&s_mux);
+        if (s_client_fd == fd) { s_client_fd = -1; should_close = true; }
+        taskEXIT_CRITICAL(&s_mux);
+        if (should_close) close(fd);
         return 0;
     }
-    return (uint32_t)wrote;
+    return len;
 }
 
 // No portable/cheap "socket send buffer space" query over lwip sockets;
@@ -106,10 +130,21 @@ static void listener_task(void *arg)
         }
 
         ESP_LOGI(TAG, "client connected: %s", inet_ntoa(peer.sin_addr));
+        // Frames are already batched (~KB each); don't let Nagle sit on them.
+        int nd = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nd, sizeof(nd));
+        // Bound how long backend_write()'s send-all loop can stall the
+        // producer task on a wedged client before we give up and drop it.
+        struct timeval tmo = { .tv_sec = 2, .tv_usec = 0 };
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tmo, sizeof(tmo));
+        // close() must happen OUTSIDE the critical section -- see the
+        // matching comment in backend_write() for why (blocking lwIP call
+        // + interrupts disabled = WDT timeout / board crash).
         taskENTER_CRITICAL(&s_mux);
-        if (s_client_fd >= 0) close(s_client_fd);   // one client at a time
+        int stale_fd = s_client_fd;   // one client at a time
         s_client_fd = fd;
         taskEXIT_CRITICAL(&s_mux);
+        if (stale_fd >= 0) close(stale_fd);
 
         // Block here until the client disconnects (a zero-length recv), so
         // the accept() loop naturally serves the next client afterwards.
@@ -122,9 +157,11 @@ static void listener_task(void *arg)
             if (s_stream) usb_stream_on_rx(s_stream, rx, (uint32_t)n);
         }
 
+        bool own_close = false;
         taskENTER_CRITICAL(&s_mux);
-        if (s_client_fd == fd) { close(fd); s_client_fd = -1; }
+        if (s_client_fd == fd) { s_client_fd = -1; own_close = true; }
         taskEXIT_CRITICAL(&s_mux);
+        if (own_close) close(fd);
         ESP_LOGI(TAG, "client disconnected");
     }
 
@@ -167,9 +204,38 @@ void tcp_backend_stop(void)
     taskEXIT_CRITICAL(&s_mux);
     if (fd >= 0) close(fd);
 
-    if (s_listen_fd >= 0) {
-        // Unblock accept() in the listener task.
-        shutdown(s_listen_fd, SHUT_RDWR);
+    // close() -- not shutdown() -- is what reliably unblocks a pending
+    // accept() on lwIP. shutdown() on a *listening* socket is not
+    // guaranteed to wake accept() the way it wakes recv()/send() on a
+    // connected socket, and in practice here it doesn't: this dormant bug
+    // was invisible when tcp_backend_stop() returned immediately (nothing
+    // was blocking on the listener task actually exiting), but became a
+    // real hang once the wait loop below was added to fix the port-reuse
+    // race (that wait needs the task to actually finish) -- accept() never
+    // unblocked, the listener task never set s_task = NULL, and this
+    // function (called from daq_ui_task, the idle-timeout auto-teardown
+    // path) spun forever, freezing the whole task and leaving the softAP
+    // stuck on. Close the fd directly instead; take ownership of it under
+    // the same lock discipline s_client_fd already uses so listener_task's
+    // own belt-and-suspenders `if (s_listen_fd >= 0) close(...)` cleanup
+    // becomes a no-op rather than a double-close.
+    taskENTER_CRITICAL(&s_mux);
+    int listen_fd = s_listen_fd;
+    s_listen_fd = -1;
+    taskEXIT_CRITICAL(&s_mux);
+    if (listen_fd >= 0) close(listen_fd);
+
+    // listener_task self-deletes shortly after accept() unblocks from the
+    // close() above -- asynchronously, on its own schedule. Returning before
+    // that finishes let a fast stop-then-start (e.g. the idle-timeout
+    // auto-teardown immediately followed by a new START) race a fresh
+    // tcp_backend_start()'s bind() on the same port against the old socket
+    // not being closed yet, failing with "bind/listen failed (errno=112)".
+    // Wait for the task to actually exit (bounded: it only blocks on
+    // accept()/close(), both fast once unblocked) so port 5566 is
+    // guaranteed free before returning.
+    while (s_task != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
