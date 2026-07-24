@@ -117,22 +117,29 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
 
         var vSegs: [Segment] = []
         if vp.showVoltage || vp.showPower {
-            vSegs = Self.windowSegments(hist: engine.voltageHist, recent: engine.voltage,
+            vSegs = Self.windowSegments(hist: engine.voltageHist, reduced: engine.voltageReduced,
+                                        recent: engine.voltage,
                                         end: end, windowSeconds: vp.windowSeconds,
-                                        scale: vp.timeScale)
+                                        scale: vp.timeScale, columns: vp.columnBudget)
         }
         var iSegs: [Segment] = []
         if vp.showCurrent || vp.showPower {
-            iSegs = Self.windowSegments(hist: engine.currentHist, recent: engine.current,
+            iSegs = Self.windowSegments(hist: engine.currentHist, reduced: engine.currentReduced,
+                                        recent: engine.current,
                                         end: end, windowSeconds: vp.windowSeconds,
-                                        scale: vp.timeScale)
+                                        scale: vp.timeScale, columns: vp.columnBudget)
         }
 
-        if vp.showVoltage, !vSegs.isEmpty {
-            let pts = Self.decimate(vSegs, columns: vp.columnBudget, useSrc: false,
-                                    color: { _ in ScopeColors.daqVoltage })
+        // Voltage polyline is shared by the Voltage trace and the Power
+        // pairing — decimate it once.
+        var vPts: [ScopeSeriesPoint] = []
+        if !vSegs.isEmpty {
+            vPts = Self.decimate(vSegs, columns: vp.columnBudget, useSrc: false,
+                                 color: { _ in ScopeColors.daqVoltage })
+        }
+        if vp.showVoltage, !vPts.isEmpty {
             traces.append(Self.trace(id: "v", label: "Voltage", unit: "V",
-                                     color: ScopeColors.daqVoltage, points: pts))
+                                     color: ScopeColors.daqVoltage, points: vPts))
         }
         if vp.showCurrent, !iSegs.isEmpty {
             let pts = Self.decimate(iSegs, columns: vp.columnBudget, useSrc: true,
@@ -140,13 +147,10 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
             traces.append(Self.trace(id: "i", label: "Current", unit: "A",
                                      color: ScopeColors.daqCurrentFine, points: pts))
         }
-        if vp.showPower, !vSegs.isEmpty, !iSegs.isEmpty {
+        if vp.showPower, !vPts.isEmpty, !iSegs.isEmpty {
             // Real timestamp-nearest pairing (voltage and current are
-            // independently-timestamped streams): decimate voltage to display
-            // columns, then look up the nearest-in-time current sample for
-            // each column point.
-            let vPts = Self.decimate(vSegs, columns: vp.columnBudget, useSrc: false,
-                                     color: { _ in ScopeColors.daqPower })
+            // independently-timestamped streams): for each voltage column
+            // point, look up the nearest-in-time current sample.
             var pPts = [ScopeSeriesPoint]()
             pPts.reserveCapacity(vPts.count)
             for p in vPts {
@@ -174,16 +178,27 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
 
     // MARK: - Reducers (pure, pipeline queue)
 
-    /// Windows the two storage tiers to [end - window, end], applies the
+    /// Windows the storage tiers to [end - window, end], applies the
     /// pinch-zoom scale as a further tail-count reduction (front-dropped from
     /// history first), and returns the in-window segments oldest-first.
-    private static func windowSegments(hist: DaqChannelBuffer, recent: DaqChannelBuffer,
+    /// When the raw window vastly exceeds the display budget, the raw recent
+    /// ring is swapped for the engine's incrementally-maintained reduced
+    /// envelope — O(columns) work per tick instead of O(raw window); deep
+    /// zooms still read the raw ring at full fidelity.
+    private static func windowSegments(hist: DaqChannelBuffer, reduced: DaqChannelBuffer,
+                                       recent: DaqChannelBuffer,
                                        end: Double, windowSeconds: Double?,
-                                       scale: CGFloat) -> [Segment] {
+                                       scale: CGFloat, columns: Int) -> [Segment] {
         let cutoff = windowSeconds.map { end - $0 } ?? -Double.infinity
 
-        let rHi = upperBound(recent.t, end)
-        let rLo = lowerBound(recent.t, cutoff, upTo: rHi)
+        var recent = recent
+        var rHi = upperBound(recent.t, end)
+        var rLo = lowerBound(recent.t, cutoff, upTo: rHi)
+        if rHi - rLo > columns * 4, !reduced.t.isEmpty {
+            recent = reduced
+            rHi = upperBound(recent.t, end)
+            rLo = lowerBound(recent.t, cutoff, upTo: rHi)
+        }
         let hHi = upperBound(hist.t, end)
         let hLo = lowerBound(hist.t, cutoff, upTo: hHi)
 
@@ -261,20 +276,27 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         var result = [ScopeSeriesPoint]()
         result.reserveCapacity(columns * 2)
 
+        // Scalar bucket tracking: materializing a ScopeSeriesPoint (with its
+        // SwiftUI Color) per RAW sample burned an entire CPU core at real
+        // rates — points are only built at bucket flush now.
         var bucket = -1
-        var minPt: ScopeSeriesPoint? = nil
-        var maxPt: ScopeSeriesPoint? = nil
+        var mnT = 0.0, mxT = 0.0
+        var mnV: Float = 0, mxV: Float = 0
+        var mnS: UInt8 = 0, mxS: UInt8 = 0
         func flush() {
-            guard let mn = minPt, let mx = maxPt else { return }
-            if mn.t == mx.t && mn.v == mx.v {
-                result.append(mn)
-            } else if mn.t <= mx.t {
-                result.append(mn); result.append(mx)
+            guard bucket >= 0 else { return }
+            if mnT == mxT && mnV == mxV {
+                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), color: color(mnS)))
+            } else if mnT <= mxT {
+                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), color: color(mnS)))
+                result.append(ScopeSeriesPoint(t: mxT, v: Double(mxV), color: color(mxS)))
             } else {
-                result.append(mx); result.append(mn)
+                result.append(ScopeSeriesPoint(t: mxT, v: Double(mxV), color: color(mxS)))
+                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), color: color(mnS)))
             }
         }
         for seg in segs {
+            let hasSrc = useSrc && !seg.src.isEmpty
             for idx in seg.range {
                 // Clamp in floating point BEFORE the Int conversion: a
                 // pathological t (out-of-window, non-finite) must degrade to
@@ -283,15 +305,16 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
                 let frac = (seg.t[idx] - tStart) / span
                 let clamped = frac.isFinite ? min(max(frac, 0), 1) : 0
                 let b = min(Int(clamped * Double(columns)), columns - 1)
+                let t = seg.t[idx]
+                let v = seg.v[idx]
+                let s: UInt8 = hasSrc && idx < seg.src.count ? seg.src[idx] : 0
                 if b != bucket {
                     flush()
                     bucket = b
-                    minPt = point(seg, idx)
-                    maxPt = minPt
+                    mnT = t; mxT = t; mnV = v; mxV = v; mnS = s; mxS = s
                 } else {
-                    let p = point(seg, idx)
-                    if let mn = minPt, p.v < mn.v { minPt = p }
-                    if let mx = maxPt, p.v > mx.v { maxPt = p }
+                    if v < mnV { mnV = v; mnT = t; mnS = s }
+                    if v > mxV { mxV = v; mxT = t; mxS = s }
                 }
             }
         }
@@ -327,8 +350,17 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
             if p.v > maxV { maxV = p.v }
         }
         if minV == .infinity { minV = -1; maxV = 1 }
+        // Magnitude-RELATIVE padding: a fixed absolute floor (the old
+        // `span > 0.001 ? span*0.1 : 1.0`) blew a nA-scale trace up to a ±1 A
+        // axis, defeating the per-lane SI autoranging entirely.
         let span = maxV - minV
-        let pad = span > 0.001 ? span * 0.1 : 1.0
+        let mag = max(abs(minV), abs(maxV))
+        let pad: Double
+        if span > mag * 1e-6, span > 0 {
+            pad = span * 0.1
+        } else {
+            pad = max(mag * 0.1, 1e-12)
+        }
         return RenderedTrace(id: id, label: label, unit: unit, defaultColor: color,
                              points: points, minV: minV - pad, maxV: maxV + pad)
     }

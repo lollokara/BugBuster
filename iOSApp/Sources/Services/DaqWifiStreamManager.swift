@@ -207,6 +207,46 @@ struct DaqChannelBuffer {
     }
 }
 
+/// Incremental min/max envelope reducer: folds every `fold` pushed samples
+/// into exactly two entries (min, max — in temporal order) appended to an
+/// output buffer. Lets the render pipeline read an always-current ~2 kHz
+/// envelope of the raw recent ring in O(columns) instead of re-scanning
+/// hundreds of thousands of raw samples every tick.
+struct EnvelopeAccumulator {
+    let fold: Int
+    private var n = 0
+    private var minT = 0.0, maxT = 0.0
+    private var minV: Float = 0, maxV: Float = 0
+    private var minS: UInt8 = 0, maxS: UInt8 = 0
+
+    init(fold: Int) { self.fold = fold }
+
+    mutating func reset() { n = 0 }
+
+    mutating func push(t: Double, v: Float, src: UInt8, hasSrc: Bool,
+                       into out: inout DaqChannelBuffer) {
+        if n == 0 {
+            minT = t; maxT = t; minV = v; maxV = v; minS = src; maxS = src
+        } else {
+            if v < minV { minV = v; minT = t; minS = src }
+            if v > maxV { maxV = v; maxT = t; maxS = src }
+        }
+        n += 1
+        if n >= fold {
+            n = 0
+            if minT <= maxT {
+                out.t.append(minT); out.v.append(minV)
+                out.t.append(maxT); out.v.append(maxV)
+                if hasSrc { out.src.append(minS); out.src.append(maxS) }
+            } else {
+                out.t.append(maxT); out.v.append(maxV)
+                out.t.append(minT); out.v.append(minV)
+                if hasSrc { out.src.append(maxS); out.src.append(minS) }
+            }
+        }
+    }
+}
+
 /// Per-stream monotonic clock. The wire's per-block wall-clock timestamps are
 /// taken when a batch is *flushed*, not when its first sample was acquired —
 /// bursty ring draining on the P4 makes consecutive blocks' nominal spans
@@ -275,6 +315,13 @@ final class DaqStreamEngine: @unchecked Sendable {
     private(set) var current = DaqChannelBuffer()
     private(set) var voltageHist = DaqChannelBuffer()
     private(set) var currentHist = DaqChannelBuffer()
+    /// Incrementally-maintained 64:1 envelopes of the recent rings — the
+    /// render tick reads these instead of the raw arrays whenever the
+    /// visible window holds far more raw samples than display columns.
+    private(set) var voltageReduced = DaqChannelBuffer()
+    private(set) var currentReduced = DaqChannelBuffer()
+    private var voltAcc = EnvelopeAccumulator(fold: DaqStreamEngine.reducedFold)
+    private var currAcc = EnvelopeAccumulator(fold: DaqStreamEngine.reducedFold)
     private(set) var recordCount = 0
     private var rxBuffer = Data()
     private var firstTimestampUs: UInt64?
@@ -283,6 +330,7 @@ final class DaqStreamEngine: @unchecked Sendable {
     private let recentCap = 262_144
     private let historyCap = 245_760
     private let historyFold = 32
+    static let reducedFold = 64
 
     // `connection` and `autoStartOnReady` are touched from BOTH the main
     // thread (connect/pause/resume/send) and the pipeline queue (state
@@ -322,8 +370,11 @@ final class DaqStreamEngine: @unchecked Sendable {
                                 using: params)
         connection = conn
         conn.stateUpdateHandler = { [weak self] state in
-            // Runs on Self.queue (conn.start below).
-            guard let self else { return }
+            // Runs on Self.queue (conn.start below). Ignore events from a
+            // superseded connection: after a redial, the old connection's
+            // .cancelled/.failed must not clobber the live one's state (this
+            // let a stale reconnect kill a just-established stream).
+            guard let self, self.connection === conn else { return }
             if case .ready = state {
                 if self.autoStartOnReady {
                     self.sendControlFrame(type: .start)
@@ -353,6 +404,10 @@ final class DaqStreamEngine: @unchecked Sendable {
             current.removeAll()
             voltageHist.removeAll()
             currentHist.removeAll()
+            voltageReduced.removeAll()
+            currentReduced.removeAll()
+            voltAcc.reset()
+            currAcc.reset()
             recordCount = 0
             firstTimestampUs = nil
             voltClock.reset()
@@ -361,10 +416,21 @@ final class DaqStreamEngine: @unchecked Sendable {
     }
 
     /// Recent-ring overflow: evict the oldest quarter into the envelope
-    /// history; when history itself overflows, halve its resolution.
-    private func trimIfNeeded(_ recent: inout DaqChannelBuffer, _ hist: inout DaqChannelBuffer) {
+    /// history (and the matching span from the reduced mirror); when history
+    /// itself overflows, halve its resolution.
+    private func trimIfNeeded(_ recent: inout DaqChannelBuffer, _ reduced: inout DaqChannelBuffer,
+                              _ hist: inout DaqChannelBuffer) {
         if recent.count > recentCap {
-            recent.foldOldest(recentCap / 4, fold: historyFold, into: &hist)
+            let evict = recentCap / 4   // multiple of reducedFold
+            recent.foldOldest(evict, fold: historyFold, into: &hist)
+            let dropReduced = min(reduced.count, (evict / Self.reducedFold) * 2)
+            if dropReduced > 0 {
+                reduced.t.removeFirst(dropReduced)
+                reduced.v.removeFirst(dropReduced)
+                if !reduced.src.isEmpty {
+                    reduced.src.removeFirst(min(dropReduced, reduced.src.count))
+                }
+            }
             if hist.count > historyCap { hist.envelopeHalve() }
         }
     }
@@ -399,9 +465,11 @@ final class DaqStreamEngine: @unchecked Sendable {
             voltage.t.append(t); voltage.v.append(voltageV)
             current.t.append(t); current.v.append(currentA)
             current.src.append(0)
+            voltAcc.push(t: t, v: voltageV, src: 0, hasSrc: false, into: &voltageReduced)
+            currAcc.push(t: t, v: currentA, src: 0, hasSrc: true, into: &currentReduced)
             recordCount += 1
-            trimIfNeeded(&voltage, &voltageHist)
-            trimIfNeeded(&current, &currentHist)
+            trimIfNeeded(&voltage, &voltageReduced, &voltageHist)
+            trimIfNeeded(&current, &currentReduced, &currentHist)
         }
     }
 
@@ -606,20 +674,25 @@ final class DaqStreamEngine: @unchecked Sendable {
             if block.isVoltage {
                 voltage.t.reserveCapacity(voltage.count + block.values.count)
                 for (i, v) in block.values.enumerated() {
-                    voltage.t.append(tBase + Double(i) * dt)
+                    let t = tBase + Double(i) * dt
+                    voltage.t.append(t)
                     voltage.v.append(v)
+                    voltAcc.push(t: t, v: v, src: 0, hasSrc: false, into: &voltageReduced)
                 }
-                trimIfNeeded(&voltage, &voltageHist)
+                trimIfNeeded(&voltage, &voltageReduced, &voltageHist)
             } else {
                 current.t.reserveCapacity(current.count + block.values.count)
                 for (i, v) in block.values.enumerated() {
-                    current.t.append(tBase + Double(i) * dt)
+                    let t = tBase + Double(i) * dt
+                    current.t.append(t)
                     current.v.append(v)
                     // Source bits live at meta[1:0]=range, [3:2]=source.
                     let m: UInt8 = block.meta.map { i < $0.count ? $0[i] : 0 } ?? 0
-                    current.src.append((m >> 2) & 0x03)
+                    let s = (m >> 2) & 0x03
+                    current.src.append(s)
+                    currAcc.push(t: t, v: v, src: s, hasSrc: true, into: &currentReduced)
                 }
-                trimIfNeeded(&current, &currentHist)
+                trimIfNeeded(&current, &currentReduced, &currentHist)
             }
 
         case .status(let status):
@@ -737,6 +810,11 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
                 self.isConnected = false
                 self.isStreaming = false
                 self.lastError = err.localizedDescription
+                // Tear the dead connection down NOW so attemptReconnect's
+                // hasConnection guard reflects reality; a fresh user-driven
+                // connect in the meantime repopulates it and turns the
+                // pending retry into a no-op.
+                self.engine.cancelConnection()
                 self.attemptReconnect()
             case .cancelled:
                 self.isConnected = false
@@ -987,8 +1065,13 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         let attempt = reconnectAttempts
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
-            // Give up if something else re-established or tore down meanwhile.
-            guard !self.isConnected, self.lastEndpoint != nil, self.joinedHotspotSSID != nil else { return }
+            // Give up if something else re-established or tore down
+            // meanwhile. hasConnection (not isConnected) is the guard: a
+            // concurrent connect() sets it immediately, whereas isConnected
+            // only flips once .ready is processed — checking the latter let
+            // a stale retry cancel a connection that had just gone live.
+            guard !self.engine.hasConnection,
+                  self.lastEndpoint != nil, self.joinedHotspotSSID != nil else { return }
             print("[DaqWifiStreamManager] socket reconnect attempt \(attempt)/\(Self.maxReconnectAttempts)")
             self.engine.connect(host: ep.host, port: ep.port)
         }
