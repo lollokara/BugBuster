@@ -117,15 +117,15 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
 
         var vSegs: [Segment] = []
         if vp.showVoltage || vp.showPower {
-            vSegs = Self.windowSegments(hist: engine.voltageHist, reduced: engine.voltageReduced,
-                                        recent: engine.voltage,
+            vSegs = Self.windowSegments(hist: engine.voltageHist,
+                                        tiers: [engine.voltage, engine.voltageMid, engine.voltageReduced],
                                         end: end, windowSeconds: vp.windowSeconds,
                                         scale: vp.timeScale, columns: vp.columnBudget)
         }
         var iSegs: [Segment] = []
         if vp.showCurrent || vp.showPower {
-            iSegs = Self.windowSegments(hist: engine.currentHist, reduced: engine.currentReduced,
-                                        recent: engine.current,
+            iSegs = Self.windowSegments(hist: engine.currentHist,
+                                        tiers: [engine.current, engine.currentMid, engine.currentReduced],
                                         end: end, windowSeconds: vp.windowSeconds,
                                         scale: vp.timeScale, columns: vp.columnBudget)
         }
@@ -181,27 +181,25 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
     /// Windows the storage tiers to [end - window, end], applies the
     /// pinch-zoom scale as a further tail-count reduction (front-dropped from
     /// history first), and returns the in-window segments oldest-first.
-    /// When the raw window vastly exceeds the display budget, the raw recent
-    /// ring is swapped for the engine's incrementally-maintained reduced
-    /// envelope — O(columns) work per tick instead of O(raw window); deep
-    /// zooms still read the raw ring at full fidelity.
-    private static func windowSegments(hist: DaqChannelBuffer, reduced: DaqChannelBuffer,
-                                       recent: DaqChannelBuffer,
+    /// `tiers` is ordered finest-first (raw, 8:1, 64:1): the finest tier
+    /// whose POST-zoom visible count fits the display budget is used, so
+    /// resolution steps down progressively as the visible span grows and
+    /// deep zooms always read raw samples at full fidelity.
+    private static func windowSegments(hist: DaqChannelBuffer,
+                                       tiers: [DaqChannelBuffer],
                                        end: Double, windowSeconds: Double?,
                                        scale: CGFloat, columns: Int) -> [Segment] {
         let cutoff = windowSeconds.map { end - $0 } ?? -Double.infinity
+        let budget = Double(columns * 4)
+        let zoom = Double(max(scale, 0.001))
 
-        var recent = recent
+        var recent = tiers.first ?? DaqChannelBuffer()
         var rHi = upperBound(recent.t, end)
         var rLo = lowerBound(recent.t, cutoff, upTo: rHi)
-        // Choose raw vs reduced from the POST-zoom visible count: the pinch
-        // scale shrinks what's on screen, and a deep zoom must fall back to
-        // the raw ring (full resolution) even when the un-zoomed window is
-        // huge — selecting on the raw window size alone rendered deep zooms
-        // from coarse envelope points.
-        let visibleRaw = Double(rHi - rLo) / Double(max(scale, 0.001))
-        if visibleRaw > Double(columns * 4), !reduced.t.isEmpty {
-            recent = reduced
+        for tier in tiers.dropFirst() {
+            if Double(rHi - rLo) / zoom <= budget { break }
+            guard !tier.t.isEmpty else { continue }
+            recent = tier
             rHi = upperBound(recent.t, end)
             rLo = lowerBound(recent.t, cutoff, upTo: rHi)
         }

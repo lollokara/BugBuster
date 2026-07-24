@@ -320,11 +320,16 @@ final class DaqStreamEngine: @unchecked Sendable {
     private(set) var current = DaqChannelBuffer()
     private(set) var voltageHist = DaqChannelBuffer()
     private(set) var currentHist = DaqChannelBuffer()
-    /// Incrementally-maintained 64:1 envelopes of the recent rings — the
-    /// render tick reads these instead of the raw arrays whenever the
-    /// visible window holds far more raw samples than display columns.
+    /// Incrementally-maintained envelope tiers of the recent rings — the
+    /// render tick picks the finest tier that fits the display budget for
+    /// the current zoom (raw → 8:1 → 64:1 → history), so resolution steps
+    /// down progressively as the visible span grows.
+    private(set) var voltageMid = DaqChannelBuffer()
+    private(set) var currentMid = DaqChannelBuffer()
     private(set) var voltageReduced = DaqChannelBuffer()
     private(set) var currentReduced = DaqChannelBuffer()
+    private var voltMidAcc = EnvelopeAccumulator(fold: DaqStreamEngine.midFold)
+    private var currMidAcc = EnvelopeAccumulator(fold: DaqStreamEngine.midFold)
     private var voltAcc = EnvelopeAccumulator(fold: DaqStreamEngine.reducedFold)
     private var currAcc = EnvelopeAccumulator(fold: DaqStreamEngine.reducedFold)
     private(set) var recordCount = 0
@@ -335,6 +340,7 @@ final class DaqStreamEngine: @unchecked Sendable {
     private let recentCap = 262_144
     private let historyCap = 245_760
     private let historyFold = 32
+    static let midFold = 8
     static let reducedFold = 64
 
     // `connection` and `autoStartOnReady` are touched from BOTH the main
@@ -431,8 +437,12 @@ final class DaqStreamEngine: @unchecked Sendable {
             current.removeAll()
             voltageHist.removeAll()
             currentHist.removeAll()
+            voltageMid.removeAll()
+            currentMid.removeAll()
             voltageReduced.removeAll()
             currentReduced.removeAll()
+            voltMidAcc.reset()
+            currMidAcc.reset()
             voltAcc.reset()
             currAcc.reset()
             recordCount = 0
@@ -445,21 +455,25 @@ final class DaqStreamEngine: @unchecked Sendable {
     /// Recent-ring overflow: evict the oldest quarter into the envelope
     /// history (and the matching span from the reduced mirror); when history
     /// itself overflows, halve its resolution.
-    private func trimIfNeeded(_ recent: inout DaqChannelBuffer, _ reduced: inout DaqChannelBuffer,
+    private func trimIfNeeded(_ recent: inout DaqChannelBuffer,
+                              _ mid: inout DaqChannelBuffer,
+                              _ reduced: inout DaqChannelBuffer,
                               _ hist: inout DaqChannelBuffer) {
         if recent.count > recentCap {
-            let evict = recentCap / 4   // multiple of reducedFold
+            let evict = recentCap / 4   // multiple of both fold factors
             recent.foldOldest(evict, fold: historyFold, into: &hist)
-            let dropReduced = min(reduced.count, (evict / Self.reducedFold) * 2)
-            if dropReduced > 0 {
-                reduced.t.removeFirst(dropReduced)
-                reduced.v.removeFirst(dropReduced)
-                if !reduced.src.isEmpty {
-                    reduced.src.removeFirst(min(dropReduced, reduced.src.count))
-                }
-            }
+            dropFront(&mid, (evict / Self.midFold) * 2)
+            dropFront(&reduced, (evict / Self.reducedFold) * 2)
             if hist.count > historyCap { hist.envelopeHalve() }
         }
+    }
+
+    private func dropFront(_ buf: inout DaqChannelBuffer, _ n: Int) {
+        let n = min(buf.count, n)
+        guard n > 0 else { return }
+        buf.t.removeFirst(n)
+        buf.v.removeFirst(n)
+        if !buf.src.isEmpty { buf.src.removeFirst(min(n, buf.src.count)) }
     }
 
     // MARK: Control frames (real CRC required, type >= 0x80)
@@ -492,11 +506,13 @@ final class DaqStreamEngine: @unchecked Sendable {
             voltage.t.append(t); voltage.v.append(voltageV)
             current.t.append(t); current.v.append(currentA)
             current.src.append(0)
+            voltMidAcc.push(t: t, v: voltageV, src: 0, hasSrc: false, into: &voltageMid)
+            currMidAcc.push(t: t, v: currentA, src: 0, hasSrc: true, into: &currentMid)
             voltAcc.push(t: t, v: voltageV, src: 0, hasSrc: false, into: &voltageReduced)
             currAcc.push(t: t, v: currentA, src: 0, hasSrc: true, into: &currentReduced)
             recordCount += 1
-            trimIfNeeded(&voltage, &voltageReduced, &voltageHist)
-            trimIfNeeded(&current, &currentReduced, &currentHist)
+            trimIfNeeded(&voltage, &voltageMid, &voltageReduced, &voltageHist)
+            trimIfNeeded(&current, &currentMid, &currentReduced, &currentHist)
         }
     }
 
@@ -718,9 +734,10 @@ final class DaqStreamEngine: @unchecked Sendable {
                     let t = tBase + Double(i) * dt
                     voltage.t.append(t)
                     voltage.v.append(v)
+                    voltMidAcc.push(t: t, v: v, src: 0, hasSrc: false, into: &voltageMid)
                     voltAcc.push(t: t, v: v, src: 0, hasSrc: false, into: &voltageReduced)
                 }
-                trimIfNeeded(&voltage, &voltageReduced, &voltageHist)
+                trimIfNeeded(&voltage, &voltageMid, &voltageReduced, &voltageHist)
             } else {
                 current.t.reserveCapacity(current.count + block.values.count)
                 for (i, v) in block.values.enumerated() {
@@ -731,9 +748,10 @@ final class DaqStreamEngine: @unchecked Sendable {
                     let m: UInt8 = block.meta.map { i < $0.count ? $0[i] : 0 } ?? 0
                     let s = (m >> 2) & 0x03
                     current.src.append(s)
+                    currMidAcc.push(t: t, v: v, src: s, hasSrc: true, into: &currentMid)
                     currAcc.push(t: t, v: v, src: s, hasSrc: true, into: &currentReduced)
                 }
-                trimIfNeeded(&current, &currentReduced, &currentHist)
+                trimIfNeeded(&current, &currentMid, &currentReduced, &currentHist)
             }
 
         case .status(let status):

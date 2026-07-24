@@ -1462,16 +1462,22 @@ esp_err_t daq_board_c6_start(daq_board_t *b)
 
 esp_err_t daq_board_start_streaming(daq_board_t *b, size_t ring_capacity)
 {
+    // Per-sample CRC ON for both buses: corrupted conversions (bit slips
+    // when the two hosts' SCLKs overlap) used to arrive with clean flags and
+    // stream as arbitrary-value spikes — with the ADAQ's per-conversion CRC
+    // byte appended and verified by the capture task, they get
+    // ADAQ_SAMPLE_FLAG_CRC_ERR and fast_sample_good() rejects them at the
+    // source. Costs one extra SPI byte per conversion frame.
     // Bus A group: ADAQ #0 alone.
     adaq7769_t *grp_a[1] = { &b->adaq[0] };
     esp_err_t err = adaq_stream_init(&b->stream_a, grp_a, 1, ring_capacity,
-                                     /*status=*/true, /*crc=*/false);
+                                     /*status=*/true, /*crc=*/true);
     if (err != ESP_OK) return err;
 
     // Bus B group: ADAQ #1 + #2.
     adaq7769_t *grp_b[2] = { &b->adaq[1], &b->adaq[2] };
     err = adaq_stream_init(&b->stream_b, grp_b, 2, ring_capacity,
-                           /*status=*/true, /*crc=*/false);
+                           /*status=*/true, /*crc=*/true);
     if (err != ESP_OK) {
         adaq_stream_deinit(&b->stream_a);
         return err;
