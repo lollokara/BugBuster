@@ -540,6 +540,11 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     /// Background stream pipeline; ScopeRenderModel reads its buffers.
     let engine = DaqStreamEngine()
 
+    /// Last endpoint we connected to, for silent socket-level reconnects.
+    private var lastEndpoint: (host: String, port: UInt16)?
+    private var reconnectAttempts = 0
+    private static let maxReconnectAttempts = 3
+
     override init() {
         super.init()
         engine.onConnectionState = { [weak self] state in
@@ -550,10 +555,12 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
                 self.isConnected = true
                 self.isStreaming = true
                 self.lastError = nil
+                self.reconnectAttempts = 0
             case .failed(let err):
                 self.isConnected = false
                 self.isStreaming = false
                 self.lastError = err.localizedDescription
+                self.attemptReconnect()
             case .cancelled:
                 self.isConnected = false
                 self.isStreaming = false
@@ -761,15 +768,49 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     }
 
     func connect(host: String, port: UInt16 = 5566) {
-        disconnect()
+        // Tear down only the socket — NOT the hotspot configuration. This
+        // used to call disconnect(), which also fires
+        // NEHotspotConfigurationManager.removeConfiguration(forSSID:) for
+        // the AP we joined moments ago (joinedHotspotSSID is already set by
+        // the time startFullStreamFlow calls connect). iOS processes that
+        // removal asynchronously, racing the fresh TCP connection: when the
+        // removal wins, the phone drops the WiFi association a second or two
+        // into streaming (bench log: "station left, aid=1" ~220 ms after
+        // CMD_START, then the P4's SO_SNDTIMEO client drop). Only the
+        // explicit disconnect()/tab-leave path may remove the configuration.
+        engine.cancelConnection()
+        isConnected = false
+        isStreaming = false
         lastError = nil
 
         guard !host.isEmpty, NWEndpoint.Port(rawValue: port) != nil else {
             lastError = "Invalid host"
             return
         }
+        lastEndpoint = (host, port)
+        reconnectAttempts = 0
         engine.resetBuffers()
         engine.connect(host: host, port: port)
+    }
+
+    /// The P4 now deliberately drops a client whose socket stalls mid-frame
+    /// for >2s (SO_SNDTIMEO) — a half-sent frame is unrecoverable, so a hard
+    /// drop + clean reconnect replaced silent stream corruption. While we
+    /// still hold the hotspot join (and the P4 keeps the softAP up for 60s
+    /// without a client), quietly re-establish the socket instead of making
+    /// the user replay the whole BLE provisioning flow.
+    private func attemptReconnect() {
+        guard let ep = lastEndpoint, joinedHotspotSSID != nil,
+              reconnectAttempts < Self.maxReconnectAttempts else { return }
+        reconnectAttempts += 1
+        let attempt = reconnectAttempts
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            // Give up if something else re-established or tore down meanwhile.
+            guard !self.isConnected, self.lastEndpoint != nil, self.joinedHotspotSSID != nil else { return }
+            print("[DaqWifiStreamManager] socket reconnect attempt \(attempt)/\(Self.maxReconnectAttempts)")
+            self.engine.connect(host: ep.host, port: ep.port)
+        }
     }
 
     func disconnect() {
@@ -777,6 +818,7 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
             sendStop()
         }
         engine.cancelConnection()
+        lastEndpoint = nil
         isConnected = false
         isStreaming = false
 
