@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SignalPathTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var opStatus: String? = nil
     
     // Constants
@@ -55,49 +56,13 @@ struct SignalPathTab: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         GlassEffectContainer(spacing: 16) {
-                            VStack(spacing: 16) {
-                                let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
-
-                                ForEach(0..<4) { ch in
-                                    let isChannelCGreyed = ch == 2 && workerEnabled
-                                    let accent = isChannelCGreyed ? Color.gray : ACCENTS[ch]
-
-                                    let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
-                                    let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
-                                        ? connectionManager.lastStatus!.muxStates[muxDev] : 0
-
-                                let isPsuOn = ch < 2
-                                    ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
-                                    : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
-
-                                let efuses = connectionManager.lastOverview?.ioexp.efuses
-                                let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
-                                let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
-
-                                let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
-                                let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
-                                let vAdjIndex  = ch < 2 ? 0 : 1
-
-                                    BlockTile(
-                                        blockIndex: ch,
-                                        muxDevice: muxDev,
-                                        muxRef: MUX_REF[ch],
-                                        muxState: muxState,
-                                        ioLabels: GPIO_PAIR_LABELS[ch],
-                                        accentColor: accent,
-                                        isPsuActive: isPsuOn,
-                                        isEfuseActive: isEfOn,
-                                        isEfuseFault: isEfFault,
-                                        isOeActive: isOeActive,
-                                        vAdjLabel: vAdjLabel,
-                                        onApplyMuxStates: { states in applyPreset(states) },
-                                        onToggleOe:     { toggleOe() },
-                                        onToggleVAdj:   { togglePsu(vAdjIndex) },
-                                        onToggleEfuse:  { toggleEfuse(ch) }
-                                    )
-                                    .opacity(isChannelCGreyed ? 0.4 : 1.0)
-                                    .grayscale(isChannelCGreyed ? 1.0 : 0)
-                                    .disabled(isChannelCGreyed)
+                            if sizeClass == .regular {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16)], spacing: 16) {
+                                    blockTiles
+                                }
+                            } else {
+                                VStack(spacing: 16) {
+                                    blockTiles
                                 }
                             }
                         }
@@ -111,6 +76,53 @@ struct SignalPathTab: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private var blockTiles: some View {
+        let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
+
+        ForEach(0..<4) { ch in
+            let isChannelCGreyed = ch == 2 && workerEnabled
+            let accent = isChannelCGreyed ? Color.gray : ACCENTS[ch]
+
+            let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
+            let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
+                ? connectionManager.lastStatus!.muxStates[muxDev] : 0
+
+            let isPsuOn = ch < 2
+                ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)
+                : (connectionManager.lastOverview?.ioexp.enables.vadj2 ?? false)
+
+            let efuses = connectionManager.lastOverview?.ioexp.efuses
+            let isEfOn   = efuses?.first(where: { $0.id == ch + 1 })?.enabled ?? false
+            let isEfFault = efuses?.first(where: { $0.id == ch + 1 })?.fault ?? false
+
+            let isOeActive = connectionManager.lastOverview?.ioexp.enables.mux ?? false
+            let vAdjLabel  = ch < 2 ? "V_ADJ1" : "V_ADJ2"
+            let vAdjIndex  = ch < 2 ? 0 : 1
+
+            BlockTile(
+                blockIndex: ch,
+                muxDevice: muxDev,
+                muxRef: MUX_REF[ch],
+                muxState: muxState,
+                ioLabels: GPIO_PAIR_LABELS[ch],
+                accentColor: accent,
+                isPsuActive: isPsuOn,
+                isEfuseActive: isEfOn,
+                isEfuseFault: isEfFault,
+                isOeActive: isOeActive,
+                vAdjLabel: vAdjLabel,
+                onApplyMuxStates: { states in applyPreset(states) },
+                onToggleOe:     { toggleOe() },
+                onToggleVAdj:   { togglePsu(vAdjIndex) },
+                onToggleEfuse:  { toggleEfuse(ch) }
+            )
+            .opacity(isChannelCGreyed ? 0.4 : 1.0)
+            .grayscale(isChannelCGreyed ? 1.0 : 0)
+            .disabled(isChannelCGreyed)
+        }
     }
 
     // MARK: - Actions (with optimistic local state updates)
@@ -457,12 +469,17 @@ struct ControlPill: View {
 
 struct GPIOControlCard: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     let modeNames = ["Disabled", "Input", "Output", "In+PD", "Out+OD"]
-    let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    private var columns: [GridItem] {
+        sizeClass == .regular
+            ? [GridItem(.adaptive(minimum: 130), spacing: 16)]
+            : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("GPIO Direct Control")
                     .font(.system(size: 18, weight: .bold))
@@ -481,7 +498,7 @@ struct GPIOControlCard: View {
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
             } else {
-                LazyVGrid(columns: columns, spacing: 10) {
+                LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(connectionManager.lastGpios) { gpio in
                         GPIOPinTile(gpio: gpio)
                     }

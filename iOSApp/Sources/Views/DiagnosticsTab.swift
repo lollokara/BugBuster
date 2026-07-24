@@ -26,6 +26,7 @@ struct GitRelease: Identifiable {
 
 struct DiagnosticsTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var isScanningWifi = false
     @State private var wifiNetworks: [WifiNetworkScanItem] = []
     @State private var selectedSSID = ""
@@ -86,18 +87,31 @@ struct DiagnosticsTab: View {
 
     var hatPresent: Bool { connectionManager.lastHatStatus?.isPresent ?? false }
 
+    @ViewBuilder
+    private var diagnosticsCards: some View {
+        selfTestCard
+        internalSuppliesCard
+        registersCard
+        usbPdCard
+        calibrationCard
+        wifiCard
+        otaCard
+        spiffsCard
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
                 headerSection
-                selfTestCard
-                internalSuppliesCard
-                registersCard
-                usbPdCard
-                calibrationCard
-                wifiCard
-                otaCard
-                spiffsCard
+                if sizeClass == .regular {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 420), spacing: 20)], spacing: 20) {
+                        diagnosticsCards
+                    }
+                } else {
+                    VStack(spacing: 20) {
+                        diagnosticsCards
+                    }
+                }
             }
             .padding()
         }

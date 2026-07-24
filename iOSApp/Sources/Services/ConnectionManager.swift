@@ -98,6 +98,50 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var lastWifiStatus: WifiStatus? = nil
     @Published public var lastDeviceVersion: DeviceVersion? = nil
     @Published public var toastMessage: ToastMessage? = nil
+
+    // MARK: - VDUT (DAQ HAT DUT power supply) — iOS UI scaffold only
+    //
+    // NOT YET IMPLEMENTED IN FIRMWARE. This is the client-side half of a
+    // protocol that doesn't exist on the DAQ HAT yet — the endpoints below
+    // are what iOS calls; a firmware agent needs to add the matching
+    // handlers. Documenting the expected shape now so both sides agree:
+    //
+    // Distinct from the mainboard/HAT power RAILS (VLOGIC/VADJ1-4, already
+    // wired via /api/hat/v2/rail/*) — VDUT is the DAQ HAT's programmable
+    // supply that biases/powers the device under test during acquisition
+    // (the same rail exercised by the P4 calibration flow in
+    // Firmware/DAQ_HAT/ESP32P4/src/cal/range_cal.c, "enable the DUT supply
+    // at 2V before prompting").
+    //
+    // Needed firmware surface (HTTP, mirroring the existing DAQ/HAT JSON
+    // conventions; a BBP command mirror would follow the same pattern as
+    // HAT_CMD_SET_RAIL_EN/HAT_CMD_SET_RAIL_V if a wire-protocol path is
+    // preferred over HTTP-only):
+    //
+    //   GET  /api/daq/vdut/status
+    //     -> { "present": bool, "enabled": bool,
+    //          "voltageSetpointV": number, "currentLimitMa": number,
+    //          "measuredVoltageV": number, "measuredCurrentMa": number,
+    //          "fault": bool }
+    //
+    //   POST /api/daq/vdut/enable   body: { "enabled": bool }
+    //     -> 200 on success (mirrors postAction convention below)
+    //
+    //   POST /api/daq/vdut/setpoint body: { "voltageV": number, "currentLimitMa": number }
+    //     -> 200 on success; firmware should clamp to hardware-safe range
+    //        and reject (non-2xx) out-of-range requests rather than silently
+    //        clamping, so the UI can surface an error instead of drifting
+    //        from what it displayed.
+    //
+    // Until firmware exists, `refreshVdutStatus()` will simply fail (caught,
+    // no-op) and the UI shows the last-known/default state.
+    @Published public var vdutPresent: Bool = false
+    @Published public var vdutEnabled: Bool = false
+    @Published public var vdutVoltageSetpointV: Double = 3.3
+    @Published public var vdutCurrentLimitMa: Double = 100
+    @Published public var vdutMeasuredVoltageV: Double? = nil
+    @Published public var vdutMeasuredCurrentMa: Double? = nil
+    @Published public var vdutFault: Bool = false
     
     @Published public var isSearching = false
 
@@ -653,9 +697,192 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         UserDefaults.standard.removeObject(forKey: "bugbuster_ip")
         UserDefaults.standard.removeObject(forKey: "bugbuster_token")
         UserDefaults.standard.removeObject(forKey: "bugbuster_last_mac")
+        stopMockUpdates()
         startDiscovery()
     }
-    
+
+    // MARK: - Mock / Demo Mode
+    //
+    // UI-only synthetic data path for screenshotting/debugging layout without
+    // real hardware. Never touches the network — bypasses `tryConnect`/
+    // `startPolling` entirely and drives its own jitter timer instead.
+
+    private var mockTimer: Timer?
+    public private(set) var isMockActive = false
+
+    public func connectMock() {
+        stopDiscovery()
+        isMockActive = true
+        transport = .wifi
+        activeDevice = DiscoveredDevice(
+            hostname: "bugbuster-mock",
+            ip: "127.0.0.1",
+            port: 80,
+            firmware: "3.6.1-mock",
+            mac: "AA:BB:CC:DD:EE:FF",
+            model: "BugBuster DAQ HAT (Mock)"
+        )
+        adminToken = "mock"
+        connectionState = .connected
+        populateMockData()
+        mockTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.jitterMockData()
+        }
+        Task { @MainActor in DaqWifiStreamManager.shared.connectMock() }
+    }
+
+    private func stopMockUpdates() {
+        mockTimer?.invalidate()
+        mockTimer = nil
+        isMockActive = false
+        Task { @MainActor in DaqWifiStreamManager.shared.disconnectMock() }
+    }
+
+    private func mockChannel(_ id: Int, function: String, functionCode: Int, value: Double) -> ChannelState {
+        ChannelState(
+            id: id, function: function, functionCode: functionCode,
+            adcRaw: Int(value * 100000), adcValue: value, adcRange: 0, adcRate: 1, adcMux: 0,
+            dacCode: 2048, dacValue: value, dinState: id % 2 == 0, dinCounter: id * 12,
+            doState: false, alert: 0, alertMask: 0, rtdExcitationUa: nil
+        )
+    }
+
+    private func populateMockData() {
+        let channels = [
+            mockChannel(0, function: "CH_FUNC_VIN", functionCode: 3, value: 3.301),
+            mockChannel(1, function: "CH_FUNC_VOUT", functionCode: 1, value: 2.500),
+            mockChannel(2, function: "CH_FUNC_IIN_EXT", functionCode: 4, value: 0.0142),
+            mockChannel(3, function: "CH_FUNC_HIGH_Z", functionCode: 0, value: 0.0)
+        ]
+        lastStatus = DeviceStatus(
+            spiOk: true, i2cOk: true, muxOk: true, dieTemp: 42.5,
+            alertStatus: 0, alertMask: 0, supplyAlertStatus: 0, supplyAlertMask: 0,
+            liveStatus: 1, channels: channels, diagnostics: [], muxStates: [0, 0, 0, 0],
+            freeHeap: 182_000, minFreeHeap: 150_000, uptimeMs: 3_723_000
+        )
+        for ch in channels {
+            channelHistory[ch.id] = (0..<60).map { _ in ch.adcValue + Double.random(in: -0.02...0.02) }
+        }
+        lastOverview = OverviewSnapshot(
+            idac: IDACState(present: true, channels: []),
+            ioexp: IOExpState(
+                present: true,
+                enables: IOExpEnables(vadj1: true, vadj2: true, analog15v: true, mux: true, usbHub: true),
+                powerGood: IOExpPowerGood(logic: true, vadj1: true, vadj2: true),
+                efuses: [
+                    IOExpEFuse(id: 0, enabled: true, fault: false),
+                    IOExpEFuse(id: 1, enabled: true, fault: false)
+                ]
+            ),
+            rails: [
+                OverviewRail(rail: 0, name: "VLOGIC", voltage: 3.301, ok: true),
+                OverviewRail(rail: 1, name: "VADJ1", voltage: 5.012, ok: true),
+                OverviewRail(rail: 2, name: "VADJ2", voltage: 12.045, ok: true)
+            ]
+        )
+        lastSelftest = SelftestStatus(
+            boot: SelftestBoot(ran: true, passed: true, vadj1V: 5.01, vadj2V: 12.02, vlogicV: 3.30),
+            calibration: SelftestCalibration(status: 2, channel: 0, points: 8, lastVoltageV: 3.30, errorMv: 1.2),
+            workerEnabled: false, supplyMonitorActive: true
+        )
+        lastHatStatus = HatStatus(detected: true, present: true, kind: "daq")
+        lastHatRails = [
+            HatRail(railId: 0, enabled: true, voltageMv: 3300, targetVoltageMv: 3300, currentMa: 120, status: 0),
+            HatRail(railId: 1, enabled: true, voltageMv: 5000, targetVoltageMv: 5000, currentMa: 340, status: 0),
+            HatRail(railId: 2, enabled: false, voltageMv: 0, targetVoltageMv: 0, currentMa: 0, status: 0)
+        ]
+        lastUsbPd = USBPDStatus(
+            present: true, attached: true, cc: "CC1", voltageV: 20.0, currentA: 3.0, powerW: 60.0,
+            pdResponse: 1,
+            sourcePdos: [
+                USBPDSourcePDO(voltage: "5V", detected: true, maxCurrentA: 3.0, maxPowerW: 15.0),
+                USBPDSourcePDO(voltage: "20V", detected: true, maxCurrentA: 3.0, maxPowerW: 60.0)
+            ],
+            selectedPdo: 1
+        )
+        lastGpios = (0..<8).map { GPIOPin(pin: $0, mode: $0 % 3, input: $0 % 2 == 0, output: $0 % 2 != 0) }
+        lastWifiStatus = WifiStatus(
+            connected: true, staSSID: "Bench-WiFi", staIP: "192.168.1.42", rssi: -52,
+            apSSID: "BugBuster-AA22", apIP: "192.168.4.1", apMAC: "AA:BB:CC:DD:EE:FF"
+        )
+        lastDeviceVersion = DeviceVersion(esp32: "3.6.1", hat: "bb-hat-3.5")
+    }
+
+    private func jitterMockData() {
+        guard connectionState == .connected, isMockActive, var status = lastStatus else { return }
+        let jittered = status.channels.map { ch -> ChannelState in
+            let delta = Double.random(in: -0.01...0.01)
+            return mockChannel(ch.id, function: ch.function, functionCode: ch.functionCode, value: max(0, ch.adcValue + delta))
+        }
+        status = DeviceStatus(
+            spiOk: status.spiOk, i2cOk: status.i2cOk, muxOk: status.muxOk, dieTemp: status.dieTemp + Double.random(in: -0.2...0.2),
+            alertStatus: status.alertStatus, alertMask: status.alertMask,
+            supplyAlertStatus: status.supplyAlertStatus, supplyAlertMask: status.supplyAlertMask,
+            liveStatus: status.liveStatus, channels: jittered, diagnostics: status.diagnostics,
+            muxStates: status.muxStates, freeHeap: status.freeHeap, minFreeHeap: status.minFreeHeap,
+            uptimeMs: status.uptimeMs + 500
+        )
+        lastStatus = status
+        for ch in jittered {
+            var hist = channelHistory[ch.id] ?? []
+            hist.append(ch.adcValue)
+            if hist.count > 60 { hist.removeFirst(hist.count - 60) }
+            channelHistory[ch.id] = hist
+        }
+    }
+
+    /// Best-effort refresh; firmware doesn't implement this endpoint yet, so
+    /// failures are expected and silently ignored (UI keeps last-known state).
+    public func refreshVdutStatus() async {
+        struct VdutStatus: Decodable {
+            let present: Bool
+            let enabled: Bool
+            let voltageSetpointV: Double
+            let currentLimitMa: Double
+            let measuredVoltageV: Double?
+            let measuredCurrentMa: Double?
+            let fault: Bool
+        }
+        guard let status: VdutStatus = try? await getRequest(path: "/api/daq/vdut/status") else { return }
+        updateOnMain {
+            self.vdutPresent = status.present
+            self.vdutEnabled = status.enabled
+            self.vdutVoltageSetpointV = status.voltageSetpointV
+            self.vdutCurrentLimitMa = status.currentLimitMa
+            self.vdutMeasuredVoltageV = status.measuredVoltageV
+            self.vdutMeasuredCurrentMa = status.measuredCurrentMa
+            self.vdutFault = status.fault
+        }
+    }
+
+    public func setVdutEnable(_ enabled: Bool) async -> Bool {
+        do {
+            let ok = try await postAction(path: "/api/daq/vdut/enable", json: ["enabled": enabled])
+            if ok { updateOnMain { self.vdutEnabled = enabled } }
+            return ok
+        } catch {
+            return false
+        }
+    }
+
+    public func setVdutSetpoint(voltageV: Double, currentLimitMa: Double) async -> Bool {
+        do {
+            let ok = try await postAction(path: "/api/daq/vdut/setpoint", json: [
+                "voltageV": voltageV,
+                "currentLimitMa": currentLimitMa
+            ])
+            if ok {
+                updateOnMain {
+                    self.vdutVoltageSetpointV = voltageV
+                    self.vdutCurrentLimitMa = currentLimitMa
+                }
+            }
+            return ok
+        } catch {
+            return false
+        }
+    }
+
     public func startPolling() {
         pollTask?.cancel()
         pollTask = Task { [weak self] in

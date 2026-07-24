@@ -6,8 +6,15 @@ struct BugBusterApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainTabView()
+            AdaptiveRootView()
                 .environmentObject(connectionManager)
+                .onAppear {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["BB_MOCK_MODE"] == "1" {
+                        connectionManager.connectMock()
+                    }
+                    #endif
+                }
         }
     }
 }

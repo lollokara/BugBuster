@@ -7,45 +7,61 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0066B8C4B046B64A6DEDE4D5 /* AdaptiveRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */; };
 		0612859A274C667B2908A00F /* ScopeTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BE3A2BF72606706AD83539 /* ScopeTab.swift */; };
-		D1681D45FF5AD897C4DAABE1 /* ScopeOrientationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A623451080B636951BE66C25 /* ScopeOrientationState.swift */; };
-		E71CF3D641E60C55B945D185 /* ScopeSampleSeries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846CCC1A1F59626C57C162B8 /* ScopeSampleSeries.swift */; };
-		8287FEA9D2F6A99E795C9149 /* RotatePromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04FC5919D1A337642325DB24 /* RotatePromptView.swift */; };
-		81DA66DEE5B40EC56C5A8B75 /* ScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 338E14C2DBD1F6E07460897D /* ScopeCanvasView.swift */; };
 		08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */; };
 		115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */; };
+		13059480F9B0D1EA524DC2A4 /* ScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */; };
 		161A773C2C0A3B9F851F620F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3E36A75C2AB886192C02B5EB /* Assets.xcassets */; };
+		175FFA45EAD99709FA4706BC /* SharedShellChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44F79EAE8560DF5764EA0B5A /* SharedShellChrome.swift */; };
 		178DC66E66A8790313840A6D /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */; };
 		181681F2955495F3399D11BD /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */; };
 		1842946A4E6147C93A3D6A36 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 462B823D90AF3666C2F3D27F /* CoreBluetooth.framework */; };
 		3F3C63BF1F58082976E16792 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */; };
+		4A8C38889012D7DE5CA83D42 /* VDUTControlsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA892263E874BA32B9F9A9BB /* VDUTControlsCard.swift */; };
+		503CE64F4170E0B6231CDBF4 /* ConnectionDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 166FC5B5DD45B8F1FAE47673 /* ConnectionDashboardView.swift */; };
+		5690A725C04CE7DA1B9F9132 /* iPadRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF21832F5299C18916D0CD1 /* iPadRootView.swift */; };
 		6498C3E9408B6C044DB34ABC /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1AE837278E0E0BE4E1CC860D /* UIKit.framework */; };
+		72205E65D91FFED897042A95 /* AppSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119CBEAE1BC796A98E90F29D /* AppSections.swift */; };
 		781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */; };
 		7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */; };
 		826AE629852D559C3BC11B55 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 875AACD9B934157EF7C7FCFC /* assets */; };
 		92405FDCF7010233990FA901 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */; };
 		99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */; };
+		A53DADBDC4C71A85E0DFC655 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC53F9312E830D2D4BECD57 /* SidebarView.swift */; };
 		B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11A9C8116A9BEBC05E47330 /* main.swift */; };
 		B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487F663BDDC3592989BBDD1B /* BugBusterApp.swift */; };
 		B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */; };
 		B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */; };
 		BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */; };
+		D1093AAAA48AE31E32FB24FD /* ScopeSampleSeries.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */; };
 		E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */; };
 		EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */; };
 		EB728E06F8D482391320DBED /* ScriptsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09B963A369295728D4B4FFF7 /* ScriptsTab.swift */; };
+		FA69B5E19EB18B396DD53371 /* ScopeOrientationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BE52DDD7CD52DF87B06604 /* ScopeOrientationState.swift */; };
+		FFC36E32AE0E90F02B2EBDEC /* RotatePromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A8FE5A22706E9D08B5F17A /* RotatePromptView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		02A8FE5A22706E9D08B5F17A /* RotatePromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatePromptView.swift; sourceTree = "<group>"; };
+		06BE52DDD7CD52DF87B06604 /* ScopeOrientationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeOrientationState.swift; sourceTree = "<group>"; };
 		09B963A369295728D4B4FFF7 /* ScriptsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsTab.swift; sourceTree = "<group>"; };
+		0FC53F9312E830D2D4BECD57 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		119CBEAE1BC796A98E90F29D /* AppSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSections.swift; sourceTree = "<group>"; };
+		166FC5B5DD45B8F1FAE47673 /* ConnectionDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionDashboardView.swift; sourceTree = "<group>"; };
 		1AE837278E0E0BE4E1CC860D /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewTab.swift; sourceTree = "<group>"; };
 		281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceModels.swift; sourceTree = "<group>"; };
 		29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketREPL.swift; sourceTree = "<group>"; };
 		354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionManager.swift; sourceTree = "<group>"; };
 		3E36A75C2AB886192C02B5EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		3FF21832F5299C18916D0CD1 /* iPadRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadRootView.swift; sourceTree = "<group>"; };
+		44F79EAE8560DF5764EA0B5A /* SharedShellChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedShellChrome.swift; sourceTree = "<group>"; };
 		462B823D90AF3666C2F3D27F /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		487F663BDDC3592989BBDD1B /* BugBusterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BugBusterApp.swift; sourceTree = "<group>"; };
+		55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveRootView.swift; sourceTree = "<group>"; };
 		785535B23A1E3B43FF7EFEB9 /* BugBuster.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BugBuster.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
 		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
 		86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		875AACD9B934157EF7C7FCFC /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
@@ -53,12 +69,10 @@
 		96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalPathTab.swift; sourceTree = "<group>"; };
 		A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeSampleSeries.swift; sourceTree = "<group>"; };
 		B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETransport.swift; sourceTree = "<group>"; };
 		C7BE3A2BF72606706AD83539 /* ScopeTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeTab.swift; sourceTree = "<group>"; };
-		A623451080B636951BE66C25 /* ScopeOrientationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeOrientationState.swift; sourceTree = "<group>"; };
-		846CCC1A1F59626C57C162B8 /* ScopeSampleSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeSampleSeries.swift; sourceTree = "<group>"; };
-		04FC5919D1A337642325DB24 /* RotatePromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatePromptView.swift; sourceTree = "<group>"; };
-		338E14C2DBD1F6E07460897D /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
+		CA892263E874BA32B9F9A9BB /* VDUTControlsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VDUTControlsCard.swift; sourceTree = "<group>"; };
 		E11A9C8116A9BEBC05E47330 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationLock.swift; sourceTree = "<group>"; };
 		EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Combine.framework; path = System/Library/Frameworks/Combine.framework; sourceTree = SDKROOT; };
@@ -97,7 +111,7 @@
 			isa = PBXGroup;
 			children = (
 				281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */,
-				846CCC1A1F59626C57C162B8 /* ScopeSampleSeries.swift */,
+				B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -106,8 +120,9 @@
 			isa = PBXGroup;
 			children = (
 				86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */,
+				119CBEAE1BC796A98E90F29D /* AppSections.swift */,
 				EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */,
-				A623451080B636951BE66C25 /* ScopeOrientationState.swift */,
+				06BE52DDD7CD52DF87B06604 /* ScopeOrientationState.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -146,14 +161,20 @@
 		DC4E380CFF3E6C32A1114AB0 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */,
+				166FC5B5DD45B8F1FAE47673 /* ConnectionDashboardView.swift */,
 				8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */,
+				3FF21832F5299C18916D0CD1 /* iPadRootView.swift */,
 				96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */,
 				23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */,
+				02A8FE5A22706E9D08B5F17A /* RotatePromptView.swift */,
+				81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */,
 				C7BE3A2BF72606706AD83539 /* ScopeTab.swift */,
 				09B963A369295728D4B4FFF7 /* ScriptsTab.swift */,
+				44F79EAE8560DF5764EA0B5A /* SharedShellChrome.swift */,
+				0FC53F9312E830D2D4BECD57 /* SidebarView.swift */,
 				9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */,
-				04FC5919D1A337642325DB24 /* RotatePromptView.swift */,
-				338E14C2DBD1F6E07460897D /* ScopeCanvasView.swift */,
+				CA892263E874BA32B9F9A9BB /* VDUTControlsCard.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -237,9 +258,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0066B8C4B046B64A6DEDE4D5 /* AdaptiveRootView.swift in Sources */,
 				3F3C63BF1F58082976E16792 /* AppDelegate.swift in Sources */,
+				72205E65D91FFED897042A95 /* AppSections.swift in Sources */,
 				E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */,
 				B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */,
+				503CE64F4170E0B6231CDBF4 /* ConnectionDashboardView.swift in Sources */,
 				08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */,
 				7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */,
 				EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */,
@@ -247,15 +271,19 @@
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,
 				BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */,
 				781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */,
+				FFC36E32AE0E90F02B2EBDEC /* RotatePromptView.swift in Sources */,
+				13059480F9B0D1EA524DC2A4 /* ScopeCanvasView.swift in Sources */,
+				FA69B5E19EB18B396DD53371 /* ScopeOrientationState.swift in Sources */,
+				D1093AAAA48AE31E32FB24FD /* ScopeSampleSeries.swift in Sources */,
 				0612859A274C667B2908A00F /* ScopeTab.swift in Sources */,
 				EB728E06F8D482391320DBED /* ScriptsTab.swift in Sources */,
+				175FFA45EAD99709FA4706BC /* SharedShellChrome.swift in Sources */,
+				A53DADBDC4C71A85E0DFC655 /* SidebarView.swift in Sources */,
 				115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */,
+				4A8C38889012D7DE5CA83D42 /* VDUTControlsCard.swift in Sources */,
 				B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */,
+				5690A725C04CE7DA1B9F9132 /* iPadRootView.swift in Sources */,
 				B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */,
-				D1681D45FF5AD897C4DAABE1 /* ScopeOrientationState.swift in Sources */,
-				E71CF3D641E60C55B945D185 /* ScopeSampleSeries.swift in Sources */,
-				8287FEA9D2F6A99E795C9149 /* RotatePromptView.swift in Sources */,
-				81DA66DEE5B40EC56C5A8B75 /* ScopeCanvasView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -267,7 +295,6 @@
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = bugbuster.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = 6R87YR573L;
 				INFOPLIST_FILE = Info.plist;
@@ -288,7 +315,6 @@
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = bugbuster.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = 6R87YR573L;
 				INFOPLIST_FILE = Info.plist;

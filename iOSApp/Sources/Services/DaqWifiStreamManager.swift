@@ -147,6 +147,64 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     private var firstTimestampUs: UInt64? = nil
     private let maxSamples = 2000
 
+    // MARK: - Mock / Demo Mode
+    //
+    // Synthetic waveform for UI screenshotting/debugging without real DAQ HAT
+    // hardware. Backfills ~60s of history at launch (so "full span" / "last 30s"
+    // timebase presets have something to show) then keeps appending like a live
+    // stream. Never touches the network.
+
+    private var mockTimer: Timer?
+    private var mockElapsed: Double = 0
+
+    func connectMock() {
+        isConnected = true
+        isStreaming = true
+        lastError = nil
+        totalRecordsReceived = 0
+        currentSamples = []
+        voltageSamples = []
+        currentSampleSources = []
+        mockElapsed = 0
+
+        // dt chosen so maxSamples (2000) exactly spans backfillSeconds — otherwise
+        // the rolling "cap at N, drop tail" buffer would truncate "full span" below
+        // what was just backfilled.
+        let backfillSeconds = 60.0
+        let dt = backfillSeconds / Double(maxSamples)
+        var t = -backfillSeconds
+        while t < 0 {
+            appendMockSample(at: t)
+            t += dt
+        }
+        mockTimer = Timer.scheduledTimer(withTimeInterval: dt, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.appendMockSample(at: self.mockElapsed)
+            self.mockElapsed += dt
+        }
+    }
+
+    func disconnectMock() {
+        mockTimer?.invalidate()
+        mockTimer = nil
+        isConnected = false
+        isStreaming = false
+    }
+
+    private func appendMockSample(at t: Double) {
+        let voltage = 5.0 + 0.4 * sin(t * 2 * .pi * 0.5) + Double.random(in: -0.03...0.03)
+        let current = 0.12 + 0.05 * sin(t * 2 * .pi * 1.3 + 0.6) + Double.random(in: -0.006...0.006)
+        voltageSamples.append((t: t, value: Float(voltage)))
+        currentSamples.append((t: t, value: Float(max(0, current))))
+        currentSampleSources.append(0)
+        if voltageSamples.count > maxSamples {
+            voltageSamples.removeFirst(voltageSamples.count - maxSamples)
+            currentSamples.removeFirst(currentSamples.count - maxSamples)
+            currentSampleSources.removeFirst(currentSampleSources.count - maxSamples)
+        }
+        totalRecordsReceived += 1
+    }
+
     // MARK: - BLE-driven bring-up
 
     private var pollTask: Task<Void, Never>?

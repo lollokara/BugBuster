@@ -31,6 +31,11 @@ targets:
         UIRequiredDeviceCapabilities: [arm64]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 1.0.0
         CFBundleVersion: "1"
         NSCameraUsageDescription: "Scan QR code to connect to the BugBuster hardware device over Wi-Fi."
@@ -44,6 +49,7 @@ targets:
       base:
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
         SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
       groups: [app]
     dependencies:
       - sdk: UIKit.framework

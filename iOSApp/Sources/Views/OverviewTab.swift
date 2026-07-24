@@ -1,6 +1,25 @@
 import SwiftUI
 import Charts
 
+/// Lays out rail slider+toggle blocks as a vertical stack (iPhone / compact width)
+/// or a 3-column grid (iPad regular width), without touching the block contents.
+struct AdaptiveRailStack<Content: View>: View {
+    let sizeClass: UserInterfaceSizeClass?
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if sizeClass == .regular {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {
+                content
+            }
+        } else {
+            VStack(spacing: 16) {
+                content
+            }
+        }
+    }
+}
+
 struct ChannelFunctionInfo: Identifiable {
     let id: Int
     let name: String
@@ -20,6 +39,7 @@ let availableFunctions = [
 
 struct OverviewTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var selectedChannel: ChannelState? = nil
     @State private var showingConfigSheet = false
 
@@ -147,6 +167,12 @@ struct OverviewTab: View {
 
     // MARK: - AFE Channels Grid (with sparklines)
 
+    private var channelGridColumns: [GridItem] {
+        sizeClass == .regular
+            ? [GridItem(.adaptive(minimum: 260), spacing: 14)]
+            : [GridItem(.flexible()), GridItem(.flexible())]
+    }
+
     var channelsGrid: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("AFE Channels")
@@ -155,7 +181,7 @@ struct OverviewTab: View {
                 .padding(.horizontal, 4)
 
             GlassEffectContainer(spacing: 12) {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                LazyVGrid(columns: channelGridColumns, spacing: 14) {
                     let channels = connectionManager.lastStatus?.channels ?? defaultChannels()
                     let workerEnabled = connectionManager.lastSelftest?.workerEnabled ?? false
                     
@@ -305,53 +331,55 @@ struct OverviewTab: View {
             let enables = connectionManager.lastOverview?.ioexp.enables
             let pg = connectionManager.lastOverview?.ioexp.powerGood
 
-            // VADJ1: slider + enable
-            VStack(spacing: 8) {
+            AdaptiveRailStack(sizeClass: sizeClass) {
+                // VADJ1: slider + enable
+                VStack(spacing: 8) {
+                    VoltageSliderRow(
+                        label: "VADJ1 Target",
+                        value: $vadj1Value,
+                        range: 3.0...15.0,
+                        step: 0.1,
+                        isDirty: $vadj1Dirty,
+                        onApply: { setRailVoltage(ch: 1, val: vadj1Value); vadj1Dirty = false }
+                    )
+                    .padding(12)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    ToggleRow(title: "Enable VADJ1 Rail", isOn: enables?.vadj1 ?? false, pg: pg?.vadj1 ?? false) { state in
+                        toggleControl("vadj1", on: state)
+                    }
+                }
+
+                // VADJ2: slider + enable
+                VStack(spacing: 8) {
+                    VoltageSliderRow(
+                        label: "VADJ2 Target",
+                        value: $vadj2Value,
+                        range: 3.0...15.0,
+                        step: 0.1,
+                        isDirty: $vadj2Dirty,
+                        onApply: { setRailVoltage(ch: 2, val: vadj2Value); vadj2Dirty = false }
+                    )
+                    .padding(12)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    ToggleRow(title: "Enable VADJ2 Rail", isOn: enables?.vadj2 ?? false, pg: pg?.vadj2 ?? false) { state in
+                        toggleControl("vadj2", on: state)
+                    }
+                }
+
+                // VLOGIC (3V3_ADJ) — always on, no separate enable
                 VoltageSliderRow(
-                    label: "VADJ1 Target",
-                    value: $vadj1Value,
-                    range: 3.0...15.0,
-                    step: 0.1,
-                    isDirty: $vadj1Dirty,
-                    onApply: { setRailVoltage(ch: 1, val: vadj1Value); vadj1Dirty = false }
+                    label: "VLOGIC Target",
+                    value: $vlogicValue,
+                    range: 1.7...5.0,
+                    step: 0.05,
+                    isDirty: $vlogicDirty,
+                    onApply: { setRailVoltage(ch: 0, val: vlogicValue); vlogicDirty = false }
                 )
                 .padding(12)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                ToggleRow(title: "Enable VADJ1 Rail", isOn: enables?.vadj1 ?? false, pg: pg?.vadj1 ?? false) { state in
-                    toggleControl("vadj1", on: state)
-                }
             }
-
-            // VADJ2: slider + enable
-            VStack(spacing: 8) {
-                VoltageSliderRow(
-                    label: "VADJ2 Target",
-                    value: $vadj2Value,
-                    range: 3.0...15.0,
-                    step: 0.1,
-                    isDirty: $vadj2Dirty,
-                    onApply: { setRailVoltage(ch: 2, val: vadj2Value); vadj2Dirty = false }
-                )
-                .padding(12)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                ToggleRow(title: "Enable VADJ2 Rail", isOn: enables?.vadj2 ?? false, pg: pg?.vadj2 ?? false) { state in
-                    toggleControl("vadj2", on: state)
-                }
-            }
-
-            // VLOGIC (3V3_ADJ) — always on, no separate enable
-            VoltageSliderRow(
-                label: "VLOGIC Target",
-                value: $vlogicValue,
-                range: 1.7...5.0,
-                step: 0.05,
-                isDirty: $vlogicDirty,
-                onApply: { setRailVoltage(ch: 0, val: vlogicValue); vlogicDirty = false }
-            )
-            .padding(12)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             // HAT Rails (only shown when HAT detected)
             if hatPresent {
@@ -392,45 +420,47 @@ struct OverviewTab: View {
                         }
                     }
 
-                    // HAT VLOGIC: slider + enable
-                    let hatVlogicRail = connectionManager.lastHatRails.first(where: { $0.railId == 0 })
-                    VStack(spacing: 8) {
-                        VoltageSliderRow(label: "HAT VLOGIC", value: $hatVlogicValue, range: 1.7...5.0, step: 0.05,
-                            isDirty: $hatVlogicDirty,
-                            onApply: { setHatRailVoltage(railId: 0, val: hatVlogicValue); hatVlogicDirty = false })
-                        .padding(12)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    AdaptiveRailStack(sizeClass: sizeClass) {
+                        // HAT VLOGIC: slider + enable
+                        let hatVlogicRail = connectionManager.lastHatRails.first(where: { $0.railId == 0 })
+                        VStack(spacing: 8) {
+                            VoltageSliderRow(label: "HAT VLOGIC", value: $hatVlogicValue, range: 1.7...5.0, step: 0.05,
+                                isDirty: $hatVlogicDirty,
+                                onApply: { setHatRailVoltage(railId: 0, val: hatVlogicValue); hatVlogicDirty = false })
+                            .padding(12)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                        ToggleRow(title: "Enable HAT VLOGIC", isOn: hatVlogicRail?.enabled ?? false, pg: true) { state in
-                            toggleHatRailEnable(railId: 0, on: state)
+                            ToggleRow(title: "Enable HAT VLOGIC", isOn: hatVlogicRail?.enabled ?? false, pg: true) { state in
+                                toggleHatRailEnable(railId: 0, on: state)
+                            }
                         }
-                    }
 
-                    // HAT VADJ3: slider + enable
-                    let hatVadj3Rail = connectionManager.lastHatRails.first(where: { $0.railId == 1 })
-                    VStack(spacing: 8) {
-                        VoltageSliderRow(label: "HAT VADJ3", value: $hatVadj3Value, range: 0.0...36.0, step: 0.1,
-                            isDirty: $hatVadj3Dirty,
-                            onApply: { setHatRailVoltage(railId: 1, val: hatVadj3Value); hatVadj3Dirty = false })
-                        .padding(12)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        // HAT VADJ3: slider + enable
+                        let hatVadj3Rail = connectionManager.lastHatRails.first(where: { $0.railId == 1 })
+                        VStack(spacing: 8) {
+                            VoltageSliderRow(label: "HAT VADJ3", value: $hatVadj3Value, range: 0.0...36.0, step: 0.1,
+                                isDirty: $hatVadj3Dirty,
+                                onApply: { setHatRailVoltage(railId: 1, val: hatVadj3Value); hatVadj3Dirty = false })
+                            .padding(12)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                        ToggleRow(title: "Enable HAT VADJ3", isOn: hatVadj3Rail?.enabled ?? false, pg: true) { state in
-                            toggleHatRailEnable(railId: 1, on: state)
+                            ToggleRow(title: "Enable HAT VADJ3", isOn: hatVadj3Rail?.enabled ?? false, pg: true) { state in
+                                toggleHatRailEnable(railId: 1, on: state)
+                            }
                         }
-                    }
 
-                    // HAT VADJ4: slider + enable
-                    let hatVadj4Rail = connectionManager.lastHatRails.first(where: { $0.railId == 2 })
-                    VStack(spacing: 8) {
-                        VoltageSliderRow(label: "HAT VADJ4", value: $hatVadj4Value, range: 0.0...36.0, step: 0.1,
-                            isDirty: $hatVadj4Dirty,
-                            onApply: { setHatRailVoltage(railId: 2, val: hatVadj4Value); hatVadj4Dirty = false })
-                        .padding(12)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        // HAT VADJ4: slider + enable
+                        let hatVadj4Rail = connectionManager.lastHatRails.first(where: { $0.railId == 2 })
+                        VStack(spacing: 8) {
+                            VoltageSliderRow(label: "HAT VADJ4", value: $hatVadj4Value, range: 0.0...36.0, step: 0.1,
+                                isDirty: $hatVadj4Dirty,
+                                onApply: { setHatRailVoltage(railId: 2, val: hatVadj4Value); hatVadj4Dirty = false })
+                            .padding(12)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                        ToggleRow(title: "Enable HAT VADJ4", isOn: hatVadj4Rail?.enabled ?? false, pg: true) { state in
-                            toggleHatRailEnable(railId: 2, on: state)
+                            ToggleRow(title: "Enable HAT VADJ4", isOn: hatVadj4Rail?.enabled ?? false, pg: true) { state in
+                                toggleHatRailEnable(railId: 2, on: state)
+                            }
                         }
                     }
                 }

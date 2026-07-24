@@ -21,6 +21,7 @@ struct ScriptListResponse: Codable {
 
 struct ScriptsTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var files: [ScriptFile] = []
     @State private var storageInfo: StorageInfo? = nil
 
@@ -66,7 +67,17 @@ struct ScriptsTab: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                if let editingName = editingFileName {
+                if sizeClass == .regular {
+                    // iPad: file browser stays visible in a left pane; editor/REPL
+                    // occupies the right pane instead of replacing the browser.
+                    HStack(spacing: 0) {
+                        browserView
+                            .frame(width: 320)
+                        Divider().background(Color.white.opacity(0.08))
+                        rightPane
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else if let editingName = editingFileName {
                     editorView(name: editingName)
                 } else if isShowingREPL {
                     replView
@@ -91,6 +102,25 @@ struct ScriptsTab: View {
                 .autocorrectionDisabled()
             Button("Cancel", role: .cancel) {}
             Button("Create") { createNewScript() }
+        }
+    }
+
+    @ViewBuilder
+    private var rightPane: some View {
+        if let editingName = editingFileName {
+            editorView(name: editingName)
+        } else if isShowingREPL {
+            replView
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 40))
+                    .foregroundColor(.secondary)
+                Text("Select a script to edit, or open the REPL.")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

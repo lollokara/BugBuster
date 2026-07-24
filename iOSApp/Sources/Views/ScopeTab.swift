@@ -133,17 +133,34 @@ enum ScopeMode: Hashable {
     case adc, daq
 }
 
+enum DaqTimebase: String, CaseIterable, Identifiable {
+    case tenSeconds = "10s"
+    case thirtySeconds = "30s"
+    case full = "Full"
+    var id: String { rawValue }
+    var seconds: Double? {
+        switch self {
+        case .tenSeconds: return 10
+        case .thirtySeconds: return 30
+        case .full: return nil
+        }
+    }
+}
+
 struct ScopeTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @ObservedObject private var adcStream = ScopeStreamManager.shared
     @ObservedObject private var daqStream = DaqWifiStreamManager.shared
     @ObservedObject private var orientation = ScopeOrientationState.shared
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var mode: ScopeMode = .adc
     @State private var lastAutoDetectedDaq: Bool? = nil
 
     // Zoom timebase (shared across modes via ScopeCanvasView)
     @State private var timeScale: CGFloat = 1.0
+    // DAQ display window: nil = full buffered span
+    @State private var daqTimebase: DaqTimebase = .full
 
     // ADC settings
     @State private var activeChannels = [true, true, false, false]
@@ -157,6 +174,14 @@ struct ScopeTab: View {
     @State private var showCurrent = true
     @State private var showPower = true
     @State private var autoscale = true
+    /// Off = each active trace gets its own stacked lane with independent
+    /// autoscale/autoranged units; on = all traces share one plot (legacy behavior).
+    @State private var mergedTraces: Bool = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["BB_MERGED_TRACES"] == "0" { return false }
+        #endif
+        return true
+    }()
 
     @State private var showingSettings = false
 
@@ -167,13 +192,53 @@ struct ScopeTab: View {
             VStack(spacing: 0) {
                 header
 
-                if orientation.isLandscape {
+                if sizeClass == .regular {
+                    // iPad: full-bleed canvas regardless of physical orientation,
+                    // legend/cursor readout floats as a glass panel instead of
+                    // consuming a full-width row.
                     ScopeCanvasView(
                         series: currentSeries,
                         timeScale: $timeScale,
                         errorMessage: currentErrorMessage,
                         isWaitingForData: currentIsWaiting,
-                        onRetry: currentRetryAction
+                        onRetry: currentRetryAction,
+                        windowSeconds: mode == .daq ? daqTimebase.seconds : nil,
+                        mergedTraces: mergedTraces
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .bottomTrailing) {
+                        Group {
+                            if mode == .adc {
+                                channelLegend
+                            } else {
+                                daqLegendRow
+                            }
+                        }
+                        // channelLegend's flexible-column grid and daqLegendRow's
+                        // Spacer are both greedy about the width SwiftUI offers —
+                        // fine for the old full-width row, wrong for this floating
+                        // corner panel. fixedSize collapses them to content width.
+                        .fixedSize()
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .fill(Color(red: 0.05, green: 0.08, blue: 0.16).opacity(0.55))
+                                )
+                        )
+                        .padding(16)
+                    }
+                } else if orientation.isLandscape {
+                    ScopeCanvasView(
+                        series: currentSeries,
+                        timeScale: $timeScale,
+                        errorMessage: currentErrorMessage,
+                        isWaitingForData: currentIsWaiting,
+                        onRetry: currentRetryAction,
+                        windowSeconds: mode == .daq ? daqTimebase.seconds : nil,
+                        mergedTraces: mergedTraces
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal, 8)
@@ -203,6 +268,7 @@ struct ScopeTab: View {
                 showCurrent: $showCurrent,
                 showPower: $showPower,
                 autoscale: $autoscale,
+                mergedTraces: $mergedTraces,
                 onDaqRateChange: { rate in
                     daqStream.sendSetRate(currentSps: rate, voltageSps: rate)
                 }
@@ -229,6 +295,9 @@ struct ScopeTab: View {
                 Text(mode == .adc ? "Oscilloscope" : "DAQ Scope")
                     .font(.system(size: 24, weight: .bold))
                     .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .layoutPriority(1)
 
                 HStack(spacing: 4) {
                     Circle()
@@ -237,34 +306,49 @@ struct ScopeTab: View {
                     Text(streamStatusText)
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
             }
-            Spacer()
+            .layoutPriority(1)
+            Spacer(minLength: 8)
 
             Picker("Mode", selection: $mode) {
                 Text("ADC").tag(ScopeMode.adc)
                 Text("DAQ").tag(ScopeMode.daq)
             }
             .pickerStyle(.segmented)
-            .frame(width: 140)
+            .frame(maxWidth: 140)
             .padding(.trailing, 8)
 
-            GlassEffectContainer(spacing: 8) {
-                Button(action: togglePlayPause) {
-                    Image(systemName: isCurrentlyStreaming ? "pause.fill" : "play.fill")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(isCurrentlyStreaming ? .orange : .green)
-                        .padding(10)
-                        .glassEffect(.regular, in: Circle())
+            if mode == .daq {
+                Picker("Timebase", selection: $daqTimebase) {
+                    ForEach(DaqTimebase.allCases) { tb in
+                        Text(tb.rawValue).tag(tb)
+                    }
                 }
-                .padding(.trailing, 6)
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 170)
+                .padding(.trailing, 8)
+            }
 
-                Button(action: { showingSettings = true }) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.cyan)
-                        .padding(10)
-                        .glassEffect(.regular, in: Circle())
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 6) {
+                    Button(action: togglePlayPause) {
+                        Image(systemName: isCurrentlyStreaming ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(isCurrentlyStreaming ? .orange : .green)
+                            .padding(10)
+                            .glassEffect(.regular, in: Circle())
+                    }
+
+                    Button(action: { showingSettings = true }) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.cyan)
+                            .padding(10)
+                            .glassEffect(.regular, in: Circle())
+                    }
                 }
             }
         }
@@ -328,6 +412,9 @@ struct ScopeTab: View {
             if showCurrent {
                 legendDot(color: ScopeColors.daqCurrentFine, label: "Current (A)")
             }
+            if showPower {
+                legendDot(color: ScopeColors.daqPower, label: "Power (W)")
+            }
             Spacer()
             Text("\(daqStream.totalRecordsReceived) frames")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -356,7 +443,8 @@ struct ScopeTab: View {
                 currentSamples: daqStream.currentSamples,
                 currentSampleSources: daqStream.currentSampleSources,
                 showVoltage: showVoltage,
-                showCurrent: showCurrent
+                showCurrent: showCurrent,
+                showPower: showPower
             )
         }
     }
@@ -424,6 +512,9 @@ struct ScopeTab: View {
 
     private func setupOrientation() {
         ScopeOrientationState.shared.beginTracking()
+        // On iPad the mask is already permissive app-wide (OrientationLock's
+        // idiom-aware default); forcing it here would fight the split-view shell.
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
         OrientationLock.shared.mask = [.portrait, .landscapeLeft, .landscapeRight]
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             windowScene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
@@ -431,11 +522,12 @@ struct ScopeTab: View {
     }
 
     private func teardownOrientation() {
+        defer { ScopeOrientationState.shared.endTracking() }
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
         OrientationLock.shared.mask = .portrait
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
         }
-        ScopeOrientationState.shared.endTracking()
     }
 
     private func stopActiveStream() {
@@ -610,6 +702,7 @@ struct ScopeSettingsView: View {
     @Binding var showCurrent: Bool
     @Binding var showPower: Bool
     @Binding var autoscale: Bool
+    @Binding var mergedTraces: Bool
     let onDaqRateChange: (UInt32) -> Void
 
     private let sampleRateOptions: [(label: String, sps: UInt32)] = [
@@ -637,6 +730,7 @@ struct ScopeSettingsView: View {
                             adcSection
                         } else {
                             daqSection
+                            VDUTControlsCard()
                         }
                     }
                     .padding()
@@ -721,11 +815,20 @@ struct ScopeSettingsView: View {
 
             Toggle("Voltage", isOn: $showVoltage).tint(ScopeColors.daqVoltage)
             Toggle("Current", isOn: $showCurrent).tint(ScopeColors.daqCurrentFine)
-            Toggle("Power", isOn: $showPower).tint(ScopeColors.daqCurrentCoarse)
+            Toggle("Power", isOn: $showPower).tint(ScopeColors.daqPower)
 
             Divider().background(Color.secondary)
 
             Toggle("Autoscale", isOn: $autoscale).tint(.cyan)
+
+            Divider().background(Color.secondary)
+
+            Toggle("Merged Traces", isOn: $mergedTraces).tint(.cyan)
+            Text(mergedTraces
+                 ? "All active traces share one plot."
+                 : "Each active trace gets its own lane with independent autoscale and autoranged units (V/mV/µV, A/mA/µA, etc).")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
         }
         .font(.system(size: 13, weight: .medium))
         .foregroundColor(.white)
