@@ -4,7 +4,5 @@
 <dict>
     <key>com.apple.developer.networking.HotspotConfiguration</key>
     <true/>
-    <key>com.apple.developer.networking.local-network</key>
-    <true/>
 </dict>
 </plist>
