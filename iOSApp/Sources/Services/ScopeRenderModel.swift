@@ -9,6 +9,10 @@ import SwiftUI
 // display, and publishes one ready-to-draw ScopeRenderFrame to SwiftUI.
 // The view never touches raw sample arrays and never runs
 // sample-count-proportional work in `body`.
+//
+// Each trace is stored in two tiers (see DaqStreamEngine): an envelope
+// `history` buffer followed in time by a raw `recent` buffer. The reducers
+// here window and decimate across both segments in one pass.
 // =============================================================================
 
 /// One display-ready trace: points are already windowed + decimated to at
@@ -82,6 +86,17 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         timer = nil
     }
 
+    // MARK: - Segment plumbing
+
+    /// A windowed slice of one storage tier.
+    private struct Segment {
+        let t: [Double]
+        let v: [Float]
+        let src: [UInt8]
+        var range: Range<Int>
+        var count: Int { range.count }
+    }
+
     // MARK: - Tick (pipeline queue)
 
     private func tick() {
@@ -93,54 +108,49 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         if let last = lastPublishedKey, last.0 == key.0, last.1 == key.1 { return }
         lastPublishedKey = key
 
-        let voltage = engine.voltage
-        let current = engine.current
-
         // Reference stream for the shared time axis: prefer voltage, fall
         // back to current (mock mode appends both symmetrically).
-        let refT = !voltage.t.isEmpty ? voltage.t : current.t
-        let liveEnd = refT.last ?? 0
+        let liveEnd = engine.voltage.t.last ?? engine.current.t.last ?? 0
         let end = vp.followLive ? liveEnd : (vp.anchorEndT ?? liveEnd)
 
         var traces: [RenderedTrace] = []
 
-        var vWindow: Range<Int> = 0..<0
+        var vSegs: [Segment] = []
         if vp.showVoltage || vp.showPower {
-            vWindow = Self.windowRange(voltage.t, end: end, windowSeconds: vp.windowSeconds, scale: vp.timeScale)
+            vSegs = Self.windowSegments(hist: engine.voltageHist, recent: engine.voltage,
+                                        end: end, windowSeconds: vp.windowSeconds,
+                                        scale: vp.timeScale)
         }
-        var iWindow: Range<Int> = 0..<0
+        var iSegs: [Segment] = []
         if vp.showCurrent || vp.showPower {
-            iWindow = Self.windowRange(current.t, end: end, windowSeconds: vp.windowSeconds, scale: vp.timeScale)
+            iSegs = Self.windowSegments(hist: engine.currentHist, recent: engine.current,
+                                        end: end, windowSeconds: vp.windowSeconds,
+                                        scale: vp.timeScale)
         }
 
-        if vp.showVoltage, !vWindow.isEmpty {
-            let pts = Self.decimate(t: voltage.t, v: voltage.v, src: nil, range: vWindow,
-                                    columns: vp.columnBudget,
+        if vp.showVoltage, !vSegs.isEmpty {
+            let pts = Self.decimate(vSegs, columns: vp.columnBudget, useSrc: false,
                                     color: { _ in ScopeColors.daqVoltage })
             traces.append(Self.trace(id: "v", label: "Voltage", unit: "V",
                                      color: ScopeColors.daqVoltage, points: pts))
         }
-        if vp.showCurrent, !iWindow.isEmpty {
-            let pts = Self.decimate(t: current.t, v: current.v, src: current.src, range: iWindow,
-                                    columns: vp.columnBudget,
+        if vp.showCurrent, !iSegs.isEmpty {
+            let pts = Self.decimate(iSegs, columns: vp.columnBudget, useSrc: true,
                                     color: { ScopeColors.daqCurrentColor(forSource: $0) })
             traces.append(Self.trace(id: "i", label: "Current", unit: "A",
                                      color: ScopeColors.daqCurrentFine, points: pts))
         }
-        if vp.showPower, !vWindow.isEmpty, !iWindow.isEmpty {
+        if vp.showPower, !vSegs.isEmpty, !iSegs.isEmpty {
             // Real timestamp-nearest pairing (voltage and current are
             // independently-timestamped streams): decimate voltage to display
             // columns, then look up the nearest-in-time current sample for
-            // each column point. Replaces the old naive index-pairing, which
-            // silently misaligned once the two buffers halved at different
-            // times.
-            let vPts = Self.decimate(t: voltage.t, v: voltage.v, src: nil, range: vWindow,
-                                     columns: vp.columnBudget,
+            // each column point.
+            let vPts = Self.decimate(vSegs, columns: vp.columnBudget, useSrc: false,
                                      color: { _ in ScopeColors.daqPower })
             var pPts = [ScopeSeriesPoint]()
             pPts.reserveCapacity(vPts.count)
             for p in vPts {
-                let i = Self.nearestValue(t: current.t, v: current.v, range: iWindow, at: p.t)
+                let i = Self.nearestValue(in: iSegs, at: p.t)
                 pPts.append(ScopeSeriesPoint(t: p.t, v: p.v * Double(i), color: ScopeColors.daqPower))
             }
             traces.append(Self.trace(id: "p", label: "Power", unit: "W",
@@ -164,22 +174,45 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
 
     // MARK: - Reducers (pure, pipeline queue)
 
-    /// Index range of `t` inside [end - window, end], with the pinch-zoom
-    /// scale applied as a further tail-count reduction (same semantics as the
-    /// old ScopeGeom.windowedPoints).
-    static func windowRange(_ t: [Double], end: Double, windowSeconds: Double?, scale: CGFloat) -> Range<Int> {
-        guard !t.isEmpty else { return 0..<0 }
-        let hi = upperBound(t, end)
-        let lo: Int
-        if let windowSeconds {
-            lo = lowerBound(t, end - windowSeconds, upTo: hi)
-        } else {
-            lo = 0
+    /// Windows the two storage tiers to [end - window, end], applies the
+    /// pinch-zoom scale as a further tail-count reduction (front-dropped from
+    /// history first), and returns the in-window segments oldest-first.
+    private static func windowSegments(hist: DaqChannelBuffer, recent: DaqChannelBuffer,
+                                       end: Double, windowSeconds: Double?,
+                                       scale: CGFloat) -> [Segment] {
+        let cutoff = windowSeconds.map { end - $0 } ?? -Double.infinity
+
+        let rHi = upperBound(recent.t, end)
+        let rLo = lowerBound(recent.t, cutoff, upTo: rHi)
+        let hHi = upperBound(hist.t, end)
+        let hLo = lowerBound(hist.t, cutoff, upTo: hHi)
+
+        var hRange = hLo..<hHi
+        var rRange = rLo..<rHi
+        let total = hRange.count + rRange.count
+        guard total > 0 else { return [] }
+
+        // Pinch-zoom tail reduction (same semantics as the pre-refactor view).
+        let safeScale = Double(max(scale, 0.001))
+        let maxCount = max(1, min(total, Int((Double(total) / safeScale).rounded(.down))))
+        var toDrop = total - maxCount
+        if toDrop > 0 {
+            let dropH = min(toDrop, hRange.count)
+            hRange = (hRange.lowerBound + dropH)..<hRange.upperBound
+            toDrop -= dropH
+            if toDrop > 0 {
+                rRange = (rRange.lowerBound + min(toDrop, rRange.count))..<rRange.upperBound
+            }
         }
-        guard hi > lo else { return 0..<0 }
-        let count = hi - lo
-        let maxCount = max(1, min(count, Int(Double(count) / Double(max(scale, 0.001)))))
-        return (hi - maxCount)..<hi
+
+        var segs: [Segment] = []
+        if !hRange.isEmpty {
+            segs.append(Segment(t: hist.t, v: hist.v, src: hist.src, range: hRange))
+        }
+        if !rRange.isEmpty {
+            segs.append(Segment(t: recent.t, v: recent.v, src: recent.src, range: rRange))
+        }
+        return segs
     }
 
     /// First index with t[i] > value (binary search; t is monotonic per stream).
@@ -201,64 +234,88 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         return lo
     }
 
-    /// Min/max-envelope decimation over an SoA slice: bin by time into
+    /// Min/max-envelope decimation across ordered segments: bin by time into
     /// `columns` buckets, keep each bucket's (min, max) in temporal order —
     /// mirrors the desktop's ~1800-column backend pyramid, computed here on
     /// the pipeline queue.
-    static func decimate(t: [Double], v: [Float], src: [UInt8]?, range: Range<Int>,
-                         columns: Int, color: (UInt8) -> Color) -> [ScopeSeriesPoint] {
-        let count = range.count
-        guard count > 0 else { return [] }
-        func point(_ idx: Int) -> ScopeSeriesPoint {
-            let s: UInt8 = src.map { idx < $0.count ? $0[idx] : 0 } ?? 0
-            return ScopeSeriesPoint(t: t[idx], v: Double(v[idx]), color: color(s))
+    private static func decimate(_ segs: [Segment], columns: Int, useSrc: Bool,
+                                 color: (UInt8) -> Color) -> [ScopeSeriesPoint] {
+        let total = segs.reduce(0) { $0 + $1.count }
+        guard total > 0, let first = segs.first, let last = segs.last else { return [] }
+
+        func point(_ seg: Segment, _ idx: Int) -> ScopeSeriesPoint {
+            let s: UInt8 = useSrc && idx < seg.src.count ? seg.src[idx] : 0
+            return ScopeSeriesPoint(t: seg.t[idx], v: Double(seg.v[idx]), color: color(s))
         }
-        if count <= columns * 2 {
-            return range.map(point)
+
+        if total <= columns * 2 {
+            var out = [ScopeSeriesPoint]()
+            out.reserveCapacity(total)
+            for seg in segs { for idx in seg.range { out.append(point(seg, idx)) } }
+            return out
         }
-        let tStart = t[range.lowerBound]
-        let tEnd = t[range.upperBound - 1]
+
+        let tStart = first.t[first.range.lowerBound]
+        let tEnd = last.t[last.range.upperBound - 1]
         let span = max(tEnd - tStart, 0.000_001)
         var result = [ScopeSeriesPoint]()
         result.reserveCapacity(columns * 2)
-        var minIdx = -1, maxIdx = -1, bucket = -1
+
+        var bucket = -1
+        var minPt: ScopeSeriesPoint? = nil
+        var maxPt: ScopeSeriesPoint? = nil
         func flush() {
-            guard bucket >= 0, minIdx >= 0 else { return }
-            if minIdx == maxIdx {
-                result.append(point(minIdx))
-            } else if minIdx < maxIdx {
-                result.append(point(minIdx)); result.append(point(maxIdx))
+            guard let mn = minPt, let mx = maxPt else { return }
+            if mn.t == mx.t && mn.v == mx.v {
+                result.append(mn)
+            } else if mn.t <= mx.t {
+                result.append(mn); result.append(mx)
             } else {
-                result.append(point(maxIdx)); result.append(point(minIdx))
+                result.append(mx); result.append(mn)
             }
         }
-        for idx in range {
-            var b = Int((t[idx] - tStart) / span * Double(columns))
-            b = min(max(b, 0), columns - 1)
-            if b != bucket {
-                flush()
-                bucket = b
-                minIdx = idx; maxIdx = idx
-            } else {
-                if v[idx] < v[minIdx] { minIdx = idx }
-                if v[idx] > v[maxIdx] { maxIdx = idx }
+        for seg in segs {
+            for idx in seg.range {
+                // Clamp in floating point BEFORE the Int conversion: a
+                // pathological t (out-of-window, non-finite) must degrade to
+                // an edge bucket, never trap Double→Int. (This trapped for
+                // real when block timestamps went non-monotonic.)
+                let frac = (seg.t[idx] - tStart) / span
+                let clamped = frac.isFinite ? min(max(frac, 0), 1) : 0
+                let b = min(Int(clamped * Double(columns)), columns - 1)
+                if b != bucket {
+                    flush()
+                    bucket = b
+                    minPt = point(seg, idx)
+                    maxPt = minPt
+                } else {
+                    let p = point(seg, idx)
+                    if let mn = minPt, p.v < mn.v { minPt = p }
+                    if let mx = maxPt, p.v > mx.v { maxPt = p }
+                }
             }
         }
         flush()
         return result
     }
 
-    /// Nearest-in-time value lookup inside `range` (binary search).
-    static func nearestValue(t: [Double], v: [Float], range: Range<Int>, at time: Double) -> Float {
-        guard !range.isEmpty else { return 0 }
-        var lo = range.lowerBound, hi = range.upperBound
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if t[mid] < time { lo = mid + 1 } else { hi = mid }
+    /// Nearest-in-time value lookup across ordered segments (binary search).
+    private static func nearestValue(in segs: [Segment], at time: Double) -> Float {
+        var best: Float = 0
+        var bestDist = Double.infinity
+        for seg in segs {
+            guard !seg.range.isEmpty else { continue }
+            var lo = seg.range.lowerBound, hi = seg.range.upperBound
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if seg.t[mid] < time { lo = mid + 1 } else { hi = mid }
+            }
+            for idx in [lo - 1, lo] where seg.range.contains(idx) {
+                let d = abs(seg.t[idx] - time)
+                if d < bestDist { bestDist = d; best = seg.v[idx] }
+            }
         }
-        if lo >= range.upperBound { return v[range.upperBound - 1] }
-        if lo == range.lowerBound { return v[lo] }
-        return (time - t[lo - 1]) <= (t[lo] - time) ? v[lo - 1] : v[lo]
+        return best
     }
 
     private static func trace(id: String, label: String, unit: String,
