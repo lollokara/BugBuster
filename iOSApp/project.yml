@@ -23,6 +23,8 @@ targets:
       - path: assets
         buildPhase: resources
         type: folder
+    entitlements:
+      path: bugbuster.entitlements
     info:
       path: Info.plist
       properties:
