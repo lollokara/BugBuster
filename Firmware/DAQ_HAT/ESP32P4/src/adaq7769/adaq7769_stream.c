@@ -344,6 +344,18 @@ static inline void capture_end(adaq_stream_t *s, uint8_t local, bool want_status
             dev->diag_err_count++;
         }
     }
+    if (s->append_crc) {
+        // The single-bus path verified the per-conversion CRC but this
+        // combined-capture path (the one the DAQ fast path actually uses)
+        // only READ the byte — corrupted conversions still slipped through
+        // unflagged. Same check as capture_read(): CRC-8 init 0x03 over
+        // data(+status).
+        size_t off = 3 + (want_status ? 1u : 0u);
+        uint8_t crc = adaq_ll_crc8(buf, off, 0x03);
+        if (crc != buf[off]) {
+            rec.flags |= ADAQ_SAMPLE_FLAG_CRC_ERR;
+        }
+    }
     rec.seq = s->seq[local]++;
     ring_push(s, &rec);
 }

@@ -1462,6 +1462,18 @@ esp_err_t daq_board_c6_start(daq_board_t *b)
 
 esp_err_t daq_board_start_streaming(daq_board_t *b, size_t ring_capacity)
 {
+    // Clear latched device errors before capture starts: POR/MERR from the
+    // boot-time interface-reset dance stick in the per-sample status byte,
+    // marking EVERY conversion STATUS_ERR — which invalidates FINE in
+    // fusion and starves the range manager's confirmation logic
+    // (bench: "status MERR POR, errs 21030" + autoranging not triggering).
+    for (int i = 0; i < ADAQ_COUNT; ++i) {
+        if (!b->adaq_ok[i]) continue;
+        uint8_t ms = 0;
+        adaq7769_read_status(&b->adaq[i], &ms);        // read-to-clear latch
+        adaq7769_clear_spi_errors(&b->adaq[i], 0xFF);  // W1C
+    }
+
     // Per-sample CRC ON for both buses: corrupted conversions (bit slips
     // when the two hosts' SCLKs overlap) used to arrive with clean flags and
     // stream as arbitrary-value spikes — with the ADAQ's per-conversion CRC
