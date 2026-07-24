@@ -1556,6 +1556,44 @@ int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len)
     return (int)rsp_len;
 }
 
+bool hat_daq_vdut_status(hat_vdut_status_t *out)
+{
+    if (!out) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+
+    uint8_t rsp[sizeof(hat_vdut_status_t)] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_DAQ_VDUT_STATUS, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
+    if (cmd != HAT_RSP_DAQ_VDUT_STATUS || rsp_len < sizeof(hat_vdut_status_t)) return false;
+
+    memcpy(out, rsp, sizeof(hat_vdut_status_t));
+    return true;
+}
+
+bool hat_daq_vdut_enable(bool enable)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+
+    uint8_t payload = enable ? 1u : 0u;
+    uint8_t rsp[4] = {}; uint8_t rsp_len = 0;
+    uint8_t code = hat_command(HAT_CMD_DAQ_VDUT_ENABLE, &payload, 1, rsp, &rsp_len, 300, sizeof(rsp));
+    return code == HAT_RSP_OK;
+}
+
+bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+
+    hat_vdut_setpoint_t req = {};
+    req.vdut_v   = vdut_v;
+    req.ilimit_a = ilimit_a;
+
+    uint8_t rsp[4] = {}; uint8_t rsp_len = 0;
+    uint8_t code = hat_command(HAT_CMD_DAQ_VDUT_SETPOINT, (const uint8_t *)&req, sizeof(req),
+                               rsp, &rsp_len, 300, sizeof(rsp));
+    return code == HAT_RSP_OK;
+}
+
 void hat_daq_send_arm(bool armed, uint8_t trig_logic, uint32_t pre_samples)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;

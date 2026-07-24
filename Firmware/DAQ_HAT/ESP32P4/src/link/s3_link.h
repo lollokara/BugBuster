@@ -135,6 +135,15 @@ extern "C" {
 // this link is strictly S3-master/P4-slave.
 #define HATP_CMD_STAGE_READ      0x75u   // payload: s3link_stage_read_req_t
 
+// VDUT (programmable DUT power supply, smu.{c,h}) request/reply commands.
+// S3-initiated request + P4 reply, modeled on HATP_CMD_STAGE_READ above (NOT
+// the one-way HATP_CMD_DAQ_TELEMETRY push pattern) -- the S3 doesn't own this
+// hardware, it has to ask the P4 for status and issue enable/setpoint writes.
+// MUST match S3 mainboard hat.h HAT_CMD_DAQ_VDUT_* exactly.
+#define HATP_CMD_DAQ_VDUT_STATUS   0x76u   // no payload -> HATP_RSP_DAQ_VDUT_STATUS
+#define HATP_CMD_DAQ_VDUT_ENABLE   0x77u   // payload: u8 enable -> OK/ERROR
+#define HATP_CMD_DAQ_VDUT_SETPOINT 0x78u   // payload: s3link_vdut_setpoint_t -> OK/ERROR
+
 // Settings/config commands (vendor sub-range 0x70..0x7F). These read/write the
 // authoritative settings store (common/daq_config_registry.h) using key-
 // addressed TLV values, so the S3 (desktop/web/mobile/MCP) can configure every
@@ -162,6 +171,7 @@ extern "C" {
 #define HATP_RSP_MB_REQ        0x96u // pending C6 mainboard request ([req_type][args]); 0-len = none
 #define HATP_RSP_STAGE_DATA    0x97u // payload: firmware bytes read from `staging` at the requested offset
 #define HATP_RSP_DAQ_WIFI_STREAM_INFO 0x8Cu // response to HATP_CMD_DAQ_WIFI_STREAM_INFO (mirrors S3 HAT_RSP_DAQ_WIFI_STREAM_INFO)
+#define HATP_RSP_DAQ_VDUT_STATUS 0x98u // payload: s3link_vdut_status_t; response to HATP_CMD_DAQ_VDUT_STATUS
 
 // Firmware version reported in GET_INFO.
 #define S3LINK_FW_MAJOR      1u
@@ -178,6 +188,26 @@ typedef struct __attribute__((packed)) {
     float    last_p;
     float    energy_mwh;
 } s3link_daq_status_t;
+
+// HATP_CMD_DAQ_VDUT_SETPOINT (0x78) payload. MUST stay byte-for-byte identical
+// to the S3-side mirror hat_vdut_setpoint_t in Firmware/ESP32/src/hat/hat.h.
+typedef struct __attribute__((packed)) {
+    float vdut_v;      // target DUT voltage (V), clamped to [SMU_VDUT_MIN, SMU_VDUT_MAX]
+    float ilimit_a;     // target current limit (A), clamped to [SMU_ILIMIT_MIN_A, SMU_ILIMIT_FULLSCALE_A]
+} s3link_vdut_setpoint_t;
+
+// HATP_RSP_DAQ_VDUT_STATUS (0x98) payload: response to HATP_CMD_DAQ_VDUT_STATUS.
+// MUST stay byte-for-byte identical to the S3-side mirror hat_vdut_status_t.
+typedef struct __attribute__((packed)) {
+    uint8_t  present;      // bool: SMU hardware detected (DS4424 IDAC present)
+    uint8_t  enabled;      // bool: LTM8056 RUN asserted
+    uint8_t  fault;        // bool: SMU in a fault state (hardware absent / read error)
+    uint8_t  _pad;
+    float    vdut_set_v;   // programmed DUT voltage setpoint (V)
+    float    ilimit_set_a; // programmed current limit setpoint (A)
+    float    meas_v;       // measured DUT voltage (V), from the ADAQ7769 acquisition chain
+    float    meas_i;       // measured DUT current (A), from the ADAQ7769 acquisition chain
+} s3link_vdut_status_t;
 
 // HATP_CMD_DAQ_TELEMETRY (0x5A) payload: S3 mainboard telemetry relayed to the
 // C6 Diagnostics menu. MUST stay byte-for-byte identical to the S3-side mirror

@@ -1106,6 +1106,50 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             return (int)sizeof(st);
         }
 
+        // ---- VDUT (programmable DUT power supply, smu.{c,h}) ----
+        case HATP_CMD_DAQ_VDUT_STATUS: {
+            bool present = (b->smu.idac && b->smu.idac->present);
+            float meas_i;
+            esp_err_t ierr = smu_read_output_current(&b->smu, &meas_i);
+            s3link_vdut_status_t st = {
+                .present      = present ? 1 : 0,
+                .enabled      = b->smu.enabled ? 1 : 0,
+                .fault        = (!present) ? 1 : 0,
+                ._pad         = 0,
+                .vdut_set_v   = b->smu.vdut_set,
+                .ilimit_set_a = b->smu.ilimit_set,
+                .meas_v       = power_dsp_last_v(&b->dsp),
+                .meas_i       = (ierr == ESP_OK) ? meas_i : power_dsp_last_i(&b->dsp),
+            };
+            memcpy(resp, &st, sizeof(st));
+            return (int)sizeof(st);
+        }
+
+        case HATP_CMD_DAQ_VDUT_ENABLE: {
+            if (len < 1) return -1;
+            bool present = (b->smu.idac && b->smu.idac->present);
+            if (!present) return -1;
+            return (smu_enable(&b->smu, payload[0] != 0) == ESP_OK) ? 0 : -1;
+        }
+
+        case HATP_CMD_DAQ_VDUT_SETPOINT: {
+            if (len < sizeof(s3link_vdut_setpoint_t)) return -1;
+            const s3link_vdut_setpoint_t *sp = (const s3link_vdut_setpoint_t *)payload;
+            // Reject out-of-range requests rather than silently clamping (the
+            // S3-side API also bounds-checks before ever sending this, but the
+            // P4 re-validates since it's the source of truth for the hardware
+            // limits).
+            if (sp->vdut_v < SMU_VDUT_MIN || sp->vdut_v > SMU_VDUT_MAX ||
+                sp->ilimit_a < SMU_ILIMIT_MIN_A || sp->ilimit_a > SMU_ILIMIT_FULLSCALE_A) {
+                return -1;
+            }
+            bool present = (b->smu.idac && b->smu.idac->present);
+            if (!present) return -1;
+            esp_err_t e1 = smu_set_current_limit(&b->smu, sp->ilimit_a);
+            esp_err_t e2 = smu_set_voltage(&b->smu, sp->vdut_v);
+            return (e1 == ESP_OK && e2 == ESP_OK) ? 0 : -1;
+        }
+
         // ---- Firmware version ----
         case HATP_CMD_GET_VERSION: {
             // Response: u32 packed version + NUL-terminated version string.

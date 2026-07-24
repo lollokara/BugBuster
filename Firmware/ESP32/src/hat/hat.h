@@ -267,6 +267,26 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_MB_RESULT       0x5E  // [req_type][status][data] result -> P4 relays to C6
 #define HAT_CMD_STAGE_READ      0x75u // read a chunk from the P4 `staging` partition -> RSP_STAGE_DATA
                                        // must match P4 HATP_CMD_STAGE_READ (s3_link.h) exactly
+
+// VDUT (DAQ HAT programmable DUT power supply, P4 smu.{c,h}) request/reply
+// commands. S3-initiated request + P4 reply, modeled on HAT_CMD_STAGE_READ
+// above (NOT the one-way HAT_CMD_DAQ_TELEMETRY push pattern) -- the S3 doesn't
+// own this hardware, it has to ask the P4 for status and issue writes.
+// MUST match P4 s3_link.h HATP_CMD_DAQ_VDUT_* exactly.
+#define HAT_CMD_DAQ_VDUT_STATUS   0x76u   // no payload -> HAT_RSP_DAQ_VDUT_STATUS
+#define HAT_CMD_DAQ_VDUT_ENABLE   0x77u   // payload: u8 enable -> OK/ERROR
+#define HAT_CMD_DAQ_VDUT_SETPOINT 0x78u   // payload: hat_vdut_setpoint_t -> OK/ERROR
+
+// VDUT hardware limits, mirrored from the P4's authoritative
+// Firmware/DAQ_HAT/ESP32P4/include/config.h (SMU_VDUT_MIN/MAX,
+// SMU_ILIMIT_MIN_A/FULLSCALE_A) so the S3 API layer (api_core.cpp) can
+// bounds-check a setpoint request before ever sending it over the HAT link,
+// per the /api/daq/vdut/setpoint contract (reject out-of-range rather than
+// silently clamp). The P4 re-validates against its own constants regardless.
+#define HAT_DAQ_VDUT_MIN_V         1.76f
+#define HAT_DAQ_VDUT_MAX_V         19.94f
+#define HAT_DAQ_VDUT_ILIMIT_MIN_A  0.05f
+#define HAT_DAQ_VDUT_ILIMIT_MAX_A  2.636f
 #define HAT_CMD_LA_SET_ROUTE    0x3B  // Select low-speed/high-speed LA route
 
 // Commands: HAT v2 Supplies / LEDs (0x40-0x4F)
@@ -303,6 +323,8 @@ typedef struct __attribute__((packed)) {
 #define HAT_RSP_CALIBRATE_STATUS 0x8A
 #define HAT_RSP_CALIBRATE_EXPORT 0x8B  // Paginated stored cal points
 #define HAT_RSP_DAQ_WIFI_STREAM_INFO 0x8C  // Response cmd byte for HAT_CMD_DAQ_WIFI_STREAM_INFO poll
+#define HAT_RSP_DAQ_VDUT_STATUS 0x98u  // Response to HAT_CMD_DAQ_VDUT_STATUS: hat_vdut_status_t.
+                                        // Must match P4 HATP_RSP_DAQ_VDUT_STATUS (s3_link.h) exactly.
 #define HAT_RSP_MB_REQ          0x96  // Pending C6 mainboard request from the P4
 #define HAT_RSP_STAGE_DATA      0x97u // Response to HAT_CMD_STAGE_READ: firmware bytes read from
                                        // the P4 `staging` partition (0 bytes = end of staged image).
@@ -318,6 +340,26 @@ typedef struct __attribute__((packed)) {
     uint32_t offset;
     uint8_t  len;
 } hat_stage_read_req_t;
+
+// HAT_CMD_DAQ_VDUT_SETPOINT payload. MUST stay byte-for-byte identical to the
+// P4-side mirror s3link_vdut_setpoint_t in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
+typedef struct __attribute__((packed)) {
+    float vdut_v;    // target DUT voltage (V)
+    float ilimit_a;  // target current limit (A)
+} hat_vdut_setpoint_t;
+
+// HAT_RSP_DAQ_VDUT_STATUS payload: response to HAT_CMD_DAQ_VDUT_STATUS. MUST
+// stay byte-for-byte identical to the P4-side mirror s3link_vdut_status_t.
+typedef struct __attribute__((packed)) {
+    uint8_t  present;
+    uint8_t  enabled;
+    uint8_t  fault;
+    uint8_t  _pad;
+    float    vdut_set_v;
+    float    ilimit_set_a;
+    float    meas_v;
+    float    meas_i;
+} hat_vdut_status_t;
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
@@ -646,6 +688,27 @@ const char *hat_get_type_string(void);
  *         -1 on a transport error (caller should retry the same offset).
  */
 int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len);
+
+/**
+ * @brief Read the DAQ HAT's VDUT (programmable DUT power supply) status:
+ *        present/enabled/fault + setpoints + measured voltage/current.
+ *        No-op (returns false) unless a DAQ HAT is connected.
+ */
+bool hat_daq_vdut_status(hat_vdut_status_t *out);
+
+/**
+ * @brief Enable/disable the DAQ HAT's VDUT (DUT power supply).
+ * @return true on P4 HAT_RSP_OK, false otherwise (including no DAQ HAT).
+ */
+bool hat_daq_vdut_enable(bool enable);
+
+/**
+ * @brief Program the DAQ HAT's VDUT voltage + current-limit setpoints.
+ *        The P4 re-validates against hardware limits and rejects (returns
+ *        false) out-of-range requests rather than silently clamping.
+ * @return true on P4 HAT_RSP_OK, false otherwise (including no DAQ HAT).
+ */
+bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a);
 
 /**
  * @brief Arm/disarm the DAQ HAT trigger latch and record the pre-roll depth.

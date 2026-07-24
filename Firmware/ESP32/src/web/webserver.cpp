@@ -2353,6 +2353,52 @@ static esp_err_t handle_get_daq_wifi_stream_status(httpd_req_t *req)
     return rc;
 }
 
+// GET /api/daq/vdut/status
+static esp_err_t handle_get_daq_vdut_status(httpd_req_t *req)
+{
+    char *resp = api_core_handle("GET", "/api/daq/vdut/status", NULL);
+    if (!resp) return send_error(req, 500, "vdut status failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// api_core_handle() error responses are just {"error": "..."} bodies (its
+// callers, e.g. api_error(), have no notion of HTTP status). The VDUT
+// setpoint/enable contract requires a non-2xx reject for invalid requests
+// (see ConnectionManager.swift's doc comment above vdutPresent), so translate
+// an "error" key in the JSON body into HTTP 400 here rather than always 200.
+static esp_err_t send_api_core_result(httpd_req_t *req, char *resp, const char *fail_msg)
+{
+    if (!resp) return send_error(req, 500, fail_msg);
+    cJSON *parsed = cJSON_Parse(resp);
+    bool is_error = parsed && cJSON_GetObjectItem(parsed, "error") != NULL;
+    esp_err_t rc = send_raw_json(req, resp, is_error ? 400 : 200);
+    if (parsed) cJSON_Delete(parsed);
+    cJSON_free(resp);
+    return rc;
+}
+
+// POST /api/daq/vdut/enable  body: {"enabled": bool}
+static esp_err_t handle_post_daq_vdut_enable(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/daq/vdut/enable", body);
+    if (body) cJSON_Delete(body);
+    return send_api_core_result(req, resp, "vdut enable failed");
+}
+
+// POST /api/daq/vdut/setpoint  body: {"voltageV": number, "currentLimitMa": number}
+static esp_err_t handle_post_daq_vdut_setpoint(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/daq/vdut/setpoint", body);
+    if (body) cJSON_Delete(body);
+    return send_api_core_result(req, resp, "vdut setpoint failed");
+}
+
 // GET /api/hat/la/status
 static esp_err_t handle_get_hat_la_status(httpd_req_t *req)
 {
@@ -5036,6 +5082,21 @@ bool initWebServer(void)
         .uri = "/api/daq/wifi_stream/status", .method = HTTP_GET, .handler = handle_get_daq_wifi_stream_status, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_wifi_stream_status);
+
+    httpd_uri_t uri_daq_vdut_status = {
+        .uri = "/api/daq/vdut/status", .method = HTTP_GET, .handler = handle_get_daq_vdut_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_vdut_status);
+
+    httpd_uri_t uri_daq_vdut_enable = {
+        .uri = "/api/daq/vdut/enable", .method = HTTP_POST, .handler = handle_post_daq_vdut_enable, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_vdut_enable);
+
+    httpd_uri_t uri_daq_vdut_setpoint = {
+        .uri = "/api/daq/vdut/setpoint", .method = HTTP_POST, .handler = handle_post_daq_vdut_setpoint, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_vdut_setpoint);
 
     // ----- HAT v2 routes (registered before the /api/hat/* wildcard) -----
 

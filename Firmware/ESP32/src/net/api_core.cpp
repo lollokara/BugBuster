@@ -10,12 +10,14 @@
 //   GET  : /api/device/info, /api/status, /api/hat, /api/usbpd, /api/wifi,
 //          /api/daq, /api/overview (idac+ioexp+LIVE rails), /api/gpio,
 //          /api/idac/cal/points?ch=N (+ HAT calibration data under "hat"),
-//          /api/ota/status, /api/ota/releases
+//          /api/ota/status, /api/ota/releases,
+//          /api/daq/wifi_stream/status, /api/daq/vdut/status
 //   POST : /api/idac/voltage,
 //          /api/hat/rail/{enable,voltage} (+ /api/hat/v2/... aliases),
 //          /api/ioexp/control, /api/usbpd/select, /api/lshift/oe,
 //          /api/gpio/<pin>/{config,set}, /api/device/reset,
-//          /api/ota/check, /api/ota/apply (drives the on-device git-release updater)
+//          /api/ota/check, /api/ota/apply (drives the on-device git-release updater),
+//          /api/daq/wifi_stream/{start,stop}, /api/daq/vdut/{enable,setpoint}
 //
 // PENDING (planned, mirror the HTTP handler then expose here): IDAC cal writes
 //   (/api/idac/cal/{point,clear,save}), channel signal-path config
@@ -367,6 +369,63 @@ static char *api_daq_wifi_stream_status(void)
         cJSON_AddStringToObject(root, "host", host_str);
         cJSON_AddNumberToObject(root, "port", info.port);
     }
+    return json_take(root);
+}
+
+// GET /api/daq/vdut/status — DAQ HAT DUT power-supply status (present/
+// enabled/fault + setpoints + measured V/I), relayed from the P4 over the
+// HAT UART link (HAT_CMD_DAQ_VDUT_STATUS).
+static char *api_daq_vdut_status(void)
+{
+    hat_vdut_status_t st;
+    if (!hat_daq_vdut_status(&st)) return api_error("HAT not responding or not a DAQ HAT");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "present", st.present != 0);
+    cJSON_AddBoolToObject(root, "enabled", st.enabled != 0);
+    cJSON_AddNumberToObject(root, "voltageSetpointV", st.vdut_set_v);
+    cJSON_AddNumberToObject(root, "currentLimitMa", st.ilimit_set_a * 1000.0);
+    cJSON_AddNumberToObject(root, "measuredVoltageV", st.meas_v);
+    cJSON_AddNumberToObject(root, "measuredCurrentMa", st.meas_i * 1000.0);
+    cJSON_AddBoolToObject(root, "fault", st.fault != 0);
+    return json_take(root);
+}
+
+// POST /api/daq/vdut/enable — enable/disable the DAQ HAT DUT power supply.
+static char *api_daq_vdut_enable(const cJSON *body)
+{
+    cJSON *jen = body_get(body, "enabled");
+    if (!cJSON_IsBool(jen)) return api_error("enabled required");
+    if (!hat_daq_vdut_enable(cJSON_IsTrue(jen))) {
+        return api_error("HAT not responding or not a DAQ HAT");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return json_take(root);
+}
+
+// POST /api/daq/vdut/setpoint — program VDUT voltage + current limit.
+// Bounds-checked here BEFORE issuing the HAT command so out-of-range
+// requests are rejected (non-2xx) rather than silently clamped by the P4.
+static char *api_daq_vdut_setpoint(const cJSON *body)
+{
+    cJSON *jv = body_get(body, "voltageV");
+    cJSON *ji = body_get(body, "currentLimitMa");
+    if (!cJSON_IsNumber(jv) || !cJSON_IsNumber(ji)) {
+        return api_error("voltageV and currentLimitMa required");
+    }
+    float vdut_v   = (float)jv->valuedouble;
+    float ilimit_a = (float)ji->valuedouble / 1000.0f;
+    if (vdut_v < HAT_DAQ_VDUT_MIN_V || vdut_v > HAT_DAQ_VDUT_MAX_V) {
+        return api_error("voltageV out of range");
+    }
+    if (ilimit_a < HAT_DAQ_VDUT_ILIMIT_MIN_A || ilimit_a > HAT_DAQ_VDUT_ILIMIT_MAX_A) {
+        return api_error("currentLimitMa out of range");
+    }
+    if (!hat_daq_vdut_setpoint(vdut_v, ilimit_a)) {
+        return api_error("HAT not responding, not a DAQ HAT, or setpoint rejected");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
     return json_take(root);
 }
 
@@ -1329,6 +1388,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
         if (q != NULL) ch = atoi(q + 3);
         return api_idac_cal_points(ch);
     }
+    if (strcmp(path, "/api/daq/vdut/status") == 0) return api_daq_vdut_status();
 
     // POST-style
     if (strcmp(path, "/api/idac/voltage") == 0)     return api_idac_voltage(body);
@@ -1341,6 +1401,8 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/daq/wifi_stream/start") == 0)  return api_daq_wifi_stream_start();
     if (strcmp(path, "/api/daq/wifi_stream/stop") == 0)   return api_daq_wifi_stream_stop();
     if (strcmp(path, "/api/daq/wifi_stream/status") == 0) return api_daq_wifi_stream_status();
+    if (strcmp(path, "/api/daq/vdut/enable") == 0)   return api_daq_vdut_enable(body);
+    if (strcmp(path, "/api/daq/vdut/setpoint") == 0) return api_daq_vdut_setpoint(body);
     if (strcmp(path, "/api/ioexp/control") == 0)    return api_ioexp_control(body);
     if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
     if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);
