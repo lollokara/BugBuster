@@ -188,25 +188,37 @@ current_range_t range_manager_step(range_manager_t *rm)
     current_range_t cur = rm->current;
 
     // ---- RANGE-UP: immediate, highest priority --------------------------------
-    // POSEDGE on FF_HI while we are in HI → go to MID.
-    if ((flags & AR_ISR_UP_HI) && cur == RANGE_HI) {
+    // The ISR edge flags are a fast trigger but NOT reliable on their own:
+    // the GPIO ISR service is installed from the capture task on core 1
+    // (see adaq7769_stream.c — deliberately, to keep the DRDY storm off
+    // core 0) while this step() runs on core 0, so the read-and-clear of
+    // isr_flags above can race an ISR set and LOSE an up-edge. The FF is an
+    // SR latch — a lost edge never re-fires, leaving the range stuck and
+    // FINE saturating for the whole overload. The latch level is the ground
+    // truth: poll it every step so a lost edge self-heals one sample later.
+    bool ff_hi_level  = gpio_get_level(AR_FF_HI_PIN) != 0;
+    bool ff_mid_level = gpio_get_level(AR_FF_MID_PIN) != 0;
+
+    // FF_HI set while we are in HI → go to MID.
+    if (((flags & AR_ISR_UP_HI) || ff_hi_level) && cur == RANGE_HI) {
         apply_range(rm, RANGE_MID);
         rm->lock_remaining = AR_LOCK_SAMPLES;
         rm->pending_down   = false;
         rm->confirm_count  = 0;
         cur = rm->current;
     }
-    // POSEDGE on FF_MID while we are in MID → go to LO.
-    if ((flags & AR_ISR_UP_MID) && cur == RANGE_MID) {
+    // FF_MID set while we are in MID → go to LO.
+    if (((flags & AR_ISR_UP_MID) || ff_mid_level) && cur == RANGE_MID) {
         apply_range(rm, RANGE_LO);
         rm->lock_remaining = AR_LOCK_SAMPLES;
         rm->pending_down   = false;
         rm->confirm_count  = 0;
         cur = rm->current;
     }
-    // Edge case: if we are in HI and FF_MID fires (stale latch state at boot),
-    // honour it as an HI→MID→LO double-step.
-    if ((flags & AR_ISR_UP_MID) && cur == RANGE_HI) {
+    // Edge case: if we are in HI and FF_MID is set (stale latch state at
+    // boot, or a violent overload setting both), honour it as an
+    // HI→MID→LO double-step.
+    if (((flags & AR_ISR_UP_MID) || ff_mid_level) && cur == RANGE_HI) {
         apply_range(rm, RANGE_MID);
         apply_range(rm, RANGE_LO);
         rm->lock_remaining = AR_LOCK_SAMPLES;
