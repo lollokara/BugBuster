@@ -80,10 +80,21 @@ void ddp_master_set_backlight(ddp_master_t *m, uint8_t level)
     ddp_master_send(m, DDP_CMD_SET_BACKLIGHT, &level, 1);
 }
 
+static bool s_wifi_stream_mode_last_sent;
+
 void ddp_master_set_wifi_stream_mode(ddp_master_t *m, bool enable)
 {
     uint8_t v = enable ? 1 : 0;
     ddp_master_send(m, DDP_CMD_WIFI_STREAM_MODE, &v, 1);
+    s_wifi_stream_mode_last_sent = enable;
+}
+
+// Fire-and-forget over DDP (no ack tracked) -- reflects what the P4 last told
+// the C6, not a confirmed readback of the C6's actual state. Status-reporting
+// only (see `wifistat` CLI command).
+bool ddp_master_wifi_stream_mode_last_sent(void)
+{
+    return s_wifi_stream_mode_last_sent;
 }
 
 void ddp_master_set_ch_leds(ddp_master_t *m, const uint8_t codes[4])

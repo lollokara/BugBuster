@@ -54,6 +54,18 @@
 // SDIO download mode : GPIO9=0 (GPIO43 LOW) + GPIO8=1 (GPIO44 HIGH / float)
 // UART download mode : GPIO9=0 (GPIO43 LOW) + GPIO8=0 (GPIO44 LOW)
 // Normal boot        : GPIO9=1 (GPIO43 HIGH / float)
+//
+// REMOVED (2026-07-23): C6_IO2_PIN was briefly repurposed as a "WiFi-
+// coprocessor boot strap" to survive the reset esp_wifi_init() triggers on
+// the C6 (see below) -- abandoned because Docs/FIRMWARE_HARDWARE_REFERENCE.md
+// §5's verified C6 wiring map doesn't list this pin as connected to the P4 at
+// all (this "reserved" note was itself never verified against the
+// schematic), matching the strap always reading asserted regardless of what
+// the P4 drove. Fixed properly via CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY
+// (sdkconfig.defaults) instead: the P4 now tells the C6 over the existing DDP
+// UART link to start its ESP-Hosted stack *before* bringing up SDIO, so
+// esp_wifi_init() only resets the C6 if that handshake actually fails. See
+// .mex/patterns/daq-hat-ios-wifi-streaming.md.
 // -----------------------------------------------------------------------------
 #define C6_RST_PIN        ((gpio_num_t)54)   // C6 CHIP_PU  (LOW = reset)
 #define C6_BOOT_PIN       ((gpio_num_t)44)   // C6 GPIO9 strap (LOW = download mode)

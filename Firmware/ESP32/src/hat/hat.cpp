@@ -1403,7 +1403,11 @@ static void hat_daq_wifi_stream_reset_reassembly(void)
 
 bool hat_daq_wifi_stream_start(void)
 {
-    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) {
+        ESP_LOGW(TAG, "wifi_stream_start: rejected locally (connected=%d type=%d)",
+                 s_state.connected, s_state.type);
+        return false;
+    }
     uint8_t rsp[4]; uint8_t rsp_len = 0;
     // P4's generic command dispatch acks/rejects via which frame comes back
     // (HAT_RSP_OK vs HAT_RSP_ERROR), not a payload byte -- there is no per-cmd
@@ -1411,6 +1415,8 @@ bool hat_daq_wifi_stream_start(void)
     // HATP_CMD_DAQ_WIFI_STREAM_START handler). rsp_len is always 0 on success,
     // so the accept/reject signal is the returned opcode, not rsp[0].
     uint8_t code = hat_command(HAT_CMD_DAQ_WIFI_STREAM_START, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
+    ESP_LOGI(TAG, "wifi_stream_start: P4 responded opcode=0x%02X (%s)",
+             code, code == HAT_RSP_OK ? "OK" : (code == HAT_RSP_ERROR ? "ERROR" : "TIMEOUT/UNKNOWN"));
     if (code != HAT_RSP_OK) return false;
 
     s_wifi_stream_info.state = HAT_DAQ_WIFI_STREAM_STARTING;
@@ -1420,14 +1426,22 @@ bool hat_daq_wifi_stream_start(void)
     memset(s_wifi_stream_info.host, 0, sizeof(s_wifi_stream_info.host));
     hat_daq_wifi_stream_reset_reassembly();
     s_wifi_stream_poll_armed = true;
+    ESP_LOGI(TAG, "wifi_stream_start: accepted, bring-up continues in background on the P4; "
+                  "polling for credentials via HAT_CMD_DAQ_WIFI_STREAM_INFO");
     return true;
 }
 
 bool hat_daq_wifi_stream_stop(void)
 {
-    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) {
+        ESP_LOGW(TAG, "wifi_stream_stop: rejected locally (connected=%d type=%d)",
+                 s_state.connected, s_state.type);
+        return false;
+    }
     uint8_t rsp[4]; uint8_t rsp_len = 0;
     uint8_t code = hat_command(HAT_CMD_DAQ_WIFI_STREAM_STOP, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
+    ESP_LOGI(TAG, "wifi_stream_stop: P4 responded opcode=0x%02X (%s)",
+             code, code == HAT_RSP_OK ? "OK" : (code == HAT_RSP_ERROR ? "ERROR" : "TIMEOUT/UNKNOWN"));
 
     s_wifi_stream_info.state = HAT_DAQ_WIFI_STREAM_IDLE;
     s_wifi_stream_info.ssid[0] = '\0';
@@ -1447,15 +1461,21 @@ void hat_daq_poll_wifi_stream_info(void)
 
     uint8_t rsp[HAT_FRAME_MAX_LEN] = {}; uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_DAQ_WIFI_STREAM_INFO, NULL, 0, rsp, &rsp_len, 100, sizeof(rsp));
-    if (cmd != HAT_RSP_DAQ_WIFI_STREAM_INFO || rsp_len < HAT_WIFI_STREAM_INFO_HDR) return;
+    if (cmd != HAT_RSP_DAQ_WIFI_STREAM_INFO || rsp_len < HAT_WIFI_STREAM_INFO_HDR) {
+        ESP_LOGW(TAG, "wifi_stream_info poll: no/bad response (opcode=0x%02X len=%u)", cmd, rsp_len);
+        return;
+    }
 
     uint8_t status = rsp[0];
     uint8_t seq    = rsp[1];
     uint8_t flags  = rsp[2];
     const uint8_t *data = &rsp[HAT_WIFI_STREAM_INFO_HDR];
     uint8_t data_len = (uint8_t)(rsp_len - HAT_WIFI_STREAM_INFO_HDR);
+    ESP_LOGI(TAG, "wifi_stream_info poll: status=%u seq=%u flags=0x%02X data_len=%u (expect_seq=%u off=%u/%u)",
+             status, seq, flags, data_len, s_wifi_stream_next_seq, s_wifi_stream_off, (unsigned)HAT_WIFI_STREAM_BLOB_LEN);
 
     if (status == HAT_WIFI_STREAM_FAILED) {
+        ESP_LOGW(TAG, "wifi_stream_info poll: P4 reports bring-up FAILED");
         s_wifi_stream_info.state = HAT_DAQ_WIFI_STREAM_FAILED;
         s_wifi_stream_poll_armed = false;
         hat_daq_wifi_stream_reset_reassembly();
@@ -1466,6 +1486,8 @@ void hat_daq_poll_wifi_stream_info(void)
     // wait for the next poll to restart from seq 0 (mirrors the iOS
     // BLETransport desync-abort behavior).
     if (seq != s_wifi_stream_next_seq) {
+        ESP_LOGW(TAG, "wifi_stream_info poll: seq desync (got %u, expected %u) -- resetting reassembly",
+                 seq, s_wifi_stream_next_seq);
         hat_daq_wifi_stream_reset_reassembly();
         return;
     }
@@ -1486,7 +1508,15 @@ void hat_daq_poll_wifi_stream_info(void)
             s_wifi_stream_info.port = (uint16_t)(s_wifi_stream_buf[98] | (s_wifi_stream_buf[99] << 8));
             memcpy(s_wifi_stream_info.host, &s_wifi_stream_buf[100], sizeof(s_wifi_stream_info.host));
             s_wifi_stream_info.state = HAT_DAQ_WIFI_STREAM_READY;
+            ESP_LOGI(TAG, "wifi_stream_info poll: READY ssid=\"%s\" host=%u.%u.%u.%u port=%u (password len=%u)",
+                     s_wifi_stream_info.ssid,
+                     s_wifi_stream_info.host[0], s_wifi_stream_info.host[1],
+                     s_wifi_stream_info.host[2], s_wifi_stream_info.host[3],
+                     s_wifi_stream_info.port, (unsigned)strlen(s_wifi_stream_info.password));
         } else {
+            ESP_LOGW(TAG, "wifi_stream_info poll: LAST chunk but incomplete/not-ready "
+                          "(status=%u collected=%u/%u) -- marking FAILED",
+                     status, s_wifi_stream_off, (unsigned)HAT_WIFI_STREAM_BLOB_LEN);
             s_wifi_stream_info.state = HAT_DAQ_WIFI_STREAM_FAILED;
         }
         hat_daq_wifi_stream_reset_reassembly();

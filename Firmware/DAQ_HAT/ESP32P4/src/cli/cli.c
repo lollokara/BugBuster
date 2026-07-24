@@ -38,8 +38,14 @@
 #include "rom/gpio.h"
 #include "ddp_master.h"
 #include "c6_flasher.h"
+#include "relay_stage.h"
+#include "relay_c6.h"
 #include "wifi_ap.h"
 #include "tcp_backend.h"
+#include "captive_dns.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_mac.h"   // MACSTR / MAC2STR
 
 #include "config.h"
 #include "version.h"
@@ -3325,6 +3331,112 @@ static int cmd_wifiap(int argc, char **argv)
 }
 
 // ---------------------------------------------------------------------------
+// Detailed status of the whole DAQ-over-WiFi bring-up chain: DDP mode flag
+// sent to the C6, P4-side softAP/ESP-Hosted state, station/IP info once up,
+// captive DNS, TCP client, and the HAT-visible wifi_stream_info state
+// machine. Meant for diagnosing exactly where the chain is stuck (e.g. the
+// SDIO handshake to the C6 racing against wifi_hosted_start() -- see
+// .mex/patterns/daq-hat-ios-wifi-streaming.md).
+static int cmd_wifistat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    daq_board_t *b = s_board;
+
+    printf("wifistat:\n");
+    printf("  DDP wifi_stream_mode (last sent to C6): %s\n",
+           ddp_master_wifi_stream_mode_last_sent() ? "enabled" : "disabled");
+
+    static const char *state_name[] = { "IDLE", "STARTING", "READY", "FAILED" };
+    daq_wifi_stream_state_t st = b->wifi_stream_info.state;
+    printf("  HAT wifi_stream_info.state: %s\n",
+           (unsigned)st < (sizeof(state_name) / sizeof(state_name[0])) ? state_name[st] : "?");
+
+    bool up = wifi_ap_is_up();
+    printf("  softAP (ESP-Hosted/SDIO): %s\n", up ? "up" : "down");
+    if (up) {
+        wifi_config_t cfg = {0};
+        if (esp_wifi_get_config(WIFI_IF_AP, &cfg) == ESP_OK) {
+            printf("    ssid=\"%.*s\" channel=%u\n", cfg.ap.ssid_len, cfg.ap.ssid, cfg.ap.channel);
+        }
+        wifi_sta_list_t sta_list = {0};
+        if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
+            printf("    stations connected: %d\n", sta_list.num);
+            for (int i = 0; i < sta_list.num; i++) {
+                printf("      [%d] " MACSTR " rssi=%d\n", i, MAC2STR(sta_list.sta[i].mac), sta_list.sta[i].rssi);
+            }
+        }
+        esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        if (ap_netif) {
+            esp_netif_ip_info_t ip = {0};
+            if (esp_netif_get_ip_info(ap_netif, &ip) == ESP_OK) {
+                printf("    ip=" IPSTR " gw=" IPSTR "\n", IP2STR(&ip.ip), IP2STR(&ip.gw));
+            }
+        }
+    }
+
+    printf("  captive DNS (UDP:53 NXDOMAIN): (paired with softAP, no separate up/down getter -- see captive_dns.h)\n");
+    printf("  TCP backend client connected: %s (port %d)\n",
+           tcp_backend_connected() ? "yes" : "no", DAQ_WIFI_STREAM_TCP_PORT);
+
+    if (st == DAQ_WIFI_STREAM_READY) {
+        printf("  credentials handed to S3: ssid=\"%s\" port=%u host=%u.%u.%u.%u\n",
+               b->wifi_stream_info.ssid, b->wifi_stream_info.port,
+               b->wifi_stream_info.host[0], b->wifi_stream_info.host[1],
+               b->wifi_stream_info.host[2], b->wifi_stream_info.host[3]);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Trigger/inspect the USB-staged relay update (relay_stage.h): a PC stages a
+// full C6 image via USB_CMD_OTA_BEGIN/DATA/END (target=C6), verified by
+// SHA-256; this command kicks off relay_c6_push() (never auto-triggered) to
+// actually push the staged image from the P4's `staging` partition to the C6
+// over the existing UART flasher (c6_flasher.c). Resumable across P4 resets
+// via NVS-persisted pushed_bytes.
+//   c6relay status   show current stage/push state
+//   c6relay push     push the staged image to the C6 (blocks until done)
+static int cmd_c6relay(int argc, char **argv)
+{
+    daq_board_t *b = s_board;
+    relay_status_t st;
+    if (argc >= 2 && strcmp(argv[1], "push") == 0) {
+        relay_stage_get_status(&st);
+        if (st.target != RELAY_TARGET_C6 || (st.state != RELAY_STAGED && st.state != RELAY_PUSHING)) {
+            printf("c6relay: nothing staged for C6 (state=%d target=%d) -- stage via USB_CMD_OTA_BEGIN first\n",
+                   st.state, st.target);
+            return 1;
+        }
+        printf("c6relay: pushing %lu bytes to C6 (resuming from %lu)...\n",
+               (unsigned long)st.image_size, (unsigned long)st.pushed_bytes);
+
+        // relay_c6_push() drives c6_flasher.c directly with no DDP handling of
+        // its own (per c6_flasher.h: "the board layer orchestrates this") --
+        // mirror cmd_c6flash's exact preamble/postamble here, since this is
+        // the first real caller and nobody had wired it before.
+        ddp_master_deinit(&b->ddp);
+        gpio_reset_pin((gpio_num_t)DAQ_UART_TX_PIN);
+        gpio_reset_pin((gpio_num_t)DAQ_UART_RX_PIN);
+
+        esp_err_t err = relay_c6_push();
+
+        ddp_master_init(&b->ddp);
+        ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+        c6_rst_drive_high();   // ensure push-pull OUTPUT HIGH; never leave floating
+
+        printf("c6relay: %s\n", err == ESP_OK ? "done" : esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
+    }
+    relay_stage_get_status(&st);
+    static const char *state_name[] = { "IDLE", "STAGING", "STAGED", "PUSHING", "DONE", "FAILED" };
+    printf("c6relay: target=%d state=%s image_size=%lu staged=%lu pushed=%lu\n",
+           st.target,
+           (unsigned)st.state < (sizeof(state_name) / sizeof(state_name[0])) ? state_name[st.state] : "?",
+           (unsigned long)st.image_size, (unsigned long)st.staged_bytes, (unsigned long)st.pushed_bytes);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 static void reg(const char *cmd, const char *help, esp_console_cmd_func_t fn)
 {
     const esp_console_cmd_t c = { .command = cmd, .help = help, .hint = NULL, .func = fn };
@@ -3463,6 +3575,8 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("c6flash", "Flash C6 via staged binary: c6flash <bytes>  (use flash_via_p4.py)", cmd_c6flash);
     reg("c6diag",  "GPIO/SDIO diagnostics: c6diag <gpio|sdio>", cmd_c6diag);
     reg("wifiap",  "iOS DAQ streaming bring-up: wifiap <on <ssid> <password>|off>", cmd_wifiap);
+    reg("wifistat", "detailed status of the DAQ WiFi streaming chain (DDP mode, softAP, stations, TCP client)", cmd_wifistat);
+    reg("c6relay", "USB-staged C6 relay update: c6relay <status|push>", cmd_c6relay);
 
     // Priority 15 keeps command input responsive even at high ODR (consumer is
     // prio 12), but the timeout+yield read loop means it never busy-spins when

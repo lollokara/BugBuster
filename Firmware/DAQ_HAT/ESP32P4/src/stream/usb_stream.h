@@ -64,8 +64,14 @@ typedef struct {
     usb_cmd_cb_t    cmd_cb;
     void           *cmd_user;
 
-    // Inbound control reassembly.
-    uint8_t         rx_buf[USB_FRAME_OVERHEAD + 64];
+    // Inbound control reassembly. Must be large enough for USB_CMD_OTA_DATA
+    // (payload = u32 offset + firmware chunk bytes) -- every OTA_DATA frame
+    // over the old 64-byte cap was silently dropped byte-for-byte in
+    // usb_stream_on_rx() (plausibility check treats an oversized length as
+    // "resync", with no logging), so staging always saw staged_bytes stuck at
+    // 0 and failed the final size/SHA-256 check. 512 matches TinyUSB's own
+    // vendor OUT FIFO (CONFIG_TINYUSB_VENDOR_RX_BUFSIZE) as a natural ceiling.
+    uint8_t         rx_buf[USB_FRAME_OVERHEAD + 512];
     uint16_t        rx_len;
 
     // Staging buffer for a frame being built (header + payload + crc).

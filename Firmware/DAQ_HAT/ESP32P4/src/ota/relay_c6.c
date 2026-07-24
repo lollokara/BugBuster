@@ -8,6 +8,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
+#include "config.h"   // C6_BOOT_PIN / C6_BOOT_EN_PIN
 
 static const char *TAG = "relay_c6";
 
@@ -26,6 +28,14 @@ esp_err_t relay_c6_push(void)
         relay_stage_reset(RELAY_FAILED);
         return err;
     }
+
+    // Persist resume progress only every this many bytes (mirrors
+    // STAGE_PERSIST_INTERVAL in relay_stage.c) -- committing to NVS on every
+    // single 256-byte chunk (~5200 commits for a 1.3 MB image) blocked long
+    // enough, with no scheduler yield in between, to starve CPU0's
+    // watchdog-checked IDLE task and reset the P4 mid-push.
+    #define RELAY_C6_PERSIST_INTERVAL (16u * 1024u)
+    uint32_t last_persisted = offset;
 
     uint8_t buf[RELAY_C6_CHUNK_SIZE];
     while (offset < st.image_size) {
@@ -56,8 +66,27 @@ esp_err_t relay_c6_push(void)
         }
 
         offset += (uint32_t)n;
-        relay_stage_set_pushed_bytes(offset);   // persists to NVS for resume
+        if (offset - last_persisted >= RELAY_C6_PERSIST_INTERVAL || offset >= st.image_size) {
+            relay_stage_set_pushed_bytes(offset);   // persists to NVS for resume
+            last_persisted = offset;
+        }
+        // Unconditional yield every chunk regardless of the persist interval
+        // above -- a resumed run may redo up to RELAY_C6_PERSIST_INTERVAL
+        // bytes of UART writes on a P4 reset, a bounded tradeoff against NVS
+        // wear (same tradeoff STAGE_PERSIST_INTERVAL already accepts).
+        vTaskDelay(1);
     }
+
+    // Release BOOT strapping before the reset inside c6_flasher_finish()
+    // (esp_loader_reset_target()) -- c6_flasher_begin() leaves C6_BOOT_PIN
+    // driven LOW (download mode) for the whole transfer and c6_flasher.c
+    // never releases it itself (cmd_c6flash in cli.c does this same release
+    // inline before its own finish call; relay_c6_push() is a separate entry
+    // point and needs the identical step). Without this, the post-flash
+    // reset lands the C6 right back in ROM download mode instead of running
+    // the new image -- silent (no crash, no log), just a black screen forever.
+    gpio_set_level((gpio_num_t)C6_BOOT_PIN,    1);
+    gpio_set_level((gpio_num_t)C6_BOOT_EN_PIN, 1);
 
     err = c6_flasher_finish();   // flushes final block, verifies MD5, resets C6
     if (err != ESP_OK) {

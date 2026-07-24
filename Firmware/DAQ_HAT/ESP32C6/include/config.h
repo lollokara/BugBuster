@@ -123,6 +123,21 @@
 #define BTN_PIN_OK        7
 
 // ---------------------------------------------------------------------------
+// REMOVED (2026-07-23): a boot-time GPIO strap on "C6 GPIO2" was tried here
+// to survive the P4's ESP-Hosted host stack hard-resetting the C6 when
+// bringing up the SDIO transport. Abandoned: Docs/FIRMWARE_HARDWARE_REFERENCE.md
+// §5's verified C6 wiring map does not list this pin as connected to the P4
+// at all (the old "C6 GPIO2 (IO2) -> P4 GPIO6" note in the P4's config.h was
+// never verified against the schematic), which matches the observed
+// behavior of the strap always reading asserted regardless of what the P4
+// did. Fixed properly instead via CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY
+// (P4 sdkconfig.defaults): the P4 now tells the C6 over the existing DDP UART
+// link to start its ESP-Hosted stack *before* bringing up SDIO, so the reset
+// path is skipped entirely instead of needing to survive it. See
+// .mex/patterns/daq-hat-ios-wifi-streaming.md.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Debug: per-phase frame profiler. Set to 1 to log how long each rendering
 // phase (bg/header/cards/flush) takes so we can target optimizations. Logs
 // averages every DISP_PERF_PERIOD frames. Set to 0 for production.

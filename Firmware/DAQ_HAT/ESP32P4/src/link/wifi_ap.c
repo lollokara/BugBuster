@@ -59,8 +59,17 @@ esp_err_t wifi_ap_init(void)
     err = esp_event_loop_create_default();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
 
-    s_ap_netif = esp_netif_create_default_wifi_ap();
-    if (!s_ap_netif) return ESP_FAIL;
+    // Guarded independently of s_inited: esp_wifi_init() below can fail (e.g.
+    // the ESP-Hosted SDIO link to the C6 isn't up yet) after this already
+    // succeeded, leaving s_inited false but the netif still registered under
+    // its fixed "WIFI_AP_DEF" key. A retry that unconditionally called
+    // esp_netif_create_default_wifi_ap() again would hit ESP-IDF's
+    // duplicate-key assert and hard-abort the whole board -- so only create
+    // it once, ever, and reuse it across retries.
+    if (!s_ap_netif) {
+        s_ap_netif = esp_netif_create_default_wifi_ap();
+        if (!s_ap_netif) return ESP_FAIL;
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&cfg);

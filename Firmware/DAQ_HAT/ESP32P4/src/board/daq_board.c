@@ -5,6 +5,7 @@
 #include "daq_board.h"
 #include <string.h>
 #include "freertos/queue.h"
+#include "freertos/task.h"
 #include "usb_proto.h"
 #include "esp_rom_sys.h"
 #include "esp_log.h"
@@ -773,6 +774,65 @@ static void c6_link_restart(daq_board_t *b)
     ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
 }
 
+// Runs the actual DAQ WiFi streaming bring-up (softAP over ESP-Hosted, fast-
+// fail DNS, TCP backend) in its own task so HATP_CMD_DAQ_WIFI_STREAM_START
+// can return to the S3-link dispatcher immediately -- see the long comment
+// at that command's case for why inline bring-up there breaks the S3's
+// 200ms response wait. Self-deletes on completion; final state (READY or
+// FAILED) is visible to the S3 via HATP_CMD_DAQ_WIFI_STREAM_INFO polling.
+static void wifi_stream_bringup_task(void *arg)
+{
+    daq_board_t *b = (daq_board_t *)arg;
+
+    char ssid[33], password[65];
+    daq_wifi_ident_generate(ssid, sizeof(ssid), password, sizeof(password));
+
+    ddp_master_set_wifi_stream_mode(&b->ddp, true);
+
+    // The DDP command above is fire-and-forget: the C6 only starts bringing
+    // up its ESP-Hosted SDIO slave stack (wifi_hosted_start(), called from
+    // its ~100ms main loop once it observes the mode flag) AFTER it receives
+    // and processes this, which is not instantaneous. With
+    // CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY (sdkconfig.defaults)
+    // the P4's own esp_wifi_init() below will NOT hard-reset the C6 as long
+    // as this SDIO handshake succeeds -- but it still needs the C6 to have
+    // already started listening, so this retry window covers the gap
+    // between sending the DDP command and the C6 actually getting to
+    // wifi_hosted_start(). (With the old unconditional-reset default,
+    // hammering the SDIO bus immediately also reset the C6 back to square
+    // one every time, wiping the very flag this command just set -- see
+    // .mex/patterns/daq-hat-ios-wifi-streaming.md for that whole saga.)
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 0; attempt < 6; attempt++) {
+        if (attempt > 0) vTaskDelay(pdMS_TO_TICKS(500));
+        err = wifi_ap_start(ssid, password);
+        if (err == ESP_OK) break;
+        ESP_LOGW(TAG, "wifi_ap_start attempt %d failed: %s, retrying...",
+                 attempt + 1, esp_err_to_name(err));
+    }
+    if (err == ESP_OK) err = captive_dns_start();
+    if (err == ESP_OK) err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "wifi stream start failed: %s", esp_err_to_name(err));
+        tcp_backend_stop();
+        captive_dns_stop();
+        wifi_ap_stop();
+        ddp_master_set_wifi_stream_mode(&b->ddp, false);
+        b->wifi_stream_info.state = DAQ_WIFI_STREAM_FAILED;
+        vTaskDelete(NULL);
+        return;
+    }
+    strlcpy(b->wifi_stream_info.ssid, ssid, sizeof(b->wifi_stream_info.ssid));
+    strlcpy(b->wifi_stream_info.password, password, sizeof(b->wifi_stream_info.password));
+    b->wifi_stream_info.port = DAQ_WIFI_STREAM_TCP_PORT;
+    b->wifi_stream_info.host[0] = 192;
+    b->wifi_stream_info.host[1] = 168;
+    b->wifi_stream_info.host[2] = 4;
+    b->wifi_stream_info.host[3] = 1;
+    b->wifi_stream_info.state = DAQ_WIFI_STREAM_READY;
+    vTaskDelete(NULL);
+}
+
 static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                           uint8_t *resp, void *user)
 {
@@ -805,36 +865,38 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         // ack" the S3 sees is really just which frame comes back
         // (HATP_RSP_OK vs HATP_RSP_ERROR via s3_link.c's generic dispatch),
         // not a payload byte (there is no per-cmd response code path for
-        // these two in s3_link.c, same as DAQ_START/STOP today). ----
+        // these two in s3_link.c, same as DAQ_START/STOP today).
+        //
+        // MUST return immediately: this handler runs synchronously inside
+        // the S3-link command dispatch, and the S3 side (hat.cpp
+        // hat_daq_wifi_stream_start()) only waits 200ms for a response. The
+        // actual bring-up (softAP/DNS/TCP, with a multi-attempt retry loop
+        // for the C6's ESP-Hosted stack to come up) can take seconds -- doing
+        // it inline here always times out the S3, which then retries WHILE
+        // the first attempt is still finishing or has just succeeded,
+        // colliding with it (tcp_backend_start() sees "already running" and
+        // the retry's failure-cleanup tears down the just-established softAP
+        // out from under the first, actually-successful attempt). So this
+        // only kicks off wifi_stream_bringup_task() and returns; the S3
+        // learns real status via the existing HATP_CMD_DAQ_WIFI_STREAM_INFO
+        // poll / b->wifi_stream_info.state, which is exactly what that
+        // state machine was already built for. ----
         case HATP_CMD_DAQ_WIFI_STREAM_START: {
-            char ssid[33], password[65];
-            daq_wifi_ident_generate(ssid, sizeof(ssid), password, sizeof(password));
-
+            // Idempotent: a repeat START while one is already in flight or
+            // already up must NOT reset state or spawn a second task.
+            if (b->wifi_stream_info.state == DAQ_WIFI_STREAM_STARTING ||
+                b->wifi_stream_info.state == DAQ_WIFI_STREAM_READY) {
+                return 0;
+            }
             memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
             b->wifi_stream_info.state = DAQ_WIFI_STREAM_STARTING;
-
-            ddp_master_set_wifi_stream_mode(&b->ddp, true);
-            esp_err_t err = wifi_ap_start(ssid, password);
-            if (err == ESP_OK) err = captive_dns_start();
-            if (err == ESP_OK) err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "wifi stream start failed: %s", esp_err_to_name(err));
-                tcp_backend_stop();
-                captive_dns_stop();
-                wifi_ap_stop();
-                ddp_master_set_wifi_stream_mode(&b->ddp, false);
+            BaseType_t ok = xTaskCreate(wifi_stream_bringup_task, "wifi_bringup",
+                                       4096, b, 5, NULL);
+            if (ok != pdPASS) {
                 b->wifi_stream_info.state = DAQ_WIFI_STREAM_FAILED;
-                return -1;   // rejected -> HATP_RSP_ERROR
+                return -1;
             }
-            strlcpy(b->wifi_stream_info.ssid, ssid, sizeof(b->wifi_stream_info.ssid));
-            strlcpy(b->wifi_stream_info.password, password, sizeof(b->wifi_stream_info.password));
-            b->wifi_stream_info.port = DAQ_WIFI_STREAM_TCP_PORT;
-            b->wifi_stream_info.host[0] = 192;
-            b->wifi_stream_info.host[1] = 168;
-            b->wifi_stream_info.host[2] = 4;
-            b->wifi_stream_info.host[3] = 1;
-            b->wifi_stream_info.state = DAQ_WIFI_STREAM_READY;
-            return 0;   // accepted -> HATP_RSP_OK
+            return 0;   // accepted -> HATP_RSP_OK (bring-up continues in background)
         }
 
         case HATP_CMD_DAQ_WIFI_STREAM_STOP:

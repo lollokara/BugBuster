@@ -66,6 +66,18 @@ CONFIG_SERIAL_FLASHER_BOOT_HOLD_TIME_MS=800
 # managed_components/espressif__esp_hosted/Kconfig) once the co-processor
 # target is picked; only the target itself has no default and must be set.
 CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+# Default is ESP_HOSTED_SLAVE_RESET_ON_EVERY_HOST_BOOTUP: esp_wifi_init()
+# unconditionally hard-resets the C6 via its CHIP_PU-adjacent GPIO before
+# even attempting SDIO, wiping all C6 RAM state -- including a DDP
+# wifi_stream_mode flag/wifi_hosted_start() call the P4 sent moments earlier
+# to get the C6 ready, which is exactly backwards for our "tell C6 first,
+# then bring up the host side" sequencing (daq_board.c's
+# HATP_CMD_DAQ_WIFI_STREAM_START handler). ONLY_IF_NECESSARY only resets if
+# the SDIO handshake actually fails, so a C6 that's already running its
+# hosted stack (told via DDP over the separate UART2 link, unaffected by
+# this GPIO) is left alone and just answers over SDIO directly.
+CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY=y
+CONFIG_ESP_HOSTED_HOST_RESTART_NO_COMMUNICATION_WITH_SLAVE=y
 # Retry a failed flash-data block up to 8 times (default 3) before aborting the
 # whole C6 transfer. The P4<->C6 UART link at 115200 occasionally glitches on a
 # single block; each retry re-syncs SLIP framing and re-sends the block, so more

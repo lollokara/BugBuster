@@ -183,7 +183,16 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             guard let self else { return }
-            let deadline = Date().addingTimeInterval(8.0)
+            // 8s was too tight: the full chain is DDP round-trip to the C6 +
+            // up to ~3s of P4-side wifi_ap_start() retries (waiting for the
+            // C6's ESP-Hosted stack to come up) + ~1-1.5s softAP/DNS/TCP
+            // bring-up + ~1s for the S3 to reassemble the 4 chunked info
+            // frames at its own 250ms HAT-poll cadence, all before this BLE
+            // poll even sees "ready" -- plus BLE's own per-request overhead
+            // on top of that. Observed real-world timeouts at 8s with the
+            // P4/S3 side otherwise succeeding cleanly. See .mex/patterns/
+            // daq-hat-ios-wifi-streaming.md.
+            let deadline = Date().addingTimeInterval(20.0)
             while !Task.isCancelled {
                 if Date() >= deadline {
                     self.provisioningState = .failed("Timed out waiting for DAQ WiFi credentials")
@@ -256,6 +265,15 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
                 joinedHotspotSSID = ssid
                 return true
             }
+            // Logged (not just stored) because a bare "could not join" with no
+            // system join prompt ever appearing is the exact signature of the
+            // com.apple.developer.networking.HotspotConfiguration entitlement
+            // being declared in bugbuster.entitlements but not actually granted
+            // by Apple (Developer Portal capability + regenerated provisioning
+            // profile is a manual step, not something buildable from CI/CLI) --
+            // this print distinguishes that from a real code bug.
+            print("[DaqWifiStreamManager] NEHotspotConfiguration apply() failed: "
+                  + "domain=\(error.domain) code=\(error.code) \(error.localizedDescription)")
             lastError = error.localizedDescription
             return false
         }

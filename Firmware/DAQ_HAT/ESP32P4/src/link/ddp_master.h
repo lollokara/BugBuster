@@ -77,6 +77,9 @@ void ddp_master_set_backlight(ddp_master_t *m, uint8_t level);
 // mode: it stops rendering the normal readout/menu and shows a static "WiFi
 // streaming" screen while the SDIO link is handed to ESP-Hosted.
 void ddp_master_set_wifi_stream_mode(ddp_master_t *m, bool enable);
+// Status-reporting only -- what the P4 last told the C6, not a confirmed
+// readback (the DDP send is fire-and-forget, no ack tracked). See `wifistat`.
+bool ddp_master_wifi_stream_mode_last_sent(void);
 // 4 channel-status colour codes (front 4-connector) -> C6 neopixels (pairs).
 void ddp_master_set_ch_leds(ddp_master_t *m, const uint8_t codes[4]);
 // Push one or more pre-encoded TLVs so the C6 menu reflects S3-side edits.
