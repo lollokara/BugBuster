@@ -4,6 +4,7 @@
 
 #include "daq_board.h"
 #include <string.h>
+#include <math.h>
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "usb_proto.h"
@@ -1522,6 +1523,47 @@ static inline int32_t base_offset_adc(daq_board_t *b, uint8_t range)
 }
 
 // Fuse one (optional) FINE + (optional) COARSE pair and push it downstream.
+// ---------------------------------------------------------------------------
+// Isolated-outlier despike (glitch eradication). The capture engine misses a
+// small fraction of edges under SCLK overlap (faststat "missed" counter) and
+// the adjacent conversions read as corrupted codes of ARBITRARY value with
+// clean flags — visible as random full-scale single-sample spikes on the
+// host, polluting the stream, DSP, and stats alike. A corrupted conversion is
+// identifiable without thresholds tuned per signal: a sample far from BOTH
+// neighbors while the neighbors agree with each other cannot be signal at
+// this ODR. Real steps/edges keep neighbors disagreeing and pass untouched.
+// Costs a one-sample delay on each stream.
+// ---------------------------------------------------------------------------
+static inline bool glitch_isolated(float prev, float x, float next, float eps)
+{
+    float dp = fabsf(x - prev);
+    float dn = fabsf(x - next);
+    float pn = fabsf(prev - next);
+    return dp > 4.0f * (pn + eps) && dn > 4.0f * (pn + eps);
+}
+
+typedef struct {
+    float           prev;      // x[n-2], post-correction
+    fusion_output_t hold;      // x[n-1], pending emission
+    bool            hold_settling;
+    uint8_t         n;
+} i_despike_t;
+
+typedef struct {
+    float   prev;              // x[n-2], post-correction
+    float   hold;              // x[n-1], pending emission
+    uint8_t n;
+} v_despike_t;
+
+static i_despike_t s_i_glitch;
+static v_despike_t s_v_glitch;
+
+static void glitch_filter_reset(void)
+{
+    s_i_glitch.n = 0;
+    s_v_glitch.n = 0;
+}
+
 static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
                       const adaq_sample_t *coarse)
 {
@@ -1553,11 +1595,33 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     fusion_output_t fo;
     current_fusion_step(&b->fusion, &in, &fo);
 
+    // One-sample-delayed despike (see glitch_isolated above): every consumer
+    // below — power, DSP tail, and the wire push — sees the corrected stream.
+    bool settling_now = range_manager_settling(&b->range);
+    fusion_output_t emit_fo;
+    bool emit_settling;
+    if (s_i_glitch.n == 0) {
+        s_i_glitch.hold = fo;
+        s_i_glitch.hold_settling = settling_now;
+        s_i_glitch.n = 1;
+        return;
+    }
+    emit_fo = s_i_glitch.hold;
+    emit_settling = s_i_glitch.hold_settling;
+    if (s_i_glitch.n >= 2 &&
+        glitch_isolated(s_i_glitch.prev, emit_fo.amps, fo.amps, 1e-6f)) {
+        emit_fo.amps = 0.5f * (s_i_glitch.prev + fo.amps);
+    }
+    s_i_glitch.prev = emit_fo.amps;
+    s_i_glitch.hold = fo;
+    s_i_glitch.hold_settling = settling_now;
+    if (s_i_glitch.n < 2) s_i_glitch.n = 2;
+
     // Instantaneous power for the full-rate PC stream: p = v_held * i. Computed
     // inline (cheap) so the heavy power DSP need not run every sample. v is the
     // held voltage from the slower VOLTAGE ADC.
     float v = power_dsp_voltage(&b->dsp);
-    float p = v * fo.amps;
+    float p = v * emit_fo.amps;
 
     // DSP TAIL (energy/charge/stats + multires + spectrum) runs DECIMATED: it
     // doesn't need the full per-channel rate, and decimating frees core-0 budget
@@ -1566,10 +1630,10 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // correct. The PC still gets every fused sample below.
     if (++b->dsp_count >= b->dsp_decim) {
         b->dsp_count = 0;
-        power_dsp_push_current(&b->dsp, fo.amps);
-        multires_push(&b->multires, fo.amps);
+        power_dsp_push_current(&b->dsp, emit_fo.amps);
+        multires_push(&b->multires, emit_fo.amps);
         spectrum_push(&b->spectrum,
-                      (b->fft_source == 1) ? power_dsp_last_p(&b->dsp) : fo.amps);
+                      (b->fft_source == 1) ? power_dsp_last_p(&b->dsp) : emit_fo.amps);
     }
 
     // Full-rate fused waveform to the PC (decimated only by wave_decim, def 1).
@@ -1578,8 +1642,8 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // at up to 256 ksps.
     if (++b->wave_count >= b->wave_decim) {
         b->wave_count = 0;
-        usb_stream_push_sample(&b->usb, &fo, b->fine_rate_hz, b->wave_decim,
-                               range_manager_settling(&b->range));
+        usb_stream_push_sample(&b->usb, &emit_fo, b->fine_rate_hz, b->wave_decim,
+                               emit_settling);
     }
 }
 
@@ -1615,25 +1679,45 @@ static void daq_fast_task(void *arg)
         while (!have_coarse && adaq_stream_read(&b->stream_b, &sb, 1) == 1) {
             progress = true;
             if (sb.device_id == FASTB_VOLTAGE_LOCAL) {
-                // Glitch filter: a raw code of EXACTLY 0 with clean flags is
-                // a corrupted conversion (SPI/DRDY glitch under bus load),
-                // not a measurement -- even a true 0 V input dithers a few
-                // LSB around zero. These showed up as full-scale 0 V spikes
-                // on the host scope, rate-proportional to ODR.
+                // sb.value != 0: cheap prefilter for one common corruption
+                // pattern (all-zero conversion with clean flags); the
+                // one-sample despike below catches arbitrary-value glitches.
                 if (b->adaq_ok[ADAQ_ROLE_VOLTAGE] && fast_sample_good(&sb) &&
                     sb.value != 0) {
                     float vv = adaq7769_code_to_volts(
                                    &b->adaq[ADAQ_ROLE_VOLTAGE], sb.value)
                                * V_DUT_SENSE_SCALE;
-                    power_dsp_set_voltage(&b->dsp, vv);
-                    // SET_RATE stream decimation. The wave header carries the
-                    // *effective* rate so hosts that ignore the header's
-                    // decimation byte still get a correct timebase.
-                    if (++b->volt_count >= b->volt_decim) {
-                        b->volt_count = 0;
-                        uint32_t vdec = b->volt_decim ? b->volt_decim : 1;
-                        usb_stream_push_voltage(&b->usb, vv,
-                                                b->volt_rate_hz / vdec);
+                    // One-sample-delayed isolated-outlier despike (see
+                    // glitch_isolated) -- corrupted conversions of arbitrary
+                    // value never reach the DSP or the wire.
+                    float emit_v = 0.0f;
+                    bool  have_v = false;
+                    if (s_v_glitch.n == 0) {
+                        s_v_glitch.hold = vv;
+                        s_v_glitch.n = 1;
+                    } else {
+                        emit_v = s_v_glitch.hold;
+                        if (s_v_glitch.n >= 2 &&
+                            glitch_isolated(s_v_glitch.prev, emit_v, vv, 0.01f)) {
+                            emit_v = 0.5f * (s_v_glitch.prev + vv);
+                        }
+                        s_v_glitch.prev = emit_v;
+                        s_v_glitch.hold = vv;
+                        if (s_v_glitch.n < 2) s_v_glitch.n = 2;
+                        have_v = true;
+                    }
+                    if (have_v) {
+                        power_dsp_set_voltage(&b->dsp, emit_v);
+                        // SET_RATE stream decimation. The wave header carries
+                        // the *effective* rate so hosts that ignore the
+                        // header's decimation byte still get a correct
+                        // timebase.
+                        if (++b->volt_count >= b->volt_decim) {
+                            b->volt_count = 0;
+                            uint32_t vdec = b->volt_decim ? b->volt_decim : 1;
+                            usb_stream_push_voltage(&b->usb, emit_v,
+                                                    b->volt_rate_hz / vdec);
+                        }
                     }
                 }
             } else {
@@ -1747,6 +1831,7 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
     b->wave_count   = 0;
     if (b->volt_decim == 0) b->volt_decim = 1;
     b->volt_count   = 0;
+    glitch_filter_reset();
     b->volt_rate_hz = (uint32_t)(b->adaq_ok[ADAQ_ROLE_VOLTAGE]
                           ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE])
                           : 0);

@@ -194,7 +194,13 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         var recent = recent
         var rHi = upperBound(recent.t, end)
         var rLo = lowerBound(recent.t, cutoff, upTo: rHi)
-        if rHi - rLo > columns * 4, !reduced.t.isEmpty {
+        // Choose raw vs reduced from the POST-zoom visible count: the pinch
+        // scale shrinks what's on screen, and a deep zoom must fall back to
+        // the raw ring (full resolution) even when the un-zoomed window is
+        // huge — selecting on the raw window size alone rendered deep zooms
+        // from coarse envelope points.
+        let visibleRaw = Double(rHi - rLo) / Double(max(scale, 0.001))
+        if visibleRaw > Double(columns * 4), !reduced.t.isEmpty {
             recent = reduced
             rHi = upperBound(recent.t, end)
             rLo = lowerBound(recent.t, cutoff, upTo: rHi)

@@ -13,8 +13,14 @@ struct DaqScopeCanvasView: View {
 
     // Pinch-zoom scale committed between gestures; live pinch multiplies it.
     @State private var committedScale: CGFloat = 1.0
-    @GestureState private var gestureScale: CGFloat = 1.0
+    /// True while ANY two-finger gesture is down — a horizontal two-finger
+    /// scroll pans/unanchors even when the finger distance barely changes.
+    @GestureState private var twoFingerActive = false
     @State private var touchLocation: CGPoint? = nil
+
+    /// Dead-band so a two-finger scroll doesn't also zoom: the scale only
+    /// changes once the pinch ratio moves meaningfully away from 1.
+    private let pinchDeadBand: CGFloat = 0.06
 
     // The view normally follows the live edge of the buffer ("anchored").
     // A two-finger pan (drag concurrent with an active pinch) unanchors it;
@@ -68,20 +74,25 @@ struct DaqScopeCanvasView: View {
             .gesture(
                 SimultaneousGesture(
                     MagnificationGesture()
-                        .updating($gestureScale) { value, state, _ in state = value }
+                        .updating($twoFingerActive) { _, state, _ in state = true }
                         .onChanged { value in
+                            guard abs(value - 1.0) > pinchDeadBand else { return }
                             let s = clampScale(committedScale * value)
                             model.updateViewport { $0.timeScale = s }
                         }
                         .onEnded { value in
-                            committedScale = clampScale(committedScale * value)
+                            if abs(value - 1.0) > pinchDeadBand {
+                                committedScale = clampScale(committedScale * value)
+                            }
                             model.updateViewport { $0.timeScale = committedScale }
                         },
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            if gestureScale != 1.0 {
-                                // Concurrent with an active pinch: treat as a
-                                // 2-finger pan, not the single-finger touch cursor.
+                            if twoFingerActive {
+                                // Two fingers down: pan/unanchor, regardless
+                                // of whether the distance between them is
+                                // changing (horizontal scroll), not the
+                                // single-finger touch cursor.
                                 touchLocation = nil
                                 followLive = false
                                 let frame = model.frame
