@@ -298,7 +298,13 @@ static inline void capture_begin(adaq_stream_t *s, uint8_t local, bool want_stat
                                  uint8_t *cur_len)
 {
     adaq7769_t *dev = s->devices[local];
-    uint8_t n = want_status ? 4 : 3;
+    // BUG FIXED HERE: this frame length previously ignored s->append_crc
+    // entirely, so with CRC enabled the device drove a trailing CRC byte
+    // that was never clocked in by fifo_setup/fifo_drain -- capture_end's
+    // CRC check then read uninitialized stack bytes past the real transfer
+    // and (mis)flagged nearly every sample CRC_ERR, invalidating FINE and
+    // COARSE and reading current as exactly 0.
+    uint8_t n = (uint8_t)(3 + (want_status ? 1 : 0) + (s->append_crc ? 1 : 0));
     if (*cur_len != n) {
         adaq_ll_fifo_setup(&dev->ll, n);
         *cur_len = n;
@@ -319,7 +325,7 @@ static inline void capture_end(adaq_stream_t *s, uint8_t local, bool want_status
                                uint8_t *buf)
 {
     adaq7769_t *dev = s->devices[local];
-    uint8_t n = want_status ? 4 : 3;
+    uint8_t n = (uint8_t)(3 + (want_status ? 1 : 0) + (s->append_crc ? 1 : 0));
     adaq_ll_fifo_wait(&dev->ll);
     adaq_ll_fifo_drain(&dev->ll, buf, n);
     // HW-CS devices already auto-deasserted (with a guaranteed post-transfer
