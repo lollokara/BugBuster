@@ -308,30 +308,7 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
 
     // MARK: - WiFi auto-join
 
-    /// Check if the app has the required entitlements for WiFi hotspot configuration.
-    /// This reads the app's embedded entitlements plist and checks for the necessary
-    /// capabilities. Note: this only checks what's in the app binary; Apple Developer
-    /// Portal must also grant these for the provisioning profile to include them.
-    func checkEntitlements() -> (hasHotspotConfig: Bool, hasLocalNetwork: Bool) {
-        var hasHotspotConfig = false
-        var hasLocalNetwork = false
-
-        guard let bundlePath = Bundle.main.path(forResource: "Entitlements", ofType: "plist"),
-              let entitlements = NSDictionary(contentsOfFile: bundlePath) else {
-            // Fallback: try reading from the app's CodeResources or other locations
-            print("[DaqWifiStreamManager] Could not locate embedded Entitlements.plist")
-            return (false, false)
-        }
-
-        hasHotspotConfig = entitlements["com.apple.developer.networking.HotspotConfiguration"] as? Bool ?? false
-        hasLocalNetwork = entitlements["com.apple.developer.networking.local-network"] as? Bool ?? false
-
-        return (hasHotspotConfig, hasLocalNetwork)
-    }
-
     private func joinDaqHotspot(ssid: String, password: String) async -> Bool {
-        let (hasHotspot, hasLocalNet) = checkEntitlements()
-        print("[DaqWifiStreamManager] Entitlements check: HotspotConfig=\(hasHotspot) LocalNetwork=\(hasLocalNet)")
 
         let configuration = NEHotspotConfiguration(ssid: ssid, passphrase: password, isWEP: false)
         configuration.joinOnce = true
@@ -348,39 +325,8 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
                 joinedHotspotSSID = ssid
                 return true
             }
-            // Logged (not just stored) because a bare "could not join" with no
-            // system join prompt ever appearing is the exact signature of the
-            // com.apple.developer.networking.HotspotConfiguration entitlement
-            // being declared in bugbuster.entitlements but not actually granted
-            // by Apple (Developer Portal capability + regenerated provisioning
-            // profile is a manual step, not something buildable from CI/CLI) --
-            // this print distinguishes that from a real code bug.
-            let errorCodeName: String
-            if let nsErrorCode = NEHotspotConfigurationError(rawValue: error.code) {
-                switch nsErrorCode {
-                case .invalid: errorCodeName = "invalid"
-                case .invalidSSID: errorCodeName = "invalidSSID"
-                case .invalidWPAPassphrase: errorCodeName = "invalidWPAPassphrase"
-                case .invalidWEPPassphrase: errorCodeName = "invalidWEPPassphrase"
-                case .alreadyAssociated: errorCodeName = "alreadyAssociated"
-                case .applicationIsNotInForeground: errorCodeName = "applicationIsNotInForeground"
-                case .userDenied: errorCodeName = "userDenied"
-                @unknown default: errorCodeName = "unknown(\(error.code))"
-                }
-            } else {
-                errorCodeName = "unknown(\(error.code))"
-            }
-
-            let debugInfo = """
-            [DaqWifiStreamManager] NEHotspotConfiguration apply() failed:
-              domain: \(error.domain)
-              code: \(error.code) (\(errorCodeName))
-              description: \(error.localizedDescription)
-              userInfo: \(error.userInfo)
-              SSID: \(ssid)
-              Device: \(UIDevice.current.model) iOS \(UIDevice.current.systemVersion)
-            """
-            print(debugInfo)
+            print("[DaqWifiStreamManager] NEHotspotConfiguration apply() failed: "
+                  + "domain=\(error.domain) code=\(error.code) \(error.localizedDescription)")
             lastError = error.localizedDescription
             return false
         }
