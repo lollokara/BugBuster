@@ -116,7 +116,10 @@ struct DaqScopeCanvasView: View {
     }
 
     private func clampScale(_ s: CGFloat) -> CGFloat {
-        max(0.2, min(5.0, s))
+        // Deep zoom is real fidelity now: past the reduced-envelope
+        // threshold the pipeline reads the raw recent ring, so 500× on a
+        // 30 s window still resolves individual samples at 32 kSps.
+        max(0.2, min(500.0, s))
     }
 
     private func tSpanOf(_ frame: ScopeRenderFrame?) -> Double {

@@ -1615,7 +1615,13 @@ static void daq_fast_task(void *arg)
         while (!have_coarse && adaq_stream_read(&b->stream_b, &sb, 1) == 1) {
             progress = true;
             if (sb.device_id == FASTB_VOLTAGE_LOCAL) {
-                if (b->adaq_ok[ADAQ_ROLE_VOLTAGE] && fast_sample_good(&sb)) {
+                // Glitch filter: a raw code of EXACTLY 0 with clean flags is
+                // a corrupted conversion (SPI/DRDY glitch under bus load),
+                // not a measurement -- even a true 0 V input dithers a few
+                // LSB around zero. These showed up as full-scale 0 V spikes
+                // on the host scope, rate-proportional to ODR.
+                if (b->adaq_ok[ADAQ_ROLE_VOLTAGE] && fast_sample_good(&sb) &&
+                    sb.value != 0) {
                     float vv = adaq7769_code_to_volts(
                                    &b->adaq[ADAQ_ROLE_VOLTAGE], sb.value)
                                * V_DUT_SENSE_SCALE;

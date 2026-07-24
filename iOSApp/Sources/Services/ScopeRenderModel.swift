@@ -75,7 +75,7 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         stop()
         self.engine = engine
         let t = DispatchSource.makeTimerSource(queue: DaqStreamEngine.queue)
-        t.schedule(deadline: .now(), repeating: .milliseconds(33))
+        t.schedule(deadline: .now(), repeating: .milliseconds(50))
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         timer = t

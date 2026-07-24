@@ -583,17 +583,23 @@ final class DaqStreamEngine: @unchecked Sendable {
             let bytesPerSample = isVoltage ? 4 : 5
             while count > 0 && 24 + count * bytesPerSample > payload.count { count -= 1 }
 
-            var values = [Float]()
-            values.reserveCapacity(count)
-            for i in 0..<count { values.append(payload.f32(24 + i * 4)) }
+            // Bulk-parse the f32/meta arrays with raw pointer loads — the
+            // per-byte Data-subscript path cost real CPU at tens of
+            // kilosamples/sec (host is little-endian, matching the wire).
+            let values: [Float] = payload.withUnsafeBytes { raw in
+                var out = [Float]()
+                out.reserveCapacity(count)
+                for i in 0..<count {
+                    out.append(Float(bitPattern: raw.loadUnaligned(fromByteOffset: 24 + i * 4,
+                                                                   as: UInt32.self)))
+                }
+                return out
+            }
 
             var meta: [UInt8]? = nil
             if !isVoltage {
-                var m = [UInt8]()
-                m.reserveCapacity(count)
                 let metaBase = 24 + count * 4
-                for i in 0..<count { m.append(payload.u8(metaBase + i)) }
-                meta = m
+                meta = Array(payload[(payload.startIndex + metaBase)..<(payload.startIndex + metaBase + count)])
             }
             return .wave(DaqWaveBlock(startIndex: startIndex, timestampUs: timestampUs,
                                       sampleRate: sampleRate,

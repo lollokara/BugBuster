@@ -339,6 +339,16 @@ struct ScopeTab: View {
 
             GlassEffectContainer(spacing: 8) {
                 HStack(spacing: 6) {
+                    if mode == .daq {
+                        Button(action: { daqStream.engine.resetBuffers() }) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.secondary)
+                                .padding(10)
+                                .glassEffect(.regular, in: Circle())
+                        }
+                    }
+
                     Button(action: togglePlayPause) {
                         Image(systemName: isCurrentlyStreaming ? "pause.fill" : "play.fill")
                             .font(.system(size: 16, weight: .bold))
@@ -761,11 +771,14 @@ struct ScopeSettingsView: View {
     @Binding var mergedTraces: Bool
     let onDaqRateChange: (UInt32) -> Void
 
+    // Effective stream rates: the ADC hardware always runs at its max ODR;
+    // these map onto device-side stream decimation (P4 CTRL_MSG_SET_RATE).
+    // 32k = decimation 1 at the FINE ADC's 32 kSps ODR.
     private let sampleRateOptions: [(label: String, sps: UInt32)] = [
-        ("1 kSps", 1_000),
-        ("10 kSps", 10_000),
-        ("50 kSps", 50_000),
-        ("250 kSps", 250_000),
+        ("1024", 1_024),
+        ("4096", 4_096),
+        ("16k", 16_384),
+        ("32k", 32_768),
     ]
 
     var body: some View {
