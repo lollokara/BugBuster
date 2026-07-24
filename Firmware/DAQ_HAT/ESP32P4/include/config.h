@@ -357,14 +357,9 @@
 // VOLTAGE well below the current ODR de-collides their DRDY: the shared bus is
 // dominated by COARSE reads with only an occasional VOLTAGE read, so COARSE never
 // misses its conversion deadline.
-// 25 k (was 50 k): enabling the per-sample SPI CRC byte lengthened every
-// transfer ~25%, and at 50 k the shared bus went marginal again — COARSE
-// conversions started failing CRC (correctly rejected), leaving fusion with
-// only the saturated FINE during range transitions (current trace clipped
-// flat at FINE full-scale instead of COARSE taking over). Halving the
-// voltage ODR restores the headroom; the wire stream is decimated well
-// below this anyway.
-#define VOLTAGE_ODR_TARGET_SPS    25000.0f
+// (Bench-verified 2026-07-24: bus B keeps up at this rate WITH the
+// per-sample SPI CRC byte enabled — ~0.2% missed edges, zero overflow.)
+#define VOLTAGE_ODR_TARGET_SPS    50000.0f
 
 // Default USB waveform-stream decimation. The full-rate fused stream to the PC
 // is gated only by this (default 1 = every sample).
