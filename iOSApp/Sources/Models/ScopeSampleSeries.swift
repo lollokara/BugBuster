@@ -68,45 +68,4 @@ extension ScopeSampleSeries {
         }
         return ScopeSampleSeries(channels: channels)
     }
-
-    /// Builds a series from DAQ's separate voltage/current sample arrays.
-    /// Current samples are colored per-point by their FINE/COARSE/BLEND source byte.
-    static func fromDAQ(
-        voltageSamples: [(t: Double, value: Float)],
-        currentSamples: [(t: Double, value: Float)],
-        currentSampleSources: [UInt8],
-        showVoltage: Bool,
-        showCurrent: Bool,
-        showPower: Bool = false
-    ) -> ScopeSampleSeries {
-        var channels: [ScopeSeriesChannel] = []
-        if showVoltage {
-            let points = voltageSamples.map {
-                ScopeSeriesPoint(t: $0.t, v: Double($0.value), color: ScopeColors.daqVoltage)
-            }
-            channels.append(ScopeSeriesChannel(label: "Voltage", defaultColor: ScopeColors.daqVoltage, unit: "V", points: points))
-        }
-        if showCurrent {
-            let points = currentSamples.enumerated().map { idx, sample -> ScopeSeriesPoint in
-                let source = idx < currentSampleSources.count ? currentSampleSources[idx] : 0
-                return ScopeSeriesPoint(t: sample.t, v: Double(sample.value), color: ScopeColors.daqCurrentColor(forSource: source))
-            }
-            channels.append(ScopeSeriesChannel(label: "Current", defaultColor: ScopeColors.daqCurrentFine, unit: "A", points: points))
-        }
-        if showPower {
-            // Paired by index: voltage/current samples in this manager are appended
-            // 1:1 per record today (see DaqWifiStreamManager), so index-alignment is
-            // valid; a future firmware change decoupling their rates would need
-            // timestamp-nearest matching here instead.
-            let count = min(voltageSamples.count, currentSamples.count)
-            var points: [ScopeSeriesPoint] = []
-            points.reserveCapacity(count)
-            for i in 0..<count {
-                let p = Double(voltageSamples[i].value) * Double(currentSamples[i].value)
-                points.append(ScopeSeriesPoint(t: voltageSamples[i].t, v: p, color: ScopeColors.daqPower))
-            }
-            channels.append(ScopeSeriesChannel(label: "Power", defaultColor: ScopeColors.daqPower, unit: "W", points: points))
-        }
-        return ScopeSampleSeries(channels: channels)
-    }
 }

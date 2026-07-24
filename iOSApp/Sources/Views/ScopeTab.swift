@@ -151,6 +151,9 @@ struct ScopeTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @ObservedObject private var adcStream = ScopeStreamManager.shared
     @ObservedObject private var daqStream = DaqWifiStreamManager.shared
+    /// Background render pipeline for DAQ mode: reduces the engine's sample
+    /// buffers to display-ready polylines at ~30 Hz off the main thread.
+    @StateObject private var daqRenderModel = ScopeRenderModel()
     @ObservedObject private var orientation = ScopeOrientationState.shared
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -192,19 +195,15 @@ struct ScopeTab: View {
             VStack(spacing: 0) {
                 header
 
-                if sizeClass == .regular {
+                if mode == .daq, let progress = daqProvisioningOverlay {
+                    Spacer()
+                    daqProvisioningCard(progress)
+                    Spacer()
+                } else if sizeClass == .regular {
                     // iPad: full-bleed canvas regardless of physical orientation,
                     // legend/cursor readout floats as a glass panel instead of
                     // consuming a full-width row.
-                    ScopeCanvasView(
-                        series: currentSeries,
-                        timeScale: $timeScale,
-                        errorMessage: currentErrorMessage,
-                        isWaitingForData: currentIsWaiting,
-                        onRetry: currentRetryAction,
-                        windowSeconds: mode == .daq ? daqTimebase.seconds : nil,
-                        mergedTraces: mergedTraces
-                    )
+                    activeCanvas
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .bottomTrailing) {
                         Group {
@@ -231,15 +230,7 @@ struct ScopeTab: View {
                         .padding(16)
                     }
                 } else if orientation.isLandscape {
-                    ScopeCanvasView(
-                        series: currentSeries,
-                        timeScale: $timeScale,
-                        errorMessage: currentErrorMessage,
-                        isWaitingForData: currentIsWaiting,
-                        onRetry: currentRetryAction,
-                        windowSeconds: mode == .daq ? daqTimebase.seconds : nil,
-                        mergedTraces: mergedTraces
-                    )
+                    activeCanvas
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -277,14 +268,28 @@ struct ScopeTab: View {
         .onAppear {
             setupOrientation()
             syncModeToDevice()
+            daqRenderModel.updateViewport {
+                $0.windowSeconds = daqTimebase.seconds
+                $0.showVoltage = showVoltage
+                $0.showCurrent = showCurrent
+                $0.showPower = showPower
+            }
+            daqRenderModel.start(engine: daqStream.engine)
         }
         .onDisappear {
+            daqRenderModel.stop()
             teardownOrientation()
             stopActiveStream()
         }
         .onChange(of: connectionManager.lastHatStatus?.isDaqHat) { _, _ in
             syncModeToDevice()
         }
+        .onChange(of: daqTimebase) { _, tb in
+            daqRenderModel.updateViewport { $0.windowSeconds = tb.seconds }
+        }
+        .onChange(of: showVoltage) { _, v in daqRenderModel.updateViewport { $0.showVoltage = v } }
+        .onChange(of: showCurrent) { _, v in daqRenderModel.updateViewport { $0.showCurrent = v } }
+        .onChange(of: showPower) { _, v in daqRenderModel.updateViewport { $0.showPower = v } }
     }
 
     // MARK: - Header
@@ -362,7 +367,7 @@ struct ScopeTab: View {
         case .adc:
             return adcStream.isStreaming ? "Streaming (\(adcStream.totalSamplesReceived) samples)" : "Stopped"
         case .daq:
-            return daqStream.isStreaming ? "Streaming (\(daqStream.totalRecordsReceived) frames)" : "Stopped"
+            return daqStream.isStreaming ? "Streaming (\(daqRenderModel.frame?.recordCount ?? 0) frames)" : "Stopped"
         }
     }
 
@@ -416,10 +421,48 @@ struct ScopeTab: View {
                 legendDot(color: ScopeColors.daqPower, label: "Power (W)")
             }
             Spacer()
-            Text("\(daqStream.totalRecordsReceived) frames")
+            Text("\(daqRenderModel.frame?.recordCount ?? 0) frames")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(.secondary)
         }
+    }
+
+    // MARK: - DAQ WiFi provisioning progress screen
+
+    /// Shown in place of the canvas while the play button's BLE->hotspot->
+    /// socket flow is in flight, driven by real P4 bring-up stage reports
+    /// (`ProvisioningStage`), not a synthetic timer.
+    private var daqProvisioningOverlay: (label: String, fraction: Double)? {
+        switch daqStream.provisioningState {
+        case .requestingStart:
+            return ("Requesting hotspot from device…", 0.05)
+        case .waitingForCredentials(let stage):
+            return (stage.label, stage.fraction)
+        case .joiningWifi:
+            return ("Joining DAQ HAT WiFi network…", 0.97)
+        default:
+            return nil
+        }
+    }
+
+    private func daqProvisioningCard(_ progress: (label: String, fraction: Double)) -> some View {
+        VStack(spacing: 16) {
+            ProgressView(value: progress.fraction)
+                .progressViewStyle(.linear)
+                .tint(.cyan)
+                .frame(width: 200)
+            Text(progress.label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white)
+            Text("This can take up to ~15s while the DAQ HAT brings up its hotspot.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .padding(24)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .frame(maxWidth: .infinity)
     }
 
     private func legendDot(color: Color, label: String) -> some View {
@@ -431,20 +474,29 @@ struct ScopeTab: View {
         }
     }
 
-    // MARK: - Mode-derived state for ScopeCanvasView
+    // MARK: - Mode-derived state for the canvases
 
-    private var currentSeries: ScopeSampleSeries {
+    /// ADC keeps the legacy synchronous ScopeCanvasView (small 500-row
+    /// buffer); DAQ uses the pipeline-fed DaqScopeCanvasView.
+    @ViewBuilder
+    private var activeCanvas: some View {
         switch mode {
         case .adc:
-            return ScopeSampleSeries.fromADC(sampleBuffer: adcStream.sampleBuffer, activeChannels: activeChannels)
+            ScopeCanvasView(
+                series: ScopeSampleSeries.fromADC(sampleBuffer: adcStream.sampleBuffer, activeChannels: activeChannels),
+                timeScale: $timeScale,
+                errorMessage: currentErrorMessage,
+                isWaitingForData: currentIsWaiting,
+                onRetry: currentRetryAction,
+                windowSeconds: nil,
+                mergedTraces: mergedTraces
+            )
         case .daq:
-            return ScopeSampleSeries.fromDAQ(
-                voltageSamples: daqStream.voltageSamples,
-                currentSamples: daqStream.currentSamples,
-                currentSampleSources: daqStream.currentSampleSources,
-                showVoltage: showVoltage,
-                showCurrent: showCurrent,
-                showPower: showPower
+            DaqScopeCanvasView(
+                model: daqRenderModel,
+                errorMessage: currentErrorMessage,
+                isWaitingForData: currentIsWaiting,
+                mergedTraces: mergedTraces
             )
         }
     }
@@ -464,7 +516,7 @@ struct ScopeTab: View {
         case .adc:
             return adcStream.isStreaming && adcStream.sampleBuffer.isEmpty
         case .daq:
-            return daqStream.isStreaming && daqStream.voltageSamples.isEmpty && daqStream.currentSamples.isEmpty
+            return daqStream.isStreaming && (daqRenderModel.frame?.traces.isEmpty ?? true)
         }
     }
 
@@ -494,8 +546,12 @@ struct ScopeTab: View {
                 adcStream.startStream(ip: connectionManager.activeDevice?.ip ?? "", token: connectionManager.adminToken)
             }
         case .daq:
-            if daqStream.isStreaming || daqStream.isConnected {
-                Task { await daqStream.requestStreamStop(ble: connectionManager.ble) }
+            if daqStream.isStreaming {
+                // Pause: stop sampling but keep the hotspot/socket connected
+                // so resume is instant (see pauseStream() doc comment).
+                daqStream.pauseStream()
+            } else if daqStream.isConnected {
+                Task { await daqStream.resumeStream(ble: connectionManager.ble) }
             } else {
                 Task { await daqStream.startFullStreamFlow(ble: connectionManager.ble) }
             }
