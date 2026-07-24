@@ -7,9 +7,25 @@
 #include <math.h>
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "config.h"
 
 static const char *TAG = "smu";
+
+// Ramp V_DUT one DS4424 code at a time on a direct jump rather than writing
+// the target code in one shot. Confirmed on the bench (baseline-cal
+// investigation): a single-shot jump to a code leaves the FINE current-sense
+// path with ~200-400 uA of residual on HI range that does NOT decay over 20+
+// seconds of waiting -- so it isn't a slow RC settle, it's history/path-
+// dependent (self-heating or dielectric absorption in the sense path most
+// likely). run_baseline_cal() (smu_cal.c) always reaches a code via a
+// continuous one-step-at-a-time ramp with a settle delay, and only THAT path
+// reads back near zero after baseline subtraction -- reproduced live by
+// ramping vdut through intermediate codes by hand. Match that methodology
+// here so every caller (CLI, settings, calibration's own stepper) gets a
+// correctly-nulled baseline instead of only the calibration sweep itself.
+#define SMU_VDUT_RAMP_STEP_DELAY_MS   10
 
 // Clamp helper.
 static float clampf(float x, float lo, float hi)
@@ -83,9 +99,35 @@ esp_err_t smu_init(smu_t *s, ds4424_t *idac)
 
 esp_err_t smu_enable(smu_t *s, bool on)
 {
+    bool was_on = s->enabled;
+
+    // Coming from OFF: RUN gates the regulator entirely, so ramping the DAC
+    // code while disabled (as smu_set_voltage() does) accomplishes nothing --
+    // the regulator snaps straight to whatever code is already latched the
+    // instant RUN asserts. Confirmed on the bench: enabling directly at the
+    // target code leaves a large (~200-400 uA on HI range), non-decaying
+    // residual after baseline subtraction; enabling then moving to the SAME
+    // target via even a tiny (~2-code) live change reads back near zero.
+    // A large absolute jump (e.g. to code 0) isn't needed and isn't safe --
+    // code 0 corresponds to ~SMU_VDUT_V0 (10.85 V), an overshoot the DUT may
+    // not tolerate. A small nudge a few codes off target and back, done
+    // entirely after RUN asserts, is enough and stays close to vdut_set.
+    if (on && !was_on && s->idac && s->idac->present) {
+        int8_t target = s->v_code;
+        int nudge = (target <= 0) ? 3 : -3;
+        int8_t start = (int8_t)clampf((float)(target + nudge), -127.0f, 127.0f);
+        ds4424_set_code(s->idac, DS4424_CH_VDUT, start);
+        s->v_code = start;
+    }
+
     gpio_set_level(PWR_VDUT_RUN_PIN, on ? 1 : 0);
     s->enabled = on;
     ESP_LOGI(TAG, "DUT supply %s", on ? "ON" : "OFF");
+
+    if (on && !was_on) {
+        vTaskDelay(pdMS_TO_TICKS(SMU_VDUT_RAMP_STEP_DELAY_MS));
+        smu_set_voltage(s, s->vdut_set);   // ramp from the nudge back to target
+    }
     return ESP_OK;
 }
 
@@ -98,7 +140,25 @@ esp_err_t smu_set_voltage(smu_t *s, float volts)
     if (!(s->cal && smu_cal_voltage_to_code(s->cal, volts, &code))) {
         code = smu_voltage_to_code(volts);
     }
-    esp_err_t err = ds4424_set_code(s->idac, DS4424_CH_VDUT, code);
+
+    // Ramp one code at a time toward the target instead of jumping directly
+    // -- see SMU_VDUT_RAMP_STEP_DELAY_MS above.
+    int8_t cur = s->v_code;
+    esp_err_t err = ESP_OK;
+    if (cur == code) {
+        // Still write once even when the code is unchanged (e.g. right after
+        // smu_enable()), matching the previous single-write behavior.
+        err = ds4424_set_code(s->idac, DS4424_CH_VDUT, code);
+    } else {
+        int step = (code > cur) ? 1 : -1;
+        while (cur != code) {
+            cur = (int8_t)(cur + step);
+            err = ds4424_set_code(s->idac, DS4424_CH_VDUT, cur);
+            if (err != ESP_OK) break;
+            s->v_code = cur;
+            vTaskDelay(pdMS_TO_TICKS(SMU_VDUT_RAMP_STEP_DELAY_MS));
+        }
+    }
     if (err == ESP_OK) {
         s->v_code   = code;
         s->vdut_set = clampf(volts, SMU_VDUT_MIN, SMU_VDUT_MAX);

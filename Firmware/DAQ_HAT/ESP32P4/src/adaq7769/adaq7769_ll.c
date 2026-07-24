@@ -8,6 +8,7 @@
 #include "hal/spi_ll.h"
 #include "esp_rom_gpio.h"
 #include "soc/gpio_sig_map.h"
+#include "soc/spi_periph.h"
 #include "config.h"
 
 static const char *TAG = "adaq_ll";
@@ -458,16 +459,42 @@ void adaq_ll_cs_manual_begin(adaq_ll_t *ll)
 // the SPI driver can only have assigned it hw CS id 0 -- there is no second
 // device to contend for a different id. Do NOT reuse this on bus B (two CS-
 // owning devices) without first confirming each device's actual hw CS id.
+//
+// BUG FOUND (baseline-cal investigation): spi_bus_remove_device() frees the
+// device's CS GPIO via spicommon_cs_free_io() -> gpio_reset_pin(), which tears
+// down the GPIO-matrix (or IOMUX) routing that connected cs_pin to this host's
+// CS0 output signal. The comment above used to claim "the pin itself is left
+// alone -- still routed to the SPI peripheral's CS output"; that is false --
+// after the remove_device() call the pin is a bare reset GPIO (floating
+// input), so every spi_ll_master_select_cs()/spi_ll_apply_config() below only
+// toggles the peripheral's *internal* CS0 register -- nothing ever reaches the
+// ADAQ. The chip then never sees a real CS transition, so its continuous-read
+// shift register never advances past whatever it last latched: FINE reads
+// back one frozen 24-bit code forever (proven live: fine_v was bit-identical
+// across >6000 consecutive samples while coarse_v, on the same board, jittered
+// normally sample to sample as a live ADC should).
+//
+// Fix: re-establish the CS-pin -> SPI-host GPIO-matrix routing ourselves right
+// after remove_device() tears it down, mirroring what spicommon_cs_initialize()
+// does for cs_num==0 (see esp_driver_spi/src/gpspi/spi_common.c). Force the
+// GPIO-matrix path (not IOMUX) unconditionally -- simpler and correct either
+// way, at the cost of the ~UI ns matrix-routing delay IOMUX would have saved.
 #if ADAQ_HW_CS
 void adaq_ll_hwcs_begin(adaq_ll_t *ll)
 {
     // Release dev_cfg's grip on the peripheral (mirrors cs_manual_begin()) so
-    // the raw spi_ll_* fifo path has sole use of it during streaming. The pin
-    // itself is left alone -- still routed to the SPI peripheral's CS output.
+    // the raw spi_ll_* fifo path has sole use of it during streaming. This
+    // also resets cs_pin to a bare GPIO (see BUG FOUND above) -- restore its
+    // routing to this host's CS0 output signal before relying on it.
     if (ll->dev_cfg) {
         spi_bus_remove_device(ll->dev_cfg);
         ll->dev_cfg = NULL;
     }
+    gpio_set_direction(ll->cs_pin, GPIO_MODE_OUTPUT);
+    esp_rom_gpio_connect_out_signal(ll->cs_pin,
+                                    spi_periph_signal[ll->host].spics_out[0],
+                                    false, false);
+
     spi_dev_t *hw = SPI_LL_GET_HW(ll->host);
     spi_ll_master_select_cs(hw, 0);              // bus A: FINE is the sole CS on this host
     spi_ll_master_keep_cs(hw, 0);                // auto-deassert after each transaction
