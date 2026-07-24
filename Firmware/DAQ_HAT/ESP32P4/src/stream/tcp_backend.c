@@ -170,6 +170,14 @@ static void listener_task(void *arg)
         uint8_t rx[256];
         while (s_running) {
             int n = recv(fd, rx, sizeof(rx), 0);
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // O_NONBLOCK (set above for backend_write's sake) applies to
+                // the whole fd, so an idle control channel legitimately
+                // returns EAGAIN here — that is NOT a disconnect. Treating
+                // it as one closed every client ~2 ms after CMD_START.
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
             if (n <= 0) break;
             if (s_stream) usb_stream_on_rx(s_stream, rx, (uint32_t)n);
         }

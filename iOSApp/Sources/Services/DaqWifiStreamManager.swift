@@ -506,7 +506,15 @@ final class DaqStreamEngine: @unchecked Sendable {
                 self.drainFrames()
             }
             if error != nil || isComplete {
-                // State handler / manager surface the error; just stop reading.
+                // A server-side close arrives as a clean EOF with NO state
+                // transition — swallowing it left the UI showing "ready"
+                // with a dead socket. Fail the connection over explicitly so
+                // the manager's reconnect path reacts.
+                print("[daq-net] receive ended error=\(String(describing: error)) eof=\(isComplete)")
+                conn.cancel()
+                self.connection = nil
+                let cb = self.onConnectionState
+                DispatchQueue.main.async { cb?(.failed(error ?? NWError.posix(.ECONNRESET))) }
                 return
             }
             self.receiveLoop(conn)
