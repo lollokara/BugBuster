@@ -21,6 +21,7 @@ static const char *TAG = "usb_backend";
 #include "tinyusb_default_config.h"
 
 static usb_stream_t *s_stream;
+static bool s_installed;   // tinyusb_driver_install() is one-time-only
 
 // ---- USB descriptors --------------------------------------------------------
 #define USB_VID            0x303A   // Espressif
@@ -230,6 +231,24 @@ esp_err_t usb_backend_start(usb_stream_t *stream)
 {
     s_stream = stream;
 
+    // tinyusb_driver_install() is one-time-only -- called once at boot, and
+    // again whenever the WiFi-stream teardown path (daq_board.c) re-registers
+    // the USB transport after a WiFi streaming session ends. Re-installing on
+    // an already-installed PHY fails with "selected PHY is in use" /
+    // ESP_ERR_INVALID_STATE; skip straight to just re-applying the transport
+    // in that case (idempotent, cheap, and all that's actually needed since
+    // the USB peripheral itself was never uninstalled).
+    if (s_installed) {
+        usb_transport_t t = {
+            .write     = backend_write,
+            .writable  = backend_writable,
+            .connected = backend_connected,
+            .ctx       = NULL,
+        };
+        usb_stream_set_transport(stream, &t);
+        return ESP_OK;
+    }
+
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG(device_event_handler);
     // The TinyUSB device task defaults to core 1 (the esp_tinyusb multicore
     // default). But core 1 is our dedicated acquisition core: the DRDY-gated
@@ -264,6 +283,7 @@ esp_err_t usb_backend_start(usb_stream_t *stream)
         ESP_LOGE(TAG, "tinyusb_driver_install failed: %s", esp_err_to_name(err));
         return err;
     }
+    s_installed = true;
 
     usb_transport_t t = {
         .write     = backend_write,

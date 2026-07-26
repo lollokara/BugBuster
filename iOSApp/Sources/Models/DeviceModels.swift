@@ -310,6 +310,10 @@ public struct HatStatus: Codable, Equatable {
 // MARK: - DAQ WiFi Stream Status
 public struct DaqWifiStreamStatus: Codable {
     public let state: String   // "idle" | "starting" | "ready" | "failed"
+    /// Only present while state == "starting": "requested" | "ap" | "dns" | "tcp".
+    /// Real P4 bring-up progress (softAP retry loop -> fast-fail DNS -> TCP
+    /// backend), not a synthetic timer -- drives the play-button progress screen.
+    public let stage: String?
     public let ssid: String?
     public let password: String?
     public let host: String?

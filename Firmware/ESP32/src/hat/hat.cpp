@@ -1482,6 +1482,15 @@ void hat_daq_poll_wifi_stream_info(void)
         return;
     }
 
+    // Still bringing up: not part of the chunked blob sequence at all (P4
+    // always replies seq=0/no data here, an extra stage byte at data[0]
+    // instead), so skip the seq-tracking/reassembly logic entirely -- it's
+    // only for the READY blob's real chunk stream below.
+    if (status == HAT_WIFI_STREAM_STARTING) {
+        if (data_len > 0) s_wifi_stream_info.stage = data[0];
+        return;
+    }
+
     // Out-of-order chunk: reassembly desynced, abort back to STARTING and
     // wait for the next poll to restart from seq 0 (mirrors the iOS
     // BLETransport desync-abort behavior).

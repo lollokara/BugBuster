@@ -10,6 +10,7 @@
 #include "captive_dns.h"
 
 #include <string.h>
+#include <stdbool.h>
 #include "esp_log.h"
 #include "lwip/udp.h"
 #include "lwip/tcpip.h"
@@ -26,9 +27,13 @@ static struct udp_pcb *s_pcb;
 // Walk the QNAME labels (each [len byte][len bytes...], terminated by a
 // zero-length label) starting at @p off, then skip QTYPE+QCLASS (4 bytes).
 // Returns the offset just past the question section, or 0 if malformed/short.
-static size_t question_end(const uint8_t *buf, size_t buf_len, size_t off)
+// If @p name/name_cap is non-NULL, also decodes the dotted-name into it
+// (lowercased, NUL-terminated, truncated if it doesn't fit).
+static size_t question_end(const uint8_t *buf, size_t buf_len, size_t off,
+                           char *name, size_t name_cap)
 {
     size_t i = off;
+    size_t name_len = 0;
     // Bound the walk defensively -- untrusted network input.
     while (i < buf_len) {
         uint8_t label_len = buf[i];
@@ -39,11 +44,37 @@ static size_t question_end(const uint8_t *buf, size_t buf_len, size_t off)
         // Reject compression pointers (top two bits set) -- shouldn't appear
         // in a query's own QNAME, and we don't need to follow them.
         if (label_len & 0xC0) return 0;
+        if (name && name_cap > 0) {
+            if (name_len > 0 && name_len + 1 < name_cap) name[name_len++] = '.';
+            for (uint8_t k = 0; k < label_len && name_len + 1 < name_cap; k++) {
+                char c = (char)buf[i + 1 + k];
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                name[name_len++] = c;
+            }
+        }
         i += 1 + label_len;
         if (i >= buf_len) return 0;
     }
+    if (name && name_cap > 0) name[name_len] = '\0';
     if (i + 4 > buf_len) return 0;   // QTYPE(2) + QCLASS(2)
     return i + 4;
+}
+
+// Apple's OS-level captive-portal probe ("is there internet?") -- an
+// unambiguous NXDOMAIN reply to this specific query is what tells iOS
+// "definitely no internet", and for a NEHotspotConfiguration `joinOnce`
+// join, iOS then actively disconnects from the network within a couple of
+// seconds (observed on the bench: phone joins, gets a DHCP lease, then
+// drops ~1.6s later, well before the app's own NWConnection ever opens).
+// Silently dropping just this one query (no reply at all -> the probe times
+// out instead of getting a hard negative) avoids that auto-disconnect while
+// every other domain still gets the fast NXDOMAIN this responder exists for
+// (keeps ordinary apps/background traffic off this AP quickly). Timeout
+// still reads as "no internet" to iOS, just not urgently enough to drop the
+// join.
+static bool is_apple_captive_probe(const char *name)
+{
+    return strcmp(name, "captive.apple.com") == 0;
 }
 
 static void dns_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
@@ -66,12 +97,15 @@ static void dns_recv_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 
     uint16_t qdcount = ((uint16_t)buf[4] << 8) | buf[5];
     size_t qend;
+    char qname[64];
+    qname[0] = '\0';
     if (qdcount == 0) {
         qend = DNS_HDR_LEN;   // no question section to echo
     } else {
-        qend = question_end(buf, len, DNS_HDR_LEN);
+        qend = question_end(buf, len, DNS_HDR_LEN, qname, sizeof(qname));
         if (qend == 0) return;   // malformed; just drop it
     }
+    if (is_apple_captive_probe(qname)) return;   // see is_apple_captive_probe doc comment
 
     // Build the reply: header (same ID, QR=1/RCODE=3, same QDCOUNT,
     // ANCOUNT=NSCOUNT=ARCOUNT=0) + the question section copied verbatim.

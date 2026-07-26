@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// DAQ HAT DUT power supply controls (enable + voltage setpoint + current
-/// limit). UI-only for now — see the protocol comment above
-/// `ConnectionManager.vdutPresent` for the firmware surface this expects
-/// (`/api/daq/vdut/status|enable|setpoint`), which doesn't exist yet.
+/// limit), backed by the real `/api/daq/vdut/status|enable|setpoint` firmware
+/// surface (reachable over BLE or HTTP). `ConnectionManager.vdutPresent`
+/// reflects whether the last status refresh actually got a response from
+/// that surface, driving the badge below.
 /// Distinct from the mainboard/HAT power rail cards in `OverviewTab`.
 struct VDUTControlsCard: View {
     @EnvironmentObject var connectionManager: ConnectionManager
@@ -17,12 +18,21 @@ struct VDUTControlsCard: View {
                 Text("VDUT (DUT Supply)")
                     .font(.system(size: 13, weight: .bold))
                 Spacer()
-                Text("FW pending")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(.orange)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().stroke(Color.orange.opacity(0.5), lineWidth: 1))
+                if connectionManager.vdutPresent {
+                    Text("Live")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().stroke(Color.green.opacity(0.5), lineWidth: 1))
+                } else {
+                    Text("FW pending")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().stroke(Color.orange.opacity(0.5), lineWidth: 1))
+                }
             }
 
             Toggle("Enable DUT Supply", isOn: Binding(
@@ -74,7 +84,9 @@ struct VDUTControlsCard: View {
                     Spacer()
                 }
             } else {
-                Text("No measurement yet — firmware endpoint not implemented.")
+                Text(connectionManager.vdutPresent
+                     ? "No measurement yet."
+                     : "No measurement yet — device did not respond to the VDUT status request.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }

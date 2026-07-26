@@ -104,7 +104,12 @@ esp_err_t wifi_ap_start(const char *ssid, const char *password)
             .channel        = 6,
             .max_connection = 2,
             .authmode       = WIFI_AUTH_WPA2_PSK,
-            .pmf_cfg        = { .required = true },
+            // PMF *required* on a plain WPA2-PSK (non-WPA3-transition) AP is
+            // a known cause of "associates then immediately deauths" on some
+            // real clients (observed on the bench: iPhone joins then drops
+            // within ~400ms, iPad never completes the join at all) -- capable
+            // but not required is the standard safe softAP setting.
+            .pmf_cfg        = { .capable = true, .required = false },
         },
     };
     memcpy(wifi_cfg.ap.ssid, ssid, ssid_len);

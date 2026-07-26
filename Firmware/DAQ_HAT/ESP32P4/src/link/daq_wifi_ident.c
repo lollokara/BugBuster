@@ -13,8 +13,15 @@ static const char s_charset[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 void daq_wifi_ident_generate(char *ssid, size_t ssid_len, char *password, size_t pass_len)
 {
+    // ESP_MAC_WIFI_STA requires a WiFi-capable chip with a WiFi MAC burned
+    // into eFuse -- the P4 has no native WiFi radio (this whole softAP is
+    // bridged over SDIO to the C6), so that read fails ("mac type is
+    // incorrect (not found)") and silently leaves mac[] all-zero, making
+    // every SSID "BugBusterDAQ-000000" instead of unique per device/boot.
+    // ESP_MAC_BASE is the universal base MAC every chip has regardless of
+    // which radios it has -- use that instead.
     uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    esp_read_mac(mac, ESP_MAC_BASE);
     snprintf(ssid, ssid_len, "BugBusterDAQ-%02X%02X%02X", mac[3], mac[4], mac[5]);
 
     uint8_t rnd[8];

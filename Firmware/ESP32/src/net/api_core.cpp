@@ -360,6 +360,16 @@ static char *api_daq_wifi_stream_status(void)
         case HAT_DAQ_WIFI_STREAM_FAILED:   state_str = "failed"; break;
     }
     cJSON_AddStringToObject(root, "state", state_str);
+    if (info.state == HAT_DAQ_WIFI_STREAM_STARTING) {
+        const char *stage_str = "requested";
+        switch (info.stage) {
+            case HAT_WIFI_STAGE_REQUESTED: stage_str = "requested"; break;
+            case HAT_WIFI_STAGE_AP:        stage_str = "ap"; break;
+            case HAT_WIFI_STAGE_DNS:       stage_str = "dns"; break;
+            case HAT_WIFI_STAGE_TCP:       stage_str = "tcp"; break;
+        }
+        cJSON_AddStringToObject(root, "stage", stage_str);
+    }
     if (info.state == HAT_DAQ_WIFI_STREAM_READY) {
         cJSON_AddStringToObject(root, "ssid", info.ssid);
         cJSON_AddStringToObject(root, "password", info.password);

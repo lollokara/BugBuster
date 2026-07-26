@@ -73,35 +73,44 @@ struct ScopeCanvasView: View {
                 }
             }
             .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($panTranslation) { value, state, _ in
-                        if gestureScale != 1.0 { state = value.translation.width }
-                    }
-                    .onChanged { value in
-                        if gestureScale != 1.0 {
-                            // Concurrent with an active pinch: treat as a
-                            // 2-finger pan, not the single-finger touch cursor.
-                            touchLocation = nil
-                            followLive = false
-                            let liveEnd = series.channels.first?.points.last?.t ?? 0
-                            let baseEnd = anchorEndT ?? liveEnd
-                            let deltaSeconds = Double(value.translation.width - committedPanTranslation) / Double(max(geometry.size.width, 1)) * tSpanForPan
-                            anchorEndT = baseEnd - deltaSeconds
-                            committedPanTranslation = value.translation.width
-                        } else {
-                            touchLocation = value.location
+            // A pinch (2-touch UIPinchGestureRecognizer) and a pan (1-touch
+            // UIPanGestureRecognizer) attached as two separate
+            // `.simultaneousGesture` modifiers compete for touch ownership at
+            // the UIKit level and unreliably both recognize on a real device
+            // (this combo was only ever exercised against synthetic mock
+            // events before, never real multitouch). Wrapping both in a
+            // single `SimultaneousGesture` and attaching via one `.gesture()`
+            // call is Apple's documented pattern for a concurrent pinch+drag
+            // and reliably delivers both touch streams together.
+            .gesture(
+                SimultaneousGesture(
+                    MagnificationGesture()
+                        .updating($gestureScale) { value, state, _ in state = value }
+                        .onEnded { value in timeScale = max(0.2, min(5.0, timeScale * value)) },
+                    DragGesture(minimumDistance: 0)
+                        .updating($panTranslation) { value, state, _ in
+                            if gestureScale != 1.0 { state = value.translation.width }
                         }
-                    }
-                    .onEnded { _ in
-                        touchLocation = nil
-                        committedPanTranslation = 0
-                    }
-            )
-            .simultaneousGesture(
-                MagnificationGesture()
-                    .updating($gestureScale) { value, state, _ in state = value }
-                    .onEnded { value in timeScale = max(0.2, min(5.0, timeScale * value)) }
+                        .onChanged { value in
+                            if gestureScale != 1.0 {
+                                // Concurrent with an active pinch: treat as a
+                                // 2-finger pan, not the single-finger touch cursor.
+                                touchLocation = nil
+                                followLive = false
+                                let liveEnd = series.channels.first?.points.last?.t ?? 0
+                                let baseEnd = anchorEndT ?? liveEnd
+                                let deltaSeconds = Double(value.translation.width - committedPanTranslation) / Double(max(geometry.size.width, 1)) * tSpanForPan
+                                anchorEndT = baseEnd - deltaSeconds
+                                committedPanTranslation = value.translation.width
+                            } else {
+                                touchLocation = value.location
+                            }
+                        }
+                        .onEnded { _ in
+                            touchLocation = nil
+                            committedPanTranslation = 0
+                        }
+                )
             )
         }
     }

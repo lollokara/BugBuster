@@ -849,8 +849,10 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let fault: Bool
     }
 
-    /// Best-effort refresh; firmware doesn't implement this endpoint yet, so
-    /// failures are expected and silently ignored (UI keeps last-known state).
+    /// Best-effort refresh of the real `/api/daq/vdut/status` firmware surface.
+    /// Older firmware or a non-DAQ-HAT device won't answer, so failures are
+    /// silently ignored (UI keeps last-known state, `vdutPresent` reflects
+    /// whether the last successful response reported the VDUT rail present).
     /// Works over both transports: BLE tunnels the same `/api/daq/vdut/status`
     /// path through `api_core_handle` on the device (see `bleDecoded`), same
     /// as `/api/status`/`/api/hat`/etc — no separate BLE-specific endpoint needed.

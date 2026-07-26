@@ -154,7 +154,15 @@ typedef struct __attribute__((packed)) {
 
 #define HAT_WIFI_STREAM_STARTING  0u  // softAP not up yet, no data this chunk
 #define HAT_WIFI_STREAM_READY     1u  // this is the final chunk (LAST flag set), data is valid
-#define HAT_WIFI_STREAM_FAILED    2u  // P4 failed to bring up the softAP
+#define HAT_WIFI_STREAM_FAILED    2u  // P4 failed to bring up the softAP; this chunk IS final
+
+// Extra byte (offset HAT_WIFI_STREAM_INFO_HDR) present only on STARTING
+// replies: coarse bring-up substage, mirrors daq_wifi_stage_t on the P4
+// (Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.h) byte-for-byte.
+#define HAT_WIFI_STAGE_REQUESTED  0u
+#define HAT_WIFI_STAGE_AP         1u
+#define HAT_WIFI_STAGE_DNS        2u
+#define HAT_WIFI_STAGE_TCP        3u
 
 // Local S3-side tracking state for hat_daq_wifi_stream_info_t.state (distinct
 // from the HAT_WIFI_STREAM_* wire status byte values above).
@@ -176,6 +184,7 @@ typedef enum {
 
 typedef struct {
     HatDaqWifiStreamState state;
+    uint8_t stage;           // HAT_WIFI_STAGE_* while state == STARTING
     char    ssid[33];
     char    password[65];
     uint16_t port;

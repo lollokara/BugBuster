@@ -3356,7 +3356,8 @@ static int cmd_wifistat(int argc, char **argv)
     if (up) {
         wifi_config_t cfg = {0};
         if (esp_wifi_get_config(WIFI_IF_AP, &cfg) == ESP_OK) {
-            printf("    ssid=\"%.*s\" channel=%u\n", cfg.ap.ssid_len, cfg.ap.ssid, cfg.ap.channel);
+            printf("    ssid=\"%.*s\" channel=%u password=\"%s\"\n",
+                   cfg.ap.ssid_len, cfg.ap.ssid, cfg.ap.channel, cfg.ap.password);
         }
         wifi_sta_list_t sta_list = {0};
         if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
