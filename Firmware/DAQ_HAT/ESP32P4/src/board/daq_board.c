@@ -810,8 +810,56 @@ static void c6_link_restart(daq_board_t *b)
 // could spawn a second bring-up task racing the first over the same softAP.
 static volatile bool s_bringup_alive;
 
+// Cooperative cancel for wifi_stream_bringup_task(), set by RECYCLE. The task
+// polls this at every stage boundary (AP retry loop, AP->DNS, DNS->TCP, and
+// -- critically -- immediately before publishing the READY success state) and
+// unwinds to IDLE without publishing success if it is set. Without this, a
+// RECYCLE landing mid-bring-up could tear down and then have the still-
+// running old task resurrect the softAP and stamp READY right after,
+// silently undoing the recycle. Cleared at the start of every new START so
+// it can never leak into the next attempt.
+static volatile bool s_bringup_cancel;
+
 // How long DAQ_WIFI_STREAM_FAILED persists before decaying to IDLE.
 #define WIFI_STREAM_FAILED_DECAY_MS 5000u
+
+// Bound on how long RECYCLE waits for an in-flight bring-up task to observe
+// s_bringup_cancel and exit before RECYCLE proceeds with its own teardown.
+// The S3 side's hat_command() timeout for this HAT link command is 200ms
+// (hat.cpp); this bound intentionally exceeds that, since a TIMEOUT/UNKNOWN
+// reply on the S3 is explicitly acceptable (it still clears its own mirror
+// and logs) and correctness here -- never letting a stale bring-up task
+// resurrect the softAP after RECYCLE reports done -- matters more than
+// fitting inside the S3's poll window. 300ms comfortably covers the task's
+// per-stage work between cancel checks (the AP retry loop's own inter-
+// attempt delay is 500ms, so this bound will not always catch a task
+// blocked deep in a single wifi_ap_start() attempt -- see the comment at the
+// wait loop below for what happens then) while staying well short of
+// anything a human or the phone's UI would perceive as a hang.
+#define BRINGUP_CANCEL_WAIT_MS 300u
+
+// Tears down anything this task may have brought up so far and exits without
+// publishing READY/FAILED, leaving b->wifi_stream_info at IDLE. Called from
+// every cancel checkpoint below. The teardown calls are unconditional and
+// idempotent (Task 3/4's wifi_ap_start/stop/init guards) so it is always
+// safe to call them here even if RECYCLE's own wifi_stream_teardown() has
+// already run concurrently -- whichever runs last simply repeats a no-op on
+// whatever the other already tore down. This is what closes the resurrection
+// race: no matter how the two interleave, the last write to
+// b->wifi_stream_info before this task exits is IDLE, never READY.
+static void wifi_stream_bringup_cancel_unwind(daq_board_t *b)
+{
+    ESP_LOGW(TAG, "wifi stream bring-up: cancelled by recycle, unwinding");
+    tcp_backend_stop();
+    captive_dns_stop();
+    wifi_ap_stop();
+    ddp_master_set_wifi_stream_mode(&b->ddp, false);
+    memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
+    b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
+    s_bringup_alive = false;
+    s_bringup_cancel = false;
+    vTaskDelete(NULL);
+}
 
 // Runs the actual DAQ WiFi streaming bring-up (softAP over ESP-Hosted, fast-
 // fail DNS, TCP backend) in its own task so HATP_CMD_DAQ_WIFI_STREAM_START
@@ -819,6 +867,12 @@ static volatile bool s_bringup_alive;
 // at that command's case for why inline bring-up there breaks the S3's
 // 200ms response wait. Self-deletes on completion; final state (READY or
 // FAILED) is visible to the S3 via HATP_CMD_DAQ_WIFI_STREAM_INFO polling.
+//
+// Checks s_bringup_cancel at every stage boundary (before the AP retry loop,
+// between AP/DNS/TCP stages, and immediately before publishing READY) so a
+// concurrent RECYCLE can never be silently undone by this task resurrecting
+// the softAP or stamping READY after RECYCLE's teardown -- see
+// wifi_stream_bringup_cancel_unwind() above.
 static void wifi_stream_bringup_task(void *arg)
 {
     daq_board_t *b = (daq_board_t *)arg;
@@ -844,6 +898,10 @@ static void wifi_stream_bringup_task(void *arg)
     const char *ssid = s_ssid;
     const char *password = s_password;
 
+    // Cancel check: RECYCLE could have raced xTaskCreate() itself, landing
+    // between the create call and this task's first scheduled instruction.
+    if (s_bringup_cancel) wifi_stream_bringup_cancel_unwind(b);
+
     ddp_master_set_wifi_stream_mode(&b->ddp, true);
 
     // The DDP command above is fire-and-forget: the C6 only starts bringing
@@ -862,20 +920,31 @@ static void wifi_stream_bringup_task(void *arg)
     b->wifi_stream_info.stage = DAQ_WIFI_STAGE_AP;
     esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < 6; attempt++) {
+        // Cancel check: bail out of the retry loop between attempts rather
+        // than burning through the remaining ones once a recycle is pending.
+        if (s_bringup_cancel) wifi_stream_bringup_cancel_unwind(b);
         if (attempt > 0) vTaskDelay(pdMS_TO_TICKS(500));
         err = wifi_ap_start(ssid, password);
         if (err == ESP_OK) break;
         ESP_LOGW(TAG, "wifi_ap_start attempt %d failed: %s, retrying...",
                  attempt + 1, esp_err_to_name(err));
     }
+    // Cancel check: AP came up (or the retries were exhausted) -- do not
+    // proceed into DNS if a recycle landed while we were retrying/joining.
+    if (s_bringup_cancel) wifi_stream_bringup_cancel_unwind(b);
     if (err == ESP_OK) {
         b->wifi_stream_info.stage = DAQ_WIFI_STAGE_DNS;
         err = captive_dns_start();
     }
+    if (s_bringup_cancel) wifi_stream_bringup_cancel_unwind(b);
     if (err == ESP_OK) {
         b->wifi_stream_info.stage = DAQ_WIFI_STAGE_TCP;
         err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
     }
+    // Cancel check: this is the critical one -- must run before the READY
+    // state is ever published below, or a recycle that arrived just as the
+    // TCP backend came up would be silently undone.
+    if (s_bringup_cancel) wifi_stream_bringup_cancel_unwind(b);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "wifi stream start failed: %s", esp_err_to_name(err));
         tcp_backend_stop();
@@ -973,6 +1042,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             }
             memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
             b->wifi_stream_info.state = DAQ_WIFI_STREAM_STARTING;
+            s_bringup_cancel = false;   // must not leak a stale cancel into this attempt
             s_bringup_alive = true;
             BaseType_t ok = xTaskCreate(wifi_stream_bringup_task, "wifi_bringup",
                                        4096, b, 5, NULL);
@@ -989,7 +1059,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             wifi_stream_teardown(b);
             return 0;   // ack -> HATP_RSP_OK
 
-        case HATP_CMD_DAQ_WIFI_STREAM_RECYCLE:
+        case HATP_CMD_DAQ_WIFI_STREAM_RECYCLE: {
             // Escape hatch: the FULL teardown sequence, unconditionally,
             // ignoring every cached state flag. STOP is cooperative and can
             // itself be skipped or half-completed if state is inconsistent;
@@ -998,11 +1068,44 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // Safe to run from any state because every call below is
             // idempotent (see wifi_ap.c's per-step guards and unconditional
             // s_up clear).
+            //
+            // A bring-up task can be mid-flight (inside its AP retry loop,
+            // or about to publish READY) when RECYCLE lands. Blindly clearing
+            // s_bringup_alive here (as an earlier version of this handler
+            // did) does not stop that task -- it can go on to resurrect the
+            // softAP and stamp READY right after our teardown below runs,
+            // silently undoing the recycle. So: ask it to cancel first, and
+            // wait -- BOUNDED, never unbounded -- for it to actually exit
+            // before proceeding. The wait is capped at BRINGUP_CANCEL_WAIT_MS
+            // (300ms), deliberately more than the S3's 200ms hat_command()
+            // timeout for this command: a TIMEOUT/UNKNOWN reply on the S3
+            // side is explicitly fine (it still clears its own mirror and
+            // logs), and never letting a stale task resurrect the softAP
+            // after we report done matters more than fitting the S3's poll
+            // window. If the task still hasn't exited after the bound (e.g.
+            // it is blocked deep inside a single wifi_ap_start() call), we
+            // log and proceed anyway -- the task's own cancel checks still
+            // guarantee it will unwind to IDLE without publishing READY
+            // whenever it does get there, so the teardown below and the
+            // task's eventual self-unwind race safely (both are idempotent
+            // and both converge on IDLE).
             ESP_LOGW(TAG, "wifi stream: force recycle requested");
+            s_bringup_cancel = true;
+            uint32_t waited_ms = 0;
+            while (s_bringup_alive && waited_ms < BRINGUP_CANCEL_WAIT_MS) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                waited_ms += 10;
+            }
+            if (s_bringup_alive) {
+                ESP_LOGW(TAG, "wifi stream recycle: bring-up task still alive after %ums wait, "
+                              "proceeding with teardown anyway (task will self-unwind on its own cancel check)",
+                         BRINGUP_CANCEL_WAIT_MS);
+            }
             s_bringup_alive = false;   // a stuck flag must not block the next START
             wifi_stream_teardown(b);
             b->wifi_stream_info.failed_at_ms = 0;
             return 0;   // ack -> HATP_RSP_OK
+        }
 
         case HATP_CMD_DAQ_WIFI_STREAM_INFO: {
             // Chunk b->wifi_stream_info into the wire's [status][seq][flags]

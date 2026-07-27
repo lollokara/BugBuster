@@ -49,7 +49,8 @@ def test_recycle_command_byte_matches_on_both_sides_of_the_hat_link():
 def test_recycle_is_unconditional_unlike_cooperative_stop():
     """Recycle must not be gated on current state -- that is the whole point."""
     start = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_RECYCLE")
-    body = BOARD[start:start + 900]
+    end = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_INFO")
+    body = BOARD[start:end]
     assert "wifi_stream_teardown" in body
     assert "s_bringup_alive = false" in body, "must clear a stuck bring-up flag"
 
@@ -58,3 +59,34 @@ def test_recycle_reachable_over_ble_and_http():
     assert "/api/daq/wifi_stream/recycle" in API, "not in api_core dispatch (BLE+HTTP)"
     assert "/api/daq/wifi_stream/recycle" in WEB, "no HTTP route registered"
     assert "hat_daq_wifi_stream_recycle" in HAT_H and "hat_daq_wifi_stream_recycle" in HAT_CPP
+
+
+def test_recycle_cancels_inflight_bringup_with_a_bounded_wait():
+    """A bring-up task can be mid-flight (AP retry loop, or about to publish
+    READY) when RECYCLE lands. RECYCLE must ask it to cancel and wait --
+    bounded, never unbounded -- rather than blindly clearing s_bringup_alive,
+    or the task can resurrect the softAP / stamp READY right after RECYCLE's
+    teardown, silently undoing the recycle."""
+    assert "static volatile bool s_bringup_cancel;" in BOARD
+    # RECYCLE must set the cancel flag and wait on it with a bounded loop
+    # (never an unbounded block on s_bringup_alive).
+    start = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_RECYCLE")
+    end = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_INFO")
+    body = BOARD[start:end]
+    assert "s_bringup_cancel = true" in body
+    assert "BRINGUP_CANCEL_WAIT_MS" in body, "wait must be bounded, not unbounded"
+    assert "while" in body and "s_bringup_alive" in body
+
+    # The bring-up task must check the cancel flag before it ever publishes
+    # READY, and must clear s_bringup_alive/s_bringup_cancel on that path too.
+    task_start = BOARD.index("static void wifi_stream_bringup_task")
+    ready_idx = BOARD.index("DAQ_WIFI_STREAM_READY", task_start)
+    task_body_before_ready = BOARD[task_start:ready_idx]
+    assert "s_bringup_cancel" in task_body_before_ready, \
+        "bring-up task never checks cancel before publishing READY"
+
+    # A fresh START must not let a stale cancel from a previous recycle leak
+    # into the new attempt.
+    start_start = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_START")
+    start_end = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_STOP")
+    assert "s_bringup_cancel = false" in BOARD[start_start:start_end]
