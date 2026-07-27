@@ -88,7 +88,19 @@ esp_err_t wifi_ap_start(const char *ssid, const char *password)
 {
     esp_err_t err = wifi_ap_init();
     if (err != ESP_OK) return err;
-    if (s_up) return ESP_OK;
+    // Verify against the driver rather than trusting the cached flag: s_up
+    // can be stale in either direction after a partial failure, and a false
+    // "already up" is the wedge described in wifi_ap_stop(). Only skip the
+    // start sequence when the driver itself confirms AP mode.
+    if (s_up) {
+        wifi_mode_t mode = WIFI_MODE_NULL;
+        if (esp_wifi_get_mode(&mode) == ESP_OK &&
+            (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA)) {
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "s_up set but driver reports mode=%d; restarting AP", (int)mode);
+        s_up = false;
+    }
 
     size_t ssid_len = strlen(ssid);
     size_t pass_len = strlen(password);
@@ -121,6 +133,14 @@ esp_err_t wifi_ap_start(const char *ssid, const char *password)
     err = esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg);
     if (err != ESP_OK) return err;
     err = esp_wifi_start();
+    if (err == ESP_ERR_WIFI_NOT_STOPPED) {
+        // The driver still considers a previous session running (e.g. a stop
+        // that errored out). Stop it for real, then retry once -- this is a
+        // recoverable condition, not a reason to fail the whole bring-up.
+        ESP_LOGW(TAG, "esp_wifi_start: not stopped; stopping and retrying");
+        esp_wifi_stop();
+        err = esp_wifi_start();
+    }
     if (err != ESP_OK) return err;
 
     s_up = true;
@@ -131,10 +151,22 @@ esp_err_t wifi_ap_start(const char *ssid, const char *password)
 esp_err_t wifi_ap_stop(void)
 {
     if (!s_up) return ESP_OK;
+    // s_up is cleared UNCONDITIONALLY, even when esp_wifi_stop() reports an
+    // error. The old code returned early on failure and left s_up = true,
+    // after which wifi_ap_start()'s `if (s_up) return ESP_OK` short-circuit
+    // reported success for an AP that was never started -- a softAP wedged
+    // until the board was power-cycled, which is exactly the field symptom
+    // this fix targets. A stale "up" flag is strictly more dangerous than a
+    // stale "down" one: "down" merely causes a redundant start attempt,
+    // which esp_wifi_start() handles.
     esp_err_t err = esp_wifi_stop();
-    if (err != ESP_OK) return err;
     s_up = false;
-    ESP_LOGI(TAG, "softAP down");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_stop failed: %s (state cleared anyway)",
+                 esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "softAP down");
+    }
     return ESP_OK;
 }
 
