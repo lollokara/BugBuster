@@ -146,8 +146,9 @@ typedef struct __attribute__((packed)) {
 // Extension v2 (bytes 28-35): FINE ADC health (adaq_ok_bits, fine_err_pct,
 //   drop_fine, drop_coarse). Extension v3 (bytes 36-55): USB streaming
 //   performance counters. Extension v4 (bytes 56-72): direct-USB relay/
-//   staging ingest progress (see ota/relay_stage.h). Older parsers silently
-//   ignore trailing bytes.
+//   staging ingest progress (see ota/relay_stage.h). Extension v5 (bytes
+//   72-87): per-record-type TX/drop counters, split by WAVE_I vs WAVE_V.
+//   Older parsers silently ignore trailing bytes.
 typedef struct __attribute__((packed)) {
     uint32_t sample_rate;     // 0
     uint32_t overflow_count;  // 4
@@ -182,7 +183,15 @@ typedef struct __attribute__((packed)) {
     uint32_t relay_image_size;  // 60 — total expected image bytes
     uint32_t relay_staged_bytes;// 64 — bytes written to staging partition so far
     uint32_t relay_pushed_bytes;// 68 — bytes pushed onward to target so far
-} usb_status_payload_t;         // total: 72 bytes
+    // Extension v5 (bytes 72-87): per-record-type TX accounting. Added to
+    // diagnose asymmetric voltage loss -- the aggregate frames_tx/
+    // fifo_drop_frames above cannot distinguish "WAVE_V was never built"
+    // from "WAVE_V was built and dropped at the transport".
+    uint32_t wave_i_frames;     // 72 — WAVE_I frames handed to the transport
+    uint32_t wave_v_frames;     // 76 — WAVE_V frames handed to the transport
+    uint32_t wave_i_drops;      // 80 — WAVE_I frames dropped (back-pressure/no transport)
+    uint32_t wave_v_drops;      // 84 — WAVE_V frames dropped
+} usb_status_payload_t;         // total: 88 bytes
 
 // ---- Control command payloads ----------------------------------------------
 typedef struct __attribute__((packed)) {

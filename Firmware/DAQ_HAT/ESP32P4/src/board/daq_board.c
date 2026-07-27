@@ -748,6 +748,8 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         .relay_staged_bytes = relay_st.staged_bytes,
         .relay_pushed_bytes = relay_st.pushed_bytes,
     };
+    usb_stream_get_type_counters(&b->usb, &st.wave_i_frames, &st.wave_v_frames,
+                                 &st.wave_i_drops, &st.wave_v_drops);
     usb_stream_send_status(&b->usb, &st);
 
     // usb_stream_perf_tick() computes the TX throughput EMA and emits a 1 Hz

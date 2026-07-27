@@ -78,6 +78,10 @@ void usb_stream_reset_apply(usb_stream_t *s)
     s->wi_count             = 0;
     s->wv_count             = 0;
     s->dropped_frames       = 0;
+    s->wi_frames            = 0;
+    s->wv_frames            = 0;
+    s->wi_drops             = 0;
+    s->wv_drops             = 0;
     s->tx_frames            = 0;
     s->tx_bytes_window      = 0;
     s->bytes_per_sec        = 0;
@@ -106,6 +110,16 @@ void usb_stream_reset_session(usb_stream_t *s)
 // back-pressure and transmits. This is the zero-copy path used by the large
 // WAVE_I / WAVE_V / FFT builders so no payload-sized stack or static buffer is
 // needed.
+// Attribute one emitted-or-dropped frame to its record type (extension v5).
+static void count_by_type(usb_stream_t *s, uint8_t type, bool sent)
+{
+    if (type == USB_REC_WAVE_I) {
+        if (sent) s->wi_frames++; else s->wi_drops++;
+    } else if (type == USB_REC_WAVE_V) {
+        if (sent) s->wv_frames++; else s->wv_drops++;
+    }
+}
+
 static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
                                     uint16_t len, bool crc)
 {
@@ -114,11 +128,13 @@ static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
     }
     if (!s->have_transport) {
         s->dropped_frames++;
+        count_by_type(s, (uint8_t)type, false);
         return ESP_ERR_INVALID_STATE;
     }
     if (s->transport.connected && !s->transport.connected(s->transport.ctx)) {
         // No host attached: drop silently, no log spam.
         s->dropped_frames++;
+        count_by_type(s, (uint8_t)type, false);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -153,6 +169,7 @@ static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
     if (s->transport.writable &&
         s->transport.writable(s->transport.ctx) < total) {
         s->dropped_frames++;
+        count_by_type(s, (uint8_t)type, false);
         if (s->dropped_frames <= 5 || s->dropped_frames % 1000 == 0) {
             ESP_LOGW(TAG, "frame drop #%lu: need=%lu avail=%lu",
                      (unsigned long)s->dropped_frames,
@@ -165,10 +182,12 @@ static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
     s->tx_seq++;
     if (wrote != total) {
         s->dropped_frames++;
+        count_by_type(s, (uint8_t)type, false);
         return ESP_FAIL;
     }
     s->tx_frames++;
     s->tx_bytes_window += total;
+    count_by_type(s, (uint8_t)type, true);
     return ESP_OK;
 }
 
@@ -382,6 +401,17 @@ void usb_stream_set_arm(usb_stream_t *s, bool armed, uint32_t pre_samples)
 uint64_t usb_stream_sample_seq(const usb_stream_t *s)
 {
     return s->sample_seq;
+}
+
+void usb_stream_get_type_counters(const usb_stream_t *s,
+                                  uint32_t *wi_frames, uint32_t *wv_frames,
+                                  uint32_t *wi_drops, uint32_t *wv_drops)
+{
+    if (!s) return;
+    if (wi_frames) *wi_frames = s->wi_frames;
+    if (wv_frames) *wv_frames = s->wv_frames;
+    if (wi_drops)  *wi_drops  = s->wi_drops;
+    if (wv_drops)  *wv_drops  = s->wv_drops;
 }
 
 void usb_stream_perf_tick(usb_stream_t *s)

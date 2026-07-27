@@ -107,6 +107,14 @@ typedef struct {
     volatile bool     armed;        // trigger latch armed
     uint32_t          pre_samples;  // requested pre-trigger depth (samples)
 
+    // Per-record-type TX accounting (see usb_status_payload_t extension v5).
+    // Written only by the producer task, same single-writer discipline as
+    // tx_frames/dropped_frames.
+    uint32_t wi_frames;
+    uint32_t wv_frames;
+    uint32_t wi_drops;
+    uint32_t wv_drops;
+
     // Perf counters (reported in STATUS perf extension + 1 Hz log).
     uint32_t tx_frames;
     uint64_t tx_bytes_window;   // bytes since last perf tick
@@ -210,6 +218,15 @@ void usb_stream_set_arm(usb_stream_t *s, bool armed, uint32_t pre_samples);
 
 /** @brief Current live fused-sample sequence (next index to be pushed). */
 uint64_t usb_stream_sample_seq(const usb_stream_t *s);
+
+/**
+ * @brief Read the per-record-type frame/drop counters (extension v5).
+ *        Any out-pointer may be NULL. Safe to call from another task: these
+ *        are plain u32 loads of single-writer counters.
+ */
+void usb_stream_get_type_counters(const usb_stream_t *s,
+                                  uint32_t *wi_frames, uint32_t *wv_frames,
+                                  uint32_t *wi_drops, uint32_t *wv_drops);
 
 /**
  * @brief Send an FFT frame: header + @p nbins magnitude floats.
