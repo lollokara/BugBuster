@@ -989,6 +989,21 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             wifi_stream_teardown(b);
             return 0;   // ack -> HATP_RSP_OK
 
+        case HATP_CMD_DAQ_WIFI_STREAM_RECYCLE:
+            // Escape hatch: the FULL teardown sequence, unconditionally,
+            // ignoring every cached state flag. STOP is cooperative and can
+            // itself be skipped or half-completed if state is inconsistent;
+            // this exists precisely for when state is already wrong, and is
+            // what lets the phone clear a wedge without a power-cycle.
+            // Safe to run from any state because every call below is
+            // idempotent (see wifi_ap.c's per-step guards and unconditional
+            // s_up clear).
+            ESP_LOGW(TAG, "wifi stream: force recycle requested");
+            s_bringup_alive = false;   // a stuck flag must not block the next START
+            wifi_stream_teardown(b);
+            b->wifi_stream_info.failed_at_ms = 0;
+            return 0;   // ack -> HATP_RSP_OK
+
         case HATP_CMD_DAQ_WIFI_STREAM_INFO: {
             // Chunk b->wifi_stream_info into the wire's [status][seq][flags]
             // + up to ~29 data bytes framing. While in a terminal state

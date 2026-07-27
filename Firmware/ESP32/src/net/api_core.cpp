@@ -346,6 +346,17 @@ static char *api_daq_wifi_stream_stop(void)
     return json_take(root);
 }
 
+// POST /api/daq/wifi_stream/recycle — force the P4 to tear the WiFi stream
+// down unconditionally. The client's recovery ladder calls this before
+// re-provisioning, so a wedged device no longer needs a power-cycle.
+static char *api_daq_wifi_stream_recycle(void)
+{
+    bool ok = hat_daq_wifi_stream_recycle();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", ok);
+    return json_take(root);
+}
+
 // GET /api/daq/wifi_stream/status — poll for the generated softAP credentials.
 static char *api_daq_wifi_stream_status(void)
 {
@@ -1410,6 +1421,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/hat/v2/swd/detect") == 0)   return api_hat_swd_detect();
     if (strcmp(path, "/api/daq/wifi_stream/start") == 0)  return api_daq_wifi_stream_start();
     if (strcmp(path, "/api/daq/wifi_stream/stop") == 0)   return api_daq_wifi_stream_stop();
+    if (strcmp(path, "/api/daq/wifi_stream/recycle") == 0) return api_daq_wifi_stream_recycle();
     if (strcmp(path, "/api/daq/wifi_stream/status") == 0) return api_daq_wifi_stream_status();
     if (strcmp(path, "/api/daq/vdut/enable") == 0)   return api_daq_vdut_enable(body);
     if (strcmp(path, "/api/daq/vdut/setpoint") == 0) return api_daq_vdut_setpoint(body);

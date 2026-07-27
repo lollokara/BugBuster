@@ -1453,6 +1453,33 @@ bool hat_daq_wifi_stream_stop(void)
     return code == HAT_RSP_OK;
 }
 
+bool hat_daq_wifi_stream_recycle(void)
+{
+    // Deliberately does NOT reject on s_state.type: recycle is the recovery
+    // path, and HAT type detection is itself something that can be stale
+    // after a bad session. A connected link is the only precondition.
+    if (!s_state.connected) {
+        ESP_LOGW(TAG, "wifi_stream_recycle: no HAT link");
+        return false;
+    }
+    uint8_t rsp[4]; uint8_t rsp_len = 0;
+    uint8_t code = hat_command(HAT_CMD_DAQ_WIFI_STREAM_RECYCLE, NULL, 0, rsp, &rsp_len,
+                               200, sizeof(rsp));
+    ESP_LOGW(TAG, "wifi_stream_recycle: P4 responded opcode=0x%02X (%s)",
+             code, code == HAT_RSP_OK ? "OK" : (code == HAT_RSP_ERROR ? "ERROR" : "TIMEOUT/UNKNOWN"));
+
+    // Clear the S3's own mirror regardless of the P4's answer -- if the P4
+    // did not respond, the mirror is exactly the state we must not trust.
+    s_wifi_stream_info.state = HAT_DAQ_WIFI_STREAM_IDLE;
+    s_wifi_stream_info.ssid[0] = '\0';
+    s_wifi_stream_info.password[0] = '\0';
+    s_wifi_stream_info.port = 0;
+    memset(s_wifi_stream_info.host, 0, sizeof(s_wifi_stream_info.host));
+    hat_daq_wifi_stream_reset_reassembly();
+    s_wifi_stream_poll_armed = false;
+    return code == HAT_RSP_OK;
+}
+
 void hat_daq_poll_wifi_stream_info(void)
 {
     if (!s_wifi_stream_poll_armed) return;

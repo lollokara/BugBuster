@@ -96,6 +96,7 @@ extern "C" {
 #define HATP_CMD_DAQ_WIFI_STREAM_START  0x5Fu   // S3->P4: start DAQ WiFi streaming (empty payload) -> 1-byte accept/reject
 #define HATP_CMD_DAQ_WIFI_STREAM_STOP   0x67u   // S3->P4: stop DAQ WiFi streaming (empty payload) -> 1-byte ack
 #define HATP_CMD_DAQ_WIFI_STREAM_INFO   0x68u   // S3->P4: poll for wifi-stream credentials -> chunked RSP_DAQ_WIFI_STREAM_INFO
+#define HATP_CMD_DAQ_WIFI_STREAM_RECYCLE  0x79u   // S3->P4: unconditional teardown to IDLE (empty payload) -> 1-byte ack
 
 // HATP_CMD_DAQ_WIFI_STREAM_INFO chunk framing: [u8 status][u8 seq][u8 flags][data...].
 // status: 0=starting (softAP not up yet, empty data), 1=ready (final chunk,

@@ -317,6 +317,7 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_DAQ_WIFI_STREAM_START  0x5F  // S3->P4: start DAQ WiFi streaming (empty payload) -> 1-byte accept/reject
 #define HAT_CMD_DAQ_WIFI_STREAM_STOP   0x67  // S3->P4: stop DAQ WiFi streaming (empty payload) -> 1-byte ack
 #define HAT_CMD_DAQ_WIFI_STREAM_INFO   0x68  // S3->P4: poll for wifi-stream credentials -> chunked response
+#define HAT_CMD_DAQ_WIFI_STREAM_RECYCLE 0x79  // S3->P4: unconditional wifi-stream teardown to IDLE
 
 // Responses (slave → master)
 #define HAT_RSP_OK              0x80
@@ -670,6 +671,14 @@ bool hat_daq_wifi_stream_start(void);
  * @return true if the P4 acknowledged the request.
  */
 bool hat_daq_wifi_stream_stop(void);
+/**
+ * @brief Force the P4 to tear its WiFi stream all the way down, ignoring
+ *        cached state. Unlike hat_daq_wifi_stream_stop(), this is the
+ *        recovery path used when state is already believed inconsistent —
+ *        it replaces power-cycling the DAQ HAT.
+ * @return true if the P4 acknowledged.
+ */
+bool hat_daq_wifi_stream_recycle(void);
 /**
  * @brief Poll the P4 for WiFi-stream credentials while a start is pending.
  *        No-op unless a poll is currently armed (i.e. between a successful

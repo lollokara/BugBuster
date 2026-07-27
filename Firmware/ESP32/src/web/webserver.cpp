@@ -2343,6 +2343,17 @@ static esp_err_t handle_post_daq_wifi_stream_stop(httpd_req_t *req)
     return rc;
 }
 
+// POST /api/daq/wifi_stream/recycle
+static esp_err_t handle_post_daq_wifi_stream_recycle(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    char *resp = api_core_handle("POST", "/api/daq/wifi_stream/recycle", NULL);
+    if (!resp) return send_error(req, 500, "wifi stream recycle failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
 // GET /api/daq/wifi_stream/status
 static esp_err_t handle_get_daq_wifi_stream_status(httpd_req_t *req)
 {
@@ -5077,6 +5088,12 @@ bool initWebServer(void)
         .uri = "/api/daq/wifi_stream/stop", .method = HTTP_POST, .handler = handle_post_daq_wifi_stream_stop, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_wifi_stream_stop);
+
+    httpd_uri_t uri_daq_wifi_stream_recycle = {
+        .uri = "/api/daq/wifi_stream/recycle", .method = HTTP_POST,
+        .handler = handle_post_daq_wifi_stream_recycle, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_wifi_stream_recycle);
 
     httpd_uri_t uri_daq_wifi_stream_status = {
         .uri = "/api/daq/wifi_stream/status", .method = HTTP_GET, .handler = handle_get_daq_wifi_stream_status, .user_ctx = NULL
