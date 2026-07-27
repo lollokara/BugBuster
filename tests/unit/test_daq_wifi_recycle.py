@@ -67,26 +67,65 @@ def test_recycle_cancels_inflight_bringup_with_a_bounded_wait():
     bounded, never unbounded -- rather than blindly clearing s_bringup_alive,
     or the task can resurrect the softAP / stamp READY right after RECYCLE's
     teardown, silently undoing the recycle."""
-    assert "static volatile bool s_bringup_cancel;" in BOARD
-    # RECYCLE must set the cancel flag and wait on it with a bounded loop
-    # (never an unbounded block on s_bringup_alive).
+    assert "static volatile uint32_t s_bringup_gen;" in BOARD
+    # RECYCLE must bump the generation and wait on s_bringup_alive with a
+    # bounded loop (never an unbounded block).
     start = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_RECYCLE")
     end = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_INFO")
     body = BOARD[start:end]
-    assert "s_bringup_cancel = true" in body
+    assert "++s_bringup_gen" in body or "s_bringup_gen++" in body or "s_bringup_gen +" in body
     assert "BRINGUP_CANCEL_WAIT_MS" in body, "wait must be bounded, not unbounded"
     assert "while" in body and "s_bringup_alive" in body
 
-    # The bring-up task must check the cancel flag before it ever publishes
-    # READY, and must clear s_bringup_alive/s_bringup_cancel on that path too.
+    # The bring-up task must check its generation before it ever publishes
+    # READY, and must clear s_bringup_alive on that path too.
     task_start = BOARD.index("static void wifi_stream_bringup_task")
     ready_idx = BOARD.index("DAQ_WIFI_STREAM_READY", task_start)
     task_body_before_ready = BOARD[task_start:ready_idx]
-    assert "s_bringup_cancel" in task_body_before_ready, \
-        "bring-up task never checks cancel before publishing READY"
+    assert "s_bringup_gen" in task_body_before_ready, \
+        "bring-up task never checks its generation before publishing READY"
 
-    # A fresh START must not let a stale cancel from a previous recycle leak
-    # into the new attempt.
+
+def test_recycle_orphan_cannot_be_un_cancelled_by_a_later_start():
+    """The generation counter, not a boolean flag, is what makes cancellation
+    stick. A prior fix used a shared s_bringup_cancel boolean: RECYCLE set it
+    and waited up to BRINGUP_CANCEL_WAIT_MS, but if the old task was stuck
+    inside wifi_ap_start() past that bound, RECYCLE gave up and force-cleared
+    s_bringup_alive so the very next START (the iOS recovery ladder recycles
+    then immediately re-provisions) wasn't blocked -- but that new START also
+    reset the shared boolean to false, un-cancelling the orphan right before
+    its next checkpoint. A per-attempt generation has no such ambiguity: once
+    bumped (by either RECYCLE or a new START), an orphan's captured value can
+    never match s_bringup_gen again, no matter what happens afterward."""
+    # There must be no shared/global boolean cancel flag left for a new START
+    # to reset out from under an orphan -- generation identity replaces it.
+    assert "s_bringup_cancel" not in BOARD, \
+        "a shared boolean cancel flag can be un-set by an unrelated START, " \
+        "re-enabling an orphaned bring-up task -- must use per-attempt generation identity instead"
+
+    # Each bring-up task instance must capture its OWN generation (passed in
+    # via its task argument, not read from the shared counter at entry -- a
+    # second START could already have bumped the shared counter before the
+    # first task's first instruction runs) and never re-derive it from the
+    # global afterward.
+    task_start = BOARD.index("static void wifi_stream_bringup_task")
+    task_end = BOARD.index("static void wifi_stream_teardown")
+    task_body = BOARD[task_start:task_end]
+    assert "my_gen" in task_body or "gen" in task_body.split("(")[1].split(")")[0], \
+        "task must capture its own generation, not just poll the shared counter"
+    assert "my_gen != s_bringup_gen" in task_body or "s_bringup_gen != my_gen" in task_body, \
+        "checkpoints must compare captured generation against the CURRENT shared counter"
+
+    # START must bump the generation on every spawn (giving each attempt an
+    # identity distinct from whatever came before, including an orphan RECYCLE
+    # gave up waiting on).
     start_start = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_START")
     start_end = BOARD.index("case HATP_CMD_DAQ_WIFI_STREAM_STOP")
-    assert "s_bringup_cancel = false" in BOARD[start_start:start_end]
+    start_body = BOARD[start_start:start_end]
+    assert "++s_bringup_gen" in start_body or "s_bringup_gen++" in start_body, \
+        "START must bump the generation so a prior orphan can never match it again"
+
+    # The task must be constructed with its own copy of that generation value
+    # (not the raw daq_board_t* alone), e.g. via a small per-spawn arg struct.
+    assert "xTaskCreate(wifi_stream_bringup_task" in start_body
+    assert "gen" in start_body
