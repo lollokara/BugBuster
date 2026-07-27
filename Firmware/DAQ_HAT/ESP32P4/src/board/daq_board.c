@@ -804,6 +804,15 @@ static void c6_link_restart(daq_board_t *b)
     ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
 }
 
+// True from the moment a bring-up task is created until it exits, on every
+// path. xTaskCreate() returning pdPASS does NOT mean the task has run yet, so
+// the STARTING-state check alone left a narrow window where a second START
+// could spawn a second bring-up task racing the first over the same softAP.
+static volatile bool s_bringup_alive;
+
+// How long DAQ_WIFI_STREAM_FAILED persists before decaying to IDLE.
+#define WIFI_STREAM_FAILED_DECAY_MS 5000u
+
 // Runs the actual DAQ WiFi streaming bring-up (softAP over ESP-Hosted, fast-
 // fail DNS, TCP backend) in its own task so HATP_CMD_DAQ_WIFI_STREAM_START
 // can return to the S3-link dispatcher immediately -- see the long comment
@@ -874,6 +883,8 @@ static void wifi_stream_bringup_task(void *arg)
         wifi_ap_stop();
         ddp_master_set_wifi_stream_mode(&b->ddp, false);
         b->wifi_stream_info.state = DAQ_WIFI_STREAM_FAILED;
+        b->wifi_stream_info.failed_at_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        s_bringup_alive = false;
         vTaskDelete(NULL);
         return;
     }
@@ -885,6 +896,7 @@ static void wifi_stream_bringup_task(void *arg)
     b->wifi_stream_info.host[2] = 4;
     b->wifi_stream_info.host[3] = 1;
     b->wifi_stream_info.state = DAQ_WIFI_STREAM_READY;
+    s_bringup_alive = false;
     vTaskDelete(NULL);
 }
 
@@ -951,17 +963,23 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         // state machine was already built for. ----
         case HATP_CMD_DAQ_WIFI_STREAM_START: {
             // Idempotent: a repeat START while one is already in flight or
-            // already up must NOT reset state or spawn a second task.
-            if (b->wifi_stream_info.state == DAQ_WIFI_STREAM_STARTING ||
+            // already up must NOT reset state or spawn a second task. The
+            // liveness flag covers the window between xTaskCreate() returning
+            // and the task actually running.
+            if (s_bringup_alive ||
+                b->wifi_stream_info.state == DAQ_WIFI_STREAM_STARTING ||
                 b->wifi_stream_info.state == DAQ_WIFI_STREAM_READY) {
                 return 0;
             }
             memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
             b->wifi_stream_info.state = DAQ_WIFI_STREAM_STARTING;
+            s_bringup_alive = true;
             BaseType_t ok = xTaskCreate(wifi_stream_bringup_task, "wifi_bringup",
                                        4096, b, 5, NULL);
             if (ok != pdPASS) {
+                s_bringup_alive = false;
                 b->wifi_stream_info.state = DAQ_WIFI_STREAM_FAILED;
+                b->wifi_stream_info.failed_at_ms = (uint32_t)(esp_timer_get_time() / 1000);
                 return -1;
             }
             return 0;   // accepted -> HATP_RSP_OK (bring-up continues in background)
@@ -1400,6 +1418,17 @@ static void daq_ui_task(void *arg)
             }
         } else {
             wifi_disconnect_since_ms = 0;
+            // FAILED is not terminal: decay it back to IDLE so a transient
+            // bring-up failure stops being reported as a permanent fault and
+            // the next START starts from a clean state.
+            if (b->wifi_stream_info.state == DAQ_WIFI_STREAM_FAILED &&
+                !s_bringup_alive &&
+                (t - b->wifi_stream_info.failed_at_ms) >= WIFI_STREAM_FAILED_DECAY_MS) {
+                ESP_LOGI(TAG, "wifi stream: clearing FAILED state after %u ms",
+                         WIFI_STREAM_FAILED_DECAY_MS);
+                memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
+                b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
+            }
         }
 
         // The C6 link (UART2) is handed to the flasher during a C6 firmware

@@ -73,6 +73,11 @@ typedef struct {
     char                     password[65];
     uint16_t                 port;
     uint8_t                  host[4];
+    // esp_timer millisecond stamp of when state became FAILED (0 otherwise).
+    // FAILED decays back to IDLE after WIFI_STREAM_FAILED_DECAY_MS so a
+    // transient bring-up failure does not report a permanent fault to the
+    // phone for the rest of the boot.
+    uint32_t                 failed_at_ms;
 } daq_wifi_stream_info_t;
 
 typedef struct daq_board {
