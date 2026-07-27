@@ -432,10 +432,33 @@ struct ScopeTab: View {
                 legendDot(color: ScopeColors.daqPower, label: "Power (W)")
             }
             Spacer()
-            Text("\(daqRenderModel.frame?.recordCount ?? 0) frames")
+            Text(daqDiagnosticLine)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(.secondary)
         }
+    }
+
+    /// Voltage-loss diagnostic readout: device TX vs phone RX per record
+    /// type, plus voltage-ADC health. "V:ERR" means the ADC itself is down,
+    /// "tx 120/0" with "rx 118/0" means voltage was never produced, and
+    /// "tx 120/118 rx 118/4" means the wire is eating voltage frames.
+    private var daqDiagnosticLine: String {
+        let rx = daqStream.rxCounts
+        guard let s = daqStream.lastStatus else {
+            return "rx \(rx.i)/\(rx.v)"
+        }
+        var parts: [String] = []
+        if let ti = s.waveIFrames, let tv = s.waveVFrames {
+            parts.append("tx \(ti)/\(tv)")
+        }
+        parts.append("rx \(rx.i)/\(rx.v)")
+        if let di = s.waveIDrops, let dv = s.waveVDrops, di + dv > 0 {
+            parts.append("drop \(di)/\(dv)")
+        }
+        if let ok = s.voltAdcOK {
+            parts.append(ok ? "V:ok" : "V:ERR")
+        }
+        return parts.joined(separator: "  ")
     }
 
     // MARK: - DAQ WiFi provisioning progress screen

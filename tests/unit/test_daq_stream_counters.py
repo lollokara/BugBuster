@@ -34,3 +34,29 @@ def test_stream_counts_drops_separately_by_type():
 
 def test_board_populates_the_new_status_fields():
     assert "usb_stream_get_type_counters" in BOARD
+
+
+IOS_MGR = Path("iOSApp/Sources/Services/DaqWifiStreamManager.swift").read_text()
+IOS_SCOPE = Path("iOSApp/Sources/Views/ScopeTab.swift").read_text()
+
+
+def test_ios_parses_extension_v5_counters_at_correct_offsets():
+    for off, field in ((72, "waveIFrames"), (76, "waveVFrames"),
+                       (80, "waveIDrops"), (84, "waveVDrops")):
+        assert field in IOS_MGR, f"{field} not parsed on iOS"
+        assert f"u32({off})" in IOS_MGR, f"offset {off} ({field}) not read"
+
+
+def test_ios_exposes_volt_adc_health_already_on_the_wire():
+    """adaq_ok_bits bit2 = VOLT ok. Sent since extension v2, never surfaced."""
+    assert "adaqOkBits" in IOS_MGR
+    assert "voltAdcOK" in IOS_MGR
+    assert "0x04" in IOS_MGR
+
+
+def test_ios_counts_received_frames_by_type():
+    assert "rxWaveI" in IOS_MGR and "rxWaveV" in IOS_MGR
+
+
+def test_scope_tab_shows_the_diagnostic_readout():
+    assert "rxCounts" in IOS_SCOPE

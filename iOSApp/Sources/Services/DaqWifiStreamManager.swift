@@ -100,6 +100,20 @@ struct DaqStatus {
     let framesTx: UInt32?
     let bytesPerSec: UInt32?
     let fifoDropFrames: UInt32?
+
+    /// adaq_ok_bits (extension v2 @28): bit0 = FINE ok, bit1 = COARSE ok,
+    /// bit2 = VOLT ok. Sent by the firmware since extension v2 but never
+    /// surfaced on the phone — a dead voltage ADC looked identical to a
+    /// dropped voltage stream.
+    let adaqOkBits: UInt8?
+    // Extension v5 (@72-87): per-record-type TX accounting from the device.
+    let waveIFrames: UInt32?
+    let waveVFrames: UInt32?
+    let waveIDrops: UInt32?
+    let waveVDrops: UInt32?
+
+    /// nil when the firmware predates extension v2.
+    var voltAdcOK: Bool? { adaqOkBits.map { $0 & 0x04 != 0 } }
 }
 
 struct DaqMarker {
@@ -333,6 +347,11 @@ final class DaqStreamEngine: @unchecked Sendable {
     private var voltAcc = EnvelopeAccumulator(fold: DaqStreamEngine.reducedFold)
     private var currAcc = EnvelopeAccumulator(fold: DaqStreamEngine.reducedFold)
     private(set) var recordCount = 0
+    /// Queue-confined RX frame counts by record type. Compared against the
+    /// device's extension-v5 TX counters to localise voltage loss: TX>>RX
+    /// means the wire dropped it, TX==RX==0 means it was never produced.
+    private(set) var rxWaveI = 0
+    private(set) var rxWaveV = 0
     private var rxBuffer = Data()
     private var firstTimestampUs: UInt64?
     private var voltClock = DaqStreamClock()
@@ -446,6 +465,8 @@ final class DaqStreamEngine: @unchecked Sendable {
             voltAcc.reset()
             currAcc.reset()
             recordCount = 0
+            rxWaveI = 0
+            rxWaveV = 0
             firstTimestampUs = nil
             voltClock.reset()
             currClock.reset()
@@ -635,6 +656,11 @@ final class DaqStreamEngine: @unchecked Sendable {
             let framesTx = payload.count >= 40 ? payload.u32(36) : nil
             let bytesPerSec = payload.count >= 44 ? payload.u32(40) : nil
             let fifoDrop = payload.count >= 48 ? payload.u32(44) : nil
+            let adaqOk = payload.count >= 29 ? payload.u8(28) : nil
+            let wiFrames = payload.count >= 76 ? payload.u32(72) : nil
+            let wvFrames = payload.count >= 80 ? payload.u32(76) : nil
+            let wiDrops  = payload.count >= 84 ? payload.u32(80) : nil
+            let wvDrops  = payload.count >= 88 ? payload.u32(84) : nil
             return .status(DaqStatus(
                 sampleRate: payload.u32(0),
                 overflowCount: payload.u32(4),
@@ -648,7 +674,12 @@ final class DaqStreamEngine: @unchecked Sendable {
                 inCurrent: inCurrent,
                 framesTx: framesTx,
                 bytesPerSec: bytesPerSec,
-                fifoDropFrames: fifoDrop
+                fifoDropFrames: fifoDrop,
+                adaqOkBits: adaqOk,
+                waveIFrames: wiFrames,
+                waveVFrames: wvFrames,
+                waveIDrops: wiDrops,
+                waveVDrops: wvDrops
             ))
 
         case .marker:
@@ -703,6 +734,7 @@ final class DaqStreamEngine: @unchecked Sendable {
         recordCount += 1
         switch record {
         case .wave(let block):
+            if block.isVoltage { rxWaveV += 1 } else { rxWaveI += 1 }
             if firstTimestampUs == nil { firstTimestampUs = block.timestampUs }
             let sessionT0 = firstTimestampUs ?? block.timestampUs
             // Effective inter-sample spacing includes device-side stream
@@ -845,6 +877,10 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     @Published var lastError: String? = nil
     @Published var lastStatus: DaqStatus? = nil
     @Published var provisioningState: ProvisioningState = .idle
+    /// Main-actor mirror of the engine's RX counts, refreshed on each STATUS
+    /// frame (10 Hz) — cheap, and STATUS is exactly when the device's own TX
+    /// counters update, so both sides of the comparison move together.
+    @Published var rxCounts: (i: Int, v: Int) = (0, 0)
 
     /// Background stream pipeline; ScopeRenderModel reads its buffers.
     let engine = DaqStreamEngine()
@@ -887,6 +923,7 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.lastStatus = status
+                self.rxCounts = (self.engine.rxWaveI, self.engine.rxWaveV)
                 self.isStreaming = status.streaming
             }
         }
