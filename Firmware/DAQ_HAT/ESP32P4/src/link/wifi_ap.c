@@ -14,8 +14,17 @@
 
 static const char *TAG = "wifi_ap";
 
-static bool s_inited;
-static bool s_up;
+// Per-step init guards. One aggregate s_inited flag was not enough: any step
+// failing mid-sequence left s_inited false, so a retry replayed the earlier,
+// NON-IDEMPOTENT steps. esp_netif_create_default_wifi_ap() replayed that way
+// trips ESP-IDF's duplicate-key assert and hard-aborts the board -- which is
+// why s_ap_netif already had its own guard. Every step gets one now.
+static bool s_hosted_ok;    // esp_hosted_init()
+static bool s_netif_ok;     // esp_netif_init() + default event loop
+static bool s_wifi_ok;      // esp_wifi_init()
+static bool s_handler_ok;   // esp_event_handler_instance_register()
+static bool s_inited;       // all of the above complete
+static bool s_up;           // softAP actually started
 static esp_netif_t *s_ap_netif;
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -42,42 +51,56 @@ esp_err_t wifi_ap_init(void)
 {
     if (s_inited) return ESP_OK;
 
-    // The P4 has no native WiFi radio -- esp_wifi_init() below routes through
-    // ESP-Hosted's "remote" wifi component over the SDIO link to the C6. That
-    // component requires the host-side hosted transport brought up first via
-    // esp_hosted_init(); skipping this makes esp_wifi_remote_init() fail with
-    // "Transport not initialized" / "ESP-Hosted link not yet up".
-    int herr = esp_hosted_init();
-    if (herr != 0) {
-        ESP_LOGE(TAG, "esp_hosted_init failed: %d", herr);
-        return ESP_FAIL;
+    if (!s_hosted_ok) {
+        // The P4 has no native WiFi radio -- the wifi driver init step below
+        // routes through ESP-Hosted's "remote" wifi component over the SDIO
+        // link to the C6. That component requires the host-side hosted
+        // transport brought up first via esp_hosted_init(); skipping this
+        // makes esp_wifi_remote_init() fail with "Transport not initialized"
+        // / "ESP-Hosted link not yet up".
+        int herr = esp_hosted_init();
+        if (herr != 0) {
+            ESP_LOGE(TAG, "esp_hosted_init failed: %d", herr);
+            return ESP_FAIL;
+        }
+        s_hosted_ok = true;
     }
 
-    esp_err_t err = esp_netif_init();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+    if (!s_netif_ok) {
+        esp_err_t nerr = esp_netif_init();
+        if (nerr != ESP_OK && nerr != ESP_ERR_INVALID_STATE) return nerr;
+        nerr = esp_event_loop_create_default();
+        if (nerr != ESP_OK && nerr != ESP_ERR_INVALID_STATE) return nerr;
+        s_netif_ok = true;
+    }
 
-    err = esp_event_loop_create_default();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
-
-    // Guarded independently of s_inited: esp_wifi_init() below can fail (e.g.
-    // the ESP-Hosted SDIO link to the C6 isn't up yet) after this already
-    // succeeded, leaving s_inited false but the netif still registered under
-    // its fixed "WIFI_AP_DEF" key. A retry that unconditionally called
-    // esp_netif_create_default_wifi_ap() again would hit ESP-IDF's
-    // duplicate-key assert and hard-abort the whole board -- so only create
-    // it once, ever, and reuse it across retries.
+    // Guarded independently of s_inited: the wifi driver init step below can
+    // fail (e.g. the ESP-Hosted SDIO link to the C6 isn't up yet) after this
+    // already succeeded, leaving s_inited false but the netif still
+    // registered under its fixed "WIFI_AP_DEF" key. A retry that
+    // unconditionally called esp_netif_create_default_wifi_ap() again would
+    // hit ESP-IDF's duplicate-key assert and hard-abort the whole board --
+    // so only create it once, ever, and reuse it across retries.
     if (!s_ap_netif) {
         s_ap_netif = esp_netif_create_default_wifi_ap();
         if (!s_ap_netif) return ESP_FAIL;
     }
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    err = esp_wifi_init(&cfg);
-    if (err != ESP_OK) return err;
+    if (!s_wifi_ok) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        esp_err_t werr = esp_wifi_init(&cfg);
+        // The C6's ESP-Hosted stack may not be listening yet; the caller
+        // retries. Everything above stays done, so the retry resumes here.
+        if (werr != ESP_OK) return werr;
+        s_wifi_ok = true;
+    }
 
-    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                              &wifi_event_handler, NULL, NULL);
-    if (err != ESP_OK) return err;
+    if (!s_handler_ok) {
+        esp_err_t herr2 = esp_event_handler_instance_register(
+            WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL);
+        if (herr2 != ESP_OK) return herr2;
+        s_handler_ok = true;
+    }
 
     s_inited = true;
     ESP_LOGI(TAG, "WiFi (ESP-Hosted/C6) initialised");

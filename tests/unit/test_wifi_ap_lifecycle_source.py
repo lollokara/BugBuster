@@ -34,3 +34,22 @@ def test_start_does_not_treat_cached_s_up_as_proof_the_ap_is_running():
 def test_start_recovers_from_not_stopped_instead_of_failing_hard():
     body = _body("wifi_ap_start")
     assert "ESP_ERR_WIFI_NOT_STOPPED" in body
+
+
+def test_each_non_idempotent_init_step_has_its_own_guard():
+    """A mid-sequence failure must not replay already-completed steps.
+    esp_netif_create_default_wifi_ap() replayed once hard-aborted the board."""
+    body = _body("wifi_ap_init")
+    for guard in ("s_hosted_ok", "s_netif_ok", "s_wifi_ok", "s_handler_ok"):
+        assert guard in SRC, f"missing per-step guard {guard}"
+    for guard, call in (("s_hosted_ok", "esp_hosted_init"),
+                        ("s_wifi_ok", "esp_wifi_init"),
+                        ("s_handler_ok", "esp_event_handler_instance_register")):
+        assert body.index(guard) < body.index(call), \
+            f"{call} is not guarded by {guard}"
+
+
+def test_event_handler_registered_at_most_once():
+    """Re-registering the same handler stacks duplicate callbacks."""
+    body = _body("wifi_ap_init")
+    assert "if (!s_handler_ok)" in body
