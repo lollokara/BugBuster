@@ -450,6 +450,42 @@ static char *api_daq_vdut_setpoint(const cJSON *body)
     return json_take(root);
 }
 
+// POST /api/daq/acq_config — set the ADAQ7769-1 digital filter + hardware
+// decimation (the sample rate; there is no separate "stream decimation" knob
+// here -- see hat_acq_config_t/s3link_acq_config_t doc comments for why).
+// Reachable over BOTH HTTP and BLE via this shared dispatcher: while
+// streaming, the phone is joined to the C6-hosted DAQ hotspot and cannot
+// reach the S3 over HTTP, so BLE is the only control channel available then.
+static char *api_daq_acq_config(const cJSON *body)
+{
+    cJSON *jfilter = body_get(body, "filter");
+    cJSON *jdec    = body_get(body, "adc_dec");
+    if (!cJSON_IsNumber(jfilter) || !cJSON_IsNumber(jdec)) {
+        return api_error("filter and adc_dec required");
+    }
+    int filter  = jfilter->valueint;
+    int adc_dec = jdec->valueint;
+    if (filter < 0 || filter > HAT_ACQ_FILTER_MAX) {
+        return api_error("filter out of range");
+    }
+    // adc_dec's valid range depends on filter: for SINC3 it is (decimation/32)
+    // and effectively free (1..255); for every other filter it must be one of
+    // the fixed ADAQ_DEC_* enum steps (0..HAT_ACQ_DEC_MAX).
+    if (filter != HAT_ACQ_FILTER_SINC3 &&
+        (adc_dec < 0 || adc_dec > (int)HAT_ACQ_DEC_MAX)) {
+        return api_error("adc_dec out of range");
+    }
+    if (adc_dec < 0 || adc_dec > 255) {
+        return api_error("adc_dec out of range");
+    }
+    if (!hat_daq_set_acq_config((uint8_t)filter, (uint8_t)adc_dec)) {
+        return api_error("HAT not responding, not a DAQ HAT, or config rejected");
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return json_take(root);
+}
+
 static char *api_usbpd(void)
 {
     husb238_update();
@@ -1425,6 +1461,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/daq/wifi_stream/status") == 0) return api_daq_wifi_stream_status();
     if (strcmp(path, "/api/daq/vdut/enable") == 0)   return api_daq_vdut_enable(body);
     if (strcmp(path, "/api/daq/vdut/setpoint") == 0) return api_daq_vdut_setpoint(body);
+    if (strcmp(path, "/api/daq/acq_config") == 0) return api_daq_acq_config(body);
     if (strcmp(path, "/api/ioexp/control") == 0)    return api_ioexp_control(body);
     if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
     if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);

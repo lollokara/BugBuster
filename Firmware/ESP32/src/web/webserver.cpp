@@ -2410,6 +2410,16 @@ static esp_err_t handle_post_daq_vdut_setpoint(httpd_req_t *req)
     return send_api_core_result(req, resp, "vdut setpoint failed");
 }
 
+// POST /api/daq/acq_config  body: {"filter": u8, "adc_dec": u8}
+static esp_err_t handle_post_daq_acq_config(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/daq/acq_config", body);
+    if (body) cJSON_Delete(body);
+    return send_api_core_result(req, resp, "acq config failed");
+}
+
 // GET /api/hat/la/status
 static esp_err_t handle_get_hat_la_status(httpd_req_t *req)
 {
@@ -5114,6 +5124,11 @@ bool initWebServer(void)
         .uri = "/api/daq/vdut/setpoint", .method = HTTP_POST, .handler = handle_post_daq_vdut_setpoint, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_vdut_setpoint);
+
+    httpd_uri_t uri_daq_acq_config = {
+        .uri = "/api/daq/acq_config", .method = HTTP_POST, .handler = handle_post_daq_acq_config, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_acq_config);
 
     // ----- HAT v2 routes (registered before the /api/hat/* wildcard) -----
 

@@ -286,6 +286,10 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_DAQ_VDUT_ENABLE   0x77u   // payload: u8 enable -> OK/ERROR
 #define HAT_CMD_DAQ_VDUT_SETPOINT 0x78u   // payload: hat_vdut_setpoint_t -> OK/ERROR
 
+// Acquisition configuration (ADAQ7769-1 digital filter + hardware decimation).
+// MUST match P4 s3_link.h HATP_CMD_DAQ_SET_ACQ_CONFIG exactly.
+#define HAT_CMD_DAQ_SET_ACQ_CONFIG 0x7Au   // payload: hat_acq_config_t -> OK/ERROR
+
 // VDUT hardware limits, mirrored from the P4's authoritative
 // Firmware/DAQ_HAT/ESP32P4/include/config.h (SMU_VDUT_MIN/MAX,
 // SMU_ILIMIT_MIN_A/FULLSCALE_A) so the S3 API layer (api_core.cpp) can
@@ -357,6 +361,16 @@ typedef struct __attribute__((packed)) {
     float vdut_v;    // target DUT voltage (V)
     float ilimit_a;  // target current limit (A)
 } hat_vdut_setpoint_t;
+
+// HAT_CMD_DAQ_SET_ACQ_CONFIG payload. MUST stay byte-for-byte identical to the
+// P4-side mirror s3link_acq_config_t in
+// Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h. No sample-rate/stream-decim
+// field: the sample rate IS the ODR (ADC hardware decimation); stream
+// decimation is not a user-facing knob (see s3link_acq_config_t doc comment).
+typedef struct __attribute__((packed)) {
+    uint8_t filter;    // ADAQ_FILTER_* (P4 adaq7769_regs.h numeric values)
+    uint8_t adc_dec;   // ADAQ_DEC_*, or (SINC3 decimation / 32)
+} hat_acq_config_t;
 
 // HAT_RSP_DAQ_VDUT_STATUS payload: response to HAT_CMD_DAQ_VDUT_STATUS. MUST
 // stay byte-for-byte identical to the P4-side mirror s3link_vdut_status_t.
@@ -727,6 +741,30 @@ bool hat_daq_vdut_enable(bool enable);
  * @return true on P4 HAT_RSP_OK, false otherwise (including no DAQ HAT).
  */
 bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a);
+
+/**
+ * @brief Request the ADAQ7769-1 digital filter + hardware decimation (the
+ *        sample rate) the P4 should apply. Fire-and-forget: the P4 accepts/
+ *        validates the filter code synchronously but applies it via its own
+ *        deferred ctrl_queue path, so this only reports whether the P4
+ *        accepted the request, not the ODR it ends up achieving -- read that
+ *        back from the STATUS stream (usb_status_payload_t v6 fields).
+ * @return true on P4 HAT_RSP_OK, false otherwise (including no DAQ HAT).
+ */
+bool hat_daq_set_acq_config(uint8_t filter, uint8_t adc_dec);
+
+// Mirrored from the P4's authoritative
+// Firmware/DAQ_HAT/ESP32P4/src/adaq7769/adaq7769_regs.h ADAQ_FILTER_* /
+// ADAQ_DEC_* so api_core.cpp can bounds-check a request before ever sending
+// it over the HAT link. The P4 re-validates against its own constants
+// regardless (same pattern as HAT_DAQ_VDUT_MIN_V/MAX_V above).
+#define HAT_ACQ_FILTER_SINC5      0u
+#define HAT_ACQ_FILTER_SINC5_X8   1u
+#define HAT_ACQ_FILTER_SINC5_X16  2u
+#define HAT_ACQ_FILTER_SINC3      3u
+#define HAT_ACQ_FILTER_WIDEBAND   4u
+#define HAT_ACQ_FILTER_MAX        HAT_ACQ_FILTER_WIDEBAND
+#define HAT_ACQ_DEC_MAX           5u   // ADAQ_DEC_X1024 (non-SINC3 filters only)
 
 /**
  * @brief Arm/disarm the DAQ HAT trigger latch and record the pre-roll depth.

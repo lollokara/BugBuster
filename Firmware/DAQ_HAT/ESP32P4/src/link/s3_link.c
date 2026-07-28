@@ -192,7 +192,8 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
         case HATP_CMD_DAQ_WIFI_STREAM_INFO:
         case HATP_CMD_DAQ_VDUT_STATUS:
         case HATP_CMD_DAQ_VDUT_ENABLE:
-        case HATP_CMD_DAQ_VDUT_SETPOINT: {
+        case HATP_CMD_DAQ_VDUT_SETPOINT:
+        case HATP_CMD_DAQ_SET_ACQ_CONFIG: {
             if (!s->cmd_cb) {
                 send_error();
                 break;

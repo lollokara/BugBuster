@@ -148,6 +148,8 @@ typedef struct __attribute__((packed)) {
 //   performance counters. Extension v4 (bytes 56-72): direct-USB relay/
 //   staging ingest progress (see ota/relay_stage.h). Extension v5 (bytes
 //   72-87): per-record-type TX/drop counters, split by WAVE_I vs WAVE_V.
+//   Extension v6 (bytes 88-95): acquisition configuration readback (filter,
+//   ADC decimation, stream decimation, actual ODR).
 //   Older parsers silently ignore trailing bytes.
 typedef struct __attribute__((packed)) {
     uint32_t sample_rate;     // 0
@@ -191,7 +193,15 @@ typedef struct __attribute__((packed)) {
     uint32_t wave_v_frames;     // 76 — WAVE_V frames handed to the transport
     uint32_t wave_i_drops;      // 80 — WAVE_I frames dropped (back-pressure/no transport)
     uint32_t wave_v_drops;      // 84 — WAVE_V frames dropped
-} usb_status_payload_t;         // total: 88 bytes
+    // --- extension v6 (offsets 88..95): acquisition configuration readback.
+    // The device reports what it ACTUALLY applied, never what was requested:
+    // the driver clamps filter/decimation combinations the part cannot hit,
+    // and a UI that echoed its own request would silently misreport the rate.
+    uint8_t  filter;        // 88  ADAQ_FILTER_*
+    uint8_t  adc_dec;       // 89  ADAQ_DEC_*, or 0xFF when SINC3 programmable
+    uint16_t stream_decim;  // 90  P4 stream decimation (>=1)
+    uint32_t odr_mhz;       // 92  actual ODR, milli-SPS (ODR * 1000)
+} usb_status_payload_t;         // total: 96 bytes
 
 // ---- Control command payloads ----------------------------------------------
 typedef struct __attribute__((packed)) {

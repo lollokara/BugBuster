@@ -1630,6 +1630,20 @@ bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a)
     return code == HAT_RSP_OK;
 }
 
+bool hat_daq_set_acq_config(uint8_t filter, uint8_t adc_dec)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+
+    hat_acq_config_t req = {};
+    req.filter  = filter;
+    req.adc_dec = adc_dec;
+
+    uint8_t rsp[4] = {}; uint8_t rsp_len = 0;
+    uint8_t code = hat_command(HAT_CMD_DAQ_SET_ACQ_CONFIG, (const uint8_t *)&req, sizeof(req),
+                               rsp, &rsp_len, 300, sizeof(rsp));
+    return code == HAT_RSP_OK;
+}
+
 void hat_daq_send_arm(bool armed, uint8_t trig_logic, uint32_t pre_samples)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;

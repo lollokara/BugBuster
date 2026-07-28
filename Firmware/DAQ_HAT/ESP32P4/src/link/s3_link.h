@@ -145,6 +145,14 @@ extern "C" {
 #define HATP_CMD_DAQ_VDUT_ENABLE   0x77u   // payload: u8 enable -> OK/ERROR
 #define HATP_CMD_DAQ_VDUT_SETPOINT 0x78u   // payload: s3link_vdut_setpoint_t -> OK/ERROR
 
+// Acquisition configuration (ADAQ7769-1 digital filter + hardware decimation,
+// which per the current design IS the sample rate -- see s3link_acq_config_t
+// below for why there is no separate "sample rate" field). Applied to all
+// three ADAQs via the P4's ctrl_queue path (like HATP internal SET_RATE),
+// never inline on this dispatcher. MUST match S3 mainboard hat.h
+// HAT_CMD_DAQ_SET_ACQ_CONFIG exactly.
+#define HATP_CMD_DAQ_SET_ACQ_CONFIG 0x7Au   // payload: s3link_acq_config_t -> OK/ERROR
+
 // Settings/config commands (vendor sub-range 0x70..0x7F). These read/write the
 // authoritative settings store (common/daq_config_registry.h) using key-
 // addressed TLV values, so the S3 (desktop/web/mobile/MCP) can configure every
@@ -196,6 +204,24 @@ typedef struct __attribute__((packed)) {
     float vdut_v;      // target DUT voltage (V), clamped to [SMU_VDUT_MIN, SMU_VDUT_MAX]
     float ilimit_a;     // target current limit (A), clamped to [SMU_ILIMIT_MIN_A, SMU_ILIMIT_FULLSCALE_A]
 } s3link_vdut_setpoint_t;
+
+// HATP_CMD_DAQ_SET_ACQ_CONFIG (0x7A) payload. MUST stay byte-for-byte
+// identical to the S3-side mirror hat_acq_config_t in Firmware/ESP32/src/hat/hat.h.
+//
+// There is deliberately no "sample rate" or "stream decimation" field here:
+// the sample rate IS the ODR, set via the ADC's own digital filter/decimation
+// (x32..x1024 for Sinc5/wideband, an arbitrary multiple of 32 for Sinc3).
+// Stream decimation (daq_board.c wave_decim) is a naive keep-1-of-N drop with
+// no anti-alias filter -- it folds everything above the new Nyquist back into
+// the band as spurious signal -- so it is intentionally NOT exposed as a
+// user-facing knob through this command; it stays fixed at 1 here and is only
+// ever touched by the legacy USB_CMD_SET_RATE path (BBP-less iOS/USB hosts).
+typedef struct __attribute__((packed)) {
+    uint8_t  filter;    // ADAQ_FILTER_* (adaq7769_regs.h)
+    uint8_t  adc_dec;   // ADAQ_DEC_* for every filter except SINC3, where it
+                         // instead carries (decimation / 32) since SINC3 takes
+                         // an arbitrary multiple of 32 rather than a fixed step
+} s3link_acq_config_t;
 
 // HATP_RSP_DAQ_VDUT_STATUS (0x98) payload: response to HATP_CMD_DAQ_VDUT_STATUS.
 // MUST stay byte-for-byte identical to the S3-side mirror hat_vdut_status_t.

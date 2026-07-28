@@ -372,7 +372,18 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out)
 // TinyUSB task overflows its stack (Stack protection fault, MCAUSE=0x1b).
 // ---------------------------------------------------------------------------
 typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE,
-               CTRL_MSG_RANGE_CAL_START } ctrl_msg_type_t;
+               CTRL_MSG_RANGE_CAL_START, CTRL_MSG_SET_ACQ_CONFIG } ctrl_msg_type_t;
+
+// HATP_CMD_DAQ_SET_ACQ_CONFIG payload, deferred here for the same reason as
+// SET_RATE: adaq7769_set_filter()/_set_sinc3() are blocking SPI writes that
+// must not run on the S3-link dispatcher task (200ms response timeout).
+// adc_dec is dual-purpose: an ADAQ_DEC_* enum value for every filter except
+// SINC3, where it instead carries (decimation / 32) since SINC3 takes an
+// arbitrary multiple of 32 rather than one of the fixed enum steps.
+typedef struct {
+    uint8_t filter;    // ADAQ_FILTER_*
+    uint8_t adc_dec;   // ADAQ_DEC_*, or SINC3 decimation/32
+} ctrl_acq_config_t;
 
 typedef struct {
     ctrl_msg_type_t type;
@@ -380,6 +391,7 @@ typedef struct {
         usb_cmd_rate_t      rate;
         usb_cmd_source_t    source;
         usb_cmd_range_cal_t range_cal;
+        ctrl_acq_config_t   acq_config;
     };
 } ctrl_msg_t;
 
@@ -451,6 +463,60 @@ static void daq_ctrl_task(void *arg)
                 if (range_cal_start(&b->range_cal, b) != ESP_OK) {
                     ESP_LOGE(TAG, "range_cal_start failed");
                 }
+                break;
+            }
+
+            case CTRL_MSG_SET_ACQ_CONFIG: {
+                // Applied identically to all three ADAQs (FINE, COARSE,
+                // VOLTAGE). FINE and COARSE MUST stay in lock-step: the fast
+                // path pairs their samples by sequence (current_fusion_step),
+                // and a mismatched ODR between them would desync that
+                // pairing. VOLTAGE isn't paired with anything, but there is
+                // no separate user-facing knob for it (the ruling is that
+                // "the sample rate IS the ODR" -- singular), so it tracks the
+                // same request rather than silently running at whatever its
+                // last configuration happened to be.
+                //
+                // NOTE: stream decimation (b->wave_decim) is deliberately
+                // NOT touched here. It is a naive keep-1-of-N drop with no
+                // anti-alias filtering (folds everything above the new
+                // Nyquist back into the band as spurious signal) and is not
+                // a user-facing knob for this command -- only SET_RATE's
+                // legacy BBP-less iOS-USB path still drives it. This command
+                // only ever changes the actual hardware ODR via the ADC's
+                // own digital filter/decimation, which needs no such caveat.
+                const uint8_t filter  = msg.acq_config.filter;
+                const uint8_t adc_dec = msg.acq_config.adc_dec;
+                for (int i = 0; i < ADAQ_COUNT; ++i) {
+                    if (!b->adaq_ok[i]) continue;
+                    esp_err_t err;
+                    if (filter == ADAQ_FILTER_SINC3) {
+                        uint32_t dec = (uint32_t)(adc_dec ? adc_dec : 1u) * 32u;
+                        err = adaq7769_set_sinc3(&b->adaq[i], dec, false);
+                    } else {
+                        err = adaq7769_set_filter(&b->adaq[i], filter, adc_dec);
+                    }
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "SET_ACQ_CONFIG: adaq[%d] apply failed: %s",
+                                 i, esp_err_to_name(err));
+                    }
+                }
+                // Refresh the cached ODRs the fast path/SET_RATE decimation
+                // math relies on (mirrors what daq_board_run_fast does after
+                // a BBP-driven rate change).
+                if (b->adaq_ok[ADAQ_ROLE_FINE]) {
+                    b->fine_rate_hz =
+                        (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
+                }
+                if (b->adaq_ok[ADAQ_ROLE_VOLTAGE]) {
+                    b->volt_rate_hz =
+                        (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE]);
+                }
+                ESP_LOGI(TAG, "SET_ACQ_CONFIG: filter=%u adc_dec=%u -> "
+                              "fine_odr=%lu volt_odr=%lu",
+                         filter, adc_dec,
+                         (unsigned long)b->fine_rate_hz,
+                         (unsigned long)b->volt_rate_hz);
                 break;
             }
         }
@@ -751,6 +817,20 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     };
     usb_stream_get_type_counters(&b->usb, &st.wave_i_frames, &st.wave_v_frames,
                                  &st.wave_i_drops, &st.wave_v_drops);
+
+    // Extension v6: report what the hardware ACTUALLY applied, read back from
+    // the FINE ADAQ's shadow config -- never the last-requested value, since
+    // the driver clamps combinations the part cannot hit. FINE/COARSE are
+    // always configured identically (see the SET_ACQ_CONFIG handler), so
+    // reading FINE alone represents both.
+    st.filter = fine_dev->cfg.filter;
+    st.adc_dec = (fine_dev->cfg.filter == ADAQ_FILTER_SINC3)
+                     ? 0xFFu : fine_dev->cfg.dec_rate;
+    st.stream_decim = b->wave_decim;
+    float fine_odr = b->adaq_ok[ADAQ_ROLE_FINE]
+                         ? adaq7769_output_data_rate(fine_dev) : 0.0f;
+    st.odr_mhz = (uint32_t)(fine_odr * 1000.0f + 0.5f);
+
     usb_stream_send_status(&b->usb, &st);
 
     // usb_stream_perf_tick() computes the TX throughput EMA and emits a 1 Hz
@@ -1067,6 +1147,34 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             usb_stream_flush_wave_i(&b->usb);
             usb_stream_flush_wave_v(&b->usb);
             return 0;
+
+        // ---- ODR/filter configuration. Deferred to the ctrl_queue/ctrl_task
+        // path -- exactly like USB_CMD_SET_RATE -- because
+        // adaq7769_set_filter()/_set_sinc3() are blocking SPI writes; running
+        // them inline here (on the S3-link dispatcher task) would exceed the
+        // S3's 200ms hat_command() timeout and surface as BBP_ERR_TIMEOUT.
+        // This only validates + enqueues and returns immediately; the S3
+        // learns the ACTUALLY-applied result via the next STATUS poll
+        // (usb_status_payload_t v6 fields), not from this response.
+        case HATP_CMD_DAQ_SET_ACQ_CONFIG: {
+            if (len < sizeof(s3link_acq_config_t)) return -1;
+            const s3link_acq_config_t *c = (const s3link_acq_config_t *)payload;
+            switch (c->filter) {
+                case ADAQ_FILTER_SINC5:
+                case ADAQ_FILTER_SINC5_X8:
+                case ADAQ_FILTER_SINC5_X16:
+                case ADAQ_FILTER_SINC3:
+                case ADAQ_FILTER_WIDEBAND:
+                    break;
+                default:
+                    return -1;   // unrecognized filter code
+            }
+            if (!b->ctrl_queue) return -1;
+            ctrl_msg_t msg = { .type = CTRL_MSG_SET_ACQ_CONFIG };
+            msg.acq_config.filter  = c->filter;
+            msg.acq_config.adc_dec = c->adc_dec;
+            return (xQueueSend(b->ctrl_queue, &msg, 0) == pdTRUE) ? 0 : -1;
+        }
 
         // ---- DAQ WiFi streaming bring-up (BLE-driven; see daq_wifi_ident.h,
         // captive_dns.h, tcp_backend.h). Lifted from cmd_wifiap's "on"/"off"
