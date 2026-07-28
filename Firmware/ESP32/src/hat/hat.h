@@ -286,9 +286,16 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_DAQ_VDUT_ENABLE   0x77u   // payload: u8 enable -> OK/ERROR
 #define HAT_CMD_DAQ_VDUT_SETPOINT 0x78u   // payload: hat_vdut_setpoint_t -> OK/ERROR
 
+// Multi-MCU OTA orchestration. Must match P4 HATP_CMD_DAQ_RELAY_APPLY /
+// _OTA_STATUS / _FW_INFO (s3_link.h) exactly — see s3_link.h for the rationale
+// behind the two separate resume sources in hat_daq_ota_status_t.
+#define HAT_CMD_DAQ_RELAY_APPLY 0x7A
+#define HAT_CMD_DAQ_OTA_STATUS  0x7B
+#define HAT_CMD_DAQ_FW_INFO     0x7C
+
 // Acquisition configuration (ADAQ7769-1 digital filter + hardware decimation).
 // MUST match P4 s3_link.h HATP_CMD_DAQ_SET_ACQ_CONFIG exactly.
-#define HAT_CMD_DAQ_SET_ACQ_CONFIG 0x7Au   // payload: hat_acq_config_t -> OK/ERROR
+#define HAT_CMD_DAQ_SET_ACQ_CONFIG 0x7Du   // payload: hat_acq_config_t -> OK/ERROR
 
 // VDUT hardware limits, mirrored from the P4's authoritative
 // Firmware/DAQ_HAT/ESP32P4/include/config.h (SMU_VDUT_MIN/MAX,
@@ -384,6 +391,25 @@ typedef struct __attribute__((packed)) {
     float    meas_v;
     float    meas_i;
 } hat_vdut_status_t;
+
+// HAT_CMD_DAQ_OTA_STATUS reply. MUST stay byte-for-byte identical to the
+// P4-side mirror s3link_ota_status_t in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
+typedef struct __attribute__((packed)) {
+    uint8_t  ota_state;
+    uint32_t ota_received;
+    uint8_t  relay_state;
+    uint32_t relay_staged_bytes;
+    uint32_t relay_pushed_bytes;
+} hat_daq_ota_status_t;
+
+// HAT_CMD_DAQ_FW_INFO reply. MUST stay byte-for-byte identical to the
+// P4-side mirror s3link_fw_info_t in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
+typedef struct __attribute__((packed)) {
+    char p4_version[16];
+    char p4_build_id[16];
+    char c6_version[16];
+    char c6_build_id[16];
+} hat_daq_fw_info_t;
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01

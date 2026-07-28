@@ -113,6 +113,13 @@ extern "C" {
 // responses (this command) must size against this, not HATP_MAX_PAYLOAD.
 #define HAT_WIRE_FRAME_MAX_LEN     32u
 
+// Multi-MCU OTA orchestration (S3-initiated request + P4 reply, modeled on
+// HATP_CMD_DAQ_VDUT_STATUS — NOT a push). MUST stay byte-for-byte identical to
+// the HAT_CMD_DAQ_* mirrors in Firmware/ESP32/src/hat/hat.h.
+#define HATP_CMD_DAQ_RELAY_APPLY 0x7Au   // no payload: apply the staged C6 image
+#define HATP_CMD_DAQ_OTA_STATUS  0x7Bu   // no payload -> s3link_ota_status_t
+#define HATP_CMD_DAQ_FW_INFO     0x7Cu   // no payload -> s3link_fw_info_t
+
 // Version + OTA commands (vendor sub-range 0x60..0x6F).
 //
 // NOTE: HATP_CMD_DAQ_WIFI_STREAM_STOP (above) reuses byte 0x67, which used to
@@ -158,7 +165,7 @@ extern "C" {
 // phase-staggered (bench-verified, config.h VOLTAGE_ODR_TARGET_SPS), so it
 // always tracks its own fixed target rate regardless of this command. MUST
 // match S3 mainboard hat.h HAT_CMD_DAQ_SET_ACQ_CONFIG exactly.
-#define HATP_CMD_DAQ_SET_ACQ_CONFIG 0x7Au   // payload: s3link_acq_config_t -> OK/ERROR
+#define HATP_CMD_DAQ_SET_ACQ_CONFIG 0x7Du   // payload: s3link_acq_config_t -> OK/ERROR
 
 // Settings/config commands (vendor sub-range 0x70..0x7F). These read/write the
 // authoritative settings store (common/daq_config_registry.h) using key-
@@ -242,6 +249,27 @@ typedef struct __attribute__((packed)) {
     float    meas_v;       // measured DUT voltage (V), from the ADAQ7769 acquisition chain
     float    meas_i;       // measured DUT current (A), from the ADAQ7769 acquisition chain
 } s3link_vdut_status_t;
+
+// HATP_CMD_DAQ_OTA_STATUS reply. Exposes BOTH durability models because the two
+// OTA targets resume from different sources: a P4-target transfer resumes from
+// @ota_received (ota.c streams straight to the A/B slot, no staging), while a
+// C6-target transfer resumes from @relay_staged_bytes (relay_stage.c).
+typedef struct __attribute__((packed)) {
+    uint8_t  ota_state;             // ota_state_t of ota.c
+    uint32_t ota_received;          // ota_received(): exact, byte-accurate
+    uint8_t  relay_state;           // relay_state_t of relay_stage.c
+    uint32_t relay_staged_bytes;    // may trail by up to ~64KB (NVS persist interval)
+    uint32_t relay_pushed_bytes;
+} s3link_ota_status_t;               // 14 bytes
+
+// HATP_CMD_DAQ_FW_INFO reply. The P4 answers for itself directly and for the C6
+// from its last DDP-reported version (see daq_board.c c6 version cache).
+typedef struct __attribute__((packed)) {
+    char p4_version[16];            // NUL-terminated semver, e.g. "1.4.0"
+    char p4_build_id[16];
+    char c6_version[16];            // all-zero if the C6 has not reported yet
+    char c6_build_id[16];
+} s3link_fw_info_t;                  // 64 bytes
 
 // HATP_CMD_DAQ_TELEMETRY (0x5A) payload: S3 mainboard telemetry relayed to the
 // C6 Diagnostics menu. MUST stay byte-for-byte identical to the S3-side mirror
