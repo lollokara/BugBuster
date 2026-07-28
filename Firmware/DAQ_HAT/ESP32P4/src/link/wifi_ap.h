@@ -19,6 +19,7 @@
 // =============================================================================
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -39,6 +40,15 @@ esp_err_t wifi_ap_start(const char *ssid, const char *password);
 esp_err_t wifi_ap_stop(void);
 
 bool wifi_ap_is_up(void);
+
+// Number of stations currently associated to the softAP.
+//
+// This is the idle-teardown timer's early liveness signal: a client associates
+// well before it completes DHCP and opens the TCP stream socket, so counting
+// only TCP connections made an actively-joining phone look identical to an
+// empty room -- and the AP was torn down mid-join. Returns 0 whenever the AP
+// is down.
+uint32_t wifi_ap_sta_count(void);
 
 #ifdef __cplusplus
 }

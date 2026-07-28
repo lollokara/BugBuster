@@ -53,3 +53,36 @@ def test_event_handler_registered_at_most_once():
     """Re-registering the same handler stacks duplicate callbacks."""
     body = _body("wifi_ap_init")
     assert "if (!s_handler_ok)" in body
+
+
+# --- Idle-teardown liveness: association, not just TCP ----------------------
+
+BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
+
+
+def test_ap_tracks_associated_station_count():
+    """The AP must maintain a station count from the association events.
+
+    Counting only tcp_backend_connected() made a phone that had associated but
+    not yet opened the socket look identical to an empty room, so the idle
+    timer tore the AP down mid-join.
+    """
+    src = SRC
+    assert "s_sta_count" in src, "no associated-station counter"
+    assert "s_sta_count++" in src, "AP_STACONNECTED does not increment the count"
+    assert "if (s_sta_count > 0) s_sta_count--;" in src, (
+        "AP_STADISCONNECTED must saturate at 0 — an unmatched disconnect would "
+        "underflow to ~4e9 and pin the AP 'alive' forever, defeating teardown")
+    assert "uint32_t wifi_ap_sta_count(void)" in src, "count is not exposed"
+
+
+def test_ap_stop_clears_the_station_count():
+    """Stale non-zero count would keep the next session's idle timer reset."""
+    body = _body("wifi_ap_stop")
+    assert "s_sta_count = 0" in body, "wifi_ap_stop must clear the station count"
+
+
+def test_idle_teardown_treats_association_as_liveness():
+    src = BOARD.read_text()
+    assert "wifi_ap_sta_count() > 0" in src, (
+        "the idle-teardown timer still counts only TCP connections")

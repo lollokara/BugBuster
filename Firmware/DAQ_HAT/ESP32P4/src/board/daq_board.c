@@ -1618,7 +1618,14 @@ static void daq_ui_task(void *arg)
         uint32_t t = (uint32_t)(esp_timer_get_time() / 1000);
 
         if (b->wifi_stream_info.state == DAQ_WIFI_STREAM_READY) {
-            if (tcp_backend_connected()) {
+            // A client counts as present from the moment it ASSOCIATES, not
+            // from when it opens the socket. Counting only TCP made a phone
+            // that had joined the softAP but was still doing DHCP / retrying
+            // its connect indistinguishable from an empty room, so this timer
+            // tore the AP down out from under a client that was actively
+            // joining -- after which the phone's recovery ladder was dialling
+            // an SSID that no longer existed.
+            if (tcp_backend_connected() || wifi_ap_sta_count() > 0) {
                 wifi_disconnect_since_ms = 0;
             } else if (wifi_disconnect_since_ms == 0) {
                 wifi_disconnect_since_ms = t;

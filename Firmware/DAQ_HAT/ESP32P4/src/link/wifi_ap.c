@@ -27,6 +27,20 @@ static bool s_inited;       // all of the above complete
 static bool s_up;           // softAP actually started
 static esp_netif_t *s_ap_netif;
 
+// Stations currently associated to the softAP. Maintained from the
+// AP_STACONNECTED/AP_STADISCONNECTED events below, which were previously only
+// logged and discarded.
+//
+// This is the liveness signal the idle-teardown timer in daq_board.c needs. It
+// used to count only tcp_backend_connected(), so a phone that had associated
+// but not yet finished DHCP / opened the socket was indistinguishable from an
+// empty room -- and the AP got torn down out from under a client that was
+// actively joining. Association happens well before the socket, so it is the
+// earliest honest evidence that somebody is there.
+//
+// Single-writer: only the WiFi event handler task assigns this.
+static volatile uint32_t s_sta_count;
+
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -34,12 +48,20 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     switch (id) {
     case WIFI_EVENT_AP_STACONNECTED: {
         wifi_event_ap_staconnected_t *e = (wifi_event_ap_staconnected_t *)data;
-        ESP_LOGI(TAG, "station " MACSTR " joined, aid=%d", MAC2STR(e->mac), e->aid);
+        s_sta_count++;
+        ESP_LOGI(TAG, "station " MACSTR " joined, aid=%d (%u associated)",
+                 MAC2STR(e->mac), e->aid, (unsigned)s_sta_count);
         break;
     }
     case WIFI_EVENT_AP_STADISCONNECTED: {
         wifi_event_ap_stadisconnected_t *e = (wifi_event_ap_stadisconnected_t *)data;
-        ESP_LOGI(TAG, "station " MACSTR " left, aid=%d", MAC2STR(e->mac), e->aid);
+        // Saturate at 0: a DISCONNECTED without a matching CONNECTED (possible
+        // across an esp_wifi_stop()/start() cycle) must not underflow this to
+        // ~4 billion, which would pin the AP "alive" forever and defeat the
+        // idle teardown entirely.
+        if (s_sta_count > 0) s_sta_count--;
+        ESP_LOGI(TAG, "station " MACSTR " left, aid=%d (%u associated)",
+                 MAC2STR(e->mac), e->aid, (unsigned)s_sta_count);
         break;
     }
     default:
@@ -184,6 +206,10 @@ esp_err_t wifi_ap_stop(void)
     // which esp_wifi_start() handles.
     esp_err_t err = esp_wifi_stop();
     s_up = false;
+    // Every station is gone by definition once the AP is down. Cleared
+    // unconditionally for the same reason as s_up: a stale non-zero count
+    // would keep the next session's idle timer permanently reset.
+    s_sta_count = 0;
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_wifi_stop failed: %s (state cleared anyway)",
                  esp_err_to_name(err));
@@ -196,4 +222,9 @@ esp_err_t wifi_ap_stop(void)
 bool wifi_ap_is_up(void)
 {
     return s_up;
+}
+
+uint32_t wifi_ap_sta_count(void)
+{
+    return s_sta_count;
 }
