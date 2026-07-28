@@ -1024,9 +1024,25 @@ struct ScopeSettingsView: View {
                     }
                 }
                 .pickerStyle(.menu)
+                // I1: under SINC3 the firmware reinterprets adc_dec as a
+                // scale factor — dec = (adc_dec ?: 1) * 32 (daq_board.c
+                // ~512-521) — not the direct decimation this picker's labels
+                // (x32...x1024) describe. Disabling it here rather than
+                // letting it silently mean something else its label doesn't
+                // say. The confirmed-value readout below is unaffected: the
+                // firmware sends adc_dec = 0xFF for SINC3, which already
+                // renders "—".
+                .disabled(selectedFilter == .sinc3)
+                .opacity(selectedFilter == .sinc3 ? 0.4 : 1.0)
                 .onChange(of: selectedAdcDec) { _, newValue in
+                    guard selectedFilter != .sinc3 else { return }
                     onAcqConfigChange(selectedFilter, newValue)
                 }
+            }
+            if selectedFilter == .sinc3 {
+                Text("Sinc3 uses its own fixed decimation, not this control.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 4) {

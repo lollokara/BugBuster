@@ -1019,25 +1019,35 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     /// show "streaming" forever.
     private static let stallTimeout: TimeInterval = 4.0
 
+    /// Rolling grace start for the watchdog's stall check. A freshly
+    /// (re)started stream legitimately has no frames yet, and the redial rung
+    /// deliberately emits .resetBuffers, which clears lastFrameAt. Treating
+    /// nil as "stalled" made the watchdog fire one second after EVERY
+    /// reconnect — long before a first frame could plausibly arrive — so
+    /// recovery could never converge:
+    ///   stall -> recover -> resetBuffers -> lastFrameAt = nil -> stall ...
+    /// which presented as a "Reconnecting..." banner that never cleared while
+    /// the trace flickered back every few seconds (fixed in ae7dc47). This is
+    /// the SAME mechanism `extendWatchdogGrace()` reuses for an
+    /// in-place acq-config change: it re-arms this instance var rather than
+    /// adding a second suspend/resume path, so an expected device-initiated
+    /// gap gets exactly the grace a fresh stream start gets instead of being
+    /// misread as a stall.
+    private var watchdogGraceStartedAt: Date = Date()
+
     private func startWatchdog() {
         watchdogTask?.cancel()
-        // Grace deadline. A freshly (re)started stream legitimately has no
-        // frames yet, and the redial rung deliberately emits .resetBuffers,
-        // which clears lastFrameAt. Treating nil as "stalled" made the
-        // watchdog fire one second after EVERY reconnect — long before a first
-        // frame could plausibly arrive — so recovery could never converge:
-        //   stall -> recover -> resetBuffers -> lastFrameAt = nil -> stall ...
-        // which presented as a "Reconnecting..." banner that never cleared
-        // while the trace flickered back every few seconds. Falling back to
-        // the watchdog's own start time gives a new stream exactly one full
-        // stallTimeout to produce its first frame.
-        let startedAt = Date()
+        watchdogGraceStartedAt = Date()
         watchdogTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self else { return }   // manager is gone; nothing left to watch
                 guard self.linkState == .streaming else { continue }
-                let reference = self.engine.lastFrameAt ?? startedAt
+                let startedAt = self.watchdogGraceStartedAt
+                // The later of "last real frame" and "most recent expected
+                // gap start" — so a config-change grace extension always
+                // wins even though lastFrameAt is non-nil and pre-dates it.
+                let reference = max(self.engine.lastFrameAt ?? startedAt, startedAt)
                 if Date().timeIntervalSince(reference) > Self.stallTimeout {
                     self.send(.dataStalled)
                 }
@@ -1048,6 +1058,17 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     private func stopWatchdog() {
         watchdogTask?.cancel()
         watchdogTask = nil
+    }
+
+    /// Re-arms the watchdog's grace window in place. Called around
+    /// `setAcquisitionConfig`'s device round trip, which the firmware
+    /// serves by stopping the fast-capture task, reprogramming both current
+    /// ADAQs over SPI (blocking register writes + a SYNC pulse), then
+    /// restarting it — a real, device-initiated gap with no frames, not a
+    /// dead link. A no-op when the watchdog isn't running (not streaming),
+    /// since there's nothing to protect.
+    private func extendWatchdogGrace() {
+        watchdogGraceStartedAt = Date()
     }
 
     // MARK: - Mock / Demo Mode
@@ -1245,6 +1266,34 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
             "filter": Int(filter.rawValue),
             "adc_dec": Int(adcDec.rawValue)
         ]
-        Task { _ = await ble.apiRequest(path: "/api/daq/acq_config", body: body) }
+        // C1: this round trip covers daq_board_stop_fast() + a blocking SPI
+        // reprogram of both current ADAQs + daq_board_run_fast() on the
+        // device — no frames for that whole window. Left unguarded, the 1 Hz
+        // watchdog (4s stallTimeout) can read that expected gap as a dead
+        // link and kick off the full recovery ladder on a healthy stream
+        // (the exact shape ae7dc47 already fixed once, via a different
+        // path). A pinger keeps re-arming the grace window for the entire
+        // request lifetime — not just once up front — so a slow reprogram
+        // (up to apiRequest's own 6s timeout) can never outrun a single
+        // fixed grace. `defer` cancels the pinger and takes one final grace
+        // stamp unconditionally, on every exit path (success, device error
+        // response, transport failure, or timeout) so the watchdog is never
+        // left suspended — a permanently suspended watchdog would be worse
+        // than a twitchy one, since a genuinely dead link would then never
+        // be detected.
+        extendWatchdogGrace()
+        Task {
+            let pinger = Task { [weak self] in
+                while !Task.isCancelled {
+                    self?.extendWatchdogGrace()
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+            defer {
+                pinger.cancel()
+                self.extendWatchdogGrace()
+            }
+            _ = await ble.apiRequest(path: "/api/daq/acq_config", body: body)
+        }
     }
 }

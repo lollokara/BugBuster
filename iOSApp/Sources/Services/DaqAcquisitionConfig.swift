@@ -72,12 +72,29 @@ public enum DaqAdcDecimation: UInt8, CaseIterable, Codable, Equatable {
 ///
 /// `sampleRate` is always identically `odr` per the ruling above — there is
 /// no separate "displayed rate" derived from stream decimation.
+///
+/// NOTE ON ACCURACY: this type mirrors the firmware's ENUM VALUES verbatim
+/// (`DaqFilter`/`DaqAdcDecimation` raw values match `ADAQ_FILTER_*`/
+/// `ADAQ_DEC_*` exactly), but the rate FORMULA is filter-dependent and is
+/// derived from `adaq7769_output_data_rate()` (adaq7769.c:353-366) plus the
+/// SINC3 scale-factor reinterpretation in `daq_board.c` (~512-521) — it does
+/// not use one universal division for all five filters:
+///   - SINC5, WIDEBAND: odr = baseRateHz / decimation ratio (32...1024) —
+///     `adc_dec` is the direct DEC_RATE register value.
+///   - SINC5_X8:  odr = baseRateHz / 8, FIXED — `adc_dec` has no effect.
+///   - SINC5_X16: odr = baseRateHz / 16, FIXED — `adc_dec` has no effect.
+///   - SINC3: `adc_dec` is reinterpreted as a scale factor, not a ratio:
+///     dec = (adc_dec != 0 ? adc_dec : 1) * 32; odr = baseRateHz / dec.
+///     (This is why the iOS ADC-Dec picker is disabled for SINC3 in
+///     ScopeTab — its x32...x1024 labels would describe a decimation the
+///     device never applies under this filter.)
 public struct DaqAcquisitionConfig: Equatable {
-    /// The ADAQ7769 output rate at x32 decimation (1.024 MSPS — see the
-    /// ADAQ_FILTER_SINC5_X8 comment in adaq7769_regs.h, "1.024MSPS"). Every
-    /// decimation change scales down from this fixed point rather than from
-    /// whatever `odr` happens to already hold, so repeated changes can't
-    /// drift from the true hardware rate table.
+    /// fMOD at MCLK_DIV_2 — the ADAQ7769's modulator rate that every ODR
+    /// formula divides down from (1.024 MSPS; matches the "1.024MSPS"
+    /// comment on ADAQ_FILTER_SINC5_X8 in adaq7769_regs.h, i.e. baseRateHz/8
+    /// for that filter). Fixed rather than derived from whatever `odr`
+    /// happens to already hold, so repeated changes can't drift from the
+    /// true hardware rate table.
     public static let baseRateHz: Double = 1_024_000.0
 
     public var filter: DaqFilter
@@ -97,35 +114,68 @@ public struct DaqAcquisitionConfig: Equatable {
     /// client). Clamped so a degenerate/zero ODR can never read as negative.
     public var sampleRate: Double { max(odr, 0) }
 
-    /// Doubling/halving the ADC decimation moves the ODR inversely off the
-    /// fixed base rate, not off whatever `odr` was last requested.
+    /// The ODR the device would apply for a given filter/decimation pair,
+    /// per `adaq7769_output_data_rate()` and the SINC3 scale-factor
+    /// reinterpretation in `daq_board.c`. SINC5_X8/SINC5_X16 ignore `adcDec`
+    /// entirely (fixed dividers); SINC3 treats it as a raw scale factor,
+    /// not a ratio.
+    private static func computedOdr(filter: DaqFilter, adcDec: DaqAdcDecimation) -> Double {
+        switch filter {
+        case .sinc5x8:
+            return baseRateHz / 8.0
+        case .sinc5x16:
+            return baseRateHz / 16.0
+        case .sinc3:
+            let raw = Double(adcDec.rawValue)
+            let scale = raw == 0 ? 1.0 : raw
+            return baseRateHz / (scale * 32.0)
+        case .sinc5, .wideband:
+            return baseRateHz / adcDec.ratio
+        }
+    }
+
+    /// Changing the ADC decimation moves the ODR per `computedOdr` for the
+    /// CURRENT filter — a no-op on the resulting rate for SINC5_X8/X16,
+    /// whose ODR is fixed regardless of decimation.
     public func settingAdcDec(_ newDec: DaqAdcDecimation) -> DaqAcquisitionConfig {
         var copy = self
         copy.adcDec = newDec
-        copy.odr = Self.baseRateHz / newDec.ratio
+        copy.odr = Self.computedOdr(filter: filter, adcDec: newDec)
         return copy
     }
 
+    /// Changing the filter also changes the rate formula, so the ODR is
+    /// recomputed against the (unchanged) decimation under the new filter.
     public func settingFilter(_ newFilter: DaqFilter) -> DaqAcquisitionConfig {
         var copy = self
         copy.filter = newFilter
+        copy.odr = Self.computedOdr(filter: newFilter, adcDec: adcDec)
         return copy
     }
 
     /// Picks the nearest decimation the hardware can actually hit for a
-    /// requested rate, rather than silently reporting a rate the device
-    /// never reached.
+    /// requested rate under the CURRENT filter, rather than silently
+    /// reporting a rate the device never reached. SINC5_X8/X16 have exactly
+    /// one achievable rate regardless of decimation, so there is nothing to
+    /// search — the request is a no-op on those two filters.
     public func settingRequestedRate(_ requestedHz: Double) -> DaqAcquisitionConfig {
         guard requestedHz > 0 else { return self }
-        let best = DaqAdcDecimation.allCases.min { a, b in
-            abs(Self.baseRateHz / a.ratio - requestedHz) < abs(Self.baseRateHz / b.ratio - requestedHz)
-        } ?? adcDec
-        return settingAdcDec(best)
+        switch filter {
+        case .sinc5x8, .sinc5x16:
+            return self
+        case .sinc5, .wideband, .sinc3:
+            let best = DaqAdcDecimation.allCases.min { a, b in
+                abs(Self.computedOdr(filter: filter, adcDec: a) - requestedHz) <
+                abs(Self.computedOdr(filter: filter, adcDec: b) - requestedHz)
+            } ?? adcDec
+            return settingAdcDec(best)
+        }
     }
 
     /// Device readback always wins: the driver clamps combinations the part
     /// cannot hit, so a UI echoing its own request would misreport the
-    /// rate. Overwrites filter, decimation, and ODR verbatim from STATUS.
+    /// rate. Overwrites filter, decimation, and ODR verbatim from STATUS —
+    /// never recomputed, always copied from what the device reported.
     public func applyingDeviceReadback(filter: DaqFilter, adcDec: DaqAdcDecimation,
                                         odr: Double) -> DaqAcquisitionConfig {
         DaqAcquisitionConfig(filter: filter, adcDec: adcDec, odr: odr)
