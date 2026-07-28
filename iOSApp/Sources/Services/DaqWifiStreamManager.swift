@@ -352,6 +352,10 @@ final class DaqStreamEngine: @unchecked Sendable {
     /// means the wire dropped it, TX==RX==0 means it was never produced.
     private(set) var rxWaveI = 0
     private(set) var rxWaveV = 0
+    /// Wall-clock of the last decoded data frame. The watchdog compares
+    /// against this: a socket can sit .ready with zero frames arriving, which
+    /// previously showed as "streaming" indefinitely.
+    private(set) var lastFrameAt: Date?
     private var rxBuffer = Data()
     private var firstTimestampUs: UInt64?
     private var voltClock = DaqStreamClock()
@@ -467,6 +471,7 @@ final class DaqStreamEngine: @unchecked Sendable {
             recordCount = 0
             rxWaveI = 0
             rxWaveV = 0
+            lastFrameAt = nil
             firstTimestampUs = nil
             voltClock.reset()
             currClock.reset()
@@ -731,6 +736,7 @@ final class DaqStreamEngine: @unchecked Sendable {
     #endif
 
     private func handle(_ record: DaqRecord) {
+        lastFrameAt = Date()
         recordCount += 1
         switch record {
         case .wave(let block):
@@ -828,16 +834,8 @@ final class DaqStreamEngine: @unchecked Sendable {
 // MARK: - BLE-driven provisioning state
 
 // `ProvisioningStage` now lives in DaqLinkState.swift, alongside the state
-// machine that consumes it.
-
-enum ProvisioningState: Equatable {
-    case idle
-    case requestingStart
-    case waitingForCredentials(stage: ProvisioningStage)
-    case credentialsReady(ssid: String, password: String, host: String, port: UInt16)
-    case joiningWifi
-    case failed(String)
-}
+// machine (`DaqLinkStateMachine`) that consumes it and replaces the old
+// `ProvisioningState` enum below.
 
 // MARK: - Manager (main-actor UI surface)
 
@@ -845,51 +843,57 @@ enum ProvisioningState: Equatable {
 final class DaqWifiStreamManager: NSObject, ObservableObject {
     static let shared = DaqWifiStreamManager()
 
-    @Published var isConnected = false
-    @Published var isStreaming = false
+    /// The single source of truth for the link. Everything the UI shows is a
+    /// projection of this; nothing else stores link state.
+    @Published private(set) var linkState: DaqLinkState = .idle
     @Published var lastError: String? = nil
     @Published var lastStatus: DaqStatus? = nil
-    @Published var provisioningState: ProvisioningState = .idle
     /// Main-actor mirror of the engine's RX counts, refreshed on each STATUS
     /// frame (10 Hz) — cheap, and STATUS is exactly when the device's own TX
     /// counters update, so both sides of the comparison move together.
     @Published var rxCounts: (i: Int, v: Int) = (0, 0)
+
+    /// Compatibility projections so existing call sites keep compiling.
+    var isConnected: Bool {
+        switch linkState {
+        case .streaming, .paused: return true
+        default: return false
+        }
+    }
+    var isStreaming: Bool { linkState == .streaming }
 
     /// Background stream pipeline; ScopeRenderModel reads its buffers.
     let engine = DaqStreamEngine()
 
     /// Last endpoint we connected to, for silent socket-level reconnects.
     private var lastEndpoint: (host: String, port: UInt16)?
-    private var reconnectAttempts = 0
-    private static let maxReconnectAttempts = 3
+
+    private var machine = DaqLinkStateMachine()
+    private var retryTask: Task<Void, Never>?
+    private var watchdogTask: Task<Void, Never>?
+    /// Set once the BLE transport is known, so recovery can reprovision
+    /// without the caller passing it in again.
+    private var ble: BLETransport?
 
     override init() {
         super.init()
         engine.onConnectionState = { [weak self] state in
             Task { @MainActor in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                self.isConnected = true
-                self.isStreaming = self.engine.autoStartOnReady
-                self.lastError = nil
-                self.reconnectAttempts = 0
-            case .failed(let err):
-                self.isConnected = false
-                self.isStreaming = false
-                self.lastError = err.localizedDescription
-                // Tear the dead connection down NOW so attemptReconnect's
-                // hasConnection guard reflects reality; a fresh user-driven
-                // connect in the meantime repopulates it and turns the
-                // pending retry into a no-op.
-                self.engine.cancelConnection()
-                self.attemptReconnect()
-            case .cancelled:
-                self.isConnected = false
-                self.isStreaming = false
-            default:
-                break
-            }
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    self.lastError = nil
+                    self.send(.socketReady)
+                case .failed(let err):
+                    self.lastError = err.localizedDescription
+                    self.engine.cancelConnection()
+                    self.send(.socketClosed(err.localizedDescription))
+                case .cancelled:
+                    break   // cancellation is always deliberate; the state
+                            // machine already moved when we asked for it
+                default:
+                    break
+                }
             }
         }
         engine.onStatus = { [weak self] status in
@@ -897,9 +901,108 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
                 guard let self else { return }
                 self.lastStatus = status
                 self.rxCounts = (self.engine.rxWaveI, self.engine.rxWaveV)
-                self.isStreaming = status.streaming
             }
         }
+    }
+
+    /// The ONLY way link state changes. Runs the reducer, publishes the new
+    /// state, then performs the returned effects — so state and side effects
+    /// can never disagree.
+    func send(_ event: DaqLinkEvent) {
+        let effects = machine.handle(event)
+        linkState = machine.state
+        for effect in effects { perform(effect) }
+    }
+
+    private func perform(_ effect: DaqLinkEffect) {
+        switch effect {
+        case .requestProvisioning:
+            guard let ble else {
+                send(.provisioningFailed("No BLE connection to the mainboard"))
+                return
+            }
+            Task { await self.runProvisioning(ble: ble) }
+
+        case .joinHotspot:
+            guard let creds = pendingCredentials else {
+                send(.hotspotJoinFailed("No credentials"))
+                return
+            }
+            Task {
+                let ok = await self.joinDaqHotspot(ssid: creds.ssid, password: creds.password)
+                self.send(ok ? .hotspotJoined
+                             : .hotspotJoinFailed("Could not join DAQ HAT WiFi hotspot"))
+            }
+
+        case .openSocket:
+            guard let ep = lastEndpoint, !ep.host.isEmpty,
+                  NWEndpoint.Port(rawValue: ep.port) != nil else {
+                send(.socketClosed("Invalid endpoint"))
+                return
+            }
+            engine.autoStartOnReady = false   // sendStart effect owns CMD_START
+            engine.connect(host: ep.host, port: ep.port)
+
+        case .sendStart:
+            engine.sendControlFrame(type: .start)
+            startWatchdog()
+
+        case .sendStop:
+            engine.sendControlFrame(type: .stop)
+            stopWatchdog()
+
+        case .closeSocket:
+            stopWatchdog()
+            engine.cancelConnection()
+
+        case .removeHotspotConfig:
+            // THE single call site. Multiple owners caused the documented
+            // bug where an async removal dropped the association a second
+            // into a freshly-established stream.
+            if let ssid = joinedHotspotSSID {
+                NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
+                joinedHotspotSSID = nil
+            }
+
+        case .recycleDevice:
+            guard let ble else { return }
+            Task { _ = await ble.apiRequest(path: "/api/daq/wifi_stream/recycle", body: nil) }
+
+        case .resetBuffers:
+            engine.resetBuffers()
+
+        case .scheduleRetry(let afterMs):
+            retryTask?.cancel()
+            retryTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(afterMs) * 1_000_000)
+                guard !Task.isCancelled else { return }
+                self?.send(.retryRequested)
+            }
+        }
+    }
+
+    /// Frames must keep arriving while streaming. A connected-but-silent link
+    /// is indistinguishable from a dead one from the user's side, and used to
+    /// show "streaming" forever.
+    private static let stallTimeout: TimeInterval = 4.0
+
+    private func startWatchdog() {
+        watchdogTask?.cancel()
+        watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, self.linkState == .streaming else { continue }
+                let last = self.engine.lastFrameAt
+                if last == nil || Date().timeIntervalSince(last!) > Self.stallTimeout {
+                    self.send(.dataStalled)
+                }
+            }
+        }
+    }
+
+    private func stopWatchdog() {
+        watchdogTask?.cancel()
+        watchdogTask = nil
     }
 
     // MARK: - Mock / Demo Mode
@@ -913,8 +1016,10 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     private var mockElapsed: Double = 0
 
     func connectMock() {
-        isConnected = true
-        isStreaming = true
+        // Mock mode bypasses the ladder entirely — jam the state directly to
+        // .streaming rather than driving it through provisioning/join/socket.
+        machine = DaqLinkStateMachine(state: .streaming)
+        linkState = machine.state
         lastError = nil
         engine.resetBuffers()
         mockElapsed = 0
@@ -939,8 +1044,8 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     func disconnectMock() {
         mockTimer?.invalidate()
         mockTimer = nil
-        isConnected = false
-        isStreaming = false
+        machine = DaqLinkStateMachine(state: .idle)
+        linkState = machine.state
     }
 
     private func appendMockSample(at t: Double) {
@@ -951,114 +1056,63 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
 
     // MARK: - BLE-driven bring-up
 
-    private var pollTask: Task<Void, Never>?
     private var joinedHotspotSSID: String?
+    private var pendingCredentials: (ssid: String, password: String,
+                                     host: String, port: UInt16)?
 
-    /// Ask the mainboard (over BLE) to bring up the DAQ HAT's WiFi hotspot,
-    /// then poll status until credentials are ready. Returns true if the
-    /// start request itself was accepted (does not wait for readiness).
-    func requestStreamStart(ble: BLETransport) async -> Bool {
-        provisioningState = .requestingStart
-        guard let data = await ble.apiRequest(path: "/api/daq/wifi_stream/start", body: nil) else {
-            provisioningState = .failed("No response from device")
-            return false
-        }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    /// Entry point from the UI's play button.
+    func start(ble: BLETransport) {
+        self.ble = ble
+        send(.startRequested)
+    }
+
+    /// Drives the BLE start + status poll, reporting progress as events. No
+    /// longer owns any state of its own — that was the bug (a stuck
+    /// "joining" screen even after real data was flowing).
+    private func runProvisioning(ble: BLETransport) async {
+        guard let data = await ble.apiRequest(path: "/api/daq/wifi_stream/start", body: nil),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (obj["ok"] as? Bool) == true else {
-            provisioningState = .failed("Start request rejected")
-            return false
+            send(.provisioningFailed("Device rejected the start request"))
+            return
         }
-        provisioningState = .waitingForCredentials(stage: .requested)
-        beginPollingStatus(ble: ble)
-        return true
-    }
 
-    /// Tell the mainboard to tear down the hotspot and stop any in-flight polling.
-    func requestStreamStop(ble: BLETransport) async {
-        pollTask?.cancel()
-        pollTask = nil
-        _ = await ble.apiRequest(path: "/api/daq/wifi_stream/stop", body: nil)
-        provisioningState = .idle
-    }
-
-    private func beginPollingStatus(ble: BLETransport) {
-        pollTask?.cancel()
-        pollTask = Task { [weak self] in
-            guard let self else { return }
-            // 8s was too tight: the full chain is DDP round-trip to the C6 +
-            // up to ~3s of P4-side wifi_ap_start() retries (waiting for the
-            // C6's ESP-Hosted stack to come up) + ~1-1.5s softAP/DNS/TCP
-            // bring-up + ~1s for the S3 to reassemble the 4 chunked info
-            // frames at its own 250ms HAT-poll cadence, all before this BLE
-            // poll even sees "ready" -- plus BLE's own per-request overhead
-            // on top of that. Observed real-world timeouts at 8s with the
-            // P4/S3 side otherwise succeeding cleanly. See .mex/patterns/
-            // daq-hat-ios-wifi-streaming.md.
-            let deadline = Date().addingTimeInterval(20.0)
-            while !Task.isCancelled {
-                if Date() >= deadline {
-                    self.provisioningState = .failed("Timed out waiting for DAQ WiFi credentials")
-                    return
-                }
-                if let data = await ble.apiRequest(path: "/api/daq/wifi_stream/status", body: nil),
-                   let status = try? JSONDecoder().decode(DaqWifiStreamStatus.self, from: data) {
-                    switch status.state {
-                    case "ready":
-                        guard let ssid = status.ssid, let password = status.password,
-                              let host = status.host, let port = status.port else {
-                            self.provisioningState = .failed("Malformed ready status")
-                            return
-                        }
-                        self.provisioningState = .credentialsReady(
-                            ssid: ssid, password: password, host: host, port: UInt16(port)
-                        )
+        // 20s: the full chain is a DDP round-trip to the C6 + up to ~3s of
+        // P4-side wifi_ap_start() retries + softAP/DNS/TCP bring-up + the S3
+        // reassembling 4 chunked info frames at its 250ms poll cadence, all
+        // before this BLE poll can see "ready". See
+        // .mex/patterns/daq-hat-ios-wifi-streaming.md.
+        let deadline = Date().addingTimeInterval(20.0)
+        while !Task.isCancelled {
+            if Date() >= deadline {
+                send(.provisioningFailed("Timed out waiting for DAQ WiFi credentials"))
+                return
+            }
+            if let data = await ble.apiRequest(path: "/api/daq/wifi_stream/status", body: nil),
+               let status = try? JSONDecoder().decode(DaqWifiStreamStatus.self, from: data) {
+                switch status.state {
+                case "ready":
+                    guard let ssid = status.ssid, let password = status.password,
+                          let host = status.host, let port = status.port else {
+                        send(.provisioningFailed("Malformed ready status"))
                         return
-                    case "failed":
-                        self.provisioningState = .failed("DAQ HAT reported hotspot failure")
-                        return
-                    case "starting":
-                        let stage = status.stage.flatMap(ProvisioningStage.init(rawValue:)) ?? .requested
-                        self.provisioningState = .waitingForCredentials(stage: stage)
-                    default:
-                        break // "idle" -- keep polling
                     }
+                    pendingCredentials = (ssid, password, host, UInt16(port))
+                    lastEndpoint = (host, UInt16(port))
+                    send(.credentialsReady)
+                    return
+                case "failed":
+                    send(.provisioningFailed("DAQ HAT reported hotspot failure"))
+                    return
+                case "starting":
+                    if let stage = status.stage.flatMap(ProvisioningStage.init(rawValue:)) {
+                        send(.stageReported(stage))
+                    }
+                default:
+                    break   // "idle" — keep polling
                 }
-                try? await Task.sleep(nanoseconds: 300_000_000)
             }
-        }
-    }
-
-    /// End-to-end orchestration: BLE start -> poll status -> auto-join WiFi -> connect socket.
-    func startFullStreamFlow(ble: BLETransport) async {
-        guard await requestStreamStart(ble: ble) else { return }
-
-        // Wait for provisioningState to settle into credentialsReady/failed
-        // (beginPollingStatus runs concurrently and mutates it directly).
-        while true {
-            switch provisioningState {
-            case .credentialsReady(let ssid, let password, let host, let port):
-                provisioningState = .joiningWifi
-                let joined = await joinDaqHotspot(ssid: ssid, password: password)
-                if joined {
-                    connect(host: host, port: port)
-                    // Nothing else ever moves provisioningState off .joiningWifi
-                    // once we get here -- the connection state handler only
-                    // touches isConnected/isStreaming, not this enum -- so the
-                    // play-button progress screen (gated on provisioningState
-                    // in ScopeTab) got stuck showing "Joining..." forever even
-                    // once real data was flowing. Back to .idle now that the
-                    // join succeeded and the socket handoff is underway;
-                    // isConnected/isStreaming take over from here.
-                    provisioningState = .idle
-                } else {
-                    provisioningState = .failed("Could not join DAQ HAT WiFi hotspot")
-                }
-                return
-            case .failed:
-                return
-            default:
-                try? await Task.sleep(nanoseconds: 150_000_000)
-            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
     }
 
@@ -1091,105 +1145,27 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         return true
     }
 
-    func connect(host: String, port: UInt16 = 5566) {
-        // Tear down only the socket — NOT the hotspot configuration. This
-        // used to call disconnect(), which also fires
-        // NEHotspotConfigurationManager.removeConfiguration(forSSID:) for
-        // the AP we joined moments ago (joinedHotspotSSID is already set by
-        // the time startFullStreamFlow calls connect). iOS processes that
-        // removal asynchronously, racing the fresh TCP connection: when the
-        // removal wins, the phone drops the WiFi association a second or two
-        // into streaming (bench log: "station left, aid=1" ~220 ms after
-        // CMD_START, then the P4's SO_SNDTIMEO client drop). Only the
-        // explicit disconnect()/tab-leave path may remove the configuration.
-        engine.cancelConnection()
-        isConnected = false
-        isStreaming = false
-        lastError = nil
-
-        guard !host.isEmpty, NWEndpoint.Port(rawValue: port) != nil else {
-            lastError = "Invalid host"
-            return
-        }
-        lastEndpoint = (host, port)
-        reconnectAttempts = 0
-        engine.autoStartOnReady = true
-        engine.resetBuffers()
-        engine.connect(host: host, port: port)
-    }
-
-    /// The P4 now deliberately drops a client whose socket stalls mid-frame
-    /// for >2s (SO_SNDTIMEO) — a half-sent frame is unrecoverable, so a hard
-    /// drop + clean reconnect replaced silent stream corruption. While we
-    /// still hold the hotspot join (and the P4 keeps the softAP up for 60s
-    /// without a client), quietly re-establish the socket instead of making
-    /// the user replay the whole BLE provisioning flow.
-    private func attemptReconnect() {
-        // Never reconnect behind a paused stream — resumeStream() owns the
-        // recovery path in that state (falls back to full provisioning).
-        guard engine.autoStartOnReady,
-              let ep = lastEndpoint, joinedHotspotSSID != nil,
-              reconnectAttempts < Self.maxReconnectAttempts else { return }
-        reconnectAttempts += 1
-        let attempt = reconnectAttempts
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            // Give up if something else re-established or tore down
-            // meanwhile. hasConnection (not isConnected) is the guard: a
-            // concurrent connect() sets it immediately, whereas isConnected
-            // only flips once .ready is processed — checking the latter let
-            // a stale retry cancel a connection that had just gone live.
-            guard !self.engine.hasConnection,
-                  self.lastEndpoint != nil, self.joinedHotspotSSID != nil else { return }
-            print("[DaqWifiStreamManager] socket reconnect attempt \(attempt)/\(Self.maxReconnectAttempts)")
-            self.engine.connect(host: ep.host, port: ep.port)
-        }
-    }
-
-    func disconnect() {
-        if engine.hasConnection {
-            sendStop()
-        }
-        engine.cancelConnection()
-        lastEndpoint = nil
-        isConnected = false
-        isStreaming = false
-
-        if let ssid = joinedHotspotSSID {
-            NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: ssid)
-            joinedHotspotSSID = nil
-        }
-    }
-
     // MARK: - Stream control
+    //
+    // Every one of these is now just an event into the state machine — the
+    // reducer decides what effects follow, so state and side effects can
+    // never disagree. See DaqLinkState.swift for the full ladder.
 
-    private func sendStop() {
-        engine.sendControlFrame(type: .stop)
-        isStreaming = false
-    }
+    func pauseStream() { send(.pauseRequested) }
 
-    /// Pause: stop the P4's sample stream over the still-open TCP socket, but
-    /// keep the WiFi association and NWConnection alive -- unlike
-    /// `requestStreamStop`, this does NOT tell the mainboard to tear down the
-    /// softAP. Resume is then just `resumeStream()`, no rejoin needed.
-    func pauseStream() {
-        guard engine.hasConnection else { return }
-        engine.autoStartOnReady = false
-        sendStop()
-    }
-
-    /// Resume after `pauseStream()`: reuses the still-live socket if we have
-    /// one, otherwise (e.g. the connection dropped while paused) falls back
-    /// to the full BLE provisioning flow.
+    /// Resume after `pauseStream()`. If the socket died while paused, the
+    /// reducer is already in `.recovering` (via the `.paused, .socketClosed`
+    /// transition) and this is simply ignored — the ladder owns getting back
+    /// to `.streaming` from there.
     func resumeStream(ble: BLETransport) async {
-        engine.autoStartOnReady = true
-        if engine.hasConnection, isConnected {
-            engine.sendControlFrame(type: .start)
-            isStreaming = true
-        } else {
-            await startFullStreamFlow(ble: ble)
-        }
+        self.ble = ble
+        send(.resumeRequested)
     }
+
+    func disconnect() { send(.stopRequested) }
+
+    /// User-facing Retry from the failure card.
+    func retry() { send(.retryRequested) }
 
     /// Send USB_CMD_SET_RATE (0x82): usb_cmd_rate_t { u32 current_sps; u32 voltage_sps; u8 decimation; u8 pad[3]; }
     func sendSetRate(currentSps: UInt32, voltageSps: UInt32, decimation: UInt8 = 1) {

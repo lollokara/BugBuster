@@ -70,6 +70,10 @@ struct DaqScopeCanvasView: View {
     let errorMessage: String?
     let isWaitingForData: Bool
     var mergedTraces: Bool = true
+    /// Present when the link has reached the terminal `.failed` state — the
+    /// recovery ladder does not retry on its own from there, so the user
+    /// needs an explicit way back in rather than a dead end.
+    var onRetry: (() -> Void)? = nil
 
     // Pinch-zoom scale committed between gestures; live pinch multiplies it.
     @State private var committedScale: CGFloat = 1.0
@@ -427,6 +431,11 @@ struct DaqScopeCanvasView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
+            if let onRetry {
+                Button("Retry", action: onRetry)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
         }
         .padding()
         .frame(maxWidth: 280)

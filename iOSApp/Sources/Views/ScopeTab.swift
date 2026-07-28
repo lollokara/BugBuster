@@ -378,7 +378,9 @@ struct ScopeTab: View {
         case .adc:
             return adcStream.isStreaming ? "Streaming (\(adcStream.totalSamplesReceived) samples)" : "Stopped"
         case .daq:
-            return daqStream.isStreaming ? "Streaming (\(daqRenderModel.frame?.recordCount ?? 0) frames)" : "Stopped"
+            return daqStream.linkState == .streaming
+                ? "Streaming (\(daqRenderModel.frame?.recordCount ?? 0) frames)"
+                : daqStream.linkState.userFacingLabel
         }
     }
 
@@ -467,13 +469,16 @@ struct ScopeTab: View {
     /// socket flow is in flight, driven by real P4 bring-up stage reports
     /// (`ProvisioningStage`), not a synthetic timer.
     private var daqProvisioningOverlay: (label: String, fraction: Double)? {
-        switch daqStream.provisioningState {
-        case .requestingStart:
-            return ("Requesting hotspot from device…", 0.05)
-        case .waitingForCredentials(let stage):
+        switch daqStream.linkState {
+        case .provisioning(let stage):
             return (stage.label, stage.fraction)
-        case .joiningWifi:
+        case .joiningWiFi:
             return ("Joining DAQ HAT WiFi network…", 0.97)
+        case .connecting:
+            return ("Connecting…", 0.99)
+        case .recovering:
+            // Indeterminate: recovery has no meaningful progress fraction.
+            return (daqStream.linkState.userFacingLabel, 0.5)
         default:
             return nil
         }
@@ -530,7 +535,10 @@ struct ScopeTab: View {
                 model: daqRenderModel,
                 errorMessage: currentErrorMessage,
                 isWaitingForData: currentIsWaiting,
-                mergedTraces: mergedTraces
+                mergedTraces: mergedTraces,
+                onRetry: {
+                    if case .failed = daqStream.linkState { daqStream.retry() }
+                }
             )
         }
     }
@@ -540,7 +548,7 @@ struct ScopeTab: View {
         case .adc:
             return adcStream.lastError
         case .daq:
-            if case .failed(let msg) = daqStream.provisioningState { return msg }
+            if case .failed(let msg) = daqStream.linkState { return msg }
             return daqStream.lastError
         }
     }
@@ -580,14 +588,19 @@ struct ScopeTab: View {
                 adcStream.startStream(ip: connectionManager.activeDevice?.ip ?? "", token: connectionManager.adminToken)
             }
         case .daq:
-            if daqStream.isStreaming {
+            switch daqStream.linkState {
+            case .streaming:
                 // Pause: stop sampling but keep the hotspot/socket connected
-                // so resume is instant (see pauseStream() doc comment).
+                // so resume is instant (see DaqLinkStateMachine's pause handling).
                 daqStream.pauseStream()
-            } else if daqStream.isConnected {
+            case .paused:
                 Task { await daqStream.resumeStream(ble: connectionManager.ble) }
-            } else {
-                Task { await daqStream.startFullStreamFlow(ble: connectionManager.ble) }
+            case .failed:
+                daqStream.retry()
+            case .idle:
+                daqStream.start(ble: connectionManager.ble)
+            case .provisioning, .joiningWiFi, .connecting, .recovering:
+                break   // bring-up or recovery already in flight
             }
         }
     }
@@ -622,7 +635,7 @@ struct ScopeTab: View {
 
     private func stopActiveStream() {
         adcStream.stopStream()
-        Task { await daqStream.requestStreamStop(ble: connectionManager.ble) }
+        daqStream.disconnect()
     }
 
     private func applyChannelConfig(ch: Int, config: ADCChannelConfig) {
