@@ -14,10 +14,17 @@ def test_live_button_is_not_pinned_to_the_lane_label_corner():
 
 
 def test_live_button_is_above_the_touch_overlay():
-    """A UIKit overlay stacked later in the ZStack swallows the tap."""
-    assert SRC.index("TwoFingerPanOverlay") < SRC.index("liveButton"), (
-        "TwoFingerPanOverlay must come BEFORE liveButton in the ZStack so the "
-        "button is on top and actually receives taps")
+    """A UIKit overlay stacked later in the ZStack swallows the tap, so the
+    pill must come AFTER the overlay's call site. Anchoring on the bare type
+    name would match the struct DECLARATION at the top of the file and pass
+    unconditionally."""
+    body_start = SRC.index("ZStack(alignment: .topLeading)")
+    body = SRC[body_start:]
+    overlay = body.index("TwoFingerPanOverlay(")
+    pill = body.index("liveButton")
+    assert overlay < pill, (
+        "TwoFingerPanOverlay must be added BEFORE liveButton in the ZStack so "
+        "the pill is topmost and actually receives taps")
 
 
 def test_pan_overlay_is_not_interaction_disabled():
