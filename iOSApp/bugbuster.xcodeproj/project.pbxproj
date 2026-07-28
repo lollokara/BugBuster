@@ -21,6 +21,7 @@
 		3F3C63BF1F58082976E16792 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */; };
 		4A8C38889012D7DE5CA83D42 /* VDUTControlsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA892263E874BA32B9F9A9BB /* VDUTControlsCard.swift */; };
 		503CE64F4170E0B6231CDBF4 /* ConnectionDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 166FC5B5DD45B8F1FAE47673 /* ConnectionDashboardView.swift */; };
+		51307E7F5E37522E853606C4 /* ScopeAxis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */; };
 		5690A725C04CE7DA1B9F9132 /* iPadRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF21832F5299C18916D0CD1 /* iPadRootView.swift */; };
 		5BBA94C26CC6511A65185B8A /* ScopeRenderModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */; };
 		6498C3E9408B6C044DB34ABC /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1AE837278E0E0BE4E1CC860D /* UIKit.framework */; };
@@ -56,6 +57,7 @@
 		1AE837278E0E0BE4E1CC860D /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewTab.swift; sourceTree = "<group>"; };
 		281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceModels.swift; sourceTree = "<group>"; };
+		282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeAxis.swift; sourceTree = "<group>"; };
 		29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketREPL.swift; sourceTree = "<group>"; };
 		354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionManager.swift; sourceTree = "<group>"; };
 		3E36A75C2AB886192C02B5EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -193,6 +195,7 @@
 				354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */,
 				08A9988F8F3540297C3821CA /* DaqLinkState.swift */,
 				81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */,
+				282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */,
 				52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */,
 				29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */,
 			);
@@ -285,6 +288,7 @@
 				BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */,
 				781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */,
 				FFC36E32AE0E90F02B2EBDEC /* RotatePromptView.swift in Sources */,
+				51307E7F5E37522E853606C4 /* ScopeAxis.swift in Sources */,
 				13059480F9B0D1EA524DC2A4 /* ScopeCanvasView.swift in Sources */,
 				FA69B5E19EB18B396DD53371 /* ScopeOrientationState.swift in Sources */,
 				5BBA94C26CC6511A65185B8A /* ScopeRenderModel.swift in Sources */,

@@ -505,8 +505,21 @@ struct DaqScopeCanvasView: View {
         let x = tSpan > 0
             ? CGFloat((t - tStart) / tSpan) * rect.width
             : CGFloat(idx) / CGFloat(max(count - 1, 1)) * rect.width
-        let span = max(maxVal - minVal, 0.001)
-        let y = rect.height - CGFloat((v - minVal) / span) * rect.height
+        // The span floor MUST be relative, not absolute. A fixed 0.001 floor
+        // squashed every small-magnitude lane flat against its bottom edge: a
+        // current lane spanning -5.39 uA..1.60 uA has span 7e-6, which the old
+        // `max(span, 0.001)` inflated 143x, mapping every sample to y ~= height.
+        // The trace rendered as a dead flat line at the bottom of the lane
+        // while the axis labels correctly read uA. Voltage (span ~0.04) cleared
+        // the floor, which is why only current looked broken.
+        // ScopeAxis.bounds() guarantees maxVal > minVal, so span > 0 here.
+        let span = maxVal - minVal
+        let denom = span > 0 ? span : Swift.max(abs(maxVal), 1e-12)
+        // Clamp: bounds are now outlier-trimmed, so a spike can legitimately
+        // fall outside the axis. Pin it to the lane edge rather than letting it
+        // draw over the neighbouring lane.
+        let norm = Swift.min(Swift.max((v - minVal) / denom, 0), 1)
+        let y = rect.height - CGFloat(norm) * rect.height
         return CGPoint(x: rect.minX + x, y: rect.minY + y)
     }
 }

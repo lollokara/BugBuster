@@ -347,25 +347,12 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
 
     private static func trace(id: String, label: String, unit: String,
                               color: Color, points: [ScopeSeriesPoint]) -> RenderedTrace {
-        var minV = Double.infinity
-        var maxV = -Double.infinity
-        for p in points {
-            if p.v < minV { minV = p.v }
-            if p.v > maxV { maxV = p.v }
-        }
-        if minV == .infinity { minV = -1; maxV = 1 }
-        // Magnitude-RELATIVE padding: a fixed absolute floor (the old
-        // `span > 0.001 ? span*0.1 : 1.0`) blew a nA-scale trace up to a ±1 A
-        // axis, defeating the per-lane SI autoranging entirely.
-        let span = maxV - minV
-        let mag = max(abs(minV), abs(maxV))
-        let pad: Double
-        if span > mag * 1e-6, span > 0 {
-            pad = span * 0.1
-        } else {
-            pad = max(mag * 0.1, 1e-12)
-        }
+        // Outlier-robust bounds. Taking the raw min/max here let a SINGLE
+        // dropout or spike define the whole lane, collapsing the real signal
+        // into a sliver; see ScopeAxis for the full rationale and the
+        // magnitude-relative padding this used to do inline.
+        let (minV, maxV) = ScopeAxis.bounds(points.map(\.v))
         return RenderedTrace(id: id, label: label, unit: unit, defaultColor: color,
-                             points: points, minV: minV - pad, maxV: maxV + pad)
+                             points: points, minV: minV, maxV: maxV)
     }
 }

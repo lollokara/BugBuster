@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 SM = Path("iOSApp/Sources/Services/DaqLinkState.swift")
+AXIS = Path("iOSApp/Sources/Services/ScopeAxis.swift")
 TESTS = Path("tests/ios/main.swift")
+AXIS_TESTS = Path("tests/ios/ScopeAxisTests.swift")
 
 
 @pytest.mark.skipif(shutil.which("swiftc") is None, reason="swiftc not available")
@@ -27,7 +29,8 @@ def test_daq_link_state_machine_behavior():
     with tempfile.TemporaryDirectory() as td:
         binary = Path(td) / "smtests"
         build = subprocess.run(
-            ["swiftc", "-swift-version", "5", str(SM), str(TESTS), "-o", str(binary)],
+            ["swiftc", "-swift-version", "5", str(SM), str(AXIS),
+             str(TESTS), str(AXIS_TESTS), "-o", str(binary)],
             capture_output=True, text=True)
         assert build.returncode == 0, f"swiftc failed:\n{build.stderr}"
         run = subprocess.run([str(binary)], capture_output=True, text=True)
