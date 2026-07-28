@@ -886,7 +886,31 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         vdutPrefetchTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.connectionState == .connected {
+                // Mirror startPolling()'s circuit breaker: once the transport
+                // is degraded (wedged httpd / repeated timeouts), don't pile
+                // another periodic request on top — same reasoning as the
+                // comment at startPolling()'s "Circuit breaker" check above.
+                //
+                // Also mirror startPolling()'s ScopeStreamManager.isStreaming
+                // skip, but against DaqWifiStreamManager instead: that's the
+                // manager actually being hardened by the recent bring-up/
+                // recovery work on this branch (b407684..4132d9b), and its
+                // `isStreaming`/`isConnected` projections are both narrower
+                // than what's fragile here — `isStreaming` is true only in
+                // `.streaming`, and `isConnected` adds just `.paused`, so
+                // neither covers `.provisioning`/`.joiningWiFi`/`.connecting`/
+                // `.recovering`, which is exactly the bring-up/recovery window
+                // this finding is about. `.idle`/`.failed` are the only two
+                // states where the DAQ link isn't doing something the VDUT
+                // prefetch could compete with, so gate on "neither of those".
+                let daqLinkBusy: Bool
+                switch DaqWifiStreamManager.shared.linkState {
+                case .idle, .failed:
+                    daqLinkBusy = false
+                default:
+                    daqLinkBusy = true
+                }
+                if self.connectionState == .connected && !self.transportDegraded && !daqLinkBusy {
                     await self.refreshVdutStatus()
                 }
                 try? await Task.sleep(nanoseconds: 5_000_000_000)

@@ -78,6 +78,66 @@ def test_vdut_state_is_prefetched_not_fetched_on_open():
         "connected), or the background prefetch never actually runs")
 
 
+def test_vdut_prefetch_is_also_started_over_ble():
+    """BLE is the primary transport while the DAQ stream is running (the phone
+    can't reach the S3 over HTTP once joined to the DAQ hotspot), so wiring
+    the prefetch into startPolling() alone leaves BLE-connected users with
+    exactly the stale-setpoint bug this task fixes, with the suite still
+    green. Must be covered independently of the WiFi-path assertion above."""
+    src = CONN.read_text()
+    assert re.search(r"func startBLEPolling\(\)\s*\{\s*startVdutPrefetch\(\)", src), (
+        "startVdutPrefetch() must also be started when BLE polling begins, "
+        "or BLE-connected users still see stale VDUT setpoints on open")
+
+
+def _extract_braced_block(src: str, anchor_pattern: str) -> str:
+    """Find `anchor_pattern`, then brace-match from the next '{' to return the
+    exact extent of that block, however long it is. Robust to reformatting
+    and to the anchor appearing more than once elsewhere, since we only ever
+    match this specific function signature."""
+    match = re.search(anchor_pattern, src)
+    assert match is not None, f"could not find {anchor_pattern!r} in source"
+    start = src.index("{", match.end() - 1)
+    depth = 0
+    for i, ch in enumerate(src[start:], start=start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:i]
+    raise AssertionError("unbalanced braces while scanning block")
+
+
+def test_vdut_prefetch_backs_off_on_transport_degraded_and_daq_stream_busy():
+    """startPolling() deliberately backs off to a probe-only cadence and skips
+    its slow multi-request cycle once transportDegraded is set ("so we don't
+    pile more requests onto a wedged httpd"), and separately skips its body
+    entirely while a DAQ stream is busy bringing up / recovering. The VDUT
+    prefetch loop must respect both, or it keeps hammering a wedged transport
+    / competes for the single serialized request slot exactly when it's
+    scarcest (DAQ wifi-stream provisioning and recovery)."""
+    src = CONN.read_text()
+    body = _extract_braced_block(src, r"func startVdutPrefetch\(\)\s*\{")
+
+    assert "transportDegraded" in body, (
+        "the prefetch loop must gate on transportDegraded, mirroring "
+        "startPolling()'s circuit breaker, or it keeps firing at a wedged "
+        "transport")
+    assert "DaqWifiStreamManager" in body and "linkState" in body, (
+        "the prefetch loop must check DaqWifiStreamManager.shared.linkState "
+        "so it backs off during DAQ wifi-stream bring-up/recovery, not just "
+        "ScopeStreamManager.isStreaming (too narrow: that only covers the "
+        "SSE scope stream, not the DAQ hotspot link)")
+    # The gate must actually guard the refreshVdutStatus() call, not just be
+    # present somewhere unrelated in the loop body.
+    refresh_idx = body.index("refreshVdutStatus")
+    guard_region = body[:refresh_idx]
+    assert "transportDegraded" in guard_region and "linkState" in guard_region, (
+        "the transportDegraded/linkState checks must guard the "
+        "refreshVdutStatus() call itself, not merely appear elsewhere in the loop")
+
+
 def test_vdut_card_does_not_depend_on_an_open_time_fetch():
     """The card must render already-prefetched ConnectionManager state, not
     kick off its own fetch when it opens — that is what makes the menu show
