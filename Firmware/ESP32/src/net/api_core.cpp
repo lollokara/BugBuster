@@ -469,14 +469,20 @@ static char *api_daq_acq_config(const cJSON *body)
         return api_error("filter out of range");
     }
     // adc_dec's valid range depends on filter: for SINC3 it is (decimation/32)
-    // and effectively free (1..255); for every other filter it must be one of
+    // and free within the uint8_t wire range, EXCEPT 0 -- the P4 side treats a
+    // 0 decimation multiplier as "1" (silently meaning x32) rather than
+    // rejecting it, so reject it here at the API boundary instead of letting
+    // a request that means nothing ("0x SINC3 decimation") through as if it
+    // were a deliberate x32 request. For every other filter it must be one of
     // the fixed ADAQ_DEC_* enum steps (0..HAT_ACQ_DEC_MAX).
-    if (filter != HAT_ACQ_FILTER_SINC3 &&
-        (adc_dec < 0 || adc_dec > (int)HAT_ACQ_DEC_MAX)) {
-        return api_error("adc_dec out of range");
-    }
-    if (adc_dec < 0 || adc_dec > 255) {
-        return api_error("adc_dec out of range");
+    if (filter == HAT_ACQ_FILTER_SINC3) {
+        if (adc_dec < 1 || adc_dec > 255) {
+            return api_error("adc_dec out of range (SINC3 decimation/32, must be 1..255)");
+        }
+    } else {
+        if (adc_dec < 0 || adc_dec > (int)HAT_ACQ_DEC_MAX) {
+            return api_error("adc_dec out of range");
+        }
     }
     if (!hat_daq_set_acq_config((uint8_t)filter, (uint8_t)adc_dec)) {
         return api_error("HAT not responding, not a DAQ HAT, or config rejected");

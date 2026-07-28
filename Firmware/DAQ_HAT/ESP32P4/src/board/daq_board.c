@@ -467,15 +467,39 @@ static void daq_ctrl_task(void *arg)
             }
 
             case CTRL_MSG_SET_ACQ_CONFIG: {
-                // Applied identically to all three ADAQs (FINE, COARSE,
-                // VOLTAGE). FINE and COARSE MUST stay in lock-step: the fast
-                // path pairs their samples by sequence (current_fusion_step),
-                // and a mismatched ODR between them would desync that
-                // pairing. VOLTAGE isn't paired with anything, but there is
-                // no separate user-facing knob for it (the ruling is that
-                // "the sample rate IS the ODR" -- singular), so it tracks the
-                // same request rather than silently running at whatever its
-                // last configuration happened to be.
+                // C3 (bench-verified ruling, overrides the original "all
+                // three ADAQs" plan): apply ONLY to FINE + COARSE, mirroring
+                // apply_adaq_filter()'s `for (i = 0; i <= 1; ++i)` in
+                // daq_settings_glue.c. VOLTAGE (U23) shares SPI bus B and one
+                // common SYNC line with COARSE (U22) and cannot be
+                // phase-staggered (config.h); VOLTAGE_ODR_TARGET_SPS keeps it
+                // well below the current-channel ODR specifically so COARSE
+                // never misses its DRDY deadline on that shared bus. Putting
+                // the user's rate on VOLTAGE too would collide both on one
+                // bus at, e.g., ~256 kSPS (SINC5/x32) -- exactly what that
+                // constant exists to prevent.
+                //
+                // C1/C2: the ADAQ config registers are inaccessible while the
+                // capture task holds the SPI bus continuously via
+                // spi_device_acquire_bus() (see the fast_running comment in
+                // daq_board_run_fast below) -- reprogramming live races the
+                // capture task's own register access and asserts
+                // (spi_device_polling_end: handle != acquiring_dev). It also
+                // permanently desyncs FINE/COARSE fusion: daq_fast_task's
+                // seq_offset is learned ONCE at first pairing and never
+                // relearned while running, but adaq7769_set_filter()/
+                // _set_sinc3() fires a per-device SYNC pulse only when that
+                // device is the SYNC master (ADAQ_ROLE_FINE, config.h
+                // ADAQ_SYNC_MASTER_INDEX=0) -- reprogramming FINE then
+                // COARSE milliseconds apart shifts their counters against
+                // each other with no resync ever happening again. Bracketing
+                // with stop_fast/run_fast (same precedent as
+                // apply_adaq_filter) fixes both: it releases the SPI bus, and
+                // daq_board_run_fast always spawns a brand-new daq_fast_task
+                // whose seq_offset/have_offset/summary_interval are
+                // function-local, so they start fresh on the new session's
+                // very first pairing (verified: all three are declared
+                // inside daq_fast_task(), not on daq_board_t).
                 //
                 // NOTE: stream decimation (b->wave_decim) is deliberately
                 // NOT touched here. It is a naive keep-1-of-N drop with no
@@ -487,7 +511,13 @@ static void daq_ctrl_task(void *arg)
                 // own digital filter/decimation, which needs no such caveat.
                 const uint8_t filter  = msg.acq_config.filter;
                 const uint8_t adc_dec = msg.acq_config.adc_dec;
-                for (int i = 0; i < ADAQ_COUNT; ++i) {
+
+                bool was_running = b->fast_running;
+                if (was_running) {
+                    daq_board_stop_fast(b);
+                }
+
+                for (int i = ADAQ_ROLE_FINE; i <= ADAQ_ROLE_COARSE; ++i) {
                     if (!b->adaq_ok[i]) continue;
                     esp_err_t err;
                     if (filter == ADAQ_FILTER_SINC3) {
@@ -501,22 +531,66 @@ static void daq_ctrl_task(void *arg)
                                  i, esp_err_to_name(err));
                     }
                 }
-                // Refresh the cached ODRs the fast path/SET_RATE decimation
-                // math relies on (mirrors what daq_board_run_fast does after
-                // a BBP-driven rate change).
-                if (b->adaq_ok[ADAQ_ROLE_FINE]) {
-                    b->fine_rate_hz =
-                        (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
-                }
+
+                // Re-assert VOLTAGE's independent target rate. FINE is the
+                // SYNC master, so the sync pulse fired above (whenever
+                // ADAQ_ROLE_FINE was reprogrammed) resets every device's
+                // internal counter over the shared SYNC line, VOLTAGE
+                // included -- its config registers (and thus its actual ODR)
+                // are untouched by that, but re-applying here is cheap
+                // insurance against any future path that could perturb them.
                 if (b->adaq_ok[ADAQ_ROLE_VOLTAGE]) {
-                    b->volt_rate_hz =
-                        (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE]);
+                    float v_achieved = 0.0f;
+                    if (adaq7769_set_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE],
+                                                      VOLTAGE_ODR_TARGET_SPS,
+                                                      &v_achieved) != ESP_OK) {
+                        ESP_LOGE(TAG, "SET_ACQ_CONFIG: failed to re-apply VOLTAGE ODR");
+                    }
+                }
+
+                // I3: settle/blend are sample counts derived from the ADAQ
+                // filter settle time at the active ODR (current_fusion.h
+                // says "call when the sample rate changes"). Currently a
+                // no-op in practice -- daq_board_init's own comment notes
+                // the ADAQ7769-1 settles in 3-7 output samples across every
+                // filter type per datasheet Table 5, so the same (8, 4)
+                // margin stays valid at any rate/filter this command can
+                // select -- but called anyway so this stays correct if that
+                // assumption (or these constants) ever changes, and so this
+                // path doesn't silently skip a documented contract.
+                current_fusion_set_timing(&b->fusion, /*settle=*/8, /*blend=*/4);
+
+                // I1: halving the ODR without retiming the power DSP would
+                // silently double reported energy/charge (wrong dt). Reset
+                // the accumulator too, matching apply_sample_rate's pattern
+                // in daq_settings_glue.c, since the meaning of "energy so
+                // far" changes with the rate. When streaming,
+                // daq_board_run_fast (below) independently recomputes
+                // power_dsp_set_rate() from the new FINE ODR / dsp_decim
+                // (verified at its "DSP tail runs every dsp_decim-th..."
+                // comment) -- this reset just guarantees a clean start
+                // regardless of whether a restart happens.
+                power_dsp_reset_energy(&b->dsp);
+
+                if (was_running) {
+                    daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                } else {
+                    // Not streaming: daq_board_run_fast won't run to refresh
+                    // these, so cache them ourselves (mirrors what it does).
+                    if (b->adaq_ok[ADAQ_ROLE_FINE]) {
+                        b->fine_rate_hz =
+                            (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
+                    }
+                    if (b->adaq_ok[ADAQ_ROLE_VOLTAGE]) {
+                        b->volt_rate_hz =
+                            (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE]);
+                    }
                 }
                 ESP_LOGI(TAG, "SET_ACQ_CONFIG: filter=%u adc_dec=%u -> "
-                              "fine_odr=%lu volt_odr=%lu",
+                              "fine_odr=%lu volt_odr=%lu (was_running=%d)",
                          filter, adc_dec,
                          (unsigned long)b->fine_rate_hz,
-                         (unsigned long)b->volt_rate_hz);
+                         (unsigned long)b->volt_rate_hz, was_running);
                 break;
             }
         }
@@ -827,9 +901,9 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     st.adc_dec = (fine_dev->cfg.filter == ADAQ_FILTER_SINC3)
                      ? 0xFFu : fine_dev->cfg.dec_rate;
     st.stream_decim = b->wave_decim;
-    float fine_odr = b->adaq_ok[ADAQ_ROLE_FINE]
-                         ? adaq7769_output_data_rate(fine_dev) : 0.0f;
-    st.odr_mhz = (uint32_t)(fine_odr * 1000.0f + 0.5f);
+    st.odr_mhz = b->adaq_ok[ADAQ_ROLE_FINE]
+                     ? (uint32_t)(adaq7769_output_data_rate(fine_dev) * 1000.0f + 0.5f)
+                     : 0u;
 
     usb_stream_send_status(&b->usb, &st);
 

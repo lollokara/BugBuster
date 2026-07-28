@@ -147,10 +147,17 @@ extern "C" {
 
 // Acquisition configuration (ADAQ7769-1 digital filter + hardware decimation,
 // which per the current design IS the sample rate -- see s3link_acq_config_t
-// below for why there is no separate "sample rate" field). Applied to all
-// three ADAQs via the P4's ctrl_queue path (like HATP internal SET_RATE),
-// never inline on this dispatcher. MUST match S3 mainboard hat.h
-// HAT_CMD_DAQ_SET_ACQ_CONFIG exactly.
+// below for why there is no separate "sample rate" field). Applied to the two
+// CURRENT ADAQs (FINE + COARSE) only, via the P4's ctrl_queue path (like HATP
+// internal SET_RATE), never inline on this dispatcher -- bracketed by a
+// stop_fast/run_fast pause exactly like apply_adaq_filter() in
+// daq_settings_glue.c, both to release the SPI bus the capture task holds for
+// the whole session and to force FINE/COARSE fusion to relearn its pairing
+// offset on the new session. VOLTAGE is deliberately left alone: it shares
+// SPI bus B and one common SYNC line with COARSE and cannot be
+// phase-staggered (bench-verified, config.h VOLTAGE_ODR_TARGET_SPS), so it
+// always tracks its own fixed target rate regardless of this command. MUST
+// match S3 mainboard hat.h HAT_CMD_DAQ_SET_ACQ_CONFIG exactly.
 #define HATP_CMD_DAQ_SET_ACQ_CONFIG 0x7Au   // payload: s3link_acq_config_t -> OK/ERROR
 
 // Settings/config commands (vendor sub-range 0x70..0x7F). These read/write the
@@ -219,8 +226,8 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint8_t  filter;    // ADAQ_FILTER_* (adaq7769_regs.h)
     uint8_t  adc_dec;   // ADAQ_DEC_* for every filter except SINC3, where it
-                         // instead carries (decimation / 32) since SINC3 takes
-                         // an arbitrary multiple of 32 rather than a fixed step
+                        // instead carries (decimation / 32) since SINC3 takes
+                        // an arbitrary multiple of 32 rather than a fixed step
 } s3link_acq_config_t;
 
 // HATP_RSP_DAQ_VDUT_STATUS (0x98) payload: response to HATP_CMD_DAQ_VDUT_STATUS.
