@@ -228,3 +228,35 @@ def test_vdut_card_does_not_depend_on_an_open_time_fetch():
     assert "refreshVdutStatus" not in onAppear_block, (
         "the card must render already-prefetched values, not kick off the fetch "
         "when it opens — that is what makes the menu show stale setpoints")
+
+
+# --- Watchdog must not fight its own recovery ------------------------------
+
+MGR = Path("iOSApp/Sources/Services/DaqWifiStreamManager.swift")
+
+
+def test_watchdog_gives_a_new_stream_a_grace_period():
+    """The redial rung emits .resetBuffers, which sets lastFrameAt = nil. If
+    the watchdog treats nil as "stalled" it fires ~1s after every reconnect,
+    before a first frame can arrive, and recovery can never converge:
+    stall -> recover -> reset -> nil -> stall. That presented as a
+    "Reconnecting..." banner that never cleared while the trace flickered back
+    every few seconds."""
+    body = _extract_braced_block(MGR.read_text(),
+                                 r"private func startWatchdog\(\)\s*\{")
+    assert "last == nil ||" not in body, (
+        "treating a nil lastFrameAt as stalled re-triggers recovery one second "
+        "after every reconnect, because .resetBuffers clears it")
+    assert "?? startedAt" in body or "?? start" in body, (
+        "the watchdog must fall back to its own start time so a freshly "
+        "(re)started stream gets a full stallTimeout to produce a frame")
+
+
+def test_reset_buffers_still_clears_the_frame_timestamp():
+    """The grace deadline is the fix — NOT leaving a stale timestamp behind.
+    A stale lastFrameAt from before an outage would make the watchdog think
+    data is flowing when it is not."""
+    body = _extract_braced_block(MGR.read_text(), r"func resetBuffers\(\)\s*\{")
+    assert "lastFrameAt = nil" in body, (
+        "resetBuffers must still clear lastFrameAt; the watchdog handles nil "
+        "via its grace deadline")

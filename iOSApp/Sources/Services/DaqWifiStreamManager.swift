@@ -995,13 +995,24 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
 
     private func startWatchdog() {
         watchdogTask?.cancel()
+        // Grace deadline. A freshly (re)started stream legitimately has no
+        // frames yet, and the redial rung deliberately emits .resetBuffers,
+        // which clears lastFrameAt. Treating nil as "stalled" made the
+        // watchdog fire one second after EVERY reconnect — long before a first
+        // frame could plausibly arrive — so recovery could never converge:
+        //   stall -> recover -> resetBuffers -> lastFrameAt = nil -> stall ...
+        // which presented as a "Reconnecting..." banner that never cleared
+        // while the trace flickered back every few seconds. Falling back to
+        // the watchdog's own start time gives a new stream exactly one full
+        // stallTimeout to produce its first frame.
+        let startedAt = Date()
         watchdogTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self else { return }   // manager is gone; nothing left to watch
                 guard self.linkState == .streaming else { continue }
-                let last = self.engine.lastFrameAt
-                if last == nil || Date().timeIntervalSince(last!) > Self.stallTimeout {
+                let reference = self.engine.lastFrameAt ?? startedAt
+                if Date().timeIntervalSince(reference) > Self.stallTimeout {
                     self.send(.dataStalled)
                 }
             }
