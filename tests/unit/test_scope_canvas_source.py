@@ -60,3 +60,51 @@ def test_sidebar_auto_collapses_after_idle():
     # The collapse action must actually flip the binding to .detailOnly.
     assert re.search(r"columnVisibility\s*=\s*\.detailOnly", src), (
         "collapse must set columnVisibility to .detailOnly")
+
+
+CONN = Path("iOSApp/Sources/Services/ConnectionManager.swift")
+VDUT_CARD = Path("iOSApp/Sources/Views/VDUTControlsCard.swift")
+
+
+def test_vdut_state_is_prefetched_not_fetched_on_open():
+    src = CONN.read_text()
+    assert "startVdutPrefetch" in src, "no background VDUT prefetch"
+    assert "vdutPrefetchTask" in src
+    # The prefetch loop must actually be wired to run once the connection is
+    # live, not just declared and left dangling — otherwise it never fires
+    # and the card is back to relying on an open-time fetch in practice.
+    assert re.search(r"func startPolling\(\)\s*\{\s*startVdutPrefetch\(\)", src), (
+        "startVdutPrefetch() must be started when polling begins (i.e. once "
+        "connected), or the background prefetch never actually runs")
+
+
+def test_vdut_card_does_not_depend_on_an_open_time_fetch():
+    """The card must render already-prefetched ConnectionManager state, not
+    kick off its own fetch when it opens — that is what makes the menu show
+    stale setpoints that snap a moment later. Anchor on the onAppear BLOCK
+    itself (brace-matched), not a fixed-width slice after a fixed string:
+    a slice would silently examine the wrong region if the file gains
+    another `.onAppear`, and would raise IndexError if it gains none."""
+    src = VDUT_CARD.read_text()
+    match = re.search(r"\.onAppear\s*\{", src)
+    assert match is not None, "VDUTControlsCard must seed its drafts in onAppear"
+
+    # Brace-match from the opening '{' to find the exact extent of the
+    # onAppear closure, however long it is.
+    start = match.end() - 1
+    depth = 0
+    end = None
+    for i, ch in enumerate(src[start:], start=start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    assert end is not None, "unbalanced braces while scanning onAppear block"
+    onAppear_block = src[start:end]
+
+    assert "refreshVdutStatus" not in onAppear_block, (
+        "the card must render already-prefetched values, not kick off the fetch "
+        "when it opens — that is what makes the menu show stale setpoints")

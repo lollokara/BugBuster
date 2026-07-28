@@ -165,6 +165,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     private let session: URLSession
     private var pollTask: Task<Void, Never>? = nil
     private var pollCycle: Int = 0
+    private var vdutPrefetchTask: Task<Void, Never>?
 
     private func updateOnMain(_ body: @MainActor @escaping () -> Void) {
         Task { @MainActor in body() }
@@ -265,6 +266,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             if self.transport == .ble {
                 self.blePollTask?.cancel()
                 self.blePollTask = nil
+                self.stopVdutPrefetch()
                 self.updateOnMain {
                     if self.connectionState == .connected {
                         self.connectionState = .disconnected
@@ -683,6 +685,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         blePollTask?.cancel()
         blePollTask = nil
         stopPolling()
+        stopVdutPrefetch()
         if transport == .ble {
             ble.disconnect()
         }
@@ -875,6 +878,27 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         }
     }
 
+    /// Keep VDUT setpoint/limit fresh in the background so opening the controls
+    /// shows what the hardware is ACTUALLY set to immediately, instead of a
+    /// stale draft that snaps a moment later once an on-open fetch returns.
+    public func startVdutPrefetch() {
+        vdutPrefetchTask?.cancel()
+        vdutPrefetchTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.connectionState == .connected {
+                    await self.refreshVdutStatus()
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+
+    public func stopVdutPrefetch() {
+        vdutPrefetchTask?.cancel()
+        vdutPrefetchTask = nil
+    }
+
     public func setVdutEnable(_ enabled: Bool) async -> Bool {
         do {
             let ok = try await postAction(path: "/api/daq/vdut/enable", json: ["enabled": enabled])
@@ -904,6 +928,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
 
     public func startPolling() {
+        startVdutPrefetch()
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             var cycle = 0
@@ -1001,6 +1026,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     /// Poll the device over the BLE control plane. Mirrors `startPolling()` but
     /// uses the API tunnel; cadence is gentler since BLE round-trips are slower.
     public func startBLEPolling() {
+        startVdutPrefetch()
         blePollTask?.cancel()
         blePollTask = Task { [weak self] in
             var cycle = 0

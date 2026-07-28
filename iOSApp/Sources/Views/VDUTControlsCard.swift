@@ -96,9 +96,12 @@ struct VDUTControlsCard: View {
         .padding(12)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onAppear {
+            // Drafts are seeded from ConnectionManager's published state, which
+            // startVdutPrefetch() keeps fresh in the background — no fetch is
+            // kicked off here, so the menu opens with real values, not stale
+            // ones that snap a moment later.
             voltageDraft = connectionManager.vdutVoltageSetpointV
             currentLimitDraft = connectionManager.vdutCurrentLimitMa
-            Task { await connectionManager.refreshVdutStatus() }
         }
     }
 
