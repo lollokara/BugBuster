@@ -834,6 +834,18 @@ static volatile bool s_bringup_alive;
 // cancelled regardless of what happens afterward.
 static volatile uint32_t s_bringup_gen;
 
+// The generation that currently OWNS the AP/DNS/TCP resources (i.e. is the
+// most recent task to have started touching them). Set by a bring-up task
+// the moment it begins its AP stage, right before it first calls
+// wifi_ap_start(). wifi_stream_bringup_cancel_unwind() only tears down those
+// resources when its caller's generation still matches this -- otherwise a
+// stale, cancelled task that is only now unwinding (because RECYCLE's bounded
+// wait timed out while it was blocked deep in a single wifi_ap_start() call)
+// would destroy a SUCCESSOR generation's live softAP/DNS/TCP instead of its
+// own, and report IDLE over a link that is actually READY. Single-writer:
+// only ever assigned by whichever bring-up task is currently in the AP stage.
+static volatile uint32_t s_owner_gen;
+
 // Small heap-allocated (not static/shared) argument block for
 // wifi_stream_bringup_task(), so each spawned instance gets its OWN
 // board pointer + generation pair -- freed by the task itself right after
@@ -865,30 +877,40 @@ typedef struct {
 // anything a human or the phone's UI would perceive as a hang.
 #define BRINGUP_CANCEL_WAIT_MS 300u
 
-// Tears down anything this task may have brought up so far and exits without
-// publishing READY/FAILED, leaving b->wifi_stream_info at IDLE. Called from
-// every cancel checkpoint below -- including the very first one, at task
-// entry, before this task has brought up anything at all. The 4 teardown
-// calls are unconditional and rely on being idempotent no-ops in that case
-// and in every other partial-progress case (Task 3/4's wifi_ap_start/stop/
-// init guards); that reliance is also what makes it safe to call them here
-// even if RECYCLE's own wifi_stream_teardown() has already run concurrently
-// -- whichever runs last simply repeats a no-op on whatever the other
-// already tore down. This is what closes the resurrection race: no matter
-// how the two interleave, the last write to b->wifi_stream_info before this
-// task exits is IDLE, never READY. Only clears s_bringup_alive -- NOT
-// s_bringup_gen, which must keep advancing forward and is never owned by an
-// individual task instance.
-static void wifi_stream_bringup_cancel_unwind(daq_board_t *b)
+// Tears down anything THIS generation may have brought up so far and exits
+// without publishing READY/FAILED, leaving b->wifi_stream_info at IDLE.
+// Called from every cancel checkpoint below -- including the very first one,
+// at task entry, before this task has brought up anything at all.
+//
+// Ownership-gated: a cancelled/superseded task can be sitting on a VERY
+// stale checkpoint result (RECYCLE's bounded wait can time out while this
+// task is blocked deep in a single wifi_ap_start() call, whose own retry
+// delay of 500ms comfortably outlasts that bound). By the time such an
+// orphan reaches its next checkpoint, a fresh generation may have already
+// started -- or even finished -- its own bring-up and be sitting on a live
+// softAP/DNS/TCP stack. Tearing that down unconditionally would destroy a
+// SUCCESSOR's resources and falsely report IDLE over a link that is READY.
+// So the 4 teardown calls (and the state write to IDLE) only run
+// `if (s_owner_gen == my_gen)` -- i.e. only when no later generation has
+// claimed ownership of the resources since. When ownership has moved on,
+// this task has nothing of its own left to clean up: it simply deletes
+// itself, touching neither the resources nor b->wifi_stream_info nor
+// s_bringup_alive, leaving all three exactly as the owning generation left
+// them. s_bringup_gen itself is untouched either way -- it must keep
+// advancing forward and is never owned by an individual task instance.
+static void wifi_stream_bringup_cancel_unwind(daq_board_t *b, uint32_t my_gen)
 {
     ESP_LOGW(TAG, "wifi stream bring-up: superseded/cancelled, unwinding");
-    tcp_backend_stop();
-    captive_dns_stop();
-    wifi_ap_stop();
-    ddp_master_set_wifi_stream_mode(&b->ddp, false);
-    memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
-    b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
-    s_bringup_alive = false;
+    if (s_owner_gen == my_gen) {
+        tcp_backend_stop();
+        usb_backend_start(&b->usb);   // re-register the USB transport, mirroring wifi_stream_teardown()
+        captive_dns_stop();
+        wifi_ap_stop();
+        ddp_master_set_wifi_stream_mode(&b->ddp, false);
+        memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
+        b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
+        s_bringup_alive = false;
+    }
     vTaskDelete(NULL);
 }
 
@@ -936,7 +958,7 @@ static void wifi_stream_bringup_task(void *arg)
 
     // Cancel check: RECYCLE could have raced xTaskCreate() itself, landing
     // between the create call and this task's first scheduled instruction.
-    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b);
+    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b, my_gen);
 
     ddp_master_set_wifi_stream_mode(&b->ddp, true);
 
@@ -954,11 +976,17 @@ static void wifi_stream_bringup_task(void *arg)
     // one every time, wiping the very flag this command just set -- see
     // .mex/patterns/daq-hat-ios-wifi-streaming.md for that whole saga.)
     b->wifi_stream_info.stage = DAQ_WIFI_STAGE_AP;
+    // Claim ownership of the AP/DNS/TCP resources now, before the first call
+    // that actually touches them (wifi_ap_start() below). From this point on,
+    // wifi_stream_bringup_cancel_unwind() will tear down on our behalf only
+    // as long as no later generation has since claimed ownership out from
+    // under us.
+    s_owner_gen = my_gen;
     esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < 6; attempt++) {
         // Cancel check: bail out of the retry loop between attempts rather
         // than burning through the remaining ones once a recycle is pending.
-        if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b);
+        if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b, my_gen);
         if (attempt > 0) vTaskDelay(pdMS_TO_TICKS(500));
         err = wifi_ap_start(ssid, password);
         if (err == ESP_OK) break;
@@ -967,12 +995,12 @@ static void wifi_stream_bringup_task(void *arg)
     }
     // Cancel check: AP came up (or the retries were exhausted) -- do not
     // proceed into DNS if a recycle landed while we were retrying/joining.
-    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b);
+    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b, my_gen);
     if (err == ESP_OK) {
         b->wifi_stream_info.stage = DAQ_WIFI_STAGE_DNS;
         err = captive_dns_start();
     }
-    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b);
+    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b, my_gen);
     if (err == ESP_OK) {
         b->wifi_stream_info.stage = DAQ_WIFI_STAGE_TCP;
         err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
@@ -980,7 +1008,7 @@ static void wifi_stream_bringup_task(void *arg)
     // Cancel check: this is the critical one -- must run before the READY
     // state is ever published below, or a recycle that arrived just as the
     // TCP backend came up would be silently undone.
-    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b);
+    if (my_gen != s_bringup_gen) wifi_stream_bringup_cancel_unwind(b, my_gen);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "wifi stream start failed: %s", esp_err_to_name(err));
         tcp_backend_stop();
@@ -1083,6 +1111,10 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // RECYCLE gave up waiting on) can never again match s_bringup_gen
             // once this fires, so it stays permanently cancelled no matter
             // what it does after this point. See the s_bringup_gen comment.
+            // Non-atomic RMW on a volatile: safe only because the S3-link
+            // dispatcher task is the single writer of s_bringup_gen (here and
+            // at the RECYCLE handler below); it is never bumped concurrently
+            // from another task.
             uint32_t gen = ++s_bringup_gen;
             s_bringup_alive = true;
             bringup_task_arg_t *targ = (bringup_task_arg_t *)malloc(sizeof(*targ));
@@ -1147,6 +1179,10 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // eventual self-unwind race safely (both are idempotent and both
             // converge on IDLE).
             ESP_LOGW(TAG, "wifi stream: force recycle requested");
+            // Non-atomic RMW on a volatile: safe only because the S3-link
+            // dispatcher task is the single writer of s_bringup_gen (here and
+            // at the START handler above); it is never bumped concurrently
+            // from another task.
             ++s_bringup_gen;
             uint32_t waited_ms = 0;
             while (s_bringup_alive && waited_ms < BRINGUP_CANCEL_WAIT_MS) {
