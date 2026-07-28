@@ -207,27 +207,16 @@ struct ScopeTab: View {
                     activeCanvas
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .bottomTrailing) {
-                        Group {
-                            if mode == .adc {
-                                channelLegend
-                            } else {
-                                daqLegendRow
+                        VStack(alignment: .trailing, spacing: 8) {
+                            // Stacked ABOVE the legend, in the same coordinate
+                            // space, so the two can never overlap. Placing it
+                            // inside the canvas put it underneath this panel
+                            // and made it untappable.
+                            if mode == .daq, daqRenderModel.frame?.followLive == false {
+                                daqLiveButton
                             }
+                            legendPanel
                         }
-                        // channelLegend's flexible-column grid and daqLegendRow's
-                        // Spacer are both greedy about the width SwiftUI offers —
-                        // fine for the old full-width row, wrong for this floating
-                        // corner panel. fixedSize collapses them to content width.
-                        .fixedSize()
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(Color(red: 0.05, green: 0.08, blue: 0.16).opacity(0.55))
-                                )
-                        )
                         .padding(16)
                     }
                 } else if orientation.isLandscape {
@@ -420,6 +409,50 @@ struct ScopeTab: View {
             }
         }
         .padding(.horizontal)
+    }
+
+    /// The floating glass legend/cursor panel. Extracted so the "Live" pill can
+    /// be stacked above it as a sibling rather than fighting it for a corner.
+    private var legendPanel: some View {
+        Group {
+            if mode == .adc {
+                channelLegend
+            } else {
+                daqLegendRow
+            }
+        }
+        // channelLegend's flexible-column grid and daqLegendRow's Spacer are
+        // both greedy about the width SwiftUI offers — fine for the old
+        // full-width row, wrong for this floating corner panel. fixedSize
+        // collapses them to content width.
+        .fixedSize()
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(red: 0.05, green: 0.08, blue: 0.16).opacity(0.55))
+                )
+        )
+    }
+
+    /// Returns the view to the live edge after a pan. Rendered here, beside the
+    /// legend, because ScopeTab overlays this panel on top of the canvas — a
+    /// pill positioned inside the canvas gets covered by it and stops receiving
+    /// taps, which is what happened when it sat at .topLeading (under the lane's
+    /// max-value tag) and then at .bottomTrailing (under this legend).
+    private var daqLiveButton: some View {
+        Button {
+            daqRenderModel.updateViewport { $0.followLive = true; $0.anchorEndT = nil }
+        } label: {
+            Label("Live", systemImage: "arrow.right.to.line")
+                .font(.system(size: 11, weight: .bold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .glassEffect(.regular.tint(.green), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var daqLegendRow: some View {

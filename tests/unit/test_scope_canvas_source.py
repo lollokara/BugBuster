@@ -2,29 +2,41 @@
 from pathlib import Path
 
 SRC = Path("iOSApp/Sources/Views/DaqScopeCanvasView.swift").read_text()
+TAB = Path("iOSApp/Sources/Views/ScopeTab.swift")
 
 
-def test_live_button_is_not_pinned_to_the_lane_label_corner():
-    """topLeading is where laneTag draws the max-value label."""
-    assert "liveButton" in SRC
-    idx = SRC.index("liveButton")
-    window = SRC[max(0, idx - 400):idx + 400]
-    assert "bottomTrailing" in window, (
-        "Live pill must be explicitly placed away from the top-left lane tag")
+def test_live_pill_is_not_rendered_inside_the_canvas():
+    """ScopeTab overlays the legend/diagnostic panel ON TOP of the canvas, so
+    anything the canvas positions in a corner can be silently covered by it and
+    stop receiving taps. That happened twice: first at .topLeading under the
+    lane's max-value tag, then at .bottomTrailing under the diagnostic legend.
+    The pill must live in ScopeTab beside the legend, not in the canvas."""
+    assert "liveButton" not in SRC, (
+        "the Live pill must not be rendered inside DaqScopeCanvasView - "
+        "ScopeTab's legend overlay is drawn on top of this view and will "
+        "cover it. Render it in ScopeTab as a sibling of the legend instead.")
 
 
-def test_live_button_is_above_the_touch_overlay():
-    """A UIKit overlay stacked later in the ZStack swallows the tap, so the
-    pill must come AFTER the overlay's call site. Anchoring on the bare type
-    name would match the struct DECLARATION at the top of the file and pass
-    unconditionally."""
-    body_start = SRC.index("ZStack(alignment: .topLeading)")
-    body = SRC[body_start:]
-    overlay = body.index("TwoFingerPanOverlay(")
-    pill = body.index("liveButton")
-    assert overlay < pill, (
-        "TwoFingerPanOverlay must be added BEFORE liveButton in the ZStack so "
-        "the pill is topmost and actually receives taps")
+def test_live_pill_is_a_sibling_of_the_legend_panel():
+    """Laid out in ONE container so overlap is impossible by construction,
+    rather than by guessing which screen corner happens to be free."""
+    tab = TAB.read_text()
+    assert "daqLiveButton" in tab, "ScopeTab does not render the Live pill"
+    overlay = _extract_braced_block(
+        tab, r"\.overlay\(alignment: \.bottomTrailing\)\s*\{")
+    assert "daqLiveButton" in overlay, (
+        "the Live pill must sit in the SAME overlay container as the legend "
+        "panel so the two cannot overlap")
+    assert "legendPanel" in overlay, "legend panel is not in that container"
+
+
+def test_live_pill_drives_the_shared_follow_state():
+    """The canvas reads follow state from the published frame, so the pill must
+    write the model viewport or tapping it does nothing."""
+    body = _extract_braced_block(
+        TAB.read_text(), r"private var daqLiveButton: some View \{")
+    assert "followLive = true" in body and "anchorEndT = nil" in body, (
+        "tapping Live must re-anchor the viewport to the live edge")
 
 
 def test_pan_overlay_is_not_interaction_disabled():

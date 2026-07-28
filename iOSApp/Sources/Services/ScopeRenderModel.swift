@@ -35,6 +35,14 @@ struct ScopeRenderFrame {
     let recordCount: Int
     /// Live end of the reference buffer, for the pan gesture's anchor math.
     let liveEndT: Double
+    /// Whether the view is still anchored to the live edge. Published here so
+    /// the "Live" affordance can be rendered by ScopeTab as a SIBLING of the
+    /// legend panel rather than inside the canvas: ScopeTab draws the legend
+    /// as an overlay ON TOP of the canvas, so anything the canvas positions in
+    /// a corner can be silently covered by it — which is exactly how the pill
+    /// ended up unclickable twice (first under the lane label, then under the
+    /// diagnostic legend).
+    let followLive: Bool
 }
 
 final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
@@ -172,7 +180,8 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         let newFrame = ScopeRenderFrame(traces: traces,
                                         mergedMin: mergedMin, mergedMax: mergedMax,
                                         recordCount: engine.recordCount,
-                                        liveEndT: liveEnd)
+                                        liveEndT: liveEnd,
+                                        followLive: vp.followLive)
         DispatchQueue.main.async { [weak self] in self?.frame = newFrame }
     }
 

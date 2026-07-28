@@ -89,7 +89,6 @@ struct DaqScopeCanvasView: View {
     // The view normally follows the live edge of the buffer ("anchored").
     // A two-finger pan (drag concurrent with an active pinch) unanchors it;
     // it stays unanchored until the user taps the floating "Live" pill.
-    @State private var followLive = true
     @State private var committedPanTranslation: CGFloat = 0
 
     private struct TouchInfo {
@@ -147,16 +146,14 @@ struct DaqScopeCanvasView: View {
                     }
                 )
 
-                if !followLive {
-                    liveButton
-                        .padding(12)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity,
-                               alignment: .bottomTrailing)
-                        // Ordered AFTER TwoFingerPanOverlay: the topmost view in a
-                        // ZStack wins the tap, which is what makes this pill
-                        // reachable. Do not move it above the overlay — a UIView
-                        // with default interaction sits between it and the touch.
-                }
+                // The "Live" pill is deliberately NOT rendered here. ScopeTab
+                // draws the legend/diagnostic panel as an overlay ON TOP of this
+                // canvas, so any corner this view picks can be silently covered
+                // by it — which happened twice (under the lane's max-value tag,
+                // then under the diagnostic legend). It now lives in ScopeTab as
+                // a SIBLING of that panel, where the two are laid out in one
+                // coordinate space and cannot overlap. Follow state travels out
+                // via ScopeRenderFrame.followLive.
             }
             .contentShape(Rectangle())
             // A pinch (2-touch UIPinchGestureRecognizer) and a pan (1-touch
@@ -216,7 +213,6 @@ struct DaqScopeCanvasView: View {
 
     private func applyPan(translationX dx: CGFloat, width: CGFloat) {
         touchLocation = nil
-        followLive = false
         let frame = model.frame
         let tSpan = max(tSpanOf(frame), 0.001)
         let vp = model.currentViewport()
@@ -229,19 +225,6 @@ struct DaqScopeCanvasView: View {
         committedPanTranslation = dx
     }
 
-    private var liveButton: some View {
-        Button(action: {
-            followLive = true
-            model.updateViewport { $0.followLive = true; $0.anchorEndT = nil }
-        }) {
-            Label("Live", systemImage: "arrow.right.to.line")
-                .font(.system(size: 11, weight: .bold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .glassEffect(.regular.tint(.green), in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
 
     // MARK: - Merged mode (all traces on one shared axis)
 
