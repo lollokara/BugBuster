@@ -25,6 +25,15 @@ targets:
         type: folder
     entitlements:
       path: bugbuster.entitlements
+      # MUST be declared here, not only in the .entitlements file on disk.
+      # XcodeGen GENERATES this file: with a `path` but no `properties` it
+      # writes an empty <dict/> over whatever is there, silently dropping the
+      # hotspot entitlement. Without it NEHotspotConfigurationManager never
+      # prompts to join the DAQ HAT hotspot, so the WiFi stream cannot start
+      # at all — and nothing about the build fails, it just stops working
+      # on device.
+      properties:
+        com.apple.developer.networking.HotspotConfiguration: true
     info:
       path: Info.plist
       properties:

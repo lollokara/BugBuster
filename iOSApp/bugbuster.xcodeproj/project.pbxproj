@@ -31,6 +31,7 @@
 		92405FDCF7010233990FA901 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */; };
 		99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */; };
 		A53DADBDC4C71A85E0DFC655 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC53F9312E830D2D4BECD57 /* SidebarView.swift */; };
+		B08212B904701C4769026071 /* DaqLinkState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A9988F8F3540297C3821CA /* DaqLinkState.swift */; };
 		B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11A9C8116A9BEBC05E47330 /* main.swift */; };
 		B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487F663BDDC3592989BBDD1B /* BugBusterApp.swift */; };
 		B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */; };
@@ -47,6 +48,7 @@
 /* Begin PBXFileReference section */
 		02A8FE5A22706E9D08B5F17A /* RotatePromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatePromptView.swift; sourceTree = "<group>"; };
 		06BE52DDD7CD52DF87B06604 /* ScopeOrientationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeOrientationState.swift; sourceTree = "<group>"; };
+		08A9988F8F3540297C3821CA /* DaqLinkState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqLinkState.swift; sourceTree = "<group>"; };
 		09B963A369295728D4B4FFF7 /* ScriptsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsTab.swift; sourceTree = "<group>"; };
 		0FC53F9312E830D2D4BECD57 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		119CBEAE1BC796A98E90F29D /* AppSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSections.swift; sourceTree = "<group>"; };
@@ -63,7 +65,7 @@
 		487F663BDDC3592989BBDD1B /* BugBusterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BugBusterApp.swift; sourceTree = "<group>"; };
 		52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeRenderModel.swift; sourceTree = "<group>"; };
 		55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveRootView.swift; sourceTree = "<group>"; };
-		785535B23A1E3B43FF7EFEB9 /* BugBuster.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BugBuster.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bugbuster_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
 		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
 		86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -134,7 +136,7 @@
 		9A2F64562D3022BEF7333027 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				785535B23A1E3B43FF7EFEB9 /* BugBuster.app */,
+				785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -189,6 +191,7 @@
 			children = (
 				B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */,
 				354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */,
+				08A9988F8F3540297C3821CA /* DaqLinkState.swift */,
 				81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */,
 				52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */,
 				29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */,
@@ -215,7 +218,7 @@
 			packageProductDependencies = (
 			);
 			productName = bugbuster_iOS;
-			productReference = 785535B23A1E3B43FF7EFEB9 /* BugBuster.app */;
+			productReference = 785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -226,6 +229,8 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
 			};
 			buildConfigurationList = A6281A948F15F8FD55C92958 /* Build configuration list for PBXProject "bugbuster" */;
 			developmentRegion = en;
@@ -271,6 +276,7 @@
 				B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */,
 				503CE64F4170E0B6231CDBF4 /* ConnectionDashboardView.swift in Sources */,
 				08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */,
+				B08212B904701C4769026071 /* DaqLinkState.swift in Sources */,
 				2AD86AB0D7A4F6D72F755B38 /* DaqScopeCanvasView.swift in Sources */,
 				7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */,
 				EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */,
@@ -305,7 +311,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = bugbuster.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 6R87YR573L;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -326,7 +331,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = bugbuster.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 6R87YR573L;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
