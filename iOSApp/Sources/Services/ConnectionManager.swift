@@ -891,26 +891,27 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
                 // another periodic request on top — same reasoning as the
                 // comment at startPolling()'s "Circuit breaker" check above.
                 //
-                // Also mirror startPolling()'s ScopeStreamManager.isStreaming
-                // skip, but against DaqWifiStreamManager instead: that's the
-                // manager actually being hardened by the recent bring-up/
-                // recovery work on this branch (b407684..4132d9b), and its
-                // `isStreaming`/`isConnected` projections are both narrower
-                // than what's fragile here — `isStreaming` is true only in
-                // `.streaming`, and `isConnected` adds just `.paused`, so
-                // neither covers `.provisioning`/`.joiningWiFi`/`.connecting`/
-                // `.recovering`, which is exactly the bring-up/recovery window
-                // this finding is about. `.idle`/`.failed` are the only two
-                // states where the DAQ link isn't doing something the VDUT
-                // prefetch could compete with, so gate on "neither of those".
-                let daqLinkBusy: Bool
+                // Also back off while the DAQ wifi-stream link is in a
+                // TRANSITIONAL state (bring-up or recovery): those genuinely
+                // contend for the single serialized command-channel request
+                // slot, and resolve in seconds. `.streaming`/`.paused` are
+                // STEADY-STATE — the high-rate data rides its own TCP socket
+                // by then, not the command channel — so they must NOT be
+                // treated as busy, or VDUT never refreshes for the entire
+                // (indefinite) duration of a live capture, which is exactly
+                // when VDUTControlsCard is most likely to be opened (it's in
+                // ScopeTab's settings sheet, opened while watching a stream).
+                // Named positively (not "everything except idle/failed") so
+                // a future DaqLinkState case defaults to NOT busy rather than
+                // silently landing on the wrong side of this gate.
+                let daqLinkTransitional: Bool
                 switch DaqWifiStreamManager.shared.linkState {
-                case .idle, .failed:
-                    daqLinkBusy = false
-                default:
-                    daqLinkBusy = true
+                case .provisioning, .joiningWiFi, .connecting, .recovering:
+                    daqLinkTransitional = true
+                case .idle, .streaming, .paused, .failed:
+                    daqLinkTransitional = false
                 }
-                if self.connectionState == .connected && !self.transportDegraded && !daqLinkBusy {
+                if self.connectionState == .connected && !self.transportDegraded && !daqLinkTransitional {
                     await self.refreshVdutStatus()
                 }
                 try? await Task.sleep(nanoseconds: 5_000_000_000)

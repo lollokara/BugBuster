@@ -138,6 +138,54 @@ def test_vdut_prefetch_backs_off_on_transport_degraded_and_daq_stream_busy():
         "refreshVdutStatus() call itself, not merely appear elsewhere in the loop")
 
 
+def test_vdut_prefetch_treats_only_transitional_daq_states_as_busy():
+    """The distinction that matters is TRANSITIONAL vs STEADY-STATE, not
+    busy-vs-not-busy. Bring-up (.provisioning/.joiningWiFi/.connecting) and
+    .recovering genuinely contend for the single serialized command-channel
+    slot and resolve in seconds. A fully-established .streaming/.paused link
+    does NOT contend — the high-rate data rides its own TCP socket by then —
+    and treating it as busy would suspend VDUT prefetch for the entire
+    (indefinite) duration of a live capture, exactly when VDUTControlsCard is
+    most likely to be opened (it's reached from ScopeTab's settings sheet,
+    opened while watching a stream). This asserts the actual state
+    partition, not just that `linkState` is referenced somewhere — a
+    too-broad gate (e.g. "busy unless .idle/.failed") passes the weaker
+    check in test_vdut_prefetch_backs_off_on_transport_degraded_and_daq_stream_busy
+    but must fail here."""
+    src = CONN.read_text()
+    fn_body = _extract_braced_block(src, r"func startVdutPrefetch\(\)\s*\{")
+    switch_body = _extract_braced_block(
+        fn_body, r"switch\s+DaqWifiStreamManager\.shared\.linkState\s*\{")
+
+    # Parse each `case A, B, C:` clause and the boolean it assigns, so the
+    # test reflects the actual partition rather than assuming a variable name.
+    partition: dict[str, bool] = {}
+    for case_list, value in re.findall(
+            r"case\s+([^:{]+):\s*\n?\s*\w+\s*=\s*(true|false)", switch_body):
+        is_busy = value == "true"
+        for state in case_list.split(","):
+            partition[state.strip()] = is_busy
+
+    transitional = {".provisioning", ".joiningWiFi", ".connecting", ".recovering"}
+    steady_or_idle = {".idle", ".streaming", ".paused", ".failed"}
+
+    missing = transitional - partition.keys()
+    assert not missing, f"transitional DAQ states not handled in the gate: {missing}"
+    assert all(partition[s] for s in transitional), (
+        "all transitional DAQ link states (.provisioning/.joiningWiFi/"
+        ".connecting/.recovering) must be treated as busy — they contend for "
+        "the single serialized command-channel request slot")
+
+    missing2 = steady_or_idle - partition.keys()
+    assert not missing2, f"steady/idle DAQ states not handled in the gate: {missing2}"
+    assert not partition[".streaming"], (
+        ".streaming must NOT be treated as busy — the high-rate data rides "
+        "its own TCP socket by then, not the command channel, so gating on "
+        "it would suspend VDUT prefetch for the entire duration of a live "
+        "capture (the exact scenario VDUTControlsCard is opened in)")
+    assert not partition[".paused"], ".paused is steady-state, not transitional"
+
+
 def test_vdut_card_does_not_depend_on_an_open_time_fetch():
     """The card must render already-prefetched ConnectionManager state, not
     kick off its own fetch when it opens — that is what makes the menu show
