@@ -1,4 +1,5 @@
 """ODR/filter/decimation config must be append-only on the wire and BLE-reachable."""
+import re
 from pathlib import Path
 
 PROTO = Path("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h").read_text()
@@ -9,8 +10,8 @@ API = Path("Firmware/ESP32/src/net/api_core.cpp").read_text()
 
 
 def test_status_growth_is_append_only():
-    assert "USB_PROTO_VERSION 2u" in PROTO.replace("#define ", "").replace("  ", " ") \
-        or "define USB_PROTO_VERSION  2u" in PROTO, "protocol version must stay 2"
+    assert re.search(r"#define\s+USB_PROTO_VERSION\s+2u", PROTO), \
+        "protocol version must stay 2 — STATUS growth is append-only"
     for field in ("filter", "adc_dec", "stream_decim", "odr_mhz"):
         assert field in PROTO, f"STATUS v6 field {field} missing"
     # v5 fields must keep their offsets — new fields go AFTER them.
