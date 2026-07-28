@@ -62,6 +62,12 @@ targets:
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_ENTITLEMENTS: bugbuster.entitlements
+        # Pinned here so `xcodegen generate` does not wipe it. Xcode writes the
+        # signing team into project.pbxproj when you first build to a device,
+        # but pbxproj is GENERATED from this file — regenerating without this
+        # line silently drops the team and on-device install fails to sign.
+        # Same class of trap as the hotspot entitlement above.
+        DEVELOPMENT_TEAM: 6R87YR573L
       groups: [app]
     dependencies:
       - sdk: UIKit.framework
