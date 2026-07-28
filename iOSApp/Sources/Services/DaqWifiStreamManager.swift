@@ -918,14 +918,19 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         switch effect {
         case .requestProvisioning:
             guard let ble else {
-                send(.provisioningFailed("No BLE connection to the mainboard"))
+                // Deferred: `perform` is called synchronously from within
+                // `send`'s effect loop. A same-tick re-entrant `send()` here
+                // would mutate `machine` and run a nested effect list before
+                // the outer loop (still iterating effects computed for the
+                // state we're about to leave) has finished applying them.
+                Task { @MainActor in self.send(.provisioningFailed("No BLE connection to the mainboard")) }
                 return
             }
             Task { await self.runProvisioning(ble: ble) }
 
         case .joinHotspot:
             guard let creds = pendingCredentials else {
-                send(.hotspotJoinFailed("No credentials"))
+                Task { @MainActor in self.send(.hotspotJoinFailed("No credentials")) }
                 return
             }
             Task {
@@ -937,7 +942,7 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         case .openSocket:
             guard let ep = lastEndpoint, !ep.host.isEmpty,
                   NWEndpoint.Port(rawValue: ep.port) != nil else {
-                send(.socketClosed("Invalid endpoint"))
+                Task { @MainActor in self.send(.socketClosed("Invalid endpoint")) }
                 return
             }
             engine.autoStartOnReady = false   // sendStart effect owns CMD_START
@@ -953,6 +958,8 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
 
         case .closeSocket:
             stopWatchdog()
+            retryTask?.cancel()
+            retryTask = nil
             engine.cancelConnection()
 
         case .removeHotspotConfig:
@@ -991,7 +998,8 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         watchdogTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard let self, self.linkState == .streaming else { continue }
+                guard let self else { return }   // manager is gone; nothing left to watch
+                guard self.linkState == .streaming else { continue }
                 let last = self.engine.lastFrameAt
                 if last == nil || Date().timeIntervalSince(last!) > Self.stallTimeout {
                     self.send(.dataStalled)

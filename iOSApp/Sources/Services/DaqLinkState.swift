@@ -57,7 +57,7 @@ public enum DaqLinkState: Equatable, Sendable {
     case connecting
     case streaming
     case paused
-    case recovering(rung: DaqRecoveryRung, attempt: Int)
+    case recovering(rung: DaqRecoveryRung, attempt: Int, wasPaused: Bool)
     case failed(reason: String)
 
     /// True when a session exists that the user would consider "on" — used to
@@ -77,7 +77,7 @@ public enum DaqLinkState: Equatable, Sendable {
         case .connecting:              return "Connecting…"
         case .streaming:               return "Streaming"
         case .paused:                  return "Paused"
-        case .recovering(let rung, let attempt):
+        case .recovering(let rung, let attempt, _):
             switch rung {
             case .redialSocket:  return "Reconnecting… (\(attempt))"
             case .rejoinHotspot: return "Rejoining WiFi… (\(attempt))"
@@ -165,21 +165,36 @@ public struct DaqLinkStateMachine: Sendable {
 
         // -- Recovery ---------------------------------------------------------
         // A recovering link that comes back up rejoins the happy path at the
-        // right point, resetting the ladder.
-        case (.recovering, .credentialsReady):
-            state = .joiningWiFi
+        // right point, resetting the ladder. Both intermediate transitions
+        // below stay in `.recovering` rather than jumping to the non-recovery
+        // `.joiningWiFi`/`.connecting` states, because those states can't
+        // carry `wasPaused` — losing it here would let a paused link that
+        // recovers via the recycle rung silently resume streaming.
+        case (.recovering(let rung, let attempt, let wasPaused), .credentialsReady):
+            state = .recovering(rung: rung, attempt: attempt, wasPaused: wasPaused)
             return [.joinHotspot]
 
-        case (.recovering, .hotspotJoined):
-            state = .connecting
+        case (.recovering(let rung, let attempt, let wasPaused), .hotspotJoined):
+            // Stay in `.recovering` (rather than `.connecting`, as the
+            // non-recovery happy path does) so `wasPaused` survives until
+            // `.socketReady` decides whether to land back in `.paused`.
+            state = .recovering(rung: rung, attempt: attempt, wasPaused: wasPaused)
             return [.resetBuffers, .openSocket]
 
-        case (.recovering, .socketReady):
+        case (.recovering(_, _, let wasPaused), .socketReady):
+            if wasPaused {
+                state = .paused
+                return []
+            }
             state = .streaming
             return [.sendStart]
 
         case (.recovering, .retryRequested):
             return performCurrentRung()
+
+        case (.recovering, .provisioningFailed(let why)),
+             (.recovering, .hotspotJoinFailed(let why)):
+            return escalate(reason: why)
 
         case (.failed, .retryRequested):
             state = .provisioning(stage: .requested)
@@ -187,8 +202,10 @@ public struct DaqLinkStateMachine: Sendable {
 
         // Any loss while a session is live enters or advances the ladder.
         case (.streaming, .socketClosed(let why)),
-             (.connecting, .socketClosed(let why)),
-             (.recovering, .socketClosed(let why)):
+             (.connecting, .socketClosed(let why)):
+            return escalate(reason: why)
+
+        case (.recovering, .socketClosed(let why)):
             return escalate(reason: why)
 
         case (.streaming, .dataStalled):
@@ -210,7 +227,11 @@ public struct DaqLinkStateMachine: Sendable {
 
         case (.paused, .socketClosed):
             // Lost the socket while paused: recover quietly, stay paused-ish
-            // by re-entering the ladder rather than surfacing an error.
+            // by re-entering the ladder rather than surfacing an error. The
+            // `wasPaused` flag threaded through `.recovering` is what makes
+            // recovery land back in `.paused` instead of silently resuming
+            // playback — see `autoStartOnReady`'s doc comment for why that
+            // invariant matters.
             return escalate(reason: "Connection lost while paused")
 
         case (.paused, .dataStalled):
@@ -224,28 +245,31 @@ public struct DaqLinkStateMachine: Sendable {
     /// Advance the recovery ladder: another attempt on the current rung, or
     /// the next rung when this one is spent, or terminal failure.
     private mutating func escalate(reason: String) -> [DaqLinkEffect] {
-        let (rung, attempt): (DaqRecoveryRung, Int)
-        if case .recovering(let r, let a) = state {
+        let (rung, attempt, wasPaused): (DaqRecoveryRung, Int, Bool)
+        switch state {
+        case .recovering(let r, let a, let wp):
             if a >= Self.maxAttemptsPerRung {
                 guard let next = DaqRecoveryRung(rawValue: r.rawValue + 1) else {
                     state = .failed(reason: reason)
                     return [.closeSocket]
                 }
-                (rung, attempt) = (next, 1)
+                (rung, attempt, wasPaused) = (next, 1, wp)
             } else {
-                (rung, attempt) = (r, a + 1)
+                (rung, attempt, wasPaused) = (r, a + 1, wp)
             }
-        } else {
-            (rung, attempt) = (.redialSocket, 1)
+        case .paused:
+            (rung, attempt, wasPaused) = (.redialSocket, 1, true)
+        default:
+            (rung, attempt, wasPaused) = (.redialSocket, 1, false)
         }
-        state = .recovering(rung: rung, attempt: attempt)
+        state = .recovering(rung: rung, attempt: attempt, wasPaused: wasPaused)
         // Backoff grows with total effort spent, capped so recovery stays
-        // responsive: 1s, 2s, 3s within a rung. Recycling the device is
-        // urgent enough that we don't wait for the scheduled retry to fire
-        // it — command it the moment we land on that rung.
-        if rung == .recycleDevice && attempt == 1 {
-            return [.recycleDevice, .scheduleRetry(afterMs: attempt * 1000)]
-        }
+        // responsive: 1s, 2s, 3s within a rung. The actual .recycleDevice
+        // command is left to performCurrentRung (fired by the scheduled
+        // retry below) rather than issued eagerly here too — issuing it from
+        // both places recycled the device twice, ~1s apart, for no benefit
+        // (and each RECYCLE bumps the P4's generation counter, one more
+        // chance to orphan an in-flight bring-up task).
         return [.scheduleRetry(afterMs: attempt * 1000)]
     }
 
@@ -255,10 +279,15 @@ public struct DaqLinkStateMachine: Sendable {
     /// another `socketClosed`) would land on a state that doesn't know how to
     /// keep climbing the ladder, wedging recovery indefinitely.
     private mutating func performCurrentRung() -> [DaqLinkEffect] {
-        guard case .recovering(let rung, _) = state else { return [] }
+        guard case .recovering(let rung, _, _) = state else { return [] }
         switch rung {
         case .redialSocket:
-            return [.openSocket]
+            // .resetBuffers before .openSocket: without it, engine.lastFrameAt
+            // is left over from before the outage (cancelConnection() clears
+            // rxBuffer/firstTimestampUs but not lastFrameAt), so the watchdog
+            // compares against an already-stale timestamp and escalates the
+            // redial via a bogus .dataStalled ~1s after it reconnects.
+            return [.resetBuffers, .openSocket]
         case .rejoinHotspot:
             return [.joinHotspot]
         case .recycleDevice:
