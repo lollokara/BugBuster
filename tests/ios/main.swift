@@ -294,6 +294,7 @@ do {
 }
 
 runScopeAxisTests()
+runDaqAcquisitionConfigTests()
 
 if failures == 0 {
     print("all DaqLinkStateMachine + ScopeAxis tests passed")

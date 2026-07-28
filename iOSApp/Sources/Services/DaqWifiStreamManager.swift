@@ -114,6 +114,21 @@ struct DaqStatus {
 
     /// nil when the firmware predates extension v2.
     var voltAdcOK: Bool? { adaqOkBits.map { $0 & 0x04 != 0 } }
+
+    // Extension v6 (@88-95): device-confirmed ADAQ7769 filter/decimation.
+    // Applies to the FINE/COARSE current ADCs only — the VOLTAGE ADAQ stays
+    // pinned at its own fixed rate (shared SPI bus + SYNC line with COARSE).
+    // These are always what the DEVICE actually applied, never the client's
+    // request — the driver clamps combinations the part can't hit.
+    let deviceFilter: DaqFilter?
+    let deviceAdcDec: DaqAdcDecimation?
+    /// Read-only: reported by the device but not driven by this client. The
+    /// ruling is that sample rate IS the ODR — there is no client-side
+    /// stream-decimation path — so nothing in the UI sets this value.
+    let deviceStreamDecim: UInt16?
+    /// ODR in samples/sec, decoded from the wire's milli-SPS (`odr_mhz` =
+    /// ODR * 1000).
+    let deviceOdrHz: Double?
 }
 
 struct DaqMarker {
@@ -666,6 +681,13 @@ final class DaqStreamEngine: @unchecked Sendable {
             let wvFrames = payload.count >= 80 ? payload.u32(76) : nil
             let wiDrops  = payload.count >= 84 ? payload.u32(80) : nil
             let wvDrops  = payload.count >= 88 ? payload.u32(84) : nil
+            // Extension v6 (@88-95). Guards use each field's END offset
+            // (>= 89, >= 90, >= 92, >= 96) — using start offsets would read
+            // out of bounds on a frame truncated mid-field.
+            let filterCode  = payload.count >= 89 ? payload.u8(88) : nil
+            let adcDecCode  = payload.count >= 90 ? payload.u8(89) : nil
+            let streamDecim = payload.count >= 92 ? payload.u16(90) : nil
+            let odrMilliSps = payload.count >= 96 ? payload.u32(92) : nil
             return .status(DaqStatus(
                 sampleRate: payload.u32(0),
                 overflowCount: payload.u32(4),
@@ -684,7 +706,11 @@ final class DaqStreamEngine: @unchecked Sendable {
                 waveIFrames: wiFrames,
                 waveVFrames: wvFrames,
                 waveIDrops: wiDrops,
-                waveVDrops: wvDrops
+                waveVDrops: wvDrops,
+                deviceFilter: filterCode.flatMap { DaqFilter(rawValue: $0) },
+                deviceAdcDec: adcDecCode.flatMap { DaqAdcDecimation(rawValue: $0) },
+                deviceStreamDecim: streamDecim,
+                deviceOdrHz: odrMilliSps.map { Double($0) / 1000.0 }
             ))
 
         case .marker:
@@ -1196,5 +1222,29 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         payload.append(0) // pad
         payload.append(0) // pad
         engine.sendControlFrame(type: .setRate, payload: payload)
+    }
+
+    /// POST /api/daq/acq_config — re-tunes the ADAQ7769 filter + ADC hardware
+    /// decimation for the FINE/COARSE current ADCs only (the VOLTAGE ADAQ is
+    /// pinned separately and is never affected by this call). Routed through
+    /// api_core_handle(), which both HTTP and BLE dispatch through, because
+    /// the phone cannot reach the S3 over HTTP while joined to the DAQ
+    /// hotspot — same transport `.recycleDevice` uses.
+    ///
+    /// Applying a new config stops and restarts acquisition on the device to
+    /// release the SPI bus; expect a brief gap in the stream, not a fault.
+    ///
+    /// `streamDecim` is accepted for symmetry with `DaqAcquisitionConfig` but
+    /// is intentionally NOT sent: the endpoint body only carries
+    /// {"filter", "adc_dec"}, and the ruling is that the sample rate IS the
+    /// ODR — there is no client-driven stream-decimation path. STATUS still
+    /// reports the device's stream_decim read-only.
+    func setAcquisitionConfig(filter: DaqFilter, adcDec: DaqAdcDecimation, streamDecim: UInt16? = nil) {
+        guard let ble else { return }
+        let body: [String: Any] = [
+            "filter": Int(filter.rawValue),
+            "adc_dec": Int(adcDec.rawValue)
+        ]
+        Task { _ = await ble.apiRequest(path: "/api/daq/acq_config", body: body) }
     }
 }

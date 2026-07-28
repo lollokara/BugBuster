@@ -13,8 +13,10 @@ import pytest
 
 SM = Path("iOSApp/Sources/Services/DaqLinkState.swift")
 AXIS = Path("iOSApp/Sources/Services/ScopeAxis.swift")
+ACQ_CFG = Path("iOSApp/Sources/Services/DaqAcquisitionConfig.swift")
 TESTS = Path("tests/ios/main.swift")
 AXIS_TESTS = Path("tests/ios/ScopeAxisTests.swift")
+ACQ_CFG_TESTS = Path("tests/ios/DaqAcquisitionConfigTests.swift")
 
 
 @pytest.mark.skipif(shutil.which("swiftc") is None, reason="swiftc not available")
@@ -26,11 +28,18 @@ def test_daq_link_state_machine_behavior():
         assert forbidden not in src, (
             f"{SM} must stay platform-free ({forbidden}) so it is host-testable")
 
+    assert ACQ_CFG.exists(), f"{ACQ_CFG} not created"
+    acq_src = ACQ_CFG.read_text()
+    for forbidden in ("import Network", "import UIKit", "import SwiftUI",
+                      "import NetworkExtension"):
+        assert forbidden not in acq_src, (
+            f"{ACQ_CFG} must stay Foundation-only ({forbidden}) so it is host-testable")
+
     with tempfile.TemporaryDirectory() as td:
         binary = Path(td) / "smtests"
         build = subprocess.run(
-            ["swiftc", "-swift-version", "5", str(SM), str(AXIS),
-             str(TESTS), str(AXIS_TESTS), "-o", str(binary)],
+            ["swiftc", "-swift-version", "5", str(SM), str(AXIS), str(ACQ_CFG),
+             str(TESTS), str(AXIS_TESTS), str(ACQ_CFG_TESTS), "-o", str(binary)],
             capture_output=True, text=True)
         assert build.returncode == 0, f"swiftc failed:\n{build.stderr}"
         run = subprocess.run([str(binary)], capture_output=True, text=True)

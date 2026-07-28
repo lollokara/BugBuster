@@ -252,6 +252,10 @@ struct ScopeTab: View {
                 mergedTraces: $mergedTraces,
                 onDaqRateChange: { rate in
                     daqStream.sendSetRate(currentSps: rate, voltageSps: rate)
+                },
+                daqStatus: daqStream.lastStatus,
+                onAcqConfigChange: { filter, adcDec in
+                    daqStream.setAcquisitionConfig(filter: filter, adcDec: adcDec)
                 }
             )
         }
@@ -840,6 +844,13 @@ struct ScopeSettingsView: View {
     @Binding var autoscale: Bool
     @Binding var mergedTraces: Bool
     let onDaqRateChange: (UInt32) -> Void
+    /// Latest STATUS from the device, used to show what the hardware
+    /// actually applied — never the client's own optimistic request.
+    let daqStatus: DaqStatus?
+    let onAcqConfigChange: (DaqFilter, DaqAdcDecimation) -> Void
+
+    @State private var selectedFilter: DaqFilter = .wideband
+    @State private var selectedAdcDec: DaqAdcDecimation = .x32
 
     // Effective stream rates: the ADC hardware always runs at its max ODR;
     // these map onto device-side stream decimation (P4 CTRL_MSG_SET_RATE).
@@ -952,6 +963,10 @@ struct ScopeSettingsView: View {
 
             Divider().background(Color.secondary)
 
+            acquisitionConfigSection
+
+            Divider().background(Color.secondary)
+
             Toggle("Voltage", isOn: $showVoltage).tint(ScopeColors.daqVoltage)
             Toggle("Current", isOn: $showCurrent).tint(ScopeColors.daqCurrentFine)
             Toggle("Power", isOn: $showPower).tint(ScopeColors.daqPower)
@@ -973,6 +988,75 @@ struct ScopeSettingsView: View {
         .foregroundColor(.white)
         .padding(12)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// Filter/ADC-decimation controls for the FINE and COARSE current ADAQs.
+    /// The picker sends the request; every readout below it renders what the
+    /// DEVICE reported back in STATUS, never the optimistic local selection
+    /// — the driver clamps combinations the part cannot hit.
+    private var acquisitionConfigSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ACQUISITION (FINE/COARSE CURRENT)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.secondary)
+            Text("Filter and ODR apply to the FINE and COARSE current ADCs only. Voltage runs at its own fixed rate.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+
+            HStack {
+                Text("Filter").frame(width: 60, alignment: .leading)
+                Picker("Filter", selection: $selectedFilter) {
+                    ForEach(DaqFilter.allCases, id: \.self) { f in
+                        Text(f.label).tag(f)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: selectedFilter) { _, newValue in
+                    onAcqConfigChange(newValue, selectedAdcDec)
+                }
+            }
+
+            HStack {
+                Text("ADC Dec").frame(width: 60, alignment: .leading)
+                Picker("ADC Decimation", selection: $selectedAdcDec) {
+                    ForEach(DaqAdcDecimation.allCases, id: \.self) { d in
+                        Text(d.label).tag(d)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: selectedAdcDec) { _, newValue in
+                    onAcqConfigChange(selectedFilter, newValue)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("DEVICE-CONFIRMED")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.secondary)
+                HStack {
+                    Text("Filter:")
+                    Text(daqStatus?.deviceFilter?.label ?? "—")
+                }
+                HStack {
+                    Text("ADC Dec:")
+                    Text(daqStatus?.deviceAdcDec?.label ?? "—")
+                }
+                HStack {
+                    Text("ODR:")
+                    Text(daqStatus?.deviceOdrHz.map { String(format: "%.0f Sa/s", $0) } ?? "—")
+                }
+                HStack {
+                    Text("Stream decim (read-only):")
+                    Text(daqStatus?.deviceStreamDecim.map { "x\($0)" } ?? "—")
+                }
+            }
+            .font(.system(size: 12))
+            .foregroundColor(.cyan)
+        }
+        .onAppear {
+            if let f = daqStatus?.deviceFilter { selectedFilter = f }
+            if let d = daqStatus?.deviceAdcDec { selectedAdcDec = d }
+        }
     }
 
     private func scopeRateBinding(for ch: Int) -> Binding<Int> {

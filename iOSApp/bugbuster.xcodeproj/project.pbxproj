@@ -38,6 +38,7 @@
 		B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */; };
 		B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */; };
 		BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */; };
+		CDAFAA870E358140FA3DF18A /* DaqAcquisitionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27828AA9E4782D23046CFB6C /* DaqAcquisitionConfig.swift */; };
 		D1093AAAA48AE31E32FB24FD /* ScopeSampleSeries.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */; };
 		E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */; };
 		EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */; };
@@ -56,6 +57,7 @@
 		166FC5B5DD45B8F1FAE47673 /* ConnectionDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionDashboardView.swift; sourceTree = "<group>"; };
 		1AE837278E0E0BE4E1CC860D /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewTab.swift; sourceTree = "<group>"; };
+		27828AA9E4782D23046CFB6C /* DaqAcquisitionConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqAcquisitionConfig.swift; sourceTree = "<group>"; };
 		281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceModels.swift; sourceTree = "<group>"; };
 		282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeAxis.swift; sourceTree = "<group>"; };
 		29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketREPL.swift; sourceTree = "<group>"; };
@@ -193,6 +195,7 @@
 			children = (
 				B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */,
 				354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */,
+				27828AA9E4782D23046CFB6C /* DaqAcquisitionConfig.swift */,
 				08A9988F8F3540297C3821CA /* DaqLinkState.swift */,
 				81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */,
 				282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */,
@@ -282,6 +285,7 @@
 				B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */,
 				503CE64F4170E0B6231CDBF4 /* ConnectionDashboardView.swift in Sources */,
 				08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */,
+				CDAFAA870E358140FA3DF18A /* DaqAcquisitionConfig.swift in Sources */,
 				B08212B904701C4769026071 /* DaqLinkState.swift in Sources */,
 				2AD86AB0D7A4F6D72F755B38 /* DaqScopeCanvasView.swift in Sources */,
 				7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */,
