@@ -827,35 +827,8 @@ final class DaqStreamEngine: @unchecked Sendable {
 
 // MARK: - BLE-driven provisioning state
 
-/// Mirrors the P4's `daq_wifi_stage_t` (`HAT_WIFI_STAGE_*`) -- real bring-up
-/// progress reported over BLE, not a synthetic timer.
-enum ProvisioningStage: String, Equatable {
-    case requested
-    case ap
-    case dns
-    case tcp
-
-    var label: String {
-        switch self {
-        case .requested: return "Requesting hotspot from device…"
-        case .ap:        return "Starting hotspot…"
-        case .dns:       return "Configuring network…"
-        case .tcp:       return "Starting data stream…"
-        }
-    }
-
-    /// Rough fraction for a determinate progress indicator; the real
-    /// bring-up isn't evenly timed across stages, so this is only meant to
-    /// give a sense of forward motion, not a precise ETA.
-    var fraction: Double {
-        switch self {
-        case .requested: return 0.15
-        case .ap:        return 0.45
-        case .dns:       return 0.75
-        case .tcp:       return 0.9
-        }
-    }
-}
+// `ProvisioningStage` now lives in DaqLinkState.swift, alongside the state
+// machine that consumes it.
 
 enum ProvisioningState: Equatable {
     case idle
