@@ -54,7 +54,9 @@ def test_every_effect_has_exactly_one_performer():
     for effect in ("requestProvisioning", "joinHotspot", "openSocket", "sendStart",
                    "sendStop", "closeSocket", "removeHotspotConfig", "recycleDevice",
                    "resetBuffers", "scheduleRetry"):
-        assert f"case .{effect}" in src, f"effect .{effect} has no performer"
+        assert src.count(f"case .{effect}") == 1, (
+            f"effect .{effect} must have exactly one performer, "
+            f"got {src.count(f'case .{effect}')}")
 
 
 def test_hotspot_configuration_removed_in_exactly_one_place():

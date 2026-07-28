@@ -41,7 +41,7 @@ def test_each_non_idempotent_init_step_has_its_own_guard():
     esp_netif_create_default_wifi_ap() replayed once hard-aborted the board."""
     body = _body("wifi_ap_init")
     for guard in ("s_hosted_ok", "s_netif_ok", "s_wifi_ok", "s_handler_ok"):
-        assert guard in SRC, f"missing per-step guard {guard}"
+        assert f"if (!{guard})" in body, f"missing per-step guard {guard}"
     for guard, call in (("s_hosted_ok", "esp_hosted_init"),
                         ("s_wifi_ok", "esp_wifi_init"),
                         ("s_handler_ok", "esp_event_handler_instance_register")):
