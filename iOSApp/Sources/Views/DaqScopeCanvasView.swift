@@ -122,11 +122,6 @@ struct DaqScopeCanvasView: View {
                     }
                 }
 
-                if !followLive {
-                    liveButton
-                        .padding(8)
-                }
-
                 if let errorMessage {
                     errorOverlay(errorMessage)
                 } else if isWaitingForData {
@@ -151,6 +146,17 @@ struct DaqScopeCanvasView: View {
                         committedPanTranslation = 0
                     }
                 )
+
+                if !followLive {
+                    liveButton
+                        .padding(12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity,
+                               alignment: .bottomTrailing)
+                        // Ordered AFTER TwoFingerPanOverlay: the topmost view in a
+                        // ZStack wins the tap, which is what makes this pill
+                        // reachable. Do not move it above the overlay — a UIView
+                        // with default interaction sits between it and the touch.
+                }
             }
             .contentShape(Rectangle())
             // A pinch (2-touch UIPinchGestureRecognizer) and a pan (1-touch
