@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"  // xTaskCreatePinnedToCoreWithCaps
+#include "esp_heap_caps.h"           // MALLOC_CAP_INTERNAL
 #include "usb_proto.h"
 #include "esp_rom_sys.h"
 #include "esp_log.h"
@@ -19,6 +21,7 @@
 #include "buttons_p4.h"
 #include "c6_flasher.h"
 #include "relay_stage.h"
+#include "relay_c6.h"
 #include "wifi_ap.h"
 #include "tcp_backend.h"
 #include "daq_wifi_ident.h"
@@ -971,11 +974,58 @@ static void c6_release_boot_straps(void)
     gpio_set_level((gpio_num_t)C6_BOOT_EN_PIN, 1);
 }
 
+// True from the moment a relay-apply worker is created until it exits. Two
+// concurrent pushes would interleave on UART2 and strand the C6 in ROM download
+// mode, so RELAY_APPLY refuses while one is live. Set before xTaskCreate(),
+// because xTaskCreate() returning pdPASS does not mean the task has run yet
+// (same hazard s_bringup_alive documents below).
+static volatile bool s_relay_apply_busy;
+
 static void c6_link_restart(daq_board_t *b)
 {
     ddp_master_init(&b->ddp);
     b->ddp.cal = &b->cal;   // rebind after init memset (CAL_CTRL handling)
     ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+}
+
+// Worker for HATP_CMD_DAQ_RELAY_APPLY. relay_c6_push() blocks for ~2 minutes on
+// a 1.3 MB image, so it cannot run in the s3_link RX callback (relay_c6.h says
+// so explicitly) -- doing that would stall the whole HAT link and trip every S3
+// command timeout while the push ran.
+//
+// relay_c6_push() drives c6_flasher.c directly and does no DDP handling of its
+// own ("the board layer orchestrates this", c6_flasher.h), so the preamble and
+// postamble here are load-bearing and mirror cmd_c6relay in cli.c: hand UART2
+// to the flasher, reset the pins it will re-own, push, then rebuild the DDP
+// link. Without the rebuild the C6 boots the new image with no command channel.
+//
+// The BOOT straps are NOT released here -- relay_c6_push() already does that
+// itself immediately before its own c6_flasher_finish() (relay_c6.c), which is
+// the only correct point since the reset happens inside that call.
+static void relay_apply_task(void *arg)
+{
+    daq_board_t *b = (daq_board_t *)arg;
+
+    ddp_master_deinit(&b->ddp);                      // hand UART2 to the flasher
+    gpio_reset_pin((gpio_num_t)DAQ_UART_TX_PIN);
+    gpio_reset_pin((gpio_num_t)DAQ_UART_RX_PIN);
+
+    esp_err_t err = relay_c6_push();
+
+    c6_link_restart(b);                              // rebuild DDP (rebinds cal)
+    gpio_set_direction((gpio_num_t)C6_RST_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)C6_RST_PIN, 1);       // never leave RST floating
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "relay apply: C6 updated");
+    } else {
+        // relay_stage has already moved to RELAY_FAILED; the S3 sees it via
+        // HATP_CMD_OTA_STATUS and decides whether to retry the push.
+        ESP_LOGE(TAG, "relay apply failed: %s", esp_err_to_name(err));
+    }
+
+    s_relay_apply_busy = false;
+    vTaskDeleteWithCaps(NULL);   // must match xTaskCreatePinnedToCoreWithCaps
 }
 
 // True from the moment a bring-up task is created until it exits, on every
@@ -1779,6 +1829,41 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             memcpy(resp + 11, &rs.staged_bytes, 4);
             memcpy(resp + 15, &rs.pushed_bytes, 4);
             return 19;
+        }
+
+        case HATP_CMD_DAQ_RELAY_APPLY: {
+            // Push the already-staged C6 image. Replies immediately; the S3
+            // watches progress via HATP_CMD_OTA_STATUS's relay_pushed_bytes.
+            if (s_relay_apply_busy) return -1;       // a push is already running
+
+            // Gate on RELAY_STAGED: relay_stage only reaches that state after
+            // its SHA-256 check passes, so any other state means the image is
+            // partial or unverified. RELAY_PUSHING is accepted too -- that is
+            // the resume case after a P4 reset mid-push, which relay_c6_push()
+            // handles from the NVS-persisted pushed_bytes.
+            relay_status_t rs;
+            relay_stage_get_status(&rs);
+            if (rs.target != RELAY_TARGET_C6) return -1;
+            if (rs.state != RELAY_STAGED && rs.state != RELAY_PUSHING) return -1;
+
+            // Set before the create: xTaskCreate() returning pdPASS does not
+            // mean the task has run, so clearing this on the task side only
+            // would leave a window for a second APPLY to slip through.
+            // The stack MUST be internal RAM. This build sets
+            // CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y, so a plain
+            // xTaskCreate() may place it in PSRAM -- and relay_c6_push()
+            // persists pushed_bytes to NVS, which disables the D-cache across
+            // both cores while it writes. PSRAM is reached through that same
+            // cache, so a PSRAM stack frame is corrupted inside that window
+            // (see patterns/firmware-autoupdate.md).
+            s_relay_apply_busy = true;
+            if (xTaskCreatePinnedToCoreWithCaps(
+                    relay_apply_task, "relay_apply", 8192, b, 5, NULL, /*core=*/0,
+                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+                s_relay_apply_busy = false;
+                return -1;
+            }
+            return 0;
         }
 
         case HATP_CMD_DAQ_C6_VERSION: {

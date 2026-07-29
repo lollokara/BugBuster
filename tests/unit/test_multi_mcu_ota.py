@@ -171,9 +171,23 @@ S3LINK_C = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c").read_text()
 
 
 def _case_body(cmd: str, span: int = 2200) -> str:
+    """The full `case cmd: { ... }` block, found by brace matching rather than a
+    fixed character span -- a span silently truncates when a comment is added,
+    which turns a real assertion into a false failure (or worse, a false pass)."""
     assert f"case {cmd}" in BOARD, f"{cmd} not dispatched"
     start = BOARD.index(f"case {cmd}")
-    return BOARD[start:start + span]
+    open_brace = BOARD.find("{", start)
+    if open_brace < 0 or open_brace > start + 200:
+        return BOARD[start:start + span]     # braceless case: fall back to span
+    depth = 0
+    for i in range(open_brace, len(BOARD)):
+        if BOARD[i] == "{":
+            depth += 1
+        elif BOARD[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return BOARD[start:i + 1]
+    raise AssertionError(f"unbalanced braces in case {cmd}")
 
 
 def test_c6_version_command_is_dispatched():
@@ -283,3 +297,73 @@ def test_ota_status_helper_zeroes_the_struct_before_a_short_copy():
     zero = body.index("memset")
     copy = body.index("memcpy")
     assert zero < copy, "must zero the output struct before copying a short reply"
+
+
+RELAY_C6_H = Path("Firmware/DAQ_HAT/ESP32P4/src/ota/relay_c6.h").read_text()
+
+
+def test_relay_apply_is_dispatched_and_allow_listed():
+    assert "case HATP_CMD_DAQ_RELAY_APPLY" in BOARD, "RELAY_APPLY not dispatched"
+    assert "case HATP_CMD_DAQ_RELAY_APPLY:" in S3LINK_C, \
+        "RELAY_APPLY missing from the s3_link.c allow-list -- it would answer RSP_ERROR"
+
+
+def test_relay_apply_does_not_push_in_the_callback_context():
+    """relay_c6.h: 'Blocks until done/failed; call from a dedicated task, not
+    from the s3_link callback context.' The push takes ~2 minutes; running it
+    inline would stall the whole HAT link and trip the S3's command timeouts."""
+    assert "call from a dedicated task" in RELAY_C6_H, \
+        "relay_c6.h no longer states the threading contract; re-check this test"
+    body = _code_only(_case_body("HATP_CMD_DAQ_RELAY_APPLY", 1600))
+    assert "relay_c6_push" not in body, \
+        "RELAY_APPLY calls relay_c6_push() inline instead of on a worker task"
+    assert "xTaskCreate" in body, "RELAY_APPLY must spawn a worker task"
+
+
+def test_relay_apply_requires_a_verified_staged_image():
+    """relay_stage only reaches RELAY_STAGED after its SHA-256 check passes.
+    Pushing from any other state flashes an unverified or partial image."""
+    body = _code_only(_case_body("HATP_CMD_DAQ_RELAY_APPLY", 1600))
+    assert "RELAY_STAGED" in body, "RELAY_APPLY must gate on RELAY_STAGED"
+    assert "RELAY_TARGET_C6" in body, "RELAY_APPLY must confirm the staged target is the C6"
+
+
+def test_relay_apply_worker_restores_the_ddp_link_around_the_push():
+    """relay_c6_push() drives c6_flasher directly and does no DDP handling of
+    its own, so the board layer must release UART2 first and rebuild the link
+    afterwards -- otherwise the C6 comes back with no command channel."""
+    worker = _code_only(_fn_body(BOARD, "static void relay_apply_task("))
+    assert "ddp_master_deinit" in worker, "worker must release UART2 before pushing"
+    push = worker.index("relay_c6_push")
+    assert worker.index("ddp_master_deinit") < push, "DDP released too late"
+    assert "c6_link_restart" in worker and worker.index("c6_link_restart") > push, \
+        "worker must rebuild the DDP link after the push"
+
+
+def test_relay_apply_rejects_a_second_concurrent_push():
+    """Two concurrent pushes would interleave on UART2 and strand the C6 in
+    ROM download mode."""
+    body = _code_only(_case_body("HATP_CMD_DAQ_RELAY_APPLY"))
+    # Must READ the flag as a guard, not merely assign it -- checking only that
+    # the name appears would still pass if the early-return were deleted.
+    assert re.search(r"if\s*\(\s*s_relay_apply_busy\s*\)", body), \
+        "RELAY_APPLY must refuse a concurrent push (no `if (s_relay_apply_busy)` guard)"
+    guard = body.index("s_relay_apply_busy")
+    create = body.index("xTaskCreate")
+    assert guard < create, "the busy guard must precede the task create"
+    assert re.search(r"s_relay_apply_busy\s*=\s*true", body[:create]), \
+        "busy flag must be set BEFORE the create; pdPASS does not mean the task ran"
+
+
+def test_relay_apply_worker_stack_is_internal_ram():
+    """This build sets CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y, so a plain
+    xTaskCreate() may put the stack in PSRAM. relay_c6_push() persists to NVS,
+    which disables the D-cache across both cores -- PSRAM is reached through
+    that cache, so a PSRAM stack frame is corrupted inside the write window.
+    See patterns/firmware-autoupdate.md."""
+    body = _code_only(_case_body("HATP_CMD_DAQ_RELAY_APPLY", 2000))
+    assert "MALLOC_CAP_INTERNAL" in body, "relay_apply stack must be internal RAM"
+    assert "xTaskCreatePinnedToCoreWithCaps" in body
+    worker = _code_only(_fn_body(BOARD, "static void relay_apply_task("))
+    assert "vTaskDeleteWithCaps" in worker, \
+        "a WithCaps task must be deleted with vTaskDeleteWithCaps or its stack leaks"
