@@ -386,6 +386,13 @@ typedef struct __attribute__((packed)) {
 #define HAT_RSP_DAQ_WIFI_STREAM_INFO 0x8C  // Response cmd byte for HAT_CMD_DAQ_WIFI_STREAM_INFO poll
 #define HAT_RSP_DAQ_VDUT_STATUS 0x98u  // Response to HAT_CMD_DAQ_VDUT_STATUS: hat_vdut_status_t.
                                         // Must match P4 HATP_RSP_DAQ_VDUT_STATUS (s3_link.h) exactly.
+// The P4 answers these three with a dedicated response byte, NOT HAT_RSP_OK --
+// send_ok() on that side carries a zero-length payload, so a caller that checks
+// for HAT_RSP_OK would reject every one of these and lose the payload. Must
+// match P4 HATP_RSP_VERSION / _OTA_STATUS / _DAQ_C6_VERSION (s3_link.h) exactly.
+#define HAT_RSP_VERSION         0x91u // Response to HAT_CMD_GET_VERSION: P4 version
+#define HAT_RSP_OTA_STATUS      0x92u // Response to HAT_CMD_OTA_STATUS: hat_daq_ota_status_t
+#define HAT_RSP_DAQ_C6_VERSION  0x99u // Response to HAT_CMD_DAQ_C6_VERSION: hat_daq_c6_version_t
 #define HAT_RSP_MB_REQ          0x96  // Pending C6 mainboard request from the P4
 #define HAT_RSP_STAGE_DATA      0x97u // Response to HAT_CMD_STAGE_READ: firmware bytes read from
                                        // the P4 `staging` partition (0 bytes = end of staged image).

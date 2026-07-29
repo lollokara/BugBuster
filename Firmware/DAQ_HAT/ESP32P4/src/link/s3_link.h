@@ -205,6 +205,7 @@ extern "C" {
 #define HATP_RSP_STAGE_DATA    0x97u // payload: firmware bytes read from `staging` at the requested offset
 #define HATP_RSP_DAQ_WIFI_STREAM_INFO 0x8Cu // response to HATP_CMD_DAQ_WIFI_STREAM_INFO (mirrors S3 HAT_RSP_DAQ_WIFI_STREAM_INFO)
 #define HATP_RSP_DAQ_VDUT_STATUS 0x98u // payload: s3link_vdut_status_t; response to HATP_CMD_DAQ_VDUT_STATUS
+#define HATP_RSP_DAQ_C6_VERSION  0x99u // payload: s3link_c6_version_t; response to HATP_CMD_DAQ_C6_VERSION
 
 // Firmware version reported in GET_INFO.
 #define S3LINK_FW_MAJOR      1u

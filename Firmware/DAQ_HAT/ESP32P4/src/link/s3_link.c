@@ -194,6 +194,7 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
         case HATP_CMD_DAQ_VDUT_STATUS:
         case HATP_CMD_DAQ_VDUT_ENABLE:
         case HATP_CMD_DAQ_VDUT_SETPOINT:
+        case HATP_CMD_DAQ_C6_VERSION:
         case HATP_CMD_DAQ_SET_ACQ_CONFIG: {
             if (!s->cmd_cb) {
                 send_error();
@@ -213,6 +214,8 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
                 send_frame(HATP_RSP_DAQ_WIFI_STREAM_INFO, resp, (uint8_t)n);
             } else if (cmd == HATP_CMD_DAQ_VDUT_STATUS) {
                 send_frame(HATP_RSP_DAQ_VDUT_STATUS, resp, (uint8_t)n);
+            } else if (cmd == HATP_CMD_DAQ_C6_VERSION) {
+                send_frame(HATP_RSP_DAQ_C6_VERSION, resp, (uint8_t)n);
             } else {
                 send_ok();
             }

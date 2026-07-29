@@ -158,3 +158,65 @@ def test_ota_senders_hold_the_hat_link_mutex():
     """An OTA transfer must not interleave with telemetry polling on the link."""
     body = _fn_body(HAT_CPP, "static bool hat_ota_txn(")
     assert "s_hat_mutex" in body, "OTA transactions must serialize on the HAT mutex"
+
+
+BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
+S3LINK_C = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c").read_text()
+
+
+def _case_body(cmd: str, span: int = 2200) -> str:
+    assert f"case {cmd}" in BOARD, f"{cmd} not dispatched"
+    start = BOARD.index(f"case {cmd}")
+    return BOARD[start:start + span]
+
+
+def test_c6_version_command_is_dispatched():
+    assert "case HATP_CMD_DAQ_C6_VERSION" in BOARD
+
+
+def test_ota_status_reply_sources_both_modules():
+    body = _case_body("HATP_CMD_OTA_STATUS")
+    assert "ota_get_status" in body
+    assert "relay_stage_get_status" in body, \
+        "0x65 must carry the relay_stage fields; that is why it was widened"
+
+
+def test_ota_status_widens_both_of_its_branches():
+    """0x65 has a C6-target branch and a P4-target branch. Widening only one
+    makes the reply length depend on which target was last selected, which the
+    S3 cannot distinguish from an older P4's short reply."""
+    body = _case_body("HATP_CMD_OTA_STATUS")
+    assert "return 10;" not in body, "a branch of 0x65 still returns 10 bytes"
+    assert "return 19;" in body, "0x65 must return the full 19-byte status"
+
+
+def test_c6_version_reply_uses_a_cached_version():
+    """The C6 version arrives asynchronously over DDP. Answering must not block
+    the s3_link RX callback on a DDP round-trip -- the C6 may be absent, busy,
+    or held in download mode mid-relay."""
+    body = _case_body("HATP_CMD_DAQ_C6_VERSION", 1200)
+    assert "c6_fw_major" in body, "must answer from the ddp_master cache"
+    assert "ddp_master_request" not in body, "C6_VERSION must not block on DDP"
+
+
+def test_new_p4_commands_are_in_the_s3_link_dispatch_allow_list():
+    """s3_link.c dispatches only an explicit allow-list; a handler in
+    daq_board.c that is not listed there is dead code answering RSP_ERROR."""
+    assert "case HATP_CMD_DAQ_C6_VERSION:" in S3LINK_C, \
+        "HATP_CMD_DAQ_C6_VERSION missing from the s3_link.c allow-list"
+
+
+def test_c6_version_gets_a_dedicated_response_code():
+    """send_ok() carries a zero-length payload, so any command returning data
+    needs its own response byte or the payload is silently dropped."""
+    assert "HATP_RSP_DAQ_C6_VERSION" in S3LINK_C, \
+        "C6_VERSION must reply with its own response code, not send_ok()"
+    assert _byte(S3LINK, "HATP_RSP", "DAQ_C6_VERSION") == \
+           _byte(HAT_H, "HAT_RSP", "DAQ_C6_VERSION") == "99"
+
+
+def test_payload_carrying_responses_mirror_on_both_sides():
+    for name, value in (("VERSION", "91"), ("OTA_STATUS", "92"),
+                        ("DAQ_C6_VERSION", "99")):
+        assert _byte(S3LINK, "HATP_RSP", name) == _byte(HAT_H, "HAT_RSP", name) == value, \
+            f"HAT_RSP_{name} differs across the two headers"

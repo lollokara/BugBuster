@@ -1723,22 +1723,56 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             ota_abort();
             return 0;
         case HATP_CMD_OTA_STATUS: {
+            // Reply layout is s3link_ota_status_t. The first 10 bytes are the
+            // original wire shape and MUST NOT move -- an S3 that predates the
+            // relay_* tail reads exactly those and stops. Both target branches
+            // append the same tail so the reply length never depends on which
+            // target happens to be selected; otherwise the S3 could not tell a
+            // short reply (old P4) from a C6-target reply (new P4).
+            relay_status_t rs;
+            relay_stage_get_status(&rs);
+
             if (s_ota_target == HATP_OTA_TARGET_C6) {
                 uint32_t recv = c6_flasher_received();
                 resp[0] = OTA_RECEIVING;            // C6 path has no PENDING_VERIFY
                 resp[1] = 0;
                 memcpy(resp + 2, &recv, 4);
                 memcpy(resp + 6, &s_c6_ota_size, 4);
-                return 10;
+            } else {
+                ota_status_t st;
+                ota_get_status(&st);
+                // Compact wire status: state, pending_verify, received, image_size.
+                resp[0] = (uint8_t)st.state;
+                resp[1] = st.pending_verify ? 1 : 0;
+                memcpy(resp + 2, &st.received, 4);
+                memcpy(resp + 6, &st.image_size, 4);
             }
-            ota_status_t st;
-            ota_get_status(&st);
-            // Compact wire status: state, pending_verify, received, image_size.
-            resp[0] = (uint8_t)st.state;
-            resp[1] = st.pending_verify ? 1 : 0;
-            memcpy(resp + 2, &st.received, 4);
-            memcpy(resp + 6, &st.image_size, 4);
-            return 10;
+
+            // Appended tail: staging progress, for the C6/STAGE targets and for
+            // the S3's RELAY_STAGED safeguard before it triggers a relay apply.
+            resp[10] = (uint8_t)rs.state;
+            memcpy(resp + 11, &rs.staged_bytes, 4);
+            memcpy(resp + 15, &rs.pushed_bytes, 4);
+            return 19;
+        }
+
+        case HATP_CMD_DAQ_C6_VERSION: {
+            // Answers from the DDP link's cached GET_INFO reply -- never issues a
+            // DDP round-trip, since this runs in the s3_link RX callback and the
+            // C6 may be busy, absent, or held in download mode mid-relay.
+            //
+            // ddp_master only caches major/minor today; there is no build ID on
+            // the DDP wire yet, so c6_build_id stays all-zero. Carrying one means
+            // extending ddp_proto GET_INFO and the C6 firmware together -- see
+            // the daq-hat manifest before doing that, it is a protocol bump.
+            s3link_c6_version_t reply;
+            memset(&reply, 0, sizeof(reply));
+            if (b->ddp.c6_present) {
+                snprintf(reply.c6_version, sizeof(reply.c6_version), "%u.%u",
+                         (unsigned)b->ddp.c6_fw_major, (unsigned)b->ddp.c6_fw_minor);
+            }
+            memcpy(resp, &reply, sizeof(reply));
+            return (int)sizeof(reply);
         }
         case HATP_CMD_OTA_CONFIRM:
             // The C6 ROM-flash path has no A/B rollback; confirm is a no-op for it.
