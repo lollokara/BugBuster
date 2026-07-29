@@ -93,11 +93,27 @@ Scripts/clean-appledouble.sh
 **/.pio/
 **/.pioenvs/
 **/dependencies.lock
-Firmware/DAQ_HAT/ESP32C6/components/
+
+# ESP32-C6 components/: ignore anything the IDF component manager drops here,
+# but wifi_hosted is VENDORED SOURCE, not a fetched artifact. It is ESP-Hosted
+# coprocessor 2.12.11 with local patches (see its CMakeLists.txt COMPONENT_
+# REQUIRES block) and src/idf_component.yml depends on it by local path, not
+# from the registry -- so nothing can re-fetch it. While it was ignored, the C6
+# firmware could only be built on a machine that already had a copy, which is
+# why no CI job could produce a C6 image. Keep it tracked.
+# The trailing /* (rather than /) is required for the negation below to work:
+# git will not descend into a wholly-excluded directory.
+Firmware/DAQ_HAT/ESP32C6/components/*
+!Firmware/DAQ_HAT/ESP32C6/components/wifi_hosted/
 
 # Pico/CMake local build directories
 **/build-*/
 **/build/
+# Re-include the one vendored directory the rule above would otherwise swallow:
+# upstream protobuf-c's own standalone CMake recipe. It is source, not build
+# output, and the vendored tree should be a faithful copy. This negation MUST
+# stay after `**/build-*/` -- the last matching pattern wins.
+!Firmware/DAQ_HAT/ESP32C6/components/wifi_hosted/common/protobuf-c/build-cmake/
 
 # Python test / typecheck caches
 .pytest_cache/
