@@ -367,3 +367,15 @@ def test_relay_apply_worker_stack_is_internal_ram():
     worker = _code_only(_fn_body(BOARD, "static void relay_apply_task("))
     assert "vTaskDeleteWithCaps" in worker, \
         "a WithCaps task must be deleted with vTaskDeleteWithCaps or its stack leaks"
+
+
+def test_every_daq_helper_gates_on_a_daq_hat_being_present():
+    """The HAT header also carries the RP2040 LA HAT. Without this gate these
+    commands are sent to whatever is attached -- 0x61-0x65 and 0x6A/0x7A mean
+    entirely different things to the RP2040 firmware. Every pre-existing
+    hat_daq_* helper carries this check; the OTA ones must too."""
+    for fn in ("hat_daq_ota_status", "hat_daq_c6_version", "hat_ota_begin",
+               "hat_ota_data", "hat_ota_end", "hat_ota_abort"):
+        body = _code_only(_fn_body(HAT_CPP, f"bool {fn}("))
+        assert "HAT_TYPE_DAQ_POWER" in body, \
+            f"{fn} does not verify a DAQ HAT is attached before sending"

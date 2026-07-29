@@ -491,6 +491,7 @@ static bool hat_ota_txn(uint8_t cmd, const uint8_t *payload, uint16_t len,
 bool hat_ota_begin(uint8_t target, const hat_ota_meta_t *meta)
 {
     if (!meta) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
     if (target > HAT_OTA_TARGET_STAGE) return false;
 
     uint8_t payload[sizeof(hat_ota_meta_t) + 1];
@@ -504,6 +505,7 @@ bool hat_ota_begin(uint8_t target, const hat_ota_meta_t *meta)
 bool hat_ota_data(uint32_t offset, const uint8_t *data, uint8_t len)
 {
     if (!data || len == 0 || len > HAT_OTA_CHUNK_MAX) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
 
     uint8_t payload[4 + HAT_OTA_CHUNK_MAX];
     memcpy(payload, &offset, sizeof(offset));   // little-endian, matches the P4
@@ -513,12 +515,14 @@ bool hat_ota_data(uint32_t offset, const uint8_t *data, uint8_t len)
 
 bool hat_ota_end(void)
 {
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
     // SHA-256 verification re-reads the whole image back out of flash.
     return hat_ota_txn(HAT_CMD_OTA_END, NULL, 0, 30000);
 }
 
 bool hat_ota_abort(void)
 {
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
     return hat_ota_txn(HAT_CMD_OTA_ABORT, NULL, 0, 2000);
 }
 
@@ -530,6 +534,7 @@ bool hat_ota_abort(void)
 bool hat_daq_ota_status(hat_daq_ota_status_t *out)
 {
     if (!out) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
 
     uint8_t rsp[sizeof(hat_daq_ota_status_t)] = {};
     uint8_t rsp_len = 0;
@@ -551,6 +556,7 @@ bool hat_daq_ota_status(hat_daq_ota_status_t *out)
 bool hat_daq_c6_version(hat_daq_c6_version_t *out)
 {
     if (!out) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
 
     uint8_t rsp[sizeof(hat_daq_c6_version_t)] = {};
     uint8_t rsp_len = 0;
