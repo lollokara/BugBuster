@@ -89,13 +89,21 @@ public enum DaqAdcDecimation: UInt8, CaseIterable, Codable, Equatable {
 ///     ScopeTab — its x32...x1024 labels would describe a decimation the
 ///     device never applies under this filter.)
 public struct DaqAcquisitionConfig: Equatable {
-    /// fMOD at MCLK_DIV_2 — the ADAQ7769's modulator rate that every ODR
-    /// formula divides down from (1.024 MSPS; matches the "1.024MSPS"
-    /// comment on ADAQ_FILTER_SINC5_X8 in adaq7769_regs.h, i.e. baseRateHz/8
-    /// for that filter). Fixed rather than derived from whatever `odr`
-    /// happens to already hold, so repeated changes can't drift from the
-    /// true hardware rate table.
-    public static let baseRateHz: Double = 1_024_000.0
+    /// fMOD at MCLK_DIV_2 — the modulator rate every ODR formula divides down
+    /// from. This board clocks the ADAQ at ADAQ_MCLK_HZ = 16_384_000
+    /// (config.h:130, SiT8208 Y1 via a CDCLVC1104 fan-out) and runs
+    /// MCLK_DIV = 2, so fMOD = 8.192 MHz — NOT the 1.024 MHz suggested by the
+    /// "1.024MSPS" comment on ADAQ_FILTER_SINC5_X8 in adaq7769_regs.h, which
+    /// describes the part's reset default and not this hardware.
+    ///
+    /// Verified against the device on 2026-07-29: SET_ACQ_CONFIG with
+    /// filter=SINC5, adc_dec=x128 logged `fine_odr=64000`, and
+    /// 8_192_000 / 128 == 64_000 exactly. The previous 1_024_000 made every
+    /// derived rate 8x too low.
+    ///
+    /// Fixed rather than derived from whatever `odr` happens to already hold,
+    /// so repeated changes can't drift from the true hardware rate table.
+    public static let baseRateHz: Double = 8_192_000.0
 
     public var filter: DaqFilter
     public var adcDec: DaqAdcDecimation

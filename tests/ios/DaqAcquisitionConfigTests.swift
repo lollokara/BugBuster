@@ -1,5 +1,11 @@
 import Foundation
 
+// Expected ODRs are ABSOLUTE hardware values, not `baseRateHz / N`
+// expressions — deriving them from the constant under test would make these
+// assertions tautological. fMOD is 8.192 MHz on this board
+// (ADAQ_MCLK_HZ 16_384_000 / MCLK_DIV 2, config.h:130), verified against the
+// device on 2026-07-29: filter=SINC5 adc_dec=x128 logged fine_odr=64000.
+
 func runDaqAcquisitionConfigTests() {
     // RULING: the sample rate IS the ODR. There is no stream-decimation
     // conversion — changing the rate re-tunes filter + ADC hardware decimation.
@@ -11,15 +17,15 @@ func runDaqAcquisitionConfigTests() {
         // Decimation drives the ODR: doubling it halves the rate.
         let c = DaqAcquisitionConfig(filter: .wideband, adcDec: .x32, odr: 32000)
             .settingAdcDec(.x64)
-        expect(c.odr, 16000.0, "doubling ADC decimation halves the ODR")
-        expect(c.sampleRate, 16000.0, "sample rate tracks the ODR exactly")
+        expect(c.odr, 128000.0, "doubling ADC decimation halves the ODR")
+        expect(c.sampleRate, 128000.0, "sample rate tracks the ODR exactly")
     }
     do {
         // Asking for a rate picks the nearest achievable decimation rather than
         // silently reporting a rate the hardware never reached.
         let c = DaqAcquisitionConfig(filter: .wideband, adcDec: .x32, odr: 32000)
             .settingRequestedRate(8000)
-        expect(c.adcDec, .x128, "32k/x32 -> 8k needs x128")
+        expect(c.adcDec, .x1024, "8k needs x1024 at fMOD 8.192 MHz")
         expect(c.sampleRate, 8000.0, "resulting rate matches the request")
     }
     do {
@@ -47,13 +53,13 @@ func runDaqAcquisitionConfigTests() {
         let c = DaqAcquisitionConfig(filter: .sinc5x8, adcDec: .x32, odr: 128000)
         expect(c.sampleRate, 128000.0, "Sinc5x8 ODR is fMOD/8")
         let changed = c.settingAdcDec(.x1024)
-        expect(changed.odr, 128000.0, "Sinc5x8's ODR ignores adc_dec entirely")
+        expect(changed.odr, 1024000.0, "Sinc5x8's ODR ignores adc_dec entirely")
     }
     do {
         let c = DaqAcquisitionConfig(filter: .sinc5x16, adcDec: .x32, odr: 64000)
         expect(c.sampleRate, 64000.0, "Sinc5x16 ODR is fMOD/16")
         let changed = c.settingAdcDec(.x512)
-        expect(changed.odr, 64000.0, "Sinc5x16's ODR ignores adc_dec entirely")
+        expect(changed.odr, 512000.0, "Sinc5x16's ODR ignores adc_dec entirely")
     }
     do {
         // Fixed-rate filters have exactly one achievable rate — requesting
@@ -66,9 +72,9 @@ func runDaqAcquisitionConfigTests() {
         // SINC3: adc_dec is a raw scale factor (dec = adc_dec * 32), NOT a
         // decimation ratio — x128's raw value (2) means dec=64, not 128.
         let c = DaqAcquisitionConfig(filter: .sinc3, adcDec: .x128, odr: 16000)
-        expect(c.sampleRate, 16000.0, "Sinc3: dec = adc_dec(2) * 32 = 64 -> 1.024M/64 = 16k")
+        expect(c.sampleRate, 16000.0, "sampleRate reflects the stored odr until recomputed")
         let widened = c.settingAdcDec(.x256)
-        expect(widened.odr, 1_024_000.0 / 96.0, "Sinc3: dec = adc_dec(3) * 32 = 96")
+        expect(widened.odr, 85333.33333333333, "Sinc3: dec = adc_dec(3) * 32 = 96 -> 8.192M/96")
     }
     do {
         // The firmware clamps adc_dec=0 the same as adc_dec=1 for SINC3
@@ -84,6 +90,6 @@ func runDaqAcquisitionConfigTests() {
         // number forward under the new formula.
         let c = DaqAcquisitionConfig(filter: .wideband, adcDec: .x32, odr: 32000)
             .settingFilter(.sinc5x8)
-        expect(c.odr, 128000.0, "switching to Sinc5x8 recomputes the fixed ODR")
+        expect(c.odr, 1024000.0, "switching to Sinc5x8 recomputes the fixed ODR")
     }
 }
