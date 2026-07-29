@@ -131,6 +131,14 @@ yarn-error.log*
 # Misc IDE / editor
 *.code-workspace
 
+# VS Code "Local History" extension. One of these under PCB Material/ had been
+# committed as a bare gitlink (an embedded repo with no .gitmodules entry and an
+# unresolvable SHA), which made `git submodule foreach --recursive` abort with
+# "No url found for submodule path ...". That broke the post-job cleanup in every
+# CI run that checks out submodules, and `git submodule update --init --recursive`
+# for anyone following the README.
+.history/
+
 # Mex project folder (optional internal tool) — avoid accidentally committing.
 # .mex is a SEPARATE, PRIVATE git repo (lollokara/bugbuster-mex) checked out
 # here; commit its contents there, not in this repo. It used to also be recorded
