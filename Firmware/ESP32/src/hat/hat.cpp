@@ -522,6 +522,50 @@ bool hat_ota_abort(void)
     return hat_ota_txn(HAT_CMD_OTA_ABORT, NULL, 0, 2000);
 }
 
+// Length of the legacy OTA_STATUS reply: {state, pending_verify, received,
+// image_size}. A P4 that predates the relay_* tail answers exactly this much,
+// which is a valid reply meaning "relay fields unknown" -- not an error.
+#define HAT_OTA_STATUS_LEGACY_LEN 10
+
+bool hat_daq_ota_status(hat_daq_ota_status_t *out)
+{
+    if (!out) return false;
+
+    uint8_t rsp[sizeof(hat_daq_ota_status_t)] = {};
+    uint8_t rsp_len = 0;
+    // The P4 replies HAT_RSP_OTA_STATUS, never HAT_RSP_OK -- its send_ok() has a
+    // zero-length payload, so RSP_OK here would mean the status was lost.
+    uint8_t code = hat_command(HAT_CMD_OTA_STATUS, NULL, 0,
+                               rsp, &rsp_len, 500, sizeof(rsp));
+    if (code != HAT_RSP_OTA_STATUS || rsp_len < HAT_OTA_STATUS_LEGACY_LEN) return false;
+    if (rsp_len > sizeof(*out)) rsp_len = sizeof(*out);
+
+    // Zero first: on a short (legacy) reply the relay_* tail is never written,
+    // and stack garbage there could read as RELAY_STAGED and wave through the
+    // staged-state safeguard. Zeroed reads as RELAY_IDLE, which fails safe.
+    memset(out, 0, sizeof(*out));
+    memcpy(out, rsp, rsp_len);
+    return true;
+}
+
+bool hat_daq_c6_version(hat_daq_c6_version_t *out)
+{
+    if (!out) return false;
+
+    uint8_t rsp[sizeof(hat_daq_c6_version_t)] = {};
+    uint8_t rsp_len = 0;
+    uint8_t code = hat_command(HAT_CMD_DAQ_C6_VERSION, NULL, 0,
+                               rsp, &rsp_len, 500, sizeof(rsp));
+    if (code != HAT_RSP_DAQ_C6_VERSION || rsp_len < sizeof(hat_daq_c6_version_t)) return false;
+
+    memcpy(out, rsp, sizeof(*out));
+    // The P4 fills fixed-size char arrays; guarantee termination before any
+    // caller treats these as C strings.
+    out->c6_version[sizeof(out->c6_version) - 1] = '\0';
+    out->c6_build_id[sizeof(out->c6_build_id) - 1] = '\0';
+    return true;
+}
+
 // -----------------------------------------------------------------------------
 // Detect Pin
 // -----------------------------------------------------------------------------

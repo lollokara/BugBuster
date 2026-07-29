@@ -99,6 +99,12 @@ def _fn_body(text: str, sig: str) -> str:
     return text[start:text.index("\n}\n", start) + 3]
 
 
+def _code_only(body: str) -> str:
+    """Function body with // comments stripped, so assertions about what the
+    code does are not satisfied (or broken) by prose that merely names it."""
+    return "\n".join(re.sub(r"//.*$", "", ln) for ln in body.splitlines())
+
+
 def test_ota_commands_mirror_the_p4_side():
     for name, value in (("GET_VERSION", "60"), ("OTA_BEGIN", "61"), ("OTA_DATA", "62"),
                         ("OTA_END", "63"), ("OTA_ABORT", "64"), ("OTA_STATUS", "65")):
@@ -236,3 +242,44 @@ def test_every_c6_flasher_reset_path_releases_the_boot_straps():
         assert call is not None, f"{cmd} has no C6 flasher call"
         assert "c6_release_boot_straps" in c6[:call], \
             f"{cmd} resets the C6 without releasing the BOOT straps first"
+
+
+def test_s3_helpers_exist_for_both_queries():
+    for fn in ("hat_daq_ota_status", "hat_daq_c6_version"):
+        assert f"bool {fn}(" in HAT_CPP, f"{fn} not implemented"
+        assert fn in HAT_H, f"{fn} not declared"
+
+
+def test_ota_status_helper_uses_the_existing_opcode():
+    assert "HAT_CMD_OTA_STATUS" in _fn_body(HAT_CPP, "bool hat_daq_ota_status(")
+
+
+def test_query_helpers_check_the_dedicated_response_codes_not_rsp_ok():
+    """The P4 answers these with HATP_RSP_OTA_STATUS / _DAQ_C6_VERSION, because
+    its send_ok() carries a zero-length payload. A helper checking HAT_RSP_OK
+    would reject every valid reply and drop the payload."""
+    for fn, code in (("hat_daq_ota_status", "HAT_RSP_OTA_STATUS"),
+                     ("hat_daq_c6_version", "HAT_RSP_DAQ_C6_VERSION")):
+        body = _code_only(_fn_body(HAT_CPP, f"bool {fn}("))
+        assert code in body, f"{fn} must accept {code}"
+        assert "HAT_RSP_OK" not in body, \
+            f"{fn} checks HAT_RSP_OK, which the P4 never sends for this command"
+
+
+def test_ota_status_helper_tolerates_an_older_p4s_short_reply():
+    """A P4 predating the widening answers 10 bytes. That is valid and means
+    'relay fields unknown' -- rejecting it would break OTA status against every
+    already-flashed DAQ HAT."""
+    body = _fn_body(HAT_CPP, "bool hat_daq_ota_status(")
+    assert "HAT_OTA_STATUS_LEGACY_LEN" in body, \
+        "helper must accept the 10-byte legacy prefix, not require the full struct"
+
+
+def test_ota_status_helper_zeroes_the_struct_before_a_short_copy():
+    """On a 10-byte reply the relay_* tail is never written. Without an explicit
+    zero it would carry stack garbage, and a garbage relay_state could read as
+    RELAY_STAGED and wave through the Task 8 safeguard."""
+    body = _fn_body(HAT_CPP, "bool hat_daq_ota_status(")
+    zero = body.index("memset")
+    copy = body.index("memcpy")
+    assert zero < copy, "must zero the output struct before copying a short reply"

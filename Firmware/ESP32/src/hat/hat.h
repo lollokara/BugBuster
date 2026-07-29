@@ -833,6 +833,27 @@ bool hat_ota_end(void);
 bool hat_ota_abort(void);
 
 /**
+ * @brief Read the P4's OTA progress (HAT_CMD_OTA_STATUS), covering both
+ *        durability models: @c received for a P4-target transfer and
+ *        @c relay_staged_bytes for a C6-target one.
+ * @note  A P4 that predates the widened reply answers only the first 10 bytes.
+ *        That is treated as success with the relay_* fields left zeroed, which
+ *        reads as RELAY_IDLE and so fails safe against a staged-state check.
+ * @return true on a valid reply, false on transport error or no DAQ HAT.
+ */
+bool hat_daq_ota_status(hat_daq_ota_status_t *out);
+
+/**
+ * @brief Read the C6's firmware version (HAT_CMD_DAQ_C6_VERSION). The P4's own
+ *        version comes from HAT_CMD_GET_VERSION instead.
+ * @note  Answered from the P4's cached DDP GET_INFO, so it is "last known", not
+ *        a live query. Both fields are all-zero until the C6 has reported once;
+ *        c6_build_id is always empty until DDP carries a build ID.
+ * @return true on a valid reply, false on transport error or no DAQ HAT.
+ */
+bool hat_daq_c6_version(hat_daq_c6_version_t *out);
+
+/**
  * @brief Read the DAQ HAT's VDUT (programmable DUT power supply) status:
  *        present/enabled/fault + setpoints + measured voltage/current.
  *        No-op (returns false) unless a DAQ HAT is connected.
