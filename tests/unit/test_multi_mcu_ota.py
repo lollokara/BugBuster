@@ -434,3 +434,79 @@ def test_every_apply_call_site_uses_the_mask():
             args = m.group(1) or ""
             assert "true" not in args and "false" not in args, \
                 f"{path} still passes booleans to the target mask: {args.strip()}"
+
+
+def test_daq_download_streams_to_the_hat_link_with_no_local_file():
+    """The P4's staging partition is already the durable buffer. A 2 MB local
+    copy would consume two thirds of the 3 MB `scripts` SPIFFS that holds user
+    MicroPython files."""
+    body = _code_only(_fn_body(UPD_CPP, "static esp_err_t hat_ota_event_handler("))
+    assert "hat_ota_data" in body, "handler must feed the HAT link directly"
+    assert "fopen" not in body and "fwrite" not in body, \
+        "the DAQ path must not stage to a local file"
+
+
+def test_daq_handler_splits_into_hat_link_chunks():
+    """The HTTP buffer delivers up to buffer_size bytes; the DAQ link carries
+    HAT_OTA_CHUNK_MAX per frame. Passing the whole buffer would truncate."""
+    body = _code_only(_fn_body(UPD_CPP, "static esp_err_t hat_ota_event_handler("))
+    assert "HAT_OTA_CHUNK_MAX" in body
+    assert "while" in body, "handler must loop over the buffer, not send it once"
+
+
+def test_daq_resume_offset_comes_from_the_p4_not_a_local_counter():
+    """After a failed frame the S3 cannot know how much the P4 kept, and the P4
+    rejects out-of-order offsets -- so the resume point must be re-queried."""
+    body = _code_only(_fn_body(UPD_CPP, "static uint32_t daq_resume_offset("))
+    assert "hat_daq_ota_status" in body
+    assert "st.received" in body and "st.relay_staged_bytes" in body, \
+        "the two targets track progress in different fields; both must be read"
+
+
+def test_daq_ota_uses_a_range_header_to_resume():
+    body = _code_only(_fn_body(UPD_CPP, "static bool apply_daq_ota("))
+    assert '"Range"' in body, "resume must re-request with an HTTP Range header"
+    assert "206" in body, "a resumed request must require 206, not accept a 200 restart"
+
+
+def test_daq_ota_does_not_hash_locally():
+    """On a Range-resume the S3 never sees the earlier bytes, so any hash it
+    computed would cover the wrong range. The SHA travels in the OTA_BEGIN meta
+    and the P4 verifies it at OTA_END."""
+    body = _code_only(_fn_body(UPD_CPP, "static bool apply_daq_ota("))
+    assert "mbedtls_sha256_update" not in body, \
+        "the S3 must not hash a resumable stream; the P4 verifies"
+    assert "hat_ota_end" in body
+
+
+def test_c6_goes_through_staging_and_p4_does_not():
+    """C6 must be SHA-verified in the P4's staging partition before the
+    ROM-loader push starts -- an aborted push strands it in download mode. The
+    P4 target bypasses staging and streams to its own A/B slot."""
+    body = _code_only(_fn_body(UPD_CPP, "static bool apply_daq_targets("))
+    c6 = body[body.index("UPDATE_TARGET_C6"):body.index("UPDATE_TARGET_P4")]
+    assert "HAT_OTA_TARGET_STAGE" in c6, "the C6 image must be staged"
+    assert "hat_daq_relay_apply" in c6, "staging alone does not flash the C6"
+    p4 = body[body.index("UPDATE_TARGET_P4"):]
+    assert "HAT_OTA_TARGET_P4" in p4
+
+
+def test_daq_apply_order_puts_c6_before_p4_in_the_code_too():
+    body = _code_only(_fn_body(UPD_CPP, "static bool apply_daq_targets("))
+    assert body.index("UPDATE_TARGET_C6") < body.index("UPDATE_TARGET_P4"), \
+        "the C6 leg must run before the P4 leg, matching UPDATE_TARGET_ORDER"
+
+
+def test_both_apply_entry_points_handle_the_daq_targets():
+    """apply_release_index() silently ignoring P4/C6 would report success for an
+    update that never ran -- the exact failure the target validation prevents."""
+    for fn in ("esp_err_t update_manager_apply(",
+               "esp_err_t update_manager_apply_release_index("):
+        body = _code_only(_fn_body(UPD_CPP, fn))
+        assert "apply_daq_targets" in body, f"{fn} drops the DAQ targets"
+
+
+def test_missing_daq_image_in_a_release_is_an_error():
+    body = _code_only(_fn_body(UPD_CPP, "static bool apply_daq_targets("))
+    assert body.count("component_available") >= 2, \
+        "both DAQ legs must check the release actually carries an image"

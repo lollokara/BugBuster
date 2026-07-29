@@ -844,6 +844,19 @@ bool hat_ota_abort(void);
 bool hat_daq_ota_status(hat_daq_ota_status_t *out);
 
 /**
+ * @brief Ask the DAQ HAT to apply the already-staged C6 image
+ *        (HAT_CMD_DAQ_RELAY_APPLY).
+ *
+ * Returns as soon as the P4 accepts: the push itself takes ~2 minutes and runs
+ * on a P4 worker task. The P4 refuses unless its staging is RELAY_STAGED (i.e.
+ * SHA-256 verified) and will refuse a second concurrent apply. Poll
+ * hat_daq_ota_status() and watch relay_pushed_bytes for progress.
+ *
+ * @return true if the P4 accepted the request, false otherwise.
+ */
+bool hat_daq_relay_apply(void);
+
+/**
  * @brief Read the C6's firmware version (HAT_CMD_DAQ_C6_VERSION). The P4's own
  *        version comes from HAT_CMD_GET_VERSION instead.
  * @note  Answered from the P4's cached DDP GET_INFO, so it is "last known", not

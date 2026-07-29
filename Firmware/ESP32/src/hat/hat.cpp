@@ -553,6 +553,20 @@ bool hat_daq_ota_status(hat_daq_ota_status_t *out)
     return true;
 }
 
+bool hat_daq_relay_apply(void)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+
+    // The P4 validates RELAY_STAGED and returns immediately, running the ~2
+    // minute push on its own worker task -- so this is a short command, and
+    // progress is read afterwards via hat_daq_ota_status().relay_pushed_bytes.
+    uint8_t rsp[HAT_FRAME_MAX_LEN];
+    uint8_t rsp_len = 0;
+    uint8_t code = hat_command(HAT_CMD_DAQ_RELAY_APPLY, NULL, 0,
+                               rsp, &rsp_len, 2000, sizeof(rsp));
+    return code == HAT_RSP_OK;
+}
+
 bool hat_daq_c6_version(hat_daq_c6_version_t *out)
 {
     if (!out) return false;

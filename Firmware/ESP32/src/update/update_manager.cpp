@@ -46,6 +46,10 @@ typedef struct {
     char commit[48];
     UpdateComponent rp2040;
     UpdateComponent esp32;
+    // DAQ HAT images. Optional: no workflow publishes these yet (that is
+    // sub-project 2), so a manifest without them must still parse.
+    UpdateComponent p4;
+    UpdateComponent c6;
 } UpdateManifest;
 
 typedef struct {
@@ -419,6 +423,13 @@ static bool fetch_manifest(UpdateManifest *manifest)
     snprintf(manifest->commit, sizeof(manifest->commit), "%s", cJSON_IsString(commit) ? commit->valuestring : "");
     bool ok = read_component(root, "rp2040", &manifest->rp2040) &&
               read_component(root, "esp32", &manifest->esp32);
+    // Optional by design -- absence means "this release has no DAQ HAT image",
+    // not a malformed manifest. read_component zeroes nothing on failure, so
+    // clear first and let component_available() report them as missing.
+    memset(&manifest->p4, 0, sizeof(manifest->p4));
+    memset(&manifest->c6, 0, sizeof(manifest->c6));
+    (void)read_component(root, "p4", &manifest->p4);
+    (void)read_component(root, "c6", &manifest->c6);
     cJSON_Delete(root);
     if (!ok) {
         ESP_LOGW(TAG, "manifest missing component metadata; falling back to GitHub releases API");
@@ -657,6 +668,162 @@ static esp_err_t ota_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+// ---------------------------------------------------------------------------
+// DAQ HAT (P4 / C6) image streaming
+//
+// Bytes go straight from the HTTPS event handler onto the HAT link; there is no
+// S3-side staging file. The P4's `staging` partition is already the durable,
+// SHA-verified, resumable buffer, and a 2 MB image would eat two thirds of the
+// 3 MB `scripts` SPIFFS that holds user MicroPython files.
+//
+// The S3 does NOT hash the image. The SHA-256 travels in the OTA_BEGIN meta and
+// the P4 verifies it at OTA_END, which is also the only correct place: on a
+// Range-resume the S3 never sees the earlier bytes, so any hash it computed
+// would cover the wrong range.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    uint32_t offset;     // next image offset to send, and the resume point
+    bool     failed;
+} HatOtaDownloadState;
+
+static esp_err_t hat_ota_event_handler(esp_http_client_event_t *evt)
+{
+    HatOtaDownloadState *s = (HatOtaDownloadState *)evt->user_data;
+    if (!s || evt->event_id != HTTP_EVENT_ON_DATA || s->failed) return ESP_OK;
+
+    // The HTTP buffer hands over up to buffer_size bytes at a time; the DAQ link
+    // carries HAT_OTA_CHUNK_MAX (236) per frame, so split rather than truncate.
+    const uint8_t *p = (const uint8_t *)evt->data;
+    int remaining = evt->data_len;
+    while (remaining > 0) {
+        uint8_t n = (remaining > HAT_OTA_CHUNK_MAX) ? HAT_OTA_CHUNK_MAX : (uint8_t)remaining;
+        if (!hat_ota_data(s->offset, p, n)) {
+            // Do not retry blindly here: the P4 rejects out-of-order offsets, so
+            // recovery has to re-query the received count and resume from there.
+            s->failed = true;
+            return ESP_OK;
+        }
+        s->offset += n;
+        p += n;
+        remaining -= n;
+        s_update.progress_done = s->offset;
+    }
+    return ESP_OK;
+}
+
+// Authoritative resume point, straight from the P4. The two targets track it in
+// different modules: a P4-target transfer streams to the A/B slot and reports
+// `received`, while a staged (C6) transfer reports `relay_staged_bytes`, which
+// may trail by up to ~64 KB because relay_stage persists to NVS at that
+// interval. Re-sending already-staged bytes is harmless; skipping any is not.
+static uint32_t daq_resume_offset(uint8_t hat_target)
+{
+    hat_daq_ota_status_t st = {};
+    if (!hat_daq_ota_status(&st)) return 0;
+    return (hat_target == HAT_OTA_TARGET_P4) ? st.received : st.relay_staged_bytes;
+}
+
+static bool version_to_u32(const char *v, uint32_t *out)
+{
+    unsigned a = 0, b = 0, c = 0;
+    if (!v || sscanf(v, "%u.%u.%u", &a, &b, &c) < 2) return false;
+    *out = ((a & 0xFF) << 16) | ((b & 0xFF) << 8) | (c & 0xFF);
+    return true;
+}
+
+#define DAQ_OTA_MAX_ATTEMPTS 5
+
+// Stream one image to the DAQ HAT, resuming with an HTTP Range request on a
+// stall. @hat_target is HAT_OTA_TARGET_P4 or _STAGE (the C6 goes through
+// staging so its image is SHA-verified before the ROM-loader push touches it).
+static bool apply_daq_ota(const UpdateComponent *component, uint8_t hat_target)
+{
+    uint8_t sha[32];
+    if (!parse_sha256(component->sha256_hex, sha)) {
+        set_error("DAQ image manifest has no usable SHA-256");
+        return false;
+    }
+
+    hat_ota_meta_t meta = {};
+    meta.image_size = component->size;
+    (void)version_to_u32(component->version, &meta.version_u32);
+    memcpy(meta.sha256, sha, sizeof(meta.sha256));
+    snprintf(meta.product_id, sizeof(meta.product_id), "%s",
+             (hat_target == HAT_OTA_TARGET_P4) ? "bugbuster-p4" : "bugbuster-c6");
+
+    if (!hat_ota_begin(hat_target, &meta)) {
+        set_error("DAQ HAT rejected OTA_BEGIN");
+        return false;
+    }
+
+    s_update.progress_total = component->size;
+    s_update.progress_done = 0;
+
+    bool ok = false;
+    for (int attempt = 0; attempt < DAQ_OTA_MAX_ATTEMPTS && !ok; attempt++) {
+        // Always resume from the P4's own count, never from a locally tracked
+        // one -- after a failed frame the S3 cannot know how much the P4 kept.
+        HatOtaDownloadState s = {};
+        s.offset = (attempt == 0) ? 0 : daq_resume_offset(hat_target);
+        if (s.offset >= component->size) { ok = true; break; }
+
+        esp_http_client_config_t cfg = {};
+        cfg.url = component->url;
+        cfg.timeout_ms = 120000;
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+        cfg.event_handler = hat_ota_event_handler;
+        cfg.user_data = &s;
+        cfg.method = HTTP_METHOD_GET;
+        cfg.buffer_size = 4096;
+        cfg.buffer_size_tx = 1024;
+        cfg.max_redirection_count = 5;
+
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        if (!client) {
+            set_error("failed to init DAQ OTA HTTP client");
+            hat_ota_abort();
+            return false;
+        }
+        esp_http_client_set_header(client, "User-Agent", "BugBuster-Update/1");
+        char range[48];
+        if (s.offset > 0) {
+            snprintf(range, sizeof(range), "bytes=%lu-", (unsigned long)s.offset);
+            esp_http_client_set_header(client, "Range", range);
+        }
+
+        esp_err_t err = esp_http_client_perform(client);
+        int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : -1;
+        esp_http_client_cleanup(client);
+
+        // 206 on a resumed request, 200 on a fresh one. A server that ignores
+        // Range answers 200 with the whole file, which would restart the P4 at
+        // a non-zero offset and be rejected -- treat it as a failed attempt.
+        bool http_ok = (err == ESP_OK) &&
+                       ((s.offset == 0 && status == 200) || (s.offset > 0 && status == 206));
+        ok = http_ok && !s.failed && s.offset >= component->size;
+        if (!ok) {
+            ESP_LOGW(TAG, "DAQ OTA attempt %d/%d failed (err=%d status=%d sent=%lu/%lu)",
+                     attempt + 1, DAQ_OTA_MAX_ATTEMPTS, (int)err, status,
+                     (unsigned long)s.offset, (unsigned long)component->size);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+
+    if (!ok) {
+        hat_ota_abort();
+        set_error("DAQ HAT image transfer failed after retries");
+        return false;
+    }
+
+    // The P4 verifies SHA-256 here; a mismatch fails the whole transfer.
+    if (!hat_ota_end()) {
+        set_error("DAQ HAT image failed verification");
+        return false;
+    }
+    return true;
+}
+
 static bool apply_esp32_ota(const UpdateComponent *component)
 {
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
@@ -812,6 +979,45 @@ esp_err_t update_manager_check(cJSON **out)
     return ESP_OK;
 }
 
+// The C6 and P4 legs of a multi-target apply, in UPDATE_TARGET_ORDER. Shared by
+// both apply entry points so the ordering rule and the "release has no image"
+// checks cannot drift between them.
+static bool apply_daq_targets(uint32_t targets, const UpdateManifest *manifest,
+                              bool *did_p4, bool *did_c6)
+{
+    // C6 first: its ROM-loader push is driven BY the P4, so the P4 must still be
+    // running its current image to perform it.
+    if (targets & UPDATE_TARGET_C6) {
+        if (!component_available(&manifest->c6)) {
+            set_error("release has no C6 image");
+            return false;
+        }
+        set_state(UPDATE_STATE_DOWNLOADING_C6, "download_c6");
+        // Staged rather than streamed straight at the C6: staging gets the image
+        // SHA-verified inside the P4's partition BEFORE the ROM-loader push
+        // starts, and makes that push resumable from pushed_bytes. An aborted
+        // push strands the C6 in ROM download mode, so verifying first matters.
+        if (!apply_daq_ota(&manifest->c6, HAT_OTA_TARGET_STAGE)) return false;
+        set_state(UPDATE_STATE_APPLYING_C6, "apply_c6");
+        if (!hat_daq_relay_apply()) {
+            set_error("DAQ HAT refused the C6 relay apply");
+            return false;
+        }
+        *did_c6 = true;
+    }
+
+    if (targets & UPDATE_TARGET_P4) {
+        if (!component_available(&manifest->p4)) {
+            set_error("release has no P4 image");
+            return false;
+        }
+        set_state(UPDATE_STATE_DOWNLOADING_P4, "download_p4");
+        if (!apply_daq_ota(&manifest->p4, HAT_OTA_TARGET_P4)) return false;
+        *did_p4 = true;
+    }
+    return true;
+}
+
 uint32_t update_manager_available_targets(void)
 {
     uint32_t mask = UPDATE_TARGET_RP2040 | UPDATE_TARGET_ESP32;
@@ -853,14 +1059,6 @@ esp_err_t update_manager_apply(uint32_t targets, cJSON **out)
         set_error(why);
         return ESP_ERR_INVALID_ARG;
     }
-    if (targets & UPDATE_TARGETS_DAQ_HAT) {
-        // The DAQ targets need the streamed HAT-link download path, which is
-        // not wired yet. Fail loudly rather than reporting a success that did
-        // nothing -- the wire layer (hat_ota_*) exists, the orchestration does not.
-        set_error("P4/C6 updates are not wired to the download path yet");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
     const bool update_rp2040 = (targets & UPDATE_TARGET_RP2040) != 0;
     const bool update_esp32  = (targets & UPDATE_TARGET_ESP32) != 0;
 
@@ -957,6 +1155,11 @@ esp_err_t update_manager_apply(uint32_t targets, cJSON **out)
         }
     }
 
+    bool did_c6 = false;
+    bool did_p4 = false;
+    if (!apply_daq_targets(targets, &manifest, &did_p4, &did_c6)) return ESP_FAIL;
+
+    // ESP32 last: rebooting this MCU ends the sequence.
     if (update_esp32 && esp_newer) {
         did_esp = true;
         set_state(UPDATE_STATE_DOWNLOADING_ESP32, "download_esp32");
@@ -967,6 +1170,8 @@ esp_err_t update_manager_apply(uint32_t targets, cJSON **out)
     cJSON_AddBoolToObject(root, "success", true);
     cJSON_AddBoolToObject(root, "rp2040Updated", did_rp);
     cJSON_AddBoolToObject(root, "esp32Updated", did_esp);
+    cJSON_AddBoolToObject(root, "p4Updated", did_p4);
+    cJSON_AddBoolToObject(root, "c6Updated", did_c6);
     cJSON_AddItemToObject(root, "status", update_manager_status_json());
     if (!did_esp) {
         set_state(UPDATE_STATE_IDLE, "idle");
@@ -1013,10 +1218,6 @@ esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJ
         set_error(why);
         return ESP_ERR_INVALID_ARG;
     }
-    if (targets & UPDATE_TARGETS_DAQ_HAT) {
-        set_error("P4/C6 updates are not wired to the download path yet");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
     const bool update_rp2040 = (targets & UPDATE_TARGET_RP2040) != 0;
     const bool update_esp32  = (targets & UPDATE_TARGET_ESP32) != 0;
     set_state(UPDATE_STATE_CHECKING, "checking_releases");
@@ -1058,6 +1259,10 @@ esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJ
         did_rp = true;
     }
 
+    bool did_c6 = false;
+    bool did_p4 = false;
+    if (!apply_daq_targets(targets, &manifest, &did_p4, &did_c6)) return ESP_FAIL;
+
     if (update_esp32 && esp_newer) {
         did_esp = true;
         set_state(UPDATE_STATE_DOWNLOADING_ESP32, "download_esp32");
@@ -1069,6 +1274,8 @@ esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJ
     cJSON_AddStringToObject(root, "selected", selected_label);
     cJSON_AddBoolToObject(root, "rp2040Updated", did_rp);
     cJSON_AddBoolToObject(root, "esp32Updated", did_esp);
+    cJSON_AddBoolToObject(root, "p4Updated", did_p4);
+    cJSON_AddBoolToObject(root, "c6Updated", did_c6);
     cJSON_AddItemToObject(root, "status", update_manager_status_json());
     if (!did_esp) set_state(UPDATE_STATE_IDLE, "idle");
     *out = root;
