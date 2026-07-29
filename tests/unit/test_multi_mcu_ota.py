@@ -563,3 +563,36 @@ def test_each_download_phase_tags_its_target():
         idx = src.index(f"set_state({state}")
         assert "set_target(" in src[max(0, idx - 200):idx], \
             f"{state} does not record which target it belongs to"
+
+
+WEBSERVER = Path("Firmware/ESP32/src/web/webserver.cpp").read_text()
+
+
+def test_http_apply_route_parses_every_target():
+    """webserver.cpp's /api/update/apply is a SEPARATE handler from api_core's.
+    It previously only read rp2040/esp32 and defaulted both to true, so a body
+    naming just {"p4":true,"c6":true} silently updated the mainboard and LA HAT
+    instead -- pulling the GitHub nightly over whatever was installed."""
+    body = _code_only(_fn_body(WEBSERVER, "static esp_err_t handle_post_update_apply("))
+    for key, bit in (('"rp2040"', "UPDATE_TARGET_RP2040"), ('"esp32"', "UPDATE_TARGET_ESP32"),
+                     ('"p4"', "UPDATE_TARGET_P4"), ('"c6"', "UPDATE_TARGET_C6")):
+        assert key in body, f"HTTP apply route does not parse {key}"
+        assert bit in body, f"HTTP apply route does not map {key} to {bit}"
+
+
+def test_http_apply_body_naming_targets_does_not_inherit_defaults():
+    """An explicit body must select targets from scratch; inheriting the
+    rp2040+esp32 defaults is what made the bug destructive rather than a no-op."""
+    body = _code_only(_fn_body(WEBSERVER, "static esp_err_t handle_post_update_apply("))
+    assert "named_any" in body, "explicit target lists must reset the default mask"
+    assert "targets == 0" in body, "an empty selection must be rejected, not applied"
+
+
+def test_both_http_surfaces_agree_on_target_keys():
+    """api_core.cpp (HTTP+BLE) and webserver.cpp must accept the same JSON keys
+    or a client's request means different things depending on the transport."""
+    api = Path("Firmware/ESP32/src/net/api_core.cpp").read_text()
+    api_body = _code_only(_fn_body(api, "static char *api_ota_apply("))
+    web_body = _code_only(_fn_body(WEBSERVER, "static esp_err_t handle_post_update_apply("))
+    for key in ('"rp2040"', '"esp32"', '"p4"', '"c6"'):
+        assert key in api_body and key in web_body, f"{key} missing from one surface"

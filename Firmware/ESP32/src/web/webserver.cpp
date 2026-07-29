@@ -3992,16 +3992,14 @@ static esp_err_t handle_get_update_status(httpd_req_t *req)
     return send_json(req, update_manager_status_json());
 }
 
-typedef struct { bool rp2040; bool esp32; } http_update_apply_args_t;
+typedef struct { uint32_t targets; } http_update_apply_args_t;
 
 static void http_update_apply_task(void *arg)
 {
     http_update_apply_args_t *a = (http_update_apply_args_t *)arg;
-    bool rp2040 = a->rp2040, esp32 = a->esp32;
+    uint32_t targets = a->targets;
     free(a);
     cJSON *root = NULL;
-    uint32_t targets = (rp2040 ? UPDATE_TARGET_RP2040 : 0u) |
-                       (esp32  ? UPDATE_TARGET_ESP32  : 0u);
     esp_err_t err = update_manager_apply(targets, &root);
     if (root) cJSON_Delete(root);
     bool reboot = update_manager_reboot_pending();
@@ -4017,22 +4015,38 @@ static esp_err_t handle_post_update_apply(httpd_req_t *req)
     if (check_admin_auth(req) != ESP_OK) {
         return send_error(req, 401, "Admin token required");
     }
-    bool rp2040 = true;
-    bool esp32 = true;
+    // Legacy default (empty body) stays rp2040+esp32, but ANY explicit body
+    // selects targets from scratch. The old code defaulted both to true and only
+    // ever looked at "rp2040"/"esp32", so a body naming just the DAQ targets
+    // silently updated the mainboard and LA HAT instead of the chips asked for.
+    uint32_t targets = UPDATE_TARGET_RP2040 | UPDATE_TARGET_ESP32;
     if (req->content_len > 0) {
         cJSON *body = recv_json_body(req);
         if (!body) return send_error(req, 400, "Invalid JSON");
-        cJSON *j_rp = cJSON_GetObjectItem(body, "rp2040");
-        cJSON *j_esp = cJSON_GetObjectItem(body, "esp32");
-        if (cJSON_IsBool(j_rp)) rp2040 = cJSON_IsTrue(j_rp);
-        if (cJSON_IsBool(j_esp)) esp32 = cJSON_IsTrue(j_esp);
+        static const struct { const char *key; uint32_t bit; } kMap[] = {
+            { "rp2040", UPDATE_TARGET_RP2040 },
+            { "esp32",  UPDATE_TARGET_ESP32  },
+            { "p4",     UPDATE_TARGET_P4     },
+            { "c6",     UPDATE_TARGET_C6     },
+        };
+        bool named_any = false;
+        for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); i++) {
+            if (cJSON_IsBool(cJSON_GetObjectItem(body, kMap[i].key))) { named_any = true; break; }
+        }
+        if (named_any) {
+            targets = 0;
+            for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); i++) {
+                cJSON *j = cJSON_GetObjectItem(body, kMap[i].key);
+                if (cJSON_IsTrue(j)) targets |= kMap[i].bit;
+            }
+        }
         cJSON_Delete(body);
     }
+    if (targets == 0) return send_error(req, 400, "no update target selected");
 
     http_update_apply_args_t *args = (http_update_apply_args_t *)malloc(sizeof(http_update_apply_args_t));
     if (!args) return send_error(req, 500, "OOM");
-    args->rp2040 = rp2040;
-    args->esp32 = esp32;
+    args->targets = targets;
 
     // 12 KB internal-RAM stack — must NOT use PSRAM (D-cache disable during flash
     // corrupts PSRAM stacks on both cores via cross-core IPC).
