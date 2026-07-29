@@ -939,7 +939,14 @@ static void cli_update_apply_task(void *ctx)
     s_cli_update_err = err;
     s_cli_update_done = true;
     s_cli_update_task = NULL;
-    vTaskDelete(NULL);
+    // MUST be vTaskDeleteWithCaps: this task was created with
+    // xTaskCreatePinnedToCoreWithCaps, which allocates the stack and TCB itself.
+    // Plain vTaskDelete() cannot free that memory, leaking the whole stack --
+    // 12 KB of INTERNAL RAM per update. Measured: internal free 31 -> 19 KB and
+    // largest free block 14 -> 8 KB after a single update, never recovering, so
+    // the second update in a boot failed to start at all (the worker needs a
+    // 12 KB contiguous internal block).
+    vTaskDeleteWithCaps(NULL);
 }
 
 static void update_wait_for_task(void)

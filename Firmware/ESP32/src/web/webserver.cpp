@@ -2,6 +2,7 @@
 // webserver.cpp - HTTP API server for AD74416H controller (ESP-IDF httpd)
 // =============================================================================
 
+#include "freertos/idf_additions.h"  // vTaskDeleteWithCaps
 #include "webserver.h"
 
 #include <stdio.h>
@@ -4007,7 +4008,14 @@ static void http_update_apply_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1000));
         esp_restart();
     }
-    vTaskDelete(NULL);
+    // MUST be vTaskDeleteWithCaps: this task was created with
+    // xTaskCreatePinnedToCoreWithCaps, which allocates the stack and TCB itself.
+    // Plain vTaskDelete() cannot free that memory, leaking the whole stack --
+    // 12 KB of INTERNAL RAM per update. Measured: internal free 31 -> 19 KB and
+    // largest free block 14 -> 8 KB after a single update, never recovering, so
+    // the second update in a boot failed to start at all (the worker needs a
+    // 12 KB contiguous internal block).
+    vTaskDeleteWithCaps(NULL);
 }
 
 static esp_err_t handle_post_update_apply(httpd_req_t *req)

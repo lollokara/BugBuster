@@ -596,3 +596,30 @@ def test_both_http_surfaces_agree_on_target_keys():
     web_body = _code_only(_fn_body(WEBSERVER, "static esp_err_t handle_post_update_apply("))
     for key in ('"rp2040"', '"esp32"', '"p4"', '"c6"'):
         assert key in api_body and key in web_body, f"{key} missing from one surface"
+
+
+def test_withcaps_tasks_are_deleted_with_withcaps():
+    """A task created by xTaskCreate*WithCaps() owns its stack and TCB, and only
+    vTaskDeleteWithCaps() can free them. Plain vTaskDelete() leaks the entire
+    stack -- measured at 12 KB of INTERNAL RAM per update on the S3, which took
+    the largest free internal block from 14 KB to 8 KB and made every subsequent
+    update fail to start (the worker needs 12 KB contiguous internal)."""
+    import subprocess
+    roots = ["Firmware/ESP32/src", "Firmware/DAQ_HAT/ESP32P4/src"]
+    offenders = []
+    for root in roots:
+        for path in Path(root).rglob("*.c*"):
+            src = path.read_text(errors="ignore")
+            if "WithCaps(" not in src:
+                continue
+            if not any(c in src for c in ("xTaskCreateWithCaps(",
+                                          "xTaskCreatePinnedToCoreWithCaps(")):
+                continue
+            code = _code_only(src)
+            # A file that creates a WithCaps task and also self-deletes a task
+            # must use the WithCaps deleter for it.
+            if "vTaskDelete(" in code and "vTaskDeleteWithCaps(" not in code:
+                offenders.append(str(path))
+    assert not offenders, (
+        "these files create WithCaps tasks but delete with plain vTaskDelete, "
+        f"leaking each task's stack: {offenders}")
