@@ -1,0 +1,154 @@
+name: DAQ HAT Firmware
+
+"on":
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version_suffix:
+        type: string
+        required: false
+        default: ""
+  pull_request:
+    paths:
+      - ".github/workflows/daq-hat-firmware.yml"
+      - "Firmware/tools/firmware_version.py"
+      - "Firmware/tools/esp_image_tool.py"
+      - "Firmware/DAQ_HAT/**"
+  push:
+    tags:
+      - "daq-fw-v*"
+    paths:
+      - ".github/workflows/daq-hat-firmware.yml"
+      - "Firmware/tools/firmware_version.py"
+      - "Firmware/tools/esp_image_tool.py"
+      - "Firmware/DAQ_HAT/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daq-hat-firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      # No submodules: the DAQ HAT projects vendor everything they need
+      # (ESP32C6/components/wifi_hosted) or pull it via the ESP-IDF component
+      # manager (ESP32P4/managed_components). Nothing in .gitmodules is theirs.
+
+      - name: Setup Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.x"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade pip platformio
+
+      - name: Read firmware versions
+        id: version
+        shell: bash
+        run: |
+          suffix="${{ inputs.version_suffix }}"
+          p4_version=$(python Firmware/tools/firmware_version.py p4)
+          c6_version=$(python Firmware/tools/firmware_version.py c6)
+          echo "p4=${p4_version}${suffix}" >> "$GITHUB_OUTPUT"
+          echo "c6=${c6_version}${suffix}" >> "$GITHUB_OUTPUT"
+          echo "DAQ HAT versions: P4 ${p4_version}${suffix}, C6 ${c6_version}${suffix}"
+
+      - name: Validate tag matches P4 firmware version
+        if: startsWith(github.ref, 'refs/tags/daq-fw-v')
+        shell: bash
+        run: |
+          expected_version="${GITHUB_REF_NAME#daq-fw-v}"
+          python Firmware/tools/firmware_version.py p4 --expect "$expected_version"
+
+      # Built separately, never with a single `pio run` over both projects:
+      # this repo's notes warn that concurrent pio invocations corrupt
+      # .pio/build/, and these are two independent PlatformIO projects anyway.
+      - name: Build ESP32-P4 firmware
+        run: pio run -d Firmware/DAQ_HAT/ESP32P4 -e esp32p4
+
+      - name: Build ESP32-C6 firmware
+        run: pio run -d Firmware/DAQ_HAT/ESP32C6 -e esp32c6
+
+      # The two chips take DIFFERENT image formats and getting this backwards is
+      # the most damaging mistake available here. See Firmware/tools/esp_image_tool.py.
+      #
+      #   P4 -> app-only firmware.bin, streamed into esp_ota_write() (A/B slot).
+      #   C6 -> full merged image from 0x0, written by the ESP-ROM loader.
+      #         relay_c6_push() calls c6_flasher_begin(size - offset, offset)
+      #         with offset = 0 on a fresh push, so an app-only image would be
+      #         laid over the C6 bootloader and brick the chip.
+      - name: Package DAQ HAT artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          p4_version="${{ steps.version.outputs.p4 }}"
+          c6_version="${{ steps.version.outputs.c6 }}"
+          p4_build="Firmware/DAQ_HAT/ESP32P4/.pio/build/esp32p4"
+          c6_build="Firmware/DAQ_HAT/ESP32C6/.pio/build/esp32c6"
+          out_dir="dist/daq-hat-firmware"
+          mkdir -p "$out_dir"
+
+          # --- P4: app-only OTA image ---------------------------------------
+          cp "$p4_build/firmware.bin" "$out_dir/bugbuster-daq-p4-v${p4_version}-ota.bin"
+          cp "$p4_build/firmware.elf" "$out_dir/bugbuster-daq-p4-v${p4_version}.elf"
+
+          # --- C6: full merged image from 0x0 -------------------------------
+          # `-merged` in the asset name is a deliberate second line of defence:
+          # anyone hand-uploading a replacement has to type the word.
+          python Firmware/tools/esp_image_tool.py merge \
+            --build-dir "$c6_build" \
+            --out "$out_dir/bugbuster-daq-c6-v${c6_version}-merged.bin"
+          cp "$c6_build/firmware.elf" "$out_dir/bugbuster-daq-c6-v${c6_version}.elf"
+
+          (
+            cd "$out_dir"
+            sha256sum ./* > "bugbuster-daq-hat-v${p4_version}-checksums.txt"
+          )
+
+      - name: Verify image formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_dir="dist/daq-hat-firmware"
+          python Firmware/tools/esp_image_tool.py verify --format app-only \
+            "$out_dir"/bugbuster-daq-p4-v*-ota.bin
+          python Firmware/tools/esp_image_tool.py verify --format merged \
+            "$out_dir"/bugbuster-daq-c6-v*-merged.bin
+
+      - name: Upload DAQ HAT firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: daq-hat-firmware-v${{ steps.version.outputs.p4 }}
+          path: dist/daq-hat-firmware/*
+          if-no-files-found: error
+
+      - name: Publish DAQ HAT firmware release
+        if: startsWith(github.ref, 'refs/tags/daq-fw-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          p4_version="${{ steps.version.outputs.p4 }}"
+          c6_version="${{ steps.version.outputs.c6 }}"
+          title="DAQ HAT Firmware v${p4_version}"
+          notes="BugBuster DAQ HAT firmware release.\n\n- ESP32-P4 v${p4_version}: *-ota.bin is the app-only image for OTA updates.\n- ESP32-C6 v${c6_version}: *-merged.bin is a full image from 0x0 (bootloader + partitions + app) written by the ESP-ROM loader, NOT an OTA slot image."
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/daq-hat-firmware/* --clobber
+          else
+            gh release create "$tag" dist/daq-hat-firmware/* \
+              --draft \
+              --title "$title" \
+              --notes "$notes"
+          fi

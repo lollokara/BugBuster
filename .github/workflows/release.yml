@@ -30,6 +30,7 @@ jobs:
       version_suffix: ${{ steps.version.outputs.version_suffix }}
       build_rp2040: ${{ steps.diff.outputs.build_rp2040 }}
       build_esp32: ${{ steps.diff.outputs.build_esp32 }}
+      build_daq: ${{ steps.diff.outputs.build_daq }}
       build_desktop: ${{ steps.diff.outputs.build_desktop }}
     steps:
       - name: Checkout
@@ -77,8 +78,9 @@ jobs:
         run: |
           build_rp2040="true"
           build_esp32="true"
+          build_daq="true"
           build_desktop="true"
-          
+
           # Only check for skipped builds if this is a push to main (prerelease)
           if [ "${{ steps.version.outputs.is_prerelease }}" = "true" ]; then
             if git rev-parse --verify "${{ github.event.before }}" >/dev/null 2>&1; then
@@ -94,6 +96,11 @@ jobs:
                 echo "No ESP32 changes detected. Skipping build."
               fi
               
+              if git diff --quiet "${{ github.event.before }}" HEAD -- Firmware/DAQ_HAT/ Firmware/tools/firmware_version.py Firmware/tools/esp_image_tool.py .github/workflows/daq-hat-firmware.yml; then
+                build_daq="false"
+                echo "No DAQ HAT changes detected. Skipping build."
+              fi
+
               if git diff --quiet "${{ github.event.before }}" HEAD -- DesktopApp/BugBuster/ .github/workflows/desktop-release.yml; then
                 build_desktop="false"
                 echo "No Desktop changes detected. Skipping build."
@@ -107,6 +114,7 @@ jobs:
           
           echo "build_rp2040=$build_rp2040" >> "$GITHUB_OUTPUT"
           echo "build_esp32=$build_esp32" >> "$GITHUB_OUTPUT"
+          echo "build_daq=$build_daq" >> "$GITHUB_OUTPUT"
           echo "build_desktop=$build_desktop" >> "$GITHUB_OUTPUT"
 
   rp2040:
@@ -127,6 +135,15 @@ jobs:
       version_suffix: ${{ needs.prep.outputs.version_suffix }}
     secrets: inherit
 
+  daq:
+    name: Build DAQ HAT
+    needs: prep
+    if: needs.prep.outputs.build_daq == 'true'
+    uses: ./.github/workflows/daq-hat-firmware.yml
+    with:
+      version_suffix: ${{ needs.prep.outputs.version_suffix }}
+    secrets: inherit
+
   desktop:
     name: Build Desktop
     needs: prep
@@ -138,8 +155,8 @@ jobs:
 
   publish:
     name: Publish combined release
-    needs: [prep, rp2040, esp32, desktop]
-    if: always() && (needs.prep.result == 'success') && (needs.rp2040.result == 'success' || needs.rp2040.result == 'skipped') && (needs.esp32.result == 'success' || needs.esp32.result == 'skipped') && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped')
+    needs: [prep, rp2040, esp32, daq, desktop]
+    if: always() && (needs.prep.result == 'success') && (needs.rp2040.result == 'success' || needs.rp2040.result == 'skipped') && (needs.esp32.result == 'success' || needs.esp32.result == 'skipped') && (needs.daq.result == 'success' || needs.daq.result == 'skipped') && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped')
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -166,6 +183,14 @@ jobs:
           path: dist/esp32
           merge-multiple: true
 
+      - name: Download DAQ HAT artifacts
+        if: needs.prep.outputs.build_daq == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: daq-hat-firmware-*
+          path: dist/daq
+          merge-multiple: true
+
       - name: Download Desktop artifacts
         if: needs.prep.outputs.build_desktop == 'true'
         uses: actions/download-artifact@v4
@@ -181,12 +206,23 @@ jobs:
         run: |
           build_rp2040="${{ needs.prep.outputs.build_rp2040 }}"
           build_esp32="${{ needs.prep.outputs.build_esp32 }}"
+          build_daq="${{ needs.prep.outputs.build_daq }}"
           build_desktop="${{ needs.prep.outputs.build_desktop }}"
-          
-          if [ "$build_rp2040" = "false" ] || [ "$build_esp32" = "false" ] || [ "$build_desktop" = "false" ]; then
+
+          if [ "$build_rp2040" = "false" ] || [ "$build_esp32" = "false" ] || [ "$build_daq" = "false" ] || [ "$build_desktop" = "false" ]; then
             echo "Looking for cached assets from a previous release..."
             mkdir -p dist/prev_release
 
+            # NOTE: the DAQ HAT (p4/c6) is deliberately NOT a requirement here.
+            # Its assets are newer than the oldest releases we may fall back to,
+            # and `p4`/`c6` are optional in bugbuster-update-manifest.json by
+            # design (update_manager.cpp's read_component treats their absence
+            # as "this release has no DAQ HAT image", not a malformed manifest).
+            # Requiring them would hard-fail an otherwise fine nightly. The
+            # staging step below warns if a skipped DAQ build finds no cached
+            # asset. Official releases always build the DAQ HAT -- change
+            # detection only runs for prereleases -- so a real release can never
+            # ship without p4/c6.
             release_has_required_assets() {
               local tag="$1"
               local asset_names
@@ -255,6 +291,7 @@ jobs:
           mkdir -p dist/release
           build_rp2040="${{ needs.prep.outputs.build_rp2040 }}"
           build_esp32="${{ needs.prep.outputs.build_esp32 }}"
+          build_daq="${{ needs.prep.outputs.build_daq }}"
           build_desktop="${{ needs.prep.outputs.build_desktop }}"
 
           # RP2040 staging
@@ -277,6 +314,27 @@ jobs:
             echo "Copying cached ESP32 assets..."
             cp -v dist/prev_release/*esp32s3* dist/release/ 2>/dev/null || true
             cp -v dist/prev_release/*spiffs* dist/release/ 2>/dev/null || true
+          fi
+
+          # DAQ HAT staging (ESP32-P4 app-only OTA image + ESP32-C6 merged image)
+          if [ "$build_daq" = "true" ]; then
+            if [ -d dist/daq ]; then
+              cp -rv dist/daq/* dist/release/ || true
+            fi
+          elif [ -d dist/prev_release ]; then
+            echo "Copying cached DAQ HAT assets..."
+            cp -v dist/prev_release/*bugbuster-daq-* dist/release/ 2>/dev/null || true
+          fi
+
+          # Carrying forward a manifest entry whose asset is not in this release
+          # would publish a URL with nothing behind it, so the manifest step
+          # below only emits p4/c6 when the file is actually staged. Warn loudly
+          # here so a silently DAQ-less nightly is visible in the run log.
+          if [ "$build_daq" = "false" ]; then
+            if ! ls dist/release/bugbuster-daq-p4-v*-ota.bin >/dev/null 2>&1 \
+               || ! ls dist/release/bugbuster-daq-c6-v*-merged.bin >/dev/null 2>&1; then
+              echo "::warning::DAQ HAT build was skipped and no cached p4/c6 assets were found. This release will have no DAQ HAT images and multi-target OTA will report 'release has no C6 image'."
+            fi
           fi
 
           # Desktop staging
@@ -334,6 +392,7 @@ jobs:
           import json
           import os
           import re
+          import sys
           import zlib
 
           repo = os.environ["GITHUB_REPOSITORY"]
@@ -348,6 +407,14 @@ jobs:
                   if matches:
                       return matches[0]
               raise SystemExit(f"missing release asset for {patterns}")
+
+          def pick_optional(pattern):
+              # p4/c6 are optional in the manifest schema. Emitting an entry for
+              # an asset that is not in this release would publish a URL with
+              # nothing behind it, so absence must mean "omit the key" -- never
+              # "carry the previous URL forward".
+              matches = sorted(glob.glob(os.path.join("dist/release", pattern)))
+              return matches[0] if matches else None
 
           def sha256(path):
               h = hashlib.sha256()
@@ -371,6 +438,8 @@ jobs:
           rp = pick(["bugbuster-hat-rp2040-v*.bin"])
           esp = pick(["bugbuster-esp32s3-v*-ota.bin"])
           spiffs = pick(["spiffs.bin"])
+          p4 = pick_optional("bugbuster-daq-p4-v*-ota.bin")
+          c6 = pick_optional("bugbuster-daq-c6-v*-merged.bin")
           rp_name = os.path.basename(rp)
           esp_name = os.path.basename(esp)
           spiffs_name = os.path.basename(spiffs)
@@ -410,6 +479,48 @@ jobs:
                   "sha256": sha256(spiffs),
               },
           }
+
+          # --- DAQ HAT (optional) -------------------------------------------
+          # The two chips take different image formats and confusing them is the
+          # most damaging mistake in this pipeline: the C6 image is written from
+          # flash offset 0 by the ESP-ROM loader, so an app-only binary there
+          # overwrites the bootloader and bricks the chip with no A/B slot and
+          # no second MCU to recover it. Re-verify here rather than trusting the
+          # build job -- these files may have been carried forward from an older
+          # release, or hand-replaced on the release page.
+          sys.path.insert(0, "Firmware/tools")
+          import esp_image_tool
+
+          if p4:
+              esp_image_tool.verify_app_only(open(p4, "rb").read())
+              p4_name = os.path.basename(p4)
+              p4_ver = version_from_name(p4, r"bugbuster-daq-p4-v(.+)-ota\.bin")
+              manifest["p4"] = {
+                  "buildId": f"{p4_ver}+{run_number}.{sha[:12]}",
+                  "version": p4_ver,
+                  "asset": p4_name,
+                  "url": f"{base}/{p4_name}",
+                  "size": os.path.getsize(p4),
+                  "sha256": sha256(p4),
+              }
+          else:
+              print("no P4 asset staged; omitting the manifest 'p4' key")
+
+          if c6:
+              esp_image_tool.verify_merged(open(c6, "rb").read())
+              c6_name = os.path.basename(c6)
+              c6_ver = version_from_name(c6, r"bugbuster-daq-c6-v(.+)-merged\.bin")
+              manifest["c6"] = {
+                  "buildId": f"{c6_ver}+{run_number}.{sha[:12]}",
+                  "version": c6_ver,
+                  "asset": c6_name,
+                  "url": f"{base}/{c6_name}",
+                  "size": os.path.getsize(c6),
+                  "sha256": sha256(c6),
+              }
+          else:
+              print("no C6 asset staged; omitting the manifest 'c6' key")
+
           out = "dist/release/bugbuster-update-manifest.json"
           with open(out, "w", encoding="utf-8") as f:
               json.dump(manifest, f, indent=2, sort_keys=True)
@@ -510,6 +621,8 @@ jobs:
           
           rp2040=$(python Firmware/tools/firmware_version.py rp2040)
           esp32=$(python Firmware/tools/firmware_version.py esp32)
+          p4=$(python Firmware/tools/firmware_version.py p4)
+          c6=$(python Firmware/tools/firmware_version.py c6)
           desktop=$(python DesktopApp/BugBuster/scripts/desktop_version.py --check)
 
           notes=$(cat <<EOF
@@ -520,6 +633,8 @@ jobs:
           - **Desktop App**: v${desktop}
           - **ESP32 Firmware**: v${esp32}
           - **RP2040 HAT Firmware**: v${rp2040}
+          - **DAQ HAT ESP32-P4 Firmware**: v${p4} (\`*-ota.bin\`, app-only OTA image)
+          - **DAQ HAT ESP32-C6 Firmware**: v${c6} (\`*-merged.bin\`, full image from 0x0)
 
           See \`SHA256SUMS.txt\` for asset checksums.
           EOF
@@ -554,7 +669,12 @@ jobs:
             if os.path.exists(manifest_path):
                 with open(manifest_path, "r", encoding="utf-8") as f:
                     manifest = json.load(f)
-                for component in ("rp2040", "esp32"):
+                # Every component that carries a URL must be rewritten to point
+                # at the archive tag, or the archived manifest links back to the
+                # rolling `nightly` release whose assets get deleted on the next
+                # run. "spiffs" was already missing from this list before p4/c6
+                # were added.
+                for component in ("rp2040", "esp32", "spiffs", "p4", "c6"):
                     asset = manifest.get(component, {}).get("asset")
                     if asset:
                         repo = manifest["repo"]

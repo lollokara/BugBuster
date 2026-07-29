@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[2]
 ESP32_BBP = ROOT / "Firmware" / "ESP32" / "src" / "bbp" / "bbp.h"
 RP2040_CMAKE = ROOT / "Firmware" / "RP2040" / "CMakeLists.txt"
 RP2040_MAIN = ROOT / "Firmware" / "RP2040" / "src" / "bb_main.c"
+P4_VERSION_H = ROOT / "Firmware" / "DAQ_HAT" / "ESP32P4" / "include" / "version.h"
+C6_VERSION_H = ROOT / "Firmware" / "DAQ_HAT" / "ESP32C6" / "include" / "version.h"
 
 
 def read_text(path: Path) -> str:
@@ -87,13 +89,45 @@ def rp2040_version() -> str:
     return version
 
 
+def version_h_version(path: Path) -> str:
+    """Parse MAJOR.MINOR.PATCH out of a DAQ HAT `version.h`.
+
+    Both DAQ HAT chips carry the same header shape (see the P4's for the
+    canonical comment). The C6's is CI-only: DDP carries no C6 build ID, so
+    nothing reports this value over the wire.
+    """
+    text = read_text(path)
+
+    def macro(name: str) -> str:
+        match = re.search(rf"(?m)^#define\s+{name}\s+(\d+)\s*$", text)
+        if match is None:
+            raise RuntimeError(f"Could not read {name} from {path}")
+        return match.group(1)
+
+    return ".".join(
+        [
+            macro("FW_VERSION_MAJOR"),
+            macro("FW_VERSION_MINOR"),
+            macro("FW_VERSION_PATCH"),
+        ]
+    )
+
+
+READERS = {
+    "esp32": esp32_version,
+    "rp2040": rp2040_version,
+    "p4": lambda: version_h_version(P4_VERSION_H),
+    "c6": lambda: version_h_version(C6_VERSION_H),
+}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read BugBuster firmware versions from source.")
-    parser.add_argument("target", choices=["esp32", "rp2040"])
+    parser.add_argument("target", choices=sorted(READERS))
     parser.add_argument("--expect", help="Fail if the parsed version does not match this value.")
     args = parser.parse_args()
 
-    version = esp32_version() if args.target == "esp32" else rp2040_version()
+    version = READERS[args.target]()
     if args.expect is not None and version != args.expect:
         print(f"{args.target} version is {version}, expected {args.expect}", file=sys.stderr)
         return 1

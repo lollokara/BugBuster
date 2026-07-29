@@ -19,6 +19,7 @@
 #include "npx.h"
 #include "c6_config.h"
 #include "wifi_hosted.h"
+#include "version.h"
 
 static const char *TAG = "daq_hat";
 
@@ -83,7 +84,9 @@ static void draw_wifi_stream_screen(void)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "DAQ HAT (C6) display firmware starting...");
+    // The only way to read the C6 firmware version off a live board: DDP does
+    // not carry a C6 build ID, so the S3 never sees it (see include/version.h).
+    ESP_LOGI(TAG, "DAQ HAT (C6) display firmware starting... (%s)", FW_VERSION_STRING);
 
     theme_init();
     settings_init();
