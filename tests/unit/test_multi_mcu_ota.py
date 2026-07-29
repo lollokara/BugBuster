@@ -220,3 +220,19 @@ def test_payload_carrying_responses_mirror_on_both_sides():
                         ("DAQ_C6_VERSION", "99")):
         assert _byte(S3LINK, "HATP_RSP", name) == _byte(HAT_H, "HAT_RSP", name) == value, \
             f"HAT_RSP_{name} differs across the two headers"
+
+
+def test_every_c6_flasher_reset_path_releases_the_boot_straps():
+    """c6_flasher_begin() drives C6_BOOT_PIN low and never releases it, while
+    both finish() and abort() reset the C6 via esp_loader_reset_target(). If the
+    strap is still asserted at that reset the C6 returns to ROM download mode --
+    black display, no log, and a P4 reset does not clear it. Releasing after the
+    flasher call is too late; the reset happens inside it."""
+    for cmd in ("HATP_CMD_OTA_END", "HATP_CMD_OTA_ABORT"):
+        body = _case_body(cmd, 900)
+        c6 = body[body.index("HATP_OTA_TARGET_C6"):]
+        call = min((c6.index(f) for f in ("c6_flasher_finish", "c6_flasher_abort")
+                    if f in c6), default=None)
+        assert call is not None, f"{cmd} has no C6 flasher call"
+        assert "c6_release_boot_straps" in c6[:call], \
+            f"{cmd} resets the C6 without releasing the BOOT straps first"

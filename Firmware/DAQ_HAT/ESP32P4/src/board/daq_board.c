@@ -952,6 +952,25 @@ static relay_target_t s_relay_target = RELAY_TARGET_C6;
 
 // Bring the C6 display link (DDP master) back up after a C6 flash hands UART2
 // back. ddp_master_deinit() released the driver; init+start re-acquire it.
+// Release the C6 BOOT straps before anything resets the C6.
+//
+// c6_flasher_begin() drives C6_BOOT_PIN LOW (download mode) for the whole
+// transfer and c6_flasher.c never releases it itself. Both c6_flasher_finish()
+// and c6_flasher_abort() call esp_loader_reset_target(), so if the strap is
+// still asserted the C6 comes back up in ROM download mode instead of running
+// its image -- silent, no crash and no log, just a black display forever, and a
+// P4 reset does not clear it.
+//
+// cmd_c6flash in cli.c and relay_c6_push() each do this inline; the S3-driven
+// inline OTA path needs the identical step. Keep this call immediately before
+// every finish/abort, not folded into c6_link_restart() -- the reset happens
+// inside the flasher call, so releasing afterwards is already too late.
+static void c6_release_boot_straps(void)
+{
+    gpio_set_level((gpio_num_t)C6_BOOT_PIN,    1);
+    gpio_set_level((gpio_num_t)C6_BOOT_EN_PIN, 1);
+}
+
 static void c6_link_restart(daq_board_t *b)
 {
     ddp_master_init(&b->ddp);
@@ -1660,7 +1679,10 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (s_ota_target == HATP_OTA_TARGET_C6) {
                 ddp_master_deinit(&b->ddp);          // hand UART2 to the flasher
                 if (c6_flasher_begin(meta.image_size, 0) != ESP_OK) {
+                    // begin() may already have asserted the straps before failing.
+                    c6_release_boot_straps();
                     c6_link_restart(b);
+                    s_ota_target = HATP_OTA_TARGET_P4;
                     return -1;
                 }
                 s_c6_ota_size = meta.image_size;
@@ -1698,8 +1720,10 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         }
         case HATP_CMD_OTA_END:
             if (s_ota_target == HATP_OTA_TARGET_C6) {
+                c6_release_boot_straps();            // BEFORE the reset inside finish()
                 esp_err_t rc = c6_flasher_finish();
                 c6_link_restart(b);                  // C6 now runs the new image
+                s_ota_target = HATP_OTA_TARGET_P4;
                 return (rc == ESP_OK) ? 0 : -1;
             }
             if (s_ota_target == HATP_OTA_TARGET_STAGE) {
@@ -1710,6 +1734,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             return (ota_end() == ESP_OK) ? 0 : -1;
         case HATP_CMD_OTA_ABORT:
             if (s_ota_target == HATP_OTA_TARGET_C6) {
+                c6_release_boot_straps();            // BEFORE the reset inside abort()
                 c6_flasher_abort();
                 c6_link_restart(b);
                 s_ota_target = HATP_OTA_TARGET_P4;
