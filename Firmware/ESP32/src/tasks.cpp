@@ -1735,7 +1735,7 @@ void initTasks(AD74416H& device)
     if (xTaskCreatePinnedToCore(
         taskAdcPoll,
         "adcPoll",
-        4096,
+        TASK_STACK_ADCPOLL,
         nullptr,
         3,
         &g_adcTaskHandle,
@@ -1747,7 +1747,7 @@ void initTasks(AD74416H& device)
     if (xTaskCreatePinnedToCore(
         taskFaultMonitor,
         "faultMon",
-        4096,
+        TASK_STACK_FAULTMON,
         nullptr,
         4,
         nullptr,
@@ -1759,7 +1759,7 @@ void initTasks(AD74416H& device)
     if (xTaskCreatePinnedToCore(
         taskCommandProcessor,
         "cmdProc",
-        8192,
+        TASK_STACK_CMDPROC,
         nullptr,
         2,
         nullptr,
@@ -1774,7 +1774,7 @@ void initTasks(AD74416H& device)
     if (xTaskCreatePinnedToCore(
         taskWavegen,
         "wavegen",
-        4096,
+        TASK_STACK_WAVEGEN,
         nullptr,
         3,
         &g_wavegenTask,

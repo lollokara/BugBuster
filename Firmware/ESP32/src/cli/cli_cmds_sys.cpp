@@ -1181,26 +1181,32 @@ extern "C" void cli_cmd_coredump(const char* args)
 extern "C" void cli_cmd_stack_hwm(const char* args)
 {
     (void)args;
-    struct { const char *name; TaskHandle_t h; } tasks[] = {
-        { "adcPoll",  g_adcTaskHandle },
-        { "faultMon", xTaskGetHandle("faultMon") },
-        { "cmdProc",  xTaskGetHandle("cmdProc") },
-        { "wavegen",  g_wavegenTask },
+    struct { const char *name; TaskHandle_t h; uint32_t declared; } tasks[] = {
+        { "adcPoll",  g_adcTaskHandle,             TASK_STACK_ADCPOLL  },
+        { "faultMon", xTaskGetHandle("faultMon"),  TASK_STACK_FAULTMON },
+        { "cmdProc",  xTaskGetHandle("cmdProc"),   TASK_STACK_CMDPROC  },
+        { "wavegen",  g_wavegenTask,               TASK_STACK_WAVEGEN  },
+        { "mainLoop", xTaskGetHandle("mainLoop"),  8192 },
+        { "bbpCli",   xTaskGetHandle("bbpCli"),    8192 },
     };
-    term_println("\r\n--- Stack High-Water Marks (words free at minimum) ---");
+    // NOTE: on ESP-IDF uxTaskGetStackHighWaterMark() returns BYTES, not words
+    // (IDF sizes stacks in bytes too). An earlier version of this command
+    // multiplied by 4 and printed figures larger than the whole stack.
+    term_println("\r\n--- Stack High-Water Marks (bytes never used) ---");
+    term_println("  task        declared   unused     peak-used");
     for (auto &t : tasks) {
         if (!t.h) {
             term_printf("  %-10s  handle not found\r\n", t.name);
             continue;
         }
-        UBaseType_t hwm = uxTaskGetStackHighWaterMark(t.h);
+        uint32_t hwm = (uint32_t)uxTaskGetStackHighWaterMark(t.h);
         const char *flag = "";
-        if      (hwm < 128) flag = "  *** LOW — overflow risk ***";
-        else if (hwm < 256) flag = "  (warn — monitor closely)";
-        term_printf("  %-10s  %4lu words free  (%4lu bytes)%s\r\n",
-                    t.name, (unsigned long)hwm, (unsigned long)hwm * 4, flag);
+        if      (hwm < 512)  flag = "  *** LOW — overflow risk ***";
+        else if (hwm < 1024) flag = "  (warn — monitor closely)";
+        term_printf("  %-10s  %6lu   %6lu   %6lu%s\r\n", t.name,
+                    (unsigned long)t.declared, (unsigned long)hwm,
+                    (unsigned long)(t.declared > hwm ? t.declared - hwm : 0), flag);
     }
-    term_println("  (1 word = 4 bytes; each task stack declared in tasks.cpp)");
     // Also emit to ESP log so it appears in the serial monitor stream
     tasks_log_stack_hwm();
 }

@@ -360,6 +360,21 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
  *        measurement task.  Call after steady-state warm-up (~60 s) to detect
  *        stacks that are close to exhaustion before shipping.
  */
+// Stack sizes for the Core-1 application tasks, in BYTES (ESP-IDF sizes stacks
+// in bytes, not words). These MUST be internal RAM -- see the comment at the
+// xTaskCreatePinnedToCore calls in tasks.cpp.
+//
+// Right-sized 2026-07-29 from measured high-water marks after sustained running
+// (peak use: adcPoll 1284, faultMon 1276, cmdProc 832, wavegen 868 bytes). The
+// previous 4096/4096/8192/4096 left ~16 KB of internal RAM permanently unused,
+// which mattered: the OTA update worker needs a 12 KB CONTIGUOUS internal block
+// and could not get one. Each value keeps roughly 2x headroom over peak; check
+// `stack_hwm` before shrinking further, and never go below ~1 KB of headroom.
+#define TASK_STACK_ADCPOLL   3072
+#define TASK_STACK_FAULTMON  3072
+#define TASK_STACK_CMDPROC   4096
+#define TASK_STACK_WAVEGEN   3072
+
 void tasks_log_stack_hwm(void);
 
 // -----------------------------------------------------------------------------
