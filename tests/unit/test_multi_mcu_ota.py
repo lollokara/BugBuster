@@ -379,3 +379,58 @@ def test_every_daq_helper_gates_on_a_daq_hat_being_present():
         body = _code_only(_fn_body(HAT_CPP, f"bool {fn}("))
         assert "HAT_TYPE_DAQ_POWER" in body, \
             f"{fn} does not verify a DAQ HAT is attached before sending"
+
+
+UPD_H = Path("Firmware/ESP32/src/update/update_manager.h").read_text()
+UPD_CPP = Path("Firmware/ESP32/src/update/update_manager.cpp").read_text()
+
+
+def test_update_targets_are_distinct_bits():
+    bits = dict(re.findall(r"UPDATE_TARGET_(\w+)\s*=\s*1u\s*<<\s*(\d+)", UPD_H))
+    assert set(bits) == {"RP2040", "ESP32", "P4", "C6"}, f"unexpected targets: {bits}"
+    assert len(set(bits.values())) == 4, f"two targets share a bit: {bits}"
+
+
+def test_multi_target_order_puts_c6_before_p4_and_esp32_last():
+    """C6 before P4 because the C6's ROM-loader push is driven BY the P4, which
+    must still be running its current image. ESP32 last because rebooting it
+    ends the sequence."""
+    order = re.search(r"#define UPDATE_TARGET_ORDER\s*\\\s*\{([^}]*)\}", UPD_H).group(1)
+    names = re.findall(r"UPDATE_TARGET_(\w+)", order)
+    assert names.index("C6") < names.index("P4"), "C6 must be applied before the P4"
+    assert names[-1] == "ESP32", "the ESP32 must be updated last"
+
+
+def test_apply_takes_a_target_mask_not_two_booleans():
+    assert "update_manager_apply(uint32_t targets" in UPD_H
+    assert "update_manager_apply_release_index(uint8_t index, uint32_t targets" in UPD_H
+    assert "bool update_rp2040, bool update_esp32" not in UPD_H, \
+        "the old boolean API is still exposed; callers can bypass target validation"
+
+
+def test_daq_targets_are_gated_on_a_daq_hat_being_attached():
+    body = _code_only(_fn_body(UPD_CPP, "uint32_t update_manager_available_targets("))
+    assert "HAT_TYPE_DAQ_POWER" in body, "P4/C6 must only be offered with a DAQ HAT"
+    assert "UPDATE_TARGETS_DAQ_HAT" in body
+
+
+def test_unavailable_targets_are_rejected_not_silently_dropped():
+    """Silently dropping a target reports success for an update that never
+    happened, which is worse than an error a client can surface."""
+    body = _code_only(_fn_body(UPD_CPP, "static bool targets_are_valid("))
+    assert "update_manager_available_targets()" in body
+    assert "return false" in body
+
+
+def test_every_apply_call_site_uses_the_mask():
+    """A missed call site would still compile if it passed bools that implicitly
+    converted to uint32_t -- 'true, true' would silently mean RP2040|ESP32."""
+    for path in ("Firmware/ESP32/src/net/api_core.cpp",
+                 "Firmware/ESP32/src/web/webserver.cpp",
+                 "Firmware/ESP32/src/cli/cli_cmds_sys.cpp",
+                 "Firmware/ESP32/src/cli/cli_menu.cpp"):
+        src = Path(path).read_text()
+        for m in re.finditer(r"update_manager_apply(?:_release_index)?\(([^;]*?)&out|&root", src):
+            args = m.group(1) or ""
+            assert "true" not in args and "false" not in args, \
+                f"{path} still passes booleans to the target mask: {args.strip()}"

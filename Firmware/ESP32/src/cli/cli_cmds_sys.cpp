@@ -924,7 +924,8 @@ static void cli_update_apply_task(void *ctx)
     cJSON *out = NULL;
     esp_err_t err = args.check_only
         ? update_manager_check(&out)
-        : update_manager_apply(args.rp2040, args.esp32, &out);
+        : update_manager_apply((args.rp2040 ? UPDATE_TARGET_RP2040 : 0u) |
+                               (args.esp32  ? UPDATE_TARGET_ESP32  : 0u), &out);
 
     s_cli_update_result[0] = '\0';
     if (out) {

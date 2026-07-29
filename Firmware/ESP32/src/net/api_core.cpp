@@ -1102,14 +1102,19 @@ static char *api_ota_releases(void)
 
 static char *api_ota_apply(const cJSON *body)
 {
-    bool rp  = cJSON_IsTrue(body_get(body, "rp2040"));
-    bool esp = cJSON_IsTrue(body_get(body, "esp32"));
+    // Accept the DAQ-HAT targets alongside the original two booleans; the
+    // request shape stays backward compatible for existing clients.
+    uint32_t targets = 0;
+    if (cJSON_IsTrue(body_get(body, "rp2040"))) targets |= UPDATE_TARGET_RP2040;
+    if (cJSON_IsTrue(body_get(body, "esp32")))  targets |= UPDATE_TARGET_ESP32;
+    if (cJSON_IsTrue(body_get(body, "p4")))     targets |= UPDATE_TARGET_P4;
+    if (cJSON_IsTrue(body_get(body, "c6")))     targets |= UPDATE_TARGET_C6;
     cJSON *jidx = body_get(body, "index");
     cJSON *out = NULL;
     if (cJSON_IsNumber(jidx)) {
-        update_manager_apply_release_index((uint8_t)jidx->valueint, rp, esp, &out);
+        update_manager_apply_release_index((uint8_t)jidx->valueint, targets, &out);
     } else {
-        update_manager_apply(rp, esp, &out);
+        update_manager_apply(targets, &out);
     }
     if (out) return json_take(out);
     return api_error("ota apply failed");

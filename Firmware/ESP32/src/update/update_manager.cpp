@@ -812,9 +812,58 @@ esp_err_t update_manager_check(cJSON **out)
     return ESP_OK;
 }
 
-esp_err_t update_manager_apply(bool update_rp2040, bool update_esp32, cJSON **out)
+uint32_t update_manager_available_targets(void)
+{
+    uint32_t mask = UPDATE_TARGET_RP2040 | UPDATE_TARGET_ESP32;
+    const HatState *hs = hat_get_state();
+    if (hs && hs->connected && hs->type == HAT_TYPE_DAQ_POWER) {
+        mask |= UPDATE_TARGETS_DAQ_HAT;
+    }
+    return mask;
+}
+
+// Reject rather than silently drop unavailable targets: a client that asked to
+// update the P4 must not be told the update succeeded when there is no DAQ HAT.
+static bool targets_are_valid(uint32_t targets, char *err, size_t err_len)
+{
+    if (targets == 0) {
+        snprintf(err, err_len, "no update target selected");
+        return false;
+    }
+    uint32_t unknown = targets & ~(uint32_t)UPDATE_TARGETS_ALL;
+    if (unknown) {
+        snprintf(err, err_len, "unknown update target bits 0x%lx", (unsigned long)unknown);
+        return false;
+    }
+    uint32_t missing = targets & ~update_manager_available_targets();
+    if (missing) {
+        snprintf(err, err_len, "target unavailable (no DAQ HAT attached?): bits 0x%lx",
+                 (unsigned long)missing);
+        return false;
+    }
+    return true;
+}
+
+esp_err_t update_manager_apply(uint32_t targets, cJSON **out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
+
+    char why[96];
+    if (!targets_are_valid(targets, why, sizeof(why))) {
+        set_error(why);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (targets & UPDATE_TARGETS_DAQ_HAT) {
+        // The DAQ targets need the streamed HAT-link download path, which is
+        // not wired yet. Fail loudly rather than reporting a success that did
+        // nothing -- the wire layer (hat_ota_*) exists, the orchestration does not.
+        set_error("P4/C6 updates are not wired to the download path yet");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    const bool update_rp2040 = (targets & UPDATE_TARGET_RP2040) != 0;
+    const bool update_esp32  = (targets & UPDATE_TARGET_ESP32) != 0;
+
     set_state(UPDATE_STATE_CHECKING, "checking");
     s_update.last_error[0] = '\0';
 
@@ -955,10 +1004,21 @@ esp_err_t update_manager_release_options(uint8_t max_options, cJSON **out)
     return ESP_OK;
 }
 
-esp_err_t update_manager_apply_release_index(uint8_t index, bool update_rp2040,
-                                             bool update_esp32, cJSON **out)
+esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJSON **out)
 {
     if (!out || index >= 5) return ESP_ERR_INVALID_ARG;
+
+    char why[96];
+    if (!targets_are_valid(targets, why, sizeof(why))) {
+        set_error(why);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (targets & UPDATE_TARGETS_DAQ_HAT) {
+        set_error("P4/C6 updates are not wired to the download path yet");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    const bool update_rp2040 = (targets & UPDATE_TARGET_RP2040) != 0;
+    const bool update_esp32  = (targets & UPDATE_TARGET_ESP32) != 0;
     set_state(UPDATE_STATE_CHECKING, "checking_releases");
     s_update.last_error[0] = '\0';
 

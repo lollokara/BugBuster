@@ -1660,7 +1660,9 @@ static void update_apply_task(void *arg)
              s_fw_picker_cur_esp, s_update_do_esp32 ? fr->esp_avail : "skip");
 
     cJSON *out = nullptr;
-    esp_err_t err = update_manager_apply_release_index(index, s_update_do_rp2040, s_update_do_esp32, &out);
+    uint32_t targets = (s_update_do_rp2040 ? UPDATE_TARGET_RP2040 : 0u) |
+                       (s_update_do_esp32  ? UPDATE_TARGET_ESP32  : 0u);
+    esp_err_t err = update_manager_apply_release_index(index, targets, &out);
     if (out) cJSON_Delete(out);
 
     if (err == ESP_OK) {

@@ -4000,7 +4000,9 @@ static void http_update_apply_task(void *arg)
     bool rp2040 = a->rp2040, esp32 = a->esp32;
     free(a);
     cJSON *root = NULL;
-    esp_err_t err = update_manager_apply(rp2040, esp32, &root);
+    uint32_t targets = (rp2040 ? UPDATE_TARGET_RP2040 : 0u) |
+                       (esp32  ? UPDATE_TARGET_ESP32  : 0u);
+    esp_err_t err = update_manager_apply(targets, &root);
     if (root) cJSON_Delete(root);
     bool reboot = update_manager_reboot_pending();
     if (err == ESP_OK && reboot) {
