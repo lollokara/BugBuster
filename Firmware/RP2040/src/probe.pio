@@ -1,0 +1,157 @@
+/*
+ * BUGBUSTER LOCAL OVERRIDE of lib/debugprobe/src/probe.pio.
+ *
+ * WHY THIS FILE EXISTS: upstream's probe_sm_init() sets the SWCLK/SWDIO pin
+ * directions with a single pio_sm_set_consecutive_pindirs() based at
+ * PROBE_PIN_OFFSET, which only works when the two pins are adjacent. The
+ * BugBuster HAT routes SWCLK to GPIO18 and SWDIO to GPIO16, so
+ * src/board_bugbuster_hat_config.h defines the two pins individually and does
+ * NOT define PROBE_PIN_OFFSET -- upstream's version therefore fails to compile
+ * with "'PROBE_PIN_OFFSET' undeclared".
+ *
+ * This lives in the superproject rather than in the debugprobe submodule on
+ * purpose. The same fix was previously made inside the submodule, was never
+ * pushed to the fork, and was silently lost -- CI only caught it months later,
+ * on the first release that rebuilt the RP2040. src/probe_config.h is already
+ * overridden the same way (it selects the board header via BB_HAT_FIRMWARE),
+ * so this matches the established pattern.
+ *
+ * CMakeLists.txt generates the PIO header from THIS file, not the submodule's.
+ * When bumping the debugprobe submodule, re-diff against
+ * lib/debugprobe/src/probe.pio and re-apply the marked override below.
+ *
+ * Base: debugprobe v2.3.0 (submodule commit 780b827).
+ */
+
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2021-2023 Raspberry Pi (Trading) Ltd.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ */
+
+// Every TX FIFO entry is either a command, or up to 32 bits of data.
+// Command format:
+//
+// | 13:9 |  8  |  7:0  |
+// | Cmd  | Dir | Count |
+//
+// Count is the number of bits to be transferred by this command, minus 1.
+// Dir is the output enable for the SWDIO pin.
+// Cmd is the address of the write_cmd, read_cmd or get_next_cmd label.
+//
+// write_cmd expects a FIFO data entry, but read_cmd does not.
+//
+// read_cmd pushes data to the FIFO, but write_cmd does not. (The lack of RX
+// garbage on writes allows the interface code to return early after pushing a
+// write command, as there is no need in general to poll for a command's
+// completion as long as all commands are executed in order.)
+//
+// The SWCLK period is 4 PIO SM execution cycles.
+
+.program probe
+.side_set 1 opt
+
+public write_cmd:
+public turnaround_cmd:                      ; Alias of write, used for probe_oen.pio
+    pull
+write_bitloop:
+    out pins, 1             [1]  side 0x0   ; Data is output by host on negedge
+    jmp x-- write_bitloop   [1]  side 0x1   ; ...and captured by target on posedge
+                                            ; Fall through to next command
+.wrap_target
+public get_next_cmd:
+    pull                         side 0x0   ; SWCLK is initially low
+    out x, 8                                ; Get bit count
+    out pindirs, 1                          ; Set SWDIO direction
+    out pc, 5                               ; Go to command routine
+
+read_bitloop:
+    nop                                     ; Additional delay on taken loop branch
+public read_cmd:
+    in pins, 1              [1]  side 0x1   ; Data is captured by host on posedge
+    jmp x-- read_bitloop         side 0x0
+    push
+.wrap                                       ; Wrap to next command
+
+
+; Implement probe_gpio_init() and probe_sm_init() methods here - set pins, offsets, sidesets etc
+% c-sdk {
+
+static inline void probe_gpio_init()
+{
+#if defined(PROBE_PIN_RESET)
+    // Target reset pin: pull up, input to emulate open drain pin
+    gpio_pull_up(PROBE_PIN_RESET);
+    // gpio_init will leave the pin cleared and set as input
+    gpio_init(PROBE_PIN_RESET);
+#endif
+    // Funcsel pins
+    pio_gpio_init(pio0, PROBE_PIN_SWCLK);
+    pio_gpio_init(pio0, PROBE_PIN_SWDIO);
+    // Make sure SWDIO has a pullup on it. Idle state is high
+    gpio_pull_up(PROBE_PIN_SWDIO);
+}
+
+// DAP interface says all pins have to be High-Z when disabled
+static inline void probe_gpio_deinit()
+{
+#if defined(PROBE_PIN_RESET)
+	gpio_deinit(PROBE_PIN_RESET);
+	gpio_disable_pulls(PROBE_PIN_RESET);
+#endif
+	gpio_deinit(PROBE_PIN_SWCLK);
+	gpio_disable_pulls(PROBE_PIN_SWCLK);
+	gpio_deinit(PROBE_PIN_SWDIO);
+	gpio_disable_pulls(PROBE_PIN_SWDIO);
+}
+
+static inline void probe_sm_init(pio_sm_config* sm_config) {
+
+    // Set SWCLK as a sideset pin
+    sm_config_set_sideset_pins(sm_config, PROBE_PIN_SWCLK);
+
+    // Set SWDIO offset
+    sm_config_set_out_pins(sm_config, PROBE_PIN_SWDIO, 1);
+    sm_config_set_set_pins(sm_config, PROBE_PIN_SWDIO, 1);
+#ifdef PROBE_IO_SWDI
+    sm_config_set_in_pins(sm_config, PROBE_PIN_SWDI);
+#else
+    sm_config_set_in_pins(sm_config, PROBE_PIN_SWDIO);
+#endif
+
+
+    // Set SWD and SWDIO pins as output to start. This will be set in the sm
+    // BUGBUSTER OVERRIDE — see the header comment at the top of this file.
+    // Upstream assumes SWCLK/SWDIO are adjacent and sets both pin directions in
+    // one "consecutive" call based at PROBE_PIN_OFFSET. On the BugBuster HAT
+    // they are GPIO18 and GPIO16 -- not adjacent -- so board_bugbuster_hat_config.h
+    // deliberately does not define PROBE_PIN_OFFSET. Set each pin explicitly.
+    pio_sm_set_consecutive_pindirs(pio0, PROBE_SM, PROBE_PIN_SWCLK, 1, true);
+    pio_sm_set_consecutive_pindirs(pio0, PROBE_SM, PROBE_PIN_SWDIO, 1, true);
+
+    // shift output right, autopull off, autopull threshold
+    sm_config_set_out_shift(sm_config, true, false, 0);
+    // shift input right as swd data is lsb first, autopush off
+    sm_config_set_in_shift(sm_config, true, false, 0);
+}
+
+%}

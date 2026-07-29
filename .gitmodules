@@ -4,7 +4,11 @@
 [submodule "Firmware/RP2040/lib/debugprobe"]
 	path = Firmware/RP2040/lib/debugprobe
 	url = https://github.com/lollokara/debugprobe.git
-	branch = bugbuster
+	# The fork has no "bugbuster" branch -- that name was declared here but never
+	# created, and the pinned commit is upstream v2.3.0 on master. BugBuster's
+	# local changes live in the superproject as override headers
+	# (Firmware/RP2040/src/probe_config.h, src/probe.pio), not in the submodule.
+	branch = master
 [submodule "Firmware/RP2040/lib/tinyusb"]
 	path = Firmware/RP2040/lib/tinyusb
 	url = https://github.com/lollokara/tinyusb.git

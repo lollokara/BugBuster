@@ -79,7 +79,12 @@ target_compile_options(bugbuster_hat PRIVATE -Wall)
 # Our local override headers must win over debugprobe defaults.
 
 # PIO programs — debugprobe SWD (PIO 0)
-pico_generate_pio_header(bugbuster_hat ${DEBUGPROBE_DIR}/src/probe.pio)
+# probe.pio is generated from OUR copy in src/, not the submodule's: upstream
+# sets both SWD pin directions with one consecutive-pindirs call based at
+# PROBE_PIN_OFFSET, which cannot express this HAT's non-adjacent GPIO18/GPIO16.
+# See the header comment in src/probe.pio, and re-diff it when bumping the
+# debugprobe submodule. This mirrors the existing src/probe_config.h override.
+pico_generate_pio_header(bugbuster_hat ${CMAKE_CURRENT_LIST_DIR}/src/probe.pio)
 pico_generate_pio_header(bugbuster_hat ${DEBUGPROBE_DIR}/src/probe_oen.pio)
 pico_generate_pio_header(bugbuster_hat ${DEBUGPROBE_DIR}/src/autobaud.pio)
 
