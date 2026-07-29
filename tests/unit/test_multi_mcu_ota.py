@@ -88,3 +88,73 @@ def test_c6_version_struct_does_not_restate_the_p4_version():
         assert "p4_version" not in body, f"{struct} restates the P4 version"
         for field in ("c6_version", "c6_build_id"):
             assert field in body, f"{struct} missing {field}"
+
+
+HAT_CPP = Path("Firmware/ESP32/src/hat/hat.cpp").read_text()
+
+
+def _fn_body(text: str, sig: str) -> str:
+    """Source of a single function, from its signature to its closing brace."""
+    start = text.index(sig)
+    return text[start:text.index("\n}\n", start) + 3]
+
+
+def test_ota_commands_mirror_the_p4_side():
+    for name, value in (("GET_VERSION", "60"), ("OTA_BEGIN", "61"), ("OTA_DATA", "62"),
+                        ("OTA_END", "63"), ("OTA_ABORT", "64"), ("OTA_STATUS", "65")):
+        assert _byte(S3LINK, "HATP_CMD", name) == _byte(HAT_H, "HAT_CMD", name) == value, \
+            f"{name} differs across the two headers"
+
+
+def test_wide_frame_sender_is_separate_from_the_32_byte_path():
+    """hat_send_frame() rejects payload_len > HAT_FRAME_MAX_LEN (32) and sizes its
+    stack buffer for 32. The OTA path needs 236-byte payloads. Merging the two
+    would silently raise the cap for every other command and the RP2040 HAT."""
+    assert "hat_send_frame_wide" in HAT_CPP
+    narrow = _fn_body(HAT_CPP, "static bool hat_send_frame(")
+    assert "HAT_FRAME_MAX_LEN" in narrow, "narrow sender lost its 32-byte guard"
+
+
+def test_wide_sender_buffer_is_sized_for_the_daq_link_payload():
+    body = _fn_body(HAT_CPP, "static bool hat_send_frame_wide(")
+    assert "HAT_OTA_WIDE_MAX" in body, "wide sender must size its buffer explicitly"
+    assert "HAT_FRAME_MAX_LEN" not in body, "wide sender must not reuse the 32-byte cap"
+
+
+def test_wide_sender_computes_crc_the_same_way_as_the_narrow_one():
+    """Both frames are parsed by one P4 receiver. A CRC over a different span
+    makes every wide frame fail CRC on the P4 with no other symptom."""
+    narrow = _fn_body(HAT_CPP, "static bool hat_send_frame(")
+    wide = _fn_body(HAT_CPP, "static bool hat_send_frame_wide(")
+    span = re.compile(r"crc8\(&frame\[2\],\s*1 \+ payload_len\)")
+    assert span.search(narrow), "narrow CRC span changed; update this test deliberately"
+    assert span.search(wide), "wide sender must CRC over CMD+payload, like the narrow one"
+    assert "HAT_FRAME_SYNC" in wide, "wide sender must emit the same SYNC byte"
+
+
+def test_ota_chunk_max_matches_the_p4_wire_budget():
+    p4 = re.search(r"HATP_MAX_PAYLOAD\s+(\d+)u?", S3LINK).group(1)
+    assert p4 == "240"
+    assert re.search(r"HAT_OTA_WIDE_MAX\s+(\d+)", HAT_H).group(1) == p4, \
+        "wide budget must equal the P4's HATP_MAX_PAYLOAD"
+    assert re.search(r"HAT_OTA_CHUNK_MAX\s+(\d+)", HAT_H).group(1) == "236", \
+        "236 = 240 payload budget - 4-byte offset prefix"
+
+
+def test_ota_meta_layout_matches_the_p4_struct():
+    """hat_ota_meta_t is memcpy'd onto the wire and read back as ota_meta_t."""
+    body = _struct_body(HAT_H, "hat_ota_meta_t")
+    for field in ("image_size", "version_u32", "sha256", "product_id"):
+        assert field in body, f"hat_ota_meta_t missing {field}"
+
+
+def test_ota_senders_exist():
+    for sig in ("bool hat_ota_begin(", "bool hat_ota_data(", "bool hat_ota_end("):
+        assert sig in HAT_CPP, f"{sig} not implemented"
+        assert sig.replace("bool ", "").rstrip("(") in HAT_H, f"{sig} not declared"
+
+
+def test_ota_senders_hold_the_hat_link_mutex():
+    """An OTA transfer must not interleave with telemetry polling on the link."""
+    body = _fn_body(HAT_CPP, "static bool hat_ota_txn(")
+    assert "s_hat_mutex" in body, "OTA transactions must serialize on the HAT mutex"

@@ -294,6 +294,45 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_DAQ_RELAY_APPLY 0x7Au   // no payload: apply the staged C6 image
 #define HAT_CMD_DAQ_C6_VERSION  0x6Au   // no payload -> hat_daq_c6_version_t
 
+// P4 version + OTA image transfer. These have existed on the P4 since before
+// the S3 could drive them (HATP_CMD_GET_VERSION / HATP_CMD_OTA_* in s3_link.h);
+// this is the S3 half of that contract, so the bytes are dictated by the P4 and
+// must not be reassigned. Do not confuse these with HAT_CMD_FW_* (0x49-0x4C),
+// which are the RP2040 LA HAT's own updater.
+//
+// OTA_BEGIN/DATA/END ride the DAQ link's WIDE frame budget (240 bytes), not the
+// 32-byte HAT_FRAME_MAX_LEN every other command uses — see hat_send_frame_wide()
+// in hat.cpp. Their replies are small, so the normal narrow receive path serves.
+#define HAT_CMD_GET_VERSION     0x60u   // -> P4 fw version (u32 + string)
+#define HAT_CMD_OTA_BEGIN       0x61u   // payload: hat_ota_meta_t + target byte
+#define HAT_CMD_OTA_DATA        0x62u   // payload: u32 offset + image bytes
+#define HAT_CMD_OTA_END         0x63u   // finalise + verify (SHA-256)
+#define HAT_CMD_OTA_ABORT       0x64u   // abort an in-progress transfer
+#define HAT_CMD_OTA_STATUS      0x65u   // -> hat_daq_ota_status_t (19 B, or 10 B legacy)
+
+// Wide-frame budget for the OTA data path only. HAT_OTA_WIDE_MAX MUST equal the
+// P4's HATP_MAX_PAYLOAD; HAT_OTA_CHUNK_MAX is what is left for image bytes after
+// the 4-byte offset prefix in an OTA_DATA payload.
+#define HAT_OTA_WIDE_MAX        240
+#define HAT_OTA_CHUNK_MAX       236
+
+// OTA_BEGIN target selector, mirroring HATP_OTA_TARGET_* in s3_link.h. P4 goes
+// straight to the A/B slot with no staging; C6 and STAGE route through the P4's
+// `staging` partition. See the design spec for why the two differ.
+#define HAT_OTA_TARGET_P4        0
+#define HAT_OTA_TARGET_C6        1
+#define HAT_OTA_TARGET_STAGE     2
+
+// OTA_BEGIN payload. Layout-identical to the P4's ota_meta_t (ota.h) — it is
+// memcpy'd onto the wire and read straight back as that struct, so field order
+// and packing are load-bearing.
+typedef struct __attribute__((packed)) {
+    uint32_t image_size;
+    uint32_t version_u32;
+    uint8_t  sha256[32];
+    char     product_id[16];
+} hat_ota_meta_t;                        // 56 bytes
+
 // Acquisition configuration (ADAQ7769-1 digital filter + hardware decimation).
 // MUST match P4 s3_link.h HATP_CMD_DAQ_SET_ACQ_CONFIG exactly.
 #define HAT_CMD_DAQ_SET_ACQ_CONFIG 0x7Du   // payload: hat_acq_config_t -> OK/ERROR
@@ -752,6 +791,39 @@ const char *hat_get_type_string(void);
  *         -1 on a transport error (caller should retry the same offset).
  */
 int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len);
+
+/**
+ * @brief Begin an OTA image transfer to the DAQ HAT.
+ * @param target One of HAT_OTA_TARGET_P4 / _C6 / _STAGE. P4 streams straight to
+ *        the P4's A/B slot; C6 and STAGE stage into its `staging` partition.
+ * @param meta   Image size, version, SHA-256 and product ID.
+ * @note  Erasing the target slot or staging region blocks the P4 for seconds;
+ *        this call waits for it.
+ * @return true on P4 HAT_RSP_OK, false otherwise (including no DAQ HAT).
+ */
+bool hat_ota_begin(uint8_t target, const hat_ota_meta_t *meta);
+
+/**
+ * @brief Send one image chunk. The P4 rejects out-of-order offsets, so on a
+ *        failure re-query the received-byte count (HAT_CMD_OTA_STATUS) and
+ *        resume from exactly there rather than retrying blindly.
+ * @param len Must be 1..HAT_OTA_CHUNK_MAX (236).
+ * @return true on P4 HAT_RSP_OK, false otherwise.
+ */
+bool hat_ota_data(uint32_t offset, const uint8_t *data, uint8_t len);
+
+/**
+ * @brief Finalise and verify the transfer. The P4 re-reads the whole image from
+ *        flash to check SHA-256, so this blocks for a long time on a large image.
+ * @return true on P4 HAT_RSP_OK, false on verification failure or transport error.
+ */
+bool hat_ota_end(void);
+
+/**
+ * @brief Abort an in-progress OTA transfer.
+ * @return true on P4 HAT_RSP_OK, false otherwise.
+ */
+bool hat_ota_abort(void);
 
 /**
  * @brief Read the DAQ HAT's VDUT (programmable DUT power supply) status:

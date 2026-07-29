@@ -151,6 +151,43 @@ static bool hat_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t payload_
     return written == (int)pos;
 }
 
+// Wide-frame variant, for the OTA image transfer path ONLY.
+//
+// The frame LEN field is a full byte, so the wire can carry up to 255; the P4
+// budgets HATP_MAX_PAYLOAD = 240 (mirrored here as HAT_OTA_WIDE_MAX). The narrow
+// hat_send_frame() above keeps the legacy 32-byte cap that every other command
+// and the whole RP2040 LA HAT protocol rely on.
+//
+// Do NOT merge these two. Raising HAT_FRAME_MAX_LEN instead would enlarge the
+// stack buffer of every command on the link and lift a cap the RP2040 firmware
+// still enforces on its side. Routing a 2 MB image through 32-byte frames would
+// instead be ~20x slower than the link allows, which is why this exists at all.
+//
+// The frame layout and CRC span are identical to the narrow sender — one P4
+// receiver parses both, so any divergence here shows up only as CRC failures.
+static bool hat_send_frame_wide(uint8_t cmd, const uint8_t *payload, uint16_t payload_len)
+{
+    if (payload_len > HAT_OTA_WIDE_MAX) return false;
+
+    uint8_t frame[3 + HAT_OTA_WIDE_MAX + 1]; // SYNC + LEN + CMD + payload + CRC
+    size_t pos = 0;
+
+    frame[pos++] = HAT_FRAME_SYNC;
+    frame[pos++] = (uint8_t)payload_len;
+    frame[pos++] = cmd;
+    if (payload_len > 0 && payload) {
+        memcpy(&frame[pos], payload, payload_len);
+        pos += payload_len;
+    }
+
+    // CRC over CMD + payload (same span as hat_send_frame)
+    frame[pos] = crc8(&frame[2], 1 + payload_len);
+    pos++;
+
+    int written = uart_write_bytes(HAT_UART_NUM, frame, pos);
+    return written == (int)pos;
+}
+
 // Receive a response frame from the HAT.
 // Blocks up to timeout_ms. Returns response CMD byte, fills payload/payload_len.
 // Returns 0 on timeout or error.
@@ -412,6 +449,77 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     }
 
     return rsp;
+}
+
+// -----------------------------------------------------------------------------
+// OTA image transfer to the DAQ HAT (wide-frame path)
+// -----------------------------------------------------------------------------
+
+// One wide request + its narrow reply, serialized on the HAT link mutex so an
+// image transfer cannot interleave with telemetry polling or a DAQ command.
+//
+// Deliberately NOT built on hat_command(): that takes a uint8_t payload_len (it
+// cannot express 240) and auto-retries on failure. A blind retry is wrong here —
+// the P4 rejects out-of-order offsets, so the caller must re-query the received
+// count and resume from exactly that offset instead.
+static bool hat_ota_txn(uint8_t cmd, const uint8_t *payload, uint16_t len,
+                        uint32_t timeout_ms)
+{
+    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
+        ESP_LOGE(TAG, "HAT OTA command 0x%02X: failed to take mutex", cmd);
+        return false;
+    }
+
+    bool ok = false;
+    if (hat_send_frame_wide(cmd, payload, len)) {
+        // Replies are small (RSP_OK / RSP_ERROR), so the narrow receive path serves.
+        uint8_t rsp_payload[HAT_FRAME_MAX_LEN];
+        uint8_t rsp_len = 0;
+        uint8_t rsp = hat_recv_frame(rsp_payload, &rsp_len, timeout_ms, sizeof(rsp_payload));
+        ok = (rsp == HAT_RSP_OK);
+        if (!ok) {
+            ESP_LOGW(TAG, "HAT OTA command 0x%02X: rsp 0x%02X", cmd, rsp);
+        }
+    } else {
+        ESP_LOGE(TAG, "HAT OTA command 0x%02X: send failed (len %u)", cmd, (unsigned)len);
+    }
+
+    if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
+    return ok;
+}
+
+bool hat_ota_begin(uint8_t target, const hat_ota_meta_t *meta)
+{
+    if (!meta) return false;
+    if (target > HAT_OTA_TARGET_STAGE) return false;
+
+    uint8_t payload[sizeof(hat_ota_meta_t) + 1];
+    memcpy(payload, meta, sizeof(hat_ota_meta_t));
+    payload[sizeof(hat_ota_meta_t)] = target;
+
+    // Erasing the target A/B slot or the staging region takes seconds.
+    return hat_ota_txn(HAT_CMD_OTA_BEGIN, payload, sizeof(payload), 10000);
+}
+
+bool hat_ota_data(uint32_t offset, const uint8_t *data, uint8_t len)
+{
+    if (!data || len == 0 || len > HAT_OTA_CHUNK_MAX) return false;
+
+    uint8_t payload[4 + HAT_OTA_CHUNK_MAX];
+    memcpy(payload, &offset, sizeof(offset));   // little-endian, matches the P4
+    memcpy(payload + 4, data, len);
+    return hat_ota_txn(HAT_CMD_OTA_DATA, payload, (uint16_t)(4 + len), 2000);
+}
+
+bool hat_ota_end(void)
+{
+    // SHA-256 verification re-reads the whole image back out of flash.
+    return hat_ota_txn(HAT_CMD_OTA_END, NULL, 0, 30000);
+}
+
+bool hat_ota_abort(void)
+{
+    return hat_ota_txn(HAT_CMD_OTA_ABORT, NULL, 0, 2000);
 }
 
 // -----------------------------------------------------------------------------
