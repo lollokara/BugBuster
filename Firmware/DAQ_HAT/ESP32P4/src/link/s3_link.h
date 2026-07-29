@@ -281,7 +281,8 @@ typedef struct __attribute__((packed)) {
     uint8_t  relay_state;           // relay_state_t of relay_stage.c
     uint32_t relay_staged_bytes;    // may trail by up to ~64KB (NVS persist interval)
     uint32_t relay_pushed_bytes;
-} s3link_ota_status_t;               // 19 bytes
+    uint8_t  relay_target;          // relay_target_t: 1=C6, 2=S3, 0=nothing staged
+} s3link_ota_status_t;               // 20 bytes
 
 // HATP_CMD_DAQ_C6_VERSION (0x6A) reply. The C6 ONLY — the P4 reports its own
 // version through HATP_CMD_GET_VERSION (0x60), which already exists. Sourced

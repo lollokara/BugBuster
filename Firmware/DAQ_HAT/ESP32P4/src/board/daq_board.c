@@ -1828,7 +1828,11 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             resp[10] = (uint8_t)rs.state;
             memcpy(resp + 11, &rs.staged_bytes, 4);
             memcpy(resp + 15, &rs.pushed_bytes, 4);
-            return 19;
+            // The target is load-bearing, not informational: without it the S3
+            // cannot tell a staged C6 image from one staged for itself, and
+            // pulling a C6 image into the S3's own OTA slot bricks the mainboard.
+            resp[19] = (uint8_t)rs.target;
+            return 20;
         }
 
         case HATP_CMD_DAQ_RELAY_APPLY: {

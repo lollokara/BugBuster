@@ -207,7 +207,13 @@ def test_ota_status_widens_both_of_its_branches():
     S3 cannot distinguish from an older P4's short reply."""
     body = _case_body("HATP_CMD_OTA_STATUS")
     assert "return 10;" not in body, "a branch of 0x65 still returns 10 bytes"
-    assert "return 19;" in body, "0x65 must return the full 19-byte status"
+    # Derive the expected length from the struct rather than hardcoding it, so
+    # appending a field updates both sides or fails loudly.
+    sizes = {"uint8_t": 1, "uint32_t": 4}
+    expect = sum(sizes[m] for m in re.findall(r"\b(uint8_t|uint32_t)\s+\w+\s*;",
+                                              _struct_body(S3LINK, "s3link_ota_status_t")))
+    assert f"return {expect};" in body, \
+        f"0x65 must return {expect} bytes to match s3link_ota_status_t"
 
 
 def test_c6_version_reply_uses_a_cached_version():
@@ -510,3 +516,50 @@ def test_missing_daq_image_in_a_release_is_an_error():
     body = _code_only(_fn_body(UPD_CPP, "static bool apply_daq_targets("))
     assert body.count("component_available") >= 2, \
         "both DAQ legs must check the release actually carries an image"
+
+
+def test_ota_status_carries_the_relay_target():
+    """Without the target the S3 cannot tell a staged C6 image from one staged
+    for itself. Both sides must agree on the field."""
+    for text, struct in ((S3LINK, "s3link_ota_status_t"), (HAT_H, "hat_daq_ota_status_t")):
+        assert "relay_target" in _struct_body(text, struct), f"{struct} missing relay_target"
+
+
+def test_s3_pull_path_requires_a_verified_stage_for_itself():
+    """apply_esp32_ota_from_p4_stage() writes to the S3's OWN OTA slot and sets
+    it bootable. Pulling a partial image, or a C6 image, bricks the mainboard --
+    and unlike the DAQ HAT there is no second MCU left to recover it."""
+    body = _code_only(_fn_body(UPD_CPP, "esp_err_t apply_esp32_ota_from_p4_stage("))
+    guard = body[:body.index("esp_ota_get_next_update_partition")]
+    assert "HAT_RELAY_STAGED" in guard, \
+        "must require RELAY_STAGED (the only SHA-verified state) before pulling"
+    assert "HAT_RELAY_TARGET_S3" in guard, \
+        "must require the staged image be for the S3, not the C6"
+
+
+def test_relay_state_constants_mirror_the_p4_enum():
+    """These gate a brick-risk decision; a drifted value silently changes which
+    state counts as verified."""
+    for name, value in (("IDLE", 0), ("STAGING", 1), ("STAGED", 2),
+                        ("PUSHING", 3), ("DONE", 4), ("FAILED", 5)):
+        m = re.search(rf"#define HAT_RELAY_{name}\s+(\d+)u", HAT_H)
+        assert m and int(m.group(1)) == value, f"HAT_RELAY_{name} should be {value}"
+    for name, value in (("C6", 1), ("S3", 2)):
+        m = re.search(rf"#define HAT_RELAY_TARGET_{name}\s+(\d+)u", HAT_H)
+        assert m and int(m.group(1)) == value, f"HAT_RELAY_TARGET_{name} should be {value}"
+
+
+def test_status_reports_which_target_is_active():
+    body = _code_only(_fn_body(UPD_CPP, "cJSON *update_manager_status_json("))
+    assert "activeTarget" in body, "status must say which MCU is being updated"
+    assert "availableTargets" in body, "clients need to know which targets exist"
+
+
+def test_each_download_phase_tags_its_target():
+    """A progress bar that cannot name the MCU is useless in a multi-target run."""
+    src = UPD_CPP
+    for state in ("UPDATE_STATE_DOWNLOADING_RP2040", "UPDATE_STATE_DOWNLOADING_ESP32",
+                  "UPDATE_STATE_DOWNLOADING_P4", "UPDATE_STATE_DOWNLOADING_C6"):
+        idx = src.index(f"set_state({state}")
+        assert "set_target(" in src[max(0, idx - 200):idx], \
+            f"{state} does not record which target it belongs to"

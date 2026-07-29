@@ -30,6 +30,10 @@ typedef struct {
     char current_step[32];
     uint32_t progress_done;
     uint32_t progress_total;
+    // Which MCU the current phase is working on, so a client showing a progress
+    // bar for a multi-target sequence can say WHAT is being updated rather than
+    // just how far along the whole run is. 0 when idle.
+    uint32_t active_target;
 } UpdateRuntime;
 
 typedef struct {
@@ -89,6 +93,23 @@ static UpdateRuntime s_update = {
     .state = UPDATE_STATE_IDLE,
 };
 static bool s_reboot_pending = false;
+
+// Phase name for a target, used in the status JSON alongside the numeric mask.
+static const char *target_name(uint32_t target)
+{
+    switch (target) {
+        case UPDATE_TARGET_RP2040: return "rp2040";
+        case UPDATE_TARGET_ESP32:  return "esp32";
+        case UPDATE_TARGET_P4:     return "p4";
+        case UPDATE_TARGET_C6:     return "c6";
+        default:                   return "";
+    }
+}
+
+static void set_target(uint32_t target)
+{
+    s_update.active_target = target;
+}
 
 static void set_state(update_state_t state, const char *step)
 {
@@ -894,6 +915,29 @@ static bool apply_esp32_ota(const UpdateComponent *component)
 // much smaller chunks than the HTTP buffer_size=4096 path above.
 esp_err_t apply_esp32_ota_from_p4_stage(void)
 {
+    // Staged-state safeguard. Without it this function will happily pull and
+    // boot whatever bytes happen to be sitting in the P4's staging partition.
+    //
+    // Two distinct hazards, both fatal to the mainboard:
+    //   - state != RELAY_STAGED means the image is partial or its SHA-256 check
+    //     has not passed. relay_stage only reaches STAGED after that check.
+    //   - target != S3 means those bytes are a C6 image. Writing a C6 image into
+    //     the S3's own OTA slot and setting it bootable bricks this board, and
+    //     unlike the DAQ HAT there is no second MCU left to recover it.
+    hat_daq_ota_status_t st = {};
+    if (!hat_daq_ota_status(&st)) {
+        set_error("cannot read DAQ HAT staging state");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (st.relay_state != HAT_RELAY_STAGED) {
+        set_error("P4 staging is not in the verified STAGED state");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (st.relay_target != HAT_RELAY_TARGET_S3) {
+        set_error("P4 staging holds an image for another target, not the S3");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part) {
         set_error("no ESP32 OTA partition available");
@@ -992,12 +1036,14 @@ static bool apply_daq_targets(uint32_t targets, const UpdateManifest *manifest,
             set_error("release has no C6 image");
             return false;
         }
+        set_target(UPDATE_TARGET_C6);
         set_state(UPDATE_STATE_DOWNLOADING_C6, "download_c6");
         // Staged rather than streamed straight at the C6: staging gets the image
         // SHA-verified inside the P4's partition BEFORE the ROM-loader push
         // starts, and makes that push resumable from pushed_bytes. An aborted
         // push strands the C6 in ROM download mode, so verifying first matters.
         if (!apply_daq_ota(&manifest->c6, HAT_OTA_TARGET_STAGE)) return false;
+        set_target(UPDATE_TARGET_C6);
         set_state(UPDATE_STATE_APPLYING_C6, "apply_c6");
         if (!hat_daq_relay_apply()) {
             set_error("DAQ HAT refused the C6 relay apply");
@@ -1011,6 +1057,7 @@ static bool apply_daq_targets(uint32_t targets, const UpdateManifest *manifest,
             set_error("release has no P4 image");
             return false;
         }
+        set_target(UPDATE_TARGET_P4);
         set_state(UPDATE_STATE_DOWNLOADING_P4, "download_p4");
         if (!apply_daq_ota(&manifest->p4, HAT_OTA_TARGET_P4)) return false;
         *did_p4 = true;
@@ -1147,7 +1194,8 @@ esp_err_t update_manager_apply(uint32_t targets, cJSON **out)
             if (!flash_rp2040_from_file(&local_comp, local_path)) return ESP_FAIL;
             did_rp = true;
         } else if (rp_newer) {
-            set_state(UPDATE_STATE_DOWNLOADING_RP2040, "download_rp2040");
+            set_target(UPDATE_TARGET_RP2040);
+        set_state(UPDATE_STATE_DOWNLOADING_RP2040, "download_rp2040");
             if (!download_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
             set_state(UPDATE_STATE_FLASHING_RP2040, "flash_rp2040");
             if (!flash_rp2040_from_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
@@ -1162,6 +1210,7 @@ esp_err_t update_manager_apply(uint32_t targets, cJSON **out)
     // ESP32 last: rebooting this MCU ends the sequence.
     if (update_esp32 && esp_newer) {
         did_esp = true;
+        set_target(UPDATE_TARGET_ESP32);
         set_state(UPDATE_STATE_DOWNLOADING_ESP32, "download_esp32");
         if (!apply_esp32_ota(&manifest.esp32)) return ESP_FAIL;
     }
@@ -1252,6 +1301,7 @@ esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJ
              current_rp2040_build_id(), manifest.rp2040.build_id, rp_newer);
 
     if (update_rp2040 && rp_newer) {
+        set_target(UPDATE_TARGET_RP2040);
         set_state(UPDATE_STATE_DOWNLOADING_RP2040, "download_rp2040");
         if (!download_file(&manifest.rp2040, RP2040_STAGE_PATH)) return ESP_FAIL;
         set_state(UPDATE_STATE_FLASHING_RP2040, "flash_rp2040");
@@ -1265,6 +1315,7 @@ esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJ
 
     if (update_esp32 && esp_newer) {
         did_esp = true;
+        set_target(UPDATE_TARGET_ESP32);
         set_state(UPDATE_STATE_DOWNLOADING_ESP32, "download_esp32");
         if (!apply_esp32_ota(&manifest.esp32)) return ESP_FAIL;
     }
@@ -1292,6 +1343,9 @@ cJSON *update_manager_status_json(void)
     cJSON_AddNumberToObject(root, "progressTotal", s_update.progress_total);
     cJSON_AddStringToObject(root, "currentRp2040", current_rp2040_build_id());
     cJSON_AddStringToObject(root, "currentEsp32", current_esp32_build_id());
+    cJSON_AddNumberToObject(root, "activeTarget", s_update.active_target);
+    cJSON_AddStringToObject(root, "activeTargetName", target_name(s_update.active_target));
+    cJSON_AddNumberToObject(root, "availableTargets", update_manager_available_targets());
     return root;
 }
 

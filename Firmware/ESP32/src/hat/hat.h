@@ -453,7 +453,20 @@ typedef struct __attribute__((packed)) {
     uint8_t  relay_state;
     uint32_t relay_staged_bytes;
     uint32_t relay_pushed_bytes;
+    uint8_t  relay_target;
 } hat_daq_ota_status_t;
+
+// Mirrors relay_state_t / relay_target_t in the P4's relay_stage.h. RELAY_STAGED
+// is the only state in which a staged image has passed its SHA-256 check.
+#define HAT_RELAY_IDLE       0u
+#define HAT_RELAY_STAGING    1u
+#define HAT_RELAY_STAGED     2u
+#define HAT_RELAY_PUSHING    3u
+#define HAT_RELAY_DONE       4u
+#define HAT_RELAY_FAILED     5u
+
+#define HAT_RELAY_TARGET_C6  1u
+#define HAT_RELAY_TARGET_S3  2u
 
 // HAT_CMD_DAQ_C6_VERSION (0x6A) reply. The C6 ONLY — the P4's own version comes
 // from HAT_CMD_GET_VERSION (0x60). MUST stay byte-for-byte identical to the
