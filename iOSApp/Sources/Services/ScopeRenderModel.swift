@@ -68,6 +68,31 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
     private weak var engine: DaqStreamEngine?
     private var lastPublishedKey: (Int, Viewport)? = nil
 
+    // =========================================================================
+    // TEMP-INSTRUMENTATION — bench diagnostics for two open bugs:
+    //   M1: 10s/30s timebases render nothing while Full renders fine.
+    //   M2: render perf degrades ("sloppy") after ~5-6k frames.
+    // Remove this whole block (grep TEMP-INSTRUMENTATION across the repo) once
+    // both measurements have been captured at the bench. #if DEBUG only —
+    // no production behaviour change, no per-sample hot-path work, throttled
+    // to ~1 Hz. See instrumentation-report.md for how to read the output.
+    // =========================================================================
+    #if DEBUG
+    /// Compact, human-readable rolling summary for the on-screen readout.
+    /// Updated at most once/sec so it's stable enough to photograph.
+    @Published private(set) var dbgLine: String = ""
+
+    private var dbgLastLogAt: CFAbsoluteTime = 0
+    private var dbgTickCalls = 0
+    private var dbgRecomputes = 0
+    private var dbgTickDurMaxMs: Double = 0
+    private var dbgTickDurSumMs: Double = 0
+    private var dbgTickDurCount = 0
+    private var dbgPointsMax = 0
+    private var dbgPointsSumForMean = 0
+    private var dbgPointsCount = 0
+    #endif
+
     func updateViewport(_ mutate: (inout Viewport) -> Void) {
         lock.lock()
         mutate(&viewport)
@@ -109,11 +134,24 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
 
     private func tick() {
         guard let engine else { return }
+        #if DEBUG
+        let dbgStart = DispatchTime.now()  // TEMP-INSTRUMENTATION
+        #endif
         let vp = currentViewport()
 
         // Skip recompute entirely when neither the data nor the view changed.
         let key = (engine.recordCount, vp)
-        if let last = lastPublishedKey, last.0 == key.0, last.1 == key.1 { return }
+        if let last = lastPublishedKey, last.0 == key.0, last.1 == key.1 {
+            #if DEBUG
+            // TEMP-INSTRUMENTATION: still record the skip so M2's "recompute
+            // vs early-return" ratio is accurate; end is two O(1) reads.
+            let liveEnd = engine.voltage.t.last ?? engine.current.t.last ?? 0
+            let end = vp.followLive ? liveEnd : (vp.anchorEndT ?? liveEnd)
+            dbgTick(recomputed: false, start: dbgStart, engine: engine, vp: vp,
+                    end: end, vSegs: [], iSegs: [], traces: [])
+            #endif
+            return
+        }
         lastPublishedKey = key
 
         // Reference stream for the shared time axis: prefer voltage, fall
@@ -182,8 +220,93 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
                                         recordCount: engine.recordCount,
                                         liveEndT: liveEnd,
                                         followLive: vp.followLive)
+        #if DEBUG
+        // TEMP-INSTRUMENTATION
+        dbgTick(recomputed: true, start: dbgStart, engine: engine, vp: vp,
+                end: end, vSegs: vSegs, iSegs: iSegs, traces: traces)
+        #endif
         DispatchQueue.main.async { [weak self] in self?.frame = newFrame }
     }
+
+    #if DEBUG
+    // =========================================================================
+    // TEMP-INSTRUMENTATION — see block comment near the stored properties.
+    // Pure bookkeeping + throttled print/publish; does not touch buffers or
+    // recompute anything the real pipeline didn't already compute.
+    // =========================================================================
+    private func dbgTick(recomputed: Bool, start: DispatchTime, engine: DaqStreamEngine,
+                         vp: Viewport, end: Double,
+                         vSegs: [Segment], iSegs: [Segment], traces: [RenderedTrace]) {
+        let durMs = Double(DispatchTime.now().uptimeNanoseconds &- start.uptimeNanoseconds) / 1_000_000.0
+        dbgTickCalls += 1
+        if recomputed { dbgRecomputes += 1 }
+        dbgTickDurSumMs += durMs
+        dbgTickDurCount += 1
+        if durMs > dbgTickDurMaxMs { dbgTickDurMaxMs = durMs }
+
+        if recomputed {
+            let pointsPublished = traces.reduce(0) { $0 + $1.points.count }
+            dbgPointsSumForMean += pointsPublished
+            dbgPointsCount += 1
+            if pointsPublished > dbgPointsMax { dbgPointsMax = pointsPublished }
+        }
+
+        // Throttle to ~1 Hz: this is the ONLY place that does string
+        // formatting / printing / publishing, so the hot per-tick path above
+        // stays cheap regardless of log rate.
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - dbgLastLogAt >= 1.0 else { return }
+        dbgLastLogAt = now
+
+        let meanTickMs = dbgTickDurCount > 0 ? dbgTickDurSumMs / Double(dbgTickDurCount) : 0
+        let meanPts = dbgPointsCount > 0 ? dbgPointsSumForMean / dbgPointsCount : 0
+        let skipPct = dbgTickCalls > 0
+            ? Double(dbgTickCalls - dbgRecomputes) / Double(dbgTickCalls) * 100 : 0
+
+        // --- Measurement 1: 10s/30s blank-render evidence ---
+        let vLast = engine.voltage.t.last ?? .nan
+        let iLast = engine.current.t.last ?? .nan
+        let skew = (vLast.isFinite && iLast.isFinite) ? abs(vLast - iLast) : .nan
+        let cutoff = vp.windowSeconds.map { end - $0 }
+        let vSegPts = vSegs.reduce(0) { $0 + $1.count }
+        let iSegPts = iSegs.reduce(0) { $0 + $1.count }
+        let winLabel = vp.windowSeconds.map { String(format: "%.0fs", $0) } ?? "full"
+
+        let m1 = String(format: "[TEMP-INSTRUMENTATION] M1 win=%@ end=%.3f cutoff=%.3f skew=%.4f " +
+                        "vLast=%.3f iLast=%.3f | vHist=[%.3f,%.3f] vRaw=[%.3f,%.3f] " +
+                        "iHist=[%.3f,%.3f] iRaw=[%.3f,%.3f] | vSegPts=%d iSegPts=%d",
+                        winLabel, end, cutoff ?? .nan, skew, vLast, iLast,
+                        engine.voltageHist.t.first ?? .nan, engine.voltageHist.t.last ?? .nan,
+                        engine.voltage.t.first ?? .nan, engine.voltage.t.last ?? .nan,
+                        engine.currentHist.t.first ?? .nan, engine.currentHist.t.last ?? .nan,
+                        engine.current.t.first ?? .nan, engine.current.t.last ?? .nan,
+                        vSegPts, iSegPts)
+
+        // --- Measurement 2: render-perf-degradation evidence ---
+        let m2 = String(format: "[TEMP-INSTRUMENTATION] M2 tickMs(max/mean)=%.2f/%.2f " +
+                        "pts(max/mean)=%d/%d recompute=%d/%d skip=%.0f%% " +
+                        "bufV(raw/mid/reduced/hist)=%d/%d/%d/%d bufI(raw/mid/reduced/hist)=%d/%d/%d/%d",
+                        dbgTickDurMaxMs, meanTickMs, dbgPointsMax, meanPts,
+                        dbgRecomputes, dbgTickCalls, skipPct,
+                        engine.voltage.count, engine.voltageMid.count,
+                        engine.voltageReduced.count, engine.voltageHist.count,
+                        engine.current.count, engine.currentMid.count,
+                        engine.currentReduced.count, engine.currentHist.count)
+
+        print(m1)
+        print(m2)
+
+        let short = String(format: "M1 skew=%.3f cut=%.2f segV/I=%d/%d | M2 tick %.1f/%.1fms pts=%d skip=%.0f%%",
+                           skew, cutoff ?? .nan, vSegPts, iSegPts,
+                           dbgTickDurMaxMs, meanTickMs, dbgPointsMax, skipPct)
+        DispatchQueue.main.async { [weak self] in self?.dbgLine = short }
+
+        // Reset the ~1s rolling window.
+        dbgTickDurMaxMs = 0; dbgTickDurSumMs = 0; dbgTickDurCount = 0
+        dbgPointsMax = 0; dbgPointsSumForMean = 0; dbgPointsCount = 0
+        dbgTickCalls = 0; dbgRecomputes = 0
+    }
+    #endif
 
     // MARK: - Reducers (pure, pipeline queue)
 

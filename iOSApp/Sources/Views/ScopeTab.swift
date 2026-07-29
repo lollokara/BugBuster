@@ -460,20 +460,34 @@ struct ScopeTab: View {
     }
 
     private var daqLegendRow: some View {
-        HStack(spacing: 16) {
-            if showVoltage {
-                legendDot(color: ScopeColors.daqVoltage, label: "Voltage (V)")
+        VStack(alignment: .trailing, spacing: 2) {
+            HStack(spacing: 16) {
+                if showVoltage {
+                    legendDot(color: ScopeColors.daqVoltage, label: "Voltage (V)")
+                }
+                if showCurrent {
+                    legendDot(color: ScopeColors.daqCurrentFine, label: "Current (A)")
+                }
+                if showPower {
+                    legendDot(color: ScopeColors.daqPower, label: "Power (W)")
+                }
+                Spacer()
+                Text(daqDiagnosticLine)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
             }
-            if showCurrent {
-                legendDot(color: ScopeColors.daqCurrentFine, label: "Current (A)")
+            #if DEBUG
+            // TEMP-INSTRUMENTATION: bench readout for the 10s/30s-blank-render
+            // (M1) and render-perf-degradation (M2) bugs. Remove together with
+            // ScopeRenderModel's dbgLine/dbgTick (grep TEMP-INSTRUMENTATION).
+            if !daqRenderModel.dbgLine.isEmpty {
+                Text(daqRenderModel.dbgLine)
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundColor(.orange)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            if showPower {
-                legendDot(color: ScopeColors.daqPower, label: "Power (W)")
-            }
-            Spacer()
-            Text(daqDiagnosticLine)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
+            #endif
         }
     }
 
