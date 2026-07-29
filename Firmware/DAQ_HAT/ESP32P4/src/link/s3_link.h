@@ -116,9 +116,19 @@ extern "C" {
 // Multi-MCU OTA orchestration (S3-initiated request + P4 reply, modeled on
 // HATP_CMD_DAQ_VDUT_STATUS — NOT a push). MUST stay byte-for-byte identical to
 // the HAT_CMD_DAQ_* mirrors in Firmware/ESP32/src/hat/hat.h.
+//
+// This is deliberately ONE new command, not three. Two of the three originally
+// planned commands duplicated surface that already exists on this link:
+//   - a "DAQ_OTA_STATUS" would have shadowed HATP_CMD_OTA_STATUS (0x65), which
+//     is already dispatched and already special-cases the C6 target. It only
+//     lacked the relay_stage fields, so 0x65's reply was widened instead (see
+//     s3link_ota_status_t) rather than adding a second status opcode.
+//   - a "DAQ_FW_INFO" would have shadowed HATP_CMD_GET_VERSION (0x60), which
+//     already reports the P4's own version. Only the C6's version was actually
+//     missing, so 0x6A answers for the C6 alone.
+// Two opcodes returning the same state is how the two sides drift apart.
 #define HATP_CMD_DAQ_RELAY_APPLY 0x7Au   // no payload: apply the staged C6 image
-#define HATP_CMD_DAQ_OTA_STATUS  0x7Bu   // no payload -> s3link_ota_status_t
-#define HATP_CMD_DAQ_FW_INFO     0x7Cu   // no payload -> s3link_fw_info_t
+#define HATP_CMD_DAQ_C6_VERSION  0x6Au   // no payload -> s3link_c6_version_t
 
 // Version + OTA commands (vendor sub-range 0x60..0x6F).
 //
@@ -250,26 +260,36 @@ typedef struct __attribute__((packed)) {
     float    meas_i;       // measured DUT current (A), from the ADAQ7769 acquisition chain
 } s3link_vdut_status_t;
 
-// HATP_CMD_DAQ_OTA_STATUS reply. Exposes BOTH durability models because the two
-// OTA targets resume from different sources: a P4-target transfer resumes from
-// @ota_received (ota.c streams straight to the A/B slot, no staging), while a
-// C6-target transfer resumes from @relay_staged_bytes (relay_stage.c).
+// HATP_CMD_OTA_STATUS (0x65) reply. The first 10 bytes are the original wire
+// shape and MUST NOT move: older S3 builds read exactly {state, pending_verify,
+// received, image_size} and stop. The relay_* tail is appended, so a short
+// 10-byte reply from an older P4 is still valid — the S3 must treat a reply
+// shorter than sizeof(s3link_ota_status_t) as "relay fields unknown" rather
+// than as an error.
+//
+// Exposes BOTH durability models because the two OTA targets resume from
+// different sources: a P4-target transfer resumes from @received (ota.c streams
+// straight to the A/B slot, no staging), while a C6-target transfer resumes
+// from @relay_staged_bytes (relay_stage.c).
 typedef struct __attribute__((packed)) {
-    uint8_t  ota_state;             // ota_state_t of ota.c
-    uint32_t ota_received;          // ota_received(): exact, byte-accurate
+    uint8_t  state;                 // ota_state_t of ota.c
+    uint8_t  pending_verify;        // bool: image awaiting ota_confirm()
+    uint32_t received;              // ota_received(): exact, byte-accurate
+    uint32_t image_size;
+    // --- appended for multi-MCU OTA; absent in replies from older P4 builds ---
     uint8_t  relay_state;           // relay_state_t of relay_stage.c
     uint32_t relay_staged_bytes;    // may trail by up to ~64KB (NVS persist interval)
     uint32_t relay_pushed_bytes;
-} s3link_ota_status_t;               // 14 bytes
+} s3link_ota_status_t;               // 19 bytes
 
-// HATP_CMD_DAQ_FW_INFO reply. The P4 answers for itself directly and for the C6
-// from its last DDP-reported version (see daq_board.c c6 version cache).
+// HATP_CMD_DAQ_C6_VERSION (0x6A) reply. The C6 ONLY — the P4 reports its own
+// version through HATP_CMD_GET_VERSION (0x60), which already exists. Sourced
+// from the P4's last DDP-reported C6 version (see daq_board.c c6 version cache);
+// all-zero if the C6 has not reported yet.
 typedef struct __attribute__((packed)) {
-    char p4_version[16];            // NUL-terminated semver, e.g. "1.4.0"
-    char p4_build_id[16];
-    char c6_version[16];            // all-zero if the C6 has not reported yet
+    char c6_version[16];            // NUL-terminated semver, e.g. "1.4.0"
     char c6_build_id[16];
-} s3link_fw_info_t;                  // 64 bytes
+} s3link_c6_version_t;               // 32 bytes
 
 // HATP_CMD_DAQ_TELEMETRY (0x5A) payload: S3 mainboard telemetry relayed to the
 // C6 Diagnostics menu. MUST stay byte-for-byte identical to the S3-side mirror

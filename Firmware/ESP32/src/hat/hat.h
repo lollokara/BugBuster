@@ -287,11 +287,12 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_DAQ_VDUT_SETPOINT 0x78u   // payload: hat_vdut_setpoint_t -> OK/ERROR
 
 // Multi-MCU OTA orchestration. Must match P4 HATP_CMD_DAQ_RELAY_APPLY /
-// _OTA_STATUS / _FW_INFO (s3_link.h) exactly — see s3_link.h for the rationale
-// behind the two separate resume sources in hat_daq_ota_status_t.
-#define HAT_CMD_DAQ_RELAY_APPLY 0x7A
-#define HAT_CMD_DAQ_OTA_STATUS  0x7B
-#define HAT_CMD_DAQ_FW_INFO     0x7C
+// HATP_CMD_DAQ_C6_VERSION (s3_link.h) exactly — see s3_link.h for why this is
+// two commands and not four: OTA status comes from the pre-existing 0x65 (whose
+// reply was widened, see hat_daq_ota_status_t) and the P4's own version from the
+// pre-existing 0x60, so only the C6's version needed a new opcode.
+#define HAT_CMD_DAQ_RELAY_APPLY 0x7Au   // no payload: apply the staged C6 image
+#define HAT_CMD_DAQ_C6_VERSION  0x6Au   // no payload -> hat_daq_c6_version_t
 
 // Acquisition configuration (ADAQ7769-1 digital filter + hardware decimation).
 // MUST match P4 s3_link.h HATP_CMD_DAQ_SET_ACQ_CONFIG exactly.
@@ -392,24 +393,29 @@ typedef struct __attribute__((packed)) {
     float    meas_i;
 } hat_vdut_status_t;
 
-// HAT_CMD_DAQ_OTA_STATUS reply. MUST stay byte-for-byte identical to the
+// HAT_CMD_OTA_STATUS (0x65) reply. MUST stay byte-for-byte identical to the
 // P4-side mirror s3link_ota_status_t in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
+// The first 10 bytes are the original wire shape and must not move; the relay_*
+// tail is appended, so a 10-byte reply from an older P4 is valid and means
+// "relay fields unknown" — do not treat a short reply as an error.
 typedef struct __attribute__((packed)) {
-    uint8_t  ota_state;
-    uint32_t ota_received;
+    uint8_t  state;
+    uint8_t  pending_verify;
+    uint32_t received;
+    uint32_t image_size;
+    // --- appended for multi-MCU OTA; absent in replies from older P4 builds ---
     uint8_t  relay_state;
     uint32_t relay_staged_bytes;
     uint32_t relay_pushed_bytes;
 } hat_daq_ota_status_t;
 
-// HAT_CMD_DAQ_FW_INFO reply. MUST stay byte-for-byte identical to the
-// P4-side mirror s3link_fw_info_t in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
+// HAT_CMD_DAQ_C6_VERSION (0x6A) reply. The C6 ONLY — the P4's own version comes
+// from HAT_CMD_GET_VERSION (0x60). MUST stay byte-for-byte identical to the
+// P4-side mirror s3link_c6_version_t in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
 typedef struct __attribute__((packed)) {
-    char p4_version[16];
-    char p4_build_id[16];
     char c6_version[16];
     char c6_build_id[16];
-} hat_daq_fw_info_t;
+} hat_daq_c6_version_t;
 
 // Error codes
 #define HAT_ERR_INVALID_CMD     0x01
