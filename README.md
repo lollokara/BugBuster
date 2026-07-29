@@ -12,10 +12,10 @@
   <img src="https://img.shields.io/badge/license-AGPL--3.0-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
   <img src="https://img.shields.io/badge/AI-MCP%20Server%20%C2%B7%2059%20tools-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP"/>
-  <img src="https://img.shields.io/badge/mainboard-ESP32--S3%203.4.0-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Mainboard firmware"/>
+  <img src="https://img.shields.io/badge/mainboard-ESP32--S3%205.0.0-0d1117?style=flat-square&labelColor=161b22&color=e34c26" alt="Mainboard firmware"/>
   <img src="https://img.shields.io/badge/HATs-Logic%20Analyzer%20%C2%B7%20Power%20Profiler%20Pro-0d1117?style=flat-square&labelColor=161b22&color=e76f51" alt="HATs"/>
   <img src="https://img.shields.io/badge/desktop-Tauri%20v2%20%C2%B7%20Leptos%200.7-0d1117?style=flat-square&labelColor=161b22&color=f4a261" alt="Desktop"/>
-  <img src="https://img.shields.io/badge/protocol-BBP%20v9-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
+  <img src="https://img.shields.io/badge/protocol-BBP%20v10-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
   <img src="https://img.shields.io/badge/python-3.11%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
 </p>
 
@@ -184,9 +184,13 @@ display and wireless link.
 | **Source / SMU** | 0–20 V output, ≤ 2.5 A | LTM8056 buck-boost + DS4424 trim |
 | **On-device DSP** | power · energy · charge · stats · FFT | mWh/J, mAh/C, min/max/mean/RMS/std, multi-resolution zoom, continuous Welch FFT |
 | **Live streaming** | USB 2.0 High-Speed | CRC-framed vendor-bulk measurement stream, target ~250 kSPS |
+| **Wireless streaming** | WiFi softAP → iOS | P4 hosts its own AP and TCP stream; phone connects directly, bypassing the mainboard network stack |
+| **Acquisition control** | ODR · filter · decimation | Configurable from the host with device-confirmed readback of the values actually applied |
+| **Signal integrity** | per-sample ADAQ CRC | Glitch rejection at the source, isolated-outlier despiking on device |
+| **DUT supply control** | enable · voltage · current limit | `/api/daq/vdut/*` over HTTP **and** BLE; out-of-range setpoints rejected, not clamped |
 | **On-board display** | ESP32-C6 + ST7789 | Live readout, settings & diagnostics menu, 3 nav buttons |
 | **Event markers** | digital, via mainboard | Correlated to P4 samples through a shared sync epoch |
-| **OTA** | dual-slot A/B | SHA-256 verified, streaming from the ESP32-S3, rollback-safe |
+| **OTA** | both chips, from a release | P4 dual-slot A/B with rollback; C6 flashed via the P4's ROM-loader relay. SHA-256 verified inside the P4, resumable, streamed from the ESP32-S3 |
 
 </td></tr>
 </table>
@@ -377,10 +381,21 @@ cd ../ESP32C6
 python -m platformio run -e esp32c6 -t upload --upload-port <COMx>
 ```
 
-Current versions: ESP32-S3 `3.4.0`, Logic Analyzer HAT `bb-hat-3.3`,
-Power Profiler Pro HAT `bb-daq-p4` (see [`version.h`](Firmware/DAQ_HAT/ESP32P4/include/version.h)),
-Desktop `1.2.0`. Release workflow + version-sync checklist:
+Current versions: ESP32-S3 `5.0.0`, Logic Analyzer HAT `bb-hat-5.0`,
+Power Profiler Pro HAT ESP32-P4 `2.0.0` and ESP32-C6 `2.0.0`, Desktop `2.0.0`.
+Read any of them from source with
+`python Firmware/tools/firmware_version.py <esp32|rp2040|p4|c6>`. Release
+workflow + version-sync checklist:
 [`Docs/ReleaseChecklist.md`](Docs/ReleaseChecklist.md).
+
+Flashing over USB is only needed for bring-up or recovery — **all four MCUs
+update over the air from a GitHub release**, orchestrated by the ESP32-S3 via
+`update apply [all|rp2040|esp32|p4|c6]` on the serial CLI, `Settings → FW Update`
+in the TUI, or `POST /api/update/apply`. The S3 streams each image over the HAT
+link and applies them in a firmware-enforced **RP2040 → C6 → P4 → S3** order:
+the C6's ROM-loader push is driven *by* the P4, so the P4 must still be running
+its current image when the C6 is written, and the S3 goes last because rebooting
+it kills the orchestrator.
 
 </details>
 

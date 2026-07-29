@@ -201,8 +201,16 @@ Pattern: `/api/channel/{0-3}/{suffix}` or `/api/channel/` (suffixes also mapped 
 | `/api/ota/info` | GET | Partition slots and rollback status. |
 | `/api/ota/rollback` | POST | Revert to previous firmware slot. |
 | `/api/update/check` | GET | Query remote server for new firmware. |
-| `/api/update/apply` | POST | `{"rp2040": bool, "esp32": bool}`. |
-| `/api/update/status` | GET | Progress of background update task. |
+| `/api/update/apply` | POST | `{"rp2040": bool, "esp32": bool, "p4": bool, "c6": bool}`. |
+| `/api/update/status` | GET | Progress of background update task, incl. current target and phase. |
+
+`p4` and `c6` target the DAQ HAT and are only accepted when a DAQ HAT is
+attached. Multiple targets may be requested in one call; the firmware always
+applies them in **RP2040 → C6 → P4 → S3** order and aborts the remainder on any
+failure. That order is not a suggestion: the C6's ROM-loader push is driven *by*
+the P4, so updating the P4 first can brick the C6, and the S3 goes last because
+rebooting it kills the orchestrator. A release with no DAQ HAT images reports
+`release has no C6 image` rather than silently succeeding.
 
 ---
 
@@ -218,6 +226,32 @@ Pattern: `/api/channel/{0-3}/{suffix}` or `/api/channel/` (suffixes also mapped 
 | `/api/usbpd/select` | POST | `{"index": N}` (Request PD profile). |
 | `/api/ioexp` | GET | Read PCA9535 inputs. |
 | `/api/ioexp/control` | POST | Set PCA9535 outputs. |
+
+---
+
+## 11b. Power Profiler Pro HAT — DAQ (9 URIs)
+
+Present only when a DAQ HAT is attached; the mainboard proxies each call to the
+ESP32-P4 over the HAT UART link. All of these are reachable over **BLE as well
+as HTTP** — they go through the shared `api_core` dispatcher, so no transport
+work was needed for either.
+
+| Endpoint | Method | Purpose |
+| :--- | :--- | :--- |
+| `/api/daq` | GET | HAT presence/type, firmware version, capabilities. |
+| `/api/daq/acq_config` | GET/POST | ODR / filter / decimation. Response echoes the values the device *actually* applied, which may differ from those requested. |
+| `/api/daq/vdut/status` | GET | DUT-supply state: enabled, setpoint, current limit, measured output. |
+| `/api/daq/vdut/enable` | POST | `{"enable": bool}`. |
+| `/api/daq/vdut/setpoint` | POST | `{"voltage": F, "currentLimit": F}`. Out-of-range values are **rejected (HTTP 400), not clamped**. |
+| `/api/daq/wifi_stream/start` | POST | Bring up the P4's softAP + TCP stream; returns SSID/password/endpoint. |
+| `/api/daq/wifi_stream/status`| GET | Poll bring-up. Carries a `stage` field (`requested`/`ap`/`dns`/`tcp`) so clients can show real progress. |
+| `/api/daq/wifi_stream/stop` | POST | Tear down the AP and stream. |
+| `/api/daq/wifi_stream/recycle`| POST | Unconditional teardown + rebuild. Replaces power-cycling a wedged stream, and cancels any bring-up already in flight. |
+
+> [!NOTE]
+> The measured-voltage field in `vdut/status` is sourced from the ADAQ7769
+> acquisition chain, not a dedicated VDUT sense ADC — that does not exist on
+> this board.
 
 ---
 

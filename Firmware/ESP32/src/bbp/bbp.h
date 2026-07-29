@@ -25,7 +25,7 @@ extern "C" {
 
 #define BBP_PROTO_VERSION       10
 
-#define BBP_FW_VERSION_MAJOR    4
+#define BBP_FW_VERSION_MAJOR    5
 #define BBP_FW_VERSION_MINOR    0
 #define BBP_FW_VERSION_PATCH    0
 

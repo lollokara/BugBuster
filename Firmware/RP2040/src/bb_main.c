@@ -43,7 +43,7 @@ extern TaskHandle_t tud_taskhandle;
 // set these via -D flags (e.g. IDE or standalone compilation).
 // To bump the version, edit PROBE_VERSION in CMakeLists.txt only.
 #ifndef BB_HAT_FW_MAJOR
-#define BB_HAT_FW_MAJOR  4  /* 0 = sentinel: CMake -D flags were not provided */
+#define BB_HAT_FW_MAJOR  5  /* 0 = sentinel: CMake -D flags were not provided */
 #endif
 #ifndef BB_HAT_FW_MINOR
 #define BB_HAT_FW_MINOR  0  /* 0 = sentinel: CMake -D flags were not provided */

@@ -12,7 +12,15 @@ otherwise the workflow fails before building any artifacts.
 |---|---|---|---|
 | RP2040 HAT firmware | `hat-fw-v*` | `.github/workflows/rp2040-firmware.yml` | `Firmware/tools/firmware_version.py rp2040` |
 | ESP32 BBP firmware | `esp-fw-v*` | `.github/workflows/esp32-firmware.yml` | `Firmware/tools/firmware_version.py esp32` |
+| DAQ HAT firmware (P4 + C6) | `daq-fw-v*` | `.github/workflows/daq-hat-firmware.yml` | `Firmware/tools/firmware_version.py p4` / `c6` |
 | Desktop Tauri app | `desktop-v*` | `.github/workflows/desktop-release.yml` | `DesktopApp/BugBuster/scripts/desktop_version.py --check` |
+
+The DAQ HAT workflow builds **both** chips under one tag and validates it
+against the **P4's** version. The two chips publish deliberately different
+image formats — the P4 an app-only OTA image, the C6 a full merged image from
+0x0 — because the C6 is written by the ESP-ROM loader rather than into an A/B
+slot. Publishing an app-only binary as the C6 asset bricks the chip; see
+`.mex/patterns/daq-hat-release-images.md`.
 
 The CI step *Validate tag matches firmware version* strips the prefix from the
 pushed tag and asserts the helper returns the same string.
@@ -72,22 +80,26 @@ python3 DesktopApp/BugBuster/scripts/desktop_version.py 1.2.0
 
 ## Pre-push checklist
 
-Run from repo root. All three must print the expected version and exit 0:
+Run from repo root. All five must print the expected version and exit 0
+(example values are the current v2.0.0 release):
 
 ```bash
-python Firmware/tools/firmware_version.py rp2040 --expect 3.3
-python Firmware/tools/firmware_version.py esp32  --expect 3.4.0
-python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect 1.2.0
+python Firmware/tools/firmware_version.py rp2040 --expect 5.0
+python Firmware/tools/firmware_version.py esp32  --expect 5.0.0
+python Firmware/tools/firmware_version.py p4     --expect 2.0.0
+python Firmware/tools/firmware_version.py c6     --expect 2.0.0
+python DesktopApp/BugBuster/scripts/desktop_version.py --check --expect 2.0.0
 ```
 
 Only then create and push the tags:
 
 ```bash
-git tag -a hat-fw-v3.3        -m "RP2040 HAT firmware v3.3"       <commit>
-git tag -a esp-fw-v3.4.0      -m "ESP32 BBP firmware v3.4.0"      <commit>
-git tag -a desktop-v1.2.0     -m "BugBuster Desktop v1.2.0"       <commit>
-git tag -a release-v1.3.0     -m "BugBuster v1.3.0"               <commit>
-git push origin hat-fw-v3.3 esp-fw-v3.4.0 desktop-v1.2.0 release-v1.3.0
+git tag -a hat-fw-v5.0        -m "RP2040 HAT firmware v5.0"       <commit>
+git tag -a esp-fw-v5.0.0      -m "ESP32 BBP firmware v5.0.0"      <commit>
+git tag -a daq-fw-v2.0.0      -m "DAQ HAT firmware v2.0.0"        <commit>
+git tag -a desktop-v2.0.0     -m "BugBuster Desktop v2.0.0"       <commit>
+git tag -a release-v2.0.0     -m "BugBuster v2.0.0"               <commit>
+git push origin hat-fw-v5.0 esp-fw-v5.0.0 daq-fw-v2.0.0 desktop-v2.0.0 release-v2.0.0
 ```
 
 ---

@@ -2,6 +2,130 @@
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-07-29
+
+Combined release. Component versions: **ESP32-S3 firmware v5.0.0**, **RP2040 HAT
+firmware bb-hat-5.0**, **DAQ HAT ESP32-P4 v2.0.0**, **DAQ HAT ESP32-C6 v2.0.0**,
+**Desktop app v2.0.0**.
+
+Wire protocols are **unchanged** — BBP v10, DDP v8, DAQ USB v2. Everything below
+was added additively (appended opcodes, replies widened with their original
+prefix preserved), so an older peer still parses what it knew. The major version
+reflects the size of the release, not a break in compatibility.
+
+### Added
+
+- **Multi-MCU OTA — the DAQ HAT's P4 and C6 are now updatable from a release.**
+  Previously only the ESP32-S3 and RP2040 HAT could be. The S3 became the
+  orchestrator: it downloads from GitHub and streams images over the HAT UART
+  link straight onto the wire, with **no S3-side staging file** — the P4's 5 MB
+  `staging` partition is already the durable, SHA-256-verified, NVS-resumable
+  buffer, and a second copy would have consumed two thirds of the 3 MB `scripts`
+  SPIFFS holding user MicroPython files. New S3 wire constants and wide-frame
+  senders (`HAT_CMD_OTA_BEGIN/DATA/END`, 236 B per frame over the 240-byte DAQ
+  link; the generic 32-byte HAT helpers would have been ~20x slower),
+  `HAT_CMD_DAQ_C6_VERSION` (0x6A) and `HAT_CMD_DAQ_RELAY_APPLY` (0x7A), and
+  `HATP_CMD_OTA_STATUS` widened from 10 to 19 bytes with `relay_stage` progress.
+  `update_manager_apply()` now takes a target bitmask over
+  {RP2040, ESP32, P4, C6} instead of two booleans, and **enforces
+  RP2040 → C6 → P4 → S3 ordering in firmware** so no client can brick the C6 by
+  updating the P4 first — the C6's ROM-loader push is driven *by* the P4, so the
+  P4 must still be running its old image. Resume is driven from the P4's own
+  byte count (the S3 holds no resume state) via HTTP `Range`, and a resumed
+  request must answer 206. See `.mex/patterns/multi-mcu-ota.md`.
+- **CI builds and publishes P4 and C6 firmware images.** New
+  `.github/workflows/daq-hat-firmware.yml`; `bugbuster-update-manifest.json`
+  gained optional `p4` and `c6` entries. The two chips take **different image
+  formats** and this is the dangerous part: the P4 asset is an app-only OTA
+  image bound for `esp_ota_write()` and an A/B slot, while the C6 asset is a
+  **full merged image from 0x0** (bootloader + partition table + app), because
+  the C6 is written by the ESP-ROM loader starting at flash offset 0. An
+  app-only binary published as the C6 asset would overwrite its bootloader and
+  brick the chip — no A/B slot, no second MCU to recover it. New
+  `Firmware/tools/esp_image_tool.py` builds the merged image and verifies both
+  formats; since both open with the same `0xE9` magic and a real app-only image
+  is ~1.27 MB (already past the 0x10000 app offset), it discriminates on the
+  partition-table magic at 0x8000 plus a second `0xE9` at 0x10000.
+  `firmware_version.py` now accepts `p4` and `c6`.
+- **DAQ WiFi stream — force-recycle instead of power-cycling.** New
+  `HAT_CMD_DAQ_WIFI_STREAM_RECYCLE` (0x79) /
+  `POST /api/daq/wifi_stream/recycle` unconditionally tears down and rebuilds a
+  wedged or interrupted P4 WiFi stream, removing the power-cycle dependency
+  entirely. A bring-up **stage byte** (requested/ap/dns/tcp) rides the STARTING
+  reply and surfaces through `/api/daq/wifi_stream/status` so clients can show
+  real progress instead of a blank wait, and the P4 auto-tears-down after 60 s
+  with no TCP client connected.
+- **DAQ acquisition configuration.** ODR / filter / decimation config command
+  with device-confirmed readback of the values actually applied, a
+  filter-aware picker for the FINE+COARSE current path, and `SET_RATE` SPS
+  requests mapped onto stream decimation.
+- **DUT-supply (VDUT) control over both HTTP and BLE.**
+  `/api/daq/vdut/status|enable|setpoint`, reachable over BLE for free through
+  the shared `api_core` dispatcher. Setpoints are re-validated on the P4 against
+  the SMU limits and **rejected rather than clamped** when out of range.
+- **Signal-integrity work on the DAQ acquisition path.** Per-sample ADAQ CRC
+  verification for glitch rejection at the source, isolated-outlier despiking on
+  device, raw-resolution deep zoom with progressive LOD tiers, and per-record-type
+  TX/RX counters plus voltage-ADC health surfaced in the STATUS record.
+- **iOS: off-main scope render pipeline and an explicit DAQ link state machine.**
+  Socket, decode, and sample storage moved off the main thread; a pure,
+  Foundation-only `DaqLinkState` reducer replaced seven ad-hoc connection flags
+  and drives a three-rung recovery ladder (redial socket → rejoin hotspot →
+  recycle device) with a data-stall watchdog and a Retry affordance. Also: iPad
+  adaptive layout across every tab, and a mock/demo device mode for UI work
+  without hardware.
+
+### Fixed
+
+- **A successful C6 update could end with a black display.** `c6_flasher_begin()`
+  drives `C6_BOOT_PIN` low and never releases it, and both `_finish()` and
+  `_abort()` reset the C6 from inside the call — so releasing the strap
+  afterwards is too late and the chip returns to ROM download mode silently,
+  which a P4 reset does not clear. All three call sites now release first.
+- **The new DAQ OTA helpers did not check a DAQ HAT was attached**, so with an
+  RP2040 LA HAT they would have pushed OTA frames at firmware that reads those
+  opcodes differently. Now gated on `HAT_TYPE_DAQ_POWER`.
+- **The S3 could pull an unverified image out of the P4's staging partition.**
+  Staging is shared between the C6 relay and the S3's own pull, so "something is
+  staged" never meant "staged for us" — a C6 image written into the S3's OTA
+  slot would brick the mainboard. Now requires both `RELAY_STAGED` and
+  `RELAY_TARGET_S3`.
+- **`HATP_CMD_DAQ_WIFI_STREAM_RECYCLE` was never reachable** — the handler
+  existed but was missing from `s3_link.c`'s explicit dispatch allow-list, so it
+  answered `RSP_ERROR` as dead code.
+- **Wedged DAQ WiFi link required a power cycle.** Root cause was `wifi_ap.c`'s
+  `s_up` flag staying stale-true after a stop-side error, which made
+  `wifi_ap_start()`'s cached-flag short-circuit silently no-op forever. Also
+  fixed: per-step init guards so a failed retry resumes rather than replaying
+  non-idempotent steps that hard-abort the board, `FAILED`-state decay, and a
+  generation counter replacing a boolean cancel flag that a later START could
+  un-cancel, letting a superseded task stamp `READY`.
+- **Memory.** The update worker's stack leaked 12 KB of internal RAM per update
+  (`vTaskDeleteWithCaps` was missing), and the Core-1 task stacks were
+  oversized — together freeing ~19 KB of internal RAM. On the P4, any task
+  touching flash or NVS must use an internal-RAM stack:
+  `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y` means a plain `xTaskCreate()`
+  may land a stack in PSRAM, which is corrupted when the D-cache is disabled
+  cross-core during an OTA write.
+- **iOS `fMOD` was wrong (8.192 MHz), making every derived ODR 8x too low.**
+- Numerous DAQ streaming fixes: atomic per-frame TCP writes (a partial lwIP
+  `send()` desynced the magic-resync stream so the phone decoded float bytes as
+  fake samples), non-blocking stream socket so backpressure cannot stall
+  acquisition, softAP PMF set to capable-not-required (PMF-required is a known
+  associate-then-deauth cause), and the `LAST`-flag bug where a STARTING poll
+  could be misread as finished-but-not-ready and abort the whole bring-up.
+
+### Changed
+
+- Version scheme: all five components moved to a major version together. The
+  private `.mex` knowledge base is no longer tracked as a gitlink in this repo.
+- The ESP32-C6's vendored `wifi_hosted` component is now tracked in git. It was
+  covered by a blanket ignore rule and is a local-path dependency that nothing
+  can re-fetch, so the C6 could previously only be built on a machine that
+  already had a copy — no CI job could produce a C6 image.
+
+### Earlier work also shipping in this release (accumulated since v1.5.0)
+
 ### Added
 - **DAQ HAT (ESP32-P4) staged/resumable relay-update core.** New 5 MB `staging` partition
   (P4 NVS grown 24 KB → ~988 KB to make room) plus a `relay_stage` module that writes/verifies
@@ -144,10 +268,6 @@
   `status` view of stored tables, per-range temps, and the live applied ADC offset — usable for
   bench automation without the full-screen TUI.
 
-
-## [1.5.0] — 2026-06-29
-
-*(no changes yet)*
 
 ## [1.5.0] — 2026-06-29
 
@@ -598,22 +718,6 @@ netlist-verified hardware map in `Docs/FIRMWARE_HARDWARE_REFERENCE.md`.
 - **REPL quote sanitization and Copy support**: Configured keyboard type to `.asciiCapable` and attached on-change handlers to sanitize smart quotes/dashes to ASCII equivalents. Added a copy button to copy the entire console log output.
 - OTA upload progress bar animates with a green shimmer during HTTP upload stages instead of freezing at 40% (SPIFFS) or 90% (ESP32); backend emits intermediate progress ticks every 250 ms via `http_upload_with_progress` helper
 - iOS app device scan is now ~5× faster: HTTP probe timeout reduced from 800 ms to 300 ms and concurrent chunk size increased from 30 to 64 hosts, bringing worst-case scan time from ~30 s down to ~5 s per subnet
-
-## [1.3.3] — 2026-06-10
-
-*(no changes yet)*
-
-## [1.3.3] — 2026-06-10
-
-*(no changes yet)*
-
-## [1.3.3] — 2026-06-10
-
-*(no changes yet)*
-
-## [1.3.3] — 2026-06-10
-
-*(no changes yet)*
 
 ## [1.3.3] — 2026-06-10
 

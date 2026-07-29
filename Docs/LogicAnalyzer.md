@@ -4,7 +4,7 @@
 **Firmware module:** `Firmware/RP2040/src/bb_la*.c/.pio/.h`
 **USB interface:** Vendor bulk (USB interface **3**, TinyUSB vendor instance `BB_LA_VENDOR_ITF = 0`, EP `0x06` OUT / `0x87` IN)
 **Transport:** Direct host ⇄ RP2040 USB (bypasses the ESP32 entirely)
-**Current version:** `bb-hat-3.3`
+**Current version:** `bb-hat-5.0`
 
 ---
 
