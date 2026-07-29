@@ -131,6 +131,11 @@ yarn-error.log*
 # Misc IDE / editor
 *.code-workspace
 
-# Mex project folder (optional internal tool) — avoid accidentally committing
+# Mex project folder (optional internal tool) — avoid accidentally committing.
+# .mex is a SEPARATE, PRIVATE git repo (lollokara/bugbuster-mex) checked out
+# here; commit its contents there, not in this repo. It used to also be recorded
+# as a bare gitlink in this repo's tree (a commit pointer with no .gitmodules
+# entry), which pinned a private SHA nobody outside could resolve; that link has
+# been removed. Nothing in CI needs it — no build reads .mex.
 .mex/
 .superpowers/
