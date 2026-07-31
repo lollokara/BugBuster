@@ -416,3 +416,70 @@ public struct ToastMessage: Identifiable, Equatable {
         lhs.id == rhs.id
     }
 }
+
+// MARK: - OTA / Firmware Update
+
+/// One published GitHub release, classified into per-MCU-target asset
+/// availability. Four independently-updatable targets exist:
+/// ESP32-S3 mainboard, RP2040 LA HAT, and (DAQ HAT only) ESP32-P4 and ESP32-C6.
+///
+/// Real asset names (see `.mex/patterns/daq-hat-release-images.md` and
+/// `Firmware/ESP32/src/update/update_manager.cpp:fill_component_from_asset`):
+///   esp32:  bugbuster-esp32s3-vX.Y.Z-ota.bin
+///   rp2040: bugbuster-hat-rp2040-vX.Y.Z.bin
+///   p4:     bugbuster-daq-p4-vX.Y.Z-ota.bin       (app-only OTA image)
+///   c6:     bugbuster-daq-c6-vX.Y.Z-merged.bin    (full merged image from 0x0)
+///
+/// P4 and C6 are NOT interchangeable formats -- the app-only image goes
+/// through `esp_ota_write()` into an A/B slot, the merged image is pushed by
+/// the ESP-ROM loader starting at flash offset 0. Crossing them can brick the
+/// C6 with no second MCU to recover it. This model therefore keeps them as two
+/// independent, separately-classified asset slots rather than one generic
+/// "DAQ HAT" slot a UI could misdirect.
+public struct GitRelease: Identifiable {
+    public let id: String
+    public let tag: String
+    public let publishedAt: String
+
+    public let esp32Available: Bool
+    public let esp32Version: String
+    public let hatAvailable: Bool       // RP2040 LA HAT
+    public let spiffsAvailable: Bool
+    public let p4Available: Bool        // DAQ HAT ESP32-P4 (app-only OTA image)
+    public let p4Version: String
+    public let c6Available: Bool        // DAQ HAT ESP32-C6 (full merged image)
+    public let c6Version: String
+}
+
+/// The four independently-updatable MCU targets accepted by
+/// `POST /api/update/apply` (`api_core.cpp:api_ota_apply`, mirrored in
+/// `webserver.cpp:handle_post_update_apply` -- both parsers must be kept in
+/// sync by hand; see `.mex/patterns/multi-mcu-ota.md`, "There are TWO
+/// /api/update/apply handlers, not one.").
+///
+/// Naming ANY key in the body resets the selection from scratch rather than
+/// layering onto the legacy rp2040+esp32 default, and an all-false body is a
+/// 400 on the device. This struct always sends all four keys explicitly, so
+/// there is no ambiguity between "not mentioned" and "explicitly off".
+/// Device-enforced apply order is RP2040 -> C6 -> P4 -> ESP32
+/// (`UPDATE_TARGET_ORDER`, update_manager.h) -- the UI does not need to
+/// reproduce that ordering, only the selection.
+public struct OtaApplyTargets {
+    public var rp2040: Bool
+    public var esp32: Bool
+    public var p4: Bool
+    public var c6: Bool
+
+    public init(rp2040: Bool = false, esp32: Bool = false, p4: Bool = false, c6: Bool = false) {
+        self.rp2040 = rp2040
+        self.esp32 = esp32
+        self.p4 = p4
+        self.c6 = c6
+    }
+
+    public var isEmpty: Bool { !rp2040 && !esp32 && !p4 && !c6 }
+
+    public var jsonBody: [String: Any] {
+        ["rp2040": rp2040, "esp32": esp32, "p4": p4, "c6": c6]
+    }
+}

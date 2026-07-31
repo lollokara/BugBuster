@@ -188,6 +188,16 @@ struct ScopeTab: View {
     }()
 
     @State private var showingSettings = false
+    /// DAQ-only: presented as a sheet rather than an overlay so it can never
+    /// cover the canvas or the floating legend/"Live" pill (see the comment
+    /// on `daqLiveButton` about that panel already having been covered twice
+    /// by other floating UI).
+    // BB_SHOW_MEASUREMENTS=1 opens the measurements sheet at launch. Same
+    // purpose as BB_MOCK_MODE / BB_INITIAL_SECTION: the simulator has no
+    // scripted-tap affordance available here, so a panel that is only
+    // reachable by tapping cannot otherwise be screenshotted or reviewed.
+    @State private var showingMeasurements =
+        ProcessInfo.processInfo.environment["BB_SHOW_MEASUREMENTS"] == "1"
 
     var body: some View {
         ZStack {
@@ -258,6 +268,28 @@ struct ScopeTab: View {
                     daqStream.setAcquisitionConfig(filter: filter, adcDec: adcDec)
                 }
             )
+        }
+        .sheet(isPresented: $showingMeasurements) {
+            NavigationStack {
+                ZStack {
+                    Color(red: 0.03, green: 0.05, blue: 0.10).ignoresSafeArea()
+                    ScrollView {
+                        DaqMeasurementsCard(daqStream: daqStream)
+                            .padding()
+                    }
+                }
+                .navigationTitle("Measurements")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingMeasurements = false }
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(.cyan)
+                    }
+                }
+                .preferredColorScheme(.dark)
+            }
+            .presentationDetents([.medium, .large])
         }
         .onAppear {
             setupOrientation()
@@ -334,6 +366,14 @@ struct ScopeTab: View {
             GlassEffectContainer(spacing: 8) {
                 HStack(spacing: 6) {
                     if mode == .daq {
+                        Button(action: { showingMeasurements = true }) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.yellow)
+                                .padding(10)
+                                .glassEffect(.regular, in: Circle())
+                        }
+
                         Button(action: { daqStream.engine.resetBuffers() }) {
                             Image(systemName: "trash")
                                 .font(.system(size: 14, weight: .bold))

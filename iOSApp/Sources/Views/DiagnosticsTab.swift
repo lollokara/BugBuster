@@ -14,16 +14,6 @@ struct OtaUpdateStatus: Codable {
     let version: String?
 }
 
-struct GitRelease: Identifiable {
-    let id: String
-    let tag: String
-    let esp32Version: String
-    let esp32Available: Bool
-    let hatAvailable: Bool
-    let spiffsAvailable: Bool
-    let publishedAt: String
-}
-
 struct DiagnosticsTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -39,8 +29,12 @@ struct DiagnosticsTab: View {
     @State private var isFetchingReleases = false
     @State private var selectedEsp32Tag = ""
     @State private var selectedHatTag = ""
+    @State private var selectedP4Tag = ""
+    @State private var selectedC6Tag = ""
     @State private var updateEsp32 = true
     @State private var updateHat = false
+    @State private var updateP4 = false
+    @State private var updateC6 = false
     @State private var isApplyingOta = false
     @State private var otaApplyStatus = ""
 
@@ -86,6 +80,17 @@ struct DiagnosticsTab: View {
     @State private var isLoadingInternalSupplies = false
 
     var hatPresent: Bool { connectionManager.lastHatStatus?.isPresent ?? false }
+    /// Gates the DAQ HAT's ESP32-P4 / ESP32-C6 OTA targets. `kind == "daq"`
+    /// (HatStatus.isDaqHat) mirrors the firmware's HAT_TYPE_DAQ_POWER (0x10,
+    /// hat.h:58) reported over GET_INFO; any other non-zero HAT type is the
+    /// LA HAT, which reads those opcodes differently and must never see a
+    /// DAQ-only update offered to it.
+    var daqHatPresent: Bool { connectionManager.lastHatStatus?.isDaqHat ?? false }
+    /// Mirrors the guard in `applyOtaUpdate()`: P4/C6 only count toward "any
+    /// target selected" while a DAQ HAT is actually present.
+    var anyTargetSelected: Bool {
+        updateEsp32 || updateHat || (daqHatPresent && (updateP4 || updateC6))
+    }
 
     @ViewBuilder
     private var diagnosticsCards: some View {
@@ -795,6 +800,69 @@ struct DiagnosticsTab: View {
                     }
                 }
 
+                // DAQ HAT pickers (only when a DAQ HAT -- not the LA HAT -- is
+                // connected; pushing a DAQ-targeted update at the LA HAT would
+                // aim OTA opcodes at a chip that reads them differently).
+                if daqHatPresent {
+                    let p4Releases = gitReleases.filter { $0.p4Available }
+                    let c6Releases = gitReleases.filter { $0.c6Available }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle(isOn: $updateP4) {
+                            Text("Update DAQ HAT (ESP32-P4)")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .toggleStyle(SwitchToggleStyle(tint: .orange))
+                        .disabled(p4Releases.isEmpty)
+
+                        if updateP4 && !p4Releases.isEmpty {
+                            Picker("P4 Version", selection: $selectedP4Tag) {
+                                ForEach(p4Releases) { r in
+                                    Text("\(r.tag) (\(r.p4Version.isEmpty ? "?" : r.p4Version))")
+                                        .tag(r.tag)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .accentColor(.orange)
+                        } else if p4Releases.isEmpty {
+                            // No P4 asset in the last 10 releases -- the CI/release
+                            // leg omits it entirely when it wasn't staged for that
+                            // release (see .mex/patterns/daq-hat-release-images.md),
+                            // so this is expected, not an error. Explain rather
+                            // than leaving a dead-looking disabled toggle.
+                            Text("No P4 firmware image found in recent releases.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                                .italic()
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle(isOn: $updateC6) {
+                            Text("Update DAQ HAT (ESP32-C6)")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .toggleStyle(SwitchToggleStyle(tint: .orange))
+                        .disabled(c6Releases.isEmpty)
+
+                        if updateC6 && !c6Releases.isEmpty {
+                            Picker("C6 Version", selection: $selectedC6Tag) {
+                                ForEach(c6Releases) { r in
+                                    Text("\(r.tag) (\(r.c6Version.isEmpty ? "?" : r.c6Version))")
+                                        .tag(r.tag)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .accentColor(.orange)
+                        } else if c6Releases.isEmpty {
+                            Text("No C6 firmware image found in recent releases.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                                .italic()
+                        }
+                    }
+                }
+
                 Divider().background(Color.white.opacity(0.1))
 
                 // Status / progress
@@ -824,11 +892,11 @@ struct DiagnosticsTab: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .glassEffect(
-                            (updateEsp32 || updateHat) ? .regular.tint(.blue) : .regular,
+                            anyTargetSelected ? .regular.tint(.blue) : .regular,
                             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                         )
                     }
-                    .disabled(!updateEsp32 && !updateHat)
+                    .disabled(!anyTargetSelected)
                 }
 
                 Divider().background(Color.white.opacity(0.1))
@@ -1128,80 +1196,39 @@ struct DiagnosticsTab: View {
     private func fetchGitReleases() {
         isFetchingReleases = true
         Task {
-            do {
-                guard let url = URL(string: "https://api.github.com/repos/lollokara/BugBuster/releases?per_page=10") else { return }
-                var req = URLRequest(url: url)
-                req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-                req.setValue("BugBuster-iOS", forHTTPHeaderField: "User-Agent")
-
-                let (data, _) = try await URLSession.shared.data(for: req)
-                guard let rawArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                    DispatchQueue.main.async { self.isFetchingReleases = false }
-                    return
+            let releases = await connectionManager.fetchGitHubReleases()
+            DispatchQueue.main.async {
+                self.gitReleases = releases
+                self.isFetchingReleases = false
+                // Auto-select the newest available per target.
+                if self.selectedEsp32Tag.isEmpty, let first = releases.first(where: { $0.esp32Available }) {
+                    self.selectedEsp32Tag = first.tag
                 }
-
-                var releases: [GitRelease] = []
-                for item in rawArray {
-                    guard let tag = item["tag_name"] as? String else { continue }
-                    let assets = item["assets"] as? [[String: Any]] ?? []
-                    let publishedAt = item["published_at"] as? String ?? ""
-
-                    var esp32Available = false
-                    var hatAvailable = false
-                    var spiffsAvailable = false
-                    var esp32Version = ""
-
-                    for asset in assets {
-                        guard let name = asset["name"] as? String else { continue }
-                        let lower = name.lowercased()
-                        if lower.contains("esp32") && lower.hasSuffix(".bin") && !lower.contains("spiffs") {
-                            esp32Available = true
-                            // Extract version from name like bugbuster-esp32-3.4.0.bin
-                            let parts = name.components(separatedBy: "-")
-                            if parts.count >= 3 {
-                                esp32Version = parts.last?.replacingOccurrences(of: ".bin", with: "") ?? ""
-                            }
-                        }
-                        if lower.contains("rp2040") || lower.contains("hat") {
-                            hatAvailable = true
-                        }
-                        if lower.contains("spiffs") && lower.hasSuffix(".bin") {
-                            spiffsAvailable = true
-                        }
-                    }
-
-                    if esp32Available || hatAvailable || spiffsAvailable {
-                        releases.append(GitRelease(
-                            id: tag,
-                            tag: tag,
-                            esp32Version: esp32Version,
-                            esp32Available: esp32Available,
-                            hatAvailable: hatAvailable,
-                            spiffsAvailable: spiffsAvailable,
-                            publishedAt: publishedAt
-                        ))
-                    }
+                if self.selectedHatTag.isEmpty, let first = releases.first(where: { $0.hatAvailable }) {
+                    self.selectedHatTag = first.tag
                 }
-
-                DispatchQueue.main.async {
-                    self.gitReleases = releases
-                    self.isFetchingReleases = false
-                    // Auto-select the newest available
-                    if self.selectedEsp32Tag.isEmpty, let first = releases.first(where: { $0.esp32Available }) {
-                        self.selectedEsp32Tag = first.tag
-                    }
-                    if self.selectedHatTag.isEmpty, let first = releases.first(where: { $0.hatAvailable }) {
-                        self.selectedHatTag = first.tag
-                    }
+                if self.selectedP4Tag.isEmpty, let first = releases.first(where: { $0.p4Available }) {
+                    self.selectedP4Tag = first.tag
                 }
-            } catch {
-                DispatchQueue.main.async { self.isFetchingReleases = false }
+                if self.selectedC6Tag.isEmpty, let first = releases.first(where: { $0.c6Available }) {
+                    self.selectedC6Tag = first.tag
+                }
             }
         }
     }
 
     private func applyOtaUpdate() {
-        guard updateEsp32 || updateHat else { return }
+        // P4/C6 are forced off when no DAQ HAT is present, even if a toggle
+        // was left on from a previous connection to a DAQ-equipped device --
+        // the firmware guards against this too, but the request should never
+        // be sent in the first place.
+        let targets = OtaApplyTargets(
+            rp2040: updateHat,
+            esp32: updateEsp32,
+            p4: updateP4 && daqHatPresent,
+            c6: updateC6 && daqHatPresent
+        )
+        guard !targets.isEmpty else { return }
         isApplyingOta = true
         otaApplyStatus = "Triggering OTA on device…"
 
@@ -1209,10 +1236,7 @@ struct DiagnosticsTab: View {
             do {
                 // First run check so firmware latches the latest URLs
                 _ = try? await connectionManager.getRequest(path: "/api/update/check") as OtaUpdateStatus
-                let ok = try await connectionManager.postAction(
-                    path: "/api/update/apply",
-                    json: ["esp32": updateEsp32, "rp2040": updateHat]
-                )
+                let ok = try await connectionManager.applyOtaUpdate(targets)
                 DispatchQueue.main.async {
                     if ok {
                         self.otaApplyStatus = "Update started — device will reboot when done."

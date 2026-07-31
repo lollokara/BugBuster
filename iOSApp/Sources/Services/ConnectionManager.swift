@@ -1593,6 +1593,107 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         } catch { return false }
     }
 
+    // MARK: - OTA Release Fetch + Apply
+
+    /// Fetches the last 10 GitHub releases and classifies their assets per
+    /// MCU target (ESP32 mainboard, RP2040 LA HAT, DAQ HAT P4, DAQ HAT C6).
+    /// This talks to api.github.com directly for display purposes only -- it
+    /// is independent of the BLE/HTTP device transport, so it has no BLE
+    /// fallback and simply returns [] on failure. The actual apply request
+    /// (`applyOtaUpdate(_:)` below) only ever sends target booleans; the
+    /// device fetches and verifies its own manifest/asset URLs, so a stale or
+    /// wrong tag picked here cannot mis-flash a chip on its own.
+    public func fetchGitHubReleases() async -> [GitRelease] {
+        guard let url = URL(string: "https://api.github.com/repos/lollokara/BugBuster/releases?per_page=10") else {
+            return []
+        }
+        var req = URLRequest(url: url)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("BugBuster-iOS", forHTTPHeaderField: "User-Agent")
+
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let rawArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+
+        // Mirrors update_manager.cpp's extract_between() so displayed
+        // versions match what the device itself would parse out of the same
+        // asset name (fill_component_from_asset, update_manager.cpp:287).
+        func version(in name: String, prefix: String, suffix: String) -> String {
+            guard let pr = name.range(of: prefix) else { return "" }
+            let rest = name[pr.upperBound...]
+            guard let sr = rest.range(of: suffix) else { return "" }
+            return String(rest[..<sr.lowerBound])
+        }
+
+        var releases: [GitRelease] = []
+        for item in rawArray {
+            guard let tag = item["tag_name"] as? String else { continue }
+            let assets = item["assets"] as? [[String: Any]] ?? []
+            let publishedAt = item["published_at"] as? String ?? ""
+
+            var esp32Available = false, hatAvailable = false, spiffsAvailable = false
+            var p4Available = false, c6Available = false
+            var esp32Version = "", p4Version = "", c6Version = ""
+
+            for asset in assets {
+                guard let name = asset["name"] as? String else { continue }
+                let lower = name.lowercased()
+                if lower.contains("esp32") && lower.hasSuffix(".bin") && !lower.contains("spiffs") && !lower.contains("daq") {
+                    esp32Available = true
+                    let parts = name.components(separatedBy: "-")
+                    if parts.count >= 3 {
+                        esp32Version = parts.last?.replacingOccurrences(of: ".bin", with: "") ?? ""
+                    }
+                }
+                if lower.contains("rp2040") || (lower.contains("hat") && !lower.contains("daq")) {
+                    hatAvailable = true
+                }
+                if lower.contains("spiffs") && lower.hasSuffix(".bin") {
+                    spiffsAvailable = true
+                }
+                // DAQ HAT ESP32-P4: app-only OTA image, e.g.
+                // "bugbuster-daq-p4-v1.0.0-ota.bin".
+                if lower.contains("daq-p4") && lower.hasSuffix(".bin") {
+                    p4Available = true
+                    p4Version = version(in: name, prefix: "-p4-v", suffix: "-ota.bin")
+                }
+                // DAQ HAT ESP32-C6: full merged image from 0x0, e.g.
+                // "bugbuster-daq-c6-v1.0.0-merged.bin". Never offer this asset
+                // for the P4 slot or vice versa -- the two formats are not
+                // interchangeable and crossing them can brick a chip (see
+                // .mex/patterns/daq-hat-release-images.md).
+                if lower.contains("daq-c6") && lower.hasSuffix(".bin") {
+                    c6Available = true
+                    c6Version = version(in: name, prefix: "-c6-v", suffix: "-merged.bin")
+                }
+            }
+
+            if esp32Available || hatAvailable || spiffsAvailable || p4Available || c6Available {
+                releases.append(GitRelease(
+                    id: tag,
+                    tag: tag,
+                    publishedAt: publishedAt,
+                    esp32Available: esp32Available,
+                    esp32Version: esp32Version,
+                    hatAvailable: hatAvailable,
+                    spiffsAvailable: spiffsAvailable,
+                    p4Available: p4Available,
+                    p4Version: p4Version,
+                    c6Available: c6Available,
+                    c6Version: c6Version
+                ))
+            }
+        }
+        return releases
+    }
+
+    /// POST /api/update/apply with all four target keys named explicitly.
+    /// See `OtaApplyTargets` for the contract this depends on.
+    public func applyOtaUpdate(_ targets: OtaApplyTargets) async throws -> Bool {
+        try await postAction(path: "/api/update/apply", json: targets.jsonBody)
+    }
+
     // MARK: - Toast
 
     public func showToast(_ text: String, type: ToastType = .info) {

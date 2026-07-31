@@ -139,10 +139,42 @@ struct DaqMarker {
     let kind: UInt8
 }
 
+/// usb_stat_block_t: float min, max, mean, rms, std; uint32_t count. 24 bytes.
+struct DaqStatBlock {
+    let min: Float
+    let max: Float
+    let mean: Float
+    let rms: Float
+    let std: Float
+    let count: UInt32
+}
+
+/// usb_stats_payload_t: three DaqStatBlock in order i, v, p. 72 bytes total.
+struct DaqStats {
+    let i: DaqStatBlock
+    let v: DaqStatBlock
+    let p: DaqStatBlock
+}
+
+/// usb_energy_payload_t: double energy_mwh, energy_j, charge_mah, charge_c,
+/// elapsed_s; float last_i, last_v, last_p. 52 bytes total, packed.
+struct DaqEnergy {
+    let energyMwh: Double
+    let energyJ: Double
+    let chargeMah: Double
+    let chargeC: Double
+    let elapsedS: Double
+    let lastI: Float
+    let lastV: Float
+    let lastP: Float
+}
+
 enum DaqRecord {
     case wave(DaqWaveBlock)
     case status(DaqStatus)
     case marker(DaqMarker)
+    case stats(DaqStats)
+    case energy(DaqEnergy)
     case unknown(UInt8)
 }
 
@@ -410,6 +442,11 @@ final class DaqStreamEngine: @unchecked Sendable {
     // -- Callbacks (always invoked on the main queue) ------------------------
     var onConnectionState: (@Sendable (NWConnection.State) -> Void)?
     var onStatus: (@Sendable (DaqStatus) -> Void)?
+    /// STATS/ENERGY arrive at 10 Hz on the wire — the same cadence as
+    /// STATUS — so these callbacks are dispatched to main exactly like
+    /// `onStatus`, with no additional throttling needed.
+    var onStats: (@Sendable (DaqStats) -> Void)?
+    var onEnergy: (@Sendable (DaqEnergy) -> Void)?
 
     // MARK: Socket lifecycle (callable from any thread; NWConnection is
     // internally thread-safe, buffer resets hop onto the pipeline queue)
@@ -708,6 +745,11 @@ final class DaqStreamEngine: @unchecked Sendable {
         func pu32(_ off: Int) -> UInt32 { buffer.loadUnaligned(fromByteOffset: payloadOffset + off, as: UInt32.self) }
         func pu64(_ off: Int) -> UInt64 { buffer.loadUnaligned(fromByteOffset: payloadOffset + off, as: UInt64.self) }
         func pf32(_ off: Int) -> Float { Float(bitPattern: pu32(off)) }
+        // Doubles are NOT guaranteed 8-byte aligned either (same reasoning as
+        // the u32/u16 unaligned loads above) — read the bit pattern via an
+        // unaligned UInt64 load rather than `load(as: Double.self)`, which
+        // would trap at runtime on an unaligned address.
+        func pf64(_ off: Int) -> Double { Double(bitPattern: pu64(off)) }
 
         switch rec {
         case .waveI, .waveV:
@@ -813,7 +855,36 @@ final class DaqStreamEngine: @unchecked Sendable {
                 kind: pu8(18)
             ))
 
-        case .stats, .energy, .fft:
+        case .stats:
+            // usb_stats_payload_t = 3 x usb_stat_block_t{f32 min,max,mean,rms,std; u32 count},
+            // in order i, v, p — 24 bytes each, 72 bytes total. Unlike STATUS
+            // this record has no extension history, so it's all-or-nothing:
+            // one guard at the full struct size, exactly like the WAVE
+            // records' single top-of-function guard.
+            guard payloadLen >= 72 else { return nil }
+            func block(_ off: Int) -> DaqStatBlock {
+                DaqStatBlock(min: pf32(off), max: pf32(off + 4), mean: pf32(off + 8),
+                             rms: pf32(off + 12), std: pf32(off + 16), count: pu32(off + 20))
+            }
+            return .stats(DaqStats(i: block(0), v: block(24), p: block(48)))
+
+        case .energy:
+            // usb_energy_payload_t = double energy_mwh, energy_j, charge_mah,
+            // charge_c, elapsed_s (8 bytes each, offsets 0/8/16/24/32) then
+            // float last_i, last_v, last_p (offsets 40/44/48) — 52 bytes total.
+            guard payloadLen >= 52 else { return nil }
+            return .energy(DaqEnergy(
+                energyMwh: pf64(0),
+                energyJ: pf64(8),
+                chargeMah: pf64(16),
+                chargeC: pf64(24),
+                elapsedS: pf64(32),
+                lastI: pf32(40),
+                lastV: pf32(44),
+                lastP: pf32(48)
+            ))
+
+        case .fft:
             // Not surfaced in the phone UI yet; parsed elsewhere if needed.
             return nil
         }
@@ -923,6 +994,16 @@ final class DaqStreamEngine: @unchecked Sendable {
             let cb = onStatus
             DispatchQueue.main.async { cb?(status) }
 
+        case .stats(let stats):
+            // Arrives at 10 Hz already — publish straight through, no
+            // pipeline-queue-rate publishing here (unlike WAVE_I/WAVE_V).
+            let cb = onStats
+            DispatchQueue.main.async { cb?(stats) }
+
+        case .energy(let energy):
+            let cb = onEnergy
+            DispatchQueue.main.async { cb?(energy) }
+
         case .marker:
             break // no marker overlay on the phone chart yet
 
@@ -975,6 +1056,9 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     @Published private(set) var linkState: DaqLinkState = .idle
     @Published var lastError: String? = nil
     @Published var lastStatus: DaqStatus? = nil
+    /// Latest decoded STATS/ENERGY records (10 Hz), mirroring `lastStatus`.
+    @Published var lastStats: DaqStats? = nil
+    @Published var lastEnergy: DaqEnergy? = nil
     /// Main-actor mirror of the engine's RX counts, refreshed on each STATUS
     /// frame (10 Hz) — cheap, and STATUS is exactly when the device's own TX
     /// counters update, so both sides of the comparison move together.
@@ -1029,6 +1113,12 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
                 self.lastStatus = status
                 self.rxCounts = (self.engine.rxWaveI, self.engine.rxWaveV)
             }
+        }
+        engine.onStats = { [weak self] stats in
+            Task { @MainActor in self?.lastStats = stats }
+        }
+        engine.onEnergy = { [weak self] energy in
+            Task { @MainActor in self?.lastEnergy = energy }
         }
     }
 
@@ -1236,7 +1326,78 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     private func appendMockSample(at t: Double) {
         let voltage = 5.0 + 0.4 * sin(t * 2 * .pi * 0.5) + Double.random(in: -0.03...0.03)
         let current = 0.12 + 0.05 * sin(t * 2 * .pi * 1.3 + 0.6) + Double.random(in: -0.006...0.006)
-        engine.appendMock(t: t, voltageV: Float(voltage), currentA: Float(max(0, current)))
+        let clamped = max(0, current)
+        engine.appendMock(t: t, voltageV: Float(voltage), currentA: Float(clamped))
+        accumulateMockMeasurements(v: voltage, i: clamped, t: t)
+    }
+
+    // Mock STATS/ENERGY.
+    //
+    // The device sends USB_REC_STATS and USB_REC_ENERGY at 10 Hz, but mock mode
+    // appends samples straight into the engine's buffers and so produces
+    // neither -- which left the whole measurements panel stuck on its empty
+    // state, i.e. the one screen mock mode exists to let us build without
+    // hardware was the one screen it could not show. Synthesize both here from
+    // the same samples the trace is drawn from, so the numbers on screen are
+    // consistent with the visible waveform.
+    //
+    // This mirrors power_dsp.c: trapezoidal energy/charge, and min/max/mean/
+    // RMS/std over the session. It does NOT exercise the wire decoder -- those
+    // byte offsets are verified against real hardware by
+    // tests/tools/daq_usb_stream_bench.py, not here.
+    private struct MockStatAcc {
+        var n: UInt32 = 0
+        var sum = 0.0, sumSq = 0.0
+        var min = Double.infinity, max = -Double.infinity
+        mutating func push(_ x: Double) {
+            n += 1; sum += x; sumSq += x * x
+            if x < min { min = x }
+            if x > max { max = x }
+        }
+        var block: DaqStatBlock {
+            guard n > 0 else { return DaqStatBlock(min: 0, max: 0, mean: 0, rms: 0, std: 0, count: 0) }
+            let d = Double(n)
+            let mean = sum / d
+            let ms = sumSq / d
+            let varr = Swift.max(ms - mean * mean, 0)
+            return DaqStatBlock(min: Float(min), max: Float(max), mean: Float(mean),
+                                rms: Float(ms.squareRoot()), std: Float(varr.squareRoot()),
+                                count: n)
+        }
+    }
+
+    private var mockAccI = MockStatAcc()
+    private var mockAccV = MockStatAcc()
+    private var mockAccP = MockStatAcc()
+    private var mockChargeC = 0.0
+    private var mockEnergyJ = 0.0
+    private var mockPrevI: Double?
+    private var mockPrevP: Double?
+    private var mockPrevT: Double?
+    private var mockElapsedS = 0.0
+    private var mockLastPublish = -Double.infinity
+
+    private func accumulateMockMeasurements(v: Double, i: Double, t: Double) {
+        let p = v * i
+        mockAccI.push(i); mockAccV.push(v); mockAccP.push(p)
+        if let pi = mockPrevI, let pp = mockPrevP, let pt = mockPrevT, t > pt {
+            let dt = t - pt
+            mockChargeC += 0.5 * (pi + i) * dt
+            mockEnergyJ += 0.5 * (pp + p) * dt
+            mockElapsedS += dt
+        }
+        mockPrevI = i; mockPrevP = p; mockPrevT = t
+
+        // Publish at the device's 10 Hz cadence, not per sample.
+        guard t - mockLastPublish >= 0.1 else { return }
+        mockLastPublish = t
+        lastEnergy = DaqEnergy(energyMwh: mockEnergyJ * (1000.0 / 3600.0),
+                               energyJ: mockEnergyJ,
+                               chargeMah: mockChargeC * (1000.0 / 3600.0),
+                               chargeC: mockChargeC,
+                               elapsedS: mockElapsedS,
+                               lastI: Float(i), lastV: Float(v), lastP: Float(p))
+        lastStats = DaqStats(i: mockAccI.block, v: mockAccV.block, p: mockAccP.block)
     }
 
     // MARK: - BLE-driven bring-up
