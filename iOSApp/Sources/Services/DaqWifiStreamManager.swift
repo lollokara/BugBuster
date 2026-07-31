@@ -372,6 +372,11 @@ final class DaqStreamEngine: @unchecked Sendable {
     /// previously showed as "streaming" indefinitely.
     private(set) var lastFrameAt: Date?
     private var rxBuffer = Data()
+    /// S1: read cursor into `rxBuffer`, in bytes, relative to `rxBuffer.startIndex`.
+    /// `drainFrames()` parses forward from here WITHOUT mutating rxBuffer, so a
+    /// receive holding several frames costs one (amortised) compaction instead
+    /// of a full-buffer memmove per frame. See `compactRxBufferIfNeeded()`.
+    private var rxCursor: Int = 0
     private var firstTimestampUs: UInt64?
     private var voltClock = DaqStreamClock()
     private var currClock = DaqStreamClock()
@@ -463,7 +468,18 @@ final class DaqStreamEngine: @unchecked Sendable {
         connection = nil
         Self.queue.async { [self] in
             rxBuffer.removeAll(keepingCapacity: false)
+            rxCursor = 0
             firstTimestampUs = nil
+            // C1: the device restarts its sample sequence at 0 on session
+            // reset. Leaving a stale refIndex in either clock makes the next
+            // block's `startIndex &- refIndex` wrap to ~1.8e19 — the exact
+            // unsigned-wrap bug class already fixed for `anchorT` above (see
+            // the comment at DaqStreamClock.blockTimes). This is currently
+            // masked because the state machine always pairs `.resetBuffers`
+            // with `.openSocket`, but resetting here too is defence-in-depth
+            // against a future reconnect path that forgets `.resetBuffers`.
+            voltClock.reset()
+            currClock.reset()
         }
     }
 
@@ -490,6 +506,9 @@ final class DaqStreamEngine: @unchecked Sendable {
             firstTimestampUs = nil
             voltClock.reset()
             currClock.reset()
+            // Note: rxBuffer/rxCursor are deliberately NOT touched here — this
+            // effect resets sample state, not the socket's in-flight byte
+            // stream. `cancelConnection()` owns clearing rxBuffer/rxCursor.
         }
     }
 
@@ -596,107 +615,178 @@ final class DaqStreamEngine: @unchecked Sendable {
     /// inside float payloads — trusting it decodes payload garbage as wild
     /// full-scale samples and lets a bogus length swallow up to 64 KB of
     /// good data.
-    private func headerLooksValid() -> Bool {
-        rxBuffer.u8(0) == DaqWire.magic0
-            && rxBuffer.u8(1) == DaqWire.magic1
-            && rxBuffer.u8(2) == DaqWire.version
-            && Self.knownDataTypes.contains(rxBuffer.u8(3))
-            && Int(rxBuffer.u16(10)) <= DaqWire.maxPayload
+    ///
+    /// `base` is a byte offset relative to `rxBuffer.startIndex` (S1: the
+    /// read-cursor offset, NOT an absolute Data.Index) — the `u8`/`u16`
+    /// helpers below are themselves startIndex-relative, so passing `base`
+    /// straight through keeps that invariant.
+    private func headerLooksValid(at base: Int) -> Bool {
+        rxBuffer.u8(base + 0) == DaqWire.magic0
+            && rxBuffer.u8(base + 1) == DaqWire.magic1
+            && rxBuffer.u8(base + 2) == DaqWire.version
+            && Self.knownDataTypes.contains(rxBuffer.u8(base + 3))
+            && Int(rxBuffer.u16(base + 10)) <= DaqWire.maxPayload
     }
 
+    /// S1: parses frames forward from `rxCursor` without mutating `rxBuffer`
+    /// per frame — the old code did a full-buffer `removeSubrange` after
+    /// EVERY frame, which memmoved the entire remaining tail once per frame
+    /// (quadratic when a single 64 KB receive holds several frames).
+    /// Consumed bytes are only compacted out of `rxBuffer` in
+    /// `compactRxBufferIfNeeded()`, called once per `drainFrames()` pass.
     private func drainFrames() {
-        while rxBuffer.count >= DaqWire.headerLen {
-            guard headerLooksValid() else {
-                // Drop one byte, then jump to the next magic candidate.
-                if let idx = rxBuffer.dropFirst().firstIndex(of: DaqWire.magic0) {
-                    rxBuffer.removeSubrange(rxBuffer.startIndex..<idx)
+        while true {
+            let available = rxBuffer.count - rxCursor
+            guard available >= DaqWire.headerLen else { break } // wait for more bytes
+
+            guard headerLooksValid(at: rxCursor) else {
+                // Drop one byte, then jump to the next magic candidate,
+                // scanning forward from the cursor (not mutating rxBuffer).
+                let searchStart = rxBuffer.startIndex + rxCursor + 1
+                if let idx = rxBuffer[searchStart...].firstIndex(of: DaqWire.magic0) {
+                    rxCursor = idx - rxBuffer.startIndex
                 } else {
-                    rxBuffer.removeAll(keepingCapacity: true)
+                    rxCursor = rxBuffer.count
                 }
                 continue
             }
 
-            let payloadLen = Int(rxBuffer.u16(10))
+            let payloadLen = Int(rxBuffer.u16(rxCursor + 10))
             let totalLen = DaqWire.headerLen + payloadLen + DaqWire.crcLen
-            guard rxBuffer.count >= totalLen else { return } // wait for more bytes
+            guard available >= totalLen else { break } // partial trailing frame — wait for more bytes
 
-            let type = rxBuffer.u8(3)
-            let payloadStart = rxBuffer.startIndex + DaqWire.headerLen
-            let payload = rxBuffer.subdata(in: payloadStart..<(payloadStart + payloadLen))
+            let type = rxBuffer.u8(rxCursor + 3)
+            let payloadOffset = rxCursor + DaqWire.headerLen
 
-            if let record = Self.decodePayload(type: type, payload: payload) {
-                handle(record)
+            // S2: decode straight out of rxBuffer's storage instead of
+            // materialising a per-frame `Data` via `subdata(in:)` (up to
+            // 16 KB copied per frame, at up to ~64 kSPS).
+            rxBuffer.withUnsafeBytes { raw in
+                if let record = Self.decodePayload(type: type, buffer: raw,
+                                                    payloadOffset: payloadOffset,
+                                                    payloadLen: payloadLen) {
+                    handle(record)
+                }
             }
 
-            rxBuffer.removeSubrange(rxBuffer.startIndex..<(rxBuffer.startIndex + totalLen))
+            rxCursor += totalLen
+        }
+        compactRxBufferIfNeeded()
+    }
+
+    /// S1: drop the consumed prefix (bytes [0, rxCursor)) only when it's
+    /// worth the memmove — either everything pending has been consumed (the
+    /// common case: cheap `removeAll(keepingCapacity:)`, no copy) or the
+    /// consumed prefix has grown to a meaningful fraction of the buffer.
+    /// Compacting on every frame is exactly the O(n^2) behaviour this
+    /// replaces; never compacting would let rxBuffer grow unboundedly
+    /// relative to genuinely pending (partial-frame) bytes.
+    private func compactRxBufferIfNeeded() {
+        guard rxCursor > 0 else { return }
+        if rxCursor == rxBuffer.count {
+            rxBuffer.removeAll(keepingCapacity: true)
+            rxCursor = 0
+        } else if rxCursor >= rxBuffer.count / 2 || rxCursor >= 65536 {
+            rxBuffer.removeSubrange(rxBuffer.startIndex..<(rxBuffer.startIndex + rxCursor))
+            rxCursor = 0
         }
     }
 
-    static func decodePayload(type: UInt8, payload: Data) -> DaqRecord? {
+    /// S2: decodes a frame's payload directly out of `buffer` (the raw bytes
+    /// backing `rxBuffer`) at `[payloadOffset, payloadOffset + payloadLen)`
+    /// — no per-frame `Data` copy. NOTE: the payload is NOT guaranteed
+    /// 4-byte aligned (the 12-byte header offset plus Data's own backing
+    /// offset can leave it unaligned), so every multi-byte read here MUST go
+    /// through `loadUnaligned`/`memcpy` rather than a typed `load(as:)` —
+    /// the latter traps at runtime on an unaligned address.
+    static func decodePayload(type: UInt8, buffer: UnsafeRawBufferPointer,
+                              payloadOffset: Int, payloadLen: Int) -> DaqRecord? {
         guard let rec = DaqWire.RecType(rawValue: type) else { return .unknown(type) }
+
+        func pu8(_ off: Int) -> UInt8 { buffer.loadUnaligned(fromByteOffset: payloadOffset + off, as: UInt8.self) }
+        func pu16(_ off: Int) -> UInt16 { buffer.loadUnaligned(fromByteOffset: payloadOffset + off, as: UInt16.self) }
+        func pu32(_ off: Int) -> UInt32 { buffer.loadUnaligned(fromByteOffset: payloadOffset + off, as: UInt32.self) }
+        func pu64(_ off: Int) -> UInt64 { buffer.loadUnaligned(fromByteOffset: payloadOffset + off, as: UInt64.self) }
+        func pf32(_ off: Int) -> Float { Float(bitPattern: pu32(off)) }
+
         switch rec {
         case .waveI, .waveV:
-            guard payload.count >= 24 else { return nil }
-            let startIndex = payload.u64(0)
-            let timestampUs = payload.u64(8)
-            let sampleRate = payload.u32(16)
-            var count = Int(payload.u16(20))
+            guard payloadLen >= 24 else { return nil }
+            let startIndex = pu64(0)
+            let timestampUs = pu64(8)
+            let sampleRate = pu32(16)
+            let requestedCount = Int(pu16(20))
             let isVoltage = rec == .waveV
             let bytesPerSample = isVoltage ? 4 : 5
-            while count > 0 && 24 + count * bytesPerSample > payload.count { count -= 1 }
+            // C2: single division replacing the old O(n) decrement loop
+            // (`while count > 0 && 24 + count * bytesPerSample > payload.count
+            // { count -= 1 }`) — same resulting count for every input,
+            // including the zero/negative-space edges: payloadLen >= 24 is
+            // already guaranteed above, so (payloadLen - 24) is never
+            // negative, and integer (floor) division reproduces exactly the
+            // largest count the old loop would have converged to.
+            let maxCount = (payloadLen - 24) / bytesPerSample
+            let count = min(requestedCount, maxCount)
 
-            // Bulk-parse the f32/meta arrays with raw pointer loads — the
-            // per-byte Data-subscript path cost real CPU at tens of
-            // kilosamples/sec (host is little-endian, matching the wire).
-            let values: [Float] = payload.withUnsafeBytes { raw in
-                var out = [Float]()
-                out.reserveCapacity(count)
-                for i in 0..<count {
-                    out.append(Float(bitPattern: raw.loadUnaligned(fromByteOffset: 24 + i * 4,
-                                                                   as: UInt32.self)))
+            // Bulk byte copy (not a per-element append loop, not a typed
+            // load — the payload may be unaligned) — memcpy handles
+            // arbitrary alignment. Host is little-endian (arm64), matching
+            // the wire, so this is a straight byte copy for both f32 values
+            // and (for WAVE_I) the meta bytes.
+            let valuesByteOffset = payloadOffset + 24
+            let values = [Float](unsafeUninitializedCapacity: count) { valBuf, initializedCount in
+                if count > 0 {
+                    memcpy(valBuf.baseAddress!, buffer.baseAddress!.advanced(by: valuesByteOffset), count * 4)
                 }
-                return out
+                initializedCount = count
             }
 
             var meta: [UInt8]? = nil
             if !isVoltage {
-                let metaBase = 24 + count * 4
-                meta = Array(payload[(payload.startIndex + metaBase)..<(payload.startIndex + metaBase + count)])
+                let metaByteOffset = payloadOffset + 24 + count * 4
+                if count > 0 {
+                    meta = [UInt8](unsafeUninitializedCapacity: count) { metaBuf, initializedCount in
+                        memcpy(metaBuf.baseAddress!, buffer.baseAddress!.advanced(by: metaByteOffset), count)
+                        initializedCount = count
+                    }
+                } else {
+                    meta = []
+                }
             }
             return .wave(DaqWaveBlock(startIndex: startIndex, timestampUs: timestampUs,
                                       sampleRate: sampleRate,
-                                      decimation: max(payload.u8(22), 1),
+                                      decimation: max(pu8(22), 1),
                                       values: values, meta: meta,
                                       isVoltage: isVoltage))
 
         case .status:
-            guard payload.count >= 20 else { return nil }
-            let inVoltage = payload.count >= 28 ? payload.f32(20) : 0
-            let inCurrent = payload.count >= 28 ? payload.f32(24) : 0
-            let framesTx = payload.count >= 40 ? payload.u32(36) : nil
-            let bytesPerSec = payload.count >= 44 ? payload.u32(40) : nil
-            let fifoDrop = payload.count >= 48 ? payload.u32(44) : nil
-            let adaqOk = payload.count >= 29 ? payload.u8(28) : nil
-            let wiFrames = payload.count >= 76 ? payload.u32(72) : nil
-            let wvFrames = payload.count >= 80 ? payload.u32(76) : nil
-            let wiDrops  = payload.count >= 84 ? payload.u32(80) : nil
-            let wvDrops  = payload.count >= 88 ? payload.u32(84) : nil
+            guard payloadLen >= 20 else { return nil }
+            let inVoltage = payloadLen >= 28 ? pf32(20) : 0
+            let inCurrent = payloadLen >= 28 ? pf32(24) : 0
+            let framesTx = payloadLen >= 40 ? pu32(36) : nil
+            let bytesPerSec = payloadLen >= 44 ? pu32(40) : nil
+            let fifoDrop = payloadLen >= 48 ? pu32(44) : nil
+            let adaqOk = payloadLen >= 29 ? pu8(28) : nil
+            let wiFrames = payloadLen >= 76 ? pu32(72) : nil
+            let wvFrames = payloadLen >= 80 ? pu32(76) : nil
+            let wiDrops  = payloadLen >= 84 ? pu32(80) : nil
+            let wvDrops  = payloadLen >= 88 ? pu32(84) : nil
             // Extension v6 (@88-95). Guards use each field's END offset
             // (>= 89, >= 90, >= 92, >= 96) — using start offsets would read
             // out of bounds on a frame truncated mid-field.
-            let filterCode  = payload.count >= 89 ? payload.u8(88) : nil
-            let adcDecCode  = payload.count >= 90 ? payload.u8(89) : nil
-            let streamDecim = payload.count >= 92 ? payload.u16(90) : nil
-            let odrMilliSps = payload.count >= 96 ? payload.u32(92) : nil
+            let filterCode  = payloadLen >= 89 ? pu8(88) : nil
+            let adcDecCode  = payloadLen >= 90 ? pu8(89) : nil
+            let streamDecim = payloadLen >= 92 ? pu16(90) : nil
+            let odrMilliSps = payloadLen >= 96 ? pu32(92) : nil
             return .status(DaqStatus(
-                sampleRate: payload.u32(0),
-                overflowCount: payload.u32(4),
-                range: payload.u8(8),
-                streaming: payload.u8(9) != 0,
-                rangeLocked: payload.u8(10) != 0,
-                sourceEnabled: payload.u8(11) != 0,
-                vdutSet: payload.f32(12),
-                ilimitSet: payload.f32(16),
+                sampleRate: pu32(0),
+                overflowCount: pu32(4),
+                range: pu8(8),
+                streaming: pu8(9) != 0,
+                rangeLocked: pu8(10) != 0,
+                sourceEnabled: pu8(11) != 0,
+                vdutSet: pf32(12),
+                ilimitSet: pf32(16),
                 inVoltage: inVoltage,
                 inCurrent: inCurrent,
                 framesTx: framesTx,
@@ -714,13 +804,13 @@ final class DaqStreamEngine: @unchecked Sendable {
             ))
 
         case .marker:
-            guard payload.count >= 20 else { return nil }
+            guard payloadLen >= 20 else { return nil }
             return .marker(DaqMarker(
-                sampleIndex: payload.u64(0),
-                timestampUs: payload.u64(8),
-                channel: payload.u8(16),
-                edge: payload.u8(17),
-                kind: payload.u8(18)
+                sampleIndex: pu64(0),
+                timestampUs: pu64(8),
+                channel: pu8(16),
+                edge: pu8(17),
+                kind: pu8(18)
             ))
 
         case .stats, .energy, .fft:
@@ -793,7 +883,10 @@ final class DaqStreamEngine: @unchecked Sendable {
             #endif
 
             if block.isVoltage {
+                // S3: reserve v alongside t — only t was reserved before, so
+                // v reallocated geometrically on every block at up to 64 kSPS.
                 voltage.t.reserveCapacity(voltage.count + block.values.count)
+                voltage.v.reserveCapacity(voltage.count + block.values.count)
                 for (i, v) in block.values.enumerated() {
                     let t = tBase + Double(i) * dt
                     voltage.t.append(t)
@@ -803,13 +896,21 @@ final class DaqStreamEngine: @unchecked Sendable {
                 }
                 trimIfNeeded(&voltage, &voltageMid, &voltageReduced, &voltageHist)
             } else {
+                // S3: reserve v and src alongside t (same reasoning as above).
                 current.t.reserveCapacity(current.count + block.values.count)
+                current.v.reserveCapacity(current.count + block.values.count)
+                current.src.reserveCapacity(current.count + block.values.count)
+                // S4: hoist block.meta out of the per-sample loop — reading
+                // an enum payload's optional-array property on every one of
+                // ~64,000 samples/sec costs a retain/release each time; the
+                // value itself never changes within a block.
+                let blockMeta = block.meta
                 for (i, v) in block.values.enumerated() {
                     let t = tBase + Double(i) * dt
                     current.t.append(t)
                     current.v.append(v)
                     // Source bits live at meta[1:0]=range, [3:2]=source.
-                    let m: UInt8 = block.meta.map { i < $0.count ? $0[i] : 0 } ?? 0
+                    let m: UInt8 = blockMeta.map { i < $0.count ? $0[i] : 0 } ?? 0
                     let s = (m >> 2) & 0x03
                     current.src.append(s)
                     currMidAcc.push(t: t, v: v, src: s, hasSrc: true, into: &currentMid)
@@ -1090,19 +1191,37 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         engine.resetBuffers()
         mockElapsed = 0
 
+        // BB_MOCK_RATE = samples/second to synthesize (default 33, i.e. the
+        // original 2000 samples over a 60 s backfill).
+        //
+        // The default is a UI-dev rate, not a realistic one: a real DAQ link
+        // delivers tens of thousands of samples/second. That matters because
+        // the simulator CANNOT join the DAQ HAT's WiFi hotspot, so mock mode is
+        // the only way to put the ingest + render pipeline under a load
+        // resembling production and read the render-tick instrumentation back.
+        // Raising this is how the two-tier buffer, the envelope accumulators
+        // and the decimator get exercised at all.
+        let env = ProcessInfo.processInfo.environment
+        let rate = Double(env["BB_MOCK_RATE"] ?? "") ?? 33.0
         let backfillSeconds = 60.0
-        let mockSampleCount = 2000.0
-        let dt = backfillSeconds / mockSampleCount
+        let dt = 1.0 / max(rate, 1.0)
         var t = -backfillSeconds
         while t < 0 {
             appendMockSample(at: t)
             t += dt
         }
-        mockTimer = Timer.scheduledTimer(withTimeInterval: dt, repeats: true) { [weak self] _ in
+        // A Timer cannot fire faster than a few hundred Hz, so above that we
+        // synthesize a BATCH per tick instead of a sample -- which also mirrors
+        // the real wire, where samples arrive in blocks, not individually.
+        let tickInterval = max(dt, 0.02)
+        let perTick = max(Int((rate * tickInterval).rounded()), 1)
+        mockTimer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.appendMockSample(at: self.mockElapsed)
-                self.mockElapsed += dt
+                for _ in 0..<perTick {
+                    self.appendMockSample(at: self.mockElapsed)
+                    self.mockElapsed += dt
+                }
             }
         }
     }

@@ -234,7 +234,8 @@ struct DaqScopeCanvasView: View {
                 let rect = CGRect(origin: .zero, size: canvasSize)
                 drawGrid(context: context, rect: rect)
                 for trace in frame.traces {
-                    drawTrace(trace.points, in: rect, minVal: frame.mergedMin, maxVal: frame.mergedMax, context: context)
+                    drawTrace(trace.points, in: rect, minVal: frame.mergedMin, maxVal: frame.mergedMax,
+                              colorForSource: trace.colorForSource, context: context)
                 }
             }
 
@@ -277,7 +278,8 @@ struct DaqScopeCanvasView: View {
             Canvas { context, canvasSize in
                 let rect = CGRect(origin: .zero, size: canvasSize)
                 drawGrid(context: context, rect: rect)
-                drawTrace(trace.points, in: rect, minVal: trace.minV, maxVal: trace.maxV, context: context)
+                drawTrace(trace.points, in: rect, minVal: trace.minV, maxVal: trace.maxV,
+                          colorForSource: trace.colorForSource, context: context)
             }
 
             VStack {
@@ -298,6 +300,7 @@ struct DaqScopeCanvasView: View {
 
             if let touch = touchLocation,
                let info = closestSampleInfo(points: trace.points, label: trace.label, unit: trace.unit,
+                                            colorForSource: trace.colorForSource,
                                             minVal: trace.minV, maxVal: trace.maxV,
                                             at: touch, in: CGSize(width: 10_000, height: height)) {
                 touchOverlay(info: info, in: CGSize(width: 10_000, height: height))
@@ -377,7 +380,7 @@ struct DaqScopeCanvasView: View {
                 let dist = hypot(pt.x - touch.x, pt.y - touch.y)
                 if dist < minDistance {
                     minDistance = dist
-                    closest = TouchInfo(label: trace.label, unit: trace.unit, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
+                    closest = TouchInfo(label: trace.label, unit: trace.unit, color: trace.colorForSource(p.source), value: p.v, time: p.t, x: pt.x, y: pt.y)
                 }
             }
         }
@@ -385,6 +388,7 @@ struct DaqScopeCanvasView: View {
     }
 
     private func closestSampleInfo(points: [ScopeSeriesPoint], label: String, unit: String,
+                                   colorForSource: (UInt8) -> Color,
                                    minVal: Double, maxVal: Double,
                                    at touch: CGPoint, in size: CGSize) -> TouchInfo? {
         guard points.count >= 2 else { return nil }
@@ -399,7 +403,7 @@ struct DaqScopeCanvasView: View {
             let dist = abs(pt.x - touch.x)
             if dist < minDistance {
                 minDistance = dist
-                closest = TouchInfo(label: label, unit: unit, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
+                closest = TouchInfo(label: label, unit: unit, color: colorForSource(p.source), value: p.v, time: p.t, x: pt.x, y: pt.y)
             }
         }
         return closest
@@ -461,23 +465,29 @@ struct DaqScopeCanvasView: View {
         context.stroke(path, with: .color(Color.white.opacity(0.06)), lineWidth: 1)
     }
 
-    private func drawTrace(_ points: [ScopeSeriesPoint], in rect: CGRect, minVal: Double, maxVal: Double, context: GraphicsContext) {
+    private func drawTrace(_ points: [ScopeSeriesPoint], in rect: CGRect, minVal: Double, maxVal: Double,
+                          colorForSource: (UInt8) -> Color, context: GraphicsContext) {
         guard points.count >= 2 else { return }
         let tStart = points.first!.t
         let tSpan = points.last!.t - tStart
 
+        // Coalesce consecutive same-source points into one run and resolve
+        // the run's Color ONCE — points themselves only carry the compact
+        // `source` discriminator now (see ScopeSeriesPoint), so this is the
+        // one place per run (not per point) that touches the heap-backed
+        // SwiftUI `Color` type.
         var runStart = 0
-        var runColor = points[0].color
+        var runSource = points[0].source
         var idx = 1
         while idx < points.count {
-            if points[idx].color != runColor {
-                strokeRun(points, from: runStart, to: idx, tStart: tStart, tSpan: tSpan, rect: rect, minVal: minVal, maxVal: maxVal, color: runColor, context: context)
+            if points[idx].source != runSource {
+                strokeRun(points, from: runStart, to: idx, tStart: tStart, tSpan: tSpan, rect: rect, minVal: minVal, maxVal: maxVal, color: colorForSource(runSource), context: context)
                 runStart = idx
-                runColor = points[idx].color
+                runSource = points[idx].source
             }
             idx += 1
         }
-        strokeRun(points, from: runStart, to: points.count - 1, tStart: tStart, tSpan: tSpan, rect: rect, minVal: minVal, maxVal: maxVal, color: runColor, context: context)
+        strokeRun(points, from: runStart, to: points.count - 1, tStart: tStart, tSpan: tSpan, rect: rect, minVal: minVal, maxVal: maxVal, color: colorForSource(runSource), context: context)
     }
 
     private func strokeRun(_ points: [ScopeSeriesPoint], from: Int, to: Int, tStart: Double, tSpan: Double, rect: CGRect, minVal: Double, maxVal: Double, color: Color, context: GraphicsContext) {

@@ -81,4 +81,90 @@ func runScopeAxisTests() {
         let b = ScopeAxis.bounds([5.0, -5.0, 5.0, -5.0, 0.0, 0.0, 0.0, 0.0])
         check(b.min < b.max, "bounds must be ordered regardless of input order")
     }
+
+    // --- Quickselect rewrite: must match the old sort-based percentiles ----
+
+    /// Sort-based reference implementation of the trimmed-percentile step,
+    /// mirroring the pre-quickselect `ScopeAxis.bounds` exactly (same padding
+    /// logic), so it can be diffed against the real implementation.
+    func referenceBounds(_ values: [Double]) -> (min: Double, max: Double) {
+        let finite = values.filter { $0.isFinite }
+        guard !finite.isEmpty else { return (-1, 1) }
+        let lo: Double
+        let hi: Double
+        if finite.count >= ScopeAxis.minSamplesForTrim {
+            let sorted = finite.sorted()
+            let k = Swift.min(Int(Double(sorted.count) * ScopeAxis.trimFraction),
+                              (sorted.count - 1) / 2)
+            lo = sorted[k]
+            hi = sorted[sorted.count - 1 - k]
+        } else {
+            lo = finite.min()!
+            hi = finite.max()!
+        }
+        let span = hi - lo
+        let mag = Swift.max(abs(lo), abs(hi))
+        let pad: Double
+        if span > mag * 1e-6, span > 0 {
+            pad = span * 0.1
+        } else {
+            pad = mag > 0 ? mag * 0.1 : 1e-12
+        }
+        return (lo - pad, hi + pad)
+    }
+
+    do {
+        // Duplicate values clustered around the trim boundary: quickselect
+        // must still land on the exact same k-th element as a full sort.
+        var v = [Double](repeating: 3.0, count: 200)
+        for i in 0..<200 where i % 3 == 0 { v[i] = 3.0 + Double(i) * 0.0001 }
+        let b = ScopeAxis.bounds(v)
+        let ref = referenceBounds(v)
+        check(b == ref, "duplicate-heavy input must match the sort-based reference (got \(b), want \(ref))")
+    }
+
+    do {
+        // All-equal input: every element is the same value, well above the
+        // trim threshold.
+        let v = [Double](repeating: 42.0, count: 500)
+        let b = ScopeAxis.bounds(v)
+        let ref = referenceBounds(v)
+        check(b == ref, "all-equal input must match the sort-based reference (got \(b), want \(ref))")
+        check(b.min < b.max, "all-equal input must still produce a non-zero-height axis")
+    }
+
+    do {
+        // Exactly `minSamplesForTrim` elements: the boundary where trimming
+        // first kicks in.
+        let v = (0..<ScopeAxis.minSamplesForTrim).map { Double($0) }
+        let b = ScopeAxis.bounds(v)
+        let ref = referenceBounds(v)
+        check(b == ref, "exactly-minSamplesForTrim input must match the sort-based reference (got \(b), want \(ref))")
+    }
+
+    do {
+        // Randomised differential test: many random inputs, comparing the
+        // quickselect implementation against the sort-based reference. This
+        // is the guarantee that matters most — the rewrite must be a pure
+        // performance change, never a behavior change.
+        var rng = SystemRandomNumberGenerator()
+        for trial in 0..<500 {
+            let count = Int.random(in: 0...400, using: &rng)
+            var v = [Double]()
+            v.reserveCapacity(count)
+            for _ in 0..<count {
+                let choice = Int.random(in: 0...9, using: &rng)
+                switch choice {
+                case 0: v.append(.nan)
+                case 1: v.append(.infinity)
+                case 2: v.append(-.infinity)
+                default:
+                    v.append(Double.random(in: -1e6...1e6, using: &rng))
+                }
+            }
+            let b = ScopeAxis.bounds(v)
+            let ref = referenceBounds(v)
+            check(b == ref, "trial \(trial) (n=\(count)) must match reference (got \(b), want \(ref))")
+        }
+    }
 }

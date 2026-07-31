@@ -3,7 +3,21 @@ import SwiftUI
 struct ScopeSeriesPoint {
     let t: Double
     let v: Double
-    let color: Color
+    /// Compact source/trace discriminator, NOT a resolved `Color`. `Color` is
+    /// a heap-backed existential; storing one per point meant tens of
+    /// thousands of heap allocations/sec at real sample rates and a 20 Hz
+    /// tick. `source` is the same 0...3 discriminator DAQ current already
+    /// carried per sample (see `ScopeColors.daqCurrentColor(forSource:)`) —
+    /// callers resolve it to a real `Color` ONCE per contiguous same-source
+    /// run when the canvas draws, not once per point. The legacy ADC path
+    /// never varies color within a channel, so it always uses source 0.
+    let source: UInt8
+
+    init(t: Double, v: Double, source: UInt8 = 0) {
+        self.t = t
+        self.v = v
+        self.source = source
+    }
 }
 
 struct ScopeSeriesChannel {
@@ -62,7 +76,7 @@ extension ScopeSampleSeries {
             let color = ScopeColors.accents[ch]
             let points: [ScopeSeriesPoint] = sampleBuffer.compactMap { sample in
                 guard sample.count > ch + 1 else { return nil }
-                return ScopeSeriesPoint(t: sample[0], v: sample[ch + 1], color: color)
+                return ScopeSeriesPoint(t: sample[0], v: sample[ch + 1])
             }
             channels.append(ScopeSeriesChannel(label: "CH\(ch + 1)", defaultColor: color, unit: "V", points: points))
         }

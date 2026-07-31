@@ -3,7 +3,7 @@ import SwiftUI
 // =============================================================================
 // ScopeRenderModel.swift — background render pipeline for the DAQ scope.
 //
-// Ticks at ~30 Hz on DaqStreamEngine.queue (the same serial queue that owns
+// Ticks at 20 Hz on DaqStreamEngine.queue (the same serial queue that owns
 // the sample buffers, so no locking on the hot path), reduces the visible
 // window of each trace to a small min/max-envelope polyline sized for the
 // display, and publishes one ready-to-draw ScopeRenderFrame to SwiftUI.
@@ -22,6 +22,12 @@ struct RenderedTrace: Identifiable {
     let label: String
     let unit: String
     let defaultColor: Color
+    /// Resolves a point's compact `source` discriminator to a real `Color`.
+    /// Points no longer carry a `Color` themselves (see `ScopeSeriesPoint`);
+    /// the canvas calls this ONCE per contiguous same-source run, not once
+    /// per point. Voltage/power traces ignore the argument (constant color);
+    /// the current trace maps 0/1/2 to fine/coarse/blend.
+    let colorForSource: (UInt8) -> Color
     let points: [ScopeSeriesPoint]
     let minV: Double
     let maxV: Double
@@ -122,12 +128,33 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
     // MARK: - Segment plumbing
 
     /// A windowed slice of one storage tier.
+    ///
+    /// `step` sub-samples the slice while iterating. The RECENT buffers have
+    /// real precomputed tiers (raw -> 8:1 -> 64:1) so they always step by 1,
+    /// but the HISTORY buffer has no tiers: it is a single ~200k-entry
+    /// envelope that `decimate` used to walk in full on every 20 Hz tick,
+    /// which measured as the dominant cost of the whole render pipeline
+    /// (bench: bufV hist=196608 vs the 7696-entry `reduced` tier actually
+    /// chosen for the recent window). Stepping bounds that walk to the display
+    /// budget.
+    ///
+    /// History is stored as consecutive (min, max) PAIRS, so `step` is forced
+    /// even and both members of a sampled pair are kept -- sub-sampling whole
+    /// pairs preserves the peak-envelope shape, whereas an odd stride would
+    /// alternately drop the min or the max and visibly bias the trace.
     private struct Segment {
         let t: [Double]
         let v: [Float]
         let src: [UInt8]
         var range: Range<Int>
-        var count: Int { range.count }
+        var step: Int = 1
+        var count: Int { (range.count + step - 1) / step }
+
+        /// Indices to visit, honouring `step` while keeping (min,max) pairs
+        /// together.
+        func indices() -> StrideTo<Int> {
+            stride(from: range.lowerBound, to: range.upperBound, by: step)
+        }
     }
 
     // MARK: - Tick (pipeline queue)
@@ -180,18 +207,16 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         // pairing — decimate it once.
         var vPts: [ScopeSeriesPoint] = []
         if !vSegs.isEmpty {
-            vPts = Self.decimate(vSegs, columns: vp.columnBudget, useSrc: false,
-                                 color: { _ in ScopeColors.daqVoltage })
+            vPts = Self.decimate(vSegs, columns: vp.columnBudget, useSrc: false)
         }
         if vp.showVoltage, !vPts.isEmpty {
             traces.append(Self.trace(id: "v", label: "Voltage", unit: "V",
-                                     color: ScopeColors.daqVoltage, points: vPts))
+                                     colorForSource: { _ in ScopeColors.daqVoltage }, points: vPts))
         }
         if vp.showCurrent, !iSegs.isEmpty {
-            let pts = Self.decimate(iSegs, columns: vp.columnBudget, useSrc: true,
-                                    color: { ScopeColors.daqCurrentColor(forSource: $0) })
+            let pts = Self.decimate(iSegs, columns: vp.columnBudget, useSrc: true)
             traces.append(Self.trace(id: "i", label: "Current", unit: "A",
-                                     color: ScopeColors.daqCurrentFine, points: pts))
+                                     colorForSource: { ScopeColors.daqCurrentColor(forSource: $0) }, points: pts))
         }
         if vp.showPower, !vPts.isEmpty, !iSegs.isEmpty {
             // Real timestamp-nearest pairing (voltage and current are
@@ -201,10 +226,10 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
             pPts.reserveCapacity(vPts.count)
             for p in vPts {
                 let i = Self.nearestValue(in: iSegs, at: p.t)
-                pPts.append(ScopeSeriesPoint(t: p.t, v: p.v * Double(i), color: ScopeColors.daqPower))
+                pPts.append(ScopeSeriesPoint(t: p.t, v: p.v * Double(i)))
             }
             traces.append(Self.trace(id: "p", label: "Power", unit: "W",
-                                     color: ScopeColors.daqPower, points: pPts))
+                                     colorForSource: { _ in ScopeColors.daqPower }, points: pPts))
         }
 
         var mergedMin = Double.infinity
@@ -358,10 +383,20 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
 
         var segs: [Segment] = []
         if !hRange.isEmpty {
-            segs.append(Segment(t: hist.t, v: hist.v, src: hist.src, range: hRange))
+            // History has no precomputed tiers, so bound its walk here (see
+            // Segment.step). Round the stride to an even number so whole
+            // (min,max) pairs are sampled together.
+            var hStep = 1
+            if Double(hRange.count) > budget {
+                hStep = Int((Double(hRange.count) / budget).rounded(.up))
+                if hStep > 1 && hStep % 2 != 0 { hStep += 1 }
+            }
+            segs.append(Segment(t: hist.t, v: hist.v, src: hist.src,
+                                range: hRange, step: hStep))
         }
         if !rRange.isEmpty {
-            segs.append(Segment(t: recent.t, v: recent.v, src: recent.src, range: rRange))
+            segs.append(Segment(t: recent.t, v: recent.v, src: recent.src,
+                                range: rRange))
         }
         return segs
     }
@@ -389,20 +424,19 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
     /// `columns` buckets, keep each bucket's (min, max) in temporal order —
     /// mirrors the desktop's ~1800-column backend pyramid, computed here on
     /// the pipeline queue.
-    private static func decimate(_ segs: [Segment], columns: Int, useSrc: Bool,
-                                 color: (UInt8) -> Color) -> [ScopeSeriesPoint] {
+    private static func decimate(_ segs: [Segment], columns: Int, useSrc: Bool) -> [ScopeSeriesPoint] {
         let total = segs.reduce(0) { $0 + $1.count }
         guard total > 0, let first = segs.first, let last = segs.last else { return [] }
 
         func point(_ seg: Segment, _ idx: Int) -> ScopeSeriesPoint {
             let s: UInt8 = useSrc && idx < seg.src.count ? seg.src[idx] : 0
-            return ScopeSeriesPoint(t: seg.t[idx], v: Double(seg.v[idx]), color: color(s))
+            return ScopeSeriesPoint(t: seg.t[idx], v: Double(seg.v[idx]), source: s)
         }
 
         if total <= columns * 2 {
             var out = [ScopeSeriesPoint]()
             out.reserveCapacity(total)
-            for seg in segs { for idx in seg.range { out.append(point(seg, idx)) } }
+            for seg in segs { for idx in seg.indices() { out.append(point(seg, idx)) } }
             return out
         }
 
@@ -412,9 +446,12 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         var result = [ScopeSeriesPoint]()
         result.reserveCapacity(columns * 2)
 
-        // Scalar bucket tracking: materializing a ScopeSeriesPoint (with its
-        // SwiftUI Color) per RAW sample burned an entire CPU core at real
-        // rates — points are only built at bucket flush now.
+        // Scalar bucket tracking: materializing a ScopeSeriesPoint (with a
+        // heap-backed SwiftUI Color) per RAW sample burned an entire CPU core
+        // at real rates. Points are only built at bucket flush now, and even
+        // then carry just the `source` discriminator — the canvas resolves
+        // that to a real Color once per contiguous run when it draws, not
+        // once per point (see ScopeSeriesPoint's doc comment).
         var bucket = -1
         var mnT = 0.0, mxT = 0.0
         var mnV: Float = 0, mxV: Float = 0
@@ -422,18 +459,18 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
         func flush() {
             guard bucket >= 0 else { return }
             if mnT == mxT && mnV == mxV {
-                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), color: color(mnS)))
+                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), source: mnS))
             } else if mnT <= mxT {
-                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), color: color(mnS)))
-                result.append(ScopeSeriesPoint(t: mxT, v: Double(mxV), color: color(mxS)))
+                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), source: mnS))
+                result.append(ScopeSeriesPoint(t: mxT, v: Double(mxV), source: mxS))
             } else {
-                result.append(ScopeSeriesPoint(t: mxT, v: Double(mxV), color: color(mxS)))
-                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), color: color(mnS)))
+                result.append(ScopeSeriesPoint(t: mxT, v: Double(mxV), source: mxS))
+                result.append(ScopeSeriesPoint(t: mnT, v: Double(mnV), source: mnS))
             }
         }
         for seg in segs {
             let hasSrc = useSrc && !seg.src.isEmpty
-            for idx in seg.range {
+            for idx in seg.indices() {
                 // Clamp in floating point BEFORE the Int conversion: a
                 // pathological t (out-of-window, non-finite) must degrade to
                 // an edge bucket, never trap Double→Int. (This trapped for
@@ -478,13 +515,15 @@ final class ScopeRenderModel: ObservableObject, @unchecked Sendable {
     }
 
     private static func trace(id: String, label: String, unit: String,
-                              color: Color, points: [ScopeSeriesPoint]) -> RenderedTrace {
+                              colorForSource: @escaping (UInt8) -> Color,
+                              points: [ScopeSeriesPoint]) -> RenderedTrace {
         // Outlier-robust bounds. Taking the raw min/max here let a SINGLE
         // dropout or spike define the whole lane, collapsing the real signal
         // into a sliver; see ScopeAxis for the full rationale and the
         // magnitude-relative padding this used to do inline.
-        let (minV, maxV) = ScopeAxis.bounds(points.map(\.v))
-        return RenderedTrace(id: id, label: label, unit: unit, defaultColor: color,
+        let (minV, maxV) = ScopeAxis.bounds(points, by: \.v)
+        return RenderedTrace(id: id, label: label, unit: unit, defaultColor: colorForSource(0),
+                             colorForSource: colorForSource,
                              points: points, minV: minV, maxV: maxV)
     }
 }

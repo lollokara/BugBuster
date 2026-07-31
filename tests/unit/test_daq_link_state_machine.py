@@ -4,6 +4,7 @@ The iOS app has no XCTest target, but this state machine is deliberately
 Foundation-only so its behavior can be tested for real rather than by
 source-string assertion.
 """
+import os
 import shutil
 import subprocess
 import tempfile
@@ -18,8 +19,12 @@ TESTS = Path("tests/ios/main.swift")
 AXIS_TESTS = Path("tests/ios/ScopeAxisTests.swift")
 ACQ_CFG_TESTS = Path("tests/ios/DaqAcquisitionConfigTests.swift")
 
+# Prefer the Xcode-selected toolchain; see the comment at the build call.
+XCRUN = shutil.which("xcrun")
 
-@pytest.mark.skipif(shutil.which("swiftc") is None, reason="swiftc not available")
+
+@pytest.mark.skipif(shutil.which("swiftc") is None and shutil.which("xcrun") is None,
+                    reason="no Swift toolchain available")
 def test_daq_link_state_machine_behavior():
     assert SM.exists(), f"{SM} not created"
     src = SM.read_text()
@@ -37,10 +42,31 @@ def test_daq_link_state_machine_behavior():
 
     with tempfile.TemporaryDirectory() as td:
         binary = Path(td) / "smtests"
+        # Build through `xcrun`, not a bare `swiftc`.
+        #
+        # A bare `swiftc` resolves to the Command Line Tools toolchain, which
+        # on a machine with a newer Xcode installed is OLDER than the macOS SDK
+        # it then tries to use. The Swift stdlib .swiftinterface is versioned,
+        # so the mismatch fails the build outright with "this SDK is not
+        # supported by the compiler" -- nothing to do with the code under test,
+        # but it made this whole suite unrunnable. `xcrun` selects the
+        # toolchain that matches the active developer directory.
+        # An inherited SDKROOT wins over xcrun's own selection, and pytest may
+        # itself be running under Xcode's bundled python3, which exports one
+        # pointing at the Command Line Tools SDK. Drop it and pin the SDK we
+        # actually resolved, so the toolchain and SDK are guaranteed to match.
+        env = {k: v for k, v in os.environ.items() if k != "SDKROOT"}
+        cmd = [XCRUN, "swiftc"] if XCRUN else ["swiftc"]
+        if XCRUN:
+            sdk = subprocess.run([XCRUN, "--sdk", "macosx", "--show-sdk-path"],
+                                 capture_output=True, text=True, env=env)
+            if sdk.returncode == 0 and sdk.stdout.strip():
+                cmd += ["-sdk", sdk.stdout.strip()]
         build = subprocess.run(
-            ["swiftc", "-swift-version", "5", str(SM), str(AXIS), str(ACQ_CFG),
-             str(TESTS), str(AXIS_TESTS), str(ACQ_CFG_TESTS), "-o", str(binary)],
-            capture_output=True, text=True)
+            cmd + ["-swift-version", "5", str(SM), str(AXIS), str(ACQ_CFG),
+                   str(TESTS), str(AXIS_TESTS), str(ACQ_CFG_TESTS),
+                   "-o", str(binary)],
+            capture_output=True, text=True, env=env)
         assert build.returncode == 0, f"swiftc failed:\n{build.stderr}"
         run = subprocess.run([str(binary)], capture_output=True, text=True)
         assert run.returncode == 0, f"state machine tests failed:\n{run.stdout}"

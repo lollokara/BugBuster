@@ -139,7 +139,7 @@ struct ScopeCanvasView: View {
                 drawGrid(context: context, rect: rect)
                 for channel in series.channels {
                     let pts = ScopeGeom.displayPoints(for: channel.points, scale: activeScale, windowSeconds: windowSeconds, endOverride: endOverride, columnBudget: columnBudget)
-                    drawChannel(pts, in: rect, minVal: minVal, maxVal: maxVal, context: context)
+                    drawChannel(pts, in: rect, minVal: minVal, maxVal: maxVal, color: channel.defaultColor, context: context)
                 }
             }
 
@@ -186,7 +186,7 @@ struct ScopeCanvasView: View {
             Canvas { context, canvasSize in
                 let rect = CGRect(origin: .zero, size: canvasSize)
                 drawGrid(context: context, rect: rect)
-                drawChannel(pts, in: rect, minVal: rawMin, maxVal: rawMax, context: context)
+                drawChannel(pts, in: rect, minVal: rawMin, maxVal: rawMax, color: channel.defaultColor, context: context)
             }
 
             VStack {
@@ -206,7 +206,7 @@ struct ScopeCanvasView: View {
             .padding(6)
 
             if let touch = touchLocation,
-               let info = closestSampleInfo(at: touch, in: CGSize(width: 10_000, height: height), points: pts, label: channel.label, minVal: rawMin, maxVal: rawMax) {
+               let info = closestSampleInfo(at: touch, in: CGSize(width: 10_000, height: height), points: pts, label: channel.label, color: channel.defaultColor, minVal: rawMin, maxVal: rawMax) {
                 // Only draw the cursor in the lane the touch actually falls in;
                 // caller clips via laneView's own frame, so any x is valid here.
                 touchOverlay(info: info, in: CGSize(width: 10_000, height: height))
@@ -287,14 +287,14 @@ struct ScopeCanvasView: View {
                 let dist = hypot(pt.x - touch.x, pt.y - touch.y)
                 if dist < minDistance {
                     minDistance = dist
-                    closest = TouchInfo(label: channel.label, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
+                    closest = TouchInfo(label: channel.label, color: channel.defaultColor, value: p.v, time: p.t, x: pt.x, y: pt.y)
                 }
             }
         }
         return closest
     }
 
-    private func closestSampleInfo(at touch: CGPoint, in size: CGSize, points: [ScopeSeriesPoint], label: String, minVal: Double, maxVal: Double) -> TouchInfo? {
+    private func closestSampleInfo(at touch: CGPoint, in size: CGSize, points: [ScopeSeriesPoint], label: String, color: Color, minVal: Double, maxVal: Double) -> TouchInfo? {
         guard points.count >= 2 else { return nil }
         let rect = CGRect(origin: .zero, size: size)
         let tStart = points.first!.t
@@ -306,7 +306,7 @@ struct ScopeCanvasView: View {
             let dist = abs(pt.x - touch.x)
             if dist < minDistance {
                 minDistance = dist
-                closest = TouchInfo(label: label, color: p.color, value: p.v, time: p.t, x: pt.x, y: pt.y)
+                closest = TouchInfo(label: label, color: color, value: p.v, time: p.t, x: pt.x, y: pt.y)
             }
         }
         return closest
@@ -373,25 +373,19 @@ struct ScopeCanvasView: View {
         context.stroke(path, with: .color(Color.white.opacity(0.06)), lineWidth: 1)
     }
 
-    // MARK: - Trace drawing (coalesces consecutive same-color point runs)
+    // MARK: - Trace drawing
+    //
+    // The legacy ADC path never varies color within a channel — `fromADC`
+    // assigns one constant accent color per channel, so every point in
+    // `displayPoints` shares the same (now-implicit) `source`. Unlike the DAQ
+    // canvas, there is nothing to coalesce here: draw the whole channel in
+    // one run with the color the caller already resolved.
 
-    private func drawChannel(_ displayPoints: [ScopeSeriesPoint], in rect: CGRect, minVal: Double, maxVal: Double, context: GraphicsContext) {
+    private func drawChannel(_ displayPoints: [ScopeSeriesPoint], in rect: CGRect, minVal: Double, maxVal: Double, color: Color, context: GraphicsContext) {
         guard displayPoints.count >= 2 else { return }
         let tStart = displayPoints.first!.t
         let tSpan = displayPoints.last!.t - tStart
-
-        var runStart = 0
-        var runColor = displayPoints[0].color
-        var idx = 1
-        while idx < displayPoints.count {
-            if displayPoints[idx].color != runColor {
-                strokeRun(displayPoints, from: runStart, to: idx, tStart: tStart, tSpan: tSpan, rect: rect, minVal: minVal, maxVal: maxVal, color: runColor, context: context)
-                runStart = idx
-                runColor = displayPoints[idx].color
-            }
-            idx += 1
-        }
-        strokeRun(displayPoints, from: runStart, to: displayPoints.count - 1, tStart: tStart, tSpan: tSpan, rect: rect, minVal: minVal, maxVal: maxVal, color: runColor, context: context)
+        strokeRun(displayPoints, from: 0, to: displayPoints.count - 1, tStart: tStart, tSpan: tSpan, rect: rect, minVal: minVal, maxVal: maxVal, color: color, context: context)
     }
 
     private func strokeRun(_ points: [ScopeSeriesPoint], from: Int, to: Int, tStart: Double, tSpan: Double, rect: CGRect, minVal: Double, maxVal: Double, color: Color, context: GraphicsContext) {

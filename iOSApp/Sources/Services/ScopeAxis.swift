@@ -35,21 +35,42 @@ public enum ScopeAxis {
     ///   - padding is magnitude-relative, so a nA-scale trace keeps nA-scale
     ///     bounds instead of being blown up to a ±1 A axis
     public static func bounds(_ values: [Double]) -> (min: Double, max: Double) {
+        bounds(values, by: { $0 })
+    }
+
+    /// Same guarantees as `bounds(_:)`, but reads values out of an arbitrary
+    /// collection via `extract` instead of requiring a pre-built `[Double]` —
+    /// lets callers (e.g. the render pipeline's per-tick trace bounds) skip
+    /// the intermediate `.map(\.v)` allocation entirely.
+    public static func bounds<C: Collection>(_ elements: C, by extract: (C.Element) -> Double) -> (min: Double, max: Double) {
         // NaN silently defeats `<`/`>` comparisons, and a single infinity would
         // make the axis useless, so neither may reach the percentile step.
-        let finite = values.filter { $0.isFinite }
+        var finite: [Double] = []
+        finite.reserveCapacity(elements.count)
+        for e in elements {
+            let v = extract(e)
+            if v.isFinite { finite.append(v) }
+        }
         guard !finite.isEmpty else { return (-1, 1) }
 
         let lo: Double
         let hi: Double
         if finite.count >= minSamplesForTrim {
-            let sorted = finite.sorted()
             // `k` is clamped below count/2 so the low index can never cross the
             // high index on small-but-trimmable inputs.
-            let k = Swift.min(Int(Double(sorted.count) * trimFraction),
-                              (sorted.count - 1) / 2)
-            lo = sorted[k]
-            hi = sorted[sorted.count - 1 - k]
+            let k = Swift.min(Int(Double(finite.count) * trimFraction),
+                              (finite.count - 1) / 2)
+            // Quickselect instead of a full sort: these two trimmed
+            // percentiles are the only thing the sort was ever used for, and
+            // selection is O(n) average vs O(n log n) for a ~1800-element
+            // array recomputed every tick. `quickselect` mutates a working
+            // copy; after selecting `k`, everything at index >= k is already
+            // >= the k-th value (the standard quickselect partition
+            // invariant), so the second select on the SAME array for the
+            // high percentile is still correct — no second copy needed.
+            var work = finite
+            lo = quickselect(&work, k)
+            hi = quickselect(&work, finite.count - 1 - k)
         } else {
             lo = finite.min()!
             hi = finite.max()!
@@ -69,5 +90,43 @@ public enum ScopeAxis {
             pad = mag > 0 ? mag * 0.1 : 1e-12
         }
         return (lo - pad, hi + pad)
+    }
+
+    /// Selects the `k`-th smallest element (0-indexed) of `a` in average O(n)
+    /// time, via Lomuto-partition quickselect with a randomized pivot (avoids
+    /// the O(n^2) worst case on already-sorted or reverse-sorted input, which
+    /// a fixed first/last-element pivot would hit on a monotonic capture).
+    /// Selecting the exact k-th order statistic is equivalent to reading
+    /// `a.sorted()[k]` for any correct selection algorithm — this must return
+    /// bit-identical results to the sort-based approach it replaces.
+    private static func quickselect(_ a: inout [Double], _ k: Int) -> Double {
+        var lo = 0
+        var hi = a.count - 1
+        while lo < hi {
+            let pivotIndex = Int.random(in: lo...hi)
+            a.swapAt(pivotIndex, hi)
+            let p = partition(&a, lo, hi)
+            if k == p {
+                return a[k]
+            } else if k < p {
+                hi = p - 1
+            } else {
+                lo = p + 1
+            }
+        }
+        return a[lo]
+    }
+
+    /// Lomuto partition: pivot is `a[hi]`; returns its final sorted-position
+    /// index after reordering `a[lo...hi]` in place.
+    private static func partition(_ a: inout [Double], _ lo: Int, _ hi: Int) -> Int {
+        let pivot = a[hi]
+        var i = lo
+        for j in lo..<hi where a[j] < pivot {
+            a.swapAt(i, j)
+            i += 1
+        }
+        a.swapAt(i, hi)
+        return i
     }
 }
